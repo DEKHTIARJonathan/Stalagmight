@@ -36,6 +36,16 @@ const open = (isCurrent: boolean, discardsUnpushed = false) => {
   });
 };
 
+/** [#303] The same dialog, opened for a FORWARD chain step. */
+const openForward = (isLatest: boolean) => {
+  useSpeleoStore.setState({ remoteProjectId: 'p1' });
+  useProjectStore.setState({ project: { name: 'Cave A' } as never });
+  useUIStore.setState({
+    activeDialog: 'speleodb-unwind',
+    dialogData: { hexsha: HEXSHA, forward: true, isLatest, discardsUnpushed: false },
+  });
+};
+
 describe('SpeleoUnwindDialog (#303)', () => {
   beforeEach(() => {
     invokeIpcMock.mockReset();
@@ -157,6 +167,62 @@ describe('SpeleoUnwindDialog (#303)', () => {
       expect(invokeIpcMock).toHaveBeenCalledWith(
         'speleodb_restore_revision',
         expect.objectContaining({ discardUnpushed: false }),
+      ),
+    );
+  });
+
+  // [#303] The forward half of the walk. Same component, same single revision swap - the
+  // direction only picks which stack the backend requires empty, and the wording.
+  it('words a forward step as moving toward the latest, not back', () => {
+    openForward(false);
+    render(<SpeleoUnwindDialog />);
+    const body = screen.getByTestId('speleodb-unwind-body').textContent ?? '';
+    expect(body).toContain('next version forward');
+    expect(body).not.toContain('earlier');
+  });
+
+  it('says a forward step that lands on BASE returns to the latest version', () => {
+    openForward(true);
+    render(<SpeleoUnwindDialog />);
+    const body = screen.getByTestId('speleodb-unwind-body').textContent ?? '';
+    expect(body).toContain('latest version');
+    // Naming a revision here would be wrong: the point of the last step is where it
+    // lands, not which sha that happens to be.
+    expect(body).not.toContain(HEXSHA.slice(0, 8));
+  });
+
+  it('sends the direction so the backend guards the redo stack, not the undo stack', async () => {
+    openForward(false);
+    render(<SpeleoUnwindDialog />);
+
+    await userEvent.click(screen.getByTestId('speleodb-unwind-confirm-btn'));
+
+    await waitFor(() =>
+      expect(invokeIpcMock).toHaveBeenCalledWith(
+        'speleodb_restore_revision',
+        expect.objectContaining({
+          restore: true,
+          keepUndoHistory: true,
+          chainForward: true,
+          // A forward step is only defined while a chain pointer exists, and a pointer is
+          // exactly what makes the dirty bit excusable - so it can never be discarding
+          // un-pushed work, and must never claim an acknowledgement.
+          discardUnpushed: false,
+        }),
+      ),
+    );
+  });
+
+  it('leaves the backward step guarding the undo stack', async () => {
+    open(true);
+    render(<SpeleoUnwindDialog />);
+
+    await userEvent.click(screen.getByTestId('speleodb-unwind-confirm-btn'));
+
+    await waitFor(() =>
+      expect(invokeIpcMock).toHaveBeenCalledWith(
+        'speleodb_restore_revision',
+        expect.objectContaining({ chainForward: false }),
       ),
     );
   });

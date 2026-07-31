@@ -168,6 +168,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "command.speleodb_unlink",
     "command.speleodb_remove_link_at",
     "command.speleodb_unwind_target",
+    "command.speleodb_rewind_target",
     "command.speleodb_update",
     "command.split_shot_at_distance",
     "command.suggest_all_import_placements",
@@ -1004,7 +1005,12 @@ mod tests {
         //       back to an ancestor) actually land:
         //       {action.dialog,dialog-cancel,dwell.dialog,active-dwell.dialog}
         //       .speleodb-unwind = 699.
-        assert_eq!(EVENT_NAMES.len(), 699);
+        //   + 1 speleodb_rewind_target (#303). The forward half of the same walk, and
+        //       the pair is the point: comparing it against unwind_target says whether
+        //       people actually step BACK out of a version once they have stepped into
+        //       one, or only ever go deeper:
+        //       command.speleodb_rewind_target = 700.
+        assert_eq!(EVENT_NAMES.len(), 700);
     }
 
     /// Active-dwell mirrors every dwell state 1:1 (#31): for each `dwell.<key>` there

@@ -476,6 +476,11 @@ export default function Toolbar({
             <UndoHistoryDropdown
               mode="redo"
               disabled={placementModeActive || !canRedo}
+              // [#303] The same reason as the undo side, in the other direction: an empty
+              // redo stack still has the forward chain step to show ("Redo into next
+              // SpeleoDB version"), and hover is the only way to reach it while the button
+              // itself stays correctly disabled.
+              hoverableWhenEmpty={!placementModeActive}
               onSingleAction={onRedo}
               testId="toolbar-redo-button"
               ariaLabel={t('common.actions.redo')}

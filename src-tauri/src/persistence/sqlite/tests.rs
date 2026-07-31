@@ -4448,7 +4448,7 @@ fn speleo_undo_chain_is_stripped_from_a_push_snapshot() {
 
     // Full mode keeps the undo HISTORY, so this pins that the chain pointer is stripped
     // even on the path most likely to forget it.
-    Database::sanitize_push_snapshot(&path, true).unwrap();
+    Database::sanitize_push_snapshot(&path, true, None).unwrap();
 
     let db = Database::open_existing(&path).unwrap();
     assert_eq!(
@@ -4456,6 +4456,183 @@ fn speleo_undo_chain_is_stripped_from_a_push_snapshot() {
         None,
         "the Unwind chain position is per-machine and must never ride to the server"
     );
+}
+
+/// [#303] Seed a snapshot whose undo stack mixes rows INHERITED from a loaded revision
+/// with rows authored after it, and return the watermark separating them.
+fn snapshot_with_inherited_and_own_rows(
+    temp: &TempDir,
+    name: &str,
+    inherited: &[&str],
+    own: &[&str],
+) -> (std::path::PathBuf, String) {
+    let path = temp.path().join(name);
+    // An hour on either side, so the assertions cannot turn on clock resolution.
+    let watermark = Utc::now();
+    let mut entries: Vec<(String, String, Option<String>)> = Vec::new();
+    for (i, tag) in inherited.iter().enumerate() {
+        entries.push((
+            format!("{{\"cmd\":\"{tag}\"}}"),
+            "{}".to_string(),
+            Some((watermark - chrono::Duration::hours(2 + i as i64)).to_rfc3339()),
+        ));
+    }
+    for (i, tag) in own.iter().enumerate() {
+        entries.push((
+            format!("{{\"cmd\":\"{tag}\"}}"),
+            "{}".to_string(),
+            Some((watermark + chrono::Duration::hours(1 + i as i64)).to_rfc3339()),
+        ));
+    }
+    {
+        let mut db = Database::open(&path).unwrap();
+        db.save_project(&Project::new(name.to_string(), None))
+            .unwrap();
+        db.save_speleo_link(Some(&sample_speleo_link(Some("abc"), true)))
+            .unwrap();
+        db.save_undo_stack_with_timestamps(entries).unwrap();
+    }
+    (path, watermark.to_rfc3339())
+}
+
+/// Read back which undo commands survived in a snapshot.
+fn surviving_undo_commands(path: &Path) -> Vec<String> {
+    let db = Database::open_existing(path).unwrap();
+    db.load_undo_stack_with_timestamps()
+        .unwrap()
+        .into_iter()
+        .map(|(_, cmd, _, _)| cmd)
+        .collect()
+}
+
+/// [#303] A chain step loads a past commit's history so the user can keep undoing. That
+/// scaffolding must not ride into the NEXT commit: those operations already live in the
+/// commit they came from, and shipping them again records every one of them twice.
+#[test]
+fn sanitize_push_snapshot_cuts_undo_rows_inherited_by_a_chain_step() {
+    let temp = TempDir::new().unwrap();
+    let (path, watermark) = snapshot_with_inherited_and_own_rows(
+        &temp,
+        "inherited.stalx",
+        &["loaded_a", "loaded_b"],
+        &["mine"],
+    );
+
+    Database::sanitize_push_snapshot(&path, true, Some(&watermark)).unwrap();
+
+    let survivors = surviving_undo_commands(&path);
+    assert_eq!(
+        survivors.len(),
+        1,
+        "only the operation authored in this session should ride, got {survivors:?}"
+    );
+    assert!(
+        survivors[0].contains("mine"),
+        "the surviving row must be the user's own edit, got {survivors:?}"
+    );
+}
+
+/// The case a POSITION watermark would have destroyed, which is why this one is a
+/// timestamp. Entries are written back with `sequence` = position, so after undoing into
+/// the loaded history and editing, the user's new row occupies the id a loaded row had -
+/// and cutting by id would delete their work instead of the inherited entry.
+#[test]
+fn the_cut_keeps_own_work_that_landed_on_an_inherited_row_position() {
+    let temp = TempDir::new().unwrap();
+    // One inherited row survives the undo, and the new edit is written directly above it,
+    // taking sequence 1 - exactly the id the second loaded entry used to hold.
+    let (path, watermark) =
+        snapshot_with_inherited_and_own_rows(&temp, "positions.stalx", &["loaded_a"], &["mine"]);
+
+    Database::sanitize_push_snapshot(&path, true, Some(&watermark)).unwrap();
+
+    let survivors = surviving_undo_commands(&path);
+    assert_eq!(survivors.len(), 1, "got {survivors:?}");
+    assert!(
+        survivors[0].contains("mine"),
+        "cutting by position would have deleted this row; cutting by timestamp keeps it"
+    );
+}
+
+/// No watermark is the ordinary lock-edit-push path: the lock cleared the stack, so every
+/// entry is this session's and the whole history ships exactly as before.
+#[test]
+fn sanitize_push_snapshot_keeps_every_row_when_nothing_was_inherited() {
+    let temp = TempDir::new().unwrap();
+    let (path, _) =
+        snapshot_with_inherited_and_own_rows(&temp, "no_watermark.stalx", &["older"], &["newer"]);
+
+    Database::sanitize_push_snapshot(&path, true, None).unwrap();
+
+    assert_eq!(
+        surviving_undo_commands(&path).len(),
+        2,
+        "without a watermark nothing is inherited, so Full mode ships the lot"
+    );
+}
+
+/// An unreadable watermark must FAIL the push rather than quietly widen into "cut
+/// nothing": a failed push is recoverable, a commit with duplicated history is not.
+#[test]
+fn an_unparseable_watermark_fails_the_push_rather_than_shipping_everything() {
+    let temp = TempDir::new().unwrap();
+    let (path, _) =
+        snapshot_with_inherited_and_own_rows(&temp, "bad_watermark.stalx", &["loaded"], &["mine"]);
+
+    let err = Database::sanitize_push_snapshot(&path, true, Some("not-a-timestamp")).unwrap_err();
+
+    assert!(
+        format!("{err:#}").contains("watermark"),
+        "the failure must name what went wrong, got {err:#}"
+    );
+}
+
+/// [#303] The watermark is per-MACHINE, like the chain pointer: it says what THIS copy
+/// inherited and against which clock. Shipping it would have the next puller cut their
+/// own history against a measurement that means nothing on their machine.
+#[test]
+fn speleo_undo_watermark_is_stripped_from_a_push_snapshot() {
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("watermark_push.stalx");
+    {
+        let mut db = Database::open(&path).unwrap();
+        db.save_project(&Project::new("WatermarkPush".to_string(), None))
+            .unwrap();
+        db.save_speleo_link(Some(&sample_speleo_link(Some("abc"), true)))
+            .unwrap();
+        db.save_speleo_undo_watermark(Some(&Utc::now().to_rfc3339()))
+            .unwrap();
+    }
+
+    // Full mode again: the path most likely to forget a local table is the one that
+    // deliberately keeps the biggest one.
+    Database::sanitize_push_snapshot(&path, true, None).unwrap();
+
+    let db = Database::open_existing(&path).unwrap();
+    assert_eq!(db.load_speleo_undo_watermark().unwrap(), None);
+}
+
+#[test]
+fn speleo_undo_watermark_round_trips_and_clears() {
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("watermark_roundtrip.stalx");
+    let mut db = Database::open(&path).unwrap();
+    db.save_project(&Project::new("W".to_string(), None))
+        .unwrap();
+
+    assert_eq!(
+        db.load_speleo_undo_watermark().unwrap(),
+        None,
+        "absent before any chain step - the ordinary case"
+    );
+    let ts = Utc::now().to_rfc3339();
+    db.save_speleo_undo_watermark(Some(&ts)).unwrap();
+    assert_eq!(
+        db.load_speleo_undo_watermark().unwrap().as_deref(),
+        Some(ts.as_str())
+    );
+    db.save_speleo_undo_watermark(None).unwrap();
+    assert_eq!(db.load_speleo_undo_watermark().unwrap(), None);
 }
 
 #[test]
@@ -4787,7 +4964,7 @@ fn sanitize_push_snapshot_clears_dirty_and_view_only_keeps_project_data() {
             .unwrap();
     }
 
-    Database::sanitize_push_snapshot(&path, false).unwrap();
+    Database::sanitize_push_snapshot(&path, false, None).unwrap();
 
     let snap = Database::open_existing(&path).unwrap();
     let count = |table: &str| -> i64 {
@@ -4900,7 +5077,7 @@ fn sanitize_push_snapshot_vacuums_the_deleted_undo_bytes_out_of_the_file() {
         .query_row("PRAGMA page_count", [], |r| r.get(0))
         .unwrap();
 
-    Database::sanitize_push_snapshot(&path, false).unwrap();
+    Database::sanitize_push_snapshot(&path, false, None).unwrap();
 
     let after = std::fs::read(&path).unwrap();
     assert!(
@@ -4924,7 +5101,7 @@ fn sanitize_push_snapshot_clears_the_dirty_bit() {
     let temp = TempDir::new().unwrap();
     let path = dirty_push_snapshot(&temp, "x", 1);
 
-    Database::sanitize_push_snapshot(&path, false).unwrap();
+    Database::sanitize_push_snapshot(&path, false, None).unwrap();
 
     let link = Database::open_existing(&path)
         .unwrap()
@@ -4959,7 +5136,7 @@ fn sanitize_push_snapshot_tolerates_a_snapshot_without_a_redo_stack() {
         .execute("DROP TABLE redo_stack", [])
         .unwrap();
 
-    Database::sanitize_push_snapshot(&path, false)
+    Database::sanitize_push_snapshot(&path, false, None)
         .expect("a missing local table must not fail the push");
 
     let snap = Connection::open(&path).unwrap();
@@ -4994,7 +5171,7 @@ fn sanitize_push_snapshot_keeps_undo_but_never_redo_in_full_mode() {
         )
         .unwrap();
 
-    Database::sanitize_push_snapshot(&path, true).unwrap();
+    Database::sanitize_push_snapshot(&path, true, None).unwrap();
 
     let snap = Connection::open(&path).unwrap();
     let count = |table: &str| -> i64 {
@@ -5039,7 +5216,7 @@ fn sanitize_push_snapshot_strips_both_stacks_in_disabled_mode() {
         )
         .unwrap();
 
-    Database::sanitize_push_snapshot(&path, false).unwrap();
+    Database::sanitize_push_snapshot(&path, false, None).unwrap();
 
     let snap = Connection::open(&path).unwrap();
     for table in ["undo_stack", "redo_stack"] {
@@ -5068,7 +5245,7 @@ fn sanitize_push_snapshot_still_fails_closed_on_redo_in_full_mode() {
         )
         .unwrap();
 
-    let err = Database::sanitize_push_snapshot(&path, true)
+    let err = Database::sanitize_push_snapshot(&path, true, None)
         .expect_err("an un-strippable redo_stack must abort the push even in Full mode");
     assert!(
         format!("{err:#}").contains("redo_stack"),
@@ -5093,7 +5270,7 @@ fn sanitize_push_snapshot_fails_closed_when_the_undo_strip_cannot_run() {
         )
         .unwrap();
 
-    let err = Database::sanitize_push_snapshot(&path, false)
+    let err = Database::sanitize_push_snapshot(&path, false, None)
         .expect_err("an un-strippable undo_stack must abort the push");
     assert!(
         format!("{err:#}").contains("undo_stack"),
@@ -5132,7 +5309,7 @@ fn sanitize_push_snapshot_tolerates_an_unstrippable_display_settings() {
         .unwrap();
     }
 
-    Database::sanitize_push_snapshot(&path, false)
+    Database::sanitize_push_snapshot(&path, false, None)
         .expect("a privacy-neutral local table must not abort the push");
 
     let snap = Connection::open(&path).unwrap();

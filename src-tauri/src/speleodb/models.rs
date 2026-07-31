@@ -119,6 +119,24 @@ pub struct SpeleoUnwindTarget {
     pub discards_unpushed: bool,
 }
 
+/// [#303] Which revision a FORWARD chain step would check out - the mirror of
+/// [`SpeleoUnwindTarget`], walking back up toward BASE.
+///
+/// Deliberately carries no `discards_unpushed`. A forward step is only defined while a
+/// chain pointer exists, and `unwind_discards_unpushed` is false whenever one does, so the
+/// field could only ever be `false` - a permanently dead warning that would read as though
+/// the case had been considered and could fire. An edit drops the pointer, which is what
+/// removes this direction entirely rather than warning about it.
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export)]
+pub struct SpeleoRewindTarget {
+    /// 40-hex commit SHA to check out.
+    pub hexsha: String,
+    /// This step lands back ON BASE, i.e. returns the copy to the latest version, so the
+    /// confirmation can say that rather than naming a revision.
+    pub is_latest: bool,
+}
+
 /// [#218] One commit projected for the frontend revision-history view. A read-only
 /// slice of [`RevisionCommit`] carrying only what the UI renders (no token, no
 /// server-internal fields). The list is server-ordered (newest first).

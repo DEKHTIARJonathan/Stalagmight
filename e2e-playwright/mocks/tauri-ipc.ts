@@ -4768,10 +4768,11 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           case 'speleodb_release_current_lock':
           case 'speleodb_delete_project':
             return null;
-          // [#303] Which revision the next Unwind would load. `null` by default - a
-          // mocked project has no revision history to walk - so the undo dropdown shows
-          // no Unwind entry unless a spec overrides this.
+          // [#303] Which revision a chain step would load, backward and forward. `null`
+          // by default - a mocked project has no revision history to walk - so neither
+          // dropdown shows its step entry unless a spec overrides this.
           case 'speleodb_unwind_target':
+          case 'speleodb_rewind_target':
             return null;
           // #215 collaborator management: the roster (users + teams). The mutating
           // commands echo the refreshed roster; the picker lists no teams by default.

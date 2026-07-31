@@ -404,12 +404,44 @@ impl UndoStack {
         self.depth_limit
     }
 
+    /// [#303] The stamp for the next entry: wall-clock, but never at or below the entry
+    /// beneath it.
+    ///
+    /// Everything that reasons about this stack by time assumes later-in-the-stack means
+    /// later-in-time - `drop_entries_up_to` says so outright and uses `partition_point`,
+    /// which silently returns a meaningless boundary if the order does not hold. Wall time
+    /// alone does not guarantee it: an entry can arrive from a peer whose clock ran ahead
+    /// (a chain step loads a past commit's history, stamped on the machine that authored
+    /// it), and a local clock can be corrected backwards under us.
+    ///
+    /// So the stack keeps its own order. The stamp is the real instant whenever that is
+    /// already ahead - the ordinary case, and the one that keeps displayed times honest -
+    /// and otherwise the smallest value that preserves the invariant.
+    fn next_stamp(&self) -> DateTime<Utc> {
+        let now = Utc::now();
+        match self.undo_stack.back().and_then(|entry| entry.timestamp) {
+            // `>=`, not `>`: two entries sharing an instant would break the strict
+            // ordering just as an inversion does.
+            Some(prev) if prev >= now => prev + chrono::Duration::nanoseconds(1),
+            // No previous entry, or a legacy one carrying no timestamp at all: there is
+            // nothing to stay ahead of.
+            _ => now,
+        }
+    }
+
+    /// The newest stamp on the undo stack, if any - the ceiling a caller must clear to be
+    /// sure it is talking about "everything currently on the stack" (see
+    /// `speleodb_clear_undo_after_push`). Cheap: the invariant above makes it the back.
+    pub fn newest_stamp(&self) -> Option<DateTime<Utc>> {
+        self.undo_stack.back().and_then(|entry| entry.timestamp)
+    }
+
     /// Push a command with its undo data to the undo stack
     pub fn push_with_data(&mut self, command: Command, undo_data: UndoData) {
         let entry = UndoEntry {
             command,
             undo_data,
-            timestamp: Some(Utc::now()),
+            timestamp: Some(self.next_stamp()),
         };
 
         self.push_undo_tracked(entry);
@@ -2276,6 +2308,76 @@ mod tests {
     }
 
     // === [#303] clear-on-push (spec items 4, 5, 11) ===
+
+    /// [#303] The stack orders itself: a new entry never lands at or below the one under
+    /// it, whatever the wall clock says.
+    ///
+    /// `drop_entries_up_to` uses `partition_point`, which needs the stamps sorted to mean
+    /// anything, and the push-time cut compares entries against a watermark. Both read a
+    /// stack whose order can otherwise be broken from outside: a chain step loads entries
+    /// stamped by the machine that authored them, and a local clock can be corrected
+    /// backwards mid-session.
+    #[test]
+    fn stamps_stay_strictly_increasing_against_a_clock_that_does_not() {
+        let mut stack = UndoStack::new();
+        let push = |stack: &mut UndoStack, i: u32| {
+            stack.push_with_data(
+                test_create_section_command(&format!("S{i}")),
+                UndoData::InverseCommand(test_delete_section_command(i)),
+            );
+        };
+
+        // An entry loaded from a peer whose clock runs a day fast.
+        push(&mut stack, 0);
+        let future = Utc::now() + chrono::Duration::days(1);
+        stack.undo_stack.back_mut().expect("seeded").timestamp = Some(future);
+
+        // Everything the user does now is stamped ABOVE it, even though `now` is a day
+        // behind. Without this, the watermark cut would classify their own work as
+        // inherited and drop it from the upload.
+        for i in 1..4 {
+            push(&mut stack, i);
+        }
+
+        // `undo_entries` yields most-recent FIRST, so reverse into stack order (oldest
+        // first) - the order the invariant is about and the one `partition_point` walks.
+        let mut stamps: Vec<_> = stack
+            .undo_entries()
+            .map(|e| e.timestamp.expect("stamped"))
+            .collect();
+        stamps.reverse();
+        assert!(
+            stamps.windows(2).all(|w| w[0] < w[1]),
+            "stamps must be strictly increasing in stack order, got {stamps:?}"
+        );
+        assert!(
+            stamps[1] > future,
+            "the user's first edit must sit above the peer's future-dated entry"
+        );
+        assert_eq!(
+            stack.newest_stamp(),
+            stamps.last().copied(),
+            "newest_stamp is the back, which the invariant makes the maximum"
+        );
+    }
+
+    /// The ordinary case must keep telling the truth: with a sane clock the stamp IS the
+    /// wall-clock instant, so displayed times stay honest and the clamp is invisible.
+    #[test]
+    fn an_ordinary_push_is_stamped_at_the_real_instant() {
+        let mut stack = UndoStack::new();
+        let before = Utc::now();
+        stack.push_with_data(
+            test_create_section_command("S0"),
+            UndoData::InverseCommand(test_delete_section_command(0)),
+        );
+        let after = Utc::now();
+        let stamp = stack.newest_stamp().expect("stamped");
+        assert!(
+            stamp >= before && stamp <= after,
+            "expected the real instant, got {stamp:?} outside {before:?}..{after:?}"
+        );
+    }
 
     /// Spec items 4 + 5: the push-start boundary. Entries captured by the push go (they
     /// are on the server now, and keeping them would duplicate them in the next commit);

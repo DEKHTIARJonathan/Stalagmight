@@ -135,6 +135,8 @@ describe('useRevertRevision - the happy path', () => {
       // discard work the user never pushed, and no path but the Unwind confirmation
       // may ever carry it.
       discardUnpushed: false,
+      // A revert walks no chain, so there is no direction to select a guard with.
+      chainForward: false,
     });
     expect(argsOf('speleodb_done')).toEqual({ message: 'undo the bad survey' });
   });

@@ -192,6 +192,71 @@ before, so no other `keep_undo_history` caller can discard un-pushed work by acc
 The frontend offers it as one entry pinned below the undo history list, and clicking it
 opens a confirmation rather than acting. Undo / Ctrl+Z on an empty stack still do nothing.
 
+### ...and forward again
+
+The walk is not one-way. **Redo into next SpeleoDB version** is the mirror: where the
+Unwind takes the first parent, `sync::rewind_target` finds the child on the path back to
+BASE and loads ITS history, so a user can step across commit boundaries in both
+directions. It is the same `speleodb_restore_revision` with the same
+`keep_undo_history: true`; only two things differ by direction.
+
+**Which commit.** The child is found by walking BASE's own first-parent chain down to the
+current position, never by scanning for "any commit whose parent is here" - an abandoned
+line can share a parent, and `authored_date` cannot break that tie. BASE is the end of the
+line: past it lies another session's push, and adopting that is an Update, not a step
+through our own history. Landing on BASE is reported as `is_latest` so the confirmation can
+say "return to the latest version" rather than name a sha.
+
+**Which stack must be empty.** Backward it is the undo stack (everything undone, so the
+tree sits at the parent's state). Forward it is the **redo** stack: every operation of the
+commit being sat on has been re-applied, so the tree really is that commit's and the
+child's history stacks onto it cleanly. `speleodb_guard_unwind` takes the direction and
+picks accordingly; checking the wrong one would let a half-redone copy jump a commit and
+silently drop the operations still parked on the other stack.
+
+**An edit ends the forward direction, with no code of its own.** A forward step is only
+defined relative to the chain pointer, and a forward command drops it (above), so after an
+edit `speleodb_rewind_target` returns `None` and the entry disappears rather than offering
+to discard that work. The backward direction stays available - it just re-warns first,
+because the pointer no longer excuses the dirty bit.
+
+`SpeleoRewindTarget` deliberately carries no `discards_unpushed`: a forward step requires a
+pointer, and the predicate is false whenever one exists, so the field could only ever be a
+constant `false` - a dead warning that would read as though the case had been considered
+and could fire.
+
+### Loaded history does not ride into the next commit
+
+A chain step loads a past commit's history so the user can keep stepping. That is
+scaffolding, not this session's work - so an edit on top and a push used to upload the lot,
+recording every loaded operation a second time in the new commit. An ordinary session never
+does that, because taking the lock clears the stack.
+
+The rule: **keep it locally, cut it from the upload.** The loaded entries stay in the stack
+so the user can still undo further at any point before the push - they are deliberately NOT
+dropped on the first edit - and `sanitize_push_snapshot` deletes them from the snapshot
+COPY on the way out, leaving the live stack untouched.
+
+What separates them is `speleo_undo_watermark`: the instant, recorded at load time, through
+which everything was inherited. **A timestamp, not a stack position** - entries are written
+back with `sequence` = position, so after undoing into the loaded history and editing, the
+user's new row occupies the id a loaded row had, and cutting by id would delete their work.
+A timestamp belongs to the entry rather than its slot, so it survives undo, redo and
+truncation. It is stamped as `max(now, newest loaded entry)`, because a pusher with a skewed
+clock can stamp entries in the future and those must still be cut; rows with no readable
+timestamp are cut too, the same reading `drop_entries_up_to` gives them.
+
+It lives in its own table rather than beside the chain pointer because the lifetimes differ:
+a forward edit clears the pointer but must **not** clear the watermark - outliving the edit
+is the whole point. It is cleared where the stack legitimately becomes all-this-session
+again (confirmed push, lock acquisition, fast-forward, any `InheritedUndo::Drop`), is
+stripped from push snapshots like its sibling, and is preserved across `save_project` - an
+autosave that dropped it would silently reintroduce the duplication.
+
+One consequence: unwinding to an ancestor and pushing **without editing** yields a commit
+carrying no undo history at all, since everything in the stack is inherited. That follows
+from the rule, and those operations still live in the commits they came from.
+
 ## Lock Ordering
 
 `command_lock` is always outermost. Below it, the mutation paths avoid holding two

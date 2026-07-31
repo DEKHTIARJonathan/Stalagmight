@@ -80,6 +80,9 @@ describe('SpeleoRestoreDialog (#218)', () => {
       // this flag is the only thing that lets the backend discard work the user never
       // pushed, and it belongs to the Unwind confirmation alone.
       discardUnpushed: false,
+      // ...and with no history kept there is no chain step, so no direction to pick a
+      // guard with either.
+      chainForward: false,
     });
     expect(closeDialogMock).toHaveBeenCalled();
     expect(showToastMock).toHaveBeenCalled();

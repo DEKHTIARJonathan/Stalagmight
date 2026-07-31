@@ -69,7 +69,7 @@ use stalagmight_lib::speleodb::{
     SpeleoDumpCandidate, SpeleoErrorDto, SpeleoLinkStatus, SpeleoLocalProjectState,
     SpeleoLoginResult, SpeleoOpenResult, SpeleoProjectMetadata, SpeleoProjectMetadataPatch,
     SpeleoProjectSummary, SpeleoPublishParams, SpeleoPublishResult, SpeleoRevision,
-    SpeleoSessionStatus, SpeleoTeamGrant, SpeleoTeamOption, SpeleoUnwindTarget,
+    SpeleoRewindTarget, SpeleoSessionStatus, SpeleoTeamGrant, SpeleoTeamOption, SpeleoUnwindTarget,
     SpeleoUserSuggestion, StartEditingResult, TokenStorage, TransportCause, UnpushedLocalEdits,
     UpdateResult, Visibility,
 };
@@ -316,6 +316,8 @@ fn main() {
     // [#303] The hybrid undo stack: which revision the next Unwind would load, and the
     // per-project policy for whether undo history rides to the server at all.
     export::<SpeleoUnwindTarget>(&out_dir);
+    // ...and its forward twin, which a redo-side step would load.
+    export::<SpeleoRewindTarget>(&out_dir);
     export::<stalagmight_lib::models::UndoMode>(&out_dir);
     export::<SpeleoSessionStatus>(&out_dir);
     export::<SpeleoDbAction>(&out_dir);
@@ -536,6 +538,7 @@ fn main() {
         "SpeleoAdoptResult",
         "SpeleoRevision",
         "SpeleoUnwindTarget",
+        "SpeleoRewindTarget",
         "UndoMode",
         "SpeleoSessionStatus",
         "SpeleoDbAction",

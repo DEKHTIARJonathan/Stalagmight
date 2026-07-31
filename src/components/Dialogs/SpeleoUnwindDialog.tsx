@@ -49,6 +49,11 @@ export default function SpeleoUnwindDialog() {
   const hexsha = typeof dialogData.hexsha === 'string' ? dialogData.hexsha : '';
   const isCurrent = dialogData.isCurrent === true;
   const discardsUnpushed = dialogData.discardsUnpushed === true;
+  // [#303] Which way this step walks. One component serves both because the mechanics are
+  // identical - a single revision swap that keeps the downloaded history - and only the
+  // wording differs; a second component would duplicate the busy/error handling for copy.
+  const forward = dialogData.forward === true;
+  const isLatest = dialogData.isLatest === true;
   const shortSha = hexsha.slice(0, 8);
 
   const [busy, setBusy] = useState(false);
@@ -73,6 +78,8 @@ export default function SpeleoUnwindDialog() {
         // Only ever set when the warning above was actually rendered, so the backend's
         // refusal still stands for a copy the user was told nothing about.
         discardUnpushed: discardsUnpushed,
+        // Which stack the backend requires empty: undo going back, redo going forward.
+        chainForward: forward,
         // The toast would say "restored to revision X. Push to make it the latest",
         // which misreads the action: nothing is being restored FORWARD, the user is
         // stepping backwards through history.
@@ -88,7 +95,7 @@ export default function SpeleoUnwindDialog() {
   return (
     <AlertDialog
       open
-      title={t('speleodb.unwind.title')}
+      title={t(forward ? 'speleodb.rewind.title' : 'speleodb.unwind.title')}
       onClose={() => {
         if (!busy) closeDialog();
       }}
@@ -105,21 +112,31 @@ export default function SpeleoUnwindDialog() {
             data-primary-action=""
             data-testid="speleodb-unwind-confirm-btn"
           >
-            {busy ? t('speleodb.unwind.loading') : t('speleodb.unwind.confirmButton')}
+            {busy
+              ? t('speleodb.unwind.loading')
+              : t(forward ? 'speleodb.rewind.confirmButton' : 'speleodb.unwind.confirmButton')}
           </Button>
         </>
       }
     >
       <div className="space-y-2 text-sm text-text-secondary">
         <p data-testid="speleodb-unwind-body">
-          {isCurrent
-            ? t('speleodb.unwind.bodyCurrent', { sha: shortSha })
-            : t('speleodb.unwind.bodyAncestor', { sha: shortSha })}
+          {forward
+            ? t(isLatest ? 'speleodb.rewind.bodyLatest' : 'speleodb.rewind.bodyNext', {
+                sha: shortSha,
+              })
+            : t(isCurrent ? 'speleodb.unwind.bodyCurrent' : 'speleodb.unwind.bodyAncestor', {
+                sha: shortSha,
+              })}
         </p>
         <p>
-          {isCurrent
-            ? t('speleodb.unwind.consequenceCurrent')
-            : t('speleodb.unwind.consequenceAncestor')}
+          {forward
+            ? t('speleodb.rewind.consequence')
+            : t(
+                isCurrent
+                  ? 'speleodb.unwind.consequenceCurrent'
+                  : 'speleodb.unwind.consequenceAncestor',
+              )}
         </p>
         {/* Stated on OPEN, not on press: this is the one shape of the action that destroys
             work, and the user has to be able to back out before committing to it. */}

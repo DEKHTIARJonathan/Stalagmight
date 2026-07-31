@@ -4,7 +4,7 @@ import { useTranslation } from 'react-i18next';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
 import { SpeleoDbLogo } from '../common/SpeleoDbLogo';
-import { useUnwindTarget } from '../../hooks/useUnwindTarget';
+import { useUnwindTarget, type ChainDirection } from '../../hooks/useUnwindTarget';
 import { useSpeleoStore } from '../../store/speleoStore';
 import { holdsWriteLock } from '../../utils/quit';
 import { useDismissableLayer } from '../../hooks/useDismissableLayer';
@@ -330,9 +330,18 @@ export default function UndoHistoryDropdown({
   iHoldLockRef.current = iHoldLock;
   const hoverableWhenEmptyRef = useRef(hoverableWhenEmpty);
   hoverableWhenEmptyRef.current = hoverableWhenEmpty;
-  const canOfferUnwind = mode === 'undo' && iHoldLock && items.length === 0;
-  const { target: unwindTarget } = useUnwindTarget(isOpen && canOfferUnwind);
-  const showUnwind = canOfferUnwind && unwindTarget !== null;
+  // [#303] The chain step past the bottom of THIS stack, in this dropdown's own
+  // direction. Undo offers the walk back, redo the walk forward, and each is offered on
+  // the same condition: its own stack is exhausted, so the next step is past a commit
+  // boundary rather than another entry in the list.
+  const chainDirection: ChainDirection = mode === 'undo' ? 'back' : 'forward';
+  const canOfferChainStep = iHoldLock && items.length === 0;
+  const { target: chainTarget } = useUnwindTarget(
+    isOpen && canOfferChainStep,
+    chainDirection,
+  );
+  const showChainStep = canOfferChainStep && chainTarget !== null;
+  const isForward = chainDirection === 'forward';
 
   const { getUndoStack, getRedoStack, undoTo, redoTo, undo, redo, canUndo, canRedo } = useProjectStore();
   const { openDialog } = useUIStore();
@@ -555,12 +564,13 @@ export default function UndoHistoryDropdown({
           return;
         }
 
-        // Open when there is something to show. [#303] An EMPTY undo stack is now
-        // something to show on a linked project we hold the lock on: the Unwind entry
-        // lives past the bottom of the stack, and this dropdown is its only trigger.
-        // `canOfferUnwind` is not consulted here - whether a target actually exists is
+        // Open when there is something to show. [#303] An EMPTY stack is now something to
+        // show on a linked project we hold the lock on, in EITHER dropdown: the chain-step
+        // entry lives past the bottom of the stack (back a version under Undo, forward a
+        // version under Redo), and this dropdown is its only trigger.
+        // `canOfferChainStep` is not consulted here - whether a target actually exists is
         // resolved asynchronously once open, and the panel closes itself if not.
-        if (stack.length > 0 || (mode === 'undo' && iHoldLockRef.current)) {
+        if (stack.length > 0 || iHoldLockRef.current) {
           setIsOpen(true);
         }
       } catch {
@@ -983,8 +993,12 @@ export default function UndoHistoryDropdown({
           >
             {items.length === 0 ? (
               <div className="px-3 py-4 text-center text-text-secondary text-sm">
-                {showUnwind
-                  ? t('undo.history.unwind.emptyWithUnwind')
+                {showChainStep
+                  ? t(
+                      isForward
+                        ? 'undo.history.rewind.emptyWithRewind'
+                        : 'undo.history.unwind.emptyWithUnwind',
+                    )
                   : t('undo.history.empty', { mode: modeLabel })}
               </div>
             ) : (
@@ -1039,25 +1053,35 @@ export default function UndoHistoryDropdown({
             )}
           </div>
 
-          {/* [#303] The Unwind entry, pinned below the list rather than inside it: it is
-              not a stack position, it is the step PAST the bottom of the stack. Clicking
-              it never acts - it opens a confirmation, because the action downloads a
-              revision and replaces the working copy. */}
-          {showUnwind && unwindTarget && (
+          {/* [#303] The chain-step entry, pinned below the list rather than inside it: it
+              is not a stack position, it is the step PAST the bottom of the stack - back a
+              version under Undo, forward a version under Redo. Clicking it never acts - it
+              opens a confirmation, because the action downloads a revision and replaces the
+              working copy. */}
+          {showChainStep && chainTarget && (
             <button
               type="button"
               role="menuitem"
               onClick={() => {
                 hardClose();
                 openDialog('speleodb-unwind', {
-                  hexsha: unwindTarget.hexsha,
-                  isCurrent: unwindTarget.is_current,
+                  hexsha: chainTarget.hexsha,
+                  isCurrent: chainTarget.is_current,
+                  // Which way this step walks. The confirmation shares one component for
+                  // both because the mechanics are identical - one revision swap keeping
+                  // the history - and only the wording differs.
+                  forward: isForward,
+                  // Where a forward step lands: back ON base, i.e. the latest version, so
+                  // the dialog can say that rather than naming a revision.
+                  isLatest: chainTarget.is_latest,
                   // [#303] Carried through so the confirmation can warn on OPEN. This
                   // dropdown offers the entry whenever the UNDO stack is empty, which
                   // undoing everything also satisfies - and that copy is dirty, with the
                   // undone steps on the redo stack. Without the flag the dialog looked
-                  // ordinary and the action failed once pressed.
-                  discardsUnpushed: unwindTarget.discards_unpushed,
+                  // ordinary and the action failed once pressed. A forward step can never
+                  // carry it: it needs a chain pointer, and a pointer is exactly what makes
+                  // the dirt excusable.
+                  discardsUnpushed: !isForward && chainTarget.discards_unpushed,
                 });
               }}
               className="w-full px-3 py-2 flex items-center gap-2 text-left border-t border-border
@@ -1070,10 +1094,10 @@ export default function UndoHistoryDropdown({
               </span>
               <div className="flex-1 min-w-0">
                 <div className="text-sm text-text-primary truncate">
-                  {t('undo.history.unwind.label')}
+                  {t(isForward ? 'undo.history.rewind.label' : 'undo.history.unwind.label')}
                 </div>
                 <div className="text-xs text-text-secondary">
-                  {t('undo.history.unwind.hint')}
+                  {t(isForward ? 'undo.history.rewind.hint' : 'undo.history.unwind.hint')}
                 </div>
               </div>
             </button>

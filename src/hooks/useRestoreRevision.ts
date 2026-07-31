@@ -59,6 +59,14 @@ export interface RestoreRevisionArgs {
    * warning.
    */
   discardUnpushed?: boolean;
+  /**
+   * [#303] This chain step walks FORWARD (toward BASE) rather than back. It selects which
+   * stack the backend requires empty before the swap: going back, the undo stack, so the
+   * tree sits at the parent's state; going forward, the redo stack, so every operation of
+   * the commit being sat on has been re-applied and the child's history stacks on cleanly.
+   * Only meaningful alongside `keepUndoHistory`, and clamped to it below.
+   */
+  chainForward?: boolean;
 }
 
 /**
@@ -95,6 +103,7 @@ export function useRestoreRevision() {
       entryPath,
       keepUndoHistory = false,
       discardUnpushed = false,
+      chainForward = false,
     }: RestoreRevisionArgs) => {
       // The backend hardcodes concurrent_session:false for an in-place revision swap
       // (the open project is unchanged), so unlike the open/adopt flow there is no
@@ -113,6 +122,9 @@ export function useRestoreRevision() {
         // ...and the acknowledgement only means anything alongside that history-keeping
         // Restore, which is the only shape the backend consults it for.
         discardUnpushed: restore && keepUndoHistory && discardUnpushed,
+        // ...and likewise the direction, which only selects a guard that a
+        // history-keeping Restore is the one caller to reach.
+        chainForward: restore && keepUndoHistory && chainForward,
       });
       // The backend closed + reopened the project at the swapped tree; pull the new
       // geometry + link state in. The on-disk copy IS the checked-out tree (saved),

@@ -70,6 +70,66 @@ impl Database {
         Ok(())
     }
 
+    /// [#303] Record how far the undo history LOADED by a chain step reaches, as the
+    /// instant everything at or before it was inherited rather than authored here.
+    /// `None` clears it ("nothing in the stack came from a loaded revision").
+    ///
+    /// A timestamp rather than a stack position, and that is not a detail. Entries are
+    /// written back with `sequence` = position, so a position watermark stops meaning
+    /// anything the moment the stack shrinks: load two entries (0, 1), undo one, edit, and
+    /// the new entry is written at 1 - the id a LOADED entry had. Cutting `sequence <= 1`
+    /// would delete the user's own work. A timestamp belongs to the entry rather than to
+    /// its slot, so it survives undo, redo and truncation alike.
+    ///
+    /// Its own table rather than a column on `speleo_undo_chain`, because the two have
+    /// different lifetimes: a forward edit clears the chain pointer, and must NOT clear
+    /// this - outliving the edit is the entire point of it.
+    pub fn save_speleo_undo_watermark(&self, inherited_through: Option<&str>) -> Result<()> {
+        self.conn.execute(
+            "CREATE TABLE IF NOT EXISTS speleo_undo_watermark (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                inherited_through TEXT NOT NULL
+            )",
+            [],
+        )?;
+        match inherited_through {
+            Some(ts) => {
+                self.conn.execute(
+                    "INSERT INTO speleo_undo_watermark (id, inherited_through) VALUES (1, ?1)
+                     ON CONFLICT(id) DO UPDATE SET inherited_through = excluded.inherited_through",
+                    params![ts],
+                )?;
+            }
+            None => {
+                self.conn.execute("DELETE FROM speleo_undo_watermark", [])?;
+            }
+        }
+        Ok(())
+    }
+
+    /// [#303] The instant through which this copy's undo stack was inherited from a loaded
+    /// revision, if any. `None` means every entry was authored in this session, so a push
+    /// carries the lot - which is the ordinary lock-edit-push case.
+    pub fn load_speleo_undo_watermark(&self) -> Result<Option<String>> {
+        let exists: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='speleo_undo_watermark'",
+            [],
+            |row| row.get(0),
+        )?;
+        if exists == 0 {
+            return Ok(None);
+        }
+        match self.conn.query_row(
+            "SELECT inherited_through FROM speleo_undo_watermark WHERE id = 1",
+            [],
+            |row| row.get::<_, String>(0),
+        ) {
+            Ok(ts) => Ok(Some(ts)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
     /// [#303] Record which SpeleoDB revision the working copy has been UNWOUND to, so
     /// the next Unwind walks to that revision's first parent instead of back to BASE.
     /// `None` clears it ("not mid-unwind").

@@ -474,9 +474,19 @@ pub(super) enum PushOutcome {
 /// undo history since the last commit, which is what gives undo cross-commit reach.
 /// The redo stack is stripped in every mode.
 ///
+/// `inherited_through` (#303) narrows what "since the last commit" means when a chain
+/// step has loaded a past commit's history into the stack: everything at or before that
+/// instant was inherited rather than authored here, and is cut from the COPY so it does
+/// not ride into the new commit twice. `None` on the ordinary lock-edit-push path, where
+/// every entry is this session's.
+///
 /// FATAL for the push: an unsanitized snapshot must never be uploaded.
-fn clear_snapshot_dirty(snapshot: &Path, keep_undo: bool) -> Result<(), SpeleoDbError> {
-    crate::persistence::Database::sanitize_push_snapshot(snapshot, keep_undo)
+fn clear_snapshot_dirty(
+    snapshot: &Path,
+    keep_undo: bool,
+    inherited_through: Option<&str>,
+) -> Result<(), SpeleoDbError> {
+    crate::persistence::Database::sanitize_push_snapshot(snapshot, keep_undo, inherited_through)
         .map_err(|e| SpeleoDbError::Io(format!("could not sanitize the push snapshot: {e}")))
 }
 
@@ -2957,6 +2967,30 @@ impl AppState {
         // together, so the None branch of edits_captured_by_push is unreachable for
         // a real dirty bit here.)
         let push_start = chrono::Utc::now().to_rfc3339();
+        // [#303] A SECOND instant, for the undo stack only, and deliberately not the same
+        // one. These two comparisons ask different questions:
+        //
+        // - `push_start` above asks "did a real edit happen after the snapshot?", against
+        //   `last_edit_at`, which `mark_remote_dirty` stamps from the wall clock. That has
+        //   to stay wall-clock, or an edit landing DURING the push would read as captured
+        //   and have its dirty bit cleared without ever being uploaded.
+        // - this one asks "which stack entries did the upload contain?", against stamps
+        //   the stack orders itself (`UndoStack::next_stamp`). Those can sit slightly
+        //   ahead of the wall clock - a chain step loads entries stamped by whichever
+        //   machine authored them - and an entry above the cutoff is simply never cleared,
+        //   so the next push carries it a second time.
+        //
+        // Taken at push START, not at clear time: an edit made while the upload is in
+        // flight stamps above this and must survive, exactly as it does for `push_start`.
+        let undo_cutoff = self
+            .undo_stack
+            .lock()
+            .ok()
+            .and_then(|stack| stack.newest_stamp())
+            .map_or_else(
+                || push_start.clone(),
+                |newest| newest.max(chrono::Utc::now()).to_rfc3339(),
+            );
 
         // Flush in-memory state to the live `.stalx` FIRST, THEN render the `.tml`.
         // save_project heals the in-memory project (mints + DEDUPS shot UUIDs and
@@ -2977,6 +3011,10 @@ impl AppState {
         // persisted (which is why this reads after `save_project`, not before);
         // everything else strips it exactly as before.
         let keep_undo = self.undo_policy().pushes_history();
+        // [#303] ...and how much of that history was only LOADED here by a chain step. Read
+        // from the live file for the same reason and at the same moment: the flush above
+        // has just written the stack these rows are cut from.
+        let inherited_through = self.speleodb_inherited_through();
 
         // Self-contained snapshot of the live `.stalx` (#195), dirty bit cleared in
         // the COPY so it never rides to the server.
@@ -2985,7 +3023,8 @@ impl AppState {
         // FATAL if it fails: an unsanitized snapshot still carries the pusher's redo
         // history (and a stale dirty bit) and must never be uploaded. In Disabled mode
         // the undo history is fatal to leak too; in Full mode it is the payload.
-        clear_snapshot_dirty(&snapshot, keep_undo).map_err(local_dto)?;
+        clear_snapshot_dirty(&snapshot, keep_undo, inherited_through.as_deref())
+            .map_err(local_dto)?;
 
         let result = self.speleodb_handle_auth(
             Endpoint::UploadAuto,
@@ -3058,7 +3097,7 @@ impl AppState {
                     }
                 })
                 .map_err(local_dto)?;
-                self.speleodb_clear_undo_after_push(&push_start);
+                self.speleodb_clear_undo_after_push(&undo_cutoff);
                 Ok(landed)
             }
             Err(e) => {
@@ -3088,7 +3127,7 @@ impl AppState {
                         }
                     })
                     .map_err(local_dto)?;
-                    self.speleodb_clear_undo_after_push(&push_start);
+                    self.speleodb_clear_undo_after_push(&undo_cutoff);
                     return Ok(landed);
                 }
                 // Ambiguous (retried-then-exhausted 5xx, or a transport drop): we
@@ -3196,6 +3235,10 @@ impl AppState {
         // is stale: the next Unwind restarts from BASE rather than resuming a walk that
         // described a different working copy.
         self.speleodb_set_unwound_from(None);
+        // ...and with the inherited history about to go with it, nothing in the stack is
+        // inherited any more. A watermark left behind would cut this session's own work
+        // out of its first push.
+        self.speleodb_set_inherited_through(None);
         if let Ok(mut stack) = self.undo_stack.lock() {
             if stack.is_empty() && !stack.can_redo() {
                 return;
@@ -3219,10 +3262,16 @@ impl AppState {
     /// issue exists to remove - and the hybrid model's answer to "undo past the last
     /// commit" is the explicit Unwind, which fetches that commit's history back.
     ///
-    /// Bounded by `push_start`, not "clear everything": an edit recorded after the
+    /// Bounded by a cutoff, not "clear everything": an edit recorded after the
     /// snapshot was taken is NOT on the server, and the arms above deliberately keep its
     /// dirty bit so the next push carries it. Its undo entry has to survive with it, or
     /// that push would upload a dirty project whose pending edit had no history.
+    ///
+    /// [#303] That cutoff is `undo_cutoff` from the push site, NOT the wall-clock
+    /// `push_start` the dirty-bit arms use. Stack stamps are ordered by the stack itself
+    /// and can sit slightly ahead of the wall clock, and an entry above the cutoff is
+    /// never cleared - so the next push would carry it a second time. See the push site
+    /// for why the two instants have to stay separate.
     ///
     /// Runs in EVERY mode. In Disabled mode nothing was uploaded, but a push still ends
     /// the undo session (Q23) - one rule, so "what happened to my history" has one
@@ -3244,6 +3293,10 @@ impl AppState {
         // made a new commit, so the next Unwind must restart from the new BASE - whose
         // file carries the history this push just uploaded.
         self.speleodb_set_unwound_from(None);
+        // The watermark goes with it: the clear-on-push below empties the stack of
+        // everything the upload carried, inherited rows included, so there is nothing left
+        // for it to describe.
+        self.speleodb_set_inherited_through(None);
         if let Ok(mut stack) = self.undo_stack.lock() {
             let dropped = stack.drop_entries_up_to(cutoff);
             if dropped > 0 {
@@ -3620,7 +3673,7 @@ mod tests {
             .expect("stamp dirty link");
         }
 
-        clear_snapshot_dirty(&path, false).expect("sanitize the snapshot");
+        clear_snapshot_dirty(&path, false, None).expect("sanitize the snapshot");
 
         let db = Database::open_existing(&path).expect("reopen snapshot");
         let link = db

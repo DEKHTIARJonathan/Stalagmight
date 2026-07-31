@@ -456,6 +456,18 @@ impl AppState {
                 .and_then(|db| db.load_speleo_undo_chain().ok().flatten())
         };
 
+        // [#303] ...and the inherited-history watermark, for the same reason and with a
+        // sharper failure. It decides which undo rows are cut from the next upload, so a
+        // save that dropped it would silently let a loaded revision's history ride into
+        // the commit as though the user had authored it here - the very duplication the
+        // watermark exists to prevent, reintroduced by an idle autosave.
+        let speleo_undo_watermark = {
+            let db_guard = self.database.lock().unwrap_or_else(|e| e.into_inner());
+            db_guard
+                .as_ref()
+                .and_then(|db| db.load_speleo_undo_watermark().ok().flatten())
+        };
+
         // Remove any leftover temp file from previous failed saves
         if temp_path.exists() {
             let _ = std::fs::remove_file(&temp_path);
@@ -544,6 +556,19 @@ impl AppState {
                     "Failed to copy speleo_undo_chain onto the fresh save file; the next \
                      Unwind will restart from BASE and may warn about un-pushed work that \
                      is only a previous Unwind's own doing"
+                );
+            }
+        }
+
+        // [#303] Likewise the inherited-history watermark.
+        if let Some(ts) = &speleo_undo_watermark {
+            if let Err(e) = db.save_speleo_undo_watermark(Some(ts)) {
+                tracing::warn!(
+                    error = %e,
+                    purpose = "preserve the inherited-history watermark on save (#303)",
+                    "Failed to copy speleo_undo_watermark onto the fresh save file; the next \
+                     push would carry the loaded revision's history as if it had been \
+                     authored in this session"
                 );
             }
         }

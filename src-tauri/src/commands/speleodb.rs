@@ -33,8 +33,8 @@ use crate::speleodb::{
     SpeleoDumpCandidate, SpeleoErrorDto, SpeleoLinkStatus, SpeleoLocalProjectState,
     SpeleoLoginResult, SpeleoOpenResult, SpeleoProjectMetadata, SpeleoProjectMetadataPatch,
     SpeleoProjectSummary, SpeleoPublishParams, SpeleoPublishResult, SpeleoRevision,
-    SpeleoSessionStatus, SpeleoTeamOption, SpeleoUnwindTarget, SpeleoUserSuggestion,
-    StartEditingResult, UpdateResult,
+    SpeleoRewindTarget, SpeleoSessionStatus, SpeleoTeamOption, SpeleoUnwindTarget,
+    SpeleoUserSuggestion, StartEditingResult, UpdateResult,
 };
 
 /// Run a blocking SpeleoDB orchestration call off the main thread. The
@@ -363,10 +363,12 @@ pub async fn speleodb_restore_revision(
     entry_path: Option<String>,
     keep_undo_history: Option<bool>,
     discard_unpushed: Option<bool>,
+    chain_forward: Option<bool>,
 ) -> Result<SpeleoOpenResult, SpeleoErrorDto> {
     let discard_local = discard_local.unwrap_or(false);
     let keep_undo_history = keep_undo_history.unwrap_or(false);
     let discard_unpushed = discard_unpushed.unwrap_or(false);
+    let chain_forward = chain_forward.unwrap_or(false);
     run_blocking(app, move |s| {
         s.speleodb_restore_revision(
             project_id,
@@ -377,6 +379,7 @@ pub async fn speleodb_restore_revision(
             entry_path,
             keep_undo_history,
             discard_unpushed,
+            chain_forward,
         )
     })
     .await
@@ -394,6 +397,23 @@ pub async fn speleodb_unwind_target(
     app: AppHandle,
 ) -> Result<Option<SpeleoUnwindTarget>, SpeleoErrorDto> {
     run_blocking(app, AppState::speleodb_unwind_target).await
+}
+
+/// [#303] Which revision a "Redo into next SpeleoDB version" step would load, or `None`
+/// when there is nothing ahead: not mid-walk (the copy is already at BASE), already back
+/// at BASE, or a chain pointer that cannot be walked from.
+///
+/// That first case is also how an edit removes the direction - a forward command drops the
+/// chain pointer, so this stops resolving and the frontend hides the entry rather than
+/// offering a step that would discard the edit.
+///
+/// Same cost and same timing as its backward twin: one `GET /revisions/`, asked when the
+/// redo dropdown opens rather than on every status poll.
+#[tauri::command]
+pub async fn speleodb_rewind_target(
+    app: AppHandle,
+) -> Result<Option<SpeleoRewindTarget>, SpeleoErrorDto> {
+    run_blocking(app, AppState::speleodb_rewind_target).await
 }
 
 /// [#303] Set the open project's per-project undo-history policy

@@ -40,9 +40,9 @@ pub use models::{
     RemoteState, SpeleoAdoptResult, SpeleoCollaborator, SpeleoCollaborators, SpeleoDumpCandidate,
     SpeleoErrorDto, SpeleoLinkStatus, SpeleoLocalProjectState, SpeleoLoginResult, SpeleoOpenResult,
     SpeleoProjectMetadata, SpeleoProjectMetadataPatch, SpeleoProjectSummary, SpeleoPublishParams,
-    SpeleoPublishResult, SpeleoRevision, SpeleoSessionStatus, SpeleoTeamGrant, SpeleoTeamOption,
-    SpeleoUnwindTarget, SpeleoUserSuggestion, StartEditingResult, TokenStorage, UnpushedLocalEdits,
-    UpdateResult, Visibility,
+    SpeleoPublishResult, SpeleoRevision, SpeleoRewindTarget, SpeleoSessionStatus, SpeleoTeamGrant,
+    SpeleoTeamOption, SpeleoUnwindTarget, SpeleoUserSuggestion, StartEditingResult, TokenStorage,
+    UnpushedLocalEdits, UpdateResult, Visibility,
 };
 
 /// Errors from the SpeleoDB client and dump handling.

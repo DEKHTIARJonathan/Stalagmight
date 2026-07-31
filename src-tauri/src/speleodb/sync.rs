@@ -561,6 +561,53 @@ pub(crate) fn unwind_target(
     }
 }
 
+/// [#303] Which revision a forward chain step should check out - the mirror of
+/// [`unwind_target`], walking back UP toward BASE instead of down toward the root.
+///
+/// The pointer is the whole input. A forward step is only defined relative to a walk in
+/// progress: with no pointer the copy is already at BASE and there is nothing ahead of it,
+/// which is also what makes an edit disable this direction (a forward command drops the
+/// pointer - see `speleodb_forget_unwind_position`).
+///
+/// The child is found by walking the first-parent chain DOWN from BASE and taking the
+/// commit whose parent is where we stand - never by scanning for "any commit whose parent
+/// is `current`". Two commits can name the same parent (a branchy history, or a server that
+/// retains an abandoned line), and `authored_date` cannot break the tie - the same
+/// unreliable ordering [`display_history`] refuses to trust. Walking from BASE yields the
+/// child on OUR path or nothing.
+///
+/// BASE is the end of the line. Anything beyond it is work this copy never had - another
+/// session's push - and adopting that is an Update, not a step through our own history.
+///
+/// Returns `(hexsha, is_latest)` where `is_latest` marks the step that lands back ON BASE,
+/// so the caller can say "return to the latest version" instead of naming a revision.
+#[must_use]
+pub(crate) fn rewind_target(
+    unwound_from: Option<&str>,
+    base: Option<&str>,
+    commits: &[RevisionCommit],
+) -> Option<(String, bool)> {
+    let current = unwound_from?;
+    let base = base?;
+    // Already home: the walk has nothing further forward to offer.
+    if base.eq_ignore_ascii_case(current) {
+        return None;
+    }
+    // Walk BASE -> root by first parents, remembering the commit we came from, and stop
+    // when a parent is where we stand: that child is the next step on our own path.
+    let mut child = commits.iter().find(|c| c.id.eq_ignore_ascii_case(base))?;
+    loop {
+        let parent = child.parent_ids.first()?;
+        if parent.eq_ignore_ascii_case(current) {
+            let is_latest = child.id.eq_ignore_ascii_case(base);
+            return Some((child.id.clone(), is_latest));
+        }
+        // A pointer naming a commit outside the fetched range walks off the end here and
+        // yields `None`, so the affordance hides rather than offering an unreachable step.
+        child = commits.iter().find(|c| c.id.eq_ignore_ascii_case(parent))?;
+    }
+}
+
 fn is_project_creation_commit(commit: &RevisionCommit) -> bool {
     const CREATION_MESSAGE: &str = "[automated] project creation";
     commit.parent_ids.is_empty()
@@ -664,9 +711,9 @@ pub(crate) fn concurrent_session_notice(active_mutex_user: Option<&str>, my_emai
 mod tests {
     use super::{
         base_is_ancestor_of_tip, classify_ancestry, concurrent_session_notice, display_history,
-        edits_captured_by_push, fence, plan_push, poll_verdict, reconcile_verdict, tip_of,
-        unwind_target, AncestryOutcome, FenceOutcome, PushPlan, ReconcileVerdict, RemoteState,
-        RevisionCommit,
+        edits_captured_by_push, fence, plan_push, poll_verdict, reconcile_verdict, rewind_target,
+        tip_of, unwind_target, AncestryOutcome, FenceOutcome, PushPlan, ReconcileVerdict,
+        RemoteState, RevisionCommit,
     };
 
     /// Build a revision-history commit with the given parents and author.
@@ -1482,5 +1529,99 @@ mod tests {
         let commits = vec![creation_commit("root"), commit("c1", &["root"], ME)];
         assert!(unwind_target(Some("deadbeef"), Some("c1"), &commits).is_none());
         assert!(unwind_target(None, Some("deadbeef"), &commits).is_none());
+    }
+
+    // --- [#303] rewind_target: the same walk, forward ---
+
+    /// Mid-walk, the forward step is the child of where we stand ON THE PATH BACK TO BASE,
+    /// and it retraces exactly the commits the backward walk visited.
+    #[test]
+    fn rewind_steps_back_up_the_chain_it_came_down() {
+        let commits = vec![
+            creation_commit("root"),
+            commit("c1", &["root"], ME),
+            commit("c2", &["c1"], ME),
+            commit("c3", &["c2"], ME),
+        ];
+        // Standing on c1 (two unwinds down from BASE c3), forward goes c1 -> c2 -> c3.
+        let (target, is_latest) =
+            rewind_target(Some("c1"), Some("c3"), &commits).expect("c2 is the next step up");
+        assert_eq!(target, "c2");
+        assert!(!is_latest, "c2 is not BASE, so this is not the last step");
+
+        let (target, is_latest) =
+            rewind_target(Some("c2"), Some("c3"), &commits).expect("c3 is reachable");
+        assert_eq!(target, "c3");
+        assert!(
+            is_latest,
+            "landing on BASE is the step that returns the copy to the latest version"
+        );
+    }
+
+    /// The two ends of the walk, where there is nothing ahead.
+    #[test]
+    fn rewind_has_no_target_at_base_or_off_the_chain() {
+        let commits = vec![
+            creation_commit("root"),
+            commit("c1", &["root"], ME),
+            commit("c2", &["c1"], ME),
+        ];
+        assert!(
+            rewind_target(None, Some("c2"), &commits).is_none(),
+            "not mid-walk: the copy is already at BASE, so there is nothing ahead of it - \
+             this is also what makes an edit (which drops the pointer) disable the direction"
+        );
+        assert!(
+            rewind_target(Some("c2"), Some("c2"), &commits).is_none(),
+            "already home"
+        );
+        assert!(
+            rewind_target(Some("deadbeef"), Some("c2"), &commits).is_none(),
+            "a pointer outside the fetched range walks off the end and fails closed"
+        );
+        assert!(
+            rewind_target(Some("c1"), None, &commits).is_none(),
+            "no BASE means no path to walk back along"
+        );
+    }
+
+    /// The child is taken from BASE's own first-parent chain, never by scanning for any
+    /// commit that names `current` as a parent. An abandoned line can share our parent, and
+    /// `authored_date` cannot break that tie - so a scan could hand back a commit that is
+    /// not on our path and walk the copy onto someone else's history.
+    #[test]
+    fn rewind_follows_our_own_path_when_a_sibling_shares_the_parent() {
+        let commits = vec![
+            creation_commit("root"),
+            commit("c1", &["root"], ME),
+            // Both descend from c1; only `mine` is on the path from BASE.
+            commit("abandoned", &["c1"], ME),
+            commit("mine", &["c1"], ME),
+            commit("base", &["mine"], ME),
+        ];
+        let (target, _) = rewind_target(Some("c1"), Some("base"), &commits).expect("our own child");
+        assert_eq!(
+            target, "mine",
+            "the step must follow BASE's ancestry, not whichever sibling was listed first"
+        );
+    }
+
+    /// Merges take the mainline parent, matching `unwind_target`'s descent.
+    #[test]
+    fn rewind_takes_the_mainline_parent_across_a_merge() {
+        let commits = vec![
+            creation_commit("root"),
+            commit("c1", &["root"], ME),
+            commit("side", &["root"], ME),
+            commit("merge", &["c1", "side"], ME),
+        ];
+        let (target, is_latest) =
+            rewind_target(Some("c1"), Some("merge"), &commits).expect("mainline child");
+        assert_eq!(target, "merge");
+        assert!(is_latest);
+        assert!(
+            rewind_target(Some("side"), Some("merge"), &commits).is_none(),
+            "the second parent is off the mainline, so it is not a step on our path"
+        );
     }
 }

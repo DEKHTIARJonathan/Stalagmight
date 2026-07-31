@@ -189,21 +189,96 @@ describe('UndoHistoryDropdown - the Unwind entry (#303)', () => {
     expect(screen.queryByTestId('toolbar-undo-button-dropdown')).not.toBeInTheDocument();
   });
 
-  it('is absent on the REDO side - history only walks backwards', async () => {
-    seedLink(true);
-    render(
-      <UndoHistoryDropdown
-        mode="redo"
-        disabled={false}
-        onSingleAction={vi.fn()}
-        testId="toolbar-redo-button"
-        ariaLabel="Redo"
-      >
-        Redo
-      </UndoHistoryDropdown>,
-    );
-    await userEvent.hover(screen.getByTestId('toolbar-redo-button'));
-    await new Promise((r) => setTimeout(r, 500));
-    expect(screen.queryByTestId('toolbar-redo-button-unwind')).not.toBeInTheDocument();
+  // [#303] The forward half. The walk is not one-way: the commits you came from are still
+  // on the server and the chain pointer still knows where you are, so the redo dropdown
+  // offers the mirror step past the bottom of ITS stack.
+  describe('the forward step on the REDO side', () => {
+    const renderRedo = () =>
+      render(
+        <UndoHistoryDropdown
+          mode="redo"
+          disabled
+          hoverableWhenEmpty
+          onSingleAction={vi.fn()}
+          testId="toolbar-redo-button"
+          ariaLabel="Redo"
+        >
+          Redo
+        </UndoHistoryDropdown>,
+      );
+
+    const hoverRedo = async () => {
+      await userEvent.hover(screen.getByTestId('toolbar-redo-button'));
+      await waitFor(
+        () => expect(screen.getByTestId('toolbar-redo-button-dropdown')).toBeInTheDocument(),
+        { timeout: 2000 },
+      );
+    };
+
+    it('offers the step, and asks the FORWARD command for its target', async () => {
+      invokeIpcMock.mockImplementation((cmd: string) => {
+        if (cmd === 'get_undo_stack' || cmd === 'get_redo_stack') return Promise.resolve([]);
+        // Only the forward command answers: asking the backward one here would walk the
+        // copy the wrong way.
+        if (cmd === 'speleodb_rewind_target')
+          return Promise.resolve({ hexsha: 'fedcba9876543210', is_latest: false });
+        return Promise.resolve(null);
+      });
+      seedLink(true);
+      renderRedo();
+      await hoverRedo();
+
+      await waitFor(() =>
+        expect(screen.getByTestId('toolbar-redo-button-unwind')).toBeInTheDocument(),
+      );
+      expect(screen.getByText(/Redo into next SpeleoDB version/)).toBeInTheDocument();
+      expect(invokeIpcMock).toHaveBeenCalledWith('speleodb_rewind_target');
+      expect(invokeIpcMock).not.toHaveBeenCalledWith('speleodb_unwind_target');
+    });
+
+    it('raises the confirmation marked forward, and acts on nothing', async () => {
+      invokeIpcMock.mockImplementation((cmd: string) => {
+        if (cmd === 'get_undo_stack' || cmd === 'get_redo_stack') return Promise.resolve([]);
+        if (cmd === 'speleodb_rewind_target')
+          return Promise.resolve({ hexsha: 'fedcba9876543210', is_latest: true });
+        return Promise.resolve(null);
+      });
+      seedLink(true);
+      renderRedo();
+      await hoverRedo();
+      await waitFor(() =>
+        expect(screen.getByTestId('toolbar-redo-button-unwind')).toBeInTheDocument(),
+      );
+
+      await userEvent.click(screen.getByTestId('toolbar-redo-button-unwind'));
+
+      expect(useUIStore.getState().activeDialog).toBe('speleodb-unwind');
+      expect(useUIStore.getState().dialogData).toMatchObject({
+        hexsha: 'fedcba9876543210',
+        forward: true,
+        isLatest: true,
+      });
+      expect(invokeIpcMock).not.toHaveBeenCalledWith(
+        'speleodb_restore_revision',
+        expect.anything(),
+      );
+    });
+
+    // The user's third requirement, and it needs no code of its own: a forward command
+    // drops the chain pointer, the backend can no longer resolve a step relative to it,
+    // and the entry disappears rather than offering to discard the edit.
+    it('disappears once there is no chain position to step forward from', async () => {
+      invokeIpcMock.mockImplementation((cmd: string) => {
+        if (cmd === 'get_undo_stack' || cmd === 'get_redo_stack') return Promise.resolve([]);
+        // What `speleodb_rewind_target` returns after an edit.
+        return Promise.resolve(null);
+      });
+      seedLink(true);
+      renderRedo();
+      await hoverRedo();
+
+      await new Promise((r) => setTimeout(r, 300));
+      expect(screen.queryByTestId('toolbar-redo-button-unwind')).not.toBeInTheDocument();
+    });
   });
 });

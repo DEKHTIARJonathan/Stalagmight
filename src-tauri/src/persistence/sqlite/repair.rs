@@ -77,12 +77,16 @@ impl Database {
     ///   downgrade-and-return round trip.
     /// - `speleo_undo_chain` - which revision this machine has unwound to (#303). Local
     ///   progress through history, not a property of the project.
+    /// - `speleo_undo_watermark` - how far THIS machine's stack was inherited from a
+    ///   loaded revision (#303). It exists to decide what to cut from the upload; shipping
+    ///   it would tell the next puller to cut their own history against our clock.
     const PUSH_SNAPSHOT_LOCAL_TABLES: &[&str] = &[
         "display_settings",
         "undo_stack",
         "redo_stack",
         "collab_state",
         "speleo_undo_chain",
+        "speleo_undo_watermark",
     ];
 
     /// The subset of [`Self::PUSH_SNAPSHOT_LOCAL_TABLES`] whose strip is FATAL to the
@@ -142,7 +146,54 @@ impl Database {
     /// only marks pages free, so without it every deleted undo row is still
     /// physically present in the bytes that get uploaded. `VACUUM` rewrites the file
     /// from the live pages, dropping the freed ones for real.
-    pub fn sanitize_push_snapshot(snapshot: &Path, keep_undo: bool) -> Result<()> {
+    /// [#303] Delete the undo rows a chain step INHERITED, leaving the ones authored in
+    /// this session. Snapshot-only: the live stack keeps everything, so the user can still
+    /// undo back through the loaded history after the push.
+    ///
+    /// Timestamps decide it, not positions - see `save_speleo_undo_watermark` for why a
+    /// position watermark would delete the user's own work once the stack shrinks. Rows are
+    /// parsed and compared in Rust rather than in SQL because `executed_at` is written with
+    /// variable fractional digits, so a lexicographic `<=` would be answering a slightly
+    /// different question than it appears to.
+    ///
+    /// A row with no parseable timestamp is CUT. Those are legacy entries, which
+    /// necessarily predate this session - the same reading `UndoStack::drop_entries_up_to`
+    /// already gives them.
+    fn cut_inherited_undo_rows(conn: &Connection, watermark: &str) -> Result<usize> {
+        let Ok(cutoff) = chrono::DateTime::parse_from_rfc3339(watermark) else {
+            // An unreadable watermark must not silently widen into "cut nothing": that is
+            // the duplication bug. Fail the push instead - it is recoverable, a wrong
+            // commit is not.
+            anyhow::bail!("unparseable inherited-history watermark `{watermark}`");
+        };
+        let mut doomed: Vec<i64> = Vec::new();
+        {
+            let mut stmt = conn.prepare("SELECT id, executed_at FROM undo_stack")?;
+            let rows = stmt.query_map([], |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, Option<String>>(1)?))
+            })?;
+            for row in rows {
+                let (id, executed_at) = row?;
+                let inherited = executed_at
+                    .as_deref()
+                    .and_then(|ts| chrono::DateTime::parse_from_rfc3339(ts).ok())
+                    .is_none_or(|ts| ts <= cutoff);
+                if inherited {
+                    doomed.push(id);
+                }
+            }
+        }
+        for id in &doomed {
+            conn.execute("DELETE FROM undo_stack WHERE id = ?1", [id])?;
+        }
+        Ok(doomed.len())
+    }
+
+    pub fn sanitize_push_snapshot(
+        snapshot: &Path,
+        keep_undo: bool,
+        inherited_through: Option<&str>,
+    ) -> Result<()> {
         // NOT a transaction: VACUUM cannot run inside one, and rusqlite only opens
         // an explicit transaction when asked, so these statements auto-commit
         // individually and the VACUUM at the end runs outside any.
@@ -156,6 +207,21 @@ impl Database {
             // what makes the commit carry the operations that produced it. `redo_stack`
             // is NOT exempted - it is never uploaded in any mode.
             if keep_undo && *table == "undo_stack" {
+                // ...but only the part of it this session authored. A chain step loads a
+                // past commit's history into the stack so the user can keep undoing, and
+                // that scaffolding must not ride into the next commit - it already lives
+                // in the commit it came from, and shipping it again duplicates every one
+                // of those operations.
+                if let Some(watermark) = inherited_through {
+                    if Self::table_exists_on(&conn, table)? {
+                        let cut = Self::cut_inherited_undo_rows(&conn, watermark)?;
+                        tracing::debug!(
+                            cut,
+                            watermark = %watermark,
+                            "sanitize_push_snapshot: dropped inherited undo rows from the upload"
+                        );
+                    }
+                }
                 continue;
             }
             if !Self::table_exists_on(&conn, table)? {
@@ -537,7 +603,7 @@ mod tests {
         db.save_display_setting("grid", "on").expect("seed a local");
         drop(db);
 
-        Database::sanitize_push_snapshot(&snapshot, false).expect("sanitize");
+        Database::sanitize_push_snapshot(&snapshot, false, None).expect("sanitize");
 
         assert!(
             !Database::vacuum_temp_path(&snapshot).exists(),
@@ -571,7 +637,8 @@ mod tests {
         let stale = Database::vacuum_temp_path(&snapshot);
         std::fs::write(&stale, b"leftover from a killed push").expect("plant a leftover");
 
-        Database::sanitize_push_snapshot(&snapshot, false).expect("sanitize past the leftover");
+        Database::sanitize_push_snapshot(&snapshot, false, None)
+            .expect("sanitize past the leftover");
 
         assert!(
             !stale.exists(),
@@ -616,7 +683,7 @@ mod tests {
             eprintln!("Skipping: test requires non-root (chmod 555 has no effect as root)");
             return;
         }
-        let result = Database::sanitize_push_snapshot(&snapshot, false);
+        let result = Database::sanitize_push_snapshot(&snapshot, false, None);
         std::fs::set_permissions(&staging, std::fs::Permissions::from_mode(0o755))
             .expect("restore permissions so tempdir can clean up");
 

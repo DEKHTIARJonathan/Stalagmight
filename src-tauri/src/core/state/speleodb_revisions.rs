@@ -18,7 +18,7 @@ use super::speleodb_cache::{
 use super::speleodb_pull::{ArianeRoute, StalxAmbiguity};
 use super::AppState;
 use crate::speleodb::contract::{dto_for_error, Endpoint};
-use crate::speleodb::models::{SpeleoRevision, SpeleoUnwindTarget};
+use crate::speleodb::models::{SpeleoRevision, SpeleoRewindTarget, SpeleoUnwindTarget};
 use crate::speleodb::{client, dump, sync};
 use crate::speleodb::{SpeleoDbError, SpeleoErrorDto, SpeleoOpenResult};
 
@@ -104,11 +104,15 @@ impl AppState {
     ///
     /// Two of them, and the second is the interesting one:
     ///
-    /// 1. **The in-memory undo stack must be EMPTY.** That is what makes "the working copy
-    ///    equals a commit" true: the stack is cleared at a lock or a confirmed push, and
+    /// 1. **The stack in the direction of travel must be EMPTY.** That is what makes "the
+    ///    working copy equals a commit" true, and which stack it is mirrors the step.
+    ///    Going BACK, the undo stack: it is cleared at a lock or a confirmed push, so
     ///    undoing everything since then returns the tree to exactly that commit's state.
-    ///    With entries still on the stack, the copy sits somewhere BETWEEN commits, and
-    ///    checking out a revision would silently discard the un-undone work.
+    ///    Going FORWARD, the redo stack: every operation of the commit being sat on has
+    ///    been re-applied, so the tree really is that commit's and the child's history
+    ///    stacks onto it cleanly. Either way, entries left on that stack mean the copy sits
+    ///    somewhere BETWEEN commits, and checking out a revision would silently discard the
+    ///    work that has not been walked through yet.
     /// 2. **Dirt that no Unwind put there must be acknowledged.** See
     ///    [`unwind_discards_unpushed`] for which dirt that is. It used to be a flat
     ///    refusal, on the grounds that un-pushed work "must not be discarded on the
@@ -123,13 +127,25 @@ impl AppState {
         &self,
         link: &crate::models::SpeleoLink,
         discard_unpushed: bool,
+        chain_forward: bool,
     ) -> Result<(), SpeleoErrorDto> {
-        // A poisoned lock reads as "not empty", i.e. REFUSE: the guard exists to stop an
-        // Unwind over un-undone work, so it has to fail closed on not knowing.
-        let stack_empty = self.undo_stack.lock().is_ok_and(|s| s.is_empty());
+        // A poisoned lock reads as "not empty", i.e. REFUSE: the guard exists to stop a
+        // chain step over un-walked work, so it has to fail closed on not knowing.
+        let stack_empty = self.undo_stack.lock().is_ok_and(|s| {
+            if chain_forward {
+                s.redo_len() == 0
+            } else {
+                s.is_empty()
+            }
+        });
         if !stack_empty {
             return Err(local_dto(SpeleoDbError::Io(
-                "undo the remaining steps before loading earlier history".to_owned(),
+                if chain_forward {
+                    "redo the remaining steps before loading the next version's history"
+                } else {
+                    "undo the remaining steps before loading earlier history"
+                }
+                .to_owned(),
             )));
         }
         if !discard_unpushed
@@ -159,6 +175,67 @@ impl AppState {
             })?
             .ok()
             .flatten()
+    }
+
+    /// [#303] The instant through which this copy's undo stack was INHERITED from a
+    /// revision a chain step loaded, if any.
+    ///
+    /// Everything at or before it came out of a commit the server already holds, so the
+    /// push cuts it from the upload rather than recording those operations a second time.
+    /// `None` is the ordinary case - a lock clears the stack, so every entry is this
+    /// session's and the whole lot ships.
+    pub(super) fn speleodb_inherited_through(&self) -> Option<String> {
+        self.database
+            .lock()
+            .ok()
+            .and_then(|guard| {
+                guard
+                    .as_ref()
+                    .map(crate::persistence::Database::load_speleo_undo_watermark)
+            })?
+            .ok()
+            .flatten()
+    }
+
+    /// [#303] Record (or clear) that watermark.
+    ///
+    /// Best-effort on the way in, like the chain pointer - but the two failures are not
+    /// symmetric. Losing the chain pointer costs a walk its position; losing this lets a
+    /// loaded revision's history ride into the next commit as though it were authored
+    /// here, which is the duplication this exists to stop. Hence the louder log.
+    pub(super) fn speleodb_set_inherited_through(&self, instant: Option<&str>) {
+        let Ok(guard) = self.database.lock() else {
+            return;
+        };
+        if let Some(db) = guard.as_ref() {
+            if let Err(e) = db.save_speleo_undo_watermark(instant) {
+                tracing::warn!(
+                    error = %e,
+                    purpose = "record the inherited-history watermark (#303)",
+                    "could not persist the undo watermark; the next push may carry a loaded \
+                     revision's history as if this session had authored it"
+                );
+            }
+        }
+    }
+
+    /// [#303] Stamp the watermark for a stack that has just been loaded by a chain step.
+    ///
+    /// `now` would almost always do, but not quite: the entries came off another machine,
+    /// and a pusher with a skewed clock can stamp them in the FUTURE. Those would then sit
+    /// above the watermark and ride into the commit anyway, which is the whole bug. Taking
+    /// the later of `now` and the newest loaded entry makes "at or before" true of every
+    /// row that was just loaded, whatever clock wrote it.
+    fn speleodb_stamp_inherited_watermark(&self) {
+        let newest = self.undo_stack.lock().ok().and_then(|stack| {
+            stack
+                .undo_entries()
+                .filter_map(|entry| entry.timestamp)
+                .max()
+        });
+        let now = chrono::Utc::now();
+        let watermark = newest.map_or(now, |newest| newest.max(now));
+        self.speleodb_set_inherited_through(Some(&watermark.to_rfc3339()));
     }
 
     /// [#303] A forward edit means the working copy is no longer where the Unwind walk
@@ -242,6 +319,39 @@ impl AppState {
         }))
     }
 
+    /// [#303] Which revision a forward chain step would load, and whether that step returns
+    /// the copy to the latest version.
+    ///
+    /// `None` whenever there is nothing ahead: not mid-walk (so the copy is already at
+    /// BASE), already home, or a chain pointer that cannot be walked from. The first of
+    /// those is what makes an edit remove this direction - a forward command drops the
+    /// pointer, so the target stops resolving and the frontend hides the entry rather than
+    /// offering a step that would discard the edit.
+    ///
+    /// Same one `GET /revisions/` as its backward twin, resolved when the redo dropdown
+    /// opens rather than on the status poll.
+    pub(crate) fn speleodb_rewind_target(
+        &self,
+    ) -> Result<Option<SpeleoRewindTarget>, SpeleoErrorDto> {
+        let link = self.speleodb_validated_link()?;
+        // Disabled mode never shipped history, so the commits ahead hold nothing to load.
+        if !self.undo_policy().pushes_history() {
+            return Ok(None);
+        }
+        let (endpoint, token) = self.speleodb_active_token().map_err(local_dto)?;
+        let insecure_http = self.speleodb_insecure_http();
+        let (_, commits) = self
+            .speleodb_server_head(&endpoint, &token, insecure_http, &link.project_id)
+            .map_err(|e| dto_for_error(Endpoint::GetProject, &e))?;
+
+        Ok(sync::rewind_target(
+            self.speleodb_unwound_from().as_deref(),
+            link.base_commit_sha.as_deref(),
+            &commits,
+        )
+        .map(|(hexsha, is_latest)| SpeleoRewindTarget { hexsha, is_latest }))
+    }
+
     /// [#218] The project's revision history for the read-only history view:
     /// `GET /projects/{id}/revisions/`, projected to [`SpeleoRevision`] DTOs (no
     /// token, only the display fields). Takes an arbitrary project id (a GlobalView
@@ -304,6 +414,7 @@ impl AppState {
         entry_path: Option<String>,
         keep_undo_history: bool,
         discard_unpushed: bool,
+        chain_forward: bool,
     ) -> Result<SpeleoOpenResult, SpeleoErrorDto> {
         validate_project_id(&project_id).map_err(local_dto)?;
         validate_hexsha(&hexsha).map_err(local_dto)?;
@@ -339,7 +450,7 @@ impl AppState {
         // gets to make either - it only reports that the dialog showed the user what this
         // throws away; the guard still decides whether that matters.
         if keep_undo_history {
-            self.speleodb_guard_unwind(&open_link, discard_unpushed)?;
+            self.speleodb_guard_unwind(&open_link, discard_unpushed, chain_forward)?;
         }
 
         let (endpoint, token) = self.speleodb_active_token().map_err(local_dto)?;
@@ -552,8 +663,18 @@ impl AppState {
         // continue a walk that no longer describes anything.
         if keep_undo_history {
             self.speleodb_set_unwound_from(Some(&hexsha));
+            // ...and mark the stack that just came back as INHERITED. Everything in it was
+            // authored in a commit the server already holds, so the next push must not
+            // record those operations again on top of whatever the user does from here.
+            // Stamped after the reload for the same reason as the pointer: the reload is
+            // what put these entries in the stack being measured.
+            self.speleodb_stamp_inherited_watermark();
         } else {
             self.speleodb_set_unwound_from(None);
+            // A plain View / Restore dropped the downloaded history (`InheritedUndo::Drop`),
+            // so nothing in the stack is inherited any more and a stale watermark here
+            // would cut the user's own work out of the next push.
+            self.speleodb_set_inherited_through(None);
         }
 
         Ok(SpeleoOpenResult {
@@ -620,7 +741,14 @@ mod tests {
             .expect("guard body precedes the next item's doc");
         assert!(
             body.contains("if !stack_empty"),
-            "an Unwind over a non-empty undo stack would discard the un-undone steps"
+            "a chain step over a non-empty stack would discard the un-walked steps"
+        );
+        // ...and which stack that is follows the direction of travel. Checking the undo
+        // stack for a forward step would let a half-redone copy jump a commit forward,
+        // silently dropping the operations still parked on the redo stack.
+        assert!(
+            body.contains("if chain_forward") && body.contains("s.redo_len() == 0"),
+            "a FORWARD step must require the redo stack empty, not the undo stack"
         );
         assert!(
             body.contains("unwind_discards_unpushed("),
@@ -667,6 +795,43 @@ mod tests {
         assert!(
             reapply < closed,
             "the write must land before the temp database is dropped and renamed"
+        );
+
+        // [#303] The inherited-history watermark needs the same carry-over, and loses more
+        // by missing it: it decides which undo rows are cut from the next upload, so a save
+        // that dropped it would let a loaded revision's history ride into the commit as
+        // though this session had authored it - the duplication it exists to prevent,
+        // reintroduced by an idle autosave.
+        let snapshot_wm = io
+            .find("load_speleo_undo_watermark")
+            .expect("the save path must snapshot the inherited-history watermark");
+        let reapply_wm = io
+            .find("save_speleo_undo_watermark")
+            .expect("...and re-apply it to the fresh file");
+        assert!(
+            snapshot_wm < reapply_wm && reapply_wm < closed,
+            "read from the OLD database, written before the temp file is renamed"
+        );
+    }
+
+    /// [#303] The watermark outlives an edit; the chain pointer does not.
+    ///
+    /// They look like the same kind of state and are cleared by nearly the same events, so
+    /// the one place they differ is worth pinning: a forward command drops the pointer (the
+    /// walk no longer describes the copy) but must LEAVE the watermark, because the whole
+    /// point of it is to still know, at push time, which rows the user never authored. Clear
+    /// it there and the loaded history ships again.
+    #[test]
+    fn a_forward_edit_keeps_the_watermark_even_as_it_drops_the_chain_pointer() {
+        let forward = std::include_str!("commands.rs");
+        assert!(
+            forward.contains("self.speleodb_forget_unwind_position();"),
+            "the forward-command path drops the chain pointer"
+        );
+        assert!(
+            !forward.contains("speleodb_set_inherited_through"),
+            "...and must NOT touch the watermark: an edit is exactly when it starts to \
+             matter, since it is what separates the user's new work from what was loaded"
         );
     }
 

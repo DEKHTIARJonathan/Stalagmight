@@ -2103,6 +2103,9 @@ impl AppState {
         // stripped from every push snapshot), so this is belt-and-braces for the case
         // where the replace left the old one behind.
         self.speleodb_set_unwound_from(None);
+        // ...and the same for the inherited-history watermark: the stack this copy carries
+        // came from the server tip, not from a chain step, so nothing in it is inherited.
+        self.speleodb_set_inherited_through(None);
         Ok(local_path)
     }
 }
