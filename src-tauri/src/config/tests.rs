@@ -3204,10 +3204,23 @@ fn test_save_to_path_leaves_destination_untouched_when_write_cannot_complete() {
         old.save_to_path(&path).unwrap();
 
         // r-xr-xr-x: readable, so the survivor can still be loaded below, but no
-        // new file may be created in it. Not effective as root, which is why this
-        // is not run in a container as root.
+        // new file may be created in it.
         let original = std::fs::metadata(dir.path()).unwrap().permissions();
         std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o555)).unwrap();
+
+        // ...unless we are root, for whom the mode bits are advisory. The
+        // self-hosted CI runner is a container running as uid 0, so this test
+        // passes on hosted runners and fails on that one - which is how it
+        // reached master: the runner picker sent its own PR to hosted. Probe the
+        // property the test depends on rather than the uid behind it, matching
+        // `repair.rs`: `unsafe_code` is denied crate-wide, so `geteuid` is not
+        // available here.
+        if std::fs::File::create(dir.path().join(".root-probe")).is_ok() {
+            let _ = std::fs::remove_file(dir.path().join(".root-probe"));
+            std::fs::set_permissions(dir.path(), original).unwrap();
+            eprintln!("Skipping: test requires non-root (chmod 555 has no effect as root)");
+            return;
+        }
 
         let mut new = Config::default();
         new.general.undo_history_limit = 99;
