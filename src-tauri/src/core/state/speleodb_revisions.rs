@@ -12,7 +12,9 @@
 //! ephemeral, only reversible.
 
 use super::speleodb::{local_dto, validate_project_id, DumpAt};
-use super::speleodb_cache::{restore_display_settings, LocalEditsPolicy};
+use super::speleodb_cache::{
+    preserved_undo_mode, restore_display_settings, InheritedUndo, LocalEditsPolicy,
+};
 use super::speleodb_pull::{ArianeRoute, StalxAmbiguity};
 use super::AppState;
 use crate::speleodb::contract::{dto_for_error, Endpoint};
@@ -226,7 +228,17 @@ impl AppState {
             LocalEditsPolicy::Protect
         };
         let preserved_view = self
-            .replace_cache_stalx_with(&mut dump, &entry, &dest, &project_id, policy)
+            .replace_cache_stalx_with(
+                &mut dump,
+                &entry,
+                &dest,
+                &project_id,
+                policy,
+                // [#303] A View/Restore adopts a server tree like any other download, so
+                // its undo history is not inherited implicitly. The Unwind is the one
+                // caller that asks to KEEP it.
+                InheritedUndo::Drop,
+            )
             .map_err(local_dto)?;
 
         // Restore rides ON TOP of the current server HEAD (BASE = tip, dirty SET).
@@ -260,6 +272,11 @@ impl AppState {
         match crate::persistence::Database::open_existing(&dest) {
             Ok(db) => {
                 restore_display_settings(&db, &preserved_view);
+                // [#303] The checked-out revision's own undo policy, read before this
+                // stamp overwrites the row. A revision swap answers "what did the project
+                // look like then", and the policy is part of the project file, so the
+                // swapped-in file speaks for itself rather than inheriting today's value.
+                let swapped_undo_mode = preserved_undo_mode(&db);
                 let link = crate::models::SpeleoLink {
                     endpoint,
                     project_id: project_id.clone(),
@@ -268,6 +285,7 @@ impl AppState {
                     has_unpushed_edits,
                     last_edit_at,
                     last_verify_at: None,
+                    undo_mode: swapped_undo_mode,
                 };
                 if let Err(e) = db.save_speleo_link(Some(&link)) {
                     tracing::warn!(

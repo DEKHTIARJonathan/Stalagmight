@@ -1,5 +1,5 @@
 use super::AppState;
-use crate::core::{CommandResult, UndoStack};
+use crate::core::{CommandResult, PersistStack};
 use crate::models::{Project, SectionId};
 use crate::persistence::Database;
 use std::path::{Path, PathBuf};
@@ -659,36 +659,57 @@ impl AppState {
     /// `undo_stack` only - callers may hold `project` (the established order is
     /// `project` before `undo_stack`).
     fn persist_undo_stacks_into(&self, db: &Database) {
-        let persist_limit = self
-            .config
-            .lock()
-            .map(|c| c.general.undo_persist_limit)
-            .unwrap_or(20);
+        // [#303] A Full-mode SpeleoDB-linked project persists its WHOLE history (bounded
+        // by the byte budget, not by a count) because that history is what rides in the
+        // next commit and gives undo its cross-commit reach. Everything else - local
+        // projects, Disabled mode - keeps the `undo_persist_limit` window unchanged.
+        //
+        // The link is read from the LOCAL `db` handle rather than through
+        // `undo_policy()`: `self.database` still points at the pre-save handle when the
+        // normal save calls this, so asking the AppState would consult the wrong file.
+        let count_limit = {
+            let policy = self.undo_policy_for(db.load_speleo_link().ok().flatten().as_ref());
+            if policy.unlimited_depth() {
+                None
+            } else {
+                Some(
+                    self.config
+                        .lock()
+                        .map(|c| c.general.undo_persist_limit)
+                        .unwrap_or(20),
+                )
+            }
+        };
 
         if let Ok(undo_stack) = self.undo_stack.lock() {
-            let undo_entries: Vec<_> = undo_stack
-                .entries_to_persist(persist_limit)
-                .filter_map(UndoStack::serialize_entry_with_timestamp)
-                .collect();
-            let redo_entries: Vec<_> = undo_stack
-                .redo_entries_to_persist(persist_limit)
-                .filter_map(UndoStack::serialize_entry_with_timestamp)
-                .collect();
+            let undo_plan = undo_stack.persist_plan(PersistStack::Undo, count_limit);
+            let redo_plan = undo_stack.persist_plan(PersistStack::Redo, count_limit);
 
-            if let Err(e) = db.save_undo_stack_with_timestamps(undo_entries) {
-                tracing::warn!(
-                    error = %e,
-                    purpose = "preserve undo history",
-                    "Failed to persist undo stack"
-                );
-            }
-            if let Err(e) = db.save_redo_stack_with_timestamps(redo_entries) {
-                tracing::warn!(
-                    error = %e,
-                    purpose = "preserve redo history",
-                    "Failed to persist redo stack"
-                );
-            }
+            let undo_synced = match db.sync_undo_stack(&undo_plan) {
+                Ok(()) => true,
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        purpose = "preserve undo history",
+                        "Failed to persist undo stack"
+                    );
+                    false
+                }
+            };
+            let redo_synced = match db.sync_redo_stack(&redo_plan) {
+                Ok(()) => true,
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        purpose = "preserve redo history",
+                        "Failed to persist redo stack"
+                    );
+                    false
+                }
+            };
+            // Both halves are best-effort and independent: a failure on either is a
+            // warning, not a failed save, since the survey itself is already on disk.
+            let _ = (undo_synced, redo_synced);
         }
     }
 
@@ -774,6 +795,11 @@ impl AppState {
             let mut undo_stack = self.undo_stack.lock().unwrap_or_else(|e| e.into_inner());
             tracing::debug!("close_project: clearing undo stack");
             undo_stack.clear();
+            // [#303] Back onto the configured entry window, and forget which file the
+            // incremental bookkeeping described - the next project's save must rewrite
+            // once rather than trust ids minted against a file that is no longer open.
+            undo_stack.use_count_limit();
+            undo_stack.require_full_rewrite();
             tracing::debug!("close_project: undo stack cleared");
         }
 

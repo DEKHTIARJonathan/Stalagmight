@@ -25,6 +25,7 @@ pub(super) const PRESERVED_SPELEOLINK_COLUMNS: &[(&str, &str, bool)] = &[
     ("has_unpushed_edits", "INTEGER", true),
     ("last_edit_at", "TEXT", false), // v10; nullable = never edited since pull
     ("last_verify_at", "TEXT", false), // v11; nullable = never re-verified since pull
+    ("undo_mode", "TEXT", false),    // v15; nullable = follow the global default (#303)
 ];
 
 impl Database {
@@ -310,7 +311,8 @@ impl Database {
                 base_commit_sha TEXT,
                 has_unpushed_edits INTEGER NOT NULL DEFAULT 0,
                 last_edit_at TEXT,
-                last_verify_at TEXT
+                last_verify_at TEXT,
+                undo_mode TEXT
             )",
             [],
         )?;
@@ -368,6 +370,38 @@ impl Database {
                 .execute("ALTER TABLE speleo_link ADD COLUMN last_verify_at TEXT", [])?;
             tracing::info!("Added last_verify_at column to speleo_link table (schema v11)");
         }
+
+        // Add undo_mode column to an EXISTING pre-v16 speleo_link (schema v15→v16: the
+        // per-project undo-history policy, #303). Same idempotent ALTER pattern as the
+        // two above. No backfill: NULL means "follow the global default", which is the
+        // behaviour every pre-v16 file already had.
+        let has_undo_mode_column: bool = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('speleo_link') WHERE name='undo_mode'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|c| c > 0)
+            .unwrap_or(false);
+        if !has_undo_mode_column {
+            self.conn
+                .execute("ALTER TABLE speleo_link ADD COLUMN undo_mode TEXT", [])?;
+            tracing::info!("Added undo_mode column to speleo_link table (schema v16)");
+        }
+
+        // Ensure the speleo_undo_chain table exists (schema v16: the Unwind chain
+        // pointer, #303). CREATE IF NOT EXISTS - the speleo_link pattern, not the ALTER
+        // pattern - so a legacy file gains it on open_existing. Local-only, so nothing
+        // to backfill and nothing to carry forward: an absent row simply means "not
+        // mid-unwind".
+        self.conn.execute(
+            "CREATE TABLE IF NOT EXISTS speleo_undo_chain (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                unwound_from_sha TEXT NOT NULL
+            )",
+            [],
+        )?;
 
         // Add uuid column to shots table (schema v5→v6: per-shot UUIDs,
         // the stable station identity every cross-reference anchors to
@@ -1294,6 +1328,7 @@ impl Database {
             -- base_commit_sha NULL = empty-repo BASE (never coerced to ''). is_remote is
             -- DERIVED from EXISTS(this table), never stored. ADDITIVE: no future migration
             -- rewrites this table (see PRESERVED_SPELEOLINK_COLUMNS / carry-forward fence).
+            -- undo_mode NULL (v15) = follow the global default (#303).
             CREATE TABLE IF NOT EXISTS speleo_link (
                 id INTEGER PRIMARY KEY CHECK (id = 1),
                 endpoint TEXT NOT NULL,
@@ -1302,7 +1337,18 @@ impl Database {
                 base_commit_sha TEXT,
                 has_unpushed_edits INTEGER NOT NULL DEFAULT 0,
                 last_edit_at TEXT,
-                last_verify_at TEXT
+                last_verify_at TEXT,
+                undo_mode TEXT
+            );
+
+            -- [#303] Which SpeleoDB revision the working copy has been UNWOUND to, so
+            -- the next Unwind walks to that revision's first parent rather than back to
+            -- BASE. Single row id=1; absent row = not mid-unwind (next target is BASE).
+            -- LOCAL-ONLY: per-machine progress through history, stripped from every push
+            -- snapshot (PUSH_SNAPSHOT_LOCAL_TABLES).
+            CREATE TABLE IF NOT EXISTS speleo_undo_chain (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                unwound_from_sha TEXT NOT NULL
             );
 
             -- Undo/redo stack (BLOB columns hold gzip-compressed JSON)

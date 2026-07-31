@@ -149,6 +149,15 @@ pub struct SpeleoDbConfig {
     /// config below the floor can't spam the server.
     #[serde(default = "default_poll_interval_seconds")]
     pub poll_interval_seconds: u32,
+    /// [#303] Default undo policy for SpeleoDB-linked projects, under any
+    /// per-project `speleo_link.undo_mode` override. Default
+    /// [`UndoMode::Full`] - the hybrid stack the issue exists to deliver.
+    ///
+    /// This is the GLOBAL half of the two-level setting: it seeds projects that
+    /// carry no override, so switching it changes every such project at once. It
+    /// says nothing about local-only projects, which always keep the fixed window.
+    #[serde(default)]
+    pub undo_mode: crate::models::UndoMode,
 }
 
 /// What a settings save has to tell the user beyond "it was written".
@@ -211,6 +220,7 @@ impl Default for SpeleoDbConfig {
             insecure_http: false,
             allow_force_edit: false,
             poll_interval_seconds: default_poll_interval_seconds(),
+            undo_mode: crate::models::UndoMode::Full,
         }
     }
 }

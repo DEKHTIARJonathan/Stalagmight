@@ -27,7 +27,8 @@ impl Database {
                 base_commit_sha TEXT,
                 has_unpushed_edits INTEGER NOT NULL DEFAULT 0,
                 last_edit_at TEXT,
-                last_verify_at TEXT
+                last_verify_at TEXT,
+                undo_mode TEXT
             )",
             [],
         )?;
@@ -35,8 +36,8 @@ impl Database {
             Some(link) => {
                 self.conn.execute(
                     "INSERT INTO speleo_link
-                        (id, endpoint, project_id, project_name, base_commit_sha, has_unpushed_edits, last_edit_at, last_verify_at)
-                     VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7)
+                        (id, endpoint, project_id, project_name, base_commit_sha, has_unpushed_edits, last_edit_at, last_verify_at, undo_mode)
+                     VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
                      ON CONFLICT(id) DO UPDATE SET
                         endpoint = excluded.endpoint,
                         project_id = excluded.project_id,
@@ -44,7 +45,8 @@ impl Database {
                         base_commit_sha = excluded.base_commit_sha,
                         has_unpushed_edits = excluded.has_unpushed_edits,
                         last_edit_at = excluded.last_edit_at,
-                        last_verify_at = excluded.last_verify_at",
+                        last_verify_at = excluded.last_verify_at,
+                        undo_mode = excluded.undo_mode",
                     params![
                         link.endpoint,
                         link.project_id,
@@ -53,6 +55,11 @@ impl Database {
                         i64::from(link.has_unpushed_edits),
                         link.last_edit_at, // Option<String> → SQL NULL when None
                         link.last_verify_at, // Option<String> → SQL NULL when None
+                        // [#303] Option<UndoMode> → SQL NULL when None ("follow the
+                        // global default"), never the string "full": the two are
+                        // different states, and only NULL keeps tracking a later change
+                        // to the global setting.
+                        link.undo_mode.map(crate::models::UndoMode::as_db_str),
                     ],
                 )?;
             }

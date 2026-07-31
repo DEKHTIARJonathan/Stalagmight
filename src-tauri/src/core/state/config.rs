@@ -481,7 +481,13 @@ impl AppState {
             recent.clone_from(&new_config.general.recent_projects);
         }
 
-        // Sync undo_stack history limit from config
+        // Sync undo_stack history limit from config.
+        //
+        // [#303] `set_history_limit` records the new count but only re-arms the COUNT
+        // bound; a Full-mode SpeleoDB project stays on the byte budget, so a settings
+        // save cannot silently truncate the history its next push is meant to carry.
+        // The recorded count still takes effect the moment the project goes back onto a
+        // count window (closed, or switched to Disabled).
         if let Ok(mut undo) = self.undo_stack.lock() {
             undo.set_history_limit(new_config.general.undo_history_limit);
         }

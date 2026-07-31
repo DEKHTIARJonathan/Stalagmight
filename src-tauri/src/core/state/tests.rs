@@ -20099,6 +20099,7 @@ fn fixture_speleo_link() -> SpeleoLink {
         has_unpushed_edits: false,
         last_edit_at: None,
         last_verify_at: None,
+        undo_mode: None,
     }
 }
 

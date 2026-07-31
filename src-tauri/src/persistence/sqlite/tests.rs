@@ -1262,6 +1262,114 @@ fn test_display_settings_persistence() {
     );
 }
 
+/// [#303] Spec item 10, at the SQL level: a save that adds one entry to a 50-entry
+/// persisted stack touches ONE row.
+///
+/// Proven by ROWID identity rather than by counting statements: SQLite assigns a fresh
+/// rowid on insert, so a row whose `id` is unchanged is a row that was never deleted and
+/// re-inserted - and therefore never re-gzipped. That is the property the byte budget
+/// depends on, because the old shape (DELETE all + re-INSERT all) re-compressed every
+/// entry on every save, including the 30s autosave.
+#[test]
+fn undo_persist_sync_leaves_untouched_rows_in_place() {
+    use crate::core::{PersistPlan, PersistRow};
+
+    let db = Database::in_memory().unwrap();
+
+    let row = |id: u64| PersistRow {
+        id,
+        command_json: format!(r#"{{"type":"Cmd{id}"}}"#),
+        undo_data_json: format!(r#"{{"n":{id}}}"#),
+        timestamp: Some("2026-07-01T00:00:00+00:00".to_owned()),
+    };
+
+    // First save: the whole stack.
+    let full = PersistPlan {
+        rows: (0..50).map(row).collect(),
+        keep_range: Some((0, 49)),
+    };
+    db.sync_undo_stack(&full).unwrap();
+    let rowids_before: Vec<(i64, i64)> = db
+        .conn
+        .prepare("SELECT sequence, id FROM undo_stack ORDER BY sequence")
+        .unwrap()
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+        .unwrap()
+        .collect::<std::result::Result<_, _>>()
+        .unwrap();
+    assert_eq!(rowids_before.len(), 50);
+
+    // Second save: one new entry at the tail.
+    let incremental = PersistPlan {
+        rows: vec![row(50)],
+        keep_range: Some((0, 50)),
+    };
+    db.sync_undo_stack(&incremental).unwrap();
+
+    let rowids_after: Vec<(i64, i64)> = db
+        .conn
+        .prepare("SELECT sequence, id FROM undo_stack ORDER BY sequence")
+        .unwrap()
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+        .unwrap()
+        .collect::<std::result::Result<_, _>>()
+        .unwrap();
+    assert_eq!(rowids_after.len(), 51, "the new entry landed");
+    assert_eq!(
+        &rowids_after[..50],
+        &rowids_before[..],
+        "every pre-existing row kept its rowid, so none was rewritten"
+    );
+
+    // And the content is all readable in order.
+    let loaded = db.load_undo_stack_with_timestamps().unwrap();
+    assert_eq!(loaded.len(), 51);
+    assert_eq!(loaded[0].1, r#"{"type":"Cmd0"}"#);
+    assert_eq!(loaded[50].1, r#"{"type":"Cmd50"}"#);
+}
+
+/// [#303] The delete half of the sync: rows outside the surviving id range go, whether
+/// they fell off the FRONT (a byte-budget trim) or the BACK (an undo popping the tail).
+#[test]
+fn undo_persist_sync_deletes_rows_outside_the_kept_range() {
+    use crate::core::{PersistPlan, PersistRow};
+
+    let db = Database::in_memory().unwrap();
+    let row = |id: u64| PersistRow {
+        id,
+        command_json: format!(r#"{{"type":"Cmd{id}"}}"#),
+        undo_data_json: format!(r#"{{"n":{id}}}"#),
+        timestamp: None,
+    };
+    db.sync_undo_stack(&PersistPlan {
+        rows: (0..5).map(row).collect(),
+        keep_range: Some((0, 4)),
+    })
+    .unwrap();
+
+    // ids 0 and 1 evicted from the front, id 4 popped off the back: only 2..=3 survive,
+    // and nothing needs rewriting.
+    db.sync_undo_stack(&PersistPlan {
+        rows: vec![],
+        keep_range: Some((2, 3)),
+    })
+    .unwrap();
+
+    let loaded = db.load_undo_stack_with_timestamps().unwrap();
+    assert_eq!(
+        loaded.iter().map(|(seq, ..)| *seq).collect::<Vec<_>>(),
+        vec![2, 3]
+    );
+
+    // An empty stack clears the table outright.
+    db.sync_undo_stack(&PersistPlan {
+        rows: vec![],
+        keep_range: None,
+    })
+    .unwrap();
+    assert!(db.load_undo_stack_with_timestamps().unwrap().is_empty());
+}
+
 #[test]
 fn test_undo_stack_persistence() {
     let db = Database::in_memory().unwrap();
@@ -3558,6 +3666,7 @@ fn sample_speleo_link(base_commit_sha: Option<&str>, dirty: bool) -> SpeleoLink 
         has_unpushed_edits: dirty,
         last_edit_at: None,
         last_verify_at: None,
+        undo_mode: None,
     }
 }
 
@@ -3961,6 +4070,7 @@ fn last_edit_at_round_trips_and_survives_migration() {
             has_unpushed_edits: true,
             last_edit_at: Some(stamp.clone()),
             last_verify_at: None,
+            undo_mode: None,
         }))
         .unwrap();
         db.set_user_version(8).unwrap(); // force migrate on next open
@@ -4161,6 +4271,137 @@ fn migrate_v10_speleo_link_adds_last_verify_at() {
     assert_eq!(link.base_commit_sha.as_deref(), Some("abc"));
     assert!(link.has_unpushed_edits, "existing dirty bit preserved");
     assert_eq!(db.get_user_version().unwrap(), SCHEMA_VERSION);
+}
+
+/// [#303] Spec item 28, migration half (schema v14→v15): a genuine v14-shaped
+/// `speleo_link` (no `undo_mode`) gains the column on `open_existing`, defaulting to
+/// NULL ("follow the global default" - exactly the behaviour every pre-v15 file
+/// already had), without disturbing any pre-existing field.
+#[test]
+fn migrate_v14_speleo_link_adds_undo_mode() {
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("v14_speleo_link.stalx");
+    {
+        let mut db = Database::open(&path).unwrap();
+        db.save_project(&Project::new("V14".to_string(), None))
+            .unwrap();
+        // Re-create the table in its pre-v15 (v14) shape and stamp the version back.
+        db.conn.execute("DROP TABLE speleo_link", []).unwrap();
+        db.conn
+            .execute(
+                "CREATE TABLE speleo_link (
+                    id INTEGER PRIMARY KEY CHECK (id = 1),
+                    endpoint TEXT NOT NULL,
+                    project_id TEXT NOT NULL,
+                    project_name TEXT NOT NULL,
+                    base_commit_sha TEXT,
+                    has_unpushed_edits INTEGER NOT NULL DEFAULT 0,
+                    last_edit_at TEXT,
+                    last_verify_at TEXT
+                )",
+                [],
+            )
+            .unwrap();
+        db.conn
+            .execute(
+                "INSERT INTO speleo_link
+                    (id, endpoint, project_id, project_name, base_commit_sha, has_unpushed_edits, last_edit_at, last_verify_at)
+                 VALUES (1, 'http://x', 'pid', 'pname', 'abc', 1, '2026-06-27T10:00:00+00:00', '2026-06-27T11:00:00+00:00')",
+                [],
+            )
+            .unwrap();
+        db.set_user_version(14).unwrap();
+    }
+
+    let db = Database::open_existing(&path).unwrap();
+    let has_col: i64 = db
+        .conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('speleo_link') WHERE name='undo_mode'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(has_col, 1, "v14→v15 ALTER added undo_mode");
+    let link = db.load_speleo_link().unwrap().unwrap();
+    assert_eq!(
+        link.undo_mode, None,
+        "the new column defaults to NULL, i.e. follow the global default"
+    );
+    // Every pre-existing v14 field survives the migration untouched.
+    assert_eq!(
+        link.last_edit_at.as_deref(),
+        Some("2026-06-27T10:00:00+00:00")
+    );
+    assert_eq!(
+        link.last_verify_at.as_deref(),
+        Some("2026-06-27T11:00:00+00:00")
+    );
+    assert_eq!(link.base_commit_sha.as_deref(), Some("abc"));
+    assert!(link.has_unpushed_edits, "existing dirty bit preserved");
+    assert_eq!(db.get_user_version().unwrap(), SCHEMA_VERSION);
+
+    // And the v15 table gained the Unwind chain pointer, empty (not mid-unwind).
+    let has_chain: i64 = db
+        .conn
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='speleo_undo_chain'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(has_chain, 1, "v15 migration created speleo_undo_chain");
+}
+
+/// [#303] Spec item 28, round-trip half: both override values survive save/load, and
+/// `None` stays NULL rather than being written as the string "full" - the two are
+/// different states (only NULL keeps tracking a later change to the global default).
+#[test]
+fn speleo_link_undo_mode_roundtrips_and_none_stays_null() {
+    use crate::models::UndoMode;
+
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("undo_mode.stalx");
+    let mut db = Database::open(&path).unwrap();
+    db.save_project(&Project::new("UndoMode".to_string(), None))
+        .unwrap();
+
+    for mode in [UndoMode::Full, UndoMode::Disabled] {
+        let mut link = sample_speleo_link(Some("abc"), false);
+        link.undo_mode = Some(mode);
+        db.save_speleo_link(Some(&link)).unwrap();
+        assert_eq!(
+            db.load_speleo_link().unwrap().unwrap().undo_mode,
+            Some(mode),
+            "{mode:?} must survive the round trip"
+        );
+    }
+
+    let mut link = sample_speleo_link(Some("abc"), false);
+    link.undo_mode = None;
+    db.save_speleo_link(Some(&link)).unwrap();
+    assert_eq!(db.load_speleo_link().unwrap().unwrap().undo_mode, None);
+    let is_null: i64 = db
+        .conn
+        .query_row(
+            "SELECT COUNT(*) FROM speleo_link WHERE id = 1 AND undo_mode IS NULL",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        is_null, 1,
+        "None must clear the column to SQL NULL, never write a default spelling"
+    );
+
+    // An unrecognized value (a newer build, or a hand-edit) reads as Unknown, which
+    // resolves to the default rather than failing the load.
+    db.conn
+        .execute("UPDATE speleo_link SET undo_mode = 'sideways'", [])
+        .unwrap();
+    let loaded = db.load_speleo_link().unwrap().unwrap().undo_mode;
+    assert_eq!(loaded, Some(UndoMode::Unknown));
+    assert!(loaded.unwrap().pushes_history(), "Unknown resolves to Full");
 }
 
 #[test]
@@ -4492,7 +4733,7 @@ fn sanitize_push_snapshot_clears_dirty_and_view_only_keeps_project_data() {
             .unwrap();
     }
 
-    Database::sanitize_push_snapshot(&path).unwrap();
+    Database::sanitize_push_snapshot(&path, false).unwrap();
 
     let snap = Database::open_existing(&path).unwrap();
     let count = |table: &str| -> i64 {
@@ -4506,13 +4747,14 @@ fn sanitize_push_snapshot_clears_dirty_and_view_only_keeps_project_data() {
         0,
         "display_settings (view toggles) must be stripped from the push snapshot"
     );
-    // Per-session edit history stripped (#194 b3): a collaborator adopting the
-    // pushed snapshot must start with a clean undo/redo slate, never inherit (and
-    // risk replaying) the pusher's history.
+    // Per-session edit history stripped (#194 b3) - this call passes `keep_undo: false`,
+    // which is what a local project and Disabled mode (#303) get: a collaborator adopting
+    // the pushed snapshot starts with a clean undo/redo slate and can never inherit (or
+    // replay) the pusher's history.
     assert_eq!(
         count("undo_stack"),
         0,
-        "undo_stack must be stripped from the push snapshot (#194 b3)"
+        "undo_stack must be stripped when keep_undo is false (#194 b3)"
     );
     assert_eq!(
         count("redo_stack"),
@@ -4604,7 +4846,7 @@ fn sanitize_push_snapshot_vacuums_the_deleted_undo_bytes_out_of_the_file() {
         .query_row("PRAGMA page_count", [], |r| r.get(0))
         .unwrap();
 
-    Database::sanitize_push_snapshot(&path).unwrap();
+    Database::sanitize_push_snapshot(&path, false).unwrap();
 
     let after = std::fs::read(&path).unwrap();
     assert!(
@@ -4628,7 +4870,7 @@ fn sanitize_push_snapshot_clears_the_dirty_bit() {
     let temp = TempDir::new().unwrap();
     let path = dirty_push_snapshot(&temp, "x", 1);
 
-    Database::sanitize_push_snapshot(&path).unwrap();
+    Database::sanitize_push_snapshot(&path, false).unwrap();
 
     let link = Database::open_existing(&path)
         .unwrap()
@@ -4663,7 +4905,8 @@ fn sanitize_push_snapshot_tolerates_a_snapshot_without_a_redo_stack() {
         .execute("DROP TABLE redo_stack", [])
         .unwrap();
 
-    Database::sanitize_push_snapshot(&path).expect("a missing local table must not fail the push");
+    Database::sanitize_push_snapshot(&path, false)
+        .expect("a missing local table must not fail the push");
 
     let snap = Connection::open(&path).unwrap();
     let undo: i64 = snap
@@ -4678,6 +4921,105 @@ fn sanitize_push_snapshot_tolerates_a_snapshot_without_a_redo_stack() {
         })
         .unwrap();
     assert_eq!(dirty, 0, "the rest of the sanitize still ran to completion");
+}
+
+/// [#303] Spec item 1: in Full mode the pushed snapshot KEEPS its undo history - that
+/// is the payload that lets undo chain backwards commit by commit - while the redo stack
+/// is stripped anyway (clarification #1: SpeleoDB stores no redo).
+#[test]
+fn sanitize_push_snapshot_keeps_undo_but_never_redo_in_full_mode() {
+    let temp = TempDir::new().unwrap();
+    let path = dirty_push_snapshot(&temp, "abc", 3);
+    // Seed the redo side too, so "redo is stripped even here" is actually tested.
+    Connection::open(&path)
+        .unwrap()
+        .execute(
+            "INSERT INTO redo_stack (sequence, command_json, undo_data_json, executed_at) \
+             VALUES (1, X'00', X'00', '2026-01-01T00:00:00Z')",
+            [],
+        )
+        .unwrap();
+
+    Database::sanitize_push_snapshot(&path, true).unwrap();
+
+    let snap = Connection::open(&path).unwrap();
+    let count = |table: &str| -> i64 {
+        snap.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0))
+            .unwrap()
+    };
+    assert_eq!(
+        count("undo_stack"),
+        3,
+        "Full mode ships the undo history since the last commit (#303)"
+    );
+    assert_eq!(
+        count("redo_stack"),
+        0,
+        "redo is never uploaded, in ANY mode (clarification #1)"
+    );
+    // The rest of the sanitize still runs: local-only state goes, dirty bit clears.
+    assert_eq!(count("display_settings"), 0);
+    assert_eq!(count("collab_state"), 0);
+    let dirty: i64 = snap
+        .query_row(
+            "SELECT has_unpushed_edits FROM speleo_link WHERE id = 1",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(dirty, 0, "the dirty bit is local hand-off state either way");
+}
+
+/// [#303] Spec item 2: Disabled mode strips BOTH stacks, so a project marked too big to
+/// ship undo history ships none of it.
+#[test]
+fn sanitize_push_snapshot_strips_both_stacks_in_disabled_mode() {
+    let temp = TempDir::new().unwrap();
+    let path = dirty_push_snapshot(&temp, "abc", 3);
+    Connection::open(&path)
+        .unwrap()
+        .execute(
+            "INSERT INTO redo_stack (sequence, command_json, undo_data_json, executed_at) \
+             VALUES (1, X'00', X'00', '2026-01-01T00:00:00Z')",
+            [],
+        )
+        .unwrap();
+
+    Database::sanitize_push_snapshot(&path, false).unwrap();
+
+    let snap = Connection::open(&path).unwrap();
+    for table in ["undo_stack", "redo_stack"] {
+        let n: i64 = snap
+            .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(n, 0, "{table} must be stripped in Disabled mode");
+    }
+}
+
+/// [#303] Spec item 3, Full-mode half: keeping the undo history must NOT relax the
+/// redo strip's fatality. A redo table that exists but cannot be emptied still aborts
+/// the push, because a redo branch replaying onto a state the server has committed past
+/// is the stale-replay hazard with none of the undo side's value.
+#[test]
+fn sanitize_push_snapshot_still_fails_closed_on_redo_in_full_mode() {
+    let temp = TempDir::new().unwrap();
+    let path = dirty_push_snapshot(&temp, "abc", 1);
+    Connection::open(&path)
+        .unwrap()
+        .execute_batch(
+            "INSERT INTO redo_stack (sequence, command_json, undo_data_json, executed_at) \
+               VALUES (1, X'00', X'00', '2026-01-01T00:00:00Z'); \
+             CREATE TRIGGER block_redo_delete BEFORE DELETE ON redo_stack \
+               BEGIN SELECT RAISE(ABORT, 'blocked'); END;",
+        )
+        .unwrap();
+
+    let err = Database::sanitize_push_snapshot(&path, true)
+        .expect_err("an un-strippable redo_stack must abort the push even in Full mode");
+    assert!(
+        format!("{err:#}").contains("redo_stack"),
+        "the error should name redo_stack, got: {err:#}"
+    );
 }
 
 #[test]
@@ -4697,7 +5039,7 @@ fn sanitize_push_snapshot_fails_closed_when_the_undo_strip_cannot_run() {
         )
         .unwrap();
 
-    let err = Database::sanitize_push_snapshot(&path)
+    let err = Database::sanitize_push_snapshot(&path, false)
         .expect_err("an un-strippable undo_stack must abort the push");
     assert!(
         format!("{err:#}").contains("undo_stack"),
@@ -4736,7 +5078,7 @@ fn sanitize_push_snapshot_tolerates_an_unstrippable_display_settings() {
         .unwrap();
     }
 
-    Database::sanitize_push_snapshot(&path)
+    Database::sanitize_push_snapshot(&path, false)
         .expect("a privacy-neutral local table must not abort the push");
 
     let snap = Connection::open(&path).unwrap();

@@ -50,13 +50,19 @@ impl Database {
     ///
     /// - `display_settings` - per-machine VIEW toggles (grid, layer/feature
     ///   visibility, color mode, grid spacing); a collaborator pulls their own view.
-    /// - `undo_stack` / `redo_stack` - the editor's local edit-session history
-    ///   (#194 b3). NOT shared state, and a *data-corruption* vector if it rode: an
-    ///   adopting collaborator pressing Ctrl-Z would replay the pusher's command
+    /// - `undo_stack` - the editor's edit-session history. Stripped UNLESS the project
+    ///   is in [`crate::models::UndoMode::Full`] (#303), which is the whole point of the
+    ///   hybrid stack: the commit carries the operations that produced it so undo can
+    ///   chain backwards commit by commit. See [`Self::sanitize_push_snapshot`]'s
+    ///   `keep_undo` for the conditional, and note that the #194 b3 hazard it relaxes -
+    ///   an adopting collaborator pressing Ctrl-Z and replaying the pusher's command
     ///   (and its `undo_data_json` prior-state payload) against a now-different tree,
-    ///   silently wiping pitch/LRUD/comment/marker/temperature - the same hazard
-    ///   `drop_legacy_undo_history` guards against. Stripping here is what makes
-    ///   every adopt-remote path (`do_load_project_full`) start with a clean slate.
+    ///   silently wiping pitch/LRUD/comment/marker/temperature - is contained
+    ///   elsewhere: a pulled stack is cleared on EVERY implicit adopt path, and is only
+    ///   ever handed back through the explicit, confirmed, lock-held Unwind.
+    /// - `redo_stack` - stripped ALWAYS (clarification #1). A redo branch replays
+    ///   FORWARD onto a state the server has now committed past, so it is the stale
+    ///   replay hazard with none of the undo side's value.
     /// - `collab_state` - the LOCAL wiring of the since-removed Ariane collab mode
     ///   (sibling `.tml` filesystem path, baseline, per-machine autosave toggle).
     ///   Meaningless to a remote collaborator and never theirs to inherit. It stays
@@ -69,11 +75,14 @@ impl Database {
     ///   strip loop `continue`s on a table that is absent, so carrying the entry
     ///   costs one `sqlite_master` probe per push and keeps the fence honest for the
     ///   downgrade-and-return round trip.
+    /// - `speleo_undo_chain` - which revision this machine has unwound to (#303). Local
+    ///   progress through history, not a property of the project.
     const PUSH_SNAPSHOT_LOCAL_TABLES: &[&str] = &[
         "display_settings",
         "undo_stack",
         "redo_stack",
         "collab_state",
+        "speleo_undo_chain",
     ];
 
     /// The subset of [`Self::PUSH_SNAPSHOT_LOCAL_TABLES`] whose strip is FATAL to the
@@ -81,9 +90,14 @@ impl Database {
     /// and the data-CORRUPTION vector on adopt (#194 b3). If they cannot be emptied
     /// the snapshot must not be uploaded at all.
     ///
-    /// The others (`display_settings`, `collab_state`) are privacy-neutral local
-    /// prefs / wiring: aborting a push over them would be a worse outcome for the
-    /// user than the (harmless) leak, so a failure there stays a warning.
+    /// `undo_stack` is here only when the strip is actually REQUESTED - in
+    /// [`crate::models::UndoMode::Full`] (#303) the undo history is meant to ride, so
+    /// there is nothing to fail over. `redo_stack` is unconditional: it is never
+    /// uploaded in any mode.
+    ///
+    /// The others (`display_settings`, `collab_state`, `speleo_undo_chain`) are
+    /// privacy-neutral local prefs / wiring: aborting a push over them would be a worse
+    /// outcome for the user than the (harmless) leak, so a failure there stays a warning.
     ///
     /// "Subset" is LOAD-BEARING, not descriptive: the strip loop iterates
     /// `PUSH_SNAPSHOT_LOCAL_TABLES` and only consults this list to decide how loudly
@@ -98,6 +112,13 @@ impl Database {
     ///   local hand-off state, never server state (the next puller re-stamps it);
     /// - empties every table in [`Self::PUSH_SNAPSHOT_LOCAL_TABLES`] - per-machine /
     ///   per-session local state that must not proliferate.
+    ///
+    /// `keep_undo` (#303) exempts `undo_stack` from that strip, for a project resolved to
+    /// [`crate::models::UndoMode::Full`]: there the history since the last commit is the
+    /// payload, and shipping it is what lets undo chain backwards commit by commit.
+    /// `redo_stack` is stripped either way. The caller resolves the mode - this function
+    /// must not, because it runs on a snapshot COPY whose link row is about to be
+    /// scrubbed and is in no position to arbitrate policy.
     ///
     /// Everything else PROLIFERATES with the project, by design: survey data,
     /// `project_settings` (shared validation config #57), AND the durable
@@ -121,7 +142,7 @@ impl Database {
     /// only marks pages free, so without it every deleted undo row is still
     /// physically present in the bytes that get uploaded. `VACUUM` rewrites the file
     /// from the live pages, dropping the freed ones for real.
-    pub fn sanitize_push_snapshot(snapshot: &Path) -> Result<()> {
+    pub fn sanitize_push_snapshot(snapshot: &Path, keep_undo: bool) -> Result<()> {
         // NOT a transaction: VACUUM cannot run inside one, and rusqlite only opens
         // an explicit transaction when asked, so these statements auto-commit
         // individually and the VACUUM at the end runs outside any.
@@ -131,6 +152,12 @@ impl Database {
         // fail, which the old ordering (dirty-clear first) did not guarantee (#197
         // review). Table names are compile-time literals (no injection surface).
         for table in Self::PUSH_SNAPSHOT_LOCAL_TABLES {
+            // [#303] In Full mode the undo history is the payload, not a leak: it is
+            // what makes the commit carry the operations that produced it. `redo_stack`
+            // is NOT exempted - it is never uploaded in any mode.
+            if keep_undo && *table == "undo_stack" {
+                continue;
+            }
             if !Self::table_exists_on(&conn, table)? {
                 // An older snapshot shape simply has no such table - nothing local
                 // can be riding in it, so this must not abort the push.
@@ -510,7 +537,7 @@ mod tests {
         db.save_display_setting("grid", "on").expect("seed a local");
         drop(db);
 
-        Database::sanitize_push_snapshot(&snapshot).expect("sanitize");
+        Database::sanitize_push_snapshot(&snapshot, false).expect("sanitize");
 
         assert!(
             !Database::vacuum_temp_path(&snapshot).exists(),
@@ -544,7 +571,7 @@ mod tests {
         let stale = Database::vacuum_temp_path(&snapshot);
         std::fs::write(&stale, b"leftover from a killed push").expect("plant a leftover");
 
-        Database::sanitize_push_snapshot(&snapshot).expect("sanitize past the leftover");
+        Database::sanitize_push_snapshot(&snapshot, false).expect("sanitize past the leftover");
 
         assert!(
             !stale.exists(),
@@ -589,7 +616,7 @@ mod tests {
             eprintln!("Skipping: test requires non-root (chmod 555 has no effect as root)");
             return;
         }
-        let result = Database::sanitize_push_snapshot(&snapshot);
+        let result = Database::sanitize_push_snapshot(&snapshot, false);
         std::fs::set_permissions(&staging, std::fs::Permissions::from_mode(0o755))
             .expect("restore permissions so tempdir can clean up");
 

@@ -11,6 +11,70 @@ use crate::models::{
 /// Default maximum number of undo entries to keep in memory
 const DEFAULT_UNDO_HISTORY_LIMIT: usize = 100;
 
+/// [#303] Byte budget for a Full-mode SpeleoDB-linked project's undo history.
+///
+/// Full mode bypasses the entry-count window (`undo_history_limit` /
+/// `undo_persist_limit`) so the project keeps its whole edit history since the last
+/// commit - but "unbounded" is not safe here, because a single `Delete shot`,
+/// `Delete section`, `Reverse section` or `Batch` (every import) stores a
+/// [`UndoData::ProjectSnapshotPair`]: TWO whole-project JSON snapshots. Measured on a
+/// project-shaped payload, a 5,000-shot project is ~2.1 MB of JSON per snapshot, so
+/// one such entry is ~4.2 MB - and this history rides in every SpeleoDB commit, which
+/// is the storage cost the issue exists to REDUCE.
+///
+/// So depth is bounded by total size instead of entry count: ordinary editing (small
+/// `PreviousValues` / `InverseCommand` entries) gets hundreds of entries, while a
+/// delete-heavy session gets however many whole-project snapshots fit. At the measured
+/// ~13x gzip ratio for this JSON shape, 128 MiB of JSON is roughly 10 MB per commit.
+///
+/// Measured against [`UndoStack::estimated_size`], NOT against a real serialization:
+/// the point is to bound growth, and serializing the whole stack to measure it would
+/// cost exactly what the budget exists to avoid.
+pub const UNDO_BYTE_BUDGET_BYTES: usize = 128 * 1024 * 1024;
+
+/// How a stack's depth is bounded.
+///
+/// Two shapes rather than one number, because the two are not interchangeable: a
+/// count window is what a local project (and Disabled mode) has always had, and a byte
+/// budget is what makes Full mode's "full depth since the last commit" survivable. See
+/// [`UNDO_BYTE_BUDGET_BYTES`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DepthLimit {
+    /// At most N entries, oldest evicted first. Local projects and Disabled mode.
+    Count(usize),
+    /// At most N bytes of estimated serialized size, oldest evicted first. Full mode
+    /// on a SpeleoDB-linked project.
+    Bytes(usize),
+}
+
+/// Which stack a [`PersistPlan`] is for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PersistStack {
+    Undo,
+    Redo,
+}
+
+/// One row a save has to write, keyed by its stable id (the `sequence` column).
+#[derive(Debug, Clone)]
+pub struct PersistRow {
+    /// Stable id = `head_dropped + position`. Written to `sequence`, so ordering by it
+    /// still reproduces stack order.
+    pub id: u64,
+    pub command_json: String,
+    pub undo_data_json: String,
+    pub timestamp: Option<String>,
+}
+
+/// [#303] The write half and the delete half of one stack's save.
+#[derive(Debug, Clone)]
+pub struct PersistPlan {
+    /// Rows to upsert - only those at or after the first changed id.
+    pub rows: Vec<PersistRow>,
+    /// `(first, last)` ids that must survive; every other row is stale and is deleted.
+    /// `None` = the stack is empty, so every row is stale.
+    pub keep_range: Option<(u64, u64)>,
+}
+
 /// Undo/redo stack
 #[derive(Debug)]
 #[expect(clippy::struct_field_names)]
@@ -21,6 +85,72 @@ pub struct UndoStack {
     redo_stack: VecDeque<UndoEntry>,
     /// Maximum entries to keep in memory
     history_limit: usize,
+    /// [#303] The active bound. `Count(history_limit)` unless the open project is a
+    /// Full-mode linked one, in which case `Bytes(UNDO_BYTE_BUDGET_BYTES)`.
+    ///
+    /// Kept alongside `history_limit` rather than replacing it so that switching a
+    /// project back to a count window (closing it, flipping the mode to Disabled)
+    /// restores the user's configured number without having to re-read the config.
+    depth_limit: DepthLimit,
+    /// [#303] Persistence bookkeeping for the undo stack - see [`StackSync`].
+    undo_sync: StackSync,
+    /// [#303] The same, for the redo stack.
+    redo_sync: StackSync,
+    /// [#303] The file the incremental bookkeeping above is a statement ABOUT. A save
+    /// to any other path cannot trust it; see [`UndoStack::retarget`].
+    persisted_to: Option<std::path::PathBuf>,
+}
+
+/// [#303] What the database already holds for one stack, so a save can write only
+/// what changed.
+///
+/// Persisting used to be `DELETE FROM undo_stack` + re-INSERT + re-gzip of EVERY
+/// entry, on EVERY save including the 30s autosave. That is affordable for the old
+/// 20-entry window and ruinous for a byte-budgeted one: at 128 MiB of JSON it is
+/// seconds of gzip per autosave. So each entry gets a STABLE id and a save writes only
+/// the ids at or after the first one whose content may differ.
+///
+/// The id of the entry at position `i` is `head_dropped + i`. That is stable across
+/// both kinds of mutation this stack sees: appending at the tail does not move
+/// anything, and evicting from the FRONT increments `head_dropped` by exactly the
+/// number removed, so every surviving entry keeps its id. Those ids are written to the
+/// existing `sequence` column, so the on-disk shape is unchanged.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+struct StackSync {
+    /// Entries ever evicted from the FRONT of this stack. Position 0 has this id.
+    head_dropped: u64,
+    /// Lowest id whose content may differ from what the database holds. `None` = the
+    /// database is in step with memory, so a save writes nothing.
+    ///
+    /// Only ADDITIONS need marking. A removal (an undo popping the tail, a trim
+    /// dropping the front) is handled by the id-range delete the sync issues anyway,
+    /// so it never has to widen this.
+    dirty_from: Option<u64>,
+    /// Set when the id bookkeeping cannot be trusted against the destination - a
+    /// freshly-opened file, a Save As to a path with no rows, a load that adopted
+    /// on-disk ids. Forces one full rewrite, after which incremental resumes.
+    needs_full_rewrite: bool,
+}
+
+impl StackSync {
+    /// Mark the entry at `id` as newly added / changed.
+    fn mark_dirty(&mut self, id: u64) {
+        self.dirty_from = Some(match self.dirty_from {
+            Some(existing) => existing.min(id),
+            None => id,
+        });
+    }
+
+    /// Note that `count` entries left the FRONT of the stack.
+    fn note_head_dropped(&mut self, count: u64) {
+        self.head_dropped = self.head_dropped.saturating_add(count);
+    }
+
+    /// The database is now in step with memory.
+    fn mark_persisted(&mut self) {
+        self.dirty_from = None;
+        self.needs_full_rewrite = false;
+    }
 }
 
 /// Entry in the undo stack
@@ -218,6 +348,10 @@ impl Default for UndoStack {
             undo_stack: VecDeque::new(),
             redo_stack: VecDeque::new(),
             history_limit: DEFAULT_UNDO_HISTORY_LIMIT,
+            depth_limit: DepthLimit::Count(DEFAULT_UNDO_HISTORY_LIMIT),
+            undo_sync: StackSync::default(),
+            redo_sync: StackSync::default(),
+            persisted_to: None,
         }
     }
 }
@@ -234,6 +368,10 @@ impl UndoStack {
             undo_stack: VecDeque::new(),
             redo_stack: VecDeque::new(),
             history_limit,
+            depth_limit: DepthLimit::Count(history_limit),
+            undo_sync: StackSync::default(),
+            redo_sync: StackSync::default(),
+            persisted_to: None,
         }
     }
 
@@ -245,13 +383,33 @@ impl UndoStack {
     /// Set the history limit
     pub fn set_history_limit(&mut self, limit: usize) {
         self.history_limit = limit;
-        // Trim both stacks if needed
-        while self.undo_stack.len() > self.history_limit {
-            self.undo_stack.pop_front();
+        // [#303] Only re-arm the COUNT bound. A Full-mode linked project is on the byte
+        // budget, and a config reload (which is what calls this) must not knock it back
+        // onto the entry window - that would silently truncate the history the next push
+        // is supposed to carry to the server.
+        if matches!(self.depth_limit, DepthLimit::Count(_)) {
+            self.depth_limit = DepthLimit::Count(limit);
         }
-        while self.redo_stack.len() > self.history_limit {
-            self.redo_stack.pop_front();
-        }
+        self.enforce_depth_limit();
+    }
+
+    /// [#303] Switch this stack onto the byte budget (Full mode on a linked project).
+    /// Idempotent, and trims immediately if the stack already exceeds the budget.
+    pub fn set_byte_budget(&mut self, budget: usize) {
+        self.depth_limit = DepthLimit::Bytes(budget);
+        self.enforce_depth_limit();
+    }
+
+    /// [#303] Switch this stack back onto the configured entry-count window (a local
+    /// project, Disabled mode, or no project open).
+    pub fn use_count_limit(&mut self) {
+        self.depth_limit = DepthLimit::Count(self.history_limit);
+        self.enforce_depth_limit();
+    }
+
+    /// The active bound.
+    pub fn depth_limit(&self) -> DepthLimit {
+        self.depth_limit
     }
 
     /// Push a command with its undo data to the undo stack
@@ -262,15 +420,12 @@ impl UndoStack {
             timestamp: Some(Utc::now()),
         };
 
-        self.undo_stack.push_back(entry);
+        self.push_undo_tracked(entry);
 
         // Clear redo stack when new command is executed
-        self.redo_stack.clear();
+        self.clear_redo();
 
-        // Limit stack size
-        while self.undo_stack.len() > self.history_limit {
-            self.undo_stack.pop_front();
-        }
+        self.enforce_depth_limit();
     }
 
     /// Push a command without undo data (convenience wrapper, timestamps are added automatically)
@@ -286,12 +441,19 @@ impl UndoStack {
 
     /// Pop from undo stack and return the entry
     pub fn pop_undo(&mut self) -> Option<UndoEntry> {
+        // No `mark_dirty`: a tail removal shrinks the id range, and the sync deletes
+        // every row outside that range, so the vacated id is cleaned up regardless.
         self.undo_stack.pop_back()
     }
 
     /// Push to redo stack
     pub fn push_redo(&mut self, entry: UndoEntry) {
+        self.redo_sync
+            .mark_dirty(self.redo_sync.head_dropped + self.redo_stack.len() as u64);
         self.redo_stack.push_back(entry);
+        // The redo stack is bounded too - undoing a long delete-heavy session moves
+        // every one of those whole-project snapshots across.
+        self.enforce_depth_limit();
     }
 
     /// Pop from redo stack
@@ -301,8 +463,17 @@ impl UndoStack {
 
     /// Push back to undo stack (for redo operations)
     pub fn push_undo(&mut self, entry: UndoEntry) {
-        self.undo_stack.push_back(entry);
+        self.push_undo_tracked(entry);
         // Don't clear redo stack when pushing for redo
+        self.enforce_depth_limit();
+    }
+
+    /// Append to the undo stack, recording the new id as dirty. The one place an
+    /// entry enters that stack, so the bookkeeping cannot be forgotten at a call site.
+    fn push_undo_tracked(&mut self, entry: UndoEntry) {
+        self.undo_sync
+            .mark_dirty(self.undo_sync.head_dropped + self.undo_stack.len() as u64);
+        self.undo_stack.push_back(entry);
     }
 
     /// Check if undo is available
@@ -319,6 +490,155 @@ impl UndoStack {
     pub fn clear(&mut self) {
         self.undo_stack.clear();
         self.redo_stack.clear();
+        // No dirty marking: an empty stack has an empty id range, and the sync deletes
+        // everything outside that range.
+    }
+
+    /// [#303] Drop every undo entry whose timestamp is at or before `cutoff`, and the
+    /// whole redo stack, returning how many undo entries went.
+    ///
+    /// This is clear-on-push (q8 / Q25): a confirmed push has just uploaded those
+    /// operations, so keeping them locally would duplicate them in the NEXT commit -
+    /// and the hybrid model's answer to "undo past the last commit" is the explicit
+    /// Unwind, not a second copy of the history.
+    ///
+    /// Keyed on the push-start instant rather than clearing everything, because an edit
+    /// that landed AFTER the snapshot was taken is not on the server: `speleodb_upload`
+    /// deliberately keeps its dirty bit so the next push carries it, so its undo entry
+    /// has to survive too. Clearing the lot would leave a dirty project whose pending
+    /// edit had no history at all.
+    ///
+    /// Entries with NO timestamp are legacy persisted ones, which necessarily predate
+    /// this session's push, so they are dropped.
+    pub fn drop_entries_up_to(&mut self, cutoff: DateTime<Utc>) -> usize {
+        let before = self.undo_stack.len();
+        // Timestamps are assigned in push order, so the entries to drop are a PREFIX -
+        // which keeps ids stable for the survivors (a front eviction, exactly like a
+        // trim). `partition_point` finds the boundary without scanning the tail.
+        let keep_from = self
+            .undo_stack
+            .partition_point(|e| e.timestamp.is_none_or(|ts| ts <= cutoff));
+        self.undo_stack.drain(..keep_from);
+        self.undo_sync.note_head_dropped(keep_from as u64);
+        // Redo is never uploaded (clarification #1) and a redo branch that replays onto
+        // a state the server has now committed is exactly the stale-replay hazard, so it
+        // goes wholesale.
+        self.redo_stack.clear();
+        before - self.undo_stack.len()
+    }
+
+    /// [#303] Estimated serialized size of one entry, in bytes.
+    ///
+    /// An ESTIMATE by design: it exists to bound growth, and measuring exactly would
+    /// mean serializing the whole stack on every push - the cost the byte budget is
+    /// there to avoid. The dominant terms are exact (the snapshot variants hold their
+    /// JSON as `String` already, so their length is the real payload); the structured
+    /// variants are approximated from their element counts, and everything else is
+    /// small enough that the flat overhead covers it.
+    pub fn estimated_size(entry: &UndoEntry) -> usize {
+        /// Roughly the JSON size of one serialized shot, from the measured
+        /// project-shaped payload (~420 bytes/shot).
+        const BYTES_PER_SHOT: usize = 420;
+        /// Command JSON plus enum/field scaffolding for any entry.
+        const ENTRY_OVERHEAD: usize = 512;
+
+        let payload = match &entry.undo_data {
+            // Exact: these hold the serialized project already.
+            UndoData::ProjectSnapshot(json) => json.len(),
+            UndoData::ProjectSnapshotPair { before, after } => before.len() + after.len(),
+            UndoData::PreviousValues { values_json, .. } => values_json.len(),
+            // Approximated from element counts - a section snapshot of a big section is
+            // the only other variant that can reach megabytes.
+            UndoData::SectionSnapshot { section_data, .. }
+            | UndoData::CreatedSectionSnapshot { section_data, .. } => {
+                section_data.shots.len() * BYTES_PER_SHOT
+            }
+            UndoData::ShotSnapshot { .. } | UndoData::CreatedShotSnapshot { .. } => BYTES_PER_SHOT,
+            UndoData::MergeInfo {
+                removed_closures,
+                previous_offsets,
+                ..
+            } => removed_closures.len() * 256 + previous_offsets.len() * 64,
+            UndoData::UnmergeInfo {
+                removed_closures, ..
+            } => removed_closures.len() * 256,
+            UndoData::ClosureInfo { .. } => 256,
+            UndoData::ZeroDatumInfo {
+                previous_offsets, ..
+            } => previous_offsets.len() * 64,
+            UndoData::SegmentMoveInfo {
+                affected_sections,
+                previous_offsets,
+                ..
+            } => affected_sections.len() * 16 + previous_offsets.len() * 64,
+            UndoData::StationMoveInfo { .. } => 2 * BYTES_PER_SHOT,
+            UndoData::InverseCommand(_) | UndoData::None => 0,
+        };
+        payload + ENTRY_OVERHEAD
+    }
+
+    /// [#303] Total estimated size of the undo stack (the budget's subject).
+    pub fn estimated_undo_bytes(&self) -> usize {
+        self.undo_stack.iter().map(Self::estimated_size).sum()
+    }
+
+    /// Apply whichever bound is active to BOTH stacks, evicting oldest-first.
+    ///
+    /// Under `Bytes`, the newest entry is always kept even if it alone exceeds the
+    /// budget: dropping it would silently discard the operation the user just did, and
+    /// a single entry over the budget is a very large import, not runaway growth.
+    fn enforce_depth_limit(&mut self) {
+        match self.depth_limit {
+            DepthLimit::Count(limit) => {
+                let undo_dropped = Self::trim_to_count(&mut self.undo_stack, limit);
+                self.undo_sync.note_head_dropped(undo_dropped);
+                let redo_dropped = Self::trim_to_count(&mut self.redo_stack, limit);
+                self.redo_sync.note_head_dropped(redo_dropped);
+            }
+            DepthLimit::Bytes(budget) => {
+                let (undo_dropped, undo_bytes) = Self::trim_to_bytes(&mut self.undo_stack, budget);
+                self.undo_sync.note_head_dropped(undo_dropped);
+                let (redo_dropped, _) = Self::trim_to_bytes(&mut self.redo_stack, budget);
+                self.redo_sync.note_head_dropped(redo_dropped);
+                if undo_dropped > 0 {
+                    // ONE counted line, not one per entry: the trim is a policy outcome
+                    // the user may need explained ("why can't I undo further?"), but a
+                    // long import must not turn it into a log flood.
+                    tracing::info!(
+                        dropped = undo_dropped,
+                        remaining = self.undo_stack.len(),
+                        estimated_bytes = undo_bytes,
+                        budget,
+                        purpose = "bound a Full-mode SpeleoDB project's undo history (#303)",
+                        "Trimmed oldest undo entries to stay within the undo byte budget"
+                    );
+                }
+            }
+        }
+    }
+
+    /// Evict from the front until at most `limit` entries remain. Returns how many went.
+    fn trim_to_count(stack: &mut VecDeque<UndoEntry>, limit: usize) -> u64 {
+        let mut dropped = 0;
+        while stack.len() > limit {
+            stack.pop_front();
+            dropped += 1;
+        }
+        dropped
+    }
+
+    /// Evict from the front until the estimated total is at most `budget`, always
+    /// keeping the newest entry. Returns (evicted, remaining estimated bytes).
+    fn trim_to_bytes(stack: &mut VecDeque<UndoEntry>, budget: usize) -> (u64, usize) {
+        let mut total: usize = stack.iter().map(Self::estimated_size).sum();
+        let mut dropped = 0;
+        while total > budget && stack.len() > 1 {
+            if let Some(front) = stack.pop_front() {
+                total = total.saturating_sub(Self::estimated_size(&front));
+                dropped += 1;
+            }
+        }
+        (dropped, total)
     }
 
     /// Clear the redo stack only, leaving undo history intact.
@@ -345,6 +665,101 @@ impl UndoStack {
     /// Get the undo data for the last undoable command
     pub fn peek_undo_data(&self) -> Option<&UndoData> {
         self.undo_stack.back().map(|e| &e.undo_data)
+    }
+
+    /// [#303] What a save must write for one stack: the rows at or after the first
+    /// changed id, plus the id range every surviving row falls in.
+    ///
+    /// The sync deletes anything outside `keep_range` and upserts `rows`, so between
+    /// them they express both halves of "make the table match memory" while only
+    /// serializing (and gzipping) what actually changed. `rows` empty with a
+    /// `keep_range` covering the whole stack means "nothing changed" - the common case
+    /// for a save that follows no edit.
+    #[must_use]
+    pub fn persist_plan(&self, stack: PersistStack, count_limit: Option<usize>) -> PersistPlan {
+        let (entries, sync) = match stack {
+            PersistStack::Undo => (&self.undo_stack, &self.undo_sync),
+            PersistStack::Redo => (&self.redo_stack, &self.redo_sync),
+        };
+
+        // A count limit (local / Disabled mode) persists only the last N entries, so
+        // the on-disk tail is a WINDOW over the stack rather than all of it. That
+        // window's start moves as entries are pushed, so every save has to rewrite from
+        // there - which is what the old code always did, at this same size.
+        let skip = match count_limit {
+            Some(limit) if entries.len() > limit => entries.len() - limit,
+            _ => 0,
+        };
+        let first_id = sync.head_dropped + skip as u64;
+        let last_id = sync.head_dropped + entries.len().saturating_sub(1) as u64;
+
+        // Where to start writing: the window start when a count limit is in force or a
+        // full rewrite is owed, else the first id whose content may differ.
+        let rewrite_from = if sync.needs_full_rewrite || count_limit.is_some() {
+            first_id
+        } else {
+            match sync.dirty_from {
+                Some(dirty) => dirty.max(first_id),
+                // Nothing changed: write no rows, but still hand back the range so a
+                // stale row left by an undo (a tail removal) is deleted.
+                None => last_id.saturating_add(1),
+            }
+        };
+
+        let rows = entries
+            .iter()
+            .enumerate()
+            .map(|(i, entry)| (sync.head_dropped + i as u64, entry))
+            .filter(|(id, _)| *id >= rewrite_from)
+            .filter_map(|(id, entry)| {
+                Self::serialize_entry_with_timestamp(entry).map(
+                    |(command_json, undo_data_json, timestamp)| PersistRow {
+                        id,
+                        command_json,
+                        undo_data_json,
+                        timestamp,
+                    },
+                )
+            })
+            .collect();
+
+        PersistPlan {
+            rows,
+            keep_range: if entries.is_empty() {
+                None
+            } else {
+                Some((first_id, last_id))
+            },
+        }
+    }
+
+    /// [#303] Record that a save wrote both plans successfully to `target`, so the next
+    /// one writes only what changes after this point. Never called on a failed save -
+    /// the database is then still behind memory, and the next save has to re-send the
+    /// same rows.
+    pub fn mark_persisted(&mut self, target: &std::path::Path) {
+        self.undo_sync.mark_persisted();
+        self.redo_sync.mark_persisted();
+        self.persisted_to = Some(target.to_path_buf());
+    }
+
+    /// [#303] Point the incremental bookkeeping at the file the next save will write.
+    ///
+    /// A different file (Save As, the first save of a deferred project, a re-open) holds
+    /// rows this bookkeeping knows nothing about - possibly none at all, possibly a
+    /// stale stack from an earlier session - so the ids in memory cannot be assumed to
+    /// line up with it. One full rewrite re-establishes the correspondence.
+    pub fn retarget(&mut self, target: &std::path::Path) {
+        if self.persisted_to.as_deref() != Some(target) {
+            self.require_full_rewrite();
+        }
+    }
+
+    /// [#303] Force the next save to rewrite both stacks in full: the destination is a
+    /// file whose rows this bookkeeping knows nothing about (a fresh open, a Save As).
+    pub fn require_full_rewrite(&mut self) {
+        self.undo_sync.needs_full_rewrite = true;
+        self.redo_sync.needs_full_rewrite = true;
     }
 
     /// Get undo entries to persist (last N entries up to persist_limit)
@@ -495,10 +910,25 @@ impl UndoStack {
         }
         Self::warn_dropped_unapplicable(&dropped);
 
-        // Trim to history limit
-        while self.undo_stack.len() > self.history_limit {
-            self.undo_stack.pop_front();
-        }
+        self.reset_sync_after_load();
+        self.enforce_depth_limit();
+    }
+
+    /// [#303] After a load, memory and the file agree, but the ids in memory were just
+    /// minted from position 0 rather than adopted from the `sequence` column - so the
+    /// next save must rewrite in full once, and only then can it go incremental.
+    ///
+    /// Deliberately a full rewrite rather than adopting the on-disk ids: a load already
+    /// FILTERS (unapplicable entries, undeserializable commands) and TRIMS, so the rows
+    /// on disk are not the entries in memory, and adopting their ids would leave the
+    /// dropped ones behind under ids nothing would ever delete.
+    fn reset_sync_after_load(&mut self) {
+        self.undo_sync = StackSync {
+            head_dropped: 0,
+            dirty_from: None,
+            needs_full_rewrite: true,
+        };
+        self.redo_sync = self.undo_sync;
     }
 
     /// Load entries from persisted data with timestamps
@@ -537,13 +967,8 @@ impl UndoStack {
             }
         }
 
-        // Trim to history limit
-        while self.undo_stack.len() > self.history_limit {
-            self.undo_stack.pop_front();
-        }
-        while self.redo_stack.len() > self.history_limit {
-            self.redo_stack.pop_front();
-        }
+        self.reset_sync_after_load();
+        self.enforce_depth_limit();
     }
 
     /// Get the number of entries in the undo stack
@@ -1637,6 +2062,380 @@ mod tests {
                 "Failed to deserialize test case {i}"
             );
         }
+    }
+
+    // === [#303] Byte budget (spec items 7, 8, 9) ===
+
+    /// An entry whose estimated size is `payload` bytes plus the flat overhead.
+    fn sized_entry(payload: usize, name: &str) -> (Command, UndoData) {
+        (
+            test_create_section_command(name),
+            UndoData::ProjectSnapshot("x".repeat(payload)),
+        )
+    }
+
+    /// Spec item 7: Full mode keeps MORE than `undo_history_limit` entries. The count
+    /// window is what the byte budget replaces, so a stack on the budget must not be
+    /// truncated at 100 (or at whatever the user configured).
+    #[test]
+    fn undo_budget_keeps_more_than_the_count_limit() {
+        let mut stack = UndoStack::new_with_limit(10);
+        stack.set_byte_budget(10 * 1024 * 1024);
+
+        for i in 0..50 {
+            let (cmd, data) = sized_entry(64, &format!("S{i}"));
+            stack.push_with_data(cmd, data);
+        }
+
+        assert_eq!(
+            stack.len(),
+            50,
+            "the byte budget replaces the count window, it does not coexist with it"
+        );
+    }
+
+    /// Spec item 8: past the budget, the OLDEST entries go first and the newest survive.
+    #[test]
+    fn undo_budget_drops_oldest_past_the_budget() {
+        // Budget for ~4 entries of 1 KiB payload (+512 overhead each).
+        let entry_size = 1024 + 512;
+        let mut stack = UndoStack::new_with_limit(1000);
+        stack.set_byte_budget(entry_size * 4);
+
+        for i in 0..10 {
+            let (cmd, data) = sized_entry(1024, &format!("S{i}"));
+            stack.push_with_data(cmd, data);
+        }
+
+        assert_eq!(stack.len(), 4, "bounded by bytes, not by count");
+        assert!(
+            stack.estimated_undo_bytes() <= entry_size * 4,
+            "the surviving stack fits the budget"
+        );
+        // The NEWEST entry is the one the user just did, so it must be the last to go.
+        let top = stack.pop_undo().expect("newest");
+        match top.command {
+            Command::CreateSection { name, .. } => assert_eq!(name, Some("S9".to_owned())),
+            other => panic!("expected the newest entry, got {other:?}"),
+        }
+    }
+
+    /// A single entry larger than the whole budget is KEPT: dropping it would silently
+    /// discard the operation the user just performed, and one oversized entry is a very
+    /// large import rather than runaway growth.
+    #[test]
+    fn undo_budget_always_keeps_the_newest_entry() {
+        let mut stack = UndoStack::new_with_limit(1000);
+        stack.set_byte_budget(1024);
+
+        let (cmd, data) = sized_entry(64 * 1024, "huge");
+        stack.push_with_data(cmd, data);
+
+        assert_eq!(stack.len(), 1, "the newest entry survives its own size");
+        assert!(stack.can_undo(), "and stays undoable");
+    }
+
+    /// Spec item 9: Disabled mode (and every local project) keeps the count window, and
+    /// switching back to it from the budget re-applies the configured number.
+    #[test]
+    fn undo_budget_reverting_to_count_limit_retrims() {
+        let mut stack = UndoStack::new_with_limit(3);
+        stack.set_byte_budget(10 * 1024 * 1024);
+        for i in 0..10 {
+            let (cmd, data) = sized_entry(64, &format!("S{i}"));
+            stack.push_with_data(cmd, data);
+        }
+        assert_eq!(stack.len(), 10);
+
+        stack.use_count_limit();
+        assert_eq!(stack.len(), 3, "back on the configured entry window");
+        assert_eq!(stack.depth_limit(), DepthLimit::Count(3));
+    }
+
+    /// A config reload must not knock a Full-mode project off the byte budget: that
+    /// would truncate the history its next push is supposed to carry to the server.
+    #[test]
+    fn undo_budget_survives_a_history_limit_change() {
+        let mut stack = UndoStack::new_with_limit(100);
+        stack.set_byte_budget(10 * 1024 * 1024);
+        for i in 0..20 {
+            let (cmd, data) = sized_entry(64, &format!("S{i}"));
+            stack.push_with_data(cmd, data);
+        }
+
+        stack.set_history_limit(5);
+
+        assert_eq!(stack.len(), 20, "still on the byte budget");
+        assert!(matches!(stack.depth_limit(), DepthLimit::Bytes(_)));
+        // ...and the new count is remembered for when the project goes back to it.
+        stack.use_count_limit();
+        assert_eq!(stack.len(), 5);
+    }
+
+    /// The estimator has to be dominated by the snapshot payloads - they are the only
+    /// variants that reach megabytes, and the whole budget rests on that being true.
+    #[test]
+    fn undo_budget_size_estimate_tracks_the_snapshot_payload() {
+        let small = UndoEntry {
+            command: test_create_section_command("small"),
+            undo_data: UndoData::InverseCommand(test_delete_section_command(1)),
+            timestamp: None,
+        };
+        let big = UndoEntry {
+            command: test_create_section_command("big"),
+            undo_data: UndoData::ProjectSnapshotPair {
+                before: "b".repeat(1_000_000),
+                after: "a".repeat(1_000_000),
+            },
+            timestamp: None,
+        };
+        assert!(UndoStack::estimated_size(&small) < 1024);
+        assert!(
+            UndoStack::estimated_size(&big) >= 2_000_000,
+            "a snapshot PAIR counts both halves - it is two whole-project JSON blobs"
+        );
+    }
+
+    // === [#303] Incremental persistence (spec item 10) ===
+
+    /// Spec item 10: adding one entry to a long stack plans ONE row, not the whole
+    /// stack. This is what keeps a byte-budgeted history off the 30s autosave's critical
+    /// path - the old shape re-serialized and re-gzipped every entry on every save.
+    #[test]
+    fn undo_persist_plan_writes_only_the_new_entry() {
+        let mut stack = UndoStack::new_with_limit(1000);
+        stack.set_byte_budget(64 * 1024 * 1024);
+        for i in 0..50 {
+            let (cmd, data) = sized_entry(64, &format!("S{i}"));
+            stack.push_with_data(cmd, data);
+        }
+        // First save writes everything (nothing is on disk yet).
+        let first = stack.persist_plan(PersistStack::Undo, None);
+        assert_eq!(first.rows.len(), 50);
+        assert_eq!(first.keep_range, Some((0, 49)));
+        stack.mark_persisted(std::path::Path::new("/tmp/p.stalx"));
+
+        // A save with nothing changed writes nothing at all.
+        let idle = stack.persist_plan(PersistStack::Undo, None);
+        assert!(idle.rows.is_empty(), "an unchanged stack writes no rows");
+        assert_eq!(idle.keep_range, Some((0, 49)));
+
+        // One more edit: exactly one row.
+        let (cmd, data) = sized_entry(64, "S50");
+        stack.push_with_data(cmd, data);
+        let second = stack.persist_plan(PersistStack::Undo, None);
+        assert_eq!(second.rows.len(), 1, "one edit, one row");
+        assert_eq!(second.rows[0].id, 50, "written at its stable id");
+        assert_eq!(second.keep_range, Some((0, 50)));
+    }
+
+    /// Ids survive a front eviction: after the budget drops the oldest entries, every
+    /// survivor keeps the id it already has on disk, so a save neither rewrites them nor
+    /// leaves the dropped ones behind.
+    #[test]
+    fn undo_persist_plan_ids_are_stable_across_a_trim() {
+        let entry_size = 1024 + 512;
+        let mut stack = UndoStack::new_with_limit(1000);
+        stack.set_byte_budget(entry_size * 3);
+        for i in 0..3 {
+            let (cmd, data) = sized_entry(1024, &format!("S{i}"));
+            stack.push_with_data(cmd, data);
+        }
+        stack.mark_persisted(std::path::Path::new("/tmp/p.stalx"));
+        assert_eq!(
+            stack.persist_plan(PersistStack::Undo, None).keep_range,
+            Some((0, 2))
+        );
+
+        // A fourth push evicts id 0.
+        let (cmd, data) = sized_entry(1024, "S3");
+        stack.push_with_data(cmd, data);
+        let plan = stack.persist_plan(PersistStack::Undo, None);
+        assert_eq!(
+            plan.keep_range,
+            Some((1, 3)),
+            "the evicted id falls outside the range, so the sync deletes its row"
+        );
+        assert_eq!(plan.rows.len(), 1, "only the new entry is rewritten");
+        assert_eq!(plan.rows[0].id, 3);
+    }
+
+    /// An undo pops the tail. That row must be deleted, and the plan expresses it purely
+    /// through the range - there is nothing to rewrite.
+    #[test]
+    fn undo_persist_plan_range_retires_a_popped_tail() {
+        let mut stack = UndoStack::new_with_limit(1000);
+        stack.set_byte_budget(64 * 1024 * 1024);
+        for i in 0..3 {
+            let (cmd, data) = sized_entry(64, &format!("S{i}"));
+            stack.push_with_data(cmd, data);
+        }
+        stack.mark_persisted(std::path::Path::new("/tmp/p.stalx"));
+
+        let popped = stack.pop_undo().expect("pop");
+        stack.push_redo(popped);
+
+        let undo_plan = stack.persist_plan(PersistStack::Undo, None);
+        assert!(
+            undo_plan.rows.is_empty(),
+            "nothing to rewrite on the undo side"
+        );
+        assert_eq!(
+            undo_plan.keep_range,
+            Some((0, 1)),
+            "the popped id is outside the range and its row is deleted"
+        );
+        // The redo side gained an entry, so it has exactly one row to write.
+        let redo_plan = stack.persist_plan(PersistStack::Redo, None);
+        assert_eq!(redo_plan.rows.len(), 1);
+    }
+
+    /// A save to a DIFFERENT file cannot trust ids minted against the previous one, so
+    /// it rewrites in full once and then resumes incremental saves.
+    #[test]
+    fn undo_persist_plan_retarget_forces_one_full_rewrite() {
+        let mut stack = UndoStack::new_with_limit(1000);
+        stack.set_byte_budget(64 * 1024 * 1024);
+        for i in 0..5 {
+            let (cmd, data) = sized_entry(64, &format!("S{i}"));
+            stack.push_with_data(cmd, data);
+        }
+        let first = std::path::Path::new("/tmp/first.stalx");
+        stack.mark_persisted(first);
+        assert!(stack.persist_plan(PersistStack::Undo, None).rows.is_empty());
+
+        // Same file: still incremental.
+        stack.retarget(first);
+        assert!(stack.persist_plan(PersistStack::Undo, None).rows.is_empty());
+
+        // Save As: one full rewrite.
+        let second = std::path::Path::new("/tmp/second.stalx");
+        stack.retarget(second);
+        let plan = stack.persist_plan(PersistStack::Undo, None);
+        assert_eq!(plan.rows.len(), 5, "a new destination is rewritten in full");
+        stack.mark_persisted(second);
+        assert!(
+            stack.persist_plan(PersistStack::Undo, None).rows.is_empty(),
+            "and incremental resumes afterwards"
+        );
+    }
+
+    /// A count-limited project (local, or Disabled mode) persists a WINDOW over the tail
+    /// of the stack, and that window's start moves with every push - so those saves
+    /// rewrite it, exactly as they always did.
+    #[test]
+    fn undo_persist_plan_count_limit_writes_the_window() {
+        let mut stack = UndoStack::new_with_limit(1000);
+        for i in 0..10 {
+            let (cmd, data) = sized_entry(64, &format!("S{i}"));
+            stack.push_with_data(cmd, data);
+        }
+        stack.mark_persisted(std::path::Path::new("/tmp/p.stalx"));
+
+        let plan = stack.persist_plan(PersistStack::Undo, Some(3));
+        assert_eq!(plan.rows.len(), 3, "only the last 3 entries are persisted");
+        assert_eq!(plan.keep_range, Some((7, 9)));
+        assert_eq!(
+            plan.rows.iter().map(|r| r.id).collect::<Vec<_>>(),
+            vec![7, 8, 9]
+        );
+    }
+
+    /// A load leaves memory and disk agreeing on CONTENT but not on ids (the load
+    /// filters and trims), so the next save must rewrite in full rather than assume the
+    /// rows on disk line up.
+    #[test]
+    fn undo_persist_plan_after_load_rewrites_in_full() {
+        let mut stack = UndoStack::new();
+        let entries: Vec<(String, String, Option<String>)> = (0..3)
+            .map(|i| {
+                UndoStack::serialize_entry_with_timestamp(&UndoEntry {
+                    command: test_create_section_command(&format!("S{i}")),
+                    undo_data: UndoData::InverseCommand(test_delete_section_command(i)),
+                    timestamp: None,
+                })
+                .expect("serialize")
+            })
+            .collect();
+        stack.load_from_persisted_with_timestamps(entries, vec![]);
+
+        let plan = stack.persist_plan(PersistStack::Undo, None);
+        assert_eq!(
+            plan.rows.len(),
+            3,
+            "a loaded stack is rewritten once so the ids on disk match memory"
+        );
+    }
+
+    // === [#303] clear-on-push (spec items 4, 5, 11) ===
+
+    /// Spec items 4 + 5: the push-start boundary. Entries captured by the push go (they
+    /// are on the server now, and keeping them would duplicate them in the next commit);
+    /// an edit that landed AFTER the snapshot was taken STAYS, because its dirty bit
+    /// stays too and the next push has to carry both the edit and its history.
+    #[test]
+    fn drop_entries_up_to_keeps_edits_that_landed_after_push_start() {
+        let mut stack = UndoStack::new();
+        let t =
+            |secs: i64| DateTime::from_timestamp(1_700_000_000 + secs, 0).expect("valid timestamp");
+
+        for (i, secs) in [0, 10, 20, 30].into_iter().enumerate() {
+            stack.push_with_data(
+                test_create_section_command(&format!("S{i}")),
+                UndoData::InverseCommand(test_delete_section_command(i as u32)),
+            );
+            // Overwrite the auto-assigned timestamp so the boundary is deterministic.
+            if let Some(entry) = stack.undo_stack.back_mut() {
+                entry.timestamp = Some(t(secs));
+            }
+        }
+        // A push that started at t=25: the first three entries are in its snapshot.
+        let dropped = stack.drop_entries_up_to(t(25));
+
+        assert_eq!(dropped, 3);
+        assert_eq!(stack.len(), 1, "the post-push-start edit survives");
+        let survivor = stack.peek_undo().expect("survivor");
+        match survivor {
+            Command::CreateSection { name, .. } => assert_eq!(*name, Some("S3".to_owned())),
+            other => panic!("expected S3, got {other:?}"),
+        }
+    }
+
+    /// Spec item 11: a confirmed push clears the redo stack outright. Redo is never
+    /// uploaded, and a redo branch that replays onto a state the server has now
+    /// committed is the stale-replay hazard the whole design avoids.
+    #[test]
+    fn drop_entries_up_to_clears_redo_wholesale() {
+        let mut stack = UndoStack::new();
+        stack.push_with_data(
+            test_create_section_command("a"),
+            UndoData::InverseCommand(test_delete_section_command(1)),
+        );
+        let entry = stack.pop_undo().expect("pop");
+        stack.push_redo(entry);
+        assert!(stack.can_redo());
+
+        stack.drop_entries_up_to(Utc::now());
+
+        assert!(!stack.can_redo(), "redo goes wholesale on a confirmed push");
+        assert!(!stack.can_undo());
+    }
+
+    /// A legacy persisted entry carries no timestamp. It necessarily predates this
+    /// session's push, so it is dropped rather than kept forever.
+    #[test]
+    fn drop_entries_up_to_drops_untimestamped_legacy_entries() {
+        let mut stack = UndoStack::new();
+        stack.push_with_data(
+            test_create_section_command("legacy"),
+            UndoData::InverseCommand(test_delete_section_command(1)),
+        );
+        if let Some(entry) = stack.undo_stack.back_mut() {
+            entry.timestamp = None;
+        }
+
+        assert_eq!(stack.drop_entries_up_to(Utc::now()), 1);
+        assert!(stack.is_empty());
     }
 
     #[test]

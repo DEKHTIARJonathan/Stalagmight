@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use chrono::Utc;
 use rusqlite::params;
 
@@ -121,6 +121,112 @@ impl Database {
 
         tracing::debug!(count = entries.len(), "Saved undo stack to database");
         Ok(())
+    }
+
+    /// [#303] Apply one stack's [`PersistPlan`] incrementally.
+    ///
+    /// The DELETE-everything-then-re-INSERT-everything shape this replaces re-gzipped
+    /// the whole persisted stack on every save, including the 30s autosave. That is
+    /// affordable for a 20-entry window and ruinous for a byte-budgeted one - a
+    /// delete-heavy session's whole-project snapshots are megabytes each, so a save
+    /// became seconds of compression. Here a save touches only what changed:
+    ///
+    /// 1. delete every row outside the surviving id range (entries popped by an undo,
+    ///    or evicted from the front by a trim), and
+    /// 2. upsert the plan's rows, which are only those at or after the first id whose
+    ///    content may differ.
+    ///
+    /// `sequence` carries the stable id, so `ORDER BY sequence` still reproduces stack
+    /// order and the on-disk shape is unchanged. Rows are re-inserted rather than
+    /// UPDATEd because `sequence` has no unique index (the table is keyed by rowid), so
+    /// a delete-then-insert of just the rewritten range is both correct and cheap.
+    fn sync_stack_plan(&self, table: &str, plan: &crate::core::PersistPlan) -> Result<()> {
+        // Stale rows: anything outside the range memory still holds. An empty stack has
+        // no range, so everything goes.
+        match plan.keep_range {
+            Some((first, last)) => {
+                self.conn.execute(
+                    &format!("DELETE FROM {table} WHERE sequence < ?1 OR sequence > ?2"),
+                    params![first as i64, last as i64],
+                )?;
+            }
+            None => {
+                self.conn.execute(&format!("DELETE FROM {table}"), [])?;
+            }
+        }
+        if plan.rows.is_empty() {
+            return Ok(());
+        }
+        // Clear the range being rewritten, then write it. Both statements are scoped to
+        // the rewritten ids, so rows below it keep their existing (already compressed)
+        // blobs untouched - the entire point.
+        let lowest = plan.rows.iter().map(|r| r.id).min().unwrap_or(0);
+        self.conn.execute(
+            &format!("DELETE FROM {table} WHERE sequence >= ?1"),
+            params![lowest as i64],
+        )?;
+        for row in &plan.rows {
+            let executed_at = row
+                .timestamp
+                .clone()
+                .unwrap_or_else(|| Utc::now().to_rfc3339());
+            self.conn.execute(
+                &format!(
+                    "INSERT INTO {table} (sequence, command_json, undo_data_json, executed_at) \
+                     VALUES (?1, ?2, ?3, ?4)"
+                ),
+                params![
+                    row.id as i64,
+                    compress_json(&row.command_json),
+                    compress_json(&row.undo_data_json),
+                    executed_at
+                ],
+            )?;
+        }
+        tracing::debug!(
+            table,
+            written = plan.rows.len(),
+            "Synced stack rows to database"
+        );
+        Ok(())
+    }
+
+    /// [#303] Empty the undo/redo tables in the `.stalx` at `path`, without opening it
+    /// as a full [`Database`].
+    ///
+    /// For the download-replace chokepoint: a freshly-extracted server copy carries the
+    /// pusher's history (Full mode ships it deliberately), and every implicit adopt path
+    /// must drop it - see `InheritedUndo`. Deliberately a BARE connection rather than
+    /// `open_existing`: this runs on a file that is about to be opened properly, and
+    /// `open_existing` would run the integrity check and the whole migration chain on it
+    /// twice, as well as taking a read-write connection with its 256 MB mmap.
+    ///
+    /// A missing table is not an error - an older snapshot shape simply has none.
+    pub fn clear_undo_history_at(path: &std::path::Path) -> Result<()> {
+        let conn = rusqlite::Connection::open(path)
+            .with_context(|| format!("open {} to clear inherited undo", path.display()))?;
+        for table in ["undo_stack", "redo_stack"] {
+            let exists: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?1",
+                params![table],
+                |row| row.get(0),
+            )?;
+            if exists > 0 {
+                conn.execute(&format!("DELETE FROM {table}"), [])
+                    .with_context(|| format!("clear {table} in {}", path.display()))?;
+            }
+        }
+        Ok(())
+    }
+
+    /// [#303] `sync_stack_plan` for the undo stack.
+    pub fn sync_undo_stack(&self, plan: &crate::core::PersistPlan) -> Result<()> {
+        self.sync_stack_plan("undo_stack", plan)
+    }
+
+    /// [#303] `sync_stack_plan` for the redo stack.
+    pub fn sync_redo_stack(&self, plan: &crate::core::PersistPlan) -> Result<()> {
+        self.sync_stack_plan("redo_stack", plan)
     }
 
     /// Save undo stack with timestamps (clear existing and save new entries)

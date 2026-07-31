@@ -237,6 +237,12 @@ impl AppState {
             }
         }
 
+        // [#303] Re-arm the depth bound for the project that just opened: a Full-mode
+        // linked one goes onto the byte budget, anything else back onto the configured
+        // entry window. AFTER the restore above (which trims under whatever bound was in
+        // force) and outside its lock, since this takes `undo_stack` itself.
+        self.sync_undo_depth_limit();
+
         // Add to recent projects and persist to config
         let path_display = format!("{}", path.display());
         if let Ok(mut recent) = self.recent_projects.lock() {
@@ -792,6 +798,10 @@ impl AppState {
                 );
             }
         }
+
+        // [#303] As in the non-staged load: re-arm the depth bound for the project that
+        // just opened, outside the stack lock.
+        self.sync_undo_depth_limit();
 
         // Commit 5: Recent projects update
         {

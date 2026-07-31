@@ -467,10 +467,19 @@ pub(super) enum PushOutcome {
 /// All durable project data - survey, config, import-dedup, resolved-warnings -
 /// proliferates with the project. See
 /// [`crate::persistence::Database::sanitize_push_snapshot`] for the exact set and
-/// for which failures are fatal (stripping the undo/redo history and clearing the
+/// for which failures are fatal (stripping the redo history and clearing the
 /// dirty bit are; the privacy-neutral local prefs are not).
 ///
+/// `keep_undo` (#303) is the one policy input: a Full-mode linked project ships its
+/// undo history since the last commit, which is what gives undo cross-commit reach.
+/// The redo stack is stripped in every mode.
+///
 /// FATAL for the push: an unsanitized snapshot must never be uploaded.
+fn clear_snapshot_dirty(snapshot: &Path, keep_undo: bool) -> Result<(), SpeleoDbError> {
+    crate::persistence::Database::sanitize_push_snapshot(snapshot, keep_undo)
+        .map_err(|e| SpeleoDbError::Io(format!("could not sanitize the push snapshot: {e}")))
+}
+
 /// The server `type` an un-adopted Ariane project carries. Compared
 /// case-insensitively: the API answers `ARIANE` on a GET and takes `ariane` on a
 /// PATCH, and which one a given payload used is not a distinction worth trusting.
@@ -501,11 +510,6 @@ pub(super) fn type_says_managed(server_kind: Option<&str>) -> bool {
 /// the state adoption is meant to leave behind.
 pub(super) fn type_still_says_ariane(server_kind: Option<&str>) -> bool {
     server_kind.is_some_and(|kind| kind.trim().eq_ignore_ascii_case(ARIANE_PROJECT_TYPE))
-}
-
-fn clear_snapshot_dirty(snapshot: &Path) -> Result<(), SpeleoDbError> {
-    crate::persistence::Database::sanitize_push_snapshot(snapshot)
-        .map_err(|e| SpeleoDbError::Io(format!("could not sanitize the push snapshot: {e}")))
 }
 
 /// Resolve the server head, re-fetching ONCE when a recorded BASE meets an empty
@@ -1750,6 +1754,14 @@ impl AppState {
                 "already editing with the write lock held".to_owned(),
             )));
         }
+        // [#303] Clear-on-lock, best-effort arm (q24). A force-edit takes NO lock and
+        // runs no reconcile, so the "copy matches git" fence cannot be evaluated here -
+        // but a force-editor is starting an edit session all the same, and the stack it
+        // would start with is still whatever the last pusher shipped. Clearing
+        // unconditionally is the safe direction: force-edit already carries the big-red
+        // unmergeable-`.stalx` warning, so losing an inherited history is the least of
+        // what that session is accepting.
+        self.speleodb_clear_inherited_undo("force-edit session started without a lock");
         self.set_edit_enabled(true);
         self.set_force_editing(true);
         Ok(())
@@ -2020,6 +2032,26 @@ impl AppState {
                 {
                     release_unless_kept(Some(&e));
                     return Err(local_dto(e));
+                }
+                // [#303] Clear-on-lock (clarification #2 / q14), gated on the copy really
+                // being the file that is in git: `UpToDate` means BASE == the server tip,
+                // and a clean link means we hold nothing the server has not seen. Under
+                // both, whatever undo history is here describes operations that are
+                // already committed - a stack inherited from the last pusher - and
+                // starting an edit session one Ctrl-Z away from a stranger's operation is
+                // the #194 b3 hazard.
+                //
+                // The guard is what makes the maintainer's case work: lock, edit, unlock
+                // WITHOUT pushing, re-lock. That copy is dirty, so this does not fire and
+                // the user's own history survives.
+                //
+                // AFTER the commit, not before: a session torn down in the window above
+                // refuses with nothing committed, and clearing there would have thrown
+                // away a stack the aborted session never went on to use.
+                if !link.has_unpushed_edits {
+                    self.speleodb_clear_inherited_undo(
+                        "lock acquired over a copy that matches git",
+                    );
                 }
                 Ok(StartEditingResult::Editing)
             }
@@ -2918,13 +2950,20 @@ impl AppState {
         }
         self.speleodb_render_tml(&tml).map_err(local_dto)?;
 
+        // [#303] Resolve the undo policy from the LIVE file, before the snapshot's own
+        // link row is scrubbed. Full + linked ships the history the flush above just
+        // persisted (which is why this reads after `save_project`, not before);
+        // everything else strips it exactly as before.
+        let keep_undo = self.undo_policy().pushes_history();
+
         // Self-contained snapshot of the live `.stalx` (#195), dirty bit cleared in
         // the COPY so it never rides to the server.
         crate::persistence::Database::vacuum_snapshot(&live, &snapshot)
             .map_err(|e| local_dto(SpeleoDbError::Io(e.to_string())))?;
-        // FATAL if it fails: an unsanitized snapshot still carries the pusher's
-        // undo/redo history (and a stale dirty bit) and must never be uploaded.
-        clear_snapshot_dirty(&snapshot).map_err(local_dto)?;
+        // FATAL if it fails: an unsanitized snapshot still carries the pusher's redo
+        // history (and a stale dirty bit) and must never be uploaded. In Disabled mode
+        // the undo history is fatal to leak too; in Full mode it is the payload.
+        clear_snapshot_dirty(&snapshot, keep_undo).map_err(local_dto)?;
 
         let result = self.speleodb_handle_auth(
             Endpoint::UploadAuto,
@@ -2997,6 +3036,7 @@ impl AppState {
                     }
                 })
                 .map_err(local_dto)?;
+                self.speleodb_clear_undo_after_push(&push_start);
                 Ok(landed)
             }
             Err(e) => {
@@ -3026,6 +3066,7 @@ impl AppState {
                         }
                     })
                     .map_err(local_dto)?;
+                    self.speleodb_clear_undo_after_push(&push_start);
                     return Ok(landed);
                 }
                 // Ambiguous (retried-then-exhausted 5xx, or a transport drop): we
@@ -3114,6 +3155,75 @@ impl AppState {
                 purpose = "finish an adoption whose own push never ran",
                 "speleodb: could not flip the project type after a landed push; the next push retries"
             ),
+        }
+    }
+
+    /// [#303] Drop the in-memory undo/redo stacks when an edit session starts over a
+    /// copy whose history is not ours - the clear-on-lock rule (clarification #2).
+    ///
+    /// The download-replace chokepoint already empties the TABLES of every server copy
+    /// it writes (see `InheritedUndo`), so in the ordinary flow this is a no-op. It is
+    /// here for the copies that path never touched: a `.stalx` opened directly from disk
+    /// (Save As'd, hand-copied, shared as a bare file), or one written by a build that
+    /// predates the drop. Cheap, and the alternative is starting an edit session one
+    /// Ctrl-Z away from a stranger's operation.
+    ///
+    /// `reason` goes to the log so the disappearance of a visible history is explicable.
+    fn speleodb_clear_inherited_undo(&self, reason: &str) {
+        if let Ok(mut stack) = self.undo_stack.lock() {
+            if stack.is_empty() && !stack.can_redo() {
+                return;
+            }
+            let dropped = stack.len();
+            stack.clear();
+            tracing::info!(
+                dropped,
+                reason,
+                purpose = "never inherit another editor's undo history (#194 b3 / #303)",
+                "Cleared the undo history carried by the opened copy"
+            );
+        }
+    }
+
+    /// [#303] Clear-on-push (q8 / Q25): after a CONFIRMED push, drop the undo entries
+    /// that push carried and the whole redo stack.
+    ///
+    /// The operations are on the server now, inside the commit just made. Keeping them
+    /// locally would put them in the NEXT commit as well, which is the duplication this
+    /// issue exists to remove - and the hybrid model's answer to "undo past the last
+    /// commit" is the explicit Unwind, which fetches that commit's history back.
+    ///
+    /// Bounded by `push_start`, not "clear everything": an edit recorded after the
+    /// snapshot was taken is NOT on the server, and the arms above deliberately keep its
+    /// dirty bit so the next push carries it. Its undo entry has to survive with it, or
+    /// that push would upload a dirty project whose pending edit had no history.
+    ///
+    /// Runs in EVERY mode. In Disabled mode nothing was uploaded, but a push still ends
+    /// the undo session (Q23) - one rule, so "what happened to my history" has one
+    /// answer.
+    ///
+    /// Best-effort: a poisoned lock leaves the stack alone rather than failing a push
+    /// that has already landed on the server.
+    fn speleodb_clear_undo_after_push(&self, push_start: &str) {
+        let Ok(cutoff) = chrono::DateTime::parse_from_rfc3339(push_start) else {
+            tracing::warn!(
+                push_start,
+                purpose = "clear undo history after a confirmed push (#303)",
+                "could not parse the push-start instant; leaving the undo stack alone"
+            );
+            return;
+        };
+        let cutoff = cutoff.with_timezone(&chrono::Utc);
+        if let Ok(mut stack) = self.undo_stack.lock() {
+            let dropped = stack.drop_entries_up_to(cutoff);
+            if dropped > 0 {
+                tracing::info!(
+                    dropped,
+                    remaining = stack.len(),
+                    purpose = "avoid duplicating pushed history in the next commit (#303)",
+                    "Cleared the undo entries carried by a confirmed push"
+                );
+            }
         }
     }
 
@@ -3268,7 +3378,7 @@ mod tests {
         REVERIFY_INTERVAL_SECS,
     };
     use crate::core::state::speleodb_cache::{
-        preserved_display_settings, restore_display_settings,
+        preserved_display_settings, restore_display_settings, InheritedUndo,
     };
     use crate::core::state::speleodb_pull::classify_dump_entry;
     use crate::core::state::tests_support::speleodb_prod_matches;
@@ -3475,11 +3585,12 @@ mod tests {
                 has_unpushed_edits: true,
                 last_edit_at: Some("2026-06-27T10:00:00+00:00".to_owned()),
                 last_verify_at: None,
+                undo_mode: None,
             }))
             .expect("stamp dirty link");
         }
 
-        clear_snapshot_dirty(&path).expect("sanitize the snapshot");
+        clear_snapshot_dirty(&path, false).expect("sanitize the snapshot");
 
         let db = Database::open_existing(&path).expect("reopen snapshot");
         let link = db
@@ -3737,7 +3848,13 @@ mod tests {
 
         let mut dump = crate::speleodb::dump::Dump::open(&zip).expect("open dump");
         let preserved = state
-            .replace_cache_stalx(&mut dump, "misc/project.stalx", &dest, GUARD_ID)
+            .replace_cache_stalx(
+                &mut dump,
+                "misc/project.stalx",
+                &dest,
+                GUARD_ID,
+                InheritedUndo::Drop,
+            )
             .expect("replace the cache file");
 
         assert_eq!(
@@ -3786,6 +3903,7 @@ mod tests {
             has_unpushed_edits: dirty,
             last_edit_at: dirty.then(|| "2026-07-26T09:00:00Z".to_owned()),
             last_verify_at: None,
+            undo_mode: None,
         }))
         .expect("save link");
     }
@@ -3937,7 +4055,12 @@ mod tests {
 
         let mut dump = crate::speleodb::dump::Dump::open(&zip).expect("open dump");
         let err = state
-            .replace_cache_stalx_abandoning(&mut dump, "no/such/entry.stalx", &dest)
+            .replace_cache_stalx_abandoning(
+                &mut dump,
+                "no/such/entry.stalx",
+                &dest,
+                InheritedUndo::Drop,
+            )
             .expect_err("extracting a missing entry must fail");
         assert!(
             !matches!(err, SpeleoDbError::WouldDiscardLocalEdits { .. }),
@@ -4015,7 +4138,13 @@ mod tests {
 
         let mut dump = crate::speleodb::dump::Dump::open(&zip).expect("open dump");
         let refused = state
-            .replace_cache_stalx(&mut dump, "misc/project.stalx", &dest, GUARD_ID)
+            .replace_cache_stalx(
+                &mut dump,
+                "misc/project.stalx",
+                &dest,
+                GUARD_ID,
+                InheritedUndo::Drop,
+            )
             .expect_err("the guarded verb must refuse");
         assert!(matches!(
             refused,
@@ -4029,7 +4158,12 @@ mod tests {
 
         let mut dump = crate::speleodb::dump::Dump::open(&zip).expect("reopen dump");
         state
-            .replace_cache_stalx_abandoning(&mut dump, "misc/project.stalx", &dest)
+            .replace_cache_stalx_abandoning(
+                &mut dump,
+                "misc/project.stalx",
+                &dest,
+                InheritedUndo::Drop,
+            )
             .expect("the abandoning verb still discards on purpose");
         assert_eq!(
             std::fs::read(&dest).expect("read replaced file"),
@@ -4266,6 +4400,7 @@ mod tests {
             has_unpushed_edits: false,
             last_edit_at: None,
             last_verify_at: None,
+            undo_mode: None,
         }))
         .expect("save link");
         drop(db);
@@ -4336,6 +4471,7 @@ mod tests {
             has_unpushed_edits: dirty,
             last_edit_at: dirty.then(|| "2026-07-27T10:00:00Z".to_owned()),
             last_verify_at: None,
+            undo_mode: None,
         }))
         .expect("save link");
         drop(db);
@@ -4775,6 +4911,7 @@ mod tests {
             has_unpushed_edits: true,
             last_edit_at: None,
             last_verify_at: None,
+            undo_mode: None,
         };
 
         state.set_force_editing(true);
@@ -4870,6 +5007,7 @@ mod tests {
             has_unpushed_edits: true,
             last_edit_at: None,
             last_verify_at: None,
+            undo_mode: None,
         };
         assert_eq!(
             state.speleodb_remote_state(&base, "tok-1", false, &link, Some("u@x")),
@@ -8471,11 +8609,21 @@ mod tests {
 
     #[test]
     #[ignore = "hits the live SpeleoDB box; needs DEV_SPELEODB_* (run with --ignored --test-threads=1)"]
-    fn live_orch_pushed_snapshot_carries_no_undo_history() {
-        // #194 b3: an edit builds local undo history; after Done (push), the copy
-        // the SERVER stores must carry NO undo/redo - so any collaborator adopting
-        // it starts with a clean slate (never inheriting + replaying the pusher's
-        // edit history, a data-corruption vector).
+    fn live_orch_pushed_snapshot_carries_the_undo_history_since_the_last_commit() {
+        // [#303] The end-to-end shape of the hybrid stack, against the real server. This
+        // test used to assert the OPPOSITE (`..._carries_no_undo_history`, #194 b3) and
+        // is inverted deliberately - three assertions, all of which flipped:
+        //
+        // 1. the pushed snapshot DOES carry the undo history (Full mode is the default),
+        //    which is what gives undo cross-commit reach;
+        // 2. it carries NO redo, in any mode (clarification #1); and
+        // 3. the LOCAL stack is EMPTY after the push (clear-on-push, q8): those
+        //    operations are in the commit now, so keeping them would duplicate them in
+        //    the next one.
+        //
+        // The #194 b3 hazard the first assertion relaxes is contained elsewhere now: a
+        // pulled stack is cleared on every implicit adopt path, and is only handed back
+        // through the explicit, confirmed, lock-held Unwind.
         let Some((url, email, password)) = orch_env() else {
             return;
         };
@@ -8516,37 +8664,82 @@ mod tests {
         );
         state.speleodb_done(None).expect("done");
 
-        // Sanity: the LOCAL file kept the editor's undo (only the uploaded snapshot
-        // is sanitized, never the live file).
-        let live_undo = Database::open_existing(&live_path)
-            .expect("open live")
-            .load_undo_stack_with_timestamps()
-            .expect("load live undo");
-        assert!(
-            !live_undo.is_empty(),
-            "sanity: the editor accumulated undo history locally"
+        // [#303] Clear-on-push, in memory: the operation that push carried is gone, so
+        // the next commit cannot duplicate it.
+        assert_eq!(
+            state.undo_stack.lock().expect("undo stack lock").len(),
+            0,
+            "a confirmed push clears the undo entries it uploaded (q8)"
         );
 
-        // Re-download the SERVER's copy: it must carry NO undo/redo (the strip).
+        // Re-download the SERVER's copy and read what the commit actually stored.
         let server = state
             .speleodb_open_project(id.clone(), "orch-undo".to_owned(), None, None)
             .expect("re-download server copy");
         let server_db =
             Database::open_existing(Path::new(&server.local_path)).expect("open server copy");
         assert!(
-            server_db
+            !server_db
                 .load_undo_stack_with_timestamps()
                 .expect("load server undo")
                 .is_empty(),
-            "the pushed snapshot must carry no undo history (#194 b3)"
+            "Full mode must ship the undo history since the last commit (#303) - this is \
+             what lets a later Unwind fetch it back and keep undoing past the commit"
         );
         assert!(
             server_db
                 .load_redo_stack_with_timestamps()
                 .expect("load server redo")
                 .is_empty(),
-            "the pushed snapshot must carry no redo history (#194 b3)"
+            "redo is never uploaded, in any mode (clarification #1)"
         );
+
+        // And the second push carries ONLY the second edit - the point of the whole
+        // exercise (no duplication across commits). Re-acquire, edit, Done again.
+        state
+            .speleodb_start_editing()
+            .expect("start_editing for the second push");
+        assert!(
+            state
+                .execute(Command::CreateSection {
+                    name: Some("undo-edit-2".to_owned()),
+                    surveyor: None,
+                    date: None,
+                    color: "#123456".to_owned(),
+                    direction: None,
+                    shots: vec![ShotData {
+                        length: 7.0,
+                        ..Default::default()
+                    }],
+                })
+                .success,
+            "second edit succeeds while editing"
+        );
+        state.speleodb_done(None).expect("second done");
+
+        let server2 = state
+            .speleodb_open_project(id.clone(), "orch-undo".to_owned(), None, None)
+            .expect("re-download after the second push");
+        let commit2 = Database::open_existing(Path::new(&server2.local_path))
+            .expect("open second server copy")
+            .load_undo_stack_with_timestamps()
+            .expect("load second server undo");
+        assert_eq!(
+            commit2.len(),
+            1,
+            "commit 2 must carry ONLY the operations made after commit 1, not the whole \
+             session again - got {commit2:?}"
+        );
+        assert!(
+            commit2
+                .iter()
+                .all(|(_, command_json, ..)| command_json.contains("undo-edit-2")),
+            "and specifically the SECOND edit, not the first: {commit2:?}"
+        );
+
+        // `live_path` is the same cache file throughout; naming it keeps the re-download
+        // assertions above honestly about the SERVER's copy rather than this one.
+        assert!(live_path.exists(), "the local cache file is still there");
     }
 
     #[test]
