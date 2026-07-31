@@ -42,6 +42,9 @@ on:
 permissions:
   contents: read
 
+# All actions are SHA-pinned: the org enforces "Require actions to be pinned to
+# a full-length commit SHA". Tag refs like @v7 are rejected outright.
+
 jobs:
   resolve:
     runs-on: ubuntu-latest
@@ -86,7 +89,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
           echo "T0=$(date +%s)" >> "$GITHUB_ENV"
 
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install tauri apt deps (hosted only)
         if: runner.environment == 'github-hosted'
@@ -109,7 +112,7 @@ jobs:
           workspaces: src-tauri
 
       - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version-file: .nvmrc
           cache: pnpm
