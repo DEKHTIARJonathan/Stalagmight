@@ -5,6 +5,9 @@
  * serialized through a command mutex so a heartbeat/health probe never
  * interleaves with a tool call.
  */
+// FIRST import on purpose: patches webdriver's undici before webdriverio (next
+// import) links it. See the module comment for the Node >= 26 failure it fixes.
+import './lib/undici-dispatcher-pin';
 import { spawn, execSync, type ChildProcess } from 'child_process';
 import * as fs from 'fs';
 import * as os from 'os';
