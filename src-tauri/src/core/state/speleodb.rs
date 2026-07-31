@@ -2417,7 +2417,9 @@ impl AppState {
     /// co-push (#196). Mints a stable UUID for any shot still missing one - a
     /// no-op for modern files; for legacy pre-v6 shots it mints AND persists so
     /// the canonical `.stalx` (hence its push snapshot) shares the identity the
-    /// `.tml` carries. Renders via `export_tml` into a throwaway sidecar.
+    /// `.tml` carries. Renders via `export_tml_for_speleodb` into a throwaway
+    /// sidecar - the same document as the user-facing export, hardened for the
+    /// server's GeoJSON conversion.
     fn speleodb_render_tml(&self, dest: &Path) -> Result<(), SpeleoDbError> {
         // Snapshot the in-memory project so the UUID-persist + render run without
         // holding the project lock across the database lock.
@@ -2451,7 +2453,7 @@ impl AppState {
                 }
             }
         }
-        crate::export::tml::export_tml(&project, dest)
+        crate::export::tml::export_tml_for_speleodb(&project, dest)
             .map_err(|e| SpeleoDbError::Io(format!("render .tml failed: {e}")))?;
         Ok(())
     }
@@ -8419,7 +8421,7 @@ mod tests {
         // to a fresh local re-render of the same (UUID-minted) project. The render is
         // deterministic - the one-time shot-UUID pass ran on push - so re-pushing
         // unchanged content never churns the .tml. (The offline byte-stability test
-        // proves export_tml is deterministic; this proves the bytes the server holds
+        // proves the render is deterministic; this proves the bytes the server holds
         // are exactly that deterministic render, intact through the round-trip.)
         let Some((url, email, password)) = orch_env() else {
             return;
@@ -8475,7 +8477,7 @@ mod tests {
             .expect("open project")
             .clone();
         let rerender = temp.path().join("rerender.tml");
-        crate::export::tml::export_tml(&project, &rerender).expect("re-render .tml");
+        crate::export::tml::export_tml_for_speleodb(&project, &rerender).expect("re-render .tml");
 
         assert_eq!(
             std::fs::read(&server_tml).expect("read server ariane.tml"),

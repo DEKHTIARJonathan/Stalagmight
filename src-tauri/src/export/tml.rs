@@ -209,13 +209,41 @@ struct ExportShot {
     locked: bool,
 }
 
+/// Which consumer the emitted document is written for.
+///
+/// Ariane reads the file as a survey; SpeleoDB feeds it to `openspeleo_lib`,
+/// which is stricter in places Ariane never looks and crashes or silently drops
+/// the whole map when a rule is broken. The sidecar profile bends the exported
+/// REPRESENTATION into what that converter can read - never the project - and
+/// exists so those concessions cannot leak into the file a user asked for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TmlProfile {
+    /// The user-facing "Export to Ariane" output. Byte-for-byte what we have
+    /// always written; nothing below may change it.
+    User,
+    /// The throwaway `ariane.tml` pushed alongside a SpeleoDB commit, which the
+    /// server converts to GeoJSON for the map preview.
+    SpeleoDbSidecar,
+}
+
 // ============================================================================
 // Public API
 // ============================================================================
 
 /// Export a project to Ariane TML (`.tml` = ZIP) or TMLU (`.tmlu` = plain XML).
 pub fn export_tml(project: &Project, path: &Path) -> Result<()> {
-    let xml = build_xml(project, names_for_path(path))?;
+    export_with_profile(project, path, TmlProfile::User)
+}
+
+/// Render the SpeleoDB co-push sidecar (#196) - the same document, hardened for
+/// `openspeleo_lib`'s GeoJSON conversion. See [`TmlProfile`] and
+/// [`harden_for_speleodb`] for what differs and why; the survey itself does not.
+pub fn export_tml_for_speleodb(project: &Project, path: &Path) -> Result<()> {
+    export_with_profile(project, path, TmlProfile::SpeleoDbSidecar)
+}
+
+fn export_with_profile(project: &Project, path: &Path, profile: TmlProfile) -> Result<()> {
+    let xml = build_xml(project, names_for_path(path), profile)?;
     write_output(path, &xml)
 }
 
@@ -249,8 +277,8 @@ fn write_output(path: &Path, xml: &[u8]) -> Result<()> {
 // XML generation
 // ============================================================================
 
-fn build_xml(project: &Project, n: &Names) -> Result<Vec<u8>> {
-    let shots = build_export_shots(project);
+fn build_xml(project: &Project, n: &Names, profile: TmlProfile) -> Result<Vec<u8>> {
+    let shots = build_export_shots(project, profile);
 
     let mut buf = Vec::new();
     let mut writer = Writer::new_with_indent(Cursor::new(&mut buf), b' ', 4);
@@ -326,7 +354,7 @@ fn write_shot<W: std::io::Write>(
     let comment_str = shot.comment.as_deref().unwrap_or("");
     write_text_element(writer, n.comment, comment_str)?;
 
-    let date_str = shot.date.as_deref().unwrap_or("2000-01-01");
+    let date_str = shot.date.as_deref().unwrap_or(DEFAULT_EXPORT_DATE);
     write_text_element(writer, n.date, date_str)?;
 
     write_text_element(writer, n.depth, &format_f64(shot.depth))?;
@@ -372,6 +400,11 @@ fn write_shot<W: std::io::Write>(
     writer.write_event(Event::End(BytesEnd::new(n.survey_data)))?;
     Ok(())
 }
+
+/// Stand-in for a section with no survey date. `<Date>` is not optional to every
+/// consumer - SpeleoDB rejects the whole file when it is missing or empty - so a
+/// dateless section still gets a parseable one.
+const DEFAULT_EXPORT_DATE: &str = "2000-01-01";
 
 /// Ariane's `DepthIn` sentinel: "this shot starts where the previous one ended".
 const DEPTH_IN_SENTINEL: f64 = -1.0;
@@ -468,7 +501,7 @@ fn shot_export_uuid(shot: &Shot) -> String {
     }
 }
 
-fn build_export_shots(project: &Project) -> Vec<ExportShot> {
+fn build_export_shots(project: &Project, profile: TmlProfile) -> Vec<ExportShot> {
     if project.sections.is_empty() {
         return Vec::new();
     }
@@ -1286,8 +1319,14 @@ fn build_export_shots(project: &Project) -> Vec<ExportShot> {
     let start_idx = all_shots.iter().position(|s| s.shot_type == "START");
     if let Some(start_idx) = start_idx {
         if let Some(primary_datum) = primary_datum {
-            all_shots[start_idx].latitude = primary_datum.gps.latitude;
-            all_shots[start_idx].longitude = primary_datum.gps.longitude;
+            let (latitude, longitude) = match profile {
+                TmlProfile::User => (primary_datum.gps.latitude, primary_datum.gps.longitude),
+                TmlProfile::SpeleoDbSidecar => {
+                    speleodb_anchor(primary_datum.gps.latitude, primary_datum.gps.longitude)
+                }
+            };
+            all_shots[start_idx].latitude = latitude;
+            all_shots[start_idx].longitude = longitude;
 
             if project.zero_datums.len() > 1 {
                 tracing::warn!(
@@ -1298,7 +1337,11 @@ fn build_export_shots(project: &Project) -> Vec<ExportShot> {
         }
     }
 
-    enforce_ariane_geometry_invariants(&mut all_shots);
+    enforce_ariane_geometry_invariants(&mut all_shots, profile);
+
+    if profile == TmlProfile::SpeleoDbSidecar {
+        harden_for_speleodb(&mut all_shots);
+    }
 
     all_shots
 }
@@ -1311,6 +1354,37 @@ const ARIANE_WRITTEN_DECIMALS: f64 = 1e6;
 
 fn round_as_written(v: f64) -> f64 {
     (v * ARIANE_WRITTEN_DECIMALS).round() / ARIANE_WRITTEN_DECIMALS
+}
+
+/// The value a consumer parsing the file will actually hold: what `format_f64`
+/// puts in the XML, read back.
+///
+/// `round_as_written` names the same number for every value we have ever
+/// exported, but not by construction: `{:.6}` rounds half to even while
+/// `f64::round` rounds half away from zero, so on a tie the two disagree by a
+/// micrometre. A check that has to survive contact with a server re-deriving the
+/// bound from the decimal strings has to be made on the strings.
+fn as_written(v: f64) -> f64 {
+    format_f64(v).parse::<f64>().unwrap_or(v)
+}
+
+/// The shortest tape whose WRITTEN form still covers `delta`.
+///
+/// Assigning the raw `delta` is not enough for a consumer that re-parses the
+/// file: a 1.3000000000000007 m drop written to six decimals comes back as
+/// "1.3", which is BELOW the drop it was minted to cover, and SpeleoDB rejects
+/// the whole survey for it ("Shot is shorter than the vertical variation").
+/// Rounding up to the next micrometre covers every case; the loop is the check
+/// against the rounding tie, and takes at most an iteration or two.
+fn length_covering_written_delta(delta: f64) -> f64 {
+    let mut fixed = (delta * ARIANE_WRITTEN_DECIMALS).ceil() / ARIANE_WRITTEN_DECIMALS;
+    for _ in 0..4 {
+        if as_written(fixed) >= delta {
+            break;
+        }
+        fixed += 1.0 / ARIANE_WRITTEN_DECIMALS;
+    }
+    fixed
 }
 
 /// Make the exported shot chain satisfy the geometry invariants an Ariane consumer
@@ -1363,7 +1437,7 @@ fn round_as_written(v: f64) -> f64 {
 ///
 /// Also sweeps non-finite values, which reach the same comparison and fail it (any
 /// comparison against NaN is false), and would otherwise be written into the file.
-fn enforce_ariane_geometry_invariants(shots: &mut [ExportShot]) {
+fn enforce_ariane_geometry_invariants(shots: &mut [ExportShot], profile: TmlProfile) {
     let mut sanitized = 0usize;
     for shot in shots.iter_mut() {
         // Every numeric field that reaches the file, not just the ones the depth
@@ -1522,12 +1596,30 @@ fn enforce_ariane_geometry_invariants(shots: &mut [ExportShot]) {
             unreachable += 1;
             continue;
         }
-        let parent_depth = round_as_written(shots[parent].depth);
-        let depth = round_as_written(shots[i].depth);
-        let length = round_as_written(shots[i].length);
+        // The sidecar is measured on the values as the SERVER will parse them,
+        // and repaired with a length that survives being written back out. The
+        // user profile keeps the arithmetic it has always used: the two agree on
+        // every value we have seen, and the difference is only ever a micrometre
+        // of tape, but a byte-identical Ariane export is worth more than that
+        // here - Ariane never applies this check.
+        let (parent_depth, depth, length) = match profile {
+            TmlProfile::User => (
+                round_as_written(shots[parent].depth),
+                round_as_written(shots[i].depth),
+                round_as_written(shots[i].length),
+            ),
+            TmlProfile::SpeleoDbSidecar => (
+                as_written(shots[parent].depth),
+                as_written(shots[i].depth),
+                as_written(shots[i].length),
+            ),
+        };
         let delta = (depth - parent_depth).abs();
         if delta > length {
-            shots[i].length = delta;
+            shots[i].length = match profile {
+                TmlProfile::User => delta,
+                TmlProfile::SpeleoDbSidecar => length_covering_written_delta(delta),
+            };
         }
     }
     if unreachable > 0 {
@@ -1536,6 +1628,200 @@ fn enforce_ariane_geometry_invariants(shots: &mut [ExportShot]) {
             "Ariane export: shots unreachable from any root (a `from_id` cycle) were \
              left with their measured geometry; a consumer walking down from the \
              anchor will drop them"
+        );
+    }
+}
+
+// ============================================================================
+// SpeleoDB sidecar hardening
+// ============================================================================
+
+/// The character SpeleoDB joins `name/description/date/explorers/surveyors` with
+/// before hashing a shot into a section (U+220E). Left inside one of those
+/// fields it re-cuts the survey into sections nobody drew.
+const SPELEODB_SECTION_FIELD_SEPARATOR: char = '\u{220e}';
+
+/// Year range of the IGRF model SpeleoDB derives magnetic declination from.
+/// Outside it the declination silently becomes 0.0, rotating the whole map by
+/// however much the survey's declination was.
+const SPELEODB_MIN_YEAR: i32 = 1900;
+const SPELEODB_MAX_YEAR: i32 = 2035;
+
+/// An anchor component this close to zero is read as "no anchor at all", and
+/// SpeleoDB skips the map rather than placing it - so a survey on the equator or
+/// the prime meridian silently gets no preview.
+const SPELEODB_ANCHOR_EPSILON: f64 = 1e-7;
+
+/// Shot count past which the server's conversion worker is at risk of running
+/// out of memory (roughly 7 KB per shot against a 1.25 GiB cap).
+const SPELEODB_SHOT_COUNT_WARN: usize = 25_000;
+
+/// Move a GPS anchor to somewhere SpeleoDB will actually use.
+///
+/// A component whose written value is zero reads as "unset" there, so a survey
+/// sitting on the equator or the prime meridian gets no map at all. The nudge is
+/// one micro-degree - about 11 cm, under a GPS fix's own error, and the smallest
+/// move that survives `format_f64`'s six decimals at all (a tenth of it writes
+/// as "0.0" and changes nothing). Out-of-range values pass SpeleoDB's parse and
+/// blow up later inside its projection, so they are clamped rather than left.
+/// A survey with no datum keeps its 0/0 and gets no map, which is correct.
+fn speleodb_anchor(latitude: f64, longitude: f64) -> (f64, f64) {
+    (
+        speleodb_anchor_component(latitude, 90.0),
+        speleodb_anchor_component(longitude, 180.0),
+    )
+}
+
+fn speleodb_anchor_component(value: f64, limit: f64) -> f64 {
+    // NaN survives both the clamp and the compare, and the geometry sweep has
+    // already replaced it with 0.0 by the time anything is written.
+    let clamped = value.clamp(-limit, limit);
+    if as_written(clamped).abs() <= SPELEODB_ANCHOR_EPSILON {
+        let nudge = 1.0 / ARIANE_WRITTEN_DECIMALS;
+        if clamped < 0.0 {
+            -nudge
+        } else {
+            nudge
+        }
+    } else {
+        clamped
+    }
+}
+
+/// A `<Date>` SpeleoDB will accept, and whose year its declination model covers.
+///
+/// A missing, empty or non-ISO date fails validation for the ENTIRE file, not
+/// for the one section, so an unparseable date falls back rather than being
+/// passed through. The year clamp trades a wrong date for a right declination:
+/// out of range the model returns 0.0 without saying so, which rotates the map.
+fn speleodb_date(raw: Option<&str>) -> String {
+    use chrono::Datelike as _;
+
+    let Some(parsed) = raw
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .and_then(|s| chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").ok())
+    else {
+        return DEFAULT_EXPORT_DATE.to_owned();
+    };
+    if parsed.year() < SPELEODB_MIN_YEAR {
+        return format!("{SPELEODB_MIN_YEAR}-01-01");
+    }
+    if parsed.year() > SPELEODB_MAX_YEAR {
+        return format!("{SPELEODB_MAX_YEAR}-12-31");
+    }
+    parsed.format("%Y-%m-%d").to_string()
+}
+
+/// The UUID as SpeleoDB will read it, or `None` if it must not be emitted.
+///
+/// The field is typed `UUID4` there, so anything else - a v1, a nil, a string
+/// that is not a UUID at all - fails validation for the whole file. Variant is
+/// part of it: a version nibble of 4 outside the RFC 4122 variant leaves
+/// Python's `uuid.UUID.version` as `None`, which is not 4 either. We pass
+/// `Shot::uuid` through verbatim and it can hold anything an imported file did,
+/// so it is checked rather than trusted.
+fn speleodb_uuid(raw: &str) -> Option<uuid::Uuid> {
+    let parsed = uuid::Uuid::parse_str(raw).ok()?;
+    (parsed.get_variant() == uuid::Variant::RFC4122 && parsed.get_version_num() == 4)
+        .then_some(parsed)
+}
+
+fn strip_section_separator(field: &str) -> String {
+    field.replace(SPELEODB_SECTION_FIELD_SEPARATOR, " ")
+}
+
+/// Bend the exported document into the shape SpeleoDB's converter can read.
+///
+/// Every rule here is one that costs the map (or the whole file) when broken,
+/// and none of them is Ariane's: the user-facing export keeps the values as
+/// measured, and this runs on the throwaway sidecar only. What it does NOT do is
+/// invent survey data - no anchor where there is no datum, no shot dropped, no
+/// tape shortened.
+fn harden_for_speleodb(shots: &mut Vec<ExportShot>) {
+    let mut seen_uuids: HashSet<uuid::Uuid> = HashSet::new();
+    let mut ids: HashSet<i64> = HashSet::new();
+    let mut duplicate_ids = 0usize;
+
+    for shot in shots.iter_mut() {
+        if !ids.insert(shot.id) {
+            duplicate_ids += 1;
+        }
+        // Only REAL shots get normalised server-side; everything else is used
+        // raw, and an azimuth outside [0, 360) then walks the shot somewhere the
+        // survey never went.
+        shot.azimuth = normalize_azimuth(shot.azimuth);
+        shot.section = strip_section_separator(&shot.section);
+        shot.explorer = shot.explorer.as_deref().map(strip_section_separator);
+        shot.date = Some(speleodb_date(shot.date.as_deref()));
+        // A repeat aliases the two shots onto one GeoJSON feature id. Shot UUIDs
+        // are unique per SECTION by design (see `shot_export_uuid`), so a repeat
+        // across sections is legal in the model and has to be dropped here;
+        // omitting the optional element costs nothing downstream.
+        let keep = shot
+            .uuid
+            .as_deref()
+            .and_then(speleodb_uuid)
+            .is_some_and(|parsed| seen_uuids.insert(parsed));
+        if !keep {
+            shot.uuid = None;
+        }
+    }
+
+    // Ids come off one counter that is never reset, so this cannot fire; it is
+    // here because a duplicate `<ID>` fails the whole file rather than one shot,
+    // and the failure would surface as a missing map days later.
+    debug_assert_eq!(duplicate_ids, 0, "exported Ariane ids must be unique");
+    if duplicate_ids > 0 {
+        tracing::error!(
+            shots = duplicate_ids,
+            "SpeleoDB sidecar: duplicate Ariane ids; the server will reject the whole file"
+        );
+    }
+
+    // Exactly one `<SurveyData>` element crashes SpeleoDB's XML decoder: a lone
+    // element parses as a dict rather than a list, and iterating it yields the
+    // field NAMES. Zero elements is handled cleanly there, two or more is the
+    // normal path - so the only fix needed is to never emit one. The padding
+    // shot is a VIRTUAL root, which the converter drops from its output and
+    // ignores as an orphan, so it changes nothing but the element count.
+    if shots.len() == 1 {
+        let pad_id = shots.iter().map(|s| s.id).max().unwrap_or(-1) + 1;
+        let anchor = &shots[0];
+        let pad = ExportShot {
+            id: pad_id,
+            uuid: None,
+            from_id: -1,
+            shot_type: "VIRTUAL",
+            section: anchor.section.clone(),
+            azimuth: 0.0,
+            length: 0.0,
+            depth: anchor.depth,
+            depth_in: anchor.depth,
+            depth_in_same_as_prev: false,
+            inclination: 0.0,
+            left: 0.0,
+            right: 0.0,
+            up: 0.0,
+            down: 0.0,
+            comment: None,
+            explorer: None,
+            date: Some(DEFAULT_EXPORT_DATE.to_owned()),
+            color: anchor.color.clone(),
+            latitude: 0.0,
+            longitude: 0.0,
+            closure_to_id: -1,
+            locked: false,
+        };
+        shots.push(pad);
+    }
+
+    if shots.len() > SPELEODB_SHOT_COUNT_WARN {
+        tracing::warn!(
+            shots = shots.len(),
+            limit = SPELEODB_SHOT_COUNT_WARN,
+            "SpeleoDB may fail to generate the map preview for very large surveys; \
+             the survey itself is pushed in full"
         );
     }
 }
@@ -1918,7 +2204,7 @@ mod tests {
             .station_comments
             .insert(station_1, "at the bend".to_string());
 
-        let shots = build_export_shots(&project);
+        let shots = build_export_shots(&project, TmlProfile::User);
 
         // Station 1 is created by the section's first shot, so its comment rides
         // along there - beside that shot's own comment, split by the ZWSP marker.
@@ -2146,7 +2432,7 @@ mod tests {
     #[test]
     fn test_single_start_shot_at_root() {
         let project = simple_project();
-        let shots = build_export_shots(&project);
+        let shots = build_export_shots(&project, TmlProfile::User);
 
         // Only one START shot should exist
         let start_count = shots.iter().filter(|s| s.shot_type == "START").count();
@@ -2165,7 +2451,7 @@ mod tests {
     #[test]
     fn test_sequential_ids() {
         let project = simple_project();
-        let shots = build_export_shots(&project);
+        let shots = build_export_shots(&project, TmlProfile::User);
 
         for (i, shot) in shots.iter().enumerate() {
             assert_eq!(shot.id, i as i64, "shot {i} should have id {i}");
@@ -2175,7 +2461,7 @@ mod tests {
     #[test]
     fn test_from_id_chain() {
         let project = simple_project();
-        let shots = build_export_shots(&project);
+        let shots = build_export_shots(&project, TmlProfile::User);
 
         // START has from_id = -1
         assert_eq!(shots[0].from_id, -1);
@@ -2206,7 +2492,7 @@ mod tests {
             ..Default::default()
         });
 
-        let shots = build_export_shots(&project);
+        let shots = build_export_shots(&project, TmlProfile::User);
         // shots[0] = START, shots[1] = VIRTUAL, shots[2] = REAL
         assert_eq!(shots[1].shot_type, "VIRTUAL");
         assert_eq!(shots[2].shot_type, "REAL");
@@ -2263,7 +2549,7 @@ mod tests {
             merged_at: chrono::Utc::now(),
         });
 
-        let shots = build_export_shots(&project);
+        let shots = build_export_shots(&project, TmlProfile::User);
 
         // Only ONE start shot should exist (for root section A)
         let start_count = shots.iter().filter(|s| s.shot_type == "START").count();
@@ -2344,7 +2630,7 @@ mod tests {
             merged_at: chrono::Utc::now(),
         });
 
-        let shots = build_export_shots(&project);
+        let shots = build_export_shots(&project, TmlProfile::User);
 
         // With non-zero merge at station 1, child is split:
         // Forward block (shots 1,2): id=4 from_id=2 (parent), id=5 from_id=4
@@ -2433,7 +2719,7 @@ mod tests {
             is_aligned: false,
         });
 
-        let shots = build_export_shots(&project);
+        let shots = build_export_shots(&project, TmlProfile::User);
         let closure = shots.iter().find(|s| s.shot_type == "CLOSURE").unwrap();
         assert_eq!(
             closure.from_id, 1,
@@ -2482,7 +2768,7 @@ mod tests {
             is_aligned: false,
         });
 
-        let shots = build_export_shots(&project);
+        let shots = build_export_shots(&project, TmlProfile::User);
         let closure = shots.iter().find(|s| s.shot_type == "CLOSURE").unwrap();
         assert!(
             closure.depth_in.abs() < f64::EPSILON,
@@ -2529,7 +2815,7 @@ mod tests {
             gps: GpsCoordinates::new(20.25, -87.5, 12.0).unwrap(),
         });
 
-        let shots = build_export_shots(&project);
+        let shots = build_export_shots(&project, TmlProfile::User);
 
         let start = shots.iter().find(|s| s.id == 0).unwrap();
         assert!((start.latitude - 20.25).abs() < f64::EPSILON);
@@ -2655,7 +2941,7 @@ mod tests {
             });
         }
 
-        let shots = build_export_shots(&project);
+        let shots = build_export_shots(&project, TmlProfile::User);
         println!("re-exported {} shots from {input}", shots.len());
         assert_ariane_chain_is_representable(&shots);
 
@@ -2715,7 +3001,7 @@ mod tests {
             is_aligned: false,
         });
 
-        let shots = build_export_shots(&project);
+        let shots = build_export_shots(&project, TmlProfile::User);
         let closure = shots.iter().find(|s| s.shot_type == "CLOSURE").unwrap();
         assert!(
             (closure.depth - 9.0).abs() < 1e-9,
@@ -2782,7 +3068,7 @@ mod tests {
             merged_at: chrono::Utc::now(),
         });
 
-        let shots = build_export_shots(&project);
+        let shots = build_export_shots(&project, TmlProfile::User);
         assert_ariane_chain_is_representable(&shots);
     }
 
@@ -2847,7 +3133,7 @@ mod tests {
             },
         ];
 
-        enforce_ariane_geometry_invariants(&mut shots);
+        enforce_ariane_geometry_invariants(&mut shots, TmlProfile::User);
 
         let measured_descent = 12.5 - 12.21;
         let exported_descent = shots[1].depth - shots[0].depth;
@@ -2910,7 +3196,7 @@ mod tests {
             geometry_shot(3, 2, 12.5, 13.0, 5.0, true),
         ];
 
-        enforce_ariane_geometry_invariants(&mut shots);
+        enforce_ariane_geometry_invariants(&mut shots, TmlProfile::User);
 
         assert!(
             (shots[1].depth - 17.29).abs() < 1e-9,
@@ -2938,7 +3224,7 @@ mod tests {
             geometry_shot(2, 1, 12.21, 12.5, 10.0, true),
         ];
 
-        enforce_ariane_geometry_invariants(&mut shots);
+        enforce_ariane_geometry_invariants(&mut shots, TmlProfile::User);
 
         let exported = shots[1].depth - shots[0].depth;
         assert!(
@@ -2961,7 +3247,7 @@ mod tests {
             geometry_shot(3, 2, 13.0, 16.0001, 3.0, true),
         ];
 
-        enforce_ariane_geometry_invariants(&mut shots);
+        enforce_ariane_geometry_invariants(&mut shots, TmlProfile::User);
 
         assert!(
             (shots[1].depth - 13.0).abs() < 1e-9,
@@ -2990,7 +3276,7 @@ mod tests {
             geometry_shot(3, 2, 40.0, 0.0, 1.0, false),
         ];
 
-        enforce_ariane_geometry_invariants(&mut shots);
+        enforce_ariane_geometry_invariants(&mut shots, TmlProfile::User);
 
         assert!(
             (shots[1].length - 1.0).abs() < f64::EPSILON
@@ -3078,7 +3364,7 @@ mod tests {
             },
         ];
 
-        enforce_ariane_geometry_invariants(&mut shots);
+        enforce_ariane_geometry_invariants(&mut shots, TmlProfile::User);
 
         assert_ariane_chain_is_representable(&shots);
     }
@@ -3126,7 +3412,7 @@ mod tests {
             gps: GpsCoordinates::new(20.0, -87.0, 0.0).unwrap(),
         });
 
-        let shots = build_export_shots(&project);
+        let shots = build_export_shots(&project, TmlProfile::User);
         let start = shots.iter().find(|s| s.shot_type == "START").unwrap();
 
         // Split produces two first shots from START: forward segment and reversed prefix.
@@ -3208,7 +3494,7 @@ mod tests {
             gps: GpsCoordinates::new(20.0, -87.0, 0.0).unwrap(),
         });
 
-        let shots = build_export_shots(&project);
+        let shots = build_export_shots(&project, TmlProfile::User);
         let start = shots.iter().find(|s| s.shot_type == "START").unwrap();
         assert_eq!(start.section, "B");
 
@@ -3328,7 +3614,7 @@ mod tests {
             ..Default::default()
         });
 
-        let shots = build_export_shots(&project);
+        let shots = build_export_shots(&project, TmlProfile::User);
         // shots[0] = START, shots[1..3] = REAL
         // `depth_in` now always carries the TRUE start depth and the sentinel rides
         // in its own flag, so assert on what actually reaches the file.
@@ -3448,7 +3734,7 @@ mod tests {
             merged_at: chrono::Utc::now(),
         });
 
-        let shots = build_export_shots(&project);
+        let shots = build_export_shots(&project, TmlProfile::User);
 
         // Root: START(0), shot0(1), shot1(2). parent station 1 → ariane id 1.
         // Forward block (child shots 2,3): id=3 from_id=1, id=4 from_id=3
@@ -3550,7 +3836,7 @@ mod tests {
             merged_at: chrono::Utc::now(),
         });
 
-        let shots = build_export_shots(&project);
+        let shots = build_export_shots(&project, TmlProfile::User);
 
         // Root: START(0), shot0(1), shot1(2).
         // Reversed child: shots 2,1,0 reversed → id=3 from_id=2, id=4 from_id=3, id=5 from_id=4
@@ -3667,7 +3953,7 @@ mod tests {
             merged_at: chrono::Utc::now(),
         });
 
-        let shots = build_export_shots(&project);
+        let shots = build_export_shots(&project, TmlProfile::User);
 
         // A: START(0), shot0(1), shot1(2)
         // B forward (shots 1,2): id=3 from_id→1, id=4 from_id=3
