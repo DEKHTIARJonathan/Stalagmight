@@ -293,20 +293,107 @@ async function androidSaveDialog(options?: SaveDialogOptions): Promise<string | 
     const dialog = document.createElement('div');
     dialog.style.cssText = 'background:var(--color-bg-primary,#1e1e2e);color:var(--color-text-primary,#cdd6f4);border-radius:12px;padding:24px;min-width:340px;max-width:90vw;font-family:inherit;box-shadow:0 8px 32px rgba(0,0,0,0.4)';
 
-    const title = options?.title ?? 'Save File';
-    dialog.innerHTML = `
-      <h3 style="margin:0 0 16px;font-size:16px;font-weight:600">${title}</h3>
-      <label style="display:block;font-size:13px;color:var(--color-text-secondary,#a6adc8);margin-bottom:4px">Save to</label>
-      <select id="android-save-dir" style="width:100%;padding:8px;border-radius:6px;border:1px solid var(--color-border,#45475a);background:var(--color-bg-secondary,#313244);color:inherit;font-size:14px;margin-bottom:12px">
-        ${dirs.map((d, i) => `<option value="${i}">${d.label} (${d.path})</option>`).join('')}
-      </select>
-      <label style="display:block;font-size:13px;color:var(--color-text-secondary,#a6adc8);margin-bottom:4px">File name</label>
-      <input id="android-save-filename" type="text" value="${defaultFilename}" style="width:100%;padding:8px;border-radius:6px;border:1px solid var(--color-border,#45475a);background:var(--color-bg-secondary,#313244);color:inherit;font-size:14px;box-sizing:border-box" />
-      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:20px">
-        <button id="android-save-cancel" style="padding:8px 16px;border-radius:6px;border:1px solid var(--color-border,#45475a);background:transparent;color:inherit;cursor:pointer;font-size:14px">Cancel</button>
-        <button id="android-save-confirm" style="padding:8px 16px;border-radius:6px;border:none;background:var(--color-accent,#89b4fa);color:var(--color-bg-primary,#1e1e2e);cursor:pointer;font-weight:600;font-size:14px">Save</button>
-      </div>
-    `;
+    // Built with createElement + `.style`, NOT innerHTML, for two reasons.
+    //
+    // 1. CSP. The production policy is `style-src 'self'` with NO
+    //    'unsafe-inline' (src-tauri/tauri.conf.json). A `style="..."` attribute
+    //    inside PARSED markup is governed by that directive and is refused;
+    //    the `.style` property is CSSOM, which CSP does not police - which is
+    //    also why the two `style.cssText` assignments above are fine. This
+    //    template previously carried seven inline style attributes, so every
+    //    control here would have rendered unstyled in a packaged build. Nothing
+    //    catches that locally: `devCsp` keeps 'unsafe-inline', so dev,
+    //    Playwright and vitest all exercise the permissive policy only.
+    //
+    // 2. Injection. The old template interpolated `title`, `defaultFilename`
+    //    and each directory's label/path straight into markup with no escaping.
+    //    Those derive from a file path, so a filename containing a quote and an
+    //    angle bracket could close an attribute and inject an element into the
+    //    app's own trusted document. Text nodes and `.value` cannot do that.
+    const style = (el: HTMLElement, css: Record<string, string>) => {
+      for (const [k, v] of Object.entries(css)) el.style.setProperty(k, v);
+    };
+    const FIELD: Record<string, string> = {
+      width: '100%',
+      padding: '8px',
+      'border-radius': '6px',
+      border: '1px solid var(--color-border,#45475a)',
+      background: 'var(--color-bg-secondary,#313244)',
+      color: 'inherit',
+      'font-size': '14px',
+    };
+    const LABEL: Record<string, string> = {
+      display: 'block',
+      'font-size': '13px',
+      color: 'var(--color-text-secondary,#a6adc8)',
+      'margin-bottom': '4px',
+    };
+    const BUTTON: Record<string, string> = {
+      padding: '8px 16px',
+      'border-radius': '6px',
+      cursor: 'pointer',
+      'font-size': '14px',
+    };
+
+    const heading = document.createElement('h3');
+    heading.textContent = options?.title ?? 'Save File';
+    style(heading, { margin: '0 0 16px', 'font-size': '16px', 'font-weight': '600' });
+
+    const dirLabel = document.createElement('label');
+    dirLabel.textContent = 'Save to';
+    style(dirLabel, LABEL);
+
+    const dirSelectEl = document.createElement('select');
+    dirSelectEl.id = 'android-save-dir';
+    style(dirSelectEl, { ...FIELD, 'margin-bottom': '12px' });
+    dirs.forEach((d, i) => {
+      const opt = document.createElement('option');
+      opt.value = String(i);
+      opt.textContent = `${d.label} (${d.path})`;
+      dirSelectEl.appendChild(opt);
+    });
+
+    const nameLabel = document.createElement('label');
+    nameLabel.textContent = 'File name';
+    style(nameLabel, LABEL);
+
+    const nameInput = document.createElement('input');
+    nameInput.id = 'android-save-filename';
+    nameInput.type = 'text';
+    nameInput.value = defaultFilename;
+    style(nameInput, { ...FIELD, 'box-sizing': 'border-box' });
+
+    const actions = document.createElement('div');
+    style(actions, {
+      display: 'flex',
+      gap: '8px',
+      'justify-content': 'flex-end',
+      'margin-top': '20px',
+    });
+
+    const cancel = document.createElement('button');
+    cancel.id = 'android-save-cancel';
+    cancel.textContent = 'Cancel';
+    style(cancel, {
+      ...BUTTON,
+      border: '1px solid var(--color-border,#45475a)',
+      background: 'transparent',
+      color: 'inherit',
+    });
+
+    const confirm = document.createElement('button');
+    confirm.id = 'android-save-confirm';
+    confirm.textContent = 'Save';
+    style(confirm, {
+      ...BUTTON,
+      border: 'none',
+      background: 'var(--color-accent,#89b4fa)',
+      color: 'var(--color-bg-primary,#1e1e2e)',
+      'font-weight': '600',
+    });
+
+    actions.append(cancel, confirm);
+    dialog.append(heading, dirLabel, dirSelectEl, nameLabel, nameInput, actions);
 
     overlay.appendChild(dialog);
     document.body.appendChild(overlay);
