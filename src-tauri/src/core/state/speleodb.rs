@@ -476,21 +476,6 @@ pub(super) enum PushOutcome {
 /// PATCH, and which one a given payload used is not a distinction worth trusting.
 const ARIANE_PROJECT_TYPE: &str = "ariane";
 
-/// What a landed push left the server project `type` saying.
-///
-/// Three states, not a `bool`, because "we could not find out" is not "it is wrong":
-/// the caller reports this to a user, and an unknown answer must not be shown as a
-/// failed flip.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum ManagedType {
-    /// The server says `other`: either it already did, or this push made it.
-    Managed,
-    /// The server still says `ariane` and the PATCH to change it failed.
-    StillAriane,
-    /// The type could not be read, so nothing can be concluded about it.
-    Unknown,
-}
-
 /// Does the server still class this project as an Ariane one?
 ///
 /// `None` - the type could not be read - is NOT "yes". A missing answer is the one
@@ -498,7 +483,7 @@ pub(super) enum ManagedType {
 /// failed to establish, and the cost of waiting is one push: the next one reads it
 /// again. Unknown types are left alone for the same reason, since only `ariane` is
 /// the state adoption is meant to leave behind.
-fn type_still_says_ariane(server_kind: Option<&str>) -> bool {
+pub(super) fn type_still_says_ariane(server_kind: Option<&str>) -> bool {
     server_kind.is_some_and(|kind| kind.trim().eq_ignore_ascii_case(ARIANE_PROJECT_TYPE))
 }
 
@@ -2954,14 +2939,13 @@ impl AppState {
                 // here to prevent. The outcome is held and returned unchanged, so the
                 // "landed" conclusion and the invalidation still cannot drift apart.
                 let landed = self.speleodb_revision_landed(project_id);
-                let managed = self.speleodb_heal_managed_type(
+                self.speleodb_heal_managed_type(
                     endpoint,
                     token,
                     insecure_http,
                     project_id,
                     server_kind.as_deref(),
                 );
-                self.speleodb_note_managed_type(project_id, managed);
                 let new_base = pushed.latest_commit.as_ref().map(|c| c.id.clone());
                 self.speleodb_mutate_link(|l| {
                     // NEVER let a successful push move BASE BACKWARD. A None BASE
@@ -3009,14 +2993,13 @@ impl AppState {
                     // stale, whatever this attempt returns. Concluded ahead of the
                     // fallible link write for the same reason as the 200 arm.
                     let landed = self.speleodb_revision_landed(project_id);
-                    let managed = self.speleodb_heal_managed_type(
+                    self.speleodb_heal_managed_type(
                         endpoint,
                         token,
                         insecure_http,
                         project_id,
                         server_kind.as_deref(),
                     );
-                    self.speleodb_note_managed_type(project_id, managed);
                     self.speleodb_mutate_link(|l| {
                         if sync::edits_captured_by_push(
                             l.last_edit_at.as_deref(),
@@ -3093,15 +3076,9 @@ impl AppState {
         insecure_http: bool,
         project_id: &str,
         server_kind: Option<&str>,
-    ) -> ManagedType {
+    ) {
         if !type_still_says_ariane(server_kind) {
-            // Either it already says `other` - the ordinary case, every push after the
-            // first - or we could not read it. Only the first of those is a project we
-            // know is correctly typed, so they are reported apart.
-            return match server_kind {
-                Some(_) => ManagedType::Managed,
-                None => ManagedType::Unknown,
-            };
+            return;
         }
         match client::patch_project(
             endpoint,
@@ -3110,52 +3087,17 @@ impl AppState {
             project_id,
             r#"{"type":"other"}"#,
         ) {
-            Ok(_) => {
-                tracing::info!(
-                    project_id,
-                    purpose = "finish an adoption whose own push never ran",
-                    "speleodb: flipped the server project type ariane->other after a landed push"
-                );
-                ManagedType::Managed
-            }
-            Err(e) => {
-                tracing::warn!(
-                    error = %e,
-                    project_id,
-                    purpose = "finish an adoption whose own push never ran",
-                    "speleodb: could not flip the project type after a landed push; the next push retries"
-                );
-                ManagedType::StillAriane
-            }
-        }
-    }
-
-    /// What the last landed push left the server project `type` saying, for the one
-    /// caller that has to report it (adoption's `type_flipped`).
-    ///
-    /// Recorded rather than returned up the stack because the return path in between -
-    /// `speleodb_upload` -> `speleodb_push` -> `speleodb_done` - crosses `DoneResult`,
-    /// which is an IPC type the webview consumes. Widening that contract to carry a
-    /// field only adoption reads would put a detail of one flow into the shape every
-    /// push replies with. Written under the same call, read immediately after it by the
-    /// same thread.
-    pub(super) fn speleodb_note_managed_type(&self, project_id: &str, outcome: ManagedType) {
-        if let Ok(mut slot) = self.speleodb_last_managed_type.lock() {
-            *slot = Some((project_id.to_owned(), outcome));
-        }
-    }
-
-    /// The [`ManagedType`] the last push recorded FOR `project_id`, if that is the
-    /// project it was recorded for. Consumed (taken), so a later read cannot mistake a
-    /// stale answer for a fresh one - the honest reply when nothing was recorded is
-    /// [`ManagedType::Unknown`], not the previous push's verdict.
-    pub(super) fn speleodb_take_managed_type(&self, project_id: &str) -> ManagedType {
-        let Ok(mut slot) = self.speleodb_last_managed_type.lock() else {
-            return ManagedType::Unknown;
-        };
-        match slot.take() {
-            Some((id, outcome)) if id == project_id => outcome,
-            _ => ManagedType::Unknown,
+            Ok(_) => tracing::info!(
+                project_id,
+                purpose = "finish an adoption whose own push never ran",
+                "speleodb: flipped the server project type ariane->other after a landed push"
+            ),
+            Err(e) => tracing::warn!(
+                error = %e,
+                project_id,
+                purpose = "finish an adoption whose own push never ran",
+                "speleodb: could not flip the project type after a landed push; the next push retries"
+            ),
         }
     }
 

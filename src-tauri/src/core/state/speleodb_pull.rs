@@ -17,7 +17,7 @@
 
 use std::path::Path;
 
-use super::speleodb::{local_dto, validate_project_id, DumpAt, ManagedType};
+use super::speleodb::{local_dto, type_still_says_ariane, validate_project_id, DumpAt};
 use super::speleodb_cache::{restore_display_settings, LocalEditsPolicy};
 use super::speleodb_revisions::validate_hexsha;
 use super::{AppState, VirtualShotMode};
@@ -915,52 +915,76 @@ impl AppState {
         entry_path: Option<String>,
     ) -> Result<SpeleoAdoptResult, SpeleoErrorDto> {
         validate_project_id(&project_id).map_err(local_dto)?;
-        let (endpoint, token) = self.speleodb_active_token().map_err(local_dto)?;
-        let insecure_http = self.speleodb_insecure_http();
 
-        // Concurrent same-account session notice (mirrors the pull, #193 b8), read
-        // BEFORE the lock below so it describes the world adoption arrived in - after
-        // it, the probe would be reporting on this very call.
+        // THE LOCK-OPS SPAN OPENS FIRST, BEFORE THE ACCOUNT IS READ.
         //
-        // The same answer decides whether to take the lock at all, so it is read once
-        // and passed down: a mutex anybody holds is one this flow declines to push
-        // through.
+        // It has to, and the sibling path says so in as many words ("The guard comes
+        // FIRST, before the account is read", `speleodb_session`). Opening it around
+        // the acquire alone leaves the token read and the holder probe - a whole
+        // network round trip - outside, and a logout that completes in THAT window is
+        // the same failure with more steps: our acquire lands on the server with a
+        // token captured beforehand, and `speleodb_record_claim` then drops the claim
+        // because there is no account left to stamp it with. Server mutex held, nothing
+        // recording it, freed only by the server-side timeout.
         //
-        // The CHECKED probe, which keeps "unheld" and "could not find out" apart. The
-        // collapsing variant beside it is right for the display probes it was written
-        // for - an unknown holder and no holder both render as "unknown" - and wrong
-        // here for the same reason it is wrong for `speleodb_start_editing`: this flow
-        // RELEASES on the way out, so reading a failed GET as "unheld" is what lets an
-        // adoption acquire over a mutex our own account is already holding in another
-        // window (that acquire is a server-side no-op, so it cannot report the
-        // collision) and then hand it back out from under that session, which goes on
-        // editing until its next push 403s. Another ACCOUNT's lock is safe either way -
-        // the server answers that acquire with the 400 - so it is only our own that
-        // needs the probe to be honest about not knowing.
-        let holder =
-            self.speleodb_lock_holder_checked(&endpoint, &token, insecure_http, &project_id);
-        let concurrent_session = self.speleodb_my_email().is_some_and(|me| {
-            sync::concurrent_session_notice(holder.as_ref().ok().and_then(Option::as_deref), &me)
-        });
+        // It closes before the head resolve. Start editing holds this across its whole
+        // acquire → commit, which is seconds; adoption's download-and-convert is not,
+        // and a span held across it would block logout - and every other lock operation
+        // - for as long as an import takes.
+        let (endpoint, token, insecure_http, concurrent_session, lock) = {
+            let _lock_ops = self.speleodb_lock_ops_guard();
+            let (endpoint, token) = self.speleodb_active_token().map_err(local_dto)?;
+            let insecure_http = self.speleodb_insecure_http();
 
-        // THE LOCK COMES FIRST - before the head resolve, before the download.
-        //
-        // Adoption reads a tree and writes it straight back, so everything between
-        // those two acts is a window in which somebody else's push makes the bytes we
-        // converted stale. Resolving the head and fetching by hash closes the window
-        // between the two REQUESTS, but not the one that spans the import, and the
-        // import is the slow part (parse the `.tml`, build the project, save it). Take
-        // the write mutex first and the window shuts completely: no other writer can
-        // land a revision between the download and the upload, so the tree we converted
-        // is still the tip when we push it, and the divergence arms below become
-        // unreachable rather than merely unlikely.
-        //
-        // Best-effort, and that is the whole design of it: a lock we cannot take is a
-        // reason to adopt WITHOUT pushing, never a reason to refuse the adoption. A
-        // READ_ONLY member and an offline machine both converted their project before
-        // this flow existed, and both still do - the copy simply stays local, stamped
-        // with un-pushed edits, which is exactly what it is.
-        let lock = self.adopt_take_lock(&endpoint, &token, insecure_http, &project_id, holder);
+            // Concurrent same-account session notice (mirrors the pull, #193 b8), read
+            // BEFORE the lock below so it describes the world adoption arrived in - after
+            // it, the probe would be reporting on this very call.
+            //
+            // The same answer decides whether to take the lock at all, so it is read once
+            // and passed down: a mutex anybody holds is one this flow declines to push
+            // through.
+            //
+            // The CHECKED probe, which keeps "unheld" and "could not find out" apart. The
+            // collapsing variant beside it is right for the display probes it was written
+            // for - an unknown holder and no holder both render as "unknown" - and wrong
+            // here for the same reason it is wrong for `speleodb_start_editing`: this flow
+            // RELEASES on the way out, so reading a failed GET as "unheld" is what lets an
+            // adoption acquire over a mutex our own account is already holding in another
+            // window (that acquire is a server-side no-op, so it cannot report the
+            // collision) and then hand it back out from under that session, which goes on
+            // editing until its next push 403s. Another ACCOUNT's lock is safe either way -
+            // the server answers that acquire with the 400 - so it is only our own that
+            // needs the probe to be honest about not knowing.
+            let holder =
+                self.speleodb_lock_holder_checked(&endpoint, &token, insecure_http, &project_id);
+            let concurrent_session = self.speleodb_my_email().is_some_and(|me| {
+                sync::concurrent_session_notice(
+                    holder.as_ref().ok().and_then(Option::as_deref),
+                    &me,
+                )
+            });
+
+            // THE LOCK COMES FIRST - before the head resolve, before the download.
+            //
+            // Adoption reads a tree and writes it straight back, so everything between
+            // those two acts is a window in which somebody else's push makes the bytes we
+            // converted stale. Resolving the head and fetching by hash closes the window
+            // between the two REQUESTS, but not the one that spans the import, and the
+            // import is the slow part (parse the `.tml`, build the project, save it). Take
+            // the write mutex first and the window shuts completely: no other writer can
+            // land a revision between the download and the upload, so the tree we converted
+            // is still the tip when we push it, and the divergence arms below become
+            // unreachable rather than merely unlikely.
+            //
+            // Best-effort, and that is the whole design of it: a lock we cannot take is a
+            // reason to adopt WITHOUT pushing, never a reason to refuse the adoption. A
+            // READ_ONLY member and an offline machine both converted their project before
+            // this flow existed, and both still do - the copy simply stays local, stamped
+            // with un-pushed edits, which is exactly what it is.
+            let lock = self.adopt_take_lock(&endpoint, &token, insecure_http, &project_id, holder);
+            (endpoint, token, insecure_http, concurrent_session, lock)
+        };
+
         // Arms the hand-back for every way the stretch below can return early. Disarmed
         // once there is a converted project for the lock to be about - see the guard.
         let mut lock_guard = AdoptLockGuard::new(
@@ -1216,24 +1240,12 @@ impl AppState {
             },
         };
 
-        // The server project `type` is flipped ariane→other by the PUSH, not here.
-        //
-        // Adoption used to issue that PATCH itself, after the push - which meant every
-        // adoption sent it TWICE, because the push's own type heal had already flipped
-        // it on the way through. Two requests would be merely wasteful; the damage was
-        // that `type_flipped` was decided by the SECOND one, so a transient failure on a
-        // redundant request told the user "its SpeleoDB type could not be changed" about
-        // a project whose type had in fact just been changed.
-        //
-        // So the push owns the flip - it is the only place that knows a `.stalx` landed,
-        // which is the precondition either way (flipping first leaves a project typed
-        // `other` whose only file is the Ariane one that type says to disregard,
-        // openable by nobody) - and this reads back what it found rather than testing it
-        // again. `Unknown` is reported as not-flipped: it is the honest answer for a
-        // type nobody could read, and it fails toward the message that asks the user to
-        // check rather than the one that says all is well.
+        // Make sure the server project ends up typed `other`, and report whether it
+        // did. Only after a landed push, which is the precondition either way: flipping
+        // first leaves a project typed `other` whose only file is the Ariane one that
+        // type says to disregard, openable by nobody.
         let type_flipped = matches!(upload, AdoptUpload::Pushed | AdoptUpload::PushedLockHeld)
-            && self.speleodb_take_managed_type(&project_id) == ManagedType::Managed;
+            && self.adopt_ensure_managed_type(&endpoint, &token, insecure_http, &project_id);
 
         // Hand the project BACK to the frontend to open, instead of leaving it
         // committed to `AppState` for a `loadProject` that then short-circuits.
@@ -1325,38 +1337,25 @@ impl AppState {
             return AdoptLock::NotTaken(AdoptUpload::LockHeld { email: Some(email) });
         }
 
-        // The lock-ops span covers the acquire AND the claim it mints, because those
-        // two have to be one indivisible act. Every other lock operation - Start
-        // editing, logout, the release paths, the janitor - takes this same guard for
-        // the same reason: without it a logout can start while the acquire is in
-        // flight, see no acquisition to hand back, finish clearing the session, and
-        // only then have our acquire succeed with the token it captured beforehand.
-        // The result is a server mutex held by a session that no longer exists, with
-        // no local claim naming it, freed only by the server-side timeout.
-        //
-        // ONLY those two. Start editing holds this across its whole acquire → commit,
-        // which is seconds; adoption's download-and-convert is not, and a guard held
-        // across it would block logout, and every other lock operation, for as long as
-        // an import takes. The window this closes is the acquire itself.
-        let acquired = {
-            let _lock_ops = self.speleodb_lock_ops_guard();
-            let acquired = self.speleodb_handle_auth(
-                Endpoint::Acquire,
-                client::acquire_lock(endpoint, token, insecure_http, project_id),
-            );
-            if acquired.is_ok() {
+        // NO lock-ops guard here: the caller holds it across this whole call, from
+        // before the account read to after the claim below. Taking it again would
+        // self-deadlock - `std::sync::Mutex` is not reentrant - so this function must
+        // only ever be called from inside that span.
+        let acquired = self.speleodb_handle_auth(
+            Endpoint::Acquire,
+            client::acquire_lock(endpoint, token, insecure_http, project_id),
+        );
+
+        match acquired {
+            Ok(_project) => {
                 // Recorded so the rest of the app can account for this mutex: the
                 // janitor, the close teardown and the held-lock prompt all read the
                 // claim, and a lock taken without one is a lock only the server-side
-                // timeout can free. Inside the span, so no teardown can land between
-                // the mutex becoming ours and the record saying so.
+                // timeout can free. Inside the caller's span, so no teardown can land
+                // between the mutex becoming ours and the record saying so.
                 self.speleodb_note_lock_acquired(Some(project_id));
+                AdoptLock::Held
             }
-            acquired
-        };
-
-        match acquired {
-            Ok(_project) => AdoptLock::Held,
             // 400 is the server's "someone else holds it" (no first-class status row,
             // per #194) - the probe above lost a race with another writer.
             Err(SpeleoDbError::Status { status: 400, .. }) => {
@@ -1374,6 +1373,76 @@ impl AppState {
                 AdoptLock::NotTaken(AdoptUpload::Failed {
                     message: e.to_string(),
                 })
+            }
+        }
+    }
+
+    /// Leave the server project typed `other`, and report whether it is.
+    ///
+    /// Called only after a landed push, and it is a READ first: the push's own type
+    /// heal has usually flipped it already, so asking costs one GET and the common case
+    /// issues no write at all.
+    ///
+    /// Adoption used to PATCH here unconditionally, which meant every adoption sent the
+    /// same PATCH twice - and `type_flipped` was decided by the SECOND one, so a
+    /// transient failure on a redundant request told the user "its SpeleoDB type could
+    /// not be changed" about a project whose type had just been changed. Reading first
+    /// removes the redundant write AND makes the answer the server's rather than an
+    /// inference from our own request's exit code.
+    ///
+    /// A GET we cannot make falls through to the PATCH rather than giving up. Delegating
+    /// the whole job to the heal was the other way round - it declines to act on a type
+    /// it could not read, which is right for a generic push (blindly re-typing someone
+    /// else's Compass project would be worse than doing nothing) and wrong here, because
+    /// adoption is the one caller that KNOWS the project was Ariane: it just converted
+    /// it. Losing that knowledge turned a transient GET failure into a project left
+    /// typed `ariane` with a `.stalx` on it, still offering Adopt over a copy that
+    /// already exists.
+    ///
+    /// Called directly rather than through the auth handler, like the head resolve
+    /// above: this runs after the conversion is safely local and its failure is
+    /// swallowed, so a spurious 401 here would drop the session - keychain entry
+    /// included - over work that already landed.
+    fn adopt_ensure_managed_type(
+        &self,
+        endpoint: &str,
+        token: &str,
+        insecure_http: bool,
+        project_id: &str,
+    ) -> bool {
+        let needs_flip = match client::get_project(endpoint, token, insecure_http, project_id) {
+            // Already `other`: the push's heal got there first, which is the ordinary
+            // path. Nothing to do, and nothing to report but success.
+            Ok(fetched) if !type_still_says_ariane(Some(&fetched.kind)) => return true,
+            Ok(_) => true,
+            Err(e) => {
+                tracing::info!(
+                    error = %e,
+                    project_id,
+                    purpose = "flip the adopted project's type without a readable current type",
+                    "speleodb_adopt_ariane: could not read the project type; flipping anyway"
+                );
+                true
+            }
+        };
+        debug_assert!(needs_flip);
+
+        match client::patch_project(
+            endpoint,
+            token,
+            insecure_http,
+            project_id,
+            r#"{"type":"other"}"#,
+        ) {
+            Ok(_) => true,
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    project_id,
+                    purpose = "flip SpeleoDB project type ariane->other on adopt",
+                    "speleodb_adopt_ariane: type flip failed (likely no write access); adopted locally"
+                );
+                false
             }
         }
     }
@@ -2118,6 +2187,47 @@ mod tests {
         session.token_store = crate::speleodb::auth::TokenStore::from_in_memory_token("tok");
     }
 
+    /// `PushedLockHeld` is inferred from the link, and the inference is only sound
+    /// because the dirty bit is provably TRUE on entry - adoption stamps it before the
+    /// hand-over, and the only things that clear it are the push's own landed arms. A
+    /// stamp that stopped setting it would make every failed release read as a landed
+    /// push, telling a user their survey was on the server when it was not.
+    ///
+    /// Pinned by source because the behavioural version needs a server that accepts an
+    /// upload and then refuses a release. What it holds is the ordering the inference
+    /// rests on, and that the unreadable-link case falls to `Failed`.
+    #[test]
+    fn the_pushed_but_locked_inference_rests_on_a_dirty_bit_set_before_the_push() {
+        let body = adopt_body();
+        let stamp = body
+            .find("has_unpushed_edits: true")
+            .expect("adoption stamps the link dirty");
+        let hand_over = body
+            .find("self.adopt_hand_over()")
+            .expect("the hand-over follows it");
+        assert!(
+            stamp < hand_over,
+            "the dirty bit has to be set BEFORE the push, or a cleared bit afterwards \
+             proves nothing about whether anything landed"
+        );
+
+        let src = prod_source();
+        let start = src
+            .find("fn adopt_hand_over_inner")
+            .expect("the hand-over is present");
+        let inner = &src[start..];
+        let inner = &inner[..inner.find("\n    }\n").expect("fn body terminates")];
+        assert!(
+            inner.contains("is_ok_and(|link| !link.has_unpushed_edits)"),
+            "the inference reads the link, and `is_ok_and` is what makes an unreadable \
+             one fall to `Failed` rather than claim a landing nobody can confirm"
+        );
+        assert!(
+            inner.contains("AdoptUpload::PushedLockHeld"),
+            "and reports the landed-but-locked outcome apart from a failure"
+        );
+    }
+
     /// The guard's whole purpose: an adoption that took the mutex and then failed
     /// before it had anything to push must not walk away still holding it. The
     /// acquisition claim is the observable half - `speleodb_release_best_effort` drops
@@ -2286,31 +2396,71 @@ mod tests {
     fn the_server_type_flips_only_after_the_stalx_lands() {
         let body = adopt_body();
 
-        // Adoption does NOT issue the PATCH. The push's own type heal does, on the one
-        // event that proves a `.stalx` is up there, and adoption reads the verdict back.
-        // Two PATCHes was not merely wasteful: `type_flipped` was decided by the second,
-        // so a transient failure on a redundant request reported "the type could not be
-        // changed" about a project whose type had just been changed.
+        // The verb itself issues no PATCH: the flip lives in `adopt_ensure_managed_type`,
+        // which reads before it writes. Two PATCHes was not merely wasteful - the push's
+        // own heal had already flipped it, and `type_flipped` was decided by the second
+        // request, so a transient failure there reported "the type could not be changed"
+        // about a project whose type had just been changed.
         assert!(
             !body.contains("client::patch_project("),
-            "the push owns the type flip; adoption re-issuing it makes `type_flipped` \
-             depend on a second request that can fail on its own"
+            "the verb must not flip the type inline; it goes through the read-first helper"
         );
 
         let hand_over = body
             .find("self.adopt_hand_over()")
             .expect("adoption hands the conversion over");
-        let read_back = body
-            .find("self.speleodb_take_managed_type(")
-            .expect("adoption reads the flip the push performed");
+        let ensure = body
+            .find("self.adopt_ensure_managed_type(")
+            .expect("adoption settles the project type");
         assert!(
-            hand_over < read_back,
-            "the verdict can only be read after the push that recorded it"
+            hand_over < ensure,
+            "the type is settled only after the push that earns it"
         );
         assert!(
-            body.contains("AdoptUpload::Pushed | AdoptUpload::PushedLockHeld"),
-            "and it must be GATED on the outcomes that mean the bytes landed - claiming \
-             a flip on a lock we could not take describes a project that does not exist"
+            body.contains("matches!(upload, AdoptUpload::Pushed | AdoptUpload::PushedLockHeld)"),
+            "and gated on the outcomes that mean the bytes landed - claiming a flip on a \
+             lock we could not take describes a project that does not exist"
+        );
+    }
+
+    /// The half the ordering tripwire cannot see: what the helper DOES.
+    ///
+    /// Adoption is the one caller that knows the project was Ariane - it just converted
+    /// it - so a type it cannot read is still a type it may set. Delegating that decision
+    /// to the generic push heal was a regression: the heal declines to act on an unknown
+    /// type, which is right when it might be someone's Compass project and wrong here,
+    /// and it turned one transient GET failure into a project left typed `ariane` with a
+    /// `.stalx` on it, still offering Adopt over a copy that already exists.
+    #[test]
+    fn an_unreadable_project_type_still_gets_flipped() {
+        let src = prod_source();
+        let start = src
+            .find("fn adopt_ensure_managed_type")
+            .expect("the helper is present");
+        let body = &src[start..];
+        let body = &body[..body.find("\n    }\n").expect("fn body terminates")];
+
+        let get = body
+            .find("client::get_project(")
+            .expect("it reads the current type first");
+        let patch = body
+            .find("client::patch_project(")
+            .expect("it flips when it has to");
+        assert!(
+            get < patch,
+            "READ first: the common case is a type the push already flipped, and asking \
+             costs a GET where assuming costs a redundant PATCH"
+        );
+
+        // The `Err` arm must fall THROUGH to the flip, not return.
+        let err_arm = body.find("Err(e) => {").expect("the unreadable-type arm");
+        assert!(
+            err_arm < patch,
+            "a type we could not read must fall through to the flip, not skip it"
+        );
+        assert!(
+            body[err_arm..patch].contains("flipping anyway"),
+            "and it must say so, because silently not flipping is what the old shape did"
         );
     }
 
@@ -2428,6 +2578,63 @@ mod tests {
     /// an import takes.
     #[test]
     fn the_adopt_acquire_and_its_claim_share_the_lock_ops_span() {
+        let body = adopt_body();
+
+        let span = body
+            .find("self.speleodb_lock_ops_guard()")
+            .expect("the verb opens the shared lock-ops span");
+        let token = body
+            .find("self.speleodb_active_token()")
+            .expect("the account is read");
+        let probe = body
+            .find("self.speleodb_lock_holder_checked(")
+            .expect("the holder is probed");
+        let acquire = body
+            .find("self.adopt_take_lock(")
+            .expect("the mutex is taken");
+
+        // The ACCOUNT READ is inside the span, not just the acquire. A span that opens
+        // later leaves the token read and a whole network round trip outside it, and a
+        // logout completing in THAT window is the same failure with more steps: the
+        // acquire lands with a token captured beforehand and the claim is dropped for
+        // want of an account to stamp it with. The sibling path states the rule - the
+        // guard comes first, before the account is read.
+        assert!(
+            span < token && span < probe && span < acquire,
+            "the span must cover the account read and the probe, not only the acquire"
+        );
+
+        // SCOPE, not just order: the block has to still be open at the acquire. Closing
+        // it early would satisfy every inequality above while re-opening the exact
+        // window the span exists to shut.
+        let closes = body[acquire..]
+            .find("\n        };")
+            .map(|at| acquire + at)
+            .expect("the span's block closes");
+        let resolve = body
+            .find("client::get_revisions(")
+            .expect("the head resolve follows it");
+        assert!(
+            acquire < closes && closes < resolve,
+            "the span must still be open at the acquire and shut before the download - \
+             holding it across the import would block logout for the length of one"
+        );
+        // Held, not merely declared. An explicit `drop` inside the block satisfies every
+        // position check above while re-opening the window between the mutex becoming
+        // ours and the claim recording it.
+        assert!(
+            !body[span..closes].contains("drop(_lock_ops"),
+            "the span must not be released early: the acquire and the claim it mints are \
+             one act, and a drop between them is the teardown window reopened"
+        );
+    }
+
+    /// The counterpart to the span above: the helper it calls must NOT take the guard
+    /// itself. `std::sync::Mutex` is not reentrant, so a second acquisition inside the
+    /// caller's span is not a redundancy - it is a self-deadlock on the first adoption
+    /// anyone runs.
+    #[test]
+    fn the_acquire_helper_does_not_retake_the_span_its_caller_holds() {
         let src = prod_source();
         let start = src
             .find("fn adopt_take_lock")
@@ -2435,27 +2642,17 @@ mod tests {
         let body = &src[start..];
         let body = &body[..body.find("\n    }\n").expect("fn body terminates")];
 
-        let span = body
-            .find("self.speleodb_lock_ops_guard()")
-            .expect("the acquire runs inside the shared lock-ops span");
-        let acquire = body
-            .find("client::acquire_lock(")
-            .expect("the acquire is here");
-        let claim = body
-            .find("self.speleodb_note_lock_acquired(")
-            .expect("the claim is minted here");
         assert!(
-            span < acquire && span < claim,
-            "both the acquire and the claim it mints must be inside the span, or a \
-             teardown can land between the mutex becoming ours and the record saying so"
+            !body.contains("speleodb_lock_ops_guard()"),
+            "the caller holds the span across this call; retaking it self-deadlocks"
         );
-
-        // And the span must NOT reach the conversion: it is held across a network call
-        // already, and stretching it over the download-and-import would block logout -
-        // and every other lock operation - for the length of an import.
+        assert!(
+            body.contains("self.speleodb_note_lock_acquired("),
+            "and the claim is still minted here, inside the caller's span"
+        );
         assert!(
             !body.contains("adopt_import_and_save"),
-            "the acquire helper must not perform the conversion; the span it holds is \
+            "the helper must not perform the conversion; the span its caller holds is \
              not one to keep across it"
         );
     }
@@ -2540,11 +2737,11 @@ mod tests {
         let close = body
             .find("self.close_project();")
             .expect("counted above, so it is present");
-        let read_back = body
-            .find("self.speleodb_take_managed_type(")
-            .expect("adoption reads the flip the push performed");
+        let ensure = body
+            .find("self.adopt_ensure_managed_type(")
+            .expect("adoption settles the project type");
         assert!(
-            read_back < close,
+            ensure < close,
             "everything that needs the project open - the link stamp, the sidecar \
              render, the hand-over and its verdict - has to run before the close"
         );
