@@ -47,6 +47,35 @@ function sortedKeys(tokens: Record<string, string>): string[] {
   return Object.keys(tokens).sort();
 }
 
+/** WCAG relative luminance. */
+function luminance(hex: string): number {
+  const channel = (v: number) => {
+    const c = v / 255;
+    return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+  };
+  const [r, g, b] = [1, 3, 5].map((i) => channel(parseInt(hex.slice(i, i + 2), 16)));
+  return 0.2126 * r! + 0.7152 * g! + 0.0722 * b!;
+}
+
+function contrast(a: string, b: string): number {
+  const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x);
+  return (hi! + 0.05) / (lo! + 0.05);
+}
+
+/**
+ * The map canvas a theme actually paints on. Chrome-only themes
+ * (`solarized_light`, `catppuccin_latte`) declare no `--cc-map-background` of
+ * their own and inherit `:root`'s dark canvas - mirrors `mapCanvasFor` in
+ * src/types/config.ts, duplicated here rather than imported so this suite
+ * doesn't couple to that module's own in-flight changes.
+ */
+function mapCanvasFor(theme: string): string {
+  const tokens = (themeTokens as Record<string, Record<string, string> | undefined>)[theme];
+  return tokens?.['--cc-map-background'] ?? themeTokens.dark['--cc-map-background'];
+}
+
+const ALL_THEME_NAMES = Object.keys(themeTokens) as (keyof typeof themeTokens)[];
+
 const cssDarkTokens = extractTokens(extractBlock(cssSource, ':root,'));
 const cssLightTokens = extractTokens(extractBlock(cssSource, '[data-theme="light"]'));
 const cssCaveTokens = extractTokens(extractBlock(cssSource, '[data-theme="cave"]'));
@@ -157,21 +186,6 @@ describe('theme tokens', () => {
  * theme's own canvas, using the production interpolation rather than a copy of it.
  */
 describe('depth gradient legibility', () => {
-  /** WCAG relative luminance. */
-  function luminance(hex: string): number {
-    const channel = (v: number) => {
-      const c = v / 255;
-      return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
-    };
-    const [r, g, b] = [1, 3, 5].map((i) => channel(parseInt(hex.slice(i, i + 2), 16)));
-    return 0.2126 * r! + 0.7152 * g! + 0.0722 * b!;
-  }
-
-  function contrast(a: string, b: string): number {
-    const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x);
-    return (hi! + 0.05) / (lo! + 0.05);
-  }
-
   /** Worst contrast anywhere along the drawn ramp, plus where it occurs. */
   /** Themes that declare their own map-visualization tokens. */
   type FullTheme =
@@ -389,6 +403,66 @@ describe('depth gradient legibility', () => {
       worst = Math.min(worst, contrast(color!, light));
     }
     expect(worst).toBeLessThan(2);
+  });
+});
+
+/**
+ * Read-only contrast audit findings 1-3 (#357). Each pairing failed WCAG on at
+ * least one theme without any token being missing - the CSS/tokens.ts sync
+ * checks above cannot see this class of defect, only a real luminance
+ * comparison can. Guards live here (not a parallel harness) so a future retune
+ * of any of these three tokens is checked the same way the depth ramp is.
+ */
+describe('contrast audit (#357)', () => {
+  // Finding 1: --cc-text-secondary on --cc-panel. Drives the vertical "Sections"
+  // tab label (11px text, needs 4.5:1) and the pin/close icons (needs 3:1) in
+  // PanelOpenerTab.tsx - one shared box, one shared token. 4.5:1 is the binding
+  // threshold since it's stricter than the icon floor.
+  const TEXT_SECONDARY_ON_PANEL_FLOOR = 4.5;
+
+  it.each(ALL_THEME_NAMES)(
+    '%s: --cc-text-secondary on --cc-panel clears 4.5:1 (11px label) and 3:1 (icons)',
+    (theme) => {
+      const ratio = contrast(themeTokens[theme]['--cc-text-secondary'], themeTokens[theme]['--cc-panel']);
+      expect(
+        ratio,
+        `${theme}: --cc-text-secondary ${themeTokens[theme]['--cc-text-secondary']} on ` +
+          `--cc-panel ${themeTokens[theme]['--cc-panel']} is ${ratio.toFixed(2)}:1, below 4.5:1`
+      ).toBeGreaterThanOrEqual(TEXT_SECONDARY_ON_PANEL_FLOOR);
+    }
+  );
+
+  // Finding 2: --cc-map-scale-border on --cc-map-background. 3:1 is the WCAG
+  // floor for a non-text UI boundary (the "200 m" scale box border).
+  const MAP_SCALE_BORDER_FLOOR = 3;
+
+  it.each(ALL_THEME_NAMES)(
+    '%s: --cc-map-scale-border on its map canvas clears 3:1',
+    (theme) => {
+      const canvas = mapCanvasFor(theme);
+      const ratio = contrast(themeTokens[theme]['--cc-map-scale-border'], canvas);
+      expect(
+        ratio,
+        `${theme}: --cc-map-scale-border ${themeTokens[theme]['--cc-map-scale-border']} on ` +
+          `map canvas ${canvas} is ${ratio.toFixed(2)}:1, below 3:1`
+      ).toBeGreaterThanOrEqual(MAP_SCALE_BORDER_FLOOR);
+    }
+  );
+
+  // Finding 3: --cc-map-scale-text on --cc-map-background. --cc-map-scale-bg is
+  // transparent on every theme, so this text sits directly on the map canvas -
+  // which for the chrome-only light themes is the DARK :root canvas, not their
+  // own light panel.
+  const MAP_SCALE_TEXT_FLOOR = 4.5;
+
+  it.each(ALL_THEME_NAMES)('%s: --cc-map-scale-text on its map canvas clears 4.5:1', (theme) => {
+    const canvas = mapCanvasFor(theme);
+    const ratio = contrast(themeTokens[theme]['--cc-map-scale-text'], canvas);
+    expect(
+      ratio,
+      `${theme}: --cc-map-scale-text ${themeTokens[theme]['--cc-map-scale-text']} on ` +
+        `map canvas ${canvas} is ${ratio.toFixed(2)}:1, below 4.5:1`
+    ).toBeGreaterThanOrEqual(MAP_SCALE_TEXT_FLOOR);
   });
 });
 

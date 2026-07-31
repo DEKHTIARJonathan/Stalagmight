@@ -31,7 +31,10 @@ export const themeTokens = {
     '--cc-map-ctrl-icon-filter': 'brightness(0) invert(1)',
     '--cc-map-ctrl-shadow': 'rgba(15, 52, 96, 0.3)',
     '--cc-map-scale-bg': 'transparent',
-    '--cc-map-scale-border': '#0f3460',
+    // Was #0f3460 (same as --cc-border, tuned for the panel, not the map canvas):
+    // 1.36:1 on --cc-map-background, invisible. Lifted to 3.22:1 - #357 contrast
+    // audit finding 2. Hue/saturation preserved.
+    '--cc-map-scale-border': '#1f6bc5',
     '--cc-map-scale-text': '#f5f5f5',
 
     // Map Visualization (see mapVizTokenNames - light and kaleido_eink override these)
@@ -155,7 +158,10 @@ export const themeTokens = {
     '--cc-map-ctrl-icon-filter': 'none',
     '--cc-map-ctrl-shadow': 'rgba(0, 0, 0, 0.15)',
     '--cc-map-scale-bg': 'transparent',
-    '--cc-map-scale-border': '#d4c5a9',
+    // Was #d4c5a9 (same as --cc-border, tuned for the panel, not the map canvas):
+    // 1.59:1 on --cc-map-background, invisible. Darkened to 3.23:1 - #357
+    // contrast audit finding 2. Hue/saturation preserved.
+    '--cc-map-scale-border': '#a38651',
     '--cc-map-scale-text': '#1a120b',
 
     // Map Visualization - warm paper canvas, dark ink outlines
@@ -256,7 +262,10 @@ export const themeTokens = {
     '--cc-map-ctrl-icon-filter': 'brightness(0) invert(1)',
     '--cc-map-ctrl-shadow': 'rgba(42, 40, 38, 0.3)',
     '--cc-map-scale-bg': 'transparent',
-    '--cc-map-scale-border': '#2a2826',
+    // Was #2a2826 (same as --cc-border, tuned for the panel, not the map canvas):
+    // 1.32:1 on --cc-map-background, invisible. Lifted to 3.21:1 - #357 contrast
+    // audit finding 2. Hue/saturation preserved.
+    '--cc-map-scale-border': '#66625d',
     '--cc-map-scale-text': '#d5d0ca',
 
     // Map Visualization
@@ -330,7 +339,10 @@ export const themeTokens = {
     '--cc-panel': '#21222c',
     '--cc-border': '#44475a',
     '--cc-text-primary': '#f8f8f2',
-    '--cc-text-secondary': '#6272a4',
+    // Lifted from #6272a4 (3.03:1 on --cc-panel/--cc-background/--cc-hover/--cc-input-bg,
+    // the worst of the four) to 4.61:1 minimum across all four - #357 contrast audit
+    // finding 1. Hue/saturation preserved, lightness only.
+    '--cc-text-secondary': '#8592b8',
     '--cc-accent': '#bd93f9',
     '--cc-accent-on': '#282a36',
     '--cc-warning': '#ffb86c',
@@ -356,7 +368,10 @@ export const themeTokens = {
     '--cc-map-ctrl-icon-filter': 'brightness(0) invert(1)',
     '--cc-map-ctrl-shadow': 'rgba(68, 71, 90, 0.3)',
     '--cc-map-scale-bg': 'transparent',
-    '--cc-map-scale-border': '#44475a',
+    // Was #44475a (same as --cc-border, tuned for the panel, not the map canvas):
+    // 1.56:1 on --cc-map-background, invisible. Lifted to 3.20:1 - #357 contrast
+    // audit finding 2. Hue/saturation preserved.
+    '--cc-map-scale-border': '#717694',
     '--cc-map-scale-text': '#f8f8f2',
 
     // Map Visualization
@@ -430,7 +445,9 @@ export const themeTokens = {
     '--cc-panel': '#21252b',
     '--cc-border': '#3e4451',
     '--cc-text-primary': '#abb2bf',
-    '--cc-text-secondary': '#5c6370',
+    // Lifted from #5c6370 (2.16:1 worst of panel/background/hover/input) to
+    // 4.55:1 minimum - #357 contrast audit finding 1. Hue/saturation preserved.
+    '--cc-text-secondary': '#939aa6',
     '--cc-accent': '#61afef',
     '--cc-accent-on': '#282c34',
     '--cc-warning': '#e5c07b',
@@ -456,7 +473,10 @@ export const themeTokens = {
     '--cc-map-ctrl-icon-filter': 'brightness(0) invert(1)',
     '--cc-map-ctrl-shadow': 'rgba(62, 68, 81, 0.3)',
     '--cc-map-scale-bg': 'transparent',
-    '--cc-map-scale-border': '#3e4451',
+    // Was #3e4451 (same as --cc-border, tuned for the panel, not the map canvas):
+    // 1.43:1 on --cc-map-background, invisible. Lifted to 3.20:1 - #357 contrast
+    // audit finding 2. Hue/saturation preserved.
+    '--cc-map-scale-border': '#6e7990',
     '--cc-map-scale-text': '#abb2bf',
 
     // Map Visualization
@@ -533,7 +553,9 @@ export const themeTokens = {
     '--cc-panel': '#eee8d5',
     '--cc-border': '#d3cbb7',
     '--cc-text-primary': '#586e75',
-    '--cc-text-secondary': '#93a1a1',
+    // Darkened from #93a1a1 (2.18:1 worst of panel/background/hover/input) to
+    // 4.60:1 minimum - #357 contrast audit finding 1. Hue/saturation preserved.
+    '--cc-text-secondary': '#5c6a6a',
     '--cc-accent': '#268bd2',
     '--cc-accent-on': '#fdf6e3',
     '--cc-warning': '#b58900',
@@ -560,7 +582,10 @@ export const themeTokens = {
     '--cc-map-ctrl-shadow': 'rgba(0, 0, 0, 0.15)',
     '--cc-map-scale-bg': 'transparent',
     '--cc-map-scale-border': '#d3cbb7',
-    '--cc-map-scale-text': '#586e75',
+    // Lifted from #586e75 (3.17:1 - tuned for the light panel, but this text sits
+    // on the DARK map canvas this chrome-only theme inherits from :root) to
+    // 4.64:1 on #1a1a2e - #357 contrast audit finding 3. Hue/saturation preserved.
+    '--cc-map-scale-text': '#6e8a92',
 
     // Opacity Variants: accent
     '--cc-accent-5': 'rgba(38, 139, 210, 0.05)',
@@ -606,7 +631,9 @@ export const themeTokens = {
     '--cc-panel': '#e6e9ef',
     '--cc-border': '#ccd0da',
     '--cc-text-primary': '#4c4f69',
-    '--cc-text-secondary': '#6c6f85',
+    // Darkened from #6c6f85 (4.06:1 worst of panel/background/hover/input) to
+    // 4.63:1 minimum - #357 contrast audit finding 1. Hue/saturation preserved.
+    '--cc-text-secondary': '#64667b',
     '--cc-accent': '#1e66f5',
     '--cc-accent-on': '#eff1f5',
     '--cc-warning': '#df8e1d',
@@ -633,7 +660,10 @@ export const themeTokens = {
     '--cc-map-ctrl-shadow': 'rgba(0, 0, 0, 0.15)',
     '--cc-map-scale-bg': 'transparent',
     '--cc-map-scale-border': '#ccd0da',
-    '--cc-map-scale-text': '#4c4f69',
+    // Lifted from #4c4f69 (2.14:1 - tuned for the light panel, but this text sits
+    // on the DARK map canvas this chrome-only theme inherits from :root) to
+    // 4.61:1 on #1a1a2e - #357 contrast audit finding 3. Hue/saturation preserved.
+    '--cc-map-scale-text': '#7f83a2',
 
     // Opacity Variants: accent
     '--cc-accent-5': 'rgba(30, 102, 245, 0.05)',
@@ -679,7 +709,10 @@ export const themeTokens = {
     '--cc-panel': '#3b4252',
     '--cc-border': '#4c566a',
     '--cc-text-primary': '#d8dee9',
-    '--cc-text-secondary': '#616e88',
+    // Lifted from #616e88 (1.96:1 worst of panel/background/hover/input, the
+    // worst pairing in the repo) to 4.61:1 minimum - #357 contrast audit
+    // finding 1. Hue/saturation preserved.
+    '--cc-text-secondary': '#a7b0c0',
     '--cc-accent': '#88c0d0',
     '--cc-accent-on': '#2e3440',
     '--cc-warning': '#ebcb8b',
@@ -705,7 +738,10 @@ export const themeTokens = {
     '--cc-map-ctrl-icon-filter': 'brightness(0) invert(1)',
     '--cc-map-ctrl-shadow': 'rgba(76, 86, 106, 0.3)',
     '--cc-map-scale-bg': 'transparent',
-    '--cc-map-scale-border': '#4c566a',
+    // Was #4c566a (same as --cc-border, tuned for the panel, not the map canvas):
+    // 1.69:1 on --cc-map-background, invisible. Lifted to 3.22:1 - #357 contrast
+    // audit finding 2. Hue/saturation preserved.
+    '--cc-map-scale-border': '#74829c',
     '--cc-map-scale-text': '#d8dee9',
 
     // Map Visualization
@@ -782,7 +818,9 @@ export const themeTokens = {
     '--cc-panel': '#181825',
     '--cc-border': '#313244',
     '--cc-text-primary': '#cdd6f4',
-    '--cc-text-secondary': '#6c7086',
+    // Lifted from #6c7086 (3.36:1 worst of panel/background/hover/input) to
+    // 4.61:1 minimum - #357 contrast audit finding 1. Hue/saturation preserved.
+    '--cc-text-secondary': '#83879b',
     '--cc-accent': '#89b4fa',
     '--cc-accent-on': '#1e1e2e',
     '--cc-warning': '#f9e2af',
@@ -808,7 +846,10 @@ export const themeTokens = {
     '--cc-map-ctrl-icon-filter': 'brightness(0) invert(1)',
     '--cc-map-ctrl-shadow': 'rgba(49, 50, 68, 0.3)',
     '--cc-map-scale-bg': 'transparent',
-    '--cc-map-scale-border': '#313244',
+    // Was #313244 (same as --cc-border, tuned for the panel, not the map canvas):
+    // 1.30:1 on --cc-map-background, invisible. Lifted to 3.20:1 - #357 contrast
+    // audit finding 2. Hue/saturation preserved.
+    '--cc-map-scale-border': '#686b91',
     '--cc-map-scale-text': '#cdd6f4',
 
     // Map Visualization
