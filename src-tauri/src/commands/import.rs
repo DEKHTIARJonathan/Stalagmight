@@ -137,7 +137,7 @@ fn finalize_deferred_import(state: &AppState, import_result: CommandResult) -> C
     if !import_result.success || !state.initial_save_deferred() {
         return import_result;
     }
-    let saved = crate::commands::project::save_project_impl(state, None, false);
+    let saved = crate::commands::project::save_project_impl(state, None);
     if !saved.success {
         tracing::warn!(
             error = ?saved.error,

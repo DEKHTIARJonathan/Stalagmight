@@ -43,7 +43,7 @@ pub(crate) fn account_key(endpoint: &str, email: &str) -> String {
 /// (require explicit http/https) is **not** done here - it lives in Track A's
 /// `tls.rs`; this is keying only, so an unparseable endpoint degrades gracefully
 /// to the trimmed/lowercased string rather than erroring.
-fn normalize_endpoint(endpoint: &str) -> String {
+pub(crate) fn normalize_endpoint(endpoint: &str) -> String {
     let trimmed = endpoint.trim();
     if let Ok(uri) = trimmed.parse::<http::Uri>() {
         if let Some(host) = uri.host() {

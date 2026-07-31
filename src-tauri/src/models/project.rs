@@ -6,9 +6,9 @@ use std::path::PathBuf;
 use ts_rs::TS;
 
 use super::{
-    ClosureStrategy, CollabState, GpsBounds, LoopClosure, Section, SectionData, SectionId,
-    SectionUpdates, ShotData, ShotId, StationAnchor, StationKey, StationMerge, StationMergeWire,
-    StationRef, ZeroDatum,
+    ClosureStrategy, GpsBounds, LoopClosure, Section, SectionData, SectionId, SectionUpdates,
+    ShotData, ShotId, StationAnchor, StationKey, StationMerge, StationMergeWire, StationRef,
+    ZeroDatum,
 };
 use super::{LoopClosureWire, ZeroDatumWire};
 
@@ -44,6 +44,9 @@ mod offsets;
 mod relationships;
 mod reverse;
 mod stats;
+
+#[cfg(test)]
+mod anchor_fuzz;
 
 pub use classify::ClassifyScope;
 pub use gas::{
@@ -281,12 +284,8 @@ pub struct Project {
     /// Monotonic counter for closure IDs. Never reused, even after deletions.
     #[serde(default)]
     pub next_closure_id: u64,
-    /// Collaboration mode state (sibling .tml linkage + baseline). None when off.
-    #[serde(default)]
-    pub collab: Option<CollabState>,
-
     /// Per-project validation thresholds (#57). Stored in the `.stalx` so they
-    /// travel with the file between collaborators. New projects are seeded from
+    /// travel with the file. New projects are seeded from
     /// the global config (the "defaults for new projects"); thereafter this is
     /// authoritative. Defaults on legacy projects until populated on load.
     #[serde(default)]
@@ -359,9 +358,6 @@ pub struct ProjectMetadata {
     pub gps_center: Option<(f64, f64)>,
     /// GPS bounds including all zero datums
     pub gps_bounds: Option<GpsBounds>,
-    /// Whether Ariane collaboration mode is enabled for this project. Lets the
-    /// recent-projects panel show/toggle the state without opening the project.
-    pub collab_enabled: bool,
     // [Track B] (#189, D-B14) Whether this `.stalx` is a pulled SpeleoDB project.
     // DERIVED from EXISTS(speleo_link) in load_metadata, never a stored column;
     // tolerant of a missing table on a read-only metadata open.
@@ -508,9 +504,9 @@ impl Serialize for ProjectIpc<'_> {
             .filter_map(|c| p.closure_to_wire(c))
             .collect();
         // Field set + order MUST stay in lockstep with the generated Project.ts
-        // (16 ts-exported fields). Adding a ts-exported field to `Project`
+        // (15 ts-exported fields). Adding a ts-exported field to `Project`
         // requires adding it here too, or it silently drops off the IPC payload.
-        let mut st = serializer.serialize_struct("Project", 16)?;
+        let mut st = serializer.serialize_struct("Project", 15)?;
         st.serialize_field("name", &p.name)?;
         st.serialize_field("location", &p.location)?;
         st.serialize_field("created_at", &p.created_at)?;
@@ -525,7 +521,6 @@ impl Serialize for ProjectIpc<'_> {
         st.serialize_field("imported_file_hashes", &p.imported_file_hashes)?;
         st.serialize_field("imported_section_hashes", &p.imported_section_hashes)?;
         st.serialize_field("next_closure_id", &p.next_closure_id)?;
-        st.serialize_field("collab", &p.collab)?;
         st.serialize_field("validation", &p.validation)?;
         st.end()
     }
@@ -563,7 +558,6 @@ impl Project {
             imported_file_hashes: Vec::new(),
             imported_section_hashes: Vec::new(),
             next_closure_id: 1,
-            collab: None,
             validation: crate::config::ValidationConfig::default(),
             cascade_deferred: false,
             section_index_cache: HashMap::new(),
@@ -682,17 +676,18 @@ impl Project {
     /// Mint v4 UUIDs for any shot whose `uuid` field is `None` and write
     /// them back into the in-memory project.
     ///
-    /// The save flow needs this before either the SQLite INSERT or the
-    /// TML export runs.  Without it, pre-v6 .stalx files loaded today
-    /// have `Shot::uuid = None` everywhere; the SQLite INSERT path
-    /// mints fresh UUIDs at write time but does NOT update the in-memory
-    /// shot, so a subsequent `export_tml_with_baseline` call in the
-    /// SAME save sees the shots still as `uuid: None` and mints a
-    /// SECOND, different set of UUIDs for the .tml.  The DB and the
-    /// sibling .tml then disagree on every shot's identity until the
-    /// next reload, breaking the collaboration round-trip.  Calling
-    /// this once at the top of `save_project` guarantees both sides
-    /// receive the same UUIDs.
+    /// The UUID is the station identity every cross-reference anchors to
+    /// (`StationKey::AfterShot`), and it is the `<UUID>` the Ariane export
+    /// emits - which is what keeps the `.tml` SpeleoDB renders byte-stable
+    /// across re-exports.
+    ///
+    /// The save flow needs this before either the SQLite INSERT or the TML
+    /// export runs. Without it, pre-v6 .stalx files loaded today have
+    /// `Shot::uuid = None` everywhere; the SQLite INSERT path mints fresh
+    /// UUIDs at write time but does NOT update the in-memory shot, so a
+    /// later export in the SAME save would mint a SECOND, different set.
+    /// Calling this once at the top of `save_project` guarantees every
+    /// consumer receives the same UUIDs.
     pub fn ensure_shot_uuids(&mut self) {
         for section in &mut self.sections {
             for shot in &mut section.shots {
@@ -854,37 +849,6 @@ impl Project {
         for (key, index) in entries {
             // First-occurrence wins, as in `rebuild_shot_uuid_index`.
             self.shot_uuid_index.entry(key).or_insert(index);
-        }
-    }
-
-    /// Drop the per-shot collaboration baseline captured at the last
-    /// sibling-`.tml` export, so `reconcile::diff` returns an empty change set
-    /// until the next save re-exports and re-seeds it.
-    ///
-    /// Call this from any operation that invalidates the baseline's
-    /// `(section_id, shot_index)` identity key wholesale. Reconcile matches a
-    /// returned shot to a baseline entry by UUID, but then applies the edit to
-    /// `project.sections[..].shots[entry.shot_index]` - so once local indices have
-    /// moved under the baseline, a collaborator's edit would land on a *different*
-    /// shot. Emptying the baseline is the fail-safe: `reconcile::diff` short-
-    /// circuits on it, so the reconcile is skipped rather than misapplied.
-    ///
-    /// Deliberately keeps `last_export_tml_sha256`. That field is *provenance* -
-    /// proof the sibling `.tml` came from us - and three things read it that have
-    /// nothing to do with the baseline: `compute_collab` bails outright when it is
-    /// `None` (so clearing it would stop us ever noticing the sibling changed,
-    /// permanently, if the next export failed), and `collab_sibling_when_disabled`
-    /// uses it to decide whether to warn about a leftover `.tml`. Clearing it buys
-    /// nothing the empty baseline does not already give.
-    pub(crate) fn invalidate_collab_baseline(&mut self) {
-        if let Some(collab) = self.collab.as_mut() {
-            if collab.shot_baseline.is_empty() {
-                return;
-            }
-            collab.shot_baseline.clear();
-            tracing::info!(
-                "Cleared collab shot baseline; the .tml will be re-exported before the next reconcile"
-            );
         }
     }
 
@@ -1327,6 +1291,7 @@ impl Project {
     /// Station comment for a positional ref, found by resolving each stored key
     /// (sound for any anchor kind). For callers/tests that hold a positional ref
     /// rather than a stored key.
+    #[cfg(test)]
     pub(crate) fn station_comment_for_ref(&self, sr: StationRef) -> Option<&String> {
         self.station_comments
             .iter()

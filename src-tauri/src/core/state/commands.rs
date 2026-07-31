@@ -74,7 +74,6 @@ impl AppState {
             | MoveStation { .. }
             | MoveComment { .. }
             | Batch { .. }
-            | ApplyCollabChanges
             | RepairIntegrity
             | UpdateProjectSettings => false,
         }
@@ -230,8 +229,7 @@ impl AppState {
             | RemoveZeroDatum { .. }
             | MoveSection { .. }
             | MoveSegment { .. }
-            | MoveStation { .. }
-            | ApplyCollabChanges => GEOMETRY_ONLY,
+            | MoveStation { .. } => GEOMETRY_ONLY,
         }
     }
 
@@ -315,9 +313,9 @@ impl AppState {
     }
 
     /// Shared structural-edit epilogue for the custom `execute_*` paths that
-    /// bypass [`Self::execute`]'s gated epilogue (collab apply, TML import).
-    /// Converts sole-bridge closures to merges and reconciles derived offsets,
-    /// then reports whether this edit INTRODUCED a CRITICAL integrity violation
+    /// bypass [`Self::execute`]'s gated epilogue (TML import).
+    /// Reconciles derived offsets, then reports whether this edit INTRODUCED a
+    /// CRITICAL integrity violation
     /// (dangling ref / out-of-range index / non-finite geometry). A caller that
     /// captured a pre-edit snapshot rolls back to it when this returns `true`,
     /// giving these paths the same "block corruption at the source" guarantee the
@@ -326,30 +324,17 @@ impl AppState {
     /// `pre_had_critical` is the project's critical state BEFORE the edit. Matching
     /// `guard_introduced_corruption` / `execute`, an already-critical project (one
     /// opened with a dangling ref or non-finite shot - permitted; the banner offers
-    /// Repair) does not block an otherwise-clean collab apply / import: only NEWLY
-    /// introduced corruption rolls back.
-    /// `can_orphan_closures` mirrors [`CommandIntegrity::can_orphan_closures`]:
-    /// only an operation that can SEVER connectivity can strand a section behind a
-    /// sole-bridge closure (issue #8). Pure-addition paths (a fresh import) never
-    /// create one, so they pass `false` and skip the O(closures × connectivity)
-    /// sole-bridge scan - which otherwise dominated a large import.
-    pub(super) fn finalize_structural_edit(
-        &self,
-        pre_had_critical: bool,
-        can_orphan_closures: bool,
-    ) -> bool {
-        if can_orphan_closures {
-            self.convert_orphan_closures_in_open_project();
-        }
+    /// Repair) does not block an otherwise-clean import: only NEWLY introduced
+    /// corruption rolls back.
+    ///
+    /// No sole-bridge scan runs here. Only an operation that can SEVER
+    /// connectivity can strand a section behind a sole-bridge closure (issue #8),
+    /// and the one remaining caller is a pure-addition path (a fresh import) that
+    /// never creates one - so it would only pay the O(closures × connectivity)
+    /// cost that used to dominate a large import.
+    pub(super) fn finalize_structural_edit(&self, pre_had_critical: bool) -> bool {
         self.reconcile_geometry();
-        if pre_had_critical {
-            return false;
-        }
-        self.project
-            .lock()
-            .ok()
-            .and_then(|g| g.as_ref().map(Project::has_critical_integrity_violations))
-            .unwrap_or(false)
+        !pre_had_critical && self.project_has_critical()
     }
 
     /// Structural-integrity violation messages for the open project, critical
@@ -501,10 +486,10 @@ impl AppState {
         // Read-only edit gate (#191, D-B6): reject mutations on a remote project
         // opened read-only, BUT lifecycle commands (Save/Open/Close/Create/
         // MergeProjects) always pass through (autosave must not be blocked).
-        // `execute_move_comment` and `apply_collab_changes` are reached via this
-        // `execute()` (early `return self.execute_move_comment(..)` and the
-        // `ApplyCollabChanges` arm), so they inherit this guard - see the
-        // chokepoint enumeration test (`gate_rejects_every_mutation_entrypoint`).
+        // `execute_move_comment` is reached via this `execute()` (an early
+        // `return self.execute_move_comment(..)`), so it inherits this guard -
+        // see the chokepoint enumeration test
+        // (`gate_rejects_every_mutation_entrypoint`).
         if !Self::is_lifecycle_passthrough(&cmd) {
             if let Err(f) = self.guard_mutation(&cmd.description()) {
                 return f;
@@ -580,9 +565,7 @@ impl AppState {
                 self.create_project(name.clone(), location.clone())
             }
             Command::OpenProject { path } => self.open_project(path.clone()),
-            Command::SaveProject { path, is_autosave } => {
-                self.save_project(path.clone(), *is_autosave)
-            }
+            Command::SaveProject { path } => self.save_project(path.clone()),
             Command::CloseProject => self.close_project(),
             Command::CreateSection {
                 name,
@@ -676,7 +659,6 @@ impl AppState {
                 output_name.clone(),
                 *archive_originals,
             ),
-            Command::ApplyCollabChanges => self.apply_collab_changes(),
             // Never routed here: repair is applied via `repair_project_integrity`,
             // which records its own snapshot-pair undo entry. Present only for match
             // exhaustiveness.
@@ -1015,10 +997,7 @@ mod integrity_capability_tests {
         // INERT (no geometry, no refs).
         assert_eq!(caps(&Command::CloseProject), (false, false, false));
         assert_eq!(
-            caps(&Command::SaveProject {
-                path: None,
-                is_autosave: false
-            }),
+            caps(&Command::SaveProject { path: None }),
             (false, false, false)
         );
         // RepairIntegrity never runs through execute(); it is classified INERT.

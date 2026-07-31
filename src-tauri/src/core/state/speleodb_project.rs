@@ -333,7 +333,7 @@ impl AppState {
             std::fs::create_dir_all(parent)
                 .map_err(|e| local_dto(SpeleoDbError::Io(e.to_string())))?;
         }
-        let save = self.save_project(Some(dest.clone()), false);
+        let save = self.save_project(Some(dest.clone()));
         if !save.success {
             return Err(local_dto(SpeleoDbError::Io(format!(
                 "failed to write project into the SpeleoDB cache: {}",
@@ -588,6 +588,36 @@ mod tests {
         assert_eq!(
             body.get("visibility").and_then(|v| v.as_str()),
             Some("PUBLIC")
+        );
+    }
+
+    #[test]
+    fn publish_relocates_into_the_cache_before_it_stamps_the_link() {
+        // save_project treats "linked + explicit destination" as Save a Copy (the
+        // copy is written WITHOUT the link and the session stays put). Publish's
+        // relocate-into-cache is an explicit-destination save, so it is only a
+        // real relocate because the project is STILL UNLINKED when it runs - the
+        // link is stamped after. Reorder those two steps and publish silently
+        // stops relocating (the cache gets an unlinked copy while the session
+        // stays on the user's original file). Guarded by ORDER in the source, the
+        // same idiom the pull-guard test uses: a behavioural version needs the
+        // process-global app dirs.
+        let src = include_str!("speleodb_project.rs");
+        let start = src
+            .find("fn speleodb_publish")
+            .expect("the publish body is present");
+        let body = &src[start..];
+        let body = &body[..body.find("\n    }\n").expect("fn body terminates")];
+        let relocate = body
+            .find("self.save_project(Some(")
+            .expect("publish relocates via an explicit-destination save");
+        let stamp = body
+            .find(".save_speleo_link(Some(")
+            .expect("publish stamps the fresh link");
+        assert!(
+            relocate < stamp,
+            "publish must relocate into the cache BEFORE the link exists - a linked \
+             explicit-destination save is a copy save and would not relocate"
         );
     }
 }

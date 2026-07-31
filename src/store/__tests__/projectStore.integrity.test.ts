@@ -373,7 +373,7 @@ describe('projectStore integrity banner dismiss lifecycle', () => {
       return undefined;
     });
 
-    await useProjectStore.getState().saveProject('/p.stalx', false);
+    await useProjectStore.getState().saveProject('/p.stalx');
     expect(getProjectStateCalled).toBe(true);
   });
 
@@ -393,7 +393,7 @@ describe('projectStore integrity banner dismiss lifecycle', () => {
       return undefined;
     });
 
-    await useProjectStore.getState().saveProject('/p.stalx', false);
+    await useProjectStore.getState().saveProject('/p.stalx');
     expect(getProjectStateCalled).toBe(false);
   });
 

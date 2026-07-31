@@ -6,37 +6,8 @@ use std::collections::HashMap;
 use super::{format_blob_placeholder, Database, RawTableData, MAX_RAW_PAGE_ROWS};
 
 impl Database {
-    /// Upsert the collaboration state without rewriting the whole project.
-    /// Used by the save-both hook to persist a refreshed baseline after exporting
-    /// the sibling `.tml`. `None` clears the row (collaboration disabled).
-    pub fn save_collab_state(&self, collab: Option<&crate::models::CollabState>) -> Result<()> {
-        self.conn.execute(
-            "CREATE TABLE IF NOT EXISTS collab_state (
-                id INTEGER PRIMARY KEY CHECK (id = 1),
-                state_json TEXT NOT NULL
-            )",
-            [],
-        )?;
-        match collab {
-            Some(state) => {
-                let json =
-                    serde_json::to_string(state).context("Failed to serialize collab state")?;
-                self.conn.execute(
-                    "INSERT INTO collab_state (id, state_json) VALUES (1, ?1)
-                     ON CONFLICT(id) DO UPDATE SET state_json = excluded.state_json",
-                    params![json],
-                )?;
-            }
-            None => {
-                self.conn.execute("DELETE FROM collab_state", [])?;
-            }
-        }
-        Ok(())
-    }
-
     /// Upsert or clear the SpeleoDB hand-off link (`speleo_link`, schema v9)
-    /// without rewriting the whole project (mirrors
-    /// [`save_collab_state`](Self::save_collab_state)). `Some(link)` upserts the
+    /// without rewriting the whole project. `Some(link)` upserts the
     /// single row id=1; `None` deletes it. `base_commit_sha` binds as
     /// `Option<String>` so `None` becomes SQL NULL - **never** `""` (NULL is the
     /// empty-repo BASE sentinel).
@@ -110,8 +81,7 @@ impl Database {
     }
 
     /// Rename the project's display name without rewriting the whole project.
-    /// A targeted `UPDATE` on the single `project` row (mirrors
-    /// [`save_collab_state`](Self::save_collab_state)); leaves `modified_at`
+    /// A targeted `UPDATE` on the single `project` row; leaves `modified_at`
     /// untouched so a rename doesn't reorder the recent list by edit time.
     pub fn save_project_name(&self, name: &str) -> Result<()> {
         let affected = self

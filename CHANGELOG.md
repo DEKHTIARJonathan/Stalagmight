@@ -7,6 +7,10 @@ Update this file every time a new version is tagged.
 
 ## [Unreleased]
 
+### Removed
+
+- **Ariane collaboration mode** - the opt-in per-project mode that kept a sibling `.tml` next to the `.stalx`, saved both on every save, and reconciled external Ariane edits back in on the next open has been removed entirely. Plain Ariane `.tml`/`.tmlu` import and export are unaffected. `.stalx` schema v15 drops the now-unused `collab_state` table. **Persisted undo/redo history is cleared on first open of a pre-upgrade project** - a saved entry can name a collaboration operation this build no longer understands, and replaying the entries around it would corrupt the survey, so the stored history is dropped once and rebuilds as you work.
+
 ## [0.5.0] - 2026-07-29
 
 The first release with builds for all three platforms. The headline additions are

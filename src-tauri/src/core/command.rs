@@ -51,16 +51,6 @@ pub enum Command {
     },
     SaveProject {
         path: Option<PathBuf>,
-        /// When `true`, treats this as an autosave (debounced background
-        /// save) rather than a user-driven save.  Autosaves honour the
-        /// project's `CollabState.write_tml_on_autosave` flag: when that
-        /// flag is `false`, the sibling `.tml` is NOT rewritten on this
-        /// save, so the user doesn't get .tml churn every 30 seconds.
-        /// Defaults to `false` for backward compatibility - older
-        /// frontends that don't pass the field get the manual-save
-        /// behaviour (always rewrite the .tml).
-        #[serde(default)]
-        is_autosave: bool,
     },
     CloseProject,
 
@@ -203,9 +193,6 @@ pub enum Command {
         /// Whether to archive (rename) the original files
         archive_originals: bool,
     },
-    /// Apply a collaborator's reconciled `.tml` changes into the project
-    /// (single undoable operation via snapshot pair).
-    ApplyCollabChanges,
     /// Repair the open project's structural integrity (drop dangling refs, re-mint
     /// duplicate UUIDs, re-cascade offsets). Applied directly via the
     /// `repair_project_integrity` IPC command, which records its own snapshot-pair
@@ -269,6 +256,51 @@ pub struct CommandResult {
     /// Path the project was saved to (for SaveProject command)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub saved_path: Option<String>,
+    /// Set when this command TORE DOWN the open project's session - today only
+    /// `delete_project`, and only when the `.stalx` it deleted was the file backing
+    /// the open project (matched with `same_file`).
+    ///
+    /// The frontend has to be TOLD, because neither half of the obvious prediction
+    /// holds:
+    ///
+    /// * `success` is not a precondition. The backend closes BEFORE handing the
+    ///   file to the OS trash, and it must: SQLite holds the file open without
+    ///   `FILE_SHARE_DELETE`, so on Windows the trash is denied while that handle
+    ///   lives and a close-afterwards would never be reached. A trash that then
+    ///   fails for an unrelated reason (no write access to the parent directory)
+    ///   therefore returns FAILURE with the session already gone.
+    /// * the deleted path is not what the backend matched. `same_file`
+    ///   canonicalizes, so a symlink, a `..` segment or a Windows case/short-name
+    ///   variant of the open project's path tears the session down while a `===` on
+    ///   the raw strings says it did not.
+    ///
+    /// Reporting it here also replaces what the frontend used to do instead - call
+    /// `get_project_state` afterwards and test it for null. That answers the same
+    /// yes/no question by cloning the whole project and recomputing station
+    /// coordinates, stats, penetration and frozen shots, which on the 75k-shot
+    /// projects this app is built for made every delete-while-open needlessly slow.
+    ///
+    /// `Option<bool>`, only ever `Some(true)`, for the same wire contract as
+    /// `section_id` / `shot_id` / `saved_path` above: `skip_serializing_if` keeps
+    /// the key absent for every command that closed nothing, and the `Option` is
+    /// what makes ts-rs emit `session_closed?: boolean` rather than a required
+    /// field that would break every existing `CommandResult` literal on the
+    /// frontend (see `reversed_sections` for the same reasoning).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_closed: Option<bool>,
+    /// Set when this save wrote a DETACHED COPY instead of saving the project:
+    /// an explicit Save-As destination on a SpeleoDB-managed project writes the
+    /// `.stalx` without its `speleo_link` row and leaves the session on the
+    /// managed file (see `save_project`). The frontend must be TOLD, because
+    /// the two things it normally does on a successful save are both wrong
+    /// here: `saved_path` would re-point `project.file_path` at a file this
+    /// session does not have open, and clearing `isDirty` would claim the open
+    /// project had been persisted when it was not. `saved_path` is deliberately
+    /// left `None` for exactly that reason. Same wire contract as the optional
+    /// fields above (`skip_serializing_if`, so ts-rs emits `unlinked_copy_path?:`
+    /// and the key stays absent for every ordinary save).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unlinked_copy_path: Option<String>,
     /// The sections whose station NUMBERING this operation reversed (station `i`
     /// became station `N - i`), each carrying the shot count `N` in force at that
     /// reverse - for `ReverseSection`, for a `Batch` of them, and for an undo/redo
@@ -377,6 +409,8 @@ impl CommandResult {
             section_ids: Vec::new(),
             shot_id: None,
             saved_path: None,
+            session_closed: None,
+            unlinked_copy_path: None,
             reversed_sections: None,
         }
     }
@@ -390,6 +424,8 @@ impl CommandResult {
             section_ids: Vec::new(),
             shot_id: None,
             saved_path: None,
+            session_closed: None,
+            unlinked_copy_path: None,
             reversed_sections: None,
         }
     }
@@ -421,6 +457,28 @@ impl CommandResult {
     /// Attach the saved file path to this result.
     pub fn with_path(mut self, path: String) -> Self {
         self.saved_path = Some(path);
+        self
+    }
+
+    /// Record whether this command tore the open project's session down.
+    ///
+    /// Takes the verdict rather than asserting it so both of `delete_project`'s
+    /// return paths - the success one AND the early failure after a denied trash,
+    /// which is the one the frontend most needs the bit on - can carry it from the
+    /// same variable and neither can forget it. A `false` deliberately leaves the
+    /// field `None` so the key stays off the wire for every command that closed
+    /// nothing (see the field's doc comment); `Some(false)` is never produced.
+    pub fn with_session_closed(mut self, closed: bool) -> Self {
+        if closed {
+            self.session_closed = Some(true);
+        }
+        self
+    }
+
+    /// Record that this save wrote a detached (unlinked) copy at `path` rather
+    /// than saving the open project (see the field's doc comment).
+    pub fn with_unlinked_copy_path(mut self, path: String) -> Self {
+        self.unlinked_copy_path = Some(path);
         self
     }
 
@@ -504,7 +562,7 @@ impl Command {
             Command::OpenProject { path } => {
                 format!("Open project '{}'", path.display())
             }
-            Command::SaveProject { path, .. } => match path {
+            Command::SaveProject { path } => match path {
                 Some(p) => format!("Save project to '{}'", p.display()),
                 None => "Save project".to_string(),
             },
@@ -625,7 +683,6 @@ impl Command {
                     output_name
                 )
             }
-            Command::ApplyCollabChanges => "Apply collaborator changes".to_string(),
             Command::RepairIntegrity => "Repair integrity".to_string(),
             Command::UpdateProjectSettings => "Update project settings".to_string(),
         }
@@ -633,7 +690,7 @@ impl Command {
 }
 
 #[cfg(test)]
-#[expect(clippy::unwrap_used)]
+#[expect(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
     use crate::models::{
@@ -641,6 +698,63 @@ mod tests {
         StationRef,
     };
     use chrono::NaiveDate;
+
+    /// Pins the `Command` variant SET, so removing one cannot pass silently.
+    ///
+    /// `Command` is `#[serde(tag = "type")]` with no catch-all, so a persisted
+    /// undo entry naming a deleted variant stops deserializing - and
+    /// `UndoStack::load_from_persisted_with_timestamps` SKIPS a bad entry rather
+    /// than truncating, keeping the entries on BOTH sides. The stack then loads
+    /// with a HOLE, and undoing past it replays older entries against a tree they
+    /// no longer describe. `ApplyCollabChanges` is the worked example: schema v15
+    /// has to call `drop_legacy_undo_history` for exactly that reason, as v11->v12
+    /// and v12->v13 did before it.
+    ///
+    /// Its sibling `legacy_set_shot_reference_undo_entries_still_deserialize`
+    /// covers the other half of this hazard - a RENAMED tag, which can be kept
+    /// loadable with `#[serde(alias = ...)]`. A removal cannot.
+    ///
+    /// If this fires because you removed a variant: either keep its tag
+    /// deserializable, or bump `SCHEMA_VERSION` and drop the persisted history in
+    /// the new migration step. If you added one, just update the count.
+    #[test]
+    fn command_variant_set_is_pinned_so_a_removal_cannot_pass_silently() {
+        let manifest_dir = env!("CARGO_MANIFEST_DIR");
+        let path = format!("{manifest_dir}/src/core/command.rs");
+        let src =
+            std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("Failed to read {path}: {e}"));
+
+        let start = src
+            .find("pub enum Command {")
+            .expect("pub enum Command not found");
+        let end = src[start..]
+            .find("\n}\n")
+            .expect("end of `enum Command` not found");
+
+        // Variants sit at exactly four-space indent. Fields and attributes are
+        // deeper, and doc comments start with `/`, so an uppercase first char at
+        // that indent identifies a variant.
+        let variants: Vec<&str> = src[start..start + end]
+            .lines()
+            .filter_map(|line| {
+                let rest = line.strip_prefix("    ")?;
+                if rest.starts_with(' ') || !rest.starts_with(char::is_uppercase) {
+                    return None;
+                }
+                rest.split(|c: char| !c.is_alphanumeric()).next()
+            })
+            .filter(|v| !v.is_empty())
+            .collect();
+
+        assert_eq!(
+            variants.len(),
+            28,
+            "Command's variant set changed. A removal leaves persisted undo \
+             history unloadable at that entry and holed either side of it - keep \
+             the tag deserializable, or bump SCHEMA_VERSION and call \
+             drop_legacy_undo_history in the new migration step. Saw: {variants:?}"
+        );
+    }
 
     #[test]
     fn legacy_set_shot_reference_undo_entries_still_deserialize() {
@@ -707,10 +821,23 @@ mod tests {
         assert!(success.section_ids.is_empty());
         assert!(success.shot_id.is_none());
         assert!(success.saved_path.is_none());
+        assert!(success.unlinked_copy_path.is_none());
 
         let with_path = CommandResult::success().with_path("/tmp/test.stalx".to_string());
         assert!(with_path.success);
         assert_eq!(with_path.saved_path.as_deref(), Some("/tmp/test.stalx"));
+
+        let with_copy =
+            CommandResult::success().with_unlinked_copy_path("/tmp/copy.stalx".to_string());
+        assert!(with_copy.success);
+        assert_eq!(
+            with_copy.unlinked_copy_path.as_deref(),
+            Some("/tmp/copy.stalx")
+        );
+        assert!(
+            with_copy.saved_path.is_none(),
+            "a copy save must never also claim saved_path (the frontend re-points on it)"
+        );
 
         let with_warnings = CommandResult::success().with_warnings(vec![warning.clone()]);
         assert!(with_warnings.success);
@@ -806,17 +933,10 @@ mod tests {
                 },
                 "Open project 'alpha.stalx'",
             ),
-            (
-                Command::SaveProject {
-                    path: None,
-                    is_autosave: false,
-                },
-                "Save project",
-            ),
+            (Command::SaveProject { path: None }, "Save project"),
             (
                 Command::SaveProject {
                     path: Some(PathBuf::from("alpha.stalx")),
-                    is_autosave: false,
                 },
                 "Save project to 'alpha.stalx'",
             ),

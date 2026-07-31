@@ -37,8 +37,9 @@ import type {
   FrozenShotRef,
 } from '../types/project';
 import type { ReversedSection } from '../types/ipc/ReversedSection';
+import type { SpeleoManagedFile } from '../types/ipc/SpeleoManagedFile';
 import type { Config } from '../types/config';
-import type { CommandResult, CommentHolder, ConnectivityResult, DmpFile, TmlFile, CompassFile, WallsFile, GpxFile, GpxSectionPlacement, ExportImageOptions, ProjectWarning, BatchCommand, UndoHistoryItem, ImportSectionConfig, PlacementSuggestion, CollabState, CollabChangeSet, IntegrityRepairResult, IntegrityCheckResult } from '../types/commands';
+import type { CommandResult, CommentHolder, ConnectivityResult, DmpFile, TmlFile, CompassFile, WallsFile, GpxFile, GpxSectionPlacement, ExportImageOptions, ProjectWarning, BatchCommand, UndoHistoryItem, ImportSectionConfig, PlacementSuggestion, IntegrityRepairResult, IntegrityCheckResult } from '../types/commands';
 import type { CreateProjectFullResult } from '../types/loading';
 import type { UnrecognisedShotKind } from '../types/ipc/UnrecognisedShotKind';
 import type { ConfigSaveReport } from '../types/ipc/ConfigSaveReport';
@@ -112,6 +113,7 @@ interface LoadError {
   code: string;
   message: string;
   details?: string | undefined;
+  speleodbManaged?: SpeleoManagedFile | undefined;
 }
 
 interface CreateProjectOptions {
@@ -153,6 +155,7 @@ function parseLoadError(e: unknown): LoadError {
       code: (obj.code as string) || 'UNKNOWN',
       message: (obj.message as string) || String(e),
       details: obj.details as string | undefined,
+      speleodbManaged: obj.speleodbManaged as SpeleoManagedFile | undefined,
     };
   }
   return { code: 'UNKNOWN', message: String(e) };
@@ -251,11 +254,21 @@ interface ProjectStore {
   /** Create a new project (legacy, still supported) */
   createProject: (name: string, projectLocation?: string, options?: CreateProjectOptions) => Promise<CommandResult>;
   /**
-   * Save the project.  `isAutosave` should be set to `true` from the
-   * autosave hook so the Rust side can honour
-   * `CollabState.write_tml_on_autosave` and skip the sibling `.tml`
-   * write when the user has disabled it.  Manual / Save-As flows
-   * leave it `false` (the default) so the .tml is always written.
+   * Save the project. `isAutosave` is FRONTEND-ONLY - it is not sent over IPC and
+   * the backend save is identical either way. Since it never reaches the backend,
+   * this comment is its whole specification: it marks a QUIET, BACKGROUND save -
+   * one the user did not ask for and is not waiting on - and suppresses two bits
+   * of UI churn for it: the save-permission dialog (which would otherwise reopen
+   * on every retry while folder access is denied) and the post-save integrity
+   * re-check (skipped unless the project entered the save already flagged, since
+   * the save path auto-heals some issues).
+   *
+   * Read it as "background save", NOT literally "the auto-save timer fired":
+   * `useAutoSave`'s debounced write is one caller, and `flushToDiskAfterPush` in
+   * `useSpeleoActions` is the other - a single, undebounced flush after a
+   * confirmed SpeleoDB push. Both are quiet writes the user never requested, so
+   * both pass `true`; anything the user explicitly asked for (Ctrl+S, Save As,
+   * save-after-import) must not.
    */
   saveProject: (path?: string, isAutosave?: boolean) => Promise<CommandResult>;
   /**
@@ -332,7 +345,7 @@ interface ProjectStore {
   unresolveWarning: (sectionId: number, shotId: number, warningCode: string) => Promise<void>;
   loadRecentProjects: () => Promise<void>;
   removeFromRecentProjects: (path: string) => Promise<CommandResult>;
-  deleteProject: (path: string, deleteCollabSibling: boolean) => Promise<CommandResult>;
+  deleteProject: (path: string) => Promise<CommandResult>;
   mergeProjects: (sourcePaths: string[], outputPath: string, outputName: string, archiveOriginals: boolean) => Promise<CommandResult>;
 
   createSection: (data: SectionData) => Promise<CommandResult>;
@@ -399,15 +412,8 @@ interface ProjectStore {
   executeWallsImport: (path: string, fileHash?: string | null, commentsOnStations?: boolean, includeSplays?: boolean, selectedSurveys?: number[] | null) => Promise<CommandResult>;
   // Per-project settings (#57): name + validation thresholds, stored in the .stalx
   updateProjectSettings: (name: string, validation: Config['validation']) => Promise<CommandResult>;
-  // Collaboration mode
-  setCollabEnabled: (enabled: boolean) => Promise<CommandResult>;
-  setCollabEnabledForPath: (path: string, enabled: boolean) => Promise<CommandResult>;
   /** Rename a recent project's display name by path (project need not be open). */
   setProjectNameForPath: (path: string, name: string) => Promise<CommandResult>;
-  getCollabState: () => Promise<CollabState | null>;
-  detectCollabChanges: () => Promise<CollabChangeSet | null>;
-  applyCollabChanges: () => Promise<CommandResult>;
-  checkCollabSibling: () => Promise<string | null>;
   parseGpx: (path: string) => Promise<GpxFile>;
   executeGpxImport: (path: string, fileHash: string | null, importWaypoints: boolean, importTracks: boolean, importRoutes: boolean, sectionPlacements: GpxSectionPlacement[], depthInverted: boolean) => Promise<CommandResult>;
   calculateFileHash: (path: string) => Promise<string>;
@@ -487,6 +493,43 @@ function runSerialized<T>(work: () => Promise<T>): Promise<T> {
     () => undefined
   );
   return result;
+}
+
+/**
+ * The frontend half of "no project is open" - every piece of project-derived state
+ * that must not outlive the project it describes, plus the two sibling stores that
+ * hold project-scoped state of their own.
+ *
+ * Shared by `closeProject` (the ordinary teardown, once the backend confirms the
+ * close) and `deleteProject` (when the `.stalx` just handed to the OS delete was
+ * the open one). The delete path can't reuse `closeProject` itself: that issues the
+ * `close_project` IPC, and by then the backend has ALREADY torn its own session
+ * down as part of the delete, so the round trip is pointless - and its `isClosing`
+ * guard can answer `success: false`, which would leave the frontend still rendering
+ * a project whose file is gone. Sharing the state reset instead keeps the two paths
+ * from drifting.
+ */
+function clearOpenProjectState(set: (partial: Partial<ProjectStore>) => void): void {
+  set({
+    project: null,
+    databaseOpen: false,
+    stations: [],
+    surveyData: null,
+    stationsAdjusted: null,
+    surveyDataAdjusted: null,
+    stats: null,
+    frozenShots: [],
+    isDirty: false,
+    integrityIssues: [],
+    integrityDismissed: false,
+    integritySaveBlocked: false,
+    integrityDialogOpen: false,
+  });
+  // Losing a project bypasses the setView() cleanup funnel, so drop the gas
+  // sub-mode (#38) here too - a stale overlay/panel must not outlive the project.
+  useUIStore.getState().exitGasPlan();
+  // #204: drop the SpeleoDB action-shell edit-state - no project is open.
+  useSpeleoStore.getState().clearLink();
 }
 
 export const useProjectStore = create<ProjectStore>((set, get) => {
@@ -1032,40 +1075,14 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         // every held lock reads as "locked by other").
         void useSpeleoStore.getState().refreshSession();
 
-        // Collaboration mode (non-blocking, best-effort): if the project
-        // has collab on AND the sibling .tml was edited externally
-        // (Ariane), offer to reconcile.  When collab is off but a
-        // companion .tml exists, warn the user that Ariane edits won't
-        // flow in and saves won't update it.  Both paths fire
-        // asynchronously so the load returns immediately, and both
-        // re-check `clientOpId` / `loading` state inside `.then` so a
-        // user who navigated away (closeProject, switched projects)
-        // before the IPC resolved doesn't get a dialog or toast for a
-        // project that's no longer open.
-        const detectOpId = clientOpId;
-        const isStillCurrentLoad = (): boolean => {
-          const state = get();
-          return (
-            state.project !== null &&
-            state.loading.clientOpId === detectOpId
-          );
-        };
         // #27: shots whose stored `kind` this build could not read. The backend
         // already failed them closed to Reference (so nothing routes through a
         // leg it could not parse) and hands them over exactly once, but that is
         // a substitution the user never agreed to - ask what they should be.
-        // Guarded by the same staleness check as the collab prompt: a user who
-        // switched projects before this resolved must not get a dialog about a
-        // file that is no longer open.
-        //
-        // AWAITED, and it gates the collab prompt below. `openDialog` REPLACES
-        // whatever is showing rather than queueing, so two fire-and-forget
-        // prompts racing means whichever resolves second silently dismisses the
-        // other. That is not symmetric: the collaboration changeset is
-        // re-detected on the next open and costs nothing to defer, while this
-        // list has already been consumed from the backend - losing this dialog
+        // Staleness-guarded: a user who switched projects before this resolved
+        // must not get a dialog about a file that is no longer open. The list
+        // has already been consumed from the backend, so losing this dialog
         // loses the prompt for the session, leaving substitutions unreviewed.
-        let promptedForUnknownKinds = false;
         try {
           const found = await invokeIpc<UnrecognisedShotKind[]>(
             'take_unrecognised_shot_kinds',
@@ -1075,56 +1092,12 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
             { loadingId: result.loadingId },
             { purpose: 'resolve unreadable shot kinds' }
           );
-          if (isStillCurrentLoad() && found.length > 0) {
+          const st = get();
+          if (st.project !== null && st.loading.clientOpId === clientOpId && found.length > 0) {
             useUIStore.getState().openDialog('unrecognised-shot-kind', { shots: found });
-            promptedForUnknownKinds = true;
           }
         } catch {
           /* best-effort: the shots are already safely Reference either way */
-        }
-
-        if (promptedForUnknownKinds) {
-          // Skip the collaboration prompt for this load rather than letting it
-          // stomp the dialog above. Nothing is lost: detect_collab_changes does
-          // not consume, so the next open re-offers it.
-        } else if (result.project.collab?.enabled) {
-          void get()
-            .detectCollabChanges()
-            .then((cs) => {
-              if (!isStillCurrentLoad()) return;
-              if (
-                cs &&
-                cs.shots_added.length +
-                  cs.shots_edited.length +
-                  cs.shots_removed.length +
-                  cs.sections_added.length +
-                  cs.section_meta_changed.length >
-                  0
-              ) {
-                useUIStore.getState().openDialog('collab-review', { changeSet: cs });
-              }
-            })
-            .catch(() => {
-              /* detection is best-effort; ignore errors */
-            });
-        } else {
-          void get()
-            .checkCollabSibling()
-            .then((siblingName) => {
-              if (!isStillCurrentLoad()) return;
-              if (siblingName) {
-                useUIStore
-                  .getState()
-                  .showToast(
-                    i18n.t('dialogs.collabReview.siblingWarning', { siblingName }),
-                    'collab-sibling-warning',
-                    'warning'
-                  );
-              }
-            })
-            .catch(() => {
-              /* best-effort; ignore errors */
-            });
         }
 
         return { success: true };
@@ -1196,6 +1169,25 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
           useUIStore.getState().openDialog('corruption-recovery', {
             corruptPath: error.details,
             errorMessage: error.message,
+          });
+          clearProjectActionSource();
+          return { success: false };
+        }
+
+        // Canonical-storage refusal: this .stalx is a non-canonical copy of a
+        // SpeleoDB project. Backend-enforced (recents clicks bypass the
+        // routeOpenedFile guards); the prompt offers the two real ways forward.
+        if (error.code === 'SPELEODB_MANAGED' && error.speleodbManaged) {
+          // A SUPERSEDED load must not speak. Phase 0 refuses before the loader
+          // reaches its first cancellation checkpoint, so a load the user has
+          // already navigated away from really can arrive here - and resetting
+          // the loading state would discard the CURRENT load's progress, while
+          // the prompt would be about a file nobody is opening any more. The
+          // newer load owns both the loading state and the action source.
+          if (get().loading.clientOpId !== clientOpId) return { success: false };
+          get().resetLoading();
+          useUIStore.getState().openDialog('speleodb-managed-file', {
+            managed: error.speleodbManaged,
           });
           clearProjectActionSource();
           return { success: false };
@@ -1317,10 +1309,29 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     const hadIntegrityIssues = get().integrityIssues.length > 0;
     const result = await invokeIpc<CommandResult>(
       'save_project',
-      { path, isAutosave: isAutosave ?? false },
+      { path },
       { purpose: 'persist project changes', fields: { path } }
     );
     if (result.success) {
+      // A detached copy was written; the OPEN project was not saved. Do not
+      // re-point file_path and do not clear isDirty (see CommandResult).
+      if (result.unlinked_copy_path) {
+        useUIStore
+          .getState()
+          .showToast(
+            i18n.t('speleodb.managedFile.copySaved', { path: result.unlinked_copy_path }),
+            'speleodb-unlinked-copy'
+          );
+        // The heals above ran on the LIVE project before the pipeline decided to
+        // write a copy, so the frontend's mirror is stale here too - and the
+        // healed state reached only the copy, never the managed file, which
+        // leaves the session dirty even if it entered the save clean.
+        if (hadIntegrityIssues) {
+          await get().refreshProjectState();
+          set({ isDirty: true });
+        }
+        return result;
+      }
       // Update file_path if the backend returned it (first save / save-as)
       if (result.saved_path) {
         const project = get().project;
@@ -1333,24 +1344,6 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         // rebuild + republish, briefly blanking all geometry (#mem).
         if (project && project.file_path !== result.saved_path) {
           set({ project: { ...project, file_path: result.saved_path } });
-          // On the first save / Save As the backend derives the sibling
-          // name from the final .stalx stem (e.g. `cave.stalx` →
-          // `cave.tml`).  The in-memory `project.collab.sibling_tml_relative`
-          // is still the pre-save placeholder (e.g. `collaboration.tml`)
-          // until we refresh - the Project Details panel would otherwise
-          // mislead the user about which companion file was actually
-          // written.  Refresh the collab state when collab is on.
-          if (project.collab?.enabled) {
-            try {
-              const fresh = await get().getCollabState();
-              const current = get().project;
-              if (fresh && current) {
-                set({ project: { ...current, collab: fresh } });
-              }
-            } catch {
-              /* best-effort refresh; ignore IPC errors */
-            }
-          }
         }
       }
       // Lightweight: just refresh undo/redo availability
@@ -1371,11 +1364,11 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       }
       // Don't let geometric corruption persist silently: re-check after save so
       // drifted merges surface in the integrity banner this session, not only on
-      // the next load. Skip on a clean autosave to avoid churn - BUT still re-check
-      // when the project entered the save flagged (hadIntegrityIssues), because the
-      // save path auto-heals some issues (duplicate UUIDs / orphan offsets) on
-      // autosave too; without this the banner/dialog would stay stale after an
-      // autosave silently cleared them.
+      // the next load. Skip on a clean autosave to avoid churn - BUT still
+      // re-check when the project entered the save flagged (hadIntegrityIssues),
+      // because the save path auto-heals some issues (duplicate UUIDs / orphan
+      // offsets) on autosave too; without this the banner would stay stale after
+      // an autosave silently cleared them.
       if (!isAutosave || hadIntegrityIssues) {
         void get().checkProjectIntegrity();
       }
@@ -1477,12 +1470,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         { purpose: 'close project and release resources' },
       );
       if (result.success) {
-        set({ project: null, databaseOpen: false, stations: [], surveyData: null, stationsAdjusted: null, surveyDataAdjusted: null, stats: null, frozenShots: [], isDirty: false, integrityIssues: [], integrityDismissed: false, integritySaveBlocked: false, integrityDialogOpen: false });
-        // Closing a project bypasses the setView() cleanup funnel, so drop the gas
-        // sub-mode (#38) here too - a stale overlay/panel must not outlive the project.
-        useUIStore.getState().exitGasPlan();
-        // #204: drop the SpeleoDB action-shell edit-state - no project is open.
-        useSpeleoStore.getState().clearLink();
+        clearOpenProjectState(set);
       }
       return result;
     } finally {
@@ -1736,15 +1724,42 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
 
   // Permanently delete a project's files from disk (destructive - distinct from
   // removeFromRecentProjects, which only forgets the entry). The backend hands the
-  // files to the OS delete; on success we refresh both the loaded list and the
+  // file to the OS delete; on success we refresh both the loaded list and the
   // config so the project disappears from the available AND "missing" recent rows.
-  deleteProject: async (path: string, deleteCollabSibling: boolean) => {
+  deleteProject: async (path: string) => {
     try {
       const result = await invokeIpc<CommandResult>(
         'delete_project',
-        { path, deleteCollabSibling },
+        { path },
         { purpose: 'permanently delete project', fields: { path } }
       );
+      // Deleting the file backing the OPEN project closes it - the backend tears
+      // its own session down (project, SQLite handle, undo stack) - so the
+      // frontend has to follow. Without that the UI kept rendering the deleted
+      // project as open, and the next autosave tick, which does not care that the
+      // file is gone, failed the save with "No project open" and surfaced that as
+      // a save error.
+      //
+      // The backend REPORTS that teardown as `session_closed` on the delete's own
+      // result, so this is a plain read of a value we already have: no second IPC
+      // call, nothing predicted from the deleted path, and nothing that can throw
+      // between the delete and the state reset. (Asking instead - calling
+      // `get_project_state` and testing it for null - answered the same yes/no
+      // question by making the backend clone the whole project and recompute
+      // coordinates, stats, penetration and frozen shots, which on a 75k-shot
+      // project is seconds of work to learn one bit.)
+      //
+      // `result.success` is deliberately NOT a precondition. The backend closes
+      // BEFORE handing the `.stalx` to the OS trash, and it has to: SQLite holds
+      // the file open without `FILE_SHARE_DELETE`, so on Windows the trash fails
+      // with "Access is denied" while that handle lives, and a close-afterwards
+      // would never be reached. A trash that is then denied for some other reason
+      // (no write access to the parent directory) therefore returns FAILURE with
+      // the session already gone, and a success-only guard left the frontend
+      // rendering a phantom project with no backend behind it. The recents refresh
+      // below stays success-only for the opposite reason: on that branch the file
+      // survived, so its entry has to stay so the project is re-openable.
+      if (result.session_closed) clearOpenProjectState(set);
       if (result.success) {
         await Promise.all([get().loadRecentProjects(), get().loadConfig()]);
       }
@@ -2235,28 +2250,11 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     }
   },
 
-  // Collaboration mode
   updateProjectSettings: async (name: string, validation: Config['validation']) => {
     return executeCommand(
       'update_project_settings',
       { name, validation },
       { purpose: 'update per-project settings' }
-    );
-  },
-
-  setCollabEnabled: async (enabled: boolean) => {
-    return executeCommand(
-      'set_collab_enabled',
-      { enabled },
-      { purpose: 'toggle collaboration mode' }
-    );
-  },
-
-  setCollabEnabledForPath: async (path: string, enabled: boolean) => {
-    return executeCommand(
-      'set_collab_enabled_for_path',
-      { path, enabled },
-      { purpose: 'toggle collaboration mode for a recent project', fields: { path } }
     );
   },
 
@@ -2267,31 +2265,6 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       { purpose: 'rename a recent project', fields: { path } }
     );
   },
-
-  getCollabState: async () => {
-    return await invokeIpc<CollabState | null>('get_collab_state', undefined, {
-      purpose: 'read collaboration state',
-    });
-  },
-
-  detectCollabChanges: async () => {
-    return await invokeIpc<CollabChangeSet | null>('detect_collab_changes', undefined, {
-      purpose: 'detect collaborator .tml changes',
-    });
-  },
-
-  applyCollabChanges: async () => {
-    return executeCommand('apply_collab_changes', {}, {
-      purpose: 'apply collaborator changes',
-    });
-  },
-
-  checkCollabSibling: async () => {
-    return await invokeIpc<string | null>('collab_sibling_when_disabled', undefined, {
-      purpose: 'warn about an unsynced Ariane sibling file',
-    });
-  },
-
 
   parseGpx: async (path: string) => {
     return await invokeIpc<GpxFile>('parse_gpx', { path }, {

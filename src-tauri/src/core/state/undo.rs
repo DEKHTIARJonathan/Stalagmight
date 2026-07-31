@@ -517,9 +517,9 @@ impl AppState {
                 // the original id AND uuid forced - so the ref-shift, offset and
                 // cascade are identical to the forward path and can't drift (this
                 // is the single-source-of-truth that prevents the redo-misalignment
-                // bug), and the shot keeps its stable collaboration identity (a
-                // fresh uuid here would dangle every AfterShot anchor and break the
-                // Ariane tier-1 match). `uuid` is None for shots created before this
+                // bug), and the shot keeps its persistent identity (a fresh uuid
+                // here would dangle every AfterShot anchor). `uuid` is None for
+                // shots created before this
                 // field existed (legacy persisted undo entries) - falls back to a
                 // fresh mint, matching the old behavior.
                 // Append (no anchor) does no geometry maintenance, so a plain

@@ -1,5 +1,4 @@
 mod app_state;
-mod collab;
 mod command_comment;
 mod command_delete_split;
 mod command_import;
@@ -24,12 +23,14 @@ mod speleodb;
 mod speleodb_admin;
 mod speleodb_cache;
 mod speleodb_credentials;
+mod speleodb_foreign;
 mod speleodb_local_state;
 mod speleodb_lock_release;
 mod speleodb_logout;
 mod speleodb_project;
 mod speleodb_pull;
 mod speleodb_revisions;
+mod speleodb_session;
 mod undo;
 mod undo_capture;
 mod undo_restore;
@@ -57,6 +58,4 @@ mod tests;
 mod tests_support;
 
 pub use app_state::AppState;
-#[cfg(test)]
-pub(crate) use collab::apply_changeset;
 pub use command_import::VirtualShotMode;

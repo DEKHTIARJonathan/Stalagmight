@@ -330,48 +330,17 @@ impl Section {
 
     /// Add a shot to the end of this section
     pub fn add_shot(&mut self, data: ShotData) -> &Shot {
-        self.add_shot_with_uuid(data, None)
-    }
-
-    /// Add a shot to the end of this section, preserving an explicit UUID
-    /// (e.g. one returned by a collaborator round-trip).  `None` mints a
-    /// fresh UUID via `Shot::new`.
-    pub fn add_shot_with_uuid(&mut self, data: ShotData, uuid: Option<String>) -> &Shot {
-        let shot = match uuid {
-            Some(u) => Shot::with_uuid(self.next_shot_id, data, Some(u)),
-            None => Shot::new(self.next_shot_id, data),
-        };
+        let shot = Shot::new(self.next_shot_id, data);
         self.next_shot_id += 1;
         self.shots.push(shot);
         let idx = self.shots.len() - 1;
         &self.shots[idx]
     }
 
-    /// Insert a shot after a specific shot ID
-    pub fn insert_shot_after(&mut self, after_id: ShotId, data: ShotData) -> Option<&Shot> {
-        self.insert_shot_after_with_uuid(after_id, data, None)
-    }
-
-    /// Insert a shot after a specific shot ID, preserving an explicit UUID.
-    pub fn insert_shot_after_with_uuid(
-        &mut self,
-        after_id: ShotId,
-        data: ShotData,
-        uuid: Option<String>,
-    ) -> Option<&Shot> {
-        let pos = self.shots.iter().position(|s| s.id == after_id)?;
-        let shot = match uuid {
-            Some(u) => Shot::with_uuid(self.next_shot_id, data, Some(u)),
-            None => Shot::new(self.next_shot_id, data),
-        };
-        self.next_shot_id += 1;
-        self.shots.insert(pos + 1, shot);
-        Some(&self.shots[pos + 1])
-    }
-
     /// Insert a shot after a specific shot ID, forcing the new shot's id when
     /// `forced_id` is `Some` and its UUID when `forced_uuid` is `Some` (used by
-    /// redo to preserve both the station id and the stable collaboration UUID).
+    /// redo to preserve both the station id and the persistent shot UUID that
+    /// undo/redo `AfterShot` anchors resolve through).
     /// `forced_uuid: None` mints a fresh UUID via `Shot::new`.
     pub fn insert_shot_after_with_id(
         &mut self,
@@ -390,14 +359,10 @@ impl Section {
         Some(&self.shots[pos + 1])
     }
 
-    /// Insert a shot before a specific shot ID
-    pub fn insert_shot_before(&mut self, before_id: ShotId, data: ShotData) -> Option<&Shot> {
-        self.insert_shot_before_with_uuid(before_id, data, None)
-    }
-
     /// Insert a shot before a specific shot ID, forcing the new shot's id when
     /// `forced_id` is `Some` and its UUID when `forced_uuid` is `Some` (used by
-    /// redo to preserve both the station id and the stable collaboration UUID).
+    /// redo to preserve both the station id and the persistent shot UUID that
+    /// undo/redo `AfterShot` anchors resolve through).
     /// `forced_uuid: None` mints a fresh UUID via `Shot::new`.
     pub fn insert_shot_before_with_id(
         &mut self,
@@ -432,23 +397,6 @@ impl Section {
                 id
             }
         }
-    }
-
-    /// Insert a shot before a specific shot ID, preserving an explicit UUID.
-    pub fn insert_shot_before_with_uuid(
-        &mut self,
-        before_id: ShotId,
-        data: ShotData,
-        uuid: Option<String>,
-    ) -> Option<&Shot> {
-        let pos = self.shots.iter().position(|s| s.id == before_id)?;
-        let shot = match uuid {
-            Some(u) => Shot::with_uuid(self.next_shot_id, data, Some(u)),
-            None => Shot::new(self.next_shot_id, data),
-        };
-        self.next_shot_id += 1;
-        self.shots.insert(pos, shot);
-        Some(&self.shots[pos])
     }
 
     /// Get a shot by ID
@@ -816,7 +764,7 @@ mod tests {
         );
 
         // Insert after shot 0
-        let inserted = section.insert_shot_after(0, test_shot_data(10.0));
+        let inserted = section.insert_shot_after_with_id(0, test_shot_data(10.0), None, None);
 
         assert!(inserted.is_some());
         let inserted = inserted.unwrap();
@@ -839,7 +787,7 @@ mod tests {
             },
         );
 
-        let result = section.insert_shot_after(999, test_shot_data(10.0));
+        let result = section.insert_shot_after_with_id(999, test_shot_data(10.0), None, None);
 
         assert!(result.is_none());
         assert_eq!(section.shots.len(), 1); // Unchanged

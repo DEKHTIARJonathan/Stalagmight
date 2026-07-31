@@ -428,6 +428,26 @@ pub async fn speleodb_unlink(app: AppHandle) -> Result<(), SpeleoErrorDto> {
     run_blocking(app, AppState::speleodb_unlink).await
 }
 
+/// Remove the `speleo_link` row from a CLOSED foreign `.stalx` so it can be
+/// opened as a plain local project - the strip half of the managed-file prompt
+/// raised when a non-canonical copy of a managed project is opened (the other
+/// half re-opens the project from SpeleoDB). Refuses the currently open
+/// project: that one detaches via `speleodb_unlink`, which also releases the
+/// held write lock.
+///
+/// `expected` is the refusal payload the prompt was raised with, re-checked
+/// against the file before the row is deleted: a prompt can sit on screen while
+/// the `.stalx` at that path is replaced, and stripping whatever is there NOW
+/// would unmanage a project the user was never asked about.
+#[tauri::command]
+pub async fn speleodb_remove_link_at(
+    app: AppHandle,
+    path: std::path::PathBuf,
+    expected: crate::core::loading::SpeleoManagedFile,
+) -> Result<(), SpeleoErrorDto> {
+    run_blocking(app, move |s| s.speleodb_remove_link_at(path, expected)).await
+}
+
 /// GET the open remote project's editable metadata so the Project Settings tab can
 /// prefill the current server truth (#206). No lock; permission-free read.
 #[tauri::command]

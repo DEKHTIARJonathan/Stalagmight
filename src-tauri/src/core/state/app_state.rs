@@ -146,6 +146,26 @@ pub struct AppState {
     /// solve so a result computed against a since-invalidated project is not
     /// written back (covers mutations that don't bump `modified_at`, e.g. repair).
     pub(super) adjusted_cache_generation: AtomicU64,
+    /// The SpeleoDB SESSION generation: bumped on every session boundary - a
+    /// project committed into (or cleared from) the `project` slot, and logout -
+    /// and ONLY while holding the `project` mutex. Captured by Start Editing at
+    /// entry and re-checked under the same mutex before its commit opens the edit
+    /// gate, so a teardown landing inside its network window refuses the commit
+    /// instead of opening a gate onto a torn-down world (F7). The same idiom as
+    /// [`Self::adjusted_cache_generation`] / `unrecognised_shot_kinds`, applied to
+    /// the one slot that never had it. See `core::state::speleodb_session`.
+    pub(super) speleodb_session_generation: AtomicU64,
+    /// Serializes SpeleoDB lock-acquisition spans against lock releases that run
+    /// detached from the session that captured them (the delete's captured
+    /// release, the stranded-claim janitor). Start Editing holds this across
+    /// acquire -> commit, so a captured release either completes before a new
+    /// acquire begins or observes the successor's claim and stands down - the F8
+    /// "stale release frees the successor's mutex" interleaving cannot fit in
+    /// between. ORDER: this mutex is OUTERMOST - it is held across network calls,
+    /// and code holding `project`/`database`/`undo_stack` must never block on it
+    /// (decide under `project`, drop it, then take this). See
+    /// `core::state::speleodb_session`.
+    pub(super) speleodb_lock_ops: Mutex<()>,
 }
 
 impl AppState {
@@ -201,6 +221,8 @@ impl AppState {
             unrecognised_shot_kinds: Mutex::new(None),
             adjusted_cache: Mutex::new(None),
             adjusted_cache_generation: AtomicU64::new(0),
+            speleodb_session_generation: AtomicU64::new(0),
+            speleodb_lock_ops: Mutex::new(()),
         })
     }
 
@@ -307,7 +329,7 @@ impl AppState {
 
     /// THE mutation chokepoint (#191, D-B6). Every SURVEY-CONTENT mutation entry
     /// (`execute` + all its `execute_*` siblings, `undo`/`redo`/`undo_to`/`redo_to`,
-    /// the collab toggles, `set_project_name_for_path`) calls this FIRST, after
+    /// `set_project_name_for_path`) calls this FIRST, after
     /// taking `command_lock` and before mutating. `Err` aborts the mutation when
     /// the open project is a remote SpeleoDB project opened read-only. No-op (`Ok`)
     /// for local-only (default-true `edit_enabled`) projects and non-mutating reads.
@@ -609,11 +631,6 @@ impl AppState {
         // serializes the key, so it still restores the intended thresholds (Codex).
         let snapshot_has_validation = snapshot.contains("\"validation\":");
         let current_validation = slot.as_ref().map(|p| p.validation.clone());
-        // Collab EXPORT PROVENANCE describes the sibling `.tml` on disk, not project
-        // state - but it rides inside the serialized `Project`, so a restore would
-        // reinstate whatever it was when the snapshot was taken. See
-        // [`Self::carry_collab_provenance_across_restore`].
-        let live_collab = slot.as_ref().and_then(|p| p.collab.clone());
         match serde_json::from_str::<Project>(snapshot) {
             Ok(mut restored) => {
                 if !snapshot_has_validation {
@@ -659,7 +676,6 @@ impl AppState {
                     restored.ensure_unique_shot_uuids();
                     restored.reanchor_station_refs();
                 }
-                Self::carry_collab_provenance_across_restore(&mut restored, live_collab);
                 *slot = Some(restored);
                 true
             }
@@ -672,80 +688,6 @@ impl AppState {
                 false
             }
         }
-    }
-
-    /// Keep the collab EXPORT PROVENANCE describing the sibling `.tml` that is actually
-    /// on disk when a project snapshot is restored, and drop a `shot_baseline` the
-    /// restored shot layout no longer matches.
-    ///
-    /// `collab` is serialized inside `Project`, so `restore_snapshot_into` would install
-    /// the snapshot's `last_export_tml_sha256` and `shot_baseline` verbatim. Both are
-    /// statements about a FILE we wrote, not about project state, so rewinding them is
-    /// always wrong: undo/redo does not un-write the `.tml`. The damaging sequence a
-    /// reverse makes easy to hit is
-    ///
-    /// ```text
-    ///   reverse (baseline cleared) -> save (re-exports the .tml, seeds baseline B')
-    ///                              -> undo (would resurrect baseline B and sha S)
-    /// ```
-    ///
-    /// after which `compute_collab` reports the sibling as collaborator-changed (its sha
-    /// no longer matches the resurrected S) and `apply_changeset` writes matched edits at
-    /// baseline B's PRE-reverse `shot_index`, scrambling the section. The same shape
-    /// applies to every snapshot-pair undo that moves shots (DeleteShot, split, merge);
-    /// the reverse just maximises it by permuting every index at once.
-    ///
-    /// So: take the provenance from the LIVE project (it describes the file on disk), and
-    /// keep its baseline only while every entry still lands on the shot it recorded - the
-    /// exact precondition `reconcile::apply_changeset` relies on when it writes an edit to
-    /// `sections[..].shots[entry.shot_index]`. Otherwise empty it, which is the same
-    /// documented fail-safe [`Project::invalidate_collab_baseline`] uses: `reconcile::diff`
-    /// short-circuits on an empty baseline, so the reconcile is deferred to the next save's
-    /// re-export instead of being misapplied.
-    ///
-    /// The user-owned settings (`enabled`, `sibling_tml_relative`, `write_tml_on_autosave`)
-    /// stay on the snapshot's side: those ARE project state and must undo.
-    fn carry_collab_provenance_across_restore(
-        restored: &mut Project,
-        live: Option<crate::models::CollabState>,
-    ) {
-        let Some(live) = live else { return };
-        if restored.collab.is_none() {
-            return;
-        }
-        let usable = Self::baseline_matches_layout(restored, &live.shot_baseline);
-        let Some(collab) = restored.collab.as_mut() else {
-            return;
-        };
-        collab.last_export_tml_sha256 = live.last_export_tml_sha256;
-        collab.section_name_map = live.section_name_map;
-        collab.synthetic_section_names = live.synthetic_section_names;
-        collab.shot_baseline = if usable {
-            live.shot_baseline
-        } else {
-            tracing::info!(
-                "Cleared collab shot baseline across a snapshot restore; the .tml will be \
-                 re-exported before the next reconcile"
-            );
-            Vec::new()
-        };
-    }
-
-    /// Whether every baseline entry still names the shot at its recorded
-    /// `(section_id, shot_index)`. A pre-UUID baseline entry (`uuid` empty) can only be
-    /// checked for the index still existing.
-    fn baseline_matches_layout(
-        project: &Project,
-        baseline: &[crate::models::ShotBaselineEntry],
-    ) -> bool {
-        baseline.iter().all(|entry| {
-            project
-                .get_section(entry.section_id)
-                .and_then(|s| s.shots.get(entry.shot_index as usize))
-                .is_some_and(|shot| {
-                    entry.uuid.is_empty() || shot.uuid.as_deref() == Some(entry.uuid.as_str())
-                })
-        })
     }
 
     /// Rollback the project to a previously captured snapshot.

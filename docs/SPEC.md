@@ -69,7 +69,6 @@ Stalagmight is a desktop application for processing underwater cave survey data.
 - Multi-project workspace (Global View)
 - Export: PNG, SVG, PDF (map images), CSV, JSON, Ariane `.tml` (data)
 - Dive and gas planning as the Plan workspace mode, persisted to a `.plnx` sidecar
-- Ariane collaboration mode ([collaboration.md](collaboration.md))
 - SpeleoDB integration - remote project hand-off; still under active development
 - SQLite project storage, undo/redo with persistence
 - An Android tablet build, sideload-only and not in CI, with partial touch
@@ -159,7 +158,7 @@ See [TESTING.md](TESTING.md) for the tiers and which one a test belongs in, and
 
 ### 2.9 Settings
 - Global settings in the Settings dialog, plus a per-project subset (project name,
-  validation thresholds, collaboration, SpeleoDB) stored in the `.stalx`
+  validation thresholds, SpeleoDB) stored in the `.stalx`
 - Changes are staged and applied on Save, not live (section 10.4)
 - Reset to defaults per category
 
@@ -1038,9 +1037,7 @@ geometry - `600` and `240` are the same reading - so the same `.stalx` renders
 identically either side of the fix. Affected data is narrow and already flagged:
 both readings inside `[0, 360)` put their difference in `(-360, 360)`, so a shot
 that could be misread always has an out-of-range reading, which
-`Validator::validate_shot` reports as `INVALID_AZIMUTH`. The v14 migration drops
-the collab `.tml` baseline only for a project that actually held such a shot,
-whose export carried the antipodal bearing.
+`Validator::validate_shot` reports as `INVALID_AZIMUTH`.
 
 Beyond the shots, `section_offsets` gains the section's old total displacement
 (station 0 is now the far end), and every external station ref in the section -
@@ -1073,16 +1070,11 @@ UUID on the shortened tail, so afterwards no shot in the file has that station a
 an endpoint. That is detected via the neighbour's recorded length and reported as
 a stale ref for the diver to re-pin, rather than guessed at.
 
-Two other stores outside `Project` are settled the same way. Position-keyed
+One other store outside `Project` is settled the same way: position-keyed
 (`NULL`-uuid) `resolved_warnings` rows are pinned to their shot's UUID, because
 the reverse keeps shot *ids* on positions - so the save-time carry-over would
 otherwise re-read the row's `(section_id, shot_id)` as an identity and migrate
-the ignore onto the mirrored shot. And an undo/redo snapshot restore keeps the
-collab export provenance (`last_export_tml_sha256`) from the *live* project
-rather than the snapshot, dropping `shot_baseline` when the restored layout no
-longer matches it: undo does not un-write the sibling `.tml`, so rewinding that
-provenance would report a phantom collaborator edit and apply it at a pre-reverse
-`shot_index`.
+the ignore onto the mirrored shot.
 
 `CommandResult.reversed_sections` names the sections a command renumbered -
 on the forward reverse, on a batch of them, and on an undo or redo of either
@@ -2136,15 +2128,23 @@ The schema is versioned (`SCHEMA_VERSION` in
 opened. Alongside the survey tables (project, sections, shots, station merges,
 zero datums, loop closures, section and station offsets) it holds per-project and
 display settings, the persisted undo and redo stacks, resolved warnings, import
-hashes, station comments, the SpeleoDB link row, and the Ariane collaboration
-baseline in `collab_state`. Two markers are worth knowing before touching
-migration code:
+hashes, station comments, and the SpeleoDB link row. Three markers are worth
+knowing before touching migration code:
 
 - `UNDO_FORMAT_SAFE_VERSION` - files written before it get their persisted
   undo/redo stacks dropped on open, because pre-v7 `ShotUpdates` JSON cannot
   distinguish "field untouched" from "clear this field".
 - v12 normalises stored pitch to the +down convention
   (`migrate_pitch_to_down_convention`); see [inclination.md](inclination.md).
+- v15 drops the `collab_state` table, the storage for the since-removed Ariane
+  collaboration baseline, and also clears the persisted undo/redo stacks -
+  unconditionally, for every pre-v15 file, via `drop_legacy_undo_history`, which
+  loops both `undo_stack` and `redo_stack`. `UNDO_FORMAT_SAFE_VERSION` is 7, so
+  a v14 file reaches the migration with its history intact, and those payloads
+  can name the removed `apply_collab_changes` command, which no longer
+  deserializes; the loader skips a bad entry without truncating, so the stack
+  would otherwise load with a hole in the middle. v13 drops the stacks the same
+  way, for the legacy `is_reference` boolean.
 
 The dive plan lives beside the project in its own `.plnx` SQLite sidecar
 (`src-tauri/src/persistence/plnx.rs`), not in the `.stalx`.
@@ -2337,7 +2337,7 @@ entry validates but does not convert MGRS and What3words - see 2.7).
 
 Regularly asked about, and not currently being worked on: 3D visualization, a web
 version, direct mNemo device communication, LRUD passage-wall rendering,
-real-time collaborative editing (the Ariane and SpeleoDB flows are file hand-off,
+real-time collaborative editing (SpeleoDB's flow is single-writer file hand-off,
 not live co-editing), and floating/dockable panels.
 
 ---

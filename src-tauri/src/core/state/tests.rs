@@ -63,50 +63,6 @@ fn poison_mutex<T>(mutex: &Mutex<T>) {
 // === Project Operations Tests ===
 
 #[test]
-fn test_collab_sibling_warning_requires_export_provenance() {
-    let temp = TempDir::new().unwrap();
-    let stalx = temp.path().join("cave.stalx");
-    // An unrelated .tml sharing the basename (e.g. the source of a TML import).
-    std::fs::write(temp.path().join("cave.tml"), b"<x/>").unwrap();
-
-    let state = AppState::new().unwrap();
-
-    // Case 1: never had collaboration (collab = None) → no warning.
-    let mut project = Project::new("Cave".to_string(), None);
-    project.file_path = Some(stalx.clone());
-    *state.project.lock().unwrap() = Some(project);
-    assert_eq!(state.collab_sibling_when_disabled(), None);
-
-    // Case 2: collab toggled on then off but no successful export ever happened
-    // (`last_export_tml_sha256` is None) → still no warning, because the
-    // `cave.tml` sitting next to us could be unrelated (e.g. a TML the user
-    // dropped in to import).  This is the gap Codex flagged: prior behaviour
-    // warned for ANY same-basename .tml on the disabled toggle, including
-    // import sources.
-    let mut project = Project::new("Cave".to_string(), None);
-    project.file_path = Some(stalx.clone());
-    let mut collab = crate::models::CollabState::new("cave.tml".to_string());
-    collab.enabled = false;
-    project.collab = Some(collab);
-    *state.project.lock().unwrap() = Some(project);
-    assert_eq!(state.collab_sibling_when_disabled(), None);
-
-    // Case 3: collab off AND a recorded export sha exists → warn.  This is the
-    // genuine "we wrote this .tml, then collaboration was turned off" path.
-    let mut project = Project::new("Cave".to_string(), None);
-    project.file_path = Some(stalx.clone());
-    let mut collab = crate::models::CollabState::new("cave.tml".to_string());
-    collab.enabled = false;
-    collab.last_export_tml_sha256 = Some("deadbeef".to_string());
-    project.collab = Some(collab);
-    *state.project.lock().unwrap() = Some(project);
-    assert_eq!(
-        state.collab_sibling_when_disabled(),
-        Some("cave.tml".to_string())
-    );
-}
-
-#[test]
 fn test_create_project() {
     let state = AppState::new().unwrap();
 
@@ -443,7 +399,7 @@ fn test_undo_after_reload_restores_exactly_the_edited_field() {
         },
     });
     assert!(result.success);
-    assert!(state.save_project(Some(path.clone()), false).success);
+    assert!(state.save_project(Some(path.clone())).success);
 
     // Session 2: fresh app instance, reload, undo.
     let state2 = AppState::new().unwrap();
@@ -711,11 +667,16 @@ fn test_merge_projects_preserves_station_comments() {
 }
 
 #[test]
-fn save_blocks_on_dangling_refs_for_both_manual_and_autosave() {
-    // Auto-save must NEVER persist a broken project: a save with unresolvable
-    // cross-references is refused (no file written) for BOTH manual and auto-save,
-    // so corruption never reaches disk. The user is told it didn't run and restores
-    // integrity via Repair, after which saves resume.
+fn save_blocks_on_dangling_refs() {
+    // A save with unresolvable cross-references is refused outright (no file
+    // written), so corruption never reaches disk. The user is told it didn't run
+    // and restores integrity via Repair, after which saves resume.
+    //
+    // This covers autosave too, and there is nothing extra to assert for it: the
+    // backend has no manual-vs-auto distinction any more. `Command::SaveProject`
+    // carries only a path, and the frontend's `isAutosave` never crosses IPC (it
+    // only quiets UI churn - see projectStore.saveAutosaveQuiet.test.ts), so the
+    // debounced autosave reaches exactly the code exercised below.
     let temp_dir = TempDir::new().unwrap();
     let state = AppState::new().unwrap();
 
@@ -736,30 +697,11 @@ fn save_blocks_on_dangling_refs_for_both_manual_and_autosave() {
 
     let stalx = temp_dir.path().join("dangle.stalx");
 
-    // Manual save is blocked and writes nothing.
-    let manual = state.execute(Command::SaveProject {
+    let result = state.execute(Command::SaveProject {
         path: Some(stalx.clone()),
-        is_autosave: false,
     });
-    assert!(!manual.success, "manual save must block on dangling refs");
-    assert!(
-        !stalx.exists(),
-        "a blocked manual save must not write a file"
-    );
-
-    // Auto-save is ALSO blocked - it must never persist a broken project.
-    let auto = state.execute(Command::SaveProject {
-        path: Some(stalx.clone()),
-        is_autosave: true,
-    });
-    assert!(
-        !auto.success,
-        "auto-save must also block on dangling refs (never persist a broken project)"
-    );
-    assert!(
-        !stalx.exists(),
-        "a blocked auto-save must not write a file either"
-    );
+    assert!(!result.success, "save must block on dangling refs");
+    assert!(!stalx.exists(), "a blocked save must not write a file");
 }
 
 #[test]
@@ -1165,7 +1107,7 @@ fn save_remints_duplicate_shot_uuids_before_persisting() {
     );
     state.set_project_for_tests(project);
 
-    let result = state.save_project(Some(temp_dir.path().join("dup")), false);
+    let result = state.save_project(Some(temp_dir.path().join("dup")));
     assert!(
         result.success,
         "save auto-heals dup UUIDs rather than blocking: {:?}",
@@ -1287,7 +1229,7 @@ fn save_drops_orphan_section_offset() {
     project.section_offsets.insert(99999, (5.0, 6.0)); // no such section
     state.set_project_for_tests(project);
 
-    let result = state.save_project(Some(temp_dir.path().join("orphan")), false);
+    let result = state.save_project(Some(temp_dir.path().join("orphan")));
     assert!(
         result.success,
         "orphan section_offset must not abort the save: {:?}",
@@ -1319,7 +1261,7 @@ fn save_sanitizes_non_finite_geometry() {
     assert!(!project.sections[0].shots[0].all_finite());
     state.set_project_for_tests(project);
 
-    let result = state.save_project(Some(temp_dir.path().join("nonfinite")), false);
+    let result = state.save_project(Some(temp_dir.path().join("nonfinite")));
     assert!(
         result.success,
         "non-finite geometry must be sanitized, not abort the save: {:?}",
@@ -1351,7 +1293,7 @@ fn save_sanitizes_non_finite_section_offset() {
     project.section_offsets.insert(a, (f64::NAN, f64::INFINITY));
     state.set_project_for_tests(project);
 
-    let result = state.save_project(Some(temp_dir.path().join("nf_offset")), false);
+    let result = state.save_project(Some(temp_dir.path().join("nf_offset")));
     assert!(
         result.success,
         "a non-finite section offset must be sanitized, not abort the save: {:?}",
@@ -1389,7 +1331,7 @@ fn blocked_save_does_not_mutate_non_finite_geometry() {
     project.sections[0].shots[0].length = f64::NAN;
     state.set_project_for_tests(project);
 
-    let result = state.save_project(Some(temp_dir.path().join("blocked")), false);
+    let result = state.save_project(Some(temp_dir.path().join("blocked")));
     assert!(
         !result.success,
         "save must be blocked by the dangling cross-reference"
@@ -1505,7 +1447,7 @@ fn restore_snapshot_mints_null_uuids_before_reanchor() {
 #[test]
 fn finalize_structural_edit_ignores_pre_existing_critical() {
     // A project opened ALREADY critical (e.g. a dangling cross-reference) must not
-    // have an otherwise-clean collab apply / import rolled back: finalize signals a
+    // have an otherwise-clean import rolled back: finalize signals a
     // rollback only for NEWLY introduced corruption, matching execute()'s guard.
     let state = AppState::new().unwrap();
     let mut project = Project::new("AlreadyCritical".to_string(), None);
@@ -1521,12 +1463,12 @@ fn finalize_structural_edit_ignores_pre_existing_critical() {
 
     // pre_had_critical = true: do NOT signal rollback (the corruption pre-existed).
     assert!(
-        !state.finalize_structural_edit(true, true),
+        !state.finalize_structural_edit(true),
         "must not block an otherwise-clean edit on an already-critical project"
     );
     // pre_had_critical = false (clean before): DOES signal rollback (corruption present).
     assert!(
-        state.finalize_structural_edit(false, true),
+        state.finalize_structural_edit(false),
         "must block when this edit introduced the critical violation"
     );
 }
@@ -1632,7 +1574,7 @@ fn test_save_project_persists_display_settings_cache() {
     state.save_display_setting("showStations", "false").unwrap();
 
     let save_path = temp_dir.path().join("cache-save");
-    let result = state.save_project(Some(save_path.clone()), false);
+    let result = state.save_project(Some(save_path.clone()));
     assert!(result.success);
 
     let saved_path = save_path.with_extension("stalx");
@@ -3222,7 +3164,7 @@ fn test_delete_shot_rewires_merges() {
 
 #[test]
 fn test_delete_shot_rejects_frozen_shot() {
-    // Issue #57 (Item 3): a frozen shot (collaborator-locked geometry anchored to
+    // Issue #57 (Item 3): a frozen shot (geometry anchored to
     // an adjusted survey network) must not be deletable via the resolve flow.
     // Build a two-section loop with a datum at each end so every shot between the
     // datums is frozen, then assert DeleteShot is refused and the shot survives.
@@ -4961,10 +4903,7 @@ fn test_is_undoable_commands() {
     assert!(!AppState::is_undoable(&Command::OpenProject {
         path: PathBuf::from("/test.stalx"),
     }));
-    assert!(!AppState::is_undoable(&Command::SaveProject {
-        path: None,
-        is_autosave: false
-    }));
+    assert!(!AppState::is_undoable(&Command::SaveProject { path: None }));
     assert!(!AppState::is_undoable(&Command::CloseProject));
     assert!(!AppState::is_undoable(&Command::CreateProject {
         name: "Test".to_string(),
@@ -5184,7 +5123,7 @@ fn test_save_project_prefers_database_display_settings_over_cache() {
     }
 
     let save_path = temp_dir.path().join("dest");
-    let result = state.save_project(Some(save_path.clone()), false);
+    let result = state.save_project(Some(save_path.clone()));
     assert!(result.success);
 
     let saved_path = save_path.with_extension("stalx");
@@ -5216,7 +5155,7 @@ fn test_save_project_failure_does_not_change_existing_file() {
     let blocked_path = temp_dir.path().join("blocked.stalx");
     std::fs::create_dir_all(&blocked_path).unwrap();
 
-    let result = state.save_project(Some(blocked_path.clone()), false);
+    let result = state.save_project(Some(blocked_path.clone()));
     assert!(!result.success);
 
     let reloaded = Database::open_existing(&original_path)
@@ -5309,7 +5248,7 @@ fn save_into_unwritable_dir_reports_permission_code() {
     let state = AppState::new().unwrap();
     state.set_project_for_tests(project);
 
-    let result = state.save_project(Some(locked.join("p.stalx")), false);
+    let result = state.save_project(Some(locked.join("p.stalx")));
 
     // Restore perms so TempDir's drop can clean up the directory.
     let _ = std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755));
@@ -5379,7 +5318,7 @@ fn save_into_missing_dir_is_not_a_permission_error() {
     let state = AppState::new().unwrap();
     state.set_project_for_tests(project);
 
-    let result = state.save_project(Some(missing), false);
+    let result = state.save_project(Some(missing));
 
     assert!(!result.success, "save into a missing dir should fail");
     let err = result.error.unwrap_or_default();
@@ -14809,7 +14748,7 @@ fn test_insert_before_pos_gt0_no_offset_adjustment() {
 #[test]
 fn test_save_project_no_project_open() {
     let state = AppState::new().unwrap();
-    let result = state.save_project(Some(PathBuf::from("/tmp/test.stalx")), false);
+    let result = state.save_project(Some(PathBuf::from("/tmp/test.stalx")));
     assert!(!result.success);
     assert!(result.error.unwrap_or_default().contains("No project open"));
 }
@@ -14822,7 +14761,7 @@ fn test_save_project_no_path_specified() {
         location: None,
     });
     // No file_path on project and no path argument
-    let result = state.save_project(None, false);
+    let result = state.save_project(None);
     assert!(!result.success);
     assert!(result.error.unwrap_or_default().contains("No save path"));
 }
@@ -14851,7 +14790,7 @@ fn test_save_project_implicit_first_save_autorename_when_target_exists() {
         *db_guard = None;
     }
 
-    let result = state.save_project(None, false);
+    let result = state.save_project(None);
     assert!(
         result.success,
         "unexpected save failure: {:?}",
@@ -14878,7 +14817,7 @@ fn test_save_project_adds_stalx_extension() {
     });
     // Save without .stalx extension
     let save_path = temp_dir.path().join("myproject");
-    let result = state.save_project(Some(save_path), false);
+    let result = state.save_project(Some(save_path));
     assert!(result.success);
     assert!(temp_dir.path().join("myproject.stalx").exists());
 }
@@ -14902,7 +14841,7 @@ fn test_save_project_cleans_up_temp_on_reopen_failure() {
     });
 
     let save_path = temp_dir.path().join("project.stalx");
-    let result = state.save_project(Some(save_path.clone()), false);
+    let result = state.save_project(Some(save_path.clone()));
     assert!(result.success);
 
     // Verify temp file was cleaned up
@@ -14936,7 +14875,7 @@ fn test_save_project_atomic_rename_preserves_original_on_temp_failure() {
 
     // First save
     let save_path = temp_dir.path().join("atomic.stalx");
-    let result = state.save_project(Some(save_path.clone()), false);
+    let result = state.save_project(Some(save_path.clone()));
     assert!(result.success);
 
     // Modify project
@@ -14950,7 +14889,7 @@ fn test_save_project_atomic_rename_preserves_original_on_temp_failure() {
     });
 
     // Save again - should succeed and update the file
-    let result = state.save_project(Some(save_path.clone()), false);
+    let result = state.save_project(Some(save_path.clone()));
     assert!(result.success);
 
     // Reload and verify both sections are there
@@ -14990,7 +14929,7 @@ fn test_save_project_persists_undo_redo_stacks() {
     state.undo();
 
     let save_path = temp_dir.path().join("undo-persist.stalx");
-    let result = state.save_project(Some(save_path.clone()), false);
+    let result = state.save_project(Some(save_path.clone()));
     assert!(result.success);
 
     // Reload and verify undo/redo stacks are persisted
@@ -15028,7 +14967,7 @@ fn test_open_project_clears_previous_state() {
         shots: vec![test_shot_data(5.0)],
     });
     let path_a = temp_dir.path().join("a.stalx");
-    state.save_project(Some(path_a.clone()), false);
+    state.save_project(Some(path_a.clone()));
 
     // Create and save project B
     state.execute(Command::CreateProject {
@@ -15052,7 +14991,7 @@ fn test_open_project_clears_previous_state() {
         shots: vec![test_shot_data(4.0)],
     });
     let path_b = temp_dir.path().join("b.stalx");
-    state.save_project(Some(path_b.clone()), false);
+    state.save_project(Some(path_b.clone()));
 
     // Open project A - should replace B's state
     let result = state.open_project(path_a);
@@ -15738,7 +15677,7 @@ fn importing_a_second_file_leaves_existing_shot_kinds_alone() {
     );
 }
 
-/// #275: overlap-interpolation updates arrive from the collab .tml reconcile
+/// #275: overlap-interpolation updates arrive from the DMP import wizard
 /// (attacker-controllable input) and must hold the same all_finite invariant
 /// as update_shot - a NaN smuggled through an ExistingShotUpdate must fail the
 /// whole import before any mutation, not poison an existing shot.
@@ -16236,7 +16175,6 @@ fn test_batch_disallowed_command_save_project() {
     let result = state.execute(Command::Batch {
         commands: vec![Command::SaveProject {
             path: Some(PathBuf::from("/tmp/test.stalx")),
-            is_autosave: false,
         }],
     });
     assert!(!result.success);
@@ -18055,7 +17993,7 @@ fn test_station_comment_persists_across_save_open() {
         station_ref: station,
         comment: Some("persisted note".to_string()),
     });
-    assert!(state.save_project(Some(save_path.clone()), false).success);
+    assert!(state.save_project(Some(save_path.clone())).success);
     let state2 = AppState::new().unwrap();
     assert!(state2.open_project(save_path).success);
     assert_eq!(
@@ -18261,7 +18199,7 @@ fn test_undo_actually_works_after_project_reopen() {
     });
     assert!(create_result.success);
     let section_id = create_result.section_id.unwrap();
-    assert!(state1.save_project(Some(save_path.clone()), false).success);
+    assert!(state1.save_project(Some(save_path.clone())).success);
     // Session 2: reopen and undo
     let state2 = AppState::new().unwrap();
     assert!(state2.open_project(save_path).success);
@@ -18476,7 +18414,7 @@ fn test_stalx_roundtrip_preserves_merges_closures_offsets() {
     assert_eq!(project_before.zero_datums.len(), 1);
 
     // Save and reopen
-    assert!(state.save_project(Some(save_path.clone()), false).success);
+    assert!(state.save_project(Some(save_path.clone())).success);
     let state2 = AppState::new().unwrap();
     assert!(state2.open_project(save_path).success);
     let project_after = state2.get_project_state().unwrap();
@@ -19604,7 +19542,7 @@ fn test_merge_chain_survives_save_reopen() {
     let c1_before = project_before.compute_station_raw_coords(StationRef::new(sec_c, 1));
 
     // Save and reopen
-    assert!(state.save_project(Some(save_path.clone()), false).success);
+    assert!(state.save_project(Some(save_path.clone())).success);
     let state2 = AppState::new().unwrap();
     assert!(state2.open_project(save_path).success);
 
@@ -19768,232 +19706,6 @@ fn test_triangle_topology_with_loop_closure() {
         project.resolve_key(&lc.station_b).is_some(),
         "closure station_b should be valid"
     );
-}
-
-// === Collaboration mode: empty-section name mapping ===
-#[test]
-fn test_collab_section_name_map_includes_empty_sections() {
-    // Regression for Codex's "preserve empty sections in the collab name map"
-    // finding: section_name_map used to be derived from per-shot baseline
-    // entries, so a section with no shots (e.g. an empty root section or
-    // one whose first shot hasn't been measured yet) was omitted from the
-    // map.  When a collaborator added the first shot to such a section in
-    // Ariane and round-tripped, the returned shot's section name had no
-    // baseline entry - reconcile classified it as a brand-new section and
-    // apply created a duplicate next to the empty original.
-    let temp_dir = TempDir::new().unwrap();
-    let state = AppState::new().unwrap();
-
-    let mut project = Project::new("Collab".to_string(), None);
-    // Two sections: one with shots, one EMPTY (no shots at all).
-    project.add_section(SectionData {
-        name: Some("Filled".to_string()),
-        surveyor: None,
-        date: None,
-        color: "#4ecdc4".to_string(),
-        direction: None,
-        quality: 1.0,
-        shots: vec![ShotData {
-            azimuth_in: 10.0,
-            azimuth_out: 10.0,
-            length: 5.0,
-            depth_in: 0.0,
-            depth_out: 1.0,
-            ..Default::default()
-        }],
-    });
-    let empty_id = project
-        .add_section(SectionData {
-            name: Some("EmptyRoot".to_string()),
-            surveyor: None,
-            date: None,
-            color: "#ff6b6b".to_string(),
-            direction: None,
-            quality: 1.0,
-            shots: vec![],
-        })
-        .id;
-    project.collab = Some(crate::models::CollabState::new("empty.tml".to_string()));
-    state.set_project_for_tests(project);
-
-    let stalx = temp_dir.path().join("empty.stalx");
-    assert!(
-        state
-            .execute(Command::SaveProject {
-                path: Some(stalx.clone()),
-                is_autosave: false,
-            })
-            .success
-    );
-
-    let loaded = Database::open(&stalx).unwrap().load_project().unwrap();
-    let collab = loaded.collab.expect("collab persisted");
-    assert!(
-        collab
-            .section_name_map
-            .iter()
-            .any(|(name, id)| name == "EmptyRoot" && *id == empty_id),
-        "empty section must appear in section_name_map so reconcile can route \
-         later Ariane additions to it instead of creating a duplicate; got {:?}",
-        collab.section_name_map,
-    );
-}
-
-// === Collaboration mode: save-both hook ===
-#[test]
-fn test_collab_save_writes_sibling_tml_and_baseline() {
-    let temp_dir = TempDir::new().unwrap();
-    let state = AppState::new().unwrap();
-
-    let mut project = Project::new("Collab Cave".to_string(), None);
-    project.add_section(SectionData {
-        name: Some("Main".to_string()),
-        surveyor: None,
-        date: None,
-        color: "#4ecdc4".to_string(),
-        direction: None,
-        quality: 1.0,
-        shots: vec![
-            ShotData {
-                azimuth_in: 10.0,
-                azimuth_out: 10.0,
-                length: 5.0,
-                depth_in: 0.0,
-                depth_out: 1.0,
-                ..Default::default()
-            },
-            ShotData {
-                azimuth_in: 20.0,
-                azimuth_out: 20.0,
-                length: 6.0,
-                depth_in: 1.0,
-                depth_out: 2.0,
-                ..Default::default()
-            },
-        ],
-    });
-    project.collab = Some(crate::models::CollabState::new(
-        "collab-cave.tml".to_string(),
-    ));
-    state.set_project_for_tests(project);
-
-    let stalx = temp_dir.path().join("collab-cave.stalx");
-    let r = state.execute(Command::SaveProject {
-        path: Some(stalx.clone()),
-        is_autosave: false,
-    });
-    assert!(r.success, "save failed: {:?}", r.error);
-
-    // Sibling .tml written next to the .stalx.
-    let tml = temp_dir.path().join("collab-cave.tml");
-    assert!(tml.exists(), "sibling .tml should be written");
-
-    // Baseline + hash persisted in the .stalx.
-    let loaded = Database::open(&stalx).unwrap().load_project().unwrap();
-    let collab = loaded.collab.expect("collab persisted");
-    assert!(collab.enabled);
-    let sha1 = collab.last_export_tml_sha256.clone().expect("hash stored");
-    assert_eq!(collab.shot_baseline.len(), 2, "baseline has both shots");
-
-    // A second save with no edits is idempotent (UUIDs reused -> same hash).
-    let r2 = state.execute(Command::SaveProject {
-        path: None,
-        is_autosave: false,
-    });
-    assert!(r2.success);
-    let loaded2 = Database::open(&stalx).unwrap().load_project().unwrap();
-    let sha2 = loaded2.collab.unwrap().last_export_tml_sha256.unwrap();
-    assert_eq!(sha1, sha2, "no-edit re-save should produce identical .tml");
-}
-
-// === Collaboration mode: apply changes (preserve native data + undo) ===
-#[test]
-fn test_apply_collab_changes_preserves_native_data_and_is_undoable() {
-    let dir = TempDir::new().unwrap();
-    let state = AppState::new().unwrap();
-
-    let mk = |len1: f64, az_out1: f64| SectionData {
-        name: Some("Main".to_string()),
-        surveyor: None,
-        date: None,
-        color: "#4ecdc4".to_string(),
-        direction: None,
-        quality: 1.0,
-        shots: vec![
-            ShotData {
-                azimuth_in: 10.0,
-                azimuth_out: 10.0,
-                length: 5.0,
-                depth_in: 0.0,
-                depth_out: 1.0,
-                ..Default::default()
-            },
-            ShotData {
-                azimuth_in: 20.0,
-                azimuth_out: az_out1,
-                length: len1,
-                depth_in: 1.0,
-                depth_out: 2.0,
-                ..Default::default()
-            },
-            ShotData {
-                azimuth_in: 30.0,
-                azimuth_out: 30.0,
-                length: 7.0,
-                depth_in: 2.0,
-                depth_out: 3.0,
-                ..Default::default()
-            },
-        ],
-    };
-
-    let mut project = Project::new("Collab".to_string(), None);
-    project.add_section(mk(6.0, 200.0)); // shot[1] has a distinct backsight (no TML equivalent)
-    project.collab = Some(crate::models::CollabState::new("c.tml".to_string()));
-    state.set_project_for_tests(project);
-
-    let stalx = dir.path().join("c.stalx");
-    assert!(
-        state
-            .execute(Command::SaveProject {
-                path: Some(stalx),
-                is_autosave: false
-            })
-            .success
-    );
-    let sibling = dir.path().join("c.tml");
-    assert!(sibling.exists());
-
-    // Simulate Ariane editing the .tml: re-export an edited project (shot[1].length = 99).
-    let mut edited = Project::new("Collab".to_string(), None);
-    edited.add_section(mk(99.0, 20.0));
-    crate::export::tml::export_tml(&edited, &sibling).unwrap();
-
-    let cs = state
-        .detect_collab_changes()
-        .unwrap()
-        .expect("changes detected");
-    assert_eq!(cs.shots_edited.len(), 1, "exactly one edit");
-    assert!(state.execute(Command::ApplyCollabChanges).success);
-
-    {
-        let g = state.project.lock().unwrap();
-        let shot = &g.as_ref().unwrap().sections[0].shots[1];
-        assert_eq!(shot.length, 99.0, "length applied from .tml");
-        assert_eq!(
-            shot.azimuth_out, 200.0,
-            "distinct backsight preserved (no TML field)"
-        );
-    }
-
-    // Undo restores the original geometry; preserved field stays intact.
-    assert!(state.undo().success);
-    {
-        let g = state.project.lock().unwrap();
-        let shot = &g.as_ref().unwrap().sections[0].shots[1];
-        assert_eq!(shot.length, 6.0, "undo restored length");
-        assert_eq!(shot.azimuth_out, 200.0);
-    }
 }
 
 // ============================================================================
@@ -20589,7 +20301,6 @@ const MUTATION_ENTRYPOINTS: &[&str] = &[
     "execute:ReverseSection",
     "execute:Batch:ReverseSection",
     "execute:MoveComment",
-    "execute:ApplyCollabChanges",
     // history entrypoints
     "undo",
     "redo",
@@ -20606,8 +20317,6 @@ const MUTATION_ENTRYPOINTS: &[&str] = &[
     "execute_create_and_merge",
     "execute_import_sections",
     // by-path / metadata methods (gated only when path == the OPEN project)
-    "set_collab_enabled",
-    "set_collab_enabled_for_path",
     "set_project_name_for_path",
     // warning resolve/unresolve (#197): gated because resolved_warnings proliferates
     // to the server (NOT stripped from the push snapshot).
@@ -20621,7 +20330,7 @@ fn gate_rejects_every_mutation_entrypoint_with_edit_disabled_code() {
     // guard_mutation AND add its name to MUTATION_ENTRYPOINTS + a call below.
     assert_eq!(
         MUTATION_ENTRYPOINTS.len(),
-        27,
+        24,
         "update both the routing and this list when adding a mutation entry"
     );
 
@@ -20710,10 +20419,6 @@ fn gate_rejects_every_mutation_entrypoint_with_edit_disabled_code() {
                 swap: false,
             }),
         );
-        assert_disabled(
-            "execute:ApplyCollabChanges",
-            &state.execute(Command::ApplyCollabChanges),
-        );
     }
 
     // --- history entrypoints ---
@@ -20801,16 +20506,11 @@ fn gate_rejects_every_mutation_entrypoint_with_edit_disabled_code() {
         );
     }
 
-    // --- collab toggles ---
+    // --- by-path metadata methods ---
     {
         let (state, _sid, _shid, _temp) = remote_fixture();
-        assert_disabled("set_collab_enabled", &state.set_collab_enabled(true));
         // The by-path methods are gated only when path == the OPEN project.
         let open_path = state.get_project_state().unwrap().file_path.unwrap();
-        assert_disabled(
-            "set_collab_enabled_for_path",
-            &state.set_collab_enabled_for_path(open_path.clone(), true),
-        );
         assert_disabled(
             "set_project_name_for_path",
             &state.set_project_name_for_path(open_path, "Renamed Remote".to_string()),
@@ -20861,10 +20561,7 @@ fn lifecycle_commands_pass_through_gate() {
     assert!(!state.edit_enabled());
 
     // Autosave (SaveProject) passes the gate.
-    let save = state.execute(Command::SaveProject {
-        path: None,
-        is_autosave: true,
-    });
+    let save = state.execute(Command::SaveProject { path: None });
     assert!(save.success, "autosave must pass through the gate");
 
     // The dirty bit is NOT set by a local save.
@@ -20980,14 +20677,7 @@ fn dirty_bit_is_idempotent_and_set_only() {
             })
             .success
     );
-    assert!(
-        state
-            .execute(Command::SaveProject {
-                path: None,
-                is_autosave: true,
-            })
-            .success
-    );
+    assert!(state.execute(Command::SaveProject { path: None }).success);
     assert!(dirty_bit(&state), "dirty bit stays set after autosave");
 }
 
@@ -21035,220 +20725,168 @@ fn dirty_bit_noop_for_local_only_project() {
         .is_none());
 }
 
+// ===========================================================================
+// Save a Copy: an explicit destination on a LINKED project writes a detached
+// unlinked copy and leaves the session on the managed file (see save_project).
+// ===========================================================================
+
 #[test]
-fn set_collab_enabled_noop_leaves_modified_at_and_dirty_bit_untouched() {
-    // #241: toggling to the value already in effect must not touch() the
-    // project or mark_remote_dirty() a remote link - that would spuriously
-    // flag unpushed edits and bump last_edit_at for a call that changes
-    // nothing. A genuine flip must still work.
-    let (state, _sid, _shid, _temp) = remote_fixture_editable();
-    assert!(!dirty_bit(&state), "fixture starts clean");
+fn save_as_on_a_linked_project_writes_an_unlinked_copy_and_stays_put() {
+    let (state, _sid, _shid, temp) = remote_fixture();
+    let open_path = state.open_project_path().unwrap();
+    let copy_path = temp.path().join("copy.stalx");
 
-    let modified_at = || state.get_project_state().unwrap().modified_at;
+    let result = state.save_project(Some(copy_path.clone()));
 
-    // Starts disabled (no collab state yet): disabling again is a no-op.
-    let before = modified_at();
-    assert!(state.set_collab_enabled(false).success);
+    assert!(result.success, "copy save succeeds: {:?}", result.error);
     assert_eq!(
-        modified_at(),
-        before,
-        "disabling an already-disabled project must not touch()"
+        result.unlinked_copy_path.as_deref(),
+        Some(copy_path.display().to_string().as_str()),
+        "the copy is reported via unlinked_copy_path"
     );
     assert!(
-        !dirty_bit(&state),
-        "a no-op toggle must not mark the project remote-dirty"
+        result.saved_path.is_none(),
+        "saved_path must stay None - the frontend re-points file_path on it"
     );
-
-    // Genuine flip to enabled: touches and dirties.
-    let before = modified_at();
-    assert!(state.set_collab_enabled(true).success);
-    assert_ne!(
-        modified_at(),
-        before,
-        "a real enable must touch() the project"
+    assert_eq!(
+        state.open_project_path().unwrap(),
+        open_path,
+        "the session stays on the managed file"
     );
     assert!(
-        dirty_bit(&state),
-        "a real enable must mark the project remote-dirty"
+        state.speleodb_open_link().is_ok(),
+        "the managed file keeps its link"
     );
 
-    // Repeat-enable is now a no-op: modified_at must not move again.
-    let before = modified_at();
-    assert!(state.set_collab_enabled(true).success);
-    assert_eq!(
-        modified_at(),
-        before,
-        "re-enabling an already-enabled project must not touch()"
+    let copy_db = Database::open_for_metadata(&copy_path).unwrap();
+    assert!(
+        copy_db.load_speleo_link().unwrap().is_none(),
+        "the copy carries NO speleo_link row"
+    );
+    drop(copy_db);
+    let copy_db = Database::open_existing(&copy_path).unwrap();
+    let copied = copy_db.load_project().unwrap();
+    assert_eq!(copied.sections.len(), 1, "the survey data is in the copy");
+    assert_eq!(copied.sections[0].shots.len(), 2);
+}
+
+#[test]
+fn save_a_copy_onto_the_managed_file_itself_is_refused() {
+    let (state, _sid, _shid, _temp) = remote_fixture();
+    let open_path = state.open_project_path().unwrap();
+
+    let result = state.save_project(Some(open_path.clone()));
+
+    assert!(
+        !result.success,
+        "writing an unlinked copy over the managed file would strip its link in place"
+    );
+    let db = Database::open_for_metadata(&open_path).unwrap();
+    assert!(
+        db.load_speleo_link().unwrap().is_some(),
+        "the refusal must not have touched the file"
     );
 }
 
 #[test]
-fn set_collab_enabled_for_path_noop_leaves_dirty_bit_and_saved_state_untouched() {
-    // #241: the by-path variant must mirror set_collab_enabled's no-op guard -
-    // a call that toggles to the value ALREADY STORED ON DISK for that path must
-    // not rewrite collab_state or mark_remote_dirty() the open project. Unlike
-    // set_collab_enabled, this reads its "already enabled" state from a fresh
-    // db.load_project() of the target path, not from the open in-memory project.
-    let (state, _sid, _shid, _temp) = remote_fixture_editable();
-    let path = state.get_project_state().unwrap().file_path.unwrap();
-    assert!(!dirty_bit(&state), "fixture starts clean");
-
-    let load_collab = || {
-        Database::open_existing(&path)
-            .unwrap()
-            .load_project()
-            .unwrap()
-            .collab
-    };
-
-    // No collab state on disk yet: disabling again is a no-op.
+fn implicit_save_on_a_linked_project_still_carries_the_link_and_the_dirty_bit() {
+    // Pins speleodb_upload's pre-push flush (`save_project(None)`): an implicit
+    // save is NOT a copy save - it must keep the link and the dirty bit.
+    let (state, sid, shid, _temp) = remote_fixture_editable();
     assert!(
         state
-            .set_collab_enabled_for_path(path.clone(), false)
+            .execute(Command::UpdateShot {
+                section_id: sid,
+                shot_id: shid,
+                updates: ShotUpdates {
+                    length: Some(9.0),
+                    ..Default::default()
+                },
+            })
             .success
     );
-    assert!(
-        !dirty_bit(&state),
-        "a no-op disable must not mark the open project remote-dirty"
-    );
-    assert!(
-        load_collab().is_none(),
-        "a no-op disable must not create a collab_state row"
-    );
+    assert!(dirty_bit(&state), "the edit set the dirty bit");
 
-    // Genuine flip to enabled: writes collab_state and dirties the open project
-    // (the fixture's path IS the open project).
+    let result = state.save_project(None);
+
+    assert!(result.success);
     assert!(
-        state
-            .set_collab_enabled_for_path(path.clone(), true)
-            .success
+        result.saved_path.is_some(),
+        "an implicit save reports saved_path"
+    );
+    assert!(
+        result.unlinked_copy_path.is_none(),
+        "an implicit save is never a copy save"
+    );
+    assert!(
+        state.speleodb_open_link().is_ok(),
+        "the link survived the save"
     );
     assert!(
         dirty_bit(&state),
-        "a real enable must mark the open project remote-dirty"
-    );
-    let stored = load_collab().expect("a real enable must save collab_state");
-    assert!(stored.enabled);
-    assert_eq!(
-        stored.sibling_tml_relative, "remote.tml",
-        "sibling name derives from the file stem on a real enable"
-    );
-
-    // Directly stamp a customized sibling name on disk, simulating state a prior
-    // real enable produced (mirrors the collab.rs doc comment: a redundant
-    // enable(true) no longer refreshes sibling_tml_relative). A no-op re-enable
-    // must leave it exactly as stamped, not recompute it back to "remote.tml".
-    let db = Database::open_existing(&path).unwrap();
-    db.save_collab_state(Some(&crate::models::CollabState::new(
-        "custom.tml".to_string(),
-    )))
-    .unwrap();
-    drop(db);
-
-    assert!(
-        state
-            .set_collab_enabled_for_path(path.clone(), true)
-            .success
-    );
-    assert_eq!(
-        load_collab().unwrap().sibling_tml_relative,
-        "custom.tml",
-        "a no-op re-enable must not refresh sibling_tml_relative"
-    );
-
-    // A genuine disable still works and is observable on disk.
-    assert!(
-        state
-            .set_collab_enabled_for_path(path.clone(), false)
-            .success
-    );
-    assert!(
-        !load_collab().unwrap().enabled,
-        "a real disable must persist"
+        "a local save never clears the dirty bit - only a push does"
     );
 }
 
 #[test]
-fn set_collab_enabled_for_path_closed_file_persists_without_touching_open_project() {
-    // The by-path variant's CLOSED-file branch (target path is NOT the open
-    // project): it must still write collab_state to that file's DB, but must NOT
-    // gate on / dirty / in-memory-sync the open project. Both existing by-path
-    // tests exercise only the OPEN-project path, leaving this branch untested.
+fn save_as_on_an_unlinked_project_still_relocates_the_session() {
+    // The pre-existing Save As contract for plain local projects, pinned so the
+    // copy_only branch cannot leak into it.
     let temp = TempDir::new().unwrap();
-
-    // A separate, CLOSED project on disk (a different file entirely).
-    let closed_path = {
-        let other = AppState::new().unwrap();
-        other.execute(Command::CreateProject {
-            name: "Closed".to_string(),
-            location: None,
-        });
-        other.execute(Command::CreateSection {
-            name: Some("S".to_string()),
-            surveyor: None,
-            date: None,
-            color: "#abcdef".to_string(),
-            direction: None,
-            shots: vec![test_shot_data(1.0)],
-        });
-        let p = temp.path().join("closed.stalx");
-        assert!(other.save_project(Some(p.clone()), false).success);
-        p
-    };
-
-    // The OPEN project is a different file with no collaboration state.
     let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "Open".to_string(),
-        location: None,
-    });
-    state.execute(Command::CreateSection {
-        name: Some("S".to_string()),
-        surveyor: None,
-        date: None,
-        color: "#abcdef".to_string(),
-        direction: None,
-        shots: vec![test_shot_data(1.0)],
-    });
-    let open_path = temp.path().join("open.stalx");
-    assert!(state.save_project(Some(open_path.clone()), false).success);
     assert!(
-        state.get_project_state().unwrap().collab.is_none(),
-        "precondition: the open project has no collab state"
+        state
+            .execute(Command::CreateProject {
+                name: "Local".to_string(),
+                location: None,
+            })
+            .success
     );
 
-    // Enable collaboration on the CLOSED file by path.
-    let result = state.set_collab_enabled_for_path(closed_path.clone(), true);
+    let dest = temp.path().join("relocated.stalx");
+    let result = state.save_project(Some(dest.clone()));
+
+    assert!(result.success);
+    assert_eq!(
+        result.saved_path.as_deref(),
+        Some(dest.display().to_string().as_str()),
+        "an unlinked Save As reports saved_path"
+    );
+    assert!(result.unlinked_copy_path.is_none());
+    assert_eq!(
+        state.open_project_path().unwrap(),
+        dest,
+        "an unlinked Save As relocates the session"
+    );
+}
+
+#[test]
+fn the_copy_carries_the_undo_history() {
+    let (state, sid, shid, temp) = remote_fixture_editable();
     assert!(
-        result.success,
-        "closed-file enable must succeed: {:?}",
-        result.error
+        state
+            .execute(Command::UpdateShot {
+                section_id: sid,
+                shot_id: shid,
+                updates: ShotUpdates {
+                    length: Some(9.0),
+                    ..Default::default()
+                },
+            })
+            .success
     );
 
-    // The closed file's on-disk collab_state is enabled, sibling derived from stem.
-    let stored = Database::open_existing(&closed_path)
-        .unwrap()
-        .load_project()
-        .unwrap()
-        .collab
-        .expect("closed-file enable must persist collab_state to that file");
-    assert!(stored.enabled);
-    assert_eq!(stored.sibling_tml_relative, "closed.tml");
+    let copy_path = temp.path().join("copy.stalx");
+    assert!(state.save_project(Some(copy_path.clone())).success);
 
-    // The OPEN project is untouched: no in-memory collab was synced onto it...
+    let copy_db = Database::open_existing(&copy_path).unwrap();
     assert!(
-        state.get_project_state().unwrap().collab.is_none(),
-        "a closed-file toggle must not touch the open project's in-memory collab"
-    );
-    // ...and its own file did not gain collab_state.
-    assert!(
-        Database::open_existing(&open_path)
+        !copy_db
+            .load_undo_stack_with_timestamps()
             .unwrap()
-            .load_project()
-            .unwrap()
-            .collab
-            .is_none(),
-        "a closed-file toggle must not write collab_state onto the open project's file"
+            .is_empty(),
+        "the copy carries the undo history (the detach flow reopens it and \
+         must not lose the edit trail)"
     );
 }
 

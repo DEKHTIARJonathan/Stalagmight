@@ -110,7 +110,6 @@ function makeSystems(): SystemGeometry[] {
     station_count: 2,
     gps_center: [0, 0],
     gps_bounds: null,
-    collab_enabled: false,
     is_remote: false,
   });
   const geometry = (shots: GeometryShot[]): SurveyGeometry => ({ shots, origin: [0, 0] });

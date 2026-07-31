@@ -41,7 +41,6 @@ const localProject = (over: Partial<ProjectMetadata> = {}): ProjectMetadata => (
   station_count: 2,
   gps_center: null,
   gps_bounds: null,
-  collab_enabled: false,
   is_remote: false,
   ...over,
 });

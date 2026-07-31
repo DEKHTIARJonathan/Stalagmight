@@ -6,6 +6,15 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 impl AppState {
+    /// Legacy open, deliberately WITHOUT the canonical-storage guard that
+    /// `do_load_project_full` runs (`foreign_link`): this function has no
+    /// `#[tauri::command]` wrapper and is not in `generate_handler!`, so it is
+    /// unreachable from the webview. Its one production caller is the recovery
+    /// reopen after a failed cache replace (`replace_cache_stalx_abandoning`),
+    /// which always reopens the CANONICAL cache path - refusing there would
+    /// strand the shell on a project the backend no longer has open. If this is
+    /// ever exposed over IPC, the guard question returns; a tripwire test pins
+    /// the non-exposure (`the_legacy_open_project_is_not_exposed_over_ipc`).
     pub(super) fn open_project(&self, path: PathBuf) -> CommandResult {
         tracing::info!(
             path = ?path,
@@ -150,10 +159,6 @@ impl AppState {
         // load path classifies and persists them. Classifying in memory here
         // without persisting would only make the two paths disagree.
 
-        if let Ok(mut proj) = self.project.lock() {
-            *proj = Some(project);
-        }
-
         // Load undo/redo stacks from database before replacing database reference
         let undo_entries = match db.load_undo_stack_with_timestamps() {
             Ok(loaded) => loaded
@@ -184,6 +189,21 @@ impl AppState {
             }
         };
 
+        // ALL commits under ONE `project` acquisition, exactly as
+        // `do_load_project_full`'s finalization and for the same reason (round
+        // 5): the delete's check-and-teardown serializes on this mutex, and a
+        // slot commit in its own span let a delete of this path land between
+        // the slot and the handles - tearing down a half-built session that
+        // this function then finished building into an empty world.
+        let mut proj_guard = self
+            .project
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *proj_guard = Some(project);
+        // A session boundary (a project committed into the slot), bumped under
+        // the guard per the `speleodb_session` rule.
+        self.bump_speleodb_session();
+
         // [Track B] (#191) Read-only edit gate: remote ⇒ edit disabled,
         // local-only ⇒ enabled (see do_load_project_full). Read before `db` moves.
         let is_remote = matches!(db.load_speleo_link(), Ok(Some(_)));
@@ -191,9 +211,10 @@ impl AppState {
         // #213: force-edit is per-session; a fresh open never starts force-editing.
         self.set_force_editing(false);
 
-        if let Ok(mut database) = self.database.lock() {
-            *database = Some(db);
-        }
+        *self
+            .database
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(db);
         // Opened an existing project from disk - its initial save is not deferred.
         self.initial_save_deferred
             .store(false, std::sync::atomic::Ordering::Relaxed);
@@ -234,6 +255,8 @@ impl AppState {
                 }
             }
         }
+
+        drop(proj_guard);
 
         tracing::info!(
             path = %path_display,
@@ -319,6 +342,47 @@ impl AppState {
                 early_return_err!(LoadError::not_found(&path.display().to_string()));
             }
         }
+        // Canonical-storage guard: a `.stalx` carrying a `speleo_link` row that
+        // is not the cache copy for that project is a SECOND local copy of a
+        // managed project, and opening it is what makes two divergent copies
+        // possible. Refuse here, in Phase 0, for three reasons: it is before ANY
+        // state mutation (the Finalizing block below is where the project / db /
+        // edit gate / recents commit); it is before `open_existing`, which
+        // MIGRATES the file and quick_checks every page, neither of which a
+        // refused file should pay or suffer; and the structured refusal lets the
+        // frontend offer the two real choices (open the canonical copy, or drop
+        // the link) instead of a generic load error. It sits after the
+        // already-open guard above, so a project already on screen is never
+        // refused. See `speleodb_foreign` for the probe's degradation rules.
+        //
+        // The probe can also ACCEPT the file under a different spelling: the
+        // cache copy reached through a symlink is the canonical copy to read,
+        // but saving through that name would rename a fresh file over the link
+        // entry and strand the real cached copy. The load continues with the
+        // canonical cache path in that case, so `project.file_path` - and every
+        // save that follows from it - names the real file.
+        use super::speleodb_foreign::LinkedSpelling;
+        let path = match self.foreign_link(&path) {
+            LinkedSpelling::AsSpelled => path,
+            LinkedSpelling::Canonical(canonical) => {
+                tracing::info!(
+                    spelled = ?path,
+                    canonical = ?canonical,
+                    purpose = "keep one local copy per SpeleoDB project",
+                    "Opening the canonical cache copy behind a symlink to it"
+                );
+                canonical
+            }
+            LinkedSpelling::Foreign(managed) => {
+                tracing::info!(
+                    path = ?path,
+                    project_id = %managed.project_id,
+                    purpose = "keep one local copy per SpeleoDB project",
+                    "Refused to open a non-canonical copy of a SpeleoDB project"
+                );
+                early_return_err!(LoadError::speleodb_managed(managed));
+            }
+        };
         // Local variable only - NO state mutation until Finalizing
         let db = match Database::open_existing(&path) {
             Ok(db) => db,
@@ -378,7 +442,7 @@ impl AppState {
         let live_shot_uuids = project.shot_uuid_by_position();
         // Guarantee every shot has a stable UUID at runtime, not just after the
         // next save: pre-v6 files load shots with uuid=None, and station identity
-        // (and the Ariane collaboration round-trip) anchors on the shot UUID. The
+        // anchors on the shot UUID. The
         // minted UUIDs persist on the next save (matching save_project's call).
         project.ensure_shot_uuids();
         match db.backfill_resolved_warning_uuids(&live_shot_uuids) {
@@ -663,11 +727,30 @@ impl AppState {
         // open" guard rejects reopening the same path, so neither releases our lock.
         self.speleodb_release_held_lock_detached();
 
-        // Commit 1: Project state mutation
-        *self
+        // ALL commits under ONE `project` acquisition. The delete's
+        // check-and-teardown (`delete_project`) takes this same mutex and
+        // reasons "strictly before the load, or strictly after it"; when the
+        // slot was committed in its own span and the database / gates / undo /
+        // recents in later ones, a delete of this very path landing after the
+        // slot commit was NEITHER - it matched the freshly-installed project,
+        // tore the half-built session down, and this function then went on
+        // installing its handles into an empty world and returned success over
+        // a project the backend no longer had (round 5). One guard makes the
+        // finalization the atom that argument needs. The guard is held over
+        // the recents/config write too - the delete prunes recents only after
+        // its own teardown, so the row this adds must not land between the two.
+        // Lock order is the documented one: `project` is outermost of
+        // {project, database, undo_stack}, and recents/config are leaves.
+        let mut proj_guard = self
             .project
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(project.clone());
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+        // Commit 1: Project state mutation
+        *proj_guard = Some(project.clone());
+        // A session boundary (a project committed into the slot), bumped under
+        // the guard per the `speleodb_session` rule.
+        self.bump_speleodb_session();
 
         // [Track B] (#191) Read-only edit gate: a remote SpeleoDB project (one
         // carrying a speleo_link row) opened WITHOUT a write lock is read-only.
@@ -730,6 +813,8 @@ impl AppState {
                 }
             }
         }
+
+        drop(proj_guard);
 
         progress.complete_phase(LoadingPhase::Finalizing);
 

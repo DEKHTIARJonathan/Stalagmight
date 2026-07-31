@@ -58,7 +58,6 @@ function makeProject(overrides: Partial<Project> = {}): Project {
     imported_file_hashes: [],
     imported_section_hashes: [],
     next_closure_id: 1n,
-    collab: null,
     validation: {
       warn_shot_length_min: 0,
       warn_shot_length_max: 100,

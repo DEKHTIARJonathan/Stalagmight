@@ -153,7 +153,7 @@ impl Project {
     }
 
     /// Insert a shot after a specific shot in a section. `forced_id` preserves
-    /// the original id and `forced_uuid` the original collaboration UUID when
+    /// the original id and `forced_uuid` the original persistent shot UUID when
     /// redo re-runs this exact path (see [`AppState::redo`]); pass `None`/`None`
     /// for normal inserts (a fresh UUID is minted).
     pub fn insert_shot_after(
@@ -230,7 +230,7 @@ impl Project {
     }
 
     /// Insert a shot before a specific shot in a section. `forced_id` preserves
-    /// the original id and `forced_uuid` the original collaboration UUID when
+    /// the original id and `forced_uuid` the original persistent shot UUID when
     /// redo re-runs this exact path; pass `None`/`None` for normal inserts.
     pub fn insert_shot_before(
         &mut self,

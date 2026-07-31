@@ -2,4 +2,4 @@
 import type { ReversedSection } from "./ReversedSection";
 import type { ValidationWarning } from "./ValidationWarning";
 
-export interface CommandResult { success: boolean, warnings: Array<ValidationWarning>, error: string | null, section_id?: number, section_ids: Array<number>, shot_id?: number, saved_path?: string, reversed_sections?: Array<ReversedSection>, }
+export interface CommandResult { success: boolean, warnings: Array<ValidationWarning>, error: string | null, section_id?: number, section_ids: Array<number>, shot_id?: number, saved_path?: string, session_closed?: boolean, unlinked_copy_path?: string, reversed_sections?: Array<ReversedSection>, }

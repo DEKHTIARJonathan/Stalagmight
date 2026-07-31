@@ -15,6 +15,28 @@ use ts_rs::TS;
 // LoadError
 // ============================================================================
 
+/// A file the load refused because it carries a `speleo_link` row and is not the
+/// canonical cache copy of that project (see `core::state::speleodb_foreign`).
+/// Everything the frontend's managed-file prompt needs to offer its two ways
+/// forward: open the managed copy from SpeleoDB, or strip this file's link.
+/// `Deserialize` as well as `Serialize`: this goes OUT with the refusal and
+/// comes back IN with the strip command, which re-checks it against the file
+/// before deleting a link row (the prompt can outlive the file it is about).
+#[derive(Serialize, Deserialize, Debug, Clone, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub struct SpeleoManagedFile {
+    /// The refused file, as the load was asked to open it.
+    pub path: String,
+    pub project_id: String,
+    pub project_name: String,
+    pub endpoint: String,
+    /// False when `project_id` failed UUID validation, so the app must not build
+    /// a cache path from it and cannot look the project up on the server: only
+    /// the remove-link action is offered.
+    pub can_open_remote: bool,
+}
+
 /// Error type for load/create operations with guaranteed valid JSON in Display impl.
 #[derive(Serialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -22,6 +44,12 @@ pub struct LoadError {
     pub code: String,
     pub message: String,
     pub details: Option<String>,
+    /// Set only by [`Self::speleodb_managed`]. The manual `Display` fallback
+    /// below drops this payload, which is acceptable: it only runs if
+    /// `serde_json::to_string` fails (it cannot for these fields), and the
+    /// degradation is the generic error UI instead of the managed-file prompt.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub speleodb_managed: Option<SpeleoManagedFile>,
 }
 
 impl LoadError {
@@ -31,6 +59,7 @@ impl LoadError {
             code: code.into(),
             message: message.into(),
             details: None,
+            speleodb_managed: None,
         }
     }
 
@@ -44,6 +73,7 @@ impl LoadError {
             code: code.into(),
             message: message.into(),
             details: Some(details.into()),
+            speleodb_managed: None,
         }
     }
 
@@ -78,6 +108,21 @@ impl LoadError {
     /// The `path` rides in `details` so the frontend can name the file.
     pub fn permission(message: impl Into<String>, path: &str) -> Self {
         Self::with_details("PERMISSION", message, path)
+    }
+
+    /// The open was refused: this file is a non-canonical copy of a SpeleoDB
+    /// project. Carries the link so the frontend can raise the managed-file
+    /// prompt instead of a dead-end error.
+    pub fn speleodb_managed(managed: SpeleoManagedFile) -> Self {
+        let mut err = Self::new(
+            "SPELEODB_MANAGED",
+            format!(
+                "\"{}\" is managed by SpeleoDB (project \"{}\")",
+                managed.path, managed.project_name
+            ),
+        );
+        err.speleodb_managed = Some(managed);
+        err
     }
 }
 
@@ -774,6 +819,31 @@ mod tests {
         assert_eq!(LoadError::cancelled().code, "CANCELLED");
         assert_eq!(LoadError::not_found("/path/to/file").code, "NOT_FOUND");
         assert_eq!(LoadError::internal("error").code, "INTERNAL");
+    }
+
+    #[test]
+    fn speleodb_managed_carries_the_link_through_the_json_display() {
+        let err = LoadError::speleodb_managed(SpeleoManagedFile {
+            path: "/tmp/foreign.stalx".to_string(),
+            project_id: "11111111-2222-3333-4444-555555555555".to_string(),
+            project_name: "Cave".to_string(),
+            endpoint: "https://sdb.example".to_string(),
+            can_open_remote: true,
+        });
+        let parsed: serde_json::Value =
+            serde_json::from_str(&err.to_string()).expect("Display should produce valid JSON");
+        assert_eq!(parsed["code"], "SPELEODB_MANAGED");
+        let managed = &parsed["speleodbManaged"];
+        assert_eq!(managed["path"], "/tmp/foreign.stalx");
+        assert_eq!(managed["projectId"], "11111111-2222-3333-4444-555555555555");
+        assert_eq!(managed["projectName"], "Cave");
+        assert_eq!(managed["endpoint"], "https://sdb.example");
+        assert_eq!(managed["canOpenRemote"], true);
+        // Errors WITHOUT the payload must omit the key entirely (skip_serializing_if),
+        // so the frontend's `error.speleodbManaged` truthiness check is reliable.
+        let plain: serde_json::Value =
+            serde_json::from_str(&LoadError::internal("x").to_string()).expect("valid JSON");
+        assert!(plain.get("speleodbManaged").is_none());
     }
 
     #[test]

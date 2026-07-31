@@ -12,8 +12,7 @@
 //       eligible closures - so a geometryMode-only check silently reports
 //       "editable" in a workspace that must be read-only (#243 / the #225 bug
 //       class). `DataTable.tsx`, `SectionsPanel.tsx`, `WarningResolution.tsx`,
-//       `DetailPanel.tsx`, and `CollabReviewDialog.tsx` all had exactly this bug;
-//       fixed in #275.
+//       `DetailPanel.tsx`, and others all had exactly this bug; fixed in #275.
 //
 //   (B) a call site that reaches for the raw `isMapReadOnly` / `selectSpeleoReadOnly`
 //       symbols directly instead of going through the shared `useEditingBlocked()` /

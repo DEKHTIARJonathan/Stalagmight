@@ -86,7 +86,31 @@ Undo and redo stacks are serialized to the SQLite database synchronously on proj
 
 ## Lock Ordering
 
-Strict ordering prevents deadlocks: `command_lock` → `undo_stack` → `project`. The `get_undo_stack()`/`get_redo_stack()` functions release the project lock before acquiring the undo_stack lock to avoid holding both simultaneously.
+`command_lock` is always outermost. Below it, the mutation paths avoid holding two
+of `undo_stack` / `project` / `database` at once at all - `undo()`/`redo()` pop the
+entry and drop the `undo_stack` guard before touching the project, and
+`get_undo_stack()`/`get_redo_stack()` release the project lock before acquiring
+`undo_stack`.
+
+Where more than one IS held, `project` is the outermost of the three and nothing in
+the crate holds an `undo_stack` or `database` guard across a `project.lock()`. Two
+places rely on that: `save_project` (holds its `project` guard while it writes the
+DB and persists both stacks) and the close teardown
+`close_open_project_locked`, whose caller `delete_project` has to decide *whether*
+to close and then close under one `project` acquisition - splitting them let a
+concurrent load install a different project between the check and the teardown.
+
+One lock sits OUTSIDE even that: `speleodb_lock_ops`
+(`core/state/speleodb_session.rs`), which serializes every SpeleoDB **lock
+operation** against every other and is deliberately held across network calls.
+Start Editing takes it before its first read (generation, link, token, holder)
+and holds it through the commit; so do the reclaim-checked releases, the status
+poll's inherited-lock gate reopen, and logout - each of which can invalidate a
+fact another one of them is mid-way through acting on. Nothing holding `project` / `database` / `undo_stack` may
+block on it - its users decide under `project`, drop that guard, and only then
+take it. The SpeleoDB session generation (`speleodb_session_generation`) is
+likewise only ever bumped while holding `project`; see the module doc in
+`speleodb_session.rs` for the rules.
 
 ## History UI
 

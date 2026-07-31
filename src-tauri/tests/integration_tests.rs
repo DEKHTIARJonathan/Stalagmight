@@ -1936,7 +1936,12 @@ fn test_section_insert_shot_after() {
     );
 
     let first_shot_id = section.shots[0].id;
-    let new_shot = section.insert_shot_after(first_shot_id, create_shot_data(45.0, 5.0, 5.0, 5.0));
+    let new_shot = section.insert_shot_after_with_id(
+        first_shot_id,
+        create_shot_data(45.0, 5.0, 5.0, 5.0),
+        None,
+        None,
+    );
 
     assert!(new_shot.is_some());
     assert_eq!(section.shots.len(), 3);

@@ -145,6 +145,9 @@ impl AppState {
 
         if let Ok(mut proj) = self.project.lock() {
             *proj = Some(project);
+            // A session boundary (a project committed into the slot), bumped under
+            // the guard per the `speleodb_session` rule.
+            self.bump_speleodb_session();
         }
 
         if let Ok(mut undo_stack) = self.undo_stack.lock() {
@@ -418,11 +421,24 @@ impl AppState {
         // All finalization commits use unwrap_or_else(PoisonError::into_inner) to ensure
         // data is written even if a previous panic poisoned a mutex.
 
-        // Commit 1: Project state mutation
-        *self
+        // ALL commits under ONE `project` acquisition, exactly as
+        // `do_load_project_full`'s finalization and for the same reason (round
+        // 4): this project carries a `file_path`, so `delete_project`'s
+        // check-and-teardown can match it - and a delete landing between the
+        // slot commit and the handle commits tore down a half-built session
+        // that this function then finished building into an empty world.
+        // (`create_project`, the in-memory sibling, commits a project with no
+        // `file_path`, which the delete's identity check can never match.)
+        let mut proj_guard = self
             .project
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(project.clone());
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+        // Commit 1: Project state mutation
+        *proj_guard = Some(project.clone());
+        // A session boundary (a project committed into the slot), bumped under
+        // the guard per the `speleodb_session` rule.
+        self.bump_speleodb_session();
 
         // Commit 2: Database handle mutation
         *self
@@ -482,6 +498,8 @@ impl AppState {
                 }
             }
         }
+
+        drop(proj_guard);
 
         // Get loading_id before clearing token
         let loading_id = progress.loading_id();
