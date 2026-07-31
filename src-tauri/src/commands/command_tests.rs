@@ -561,6 +561,59 @@ fn test_get_config_defaults_validation() {
     });
 }
 
+/// The `[general]` collections are writable through the whole-`Config` door and
+/// nothing pruned them: `onboarding_completed_flows` was deduped but uncapped,
+/// `locale` was checked only for emptiness, and `recent_projects` was not touched
+/// at all while its own `recent_projects_max` was unclamped. `config.toml` is
+/// re-parsed at every launch, so one oversized write is re-read forever.
+///
+/// The same unbounded-growth shape `normalize_column_names` was written to close,
+/// asserted at the same door, and against the PERSISTED value rather than the
+/// in-memory one - the caps only matter if they reach disk.
+#[test]
+fn test_update_config_caps_general_collections() {
+    with_config_lock(|| {
+        let app = app_with_state();
+        with_restored_config(&app, || {
+            let mut cfg = config::get_config(state(&app));
+            cfg.general.onboarding_completed_flows =
+                (0..100_000).map(|i| format!("flow-{i}")).collect();
+            cfg.general.locale = "e".repeat(10_000);
+            // Large, but still inside i64 and therefore still serializable to
+            // TOML. `usize::MAX` would also fail this door - it overflows TOML's
+            // integer and the save errors out before any of these assertions are
+            // reached - which is a different (and quieter) consequence of the
+            // same missing clamp, covered by the unit test in `config::tests`.
+            cfg.general.recent_projects_max = 1_000_000;
+            cfg.general.recent_projects = (0..100_000)
+                .map(|i| PathBuf::from(format!("/caves/{i}.stalx")))
+                .collect();
+            config::update_config(state(&app), cfg).expect("update config");
+
+            let general = config::get_config(state(&app)).general;
+            assert!(
+                general.onboarding_completed_flows.len() <= 256,
+                "100k flow ids reached the config: {}",
+                general.onboarding_completed_flows.len()
+            );
+            assert_eq!(
+                general.locale, "system",
+                "an unusable locale tag must be repaired to its default before it is persisted"
+            );
+            assert!(
+                general.recent_projects_max <= 256,
+                "recent_projects_max reached the config unclamped: {}",
+                general.recent_projects_max
+            );
+            assert_eq!(
+                general.recent_projects.len(),
+                general.recent_projects_max,
+                "the recents list must obey the clamped maximum"
+            );
+        });
+    });
+}
+
 #[test]
 fn test_update_config_roundtrip_auto_save() {
     with_config_lock(|| {
@@ -5044,13 +5097,25 @@ fn test_concurrent_partial_config_updates_do_not_lose_writes() {
         // reintroduced lost update, not raw iteration count.
         const ITERS: u32 = 25;
         const TRIALS: u32 = 12;
-        for _trial in 0..TRIALS {
+        // Trial-DISTINCT values, and that is the whole reason the trials count.
+        // Every trial builds a fresh `AppState`, which re-loads the config the
+        // previous trial left in the shared isolated directory - so with a value
+        // series that does not move between trials, trial N > 1 opens already
+        // holding the exact numbers it asserts at the end. Every trial but the
+        // first then passes without a single write landing, and the lost-update
+        // window each trial opens with is blind by construction because the stale
+        // value IS the expected one. Seeding from the trial index makes the
+        // starting state wrong for the assertion until this trial's own writes
+        // land. Both series stay inside their normalizer's clamp
+        // (`sections_panel_width` 150..400, column widths 40..2000), so what comes
+        // back is what went in.
+        for trial in 0..TRIALS {
             let shared = std::sync::Arc::new(AppState::new().expect("app state"));
 
             let a = std::sync::Arc::clone(&shared);
             let handle_a = std::thread::spawn(move || {
                 for i in 0..ITERS {
-                    let width = 150 + (i % 250);
+                    let width = 150 + trial * 10 + (i % 10);
                     retrying(|| {
                         config::update_panel_sizes_impl(a.as_ref(), Some(width), None, None)
                     });
@@ -5059,7 +5124,8 @@ fn test_concurrent_partial_config_updates_do_not_lose_writes() {
             let b = std::sync::Arc::clone(&shared);
             let handle_b = std::thread::spawn(move || {
                 for i in 0..ITERS {
-                    let widths = BTreeMap::from([("length".to_string(), 40 + (i % 1900))]);
+                    let widths =
+                        BTreeMap::from([("length".to_string(), 100 + trial * 10 + (i % 10))]);
                     retrying(|| {
                         config::update_data_table_view_impl(
                             b.as_ref(),
@@ -5078,8 +5144,8 @@ fn test_concurrent_partial_config_updates_do_not_lose_writes() {
             handle_a.join().expect("thread A panicked");
             handle_b.join().expect("thread B panicked");
 
-            let last_width_a = 150 + ((ITERS - 1) % 250);
-            let last_width_b = 40 + ((ITERS - 1) % 1900);
+            let last_width_a = 150 + trial * 10 + ((ITERS - 1) % 10);
+            let last_width_b = 100 + trial * 10 + ((ITERS - 1) % 10);
             let cfg = shared.get_config();
             assert_eq!(
                 cfg.panels.sections_panel_width, last_width_a,

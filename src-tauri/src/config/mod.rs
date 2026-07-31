@@ -2,6 +2,7 @@ mod atomic_write;
 mod column_widths;
 pub mod defaults;
 mod gas;
+mod general;
 mod speleodb;
 mod types;
 mod webkit;

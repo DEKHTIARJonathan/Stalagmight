@@ -4,7 +4,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 use super::column_widths::{
     lenient_column_widths, normalize_column_names, normalize_column_widths,
 };
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use ts_rs::TS;
 
@@ -823,11 +823,11 @@ pub struct GeneralConfig {
     pub telemetry_opt_in_shown: bool,
 }
 
-fn default_locale() -> String {
+pub(super) fn default_locale() -> String {
     "system".to_string()
 }
 
-fn default_format_locale() -> String {
+pub(super) fn default_format_locale() -> String {
     "locale".to_string()
 }
 
@@ -1975,14 +1975,7 @@ impl Config {
         self.gas.normalize();
         self.webkit_memory.normalize();
         self.units.decimal_precision.normalize();
-        if self.general.locale.trim().is_empty() {
-            self.general.locale = default_locale();
-        }
-        let mut seen = HashSet::new();
-        self.general.onboarding_completed_flows.retain(|flow_id| {
-            let trimmed = flow_id.trim();
-            !trimmed.is_empty() && seen.insert(trimmed.to_string())
-        });
+        super::general::normalize_general(&mut self.general);
     }
 
     /// Migrate legacy config fields to new structure
