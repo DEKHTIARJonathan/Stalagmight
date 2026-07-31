@@ -1083,13 +1083,26 @@ impl AppState {
         // has never been given this `.stalx`. The hand-over clears it by pushing; every
         // path that does not push leaves it standing, which is what arms the quit guard
         // over a conversion that exists only in this cache.
+        //
+        // `last_edit_at` is stamped WITH it, and must be: a dirty bit with no edit time
+        // is one a confirmed push can never clear. `edits_captured_by_push` reads a
+        // missing timestamp as "unknown timing" and keeps the bit - the conservative
+        // answer, since an edit it cannot date might postdate the upload - so a link
+        // stamped dirty-but-undated pushes successfully, stays dirty, reports
+        // `PushUnconfirmed`, and holds the lock for a retry that will do the same thing
+        // again. That is the exact defect the v9→v10 migration had to backfill the
+        // epoch for, and adoption was minting fresh rows with it.
+        //
+        // The conversion IS the edit and it happened just now, so `now` is both true and
+        // the value that works: the push below starts after this line, so
+        // `last_edit_at <= push_start` and a landed push clears the bit.
         if let Err(e) = self.speleodb_set_open_link(&crate::models::SpeleoLink {
             endpoint: endpoint.clone(),
             project_id: project_id.clone(),
             project_name,
             base_commit_sha: base_sha,
             has_unpushed_edits: true,
-            last_edit_at: None,
+            last_edit_at: Some(chrono::Utc::now().to_rfc3339()),
             last_verify_at: None,
         }) {
             tracing::warn!(
@@ -1263,6 +1276,29 @@ impl AppState {
     /// failed command. Each arm reports what happened so the webview can seed its
     /// dirty bit honestly and say what is left to do.
     fn adopt_hand_over(&self) -> AdoptUpload {
+        let outcome = self.adopt_hand_over_inner();
+        // Logged HERE rather than at each arm, so no arm can be added without one.
+        // Every non-`Pushed` outcome reaches the user as the same "it stayed local"
+        // toast, deliberately - there is nothing they can do differently about a lock
+        // held versus a push that did not confirm - which makes this the only record of
+        // WHICH it was. Diagnosing the first of these without it meant reading the
+        // server's mutex table.
+        match &outcome {
+            AdoptUpload::Pushed => tracing::info!(
+                purpose = "confirm the adoption reached the server",
+                "speleodb_adopt_ariane: conversion pushed and the lock handed back"
+            ),
+            other => tracing::warn!(
+                outcome = ?other,
+                purpose = "explain an adoption that converted but did not upload",
+                "speleodb_adopt_ariane: the conversion stayed local"
+            ),
+        }
+        outcome
+    }
+
+    /// [`Self::adopt_hand_over`] without the logging, so the arms stay readable.
+    fn adopt_hand_over_inner(&self) -> AdoptUpload {
         match self.speleodb_start_editing() {
             Ok(StartEditingResult::Editing) => {}
             // Unreachable while the lock is ours - nobody can have advanced the tip
@@ -1975,6 +2011,35 @@ mod tests {
             body.contains("matches!(upload, AdoptUpload::Pushed)"),
             "and it must be GATED on the one outcome that means the bytes landed - \
              flipping on a lock we could not take strands the project unopenable"
+        );
+    }
+
+    /// A dirty bit with no edit time is one a confirmed push can NEVER clear:
+    /// `edits_captured_by_push` reads a missing timestamp as unknown timing and keeps
+    /// the bit, because an edit it cannot date might postdate the upload. Adoption
+    /// stamps `has_unpushed_edits: true` on a link it mints from nothing, so it is the
+    /// one place that can create that pairing - and it did, which made every adoption
+    /// push successfully, stay dirty, report `PushUnconfirmed` and hold the lock for a
+    /// retry that would do the same thing again.
+    ///
+    /// The same defect the v9→v10 migration had to backfill the epoch for. Pinned here
+    /// against the predicate itself, so the rule travels with its reason.
+    #[test]
+    fn the_adopted_link_is_dated_so_a_landed_push_can_clear_it() {
+        assert!(
+            !crate::speleodb::sync::edits_captured_by_push(None, Some("2026-07-31T00:00:00+00:00")),
+            "an undated dirty bit is never captured by a push - this is the trap"
+        );
+
+        let body = adopt_body();
+        assert!(
+            body.contains("has_unpushed_edits: true"),
+            "the adopted copy is un-pushed at the moment it is stamped"
+        );
+        assert!(
+            body.contains("last_edit_at: Some(chrono::Utc::now().to_rfc3339())"),
+            "and it must be DATED, or the hand-over's push lands and the bit survives \
+             it: the conversion is the edit, and it happened now"
         );
     }
 
