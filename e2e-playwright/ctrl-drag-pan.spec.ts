@@ -75,6 +75,40 @@ test.describe('Ctrl+Drag Panning', () => {
         await page.keyboard.up('Control');
       });
     }
+
+    test('ending a Ctrl-pan under Move Station restores the arrow, not "move" (#316)', async ({ page }) => {
+      // The mouseup that ends a Ctrl-pan restores a cursor of its own. It must
+      // hand that to SurveyLayer rather than writing the canvas directly:
+      // SurveyLayer owns the precedence, and Move Station/Shot deliberately rest
+      // on an arrow (not their own `move`) so MapLibre's grab does not show
+      // through over empty map. Writing `move` straight to the DOM defeats that
+      // with nothing to correct it - hover only re-derives when the hovered id
+      // CHANGES, so a pointer left on empty map keeps the wrong cursor.
+      await page.keyboard.press('t');
+      await waitForActiveTool(page, 'move_station');
+
+      const canvas = page.getByTestId('map-canvas');
+      const box = (await canvas.boundingBox())!;
+      const x = box.x + box.width / 2;
+      const y = box.y + box.height / 2;
+
+      await page.keyboard.down('Control');
+      await page.waitForFunction(() => document.querySelector('canvas')?.style.cursor === 'grab');
+      await page.mouse.move(x, y);
+      await page.mouse.down();
+      await page.mouse.move(x + 60, y + 60, { steps: 6 });
+      // Release Ctrl BEFORE mouseup: that is what takes the restore's non-grab
+      // branch, the one that used to write the tool cursor raw.
+      await page.keyboard.up('Control');
+      await page.mouse.up();
+      await waitForMapIdle(page);
+
+      await expect
+        .poll(() => page.evaluate(() => document.querySelector('canvas')?.style.cursor ?? ''), {
+          timeout: 5000,
+        })
+        .toBe('default');
+    });
   });
 
   test.describe('Ctrl+Drag Panning Behavior', () => {

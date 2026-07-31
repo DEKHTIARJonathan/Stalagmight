@@ -2833,12 +2833,19 @@ function MapCanvas() {
           customPanActiveRef.current = false;
           ctrlPanActiveRef.current = false;
         }, 50);
-        // Restore cursor: if Ctrl still held, show grab cursor for next potential pan
-        // Otherwise restore the tool cursor
-        if (e.ctrlKey && CTRL_PAN_TOOLS.includes(activeTool)) {
-          map.current.getCanvas().style.cursor = 'grab';
+        // Restore cursor: if Ctrl still held, show grab cursor for next potential
+        // pan; otherwise restore the tool cursor. Hand it to SurveyLayer rather
+        // than writing the canvas directly, exactly as the passive effect above
+        // does - it owns the hover-vs-tool precedence, including Move
+        // Station/Shot's arrow fallback, which a raw `move` write here would
+        // defeat with nothing to correct it (hover only re-derives when the
+        // hovered id CHANGES, so a pointer resting on empty map keeps it).
+        const ctrlStillPanning = e.ctrlKey && CTRL_PAN_TOOLS.includes(activeTool);
+        const restored = ctrlStillPanning ? 'grab' : toolCursor(activeTool);
+        if (surveyLayerRef.current) {
+          surveyLayerRef.current.setBaseCursor(restored, ctrlStillPanning);
         } else {
-          map.current.getCanvas().style.cursor = toolCursor(activeTool);
+          map.current.getCanvas().style.cursor = restored;
         }
       }
     };
