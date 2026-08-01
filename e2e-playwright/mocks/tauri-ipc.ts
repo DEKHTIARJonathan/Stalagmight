@@ -4734,11 +4734,23 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               access_denied: false,
               server_error: null,
               exclude_geojson: false,
+              // [#303] Dirty ONLY because a chain step walked this copy back to an older
+              // revision - the user has edited nothing. Every consumer composes it with
+              // has_unpushed_edits (`isUnwoundNotEdited`), and it is what makes the close
+              // and quit prompts stop calling an old copy "unpushed changes" and stop
+              // pre-focusing the push. It was missing here, so it read as `undefined`
+              // rather than false and no spec could reach the state at all - the state
+              // this whole feature is built around.
+              unwound: false,
               // [#303] The hybrid undo stack's policy fields. Full is the default, and
               // not overridden, so the settings control renders "following the global
               // default" - the shape a spec sees unless it overrides this.
               undo_mode: 'full',
               undo_mode_overridden: false,
+              // A spec opts into a different link state by assigning this before the app
+              // asks; anything it carries wins over the defaults above.
+              ...((window as unknown as Record<string, unknown>)
+                .__speleoLinkStatusOverrides as Record<string, unknown> | undefined),
             };
           case 'speleodb_list_projects':
             return [];

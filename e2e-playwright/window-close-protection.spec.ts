@@ -333,6 +333,60 @@ test.describe('Window Close Protection', () => {
     await expect(page.getByTestId('single-system-view')).toBeVisible();
   });
 
+  test('window X on an UNWOUND copy hands the default to keeping the lock', async ({
+    page,
+  }) => {
+    // [#303] The state the whole feature is built around, and until now unreachable from a
+    // spec: dirty ONLY because a chain step walked the copy back, with nothing of the
+    // user's in it. Calling that "changes that have not been uploaded" and pre-focusing
+    // "Push, release & quit" pointed a stray Enter at the one destructive answer - pushing
+    // records the older survey over the newer one for everyone.
+    await createProject(page, 'Window X Unwound Test');
+
+    await page.evaluate(() => {
+      const e2e = (window as unknown as {
+        __E2E_TEST__?: {
+          projectStore?: { setState: (s: unknown) => void };
+          speleoStore?: { setState: (s: unknown) => void };
+        };
+      }).__E2E_TEST__;
+      e2e?.projectStore?.setState({ isDirty: false });
+      e2e?.speleoStore?.setState({
+        link: {
+          permission: 'READ_AND_WRITE',
+          editState: 'editing',
+          lockHolder: null,
+          lockedByOther: false,
+          hasUnpushedEdits: true,
+          // The term that separates "you have work to save" from "this is an older copy".
+          unwound: true,
+          forceEditing: false,
+          forceEditAllowed: false,
+          remoteState: 'up_to_date',
+          noAccess: false,
+          serverError: null,
+        },
+      });
+    });
+
+    await pressWindowCloseButton(page);
+
+    const dialog = page.getByTestId('speleodb-quit-dialog');
+    await expect(dialog).toBeVisible({ timeout: 5000 });
+    // The roles swap: keeping the lock changes nothing on the server, so THAT is what a
+    // stray Enter reaches, and pushing is reachable but no longer the default.
+    await expect(dialog.getByTestId('speleodb-quit-keep-lock')).toHaveAttribute(
+      'data-primary-action',
+      ''
+    );
+    await expect(dialog.getByTestId('speleodb-quit-push-release')).not.toHaveAttribute(
+      'data-primary-action',
+      ''
+    );
+    // ...and it stops describing the copy as work the user has not uploaded.
+    await expect(dialog).toContainText('older version of the survey');
+  });
+
   test('window X prompts on unpushed SpeleoDB edits held under our write lock', async ({
     page,
   }) => {

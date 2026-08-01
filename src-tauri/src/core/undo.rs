@@ -359,6 +359,24 @@ impl UndoStack {
         self.depth_limit
     }
 
+    /// [#303] Are this stack's timestamps non-decreasing, front to back?
+    ///
+    /// The invariant `next_stamp` maintains on the way in, checked on the way out of a
+    /// load. Untimestamped (legacy) entries are ignored rather than failing the check: they
+    /// sort as a prefix by construction - a legacy file is uniformly unstamped, since the
+    /// build that wrote it had no timestamps at all - and `drop_entries_up_to` reads them
+    /// as "before the cutoff" anyway.
+    fn stamps_ascend(stack: &VecDeque<UndoEntry>) -> bool {
+        let mut previous: Option<DateTime<Utc>> = None;
+        for stamp in stack.iter().filter_map(|entry| entry.timestamp) {
+            if previous.is_some_and(|prev| stamp < prev) {
+                return false;
+            }
+            previous = Some(stamp);
+        }
+        true
+    }
+
     /// [#303] Mirror the inherited-history watermark onto this stack.
     ///
     /// See [`Self::inherited_through`]. Always call it on a load, with `None` when the
@@ -861,6 +879,28 @@ impl UndoStack {
             }
         }
         Self::warn_dropped_unapplicable(&dropped);
+
+        // [#303] The undo stack must be ASCENDING in time, and nothing on the way in
+        // enforced it. `drop_entries_up_to` finds the post-push cut with `partition_point`,
+        // which is only meaningful on a monotone predicate; over an unsorted stack it
+        // returns an arbitrary boundary and `drain(..keep_from)` then deletes a wrong
+        // prefix - i.e. clear-on-push eats entries the upload never carried.
+        //
+        // Every file this app writes satisfies it (new entries are stamped above the one
+        // beneath and appended, undo/redo is an order-preserving stack pair, and both trims
+        // evict from the front), so this only fires on a corrupt or hand-crafted file - and
+        // this is the path that ingests another machine's history. Refuse rather than sort:
+        // stack order IS undo order, so reordering would silently change what undo does,
+        // turning a detectable fault into an invisible one.
+        if !Self::stamps_ascend(&self.undo_stack) {
+            tracing::warn!(
+                entries = self.undo_stack.len(),
+                purpose = "refuse a non-monotonic undo stack (#303)",
+                "loaded undo history is not in time order; dropping it rather than risk \
+                 deleting the wrong entries on the next push"
+            );
+            self.undo_stack.clear();
+        }
 
         // The redo stack is loaded UNFILTERED on purpose - see `is_applicable`.
         for (command_json, undo_data_json, timestamp_str) in redo_entries {
@@ -2290,6 +2330,64 @@ mod tests {
             stamps.last().copied(),
             "newest_stamp is the back, which the invariant makes the maximum"
         );
+    }
+
+    /// [#303] A load whose stamps are not in time order is refused, not sorted.
+    ///
+    /// `drop_entries_up_to` finds the post-push cut with `partition_point`, which needs a
+    /// monotone predicate; over an unsorted stack it returns an arbitrary boundary and the
+    /// drain then deletes a wrong prefix. Sorting would fix the search and break the
+    /// meaning - stack order IS undo order - so a stack that cannot be trusted is dropped.
+    #[test]
+    fn a_load_with_out_of_order_stamps_is_dropped_rather_than_trusted() {
+        let now = Utc::now();
+        let rows: Vec<(String, String, Option<String>)> = [now + chrono::Duration::minutes(5), now]
+            .iter()
+            .enumerate()
+            .map(|(i, ts)| {
+                let entry = UndoEntry {
+                    command: test_create_section_command(&format!("S{i}")),
+                    undo_data: UndoData::InverseCommand(test_delete_section_command(
+                        u32::try_from(i).expect("small"),
+                    )),
+                    timestamp: Some(*ts),
+                };
+                UndoStack::serialize_entry_with_timestamp(&entry).expect("serializes")
+            })
+            .collect();
+
+        let mut stack = UndoStack::new();
+        stack.load_from_persisted_with_timestamps(rows, Vec::new());
+
+        assert!(
+            stack.is_empty(),
+            "a non-monotonic undo stack must be refused, not silently reordered"
+        );
+    }
+
+    /// The ordinary case is untouched: an in-order load keeps every entry.
+    #[test]
+    fn an_in_order_load_keeps_its_entries() {
+        let now = Utc::now();
+        let rows: Vec<(String, String, Option<String>)> = [now, now + chrono::Duration::minutes(5)]
+            .iter()
+            .enumerate()
+            .map(|(i, ts)| {
+                let entry = UndoEntry {
+                    command: test_create_section_command(&format!("S{i}")),
+                    undo_data: UndoData::InverseCommand(test_delete_section_command(
+                        u32::try_from(i).expect("small"),
+                    )),
+                    timestamp: Some(*ts),
+                };
+                UndoStack::serialize_entry_with_timestamp(&entry).expect("serializes")
+            })
+            .collect();
+
+        let mut stack = UndoStack::new();
+        stack.load_from_persisted_with_timestamps(rows, Vec::new());
+
+        assert_eq!(stack.len(), 2, "an in-order load must be kept intact");
     }
 
     /// [#303] The watermark is the SECOND floor, and clearing the entry beneath is not
