@@ -189,6 +189,23 @@ impl Database {
     /// only marks pages free, so without it every deleted undo row is still
     /// physically present in the bytes that get uploaded. `VACUUM` rewrites the file
     /// from the live pages, dropping the freed ones for real.
+    /// [#303] Is a chain pointer recorded in this snapshot?
+    ///
+    /// Read from the SNAPSHOT rather than the live database because that is the copy whose
+    /// undo rows are about to be judged, and because `sanitize_push_snapshot` takes a bare
+    /// path, not an `AppState`. Safe to read here: `speleo_undo_chain` is stripped later in
+    /// `PUSH_SNAPSHOT_LOCAL_TABLES` than `undo_stack`, so it is still present at that point.
+    ///
+    /// An absent table answers false - a file that never had a chain step.
+    fn chain_pointer_present(conn: &Connection) -> Result<bool> {
+        if !Self::table_exists_on(conn, "speleo_undo_chain")? {
+            return Ok(false);
+        }
+        let rows: i64 =
+            conn.query_row("SELECT COUNT(*) FROM speleo_undo_chain", [], |r| r.get(0))?;
+        Ok(rows > 0)
+    }
+
     pub fn sanitize_push_snapshot(
         snapshot: &Path,
         keep_undo: bool,
@@ -221,8 +238,31 @@ impl Database {
                             "sanitize_push_snapshot: dropped inherited undo rows from the upload"
                         );
                     }
+                    continue;
                 }
-                continue;
+                // [#303] No watermark. That is TWO different states and they must not be
+                // confused: nothing was ever inherited (the ordinary push - keep the whole
+                // stack), or a chain step DID load a revision's history and the watermark
+                // write failed. That write is best-effort and only warns, so the second
+                // case is reachable, and taking it for the first ships the loaded history
+                // and duplicates every one of its operations in the next commit - the
+                // exact failure the cut exists to prevent. An unparseable watermark
+                // already fails closed here; an absent one silently did not.
+                //
+                // The chain pointer separates them, and it is still readable because
+                // `speleo_undo_chain` is stripped LATER in this same list. Unknown extent
+                // means strip the lot: fall through to the ordinary (fatal) strip below
+                // rather than `continue`, so a snapshot that cannot be cleaned refuses the
+                // upload instead of carrying someone else's history into the commit.
+                if !Self::chain_pointer_present(&conn)? {
+                    continue;
+                }
+                tracing::warn!(
+                    purpose = "fail closed on an unknown inherited-history extent (#303)",
+                    "a chain step is recorded but its watermark is missing; stripping the \
+                     whole undo history from this push rather than risk duplicating a \
+                     loaded revision's operations"
+                );
             }
             if !Self::table_exists_on(&conn, table)? {
                 // An older snapshot shape simply has no such table - nothing local

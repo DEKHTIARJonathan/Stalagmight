@@ -23,11 +23,17 @@ impl AppState {
     /// been swapped out for a local one mid-save). Those pass the link they already
     /// have to [`Self::undo_policy_for`] instead.
     pub(crate) fn undo_policy(&self) -> UndoPolicy {
+        // Recover a poisoned guard rather than falling back: `.ok()` here answered
+        // `UndoPolicy::local()`, which makes `keep_undo` false and strips a Full-mode
+        // project's history from the push - silently, with no log line - because some
+        // unrelated thread panicked. This is a plain read of a link row, so taking the
+        // value is the same judgement `project_io.rs` already makes at its own acquisitions.
         let link = self
             .database
             .lock()
-            .ok()
-            .and_then(|guard| guard.as_ref().and_then(|db| db.load_speleo_link().ok()))
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_ref()
+            .and_then(|db| db.load_speleo_link().ok())
             .flatten();
         self.undo_policy_for(link.as_ref())
     }
@@ -119,12 +125,17 @@ impl AppState {
     }
 
     fn apply_undo_depth_limit(&self, policy: UndoPolicy) {
-        if let Ok(mut undo) = self.undo_stack.lock() {
-            if policy.unlimited_depth() {
-                undo.set_byte_budget(crate::core::undo::UNDO_BYTE_BUDGET_BYTES);
-            } else {
-                undo.use_count_limit();
-            }
+        // Same reasoning: skipping the arm left the stack on its previous bound, and the
+        // `enforce_depth_limit` at the end of a load then truncates to it - the loss the
+        // load path says no later re-arm can undo.
+        let mut undo = self
+            .undo_stack
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if policy.unlimited_depth() {
+            undo.set_byte_budget(crate::core::undo::UNDO_BYTE_BUDGET_BYTES);
+        } else {
+            undo.use_count_limit();
         }
     }
 

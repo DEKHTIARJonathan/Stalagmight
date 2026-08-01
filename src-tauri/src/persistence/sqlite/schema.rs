@@ -403,6 +403,20 @@ impl Database {
             [],
         )?;
 
+        // [#303] Its sibling, on the same terms. Created HERE rather than lazily on first
+        // write (which is what `save_speleo_undo_watermark` used to be the only creator of)
+        // so that "the table is absent" and "there is no watermark" stop being the same
+        // observable state - the push has to tell them apart to decide whether it may keep
+        // undo history - and so a maintainer tracing the migration finds it where its
+        // sibling is rather than inside a setter.
+        self.conn.execute(
+            "CREATE TABLE IF NOT EXISTS speleo_undo_watermark (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                inherited_through TEXT NOT NULL
+            )",
+            [],
+        )?;
+
         // Add uuid column to shots table (schema v5→v6: per-shot UUIDs,
         // the stable station identity every cross-reference anchors to
         // (`StationKey::AfterShot`) and the `<UUID>` the Ariane export
@@ -1372,6 +1386,16 @@ impl Database {
             CREATE TABLE IF NOT EXISTS speleo_undo_chain (
                 id INTEGER PRIMARY KEY CHECK (id = 1),
                 unwound_from_sha TEXT NOT NULL
+            );
+
+            -- [#303] How far the loaded history reaches: every undo row stamped at or
+            -- before this instant came off a revision a chain step downloaded, so the next
+            -- push cuts them rather than shipping them a second time. Single row id=1;
+            -- absent row = nothing inherited. LOCAL-ONLY, stripped from every push
+            -- snapshot (PUSH_SNAPSHOT_LOCAL_TABLES).
+            CREATE TABLE IF NOT EXISTS speleo_undo_watermark (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                inherited_through TEXT NOT NULL
             );
 
             -- Undo/redo stack (BLOB columns hold gzip-compressed JSON)

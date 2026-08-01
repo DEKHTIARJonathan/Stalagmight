@@ -4612,6 +4612,54 @@ fn snapshot_with_exact_stamps(
     path
 }
 
+/// [#303] A chain step with no watermark must strip the history, not ship it.
+///
+/// `speleodb_set_inherited_through` is best-effort - a DB hiccup logs a warning and moves
+/// on - so "no watermark" has two meanings: nothing was inherited, or something was and we
+/// lost track of how much. Treating the second as the first uploads a loaded revision's
+/// history and duplicates every one of its operations in the next commit. The chain
+/// pointer is what tells them apart.
+#[test]
+fn a_chain_step_with_no_watermark_strips_the_whole_undo_history() {
+    let temp = TempDir::new().unwrap();
+    let path = snapshot_with_exact_stamps(
+        &temp,
+        "no-watermark.stalx",
+        &[("mine", Some(Utc::now().to_rfc3339()))],
+    );
+    // A chain step happened; its watermark write did not land.
+    {
+        let db = Database::open_existing(&path).unwrap();
+        db.save_speleo_undo_chain(Some("deadbeefcafe")).unwrap();
+    }
+
+    Database::sanitize_push_snapshot(&path, true, None).unwrap();
+
+    assert!(
+        surviving_undo_commands(&path).is_empty(),
+        "unknown inherited extent must fail closed and strip the lot"
+    );
+}
+
+/// ...and with no chain step, an absent watermark means exactly what it looks like.
+#[test]
+fn no_chain_step_and_no_watermark_keeps_the_whole_undo_history() {
+    let temp = TempDir::new().unwrap();
+    let path = snapshot_with_exact_stamps(
+        &temp,
+        "ordinary.stalx",
+        &[("mine", Some(Utc::now().to_rfc3339()))],
+    );
+
+    Database::sanitize_push_snapshot(&path, true, None).unwrap();
+
+    assert_eq!(
+        surviving_undo_commands(&path).len(),
+        1,
+        "an ordinary Full-mode push keeps the history it authored"
+    );
+}
+
 /// [#303] The three rows the cut's boundary actually turns on. Every other test here
 /// seeds rows an hour either side, so flipping `is_none_or` to `is_some_and` - which
 /// would re-upload every legacy entry on every push - passed the lot.

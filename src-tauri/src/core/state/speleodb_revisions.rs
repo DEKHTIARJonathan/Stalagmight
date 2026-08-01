@@ -73,7 +73,13 @@ fn revision_swap_base(
         // like any other mutation, so the moment the user actually steps back through
         // the loaded history the copy is dirty again and Done pushes it. Done over a
         // copy nobody has touched now just releases the lock.
-        let restored_the_tip = server_tip.as_deref() == Some(hexsha);
+        // Case-insensitive like the six SHA comparisons in `sync.rs`: git object ids come
+        // back from the server and either case is legitimate, and a false "not the tip"
+        // here stamps the copy dirty - which is exactly the empty-commit push the block
+        // above exists to prevent.
+        let restored_the_tip = server_tip
+            .as_deref()
+            .is_some_and(|tip| tip.eq_ignore_ascii_case(hexsha));
         (server_tip, !restored_the_tip)
     } else {
         (Some(hexsha.to_owned()), false)
@@ -123,6 +129,46 @@ impl AppState {
     ///    `discard_unpushed` is that dialog reporting it did. Absent the acknowledgement
     ///    this still refuses, so no other caller can discard un-pushed work by passing
     ///    `keep_undo_history` alone.
+    /// [#303] Is the revision being asked for actually the step the claimed direction
+    /// leads to?
+    ///
+    /// `chain_forward` arrives raw over IPC and decides WHICH stack `speleodb_guard_unwind`
+    /// requires to be empty - undo going back, redo going forward. So a backward step
+    /// declared forward is measured against the redo stack, which an ordinary session
+    /// leaves empty, and the guard waves through exactly the case it exists to refuse: a
+    /// copy sitting between commits, whose un-walked undo entries the swap then discards.
+    /// The structural tripwire only greps for `if chain_forward`, so it cannot see this.
+    ///
+    /// Rather than trust the flag, ask the resolver it names and require the requested
+    /// `hexsha` to be what that resolver returns. A lie about direction fails because the
+    /// SHA will not match. Costs the same `GET /revisions/` the affordance already spent to
+    /// offer the step, and it is spent only on the `keep_undo_history` path - the one that
+    /// gets to keep a downloaded copy's history, and so the one that has to earn it.
+    ///
+    /// Case-insensitive, like every other SHA comparison in this feature.
+    fn speleodb_verify_chain_target(
+        &self,
+        hexsha: &str,
+        chain_forward: bool,
+    ) -> Result<(), SpeleoErrorDto> {
+        let expected = if chain_forward {
+            self.speleodb_rewind_target()?.map(|t| t.hexsha)
+        } else {
+            self.speleodb_unwind_target()?.map(|t| t.hexsha)
+        };
+        if expected
+            .as_deref()
+            .is_some_and(|sha| sha.eq_ignore_ascii_case(hexsha))
+        {
+            return Ok(());
+        }
+        Err(local_dto(SpeleoDbError::Io(
+            "that revision is not the next step in the direction requested; reopen the \
+             undo history to pick it up again"
+                .to_owned(),
+        )))
+    }
+
     fn speleodb_guard_unwind(
         &self,
         link: &crate::models::SpeleoLink,
@@ -491,6 +537,8 @@ impl AppState {
         // throws away; the guard still decides whether that matters.
         if keep_undo_history {
             self.speleodb_guard_unwind(&open_link, discard_unpushed, chain_forward)?;
+            // ...and check the direction the guard just branched on was the truth.
+            self.speleodb_verify_chain_target(&hexsha, chain_forward)?;
         }
 
         let (endpoint, token) = self.speleodb_active_token().map_err(local_dto)?;

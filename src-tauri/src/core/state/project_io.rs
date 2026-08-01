@@ -523,6 +523,12 @@ impl AppState {
         // dirty bit is set-only here - only a later server push clears it.
         // EXCEPT on a copy save, where dropping the row is the whole point: the
         // copy is a plain unmanaged project.
+        // [#303] The chain position and the inherited-history watermark join the link
+        // under the SAME guard, rather than each carrying their own: all three describe
+        // this machine's relationship to the SERVER, so a copy that has deliberately shed
+        // its link must shed them too. A copy that kept the watermark and was later linked
+        // would have its own first push cut the user's history as "inherited". Grouped
+        // because the per-site version of this rule has already been missed once.
         if !copy_only {
             if let Some(link) = &speleo_link {
                 if let Err(e) = db.save_speleo_link(Some(link)) {
@@ -530,6 +536,33 @@ impl AppState {
                         error = %e,
                         purpose = "preserve SpeleoDB hand-off link on save",
                         "Failed to copy speleo_link onto the fresh save file"
+                    );
+                }
+            }
+            // [#303] ...and the Unwind chain position with it. Only written when one exists:
+            // `None` is already the fresh file's state, and writing it unconditionally would
+            // mean every save of every project touched this table for nothing.
+            if let Some(sha) = &speleo_undo_chain {
+                if let Err(e) = db.save_speleo_undo_chain(Some(sha)) {
+                    tracing::warn!(
+                        error = %e,
+                        purpose = "preserve the Unwind chain position on save (#303)",
+                        "Failed to copy speleo_undo_chain onto the fresh save file; the next \
+                         Unwind will restart from BASE and may warn about un-pushed work that \
+                         is only a previous Unwind's own doing"
+                    );
+                }
+            }
+
+            // [#303] Likewise the inherited-history watermark.
+            if let Some(ts) = &speleo_undo_watermark {
+                if let Err(e) = db.save_speleo_undo_watermark(Some(ts)) {
+                    tracing::warn!(
+                        error = %e,
+                        purpose = "preserve the inherited-history watermark on save (#303)",
+                        "Failed to copy speleo_undo_watermark onto the fresh save file; the next \
+                         push would carry the loaded revision's history as if it had been \
+                         authored in this session"
                     );
                 }
             }
@@ -543,34 +576,6 @@ impl AppState {
         // opens.
         if copy_only {
             self.persist_undo_stacks_into(&db);
-        }
-
-        // [#303] ...and the Unwind chain position with it. Only written when one exists:
-        // `None` is already the fresh file's state, and writing it unconditionally would
-        // mean every save of every project touched this table for nothing.
-        if let Some(sha) = &speleo_undo_chain {
-            if let Err(e) = db.save_speleo_undo_chain(Some(sha)) {
-                tracing::warn!(
-                    error = %e,
-                    purpose = "preserve the Unwind chain position on save (#303)",
-                    "Failed to copy speleo_undo_chain onto the fresh save file; the next \
-                     Unwind will restart from BASE and may warn about un-pushed work that \
-                     is only a previous Unwind's own doing"
-                );
-            }
-        }
-
-        // [#303] Likewise the inherited-history watermark.
-        if let Some(ts) = &speleo_undo_watermark {
-            if let Err(e) = db.save_speleo_undo_watermark(Some(ts)) {
-                tracing::warn!(
-                    error = %e,
-                    purpose = "preserve the inherited-history watermark on save (#303)",
-                    "Failed to copy speleo_undo_watermark onto the fresh save file; the next \
-                     push would carry the loaded revision's history as if it had been \
-                     authored in this session"
-                );
-            }
         }
 
         // Close the temp database before renaming
