@@ -1207,6 +1207,29 @@ impl Database {
             // that. The history is not worth the risk.
             self.drop_legacy_undo_history()?;
         }
+        if current < 16 {
+            // [#303] Same drop again, for a different reason: PRIVACY, not replay safety.
+            //
+            // Until v16 an undo `ProjectSnapshot` / `ProjectSnapshotPair` was
+            // `serde_json::to_string(project)` over the WHOLE `Project`, including
+            // `file_path` - an absolute path on the authoring machine
+            // (`/home/<user>/…`, `C:\Users\<Real Name>\…`). That was harmless while the
+            // push stripped `undo_stack` unconditionally; v16 makes Full mode ship it, so
+            // those rows would ride into the project's git history, permanently, readable
+            // by every collaborator and by whoever runs the server.
+            //
+            // `AppState::serialize_project_snapshot` clears the field from here on, but it
+            // is producer-side: it cannot reach rows already on disk. Nor does the
+            // clear-on-lock path, which deliberately skips a copy that is already dirty
+            // ("the user's own history survives") - i.e. exactly the upgrade-with-unpushed-
+            // work case. Dropping the pre-v16 stacks at the migration is the only place
+            // that catches every existing file before its first push.
+            //
+            // The cost is the same one v13 and v15 already charged: a one-time loss of
+            // local undo history at upgrade, for history that was capped and best-effort
+            // anyway.
+            self.drop_legacy_undo_history()?;
+        }
         self.set_user_version(SCHEMA_VERSION)?;
         // Keep project-level schema_version in sync with PRAGMA user_version.
         let _ = self.conn.execute(

@@ -2157,6 +2157,47 @@ fn write_legacy_v6_project_with_undo_history(dir: &TempDir, name: &str) -> std::
     path
 }
 
+/// [#303] A pre-v16 file's undo rows carry `file_path`, so the migration must drop them.
+///
+/// Until v16 a snapshot entry was `serde_json::to_string(project)` over the whole
+/// `Project`, absolute path included. That was harmless while the push stripped
+/// `undo_stack` unconditionally; Full mode now ships it, so those rows would put the
+/// authoring machine's username and directory layout into the project's git history for
+/// good. `serialize_project_snapshot` clears the field from here on but is producer-side
+/// and cannot reach rows already written, and clear-on-lock deliberately skips a dirty
+/// copy - which is exactly the upgrade-with-unpushed-work case. The migration is the only
+/// point that catches every existing file before its first push.
+#[test]
+fn a_pre_v16_file_loses_its_path_bearing_undo_history_on_open() {
+    let temp_dir = TempDir::new().unwrap();
+    let path = temp_dir.path().join("pre-v16.stalx");
+    {
+        let mut db = Database::open(&path).unwrap();
+        db.save_project(&Project::new("Leaky".to_string(), None))
+            .unwrap();
+        // A snapshot entry of the shape the old producer wrote.
+        db.save_undo_stack_with_timestamps(vec![(
+            r#"{"type":"delete_section","section_id":1}"#.to_string(),
+            r#"{"ProjectSnapshot":"{\"file_path\":\"/home/victim/caves/secret.stalx\"}"}"#
+                .to_string(),
+            None,
+        )])
+        .unwrap();
+        // Rewind the stamp so the file looks exactly like one written by a v15 build.
+        db.set_user_version(15).unwrap();
+        drop(db);
+    }
+
+    let db = Database::open_existing(&path).unwrap();
+    let undo = db.load_undo_stack_with_timestamps().unwrap_or_default();
+    assert!(
+        undo.is_empty(),
+        "the v16 migration must drop pre-v16 undo history; {} row(s) survived carrying \
+         a local path",
+        undo.len()
+    );
+}
+
 #[test]
 fn test_legacy_v6_undo_history_dropped_on_open_existing() {
     let temp_dir = TempDir::new().unwrap();
