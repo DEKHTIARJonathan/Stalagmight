@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { invokeIpc } from '../utils/ipc';
+import { useProjectStore } from '../store/projectStore';
 import { useSpeleoStore } from '../store/speleoStore';
 import type { SpeleoRewindTarget, SpeleoUnwindTarget } from '../types/ipc.generated';
 
@@ -48,6 +49,17 @@ export type ChainTarget =
  */
 const TARGET_TTL_MS = 5000;
 
+/**
+ * Stable identity for the open project, in the same shape `useMapTools` uses for its
+ * along-line replies (#26): a distinct file - even a duplicate sharing created_at /
+ * modified_at - and any edit yield a different key, so a reply issued for one project
+ * cannot be stored against another.
+ */
+function projectIdentityKey(): string {
+  const project = useProjectStore.getState().project;
+  return `${project?.created_at ?? ''}|${project?.modified_at ?? ''}|${project?.file_path ?? ''}`;
+}
+
 export function useUnwindTarget(
   enabled: boolean,
   direction: ChainDirection = 'back',
@@ -65,6 +77,11 @@ export function useUnwindTarget(
   // no window in which a stale answer for the other direction can be read back.
   const cacheKey = `${direction}:${String(isRemote)}`;
   const cacheRef = useRef<{ at: number; key: string; value: ChainTarget | null } | null>(null);
+  // Monotonic stamp for the in-flight fetch. `resolve` (hover) and `refresh` (panel open)
+  // are two entry points into the same request, so a cursor that crosses the toolbar and
+  // then opens the panel has BOTH running - and whichever the server answers last used to
+  // win, target and memo alike. Only the newest request may store.
+  const requestIdRef = useRef(0);
 
   const fetchTarget = useCallback(async (): Promise<ChainTarget | null> => {
     if (!isRemote) return null;
@@ -90,11 +107,28 @@ export function useUnwindTarget(
     [cacheKey],
   );
 
+  // One fetch, stamped and bound to the project it was issued for, storing only if it is
+  // still the answer anyone asked for. Both guards cover the memo as well as `target`: a
+  // stale value cached here outlives its own reply for the whole TTL, so guarding only
+  // the setState would trade one wrong render for five seconds of them.
+  const fetchNewest = useCallback(async (): Promise<ChainTarget | null> => {
+    requestIdRef.current += 1;
+    const requestId = requestIdRef.current;
+    // Captured at request time: the backend binds the resulting action to whatever link is
+    // open when it is PRESSED, so a hexsha resolved against a project the user has since
+    // left describes a step that no longer exists.
+    const requestProjectKey = projectIdentityKey();
+    const value = await fetchTarget();
+    if (requestId !== requestIdRef.current) return null;
+    if (projectIdentityKey() !== requestProjectKey) return null;
+    return remember(value);
+  }, [fetchTarget, remember]);
+
   // The open-panel path: always a real fetch, since a push or a lock change while the
   // panel sits open is exactly what it is there to notice.
   const refresh = useCallback(async () => {
-    remember(await fetchTarget());
-  }, [fetchTarget, remember]);
+    await fetchNewest();
+  }, [fetchNewest]);
 
   // The before-opening path: answer from the memo when it is fresh, so a cursor crossing
   // the toolbar cannot turn into one `GET /revisions/` per pass. Stores either way, so an
@@ -105,8 +139,11 @@ export function useUnwindTarget(
       setTarget(cached.value);
       return cached.value;
     }
-    return remember(await fetchTarget());
-  }, [cacheKey, fetchTarget, remember]);
+    // A discarded reply answers `null` rather than the value it fetched: the caller opens
+    // the panel on this answer, and a step resolved for a project the user has left (or
+    // superseded by a newer ask) is not something to open a panel on.
+    return fetchNewest();
+  }, [cacheKey, fetchNewest]);
 
   useEffect(() => {
     if (!enabled) {

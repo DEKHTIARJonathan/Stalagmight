@@ -461,6 +461,29 @@ impl AppState {
                 "acquire the write lock before restoring a revision".to_owned(),
             )));
         }
+        // [#303] Keeping the downloaded copy's undo history is a LOCK-HELD RESTORE or
+        // nothing. (Spelled "the Keep variant" rather than in full: the
+        // `undo_history_keep_is_unwind_only` tripwire counts raw occurrences of that
+        // literal across the production sources, prose included, so writing it here would
+        // read as a second waiver site.)
+        // The Keep variant hands a server tree's history to a stack the user
+        // can then push from, and writes the chain pointer and the inherited watermark that
+        // decide what the next upload cuts - which is why `repair.rs` and the
+        // `InheritedUndo` docs both describe it as reachable only through an explicit,
+        // confirmed, lock-held Unwind. Nothing in the backend made that true: the gate above
+        // asks about `restore` alone, so `keep_undo_history: true` with `restore: false`
+        // took the Keep branch, stamped the watermark and wrote the pointer with no lock
+        // held. Only `useRestoreRevision.ts`'s clamp stood in the way, and an invariant the
+        // whole push path is written against cannot live in one frontend caller.
+        //
+        // Spelled as the full precondition rather than `!restore`, so it does not quietly
+        // depend on the gate above running first: this refusal has to hold on its own.
+        if keep_undo_history && !(restore && self.edit_enabled()) {
+            return Err(local_dto(SpeleoDbError::Io(
+                "loading a revision's undo history needs a restore with the write lock held"
+                    .to_owned(),
+            )));
+        }
         // [#303] The Unwind flavour: keeping the downloaded copy's undo history is a
         // waiver of the #194 b3 guard, so its preconditions are checked HERE and never
         // taken on trust from the frontend. `discard_unpushed` is not a decision the FE
@@ -704,8 +727,95 @@ impl AppState {
 #[cfg(test)]
 #[expect(clippy::expect_used, reason = "unit test fixtures")]
 mod tests {
-    use super::{revision_swap_base, unwind_discards_unpushed, validate_hexsha};
+    use super::{revision_swap_base, unwind_discards_unpushed, validate_hexsha, AppState};
+    use crate::models::{Project, SpeleoLink};
+    use crate::persistence::Database;
     use crate::speleodb::SpeleoDbError;
+
+    /// The project id every fixture here is stamped with; `validate_project_id` requires
+    /// a UUID, so it cannot be an arbitrary string.
+    const FIXTURE_PROJECT_ID: &str = "11111111-1111-1111-1111-111111111111";
+
+    /// An `AppState` holding a LINKED project, which is as far as the revision-swap
+    /// verb's entry guards can be driven offline: everything past them needs a session
+    /// token, a server and the app cache dir.
+    fn linked_state() -> (AppState, tempfile::TempDir) {
+        let temp = tempfile::TempDir::new().expect("temp dir");
+        let path = temp.path().join("linked.stalx");
+        let mut db = Database::open(&path).expect("open fixture .stalx");
+        db.save_project(&Project::new("Linked".to_owned(), None))
+            .expect("save fixture project");
+        db.save_speleo_link(Some(&SpeleoLink {
+            endpoint: "https://example.invalid".to_owned(),
+            project_id: FIXTURE_PROJECT_ID.to_owned(),
+            project_name: "Linked".to_owned(),
+            base_commit_sha: Some("deadbeefcafe".to_owned()),
+            has_unpushed_edits: false,
+            last_edit_at: None,
+            last_verify_at: None,
+            undo_mode: None,
+        }))
+        .expect("stamp the fixture link");
+
+        let state = AppState::new().expect("construct AppState");
+        state.set_database_for_tests(db);
+        (state, temp)
+    }
+
+    /// Ask for a revision swap that keeps the downloaded copy's undo history.
+    fn keep_history_swap(state: &AppState, restore: bool) -> Result<(), String> {
+        state
+            .speleodb_restore_revision(
+                FIXTURE_PROJECT_ID.to_owned(),
+                "Linked".to_owned(),
+                "deadbeefcafe".to_owned(),
+                restore,
+                false,
+                None,
+                true,
+                false,
+                false,
+            )
+            .map(|_| ())
+            .map_err(|e| e.message)
+    }
+
+    /// [#303] Keeping a downloaded revision's undo history is a lock-held RESTORE or
+    /// nothing, and the backend is where that is decided.
+    ///
+    /// `InheritedUndo::Keep` hands a server tree's history to a stack the user can push
+    /// from, and stamps the watermark that decides what the next upload cuts - which is
+    /// exactly the "explicit, confirmed, lock-held Unwind" that `repair.rs` and the
+    /// `InheritedUndo` docs are written against. The verb gated only `restore`, so a
+    /// read-only View asking for `keep_undo_history` took the Keep branch anyway; the sole
+    /// thing preventing it was `useRestoreRevision.ts` clamping the flag on its way out,
+    /// and an invariant the whole push path relies on cannot live in one frontend caller.
+    #[test]
+    fn keeping_the_undo_history_is_refused_without_a_lock_held_restore() {
+        crate::test_helpers::with_isolated_config(|| {
+            let (state, _temp) = linked_state();
+
+            // A View (`restore: false`) can never inherit history, lock or no lock. This is
+            // the case the frontend clamp was the only guard for.
+            state.set_edit_enabled(true);
+            let err = keep_history_swap(&state, false)
+                .expect_err("a View must not be able to inherit a revision's undo history");
+            assert!(
+                err.contains("undo history"),
+                "the refusal must name what was refused, got {err:?}"
+            );
+
+            // ...and a Restore without the write lock is refused too, so no arm of the verb
+            // reaches the Keep branch outside an edit session.
+            state.set_edit_enabled(false);
+            let err = keep_history_swap(&state, true)
+                .expect_err("a lockless restore must not inherit a revision's undo history");
+            assert!(
+                err.contains("write lock"),
+                "the refusal must name the missing lock, got {err:?}"
+            );
+        });
+    }
 
     /// The production region of this file, split out of the test module so the
     /// source-level tripwire below cannot match its own assertions.

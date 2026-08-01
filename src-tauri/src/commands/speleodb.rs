@@ -411,6 +411,13 @@ pub async fn speleodb_unwind_target(
 /// that the copy was merely unwound, because the menu action reaches it with real edits
 /// pending on purpose.
 ///
+/// What it does insist on is `acknowledged` - the caller reporting that it put the loss in
+/// front of the user, the same shape as the Unwind guard's `discard_unpushed`. Without it
+/// the backend has no way to tell a confirmed discard from a stray invocation of the one
+/// verb here that destroys work irrecoverably. It is NOT a read-only or lock gate: a 401
+/// auto-drop leaves the session read-only while still holding un-pushed work, and this is
+/// the way out of that state.
+///
 /// `keep_lock` decides the only thing left once the copy is gone - carry on editing from
 /// the latest, or hand the project back. Keeping returns the Start-editing outcome, so a
 /// lock someone else took meanwhile surfaces as it would anywhere else; releasing returns
@@ -419,8 +426,12 @@ pub async fn speleodb_unwind_target(
 pub async fn speleodb_discard_changes(
     app: AppHandle,
     keep_lock: bool,
+    acknowledged: bool,
 ) -> Result<Option<StartEditingResult>, SpeleoErrorDto> {
-    run_blocking(app, move |s| s.speleodb_discard_changes(keep_lock)).await
+    run_blocking(app, move |s| {
+        s.speleodb_discard_changes(keep_lock, acknowledged)
+    })
+    .await
 }
 
 /// [#303] Which revision a "Redo into next SpeleoDB version" step would load, or `None`

@@ -370,10 +370,31 @@ impl AppState {
     /// (someone else took it meanwhile) surfaces as the ordinary contended-lock error, by
     /// which time the discard has already happened and the copy is at the tip - which is
     /// still the state they asked for.
+    ///
+    /// `acknowledged` is the one thing it does insist on, and it is not a second guess at
+    /// the decision: it is the difference between a caller that ASKED to destroy unpushed
+    /// work and a caller that arrived here. Every sibling verb re-derives its own
+    /// preconditions - Done checks the gate and the dirty bit, the Unwind guard checks the
+    /// stack and the acknowledgement - while this one, the only verb that destroys work
+    /// with no way back, validated nothing but a link and a token. Mirrors
+    /// `speleodb_guard_unwind`'s `discard_unpushed`: the caller reports that the waiver was
+    /// shown, and the backend refuses without it.
+    ///
+    /// Deliberately NOT gated on the edit gate or a held lock, which was considered and
+    /// rejected: a 401 auto-drop (`speleodb_forget`) leaves the session read-only while the
+    /// copy still holds unpushed work, and discard is the escape hatch for exactly that
+    /// state. A lock gate would close the only door out of it.
     pub(crate) fn speleodb_discard_changes(
         &self,
         keep_lock: bool,
+        acknowledged: bool,
     ) -> Result<Option<StartEditingResult>, SpeleoErrorDto> {
+        if !acknowledged {
+            return Err(local_dto(SpeleoDbError::Io(
+                "discarding the local copy destroys un-pushed work and must be confirmed"
+                    .to_owned(),
+            )));
+        }
         let link = self.speleodb_validated_link()?;
         let (endpoint, token) = self.speleodb_active_token().map_err(local_dto)?;
         let insecure_http = self.speleodb_insecure_http();
@@ -704,30 +725,6 @@ impl AppState {
         // together, so the None branch of edits_captured_by_push is unreachable for
         // a real dirty bit here.)
         let push_start = chrono::Utc::now().to_rfc3339();
-        // [#303] A SECOND instant, for the undo stack only, and deliberately not the same
-        // one. These two comparisons ask different questions:
-        //
-        // - `push_start` above asks "did a real edit happen after the snapshot?", against
-        //   `last_edit_at`, which `mark_remote_dirty` stamps from the wall clock. That has
-        //   to stay wall-clock, or an edit landing DURING the push would read as captured
-        //   and have its dirty bit cleared without ever being uploaded.
-        // - this one asks "which stack entries did the upload contain?", against stamps
-        //   the stack orders itself (`UndoStack::next_stamp`). Those can sit slightly
-        //   ahead of the wall clock - a chain step loads entries stamped by whichever
-        //   machine authored them - and an entry above the cutoff is simply never cleared,
-        //   so the next push carries it a second time.
-        //
-        // Taken at push START, not at clear time: an edit made while the upload is in
-        // flight stamps above this and must survive, exactly as it does for `push_start`.
-        let undo_cutoff = self
-            .undo_stack
-            .lock()
-            .ok()
-            .and_then(|stack| stack.newest_stamp())
-            .map_or_else(
-                || push_start.clone(),
-                |newest| newest.max(chrono::Utc::now()).to_rfc3339(),
-            );
 
         // Flush in-memory state to the live `.stalx` FIRST, THEN render the `.tml`.
         // save_project heals the in-memory project (mints + DEDUPS shot UUIDs and
@@ -752,6 +749,39 @@ impl AppState {
         // from the live file for the same reason and at the same moment: the flush above
         // has just written the stack these rows are cut from.
         let inherited_through = self.speleodb_inherited_through();
+
+        // [#303] A SECOND instant, for the undo stack only, and deliberately not the same
+        // one as `push_start`. The two comparisons ask different questions:
+        //
+        // - `push_start` asks "did a real edit happen after the snapshot?", against
+        //   `last_edit_at`, which `mark_remote_dirty` stamps from the wall clock. That has
+        //   to stay wall-clock, or an edit landing DURING the push would read as captured
+        //   and have its dirty bit cleared without ever being uploaded.
+        // - this one asks "which stack entries did the upload contain?", against stamps
+        //   the stack orders itself (`UndoStack::next_stamp`). Those can sit slightly
+        //   ahead of the wall clock - a chain step loads entries stamped by whichever
+        //   machine authored them - and an entry above the cutoff is simply never cleared,
+        //   so the next push carries it a second time.
+        //
+        // Taken here, between the flush and the snapshot, so it describes the FILE that is
+        // about to be copied rather than the stack as it stood before the flush. Captured
+        // ahead of `save_project` it could name an instant BELOW an entry the flush then
+        // wrote into the upload: that entry ships, and `speleodb_clear_undo_after_push`
+        // keeps it anyway, so the next push records the operation a second time.
+        //
+        // It still floors on the wall clock, which is what preserves the property the
+        // earlier capture was really protecting: an entry pushed AFTER the snapshot is not
+        // in the upload, stamps above this instant, and survives the clear so the next push
+        // carries it - exactly as `push_start` keeps its dirty bit.
+        let undo_cutoff = self
+            .undo_stack
+            .lock()
+            .ok()
+            .and_then(|stack| stack.newest_stamp())
+            .map_or_else(
+                || push_start.clone(),
+                |newest| newest.max(chrono::Utc::now()).to_rfc3339(),
+            );
 
         // Self-contained snapshot of the live `.stalx` (#195), dirty bit cleared in
         // the COPY so it never rides to the server.

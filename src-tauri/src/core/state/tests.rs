@@ -274,6 +274,79 @@ fn test_open_project_restores_undo_redo_and_assigns_closure_ids() {
     }
 }
 
+/// [#303] A Full-mode linked project opens with ALL of its persisted history, however
+/// far past the entry-count window it reaches.
+///
+/// The bound has to be armed BEFORE the restore, and that ordering is the whole test:
+/// `load_from_persisted_with_timestamps` ends in `enforce_depth_limit`, so whatever bound
+/// is in force at that instant is the one that trims. Arming afterwards meant the restore
+/// ran under the startup default `Count(undo_history_limit)` and evicted everything older
+/// than the window on the way in - which Count -> Bytes cannot undo. The next
+/// full-rewrite save then wrote the truncation to disk and the next push shipped a commit
+/// missing the history it was meant to carry.
+#[test]
+fn opening_a_full_mode_project_restores_history_deeper_than_the_count_window() {
+    // `open_project` writes the recent-projects list into the global config, and the
+    // entry-count window this test reasons about is read from it too.
+    crate::test_helpers::with_isolated_config(|| {
+        let temp_dir = TempDir::new().unwrap();
+        let path = temp_dir.path().join("deep_history.stalx");
+
+        // Half again over the 100-entry default window, so the shortfall is unambiguous.
+        const PERSISTED: usize = 150;
+        let now = chrono::Utc::now();
+        let entries: Vec<_> = (0..PERSISTED)
+            .map(|i| {
+                let entry = UndoEntry {
+                    command: Command::CreateProject {
+                        name: format!("Entry {i}"),
+                        location: None,
+                    },
+                    // Real undo data: the loader drops `UndoData::None` from the undo
+                    // stack, which would test that filter instead of the depth bound.
+                    undo_data: UndoData::InverseCommand(Command::CloseProject),
+                    timestamp: Some(now + chrono::Duration::seconds(i as i64)),
+                };
+                UndoStack::serialize_entry_with_timestamp(&entry).unwrap()
+            })
+            .collect();
+
+        let mut db = Database::open(&path).unwrap();
+        db.save_project(&Project::new("Deep".to_string(), None))
+            .unwrap();
+        // Full mode SET ON THE LINK, not inherited from the global default: this test is
+        // about the arming order, so the policy must not depend on a config value another
+        // test could reasonably change.
+        db.save_speleo_link(Some(&SpeleoLink {
+            undo_mode: Some(crate::models::UndoMode::Full),
+            ..fixture_speleo_link()
+        }))
+        .unwrap();
+        db.save_undo_stack_with_timestamps(entries).unwrap();
+        drop(db);
+
+        let state = AppState::new().unwrap();
+        assert!(state.open_project(path).success);
+
+        let stack = state.undo_stack.lock().unwrap();
+        assert_eq!(
+            stack.len(),
+            PERSISTED,
+            "a Full-mode project is on the byte budget, so every persisted entry must \
+             survive the open - a short stack means the count window was still armed \
+             when the entries were restored"
+        );
+        // The oldest is the one a count trim evicts first, so name it explicitly.
+        assert!(
+            matches!(
+                &stack.undo_entries().last().unwrap().command,
+                Command::CreateProject { name, .. } if name == "Entry 0"
+            ),
+            "the OLDEST entry is what a front eviction takes, so it is the one worth pinning"
+        );
+    });
+}
+
 /// Shot with every nullable field populated - the fields a replayed legacy
 /// (pre-v7) undo entry would silently clear under the v7 `double_option`
 /// null-means-clear semantics.
@@ -14998,6 +15071,45 @@ fn test_save_project_persists_undo_redo_stacks() {
     let redo = db.load_redo_stack_with_timestamps().unwrap_or_default();
     assert!(!undo.is_empty(), "undo stack should be persisted");
     assert!(!redo.is_empty(), "redo stack should be persisted");
+}
+
+/// [#303] Changing the undo mode really does need the write lock.
+///
+/// The sibling test in `undo_policy.rs` asserts this with NO project open, so
+/// `speleodb_validated_link()?` errors one line before the `edit_enabled()` gate is ever
+/// reached - delete the gate and it stays green. This one opens a real linked project so
+/// the gate is the thing under test, and its companion source-text tripwire only pins the
+/// gate's POSITION, not that it fires.
+#[test]
+fn setting_the_undo_mode_on_a_linked_project_needs_the_edit_gate() {
+    let temp_dir = TempDir::new().unwrap();
+    let save_path = temp_dir.path().join("undo-mode-gate.stalx");
+    {
+        let mut db = Database::open(&save_path).unwrap();
+        db.save_project(&Project::new("Linked".to_string(), None))
+            .unwrap();
+        db.save_speleo_link(Some(&fixture_speleo_link())).unwrap();
+    }
+
+    let state = AppState::new().unwrap();
+    assert!(state.open_project(save_path).success);
+    // A remote open leaves editing disabled, which is exactly the state under test.
+    assert!(!state.edit_enabled(), "a remote open starts read-only");
+
+    let err = state
+        .speleodb_set_undo_mode(Some(crate::models::UndoMode::Disabled))
+        .expect_err("a read-only session must not change what the project ships");
+    assert!(
+        err.message.contains("write lock"),
+        "the refusal must be the LOCK one, not the absent-link one, got {err:?}"
+    );
+
+    // ...and with the gate open the same call succeeds, so the test is pinning the gate
+    // rather than some unrelated refusal.
+    state.set_edit_enabled(true);
+    state
+        .speleodb_set_undo_mode(Some(crate::models::UndoMode::Disabled))
+        .expect("with the write lock held the override is settable");
 }
 
 /// [#303] An undo snapshot must not carry this machine's filesystem paths.

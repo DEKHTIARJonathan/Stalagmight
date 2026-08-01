@@ -469,8 +469,13 @@ impl UndoStack {
         self.enforce_depth_limit();
     }
 
-    /// Append to the undo stack. The one place an entry enters that stack, so any
-    /// bookkeeping an append needs has a single home rather than one per call site.
+    /// Append to the undo stack.
+    ///
+    /// The single point an entry enters that stack: `push_with_data` (a new edit) and
+    /// `push_undo` (a redo replaying one back) both route through here. Note that it does
+    /// NOT bound the stack - each caller applies `enforce_depth_limit` itself, because
+    /// they differ in what else the append implies (a new edit also clears redo; a replay
+    /// must not).
     fn push_undo_tracked(&mut self, entry: UndoEntry) {
         self.undo_stack.push_back(entry);
     }
@@ -2427,6 +2432,89 @@ mod tests {
 
         assert!(!stack.can_redo(), "redo goes wholesale on a confirmed push");
         assert!(!stack.can_undo());
+    }
+
+    /// [#303] Un-timestamped entries are always a PREFIX of the undo stack - never a
+    /// stamped entry with a `None` behind it.
+    ///
+    /// `drop_entries_up_to` finds its boundary with `partition_point`, which is only
+    /// meaningful over a predicate that partitions: `timestamp.is_none_or(|ts| ts <=
+    /// cutoff)` must be true for a prefix and false thereafter, and a `None` sitting above
+    /// a stamped entry breaks that - `partition_point` would then return a boundary that
+    /// keeps rows it should cut, or cuts rows it should keep, with no error either way.
+    ///
+    /// It holds because of how entries get here, and this pins each leg: a legacy file is
+    /// uniformly unstamped (the load is the only source of `None`), every new entry is
+    /// stamped by `next_stamp` and appended at the BACK, redo returns entries to the back
+    /// in the order they left it, and both trims evict from the FRONT.
+    #[test]
+    fn untimestamped_entries_stay_a_prefix_of_the_undo_stack() {
+        /// True while no un-stamped entry sits above a stamped one.
+        fn none_timestamps_are_a_prefix(stack: &UndoStack) -> bool {
+            let first_stamped = stack
+                .undo_stack
+                .iter()
+                .position(|e| e.timestamp.is_some())
+                .unwrap_or(stack.undo_stack.len());
+            stack
+                .undo_stack
+                .iter()
+                .skip(first_stamped)
+                .all(|e| e.timestamp.is_some())
+        }
+
+        // A legacy file: every restored entry is un-stamped, so the prefix is the lot.
+        let mut stack = UndoStack::new_with_limit(4);
+        let legacy: Vec<_> = (0..3)
+            .map(|i| {
+                let entry = UndoEntry {
+                    command: test_create_section_command(&format!("legacy{i}")),
+                    undo_data: UndoData::InverseCommand(test_delete_section_command(i)),
+                    timestamp: None,
+                };
+                UndoStack::serialize_entry_with_timestamp(&entry).expect("serialize")
+            })
+            .collect();
+        stack.load_from_persisted_with_timestamps(legacy, vec![]);
+        assert!(stack.undo_entries().all(|e| e.timestamp.is_none()));
+        assert!(none_timestamps_are_a_prefix(&stack));
+
+        // A new edit is stamped and lands at the back, so the un-stamped rows stay below.
+        stack.push_with_data(
+            test_create_section_command("mine"),
+            UndoData::InverseCommand(test_delete_section_command(9)),
+        );
+        assert!(none_timestamps_are_a_prefix(&stack));
+
+        // Undo then redo: the stamped entry leaves the back and comes back to it, so the
+        // order is preserved rather than rebuilt.
+        let popped = stack.pop_undo().expect("undo the new edit");
+        assert!(none_timestamps_are_a_prefix(&stack));
+        stack.push_redo(popped);
+        let replayed = stack.pop_redo().expect("redo it");
+        stack.push_undo(replayed);
+        assert!(
+            none_timestamps_are_a_prefix(&stack),
+            "redo returns an entry to the BACK, so it cannot land beneath a legacy row"
+        );
+
+        // And a trim evicts from the FRONT, which can only ever shorten the prefix.
+        for i in 0..3 {
+            stack.push_with_data(
+                test_create_section_command(&format!("more{i}")),
+                UndoData::InverseCommand(test_delete_section_command(20 + i)),
+            );
+        }
+        assert_eq!(
+            stack.len(),
+            4,
+            "the count window trimmed the oldest entries"
+        );
+        assert!(none_timestamps_are_a_prefix(&stack));
+        assert!(
+            stack.undo_entries().all(|e| e.timestamp.is_some()),
+            "the evicted entries are the legacy ones at the front"
+        );
     }
 
     /// A legacy persisted entry carries no timestamp. It necessarily predates this

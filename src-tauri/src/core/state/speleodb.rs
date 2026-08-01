@@ -3151,6 +3151,44 @@ mod tests {
         writer.finish().expect("finish zip").into_inner()
     }
 
+    /// [#303] The discard verb destroys un-pushed work with no way back, and until now it
+    /// validated nothing but a link and a token - so the backend could not tell a
+    /// confirmed discard from a stray call. `acknowledged` is the caller reporting that it
+    /// showed the loss, the same shape as `speleodb_guard_unwind`'s `discard_unpushed`.
+    ///
+    /// It is NOT a lock or read-only gate, which was considered and rejected: a 401
+    /// auto-drop leaves the session read-only while the copy still holds un-pushed work,
+    /// and discard is the way out of exactly that state.
+    #[test]
+    fn discarding_the_local_copy_needs_the_callers_acknowledgement() {
+        let temp = TempDir::new().expect("temp dir");
+        let dest = temp.path().join("discard.stalx");
+        seed_linked_stalx(&dest, GUARD_ID, true);
+        let state = AppState::new().expect("state");
+        assert!(state.open_project(dest).success, "open the linked copy");
+
+        let refused = state
+            .speleodb_discard_changes(true, false)
+            .expect_err("an unacknowledged discard must be refused");
+        assert!(
+            refused.message.contains("confirmed"),
+            "the refusal must say what is missing, got {:?}",
+            refused.message
+        );
+
+        // ...and the acknowledgement is the ONLY thing that refusal was about: with it
+        // set, the same call gets as far as the session token (absent in this offline
+        // fixture) instead. Without this half, deleting the check would leave the test
+        // passing on whatever error came next.
+        let acknowledged = state
+            .speleodb_discard_changes(true, true)
+            .expect_err("offline fixture: there is no session token to reach the server with");
+        assert_ne!(
+            acknowledged.message, refused.message,
+            "an acknowledged discard must get past the acknowledgement gate"
+        );
+    }
+
     #[test]
     fn guard_refuses_a_cached_copy_that_has_unpushed_edits() {
         // The data-loss hole: re-opening a project from the SpeleoDB list re-pulls

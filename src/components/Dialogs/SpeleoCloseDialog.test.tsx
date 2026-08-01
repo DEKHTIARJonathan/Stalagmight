@@ -21,9 +21,16 @@ vi.mock('../../utils/ipc', () => ({
 }));
 
 import SpeleoCloseDialog from './SpeleoCloseDialog';
+import SpeleoUnwoundPushDialog from './SpeleoUnwoundPushDialog';
 import { useSpeleoStore, type SpeleoLinkState } from '../../store/speleoStore';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
+
+// The real dialog actions, captured before `beforeEach` swaps in spies. The [#303]
+// hand-off at the bottom of this file moves the user BETWEEN two dialogs, so
+// `activeDialog` has to actually change rather than be recorded.
+const REAL_OPEN_DIALOG = useUIStore.getState().openDialog;
+const REAL_CLOSE_DIALOG = useUIStore.getState().closeDialog;
 
 const LINK: SpeleoLinkState = {
   permission: 'READ_AND_WRITE',
@@ -200,5 +207,64 @@ describe('SpeleoCloseDialog replays the exit that raised it', () => {
     seedLink({ editState: 'read-only', hasUnpushedEdits: true });
     render(<SpeleoCloseDialog />);
     expect(screen.queryByTestId('speleodb-close-pending-note')).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * [#303] The close half of the stranded-exit blocker.
+ *
+ * On an unwound copy `done` pushes nothing: it raises `SpeleoUnwoundPushDialog` over this
+ * prompt and answers `null`, so `pushReleaseThenClose` stopped there - while the
+ * confirmation went on to push and release anyway. The project stayed open, and with it
+ * the Open / New Project the close was standing in for (#270), which is the request that
+ * was never the user's to lose twice.
+ */
+describe('SpeleoCloseDialog - the unwound-push confirmation carries the close', () => {
+  let loadProject: ReturnType<typeof vi.fn>;
+
+  const DialogHost = () => {
+    const active = useUIStore((s) => s.activeDialog);
+    if (active === 'speleodb-close') return <SpeleoCloseDialog />;
+    if (active === 'speleodb-unwound-push') return <SpeleoUnwoundPushDialog />;
+    return null;
+  };
+
+  beforeEach(() => {
+    loadProject = vi.fn(async () => ({ success: true }));
+    useProjectStore.setState({ loadProject: loadProject as never });
+    useUIStore.setState({ openDialog: REAL_OPEN_DIALOG, closeDialog: REAL_CLOSE_DIALOG });
+  });
+
+  const reachConfirmation = async () => {
+    seedLink({ unwound: true, hasUnpushedEdits: true });
+    useUIStore.setState({
+      activeDialog: 'speleodb-close',
+      dialogData: { pendingOpenPath: '/cave/other.stalx' },
+    });
+    render(<DialogHost />);
+    await userEvent.click(screen.getByTestId('speleodb-close-push-release'));
+    return screen.findByTestId('speleodb-unwound-push-dialog');
+  };
+
+  it('closes AND replays the open that raised the prompt, once the push releases', async () => {
+    await reachConfirmation();
+    expect(closeProject).not.toHaveBeenCalled();
+
+    await userEvent.click(screen.getByTestId('speleodb-unwound-push-push-anyway'));
+
+    await waitFor(() => expect(loadProject).toHaveBeenCalledWith('/cave/other.stalx'));
+    expect(closeProject).toHaveBeenCalled();
+    expect(useUIStore.getState().activeDialog).toBeNull();
+  });
+
+  it('puts the close prompt back on Cancel, with the pending open intact', async () => {
+    await reachConfirmation();
+
+    await userEvent.click(screen.getByTestId('speleodb-unwound-push-cancel'));
+
+    expect(useUIStore.getState().activeDialog).toBe('speleodb-close');
+    expect(useUIStore.getState().dialogData).toEqual({ pendingOpenPath: '/cave/other.stalx' });
+    expect(screen.getByTestId('speleodb-close-pending-note')).toBeInTheDocument();
+    expect(closeProject).not.toHaveBeenCalled();
   });
 });

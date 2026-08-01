@@ -9,6 +9,7 @@ import {
   isUnwoundNotEdited,
 } from '../store/speleoStore';
 import { invokeIpc } from '../utils/ipc';
+import { openExitPrompt, type PendingExit } from '../utils/quit';
 import { speleoErrorAction, humanizeSpeleoError } from '../utils/speleoError';
 import type {
   DoneResult,
@@ -54,10 +55,15 @@ export interface SpeleoActions {
       [#303] Also `null` - having raised its own confirmation instead - when the copy is
       dirty only because a chain step walked it back to an older version, since pushing
       that publishes a revert rather than saving work. `acceptOlderVersion` is that
-      confirmation reporting the user chose it knowingly. */
+      confirmation reporting the user chose it knowingly.
+      [#303] `pendingExit` is for the callers whose CONTINUATION is the thing at risk when
+      that happens: an exit prompt reads the `null` as "did not release" and stays put,
+      but it has already been evicted from uiStore's single dialog slot, so the quit or
+      close the user asked for is simply gone. Handing the intent over lets the
+      confirmation finish it. */
   done: (
     message?: string | null,
-    opts?: { acceptOlderVersion?: boolean },
+    opts?: { acceptOlderVersion?: boolean; pendingExit?: PendingExit },
   ) => Promise<DoneResult | null>;
   /** #198 "Take remote": DISCARD local unpushed edits and reset to the server
       tip. Returns `true` once the tree is reloaded, `false` if the call threw.
@@ -348,7 +354,7 @@ export function useSpeleoActions(): SpeleoActions {
   const done = useCallback(
     async (
       message?: string | null,
-      opts?: { acceptOlderVersion?: boolean },
+      opts?: { acceptOlderVersion?: boolean; pendingExit?: PendingExit },
     ): Promise<DoneResult | null> => {
       // [#303] The copy is dirty ONLY because a chain step walked it back to an older
       // version - the user has edited nothing. Pushing here does not save anyone's work,
@@ -361,7 +367,19 @@ export function useSpeleoActions(): SpeleoActions {
       // `acceptOlderVersion` is the confirmation reporting that the user was shown what it
       // does and chose it anyway.
       if (!opts?.acceptOlderVersion && isUnwoundNotEdited(useSpeleoStore.getState().link)) {
-        openDialog('speleodb-unwound-push', { message: message ?? null });
+        const data = { message: message ?? null };
+        if (opts?.pendingExit) {
+          // Raised out of an exit prompt, so it inherits that prompt's obligations: this
+          // call EVICTS the prompt from uiStore's single `activeDialog` slot, and
+          // `openExitPrompt` is what records the eviction so Cancel can put it back. The
+          // intent rides along so "Upload this older version" ends in the quit / close the
+          // user actually asked for, instead of a released lock and a window still open.
+          openExitPrompt('speleodb-unwound-push', { ...data, pendingExit: opts.pendingExit });
+        } else {
+          // Nothing is waiting on the outcome (the status button, the lock menu): the
+          // confirmation is the whole interaction, exactly as it shipped.
+          openDialog('speleodb-unwound-push', data);
+        }
         // Null, not a result: the caller is mid-flow (the close prompt only leaves once a
         // push RELEASES) and must stay put while the confirmation is up.
         return null;

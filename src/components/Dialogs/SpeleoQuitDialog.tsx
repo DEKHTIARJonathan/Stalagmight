@@ -119,7 +119,12 @@ export default function SpeleoQuitDialog() {
   // be exactly the data loss this dialog exists to prevent.
   const pushReleaseThenQuit = async () => {
     if (!(await maybeSaveLocally())) return;
-    const resolved = await done(null);
+    // [#303] On an unwound copy `done` never pushes: it raises its own confirmation over
+    // this dialog and answers `null`, so the quit below cannot run and this prompt is
+    // already gone from the single dialog slot - the quit request evaporated. Hand the
+    // intent to the confirmation, which finishes the quit once the push actually releases
+    // and puts this prompt back on Cancel.
+    const resolved = await done(null, { pendingExit: { kind: 'quit' } });
     if (resolved?.kind === 'released') {
       closeDialog();
       performQuit();

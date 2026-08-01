@@ -4543,6 +4543,84 @@ fn the_cut_keeps_own_work_that_landed_on_an_inherited_row_position() {
     );
 }
 
+/// [#303] Seed a snapshot whose undo rows carry EXACT timestamps (or none at all), for
+/// the boundary cases the hour-either-side helper above cannot express.
+fn snapshot_with_exact_stamps(
+    temp: &TempDir,
+    name: &str,
+    rows: &[(&str, Option<String>)],
+) -> std::path::PathBuf {
+    let path = temp.path().join(name);
+    let entries: Vec<(String, String, Option<String>)> = rows
+        .iter()
+        .map(|(tag, ts)| {
+            (
+                format!("{{\"cmd\":\"{tag}\"}}"),
+                "{}".to_string(),
+                ts.clone(),
+            )
+        })
+        .collect();
+    let mut db = Database::open(&path).unwrap();
+    db.save_project(&Project::new(name.to_string(), None))
+        .unwrap();
+    db.save_speleo_link(Some(&sample_speleo_link(Some("abc"), true)))
+        .unwrap();
+    db.save_undo_stack_with_timestamps(entries).unwrap();
+    drop(db);
+    path
+}
+
+/// [#303] The three rows the cut's boundary actually turns on. Every other test here
+/// seeds rows an hour either side, so flipping `is_none_or` to `is_some_and` - which
+/// would re-upload every legacy entry on every push - passed the lot.
+///
+/// - An UNPARSEABLE `executed_at` is cut, on the same reading `UndoStack::drop_entries_up_to`
+///   gives it. Note this is the reachable half of that arm, not a NULL: `executed_at` is
+///   `TEXT NOT NULL` in every schema version including the v11 table rebuild, so the
+///   `is_none_or` None case cannot come from this table at all - but the column is TEXT, so
+///   a corrupt or foreign-format string can and does land in it.
+/// - A row stamped exactly ON the watermark is inherited: the comparison is `<=`, and
+///   the watermark is taken as the newest LOADED stamp, so the equality case is a row
+///   that really did come off the loaded revision.
+/// - A row a nanosecond above it is the user's own work and survives.
+///
+/// That equality case reaches past this function: `UndoStack::next_stamp` floors new
+/// entries with `>=` rather than `>` precisely BECAUSE the cut is `<=`. An entry allowed
+/// to land exactly on the watermark would be deleted from the upload as inherited, so the
+/// commit would ship the survey change with no history for it.
+#[test]
+fn the_inherited_cut_takes_unparseable_and_on_the_watermark_rows_but_spares_the_one_above() {
+    let temp = TempDir::new().unwrap();
+    let watermark = Utc::now();
+    let path = snapshot_with_exact_stamps(
+        &temp,
+        "boundary.stalx",
+        &[
+            ("unparseable", Some("not-a-timestamp".to_string())),
+            ("on_the_watermark", Some(watermark.to_rfc3339())),
+            (
+                "just_above",
+                Some((watermark + chrono::Duration::nanoseconds(1)).to_rfc3339()),
+            ),
+        ],
+    );
+
+    Database::sanitize_push_snapshot(&path, true, Some(&watermark.to_rfc3339())).unwrap();
+
+    let survivors = surviving_undo_commands(&path);
+    assert_eq!(
+        survivors.len(),
+        1,
+        "only the row stamped ABOVE the watermark was authored here, got {survivors:?}"
+    );
+    assert!(
+        survivors[0].contains("just_above"),
+        "a legacy (NULL) row and a row exactly on the watermark are both inherited, \
+         got {survivors:?}"
+    );
+}
+
 /// No watermark is the ordinary lock-edit-push path: the lock cleared the stack, so every
 /// entry is this session's and the whole history ships exactly as before.
 #[test]

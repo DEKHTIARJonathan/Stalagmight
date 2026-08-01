@@ -39,7 +39,10 @@ export default function SpeleoDiscardChangesDialog() {
   const run = async (keepLock: boolean) => {
     setBusy(true);
     try {
-      await invokeIpc('speleodb_discard_changes', { keepLock });
+      // [#303] `acknowledged` is this dialog reporting that it put the loss in front of
+      // the user; the backend refuses without it. Not a second guess at the decision - it
+      // is what stops any OTHER route reaching a verb that destroys un-pushed work.
+      await invokeIpc('speleodb_discard_changes', { keepLock, acknowledged: true });
       // The backend replaced the working copy and reloaded it in place; pull the new
       // geometry and link state in, the same way the revision swap does.
       await refreshProjectState();

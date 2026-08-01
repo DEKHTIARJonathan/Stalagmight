@@ -202,6 +202,10 @@ impl AppState {
                     .ok()
                     .map(|dt| dt.with_timezone(&chrono::Utc))
             });
+        // [#303] ...and the link that decides how deep the stack those entries land in is
+        // allowed to be. Read off the same handle for the same reason, and used below
+        // BEFORE the restore - see the arming call for what a late one costs.
+        let speleo_link = db.load_speleo_link().ok().flatten();
 
         // ALL commits under ONE `project` acquisition, exactly as
         // `do_load_project_full`'s finalization and for the same reason (round
@@ -219,8 +223,9 @@ impl AppState {
         self.bump_speleodb_session();
 
         // [Track B] (#191) Read-only edit gate: remote ⇒ edit disabled,
-        // local-only ⇒ enabled (see do_load_project_full). Read before `db` moves.
-        let is_remote = matches!(db.load_speleo_link(), Ok(Some(_)));
+        // local-only ⇒ enabled (see do_load_project_full). Off the link read above,
+        // which came from the same handle before `db` moves.
+        let is_remote = speleo_link.is_some();
         self.set_edit_enabled(!is_remote);
         // #213: force-edit is per-session; a fresh open never starts force-editing.
         self.set_force_editing(false);
@@ -236,6 +241,20 @@ impl AppState {
         // Clear display settings cache (settings will be loaded from DB by frontend)
         self.clear_display_settings_cache();
         self.invalidate_adjusted_cache();
+
+        // [#303] Arm the depth bound for the project about to be restored BEFORE its
+        // entries go in, not after. `load_from_persisted_with_timestamps` ends in
+        // `enforce_depth_limit`, so whichever bound is in force at that instant is the one
+        // that trims - and until this call it is still the PREVIOUS project's (or the
+        // startup default, `Count(undo_history_limit)`). A Full-mode linked project holding
+        // more than that many entries therefore lost the oldest ones on open, the next
+        // full-rewrite save wrote the truncation to disk, and the next push shipped a
+        // commit missing the history it was supposed to carry. Re-arming afterwards cannot
+        // undo it: Count -> Bytes has nothing to put back.
+        //
+        // Resolved from the link read off the file's own handle rather than through
+        // `undo_policy()`, which takes the `database` lock this path is mid-swap on.
+        self.sync_undo_depth_limit_for(speleo_link.as_ref());
 
         // Restore persisted undo/redo stacks
         if let Ok(mut undo_stack) = self.undo_stack.lock() {
@@ -255,11 +274,10 @@ impl AppState {
             }
         }
 
-        // [#303] Re-arm the depth bound for the project that just opened: a Full-mode
-        // linked one goes onto the byte budget, anything else back onto the configured
-        // entry window. AFTER the restore above (which trims under whatever bound was in
-        // force) and outside its lock, since this takes `undo_stack` itself.
-        self.sync_undo_depth_limit();
+        // No second `sync_undo_depth_limit()` after the restore: it would re-resolve the
+        // SAME policy from the SAME file and re-apply the SAME bound, and the one thing it
+        // could still do differently is fail its `database` lock and fall back to the count
+        // window - i.e. re-introduce the truncation the arming above exists to avoid.
 
         // Add to recent projects and persist to config
         let path_display = format!("{}", path.display());
@@ -747,6 +765,12 @@ impl AppState {
                     .ok()
                     .map(|dt| dt.with_timezone(&chrono::Utc))
             });
+        // [#303] ...and the link that bounds the stack they land in, off the same handle
+        // and for the same reason. Used before the restore below - see the arming call.
+        // This is the INCOMING file's link; the detached release just below reads the
+        // OUTGOING project's through the still-live handle, and the two are not
+        // interchangeable.
+        let speleo_link = db.load_speleo_link().ok().flatten();
 
         // All finalization commits use unwrap_or_else(PoisonError::into_inner) to ensure
         // data is written even if a previous panic poisoned a mutex. This is acceptable
@@ -794,8 +818,9 @@ impl AppState {
         // carrying a speleo_link row) opened WITHOUT a write lock is read-only.
         // There is no lock-acquire path yet (#191), so the rule is simply: remote
         // ⇒ edit disabled; local-only ⇒ edit enabled (default-true; the gate is a
-        // no-op off-SpeleoDB). Read before `db` is moved into the handle slot.
-        let is_remote = matches!(db.load_speleo_link(), Ok(Some(_)));
+        // no-op off-SpeleoDB). Off the link read above, taken from the same handle
+        // before `db` is moved into the handle slot.
+        let is_remote = speleo_link.is_some();
         self.set_edit_enabled(!is_remote);
         // #213: force-edit is per-session; a fresh open never starts force-editing.
         self.set_force_editing(false);
@@ -812,6 +837,12 @@ impl AppState {
         // Commit 3: Display settings cache clear
         self.clear_display_settings_cache();
         self.invalidate_adjusted_cache();
+
+        // [#303] As in the non-staged load: arm the depth bound BEFORE the entries are
+        // restored under it, from the link read off this file's own handle. Late, the
+        // restore's own `enforce_depth_limit` would trim a Full-mode project's history
+        // down to the count window and no later re-arm could put it back.
+        self.sync_undo_depth_limit_for(speleo_link.as_ref());
 
         // Commit 4: Undo/redo stack restore
         {
@@ -834,10 +865,6 @@ impl AppState {
                 );
             }
         }
-
-        // [#303] As in the non-staged load: re-arm the depth bound for the project that
-        // just opened, outside the stack lock.
-        self.sync_undo_depth_limit();
 
         // Commit 5: Recent projects update
         {

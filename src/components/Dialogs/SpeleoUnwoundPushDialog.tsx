@@ -5,6 +5,7 @@ import { useSpeleoStore } from '../../store/speleoStore';
 import { useProjectStore } from '../../store/projectStore';
 import { useSpeleoActions } from '../../hooks/useSpeleoActions';
 import { invokeIpc, getErrorMessage } from '../../utils/ipc';
+import { handBackProject, performQuit, readPendingExit } from '../../utils/quit';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 
@@ -26,6 +27,12 @@ import { DialogWrapper } from './DialogWrapper';
  * and come back at the latest, still holding the lock so the user can carry on. Pushing the
  * old version stays available - it IS how you deliberately roll a project back - but it is
  * named for what it does and it is not the primary.
+ *
+ * Two of the routes here are a QUIT or a CLOSE mid-flight, and those prompts are gone from
+ * uiStore's single dialog slot by the time this renders. So this dialog also owns the exit
+ * it interrupted (`pendingExit`): it finishes the quit / close once the push has actually
+ * released, and hands the prompt back on every other outcome. Without that, the push landed
+ * and the app neither quit nor closed - and Cancel dropped the exit request silently.
  */
 export default function SpeleoUnwoundPushDialog() {
   const { t } = useTranslation();
@@ -40,18 +47,51 @@ export default function SpeleoUnwoundPushDialog() {
   const message = typeof dialogData.message === 'string' ? dialogData.message : null;
   const [busy, setBusy] = useState(false);
 
+  // [#303] The exit this confirmation interrupted, when it was raised out of one. `done`
+  // short-circuits here from the quit and close prompts too, and those prompts are the
+  // user's exit request: they are already evicted from uiStore's single dialog slot by
+  // the time this renders, so unless this dialog finishes what they started - or hands
+  // them back - the request is gone with no trace. `null` for the routes where this
+  // dialog IS the whole interaction (the status button, the lock menu).
+  const pendingExit = readPendingExit(dialogData);
+  // The prompt that was displaced, recorded by `openExitPrompt` on the way in. Same pair
+  // SpeleoQuitDialog reads for its own Cancel - see `openExitPrompt` in utils/quit.
+  const cancelReturnsTo =
+    typeof dialogData.cancelReturnsTo === 'string' ? dialogData.cancelReturnsTo : null;
+  const cancelReturnsData =
+    typeof dialogData.cancelReturnsData === 'object' && dialogData.cancelReturnsData !== null
+      ? (dialogData.cancelReturnsData as Record<string, unknown>)
+      : undefined;
+
+  /**
+   * Leave this confirmation with the app still running: put the exit prompt back if one
+   * was displaced, otherwise just close. Used by Cancel / X / Escape AND by every outcome
+   * that does not end in the exit - a user who asked to quit must never be dropped into a
+   * bare view with nothing on screen saying what became of the request.
+   */
+  const returnToCaller = () => {
+    if (cancelReturnsTo) openDialog(cancelReturnsTo, cancelReturnsData);
+    else closeDialog();
+  };
+
   const discardAndLock = async () => {
     setBusy(true);
     try {
       // Keeps the lock: this branch exists so the user can carry on from the latest.
-      await invokeIpc('speleodb_discard_changes', { keepLock: true });
+      // [#303] See SpeleoDiscardChangesDialog: the backend refuses an unacknowledged
+      // discard, and this dialog's whole body is the acknowledgement.
+      await invokeIpc('speleodb_discard_changes', { keepLock: true, acknowledged: true });
       // The backend replaced the working copy and reloaded it in place, so pull the new
       // geometry and link state in the same way the revision swap does.
       await refreshProjectState();
       useProjectStore.setState({ isDirty: false });
       await refreshLinkStatus();
       showToast(t('speleodb.unwoundPush.discardedToast'), 'speleodb-discarded', 'success');
-      closeDialog();
+      // Not the exit: this branch keeps the lock so the user can carry on editing, and
+      // quitting on a button that says so would be a lie. It still has to hand the exit
+      // prompt back rather than close over it - the request was to leave, and the state
+      // it was raised for has just changed under it.
+      returnToCaller();
     } catch (e) {
       openDialog('error', {
         title: t('speleodb.unwoundPush.discardFailedTitle'),
@@ -63,16 +103,35 @@ export default function SpeleoUnwoundPushDialog() {
 
   const pushAnyway = async () => {
     setBusy(true);
-    closeDialog();
     // The acknowledgement the guard in `useSpeleoActions.done` is waiting for - without it
     // this would raise this same dialog again.
-    await done(message, { acceptOlderVersion: true });
+    if (!pendingExit) {
+      // Nobody is waiting on the outcome, so get out of the way first and let the toast
+      // and the push-failure banner report it. Unchanged for the status button and the
+      // lock menu, which are the routes that reach this dialog on its own.
+      closeDialog();
+      await done(message, { acceptOlderVersion: true });
+      return;
+    }
+    const resolved = await done(message, { acceptOlderVersion: true });
+    if (resolved?.kind === 'released') {
+      closeDialog();
+      if (pendingExit.kind === 'quit') performQuit();
+      else await handBackProject(pendingExit);
+      return;
+    }
+    // Nothing was released, so nothing may leave - and the exit prompt is the surface
+    // that says why: it renders the failure inline (SpeleoPushFailureNotice) and its own
+    // push button is the retry. Closing here instead would lose the exit request for the
+    // second time, over a failure the user never got to see.
+    setBusy(false);
+    returnToCaller();
   };
 
   return (
     <DialogWrapper
       title={t('speleodb.unwoundPush.title')}
-      onClose={busy ? () => {} : closeDialog}
+      onClose={busy ? () => {} : returnToCaller}
       size="md"
       data-testid="speleodb-unwound-push-dialog"
     >
@@ -87,7 +146,7 @@ export default function SpeleoUnwoundPushDialog() {
 
         <div className="flex justify-end gap-2 pt-2 border-t border-border">
           <Button
-            onClick={closeDialog}
+            onClick={returnToCaller}
             disabled={busy}
             data-testid="speleodb-unwound-push-cancel"
           >

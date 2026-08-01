@@ -2147,9 +2147,14 @@ code:
   would otherwise load with a hole in the middle. v13 drops the stacks the same
   way, for the legacy `is_reference` boolean.
 - v16 adds `speleo_link.undo_mode` (whether this project's undo history rides to
-  SpeleoDB) and the local-only `speleo_undo_chain` (how far back through the
-  server's revisions this machine has unwound); see
-  [undo-redo.md](undo-redo.md).
+  SpeleoDB) and two local-only tables: `speleo_undo_chain` (how far back through
+  the server's revisions this machine has unwound) and `speleo_undo_watermark`
+  (which loaded entries a chain step inherited, so the next push does not ship
+  them again); see [undo-redo.md](undo-redo.md). Note that `speleo_undo_watermark`
+  is NOT created by the migration in `schema.rs` like its sibling - it is created
+  lazily by `CREATE TABLE IF NOT EXISTS` on first write in
+  `persistence/sqlite/settings.rs`, with a `sqlite_master` probe on the read side,
+  so tracing the migration alone will not find it.
 
 The dive plan lives beside the project in its own `.plnx` SQLite sidecar
 (`src-tauri/src/persistence/plnx.rs`), not in the `.stalx`.

@@ -6,7 +6,7 @@ import { useProjectStore } from '../../store/projectStore';
 import { useSpeleoActions } from '../../hooks/useSpeleoActions';
 import { surfaceSaveFailure } from '../../utils/saveFeedback';
 import { getErrorMessage } from '../../utils/ipc';
-import { holdsWriteLock } from '../../utils/quit';
+import { handBackProject, holdsWriteLock, type PendingExit } from '../../utils/quit';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import { SpeleoPushFailureNotice } from './SpeleoPushFailureNotice';
@@ -33,8 +33,6 @@ export default function SpeleoCloseDialog() {
   const openDialog = useUIStore((s) => s.openDialog);
   const dialogData = useUIStore((s) => s.dialogData);
   const link = useSpeleoStore((s) => s.link);
-  const closeProject = useProjectStore((s) => s.closeProject);
-  const loadProject = useProjectStore((s) => s.loadProject);
   const saveProject = useProjectStore((s) => s.saveProject);
   const isDirtyLocal = useProjectStore((s) => s.isDirty);
   const { busy, done } = useSpeleoActions();
@@ -98,28 +96,24 @@ export default function SpeleoCloseDialog() {
   };
 
   /**
-   * Hand the project back, then replay whatever the user actually asked for. The
-   * close has to land first in every case: it is what releases (or deliberately
-   * keeps) the server lock and clears the SpeleoDB link, so replaying before it
-   * would leave the shell linked to a project that is on its way out. A FAILED
-   * close replays nothing - the project is still open, so the exit did not happen.
+   * The exit this prompt is standing in for, in the shape a dialog raised OVER this one
+   * can finish by itself (#303). The hand-back and the replay live in `handBackProject`
+   * so both finishers order them identically.
    */
-  const closeThen = async (opts?: { releaseLock?: boolean }) => {
-    const result = await closeProject(opts);
-    if (!result.success) return;
-    // loadProject switches the view and surfaces its own failures.
-    if (pendingOpenPath) await loadProject(pendingOpenPath);
-    // `createProject` seeds the shell from here; the close above already left us
-    // on the global view (App falls back to it whenever no project is open).
-    else if (pendingNewProject) openDialog('new-project');
-  };
+  const closeIntent: PendingExit = { kind: 'close', pendingOpenPath, pendingNewProject };
+  const closeThen = (opts?: { releaseLock?: boolean }) => handBackProject(closeIntent, opts);
 
   const pushReleaseThenClose = async () => {
     if (!(await maybeSaveLocally())) return;
     // done(null) pushes (when dirty) and releases the lock. Only leave once the
     // lock is actually RELEASED - a divergence / unconfirmed push keeps us here so
     // the user resolves it rather than walking away still holding the lock (fix 2).
-    const resolved = await done(null);
+    //
+    // [#303] ...and on an unwound copy it does not push at all: it raises its own
+    // confirmation over this dialog and answers `null`. The close (and the Open / New
+    // Project it may be standing in for) would be lost with this prompt, so the intent
+    // goes with it and the confirmation completes it.
+    const resolved = await done(null, { pendingExit: closeIntent });
     if (resolved?.kind === 'released') {
       closeDialog();
       await closeThen();

@@ -107,6 +107,17 @@ impl AppState {
         self.apply_undo_depth_limit(policy);
     }
 
+    /// [`Self::sync_undo_depth_limit`] over a link the caller has ALREADY read - for the
+    /// two load paths, which hold the just-opened database handle directly and have to
+    /// arm the bound BEFORE the persisted stack is restored into it.
+    ///
+    /// Takes only the `undo_stack` lock, never `database`, so it is safe at a point where
+    /// the live handle is mid-swap.
+    pub(crate) fn sync_undo_depth_limit_for(&self, link: Option<&SpeleoLink>) {
+        let policy = self.undo_policy_for(link);
+        self.apply_undo_depth_limit(policy);
+    }
+
     fn apply_undo_depth_limit(&self, policy: UndoPolicy) {
         if let Ok(mut undo) = self.undo_stack.lock() {
             if policy.unlimited_depth() {

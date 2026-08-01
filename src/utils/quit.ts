@@ -150,6 +150,74 @@ export function needsSpeleoHandBackPrompt(link: SpeleoLinkState | null): boolean
 }
 
 /**
+ * What the user asked for, in a shape a DIALOG can finish on its own.
+ *
+ * [#303] Exists because an exit prompt is not always the last dialog in the chain.
+ * Both prompts hand off to `useSpeleoActions.done`, which SHORT-CIRCUITS on a copy that
+ * is dirty only because a chain step walked it back: it raises its own confirmation and
+ * answers `null`, so the `if (resolved?.kind === 'released')` continuation - the quit, or
+ * the close plus whatever that close was standing in for - never runs. Pressing "Upload
+ * this older version" from there published the revert and then left the user sitting in
+ * the app they had asked to leave. Carrying the intent through the confirmation is what
+ * lets it finish the job instead of dropping it.
+ */
+export type PendingExit =
+  | { kind: 'quit' }
+  | {
+      kind: 'close';
+      /** The `.stalx` this close was standing in for (Ctrl+O / drag-drop) (#270). */
+      pendingOpenPath?: string | null;
+      /** A New Project request the close prompt displaced (#270). */
+      pendingNewProject?: boolean;
+    };
+
+/**
+ * Read a {@link PendingExit} back out of `dialogData`, which is an untyped
+ * `Record<string, unknown>` - so the confirmation that carries one VALIDATES rather than
+ * trusts, exactly as the `cancelReturnsTo` readers do. `null` means "nobody is waiting on
+ * this", which is the case for every non-exit route into the same confirmation (the
+ * status button, the lock menu).
+ */
+export function readPendingExit(data: Record<string, unknown>): PendingExit | null {
+  const raw = data.pendingExit;
+  if (typeof raw !== 'object' || raw === null) return null;
+  const { kind, pendingOpenPath, pendingNewProject } = raw as Record<string, unknown>;
+  if (kind === 'quit') return { kind: 'quit' };
+  if (kind !== 'close') return null;
+  return {
+    kind: 'close',
+    pendingOpenPath: typeof pendingOpenPath === 'string' ? pendingOpenPath : null,
+    pendingNewProject: pendingNewProject === true,
+  };
+}
+
+/**
+ * Hand the open project back, then replay whatever the user actually asked for.
+ *
+ * The close has to land first in every case: it is what releases (or deliberately keeps)
+ * the server lock and clears the SpeleoDB link, so replaying before it would leave the
+ * shell linked to a project that is on its way out. A FAILED close replays nothing - the
+ * project is still open, so the exit did not happen.
+ *
+ * Lifted out of `SpeleoCloseDialog` (where it was `closeThen`) so the unwound-push
+ * confirmation completes a displaced close EXACTLY as the close prompt would, rather than
+ * growing a second copy of the ordering argument above.
+ */
+export async function handBackProject(
+  exit: { pendingOpenPath?: string | null; pendingNewProject?: boolean },
+  opts?: { releaseLock?: boolean },
+): Promise<void> {
+  const { closeProject, loadProject } = useProjectStore.getState();
+  const result = await closeProject(opts);
+  if (!result.success) return;
+  // loadProject switches the view and surfaces its own failures.
+  if (exit.pendingOpenPath) await loadProject(exit.pendingOpenPath);
+  // `createProject` seeds the shell from here; the close above already left us on the
+  // global view (App falls back to it whenever no project is open).
+  else if (exit.pendingNewProject) useUIStore.getState().openDialog('new-project');
+}
+
+/**
  * Raise one of the exit prompts, remembering the dialog it displaces so its own
  * Cancel can put that dialog back.
  *
@@ -168,8 +236,13 @@ export function needsSpeleoHandBackPrompt(link: SpeleoLinkState | null): boolean
  * The wizard's own state lives in `dialogData`, so carrying the pair back restores
  * it. (`openDialog` also resets `dmpImportWizardPhase`, which drives onboarding
  * hints only - the wizard itself does not read it.)
+ *
+ * [#303] Exported because the chain does not stop at the exit prompt: the unwound-push
+ * confirmation is raised OUT of one and evicts it from the same single slot, so its
+ * Cancel needs the same return hop or the exit request evaporates with nothing on screen
+ * to say so.
  */
-function openExitPrompt(dialog: string, data?: Record<string, unknown>): void {
+export function openExitPrompt(dialog: string, data?: Record<string, unknown>): void {
   const { activeDialog, dialogData, openDialog } = useUIStore.getState();
   // Re-opening ourselves is not a return hop, it is a loop - and there is nothing to
   // restore when nothing was displaced.

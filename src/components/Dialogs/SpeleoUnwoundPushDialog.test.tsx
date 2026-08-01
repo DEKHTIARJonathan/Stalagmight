@@ -21,6 +21,17 @@ vi.mock('../../utils/ipc', () => ({
   getErrorMessage: (e: unknown, f?: string) => (e as { message?: string })?.message ?? f ?? 'e',
 }));
 
+// [#303] The two exits this dialog can finish. Stubbed (the rest of utils/quit is real,
+// `holdsWriteLock` included) so the cases below can assert that the routes with NO exit
+// waiting still reach neither of them.
+const performQuitMock = vi.hoisted(() => vi.fn());
+const handBackProjectMock = vi.hoisted(() => vi.fn(async () => {}));
+vi.mock('../../utils/quit', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../utils/quit')>()),
+  performQuit: performQuitMock,
+  handBackProject: handBackProjectMock,
+}));
+
 import SpeleoUnwoundPushDialog from './SpeleoUnwoundPushDialog';
 import { useSpeleoStore } from '../../store/speleoStore';
 import { useProjectStore } from '../../store/projectStore';
@@ -36,6 +47,8 @@ const open = () => {
 describe('SpeleoUnwoundPushDialog (#303)', () => {
   beforeEach(() => {
     invokeIpcMock.mockReset();
+    performQuitMock.mockReset();
+    handBackProjectMock.mockClear();
     invokeIpcMock.mockResolvedValue({ kind: 'editing' });
     useUIStore.setState({
       closeDialog: vi.fn(() => useUIStore.setState({ activeDialog: null })),
@@ -77,7 +90,7 @@ describe('SpeleoUnwoundPushDialog (#303)', () => {
 
     await userEvent.click(screen.getByTestId('speleodb-unwound-push-discard'));
 
-    await waitFor(() => expect(invokeIpcMock).toHaveBeenCalledWith('speleodb_discard_changes', { keepLock: true }));
+    await waitFor(() => expect(invokeIpcMock).toHaveBeenCalledWith('speleodb_discard_changes', { keepLock: true, acknowledged: true }));
     // Never a push: that is the whole point of this branch.
     expect(invokeIpcMock).not.toHaveBeenCalledWith('speleodb_done', expect.anything());
   });
@@ -126,7 +139,7 @@ describe('SpeleoUnwoundPushDialog (#303)', () => {
 
     await userEvent.click(screen.getByTestId('speleodb-discard-changes-release'));
     await waitFor(() =>
-      expect(invokeIpcMock).toHaveBeenCalledWith('speleodb_discard_changes', { keepLock: false }),
+      expect(invokeIpcMock).toHaveBeenCalledWith('speleodb_discard_changes', { keepLock: false, acknowledged: true }),
     );
   });
 
@@ -155,7 +168,7 @@ describe('SpeleoUnwoundPushDialog (#303)', () => {
 
     await userEvent.click(keep);
     await waitFor(() =>
-      expect(invokeIpcMock).toHaveBeenCalledWith('speleodb_discard_changes', { keepLock: true }),
+      expect(invokeIpcMock).toHaveBeenCalledWith('speleodb_discard_changes', { keepLock: true, acknowledged: true }),
     );
   });
 
@@ -167,5 +180,49 @@ describe('SpeleoUnwoundPushDialog (#303)', () => {
 
     expect(invokeIpcMock).not.toHaveBeenCalled();
     expect(useUIStore.getState().activeDialog).toBeNull();
+  });
+
+  /**
+   * [#303] The dialog now also finishes the quit / close it was raised out of, which it
+   * knows about ONLY from `dialogData.pendingExit`. The routes that carry none - the
+   * status button and the SpeleoDB lock menu, where this confirmation IS the whole
+   * interaction - must be untouched by that: no exit, and the same get-out-of-the-way
+   * ordering (close first, report through the toast / push-failure banner).
+   */
+  describe('the routes with no exit waiting are unchanged', () => {
+    it('closes first and exits nothing when Push anyway is pressed', async () => {
+      open();
+      render(<SpeleoUnwoundPushDialog />);
+
+      await userEvent.click(screen.getByTestId('speleodb-unwound-push-push-anyway'));
+
+      await waitFor(() =>
+        expect(invokeIpcMock).toHaveBeenCalledWith('speleodb_done', expect.anything()),
+      );
+      expect(useUIStore.getState().activeDialog).toBeNull();
+      expect(performQuitMock).not.toHaveBeenCalled();
+      expect(handBackProjectMock).not.toHaveBeenCalled();
+    });
+
+    it('exits nothing on the discard branch either', async () => {
+      open();
+      render(<SpeleoUnwoundPushDialog />);
+
+      await userEvent.click(screen.getByTestId('speleodb-unwound-push-discard'));
+
+      await waitFor(() => expect(useUIStore.getState().activeDialog).toBeNull());
+      expect(performQuitMock).not.toHaveBeenCalled();
+      expect(handBackProjectMock).not.toHaveBeenCalled();
+    });
+
+    it('exits nothing on cancel', async () => {
+      open();
+      render(<SpeleoUnwoundPushDialog />);
+
+      await userEvent.click(screen.getByTestId('speleodb-unwound-push-cancel'));
+
+      expect(performQuitMock).not.toHaveBeenCalled();
+      expect(handBackProjectMock).not.toHaveBeenCalled();
+    });
   });
 });

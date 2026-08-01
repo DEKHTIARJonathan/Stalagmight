@@ -34,6 +34,7 @@ vi.mock('../../utils/quit', async (importOriginal) => ({
 }));
 
 import SpeleoQuitDialog from './SpeleoQuitDialog';
+import SpeleoUnwoundPushDialog from './SpeleoUnwoundPushDialog';
 import { useSpeleoStore, type SpeleoLinkState } from '../../store/speleoStore';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
@@ -389,7 +390,8 @@ describe('SpeleoQuitDialog - Cancel puts back the dialog it displaced', () => {
  * release & quit" pointed a stray Enter at the one destructive answer: pushing records
  * the older survey over the newer one for everyone, and `done` then short-circuits into
  * its own confirmation, which replaces this dialog in the single `activeDialog` slot -
- * so the quit is silently abandoned as well.
+ * so the quit was silently abandoned as well. The confirmation now carries the quit
+ * (`pendingExit`); the hand-off is pinned in the last describe of this file.
  */
 describe('SpeleoQuitDialog - unwound copy', () => {
   const unwind = () =>
@@ -430,5 +432,88 @@ describe('SpeleoQuitDialog - unwound copy', () => {
     expect(screen.getByTestId('speleodb-quit-dialog').textContent ?? '').toContain(
       'have not been uploaded',
     );
+  });
+});
+
+/**
+ * [#303] The blocker the describe above only documented: pressing "Upload this older
+ * version" from a QUIT stranded the user.
+ *
+ * `done` never pushes on an unwound copy - it raises `SpeleoUnwoundPushDialog` and answers
+ * `null`. That answer is not "no": the push then happens from inside the confirmation, so
+ * the lock was released and the app carried on running, in a project the user had asked to
+ * leave. Cancel was worse - the quit prompt had already been evicted from uiStore's single
+ * `activeDialog` slot, so the exit request vanished with nothing on screen to say so.
+ *
+ * These cases render whichever dialog is active, exactly as App does, so the hand-off is
+ * exercised end to end rather than asserted on the argument that carries it.
+ */
+describe('SpeleoQuitDialog - the unwound-push confirmation carries the quit', () => {
+  /** App's dialog switch, narrowed to the two dialogs this hand-off spans. */
+  const DialogHost = () => {
+    const active = useUIStore((s) => s.activeDialog);
+    if (active === 'speleodb-quit') return <SpeleoQuitDialog />;
+    if (active === 'speleodb-unwound-push') return <SpeleoUnwoundPushDialog />;
+    return null;
+  };
+
+  /** Quit prompt raised over an unwound copy, then "Push older version & quit" pressed. */
+  const reachConfirmation = async () => {
+    useSpeleoStore.setState({ link: { ...LINK, hasUnpushedEdits: true, unwound: true } });
+    render(<DialogHost />);
+    await userEvent.click(screen.getByTestId('speleodb-quit-push-release'));
+    return screen.findByTestId('speleodb-unwound-push-dialog');
+  };
+
+  it('quits once the push actually releases the lock', async () => {
+    invokeIpcMock.mockResolvedValue({ kind: 'released' });
+    await reachConfirmation();
+    // The confirmation is up INSTEAD of the quit prompt, and nothing was uploaded yet.
+    expect(calledCommands()).not.toContain('speleodb_done');
+
+    await userEvent.click(screen.getByTestId('speleodb-unwound-push-push-anyway'));
+
+    await waitFor(() => expect(performQuitMock).toHaveBeenCalledTimes(1));
+    expect(calledCommands()).toContain('speleodb_done');
+    expect(useUIStore.getState().activeDialog).toBeNull();
+  });
+
+  it('puts the quit prompt back on Cancel, instead of dropping the request', async () => {
+    await reachConfirmation();
+
+    await userEvent.click(screen.getByTestId('speleodb-unwound-push-cancel'));
+
+    expect(useUIStore.getState().activeDialog).toBe('speleodb-quit');
+    expect(screen.getByTestId('speleodb-quit-dialog')).toBeInTheDocument();
+    expect(performQuitMock).not.toHaveBeenCalled();
+    expect(invokeIpcMock).not.toHaveBeenCalled();
+  });
+
+  it('does NOT quit when the older-version push fails - and hands the prompt back with it', async () => {
+    invokeIpcMock.mockRejectedValue(new Error('blackholed'));
+    await reachConfirmation();
+
+    await userEvent.click(screen.getByTestId('speleodb-unwound-push-push-anyway'));
+
+    // Back on the quit prompt, which is the only surface that renders the failure inline
+    // and whose own button is the retry. Closing over it would lose the quit twice.
+    await waitFor(() => expect(useUIStore.getState().activeDialog).toBe('speleodb-quit'));
+    expect(await screen.findByTestId('speleodb-push-failure-inline')).toBeInTheDocument();
+    expect(performQuitMock).not.toHaveBeenCalled();
+  });
+
+  it('hands the prompt back after "discard and take the latest", rather than quitting on it', async () => {
+    // That button keeps the write lock so the user can carry on editing, so quitting on it
+    // would contradict its own label - but the quit request still has to survive.
+    useProjectStore.setState({ refreshProjectState: vi.fn(async () => {}) as never });
+    useSpeleoStore.setState({ refreshLinkStatus: vi.fn(async () => {}) as never });
+    invokeIpcMock.mockResolvedValue(null);
+    await reachConfirmation();
+
+    await userEvent.click(screen.getByTestId('speleodb-unwound-push-discard'));
+
+    await waitFor(() => expect(useUIStore.getState().activeDialog).toBe('speleodb-quit'));
+    expect(calledCommands()).toEqual(['speleodb_discard_changes']);
+    expect(performQuitMock).not.toHaveBeenCalled();
   });
 });

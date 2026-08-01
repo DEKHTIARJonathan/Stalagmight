@@ -646,4 +646,51 @@ describe('useSpeleoActions - pushing an unwound copy is confirmed first (#303)',
     expect(openDialog).not.toHaveBeenCalled();
     expect(invokeIpcMock).toHaveBeenCalledWith('speleodb_done', { message: 'msg' });
   });
+
+  /**
+   * [#303] Answering `null` is only safe for a caller that stays put. The exit prompts do
+   * not: they are already evicted from uiStore's single `activeDialog` slot by the time
+   * they read it, so the quit or close the user asked for went with them - the push then
+   * happened from inside the confirmation and the app carried on running regardless.
+   * `pendingExit` is the intent riding along so the confirmation can finish it.
+   */
+  it('carries an exit caller intent, and the return hop back to its prompt', async () => {
+    seedUnwound(true);
+    const openDialog = vi.fn();
+    useUIStore.setState({
+      openDialog,
+      activeDialog: 'speleodb-quit',
+      dialogData: { cancelReturnsTo: 'dmp-selection' },
+    });
+    const { result } = renderHook(() => useSpeleoActions());
+
+    await act(async () => {
+      await result.current.done(null, { pendingExit: { kind: 'quit' } });
+    });
+
+    expect(openDialog).toHaveBeenCalledWith('speleodb-unwound-push', {
+      message: null,
+      pendingExit: { kind: 'quit' },
+      // The displaced prompt AND its own data, so cancelling twice walks back to the
+      // import wizard the quit guard displaced rather than stopping one hop short.
+      cancelReturnsTo: 'speleodb-quit',
+      cancelReturnsData: { cancelReturnsTo: 'dmp-selection' },
+    });
+  });
+
+  it('records no return hop for the routes with no exit waiting', async () => {
+    // The status button and the lock menu are pressable with another dialog on screen,
+    // and nothing is mid-flow there: raising a return hop would put a dialog the user
+    // had already left back on top of them.
+    seedUnwound(true);
+    const openDialog = vi.fn();
+    useUIStore.setState({ openDialog, activeDialog: 'speleodb-done', dialogData: {} });
+    const { result } = renderHook(() => useSpeleoActions());
+
+    await act(async () => {
+      await result.current.done(null);
+    });
+
+    expect(openDialog).toHaveBeenCalledWith('speleodb-unwound-push', { message: null });
+  });
 });
