@@ -15000,18 +15000,20 @@ fn test_save_project_persists_undo_redo_stacks() {
     assert!(!redo.is_empty(), "redo stack should be persisted");
 }
 
-/// [#303] A Full-mode linked project persists its undo history and NO redo.
+/// [#303] A Full-mode linked project persists BOTH stacks, redo included.
 ///
-/// The byte budget is applied to the undo and redo stacks independently, so persisting
-/// both made every 30 s autosave serialize and gzip up to twice the documented budget -
-/// and none of the redo half ever reaches the server, because `redo_stack` is
-/// unconditionally in `PUSH_SNAPSHOT_LOCAL_TABLES`.
+/// Pinned because the opposite was tried. The byte budget is applied to the undo and
+/// redo stacks independently, so a Full-mode save can write up to twice
+/// `UNDO_BYTE_BUDGET_BYTES` - which reads like a bug, and was briefly "fixed" by
+/// dropping redo from the Full-mode save. It was reversed: 64 MiB is a ceiling rather
+/// than growth (each stack is budgeted, and a confirmed push clears the undo history),
+/// and persisting redo is what keeps a redo branch alive across a close and reopen.
 ///
-/// The empty redo table is the deliberate cost, not an accident: a Full-mode linked
-/// project has no redo-after-reopen. The test above pins the other half - every
-/// count-windowed project (local, Disabled mode) still persists redo.
+/// So this test exists to fail if someone re-derives that fix. None of the redo half
+/// reaches the server in any mode - `redo_stack` is unconditionally in
+/// `PUSH_SNAPSHOT_LOCAL_TABLES` - so the cost is local and so is the benefit.
 #[test]
-fn full_mode_save_persists_undo_but_not_redo() {
+fn full_mode_save_persists_both_stacks() {
     let temp_dir = TempDir::new().unwrap();
     let save_path = temp_dir.path().join("full-mode-undo.stalx");
 
@@ -15067,11 +15069,11 @@ fn full_mode_save_persists_undo_but_not_redo() {
         "Full mode persists the undo history - that is what rides in the next commit"
     );
     assert!(
-        db.load_redo_stack_with_timestamps()
+        !db.load_redo_stack_with_timestamps()
             .unwrap_or_default()
             .is_empty(),
-        "Full mode must persist NO redo: it doubles the save cost and never reaches \
-         the server"
+        "Full mode persists redo too - the 2x save cost is an accepted ceiling, and \
+         dropping it would cost redo-after-reopen"
     );
 }
 

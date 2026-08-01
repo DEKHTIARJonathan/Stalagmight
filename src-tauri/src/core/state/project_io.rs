@@ -743,28 +743,23 @@ impl AppState {
             // has no undo tables to add to. See `UndoStack::rows_to_persist`.
             let undo_rows = undo_stack.rows_to_persist(PersistStack::Undo, count_limit);
 
-            // [#303] Full mode - the `count_limit == None` branch - persists NO redo at
-            // all. The byte budget is applied to the undo and redo stacks independently,
-            // so writing both made every 30 s autosave serialize and gzip up to twice
-            // the documented budget, and the redo half buys nothing on a linked project:
-            // `redo_stack` is unconditionally in `PUSH_SNAPSHOT_LOCAL_TABLES`, so none
-            // of it ever reaches the server.
+            // [#303] Redo is persisted in EVERY mode, including Full, where that means a
+            // save can write up to 2x `UNDO_BYTE_BUDGET_BYTES` - the budget is applied to
+            // the two stacks independently.
             //
-            // The price, accepted knowingly: a Full-mode linked project loses
-            // redo-after-reopen. Close it with a redo branch outstanding and reopening
-            // finds the redo stack empty. That was the deliberate trade for the smallest
-            // save cost on exactly the projects whose saves are most expensive; every
-            // other mode keeps persisting redo under the count window, where the window
-            // already bounds what a save costs.
+            // That doubling is deliberate and was re-decided after review, so do not
+            // "fix" it by skipping redo in Full mode: that change was made and reversed.
+            // The reasoning is that 64 MiB is a CEILING, not growth - each stack is
+            // bounded by the budget, and a confirmed push clears the undo history - and
+            // that persisting redo is what keeps a redo branch alive across a close and
+            // reopen. Dropping it bought a smaller save on exactly the projects whose
+            // saves are largest, and cost redo-after-reopen on all of them, which is the
+            // worse end of the trade.
             //
-            // NOT addressed here, deliberately: the IN-MEMORY doubling. Both stacks can
-            // still hold `UNDO_BYTE_BUDGET_BYTES` each while the project is open. This
-            // bounds the SAVE cost only.
-            let redo_rows = if count_limit.is_some() {
-                undo_stack.rows_to_persist(PersistStack::Redo, count_limit)
-            } else {
-                Vec::new()
-            };
+            // None of the redo half reaches the server either way: `redo_stack` is
+            // unconditionally in `PUSH_SNAPSHOT_LOCAL_TABLES`, so this is local-only cost
+            // for a local-only feature.
+            let redo_rows = undo_stack.rows_to_persist(PersistStack::Redo, count_limit);
 
             if let Err(e) = db.save_undo_stack_with_timestamps(undo_rows) {
                 tracing::warn!(

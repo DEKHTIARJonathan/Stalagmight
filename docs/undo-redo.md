@@ -116,19 +116,16 @@ stack holds at push time is what every commit stores forever. Two policies, reso
 | | `Full` (default) | `Disabled` | Local project |
 |---|---|---|---|
 | In-memory depth | byte budget | `undo_history_limit` | `undo_history_limit` |
-| Persisted depth | byte budget (undo); redo NOT persisted | `undo_persist_limit` | `undo_persist_limit` |
+| Persisted depth | byte budget | `undo_persist_limit` | `undo_persist_limit` |
 | Rides in the push | yes (undo only) | no | n/a |
 
-**Full mode does not persist the redo stack at all.** The byte budget applies to the undo
-and redo stacks independently, so persisting both made every 30 s autosave serialize and
-gzip up to twice the documented budget - and the redo half bought nothing, because
-`redo_stack` is unconditionally in `PUSH_SNAPSHOT_LOCAL_TABLES` and so never reaches the
-server. The accepted price is that a Full-mode linked project loses redo-after-reopen:
-close it with a redo branch outstanding and reopening finds the redo stack empty. Every
-other mode persists redo under `undo_persist_limit`, where the window already bounds what
-a save costs. The IN-MEMORY doubling is untouched - both stacks can still hold
-`UNDO_BYTE_BUDGET_BYTES` each while the project is open; only the save cost is bounded
-here.
+**Both stacks get the budget, so a Full-mode save can write up to 2x
+`UNDO_BYTE_BUDGET_BYTES`.** That is an accepted ceiling rather than growth: each stack is
+bounded, and a confirmed push clears the undo history. Dropping redo from the Full-mode
+save was tried and reversed - it bought a smaller save on exactly the projects whose saves
+are largest, and cost redo-after-reopen on all of them. No redo reaches the server in any
+mode (`redo_stack` is unconditionally in `PUSH_SNAPSHOT_LOCAL_TABLES`), so both the cost
+and the benefit are local.
 
 **The byte budget** (`UNDO_BYTE_BUDGET_BYTES`, 32 MiB of serialized JSON ~= 2.5 MB per
 commit) replaces the entry-count window rather than joining it. Count is the wrong unit
