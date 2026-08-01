@@ -91,17 +91,43 @@ project-wide uniqueness, and do not describe `<UUID>` as one.
 
 The importer does **not** read the element back: a fresh import mints its own
 shot identities, so `<UUID>` is write-only as far as Stalagmight is concerned.
+
+Ariane 26.3.0's own Save fills any row missing `<UUID>` with a fresh v4
+(verified 2026-07-31), so the synthesized-shot gaps above do not survive a
+round-trip through Ariane itself. Every consumer of the file *as we export
+it* - SpeleoDB, the GeoJSON feature ids - still sees the omissions.
 It exists for the SpeleoDB render and for any consumer that wants a stable
 per-shot key. Ariane 26+ round-trips it; Ariane 25 and older drop it silently,
 which is harmless here.
 
 ## Topology
 
-Ariane represents survey data as a directed graph rooted at a single START shot.
+Ariane represents survey data as a directed graph rooted at START shots - one
+per entrance, matching what Ariane itself writes for multi-entrance caves.
 
-### Single START shot
+### START shots - one per entrance
 
-Only the **root section** (the first section, or the one with no parent) gets a synthesized START shot with `FromID = -1`. All other sections connect to their parent via `FromID` on their first real/reference shot.
+The **root section** and any section left parentless after link resolution (a
+genuinely detached component) each get a synthesized START shot with
+`FromID = -1`, anchored at the project coordinates (every START repeats them -
+an unanchored START lands at lat/lon 0 and the view opens on the Atlantic).
+All other sections connect to their parent via `FromID` on their first
+real/reference shot.
+
+A parentless shot whose type is **not** START is an orphan root. Ariane
+tolerates it in isolation, but a file containing both an orphan root and any
+CLOSURE row makes Ariane abandon the loop solve and draw a completely blank
+map with a fully populated data table (#379). Two hard facts keep this
+invariant on the exporter alone:
+
+- **Ariane never repairs it.** Re-saving such a file in Ariane 26.3.0
+  preserves every orphan root untouched (verified 2026-07-31, 17/17 on a
+  pre-fix export), and every Ariane-authored file examined in the #379
+  investigation typed all of its parentless roots START. Nothing downstream
+  compensates.
+- `ensure_rooted_chain` in `src-tauri/src/export/tml.rs` therefore refuses to
+  write an orphan root alongside closures (user profile), and warns when a
+  file carries orphans without closures.
 
 ### Section connectivity
 
@@ -228,5 +254,7 @@ dropped or capped.
 ## Limitations
 
 - Shape/cross-section geometry (`Shape`/`SH` elements) is not exported (not stored in the internal model)
-- GPS coordinates are not written per-shot (only the project-level elevation reference is set)
-- Latitude and longitude are written as `0.0` on every shot
+- GPS coordinates are not written per-shot: latitude and longitude are `0.0`
+  everywhere except the START shots, which repeat the primary datum's anchor
+  (see Topology); without a primary datum they are `0.0` there too. Only the
+  project-level elevation reference is otherwise set
