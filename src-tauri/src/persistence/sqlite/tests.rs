@@ -2408,6 +2408,7 @@ fn test_new_format_undo_history_survives_reload() {
         "untouched nullable fields must serialize as absent, got: {values_json}"
     );
     let entry = UndoEntry {
+        command_bytes: None,
         command: Command::UpdateShot {
             section_id,
             shot_id,

@@ -114,6 +114,23 @@ pub struct UndoEntry {
     /// Timestamp when the command was executed (None for legacy entries)
     #[serde(default)]
     pub timestamp: Option<DateTime<Utc>>,
+    /// [#303] Serialized byte length of `command`, measured once when the entry was
+    /// pushed. `None` for an entry restored from disk (nothing persists it) or built by a
+    /// test literal.
+    ///
+    /// The byte budget bounds what a Full-mode save gzips and what the next commit
+    /// carries, and `command_json` is half of what gets written - but `estimated_size`
+    /// charged the command a flat `ENTRY_OVERHEAD`, so a `Batch` of an entire import
+    /// counted as 512 bytes against a 32 MiB ceiling whose own doc names Batch as the
+    /// motivating case.
+    ///
+    /// Measured at push rather than at trim, and stored rather than recomputed, because
+    /// the two are not the same cost: pushing happens once per edit, trimming happens on
+    /// every push after every edit. This mirrors what the snapshot variants already get
+    /// for free - they hold their serialized `String`, so their length is exact and cheap
+    /// to read; the command is still structured, so it has to be measured deliberately.
+    #[serde(default, skip_serializing)]
+    pub command_bytes: Option<usize>,
 }
 
 /// Data needed to undo a command
@@ -438,6 +455,9 @@ impl UndoStack {
     /// Push a command with its undo data to the undo stack
     pub fn push_with_data(&mut self, command: Command, undo_data: UndoData) {
         let entry = UndoEntry {
+            // Measured once, HERE, and never again: this runs per edit, while
+            // `estimated_size` runs on every trim after every edit. See the field's doc.
+            command_bytes: serde_json::to_string(&command).ok().map(|json| json.len()),
             command,
             undo_data,
             timestamp: Some(self.next_stamp()),
@@ -593,7 +613,11 @@ impl UndoStack {
             UndoData::StationMoveInfo { .. } => 2 * BYTES_PER_SHOT,
             UndoData::InverseCommand(_) | UndoData::None => 0,
         };
-        payload + ENTRY_OVERHEAD
+        // [#303] The command's own bytes, exactly, when the push measured them. An entry
+        // restored from disk has no stored value (nothing persists it), so it falls back
+        // to the flat overhead - the pre-#303 behaviour, and acceptable because a load is
+        // immediately followed by the trim that would have used it anyway.
+        payload + entry.command_bytes.unwrap_or(ENTRY_OVERHEAD)
     }
 
     /// [#303] Total estimated size of the undo stack (the budget's subject).
@@ -765,6 +789,7 @@ impl UndoStack {
         };
         let undo_data: UndoData = serde_json::from_str(undo_data_json).ok()?;
         Some(UndoEntry {
+            command_bytes: None,
             command,
             undo_data,
             timestamp: None, // Legacy entries without timestamp
@@ -797,6 +822,7 @@ impl UndoStack {
             .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
             .map(|dt| dt.with_timezone(&Utc));
         Some(UndoEntry {
+            command_bytes: None,
             command,
             undo_data,
             timestamp,
@@ -1075,6 +1101,7 @@ mod tests {
         stack.push_with_data(test_create_section_command("First"), UndoData::None);
         stack.push_with_data(test_create_section_command("Second"), UndoData::None);
         stack.push_redo(UndoEntry {
+            command_bytes: None,
             command: test_create_section_command("Redo"),
             undo_data: UndoData::None,
             timestamp: None,
@@ -1094,6 +1121,7 @@ mod tests {
     fn test_push_redo_enables_redo() {
         let mut stack = UndoStack::new();
         let entry = UndoEntry {
+            command_bytes: None,
             command: test_create_section_command("Test"),
             undo_data: UndoData::None,
             timestamp: None,
@@ -1110,11 +1138,13 @@ mod tests {
         let mut stack = UndoStack::new();
 
         stack.push_redo(UndoEntry {
+            command_bytes: None,
             command: test_create_section_command("First"),
             undo_data: UndoData::None,
             timestamp: None,
         });
         stack.push_redo(UndoEntry {
+            command_bytes: None,
             command: test_create_section_command("Second"),
             undo_data: UndoData::None,
             timestamp: None,
@@ -1140,6 +1170,7 @@ mod tests {
     fn test_peek_redo_does_not_modify_stack() {
         let mut stack = UndoStack::new();
         let entry = UndoEntry {
+            command_bytes: None,
             command: test_create_section_command("Test"),
             undo_data: UndoData::None,
             timestamp: None,
@@ -1158,11 +1189,13 @@ mod tests {
 
         // Add some redo entries
         stack.push_redo(UndoEntry {
+            command_bytes: None,
             command: test_create_section_command("Redo1"),
             undo_data: UndoData::None,
             timestamp: None,
         });
         stack.push_redo(UndoEntry {
+            command_bytes: None,
             command: test_create_section_command("Redo2"),
             undo_data: UndoData::None,
             timestamp: None,
@@ -1183,6 +1216,7 @@ mod tests {
 
         // Add redo entries
         stack.push_redo(UndoEntry {
+            command_bytes: None,
             command: test_create_section_command("Redo"),
             undo_data: UndoData::None,
             timestamp: None,
@@ -1190,6 +1224,7 @@ mod tests {
 
         // push_undo is used for redo operations and should NOT clear redo
         stack.push_undo(UndoEntry {
+            command_bytes: None,
             command: test_create_section_command("Restored"),
             undo_data: UndoData::None,
             timestamp: None,
@@ -1268,6 +1303,7 @@ mod tests {
         // Build up a redo stack by pushing then undoing
         for i in 0..10 {
             stack.push_redo(UndoEntry {
+                command_bytes: None,
                 command: test_create_section_command(&format!("Redo {i}")),
                 undo_data: UndoData::None,
                 timestamp: None,
@@ -1454,6 +1490,7 @@ mod tests {
     #[test]
     fn test_serialize_entry_basic() {
         let entry = UndoEntry {
+            command_bytes: None,
             command: test_create_section_command("Serialize Test"),
             undo_data: UndoData::None,
             timestamp: None,
@@ -1470,6 +1507,7 @@ mod tests {
     #[test]
     fn test_deserialize_entry_basic() {
         let entry = UndoEntry {
+            command_bytes: None,
             command: test_create_section_command("Deserialize Test"),
             undo_data: UndoData::InverseCommand(test_delete_section_command(42)),
             timestamp: None,
@@ -1504,6 +1542,7 @@ mod tests {
     #[test]
     fn test_serialize_entry_with_section_snapshot() {
         let entry = UndoEntry {
+            command_bytes: None,
             command: test_delete_section_command(5),
             undo_data: UndoData::SectionSnapshot {
                 section_id: 5,
@@ -1538,6 +1577,7 @@ mod tests {
         let entries: Vec<(String, String)> = (0..3)
             .map(|i| {
                 let entry = UndoEntry {
+                    command_bytes: None,
                     command: test_create_section_command(&format!("Section {i}")),
                     undo_data: UndoData::InverseCommand(test_delete_section_command(i as u32)),
                     timestamp: None,
@@ -1571,6 +1611,7 @@ mod tests {
         let entries: Vec<(String, String)> = (0..5)
             .map(|i| {
                 let entry = UndoEntry {
+                    command_bytes: None,
                     command: test_create_section_command(&format!("Section {i}")),
                     undo_data: UndoData::InverseCommand(test_delete_section_command(1)),
                     timestamp: None,
@@ -1599,6 +1640,7 @@ mod tests {
         // Add some entries
         stack.push_with_data(test_create_section_command("Existing"), UndoData::None);
         stack.push_redo(UndoEntry {
+            command_bytes: None,
             command: test_create_section_command("Existing Redo"),
             undo_data: UndoData::None,
             timestamp: None,
@@ -1607,6 +1649,7 @@ mod tests {
         // Load persisted data should clear existing. Real undo data, so the load
         // filter keeps the entry and this stays a test of the clear.
         let entries: Vec<(String, String)> = vec![UndoStack::serialize_entry(&UndoEntry {
+            command_bytes: None,
             command: test_create_section_command("Loaded"),
             undo_data: UndoData::InverseCommand(test_delete_section_command(1)),
             timestamp: None,
@@ -1626,6 +1669,7 @@ mod tests {
         // Real undo data, so the only thing that can drop this entry is the
         // malformed-JSON skip this test is about.
         let valid_entry = UndoStack::serialize_entry(&UndoEntry {
+            command_bytes: None,
             command: test_create_section_command("Valid"),
             undo_data: UndoData::InverseCommand(test_delete_section_command(1)),
             timestamp: None,
@@ -1654,18 +1698,21 @@ mod tests {
 
         let entries: Vec<(String, String)> = vec![
             UndoStack::serialize_entry(&UndoEntry {
+                command_bytes: None,
                 command: test_create_section_command("Older"),
                 undo_data: UndoData::InverseCommand(test_delete_section_command(1)),
                 timestamp: None,
             })
             .unwrap(),
             UndoStack::serialize_entry(&UndoEntry {
+                command_bytes: None,
                 command: test_create_section_command("Poison"),
                 undo_data: UndoData::None,
                 timestamp: None,
             })
             .unwrap(),
             UndoStack::serialize_entry(&UndoEntry {
+                command_bytes: None,
                 command: test_create_section_command("Newer"),
                 undo_data: UndoData::InverseCommand(test_delete_section_command(3)),
                 timestamp: None,
@@ -1697,18 +1744,21 @@ mod tests {
 
         let undo_entries: Vec<(String, String, Option<String>)> = vec![
             UndoStack::serialize_entry_with_timestamp(&UndoEntry {
+                command_bytes: None,
                 command: test_create_section_command("Older"),
                 undo_data: UndoData::InverseCommand(test_delete_section_command(1)),
                 timestamp: None,
             })
             .unwrap(),
             UndoStack::serialize_entry_with_timestamp(&UndoEntry {
+                command_bytes: None,
                 command: test_create_section_command("Poison"),
                 undo_data: UndoData::None,
                 timestamp: None,
             })
             .unwrap(),
             UndoStack::serialize_entry_with_timestamp(&UndoEntry {
+                command_bytes: None,
                 command: test_create_section_command("Newer"),
                 undo_data: UndoData::InverseCommand(test_delete_section_command(3)),
                 timestamp: None,
@@ -1742,6 +1792,7 @@ mod tests {
 
         let redo_entries: Vec<(String, String, Option<String>)> =
             vec![UndoStack::serialize_entry_with_timestamp(&UndoEntry {
+                command_bytes: None,
                 command: test_create_section_command("Redoable"),
                 undo_data: UndoData::None,
                 timestamp: None,
@@ -1799,6 +1850,7 @@ mod tests {
 
         // Push command
         let entry = UndoEntry {
+            command_bytes: None,
             command: test_create_section_command("Test"),
             undo_data: UndoData::InverseCommand(test_delete_section_command(1)),
             timestamp: None,
@@ -1881,16 +1933,19 @@ mod tests {
 
         let test_cases: Vec<UndoEntry> = vec![
             UndoEntry {
+                command_bytes: None,
                 command: test_create_section_command("None"),
                 undo_data: UndoData::None,
                 timestamp: None,
             },
             UndoEntry {
+                command_bytes: None,
                 command: test_create_section_command("Inverse"),
                 undo_data: UndoData::InverseCommand(test_delete_section_command(1)),
                 timestamp: None,
             },
             UndoEntry {
+                command_bytes: None,
                 command: test_delete_section_command(2),
                 undo_data: UndoData::SectionSnapshot {
                     section_id: 2,
@@ -1899,6 +1954,7 @@ mod tests {
                 timestamp: None,
             },
             UndoEntry {
+                command_bytes: None,
                 command: test_create_section_command("Created Snapshot"),
                 undo_data: UndoData::CreatedSectionSnapshot {
                     section_id: 3,
@@ -1907,6 +1963,7 @@ mod tests {
                 timestamp: None,
             },
             UndoEntry {
+                command_bytes: None,
                 command: Command::DeleteShot {
                     section_id: 1,
                     shot_id: 100,
@@ -1924,6 +1981,7 @@ mod tests {
                 timestamp: None,
             },
             UndoEntry {
+                command_bytes: None,
                 command: Command::CreateShot {
                     section_id: 1,
                     shot: ShotData {
@@ -1949,6 +2007,7 @@ mod tests {
                 timestamp: None,
             },
             UndoEntry {
+                command_bytes: None,
                 command: Command::SetZeroDatum {
                     station_ref: StationRef::new(1, 0),
                     coordinates: GpsCoordinates::new(45.0, -73.0, 100.0).unwrap(),
@@ -1961,6 +2020,7 @@ mod tests {
                 timestamp: None,
             },
             UndoEntry {
+                command_bytes: None,
                 command: Command::MergeStations {
                     station_a: StationRef::new(1, 0),
                     station_b: StationRef::new(2, 1),
@@ -1974,11 +2034,13 @@ mod tests {
                 timestamp: None,
             },
             UndoEntry {
+                command_bytes: None,
                 command: Command::Batch { commands: vec![] },
                 undo_data: UndoData::ProjectSnapshot("{}".to_string()),
                 timestamp: None,
             },
             UndoEntry {
+                command_bytes: None,
                 command: Command::UpdateShot {
                     section_id: 1,
                     shot_id: 100,
@@ -2019,6 +2081,20 @@ mod tests {
         )
     }
 
+    /// [#303] The measured size of one `sized_entry`, so a budget can be expressed in
+    /// entries rather than in a hardcoded overhead.
+    ///
+    /// These tests used to assume `1024 + ENTRY_OVERHEAD`, i.e. that the command costs a
+    /// flat 512. It no longer does - the command is measured at push - so the constant
+    /// both over-counted a small command and would under-count a large one. Deriving it
+    /// keeps the tests about the BUDGET rather than about the estimator's internals.
+    fn measured_entry_size(payload: usize) -> usize {
+        let mut probe = UndoStack::new_with_limit(1000);
+        let (cmd, data) = sized_entry(payload, "S0");
+        probe.push_with_data(cmd, data);
+        probe.estimated_undo_bytes()
+    }
+
     /// Spec item 7: Full mode keeps MORE than `undo_history_limit` entries. The count
     /// window is what the byte budget replaces, so a stack on the budget must not be
     /// truncated at 100 (or at whatever the user configured).
@@ -2042,8 +2118,8 @@ mod tests {
     /// Spec item 8: past the budget, the OLDEST entries go first and the newest survive.
     #[test]
     fn undo_budget_drops_oldest_past_the_budget() {
-        // Budget for ~4 entries of 1 KiB payload (+512 overhead each).
-        let entry_size = 1024 + 512;
+        // Budget for exactly 4 entries, measured rather than assumed.
+        let entry_size = measured_entry_size(1024);
         let mut stack = UndoStack::new_with_limit(1000);
         stack.set_byte_budget(entry_size * 4);
 
@@ -2122,11 +2198,13 @@ mod tests {
     #[test]
     fn undo_budget_size_estimate_tracks_the_snapshot_payload() {
         let small = UndoEntry {
+            command_bytes: None,
             command: test_create_section_command("small"),
             undo_data: UndoData::InverseCommand(test_delete_section_command(1)),
             timestamp: None,
         };
         let big = UndoEntry {
+            command_bytes: None,
             command: test_create_section_command("big"),
             undo_data: UndoData::ProjectSnapshotPair {
                 before: "b".repeat(1_000_000),
@@ -2179,7 +2257,7 @@ mod tests {
     /// survived - in stack order, with no trace of the evicted entry.
     #[test]
     fn undo_rows_to_persist_follows_a_trim() {
-        let entry_size = 1024 + 512;
+        let entry_size = measured_entry_size(1024);
         let mut stack = UndoStack::new_with_limit(1000);
         stack.set_byte_budget(entry_size * 3);
         for i in 0..3 {
@@ -2261,6 +2339,7 @@ mod tests {
         let entries: Vec<(String, String, Option<String>)> = (0..3)
             .map(|i| {
                 UndoStack::serialize_entry_with_timestamp(&UndoEntry {
+                    command_bytes: None,
                     command: test_create_section_command(&format!("S{i}")),
                     undo_data: UndoData::InverseCommand(test_delete_section_command(i)),
                     timestamp: None,
@@ -2332,6 +2411,59 @@ mod tests {
         );
     }
 
+    /// [#303] The byte budget counts the COMMAND too, not just the undo data.
+    ///
+    /// `estimated_size` charged the command a flat `ENTRY_OVERHEAD`, but `Command::Batch`
+    /// and the `shots:` variants are unbounded and `rows_to_persist` writes that
+    /// `command_json` - and in Full mode ships it. So an entire import counted as 512
+    /// bytes against a 32 MiB ceiling whose own doc names Batch as the reason it exists.
+    #[test]
+    fn the_budget_counts_a_large_command_not_a_flat_overhead() {
+        let mut stack = UndoStack::new();
+        // One command carrying a survey's worth of shots, with NO undo payload - so
+        // anything the estimate reports above the flat overhead came from the command.
+        let shots: Vec<_> = (0..2_000)
+            .map(|_| ShotData {
+                azimuth_in: 45.0,
+                azimuth_out: 225.0,
+                length: 10.0,
+                depth_in: 5.0,
+                depth_out: 6.0,
+                ..Default::default()
+            })
+            .collect();
+        stack.push_with_data(
+            Command::CreateSection {
+                name: Some("Imported".to_string()),
+                surveyor: None,
+                date: None,
+                color: "#ff0000".to_string(),
+                direction: None,
+                shots,
+            },
+            UndoData::None,
+        );
+
+        let size = stack.estimated_undo_bytes();
+        assert!(
+            size > 100_000,
+            "a 2,000-shot command must count its own payload, got {size} bytes"
+        );
+    }
+
+    /// An entry restored from disk has no measurement, and falls back to the flat
+    /// overhead rather than pretending to know - the pre-#303 behaviour.
+    #[test]
+    fn a_restored_entry_falls_back_to_the_flat_overhead() {
+        let entry = UndoEntry {
+            command_bytes: None,
+            command: test_create_section_command("S0"),
+            undo_data: UndoData::None,
+            timestamp: None,
+        };
+        assert_eq!(UndoStack::estimated_size(&entry), 512);
+    }
+
     /// [#303] A load whose stamps are not in time order is refused, not sorted.
     ///
     /// `drop_entries_up_to` finds the post-push cut with `partition_point`, which needs a
@@ -2346,6 +2478,7 @@ mod tests {
             .enumerate()
             .map(|(i, ts)| {
                 let entry = UndoEntry {
+                    command_bytes: None,
                     command: test_create_section_command(&format!("S{i}")),
                     undo_data: UndoData::InverseCommand(test_delete_section_command(
                         u32::try_from(i).expect("small"),
@@ -2374,6 +2507,7 @@ mod tests {
             .enumerate()
             .map(|(i, ts)| {
                 let entry = UndoEntry {
+                    command_bytes: None,
                     command: test_create_section_command(&format!("S{i}")),
                     undo_data: UndoData::InverseCommand(test_delete_section_command(
                         u32::try_from(i).expect("small"),
@@ -2566,6 +2700,7 @@ mod tests {
         let legacy: Vec<_> = (0..3)
             .map(|i| {
                 let entry = UndoEntry {
+                    command_bytes: None,
                     command: test_create_section_command(&format!("legacy{i}")),
                     undo_data: UndoData::InverseCommand(test_delete_section_command(i)),
                     timestamp: None,
@@ -2648,6 +2783,7 @@ mod tests {
         };
 
         let entry = UndoEntry {
+            command_bytes: None,
             command: Command::CreateLoopClosure {
                 station_a: StationRef::new(1, 0),
                 station_b: StationRef::new(2, 3),

@@ -225,6 +225,7 @@ fn test_open_project_restores_undo_redo_and_assigns_closure_ids() {
     // the redo stack is not filtered (a `None` redo entry re-executes its command
     // correctly), and `redo_len() == 1` below is the pin for that.
     let undo_entry = UndoEntry {
+        command_bytes: None,
         command: Command::CreateProject {
             name: "Undo Project".to_string(),
             location: None,
@@ -233,6 +234,7 @@ fn test_open_project_restores_undo_redo_and_assigns_closure_ids() {
         timestamp: None,
     };
     let redo_entry = UndoEntry {
+        command_bytes: None,
         command: Command::CloseProject,
         undo_data: UndoData::None,
         timestamp: None,
@@ -298,6 +300,7 @@ fn opening_a_full_mode_project_restores_history_deeper_than_the_count_window() {
         let entries: Vec<_> = (0..PERSISTED)
             .map(|i| {
                 let entry = UndoEntry {
+                    command_bytes: None,
                     command: Command::CreateProject {
                         name: format!("Entry {i}"),
                         location: None,
@@ -1634,6 +1637,7 @@ fn redo_legacy_prepend_createshot_reanchors_section_start() {
     // A LEGACY redo entry: prepend (position 0) with NO anchor fields, as a
     // pre-anchor build would have persisted it.
     let entry = UndoEntry {
+        command_bytes: None,
         command: Command::CreateShot {
             section_id: a,
             shot: test_shot_data(5.0),
@@ -1789,6 +1793,7 @@ fn test_redo_fails_with_invalid_project_snapshot_pair() {
     let state = AppState::new().unwrap();
     let mut stack = state.undo_stack.lock().unwrap();
     let entry = UndoEntry {
+        command_bytes: None,
         command: Command::CloseProject,
         undo_data: UndoData::ProjectSnapshotPair {
             before: "{}".to_string(),
@@ -1812,6 +1817,7 @@ fn test_redo_fails_for_command_not_allowed_in_undo_context() {
     let state = AppState::new().unwrap();
     let mut stack = state.undo_stack.lock().unwrap();
     let entry = UndoEntry {
+        command_bytes: None,
         command: Command::MergeProjects {
             source_paths: Vec::new(),
             output_path: PathBuf::from("out.stalx"),
@@ -4959,6 +4965,7 @@ fn test_redo_project_snapshot_pair_fails_when_project_lock_poisoned() {
     let after = serde_json::to_string(&Project::new("After".to_string(), None)).unwrap();
 
     let entry = UndoEntry {
+        command_bytes: None,
         command: Command::CloseProject,
         undo_data: UndoData::ProjectSnapshotPair { before, after },
         timestamp: None,
@@ -7290,6 +7297,7 @@ fn test_redo_failure_preserves_entry_on_redo_stack() {
     // Push an entry onto the redo stack that will fail when re-executed
     let mut stack = state.undo_stack.lock().unwrap();
     let entry = UndoEntry {
+        command_bytes: None,
         command: Command::CloseProject,
         undo_data: UndoData::ProjectSnapshotPair {
             before: "{}".to_string(),
@@ -7398,6 +7406,7 @@ fn test_redo_failure_preserves_entry_at_top_lifo_order() {
 
     // Valid redo entry (bottom)
     stack.push_redo(UndoEntry {
+        command_bytes: None,
         command: Command::CreateSection {
             name: Some("Valid".to_string()),
             surveyor: None,
@@ -7412,6 +7421,7 @@ fn test_redo_failure_preserves_entry_at_top_lifo_order() {
 
     // Invalid redo entry (top) - will fail because "after" JSON is invalid
     stack.push_redo(UndoEntry {
+        command_bytes: None,
         command: Command::CloseProject,
         undo_data: UndoData::ProjectSnapshotPair {
             before: "{}".to_string(),
@@ -7483,6 +7493,7 @@ fn test_undo_to_partial_completion_stops_at_failed_step() {
 
         // Push invalid entry at position where Section 1 was
         stack.push_undo(UndoEntry {
+            command_bytes: None,
             command: Command::UpdateShot {
                 section_id: 999,
                 shot_id: 999,
@@ -7595,6 +7606,7 @@ fn test_redo_to_partial_completion_stops_at_failed_step() {
         let top = stack.pop_redo().unwrap(); // SectionA (last undone = first to redo)
                                              // Push invalid entry
         stack.push_redo(UndoEntry {
+            command_bytes: None,
             command: Command::CloseProject,
             undo_data: UndoData::ProjectSnapshotPair {
                 before: "{}".to_string(),
@@ -7720,6 +7732,7 @@ fn test_redo_failure_with_project_lock_preserves_entry() {
     let after = serde_json::to_string(&Project::new("After".to_string(), None)).unwrap();
 
     let entry = UndoEntry {
+        command_bytes: None,
         command: Command::CloseProject,
         undo_data: UndoData::ProjectSnapshotPair { before, after },
         timestamp: None,
@@ -21263,6 +21276,7 @@ fn a_persisted_none_entry_does_not_block_the_history_beneath_it() {
     };
     persisted.push(
         UndoStack::serialize_entry_with_timestamp(&UndoEntry {
+            command_bytes: None,
             command: Command::ReverseSection {
                 section_id: 1,
                 swap_left_right: false,
@@ -21336,6 +21350,7 @@ fn redoing_an_unundoable_entry_does_not_re_wedge_the_undo_stack() {
     {
         let mut stack = state.undo_stack.lock().unwrap();
         stack.push_redo(UndoEntry {
+            command_bytes: None,
             command: Command::ReverseSection {
                 section_id: waypoint_id,
                 swap_left_right: false,
@@ -21467,12 +21482,14 @@ fn a_loaded_none_entry_is_not_re_persisted() {
 
     let persisted: Vec<(String, String, Option<String>)> = vec![
         UndoStack::serialize_entry_with_timestamp(&UndoEntry {
+            command_bytes: None,
             command: Command::DeleteSection { section_id: 7 },
             undo_data: UndoData::InverseCommand(Command::DeleteSection { section_id: 7 }),
             timestamp: None,
         })
         .unwrap(),
         UndoStack::serialize_entry_with_timestamp(&UndoEntry {
+            command_bytes: None,
             command: Command::ReverseSection {
                 section_id: 1,
                 swap_left_right: false,
@@ -21508,6 +21525,7 @@ fn a_failed_undo_still_pushes_its_entry_back() {
 
     let persisted: Vec<(String, String, Option<String>)> =
         vec![UndoStack::serialize_entry_with_timestamp(&UndoEntry {
+            command_bytes: None,
             command: Command::UpdateShot {
                 section_id: 1,
                 shot_id: 1,

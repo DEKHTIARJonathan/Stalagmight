@@ -549,6 +549,7 @@ fn test_undo_clears_redo_stack() {
 #[test]
 fn test_batch_command_structure() {
     let entry = UndoEntry {
+        command_bytes: None,
         command: Command::CreateSection {
             name: Some("Test".to_string()),
             surveyor: None,
