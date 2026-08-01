@@ -149,3 +149,43 @@ describe('useUnwindTarget - overlapping lookups (#303)', () => {
     expect(invokeIpcMock).toHaveBeenCalledTimes(1);
   });
 });
+
+/**
+ * [#303] The memo must not outlive the project state it describes.
+ *
+ * The request-id and identity guards sit on the fetch, but `resolve` returns from the
+ * memo BEFORE reaching them - so with a key of direction + remote-ness alone, anything
+ * that moved the copy (a chain step, a push, a revision swap - none of which unmount the
+ * dropdown, because the project stays open) left a hover answering with the pre-swap
+ * hexsha for the whole TTL, and that value goes straight into the confirmation dialog.
+ */
+describe('useUnwindTarget - the memo is bound to the project', () => {
+  it('re-fetches inside the TTL once the project has moved', async () => {
+    invokeIpcMock.mockResolvedValueOnce({ hexsha: 'before', is_current: false, discards_unpushed: false });
+    const { result } = renderHook(() => useUnwindTarget(false, 'back'));
+
+    await act(async () => {
+      await result.current.resolve();
+    });
+    expect(invokeIpcMock).toHaveBeenCalledTimes(1);
+
+    // Same key inputs, so without the identity term this second call is a memo hit.
+    await act(async () => {
+      await result.current.resolve();
+    });
+    expect(invokeIpcMock).toHaveBeenCalledTimes(1);
+
+    // A swap moves the copy without unmounting anything.
+    invokeIpcMock.mockResolvedValueOnce({ hexsha: 'after', is_current: false, discards_unpushed: false });
+    act(() => {
+      const current = useProjectStore.getState().project as Record<string, unknown> | null;
+      useProjectStore.setState({
+        project: { ...(current ?? {}), modified_at: 'moved' } as never,
+      });
+    });
+
+    const fresh = await act(async () => result.current.resolve());
+    expect(invokeIpcMock).toHaveBeenCalledTimes(2);
+    expect(fresh?.hexsha).toBe('after');
+  });
+});

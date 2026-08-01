@@ -72,10 +72,24 @@ export function useUnwindTarget(
   // Only a remote project has revisions to walk; asking otherwise earns a refusal.
   const isRemote = useSpeleoStore((s) => s.projectLinkKind === 'remote');
 
-  // The memo carries the inputs it was fetched for, so a change of direction or of
-  // remote-ness invalidates it by not matching rather than by needing to be cleared -
-  // no window in which a stale answer for the other direction can be read back.
-  const cacheKey = `${direction}:${String(isRemote)}`;
+  // The memo carries the inputs it was fetched for, so a change of direction, of
+  // remote-ness, or OF THE PROJECT ITSELF invalidates it by not matching rather than by
+  // needing to be cleared - no window in which a stale answer can be read back.
+  //
+  // The project identity is load-bearing and was missing: the two guards below sit on the
+  // fetch, and `resolve` returns from this memo BEFORE reaching them. So for the whole TTL
+  // after anything that moves the copy - a chain step, a push, a revision swap, none of
+  // which unmount the dropdown because the project stays open - a hover answered with the
+  // pre-swap hexsha, and `UndoHistoryDropdown` puts that straight into the confirmation.
+  // Folding the identity in here means the memo cannot outlive what it describes, which is
+  // better than repeating the guards at a second site that has to be kept in step.
+  // Built on DEMAND, not at render: this hook subscribes to the speleo store, not the
+  // project one, so a swap that moves the project does not re-render it - a key captured
+  // during render would still name the old identity at the moment it matters most.
+  const makeCacheKey = useCallback(
+    () => `${direction}:${String(isRemote)}:${projectIdentityKey()}`,
+    [direction, isRemote],
+  );
   const cacheRef = useRef<{ at: number; key: string; value: ChainTarget | null } | null>(null);
   // Monotonic stamp for the in-flight fetch. `resolve` (hover) and `refresh` (panel open)
   // are two entry points into the same request, so a cursor that crosses the toolbar and
@@ -100,11 +114,11 @@ export function useUnwindTarget(
 
   const remember = useCallback(
     (value: ChainTarget | null): ChainTarget | null => {
-      cacheRef.current = { at: Date.now(), key: cacheKey, value };
+      cacheRef.current = { at: Date.now(), key: makeCacheKey(), value };
       setTarget(value);
       return value;
     },
-    [cacheKey],
+    [makeCacheKey],
   );
 
   // One fetch, stamped and bound to the project it was issued for, storing only if it is
@@ -135,7 +149,7 @@ export function useUnwindTarget(
   // open panel renders what the caller decided to open on.
   const resolve = useCallback(async (): Promise<ChainTarget | null> => {
     const cached = cacheRef.current;
-    if (cached && cached.key === cacheKey && Date.now() - cached.at < TARGET_TTL_MS) {
+    if (cached && cached.key === makeCacheKey() && Date.now() - cached.at < TARGET_TTL_MS) {
       setTarget(cached.value);
       return cached.value;
     }
@@ -143,7 +157,7 @@ export function useUnwindTarget(
     // the panel on this answer, and a step resolved for a project the user has left (or
     // superseded by a newer ask) is not something to open a panel on.
     return fetchNewest();
-  }, [cacheKey, fetchNewest]);
+  }, [makeCacheKey, fetchNewest]);
 
   useEffect(() => {
     if (!enabled) {
