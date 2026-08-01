@@ -628,8 +628,42 @@ impl AppState {
         let Some(p) = guard.as_ref() else {
             return Err(CommandResult::failure("No project open".to_string()));
         };
-        serde_json::to_string(p)
+        Self::serialize_project_snapshot(p)
             .map_err(|e| CommandResult::failure(format!("Failed to serialize project: {e}")))
+    }
+
+    /// [#303] Serialize a project FOR AN UNDO SNAPSHOT, with machine-local fields cleared.
+    ///
+    /// Snapshot entries stopped being local-only when Full mode started shipping undo
+    /// history: `sanitize_push_snapshot` deliberately keeps `undo_stack` in the upload, and
+    /// every `ProjectSnapshot` / `ProjectSnapshotPair` is a whole serialized `Project`.
+    /// `file_path` is an absolute path on THIS machine - `/home/<user>/…`,
+    /// `C:\Users\<Real Name>\…` - so shipping it writes the pusher's username and directory
+    /// layout into the project's git history, permanently, readable by every collaborator
+    /// and by whoever runs the server. Snapshot pairs come from Delete shot, Delete section,
+    /// Reverse section and every Batch import, so this is routine editing, not an edge case.
+    ///
+    /// Cleared HERE, at the one place a snapshot is produced, rather than scrubbed out of
+    /// the upload: a snapshot that never holds the value cannot leak it through a log, a bug
+    /// report, or some future consumer either. `restore_snapshot_into` carries the LIVE path
+    /// back across, exactly as it already does for `validation`, so an undo does not lose
+    /// track of where the file lives.
+    ///
+    /// The clone is the cost of doing it correctly: `Project` is megabytes on a large
+    /// survey. It is proportionate - this path already builds a JSON string of the same
+    /// project - and it only runs for the snapshot commands, not for ordinary edits.
+    ///
+    /// `file_path` is the only machine-local field on `Project`: the four transient caches
+    /// are `#[serde(skip)]`, and `imported_file_hashes` is content hashes that are meant to
+    /// proliferate. A new field of that kind must be added here too.
+    pub(super) fn serialize_project_snapshot(project: &Project) -> serde_json::Result<String> {
+        if project.file_path.is_none() {
+            // An unsaved project has nothing to scrub, so skip the clone entirely.
+            return serde_json::to_string(project);
+        }
+        let mut scrubbed = project.clone();
+        scrubbed.file_path = None;
+        serde_json::to_string(&scrubbed)
     }
 
     /// Deserialize a project snapshot and install it into `slot`, rebuilding the
@@ -650,6 +684,14 @@ impl AppState {
         // serializes the key, so it still restores the intended thresholds (Codex).
         let snapshot_has_validation = snapshot.contains("\"validation\":");
         let current_validation = slot.as_ref().map(|p| p.validation.clone());
+        // [#303] Where the file lives is a property of THIS machine, not of the survey, so
+        // `serialize_project_snapshot` clears it rather than write a username into every
+        // pushed commit. Carry the live value across on the way back, or an undo would leave
+        // the app thinking the project has never been saved - and the next save would ask
+        // for a path. Unconditional, unlike the `validation` carry-over above: the snapshot
+        // never has a useful path in it, whether it was written before this change (someone
+        // else's path) or after (none at all).
+        let current_file_path = slot.as_ref().and_then(|p| p.file_path.clone());
         match serde_json::from_str::<Project>(snapshot) {
             Ok(mut restored) => {
                 if !snapshot_has_validation {
@@ -657,6 +699,7 @@ impl AppState {
                         restored.validation = validation;
                     }
                 }
+                restored.file_path = current_file_path;
                 restored.rebuild_section_index();
                 restored.rebuild_merge_adjacency();
                 restored.rebuild_shot_uuid_index();

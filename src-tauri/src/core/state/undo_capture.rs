@@ -25,7 +25,7 @@ impl AppState {
             // Guard: only serialize if section exists (avoids overhead for doomed commands).
             Command::DeleteSection { section_id } => {
                 if project.get_section(*section_id).is_some() {
-                    match serde_json::to_string(project) {
+                    match AppState::serialize_project_snapshot(project) {
                         Ok(before) => UndoData::ProjectSnapshotPair {
                             before,
                             after: String::new(), // Filled by finalize_undo_data
@@ -54,7 +54,7 @@ impl AppState {
                     .get_section(*section_id)
                     .is_some_and(|s| !s.shots.is_empty())
                 {
-                    match serde_json::to_string(project) {
+                    match AppState::serialize_project_snapshot(project) {
                         Ok(before) => UndoData::ProjectSnapshotPair {
                             before,
                             after: String::new(), // Filled by finalize_undo_data
@@ -75,7 +75,7 @@ impl AppState {
             } => {
                 if let Some(section) = project.get_section(*section_id) {
                     if section.shots.iter().any(|s| s.id == *shot_id) {
-                        match serde_json::to_string(project) {
+                        match AppState::serialize_project_snapshot(project) {
                             Ok(before) => UndoData::ProjectSnapshotPair {
                                 before,
                                 after: String::new(), // Filled by finalize_undo_data
@@ -200,7 +200,7 @@ impl AppState {
                 if project.get_section(station_a.section_id).is_some()
                     && project.get_section(station_b.section_id).is_some()
                 {
-                    match serde_json::to_string(project) {
+                    match AppState::serialize_project_snapshot(project) {
                         Ok(before) => UndoData::ProjectSnapshotPair {
                             before,
                             after: String::new(), // Filled by finalize_undo_data
@@ -229,7 +229,7 @@ impl AppState {
                         || project.key_is_ref(&m.station_b, *station_ref)
                 });
                 if involved {
-                    match serde_json::to_string(project) {
+                    match AppState::serialize_project_snapshot(project) {
                         Ok(before) => UndoData::ProjectSnapshotPair {
                             before,
                             after: String::new(), // Filled by finalize_undo_data
@@ -252,7 +252,7 @@ impl AppState {
                             && project.key_is_ref(&m.station_b, *station_a))
                 });
                 if merged {
-                    match serde_json::to_string(project) {
+                    match AppState::serialize_project_snapshot(project) {
                         Ok(before) => UndoData::ProjectSnapshotPair {
                             before,
                             after: String::new(), // Filled by finalize_undo_data
@@ -272,7 +272,7 @@ impl AppState {
                     closure_strategy,
                     ClosureStrategy::ProportionalByLength | ClosureStrategy::EqualDistribution
                 ) {
-                    match serde_json::to_string(project) {
+                    match AppState::serialize_project_snapshot(project) {
                         Ok(before) => UndoData::ProjectSnapshotPair {
                             before,
                             after: String::new(), // Filled by finalize_undo_data
@@ -388,7 +388,7 @@ impl AppState {
                 offset: _,
             } => {
                 if project.get_section(station_ref.section_id).is_some() {
-                    match serde_json::to_string(project) {
+                    match AppState::serialize_project_snapshot(project) {
                         Ok(before) => UndoData::ProjectSnapshotPair {
                             before,
                             after: String::new(), // Filled by finalize_undo_data
@@ -503,7 +503,7 @@ impl AppState {
                     ClosureStrategy::ProportionalByLength | ClosureStrategy::EqualDistribution
                 ) {
                     if let UndoData::ProjectSnapshotPair { before, .. } = undo_data {
-                        match serde_json::to_string(project) {
+                        match AppState::serialize_project_snapshot(project) {
                             Ok(after) => UndoData::ProjectSnapshotPair { before, after },
                             Err(_) => UndoData::None,
                         }
@@ -539,7 +539,7 @@ impl AppState {
             | Command::UnmergeStationPair { .. }
             | Command::MoveStation { .. } => {
                 if let UndoData::ProjectSnapshotPair { before, .. } = undo_data {
-                    match serde_json::to_string(project) {
+                    match AppState::serialize_project_snapshot(project) {
                         Ok(after) => UndoData::ProjectSnapshotPair { before, after },
                         Err(_) => UndoData::None,
                     }

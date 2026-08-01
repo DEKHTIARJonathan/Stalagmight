@@ -15000,6 +15000,53 @@ fn test_save_project_persists_undo_redo_stacks() {
     assert!(!redo.is_empty(), "redo stack should be persisted");
 }
 
+/// [#303] An undo snapshot must not carry this machine's filesystem paths.
+///
+/// Full mode ships `undo_stack` to the server on purpose, and every `ProjectSnapshot` /
+/// `ProjectSnapshotPair` is a whole serialized `Project` - so an unscrubbed `file_path`
+/// writes `/home/<user>/…` or `C:\Users\<Real Name>\…` into the project's git history,
+/// permanently and readable by every collaborator. Snapshot pairs come from Delete shot,
+/// Delete section, Reverse section and every Batch import, so this is routine editing.
+#[test]
+fn a_project_snapshot_carries_no_local_filesystem_path() {
+    let mut project = Project::new("Leaky".to_string(), None);
+    project.file_path = Some(PathBuf::from("/home/victim/caves/secret-sump.stalx"));
+
+    let json = AppState::serialize_project_snapshot(&project).expect("serializes");
+
+    assert!(
+        !json.contains("victim"),
+        "the snapshot leaked a local path: {json}"
+    );
+    assert!(
+        !json.contains("secret-sump.stalx"),
+        "the snapshot leaked a local filename: {json}"
+    );
+    // The survey itself must still be there - scrubbing must not cost the payload.
+    assert!(json.contains("Leaky"), "the snapshot lost the project name");
+}
+
+/// ...and restoring one must not lose track of where the file lives.
+///
+/// The path is cleared on the way out, so the way back has to re-apply the live value or
+/// an undo would leave the app believing the project was never saved - and the next save
+/// would prompt for a location.
+#[test]
+fn restoring_a_snapshot_keeps_the_live_file_path() {
+    let mut live = Project::new("Cave".to_string(), None);
+    live.file_path = Some(PathBuf::from("/home/me/cave.stalx"));
+    let snapshot = AppState::serialize_project_snapshot(&live).expect("serializes");
+
+    let mut slot = Some(live);
+    assert!(AppState::restore_snapshot_into(&mut slot, &snapshot));
+
+    assert_eq!(
+        slot.as_ref().and_then(|p| p.file_path.clone()),
+        Some(PathBuf::from("/home/me/cave.stalx")),
+        "the restore must carry the live path across, not the snapshot's (absent) one"
+    );
+}
+
 /// [#303] A Full-mode linked project persists BOTH stacks, redo included.
 ///
 /// Pinned because the opposite was tried. The byte budget is applied to the undo and
