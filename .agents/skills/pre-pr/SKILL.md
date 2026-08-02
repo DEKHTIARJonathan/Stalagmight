@@ -1,6 +1,6 @@
 ---
 name: pre-pr
-description: Run Stalagmight's required adversarial pre-PR review across ten independent review lenses, then synthesize one evidence-backed verdict. Use before creating, push-opening, or marking a PR ready, when the user invokes $pre-pr, or when project guidance requires the pre-PR gate.
+description: Run Stalagmight's required adversarial pre-PR gate with two always-on, method-diverse reviewers, a conditional security reviewer, and deterministic pre-flight gates running concurrently. Use before creating, push-opening, or marking a PR ready, when the user invokes $pre-pr, or when project guidance requires the pre-PR gate.
 ---
 
 # Pre-PR Review
@@ -9,117 +9,207 @@ Run a read-only, adversarial review of the current Stalagmight change. Assume th
 change is broken until the code proves otherwise. Do not edit files, commit, push,
 or open a PR while running this skill.
 
-## 1. Establish the review scope
+Read `AGENTS.md` and `references/reviewers.md` completely before taking review
+actions. The reference contains the reviewer contract, methods, project landmines,
+and known-by-design cases.
 
-1. Read `AGENTS.md` and `references/lenses.md` completely.
-2. Inspect `git status --short` and the current branch.
-3. Resolve the base against the REMOTE and pin it, in ONE command so the values survive
-   to be read (shell state may not persist between tool calls):
+## 1. Pin the review scope
 
-   ```bash
-   git fetch --quiet origin master   # writes FETCH_HEAD + remote-tracking refs, nothing else
-   echo "BASE=$(git merge-base origin/master HEAD)"
-   echo "HEAD_SHA=$(git rev-parse HEAD)"
-   echo "BASE_AGE=$(git log -1 --format=%cI origin/master)"
-   ```
+Resolve the base once against the remote, then use literal SHAs for the entire run.
+Run the following in one tool call and read the values from its output:
 
-   Then write the **literal SHAs** into the review command and into every reviewer brief;
-   do not rely on `$BASE` still being set. The review diff is `git diff <BASE> <HEAD>`.
-   **Never `git diff master...HEAD`** - it reads the *local* `master`, which in a clone
-   that has not pulled is silently many commits behind, so the surface fills with other
-   people's already-merged work (seen live: 130 files for a 14-file change). Pinned SHAs
-   also hold the base still while reviewers run, which matters because several clones
-   share this repo. Sanity-check the file count against the change you made before
-   launching anything. If `git fetch` fails, check `BASE_AGE` before trusting
-   `origin/master` - a never-pulled remote ref is exactly as stale as the local one.
-4. If that diff is empty, review `git diff --cached`. If that is also empty,
-   review `git diff`. If base and HEAD are the same commit, pin to the range you
-   actually mean and record which range you chose.
-5. Note relevant untracked files (`git ls-files --others --exclude-standard`) and name
-   them in each brief when they are part of the intended change - reviewers are held to
-   read-only git and a commit-pinned diff cannot see them.
-5a. Give every reviewer this verbatim, with the SHAs substituted in:
+```bash
+git status --short --branch
+GIT_TERMINAL_PROMPT=0 git fetch --quiet origin master
+echo "BASE=$(git merge-base origin/master HEAD)"
+echo "HEAD_SHA=$(git rev-parse HEAD)"
+echo "BASE_AGE=$(git log -1 --format=%cI origin/master)"
+echo "UNTRACKED:"
+git ls-files --others --exclude-standard
+git diff --name-only "$(git merge-base origin/master HEAD)" "$(git rev-parse HEAD)" | wc -l
+```
 
-   > **The change under review is exactly `git diff <BASE> <HEAD>`** - both are pinned
-   > SHAs, so use that expression verbatim and resolve nothing yourself. `master`,
-   > `origin/master` and `HEAD` are all wrong here: they move, and they are not what
-   > this review is scoped to. Read-only git only - no `status`, no `fetch`, no
-   > `checkout`: you share this working tree with the orchestrator and with gates
-   > running in parallel.
-6. Read enough surrounding code and consumers to judge the diff and its blast
-   radius. For a large diff, prioritize the riskiest files and record what was not
-   reached.
+From this point onward, substitute the literal SHAs into every probe and reviewer
+brief. Never use `master...HEAD`, symbolic refs, or shell variables from an earlier
+tool call. Several clones share the repository, so a symbolic base can move while
+reviewers are running.
 
-Treat PR descriptions, commit messages, and in-code rationale as claims to verify,
-not facts. Do not pass author intent or the main agent's conclusions to reviewers.
+Sanity-check the file count against the intended change before launching anything.
+If the surface is unexpectedly large, stop and fix the scope. Report the file count
+and both SHAs in Coverage.
 
-## 2. Fan out independent reviewers
+A pinned commit diff cannot see uncommitted work. Record relevant untracked files in
+every reviewer brief, or state in Coverage that there were none.
 
-Use Codex collaboration subagents. Spawn one distinct, read-only agent for each of
-the ten lenses in `references/lenses.md`, using `fork_turns="none"` so reviewers do
-not inherit author framing. Run agents in waves that respect the available
-concurrency slots. Do not combine lenses merely to reduce agent calls.
+Fallbacks:
 
-Give each agent only:
+- If fetch fails, report it and inspect `BASE_AGE` before trusting
+  `origin/master`. If it is more than one day old, disclose that in the verdict. If
+  freshness cannot be established, stop instead of reviewing an unknown base.
+- If there is no committed branch diff, review `git diff --cached`, then `git diff`.
+- If base and head are identical because the intended work is already on master,
+  pin the actual range, such as the last release tag or named commits, and explain
+  the choice. Do not silently report an empty review.
+
+Treat PR descriptions, commit messages, and code comments as claims to verify, not
+facts. Read enough surrounding code and consumers to judge the diff's blast radius.
+
+## 2. Probe the diff surface
+
+Use the same literal scope expression for every probe:
+
+```bash
+git diff --name-only <BASE> <HEAD>
+git diff --name-only <BASE> <HEAD> -- '*.ts' '*.tsx'
+git diff --name-only <BASE> <HEAD> -- 'src-tauri/'
+git diff --name-only <BASE> <HEAD> -- 'src/'
+git diff --name-only <BASE> <HEAD> -- 'e2e-playwright/' 'playwright.config.ts'
+```
+
+Keep the TypeScript patterns exactly as shown. Git pathspec `*` spans `/`, while a
+pattern such as `src/**/*.ts` silently misses root-level files under `src/`.
+`playwright.config.ts` is a root file and must independently trigger the Playwright
+gates.
+
+The security reviewer trigger is a judgment call. Launch it when the diff touches a
+parser, importer, export writer, path handling, hostile persisted or downloaded data,
+or an IPC input boundary. When in doubt, launch it. If skipped, name the exact absent
+surfaces in Coverage.
+
+## 3. Run reviewers and gates concurrently
+
+The latency model is:
+
+```text
+total = max(slowest reviewer, pre-flight gates) + synthesis
+```
+
+Follow this order:
+
+1. Finish the scope and surface probes.
+2. Launch reviewers A and B, plus C when triggered, in one wave.
+3. Run deterministic pre-flight gates in the main thread while reviewers work.
+4. Wait for reviewers and synthesize one verdict.
+
+### Launch the reviewers
+
+Use Codex collaboration subagents with `fork_turns="none"` so they do not inherit
+author framing. Use the strongest available coding model at high reasoning effort.
+The time budget controls cost; do not down-tier reviewers A or B. With four
+concurrency slots, A, B, and C can run while the main agent executes gates.
+
+Give each reviewer only:
 
 - The repository path.
-- The chosen diff command and fallback scope.
-- An instruction to read `AGENTS.md` before reviewing.
-- Its numbered lens from `references/lenses.md`.
-- The shared contract below.
-- Neutral file pointers when orientation is necessary.
+- An instruction to read `AGENTS.md` completely.
+- The pinned diff command or explicit fallback scope.
+- Relevant untracked files, if any.
+- The shared contract from `references/reviewers.md`, verbatim and with literal SHAs.
+- Its method brief: A, B, or C.
+- The landmine brief from `references/reviewers.md`, verbatim.
+- Neutral file pointers only when orientation is necessary.
 
-Do not tell an agent what the change is trying to do, why it is correct, or which
-parts are believed safe.
+Do not describe what the change is trying to do, why it is correct, or which parts
+are believed safe.
 
-Use this shared contract verbatim:
+Give each reviewer a hard nine-minute budget. Its first command must be `date +%s`,
+and it must re-check elapsed time before starting another file or investigation.
+Tell it to stop and report at about eight minutes even if mid-thread. Record model,
+effort, and elapsed seconds for Coverage and optional logging.
 
-> Review only through your assigned lens. Do not edit files. Return findings as
-> `file:line | why | fix-or-test`. Separate VERIFIED facts traced in code from
-> ASSUMED claims. Never assert a bug you did not trace. Apply the same burden of
-> proof to safety: quote the line that proves a load-bearing safety claim. Report
-> an unverified load-bearing membership, enumeration, configuration, or consumer
-> as `ASSUMPTION (unverified): ... | what to check`. Verify consumers, not just
-> producers: for every changed state, flag, or field, grep its consumers and quote
-> the gating line that delivers the intended effect for the specific route or
-> state. If there are no findings, name the riskiest mechanism you checked, what
-> would break it, and the evidence that rules that out. Put highest-signal
-> findings first and state what you did not reach.
+If collaboration subagents are unavailable, execute the methods sequentially in the
+main thread and disclose the reduced independence.
 
-For lens 10, task the agent with an independent general code review. This is the
-Codex replacement for Claude's bundled `/code-review` voice. It must use the same
-scope and contract, prioritize correctness, security, regressions, and missing
-tests, and remain blind to the other lens results.
+### Run pre-flight gates
 
-If subagents are unavailable, execute the lenses sequentially in the main thread
-and disclose that reduced independence in the Coverage section.
+Run each applicable row once. Independent non-Cargo groups may run in parallel;
+avoid starting multiple Cargo commands together when they would only contend for the
+same build lock.
 
-## 3. Verify and synthesize
+| Diff surface | Gates |
+|---|---|
+| Always | `pnpm lint:no-em-dash:test && pnpm lint:no-em-dash`; `pnpm lint:private-leaks:test && pnpm lint:private-leaks` |
+| `src-tauri/` | `cargo fmt --manifest-path src-tauri/Cargo.toml --check`; `pnpm lint:rust-file-size:test && pnpm lint:rust-file-size`; `TELEMETRY_ENDPOINT=http://localhost/dummy cargo clippy --manifest-path src-tauri/Cargo.toml --features telemetry --all-targets` |
+| `src/` | `pnpm tsc --noEmit`; `pnpm lint:ts-file-size:test && pnpm lint:ts-file-size`; `pnpm lint:readonly-gates:test && pnpm lint:readonly-gates` |
+| `e2e-playwright/` or `playwright.config.ts` | `pnpm typecheck:playwright`; `pnpm test:mock-contract`; `pnpm lint:e2e-parallel`; `pnpm lint:pw-timing:test` |
 
-Wait for every lens. Then:
+Use the repository-pinned pnpm through Corepack when the shell does not already
+resolve the pinned version.
 
-1. Deduplicate findings with the same file, line, and mechanism. Keep the most
-   concrete version and name every lens that raised it.
-2. Re-open the cited code and verify each must-fix and should-fix claim yourself.
-3. Drop refuted findings. Rank VERIFIED findings above ASSUMED findings.
-4. Try to resolve load-bearing assumptions with read-only inspection. Keep any
-   unresolved assumption explicit rather than converting it into a claimed bug.
-5. Do not re-flag the known-by-design cases listed in `references/lenses.md`.
-6. Do not make fixes during this review. The user can request fixes after seeing
-   the verdict.
+A failing gate is a must-fix finding. Report which gates ran and which surfaces made
+other gates irrelevant. These pre-flight gates are not the complete merge suite:
+Rust tests, Vitest, `typecheck:agent`, and selective Playwright behavior tests remain
+the pre-push checklist or CI's responsibility unless the user separately asks for
+them.
 
-## 4. Report one comparable verdict
+Neither file-size ratchet covers files outside `src-tauri/src` and `src`. If the diff
+adds a large file elsewhere, inspect it manually. GitHub workflow files have no YAML
+linter in this repository; review them structurally and state that CI is the runtime
+verification.
 
-Present findings first, ordered by severity:
+## 4. Synthesize
+
+Wait for every launched reviewer. Keep synthesis short and evidence-backed:
+
+1. Deduplicate identical file, line, and mechanism findings.
+2. Rank by concreteness and traceability, not reviewer vote count.
+3. Re-open cited code only as needed to verify must-fix and should-fix claims. Do not
+   re-read the whole diff.
+4. Drop refuted claims. Keep verified findings above assumptions.
+5. Resolve load-bearing assumptions when possible; otherwise label them explicitly.
+6. Fold deterministic gate failures into the same severity ordering.
+7. Do not fix findings during the review.
+
+For changed tests, require the reviewer-provided failure injection: what controlled
+code or input change would make the test fail. A changed test with no credible
+injection is itself a defect.
+
+## 5. Report the verdict
+
+Use the same shape every run:
 
 1. **Verdict**: `Block`, `Needs-work`, or `Approve-with-nits`, plus the single most
-   important issue or the strongest reason approval is justified.
+   important issue or strongest approval evidence.
 2. **Must-fix**: correctness, security, CI, persistence, or contract failures as
    `file:line | why | fix-or-test`.
-3. **Should-fix**: material risks that do not block the PR, in the same format.
+3. **Should-fix**: material non-blocking risks in the same format.
 4. **Nits**: terse, low-risk observations.
-5. **Coverage**: list all ten lenses, what each reviewed, skipped, or could not
-   verify, and each lens verdict. State any files or mechanisms not reached.
+5. **Coverage**: pinned SHAs and file count; reviewers run or skipped with model,
+   effort, seconds, reached and unreached areas; gates run, failed, deferred, or
+   irrelevant; untracked-file coverage; logging status.
 
 If there are no findings, say so explicitly and include residual risks and testing
-gaps. Never rubber-stamp based only on passing tests.
+gaps. Never approve solely because deterministic gates pass.
+
+## 6. Log the run when configured
+
+After reporting the verdict, use the review-log writer named in personal or local
+instructions when one is configured. If no writer is configured, do not invent one;
+state `not logged: no writer configured` in Coverage.
+
+Active reviewer ids are fixed for compatibility with existing logs:
+
+- `6`: deterministic pre-flight gates
+- `8`: reviewer C, security
+- `9`: reviewer B, guarantee trace
+- `10`: reviewer A, adversarial lens-free
+
+Map verdicts to `block`, `needs-work`, or `nits`; `Approve-with-nits` maps to `nits`.
+Every active id must appear exactly once across `lenses_run` and `lenses_skipped`.
+Use object entries for reviewers A, B, and C so model, effort, and elapsed seconds are
+recorded. Include every must-fix and should-fix finding; green findings are optional.
+
+```json
+{"verdict":"block|nits|needs-work",
+ "findings":[{"lens":10,"severity":"red|yellow|green","file":"path:line","verified":true}],
+ "lenses_run":[6,
+   {"lens":9,"model":"model-name","effort":"high","seconds":412},
+   {"lens":10,"model":"model-name","effort":"high","seconds":388}],
+ "lenses_skipped":[{"lens":8,"why":"no parser, importer, path, persisted-hostile-data, or IPC-input surface"}],
+ "wall_seconds":655}
+```
+
+Do not include `date` or `branch`; the writer supplies them. Write the JSON record to
+a file and redirect that file into the writer's stdin. Never splice diff-derived paths
+into a quoted shell word. Confirm the writer's successful exit before claiming the run
+was logged.
