@@ -702,8 +702,13 @@ define('map_click', 'Click a visible geographic point through the active map int
         const button = args.button ?? 'left';
         const resolved = await mapClick(b, args.lngLat as [number, number], button);
         return {
-          result: { clicked: true, interaction: resolved.interaction },
-          resolved: { lngLat: args.lngLat, point: { x: resolved.x, y: resolved.y }, interaction: resolved.interaction },
+          result: { clicked: true, interaction: resolved.interaction, interactionVerified: true },
+          resolved: {
+            lngLat: args.lngLat,
+            point: { x: resolved.x, y: resolved.y },
+            interaction: resolved.interaction,
+            interactionSequence: resolved.interactionSequence,
+          },
         };
       }),
     { digest: true, sweep: true },
@@ -712,7 +717,7 @@ define('map_click', 'Click a visible geographic point through the active map int
 
 define(
   'map_feature_click',
-  'Resolve a visible custom-WebGL shot or station by domain identity, click it, and optionally verify selection.',
+  'Resolve a visible custom-WebGL shot or station by domain identity, prefer it across overlaps, and prove the map processed this click.',
   {
     featureType: z.enum(['shot', 'station']),
     sectionId: z.number().int(),
@@ -735,6 +740,7 @@ define(
               sectionId: resolved.sectionId,
               shotId: resolved.shotId,
               stationIndex: resolved.stationIndex,
+              interactionVerified: resolved.interactionVerified,
               selectionVerified: resolved.selectionVerified,
             },
             resolved,

@@ -86,6 +86,11 @@ import {
   overlayPaintDigest,
   overlayTouchesRemovedSections,
 } from './surveyLayer/interactOverlayHide';
+import {
+  resolveSemanticMapTarget,
+  type SemanticMapTarget,
+} from './surveyLayer/semanticTarget';
+export type { SemanticMapTarget } from './surveyLayer/semanticTarget';
 
 export interface SurveyLayerCallbacks {
   onStationClick?: (ref: StationRef, event: MapMouseEvent) => void;
@@ -155,6 +160,7 @@ export default class SurveyLayer {
   private ghostStationsHitboxLayerId = 'survey-ghost-stations-hitbox';
   private ghostShotsHitboxLayerId = 'survey-ghost-shots-hitbox';
   private callbacks: SurveyLayerCallbacks;
+  private semanticTargetPreference: SemanticMapTarget | null = null;
 
   // Config storage with fallback defaults for when config is null (initial load)
   private config: Config | null = null;
@@ -1137,6 +1143,22 @@ export default class SurveyLayer {
     const stationHitReach = this.getStationHitReach();
     const shotHitReach = this.getShotHitReach();
 
+    const preferred = this.takeSemanticTargetAt(
+      e,
+      stationHitReach,
+      shotHitReach,
+      suppressStationClick,
+      suppressShotClick,
+    );
+    if (preferred?.type === 'station') {
+      this.callbacks.onStationClick?.(preferred.ref, e);
+      return;
+    }
+    if (preferred?.type === 'shot') {
+      this.callbacks.onShotClick?.(preferred.sectionId, preferred.shotId, e);
+      return;
+    }
+
     // Stations take priority - resolve nearest station first
     const nearestStation = !suppressStationClick
       ? this.resolveStationAt(e.point.x, e.point.y, stationSections, stationHitReach)
@@ -1188,6 +1210,24 @@ export default class SurveyLayer {
 
     const stationHitReach = this.getStationHitReach();
     const shotHitReach = this.getShotHitReach();
+
+    const preferred = this.takeSemanticTargetAt(e, stationHitReach, shotHitReach, false, false);
+    if (preferred?.type === 'station') {
+      this.callbacks.onContextMenu?.({ type: 'station', ref: preferred.ref }, e);
+      return;
+    }
+    if (preferred?.type === 'shot') {
+      this.callbacks.onContextMenu?.(
+        {
+          type: 'shot',
+          sectionId: preferred.sectionId,
+          shotId: preferred.shotId,
+          alongT: preferred.alongT,
+        },
+        e,
+      );
+      return;
+    }
 
     // Stations take priority
     const nearestStation = this.resolveStationAt(e.point.x, e.point.y, stationSections, stationHitReach);
@@ -1326,6 +1366,52 @@ export default class SurveyLayer {
     return this.geoIndex.nearestShot(this.projector(), x, y, sections, maxDistance, {
       visibleKinds: this.visibleKinds(),
     });
+  }
+
+  /** Prefer one exact co-located feature for the next development-harness click. */
+  setSemanticTargetPreference(target: SemanticMapTarget): void {
+    this.semanticTargetPreference = target;
+  }
+
+  private takeSemanticTargetAt(
+    event: MapMouseEvent,
+    stationReach: number,
+    shotReach: number,
+    suppressStations: boolean,
+    suppressShots: boolean,
+  ):
+    | { type: 'station'; ref: StationRef }
+    | { type: 'shot'; sectionId: number; shotId: number; alongT: number }
+    | null {
+    const target = this.semanticTargetPreference;
+    this.semanticTargetPreference = null;
+    if (!target) return null;
+
+    if (target.featureType === 'station' && suppressStations) return null;
+    if (target.featureType === 'shot' && suppressShots) return null;
+    const geometry = this.enumerateGeometry();
+    if (!geometry) return null;
+    const resolved = resolveSemanticMapTarget(
+      target,
+      geometry,
+      (lngLat) => this.map.project(lngLat),
+      event.point,
+      stationReach,
+      shotReach,
+    );
+    if (resolved?.type === 'station') {
+      return {
+        type: 'station',
+        ref: { section_id: resolved.sectionId, station_index: resolved.stationIndex },
+      };
+    }
+    if (resolved?.type !== 'shot') return null;
+    return {
+      type: 'shot',
+      sectionId: resolved.sectionId,
+      shotId: resolved.shotId,
+      alongT: resolved.alongT,
+    };
   }
 
   /**

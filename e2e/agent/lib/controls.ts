@@ -60,6 +60,7 @@ export interface MapClickResult {
   x: number;
   y: number;
   interaction: 'maplibre' | 'placement';
+  interactionSequence: number;
 }
 
 export function targetSelector(target: ElementTarget): string | undefined {
@@ -285,13 +286,16 @@ export async function mapClick(
     browser,
     `
       const map = window.__stalagmight_map__;
+      const readInteraction = window.__stalagmight_map_interaction__;
       if (!map || !map.project) return null;
+      if (typeof readInteraction !== 'function') return { error: 'map interaction hooks are unavailable' };
+      const interactionSequenceBefore = readInteraction();
       const projected = map.project(args[0]);
       const canvasRoot = document.querySelector('[data-testid="map-canvas"]');
       const surface = map.getCanvas && map.getCanvas();
       if (!canvasRoot || !surface) return null;
       const rect = surface.getBoundingClientRect();
-      if (projected.x < 0 || projected.y < 0 || projected.x > rect.width || projected.y > rect.height) {
+      if (projected.x < 0 || projected.y < 0 || projected.x >= rect.width || projected.y >= rect.height) {
         return {
           error: 'map point is outside the visible viewport: [' + args[0][0] + ', ' + args[0][1] + '] projects to [' +
             Math.round(projected.x) + ', ' + Math.round(projected.y) + '] for a ' +
@@ -343,7 +347,11 @@ export async function mapClick(
           }));
           if (!down.defaultPrevented) return { error: 'placement pointer event was not handled' };
         }
-        return { ...point, interaction: 'placement' };
+        const interactionSequence = readInteraction();
+        if (interactionSequence <= interactionSequenceBefore) {
+          return { error: 'map placement handler did not process the click' };
+        }
+        return { ...point, interaction: 'placement', interactionSequence };
       }
 
       map.fire(eventName, {
@@ -357,7 +365,11 @@ export async function mapClick(
           clientY: point.y,
         }),
       });
-      return { ...point, interaction: 'maplibre' };
+      const interactionSequence = readInteraction();
+      if (interactionSequence <= interactionSequenceBefore) {
+        return { error: 'map interaction handler did not process the click' };
+      }
+      return { ...point, interaction: 'maplibre', interactionSequence };
     `,
     [lngLat, button],
   );

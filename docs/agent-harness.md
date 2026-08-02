@@ -169,8 +169,8 @@ Interaction (each runs a cheap oracle sweep after; findings ride the result unde
 | `eval(script, args?)` | Async function body in the webview; returns its value. |
 | `ipc(command, args?)` | `window.__TAURI__.core.invoke`; e.g. `get_recent_logs_since`, `check_project_integrity`. |
 | `map_view(set?)` | Read or set the MapLibre view (center/zoom/bearing). |
-| `map_click(lngLat, button?)` | Click a visible geographic point. Uses MapLibre events for ordinary map interaction and the real map-surface pointer path while section placement is active. Rejects off-viewport coordinates instead of reporting a no-op click. |
-| `map_feature_click(featureType, sectionId, shotId?/stationIndex?, button?, verifySelection?)` | Resolve current WebGL geometry by semantic identity, choose a safe point, drive the MapLibre interaction pipeline, and verify selection by default. Disable verification for tools whose click intentionally has another effect. |
+| `map_click(lngLat, button?)` | Click a visible geographic point through the ordinary or placement path, reject half-open viewport edges, and require the map interaction sequence to advance. |
+| `map_feature_click(featureType, sectionId, shotId?/stationIndex?, button?, verifySelection?)` | Resolve current WebGL geometry by semantic identity, arm a one-use overlap preference, drive the MapLibre pipeline, and prove this click was processed. Selection is also verified by default. |
 | `seed(mode, name?, projectName?)` | Open a fixture / fractal fixture (`e2e/fixtures/`), or create a basic empty project. |
 | `driver_script(script, timeoutMs?)` | Node-context async body with `browser`/`ipc`/`evalInApp`/`readStore`/`callAction`/`log` in scope, under the mutex, for tight loops (one MCP call per action is too slow). On timeout the helpers (and the `browser` proxy) are disabled so a still-running body cannot keep driving the app outside the mutex. |
 

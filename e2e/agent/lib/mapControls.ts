@@ -21,6 +21,9 @@ export interface ResolvedMapFeatureClick {
   canvasSize: { width: number; height: number };
   point: { x: number; y: number };
   clearancePx: number;
+  interactionSequenceBefore: number;
+  interactionSequenceAfter: number;
+  interactionVerified: boolean;
   selectionVerified: boolean;
 }
 
@@ -29,6 +32,11 @@ interface MapSelection {
   sectionId?: number;
   shotId?: number;
   stationRef?: { section_id?: number; station_index?: number };
+}
+
+interface MapPostClickState {
+  interactionSequence: number;
+  selection: MapSelection | null;
 }
 
 function validateRequest(request: MapFeatureClickRequest): void {
@@ -58,14 +66,22 @@ export async function mapFeatureClick(
   request: MapFeatureClickRequest,
 ): Promise<ResolvedMapFeatureClick> {
   validateRequest(request);
-  const resolved = await evalInApp<Omit<ResolvedMapFeatureClick, 'selectionVerified'>>(
+  const resolved = await evalInApp<
+    Omit<ResolvedMapFeatureClick, 'interactionSequenceAfter' | 'interactionVerified' | 'selectionVerified'>
+  >(
     browser,
     `
       const request = args[0];
       const map = window.__stalagmight_map__;
       const readGeometry = window.__stalagmight_geometry__;
+      const readInteraction = window.__stalagmight_map_interaction__;
+      const setSemanticTarget = window.__stalagmight_set_map_target__;
       if (!map || typeof map.project !== 'function') throw new Error('map is unavailable');
       if (typeof readGeometry !== 'function') throw new Error('map geometry hooks are unavailable; start an E2E build');
+      if (typeof readInteraction !== 'function' || typeof setSemanticTarget !== 'function') {
+        throw new Error('semantic map controls are unavailable; start an E2E build');
+      }
+      const interactionSequenceBefore = readInteraction();
       const geometry = readGeometry();
       if (!geometry || !Array.isArray(geometry.stations) || !Array.isArray(geometry.shots)) {
         throw new Error('map geometry is unavailable');
@@ -96,6 +112,7 @@ export async function mapFeatureClick(
         canvasSize: { width: rect.width, height: rect.height },
         point: { x: Math.round(rect.left + canvasPoint.x), y: Math.round(rect.top + canvasPoint.y) },
         clearancePx: Number.isFinite(clearancePx) ? Math.round(clearancePx * 100) / 100 : 0,
+        interactionSequenceBefore,
       });
 
       if (request.featureType === 'station') {
@@ -106,6 +123,7 @@ export async function mapFeatureClick(
         const point = project(station.lngLat);
         if (!inside(point)) throw new Error('station feature is outside the map viewport');
         const resolved = finish(station.lngLat, point, 0);
+        if (!setSemanticTarget(request)) throw new Error('semantic map target could not be armed');
         const eventName = request.button === 'right' ? 'contextmenu' : 'click';
         map.fire(eventName, {
           point: resolved.canvasPoint,
@@ -149,6 +167,7 @@ export async function mapFeatureClick(
         shot.from[1] + (shot.to[1] - shot.from[1]) * best.t,
       ];
       const resolved = finish(lngLat, best.point, best.clearance);
+      if (!setSemanticTarget(request)) throw new Error('semantic map target could not be armed');
       const eventName = request.button === 'right' ? 'contextmenu' : 'click';
       map.fire(eventName, {
         point: resolved.canvasPoint,
@@ -160,19 +179,35 @@ export async function mapFeatureClick(
     [request],
   );
 
+  const postClick = await evalInApp<MapPostClickState>(
+    browser,
+    `
+      const readInteraction = window.__stalagmight_map_interaction__;
+      if (typeof readInteraction !== 'function') throw new Error('semantic map controls are unavailable');
+      return {
+        interactionSequence: readInteraction(),
+        selection: window.__E2E_TEST__?.uiStore?.getState().selection ?? null,
+      };
+    `,
+  );
+  if (postClick.interactionSequence <= resolved.interactionSequenceBefore) {
+    throw new Error('map_feature_click did not reach a semantic map interaction handler');
+  }
+
   const shouldVerify = request.verifySelection ?? true;
   if (shouldVerify) {
-    const selection = await evalInApp<MapSelection | null>(
-      browser,
-      `return window.__E2E_TEST__?.uiStore?.getState().selection ?? null;`,
-    );
-    if (!selectionMatches(request, selection)) {
+    if (!selectionMatches(request, postClick.selection)) {
       throw new Error(
-        `map_feature_click selected ${JSON.stringify(selection)} instead of ${request.featureType} ` +
+        `map_feature_click selected ${JSON.stringify(postClick.selection)} instead of ${request.featureType} ` +
           `${request.sectionId}:${request.featureType === 'shot' ? request.shotId : request.stationIndex}`,
       );
     }
   }
 
-  return { ...resolved, selectionVerified: shouldVerify };
+  return {
+    ...resolved,
+    interactionSequenceAfter: postClick.interactionSequence,
+    interactionVerified: true,
+    selectionVerified: shouldVerify,
+  };
 }

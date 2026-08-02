@@ -25,8 +25,12 @@ describe('mapFeatureClick', () => {
         canvasSize: { width: 200, height: 100 },
         point: { x: 120, y: 230 },
         clearancePx: 9.5,
+        interactionSequenceBefore: 4,
       })
-      .mockResolvedValueOnce({ type: 'shot', sectionId: 7, shotId: 42 });
+      .mockResolvedValueOnce({
+        interactionSequence: 5,
+        selection: { type: 'shot', sectionId: 7, shotId: 42 },
+      });
 
     await expect(mapFeatureClick(browser, { featureType: 'shot', sectionId: 7, shotId: 42 })).resolves.toMatchObject({
       point: { x: 120, y: 230 },
@@ -48,8 +52,12 @@ describe('mapFeatureClick', () => {
         canvasSize: { width: 200, height: 100 },
         point: { x: 120, y: 230 },
         clearancePx: 0,
+        interactionSequenceBefore: 8,
       })
-      .mockResolvedValueOnce({ type: 'station', stationRef: { section_id: 3, station_index: 9 } });
+      .mockResolvedValueOnce({
+        interactionSequence: 9,
+        selection: { type: 'station', stationRef: { section_id: 3, station_index: 9 } },
+      });
 
     await expect(
       mapFeatureClick(browser, { featureType: 'station', sectionId: 3, stationIndex: 8 }),
@@ -58,16 +66,19 @@ describe('mapFeatureClick', () => {
 
   it('allows non-selection map tools to skip selection verification', async () => {
     const browser = pointerBrowser();
-    evalInAppMock.mockResolvedValueOnce({
-      featureType: 'station',
-      sectionId: 3,
-      stationIndex: 8,
-      lngLat: [1, 2],
-      canvasPoint: { x: 20, y: 30 },
-      canvasSize: { width: 200, height: 100 },
-      point: { x: 120, y: 230 },
-      clearancePx: 0,
-    });
+    evalInAppMock
+      .mockResolvedValueOnce({
+        featureType: 'station',
+        sectionId: 3,
+        stationIndex: 8,
+        lngLat: [1, 2],
+        canvasPoint: { x: 20, y: 30 },
+        canvasSize: { width: 200, height: 100 },
+        point: { x: 120, y: 230 },
+        clearancePx: 0,
+        interactionSequenceBefore: 10,
+      })
+      .mockResolvedValueOnce({ interactionSequence: 11, selection: null });
 
     await expect(
       mapFeatureClick(browser, {
@@ -78,6 +89,30 @@ describe('mapFeatureClick', () => {
         verifySelection: false,
       }),
     ).resolves.toMatchObject({ selectionVerified: false });
-    expect(evalInAppMock).toHaveBeenCalledOnce();
+    expect(evalInAppMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('rejects a click when stale selection makes it look successful', async () => {
+    const browser = pointerBrowser();
+    evalInAppMock
+      .mockResolvedValueOnce({
+        featureType: 'station',
+        sectionId: 3,
+        stationIndex: 8,
+        lngLat: [1, 2],
+        canvasPoint: { x: 20, y: 30 },
+        canvasSize: { width: 200, height: 100 },
+        point: { x: 120, y: 230 },
+        clearancePx: 0,
+        interactionSequenceBefore: 12,
+      })
+      .mockResolvedValueOnce({
+        interactionSequence: 12,
+        selection: { type: 'station', stationRef: { section_id: 3, station_index: 8 } },
+      });
+
+    await expect(
+      mapFeatureClick(browser, { featureType: 'station', sectionId: 3, stationIndex: 8 }),
+    ).rejects.toThrow('did not reach a semantic map interaction handler');
   });
 });
