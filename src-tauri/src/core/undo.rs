@@ -2439,6 +2439,30 @@ mod tests {
         }
     }
 
+    #[test]
+    fn drop_entries_up_to_drops_the_entry_exactly_at_the_cutoff() {
+        let mut stack = UndoStack::new();
+        let t =
+            |secs: i64| DateTime::from_timestamp(1_700_000_000 + secs, 0).expect("valid timestamp");
+
+        for (i, secs) in [10, 20, 30].into_iter().enumerate() {
+            stack.push_with_data(
+                test_create_section_command(&format!("S{i}")),
+                UndoData::InverseCommand(test_delete_section_command(i as u32)),
+            );
+            stack.undo_stack.back_mut().unwrap().timestamp = Some(t(secs));
+        }
+
+        let dropped = stack.drop_entries_up_to(t(20));
+
+        assert_eq!(dropped, 2, "the entry exactly on the upload cutoff is gone");
+        assert_eq!(stack.len(), 1);
+        assert!(matches!(
+            stack.peek_undo(),
+            Some(Command::CreateSection { name: Some(name), .. }) if name == "S2"
+        ));
+    }
+
     /// Spec item 11: a confirmed push clears the redo stack outright. Redo is never
     /// uploaded, and a redo branch that replays onto a state the server has now
     /// committed is the stale-replay hazard the whole design avoids.
