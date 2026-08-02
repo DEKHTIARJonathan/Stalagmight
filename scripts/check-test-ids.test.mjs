@@ -85,12 +85,20 @@ assert.deepEqual(
   [],
 );
 
-assert.deepEqual(
+assert.match(
   analyzeSource(
     'exclusive-short-circuit.tsx',
     'const view = <>{flag && <button data-testid="same">One</button>}{!flag && <button data-testid="same">Two</button>}</>;',
-  ),
-  [],
+  ).at(-1)?.message ?? '',
+  /duplicated in one JSX container/,
+);
+
+assert.match(
+  analyzeSource(
+    'simultaneous-short-circuit.tsx',
+    'const view = <>{canEdit && <button data-testid="same">One</button>}{isAdmin && <button data-testid="same">Two</button>}</>;',
+  ).at(-1)?.message ?? '',
+  /duplicated in one JSX container/,
 );
 
 assert.match(
