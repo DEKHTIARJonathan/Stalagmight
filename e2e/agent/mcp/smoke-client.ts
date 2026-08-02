@@ -121,19 +121,32 @@ async function main(): Promise<void> {
     const respondsAfterPanic = parseText(await call('store_state', { store: 'ui', path: 'view' })) as { value?: unknown };
     check('app survives thread panic (still responds)', respondsAfterPanic?.value === 'global');
 
-    // seed + driver_script (do this last: seed opens a project -> single view).
-    const seeded = parseText(await call('seed', { mode: 'fixture' })) as { mode?: string };
-    check('seed opens a fixture project', seeded?.mode === 'fixture', seeded);
+    // Seed + driver_script (do this last: seed opens a project -> single view).
+    const seeded = parseText(await call('seed', { mode: 'basic', projectName: 'mcp-smoke' })) as { mode?: string };
+    check('seed creates a basic project', seeded?.mode === 'basic', seeded);
+    const section = {
+      name: 'MCP smoke section', surveyor: 'harness', date: '2026-08-02', color: '#3388FF', direction: 'out', quality: 3,
+      shots: [
+        { azimuth_in: 0, azimuth_out: 180, length: 10, depth_in: 0, depth_out: 1, pitch_in: null, pitch_out: null, left: 1, right: 1, up: 1, down: 1, comment: null, kind: 'Normal', marker_index: null, temperature: null },
+        { azimuth_in: 90, azimuth_out: 270, length: 8, depth_in: 1, depth_out: 2, pitch_in: null, pitch_out: null, left: 1, right: 1, up: 1, down: 1, comment: null, kind: 'Normal', marker_index: null, temperature: null },
+      ],
+    };
+    const createdSection = parseText(await call('store_action', { store: 'project', action: 'createSection', args: [section] })) as { ok?: boolean; result?: { success?: boolean } };
+    check('store_action creates smoke geometry', createdSection?.ok === true && createdSection.result?.success === true, createdSection);
     const seededView = parseText(await call('store_state', { store: 'ui', path: 'view' })) as { value?: unknown };
     check('seed switched to single view', seededView?.value === 'single', seededView?.value);
     await call('wait_for', { condition: 'map-idle', timeoutMs: 10000 });
     const featureIdentity = parseText(
       await call('eval', {
         script:
-          'const section = window.__E2E_TEST__?.projectStore?.getState().project?.sections?.[0]; return section ? { sectionId: section.id, shotId: section.shots?.[0]?.id } : null;',
+          'const section = window.__E2E_TEST__?.projectStore?.getState().project?.sections?.[0]; const shot = window.__stalagmight_geometry__?.()?.shots?.[0]; return section && shot ? { sectionId: section.id, shotId: section.shots?.[0]?.id, center: [(shot.from[0] + shot.to[0]) / 2, (shot.from[1] + shot.to[1]) / 2] } : null;',
       }),
-    ) as { value?: { sectionId?: number; shotId?: number } };
+    ) as { value?: { sectionId?: number; shotId?: number; center?: [number, number] } };
     const feature = featureIdentity?.value;
+    if (feature?.center) {
+      await call('map_view', { set: { center: feature.center, zoom: 17, bearing: 0 } });
+      await call('wait_for', { condition: 'map-idle', timeoutMs: 10000 });
+    }
     const semanticClick = feature?.sectionId != null && feature.shotId != null
       ? parseText(
           await call('map_feature_click', {

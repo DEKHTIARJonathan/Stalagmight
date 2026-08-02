@@ -54,21 +54,27 @@ export async function evalInApp<T = unknown>(
   body: string,
   args: unknown[] = [],
 ): Promise<T> {
-  const raw = await browser.executeAsync(
-    (fnBody: string, fnArgs: unknown[], done: (r: unknown) => void) => {
-      try {
-        // eslint-disable-next-line no-new-func
-        const fn = new Function(`return (async (...args) => { ${fnBody} });`)();
-        Promise.resolve(fn.apply(null, fnArgs))
-          .then((value: unknown) => done({ value }))
-          .catch((err: unknown) => done({ __agentError: String(err) }));
+  let runner: (fnArgs: unknown[], done: (r: unknown) => void) => void;
+  try {
+    // Compile in the Node driver. WebDriver executes the resulting fixed script
+    // directly, so the webview's production CSP does not need unsafe-eval.
+    // eslint-disable-next-line no-new-func
+    runner = new Function(
+      'fnArgs',
+      'done',
+      `try {
+        const fn = async (...args) => { ${body} };
+        Promise.resolve(fn(...fnArgs))
+          .then((value) => done({ value }))
+          .catch((err) => done({ __agentError: String(err) }));
       } catch (err) {
         done({ __agentError: String(err) });
-      }
-    },
-    body,
-    args,
-  );
+      }`,
+    ) as (fnArgs: unknown[], done: (r: unknown) => void) => void;
+  } catch (err) {
+    throw new Error(`eval compile: ${String(err)}`);
+  }
+  const raw = await browser.executeAsync(runner, args);
   if (isPageError(raw)) throw new Error(`eval: ${raw.__agentError}`);
   return (raw as { value: T }).value;
 }
