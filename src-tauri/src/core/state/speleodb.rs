@@ -3059,19 +3059,7 @@ mod tests {
             db.save_display_setting("grid", "off").expect("save grid");
         }
 
-        // A server dump carrying a fresh `.stalx` (contents are opaque here - the
-        // swap is what's under test).
-        let zip = {
-            use std::io::Write as _;
-            let mut writer = zip::write::ZipWriter::new(std::io::Cursor::new(Vec::<u8>::new()));
-            let opts = zip::write::SimpleFileOptions::default()
-                .compression_method(zip::CompressionMethod::Stored);
-            writer
-                .start_file("misc/project.stalx", opts)
-                .expect("start_file");
-            writer.write_all(b"SERVER-COPY").expect("write entry");
-            writer.finish().expect("finish zip").into_inner()
-        };
+        let zip = server_dump_zip();
 
         let state = AppState::new().expect("state");
         assert!(state.open_project(dest.clone()).success, "open the cache");
@@ -3096,9 +3084,10 @@ mod tests {
             !project_is_open(&state),
             "the live handle is dropped before the file is replaced"
         );
+        let replaced = Database::open_existing(&dest).expect("open replaced file");
         assert_eq!(
-            std::fs::read(&dest).expect("read replaced file"),
-            b"SERVER-COPY",
+            replaced.load_project().expect("load replaced project").name,
+            "Server Copy",
             "the destination now holds the downloaded copy"
         );
         let leftovers: Vec<_> = std::fs::read_dir(temp.path())
@@ -3141,13 +3130,17 @@ mod tests {
     /// A one-entry server dump whose `.stalx` payload is recognisable on disk.
     fn server_dump_zip() -> Vec<u8> {
         use std::io::Write as _;
+        let temp = TempDir::new().expect("server project temp dir");
+        let project = temp.path().join("server.stalx");
+        seed_stalx(&project, "Server Copy");
+        let bytes = std::fs::read(project).expect("read server project");
         let mut writer = zip::write::ZipWriter::new(std::io::Cursor::new(Vec::<u8>::new()));
         let opts = zip::write::SimpleFileOptions::default()
             .compression_method(zip::CompressionMethod::Stored);
         writer
             .start_file("misc/project.stalx", opts)
             .expect("start_file");
-        writer.write_all(b"SERVER-COPY").expect("write entry");
+        writer.write_all(&bytes).expect("write entry");
         writer.finish().expect("finish zip").into_inner()
     }
 
@@ -3433,9 +3426,10 @@ mod tests {
                 InheritedUndo::Drop,
             )
             .expect("the abandoning verb still discards on purpose");
+        let replaced = Database::open_existing(&dest).expect("open replaced file");
         assert_eq!(
-            std::fs::read(&dest).expect("read replaced file"),
-            b"SERVER-COPY",
+            replaced.load_project().expect("load replaced project").name,
+            "Server Copy",
             "the confirmed-discard path keeps working"
         );
     }
@@ -4818,7 +4812,7 @@ mod tests {
     /// and panic in `expect`, which reports the wrong thing entirely.
     fn push_prod_source() -> &'static str {
         include_str!("speleodb_push.rs")
-            .split("#[cfg(test)]")
+            .split("\n#[cfg(test)]")
             .next()
             .expect("production region precedes the test module")
     }

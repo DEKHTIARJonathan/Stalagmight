@@ -3750,10 +3750,10 @@ mod tests {
         );
         assert_eq!(
             speleodb_prod_matches("speleodb_resolve_entry_remembering(", &[]),
-            5,
-            "expected one definition plus the four classify sites (pull, fast-forward, \
-             restore, and the lock-free probe); a change here means a site was added or \
-             one stopped remembering"
+            6,
+            "expected one definition plus the five classify sites (pull, fast-forward, \
+             restore, rewind-target resolution, and the lock-free probe); a change here \
+             means a site was added or one stopped remembering"
         );
     }
 

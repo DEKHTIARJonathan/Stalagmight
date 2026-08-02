@@ -437,16 +437,31 @@ mod tests {
         .expect("save link");
     }
 
-    /// A one-entry ZIP standing in for a downloaded dump. The body is not a `.stalx`
-    /// - nothing here re-opens it, and the point is only whether it reached `dest`.
+    /// A one-entry ZIP standing in for a downloaded dump.
     fn server_dump() -> Vec<u8> {
         use std::io::Write as _;
+        let temp = tempfile::TempDir::new().expect("server project temp");
+        let project = temp.path().join("server.stalx");
+        {
+            let mut db = Database::open(&project).expect("open server project");
+            db.save_project(&Project::new("Server Copy".to_owned(), None))
+                .expect("save server project");
+        }
+        let bytes = std::fs::read(project).expect("read server project");
         let mut writer = zip::write::ZipWriter::new(std::io::Cursor::new(Vec::<u8>::new()));
         let opts = zip::write::SimpleFileOptions::default()
             .compression_method(zip::CompressionMethod::Stored);
         writer.start_file(ENTRY, opts).expect("start_file");
-        writer.write_all(b"the server copy").expect("write entry");
+        writer.write_all(&bytes).expect("write entry");
         writer.finish().expect("finish zip").into_inner()
+    }
+
+    fn replaced_project_name(path: &Path) -> String {
+        Database::open_existing(path)
+            .expect("open replaced project")
+            .load_project()
+            .expect("load replaced project")
+            .name
     }
 
     #[test]
@@ -509,8 +524,8 @@ mod tests {
             )
             .expect("the confirmed-discard waiver replaces the copy");
         assert_eq!(
-            std::fs::read(&dest).expect("read dest"),
-            b"the server copy",
+            replaced_project_name(&dest),
+            "Server Copy",
             "and only that waiver actually overwrites it"
         );
     }
@@ -687,8 +702,8 @@ mod tests {
             )
             .expect("a clean local copy needs no waiver");
         assert_eq!(
-            std::fs::read(&dest).expect("read dest"),
-            b"the server copy",
+            replaced_project_name(&dest),
+            "Server Copy",
             "the server copy landed"
         );
     }

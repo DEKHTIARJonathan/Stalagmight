@@ -1295,7 +1295,6 @@ mod tests {
                 "commands.rs",
                 "project_create.rs",
                 "recent_projects.rs",
-                "undo_policy.rs",
                 "warnings.rs",
             ],
             "enumerate every direct forward writer so a new path is reviewed explicitly"

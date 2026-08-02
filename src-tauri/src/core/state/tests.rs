@@ -21619,6 +21619,11 @@ fn a_persisted_none_entry_does_not_block_the_history_beneath_it() {
         assert_eq!(stack.len(), 2);
         stack.rows_to_persist(PersistStack::Undo, Some(20))
     };
+    let poison_timestamp = persisted
+        .last()
+        .and_then(|(_, _, timestamp)| timestamp.as_deref())
+        .and_then(|timestamp| chrono::DateTime::parse_from_rfc3339(timestamp).ok())
+        .map(|timestamp| timestamp.with_timezone(&chrono::Utc) + chrono::Duration::nanoseconds(1));
     persisted.push(
         UndoStack::serialize_entry_with_timestamp(&UndoEntry {
             command_bytes: None,
@@ -21627,7 +21632,7 @@ fn a_persisted_none_entry_does_not_block_the_history_beneath_it() {
                 swap_left_right: false,
             },
             undo_data: UndoData::None,
-            timestamp: None,
+            timestamp: poison_timestamp,
         })
         .unwrap(),
     );

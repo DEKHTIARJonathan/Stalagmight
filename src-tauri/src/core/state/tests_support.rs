@@ -61,7 +61,12 @@ fn speleodb_prod_sources() -> [(&'static str, &'static str); 13] {
         ),
         ("speleodb_session.rs", include_str!("speleodb_session.rs")),
     ]
-    .map(|(name, src)| (name, src.split("#[cfg(test)]").next().unwrap_or(src)))
+    .map(|(name, src)| {
+        // Only the top-level test module ends production. `speleodb_push.rs` also has
+        // a test-only method, whose indented attribute must not truncate every source
+        // scan before the real push implementation.
+        (name, src.split("\n#[cfg(test)]").next().unwrap_or(src))
+    })
 }
 
 /// How many times `needle` appears across the family's production regions.
