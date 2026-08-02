@@ -22,6 +22,9 @@ import { useSpeleoStore } from '../../../store/speleoStore';
 import { useProjectStore } from '../../../store/projectStore';
 import { useUIStore } from '../../../store/uiStore';
 
+const originalGetRedoStack = useProjectStore.getState().getRedoStack;
+const originalRedo = useProjectStore.getState().redo;
+
 /** A remote link whose write lock we hold (or not), which is what gates the entry. */
 const seedLink = (editing: boolean, forceEditing = false) =>
   useSpeleoStore.setState({
@@ -81,7 +84,12 @@ describe('UndoHistoryDropdown - the Unwind entry (#303)', () => {
       return Promise.resolve(null);
     });
     useSpeleoStore.setState({ projectLinkKind: 'unknown', link: null });
-    useProjectStore.setState({ canUndo: false, canRedo: false });
+    useProjectStore.setState({
+      canUndo: false,
+      canRedo: false,
+      getRedoStack: originalGetRedoStack,
+      redo: originalRedo,
+    });
     useUIStore.setState({ activeDialog: null, dialogData: {} });
   });
 
@@ -241,11 +249,11 @@ describe('UndoHistoryDropdown - the Unwind entry (#303)', () => {
   // on the server and the chain pointer still knows where you are, so the redo dropdown
   // offers the mirror step past the bottom of ITS stack.
   describe('the forward step on the REDO side', () => {
-    const renderRedo = () =>
+    const renderRedo = (disabled = true) =>
       render(
         <UndoHistoryDropdown
           mode="redo"
-          disabled
+          disabled={disabled}
           hoverableWhenEmpty
           onSingleAction={vi.fn()}
           testId="toolbar-redo-button"
@@ -282,6 +290,44 @@ describe('UndoHistoryDropdown - the Unwind entry (#303)', () => {
       expect(screen.getByText(/Redo into next SpeleoDB version/)).toBeInTheDocument();
       expect(invokeIpcMock).toHaveBeenCalledWith('speleodb_rewind_target');
       expect(invokeIpcMock).not.toHaveBeenCalledWith('speleodb_unwind_target');
+    });
+
+    it('stays open when the last local redo reaches the next revision boundary', async () => {
+      const localRedo = {
+        index: 0,
+        description: 'Restore station name',
+        timestamp: null,
+        commandType: 'update_station',
+        previewData: null,
+      };
+      const getRedoStack = vi
+        .fn()
+        .mockResolvedValueOnce([localRedo])
+        .mockResolvedValueOnce([localRedo])
+        .mockResolvedValue([]);
+      const redo = vi.fn(async () => ({ success: true, warnings: [] }));
+      useProjectStore.setState({ getRedoStack, redo });
+      invokeIpcMock.mockImplementation((cmd: string) => {
+        if (cmd === 'speleodb_rewind_target')
+          return Promise.resolve({ hexsha: 'fedcba9876543210', is_latest: false });
+        return Promise.resolve(null);
+      });
+      seedLink(true);
+      renderRedo(false);
+      await hoverRedo();
+      expect(screen.getByText('Restore station name')).toBeInTheDocument();
+      const scrollable = document.querySelector('.undo-history-scrollable') as HTMLElement & {
+        scrollTo: ReturnType<typeof vi.fn>;
+      };
+      scrollable.scrollTo = vi.fn();
+
+      await userEvent.click(screen.getByTestId('toolbar-redo-button'));
+
+      await waitFor(() => expect(redo).toHaveBeenCalledOnce());
+      await waitFor(() =>
+        expect(screen.getByText(/Redo into next SpeleoDB version/)).toBeInTheDocument(),
+      );
+      expect(screen.getByTestId('toolbar-redo-button-dropdown')).toBeInTheDocument();
     });
 
     it('raises the confirmation marked forward, and acts on nothing', async () => {

@@ -493,10 +493,10 @@ export default function UndoHistoryDropdown({
       // Close-on-empty: if stack is now empty, discard remaining queued actions and hard
       // close.
       //
-      // [#303] UNLESS the Unwind is on offer. Undoing the last entry is exactly the
-      // moment a user walking backwards through history arrives at the commit boundary,
-      // and slamming the panel shut there hides the one control that continues the walk.
-      if (refreshedStack.length === 0 && !(mode === 'undo' && iHoldLockRef.current)) {
+      // [#303] UNLESS a revision-chain step can be on offer. Undoing or redoing the last
+      // local entry is exactly when a history walk reaches a commit boundary, and closing
+      // the panel there hides the pinned control that continues in that same direction.
+      if (refreshedStack.length === 0 && !iHoldLockRef.current) {
         actionQueueRef.current = [];
         isActionInProgressRef.current = false;
         setIsActionInProgress(false);
