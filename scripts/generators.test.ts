@@ -59,8 +59,7 @@ beforeAll(() => {
       resolved: { selector: '[data-testid="save-button"]' },
       outcome: { ok: true, durationMs: 40 },
     }),
-    // A driver_script that TIMED OUT live: the replay must bound it with the
-    // recorded timeout and tolerate the failure instead of hanging.
+    // A driver_script that timed out live must not be started again during replay.
     record({
       type: 'action',
       v: 1,
@@ -241,12 +240,8 @@ describe('generate-replay.mjs', () => {
     expect(spec).toContain(
       `answerFileDialog(browser, "import-dmp-button", "open", "C:\\\\Caves\\\\survey.dmp")`,
     );
-    // Timed-out driver_script -> recorded timeout threaded through AND the
-    // failure tolerated, so the replay proceeds past it the way the live run did.
-    const dsLine = spec.split('\n').find((l) => l.includes('driverScript(browser,'));
-    expect(dsLine).toBeDefined();
-    expect(dsLine).toContain(', 5000)');
-    expect(dsLine).toContain('.catch(() => undefined); // recorded as FAILED');
+    expect(spec).toContain('driver_script recorded as FAILED; skipped');
+    expect(spec).not.toContain('driverScript(browser,');
     // run_scenario -> deterministic replay with the recorded seed + iterations.
     expect(spec).toContain(`await runScenarioReplay(browser, "mapStorm", 7, 3);`);
     // Observation-only tools stay comments.

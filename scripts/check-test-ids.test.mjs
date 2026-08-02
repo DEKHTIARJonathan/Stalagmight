@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict';
-import { analyzeSource } from './check-test-ids.mjs';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { analyzeSource, scan } from './check-test-ids.mjs';
 
 assert.deepEqual(
   analyzeSource('ok.tsx', 'const view = <Button data-testid="save-button">Save</Button>;'),
@@ -49,5 +52,10 @@ assert.deepEqual(
   ),
   [],
 );
+
+const sourceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'stalagmight-test-id-root-'));
+fs.writeFileSync(path.join(sourceRoot, 'App.tsx'), 'export const App = () => <button>Run</button>;');
+assert.match(scan(sourceRoot)[0]?.message ?? '', /has no data-testid/);
+fs.rmSync(sourceRoot, { recursive: true, force: true });
 
 console.log('Test-ID gate fixtures passed.');

@@ -69,6 +69,7 @@ declare global {
         save: TestFileDialogQueueEntry[];
       };
       fileDialogConsumptions?: Record<string, 'open' | 'save'>;
+      activeFileDialogTriggerTestId?: string;
     };
   }
 }

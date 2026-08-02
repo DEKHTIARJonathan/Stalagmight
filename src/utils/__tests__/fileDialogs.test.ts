@@ -13,6 +13,8 @@ import {
   COMPASS_EXTENSIONS,
   openDialog,
   saveDialog,
+  takeTestFileDialogAnswer,
+  testFileDialogHooksEnabled,
 } from '../fileDialogs';
 
 // ---------------------------------------------------------------------------
@@ -162,6 +164,7 @@ describe('E2E file dialog answers', () => {
         save: [],
       },
       fileDialogConsumptions: {},
+      activeFileDialogTriggerTestId: 'open-button',
     };
     await expect(openDialog({ multiple: true })).resolves.toEqual(['/tmp/a.dmp', '/tmp/b.dmp']);
     expect(window.__E2E_TEST__.fileDialogAnswers?.open).toEqual([]);
@@ -178,9 +181,29 @@ describe('E2E file dialog answers', () => {
         ],
       },
       fileDialogConsumptions: {},
+      activeFileDialogTriggerTestId: 'save-button',
     };
     await expect(saveDialog()).resolves.toBe('/tmp/out.stalx');
+    window.__E2E_TEST__.activeFileDialogTriggerTestId = 'save-button';
     await expect(saveDialog()).resolves.toBeNull();
     expect(window.__E2E_TEST__.fileDialogConsumptions).toEqual({ 'save-1': 'save', 'save-2': 'save' });
+  });
+
+  it('rejects forged hooks in production builds', () => {
+    expect(testFileDialogHooksEnabled({ DEV: false, MODE: 'production' })).toBe(false);
+  });
+
+  it('does not consume an answer armed by a different trigger', async () => {
+    window.__E2E_TEST__ = {
+      fileDialogAnswers: {
+        open: [{ id: 'open-2', value: '/tmp/wrong.dmp', triggerTestId: 'expected-button', armed: true }],
+        save: [],
+      },
+      fileDialogConsumptions: {},
+      activeFileDialogTriggerTestId: 'other-button',
+    };
+
+    expect(takeTestFileDialogAnswer('open')).toEqual({ queued: false, value: undefined });
+    expect(window.__E2E_TEST__.fileDialogAnswers?.open).toHaveLength(1);
   });
 });

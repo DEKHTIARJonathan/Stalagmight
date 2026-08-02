@@ -163,13 +163,36 @@ export async function driverScript(
   script: string,
   timeoutMs = 60000,
 ): Promise<unknown> {
+  let expired = false;
+  const fence = () => {
+    if (expired) throw new Error('replayed driver_script timed out; its helpers are disabled');
+  };
   const helpers = {
-    browser,
-    ipc: (c: string, a?: Record<string, unknown>) => invokeInApp(browser, c, a),
-    evalInApp: (b: string, a?: unknown[]) => evalInApp(browser, b, a ?? []),
-    readStore: (s: StoreName, p?: string) => readStore(browser, s, p ?? null),
-    callAction: (s: StoreName, act: string, a?: unknown[]) =>
-      callStoreAction(browser, s, act, a ?? []),
+    browser: new Proxy(browser, {
+      get(target, prop) {
+        fence();
+        const value = Reflect.get(target, prop) as unknown;
+        return typeof value === 'function'
+          ? (value as (...args: unknown[]) => unknown).bind(target)
+          : value;
+      },
+    }),
+    ipc: (c: string, a?: Record<string, unknown>) => {
+      fence();
+      return invokeInApp(browser, c, a);
+    },
+    evalInApp: (b: string, a?: unknown[]) => {
+      fence();
+      return evalInApp(browser, b, a ?? []);
+    },
+    readStore: (s: StoreName, p?: string) => {
+      fence();
+      return readStore(browser, s, p ?? null);
+    },
+    callAction: (s: StoreName, act: string, a?: unknown[]) => {
+      fence();
+      return callStoreAction(browser, s, act, a ?? []);
+    },
     log: (_m: unknown) => undefined,
   };
   // eslint-disable-next-line no-new-func
@@ -180,7 +203,10 @@ export async function driverScript(
   let timer: NodeJS.Timeout | undefined;
   const timeout = new Promise<never>((_, reject) => {
     timer = setTimeout(
-      () => reject(new Error(`replayed driver_script timed out after ${timeoutMs}ms`)),
+      () => {
+        expired = true;
+        reject(new Error(`replayed driver_script timed out after ${timeoutMs}ms`));
+      },
       timeoutMs,
     );
   });

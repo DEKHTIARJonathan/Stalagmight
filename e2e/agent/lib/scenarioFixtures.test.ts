@@ -19,4 +19,14 @@ describe('agent fixture resolution', () => {
   it('confines caller-supplied fixture names to the fixture directory', () => {
     expect(fixtureSourcePath('../../outside.stalx')).toBe(fixtureSourcePath('outside.stalx'));
   });
+
+  it('refreshes a reused session fixture from the tracked source', () => {
+    const destinationDir = fs.mkdtempSync(path.join(os.tmpdir(), 'stalagmight-fixture-refresh-'));
+    const copied = materializeFixture(DEFAULT_FIXTURE, destinationDir);
+    fs.writeFileSync(copied, 'mutated by the first seed');
+
+    materializeFixture(DEFAULT_FIXTURE, destinationDir);
+
+    expect(fs.readFileSync(copied)).toEqual(fs.readFileSync(fixtureSourcePath(DEFAULT_FIXTURE)));
+  });
 });

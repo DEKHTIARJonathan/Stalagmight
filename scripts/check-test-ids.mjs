@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import ts from 'typescript';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const COMPONENT_ROOT = path.join(REPO_ROOT, 'src', 'components');
+const SOURCE_ROOT = path.join(REPO_ROOT, 'src');
 
 export const INTERACTIVE_TAGS = new Set([
   'a',
@@ -122,11 +122,11 @@ export function analyzeSource(fileName, sourceText) {
   return findings;
 }
 
-function componentFiles(root) {
+function productionTsxFiles(root) {
   const files = [];
   for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
     const fullPath = path.join(root, entry.name);
-    if (entry.isDirectory()) files.push(...componentFiles(fullPath));
+    if (entry.isDirectory()) files.push(...productionTsxFiles(fullPath));
     else if (
       entry.name.endsWith('.tsx') &&
       !entry.name.includes('.test.') &&
@@ -138,8 +138,8 @@ function componentFiles(root) {
   return files;
 }
 
-export function scan(root = COMPONENT_ROOT) {
-  return componentFiles(root).flatMap((fileName) =>
+export function scan(root = SOURCE_ROOT) {
+  return productionTsxFiles(root).flatMap((fileName) =>
     analyzeSource(fileName, fs.readFileSync(fileName, 'utf8')),
   );
 }

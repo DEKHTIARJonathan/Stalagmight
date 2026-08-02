@@ -8,17 +8,33 @@ export interface TestFileDialogQueueEntry {
   armed: boolean;
 }
 
-function takeTestFileDialogAnswer(kind: 'open' | 'save'): {
+interface FileDialogTestEnv {
+  DEV?: boolean;
+  MODE?: string;
+  VITE_E2E?: string;
+}
+
+export function testFileDialogHooksEnabled(env: FileDialogTestEnv = import.meta.env): boolean {
+  return env.DEV === true || env.MODE === 'test' || env.VITE_E2E === '1';
+}
+
+export function takeTestFileDialogAnswer(kind: 'open' | 'save'): {
   queued: boolean;
   value: TestFileDialogAnswer | undefined;
 } {
-  if (typeof window === 'undefined') return { queued: false, value: undefined };
+  if (!testFileDialogHooksEnabled() || typeof window === 'undefined') {
+    return { queued: false, value: undefined };
+  }
   const hooks = window.__E2E_TEST__;
   const queue = hooks?.fileDialogAnswers?.[kind];
   if (!hooks || !queue) return { queued: false, value: undefined };
   const entry = queue?.[0];
   if (!entry?.armed) return { queued: false, value: undefined };
+  if (hooks.activeFileDialogTriggerTestId !== entry.triggerTestId) {
+    return { queued: false, value: undefined };
+  }
   queue.shift();
+  delete hooks.activeFileDialogTriggerTestId;
   hooks.fileDialogConsumptions ??= {};
   hooks.fileDialogConsumptions[entry.id] = kind;
   return { queued: true, value: entry.value };

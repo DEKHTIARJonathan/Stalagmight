@@ -188,12 +188,12 @@ for (let i = 0; i < actions.length; i++) {
       break;
     }
     case 'driver_script': {
-      // Thread the recorded timeout through so the replay is bounded exactly
-      // like the live run; a step recorded as FAILED (often a timeout) is
-      // tolerated so the replay proceeds past it the way the session did.
+      if (a.outcome?.ok === false) {
+        push(`    // driver_script recorded as FAILED; skipped to avoid replaying a timed-out background body`);
+        break;
+      }
       const dsCall = `driverScript(browser, ${q(p.script ?? '')}${p.timeoutMs != null ? `, ${p.timeoutMs}` : ''})`;
-      if (a.outcome?.ok === false) push(`    await ${dsCall}.catch(() => undefined); // recorded as FAILED`);
-      else push(`    await ${dsCall};`);
+      push(`    await ${dsCall};`);
       break;
     }
     case 'run_scenario': {

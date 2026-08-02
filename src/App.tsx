@@ -506,6 +506,7 @@ function App() {
         >
           <div
             className="bg-panel border border-border rounded-lg shadow-xl w-full max-w-xl max-h-[80vh] flex flex-col"
+            data-testid="integrity-dialog-panel"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="px-4 py-3 border-b border-border">

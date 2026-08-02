@@ -17,6 +17,6 @@ export function materializeFixture(name: string, destinationDir: string): string
 
   fs.mkdirSync(destinationDir, { recursive: true });
   const destination = path.join(destinationDir, path.basename(name));
-  if (!fs.existsSync(destination)) fs.copyFileSync(source, destination);
+  fs.copyFileSync(source, destination);
   return destination;
 }

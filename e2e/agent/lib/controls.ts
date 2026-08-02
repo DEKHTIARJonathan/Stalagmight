@@ -237,7 +237,15 @@ export async function answerFileDialog(
       if (!trigger) throw new Error('file dialog trigger not found: ' + args[3]);
       const entry = { id: args[1], value: args[2], triggerTestId: args[3], armed: false };
       hooks[args[0]].push(entry);
-      trigger.addEventListener('click', () => { entry.armed = true; }, { capture: true, once: true });
+      trigger.addEventListener('click', () => {
+        entry.armed = true;
+        testApi.activeFileDialogTriggerTestId = entry.triggerTestId;
+        setTimeout(() => {
+          if (testApi.activeFileDialogTriggerTestId === entry.triggerTestId) {
+            delete testApi.activeFileDialogTriggerTestId;
+          }
+        }, 0);
+      }, { capture: true, once: true });
       return true;
     `,
     [kind, answerId, value, triggerTestId, selector],
@@ -270,9 +278,12 @@ export async function answerFileDialog(
         const queue = testApi?.fileDialogAnswers?.[args[0]];
         const index = queue?.findIndex((entry) => entry.id === args[1]) ?? -1;
         if (index >= 0) queue.splice(index, 1);
+        if (testApi?.activeFileDialogTriggerTestId === args[2]) {
+          delete testApi.activeFileDialogTriggerTestId;
+        }
         if (testApi?.fileDialogConsumptions) delete testApi.fileDialogConsumptions[args[1]];
       `,
-      [kind, answerId],
+      [kind, answerId, triggerTestId],
     ).catch(() => undefined);
   }
 }
