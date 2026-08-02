@@ -3119,7 +3119,9 @@ mod tests {
             has_unpushed_edits: dirty,
             last_edit_at: dirty.then(|| "2026-07-26T09:00:00Z".to_owned()),
             last_verify_at: None,
-            undo_mode: None,
+            // Current linked fixtures carry an explicit project policy. Legacy NULL
+            // behavior is covered separately by the undo-policy migration tests.
+            undo_mode: Some(crate::models::UndoMode::Full),
         }))
         .expect("save link");
     }
