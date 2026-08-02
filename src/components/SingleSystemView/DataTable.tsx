@@ -1783,6 +1783,8 @@ export default function DataTable({ sections }: DataTableProps) {
                 columns={shotColumns}
                 rows={gridShotRows}
                 rowKey={(s) => s.id}
+                rowTestId={(s) => `shot-row-${selectedSection.id}-${s.id}`}
+                cellTestId={(s, _rowIndex, colKey) => `shot-cell-${selectedSection.id}-${s.id}-${colKey}`}
                 locale={numberLocale}
                 height={gridHeight}
                 onEdit={onShotEdit}
@@ -1820,6 +1822,10 @@ export default function DataTable({ sections }: DataTableProps) {
                 columns={stationColumns}
                 rows={sectionStations}
                 rowKey={(s) => s.station_ref.station_index}
+                rowTestId={(s) => `station-row-${s.station_ref.section_id}-${s.station_ref.station_index}`}
+                cellTestId={(s, _rowIndex, colKey) =>
+                  `station-cell-${s.station_ref.section_id}-${s.station_ref.station_index}-${colKey}`
+                }
                 locale={numberLocale}
                 height={gridHeight}
                 onEdit={onStationEdit}
