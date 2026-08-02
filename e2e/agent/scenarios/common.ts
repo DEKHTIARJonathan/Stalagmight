@@ -3,20 +3,9 @@
  * deterministic state signature, and a valid minimal SectionData factory (shapes
  * verified against src/types/ipc/{SectionData,ShotData}.ts).
  */
-import * as fs from 'fs';
-import * as path from 'path';
-import { fileURLToPath } from 'url';
 import type { ScenarioContext } from './framework';
-
-const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
-
-export const DEFAULT_FIXTURE = 'fractal_plant_iter3.stalx';
-
-export function fixturePath(name: string): string {
-  // Confine to a basename so a caller-supplied name cannot resolve outside
-  // e2e/fixtures/ (the seed tool passes this through verbatim).
-  return path.join(repoRoot, 'e2e', 'fixtures', path.basename(name));
-}
+export { DEFAULT_FIXTURE } from '../lib/fixtures';
+import { DEFAULT_FIXTURE } from '../lib/fixtures';
 
 export async function hasProject(ctx: ScenarioContext): Promise<boolean> {
   return ctx.eval<boolean>('return !!window.__E2E_TEST__.projectStore.getState().project;');
@@ -25,8 +14,7 @@ export async function hasProject(ctx: ScenarioContext): Promise<boolean> {
 /** Open a fixture project if none is loaded (loadProject also switches to single view). */
 export async function ensureProjectLoaded(ctx: ScenarioContext, fixture = DEFAULT_FIXTURE): Promise<void> {
   if (await hasProject(ctx)) return;
-  const p = fixturePath(fixture);
-  if (!fs.existsSync(p)) throw new Error(`fixture missing: ${p}`);
+  const p = ctx.fixturePath(fixture);
   const res = (await ctx.callAction('project', 'loadProject', [p])) as {
     ok: boolean;
     error?: string;

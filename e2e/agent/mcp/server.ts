@@ -11,7 +11,7 @@ import { LogCursor, type LogLevel } from '../lib/logs';
 import { invokeInApp, evalInApp, capJson } from '../lib/page';
 import { newOracleState, runSweep, type OracleState } from '../lib/oracles';
 import { listScenarios, runScenario } from '../scenarios';
-import { fixturePath, DEFAULT_FIXTURE } from '../scenarios/common';
+import { DEFAULT_FIXTURE, materializeFixture } from '../lib/fixtures';
 import {
   waitForAppReady,
   waitForUiIdle,
@@ -763,10 +763,7 @@ define(
           return { result: { mode: 'basic', result: res } };
         }
         const fixture = args.name ?? (args.mode === 'fractal' ? 'fractal_plant_iter3.stalx' : DEFAULT_FIXTURE);
-        const p = fixturePath(fixture);
-        if (!fs.existsSync(p)) {
-          throw new Error(`fixture not found: ${p} (fixtures live under e2e/fixtures/)`);
-        }
+        const p = materializeFixture(fixture, `${session.sessionDir}/fixtures`);
         const res = await session.exclusive(() =>
           callStoreAction(session.browser, 'project', 'loadProject', [p]),
         );

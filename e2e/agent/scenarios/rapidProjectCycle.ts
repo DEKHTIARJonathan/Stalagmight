@@ -4,17 +4,15 @@
  * Catches lock/handle leaks and teardown races in the open/close path (each call
  * is awaited, per closeProject's isClosing guard).
  */
-import * as fs from 'fs';
 import type { Scenario } from './framework';
-import { fixturePath, DEFAULT_FIXTURE } from './common';
+import { DEFAULT_FIXTURE } from './common';
 
 export const rapidProjectCycle: Scenario = {
   name: 'rapid-project-cycle',
   description: 'Open+close a fixture repeatedly; assert clean project null/non-null transitions.',
   defaultIterations: 15,
   async run(ctx, { iterations }) {
-    const p = fixturePath(DEFAULT_FIXTURE);
-    if (!fs.existsSync(p)) throw new Error(`fixture missing: ${p}`);
+    const p = ctx.fixturePath(DEFAULT_FIXTURE);
 
     // Start from a clean slate.
     await ctx.callAction('project', 'closeProject', []);

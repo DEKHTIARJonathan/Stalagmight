@@ -123,7 +123,7 @@ async function main(): Promise<void> {
 
     // Seed + driver_script (do this last: seed opens a project -> single view).
     const seeded = parseText(await call('seed', { mode: 'fixture' })) as { mode?: string };
-    check('seed opens the tracked default fixture', seeded?.mode === 'fixture', seeded);
+    check('seed opens an isolated copy of the default fixture', seeded?.mode === 'fixture', seeded);
     const seededView = parseText(await call('store_state', { store: 'ui', path: 'view' })) as { value?: unknown };
     check('seed switched to single view', seededView?.value === 'single', seededView?.value);
     await call('wait_for', { condition: 'map-idle', timeoutMs: 10000 });
