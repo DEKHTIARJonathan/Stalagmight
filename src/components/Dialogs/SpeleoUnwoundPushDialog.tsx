@@ -1,11 +1,10 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useUIStore } from '../../store/uiStore';
-import { speleoProjectSessionIssuedFor, useSpeleoStore } from '../../store/speleoStore';
 import { useSpeleoActions } from '../../hooks/useSpeleoActions';
-import { invokeIpc, getErrorMessage } from '../../utils/ipc';
+import { getErrorMessage } from '../../utils/ipc';
 import { handBackProject, performQuit, readPendingExit } from '../../utils/quit';
-import { applySpeleoTreeReplacement } from '../../utils/speleoTreeReplacement';
+import { trackDialogComplete } from '../../utils/telemetry';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 
@@ -40,7 +39,7 @@ export default function SpeleoUnwoundPushDialog() {
   const openDialog = useUIStore((s) => s.openDialog);
   const showToast = useUIStore((s) => s.showToast);
   const dialogData = useUIStore((s) => s.dialogData);
-  const { push, done } = useSpeleoActions();
+  const { push, done, discardChanges } = useSpeleoActions();
 
   const message = typeof dialogData.message === 'string' ? dialogData.message : null;
   const mode = dialogData.mode === 'push' ? 'push' : 'release';
@@ -74,20 +73,16 @@ export default function SpeleoUnwoundPushDialog() {
   };
 
   const discardAndLock = async () => {
-    const issuedFor = speleoProjectSessionIssuedFor(
-      useSpeleoStore.getState().remoteProjectId,
-    );
     setBusy(true);
     try {
       // Keeps the lock: this branch exists so the user can carry on from the latest.
       // [#303] See SpeleoDiscardChangesDialog: the backend refuses an unacknowledged
       // discard, and this dialog's whole body is the acknowledgement.
-      await invokeIpc('speleodb_discard_changes', { keepLock: true, acknowledged: true });
-      if (!(await applySpeleoTreeReplacement(issuedFor))) {
-        returnToCaller();
-        return;
+      const outcome = await discardChanges(true);
+      if (outcome === 'editing') {
+        showToast(t('speleodb.unwoundPush.discardedToast'), 'speleodb-discarded', 'success');
       }
-      showToast(t('speleodb.unwoundPush.discardedToast'), 'speleodb-discarded', 'success');
+      trackDialogComplete('speleodb-unwound-push');
       // Not the exit: this branch keeps the lock so the user can carry on editing, and
       // quitting on a button that says so would be a lie. It still has to hand the exit
       // prompt back rather than close over it - the request was to leave, and the state
@@ -106,22 +101,26 @@ export default function SpeleoUnwoundPushDialog() {
     setBusy(true);
     if (mode === 'push') {
       const resolved = await push(message, { acceptOlderVersion: true });
-      if (resolved?.kind === 'pushed') closeDialog();
+      if (resolved?.kind === 'pushed') {
+        trackDialogComplete('speleodb-unwound-push');
+        closeDialog();
+      }
       else setBusy(false);
       return;
     }
     // The acknowledgement the guard in `useSpeleoActions.done` is waiting for - without it
     // this would raise this same dialog again.
     if (!pendingExit) {
-      // Nobody is waiting on the outcome, so get out of the way first and let the toast
-      // and the push-failure banner report it. Unchanged for the status button and the
-      // lock menu, which are the routes that reach this dialog on its own.
+      const resolved = await done(message, { acceptOlderVersion: true });
+      if (resolved?.kind === 'released') {
+        trackDialogComplete('speleodb-unwound-push');
+      }
       closeDialog();
-      await done(message, { acceptOlderVersion: true });
       return;
     }
     const resolved = await done(message, { acceptOlderVersion: true });
     if (resolved?.kind === 'released') {
+      trackDialogComplete('speleodb-unwound-push');
       closeDialog();
       if (pendingExit.kind === 'quit') performQuit();
       else await handBackProject(pendingExit);

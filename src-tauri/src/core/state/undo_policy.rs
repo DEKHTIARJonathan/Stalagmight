@@ -56,7 +56,7 @@ impl AppState {
     /// [#303] Set the open project's per-project undo-history policy, or clear the
     /// override (`None`) so it follows the global default.
     ///
-    /// LOCK-REQUIRED (q17), and the reason is structural rather than cautious: this writes
+    /// EDIT-SESSION-REQUIRED (q17), and the reason is structural rather than cautious: this writes
     /// `speleo_link.undo_mode` in the `.stalx`, which rides to the server in the next
     /// push, so the value becomes every collaborator's. That makes it an edit of the
     /// project - it dirties the copy exactly like a survey edit, and takes effect for
@@ -74,7 +74,7 @@ impl AppState {
         let _link = self.speleodb_validated_link()?;
         if !self.edit_enabled() {
             return Err(super::speleodb::local_dto(SpeleoDbError::Io(
-                "acquire the write lock before changing the undo-history setting".to_owned(),
+                "start editing before changing the undo-history setting".to_owned(),
             )));
         }
         self.speleodb_mutate_link(|l| l.undo_mode = mode)
@@ -301,7 +301,7 @@ mod tests {
         });
     }
 
-    /// Spec item 26: the per-project undo-mode write is LOCK-REQUIRED, and refuses a
+    /// Spec item 26: the per-project undo-mode write needs the edit gate, and refuses a
     /// project with no link outright.
     ///
     /// Not caution: the value lands in the `.stalx` and rides to the server in the next
@@ -309,7 +309,7 @@ mod tests {
     /// project, and a read-only session must not be able to change what the project
     /// ships.
     #[test]
-    fn setting_the_undo_mode_requires_the_write_lock() {
+    fn setting_the_undo_mode_requires_an_edit_session() {
         with_isolated_config(|| {
             let state = state();
 
@@ -355,7 +355,7 @@ mod tests {
             .expect("the verb writes the link");
         assert!(
             gate < write,
-            "the lock gate must precede the write - checking afterwards would leave the \
+            "the edit gate must precede the write - checking afterwards would leave the \
              override on disk for the next push to ship"
         );
     }

@@ -7,6 +7,7 @@ import { useSpeleoStore } from '../../store/speleoStore';
 import { useProjectStore } from '../../store/projectStore';
 import { useRestoreRevision } from '../../hooks/useRestoreRevision';
 import { humanizeSpeleoError } from '../../utils/speleoError';
+import { trackDialogComplete } from '../../utils/telemetry';
 
 /**
  * [#303] Confirmation for "Unwind to previous SpeleoDB version" - the one action that
@@ -89,6 +90,7 @@ export default function SpeleoUnwindDialog() {
         closeDialog();
         return;
       }
+      trackDialogComplete('speleodb-unwind');
       closeDialog();
     } catch (e) {
       setError(humanizeSpeleoError(e, t('speleodb.unwind.failed')));

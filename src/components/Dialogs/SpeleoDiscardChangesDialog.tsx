@@ -1,14 +1,11 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useUIStore } from '../../store/uiStore';
-import {
-  isUnwoundNotEdited,
-  speleoProjectSessionIssuedFor,
-  useSpeleoStore,
-} from '../../store/speleoStore';
-import { invokeIpc, getErrorMessage } from '../../utils/ipc';
+import { isUnwoundNotEdited, useSpeleoStore } from '../../store/speleoStore';
+import { useSpeleoActions } from '../../hooks/useSpeleoActions';
+import { getErrorMessage } from '../../utils/ipc';
 import { holdsWriteLock } from '../../utils/quit';
-import { applySpeleoTreeReplacement } from '../../utils/speleoTreeReplacement';
+import { trackDialogComplete } from '../../utils/telemetry';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 
@@ -31,6 +28,7 @@ export default function SpeleoDiscardChangesDialog() {
   const openDialog = useUIStore((s) => s.openDialog);
   const showToast = useUIStore((s) => s.showToast);
   const link = useSpeleoStore((s) => s.link);
+  const { discardChanges } = useSpeleoActions();
 
   const unwound = isUnwoundNotEdited(link);
   // [#303] Whether the lock question below is even ours to answer. `holdsWriteLock` is
@@ -39,26 +37,22 @@ export default function SpeleoDiscardChangesDialog() {
   const [busy, setBusy] = useState(false);
 
   const run = async (keepLock: boolean) => {
-    const issuedFor = speleoProjectSessionIssuedFor(
-      useSpeleoStore.getState().remoteProjectId,
-    );
     setBusy(true);
     try {
       // [#303] `acknowledged` is this dialog reporting that it put the loss in front of
       // the user; the backend refuses without it. Not a second guess at the decision - it
       // is what stops any OTHER route reaching a verb that destroys un-pushed work.
-      await invokeIpc('speleodb_discard_changes', { keepLock, acknowledged: true });
-      if (!(await applySpeleoTreeReplacement(issuedFor))) {
-        closeDialog();
-        return;
+      const outcome = await discardChanges(keepLock);
+      if (outcome === 'editing' || outcome === 'released') {
+        showToast(
+          outcome === 'editing'
+            ? t('speleodb.discardChanges.doneKeptToast')
+            : t('speleodb.discardChanges.doneReleasedToast'),
+          'speleodb-discarded',
+          'success',
+        );
       }
-      showToast(
-        keepLock
-          ? t('speleodb.discardChanges.doneKeptToast')
-          : t('speleodb.discardChanges.doneReleasedToast'),
-        'speleodb-discarded',
-        'success',
-      );
+      trackDialogComplete('speleodb-discard-changes');
       closeDialog();
     } catch (e) {
       openDialog('error', {

@@ -15223,7 +15223,7 @@ fn failed_atomic_history_replacement_falls_back_to_empty_stacks() {
     assert!(db.load_redo_stack_with_timestamps().unwrap().is_empty());
 }
 
-/// [#303] Changing the undo mode really does need the write lock.
+/// [#303] Changing the undo mode really does need the edit gate.
 ///
 /// The sibling test in `undo_policy.rs` asserts this with NO project open, so
 /// `speleodb_validated_link()?` errors one line before the `edit_enabled()` gate is ever
@@ -15250,8 +15250,8 @@ fn setting_the_undo_mode_on_a_linked_project_needs_the_edit_gate() {
         .speleodb_set_undo_mode(Some(crate::models::UndoMode::Disabled))
         .expect_err("a read-only session must not change what the project ships");
     assert!(
-        err.message.contains("write lock"),
-        "the refusal must be the LOCK one, not the absent-link one, got {err:?}"
+        err.message.contains("start editing"),
+        "the refusal must be the edit-gate one, not the absent-link one, got {err:?}"
     );
 
     // ...and with the gate open the same call succeeds, so the test is pinning the gate
@@ -15259,7 +15259,14 @@ fn setting_the_undo_mode_on_a_linked_project_needs_the_edit_gate() {
     state.set_edit_enabled(true);
     state
         .speleodb_set_undo_mode(Some(crate::models::UndoMode::Disabled))
-        .expect("with the write lock held the override is settable");
+        .expect("with an edit session the override is settable");
+
+    // Force editing is intentionally the same gate. It carries conflict risk, but the
+    // user explicitly accepted that mode and its commands may edit this same project file.
+    state.set_force_editing(true);
+    state
+        .speleodb_set_undo_mode(Some(crate::models::UndoMode::Full))
+        .expect("force editing may change the project policy too");
 }
 
 /// [#303] An undo snapshot must not carry this machine's filesystem paths.

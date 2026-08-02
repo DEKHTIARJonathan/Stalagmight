@@ -160,6 +160,7 @@ describe('SpeleoUnwoundPushDialog (#303)', () => {
     // whereas a released lock is a colleague's to take.
     expect(keep).toHaveAttribute('data-primary-action');
 
+    invokeIpcMock.mockResolvedValueOnce(null);
     await userEvent.click(screen.getByTestId('speleodb-discard-changes-release'));
     await waitFor(() =>
       expect(invokeIpcMock).toHaveBeenCalledWith('speleodb_discard_changes', { keepLock: false, acknowledged: true }),
@@ -213,11 +214,11 @@ describe('SpeleoUnwoundPushDialog (#303)', () => {
    * [#303] The dialog now also finishes the quit / close it was raised out of, which it
    * knows about ONLY from `dialogData.pendingExit`. The routes that carry none - the
    * status button and the SpeleoDB lock menu, where this confirmation IS the whole
-   * interaction - must be untouched by that: no exit, and the same get-out-of-the-way
-   * ordering (close first, report through the toast / push-failure banner).
+   * interaction - must be untouched by that: no exit, and the same result routing.
    */
   describe('the routes with no exit waiting are unchanged', () => {
-    it('closes first and exits nothing when Push anyway is pressed', async () => {
+    it('closes and exits nothing when Push anyway succeeds', async () => {
+      invokeIpcMock.mockResolvedValueOnce({ kind: 'released' });
       open();
       render(<SpeleoUnwoundPushDialog />);
 

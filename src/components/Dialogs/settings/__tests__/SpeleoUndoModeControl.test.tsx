@@ -1,7 +1,7 @@
 /**
  * [#303] Component test - spec item 29: the per-project undo-history control renders the
  * effective value, distinguishes an override from the inherited default, is disabled
- * without the write lock WITH the reason visible, and writes through on change.
+ * without an edit session WITH the reason visible, and writes through on change.
  *
  * The distinction it exists to keep honest: "Full" set on the project and "Full"
  * inherited from the application default are different states, and only the latter keeps
@@ -119,14 +119,19 @@ describe('SpeleoUndoModeControl (#303)', () => {
     expect(screen.getByTestId('speleodb-undo-mode-lock-hint')).toBeInTheDocument();
   });
 
-  it('is disabled for a force-editor, who holds no lock the backend would accept', () => {
-    // #213: force-editing is edit-enabled WITHOUT a lock, so the backend refuses the
-    // write. An enabled control there could only ever fail.
+  it('stays enabled for a force-editor who accepted conflict responsibility', async () => {
     seed({ editing: true, forceEditing: true });
     render(<SpeleoUndoModeControl />);
 
-    expect(screen.getByTestId('speleodb-undo-mode-full-input')).toBeDisabled();
-    expect(screen.getByTestId('speleodb-undo-mode-lock-hint')).toBeInTheDocument();
+    expect(screen.getByTestId('speleodb-undo-mode-disabled-input')).toBeEnabled();
+    expect(screen.queryByTestId('speleodb-undo-mode-lock-hint')).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByTestId('speleodb-undo-mode-disabled-input'));
+    await waitFor(() =>
+      expect(invokeIpcMock).toHaveBeenCalledWith('speleodb_set_undo_mode', {
+        mode: 'disabled',
+      }),
+    );
   });
 
   it('surfaces a refusal inline instead of throwing it away', async () => {

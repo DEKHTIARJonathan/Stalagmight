@@ -505,7 +505,10 @@ describe('SpeleoQuitDialog - the unwound-push confirmation carries the quit', ()
   it('hands the prompt back after "discard and take the latest", rather than quitting on it', async () => {
     // That button keeps the write lock so the user can carry on editing, so quitting on it
     // would contradict its own label - but the quit request still has to survive.
-    useProjectStore.setState({ refreshProjectState: vi.fn(async () => {}) as never });
+    useProjectStore.setState({
+      refreshProjectState: vi.fn(async () => {}) as never,
+      checkProjectIntegrity: vi.fn(async () => []) as never,
+    });
     useSpeleoStore.setState({ refreshLinkStatus: vi.fn(async () => {}) as never });
     invokeIpcMock.mockResolvedValue(null);
     await reachConfirmation();

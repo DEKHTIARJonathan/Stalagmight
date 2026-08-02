@@ -406,6 +406,104 @@ describe('useSpeleoActions - fast-forward resets the on-screen tree (#218)', () 
   });
 });
 
+describe('useSpeleoActions - discard routes every StartEditingResult (#303)', () => {
+  const setup = () => {
+    const loadProject = vi.fn(async () => ({ success: true }));
+    const refreshProjectState = vi.fn(async () => {});
+    const refreshLinkStatus = vi.fn(async () => {});
+    const applyStartEditing = vi.fn();
+    useProjectStore.setState({
+      loadProject,
+      refreshProjectState,
+      checkProjectIntegrity: vi.fn(async () => []),
+    });
+    useSpeleoStore.setState({
+      remoteProjectId: 'p1',
+      applyStartEditing,
+      refreshLinkStatus,
+    });
+    return { loadProject, refreshProjectState, refreshLinkStatus, applyStartEditing };
+  };
+
+  it('distinguishes a released discard from a kept edit session', async () => {
+    const { applyStartEditing } = setup();
+    invokeIpcMock.mockResolvedValue(null);
+    const { result } = renderHook(() => useSpeleoActions());
+    let outcome: Awaited<ReturnType<typeof result.current.discardChanges>> | undefined;
+
+    await act(async () => {
+      outcome = await result.current.discardChanges(false);
+    });
+
+    expect(outcome).toBe('released');
+    expect(applyStartEditing).not.toHaveBeenCalled();
+    expect(invokeIpcMock).toHaveBeenCalledWith('speleodb_discard_changes', {
+      keepLock: false,
+      acknowledged: true,
+    });
+  });
+
+  it('applies the ordinary editing result after keeping the lock', async () => {
+    const { applyStartEditing, refreshProjectState } = setup();
+    const editing = { kind: 'editing' } as const;
+    invokeIpcMock.mockResolvedValue(editing);
+    const { result } = renderHook(() => useSpeleoActions());
+    let outcome: Awaited<ReturnType<typeof result.current.discardChanges>> | undefined;
+
+    await act(async () => {
+      outcome = await result.current.discardChanges(true);
+    });
+
+    expect(outcome).toBe('editing');
+    expect(applyStartEditing).toHaveBeenCalledWith(editing);
+    expect(refreshProjectState).toHaveBeenCalled();
+  });
+
+  it('applies lock contention instead of pretending the lock was kept', async () => {
+    const { applyStartEditing } = setup();
+    const locked = { kind: 'locked_by', email: 'other@example.com' } as const;
+    invokeIpcMock.mockResolvedValue(locked);
+    const { result } = renderHook(() => useSpeleoActions());
+    let outcome: Awaited<ReturnType<typeof result.current.discardChanges>> | undefined;
+
+    await act(async () => {
+      outcome = await result.current.discardChanges(true);
+    });
+
+    expect(outcome).toBe('discarded_without_lock');
+    expect(applyStartEditing).toHaveBeenCalledWith(locked);
+    expect(useUIStore.getState().showToast).toHaveBeenCalledWith(
+      expect.any(String),
+      'speleodb-locked-by',
+      'warning',
+    );
+  });
+
+  it('applies divergence and reloads a fast-forwarded result', async () => {
+    const { applyStartEditing, loadProject } = setup();
+    const fastForwarded = { kind: 'fast_forwarded', local_path: '/tip.stalx' } as const;
+    invokeIpcMock.mockResolvedValue(fastForwarded);
+    const { result } = renderHook(() => useSpeleoActions());
+    let outcome: Awaited<ReturnType<typeof result.current.discardChanges>> | undefined;
+
+    await act(async () => {
+      outcome = await result.current.discardChanges(true);
+    });
+
+    expect(outcome).toBe('editing');
+    expect(applyStartEditing).toHaveBeenCalledWith(fastForwarded);
+    expect(loadProject).toHaveBeenCalledWith('/tip.stalx');
+
+    const divergence = { kind: 'divergence_needed' } as const;
+    invokeIpcMock.mockResolvedValueOnce(divergence);
+    await act(async () => {
+      outcome = await result.current.discardChanges(true);
+    });
+    expect(outcome).toBe('discarded_without_lock');
+    expect(applyStartEditing).toHaveBeenCalledWith(divergence);
+  });
+});
+
 /**
  * [#270] `busy` is ONE shared boolean, and `clearLink` (project close/switch) and
  * `restoreLink` (a rolled-back remote open) both reset it out of band. A verb
