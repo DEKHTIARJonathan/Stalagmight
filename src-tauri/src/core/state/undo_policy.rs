@@ -144,7 +144,7 @@ impl AppState {
 
     /// An override, else the global default - resolved, so no consumer ever sees
     /// [`UndoMode::Unknown`]. The one place the precedence rule lives.
-    fn effective_undo_mode(&self, override_mode: Option<UndoMode>) -> UndoMode {
+    pub(super) fn effective_undo_mode(&self, override_mode: Option<UndoMode>) -> UndoMode {
         match override_mode {
             Some(mode) => mode.resolved(),
             None => self.global_undo_mode(),

@@ -17,10 +17,69 @@ use super::speleodb_cache::{
 };
 use super::speleodb_pull::{ArianeRoute, StalxAmbiguity};
 use super::AppState;
+use crate::models::UndoMode;
 use crate::speleodb::contract::{dto_for_error, Endpoint};
 use crate::speleodb::models::{SpeleoRevision, SpeleoRewindTarget, SpeleoUnwindTarget};
 use crate::speleodb::{client, dump, sync};
 use crate::speleodb::{SpeleoDbError, SpeleoErrorDto, SpeleoOpenResult};
+
+/// Read one downloaded revision's effective undo mode without installing it over the
+/// working copy. Revision metadata does not carry this policy, so a forward chain step
+/// has to inspect the child `.stalx` it would load.
+fn downloaded_revision_undo_mode(
+    state: &AppState,
+    dump: &mut dump::Dump<'_>,
+    entry: &str,
+    scratch_base: &std::path::Path,
+) -> Result<UndoMode, SpeleoDbError> {
+    let mut name = scratch_base
+        .file_name()
+        .unwrap_or_else(|| std::ffi::OsStr::new("project.stalx"))
+        .to_os_string();
+    name.push(format!(
+        ".undo-mode.{}.stalx",
+        uuid::Uuid::new_v4().simple()
+    ));
+    let probe = scratch_base.with_file_name(name);
+
+    let result = (|| {
+        dump.extract_entry_to(entry, &probe)?;
+        let db = crate::persistence::Database::open_for_metadata(&probe).map_err(|e| {
+            SpeleoDbError::Io(format!(
+                "could not open the downloaded revision to read its undo policy: {e}"
+            ))
+        })?;
+        let override_mode = db
+            .load_speleo_link()
+            .map_err(|e| {
+                SpeleoDbError::Io(format!(
+                    "could not read the downloaded revision's undo policy: {e}"
+                ))
+            })?
+            .and_then(|link| link.undo_mode);
+        Ok(state.effective_undo_mode(override_mode))
+    })();
+
+    if let Err(e) = std::fs::remove_file(&probe) {
+        if e.kind() != std::io::ErrorKind::NotFound {
+            tracing::warn!(
+                error = %e,
+                path = %probe.display(),
+                purpose = "clean up a downloaded revision policy probe",
+                "could not remove the temporary revision policy probe"
+            );
+        }
+    }
+    result
+}
+
+struct RewindCandidate {
+    target: SpeleoRewindTarget,
+    endpoint: String,
+    token: String,
+    insecure_http: bool,
+    project_id: String,
+}
 
 /// [#218] Validate a git commit SHA supplied over IPC (revision restore) before it
 /// is interpolated into the download-at-hash URL. A git object id is 7..=40 lowercase
@@ -152,7 +211,8 @@ impl AppState {
         chain_forward: bool,
     ) -> Result<(), SpeleoErrorDto> {
         let expected = if chain_forward {
-            self.speleodb_rewind_target()?.map(|t| t.hexsha)
+            self.speleodb_rewind_candidate()?
+                .map(|candidate| candidate.target.hexsha)
         } else {
             self.speleodb_unwind_target()?.map(|t| t.hexsha)
         };
@@ -382,37 +442,80 @@ impl AppState {
         }))
     }
 
-    /// [#303] Which revision a forward chain step would load, and whether that step returns
-    /// the copy to the latest version.
-    ///
-    /// `None` whenever there is nothing ahead: not mid-walk (so the copy is already at
-    /// BASE), already home, or a chain pointer that cannot be walked from. The first of
-    /// those is what makes an edit remove this direction - a forward command drops the
-    /// pointer, so the target stops resolving and the frontend hides the entry rather than
-    /// offering a step that would discard the edit.
-    ///
-    /// Same one `GET /revisions/` as its backward twin, resolved when the redo dropdown
-    /// opens rather than on the status poll.
-    pub(crate) fn speleodb_rewind_target(
-        &self,
-    ) -> Result<Option<SpeleoRewindTarget>, SpeleoErrorDto> {
+    /// Resolve the topology-only forward candidate while keeping the authenticated
+    /// request context that the public target query needs to inspect its policy.
+    fn speleodb_rewind_candidate(&self) -> Result<Option<RewindCandidate>, SpeleoErrorDto> {
         let link = self.speleodb_validated_link()?;
-        // Disabled mode never shipped history, so the commits ahead hold nothing to load.
-        if !self.undo_policy().pushes_history() {
-            return Ok(None);
-        }
         let (endpoint, token) = self.speleodb_active_token().map_err(local_dto)?;
         let insecure_http = self.speleodb_insecure_http();
         let (_, commits) = self
             .speleodb_server_head(&endpoint, &token, insecure_http, &link.project_id)
             .map_err(|e| dto_for_error(Endpoint::GetProject, &e))?;
-
         Ok(sync::rewind_target(
             self.speleodb_unwound_from().as_deref(),
             link.base_commit_sha.as_deref(),
             &commits,
         )
-        .map(|(hexsha, is_latest)| SpeleoRewindTarget { hexsha, is_latest }))
+        .map(|(hexsha, is_latest)| RewindCandidate {
+            target: SpeleoRewindTarget { hexsha, is_latest },
+            endpoint,
+            token,
+            insecure_http,
+            project_id: link.project_id,
+        }))
+    }
+
+    /// [#303] Which revision a forward chain step would load, and whether that step returns
+    /// the copy to the latest version.
+    ///
+    /// `None` whenever there is nothing ahead: not mid-walk (so the copy is already at
+    /// BASE), already home, a chain pointer that cannot be walked from, or a target child
+    /// whose policy did not publish undo history. The first of those is what makes an edit
+    /// remove this direction - a forward command drops the pointer, so the target stops
+    /// resolving and the frontend hides the entry rather than offering a step that would
+    /// discard the edit.
+    ///
+    /// Costs one `GET /revisions/` plus one download of the resolved child. The revisions
+    /// API does not carry undo policy, and the CHILD'S mode is the answer: that is the
+    /// revision whose history a forward step loads, regardless of the mode in the older
+    /// copy currently open.
+    pub(crate) fn speleodb_rewind_target(
+        &self,
+    ) -> Result<Option<SpeleoRewindTarget>, SpeleoErrorDto> {
+        let Some(candidate) = self.speleodb_rewind_candidate()? else {
+            return Ok(None);
+        };
+
+        let zip = self
+            .speleodb_handle_auth(
+                Endpoint::DownloadDump,
+                client::download_dump_at_hash(
+                    &candidate.endpoint,
+                    &candidate.token,
+                    candidate.insecure_http,
+                    &candidate.project_id,
+                    &candidate.target.hexsha,
+                ),
+            )
+            .map_err(|e| dto_for_error(Endpoint::DownloadDump, &e))?;
+        let mut dump = dump::Dump::open(&zip).map_err(local_dto)?;
+        let entry = self
+            .speleodb_resolve_entry_remembering(
+                &candidate.project_id,
+                &mut dump,
+                None,
+                ArianeRoute::Refuse,
+                DumpAt::Revision(&candidate.target.hexsha),
+                StalxAmbiguity::Refuse,
+            )
+            .map_err(local_dto)?;
+        let scratch_base = self
+            .speleodb_cache_path(&candidate.project_id)
+            .map_err(local_dto)?;
+        let target_mode = downloaded_revision_undo_mode(self, &mut dump, &entry, &scratch_base)
+            .map_err(local_dto)?;
+
+        Ok(target_mode.pushes_history().then_some(candidate.target))
     }
 
     /// [#218] The project's revision history for the read-only history view:
@@ -591,6 +694,22 @@ impl AppState {
             .map_err(local_dto)?;
 
         let dest = self.speleodb_cache_path(&project_id).map_err(local_dto)?;
+        // A forward step loads the CHILD revision's stack. Its policy is therefore the
+        // one that decides whether there is any published history to continue with -
+        // the currently loaded parent may have the opposite setting. The affordance
+        // checks this too, but the backend repeats it against the exact dump and entry
+        // it is about to install so a stale or direct IPC call cannot bypass the rule.
+        if keep_undo_history && chain_forward {
+            let target_mode =
+                downloaded_revision_undo_mode(self, &mut dump, &entry, &dest).map_err(local_dto)?;
+            if !target_mode.pushes_history() {
+                return Err(local_dto(SpeleoDbError::Io(
+                    "the next revision did not publish undo history, so there is no forward \
+                     history step to load"
+                        .to_owned(),
+                )));
+            }
+        }
         // Carry the user's local view toggles across the download-replace, same as a
         // re-pull (display_settings are stripped from the server copy), and drop the
         // live handle to this file first - the reload below re-opens it anyway, so
@@ -775,10 +894,13 @@ impl AppState {
 #[cfg(test)]
 #[expect(clippy::expect_used, reason = "unit test fixtures")]
 mod tests {
-    use super::{revision_swap_base, unwind_discards_unpushed, validate_hexsha, AppState};
-    use crate::models::{Project, SpeleoLink};
+    use super::{
+        downloaded_revision_undo_mode, revision_swap_base, unwind_discards_unpushed,
+        validate_hexsha, AppState,
+    };
+    use crate::models::{Project, SpeleoLink, UndoMode};
     use crate::persistence::Database;
-    use crate::speleodb::SpeleoDbError;
+    use crate::speleodb::{dump::Dump, SpeleoDbError};
 
     /// The project id every fixture here is stamped with; `validate_project_id` requires
     /// a UUID, so it cannot be an arbitrary string.
@@ -787,7 +909,7 @@ mod tests {
     /// An `AppState` holding a LINKED project, which is as far as the revision-swap
     /// verb's entry guards can be driven offline: everything past them needs a session
     /// token, a server and the app cache dir.
-    fn linked_state() -> (AppState, tempfile::TempDir) {
+    fn linked_state_with_undo_mode(undo_mode: Option<UndoMode>) -> (AppState, tempfile::TempDir) {
         let temp = tempfile::TempDir::new().expect("temp dir");
         let path = temp.path().join("linked.stalx");
         let mut db = Database::open(&path).expect("open fixture .stalx");
@@ -801,13 +923,90 @@ mod tests {
             has_unpushed_edits: false,
             last_edit_at: None,
             last_verify_at: None,
-            undo_mode: None,
+            undo_mode,
         }))
         .expect("stamp the fixture link");
 
         let state = AppState::new().expect("construct AppState");
         state.set_database_for_tests(db);
         (state, temp)
+    }
+
+    fn linked_state() -> (AppState, tempfile::TempDir) {
+        linked_state_with_undo_mode(None)
+    }
+
+    fn revision_dump_with_undo_mode(mode: UndoMode) -> Vec<u8> {
+        use std::io::Write as _;
+
+        let temp = tempfile::TempDir::new().expect("revision temp dir");
+        let path = temp.path().join("revision.stalx");
+        {
+            let mut db = Database::open(&path).expect("open revision fixture");
+            db.save_project(&Project::new("Revision".to_owned(), None))
+                .expect("save revision project");
+            db.save_speleo_link(Some(&SpeleoLink {
+                endpoint: "https://example.invalid".to_owned(),
+                project_id: FIXTURE_PROJECT_ID.to_owned(),
+                project_name: "Revision".to_owned(),
+                base_commit_sha: Some("deadbeefcafe".to_owned()),
+                has_unpushed_edits: false,
+                last_edit_at: None,
+                last_verify_at: None,
+                undo_mode: Some(mode),
+            }))
+            .expect("stamp revision policy");
+        }
+
+        let bytes = std::fs::read(path).expect("read revision fixture");
+        let mut writer = zip::write::ZipWriter::new(std::io::Cursor::new(Vec::<u8>::new()));
+        writer
+            .start_file(
+                "misc/project.stalx",
+                zip::write::SimpleFileOptions::default()
+                    .compression_method(zip::CompressionMethod::Stored),
+            )
+            .expect("start revision entry");
+        writer.write_all(&bytes).expect("write revision entry");
+        writer.finish().expect("finish revision dump").into_inner()
+    }
+
+    /// A forward step loads the child revision's stack, so the child policy wins even
+    /// when the older working copy says the exact opposite.
+    #[test]
+    fn downloaded_child_policy_decides_forward_history_eligibility() {
+        crate::test_helpers::with_isolated_config(|| {
+            for (current, child) in [
+                (UndoMode::Disabled, UndoMode::Full),
+                (UndoMode::Full, UndoMode::Disabled),
+            ] {
+                let (state, temp) = linked_state_with_undo_mode(Some(current));
+                assert_eq!(
+                    state.undo_policy().mode,
+                    current,
+                    "sanity: the open older revision carries the opposite policy"
+                );
+                let zip = revision_dump_with_undo_mode(child);
+                let mut dump = Dump::open(&zip).expect("open revision dump");
+                let mode = downloaded_revision_undo_mode(
+                    &state,
+                    &mut dump,
+                    "misc/project.stalx",
+                    &temp.path().join("project.stalx"),
+                )
+                .expect("read child policy");
+                assert_eq!(
+                    mode, child,
+                    "forward eligibility must come from the downloaded child, not the open parent"
+                );
+                let leftovers = std::fs::read_dir(temp.path())
+                    .expect("read temp directory")
+                    .filter_map(Result::ok)
+                    .filter(|entry| entry.file_name().to_string_lossy().contains(".undo-mode."))
+                    .count();
+                assert_eq!(leftovers, 0, "the policy probe must clean up its `.stalx`");
+            }
+        });
     }
 
     /// Ask for a revision swap that keeps the downloaded copy's undo history.
@@ -936,6 +1135,42 @@ mod tests {
         assert!(
             body.contains("if !discard_unpushed"),
             "un-pushed work may only be discarded by a caller that acknowledged it"
+        );
+    }
+
+    /// The target query and the destructive swap both enforce the same child-policy
+    /// rule. The first keeps a useless forward action out of the UI; the second stops a
+    /// stale or direct IPC call before it replaces the working copy.
+    #[test]
+    fn forward_chain_steps_are_gated_by_the_downloaded_child_policy() {
+        let src = prod_source();
+        let target = src
+            .split_once("pub(crate) fn speleodb_rewind_target")
+            .map(|(_, rest)| rest)
+            .and_then(|rest| rest.split("\n    /// ").next())
+            .expect("rewind target body precedes the next item");
+        assert!(
+            target.contains("downloaded_revision_undo_mode("),
+            "the affordance must inspect the child revision's own undo policy"
+        );
+        assert!(
+            !target.contains("self.undo_policy()"),
+            "the currently open parent policy cannot decide whether the child shipped history"
+        );
+
+        let restore = src
+            .split_once("pub(crate) fn speleodb_restore_revision")
+            .map(|(_, rest)| rest)
+            .expect("restore body follows its signature");
+        let policy = restore
+            .find("if keep_undo_history && chain_forward")
+            .expect("the forward restore must re-check the downloaded child policy");
+        let replace = restore
+            .find(".replace_cache_stalx_with(")
+            .expect("the restore replaces the working copy");
+        assert!(
+            policy < replace,
+            "the child-policy refusal must happen before the working copy is replaced"
         );
     }
 
