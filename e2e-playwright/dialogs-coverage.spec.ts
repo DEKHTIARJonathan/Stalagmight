@@ -133,6 +133,26 @@ test.describe('Dialog Coverage - Edit Shot', () => {
     expect(updatedShot.left).toBe(1.2);
     expect(updatedShot.comment).toBe('notes');
   });
+
+  test('keeps the dialog body scrollable in a short viewport', async ({ page }) => {
+    await page.setViewportSize({ width: 800, height: 420 });
+    const { sectionId, shotId } = await setupProjectWithShots(page, 2);
+    await openDialog(page, 'edit-shot', { sectionId, shotId });
+
+    const body = page.getByTestId('edit-shot-dialog-body');
+    await expect(body).toBeVisible();
+    const metrics = await body.evaluate((element) => ({
+      clientHeight: element.clientHeight,
+      scrollHeight: element.scrollHeight,
+      overflowY: getComputedStyle(element).overflowY,
+    }));
+    expect(metrics.overflowY).toBe('auto');
+    expect(metrics.scrollHeight).toBeGreaterThan(metrics.clientHeight);
+
+    await body.evaluate((element) => element.scrollTo({ top: element.scrollHeight }));
+    await expect.poll(() => body.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+    await expect(page.getByTestId('edit-shot-dialog').getByRole('button', { name: 'Save' })).toBeVisible();
+  });
 });
 
 test.describe('Dialog Coverage - Draw Shot', () => {

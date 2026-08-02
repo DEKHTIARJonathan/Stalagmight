@@ -126,6 +126,28 @@ async function main(): Promise<void> {
     check('seed opens a fixture project', seeded?.mode === 'fixture', seeded);
     const seededView = parseText(await call('store_state', { store: 'ui', path: 'view' })) as { value?: unknown };
     check('seed switched to single view', seededView?.value === 'single', seededView?.value);
+    await call('wait_for', { condition: 'map-idle', timeoutMs: 10000 });
+    const featureIdentity = parseText(
+      await call('eval', {
+        script:
+          'const section = window.__E2E_TEST__?.projectStore?.getState().project?.sections?.[0]; return section ? { sectionId: section.id, shotId: section.shots?.[0]?.id } : null;',
+      }),
+    ) as { value?: { sectionId?: number; shotId?: number } };
+    const feature = featureIdentity?.value;
+    const semanticClick = feature?.sectionId != null && feature.shotId != null
+      ? parseText(
+          await call('map_feature_click', {
+            featureType: 'shot',
+            sectionId: feature.sectionId,
+            shotId: feature.shotId,
+          }),
+        ) as { clicked?: boolean; selectionVerified?: boolean }
+      : null;
+    check(
+      'map_feature_click resolves and selects a fixture shot',
+      semanticClick?.clicked === true && semanticClick.selectionVerified === true,
+      semanticClick ?? featureIdentity,
+    );
     const driven = parseText(
       await call('driver_script', { script: 'const v = await readStore("ui", "view"); return v.value;' }),
     ) as { value?: unknown };

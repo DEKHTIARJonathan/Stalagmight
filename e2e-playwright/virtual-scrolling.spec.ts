@@ -15,10 +15,8 @@ import {
  *   ROW_HEIGHT = 33px
  *   overscan = 8
  *
- * Rows are grid-row-{rowIndex} (index, not shot id); the active row carries
- * data-active="true". Tests verify that the DataTable correctly loads and
- * renders a large number of shots, supports row selection, and displays
- * correct shot data.
+ * Legacy structural selectors remain available, while semantic row/cell aliases
+ * use section and shot IDs. Tests verify both contracts across virtualization.
  */
 
 const SHOT_COUNT = 120;
@@ -75,18 +73,27 @@ test.describe('Virtual Scrolling in DataTable', () => {
     expect(rowCount).toBeLessThan(SHOT_COUNT);
   });
 
-  test('first row is visible and has correct shot ID', async ({ page }) => {
-    const sectionId = await page.evaluate(() => {
+  test('first row exposes unique semantic shot and cell selectors', async ({ page }) => {
+    const ids = await page.evaluate(() => {
       const e2e = (window as any).__E2E_TEST__;
       if (!e2e) return null;
-      return e2e.projectStore.getState().project?.sections?.[0]?.id ?? null;
+      const section = e2e.projectStore.getState().project?.sections?.[0];
+      return section ? { sectionId: section.id, shotId: section.shots[0]?.id ?? null } : null;
     });
-    expect(sectionId).not.toBeNull();
+    if (!ids || ids.shotId == null) throw new Error('No first shot identity');
 
     const firstRow = page.getByTestId('grid-row-0');
     await expect(firstRow).toBeVisible();
     // The row gutter shows the section:position shot id (positions are 1-based)
-    await expect(page.getByTestId('grid-gutter-0')).toContainText(`${sectionId}:1`);
+    await expect(page.getByTestId('grid-gutter-0')).toContainText(`${ids.sectionId}:1`);
+
+    const semanticRow = page.getByTestId(`shot-row-${ids.sectionId}-${ids.shotId}`);
+    const semanticCell = page.getByTestId(`shot-cell-${ids.sectionId}-${ids.shotId}-length`);
+    await expect(semanticRow).toHaveCount(1);
+    await expect(semanticRow).toBeVisible();
+    await expect(semanticCell).toHaveCount(1);
+    await semanticCell.click();
+    await expect(firstRow).toHaveAttribute('data-active', 'true');
   });
 
   test('last row exists in the DOM', async ({ page }) => {
