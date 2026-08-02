@@ -56,8 +56,17 @@ const TARGET_TTL_MS = 5000;
  * cannot be stored against another.
  */
 function projectIdentityKey(): string {
-  const project = useProjectStore.getState().project;
-  return `${project?.created_at ?? ''}|${project?.modified_at ?? ''}|${project?.file_path ?? ''}`;
+  const projectState = useProjectStore.getState();
+  const speleoState = useSpeleoStore.getState();
+  const project = projectState.project;
+  return [
+    projectState.projectTreeGeneration,
+    project?.created_at ?? '',
+    project?.modified_at ?? '',
+    project?.file_path ?? '',
+    speleoState.remoteProjectId ?? '',
+    speleoState.sessionGeneration,
+  ].join('|');
 }
 
 export function useUnwindTarget(
@@ -71,6 +80,9 @@ export function useUnwindTarget(
   const [target, setTarget] = useState<ChainTarget | null>(null);
   // Only a remote project has revisions to walk; asking otherwise earns a refusal.
   const isRemote = useSpeleoStore((s) => s.projectLinkKind === 'remote');
+  const remoteProjectId = useSpeleoStore((s) => s.remoteProjectId);
+  const sessionGeneration = useSpeleoStore((s) => s.sessionGeneration);
+  const projectTreeGeneration = useProjectStore((s) => s.projectTreeGeneration);
 
   // The memo carries the inputs it was fetched for, so a change of direction, of
   // remote-ness, or OF THE PROJECT ITSELF invalidates it by not matching rather than by
@@ -88,7 +100,13 @@ export function useUnwindTarget(
   // during render would still name the old identity at the moment it matters most.
   const makeCacheKey = useCallback(
     () => `${direction}:${String(isRemote)}:${projectIdentityKey()}`,
-    [direction, isRemote],
+    [
+      direction,
+      isRemote,
+      projectTreeGeneration,
+      remoteProjectId,
+      sessionGeneration,
+    ],
   );
   const cacheRef = useRef<{ at: number; key: string; value: ChainTarget | null } | null>(null);
   // Monotonic stamp for the in-flight fetch. `resolve` (hover) and `refresh` (panel open)

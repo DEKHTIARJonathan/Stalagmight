@@ -52,9 +52,16 @@ const project = (file_path: string) =>
 
 beforeEach(() => {
   invokeIpcMock.mockReset();
-  useProjectStore.setState({ project: project('/cave/a.stalx') });
+  useProjectStore.setState({
+    project: project('/cave/a.stalx'),
+    projectTreeGeneration: 1,
+  });
   // Only a remote project has revisions to walk - otherwise `fetchTarget` never calls.
-  useSpeleoStore.setState({ projectLinkKind: 'remote' });
+  useSpeleoStore.setState({
+    projectLinkKind: 'remote',
+    remoteProjectId: 'p1',
+    sessionGeneration: 1,
+  });
 });
 
 /** `enabled: false` so the mount effect does not fire a fetch of its own: every request
@@ -131,6 +138,25 @@ describe('useUnwindTarget - overlapping lookups (#303)', () => {
     expect(next).toEqual(asBack(NEWER));
   });
 
+  it('drops a reply when the same-path project tree changes in flight', async () => {
+    const pending = deferred<SpeleoUnwindTarget | null>();
+    invokeIpcMock.mockReturnValueOnce(pending.promise);
+    const { result } = renderTarget();
+
+    let resolved: Promise<ChainTarget | null>;
+    act(() => {
+      resolved = result.current.resolve();
+      useProjectStore.setState({ projectTreeGeneration: 2 });
+    });
+    await act(async () => {
+      pending.resolve(OLDER);
+      await Promise.resolve();
+    });
+
+    expect(result.current.target).toBeNull();
+    await expect(resolved!).resolves.toBeNull();
+  });
+
   it('stores and memoises a reply that nothing superseded (control)', async () => {
     invokeIpcMock.mockResolvedValue(OLDER);
     const { result } = renderTarget();
@@ -187,5 +213,49 @@ describe('useUnwindTarget - the memo is bound to the project', () => {
     const fresh = await act(async () => result.current.resolve());
     expect(invokeIpcMock).toHaveBeenCalledTimes(2);
     expect(fresh?.hexsha).toBe('after');
+  });
+
+  it('re-fetches after an in-place edit with unchanged project metadata', async () => {
+    invokeIpcMock
+      .mockResolvedValueOnce(OLDER)
+      .mockResolvedValueOnce(NEWER);
+    const { result } = renderTarget();
+
+    await act(async () => {
+      await result.current.resolve();
+    });
+    act(() => {
+      useProjectStore.setState({ projectTreeGeneration: 2 });
+    });
+
+    let next: ChainTarget | null = null;
+    await act(async () => {
+      next = await result.current.resolve();
+    });
+
+    expect(next).toEqual(asBack(NEWER));
+    expect(invokeIpcMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not reuse a target resolved under an earlier login generation', async () => {
+    invokeIpcMock
+      .mockResolvedValueOnce(OLDER)
+      .mockResolvedValueOnce(NEWER);
+    const { result } = renderTarget();
+
+    await act(async () => {
+      await result.current.resolve();
+    });
+    act(() => {
+      useSpeleoStore.setState({ sessionGeneration: 2 });
+    });
+
+    let next: ChainTarget | null = null;
+    await act(async () => {
+      next = await result.current.resolve();
+    });
+
+    expect(next).toEqual(asBack(NEWER));
+    expect(invokeIpcMock).toHaveBeenCalledTimes(2);
   });
 });

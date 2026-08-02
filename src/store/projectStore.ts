@@ -100,6 +100,12 @@ const initialLoadingState: LoadingState = {
 
 // Separate client operation ID for race detection (independent of backend loading ID)
 let clientOpIdCounter = 0;
+let projectTreeGenerationCounter = 0;
+
+function nextProjectTreeGeneration(): number {
+  projectTreeGenerationCounter += 1;
+  return projectTreeGenerationCounter;
+}
 
 // Monotonic sequence so overlapping fire-and-forget integrity checks are
 // last-issued-wins: an earlier check that resolves after a newer one was started
@@ -191,6 +197,13 @@ export interface LoadProjectOutcome {
 export interface ProjectStore extends ProjectConfigActions {
   // State
   project: Project | null;
+  /**
+   * Monotonic identity of the measured project tree currently mirrored in this store.
+   * Incremented on every successful load, create, refresh, and close so async caches can
+   * distinguish same-path revision swaps and in-memory edits whose project metadata did
+   * not change.
+   */
+  projectTreeGeneration: number;
   /**
    * Whether the open project is backed by an on-disk database. A new project
    * created with a deferred initial save reserves `project.file_path` but leaves
@@ -509,6 +522,7 @@ function runSerialized<T>(work: () => Promise<T>): Promise<T> {
 function clearOpenProjectState(set: (partial: Partial<ProjectStore>) => void): void {
   set({
     project: null,
+    projectTreeGeneration: nextProjectTreeGeneration(),
     databaseOpen: false,
     stations: [],
     surveyData: null,
@@ -740,6 +754,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   return {
   // Initial state
   project: null,
+  projectTreeGeneration: 0,
   databaseOpen: false,
   stations: [],
   surveyData: null,
@@ -908,6 +923,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         const tSetStart = performance.now();
         set({
           project: result.project,
+          projectTreeGeneration: nextProjectTreeGeneration(),
           stations: result.stations,
           surveyData: result.surveyData,
           // Adjusted geometry is lazily (re)fetched by the map when the adjusted
@@ -1167,6 +1183,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       // stations yet, so `surveyData` starts as an empty SoA.
       set({
         project: result.project,
+        projectTreeGeneration: nextProjectTreeGeneration(),
         // A deferred new project has no on-disk database until the first save.
         databaseOpen: !deferred,
         stations: [],
@@ -1414,6 +1431,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         const surveyData = surveyDataFromLegacy(state.project.sections, state.stations);
         set({
           project: state.project,
+          projectTreeGeneration: nextProjectTreeGeneration(),
           stations: state.stations,
           surveyData,
           // Any edit changes measured geometry → the cached adjusted view is stale.
