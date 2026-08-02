@@ -14,7 +14,7 @@ import {
   waitForMapIdle,
   type SectionSeed,
 } from './helpers/app';
-import { warningResolveButtons } from './helpers/testIds';
+import { warningMessages, warningResolveButtons } from './helpers/testIds';
 
 /** Seed data: one section with shots. */
 const sectionSeeds: SectionSeed[] = [
@@ -199,7 +199,7 @@ test.describe('Warning Click Navigation', () => {
     // Clicking the warning row (the message area, away from the shot pill)
     // selects the problematic shot but stays on the Warnings tab (issue #57);
     // the entity pills are the way to jump to Details.
-    await page.getByTestId('warning-message').first().click({ position: { x: 4, y: 4 } });
+    await warningMessages(page).first().click({ position: { x: 4, y: 4 } });
 
     const selection = await pollSelectionState(
       page,
@@ -252,7 +252,7 @@ test.describe('Warning Click Navigation', () => {
 
     // Clicking the row (message area, away from the shot pill) selects the shot
     // but stays on the Warnings tab (#57).
-    await page.getByTestId('warning-message').first().click({ position: { x: 4, y: 4 } });
+    await warningMessages(page).first().click({ position: { x: 4, y: 4 } });
 
     const selection = await pollSelectionState(
       page,

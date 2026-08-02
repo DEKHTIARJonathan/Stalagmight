@@ -50,3 +50,11 @@ export function warningResolveTestId(warning: WarningTestIdIdentity): string {
 export function warningUndoResolveTestId(warning: WarningTestIdIdentity): string {
   return `warning-${testIdPart(warningKey(warning))}-undo-resolve`;
 }
+
+export function warningMessageTestId(warning: WarningTestIdIdentity): string {
+  return `warning-${testIdPart(warningKey(warning))}-message`;
+}
+
+export function warningOpenShotTestId(warning: WarningTestIdIdentity): string {
+  return `warning-${testIdPart(warningKey(warning))}-open-shot`;
+}

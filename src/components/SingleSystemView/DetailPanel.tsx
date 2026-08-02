@@ -23,7 +23,13 @@ import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
 import { useActiveStations } from '../../hooks/useActiveStations';
 import { setSource, trackContextMenuAction } from '../../utils/telemetry';
 import { SHOT_KIND_LABEL_KEY, nextShotKind } from '../../utils/shotKind';
-import { warningKey, warningResolveTestId, warningUndoResolveTestId } from '../../utils/testId';
+import {
+  warningKey,
+  warningMessageTestId,
+  warningOpenShotTestId,
+  warningResolveTestId,
+  warningUndoResolveTestId,
+} from '../../utils/testId';
 
 /** Center/locate glyph (small ring + edge spokes), filled so it stays crisp
  *  under the page-zoom UI scale. Shared by the per-entity "center on map"
@@ -540,7 +546,7 @@ function WarningsContent({ warnings, project, onWarningClick }: WarningsContentP
               onClick={() => onWarningClick(warning)}
               onDoubleClick={() => triggerPanToShot(warning.sectionId, warning.shotId)}
               className={`text-left cursor-pointer rounded${showPills ? '' : ' focus:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-inset'}`}
-              data-testid={`warning-${index}-message`}
+              data-testid={warningMessageTestId(warning)}
             >
               <span className={`mr-1.5 align-text-bottom inline-block ${warning.severity === 'error' ? 'text-error' : 'text-warning'}`}>
                 {warning.isResolved
@@ -569,7 +575,7 @@ function WarningsContent({ warnings, project, onWarningClick }: WarningsContentP
                         aria-label={t('detailPanel.warnings.openShotDetails', {
                           shot: formatShotId(warning.sectionId, warning.shotIndex + 1),
                         })}
-                        data-testid={`warning-${index}-open-shot`}
+                        data-testid={warningOpenShotTestId(warning)}
                       >
                         <EntityBlob entity="shot">
                           {formatShotId(warning.sectionId, warning.shotIndex + 1)}

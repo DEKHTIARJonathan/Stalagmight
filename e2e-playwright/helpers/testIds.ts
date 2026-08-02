@@ -8,6 +8,8 @@ export {
   recoveryBackupItemTestId,
   systemCardTestId,
   systemRowTestId,
+  warningMessageTestId,
+  warningOpenShotTestId,
   warningResolveTestId,
   warningUndoResolveTestId,
 } from '../../src/utils/testId';
@@ -27,4 +29,8 @@ export function recoveryBackupItems(page: Page) {
 
 export function warningResolveButtons(page: Page) {
   return page.getByTestId(/^warning-(?!.*-undo-resolve$).*-resolve$/);
+}
+
+export function warningMessages(page: Page) {
+  return page.getByTestId(/^warning-.*-message$/);
 }

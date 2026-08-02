@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import {
   systemCardTestId,
   systemRowTestId,
+  warningMessageTestId,
+  warningOpenShotTestId,
   warningResolveTestId,
   warningUndoResolveTestId,
 } from '../testId';
@@ -21,5 +23,7 @@ describe('test ID contracts', () => {
     expect(after[0]).toBe(before[1]);
     expect(after[0]).toBe('warning-3%3A8%3ADEPTH_DIFF%3Ad2-resolve');
     expect(warningUndoResolveTestId(warningB)).toBe('warning-3%3A8%3ADEPTH_DIFF%3Ad2-undo-resolve');
+    expect(warningMessageTestId(warningB)).toBe('warning-3%3A8%3ADEPTH_DIFF%3Ad2-message');
+    expect(warningOpenShotTestId(warningB)).toBe('warning-3%3A8%3ADEPTH_DIFF%3Ad2-open-shot');
   });
 });
