@@ -687,6 +687,19 @@ impl AppState {
         self.initial_save_deferred
             .store(false, std::sync::atomic::Ordering::Relaxed);
 
+        // The installed file deliberately has no history because its chain metadata
+        // could not be classified safely. Drop the live mirror at the same commit point:
+        // otherwise a later save can write these same unclassified rows straight back
+        // into the now-valid database and undo the fail-closed fallback.
+        if marker_preservation_failed {
+            let mut undo_stack = self
+                .undo_stack
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            undo_stack.clear();
+            undo_stack.set_inherited_through(None);
+        }
+
         // Reopen the database at the final path
         let db = match Database::open(&save_path) {
             Ok(db) => db,

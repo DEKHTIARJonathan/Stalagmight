@@ -15250,6 +15250,18 @@ fn unreadable_undo_markers_save_without_history() {
         },
         UndoData::None,
     );
+    state.undo_stack.lock().unwrap().push_with_data(
+        Command::CreateSection {
+            name: Some("Redo candidate".to_owned()),
+            surveyor: None,
+            date: None,
+            color: "#00ff00".to_owned(),
+            direction: None,
+            shots: Vec::new(),
+        },
+        UndoData::None,
+    );
+    state.undo();
 
     // Keep the table present but remove the column the marker reader requires. The
     // survey database and undo rows remain readable, isolating the marker-failure path.
@@ -15281,6 +15293,20 @@ fn unreadable_undo_markers_save_without_history() {
     assert!(db.load_redo_stack_with_timestamps().unwrap().is_empty());
     assert_eq!(db.load_speleo_undo_chain().unwrap(), None);
     assert_eq!(db.load_speleo_undo_watermark().unwrap(), None);
+    drop(db_guard);
+
+    let undo_stack = state.undo_stack.lock().unwrap();
+    assert!(!undo_stack.can_undo(), "the live undo stack must be cleared");
+    assert!(!undo_stack.can_redo(), "the live redo stack must be cleared");
+    drop(undo_stack);
+
+    // The replacement database is valid now. A later save must not resurrect the
+    // unclassified rows from memory after the marker-failure fallback has cleared them.
+    assert!(state.save_project(None).success);
+    let db_guard = state.database.lock().unwrap();
+    let db = db_guard.as_ref().expect("database reopened after second save");
+    assert!(db.load_undo_stack_with_timestamps().unwrap().is_empty());
+    assert!(db.load_redo_stack_with_timestamps().unwrap().is_empty());
 }
 
 /// [#303] Changing the undo mode really does need the edit gate.
