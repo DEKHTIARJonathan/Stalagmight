@@ -1,9 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
+import { existsSync, writeFileSync } from 'node:fs';
+import { dirname } from 'node:path';
 
 const invokeInApp = vi.hoisted(() => vi.fn());
 vi.mock('./page', () => ({ invokeInApp, evalInApp: vi.fn() }));
 
-import { driverScript } from './replayHelpers';
+import { cleanupReplayFixtures, driverScript, materializeReplayFixture } from './replayHelpers';
 import type { Browser } from 'webdriverio';
 
 describe('replayed driver scripts', () => {
@@ -55,5 +57,32 @@ describe('replayed driver scripts', () => {
 
     expect(deleteSession).toHaveBeenCalledOnce();
     expect(mutate).not.toHaveBeenCalled();
+  });
+
+  it('bounds quarantine when WebDriver session deletion never settles', async () => {
+    const deleteSession = vi.fn(() => new Promise<never>(() => undefined));
+    const browser = { deleteSession } as unknown as Browser;
+    const started = Date.now();
+
+    await expect(
+      driverScript(browser, `await new Promise((resolve) => setTimeout(resolve, 20));`, 5),
+    ).rejects.toThrow('settled during the grace window');
+
+    expect(Date.now() - started).toBeLessThan(1500);
+    expect(deleteSession).toHaveBeenCalledOnce();
+  });
+});
+
+describe('replayed fixtures', () => {
+  it('removes every copied database and SQLite sidecar after replay', () => {
+    const first = materializeReplayFixture('fractal_plant_iter3.stalx');
+    const second = materializeReplayFixture('fractal_plant_iter3.stalx');
+    writeFileSync(`${first}-wal`, 'wal');
+    writeFileSync(`${second}-shm`, 'shm');
+
+    cleanupReplayFixtures();
+
+    expect(existsSync(dirname(first))).toBe(false);
+    expect(existsSync(dirname(second))).toBe(false);
   });
 });

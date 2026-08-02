@@ -217,6 +217,7 @@ describe('generate-replay.mjs', () => {
     expect(spec).toContain(
       `'loadProject', [materializeReplayFixture("fractal_plant_iter3.stalx")]`,
     );
+    expect(spec).toContain('afterEach(() => cleanupReplayFixtures());');
     expect(spec).not.toContain('/repo/.agent-artifacts/sessions/golden-fixture');
     // click -> the resolved selector, clicked.
     expect(spec).toContain(`replayClick(browser, {"selector":"[data-testid=\\"save-button\\"]"})`);

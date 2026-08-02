@@ -77,6 +77,22 @@ assert.match(
   /duplicated in one JSX container/,
 );
 
+assert.deepEqual(
+  analyzeSource(
+    'exclusive-ternary.tsx',
+    'const view = <>{flag ? <button data-testid="same">One</button> : <button data-testid="same">Two</button>}</>;',
+  ),
+  [],
+);
+
+assert.deepEqual(
+  analyzeSource(
+    'exclusive-short-circuit.tsx',
+    'const view = <>{flag && <button data-testid="same">One</button>}{!flag && <button data-testid="same">Two</button>}</>;',
+  ),
+  [],
+);
+
 assert.match(
   analyzeSource('summary.tsx', 'const view = <summary>Details</summary>;')[0]?.message ?? '',
   /has no data-testid/,

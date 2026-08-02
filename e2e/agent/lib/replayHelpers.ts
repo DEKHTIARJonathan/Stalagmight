@@ -6,7 +6,7 @@
  * replays from harness refactors.
  */
 import type { Browser } from 'webdriverio';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { invokeInApp, evalInApp } from './page';
@@ -33,9 +33,19 @@ export { callStoreAction as storeAction };
 export { answerFileDialog, dragPointer, hoverElement, mapClick, scrollTarget, selectOption };
 export { mapFeatureClick };
 
+const replayFixtureDirs = new Set<string>();
+
 /** Give every replay seed a fresh copy that the app may safely migrate or save. */
 export function materializeReplayFixture(name: string): string {
-  return materializeFixture(name, mkdtempSync(join(tmpdir(), 'stalagmight-replay-fixture-')));
+  const fixtureDir = mkdtempSync(join(tmpdir(), 'stalagmight-replay-fixture-'));
+  replayFixtureDirs.add(fixtureDir);
+  return materializeFixture(name, fixtureDir);
+}
+
+/** Remove fixture databases and any SQLite sidecars created during a replay. */
+export function cleanupReplayFixtures(): void {
+  for (const fixtureDir of replayFixtureDirs) rmSync(fixtureDir, { recursive: true, force: true });
+  replayFixtureDirs.clear();
 }
 
 interface ReplayWaitRequest {
@@ -55,6 +65,18 @@ interface ReplayClickRequest {
   button?: 'left' | 'right' | 'middle';
   double?: boolean;
   modifiers?: Array<'Control' | 'Shift' | 'Alt'>;
+}
+
+async function settlesWithin(promise: Promise<unknown>, timeoutMs: number): Promise<boolean> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      promise.then(() => true, () => true),
+      new Promise<false>((resolve) => { timer = setTimeout(() => resolve(false), timeoutMs); }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 /** Replay a click without dropping its button, double-click, or modifier semantics. */
@@ -229,11 +251,10 @@ export async function driverScript(
     if (!expired) throw error;
     // A replay timeout is terminal for its dedicated WebDriver session. This
     // also quarantines element/action handles captured before the timeout.
-    if (typeof browser.deleteSession === 'function') await browser.deleteSession().catch(() => undefined);
-    const settled = await Promise.race([
-      body.then(() => true, () => true),
-      new Promise<false>((resolve) => setTimeout(() => resolve(false), 10000)),
-    ]);
+    const quarantined = typeof browser.deleteSession === 'function'
+      ? settlesWithin(browser.deleteSession(), 1000)
+      : Promise.resolve(true);
+    const [settled] = await Promise.all([settlesWithin(body, 10000), quarantined]);
     if (!settled) {
       throw new Error(
         `replayed driver_script timed out after ${timeoutMs}ms and is still running; WebDriver session closed`,

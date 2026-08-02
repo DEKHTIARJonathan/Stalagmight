@@ -104,11 +104,20 @@ function repeatedCallback(node) {
 }
 
 function containingJsxParent(node) {
-  let current = node.parent;
-  if (ts.isJsxElement(current)) current = current.parent;
+  let child = ts.isJsxOpeningElement(node) ? node.parent : node;
+  let current = child.parent;
   for (; current; current = current.parent) {
+    if (ts.isConditionalExpression(current)) return child;
+    if (
+      ts.isBinaryExpression(current) &&
+      [ts.SyntaxKind.AmpersandAmpersandToken, ts.SyntaxKind.BarBarToken, ts.SyntaxKind.QuestionQuestionToken]
+        .includes(current.operatorToken.kind)
+    ) {
+      return current;
+    }
     if (ts.isJsxElement(current) || ts.isJsxFragment(current)) return current;
     if (ts.isSourceFile(current)) return null;
+    child = current;
   }
   return null;
 }
