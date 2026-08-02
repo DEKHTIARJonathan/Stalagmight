@@ -316,6 +316,33 @@ describe('useSpeleoActions - toast kinds', () => {
 });
 
 describe('useSpeleoActions - fast-forward resets the on-screen tree (#218)', () => {
+  it('does not route a start-editing reply after the open project changes', async () => {
+    let finishRequest!: (value: { kind: 'editing' }) => void;
+    invokeIpcMock.mockReturnValue(
+      new Promise<{ kind: 'editing' }>((resolve) => {
+        finishRequest = resolve;
+      }),
+    );
+    const applyStartEditing = vi.fn();
+    useSpeleoStore.setState({ remoteProjectId: 'p1', applyStartEditing });
+    const { result } = renderHook(() => useSpeleoActions());
+    let pending!: Promise<boolean>;
+    act(() => {
+      pending = result.current.startEditing();
+    });
+    await vi.waitFor(() => expect(invokeIpcMock).toHaveBeenCalled());
+
+    useSpeleoStore.setState({ remoteProjectId: 'p2' });
+    finishRequest({ kind: 'editing' });
+
+    let held: boolean | undefined;
+    await act(async () => {
+      held = await pending;
+    });
+    expect(held).toBe(false);
+    expect(applyStartEditing).not.toHaveBeenCalled();
+  });
+
   it('update (→ fast_forwarded) refreshes geometry + link state', async () => {
     // The backend FF reload reopens the SAME path, so loadProject short-circuits on
     // the "already open" guard; without the explicit refresh the old tree would stay
@@ -501,6 +528,33 @@ describe('useSpeleoActions - discard routes every StartEditingResult (#303)', ()
     });
     expect(outcome).toBe('discarded_without_lock');
     expect(applyStartEditing).toHaveBeenCalledWith(divergence);
+  });
+
+  it('does not route a discard reply after the open project changes', async () => {
+    const { applyStartEditing, refreshProjectState } = setup();
+    let finishRequest!: (value: { kind: 'editing' }) => void;
+    invokeIpcMock.mockReturnValue(
+      new Promise<{ kind: 'editing' }>((resolve) => {
+        finishRequest = resolve;
+      }),
+    );
+    const { result } = renderHook(() => useSpeleoActions());
+    let pending!: ReturnType<typeof result.current.discardChanges>;
+    act(() => {
+      pending = result.current.discardChanges(true);
+    });
+    await vi.waitFor(() => expect(invokeIpcMock).toHaveBeenCalled());
+
+    useSpeleoStore.setState({ remoteProjectId: 'p2' });
+    finishRequest({ kind: 'editing' });
+
+    let outcome: Awaited<typeof pending> | undefined;
+    await act(async () => {
+      outcome = await pending;
+    });
+    expect(outcome).toBe('stale');
+    expect(applyStartEditing).not.toHaveBeenCalled();
+    expect(refreshProjectState).not.toHaveBeenCalled();
   });
 });
 

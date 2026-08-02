@@ -3,6 +3,7 @@ import { useGasPlanStore } from '../store/gasPlanStore';
 import { useProjectStore } from '../store/projectStore';
 import { speleoProjectSessionIssuedFor, useSpeleoStore } from '../store/speleoStore';
 import { useUIStore } from '../store/uiStore';
+import { runProjectSwitch } from './projectTransition';
 import { applySpeleoTreeReplacement } from './speleoTreeReplacement';
 
 let refreshProjectState: ReturnType<typeof vi.fn>;
@@ -81,5 +82,28 @@ describe('applySpeleoTreeReplacement', () => {
     expect(checkProjectIntegrity).not.toHaveBeenCalled();
     expect(refreshLinkStatus).not.toHaveBeenCalled();
     expect(useProjectStore.getState().isDirty).toBe(true);
+  });
+
+  it('holds project switches until replacement reconciliation finishes', async () => {
+    let finishRefresh!: () => void;
+    refreshProjectState = vi.fn(
+      () => new Promise<void>((resolve) => {
+        finishRefresh = resolve;
+      }),
+    );
+    useProjectStore.setState({ refreshProjectState });
+
+    const replacement = applySpeleoTreeReplacement(speleoProjectSessionIssuedFor('p1'));
+    await vi.waitFor(() => expect(refreshProjectState).toHaveBeenCalledOnce());
+
+    const switchWork = vi.fn(async () => {});
+    const projectSwitch = runProjectSwitch(switchWork);
+    await Promise.resolve();
+    expect(switchWork).not.toHaveBeenCalled();
+
+    finishRefresh();
+    await replacement;
+    await projectSwitch;
+    expect(switchWork).toHaveBeenCalledOnce();
   });
 });

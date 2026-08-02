@@ -46,6 +46,7 @@ import type { UnrecognisedShotKind } from '../types/ipc/UnrecognisedShotKind';
 import type { SurveyData } from '../types/survey-data';
 import { emptySurveyData, surveyDataFromLegacy, surveyDataWithAdjustedStations } from '../types/survey-data';
 import { createProjectConfigActions, type ProjectConfigActions } from './projectConfigActions';
+import { runProjectSwitch } from '../utils/projectTransition';
 
 type ShotUpdatesPatch = Partial<ShotUpdates>;
 
@@ -862,7 +863,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       if (key !== path) inFlightLoads.delete(key);
     }
 
-    const promise: Promise<LoadProjectOutcome> = (async () => {
+    const promise: Promise<LoadProjectOutcome> = runProjectSwitch(async () => {
       // [perf-debug] Trace each post-IPC step distinctly so we know whether
       // the visible "stuck progress bar" freeze is JSON.parse on the IPC
       // resolution, the Zustand set, the view switch / MapCanvas mount, or
@@ -1130,7 +1131,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         clearProjectActionSource();
         return { success: false };
       }
-    })();
+    });
 
     inFlightLoads.set(path, promise);
     void promise.finally(() => {
@@ -1140,7 +1141,8 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   },
 
   // Project operations - uses consolidated create_project_full command
-  createProject: async (name: string, projectLocation?: string, options?: CreateProjectOptions) => {
+  createProject: (name: string, projectLocation?: string, options?: CreateProjectOptions) =>
+    runProjectSwitch(async () => {
     // ALWAYS cancel first - NO isLoading guard
     await get().cancelLoading();
 
@@ -1228,7 +1230,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       }
       return emptyCommandResult(false, error.message);
     }
-  },
+    }),
 
   saveProject: async (path?: string, isAutosave?: boolean) => {
     // The Rust save path heals duplicate shot UUIDs / orphan section offsets /
@@ -1386,29 +1388,31 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     return true;
   },
 
-  closeProject: async (opts) => {
+  closeProject: (opts) => {
     // Guard against concurrent close operations (rapid Back clicks or double Discard)
     if (get().isClosing) {
       debugLog('[projectStore] closeProject ignored - already closing');
-      return emptyCommandResult(false, 'Already closing');
+      return Promise.resolve(emptyCommandResult(false, 'Already closing'));
     }
 
     set({ isClosing: true });
-    try {
-      const result = await invokeIpc<CommandResult>(
-        'close_project',
-        // Default: release a held SpeleoDB lock so the close doesn't strand it
-        // (fix 1). The keep-lock close path passes { releaseLock: false }.
-        { releaseLock: opts?.releaseLock ?? true },
-        { purpose: 'close project and release resources' },
-      );
-      if (result.success) {
-        clearOpenProjectState(set);
+    return runProjectSwitch(async () => {
+      try {
+        const result = await invokeIpc<CommandResult>(
+          'close_project',
+          // Default: release a held SpeleoDB lock so the close doesn't strand it
+          // (fix 1). The keep-lock close path passes { releaseLock: false }.
+          { releaseLock: opts?.releaseLock ?? true },
+          { purpose: 'close project and release resources' },
+        );
+        if (result.success) {
+          clearOpenProjectState(set);
+        }
+        return result;
+      } finally {
+        set({ isClosing: false });
       }
-      return result;
-    } finally {
-      set({ isClosing: false });
-    }
+    });
   },
 
   isShotFrozen: (sectionId: number, shotIndex: number) => {
@@ -1663,7 +1667,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   // removeFromRecentProjects, which only forgets the entry). The backend hands the
   // file to the OS delete; on success we refresh both the loaded list and the
   // config so the project disappears from the available AND "missing" recent rows.
-  deleteProject: async (path: string) => {
+  deleteProject: (path: string) => runProjectSwitch(async () => {
     try {
       const result = await invokeIpc<CommandResult>(
         'delete_project',
@@ -1705,7 +1709,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       console.error('Failed to delete project:', e);
       return emptyCommandResult(false, String(e));
     }
-  },
+  }),
 
   // Section operations
   createSection: async (data: SectionData) => {

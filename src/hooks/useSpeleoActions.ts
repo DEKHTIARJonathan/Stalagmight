@@ -151,7 +151,11 @@ export function useSpeleoActions(): SpeleoActions {
     async (
       result: StartEditingResult,
       showEditingToast: boolean,
+      issuedFor: ReturnType<typeof speleoProjectSessionIssuedFor>,
     ): Promise<{ editing: boolean; treeReplaced: boolean; landed: boolean }> => {
+      if (!speleoProjectSessionStillCurrent(issuedFor)) {
+        return { editing: false, treeReplaced: false, landed: false };
+      }
       applyStartEditing(result);
       switch (result.kind) {
         case 'editing':
@@ -161,6 +165,9 @@ export function useSpeleoActions(): SpeleoActions {
           return { editing: true, treeReplaced: false, landed: true };
         case 'fast_forwarded': {
           const loaded = await loadProject(result.local_path);
+          if (!speleoProjectSessionStillCurrent(issuedFor)) {
+            return { editing: false, treeReplaced: false, landed: false };
+          }
           return {
             editing: loaded.success,
             treeReplaced: true,
@@ -196,7 +203,7 @@ export function useSpeleoActions(): SpeleoActions {
     const busyToken = beginBusy();
     try {
       const result = await invokeIpc<StartEditingResult>('speleodb_start_editing');
-      const routed = await routeStartEditingResult(result, true);
+      const routed = await routeStartEditingResult(result, true, issuedFor);
       if (!routed.landed) return false;
       if (routed.treeReplaced && !(await applySpeleoTreeReplacement(issuedFor))) {
         return false;
@@ -224,7 +231,9 @@ export function useSpeleoActions(): SpeleoActions {
           keepLock,
           acknowledged: true,
         });
-        const routed = result ? await routeStartEditingResult(result, false) : null;
+        const routed = result
+          ? await routeStartEditingResult(result, false, issuedFor)
+          : null;
         if (routed && !routed.landed) return 'stale';
         if (!(await applySpeleoTreeReplacement(issuedFor))) return 'stale';
         if (!result) return 'released';
