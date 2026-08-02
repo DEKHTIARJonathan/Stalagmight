@@ -190,6 +190,10 @@ impl AppState {
 
 #[cfg(test)]
 #[expect(clippy::expect_used, reason = "unit test fixtures")]
+#[expect(
+    clippy::panic,
+    reason = "poisoned-lock tests must panic while holding the mutex guard"
+)]
 mod tests {
     use super::*;
     use crate::core::state::AppState;
