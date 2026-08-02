@@ -164,7 +164,7 @@ Interaction (each runs a cheap oracle sweep after; findings ride the result unde
 | `drag(from..., to..., button?, durationMs?)` | Drag between test IDs, selectors, or viewport points. |
 | `scroll(testid?/selector?, deltaX?, deltaY?)` | Scroll a target into view or scroll a target/window by pixels. |
 | `select_option(testid\|selector, value)` | Select a native option or a portaled Stalagmight `Select` option by value. |
-| `file_dialog_answer(kind, path\|paths\|cancel)` | Queue the next E2E-only native open/save picker answer, then activate the real UI flow. |
+| `file_dialog_answer(triggerTestid, kind, path\|paths\|cancel)` | Click the named UI control, answer the picker it opens, and verify that exact answer was consumed. |
 | `store_action(store, action, args?)` | Call a Zustand action (async-aware). |
 | `eval(script, args?)` | Async function body in the webview; returns its value. |
 | `ipc(command, args?)` | `window.__TAURI__.core.invoke`; e.g. `get_recent_logs_since`, `check_project_integrity`. |

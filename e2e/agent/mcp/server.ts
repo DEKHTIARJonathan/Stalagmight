@@ -23,7 +23,7 @@ import {
   hoverElement,
   mapClick,
   queryElementState,
-  queueFileDialogAnswer,
+  answerFileDialog,
   scrollTarget,
   selectOption,
   targetSelector,
@@ -597,9 +597,10 @@ define(
 
 define(
   'file_dialog_answer',
-  'Queue the next test-only native open/save dialog result, then trigger the picker through the real UI.',
+  'Trigger a real UI control and atomically answer the native open/save dialog it opens.',
   {
     kind: z.enum(['open', 'save']),
+    triggerTestid: z.string().min(1),
     path: z.string().optional(),
     paths: z.array(z.string()).min(1).optional(),
     cancel: z.boolean().optional(),
@@ -610,8 +611,10 @@ define(
       if (choices !== 1) throw new Error('file_dialog_answer needs exactly one of path, paths, or cancel=true');
       if (args.kind === 'save' && args.paths) throw new Error('save dialog answer cannot contain multiple paths');
       const value = args.cancel ? null : (args.paths ?? args.path ?? null);
-      await session.exclusive(() => queueFileDialogAnswer(session.browser, args.kind, value));
-      return { result: { queued: true, kind: args.kind, value } };
+      const resolved = await session.exclusive(() =>
+        answerFileDialog(session.browser, args.triggerTestid, args.kind, value),
+      );
+      return { result: { consumed: true, kind: args.kind, triggerTestid: args.triggerTestid }, resolved };
     }),
 );
 

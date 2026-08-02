@@ -13,7 +13,7 @@ import {
   dragPointer,
   hoverElement,
   mapClick,
-  queueFileDialogAnswer,
+  answerFileDialog,
   scrollTarget,
   selectOption,
   type DragRequest,
@@ -26,7 +26,7 @@ import { mapFeatureClick, type MapFeatureClickRequest } from './mapControls';
 
 export { invokeInApp as ipc, evalInApp };
 export { callStoreAction as storeAction };
-export { dragPointer, hoverElement, mapClick, queueFileDialogAnswer, scrollTarget, selectOption };
+export { answerFileDialog, dragPointer, hoverElement, mapClick, scrollTarget, selectOption };
 export { mapFeatureClick };
 
 interface ReplayWaitRequest {

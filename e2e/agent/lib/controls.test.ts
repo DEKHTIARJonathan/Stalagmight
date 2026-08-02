@@ -3,12 +3,16 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const evalInAppMock = vi.hoisted(() => vi.fn());
 vi.mock('./page', () => ({ evalInApp: evalInAppMock }));
 
-import { hoverElement, mapClick, queueFileDialogAnswer, selectOption, targetSelector, testIdSelector } from './controls';
+import { answerFileDialog, hoverElement, mapClick, selectOption, targetSelector, testIdSelector } from './controls';
 import type { Browser } from 'webdriverio';
 
 function fakeBrowser(elements: Record<string, Record<string, ReturnType<typeof vi.fn>>>) {
   return {
     $: vi.fn((selector: string) => elements[selector]),
+    waitUntil: vi.fn(async (condition: () => Promise<boolean>) => {
+      if (!(await condition())) throw new Error('condition was not met');
+      return true;
+    }),
   } as unknown as Browser;
 }
 
@@ -47,20 +51,23 @@ describe('agent controls', () => {
     expect(option.click).toHaveBeenCalledOnce();
   });
 
-  it('queues a native-dialog answer through the E2E hook', async () => {
-    evalInAppMock.mockResolvedValue(true);
-    const browser = fakeBrowser({});
-    await queueFileDialogAnswer(browser, 'open', 'C:\\Caves\\survey.dmp');
-    expect(evalInAppMock).toHaveBeenCalledWith(
-      browser,
-      expect.stringContaining('fileDialogAnswers'),
-      ['open', 'C:\\Caves\\survey.dmp'],
-    );
+  it('arms, triggers, and verifies a native-dialog answer atomically', async () => {
+    evalInAppMock.mockResolvedValueOnce(true).mockResolvedValueOnce(true).mockResolvedValueOnce(undefined);
+    const selector = testIdSelector('import-dmp-button');
+    const trigger = { waitForDisplayed: vi.fn(), waitForClickable: vi.fn(), click: vi.fn() };
+    const browser = fakeBrowser({ [selector]: trigger });
+
+    const result = await answerFileDialog(browser, 'import-dmp-button', 'open', 'C:\\Caves\\survey.dmp');
+
+    expect(result).toMatchObject({ selector, consumed: true });
+    expect(trigger.click).toHaveBeenCalledOnce();
+    expect(evalInAppMock.mock.calls[0]?.[1]).toContain('entry.armed = true');
+    expect(evalInAppMock.mock.calls[1]?.[1]).toContain('fileDialogConsumptions');
   });
 
   it('fails clearly when the app was not built with E2E hooks', async () => {
     evalInAppMock.mockResolvedValue(false);
-    await expect(queueFileDialogAnswer(fakeBrowser({}), 'save', null)).rejects.toThrow(
+    await expect(answerFileDialog(fakeBrowser({}), 'save-project-button', 'save', null)).rejects.toThrow(
       'file dialog hooks are unavailable',
     );
   });

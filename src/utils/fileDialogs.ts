@@ -1,15 +1,27 @@
 import type { OpenDialogOptions, SaveDialogOptions } from '@tauri-apps/plugin-dialog';
 
 export type TestFileDialogAnswer = string | string[] | null;
+export interface TestFileDialogQueueEntry {
+  id: string;
+  value: TestFileDialogAnswer;
+  triggerTestId: string;
+  armed: boolean;
+}
 
 function takeTestFileDialogAnswer(kind: 'open' | 'save'): {
   queued: boolean;
   value: TestFileDialogAnswer | undefined;
 } {
   if (typeof window === 'undefined') return { queued: false, value: undefined };
-  const queue = window.__E2E_TEST__?.fileDialogAnswers?.[kind];
-  if (!queue?.length) return { queued: false, value: undefined };
-  return { queued: true, value: queue.shift() };
+  const hooks = window.__E2E_TEST__;
+  const queue = hooks?.fileDialogAnswers?.[kind];
+  if (!hooks || !queue) return { queued: false, value: undefined };
+  const entry = queue?.[0];
+  if (!entry?.armed) return { queued: false, value: undefined };
+  queue.shift();
+  hooks.fileDialogConsumptions ??= {};
+  hooks.fileDialogConsumptions[entry.id] = kind;
+  return { queued: true, value: entry.value };
 }
 
 export const PROJECT_EXTENSION = 'stalx';

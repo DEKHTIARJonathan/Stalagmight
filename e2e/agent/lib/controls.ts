@@ -1,4 +1,5 @@
 import type { Browser } from 'webdriverio';
+import { randomUUID } from 'node:crypto';
 import { evalInApp } from './page';
 import { cssStringLiteral, testIdSelector } from '../../../scripts/lib/test-id-selector.mjs';
 
@@ -216,22 +217,63 @@ export async function queryElementState(browser: Browser, target: ElementTarget)
   );
 }
 
-export async function queueFileDialogAnswer(
+export async function answerFileDialog(
   browser: Browser,
+  triggerTestId: string,
   kind: 'open' | 'save',
   value: string | string[] | null,
-): Promise<void> {
+): Promise<{ answerId: string; selector: string; consumed: true }> {
+  const answerId = randomUUID();
+  const selector = testIdSelector(triggerTestId);
   const queued = await evalInApp<boolean>(
     browser,
     `
-      const hooks = window.__E2E_TEST__ && window.__E2E_TEST__.fileDialogAnswers;
+      const testApi = window.__E2E_TEST__;
+      const hooks = testApi && testApi.fileDialogAnswers;
       if (!hooks || !Array.isArray(hooks[args[0]])) return false;
-      hooks[args[0]].push(args[1]);
+      if (hooks[args[0]].length > 0) throw new Error('a file dialog answer is already pending');
+      const trigger = document.querySelector(args[4]);
+      if (!trigger) throw new Error('file dialog trigger not found: ' + args[3]);
+      const entry = { id: args[1], value: args[2], triggerTestId: args[3], armed: false };
+      hooks[args[0]].push(entry);
+      trigger.addEventListener('click', () => { entry.armed = true; }, { capture: true, once: true });
       return true;
     `,
-    [kind, value],
+    [kind, answerId, value, triggerTestId, selector],
   );
   if (!queued) throw new Error('file dialog hooks are unavailable; start an E2E build');
+
+  try {
+    const trigger = browser.$(selector);
+    await trigger.waitForDisplayed({ timeout: 5000 });
+    await trigger.waitForClickable({ timeout: 5000 });
+    await trigger.click();
+    await browser.waitUntil(
+      () =>
+        evalInApp<boolean>(
+          browser,
+          `return window.__E2E_TEST__?.fileDialogConsumptions?.[args[0]] === args[1];`,
+          [answerId, kind],
+        ),
+      {
+        timeout: 5000,
+        timeoutMsg: `file dialog answer ${answerId} was not consumed by ${triggerTestId}`,
+      },
+    );
+    return { answerId, selector, consumed: true };
+  } finally {
+    await evalInApp(
+      browser,
+      `
+        const testApi = window.__E2E_TEST__;
+        const queue = testApi?.fileDialogAnswers?.[args[0]];
+        const index = queue?.findIndex((entry) => entry.id === args[1]) ?? -1;
+        if (index >= 0) queue.splice(index, 1);
+        if (testApi?.fileDialogConsumptions) delete testApi.fileDialogConsumptions[args[1]];
+      `,
+      [kind, answerId],
+    ).catch(() => undefined);
+  }
 }
 
 export async function mapClick(

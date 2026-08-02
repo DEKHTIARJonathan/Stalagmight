@@ -139,7 +139,7 @@ describe('E2E file dialog answers', () => {
     Object.defineProperty(globalThis, 'window', {
       configurable: true,
       writable: true,
-      value: { __E2E_TEST__: { fileDialogAnswers: { open: [], save: [] } } },
+      value: { __E2E_TEST__: { fileDialogAnswers: { open: [], save: [] }, fileDialogConsumptions: {} } },
     });
   });
 
@@ -156,14 +156,31 @@ describe('E2E file dialog answers', () => {
   });
 
   it('consumes queued open paths without opening a native picker', async () => {
-    window.__E2E_TEST__ = { fileDialogAnswers: { open: [['/tmp/a.dmp', '/tmp/b.dmp']], save: [] } };
+    window.__E2E_TEST__ = {
+      fileDialogAnswers: {
+        open: [{ id: 'open-1', value: ['/tmp/a.dmp', '/tmp/b.dmp'], triggerTestId: 'open-button', armed: true }],
+        save: [],
+      },
+      fileDialogConsumptions: {},
+    };
     await expect(openDialog({ multiple: true })).resolves.toEqual(['/tmp/a.dmp', '/tmp/b.dmp']);
     expect(window.__E2E_TEST__.fileDialogAnswers?.open).toEqual([]);
+    expect(window.__E2E_TEST__.fileDialogConsumptions?.['open-1']).toBe('open');
   });
 
   it('consumes save paths and explicit cancellation', async () => {
-    window.__E2E_TEST__ = { fileDialogAnswers: { open: [], save: ['/tmp/out.stalx', null] } };
+    window.__E2E_TEST__ = {
+      fileDialogAnswers: {
+        open: [],
+        save: [
+          { id: 'save-1', value: '/tmp/out.stalx', triggerTestId: 'save-button', armed: true },
+          { id: 'save-2', value: null, triggerTestId: 'save-button', armed: true },
+        ],
+      },
+      fileDialogConsumptions: {},
+    };
     await expect(saveDialog()).resolves.toBe('/tmp/out.stalx');
     await expect(saveDialog()).resolves.toBeNull();
+    expect(window.__E2E_TEST__.fileDialogConsumptions).toEqual({ 'save-1': 'save', 'save-2': 'save' });
   });
 });

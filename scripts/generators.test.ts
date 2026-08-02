@@ -176,7 +176,7 @@ beforeAll(() => {
       seq: 14,
       ts: ts(15),
       tool: 'file_dialog_answer',
-      params: { kind: 'open', path: 'C:\\Caves\\survey.dmp' },
+      params: { triggerTestid: 'import-dmp-button', kind: 'open', path: 'C:\\Caves\\survey.dmp' },
       outcome: { ok: true, durationMs: 10 },
     }),
     record({
@@ -238,7 +238,9 @@ describe('generate-replay.mjs', () => {
     expect(spec).toContain(`dragPointer(browser, {"fromTestid":"station-a","toTestid":"station-b","durationMs":250})`);
     expect(spec).toContain(`scrollTarget(browser, {"testid":"warnings-content","deltaY":400})`);
     expect(spec).toContain(`selectOption(browser, {"testid":"select-number-format","value":"en-US"})`);
-    expect(spec).toContain(`queueFileDialogAnswer(browser, "open", "C:\\\\Caves\\\\survey.dmp")`);
+    expect(spec).toContain(
+      `answerFileDialog(browser, "import-dmp-button", "open", "C:\\\\Caves\\\\survey.dmp")`,
+    );
     // Timed-out driver_script -> recorded timeout threaded through AND the
     // failure tolerated, so the replay proceeds past it the way the live run did.
     const dsLine = spec.split('\n').find((l) => l.includes('driverScript(browser,'));
