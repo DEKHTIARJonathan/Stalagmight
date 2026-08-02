@@ -4,6 +4,49 @@ use rusqlite::params;
 
 use super::{compress_json, decompress_json, Database};
 
+type CompressedHistoryRow = (i64, Vec<u8>, Vec<u8>, Option<String>);
+type HistoryRow = (i64, String, String, Option<String>);
+
+const MAX_DECOMPRESS_THREADS: usize = 8;
+
+fn rows_per_decompress_batch() -> usize {
+    let available = std::thread::available_parallelism().map_or(2, usize::from);
+    available.clamp(2, MAX_DECOMPRESS_THREADS) / 2
+}
+
+fn decompress_history_rows(
+    raw: Vec<CompressedHistoryRow>,
+    stack_name: &'static str,
+) -> Result<Vec<HistoryRow>> {
+    let mut entries = Vec::with_capacity(raw.len());
+    for batch in raw.chunks(rows_per_decompress_batch()) {
+        let decoded: Result<Vec<_>> = std::thread::scope(|scope| {
+            let handles: Vec<_> = batch
+                .iter()
+                .map(|(seq, cmd_bytes, undo_bytes, ts)| {
+                    let h_cmd = scope.spawn(move || decompress_json(cmd_bytes));
+                    let h_undo = scope.spawn(move || decompress_json(undo_bytes));
+                    (*seq, h_cmd, h_undo, ts.clone())
+                })
+                .collect();
+            handles
+                .into_iter()
+                .map(|(seq, h_cmd, h_undo, ts)| {
+                    let cmd = h_cmd.join().map_err(|_| {
+                        anyhow::anyhow!("{stack_name} decompress thread panicked")
+                    })??;
+                    let undo = h_undo.join().map_err(|_| {
+                        anyhow::anyhow!("{stack_name} decompress thread panicked")
+                    })??;
+                    Ok((seq, cmd, undo, ts))
+                })
+                .collect()
+        });
+        entries.extend(decoded?);
+    }
+    Ok(entries)
+}
+
 impl Database {
     /// Save undo entry to database
     pub fn save_undo_entry(
@@ -60,39 +103,14 @@ impl Database {
             ))
         })?;
 
-        // Collect compressed blobs first, then decompress in parallel -
-        // the command_json and undo_data_json blobs of a single entry
-        // are independent of each other, and on big undo entries (e.g.
-        // a multi-MB project snapshot from a batch import) gzip
-        // decompression is single-threaded and slow.  std::thread::scope
-        // keeps us dep-free.
-        let mut raw: Vec<(i64, Vec<u8>, Vec<u8>, Option<String>)> = Vec::new();
+        // Decompress independent blobs in bounded batches. Large snapshot payloads
+        // still use multiple cores, but a deep Full-mode history cannot create two
+        // operating-system threads for every row at once.
+        let mut raw: Vec<CompressedHistoryRow> = Vec::new();
         for row in rows {
             raw.push(row?);
         }
-        let entries: Result<Vec<_>> = std::thread::scope(|scope| {
-            let handles: Vec<_> = raw
-                .into_iter()
-                .map(|(seq, cmd_bytes, undo_bytes, ts)| {
-                    let h_cmd = scope.spawn(move || decompress_json(&cmd_bytes));
-                    let h_undo = scope.spawn(move || decompress_json(&undo_bytes));
-                    (seq, h_cmd, h_undo, ts)
-                })
-                .collect();
-            handles
-                .into_iter()
-                .map(|(seq, h_cmd, h_undo, ts)| {
-                    let cmd = h_cmd
-                        .join()
-                        .map_err(|_| anyhow::anyhow!("undo decompress thread panicked"))??;
-                    let undo = h_undo
-                        .join()
-                        .map_err(|_| anyhow::anyhow!("undo decompress thread panicked"))??;
-                    Ok((seq, cmd, undo, ts))
-                })
-                .collect()
-        });
-        entries
+        decompress_history_rows(raw, "undo")
     }
 
     /// Clear undo stack entries after a given sequence
@@ -203,34 +221,11 @@ impl Database {
 
         // Parallel gzip decompression of the per-entry blobs - see
         // load_undo_stack_with_timestamps for the rationale.
-        let mut raw: Vec<(i64, Vec<u8>, Vec<u8>, Option<String>)> = Vec::new();
+        let mut raw: Vec<CompressedHistoryRow> = Vec::new();
         for row in rows {
             raw.push(row?);
         }
-        let entries: Result<Vec<_>> = std::thread::scope(|scope| {
-            let handles: Vec<_> = raw
-                .into_iter()
-                .map(|(seq, cmd_bytes, undo_bytes, ts)| {
-                    let h_cmd = scope.spawn(move || decompress_json(&cmd_bytes));
-                    let h_undo = scope.spawn(move || decompress_json(&undo_bytes));
-                    (seq, h_cmd, h_undo, ts)
-                })
-                .collect();
-            handles
-                .into_iter()
-                .map(|(seq, h_cmd, h_undo, ts)| {
-                    let cmd = h_cmd
-                        .join()
-                        .map_err(|_| anyhow::anyhow!("redo decompress thread panicked"))??;
-                    let undo = h_undo
-                        .join()
-                        .map_err(|_| anyhow::anyhow!("redo decompress thread panicked"))??;
-                    Ok((seq, cmd, undo, ts))
-                })
-                .collect()
-        });
-        let entries = entries?;
-        Ok(entries)
+        decompress_history_rows(raw, "redo")
     }
 
     /// Save redo stack with timestamps (clear existing and save new entries)
@@ -257,5 +252,16 @@ impl Database {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn decompression_batch_never_exceeds_the_thread_cap() {
+        assert!(rows_per_decompress_batch() >= 1);
+        assert!(rows_per_decompress_batch() * 2 <= MAX_DECOMPRESS_THREADS);
     }
 }
