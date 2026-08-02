@@ -20,7 +20,7 @@ export const rapidProjectCycle: Scenario = {
     await ctx.callAction('project', 'closeProject', []);
 
     for (let i = 0; i < iterations; i++) {
-      const opened = (await ctx.callAction('project', 'openProject', [p])) as {
+      const opened = (await ctx.callAction('project', 'loadProject', [p])) as {
         ok: boolean;
         result?: { success?: boolean; error?: string };
       };

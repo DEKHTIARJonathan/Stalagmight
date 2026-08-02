@@ -54,7 +54,7 @@ export const saveUnderChurn: Scenario = {
 
       // Reopen to prove the on-disk file round-trips.
       await ctx.callAction('project', 'closeProject', []);
-      const reopened = (await ctx.callAction('project', 'openProject', [savePath])) as {
+      const reopened = (await ctx.callAction('project', 'loadProject', [savePath])) as {
         ok: boolean;
         result?: { success?: boolean; error?: string };
       };

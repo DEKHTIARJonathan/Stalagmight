@@ -10,7 +10,7 @@ import type { ScenarioContext } from './framework';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 
-export const DEFAULT_FIXTURE = 'fractal_plant_iter2.stalx';
+export const DEFAULT_FIXTURE = 'fractal_plant_iter3.stalx';
 
 export function fixturePath(name: string): string {
   // Confine to a basename so a caller-supplied name cannot resolve outside
@@ -22,20 +22,20 @@ export async function hasProject(ctx: ScenarioContext): Promise<boolean> {
   return ctx.eval<boolean>('return !!window.__E2E_TEST__.projectStore.getState().project;');
 }
 
-/** Open a fixture project if none is loaded (openProject also switches to single view). */
+/** Open a fixture project if none is loaded (loadProject also switches to single view). */
 export async function ensureProjectLoaded(ctx: ScenarioContext, fixture = DEFAULT_FIXTURE): Promise<void> {
   if (await hasProject(ctx)) return;
   const p = fixturePath(fixture);
   if (!fs.existsSync(p)) throw new Error(`fixture missing: ${p}`);
-  const res = (await ctx.callAction('project', 'openProject', [p])) as {
+  const res = (await ctx.callAction('project', 'loadProject', [p])) as {
     ok: boolean;
     error?: string;
     result?: { success?: boolean; error?: string };
   };
   if (!res.ok || res.result?.success === false) {
-    throw new Error(`openProject failed: ${res.result?.error ?? res.error ?? 'unknown'}`);
+    throw new Error(`loadProject failed: ${res.result?.error ?? res.error ?? 'unknown'}`);
   }
-  if (!(await hasProject(ctx))) throw new Error('project still null after openProject');
+  if (!(await hasProject(ctx))) throw new Error('project still null after loadProject');
 }
 
 /** A valid minimal section (two standard shots), unique per index. */

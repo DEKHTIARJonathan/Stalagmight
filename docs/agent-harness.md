@@ -239,7 +239,7 @@ tolerate a truncated final line.
 
 - **Replay**: `node scripts/generate-replay.mjs <sessionDir> [--out f] [--name n]
   [--assert-final]`. Interaction tools become real WDIO code using `resolved`,
-  including `seed` (replayed as `openProject`/`createProject`), `driver_script`
+  including `seed` (replayed as `loadProject`/`createProject`), `driver_script`
   (re-run with the same helpers), and `run_scenario` (re-run with the recorded
   seed/iterations). Map clicks re-project their recorded longitude/latitude,
   semantic waiters stay semantic, and test IDs are CSS-escaped. Observation

@@ -181,7 +181,7 @@ for (let i = 0; i < actions.length; i++) {
       if (p.mode === 'basic') {
         push(`    await storeAction(browser, 'project', 'createProject', ${q([p.projectName ?? 'harness-project'])});`);
       } else if (r.path) {
-        push(`    await storeAction(browser, 'project', 'openProject', ${q([r.path])});`);
+        push(`    await storeAction(browser, 'project', 'loadProject', ${q([r.path])});`);
       } else {
         push(`    // seed had no resolved fixture path; skipped`);
       }

@@ -45,8 +45,8 @@ beforeAll(() => {
       seq: 1,
       ts: ts(1),
       tool: 'seed',
-      params: { mode: 'fixture', name: 'fractal_plant_iter2.stalx' },
-      resolved: { path: '/repo/e2e/fixtures/fractal_plant_iter2.stalx' },
+      params: { mode: 'fixture', name: 'fractal_plant_iter3.stalx' },
+      resolved: { path: '/repo/e2e/fixtures/fractal_plant_iter3.stalx' },
       outcome: { ok: true, durationMs: 120 },
     }),
     record({
@@ -214,8 +214,8 @@ describe('generate-replay.mjs', () => {
     execFileSync(process.execPath, [replayGen, sessionDir, '--out', out], { encoding: 'utf8' });
     const spec = fs.readFileSync(out, 'utf8');
 
-    // seed -> a real openProject call using the RESOLVED fixture path.
-    expect(spec).toContain(`'openProject', ["/repo/e2e/fixtures/fractal_plant_iter2.stalx"]`);
+    // seed -> a real loadProject call using the RESOLVED fixture path.
+    expect(spec).toContain(`'loadProject', ["/repo/e2e/fixtures/fractal_plant_iter3.stalx"]`);
     // click -> the resolved selector, clicked.
     expect(spec).toContain(`replayClick(browser, {"selector":"[data-testid=\\"save-button\\"]"})`);
     // Unsafe legacy resolved selectors are rebuilt from the recorded test ID.

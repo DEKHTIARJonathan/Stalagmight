@@ -759,13 +759,13 @@ define(
           );
           return { result: { mode: 'basic', result: res } };
         }
-        const fixture = args.name ?? (args.mode === 'fractal' ? 'fractal_plant_iter2.stalx' : DEFAULT_FIXTURE);
+        const fixture = args.name ?? (args.mode === 'fractal' ? 'fractal_plant_iter3.stalx' : DEFAULT_FIXTURE);
         const p = fixturePath(fixture);
         if (!fs.existsSync(p)) {
           throw new Error(`fixture not found: ${p} (fixtures live under e2e/fixtures/)`);
         }
         const res = await session.exclusive(() =>
-          callStoreAction(session.browser, 'project', 'openProject', [p]),
+          callStoreAction(session.browser, 'project', 'loadProject', [p]),
         );
         return { result: { mode: args.mode, fixture, result: res }, resolved: { path: p } };
       },

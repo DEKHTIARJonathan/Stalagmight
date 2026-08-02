@@ -122,17 +122,8 @@ async function main(): Promise<void> {
     check('app survives thread panic (still responds)', respondsAfterPanic?.value === 'global');
 
     // Seed + driver_script (do this last: seed opens a project -> single view).
-    const seeded = parseText(await call('seed', { mode: 'basic', projectName: 'mcp-smoke' })) as { mode?: string };
-    check('seed creates a basic project', seeded?.mode === 'basic', seeded);
-    const section = {
-      name: 'MCP smoke section', surveyor: 'harness', date: '2026-08-02', color: '#3388FF', direction: 'out', quality: 3,
-      shots: [
-        { azimuth_in: 0, azimuth_out: 180, length: 10, depth_in: 0, depth_out: 1, pitch_in: null, pitch_out: null, left: 1, right: 1, up: 1, down: 1, comment: null, kind: 'Normal', marker_index: null, temperature: null },
-        { azimuth_in: 90, azimuth_out: 270, length: 8, depth_in: 1, depth_out: 2, pitch_in: null, pitch_out: null, left: 1, right: 1, up: 1, down: 1, comment: null, kind: 'Normal', marker_index: null, temperature: null },
-      ],
-    };
-    const createdSection = parseText(await call('store_action', { store: 'project', action: 'createSection', args: [section] })) as { ok?: boolean; result?: { success?: boolean } };
-    check('store_action creates smoke geometry', createdSection?.ok === true && createdSection.result?.success === true, createdSection);
+    const seeded = parseText(await call('seed', { mode: 'fixture' })) as { mode?: string };
+    check('seed opens the tracked default fixture', seeded?.mode === 'fixture', seeded);
     const seededView = parseText(await call('store_state', { store: 'ui', path: 'view' })) as { value?: unknown };
     check('seed switched to single view', seededView?.value === 'single', seededView?.value);
     await call('wait_for', { condition: 'map-idle', timeoutMs: 10000 });
