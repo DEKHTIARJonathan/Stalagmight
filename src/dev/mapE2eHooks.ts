@@ -34,6 +34,7 @@ export interface MapE2eHookSources {
   controls?: {
     interactionSequence: () => number;
     setSemanticTarget: (target: SemanticMapTarget) => boolean;
+    clearSemanticTarget: () => void;
   };
 }
 
@@ -44,6 +45,7 @@ interface HookWindow {
   __stalagmight_to_meters__?: (lng: number, lat: number) => { x: number; y: number };
   __stalagmight_map_interaction__?: () => number;
   __stalagmight_set_map_target__?: (target: SemanticMapTarget) => boolean;
+  __stalagmight_clear_map_target__?: () => void;
 }
 
 /**
@@ -72,6 +74,7 @@ export function installMapE2eHooks(sources: MapE2eHookSources): () => void {
   if (sources.controls) {
     w.__stalagmight_map_interaction__ = () => sources.controls!.interactionSequence();
     w.__stalagmight_set_map_target__ = (target) => sources.controls!.setSemanticTarget(target);
+    w.__stalagmight_clear_map_target__ = () => sources.controls!.clearSemanticTarget();
   }
 
   return () => {
@@ -81,5 +84,6 @@ export function installMapE2eHooks(sources: MapE2eHookSources): () => void {
     delete w.__stalagmight_to_meters__;
     delete w.__stalagmight_map_interaction__;
     delete w.__stalagmight_set_map_target__;
+    delete w.__stalagmight_clear_map_target__;
   };
 }

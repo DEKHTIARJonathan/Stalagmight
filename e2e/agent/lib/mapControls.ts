@@ -1,5 +1,6 @@
 import type { Browser } from 'webdriverio';
 import { evalInApp } from './page';
+import { dispatchMapPointer } from './controls';
 
 export interface MapFeatureClickRequest {
   featureType: 'shot' | 'station';
@@ -124,12 +125,6 @@ export async function mapFeatureClick(
         if (!inside(point)) throw new Error('station feature is outside the map viewport');
         const resolved = finish(station.lngLat, point, 0);
         if (!setSemanticTarget(request)) throw new Error('semantic map target could not be armed');
-        const eventName = request.button === 'right' ? 'contextmenu' : 'click';
-        map.fire(eventName, {
-          point: resolved.canvasPoint,
-          lngLat: map.unproject(resolved.canvasPoint),
-          originalEvent: new MouseEvent(eventName, { button: request.button === 'right' ? 2 : 0, clientX: resolved.point.x, clientY: resolved.point.y }),
-        });
         return resolved;
       }
 
@@ -168,30 +163,29 @@ export async function mapFeatureClick(
       ];
       const resolved = finish(lngLat, best.point, best.clearance);
       if (!setSemanticTarget(request)) throw new Error('semantic map target could not be armed');
-      const eventName = request.button === 'right' ? 'contextmenu' : 'click';
-      map.fire(eventName, {
-        point: resolved.canvasPoint,
-        lngLat: map.unproject(resolved.canvasPoint),
-        originalEvent: new MouseEvent(eventName, { button: request.button === 'right' ? 2 : 0, clientX: resolved.point.x, clientY: resolved.point.y }),
-      });
       return resolved;
     `,
     [request],
   );
 
+  const target = await dispatchMapPointer(browser, resolved.point, request.button);
+
   const postClick = await evalInApp<MapPostClickState>(
     browser,
     `
       const readInteraction = window.__stalagmight_map_interaction__;
+      const clearSemanticTarget = window.__stalagmight_clear_map_target__;
       if (typeof readInteraction !== 'function') throw new Error('semantic map controls are unavailable');
-      return {
+      const state = {
         interactionSequence: readInteraction(),
         selection: window.__E2E_TEST__?.uiStore?.getState().selection ?? null,
       };
+      if (typeof clearSemanticTarget === 'function') clearSemanticTarget();
+      return state;
     `,
   );
   if (postClick.interactionSequence <= resolved.interactionSequenceBefore) {
-    throw new Error('map_feature_click did not reach a semantic map interaction handler');
+    throw new Error(`map_feature_click did not reach a semantic map interaction handler via ${target}`);
   }
 
   const shouldVerify = request.verifySelection ?? true;

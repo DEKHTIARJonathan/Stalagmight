@@ -7,7 +7,14 @@ import { mapFeatureClick } from './mapControls';
 import type { Browser } from 'webdriverio';
 
 function pointerBrowser() {
-  return {} as Browser;
+  const canvas = { waitForDisplayed: vi.fn(), moveTo: vi.fn() };
+  const pointer = {
+    move: vi.fn().mockReturnThis(),
+    down: vi.fn().mockReturnThis(),
+    up: vi.fn().mockReturnThis(),
+    perform: vi.fn(),
+  };
+  return { $: vi.fn(() => canvas), action: vi.fn(() => pointer) } as unknown as Browser;
 }
 
 beforeEach(() => vi.clearAllMocks());
@@ -27,6 +34,7 @@ describe('mapFeatureClick', () => {
         clearancePx: 9.5,
         interactionSequenceBefore: 4,
       })
+      .mockResolvedValueOnce('canvas.maplibregl-canvas')
       .mockResolvedValueOnce({
         interactionSequence: 5,
         selection: { type: 'shot', sectionId: 7, shotId: 42 },
@@ -37,7 +45,9 @@ describe('mapFeatureClick', () => {
       selectionVerified: true,
     });
     expect(evalInAppMock.mock.calls[0]?.[1]).toContain('__stalagmight_geometry__');
-    expect(evalInAppMock.mock.calls[0]?.[1]).toContain('map.fire');
+    expect(evalInAppMock.mock.calls[0]?.[1]).not.toContain('map.fire');
+    expect(evalInAppMock.mock.calls[1]?.[1]).toContain('document.elementFromPoint');
+    expect(evalInAppMock.mock.calls[2]?.[1]).toContain('__stalagmight_clear_map_target__');
   });
 
   it('fails when overlapping geometry selects a different feature', async () => {
@@ -54,6 +64,7 @@ describe('mapFeatureClick', () => {
         clearancePx: 0,
         interactionSequenceBefore: 8,
       })
+      .mockResolvedValueOnce('canvas.maplibregl-canvas')
       .mockResolvedValueOnce({
         interactionSequence: 9,
         selection: { type: 'station', stationRef: { section_id: 3, station_index: 9 } },
@@ -78,6 +89,7 @@ describe('mapFeatureClick', () => {
         clearancePx: 0,
         interactionSequenceBefore: 10,
       })
+      .mockResolvedValueOnce('canvas.maplibregl-canvas')
       .mockResolvedValueOnce({ interactionSequence: 11, selection: null });
 
     await expect(
@@ -89,7 +101,7 @@ describe('mapFeatureClick', () => {
         verifySelection: false,
       }),
     ).resolves.toMatchObject({ selectionVerified: false });
-    expect(evalInAppMock).toHaveBeenCalledTimes(2);
+    expect(evalInAppMock).toHaveBeenCalledTimes(3);
   });
 
   it('rejects a click when stale selection makes it look successful', async () => {
@@ -106,6 +118,7 @@ describe('mapFeatureClick', () => {
         clearancePx: 0,
         interactionSequenceBefore: 12,
       })
+      .mockResolvedValueOnce('canvas.maplibregl-canvas')
       .mockResolvedValueOnce({
         interactionSequence: 12,
         selection: { type: 'station', stationRef: { section_id: 3, station_index: 8 } },

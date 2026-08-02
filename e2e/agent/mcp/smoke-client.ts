@@ -105,6 +105,18 @@ async function main(): Promise<void> {
     const wait = parseText(await call('wait_for', { condition: 'app-ready', timeoutMs: 5000 })) as { met?: boolean };
     check('wait_for app-ready', wait?.met === true);
 
+    const telemetryPrompt = parseText(
+      await call('element_state', { testid: 'telemetry-opt-in-dialog' }),
+    ) as { elements?: Array<{ displayed?: boolean }> };
+    if (telemetryPrompt?.elements?.some((element) => element.displayed)) {
+      await call('click', { testid: 'telemetry-opt-in-no' });
+      await call('wait_for', {
+        condition: 'hidden',
+        selector: '[data-testid="telemetry-opt-in-dialog"]',
+        timeoutMs: 5000,
+      });
+    }
+
     // Oracle self-test (harness doctor): a deliberate backend thread panic (app
     // survives) must surface as a fatal crash-marker finding from check_problems.
     await call('ipc', { command: 'debug_trigger_panic', args: { delayMs: 50 } });
@@ -126,6 +138,12 @@ async function main(): Promise<void> {
     check('seed opens an isolated copy of the default fixture', seeded?.mode === 'fixture', seeded);
     const seededView = parseText(await call('store_state', { store: 'ui', path: 'view' })) as { value?: unknown };
     check('seed switched to single view', seededView?.value === 'single', seededView?.value);
+    await call('click', { testid: 'telemetry-opt-in-no' });
+    await call('wait_for', {
+      condition: 'hidden',
+      selector: '[data-testid="telemetry-opt-in-dialog"]',
+      timeoutMs: 5000,
+    });
     await call('wait_for', { condition: 'map-idle', timeoutMs: 10000 });
     const featureIdentity = parseText(
       await call('eval', {

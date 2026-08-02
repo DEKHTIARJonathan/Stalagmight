@@ -7,8 +7,16 @@ import { answerFileDialog, hoverElement, mapClick, selectOption, targetSelector,
 import type { Browser } from 'webdriverio';
 
 function fakeBrowser(elements: Record<string, Record<string, ReturnType<typeof vi.fn>>>) {
+  const canvas = { waitForDisplayed: vi.fn(), moveTo: vi.fn() };
+  const pointer = {
+    move: vi.fn().mockReturnThis(),
+    down: vi.fn().mockReturnThis(),
+    up: vi.fn().mockReturnThis(),
+    perform: vi.fn(),
+  };
   return {
-    $: vi.fn((selector: string) => elements[selector]),
+    $: vi.fn((selector: string) => elements[selector] ?? canvas),
+    action: vi.fn(() => pointer),
     waitUntil: vi.fn(async (condition: () => Promise<boolean>) => {
       if (!(await condition())) throw new Error('condition was not met');
       return true;
@@ -73,7 +81,15 @@ describe('agent controls', () => {
   });
 
   it('clicks geographic points relative to the live canvas element', async () => {
-    evalInAppMock.mockResolvedValue({ x: 500, y: 400, interaction: 'maplibre', interactionSequence: 7 });
+    evalInAppMock
+      .mockResolvedValueOnce({
+        x: 500,
+        y: 400,
+        interaction: 'maplibre',
+        interactionSequenceBefore: 6,
+      })
+      .mockResolvedValueOnce('canvas.maplibregl-canvas')
+      .mockResolvedValueOnce(7);
     const browser = fakeBrowser({});
 
     await expect(mapClick(browser, [12, 34], 'right')).resolves.toEqual({
@@ -82,15 +98,23 @@ describe('agent controls', () => {
       interaction: 'maplibre',
       interactionSequence: 7,
     });
-    expect(evalInAppMock).toHaveBeenCalledWith(browser, expect.stringContaining('map.fire'), [[12, 34], 'right']);
+    expect(evalInAppMock.mock.calls[0]?.[1]).not.toContain('map.fire');
     expect(evalInAppMock.mock.calls[0]?.[1]).toContain("canvasRoot.dataset.placementMode === 'true'");
-    expect(evalInAppMock.mock.calls[0]?.[1]).toContain("new PointerEventCtor('pointerdown'");
     expect(evalInAppMock.mock.calls[0]?.[1]).toContain('projected.x >= rect.width');
+    expect(evalInAppMock.mock.calls[1]?.[1]).toContain('document.elementFromPoint');
   });
 
   it('reports placement routing and rejects false-positive map clicks', async () => {
     const browser = fakeBrowser({});
-    evalInAppMock.mockResolvedValueOnce({ x: 320, y: 240, interaction: 'placement', interactionSequence: 3 });
+    evalInAppMock
+      .mockResolvedValueOnce({
+        x: 320,
+        y: 240,
+        interaction: 'placement',
+        interactionSequenceBefore: 2,
+      })
+      .mockResolvedValueOnce('canvas.maplibregl-canvas')
+      .mockResolvedValueOnce(3);
     await expect(mapClick(browser, [-81.78, 24.55])).resolves.toEqual({
       x: 320,
       y: 240,

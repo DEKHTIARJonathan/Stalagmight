@@ -1876,6 +1876,7 @@ function MapCanvas() {
                   layer.setSemanticTargetPreference(target);
                   return true;
                 },
+                clearSemanticTarget: () => surveyLayerRef.current?.setSemanticTargetPreference(null),
               },
             }
           : {}),

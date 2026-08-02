@@ -63,6 +63,54 @@ export interface MapClickResult {
   interactionSequence: number;
 }
 
+interface MapClickProbe {
+  x: number;
+  y: number;
+  interaction: 'maplibre' | 'placement';
+  interactionSequenceBefore: number;
+}
+
+export async function dispatchMapPointer(
+  browser: Browser,
+  point: { x: number; y: number },
+  button: 'left' | 'right' = 'left',
+): Promise<string> {
+  const dispatched = await evalInApp<string | null>(
+    browser,
+    `
+      const target = document.elementFromPoint(args[0], args[1]);
+      if (!target) return null;
+      const right = args[2] === 'right';
+      const button = right ? 2 : 0;
+      const buttons = right ? 2 : 1;
+      const common = {
+        bubbles: true,
+        cancelable: true,
+        composed: true,
+        button,
+        clientX: args[0],
+        clientY: args[1],
+      };
+      const PointerEventCtor = typeof PointerEvent === 'function' ? PointerEvent : MouseEvent;
+      target.dispatchEvent(new PointerEventCtor('pointerdown', {
+        ...common, buttons, pointerId: 1, pointerType: 'mouse', isPrimary: true,
+      }));
+      target.dispatchEvent(new MouseEvent('mousedown', { ...common, buttons }));
+      target.dispatchEvent(new PointerEventCtor('pointerup', {
+        ...common, buttons: 0, pointerId: 1, pointerType: 'mouse', isPrimary: true,
+      }));
+      target.dispatchEvent(new MouseEvent('mouseup', { ...common, buttons: 0 }));
+      target.dispatchEvent(new MouseEvent(right ? 'contextmenu' : 'click', { ...common, buttons: 0, detail: 1 }));
+      return target.tagName.toLowerCase() +
+        (target.getAttribute('data-testid') ? '[data-testid=' + target.getAttribute('data-testid') + ']' : '') +
+        (target.className && typeof target.className === 'string' ? '.' + target.className.trim().replace(/\s+/g, '.') : '');
+    `,
+    [point.x, point.y, button],
+  );
+  if (!dispatched) throw new Error('map point has no DOM target');
+  return dispatched;
+}
+
 export function targetSelector(target: ElementTarget): string | undefined {
   return target.testid !== undefined ? testIdSelector(target.testid) : target.selector;
 }
@@ -293,7 +341,7 @@ export async function mapClick(
   lngLat: [number, number],
   button: 'left' | 'right' = 'left',
 ): Promise<MapClickResult> {
-  const outcome = await evalInApp<MapClickResult | { error: string } | null>(
+  const outcome = await evalInApp<MapClickProbe | { error: string } | null>(
     browser,
     `
       const map = window.__stalagmight_map__;
@@ -314,79 +362,29 @@ export async function mapClick(
         };
       }
       const point = { x: Math.round(rect.left + projected.x), y: Math.round(rect.top + projected.y) };
-      const eventName = args[1] === 'right' ? 'contextmenu' : 'click';
-
-      // Placement is owned by MapCanvas's React pointer handlers, not MapLibre's
-      // click event. Drive the same DOM path a user does so the placement callback
-      // creates or moves the section instead of reporting a false-positive click.
-      if (canvasRoot.dataset.placementMode === 'true') {
-        if (args[1] === 'right') {
-          const event = new MouseEvent('contextmenu', {
-            bubbles: true,
-            cancelable: true,
-            button: 2,
-            buttons: 2,
-            clientX: point.x,
-            clientY: point.y,
-          });
-          surface.dispatchEvent(event);
-          if (!event.defaultPrevented) return { error: 'placement context-menu event was not handled' };
-        } else {
-          const PointerEventCtor = typeof PointerEvent === 'function' ? PointerEvent : MouseEvent;
-          const down = new PointerEventCtor('pointerdown', {
-            bubbles: true,
-            cancelable: true,
-            button: 0,
-            buttons: 1,
-            clientX: point.x,
-            clientY: point.y,
-            pointerId: 1,
-            pointerType: 'mouse',
-            isPrimary: true,
-          });
-          surface.dispatchEvent(down);
-          surface.dispatchEvent(new PointerEventCtor('pointerup', {
-            bubbles: true,
-            cancelable: true,
-            button: 0,
-            buttons: 0,
-            clientX: point.x,
-            clientY: point.y,
-            pointerId: 1,
-            pointerType: 'mouse',
-            isPrimary: true,
-          }));
-          if (!down.defaultPrevented) return { error: 'placement pointer event was not handled' };
-        }
-        const interactionSequence = readInteraction();
-        if (interactionSequence <= interactionSequenceBefore) {
-          return { error: 'map placement handler did not process the click' };
-        }
-        return { ...point, interaction: 'placement', interactionSequence };
-      }
-
-      map.fire(eventName, {
-        point: { x: projected.x, y: projected.y },
-        lngLat: map.unproject([projected.x, projected.y]),
-        originalEvent: new MouseEvent(eventName, {
-          bubbles: true,
-          cancelable: true,
-          button: args[1] === 'right' ? 2 : 0,
-          clientX: point.x,
-          clientY: point.y,
-        }),
-      });
-      const interactionSequence = readInteraction();
-      if (interactionSequence <= interactionSequenceBefore) {
-        return { error: 'map interaction handler did not process the click' };
-      }
-      return { ...point, interaction: 'maplibre', interactionSequence };
+      return {
+        ...point,
+        interaction: canvasRoot.dataset.placementMode === 'true' ? 'placement' : 'maplibre',
+        interactionSequenceBefore,
+      };
     `,
     [lngLat, button],
   );
   if (!outcome) throw new Error('map not available');
   if ('error' in outcome) throw new Error(outcome.error);
-  return outcome;
+  const target = await dispatchMapPointer(browser, { x: outcome.x, y: outcome.y }, button);
+  const interactionSequence = await evalInApp<number>(
+    browser,
+    `
+      const readInteraction = window.__stalagmight_map_interaction__;
+      if (typeof readInteraction !== 'function') throw new Error('map interaction hooks are unavailable');
+      return readInteraction();
+    `,
+  );
+  if (interactionSequence <= outcome.interactionSequenceBefore) {
+    throw new Error(`map ${outcome.interaction} handler did not process the click dispatched to ${target}`);
+  }
+  return { x: outcome.x, y: outcome.y, interaction: outcome.interaction, interactionSequence };
 }
 
 export { cssStringLiteral, testIdSelector };
