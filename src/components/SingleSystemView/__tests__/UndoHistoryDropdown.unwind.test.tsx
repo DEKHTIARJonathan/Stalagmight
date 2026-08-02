@@ -305,7 +305,12 @@ describe('UndoHistoryDropdown - the Unwind entry (#303)', () => {
         .mockResolvedValueOnce([localRedo])
         .mockResolvedValueOnce([localRedo])
         .mockResolvedValue([]);
-      const redo = vi.fn(async () => ({ success: true, warnings: [] }));
+      const redo = vi.fn(async () => ({
+        success: true,
+        warnings: [],
+        error: null,
+        section_ids: [],
+      }));
       useProjectStore.setState({ getRedoStack, redo });
       invokeIpcMock.mockImplementation((cmd: string) => {
         if (cmd === 'speleodb_rewind_target')

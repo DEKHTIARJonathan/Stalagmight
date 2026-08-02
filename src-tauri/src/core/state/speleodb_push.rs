@@ -100,58 +100,6 @@ fn snapshot_undo_metadata(
     ))
 }
 
-#[cfg(test)]
-mod snapshot_undo_metadata_tests {
-    use super::*;
-    use crate::models::{Project, SpeleoLink, UndoMode};
-    use crate::persistence::Database;
-    use crate::test_helpers::with_isolated_config;
-    use tempfile::TempDir;
-
-    #[test]
-    fn full_snapshot_policy_survives_an_absent_live_database_handle() {
-        with_isolated_config(|| {
-            let state = AppState::new().expect("construct state");
-            state.config.lock().expect("config lock").speleodb.undo_mode = UndoMode::Disabled;
-            assert!(
-                !state.undo_policy().pushes_history(),
-                "the old live-handle lookup classifies an unopened state as local"
-            );
-
-            let temp = TempDir::new().expect("temp dir");
-            let path = temp.path().join("snapshot.stalx");
-            {
-                let mut db = Database::open(&path).expect("create snapshot");
-                db.save_project(&Project::new("Snapshot".to_owned(), None))
-                    .expect("save project");
-                db.save_speleo_link(Some(&SpeleoLink {
-                    endpoint: "https://example.invalid".to_owned(),
-                    project_id: "11111111-1111-1111-1111-111111111111".to_owned(),
-                    project_name: "Snapshot".to_owned(),
-                    base_commit_sha: None,
-                    has_unpushed_edits: true,
-                    last_edit_at: None,
-                    last_verify_at: None,
-                    undo_mode: Some(UndoMode::Full),
-                }))
-                .expect("save link");
-                db.save_speleo_undo_watermark(Some("2026-08-02T10:00:00+00:00"))
-                    .expect("save watermark");
-            }
-
-            let snapshot = Database::open_for_metadata(&path).expect("open snapshot metadata");
-            let (keep_undo, inherited_through) =
-                snapshot_undo_metadata(&state, &snapshot).expect("read snapshot policy");
-
-            assert!(keep_undo, "the snapshot's explicit Full policy wins");
-            assert_eq!(
-                inherited_through.as_deref(),
-                Some("2026-08-02T10:00:00+00:00")
-            );
-        });
-    }
-}
-
 /// The server `type` an un-adopted Ariane project carries. Compared
 /// case-insensitively: the API answers `ARIANE` on a GET and takes `ariane` on a
 /// PATCH, and which one a given payload used is not a distinction worth trusting.
@@ -1151,5 +1099,61 @@ impl AppState {
             purpose = "avoid duplicating pushed history in the next commit (#303)",
             "Persisted the undo cleanup for a confirmed push"
         );
+    }
+}
+
+#[cfg(test)]
+#[expect(
+    clippy::expect_used,
+    reason = "test setup failures should stop the regression test immediately"
+)]
+mod snapshot_undo_metadata_tests {
+    use super::*;
+    use crate::models::{Project, SpeleoLink, UndoMode};
+    use crate::persistence::Database;
+    use crate::test_helpers::with_isolated_config;
+    use tempfile::TempDir;
+
+    #[test]
+    fn full_snapshot_policy_survives_an_absent_live_database_handle() {
+        with_isolated_config(|| {
+            let state = AppState::new().expect("construct state");
+            state.config.lock().expect("config lock").speleodb.undo_mode = UndoMode::Disabled;
+            assert!(
+                !state.undo_policy().pushes_history(),
+                "the old live-handle lookup classifies an unopened state as local"
+            );
+
+            let temp = TempDir::new().expect("temp dir");
+            let path = temp.path().join("snapshot.stalx");
+            {
+                let mut db = Database::open(&path).expect("create snapshot");
+                db.save_project(&Project::new("Snapshot".to_owned(), None))
+                    .expect("save project");
+                db.save_speleo_link(Some(&SpeleoLink {
+                    endpoint: "https://example.invalid".to_owned(),
+                    project_id: "11111111-1111-1111-1111-111111111111".to_owned(),
+                    project_name: "Snapshot".to_owned(),
+                    base_commit_sha: None,
+                    has_unpushed_edits: true,
+                    last_edit_at: None,
+                    last_verify_at: None,
+                    undo_mode: Some(UndoMode::Full),
+                }))
+                .expect("save link");
+                db.save_speleo_undo_watermark(Some("2026-08-02T10:00:00+00:00"))
+                    .expect("save watermark");
+            }
+
+            let snapshot = Database::open_for_metadata(&path).expect("open snapshot metadata");
+            let (keep_undo, inherited_through) =
+                snapshot_undo_metadata(&state, &snapshot).expect("read snapshot policy");
+
+            assert!(keep_undo, "the snapshot's explicit Full policy wins");
+            assert_eq!(
+                inherited_through.as_deref(),
+                Some("2026-08-02T10:00:00+00:00")
+            );
+        });
     }
 }
