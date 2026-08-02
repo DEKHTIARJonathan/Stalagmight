@@ -110,6 +110,22 @@ assert.match(
 );
 
 assert.match(
+  analyzeSource(
+    'unconditional-and-ternary.tsx',
+    'const view = <><button data-testid="same">Always</button>{flag ? <button data-testid="same">Sometimes</button> : null}</>;',
+  ).at(-1)?.message ?? '',
+  /duplicated in one JSX container/,
+);
+
+assert.match(
+  analyzeSource(
+    'compatible-ternaries.tsx',
+    'const view = <>{first ? <button data-testid="same">One</button> : null}{second ? <button data-testid="same">Two</button> : null}</>;',
+  ).at(-1)?.message ?? '',
+  /duplicated in one JSX container/,
+);
+
+assert.match(
   analyzeSource('summary.tsx', 'const view = <summary>Details</summary>;')[0]?.message ?? '',
   /has no data-testid/,
 );

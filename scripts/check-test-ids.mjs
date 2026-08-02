@@ -104,21 +104,40 @@ function repeatedCallback(node) {
 }
 
 function containingJsxParent(node) {
-  let child = ts.isJsxOpeningElement(node) ? node.parent : node;
-  let current = child.parent;
+  let current = ts.isJsxOpeningElement(node) ? node.parent.parent : node.parent;
   for (; current; current = current.parent) {
-    if (ts.isConditionalExpression(current)) return child;
     if (ts.isJsxElement(current) || ts.isJsxFragment(current)) return current;
     if (ts.isSourceFile(current)) return null;
-    child = current;
   }
   return null;
+}
+
+function conditionalBranches(node) {
+  const branches = new Map();
+  for (let current = node.parent; current; current = current.parent) {
+    if (ts.isConditionalExpression(current)) {
+      if (node.pos >= current.whenTrue.pos && node.end <= current.whenTrue.end) branches.set(current, 'true');
+      else if (node.pos >= current.whenFalse.pos && node.end <= current.whenFalse.end) branches.set(current, 'false');
+    }
+    if (ts.isSourceFile(current)) break;
+  }
+  return branches;
+}
+
+function mutuallyExclusive(left, right) {
+  const leftBranches = conditionalBranches(left);
+  const rightBranches = conditionalBranches(right);
+  for (const [conditional, branch] of leftBranches) {
+    const otherBranch = rightBranches.get(conditional);
+    if (otherBranch && otherBranch !== branch) return true;
+  }
+  return false;
 }
 
 export function analyzeSource(fileName, sourceText) {
   const source = ts.createSourceFile(fileName, sourceText, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
   const findings = [];
-  const literalContainers = new Map();
+  const literalOccurrences = new Map();
 
   function visit(node) {
     if (ts.isJsxOpeningElement(node) || ts.isJsxSelfClosingElement(node)) {
@@ -138,12 +157,15 @@ export function analyzeSource(fileName, sourceText) {
       }
       if (literal) {
         const container = containingJsxParent(node);
-        const prior = literalContainers.get(literal);
-        if (container && prior === container) {
+        const occurrences = literalOccurrences.get(literal) ?? [];
+        const conflict = occurrences.some(
+          (occurrence) => occurrence.container === container && !mutuallyExclusive(occurrence.node, node),
+        );
+        if (container && conflict) {
           findings.push({ fileName, line, message: `literal test ID "${literal}" is duplicated in one JSX container` });
-        } else if (container) {
-          literalContainers.set(literal, container);
         }
+        if (container) occurrences.push({ container, node });
+        literalOccurrences.set(literal, occurrences);
       }
     }
     ts.forEachChild(node, visit);
