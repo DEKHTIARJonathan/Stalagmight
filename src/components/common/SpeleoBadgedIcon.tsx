@@ -12,6 +12,7 @@ export function SpeleoBadgedIcon({
   badgeColor,
   size = 20,
   tint,
+  testIdPrefix,
 }: {
   /**
    * Omit for the bare mark. "No badge" is a real state, not an absence: an
@@ -24,17 +25,23 @@ export function SpeleoBadgedIcon({
   size?: number;
   /** Recolour the MARK itself (#270: yellow while there are un-pushed local edits). */
   tint?: string | undefined;
+  /** Stable prefix that keeps the nested logo and badge IDs unique at every call site. */
+  testIdPrefix: string;
 }) {
   return (
     <span className="relative inline-flex">
-      <SpeleoDbLogo size={size} tint={tint} />
+      <SpeleoDbLogo
+        size={size}
+        tint={tint}
+        testId={`${testIdPrefix}-logo`}
+      />
       {/* The disc is the panel BACKGROUND colour (like the DisplayMenu badge-bg,
           fill: var(--cc-panel)) so it knocks the icon out around the badge - a
           cutout, not a coloured circle. */}
       {badge != null && (
         <span
           className={`absolute -bottom-1 -right-1 flex items-center justify-center rounded-full bg-panel p-[1px] ${badgeColor ?? ''}`}
-          data-testid="speleo-badged-icon-badge"
+          data-testid={`${testIdPrefix}-state-badge`}
         >
           {badge}
         </span>

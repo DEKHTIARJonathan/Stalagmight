@@ -847,7 +847,12 @@ export default function GlobalView() {
               data-testid="globalview-speleo-refresh"
               className="flex items-center justify-center w-8 h-8 rounded text-text-secondary hover:text-text hover:bg-panel transition-colors disabled:opacity-50"
             >
-              <SpeleoBadgedIcon badge={<RefreshGlyph size={10} />} badgeColor="text-accent" size={18} />
+              <SpeleoBadgedIcon
+                badge={<RefreshGlyph size={10} />}
+                badgeColor="text-accent"
+                size={18}
+                testIdPrefix="globalview-speleo-refresh-icon"
+              />
             </button>
           )}
         </div>

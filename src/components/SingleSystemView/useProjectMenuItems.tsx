@@ -107,7 +107,12 @@ export function useProjectMenuItems({ onSave, saveFailed = false }: UseProjectMe
               id: 'publish-to-speleodb-menu',
               label: t('speleodb.publish.menuItem'),
               icon: (
-                <SpeleoBadgedIcon badge={<FilePlusIcon size={11} />} badgeColor="text-green-400" size={sz} />
+                <SpeleoBadgedIcon
+                  badge={<FilePlusIcon size={11} />}
+                  badgeColor="text-green-400"
+                  size={sz}
+                  testIdPrefix="publish-to-speleodb-menu-icon"
+                />
               ),
               onClick: () => openDialog('publish-to-speleodb'),
             },
@@ -119,7 +124,7 @@ export function useProjectMenuItems({ onSave, saveFailed = false }: UseProjectMe
             {
               id: 'speleodb-menu',
               label: t('speleodb.menu.title'),
-              icon: <SpeleoDbLogo size={sz} />,
+              icon: <SpeleoDbLogo size={sz} testId="speleodb-menu-logo" />,
               submenu: speleoItems,
             },
           ]

@@ -44,7 +44,7 @@ const seed = (o: Partial<SpeleoLinkState> = {}) =>
 
 const button = () => screen.getByTestId('speleodb-status-button');
 const badge = () => screen.queryByTestId('speleodb-status-unpushed-badge');
-const tintedMark = () => screen.queryByTestId('speleodb-logo-tinted');
+const statusMark = () => screen.getByTestId('speleodb-status-icon-logo');
 
 beforeEach(() => {
   invokeIpcMock.mockReset();
@@ -64,7 +64,7 @@ describe('SpeleoStatusButton un-pushed local edits (#270)', () => {
     render(<SpeleoStatusButton />);
     expect(button()).toHaveAttribute('data-kind', 'unlocked');
     expect(button()).toHaveAttribute('data-unpushed', 'false');
-    expect(tintedMark()).not.toBeInTheDocument();
+    expect(statusMark()).not.toHaveAttribute('data-tint');
     expect(badge()).not.toBeInTheDocument();
   });
 
@@ -74,7 +74,7 @@ describe('SpeleoStatusButton un-pushed local edits (#270)', () => {
     render(<SpeleoStatusButton />);
     expect(button()).toHaveAttribute('data-kind', 'unlocked');
     expect(button()).toHaveAttribute('data-unpushed', 'true');
-    expect(tintedMark()).toHaveAttribute('data-tint', UNPUSHED_ACCENT);
+    expect(statusMark()).toHaveAttribute('data-tint', UNPUSHED_ACCENT);
     expect(badge()).toBeInTheDocument();
   });
 
@@ -99,7 +99,7 @@ describe('SpeleoStatusButton un-pushed local edits (#270)', () => {
     seed({ hasUnpushedEdits: true, editState: 'editing' });
     render(<SpeleoStatusButton />);
     expect(button()).toHaveAttribute('data-kind', 'editing');
-    expect(tintedMark()).toHaveAttribute('data-tint', UNPUSHED_ACCENT);
+    expect(statusMark()).toHaveAttribute('data-tint', UNPUSHED_ACCENT);
     expect(badge()).not.toBeInTheDocument();
   });
 
@@ -114,7 +114,7 @@ describe('SpeleoStatusButton un-pushed local edits (#270)', () => {
     seed({ hasUnpushedEdits: true, remoteState: 'remote_ahead' });
     render(<SpeleoStatusButton />);
     expect(button()).toHaveAttribute('data-kind', 'remote_ahead');
-    expect(tintedMark()).toHaveAttribute('data-tint', UNPUSHED_ACCENT);
+    expect(statusMark()).toHaveAttribute('data-tint', UNPUSHED_ACCENT);
     expect(badge()).toBeInTheDocument();
   });
 
@@ -127,13 +127,13 @@ describe('SpeleoStatusButton un-pushed local edits (#270)', () => {
     seed({ hasUnpushedEdits: true });
     render(<SpeleoStatusButton />);
     expect(button()).toHaveAttribute('data-kind', 'logged_out');
-    expect(tintedMark()).toHaveAttribute('data-tint', UNPUSHED_ACCENT);
+    expect(statusMark()).toHaveAttribute('data-tint', UNPUSHED_ACCENT);
     expect(badge()).toBeInTheDocument();
   });
 });
 
 describe('SpeleoStatusButton state badge', () => {
-  const stateBadge = () => screen.queryByTestId('speleo-badged-icon-badge');
+  const stateBadge = () => screen.queryByTestId('speleodb-status-icon-state-badge');
 
   it('leaves the resting unlocked state bare', () => {
     // The read-only, up-to-date, nothing-outstanding case: nothing is wrong and

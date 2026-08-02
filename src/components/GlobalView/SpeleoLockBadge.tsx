@@ -110,6 +110,7 @@ export function SpeleoLockBadge({
             badgeColor="text-success"
             size={size}
             tint={tint}
+            testIdPrefix={testIdPrefix}
           />
         </span>
       </Tooltip>
@@ -119,7 +120,13 @@ export function SpeleoLockBadge({
     return (
       <Tooltip content={t('speleodb.recentBadge.lockedByOther', { email: lockHolder })}>
         <span data-testid={`${testIdPrefix}-badge-locked-other`}>
-          <SpeleoBadgedIcon badge={<HourglassGlyph />} badgeColor="text-warning" size={size} tint={tint} />
+          <SpeleoBadgedIcon
+            badge={<HourglassGlyph />}
+            badgeColor="text-warning"
+            size={size}
+            tint={tint}
+            testIdPrefix={testIdPrefix}
+          />
         </span>
       </Tooltip>
     );
@@ -127,7 +134,7 @@ export function SpeleoLockBadge({
   return (
     <Tooltip content={t('speleodb.recentBadge.remote')}>
       <span data-testid={`${testIdPrefix}-badge-remote`}>
-        <SpeleoDbLogo size={size} tint={tint} />
+        <SpeleoDbLogo size={size} tint={tint} testId={`${testIdPrefix}-logo`} />
       </span>
     </Tooltip>
   );
