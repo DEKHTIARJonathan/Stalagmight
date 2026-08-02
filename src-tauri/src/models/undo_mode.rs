@@ -70,15 +70,14 @@ impl UndoMode {
         }
     }
 
-    /// Parse the column back. An unrecognized string reads as `Unknown` (which
-    /// resolves to `Full`) rather than failing the load, for the same reason the
-    /// serde sentinel exists.
+    /// Parse the column back. An unrecognized stored value fails closed to
+    /// `Disabled`; this does not change the valid unset/global default of `Full`.
     #[must_use]
     pub fn from_db_str(raw: &str) -> Self {
         match raw.trim().to_ascii_lowercase().as_str() {
             "disabled" => Self::Disabled,
             "full" => Self::Full,
-            _ => Self::Unknown,
+            _ => Self::Disabled,
         }
     }
 }
@@ -138,11 +137,11 @@ mod tests {
         for mode in [UndoMode::Full, UndoMode::Disabled] {
             assert_eq!(UndoMode::from_db_str(mode.as_db_str()), mode);
         }
-        // Case / whitespace tolerance, and an unknown value that must not panic or
-        // silently read as Disabled (the safe default is the documented one).
+        // Case / whitespace tolerance, and a malformed stored value that must not
+        // turn uncertainty into permission to publish history.
         assert_eq!(UndoMode::from_db_str(" DISABLED "), UndoMode::Disabled);
-        assert_eq!(UndoMode::from_db_str("wat"), UndoMode::Unknown);
-        assert!(UndoMode::from_db_str("wat").pushes_history());
+        assert_eq!(UndoMode::from_db_str("wat"), UndoMode::Disabled);
+        assert!(!UndoMode::from_db_str("wat").pushes_history());
     }
 
     #[test]

@@ -139,14 +139,14 @@ impl AppState {
         }
     }
 
-    /// The global default, or [`UndoMode::Full`] if the config lock is unavailable
-    /// (the documented default is the safe answer, and it is what a fresh config
-    /// carries anyway).
+    /// The global default. Recover a poisoned guard so a panic cannot replace an
+    /// explicit `Disabled` setting with [`UndoMode::default`] (`Full`).
     fn global_undo_mode(&self) -> UndoMode {
         self.config
             .lock()
-            .map(|c| c.speleodb.undo_mode)
-            .unwrap_or_default()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .speleodb
+            .undo_mode
             .resolved()
     }
 
@@ -176,8 +176,9 @@ impl AppState {
         let override_mode = self
             .database
             .lock()
-            .ok()
-            .and_then(|guard| guard.as_ref().and_then(|db| db.load_speleo_link().ok()))
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_ref()
+            .and_then(|db| db.load_speleo_link().ok())
             .flatten()
             .and_then(|l| l.undo_mode);
         (
@@ -192,7 +193,9 @@ impl AppState {
 mod tests {
     use super::*;
     use crate::core::state::AppState;
+    use crate::persistence::Database;
     use crate::test_helpers::with_isolated_config;
+    use tempfile::TempDir;
 
     /// `AppState::new()` loads the global config, so every test here runs under the
     /// config isolation guard - otherwise it reads (and races on) the developer's
@@ -212,6 +215,13 @@ mod tests {
             last_verify_at: None,
             undo_mode: mode,
         }
+    }
+
+    fn poison_mutex<T>(mutex: &std::sync::Mutex<T>) {
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = mutex.lock().expect("lock before poisoning");
+            panic!("poison mutex for undo-policy coverage");
+        }));
     }
 
     /// Spec item 27, first half: a link override beats the global default in BOTH
@@ -254,6 +264,19 @@ mod tests {
         });
     }
 
+    #[test]
+    fn poisoned_config_lock_preserves_a_disabled_global_default() {
+        with_isolated_config(|| {
+            let state = state();
+            state.config.lock().expect("config lock").speleodb.undo_mode = UndoMode::Disabled;
+            poison_mutex(&state.config);
+
+            let policy = state.undo_policy_for(Some(&link_with(None)));
+            assert_eq!(policy.mode, UndoMode::Disabled);
+            assert!(!policy.pushes_history());
+        });
+    }
+
     /// q4: no link, no hybrid. A local project keeps the fixed window whatever the
     /// global default says, because there is no commit for its history to chain
     /// through.
@@ -270,9 +293,8 @@ mod tests {
         });
     }
 
-    /// An unrecognized column value (a file written by a newer build, or hand-edited)
-    /// must resolve to the documented default rather than reaching a consumer as
-    /// `Unknown`.
+    /// The serde sentinel still resolves to the documented default. Database parsing
+    /// handles malformed stored strings separately and fails closed to `Disabled`.
     #[test]
     fn an_unknown_override_resolves_to_full() {
         with_isolated_config(|| {
@@ -359,6 +381,25 @@ mod tests {
             let (mode, overridden) = state.undo_mode_status();
             assert_eq!(mode, UndoMode::Disabled);
             assert!(!overridden);
+        });
+    }
+
+    #[test]
+    fn poisoned_database_lock_preserves_the_project_override_status() {
+        with_isolated_config(|| {
+            let temp_dir = TempDir::new().expect("temp dir");
+            let path = temp_dir.path().join("undo-mode-status.stalx");
+            let db = Database::open(&path).expect("open database");
+            db.save_speleo_link(Some(&link_with(Some(UndoMode::Disabled))))
+                .expect("save link");
+
+            let state = state();
+            *state.database.lock().expect("database lock") = Some(db);
+            poison_mutex(&state.database);
+
+            let (mode, overridden) = state.undo_mode_status();
+            assert_eq!(mode, UndoMode::Disabled);
+            assert!(overridden);
         });
     }
 }
