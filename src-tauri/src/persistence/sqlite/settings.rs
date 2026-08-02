@@ -207,7 +207,7 @@ impl Database {
     /// behind would make the UI classify this real edit as a disposable Unwind step.
     pub fn set_speleo_undo_mode_and_mark_forward_edit(
         &self,
-        mode: Option<crate::models::UndoMode>,
+        mode: crate::models::UndoMode,
         last_edit_at: &str,
     ) -> Result<()> {
         let tx = self.conn.unchecked_transaction()?;
@@ -215,7 +215,7 @@ impl Database {
             "UPDATE speleo_link
              SET undo_mode = ?1, has_unpushed_edits = 1, last_edit_at = ?2
              WHERE id = 1",
-            params![mode.map(crate::models::UndoMode::as_db_str), last_edit_at,],
+            params![mode.as_db_str(), last_edit_at],
         )?;
         if rows == 0 {
             anyhow::bail!("No SpeleoDB link row to update");

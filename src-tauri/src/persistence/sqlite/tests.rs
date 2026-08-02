@@ -4287,8 +4287,8 @@ fn migrate_v10_speleo_link_adds_last_verify_at() {
 
 /// [#303] Spec item 28, migration half (schema v14→v15): a genuine v14-shaped
 /// `speleo_link` (no `undo_mode`) gains the column on `open_existing`, defaulting to
-/// NULL ("follow the global default" - exactly the behaviour every pre-v15 file
-/// already had), without disturbing any pre-existing field.
+/// NULL (the legacy marker the application materializes on first open), without
+/// disturbing any pre-existing field.
 #[test]
 fn migrate_v14_speleo_link_adds_undo_mode() {
     let temp = TempDir::new().unwrap();
@@ -4338,7 +4338,7 @@ fn migrate_v14_speleo_link_adds_undo_mode() {
     let link = db.load_speleo_link().unwrap().unwrap();
     assert_eq!(
         link.undo_mode, None,
-        "the new column defaults to NULL, i.e. follow the global default"
+        "the new column defaults to the legacy initialization marker"
     );
     // Every pre-existing v14 field survives the migration untouched.
     assert_eq!(
@@ -4907,7 +4907,7 @@ fn undo_mode_forward_edit_is_one_atomic_metadata_change() {
         .unwrap();
 
     db.set_speleo_undo_mode_and_mark_forward_edit(
-        Some(crate::models::UndoMode::Disabled),
+        crate::models::UndoMode::Disabled,
         "2026-08-02T01:02:03+00:00",
     )
     .unwrap();
@@ -4944,7 +4944,7 @@ fn undo_mode_forward_edit_rolls_back_when_chain_clear_fails() {
         .unwrap();
 
     db.set_speleo_undo_mode_and_mark_forward_edit(
-        Some(crate::models::UndoMode::Disabled),
+        crate::models::UndoMode::Disabled,
         "2026-08-02T01:02:03+00:00",
     )
     .expect_err("a chain-clear failure must roll back the link update");

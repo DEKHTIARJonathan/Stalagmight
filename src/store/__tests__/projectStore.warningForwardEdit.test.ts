@@ -18,7 +18,7 @@ describe('projectStore warning edits', () => {
     });
     useSpeleoStore.setState({
       link: {
-        permission: 'write',
+        permission: 'READ_AND_WRITE',
         editState: 'editing',
         lockHolder: null,
         lockedByOther: false,
@@ -26,9 +26,8 @@ describe('projectStore warning edits', () => {
         unwound: true,
         forceEditing: false,
         undoMode: 'full',
-        undoModeOverridden: true,
         forceEditAllowed: false,
-        remoteState: 'dirty',
+        remoteState: 'up_to_date',
         noAccess: false,
         serverError: null,
       },

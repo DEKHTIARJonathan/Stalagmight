@@ -681,8 +681,7 @@ impl AppState {
                     // [#303] A local project has no undo POLICY (the fixed window is
                     // unconditional there), so report the global default and leave the
                     // control - which only renders for a remote project - unbothered.
-                    undo_mode: self.undo_mode_status().0,
-                    undo_mode_overridden: false,
+                    undo_mode: self.undo_mode_status(),
                     force_editing: self.force_editing(),
                     allow_force_edit: self.speleodb_allow_force_edit(),
                     project_id: None,
@@ -824,11 +823,9 @@ impl AppState {
             access_denied,
             server_error,
             exclude_geojson,
-            // [#303] Resolved from `link.undo_mode` (already in hand) and the global
-            // default, so the settings control can distinguish "Full" from "Full,
-            // following the global default" without a second round trip.
+            // [#303] Resolved from the explicit project value. The global default is
+            // consulted only while initializing a legacy NULL on open.
             undo_mode: self.undo_policy_for(Some(&link)).mode,
-            undo_mode_overridden: link.undo_mode.is_some(),
             // #213: report force-edit so the FE renders the big-red banner + offers
             // Reconnect. An online force-editor whose tip moved already surfaces via
             // `remote_state` (RemoteAhead/Conflict); offline it stays Unknown (skipped).

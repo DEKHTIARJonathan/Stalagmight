@@ -895,10 +895,9 @@ impl AppState {
                     has_unpushed_edits: false,
                     last_edit_at: None,   // freshly pulled: no local edits yet
                     last_verify_at: None, // no lock held on pull; stamped on acquire (#202)
-                    // [#303] Carried from the file we just extracted: the undo policy is
-                    // project state that rides in the commit, so the server's value wins
-                    // and this stamp must not reset it (see `preserved_undo_mode`).
-                    undo_mode: pulled_undo_mode,
+                    // [#303] Carried from the file we just extracted. A legacy NULL is
+                    // initialized once from the application default and stamped explicitly.
+                    undo_mode: Some(self.effective_undo_mode(pulled_undo_mode)),
                 };
                 if let Err(e) = db.save_speleo_link(Some(&link)) {
                     // Non-fatal: the pull succeeded and the file is openable; the
@@ -1253,8 +1252,7 @@ impl AppState {
         // normally no prior link to carry an undo policy from - but the file can be a
         // re-adopt over an existing cache copy, and that copy's override is still the
         // project's answer. Read it off the SAME live handle before the upsert
-        // overwrites the row; no link yet (the fresh-adopt case) reads as `None`, which
-        // is exactly "follow the global default".
+        // overwrites the row; no link yet initializes from the global default once.
         let adopted_undo_mode = self.speleodb_open_link().ok().and_then(|l| l.undo_mode);
         let stamped = self.speleodb_set_open_link(&crate::models::SpeleoLink {
             endpoint: endpoint.clone(),
@@ -1264,7 +1262,7 @@ impl AppState {
             has_unpushed_edits: true,
             last_edit_at: Some(chrono::Utc::now().to_rfc3339()),
             last_verify_at: None,
-            undo_mode: adopted_undo_mode,
+            undo_mode: Some(self.effective_undo_mode(adopted_undo_mode)),
         });
         if let Err(e) = &stamped {
             tracing::warn!(
@@ -2061,7 +2059,7 @@ impl AppState {
                     // IS a lock re-verify point (#202): stamp it so the 20-min lazy
                     // re-verify starts its window from the pull, not from acquire-time.
                     last_verify_at: Some(chrono::Utc::now().to_rfc3339()),
-                    undo_mode: pulled_undo_mode,
+                    undo_mode: Some(self.effective_undo_mode(pulled_undo_mode)),
                 };
                 if let Err(e) = db.save_speleo_link(Some(&new_link)) {
                     tracing::warn!(

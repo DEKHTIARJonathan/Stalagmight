@@ -30,7 +30,6 @@ const LINK: SpeleoLinkState = {
   forceEditing: false,
   forceEditAllowed: true,
   undoMode: 'full',
-  undoModeOverridden: false,
   remoteState: 'up_to_date',
   noAccess: false,
   serverError: null,

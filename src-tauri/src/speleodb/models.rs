@@ -819,14 +819,8 @@ pub struct SpeleoLinkStatus {
     /// over the same `get_project` probe; `false` when logged out / offline / the
     /// lookup failed (never nag on a transient miss).
     pub exclude_geojson: bool,
-    /// [#303] The project's effective undo-history policy - what its next push will
-    /// carry - and whether that came from a per-project override or from the global
-    /// default. The settings control renders both: "Full" and "Full (following the
-    /// global default)" are different states, and collapsing them makes clearing an
-    /// override look like a no-op.
+    /// [#303] The project's undo-history policy - what its next push will carry.
     pub undo_mode: crate::models::UndoMode,
-    /// See [`Self::undo_mode`].
-    pub undo_mode_overridden: bool,
     /// [#213] The open remote project is being force-edited WITHOUT the write lock
     /// (`edit_enabled` is also true, but no lock is held). Drives the persistent
     /// big-red "unmergeable `.stalx`" banner + the "Reconnect to sync" action, and
@@ -1085,7 +1079,6 @@ mod tests {
             server_error: None,
             exclude_geojson: false,
             undo_mode: crate::models::UndoMode::Full,
-            undo_mode_overridden: false,
             force_editing: false,
             allow_force_edit: false,
             project_id: Some("11111111-1111-1111-1111-111111111111".to_owned()),

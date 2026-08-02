@@ -492,11 +492,10 @@ impl AppState {
             undo.set_history_limit(new_config.general.undo_history_limit);
         }
         // ...and the BOUND itself, which `set_history_limit` deliberately will not touch.
-        // The global `speleodb.undo_mode` can change in the same save, and for a linked
-        // project with no per-project override that flips the policy - so without this the
-        // stack stays on `Count(100)` while the persist path believes it is unbounded, and
-        // the history is silently cut to 100. `sync_undo_depth_limit`'s own doc has always
-        // listed "a config reload" as a site it must be called from; this is that site.
+        // The global `speleodb.undo_mode` can change in the same save. An already-open
+        // linked project has an explicit value and therefore stays unchanged; local/no
+        // project state remains on the count window. `sync_undo_depth_limit`'s own doc
+        // lists config reload as a site it must be called from, so keep the re-arm here.
         // Sequenced after the block above so no lock is held across it.
         self.sync_undo_depth_limit();
 

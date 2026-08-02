@@ -25,7 +25,7 @@ pub(super) const PRESERVED_SPELEOLINK_COLUMNS: &[(&str, &str, bool)] = &[
     ("has_unpushed_edits", "INTEGER", true),
     ("last_edit_at", "TEXT", false), // v10; nullable = never edited since pull
     ("last_verify_at", "TEXT", false), // v11; nullable = never re-verified since pull
-    ("undo_mode", "TEXT", false),    // v16; nullable = follow the global default (#303)
+    ("undo_mode", "TEXT", false),    // v16; nullable only for legacy initialization (#303)
 ];
 
 impl Database {
@@ -373,8 +373,8 @@ impl Database {
 
         // Add undo_mode column to an EXISTING pre-v16 speleo_link (schema v15→v16: the
         // per-project undo-history policy, #303). Same idempotent ALTER pattern as the
-        // two above. No backfill: NULL means "follow the global default", which is the
-        // behaviour every pre-v16 file already had.
+        // two above. No SQL backfill: the application materializes NULL from its configured
+        // default on the first open, when that machine-specific value is available.
         let has_undo_mode_column: bool = self
             .conn
             .query_row(
@@ -1365,7 +1365,7 @@ impl Database {
             -- base_commit_sha NULL = empty-repo BASE (never coerced to ''). is_remote is
             -- DERIVED from EXISTS(this table), never stored. ADDITIVE: no future migration
             -- rewrites this table (see PRESERVED_SPELEOLINK_COLUMNS / carry-forward fence).
-            -- undo_mode NULL (v16) = follow the global default (#303).
+            -- undo_mode NULL (v16) = legacy/uninitialized; materialized on open (#303).
             CREATE TABLE IF NOT EXISTS speleo_link (
                 id INTEGER PRIMARY KEY CHECK (id = 1),
                 endpoint TEXT NOT NULL,

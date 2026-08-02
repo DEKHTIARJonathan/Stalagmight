@@ -205,7 +205,10 @@ impl AppState {
         // [#303] ...and the link that decides how deep the stack those entries land in is
         // allowed to be. Read off the same handle for the same reason, and used below
         // BEFORE the restore - see the arming call for what a late one costs.
-        let speleo_link = db.load_speleo_link().ok().flatten();
+        let mut speleo_link = db.load_speleo_link().ok().flatten();
+        if let Some(link) = &mut speleo_link {
+            self.materialize_undo_mode(&db, link);
+        }
 
         // ALL commits under ONE `project` acquisition, exactly as
         // `do_load_project_full`'s finalization and for the same reason (round
@@ -770,7 +773,10 @@ impl AppState {
         // This is the INCOMING file's link; the detached release just below reads the
         // OUTGOING project's through the still-live handle, and the two are not
         // interchangeable.
-        let speleo_link = db.load_speleo_link().ok().flatten();
+        let mut speleo_link = db.load_speleo_link().ok().flatten();
+        if let Some(link) = &mut speleo_link {
+            self.materialize_undo_mode(&db, link);
+        }
 
         // All finalization commits use unwrap_or_else(PoisonError::into_inner) to ensure
         // data is written even if a previous panic poisoned a mutex. This is acceptable

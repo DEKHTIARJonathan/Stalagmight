@@ -15,10 +15,10 @@ use ts_rs::TS;
 ///   is STRIPPED from the pushed snapshot. For projects big enough that shipping
 ///   whole-project undo snapshots in every commit is not worth the repo growth.
 ///
-/// Resolution order is the per-project override then the global default; see
-/// `AppState::undo_policy`. Local-only projects ignore this entirely - they have no
-/// commit to chain through, so the fixed window is the only policy that means
-/// anything there.
+/// A legacy NULL project value is initialized once from the global default. The
+/// explicit project value is authoritative after that. Local-only projects ignore
+/// this entirely - they have no commit to chain through, so the fixed window is the
+/// only policy that means anything there.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(rename_all = "snake_case")]
@@ -59,8 +59,7 @@ impl UndoMode {
     }
 
     /// The `speleo_link.undo_mode` column spelling (schema v16). `None` in the
-    /// column means "follow the global default", which is why this is only ever
-    /// called on a `Some`.
+    /// column is legacy/uninitialized and is materialized on open.
     #[must_use]
     pub fn as_db_str(self) -> &'static str {
         match self.resolved() {
@@ -71,7 +70,7 @@ impl UndoMode {
     }
 
     /// Parse the column back. An unrecognized stored value fails closed to
-    /// `Disabled`; this does not change the valid unset/global default of `Full`.
+    /// `Disabled`; NULL is handled separately as legacy initialization.
     #[must_use]
     pub fn from_db_str(raw: &str) -> Self {
         match raw.trim().to_ascii_lowercase().as_str() {
@@ -92,7 +91,7 @@ impl UndoMode {
 pub struct UndoPolicy {
     /// The open project has a `speleo_link` row.
     pub linked: bool,
-    /// The resolved mode (override, else global default).
+    /// The resolved mode (explicit project value, or one-time legacy fallback).
     pub mode: UndoMode,
 }
 

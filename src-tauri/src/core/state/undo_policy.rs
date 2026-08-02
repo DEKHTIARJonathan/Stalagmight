@@ -4,8 +4,8 @@
 //! history ride to SpeleoDB, and is its depth therefore bounded by a byte budget
 //! instead of the fixed `undo_history_limit` / `undo_persist_limit` window? Every
 //! trim, strip and clear site asks it here rather than re-deriving it, because the
-//! answer has three inputs (is there a link, what does the link override say, what
-//! is the global default) and three chances to get the precedence wrong.
+//! answer has three inputs (is there a link, has its legacy NULL been initialized,
+//! what is the global default) and three chances to get the transition wrong.
 
 use crate::models::{SpeleoLink, UndoMode, UndoPolicy};
 use crate::speleodb::{SpeleoDbError, SpeleoErrorDto};
@@ -42,7 +42,7 @@ impl AppState {
     /// `save_project`, which holds a database handle this state's `database` field
     /// does not yet point at, and for the unit tests.
     ///
-    /// `None` means "no link", i.e. a local-only project, NOT "no override".
+    /// `None` means "no link", i.e. a local-only project, not a legacy NULL mode.
     pub(crate) fn undo_policy_for(&self, link: Option<&SpeleoLink>) -> UndoPolicy {
         let Some(link) = link else {
             return UndoPolicy::local();
@@ -53,8 +53,7 @@ impl AppState {
         }
     }
 
-    /// [#303] Set the open project's per-project undo-history policy, or clear the
-    /// override (`None`) so it follows the global default.
+    /// [#303] Set the open project's undo-history policy.
     ///
     /// EDIT-SESSION-REQUIRED (q17), and the reason is structural rather than cautious: this writes
     /// `speleo_link.undo_mode` in the `.stalx`, which rides to the server in the next
@@ -65,10 +64,7 @@ impl AppState {
     ///
     /// Re-arms the depth bound immediately, so switching to Disabled starts trimming to
     /// the count window without waiting for a reload.
-    pub(crate) fn speleodb_set_undo_mode(
-        &self,
-        mode: Option<UndoMode>,
-    ) -> Result<(), SpeleoErrorDto> {
+    pub(crate) fn speleodb_set_undo_mode(&self, mode: UndoMode) -> Result<(), SpeleoErrorDto> {
         // Save rewrites the whole database while holding `project`, then renames the
         // fresh file over the live one. Hold the same lock through this database edit so
         // a save cannot snapshot the old mode and overwrite a successful setting change.
@@ -145,7 +141,7 @@ impl AppState {
 
     /// The global default. Recover a poisoned guard so a panic cannot replace an
     /// explicit `Disabled` setting with [`UndoMode::default`] (`Full`).
-    fn global_undo_mode(&self) -> UndoMode {
+    pub(super) fn global_undo_mode(&self) -> UndoMode {
         self.config
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -154,8 +150,8 @@ impl AppState {
             .resolved()
     }
 
-    /// An override, else the global default - resolved, so no consumer ever sees
-    /// [`UndoMode::Unknown`]. The one place the precedence rule lives.
+    /// An explicit project value, or the global default for a legacy NULL that has
+    /// not yet been initialized. Resolved so no consumer sees [`UndoMode::Unknown`].
     pub(super) fn effective_undo_mode(&self, override_mode: Option<UndoMode>) -> UndoMode {
         match override_mode {
             Some(mode) => mode.resolved(),
@@ -163,21 +159,15 @@ impl AppState {
         }
     }
 
-    /// The effective mode for the open project, for the status/IPC surface: the
-    /// resolved value the FE renders, plus whether it came from an override.
-    ///
-    /// Reported as a pair rather than folded into one value because the settings
-    /// control has to say "Full (following the global default)" differently from
-    /// "Full (set on this project)" - otherwise clearing an override looks like a
-    /// no-op.
+    /// The effective mode for the open project, for the status/IPC surface.
     ///
     /// Deliberately NOT `undo_policy().mode`: that reports `Full` for an unlinked
     /// project, because a local project is exempt from the hybrid rules rather than
     /// following them, and rendering that as the control's value would show a
     /// setting the global default disagrees with. This answers the narrower question
     /// the control asks - which value is in force for this project's undo history.
-    pub(crate) fn undo_mode_status(&self) -> (UndoMode, bool) {
-        let override_mode = self
+    pub(crate) fn undo_mode_status(&self) -> UndoMode {
+        let stored_mode = self
             .database
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -185,10 +175,32 @@ impl AppState {
             .and_then(|db| db.load_speleo_link().ok())
             .flatten()
             .and_then(|l| l.undo_mode);
-        (
-            self.effective_undo_mode(override_mode),
-            override_mode.is_some(),
-        )
+        self.effective_undo_mode(stored_mode)
+    }
+
+    /// Materialize a legacy NULL undo mode using this machine's global default.
+    ///
+    /// NULL is only an initialization marker. Once a linked project is opened, its
+    /// resolved Full/Disabled choice is written into the shared `.stalx` and no later
+    /// config change can alter that project's policy.
+    pub(super) fn materialize_undo_mode(
+        &self,
+        db: &crate::persistence::Database,
+        link: &mut SpeleoLink,
+    ) {
+        let mode = self.effective_undo_mode(link.undo_mode);
+        if link.undo_mode == Some(mode) {
+            return;
+        }
+        link.undo_mode = Some(mode);
+        if let Err(e) = db.save_speleo_link(Some(link)) {
+            tracing::warn!(
+                error = %e,
+                mode = ?mode,
+                purpose = "initialize a legacy SpeleoDB undo policy (#303)",
+                "Could not materialize the project's undo mode; this session will keep the resolved value in memory"
+            );
+        }
     }
 }
 
@@ -232,11 +244,11 @@ mod tests {
         }));
     }
 
-    /// Spec item 27, first half: a link override beats the global default in BOTH
+    /// Spec item 27, first half: an explicit project value beats the global default in BOTH
     /// directions, so a Disabled project stays Disabled under a Full default and a
     /// Full project stays Full under a Disabled default.
     #[test]
-    fn undo_mode_override_wins_over_the_global_default() {
+    fn explicit_undo_mode_wins_over_the_global_default() {
         with_isolated_config(|| {
             let state = state();
 
@@ -252,23 +264,19 @@ mod tests {
         });
     }
 
-    /// Spec item 27, second half: no override follows the global default, and keeps
-    /// following it when that default changes.
+    /// Spec item 27, second half: a legacy NULL uses the global default once, then the
+    /// materialized project value no longer follows later config changes.
     #[test]
-    fn no_override_follows_the_global_default() {
+    fn legacy_null_is_initialized_once() {
         with_isolated_config(|| {
             let state = state();
-            let link = link_with(None);
+            let mut link = link_with(None);
 
             state.config.lock().expect("config lock").speleodb.undo_mode = UndoMode::Disabled;
-            assert_eq!(
-                state.undo_policy_for(Some(&link)).mode,
-                UndoMode::Disabled,
-                "a NULL column tracks the global setting rather than snapshotting it"
-            );
+            link.undo_mode = Some(state.effective_undo_mode(link.undo_mode));
 
             state.config.lock().expect("config lock").speleodb.undo_mode = UndoMode::Full;
-            assert_eq!(state.undo_policy_for(Some(&link)).mode, UndoMode::Full);
+            assert_eq!(state.undo_policy_for(Some(&link)).mode, UndoMode::Disabled);
         });
     }
 
@@ -327,7 +335,7 @@ mod tests {
 
             // No project open: there is no link row to write the override into.
             let err = state
-                .speleodb_set_undo_mode(Some(UndoMode::Disabled))
+                .speleodb_set_undo_mode(UndoMode::Disabled)
                 .expect_err("a local / absent project has no per-project policy to set");
             assert!(
                 !err.message.is_empty(),
@@ -341,7 +349,7 @@ mod tests {
             // that no arm of the verb succeeds without an edit session.
             state.set_edit_enabled(false);
             assert!(
-                state.speleodb_set_undo_mode(None).is_err(),
+                state.speleodb_set_undo_mode(UndoMode::Full).is_err(),
                 "read-only sessions cannot change what the project ships"
             );
         });
@@ -368,15 +376,13 @@ mod tests {
         assert!(
             gate < write,
             "the edit gate must precede the write - checking afterwards would leave the \
-             override on disk for the next push to ship"
+             policy on disk for the next push to ship"
         );
     }
 
-    /// The status pair reports the RESOLVED mode plus whether an override supplied
-    /// it - the distinction the settings control needs to say "following the global
-    /// default" honestly.
+    /// With no linked project open, status reports the application default.
     #[test]
-    fn undo_mode_status_separates_the_value_from_its_provenance() {
+    fn undo_mode_status_reports_the_global_value_without_a_project() {
         with_isolated_config(|| {
             let state = state();
             state.config.lock().expect("config lock").speleodb.undo_mode = UndoMode::Disabled;
@@ -386,9 +392,7 @@ mod tests {
             // from the hybrid rules", which is a different question from "what
             // value is in force", and conflating them showed the control a value
             // the global setting disagreed with.
-            let (mode, overridden) = state.undo_mode_status();
-            assert_eq!(mode, UndoMode::Disabled);
-            assert!(!overridden);
+            assert_eq!(state.undo_mode_status(), UndoMode::Disabled);
         });
     }
 
@@ -405,9 +409,34 @@ mod tests {
             *state.database.lock().expect("database lock") = Some(db);
             poison_mutex(&state.database);
 
-            let (mode, overridden) = state.undo_mode_status();
-            assert_eq!(mode, UndoMode::Disabled);
-            assert!(overridden);
+            assert_eq!(state.undo_mode_status(), UndoMode::Disabled);
+        });
+    }
+
+    #[test]
+    fn opening_materializes_a_legacy_null_from_the_global_default() {
+        with_isolated_config(|| {
+            let temp_dir = TempDir::new().expect("temp dir");
+            let path = temp_dir.path().join("legacy-null.stalx");
+            {
+                let mut db = Database::open(&path).expect("open database");
+                db.save_project(&crate::models::Project::new("Legacy".to_owned(), None))
+                    .expect("save project");
+                db.save_speleo_link(Some(&link_with(None)))
+                    .expect("save link");
+            }
+
+            let state = state();
+            state.config.lock().expect("config lock").speleodb.undo_mode = UndoMode::Disabled;
+            assert!(state.open_project(path).success);
+            let db_guard = state.database.lock().expect("database lock");
+            let db = db_guard.as_ref().expect("open database installed");
+            let link = db
+                .load_speleo_link()
+                .expect("load link")
+                .expect("link exists");
+
+            assert_eq!(link.undo_mode, Some(UndoMode::Disabled));
         });
     }
 }

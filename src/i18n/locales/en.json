@@ -2873,9 +2873,6 @@
       "fullHint": "Each revision stores the operations that produced it, so undo reaches back through the project's whole history.",
       "disabled": "No undo history",
       "disabledHint": "Undo works locally but is stripped before every push. For very large projects, where storing whole-survey snapshots in each revision is not worth the repository growth.",
-      "followingDefault": "Following the application default",
-      "overridden": "Set on this project",
-      "useDefault": "Follow the application default",
       "lockRequired": "Start editing to change this - it is stored in the project file and applies to everyone once pushed.",
       "failed": "Could not change the undo-history setting."
     },

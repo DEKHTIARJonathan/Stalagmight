@@ -15296,15 +15296,23 @@ fn unreadable_undo_markers_save_without_history() {
     drop(db_guard);
 
     let undo_stack = state.undo_stack.lock().unwrap();
-    assert!(!undo_stack.can_undo(), "the live undo stack must be cleared");
-    assert!(!undo_stack.can_redo(), "the live redo stack must be cleared");
+    assert!(
+        !undo_stack.can_undo(),
+        "the live undo stack must be cleared"
+    );
+    assert!(
+        !undo_stack.can_redo(),
+        "the live redo stack must be cleared"
+    );
     drop(undo_stack);
 
     // The replacement database is valid now. A later save must not resurrect the
     // unclassified rows from memory after the marker-failure fallback has cleared them.
     assert!(state.save_project(None).success);
     let db_guard = state.database.lock().unwrap();
-    let db = db_guard.as_ref().expect("database reopened after second save");
+    let db = db_guard
+        .as_ref()
+        .expect("database reopened after second save");
     assert!(db.load_undo_stack_with_timestamps().unwrap().is_empty());
     assert!(db.load_redo_stack_with_timestamps().unwrap().is_empty());
 }
@@ -15333,7 +15341,7 @@ fn setting_the_undo_mode_on_a_linked_project_needs_the_edit_gate() {
     assert!(!state.edit_enabled(), "a remote open starts read-only");
 
     let err = state
-        .speleodb_set_undo_mode(Some(crate::models::UndoMode::Disabled))
+        .speleodb_set_undo_mode(crate::models::UndoMode::Disabled)
         .expect_err("a read-only session must not change what the project ships");
     assert!(
         err.message.contains("start editing"),
@@ -15344,14 +15352,14 @@ fn setting_the_undo_mode_on_a_linked_project_needs_the_edit_gate() {
     // rather than some unrelated refusal.
     state.set_edit_enabled(true);
     state
-        .speleodb_set_undo_mode(Some(crate::models::UndoMode::Disabled))
+        .speleodb_set_undo_mode(crate::models::UndoMode::Disabled)
         .expect("with an edit session the override is settable");
 
     // Force editing is intentionally the same gate. It carries conflict risk, but the
     // user explicitly accepted that mode and its commands may edit this same project file.
     state.set_force_editing(true);
     state
-        .speleodb_set_undo_mode(Some(crate::models::UndoMode::Full))
+        .speleodb_set_undo_mode(crate::models::UndoMode::Full)
         .expect("force editing may change the project policy too");
 }
 
@@ -15373,7 +15381,7 @@ fn setting_the_undo_mode_serializes_with_full_file_saves() {
     let worker_state = Arc::clone(&state);
     let (sent, received) = std::sync::mpsc::channel();
     let worker = std::thread::spawn(move || {
-        let result = worker_state.speleodb_set_undo_mode(Some(crate::models::UndoMode::Disabled));
+        let result = worker_state.speleodb_set_undo_mode(crate::models::UndoMode::Disabled);
         sent.send(result).unwrap();
     });
 

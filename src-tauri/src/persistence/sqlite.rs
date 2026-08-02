@@ -62,9 +62,9 @@ use std::path::Path;
 /// take the migration once on open; an older build opening a v15 file still works
 /// (it warns about the newer version and recreates the table on its own writes).
 ///
-/// v16 adds the additive `speleo_link.undo_mode` column (#303: the per-project
-/// override of whether this project's undo history rides to the server; nullable =
-/// follow the global default) and the additive single-row local-only
+/// v16 adds the additive `speleo_link.undo_mode` column (#303: whether this project's
+/// undo history rides to the server; nullable only as a legacy initialization marker)
+/// and the additive single-row local-only
 /// `speleo_undo_chain` table (which server revision the working copy was unwound
 /// to, so the next Unwind can walk to its parent). Both are created in BOTH
 /// `init_schema` and `migrate_schema` - a conditional `ALTER` for existing tables,

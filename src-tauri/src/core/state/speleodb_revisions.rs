@@ -27,7 +27,6 @@ use crate::speleodb::{SpeleoDbError, SpeleoErrorDto, SpeleoOpenResult};
 /// working copy. Revision metadata does not carry this policy, so a forward chain step
 /// has to inspect the child `.stalx` it would load.
 fn downloaded_revision_undo_mode(
-    state: &AppState,
     dump: &mut dump::Dump<'_>,
     entry: &str,
     scratch_base: &std::path::Path,
@@ -49,7 +48,7 @@ fn downloaded_revision_undo_mode(
                 "could not open the downloaded revision to read its undo policy: {e}"
             ))
         })?;
-        let override_mode = db
+        let stored_mode = db
             .load_speleo_link()
             .map_err(|e| {
                 SpeleoDbError::Io(format!(
@@ -57,7 +56,10 @@ fn downloaded_revision_undo_mode(
                 ))
             })?
             .and_then(|link| link.undo_mode);
-        Ok(state.effective_undo_mode(override_mode))
+        // NULL revisions predate shared undo history. They cannot prove that a stack
+        // was intentionally published, so never reinterpret them using this machine's
+        // current global default.
+        Ok(stored_mode.map_or(UndoMode::Disabled, UndoMode::resolved))
     })();
 
     if let Err(e) = std::fs::remove_file(&probe) {
@@ -512,8 +514,8 @@ impl AppState {
         let scratch_base = self
             .speleodb_cache_path(&candidate.project_id)
             .map_err(local_dto)?;
-        let target_mode = downloaded_revision_undo_mode(self, &mut dump, &entry, &scratch_base)
-            .map_err(local_dto)?;
+        let target_mode =
+            downloaded_revision_undo_mode(&mut dump, &entry, &scratch_base).map_err(local_dto)?;
 
         Ok(target_mode.pushes_history().then_some(candidate.target))
     }
@@ -701,7 +703,7 @@ impl AppState {
         // it is about to install so a stale or direct IPC call cannot bypass the rule.
         if keep_undo_history && chain_forward {
             let target_mode =
-                downloaded_revision_undo_mode(self, &mut dump, &entry, &dest).map_err(local_dto)?;
+                downloaded_revision_undo_mode(&mut dump, &entry, &dest).map_err(local_dto)?;
             if !target_mode.pushes_history() {
                 return Err(local_dto(SpeleoDbError::Io(
                     "the next revision did not publish undo history, so there is no forward \
@@ -798,7 +800,7 @@ impl AppState {
                     has_unpushed_edits,
                     last_edit_at,
                     last_verify_at: None,
-                    undo_mode: swapped_undo_mode,
+                    undo_mode: Some(self.effective_undo_mode(swapped_undo_mode)),
                 };
                 if let Err(e) = db.save_speleo_link(Some(&link)) {
                     tracing::warn!(
@@ -936,7 +938,7 @@ mod tests {
         linked_state_with_undo_mode(None)
     }
 
-    fn revision_dump_with_undo_mode(mode: UndoMode) -> Vec<u8> {
+    fn revision_dump_with_undo_mode(mode: Option<UndoMode>) -> Vec<u8> {
         use std::io::Write as _;
 
         let temp = tempfile::TempDir::new().expect("revision temp dir");
@@ -953,7 +955,7 @@ mod tests {
                 has_unpushed_edits: false,
                 last_edit_at: None,
                 last_verify_at: None,
-                undo_mode: Some(mode),
+                undo_mode: mode,
             }))
             .expect("stamp revision policy");
         }
@@ -986,10 +988,9 @@ mod tests {
                     current,
                     "sanity: the open older revision carries the opposite policy"
                 );
-                let zip = revision_dump_with_undo_mode(child);
+                let zip = revision_dump_with_undo_mode(Some(child));
                 let mut dump = Dump::open(&zip).expect("open revision dump");
                 let mode = downloaded_revision_undo_mode(
-                    &state,
                     &mut dump,
                     "misc/project.stalx",
                     &temp.path().join("project.stalx"),
@@ -1006,6 +1007,25 @@ mod tests {
                     .count();
                 assert_eq!(leftovers, 0, "the policy probe must clean up its `.stalx`");
             }
+        });
+    }
+
+    #[test]
+    fn legacy_null_revision_does_not_inherit_the_current_global_default() {
+        crate::test_helpers::with_isolated_config(|| {
+            let (state, temp) = linked_state_with_undo_mode(Some(UndoMode::Full));
+            state.config.lock().expect("config lock").speleodb.undo_mode = UndoMode::Full;
+            let zip = revision_dump_with_undo_mode(None);
+            let mut dump = Dump::open(&zip).expect("open revision dump");
+
+            let mode = downloaded_revision_undo_mode(
+                &mut dump,
+                "misc/project.stalx",
+                &temp.path().join("project.stalx"),
+            )
+            .expect("read legacy policy");
+
+            assert_eq!(mode, UndoMode::Disabled);
         });
     }
 

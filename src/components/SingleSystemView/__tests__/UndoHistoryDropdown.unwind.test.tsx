@@ -36,7 +36,6 @@ const seedLink = (editing: boolean, forceEditing = false) =>
       forceEditing,
       forceEditAllowed: false,
       undoMode: 'full',
-      undoModeOverridden: false,
       remoteState: 'up_to_date',
       noAccess: false,
       serverError: null,

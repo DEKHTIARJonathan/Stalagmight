@@ -460,16 +460,13 @@ pub async fn speleodb_rewind_target(
 }
 
 /// [#303] Set the open project's per-project undo-history policy
-/// (`speleo_link.undo_mode`), or clear the override so it follows the global default.
+/// (`speleo_link.undo_mode`).
 ///
 /// EDIT-SESSION-REQUIRED: this writes the `.stalx`, which is project state that rides to
 /// the server in the next push, so every collaborator inherits it. Force editing uses
 /// the same gate deliberately - see `AppState::speleodb_set_undo_mode`.
 #[tauri::command]
-pub async fn speleodb_set_undo_mode(
-    app: AppHandle,
-    mode: Option<UndoMode>,
-) -> Result<(), SpeleoErrorDto> {
+pub async fn speleodb_set_undo_mode(app: AppHandle, mode: UndoMode) -> Result<(), SpeleoErrorDto> {
     run_blocking(app, move |s| s.speleodb_set_undo_mode(mode)).await
 }
 

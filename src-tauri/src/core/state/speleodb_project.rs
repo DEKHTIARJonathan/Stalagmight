@@ -352,12 +352,9 @@ impl AppState {
             has_unpushed_edits: true,
             last_edit_at: Some(chrono::Utc::now().to_rfc3339()),
             last_verify_at: None,
-            // [#303] A publish turns a LOCAL project into a managed one, and a local
-            // project has no undo policy - the fixed window is unconditional there. So
-            // the new link carries no override and follows the global default, unless
-            // this file was already managed (a re-publish of a detached copy), in which
-            // case its own answer is still the project's.
-            undo_mode: {
+            // [#303] A new link materializes the application default immediately.
+            // Re-publishing a detached managed copy preserves its explicit project value.
+            undo_mode: Some({
                 let db_guard = self.database.lock().map_err(|_| {
                     local_dto(SpeleoDbError::Io("database lock poisoned".to_owned()))
                 })?;
@@ -366,8 +363,8 @@ impl AppState {
                         "no open database after writing the cache file".to_owned(),
                     ))
                 })?;
-                super::speleodb_cache::preserved_undo_mode(db)
-            },
+                self.effective_undo_mode(super::speleodb_cache::preserved_undo_mode(db))
+            }),
         };
         {
             let db_guard = self

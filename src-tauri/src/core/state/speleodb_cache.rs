@@ -61,16 +61,16 @@ pub(super) fn preserved_display_settings(dest: &Path) -> HashMap<String, String>
 /// [#303] The `speleo_link.undo_mode` already recorded in the `.stalx` at `dest`.
 ///
 /// Every stamp site rewrites the WHOLE link row, so without this a pull / fast-forward /
-/// revision swap would reset the project's undo policy to "follow the global default",
-/// silently discarding a `Disabled` that the project owner set precisely because the
-/// project is too big to ship undo snapshots. The override rides in the pushed snapshot
+/// revision swap would reset the project's explicit undo policy, silently discarding a
+/// `Disabled` that the project owner set precisely because the
+/// project is too big to ship undo snapshots. The value rides in the pushed snapshot
 /// (it is project state, not machine state), so the value in the file we just extracted
 /// IS the authoritative answer and the stamp has to carry it forward.
 ///
-/// `None` when the file carries no link or no override - both of which correctly mean
-/// "follow the global default". Takes the handle each stamp site has ALREADY opened on
-/// the file it is about to stamp, rather than a path: a second connection to a file
-/// mid-replace is exactly what the rest of this module goes out of its way to avoid.
+/// `None` when the file carries no link or a legacy NULL. The caller materializes the
+/// application default before stamping the shared row. Takes the handle each stamp site
+/// has ALREADY opened on the file it is about to stamp, rather than a path: a second
+/// connection to a file mid-replace is exactly what the rest of this module avoids.
 pub(super) fn preserved_undo_mode(
     db: &crate::persistence::Database,
 ) -> Option<crate::models::UndoMode> {

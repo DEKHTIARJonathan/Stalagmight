@@ -36,7 +36,6 @@ const status = (o: Partial<SpeleoLinkStatus> = {}): SpeleoLinkStatus => ({
   exclude_geojson: false,
   // [#303] The hybrid undo stack's policy pair: Full, from the global default.
   undo_mode: 'full',
-  undo_mode_overridden: false,
   force_editing: false,
   allow_force_edit: false,
   project_id: null,
@@ -550,7 +549,6 @@ describe('speleoStore', () => {
         forceEditing: false,
         forceEditAllowed: false,
         undoMode: 'full',
-        undoModeOverridden: false,
         remoteState: 'up_to_date',
         noAccess: false,
         serverError: null,
@@ -1079,7 +1077,6 @@ describe('speleoStore', () => {
           forceEditing: false,
           forceEditAllowed: false,
           undoMode: 'full',
-          undoModeOverridden: false,
           remoteState: 'unknown',
           noAccess: false,
           serverError: null,

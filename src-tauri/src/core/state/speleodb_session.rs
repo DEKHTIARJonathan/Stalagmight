@@ -864,7 +864,7 @@ mod tests {
             has_unpushed_edits: false,
             last_edit_at: None,
             last_verify_at: None,
-            // [#303] NULL = follow the global undo-history default.
+            // [#303] NULL exercises the legacy initialization path.
             undo_mode: None,
         }))
         .expect("save link");

@@ -57,7 +57,6 @@ const link = (o: Partial<SpeleoLinkState>): SpeleoLinkState => ({
   forceEditing: false,
   forceEditAllowed: false,
   undoMode: 'full',
-  undoModeOverridden: false,
   remoteState: 'up_to_date',
   noAccess: false,
   serverError: null,

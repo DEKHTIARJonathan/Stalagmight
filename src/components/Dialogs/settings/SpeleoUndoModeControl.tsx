@@ -1,6 +1,5 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Button } from '../../common/Button';
 import { useSpeleoStore } from '../../../store/speleoStore';
 import { humanizeSpeleoError } from '../../../utils/speleoError';
 import type { UndoMode } from '../../../types/ipc.generated';
@@ -24,7 +23,6 @@ import type { UndoMode } from '../../../types/ipc.generated';
 export function SpeleoUndoModeControl() {
   const { t } = useTranslation();
   const mode = useSpeleoStore((s) => s.link?.undoMode ?? 'full');
-  const overridden = useSpeleoStore((s) => s.link?.undoModeOverridden ?? false);
   // Force editing deliberately uses the same edit gate as ordinary commands. It carries
   // conflict risk by design, but the user already accepted that responsibility when they
   // entered the mode, so this project-file setting remains available there too.
@@ -34,7 +32,7 @@ export function SpeleoUndoModeControl() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const apply = async (next: UndoMode | null) => {
+  const apply = async (next: UndoMode) => {
     setBusy(true);
     setError(null);
     try {
@@ -83,27 +81,6 @@ export function SpeleoUndoModeControl() {
       <div className="space-y-1.5">
         {option('full', t('speleodb.undoMode.full'), t('speleodb.undoMode.fullHint'))}
         {option('disabled', t('speleodb.undoMode.disabled'), t('speleodb.undoMode.disabledHint'))}
-      </div>
-
-      <div className="flex items-center gap-2 pt-2">
-        <span className="text-xs text-text-secondary" data-testid="speleodb-undo-mode-provenance">
-          {overridden
-            ? t('speleodb.undoMode.overridden')
-            : t('speleodb.undoMode.followingDefault')}
-        </span>
-        {/* Clearing the override is its own action: "Full" set on the project and "Full"
-            inherited from the application default are different states, and only the
-            latter keeps tracking a later change to that default. */}
-        {overridden && (
-          <Button
-            variant="secondary"
-            disabled={!canEdit || busy}
-            onClick={() => void apply(null)}
-            data-testid="speleodb-undo-mode-use-default"
-          >
-            {t('speleodb.undoMode.useDefault')}
-          </Button>
-        )}
       </div>
 
       {!canEdit && (
