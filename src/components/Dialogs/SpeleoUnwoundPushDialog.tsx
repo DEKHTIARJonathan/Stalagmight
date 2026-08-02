@@ -7,6 +7,7 @@ import { handBackProject, performQuit, readPendingExit } from '../../utils/quit'
 import { trackDialogComplete } from '../../utils/telemetry';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
+import { SpeleoPushFailureNotice } from './SpeleoPushFailureNotice';
 
 /**
  * [#303] Raised when a push is attempted on a copy that is dirty ONLY because a chain step
@@ -114,8 +115,12 @@ export default function SpeleoUnwoundPushDialog() {
       const resolved = await done(message, { acceptOlderVersion: true });
       if (resolved?.kind === 'released') {
         trackDialogComplete('speleodb-unwound-push');
+        closeDialog();
+      } else {
+        // The lock is still held and the push did not finish. Keep the confirmation,
+        // its commit message, and its retry button alive just like SpeleoDoneDialog.
+        setBusy(false);
       }
-      closeDialog();
       return;
     }
     const resolved = await done(message, { acceptOlderVersion: true });
@@ -149,6 +154,8 @@ export default function SpeleoUnwoundPushDialog() {
           {t('speleodb.unwoundPush.warning')}
         </p>
         <p className="text-xs text-text-secondary">{t('speleodb.unwoundPush.discardHint')}</p>
+
+        <SpeleoPushFailureNotice />
 
         <div className="flex justify-end gap-2 pt-2 border-t border-border">
           <Button

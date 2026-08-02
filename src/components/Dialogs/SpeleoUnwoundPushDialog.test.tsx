@@ -58,6 +58,7 @@ describe('SpeleoUnwoundPushDialog (#303)', () => {
     useSpeleoStore.setState({
       remoteProjectId: 'p1',
       refreshLinkStatus: vi.fn(async () => {}),
+      banner: null,
     });
     useProjectStore.setState({
       refreshProjectState: vi.fn(async () => {}),
@@ -116,6 +117,36 @@ describe('SpeleoUnwoundPushDialog (#303)', () => {
         expect.objectContaining({ message: 'a commit message' }),
       ),
     );
+  });
+
+  it('keeps the message and retry surface when the release attempt fails', async () => {
+    invokeIpcMock
+      .mockRejectedValueOnce(new Error('offline'))
+      .mockResolvedValueOnce({ kind: 'released' });
+    open();
+    render(<SpeleoUnwoundPushDialog />);
+
+    const pushAnyway = screen.getByTestId('speleodb-unwound-push-push-anyway');
+    await userEvent.click(pushAnyway);
+
+    const notice = await screen.findByTestId('speleodb-push-failure-inline');
+    expect(notice).toHaveTextContent('offline');
+    expect(useUIStore.getState().activeDialog).toBe('speleodb-unwound-push');
+    expect(pushAnyway).toBeEnabled();
+
+    await userEvent.click(pushAnyway);
+    await waitFor(() => expect(useUIStore.getState().activeDialog).toBeNull());
+    const doneCalls = invokeIpcMock.mock.calls.filter(([command]) => command === 'speleodb_done');
+    expect(doneCalls).toEqual([
+      [
+        'speleodb_done',
+        expect.objectContaining({ message: 'a commit message', acceptOlderVersion: true }),
+      ],
+      [
+        'speleodb_done',
+        expect.objectContaining({ message: 'a commit message', acceptOlderVersion: true }),
+      ],
+    ]);
   });
 
   it('acknowledges an explicit push without releasing the lock', async () => {
