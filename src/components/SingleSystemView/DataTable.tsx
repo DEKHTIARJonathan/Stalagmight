@@ -1193,7 +1193,10 @@ export default function DataTable({ sections }: DataTableProps) {
       if (shot.id < 0) return <span className="opacity-50">+</span>;
       const shotIndex = shotIndexAt(rowIndex);
       return selectedSectionId !== null && shotIndex !== null ? (
-        <span onDoubleClick={() => handlePanToShot(shot)}>
+        <span
+          onDoubleClick={() => handlePanToShot(shot)}
+          data-testid={`data-table-shot-row-label-${selectedSectionId}-${shot.id}`}
+        >
           <EntityBlob entity="shot">{formatShotId(selectedSectionId, shotIndex + 1)}</EntityBlob>
         </span>
       ) : (
@@ -1377,6 +1380,7 @@ export default function DataTable({ sections }: DataTableProps) {
           setSource('data-table');
           triggerCenterOnStation(station.station_ref);
         }}
+        data-testid={`data-table-station-row-label-${station.station_ref.section_id}-${station.station_ref.station_index}`}
       >
         <EntityBlob entity="station">
           {formatStationId(station.station_ref.section_id, station.station_ref.station_index)}

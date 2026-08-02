@@ -437,7 +437,7 @@ test.describe('ID=0 Edge Cases', () => {
     });
     await expect(dialog).toBeVisible({ timeout: 3000 });
     // Check the select shows "Out"
-    await expect(directionSelect.locator('button')).toHaveText(/Out/i);
+    await expect(directionSelect).toHaveText(/Out/i);
   });
 
   test('Edit Section dialog handles save without changes for id=0', async ({ page }) => {

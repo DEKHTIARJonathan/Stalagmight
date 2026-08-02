@@ -7,6 +7,7 @@ const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..
 const COMPONENT_ROOT = path.join(REPO_ROOT, 'src', 'components');
 
 export const INTERACTIVE_TAGS = new Set([
+  'a',
   'button',
   'input',
   'select',
@@ -22,18 +23,62 @@ export const INTERACTIVE_TAGS = new Set([
   'PanelOpenerTab',
 ]);
 
+const INTERACTIVE_ROLES = new Set([
+  'button',
+  'checkbox',
+  'combobox',
+  'link',
+  'menuitem',
+  'option',
+  'radio',
+  'switch',
+  'tab',
+]);
+
+const INTERACTION_HANDLERS = new Set([
+  'onClick',
+  'onContextMenu',
+  'onDoubleClick',
+]);
+
 function hasTestId(node) {
   return node.attributes.properties.some(
     (attr) => ts.isJsxAttribute(attr) && ['data-testid', 'testId'].includes(attr.name.getText()),
   );
 }
 
-function literalTestId(node) {
+function literalAttribute(node, names) {
   const attr = node.attributes.properties.find(
-    (candidate) => ts.isJsxAttribute(candidate) && candidate.name.getText() === 'data-testid',
+    (candidate) => ts.isJsxAttribute(candidate) && names.includes(candidate.name.getText()),
   );
   if (!attr || !ts.isJsxAttribute(attr) || !attr.initializer) return null;
-  return ts.isStringLiteral(attr.initializer) ? attr.initializer.text : null;
+  if (ts.isStringLiteral(attr.initializer)) return attr.initializer.text;
+  if (
+    ts.isJsxExpression(attr.initializer) &&
+    attr.initializer.expression &&
+    ts.isStringLiteral(attr.initializer.expression)
+  ) {
+    return attr.initializer.expression.text;
+  }
+  return null;
+}
+
+function literalTestId(node) {
+  return literalAttribute(node, ['data-testid', 'testId']);
+}
+
+function hasAttribute(node, names) {
+  return node.attributes.properties.some(
+    (attr) => ts.isJsxAttribute(attr) && names.includes(attr.name.getText()),
+  );
+}
+
+function isInteractive(node, tag) {
+  if (INTERACTIVE_TAGS.has(tag)) return true;
+  if (tag[0] !== tag[0]?.toLowerCase()) return false;
+  const role = literalAttribute(node, ['role']);
+  if (role && INTERACTIVE_ROLES.has(role)) return true;
+  return hasAttribute(node, [...INTERACTION_HANDLERS]);
 }
 
 function isInsideMapCallback(node) {
@@ -58,7 +103,7 @@ export function analyzeSource(fileName, sourceText) {
     if (ts.isJsxOpeningElement(node) || ts.isJsxSelfClosingElement(node)) {
       const tag = node.tagName.getText(source);
       const line = source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1;
-      if (INTERACTIVE_TAGS.has(tag) && !hasTestId(node)) {
+      if (isInteractive(node, tag) && !hasTestId(node)) {
         findings.push({ fileName, line, message: `<${tag}> has no data-testid/testId` });
       }
       const literal = literalTestId(node);
@@ -66,7 +111,7 @@ export function analyzeSource(fileName, sourceText) {
         findings.push({
           fileName,
           line,
-          message: `literal data-testid "${literal}" is rendered inside map(); include row identity`,
+          message: `literal test ID "${literal}" is rendered inside map(); include row identity`,
         });
       }
     }

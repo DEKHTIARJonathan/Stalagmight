@@ -358,7 +358,12 @@ export function DialogWrapper({
       tabIndex={-1}
       onKeyDown={handleKeyDown}
     >
-      <div className="absolute inset-0 bg-overlay" onMouseDown={handleBackdropMouseDown} onClick={handleBackdropClick} />
+      <div
+        className="absolute inset-0 bg-overlay"
+        onMouseDown={handleBackdropMouseDown}
+        onClick={handleBackdropClick}
+        data-testid={testId ? `${testId}-backdrop` : 'dialog-backdrop'}
+      />
       <div
         ref={dialogContentRef}
         role="dialog"
@@ -396,7 +401,11 @@ export function DialogWrapper({
           className="fixed inset-0 z-[60] flex items-center justify-center"
           tabIndex={-1}
         >
-          <div className="absolute inset-0 bg-overlay" onClick={handleCancelDiscard} />
+          <div
+            className="absolute inset-0 bg-overlay"
+            onClick={handleCancelDiscard}
+            data-testid={testId ? `${testId}-discard-backdrop` : 'dialog-discard-backdrop'}
+          />
           <div
             role="alertdialog"
             aria-modal="true"

@@ -534,6 +534,7 @@ export function Select({
         type="button"
         role="combobox"
         data-testid={testId}
+        data-dropdown-open={isOpen || undefined}
         className={`w-full px-3 py-2 bg-background border border-border rounded text-left flex items-center justify-between ${
           disabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer hover:border-accent'
         }`}

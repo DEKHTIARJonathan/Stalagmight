@@ -863,6 +863,7 @@ export function ShotTableEditor({
         <div
           className="fixed inset-0 z-50"
           onClick={closeContextMenu}
+          data-testid="shot-context-menu-backdrop"
           onContextMenu={(e) => {
             e.preventDefault();
             closeContextMenu();

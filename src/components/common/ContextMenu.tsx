@@ -772,7 +772,7 @@ export default function ContextMenu() {
 
   return (
     <div className="fixed inset-0 z-50">
-      <div className="absolute inset-0" onClick={closeDialog} />
+      <div className="absolute inset-0" onClick={closeDialog} data-testid="context-menu-backdrop" />
       <div
         ref={menuRef}
         className="absolute bg-panel border border-border rounded-lg shadow-xl py-1 min-w-[180px]"

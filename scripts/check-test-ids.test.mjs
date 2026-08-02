@@ -19,6 +19,29 @@ assert.match(
   /include row identity/,
 );
 
+assert.match(
+  analyzeSource('anchor.tsx', 'const view = <a href="https://example.com">Website</a>;')[0]?.message ?? '',
+  /has no data-testid/,
+);
+
+assert.match(
+  analyzeSource('role.tsx', 'const view = <div role="button" tabIndex={0}>Open</div>;')[0]?.message ?? '',
+  /has no data-testid/,
+);
+
+assert.match(
+  analyzeSource('handler.tsx', 'const view = <div onClick={open}>Open</div>;')[0]?.message ?? '',
+  /has no data-testid/,
+);
+
+assert.match(
+  analyzeSource(
+    'repeated-prop.tsx',
+    'const view = rows.map((row) => <Button testId="remove-row">Remove</Button>);',
+  )[0]?.message ?? '',
+  /include row identity/,
+);
+
 assert.deepEqual(
   analyzeSource(
     'unique.tsx',

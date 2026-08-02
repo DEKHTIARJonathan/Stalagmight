@@ -101,7 +101,11 @@ export function AlertDialog({
       tabIndex={-1}
       onKeyDown={handleKeyDown}
     >
-      <div className="absolute inset-0 bg-overlay" onClick={handleBackdropClick} />
+      <div
+        className="absolute inset-0 bg-overlay"
+        onClick={handleBackdropClick}
+        data-testid={testId ? `${testId}-backdrop` : 'alert-dialog-backdrop'}
+      />
       <div
         ref={dialogRef}
         role="alertdialog"
