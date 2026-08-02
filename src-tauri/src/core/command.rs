@@ -500,6 +500,47 @@ impl CommandResult {
 }
 
 impl Command {
+    /// Whether this command can change measured survey geometry.
+    ///
+    /// This classification belongs to the command rather than to any one executor:
+    /// geometry reconciliation, cache invalidation, and other consumers must agree on
+    /// the same exhaustive answer. `UpdateShot` is instance-aware because the variant
+    /// carries both measurements and metadata, and a batch inherits the union of its
+    /// members.
+    #[must_use]
+    pub fn affects_geometry(&self) -> bool {
+        match self {
+            Command::CreateProject { .. }
+            | Command::OpenProject { .. }
+            | Command::SaveProject { .. }
+            | Command::CloseProject
+            | Command::UpdateSectionMetadata { .. }
+            | Command::SetShotKind { .. }
+            | Command::SetStationComment { .. }
+            | Command::MoveComment { .. }
+            | Command::RepairIntegrity
+            | Command::UpdateProjectSettings => false,
+            Command::UpdateShot { updates, .. } => updates.touches_geometry(),
+            Command::Batch { commands } => commands.iter().any(Command::affects_geometry),
+            Command::CreateSection { .. }
+            | Command::DeleteSection { .. }
+            | Command::ReverseSection { .. }
+            | Command::CreateShot { .. }
+            | Command::DeleteShot { .. }
+            | Command::MergeStations { .. }
+            | Command::UnmergeStations { .. }
+            | Command::UnmergeStationPair { .. }
+            | Command::CreateLoopClosure { .. }
+            | Command::RemoveLoopClosure { .. }
+            | Command::SetZeroDatum { .. }
+            | Command::RemoveZeroDatum { .. }
+            | Command::MoveSection { .. }
+            | Command::MoveSegment { .. }
+            | Command::MoveStation { .. }
+            | Command::MergeProjects { .. } => true,
+        }
+    }
+
     /// Reduce a reverse log to its NET effect: keep an id only when it occurs an
     /// ODD number of times, in first-occurrence order.
     ///
@@ -754,6 +795,213 @@ mod tests {
              the tag deserializable, or bump SCHEMA_VERSION and call \
              drop_legacy_undo_history in the new migration step. Saw: {variants:?}"
         );
+    }
+
+    #[test]
+    fn geometry_classification_enumerates_every_command_variant() {
+        let station_a = StationRef::new(1, 0);
+        let station_b = StationRef::new(1, 1);
+        let geometry_update = ShotUpdates {
+            length: Some(4.0),
+            ..Default::default()
+        };
+        let cases = vec![
+            (
+                Command::CreateProject {
+                    name: String::new(),
+                    location: None,
+                },
+                false,
+            ),
+            (
+                Command::OpenProject {
+                    path: PathBuf::new(),
+                },
+                false,
+            ),
+            (Command::SaveProject { path: None }, false),
+            (Command::CloseProject, false),
+            (
+                Command::CreateSection {
+                    name: None,
+                    surveyor: None,
+                    date: None,
+                    color: String::new(),
+                    direction: None,
+                    shots: Vec::new(),
+                },
+                true,
+            ),
+            (Command::DeleteSection { section_id: 1 }, true),
+            (
+                Command::UpdateSectionMetadata {
+                    section_id: 1,
+                    updates: SectionUpdates::default(),
+                },
+                false,
+            ),
+            (
+                Command::ReverseSection {
+                    section_id: 1,
+                    swap_left_right: false,
+                },
+                true,
+            ),
+            (
+                Command::CreateShot {
+                    section_id: 1,
+                    shot: ShotData::default(),
+                    after_shot_id: None,
+                    before_shot_id: None,
+                },
+                true,
+            ),
+            (
+                Command::UpdateShot {
+                    section_id: 1,
+                    shot_id: 1,
+                    updates: geometry_update,
+                },
+                true,
+            ),
+            (
+                Command::DeleteShot {
+                    section_id: 1,
+                    shot_id: 1,
+                },
+                true,
+            ),
+            (
+                Command::SetShotKind {
+                    section_id: 1,
+                    shot_id: 1,
+                    kind: ShotKind::Jump,
+                },
+                false,
+            ),
+            (
+                Command::MergeStations {
+                    station_a,
+                    station_b,
+                },
+                true,
+            ),
+            (
+                Command::UnmergeStations {
+                    station_ref: station_a,
+                },
+                true,
+            ),
+            (
+                Command::UnmergeStationPair {
+                    station_a,
+                    station_b,
+                },
+                true,
+            ),
+            (
+                Command::CreateLoopClosure {
+                    station_a,
+                    station_b,
+                    closure_strategy: ClosureStrategy::ProportionalByLength,
+                },
+                true,
+            ),
+            (Command::RemoveLoopClosure { closure_id: 1 }, true),
+            (
+                Command::SetZeroDatum {
+                    station_ref: station_a,
+                    coordinates: GpsCoordinates::new(1.0, 2.0, 3.0).unwrap(),
+                },
+                true,
+            ),
+            (
+                Command::RemoveZeroDatum {
+                    station_ref: station_a,
+                },
+                true,
+            ),
+            (
+                Command::SetStationComment {
+                    station_ref: station_a,
+                    comment: None,
+                },
+                false,
+            ),
+            (
+                Command::MoveSection {
+                    section_id: 1,
+                    offset: Coordinates::default(),
+                },
+                true,
+            ),
+            (
+                Command::MoveSegment {
+                    section_id: 1,
+                    offset: Coordinates::default(),
+                },
+                true,
+            ),
+            (
+                Command::MoveStation {
+                    station_ref: station_a,
+                    offset: Coordinates::default(),
+                },
+                true,
+            ),
+            (
+                Command::MoveComment {
+                    source: CommentHolder::Station {
+                        station_ref: station_a,
+                    },
+                    target: CommentHolder::Station {
+                        station_ref: station_b,
+                    },
+                    swap: false,
+                },
+                false,
+            ),
+            (
+                Command::Batch {
+                    commands: vec![Command::CloseProject],
+                },
+                false,
+            ),
+            (
+                Command::MergeProjects {
+                    source_paths: Vec::new(),
+                    output_path: PathBuf::new(),
+                    output_name: String::new(),
+                    archive_originals: false,
+                },
+                true,
+            ),
+            (Command::RepairIntegrity, false),
+            (Command::UpdateProjectSettings, false),
+        ];
+
+        assert_eq!(
+            cases.len(),
+            28,
+            "add every new Command variant to this table"
+        );
+        for (command, expected) in cases {
+            assert_eq!(command.affects_geometry(), expected, "{command:?}");
+        }
+
+        let metadata_update = Command::UpdateShot {
+            section_id: 1,
+            shot_id: 1,
+            updates: ShotUpdates {
+                comment: Some(Some("metadata".to_owned())),
+                ..Default::default()
+            },
+        };
+        assert!(!metadata_update.affects_geometry());
+        assert!(Command::Batch {
+            commands: vec![metadata_update, Command::DeleteSection { section_id: 1 }],
+        }
+        .affects_geometry());
     }
 
     #[test]
