@@ -58,7 +58,12 @@ impl UndoStack {
 
     /// [#303] Total estimated size of the undo stack (the budget's subject).
     pub fn estimated_undo_bytes(&self) -> usize {
-        self.undo_stack.iter().map(Self::estimated_size).sum()
+        self.undo_bytes
+    }
+
+    /// [#303] Total estimated size of the redo stack.
+    pub fn estimated_redo_bytes(&self) -> usize {
+        self.redo_bytes
     }
 
     /// Apply whichever bound is active to BOTH stacks, evicting oldest-first.
@@ -69,17 +74,18 @@ impl UndoStack {
     pub(super) fn enforce_depth_limit(&mut self) {
         match self.depth_limit {
             DepthLimit::Count(limit) => {
-                Self::trim_to_count(&mut self.undo_stack, limit);
-                Self::trim_to_count(&mut self.redo_stack, limit);
+                Self::trim_to_count(&mut self.undo_stack, &mut self.undo_bytes, limit);
+                Self::trim_to_count(&mut self.redo_stack, &mut self.redo_bytes, limit);
             }
             DepthLimit::Bytes(budget) => {
-                let (undo_dropped, undo_bytes) = Self::trim_to_bytes(&mut self.undo_stack, budget);
-                Self::trim_to_bytes(&mut self.redo_stack, budget);
+                let undo_dropped =
+                    Self::trim_to_bytes(&mut self.undo_stack, &mut self.undo_bytes, budget);
+                Self::trim_to_bytes(&mut self.redo_stack, &mut self.redo_bytes, budget);
                 if undo_dropped > 0 {
                     tracing::info!(
                         dropped = undo_dropped,
                         remaining = self.undo_stack.len(),
-                        estimated_bytes = undo_bytes,
+                        estimated_bytes = self.undo_bytes,
                         budget,
                         purpose = "bound a Full-mode SpeleoDB project's undo history (#303)",
                         "Trimmed oldest undo entries to stay within the undo byte budget"
@@ -89,23 +95,24 @@ impl UndoStack {
         }
     }
 
-    fn trim_to_count(stack: &mut VecDeque<UndoEntry>, limit: usize) {
+    fn trim_to_count(stack: &mut VecDeque<UndoEntry>, total: &mut usize, limit: usize) {
         while stack.len() > limit {
-            stack.pop_front();
+            if let Some(front) = stack.pop_front() {
+                *total = total.saturating_sub(Self::estimated_size(&front));
+            }
         }
     }
 
-    /// Evict from the front until the estimated total is at most `budget`, always
-    /// keeping the newest entry. Returns (evicted, remaining estimated bytes).
-    fn trim_to_bytes(stack: &mut VecDeque<UndoEntry>, budget: usize) -> (u64, usize) {
-        let mut total: usize = stack.iter().map(Self::estimated_size).sum();
+    /// Evict from the front until the running total is at most `budget`, always
+    /// keeping the newest entry. Returns the number evicted.
+    fn trim_to_bytes(stack: &mut VecDeque<UndoEntry>, total: &mut usize, budget: usize) -> u64 {
         let mut dropped = 0;
-        while total > budget && stack.len() > 1 {
+        while *total > budget && stack.len() > 1 {
             if let Some(front) = stack.pop_front() {
-                total = total.saturating_sub(Self::estimated_size(&front));
+                *total = total.saturating_sub(Self::estimated_size(&front));
                 dropped += 1;
             }
         }
-        (dropped, total)
+        dropped
     }
 }

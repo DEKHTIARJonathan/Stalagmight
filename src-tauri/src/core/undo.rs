@@ -82,6 +82,10 @@ pub struct UndoStack {
     undo_stack: VecDeque<UndoEntry>,
     /// Commands that can be redone
     redo_stack: VecDeque<UndoEntry>,
+    /// Running estimated byte total for `undo_stack`.
+    undo_bytes: usize,
+    /// Running estimated byte total for `redo_stack`.
+    redo_bytes: usize,
     /// Maximum entries to keep in memory
     history_limit: usize,
     /// [#303] The active bound. `Count(history_limit)` unless the open project is a
@@ -320,6 +324,8 @@ impl Default for UndoStack {
         Self {
             undo_stack: VecDeque::new(),
             redo_stack: VecDeque::new(),
+            undo_bytes: 0,
+            redo_bytes: 0,
             history_limit: DEFAULT_UNDO_HISTORY_LIMIT,
             depth_limit: DepthLimit::Count(DEFAULT_UNDO_HISTORY_LIMIT),
             inherited_through: None,
@@ -338,6 +344,8 @@ impl UndoStack {
         Self {
             undo_stack: VecDeque::new(),
             redo_stack: VecDeque::new(),
+            undo_bytes: 0,
+            redo_bytes: 0,
             history_limit,
             depth_limit: DepthLimit::Count(history_limit),
             inherited_through: None,
@@ -489,12 +497,14 @@ impl UndoStack {
 
     /// Pop from undo stack and return the entry
     pub fn pop_undo(&mut self) -> Option<UndoEntry> {
-        self.undo_stack.pop_back()
+        let entry = self.undo_stack.pop_back()?;
+        self.undo_bytes = self.undo_bytes.saturating_sub(Self::estimated_size(&entry));
+        Some(entry)
     }
 
     /// Push to redo stack
     pub fn push_redo(&mut self, entry: UndoEntry) {
-        self.redo_stack.push_back(entry);
+        self.push_redo_tracked(entry);
         // The redo stack is bounded too - undoing a long delete-heavy session moves
         // every one of those whole-project snapshots across.
         self.enforce_depth_limit();
@@ -502,7 +512,9 @@ impl UndoStack {
 
     /// Pop from redo stack
     pub fn pop_redo(&mut self) -> Option<UndoEntry> {
-        self.redo_stack.pop_back()
+        let entry = self.redo_stack.pop_back()?;
+        self.redo_bytes = self.redo_bytes.saturating_sub(Self::estimated_size(&entry));
+        Some(entry)
     }
 
     /// Push back to undo stack (for redo operations)
@@ -520,7 +532,14 @@ impl UndoStack {
     /// they differ in what else the append implies (a new edit also clears redo; a replay
     /// must not).
     fn push_undo_tracked(&mut self, entry: UndoEntry) {
+        self.undo_bytes = self.undo_bytes.saturating_add(Self::estimated_size(&entry));
         self.undo_stack.push_back(entry);
+    }
+
+    /// Append to the redo stack without applying the active bound.
+    fn push_redo_tracked(&mut self, entry: UndoEntry) {
+        self.redo_bytes = self.redo_bytes.saturating_add(Self::estimated_size(&entry));
+        self.redo_stack.push_back(entry);
     }
 
     /// Check if undo is available
@@ -535,8 +554,13 @@ impl UndoStack {
 
     /// Clear both stacks
     pub fn clear(&mut self) {
+        self.clear_undo();
+        self.clear_redo();
+    }
+
+    fn clear_undo(&mut self) {
         self.undo_stack.clear();
-        self.redo_stack.clear();
+        self.undo_bytes = 0;
     }
 
     /// [#303] Drop every undo entry whose timestamp is at or before `cutoff`, and the
@@ -563,11 +587,16 @@ impl UndoStack {
         let keep_from = self
             .undo_stack
             .partition_point(|e| e.timestamp.is_none_or(|ts| ts <= cutoff));
-        self.undo_stack.drain(..keep_from);
+        let dropped_bytes = self
+            .undo_stack
+            .drain(..keep_from)
+            .map(|entry| Self::estimated_size(&entry))
+            .sum::<usize>();
+        self.undo_bytes = self.undo_bytes.saturating_sub(dropped_bytes);
         // Redo is never uploaded (clarification #1) and a redo branch that replays onto
         // a state the server has now committed is exactly the stale-replay hazard, so it
         // goes wholesale.
-        self.redo_stack.clear();
+        self.clear_redo();
         before - self.undo_stack.len()
     }
 
@@ -580,6 +609,7 @@ impl UndoStack {
     /// not be coupled to whether an entry was pushed.
     pub fn clear_redo(&mut self) {
         self.redo_stack.clear();
+        self.redo_bytes = 0;
     }
 
     /// Get the last command that can be undone
@@ -1792,6 +1822,63 @@ mod tests {
         let (cmd, data) = sized_entry(payload, "S0");
         probe.push_with_data(cmd, data);
         probe.estimated_undo_bytes()
+    }
+
+    fn assert_cached_byte_totals(stack: &UndoStack) {
+        assert_eq!(
+            stack.estimated_undo_bytes(),
+            stack
+                .undo_stack
+                .iter()
+                .map(UndoStack::estimated_size)
+                .sum::<usize>()
+        );
+        assert_eq!(
+            stack.estimated_redo_bytes(),
+            stack
+                .redo_stack
+                .iter()
+                .map(UndoStack::estimated_size)
+                .sum::<usize>()
+        );
+    }
+
+    #[test]
+    fn running_byte_totals_follow_every_stack_mutation() {
+        let mut stack = UndoStack::new_with_limit(10);
+        for i in 0..3 {
+            let (cmd, data) = sized_entry(128 + i * 32, &format!("S{i}"));
+            stack.push_with_data(cmd, data);
+        }
+        assert_cached_byte_totals(&stack);
+
+        let undone = stack.pop_undo().expect("entry to undo");
+        stack.push_redo(undone);
+        assert_cached_byte_totals(&stack);
+
+        let redone = stack.pop_redo().expect("entry to redo");
+        stack.push_undo(redone);
+        assert_cached_byte_totals(&stack);
+
+        stack.set_history_limit(2);
+        assert_cached_byte_totals(&stack);
+
+        let newest = stack.newest_stamp().expect("timestamped entries");
+        stack.drop_entries_up_to(newest);
+        assert_cached_byte_totals(&stack);
+
+        let entry = UndoEntry {
+            command_bytes: None,
+            command: test_create_section_command("persisted"),
+            undo_data: UndoData::ProjectSnapshot("x".repeat(256)),
+            timestamp: None,
+        };
+        let persisted = UndoStack::serialize_entry(&entry).expect("serialize entry");
+        stack.load_from_persisted(vec![persisted]);
+        assert_cached_byte_totals(&stack);
+
+        stack.clear();
+        assert_cached_byte_totals(&stack);
     }
 
     /// Spec item 7: Full mode keeps MORE than `undo_history_limit` entries. The count

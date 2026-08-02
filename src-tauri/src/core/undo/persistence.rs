@@ -149,14 +149,13 @@ impl UndoStack {
 
     /// Load legacy persisted undo data.
     pub fn load_from_persisted(&mut self, entries: Vec<(String, String)>) {
-        self.undo_stack.clear();
-        self.redo_stack.clear();
+        self.clear();
 
         let mut dropped: Vec<String> = Vec::new();
         for (command_json, undo_data_json) in entries {
             if let Some(entry) = Self::deserialize_entry(&command_json, &undo_data_json) {
                 if Self::is_applicable(&entry) {
-                    self.undo_stack.push_back(entry);
+                    self.push_undo_tracked(entry);
                 } else {
                     dropped.push(entry.command.description());
                 }
@@ -172,8 +171,7 @@ impl UndoStack {
         undo_entries: Vec<(String, String, Option<String>)>,
         redo_entries: Vec<(String, String, Option<String>)>,
     ) {
-        self.undo_stack.clear();
-        self.redo_stack.clear();
+        self.clear();
 
         if !Self::undo_timestamps_are_valid(&undo_entries) {
             tracing::warn!(
@@ -191,7 +189,7 @@ impl UndoStack {
                     timestamp_str.as_deref(),
                 ) {
                     if Self::is_applicable(&entry) {
-                        self.undo_stack.push_back(entry);
+                        self.push_undo_tracked(entry);
                     } else {
                         dropped.push(entry.command.description());
                     }
@@ -209,7 +207,7 @@ impl UndoStack {
                     "loaded undo history is not in time order; dropping it rather than risk \
                  deleting the wrong entries on the next push"
                 );
-                self.undo_stack.clear();
+                self.clear_undo();
             }
         }
 
@@ -228,7 +226,7 @@ impl UndoStack {
                     &undo_data_json,
                     timestamp_str.as_deref(),
                 ) {
-                    self.redo_stack.push_back(entry);
+                    self.push_redo_tracked(entry);
                 }
             }
         }
