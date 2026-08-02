@@ -1437,6 +1437,50 @@ mod tests {
         }
     }
 
+    #[test]
+    fn load_rejects_a_malformed_undo_timestamp_instead_of_treating_it_as_legacy() {
+        let mut stack = UndoStack::new();
+        let entry = UndoStack::serialize_entry_with_timestamp(&UndoEntry {
+            command_bytes: None,
+            command: test_create_section_command("Malformed"),
+            undo_data: UndoData::InverseCommand(test_delete_section_command(1)),
+            timestamp: None,
+        })
+        .unwrap();
+
+        stack.load_from_persisted_with_timestamps(
+            vec![(entry.0, entry.1, Some("not-a-timestamp".to_owned()))],
+            vec![],
+        );
+
+        assert!(stack.is_empty());
+    }
+
+    #[test]
+    fn load_rejects_a_missing_timestamp_after_a_stamped_entry() {
+        let row = |name: &str, timestamp: Option<&str>| {
+            let serialized = UndoStack::serialize_entry_with_timestamp(&UndoEntry {
+                command_bytes: None,
+                command: test_create_section_command(name),
+                undo_data: UndoData::InverseCommand(test_delete_section_command(1)),
+                timestamp: None,
+            })
+            .unwrap();
+            (serialized.0, serialized.1, timestamp.map(str::to_owned))
+        };
+        let mut stack = UndoStack::new();
+
+        stack.load_from_persisted_with_timestamps(
+            vec![
+                row("Stamped", Some("2026-08-01T00:00:00+00:00")),
+                row("Missing", None),
+            ],
+            vec![],
+        );
+
+        assert!(stack.is_empty());
+    }
+
     /// Guards against over-filtering. `redo_inner`'s catch-all arm re-executes
     /// `entry.command` and never reads `undo_data`, so a `UndoData::None` REDO entry
     /// redoes correctly. Dropping it would destroy working functionality and shift

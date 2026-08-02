@@ -72,9 +72,10 @@ impl UndoStack {
     ) -> Option<UndoEntry> {
         let command = Self::deserialize_command(command_json)?;
         let undo_data: UndoData = serde_json::from_str(undo_data_json).ok()?;
-        let timestamp = timestamp_str
-            .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
-            .map(|dt| dt.with_timezone(&Utc));
+        let timestamp = match timestamp_str {
+            Some(raw) => Some(DateTime::parse_from_rfc3339(raw).ok()?.with_timezone(&Utc)),
+            None => None,
+        };
         Some(UndoEntry {
             command_bytes: None,
             command,
@@ -114,6 +115,38 @@ impl UndoStack {
         );
     }
 
+    /// Validate the raw undo timestamp column before any rows are filtered.
+    /// Legacy `NULL`s may only be a prefix, followed by parseable non-decreasing stamps.
+    fn undo_timestamps_are_valid(entries: &[(String, String, Option<String>)]) -> bool {
+        let mut previous: Option<DateTime<Utc>> = None;
+        let mut saw_timestamp = false;
+        for (_, _, raw) in entries {
+            let Some(raw) = raw else {
+                if saw_timestamp {
+                    return false;
+                }
+                continue;
+            };
+            let Ok(stamp) = DateTime::parse_from_rfc3339(raw) else {
+                return false;
+            };
+            let stamp = stamp.with_timezone(&Utc);
+            if previous.is_some_and(|prev| stamp < prev) {
+                return false;
+            }
+            previous = Some(stamp);
+            saw_timestamp = true;
+        }
+        true
+    }
+
+    fn timestamps_are_parseable(entries: &[(String, String, Option<String>)]) -> bool {
+        entries.iter().all(|(_, _, raw)| {
+            raw.as_deref()
+                .is_none_or(|stamp| DateTime::parse_from_rfc3339(stamp).is_ok())
+        })
+    }
+
     /// Load legacy persisted undo data.
     pub fn load_from_persisted(&mut self, entries: Vec<(String, String)>) {
         self.undo_stack.clear();
@@ -142,44 +175,61 @@ impl UndoStack {
         self.undo_stack.clear();
         self.redo_stack.clear();
 
-        let mut dropped: Vec<String> = Vec::new();
-        for (command_json, undo_data_json, timestamp_str) in undo_entries {
-            if let Some(entry) = Self::deserialize_entry_with_timestamp(
-                &command_json,
-                &undo_data_json,
-                timestamp_str.as_deref(),
-            ) {
-                if Self::is_applicable(&entry) {
-                    self.undo_stack.push_back(entry);
-                } else {
-                    dropped.push(entry.command.description());
+        if !Self::undo_timestamps_are_valid(&undo_entries) {
+            tracing::warn!(
+                entries = undo_entries.len(),
+                purpose = "refuse invalid persisted undo timestamps (#303)",
+                "loaded undo history has malformed, non-monotonic, or misplaced missing \
+                 timestamps; dropping it rather than risk an incorrect push cutoff"
+            );
+        } else {
+            let mut dropped: Vec<String> = Vec::new();
+            for (command_json, undo_data_json, timestamp_str) in undo_entries {
+                if let Some(entry) = Self::deserialize_entry_with_timestamp(
+                    &command_json,
+                    &undo_data_json,
+                    timestamp_str.as_deref(),
+                ) {
+                    if Self::is_applicable(&entry) {
+                        self.undo_stack.push_back(entry);
+                    } else {
+                        dropped.push(entry.command.description());
+                    }
                 }
             }
-        }
-        Self::warn_dropped_unapplicable(&dropped);
+            Self::warn_dropped_unapplicable(&dropped);
 
-        // Stack order is undo order, so a non-monotonic timestamp sequence cannot be
-        // sorted safely. Drop it rather than letting the push cutoff delete an arbitrary
-        // prefix.
-        if !Self::stamps_ascend(&self.undo_stack) {
-            tracing::warn!(
-                entries = self.undo_stack.len(),
-                purpose = "refuse a non-monotonic undo stack (#303)",
-                "loaded undo history is not in time order; dropping it rather than risk \
+            // Stack order is undo order, so a non-monotonic timestamp sequence cannot be
+            // sorted safely. Drop it rather than letting the push cutoff delete an arbitrary
+            // prefix.
+            if !Self::stamps_ascend(&self.undo_stack) {
+                tracing::warn!(
+                    entries = self.undo_stack.len(),
+                    purpose = "refuse a non-monotonic undo stack (#303)",
+                    "loaded undo history is not in time order; dropping it rather than risk \
                  deleting the wrong entries on the next push"
-            );
-            self.undo_stack.clear();
+                );
+                self.undo_stack.clear();
+            }
         }
 
         // A redo entry with `UndoData::None` still re-executes correctly, so the redo
         // side is intentionally not filtered by `is_applicable`.
-        for (command_json, undo_data_json, timestamp_str) in redo_entries {
-            if let Some(entry) = Self::deserialize_entry_with_timestamp(
-                &command_json,
-                &undo_data_json,
-                timestamp_str.as_deref(),
-            ) {
-                self.redo_stack.push_back(entry);
+        if !Self::timestamps_are_parseable(&redo_entries) {
+            tracing::warn!(
+                entries = redo_entries.len(),
+                purpose = "refuse invalid persisted redo timestamps (#303)",
+                "loaded redo history has a malformed timestamp; dropping it"
+            );
+        } else {
+            for (command_json, undo_data_json, timestamp_str) in redo_entries {
+                if let Some(entry) = Self::deserialize_entry_with_timestamp(
+                    &command_json,
+                    &undo_data_json,
+                    timestamp_str.as_deref(),
+                ) {
+                    self.redo_stack.push_back(entry);
+                }
             }
         }
 

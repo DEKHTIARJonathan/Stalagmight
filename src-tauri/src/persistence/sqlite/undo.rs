@@ -336,6 +336,10 @@ impl Database {
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    reason = "unit test fixtures fail loudly on setup and readback errors"
+)]
 mod tests {
     use super::*;
 
