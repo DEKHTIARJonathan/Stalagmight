@@ -15173,6 +15173,56 @@ fn test_save_project_persists_undo_redo_stacks() {
     assert!(!redo.is_empty(), "redo stack should be persisted");
 }
 
+#[test]
+fn failed_atomic_history_replacement_falls_back_to_empty_stacks() {
+    let temp_dir = TempDir::new().unwrap();
+    let path = temp_dir.path().join("history-fallback.stalx");
+    let db = Database::open(&path).unwrap();
+    db.save_undo_stack_with_timestamps(vec![(
+        r#"{"type":"OldUndo"}"#.to_owned(),
+        r#"{"kind":"old"}"#.to_owned(),
+        None,
+    )])
+    .unwrap();
+    db.save_redo_stack_with_timestamps(vec![(
+        r#"{"type":"OldRedo"}"#.to_owned(),
+        r#"{"kind":"old"}"#.to_owned(),
+        None,
+    )])
+    .unwrap();
+
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "History fallback".to_owned(),
+        location: None,
+    });
+    state.execute(Command::CreateSection {
+        name: Some("Redo candidate".to_owned()),
+        surveyor: None,
+        date: None,
+        color: "#ff0000".to_owned(),
+        direction: None,
+        shots: vec![test_shot_data(2.0)],
+    });
+    state.undo();
+
+    rusqlite::Connection::open(&path)
+        .unwrap()
+        .execute_batch(
+            "CREATE TRIGGER reject_redo_insert BEFORE INSERT ON redo_stack \
+             BEGIN SELECT RAISE(FAIL, 'redo rejected'); END;",
+        )
+        .unwrap();
+
+    let dropped = state
+        .persist_or_clear_undo_stacks_into(&db)
+        .expect("the empty-history fallback should succeed");
+
+    assert!(dropped, "the caller must surface the history-loss warning");
+    assert!(db.load_undo_stack_with_timestamps().unwrap().is_empty());
+    assert!(db.load_redo_stack_with_timestamps().unwrap().is_empty());
+}
+
 /// [#303] Changing the undo mode really does need the write lock.
 ///
 /// The sibling test in `undo_policy.rs` asserts this with NO project open, so
@@ -20608,6 +20658,29 @@ fn remote_fixture_editable() -> (AppState, SectionId, ShotId, TempDir) {
     let (state, sid, shid, temp) = remote_fixture();
     state.set_edit_enabled(true);
     (state, sid, shid, temp)
+}
+
+#[test]
+fn unwound_pushes_require_an_explicit_backend_acknowledgement() {
+    let (state, _sid, _shid, _temp) = remote_fixture_editable();
+    state.mark_remote_dirty();
+    state.speleodb_set_unwound_from(Some("abc123"));
+
+    let refused = state
+        .speleodb_push_only_acknowledged(None, false)
+        .expect_err("unacknowledged older-version push must fail closed");
+    assert!(
+        refused.message.contains("older unwound revision"),
+        "unexpected refusal: {refused:?}"
+    );
+
+    let acknowledged = state
+        .speleodb_push_only_acknowledged(None, true)
+        .expect_err("fixture is deliberately signed out");
+    assert!(
+        !acknowledged.message.contains("older unwound revision"),
+        "the explicit acknowledgement must pass the older-version guard"
+    );
 }
 
 /// Read has_unpushed_edits straight from the open database.

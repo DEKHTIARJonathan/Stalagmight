@@ -89,19 +89,24 @@ pub(super) fn preserved_undo_mode(
 /// into the live stack, and a clear that only touched memory would leave the history in
 /// the file for the next open to pick up again.
 ///
-/// Best-effort. A failure leaves an inherited stack in place, which is the pre-#303
-/// hazard rather than a new one, and refusing the whole pull over it would be a much
-/// worse outcome for the user - so it is logged loudly and the pull continues.
-fn drop_inherited_undo(dest: &Path) {
-    if let Err(e) = crate::persistence::Database::clear_undo_history_at(dest) {
-        tracing::warn!(
-            error = %e,
-            path = %dest.display(),
-            purpose = "drop the pusher's undo history from a downloaded copy (#303)",
-            "could not clear inherited undo history; the pulled stack may show another \
-             editor's operations until the next lock or push clears it"
-        );
-    }
+/// Fatal while the file is still staged. A downloaded database is never installed until
+/// all inherited history metadata has been removed successfully.
+fn drop_inherited_undo(dest: &Path) -> Result<(), SpeleoDbError> {
+    crate::persistence::Database::clear_undo_history_at(dest).map_err(|e| {
+        SpeleoDbError::Io(format!(
+            "could not clear inherited history from {}: {e}",
+            dest.display()
+        ))
+    })
+}
+
+fn sanitized_download_path(dest: &Path) -> std::path::PathBuf {
+    let mut name = dest
+        .file_name()
+        .unwrap_or_else(|| std::ffi::OsStr::new("project.stalx"))
+        .to_os_string();
+    name.push(".sanitize.tmp");
+    dest.with_file_name(name)
 }
 
 /// Re-apply preserved local `display_settings` into a freshly-downloaded cache file
@@ -289,7 +294,9 @@ impl AppState {
         // `dest` is still the file we just closed and re-opening restores the
         // pre-call state (bar the undo history, which the close spent either way).
         let closed = self.close_project_if_open_at(dest);
-        match dump.extract_entry_to(entry, dest) {
+        let staged = sanitized_download_path(dest);
+        let _ = std::fs::remove_file(&staged);
+        match dump.extract_entry_to(entry, &staged) {
             Ok(()) => {
                 // [#303] THE chokepoint. Every server `.stalx` that becomes the local
                 // cache file passes through here, so dropping the inherited history in
@@ -297,7 +304,23 @@ impl AppState {
                 // true of the pull, the fast-forward AND the revision swap at once,
                 // without each of them having to remember.
                 if matches!(undo, InheritedUndo::Drop) {
-                    drop_inherited_undo(dest);
+                    if let Err(e) = drop_inherited_undo(&staged) {
+                        let _ = std::fs::remove_file(&staged);
+                        if closed {
+                            let _ = self.open_project(dest.to_path_buf());
+                        }
+                        return Err(e);
+                    }
+                }
+                if let Err(e) = std::fs::rename(&staged, dest) {
+                    let _ = std::fs::remove_file(&staged);
+                    if closed {
+                        let _ = self.open_project(dest.to_path_buf());
+                    }
+                    return Err(SpeleoDbError::Io(format!(
+                        "could not install sanitized download at {}: {e}",
+                        dest.display()
+                    )));
                 }
                 Ok(preserved_view)
             }
@@ -493,8 +516,8 @@ mod tests {
     }
 
     /// [#303] Spec item 15's behavioural half: a replace that carries
-    /// `InheritedUndo::Drop` leaves the downloaded file's undo/redo tables EMPTY, and one
-    /// that carries `Keep` leaves them intact.
+    /// `InheritedUndo::Drop` leaves every downloaded history table EMPTY, and one that
+    /// carries `Keep` leaves them intact.
     ///
     /// Asserted on the FILE rather than on the in-memory stack, because that is where it
     /// has to be true: the load path reads these tables into the live stack, so a clear
@@ -522,6 +545,10 @@ mod tests {
                     None,
                 )])
                 .expect("seed redo");
+                db.save_speleo_undo_chain(Some("older-revision"))
+                    .expect("seed chain pointer");
+                db.save_speleo_undo_watermark(Some("2026-08-01T00:00:00+00:00"))
+                    .expect("seed watermark");
             }
             let bytes = std::fs::read(&seeded).expect("read seed");
             let mut writer = zip::write::ZipWriter::new(std::io::Cursor::new(Vec::<u8>::new()));
@@ -532,7 +559,7 @@ mod tests {
             writer.finish().expect("finish zip").into_inner()
         }
 
-        let counts = |path: &Path| -> (usize, usize) {
+        let history = |path: &Path| -> (usize, usize, Option<String>, Option<String>) {
             let db = Database::open_existing(path).expect("open replaced");
             (
                 db.load_undo_stack_with_timestamps()
@@ -541,6 +568,8 @@ mod tests {
                 db.load_redo_stack_with_timestamps()
                     .expect("load redo")
                     .len(),
+                db.load_speleo_undo_chain().expect("load chain pointer"),
+                db.load_speleo_undo_watermark().expect("load watermark"),
             )
         };
 
@@ -560,8 +589,13 @@ mod tests {
             )
             .expect("replace with Keep");
         assert_eq!(
-            counts(&kept),
-            (2, 1),
+            history(&kept),
+            (
+                2,
+                1,
+                Some("older-revision".to_owned()),
+                Some("2026-08-01T00:00:00+00:00".to_owned()),
+            ),
             "Keep leaves the downloaded history in place - what the Unwind needs"
         );
 
@@ -575,9 +609,61 @@ mod tests {
             )
             .expect("replace with Drop");
         assert_eq!(
-            counts(&dropped),
-            (0, 0),
-            "Drop empties both tables, so no adopt path can inherit them (#194 b3)"
+            history(&dropped),
+            (0, 0, None, None),
+            "Drop empties all history metadata, so no adopt path can inherit it (#194 b3)"
+        );
+    }
+
+    #[test]
+    fn failed_history_cleanup_leaves_the_existing_cache_untouched() {
+        use std::io::Write as _;
+
+        let seed_dir = tempfile::TempDir::new().expect("seed temp");
+        let seeded = seed_dir.path().join("seeded.stalx");
+        {
+            let mut db = Database::open(&seeded).expect("open seed");
+            db.save_project(&Project::new("Pushed".to_owned(), None))
+                .expect("save project");
+            db.save_undo_stack(vec![(r#"{"c":1}"#.to_owned(), r#"{"u":1}"#.to_owned())])
+                .expect("seed undo");
+        }
+        rusqlite::Connection::open(&seeded)
+            .expect("reopen seed")
+            .execute_batch(
+                "CREATE TRIGGER block_undo_delete BEFORE DELETE ON undo_stack \
+                 BEGIN SELECT RAISE(ABORT, 'blocked'); END;",
+            )
+            .expect("install blocking trigger");
+        let bytes = std::fs::read(&seeded).expect("read seed");
+        let mut writer = zip::write::ZipWriter::new(std::io::Cursor::new(Vec::<u8>::new()));
+        writer
+            .start_file(ENTRY, zip::write::SimpleFileOptions::default())
+            .expect("start entry");
+        writer.write_all(&bytes).expect("write entry");
+        let zip = writer.finish().expect("finish zip").into_inner();
+
+        let temp = tempfile::TempDir::new().expect("temp");
+        let dest = temp.path().join("project.stalx");
+        std::fs::write(&dest, b"original cache").expect("seed destination");
+        let before = std::fs::read(&dest).expect("read destination");
+        let state = AppState::new().expect("state");
+
+        let err = state
+            .replace_cache_stalx_abandoning(
+                &mut Dump::open(&zip).expect("open dump"),
+                ENTRY,
+                &dest,
+                InheritedUndo::Drop,
+            )
+            .expect_err("cleanup failure must abort adoption");
+        assert!(err
+            .to_string()
+            .contains("could not clear inherited history"));
+        assert_eq!(std::fs::read(&dest).expect("read destination"), before);
+        assert!(
+            !sanitized_download_path(&dest).exists(),
+            "failed staged download must be cleaned up"
         );
     }
 

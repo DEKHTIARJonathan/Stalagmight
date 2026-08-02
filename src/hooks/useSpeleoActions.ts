@@ -49,7 +49,10 @@ export interface SpeleoActions {
   /** Push edits without releasing the lock (T2d) - collects an optional message.
       Returns the backend outcome (or `null` if the call threw) so callers can keep
       a dialog open on a `divergence_needed` / `push_unconfirmed` result. */
-  push: (message?: string | null) => Promise<PushResult | null>;
+  push: (
+    message?: string | null,
+    opts?: { acceptOlderVersion?: boolean },
+  ) => Promise<PushResult | null>;
   /** The backend outcome, or `null` if the call threw. Callers key off `.kind`
       (e.g. the close flow only leaves once the lock is actually `released`).
       [#303] Also `null` - having raised its own confirmation instead - when the copy is
@@ -282,7 +285,14 @@ export function useSpeleoActions(): SpeleoActions {
   }, [applyUpdate, loadProject, refreshProjectState, refreshLinkStatus, clearSelection, showToast, t, handleError, beginBusy, endBusy, bumpPoll]);
 
   const push = useCallback(
-    async (message?: string | null): Promise<PushResult | null> => {
+    async (
+      message?: string | null,
+      opts?: { acceptOlderVersion?: boolean },
+    ): Promise<PushResult | null> => {
+      if (!opts?.acceptOlderVersion && isUnwoundNotEdited(useSpeleoStore.getState().link)) {
+        openDialog('speleodb-unwound-push', { message: message ?? null, mode: 'push' });
+        return null;
+      }
       const busyToken = beginBusy();
       // A fresh attempt supersedes the previous failure banner (#260); a landed
       // push clears the whole slot via applyPush, and any outcome that leaves the
@@ -290,7 +300,10 @@ export function useSpeleoActions(): SpeleoActions {
       // arm, which neither lands nor throws.
       clearPushFailedBanner();
       try {
-        const result = await invokeIpc<PushResult>('speleodb_push', { message: message ?? null });
+        const result = await invokeIpc<PushResult>('speleodb_push', {
+          message: message ?? null,
+          acceptOlderVersion: opts?.acceptOlderVersion ?? false,
+        });
         applyPush(result);
         const kind = asPushKind(result.kind);
         if (kind === 'pushed') {
@@ -348,6 +361,7 @@ export function useSpeleoActions(): SpeleoActions {
       flushToDiskAfterPush,
       raisePushFailedBanner,
       clearPushFailedBanner,
+      openDialog,
     ],
   );
 
@@ -393,7 +407,10 @@ export function useSpeleoActions(): SpeleoActions {
       // it BEFORE the call.
       const hadUnpushedEdits = useSpeleoStore.getState().link?.hasUnpushedEdits ?? false;
       try {
-        const result = await invokeIpc<DoneResult>('speleodb_done', { message: message ?? null });
+        const result = await invokeIpc<DoneResult>('speleodb_done', {
+          message: message ?? null,
+          acceptOlderVersion: opts?.acceptOlderVersion ?? false,
+        });
         applyDone(result);
         switch (asDoneKind(result.kind)) {
           case 'released':

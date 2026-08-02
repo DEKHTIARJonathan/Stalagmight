@@ -232,8 +232,12 @@ pub async fn speleodb_start_editing(app: AppHandle) -> Result<StartEditingResult
 pub async fn speleodb_done(
     app: AppHandle,
     message: Option<String>,
+    accept_older_version: Option<bool>,
 ) -> Result<DoneResult, SpeleoErrorDto> {
-    run_blocking(app, move |s| s.speleodb_done(message)).await
+    run_blocking(app, move |s| {
+        s.speleodb_done_acknowledged(message, accept_older_version.unwrap_or(false))
+    })
+    .await
 }
 
 /// Read-only refresh of the open project against the server (#197): no lock is
@@ -250,8 +254,12 @@ pub async fn speleodb_update(app: AppHandle) -> Result<UpdateResult, SpeleoError
 pub async fn speleodb_push(
     app: AppHandle,
     message: Option<String>,
+    accept_older_version: Option<bool>,
 ) -> Result<PushResult, SpeleoErrorDto> {
-    run_blocking(app, move |s| s.speleodb_push_only(message)).await
+    run_blocking(app, move |s| {
+        s.speleodb_push_only_acknowledged(message, accept_older_version.unwrap_or(false))
+    })
+    .await
 }
 
 /// Take the SpeleoDB version, DISCARDING local unpushed edits (#198 "Take

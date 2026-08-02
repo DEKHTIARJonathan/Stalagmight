@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
-use chrono::Utc;
-use rusqlite::params;
+use chrono::{DateTime, Utc};
+use rusqlite::{params, OptionalExtension};
 
 use super::{compress_json, decompress_json, Database};
 
@@ -48,6 +48,76 @@ fn decompress_history_rows(
 }
 
 impl Database {
+    pub fn replace_history_stacks_with_timestamps(
+        &self,
+        undo_entries: Vec<(String, String, Option<String>)>,
+        redo_entries: Vec<(String, String, Option<String>)>,
+    ) -> Result<()> {
+        let tx = self
+            .conn
+            .unchecked_transaction()
+            .context("begin undo/redo replacement transaction")?;
+        tx.execute("DELETE FROM undo_stack", [])?;
+        tx.execute("DELETE FROM redo_stack", [])?;
+
+        for (seq, (command_json, undo_data_json, timestamp)) in undo_entries.iter().enumerate() {
+            tx.execute(
+                "INSERT INTO undo_stack (sequence, command_json, undo_data_json, executed_at) \
+                 VALUES (?1, ?2, ?3, ?4)",
+                params![
+                    seq as i64,
+                    compress_json(command_json),
+                    compress_json(undo_data_json),
+                    timestamp.clone().unwrap_or_else(|| Utc::now().to_rfc3339()),
+                ],
+            )?;
+        }
+        for (seq, (command_json, undo_data_json, timestamp)) in redo_entries.iter().enumerate() {
+            tx.execute(
+                "INSERT INTO redo_stack (sequence, command_json, undo_data_json, executed_at) \
+                 VALUES (?1, ?2, ?3, ?4)",
+                params![
+                    seq as i64,
+                    compress_json(command_json),
+                    compress_json(undo_data_json),
+                    timestamp.clone().unwrap_or_else(|| Utc::now().to_rfc3339()),
+                ],
+            )?;
+        }
+        tx.commit().context("commit undo/redo replacement")?;
+        Ok(())
+    }
+
+    pub fn clear_history_stacks(&self) -> Result<()> {
+        let tx = self
+            .conn
+            .unchecked_transaction()
+            .context("begin undo/redo clear transaction")?;
+        tx.execute("DELETE FROM undo_stack", [])?;
+        tx.execute("DELETE FROM redo_stack", [])?;
+        tx.commit().context("commit undo/redo clear")?;
+        Ok(())
+    }
+
+    /// Newest undo timestamp persisted in this database, without decompressing payloads.
+    pub fn newest_undo_timestamp(&self) -> Result<Option<DateTime<Utc>>> {
+        let raw = self
+            .conn
+            .query_row(
+                "SELECT executed_at FROM undo_stack ORDER BY sequence DESC LIMIT 1",
+                [],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .optional()?
+            .flatten();
+        raw.map(|stamp| {
+            DateTime::parse_from_rfc3339(&stamp)
+                .map(|parsed| parsed.with_timezone(&Utc))
+                .with_context(|| format!("invalid newest undo timestamp `{stamp}`"))
+        })
+        .transpose()
+    }
+
     /// Save undo entry to database
     pub fn save_undo_entry(
         &self,
@@ -155,17 +225,27 @@ impl Database {
     pub fn clear_undo_history_at(path: &std::path::Path) -> Result<()> {
         let conn = rusqlite::Connection::open(path)
             .with_context(|| format!("open {} to clear inherited undo", path.display()))?;
-        for table in ["undo_stack", "redo_stack"] {
-            let exists: i64 = conn.query_row(
+        let tx = conn
+            .unchecked_transaction()
+            .with_context(|| format!("begin inherited-history cleanup in {}", path.display()))?;
+        for table in [
+            "undo_stack",
+            "redo_stack",
+            "speleo_undo_chain",
+            "speleo_undo_watermark",
+        ] {
+            let exists: i64 = tx.query_row(
                 "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?1",
                 params![table],
                 |row| row.get(0),
             )?;
             if exists > 0 {
-                conn.execute(&format!("DELETE FROM {table}"), [])
+                tx.execute(&format!("DELETE FROM {table}"), [])
                     .with_context(|| format!("clear {table} in {}", path.display()))?;
             }
         }
+        tx.commit()
+            .with_context(|| format!("commit inherited-history cleanup in {}", path.display()))?;
         Ok(())
     }
 
@@ -263,5 +343,40 @@ mod tests {
     fn decompression_batch_never_exceeds_the_thread_cap() {
         assert!(rows_per_decompress_batch() >= 1);
         assert!(rows_per_decompress_batch() * 2 <= MAX_DECOMPRESS_THREADS);
+    }
+
+    #[test]
+    fn replacing_both_history_stacks_rolls_back_when_redo_insert_fails() {
+        let db = Database::in_memory().unwrap();
+        let old = |name: &str| {
+            (
+                format!(r#"{{"type":"{name}"}}"#),
+                r#"{"kind":"old"}"#.to_owned(),
+                Some("2026-08-01T00:00:00+00:00".to_owned()),
+            )
+        };
+        db.save_undo_stack_with_timestamps(vec![old("OldUndo")])
+            .unwrap();
+        db.save_redo_stack_with_timestamps(vec![old("OldRedo")])
+            .unwrap();
+        db.conn
+            .execute_batch(
+                "CREATE TRIGGER reject_redo_insert BEFORE INSERT ON redo_stack \
+                 BEGIN SELECT RAISE(FAIL, 'redo rejected'); END;",
+            )
+            .unwrap();
+
+        let result =
+            db.replace_history_stacks_with_timestamps(vec![old("NewUndo")], vec![old("NewRedo")]);
+
+        assert!(result.is_err());
+        assert_eq!(
+            db.load_undo_stack_with_timestamps().unwrap()[0].1,
+            r#"{"type":"OldUndo"}"#
+        );
+        assert_eq!(
+            db.load_redo_stack_with_timestamps().unwrap()[0].1,
+            r#"{"type":"OldRedo"}"#
+        );
     }
 }

@@ -42,9 +42,10 @@ export default function SpeleoUnwoundPushDialog() {
   const dialogData = useUIStore((s) => s.dialogData);
   const refreshLinkStatus = useSpeleoStore((s) => s.refreshLinkStatus);
   const refreshProjectState = useProjectStore((s) => s.refreshProjectState);
-  const { done } = useSpeleoActions();
+  const { push, done } = useSpeleoActions();
 
   const message = typeof dialogData.message === 'string' ? dialogData.message : null;
+  const mode = dialogData.mode === 'push' ? 'push' : 'release';
   const [busy, setBusy] = useState(false);
 
   // [#303] The exit this confirmation interrupted, when it was raised out of one. `done`
@@ -103,6 +104,12 @@ export default function SpeleoUnwoundPushDialog() {
 
   const pushAnyway = async () => {
     setBusy(true);
+    if (mode === 'push') {
+      const resolved = await push(message, { acceptOlderVersion: true });
+      if (resolved?.kind === 'pushed') closeDialog();
+      else setBusy(false);
+      return;
+    }
     // The acknowledgement the guard in `useSpeleoActions.done` is waiting for - without it
     // this would raise this same dialog again.
     if (!pendingExit) {

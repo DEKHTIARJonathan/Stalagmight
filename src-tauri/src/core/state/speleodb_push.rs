@@ -179,6 +179,14 @@ impl AppState {
         &self,
         message: Option<String>,
     ) -> Result<DoneResult, SpeleoErrorDto> {
+        self.speleodb_done_acknowledged(message, false)
+    }
+
+    pub(crate) fn speleodb_done_acknowledged(
+        &self,
+        message: Option<String>,
+        accept_older_version: bool,
+    ) -> Result<DoneResult, SpeleoErrorDto> {
         let link = self.speleodb_validated_link()?;
 
         // #213: a force-editor is edit-enabled but holds NO lock, so Done cannot push
@@ -207,6 +215,8 @@ impl AppState {
         if !self.edit_enabled() {
             return Ok(DoneResult::NotEditing);
         }
+
+        self.speleodb_guard_older_version_push(&link, accept_older_version)?;
 
         let (endpoint, token) = self.speleodb_active_token().map_err(local_dto)?;
         let insecure_http = self.speleodb_insecure_http();
@@ -272,9 +282,18 @@ impl AppState {
     /// [`Self::speleodb_done`]'s push half, but the mutex is retained in every arm
     /// so editing continues. A no-op (reports `Pushed`) when not in an edit session
     /// or when there is nothing to push.
+    #[cfg(test)]
     pub(crate) fn speleodb_push_only(
         &self,
         message: Option<String>,
+    ) -> Result<PushResult, SpeleoErrorDto> {
+        self.speleodb_push_only_acknowledged(message, false)
+    }
+
+    pub(crate) fn speleodb_push_only_acknowledged(
+        &self,
+        message: Option<String>,
+        accept_older_version: bool,
     ) -> Result<PushResult, SpeleoErrorDto> {
         let link = self.speleodb_validated_link()?;
 
@@ -299,6 +318,7 @@ impl AppState {
         if !self.edit_enabled() {
             return Ok(PushResult::NotEditing);
         }
+        self.speleodb_guard_older_version_push(&link, accept_older_version)?;
         if !link.has_unpushed_edits {
             return Ok(PushResult::Pushed);
         }
@@ -324,6 +344,19 @@ impl AppState {
             PushOutcome::Diverged => Ok(PushResult::DivergenceNeeded),
             PushOutcome::Unconfirmed => Ok(PushResult::PushUnconfirmed),
         }
+    }
+
+    fn speleodb_guard_older_version_push(
+        &self,
+        link: &crate::models::SpeleoLink,
+        acknowledged: bool,
+    ) -> Result<(), SpeleoErrorDto> {
+        if link.has_unpushed_edits && self.speleodb_unwound_from().is_some() && !acknowledged {
+            return Err(local_dto(SpeleoDbError::Io(
+                "uploading an older unwound revision must be confirmed".to_owned(),
+            )));
+        }
+        Ok(())
     }
 
     /// [#303] Replace the local copy with the server tip, throwing away whatever it held.
@@ -750,43 +783,28 @@ impl AppState {
         // has just written the stack these rows are cut from.
         let inherited_through = self.speleodb_inherited_through();
 
-        // [#303] A SECOND instant, for the undo stack only, and deliberately not the same
-        // one as `push_start`. The two comparisons ask different questions:
-        //
-        // - `push_start` asks "did a real edit happen after the snapshot?", against
-        //   `last_edit_at`, which `mark_remote_dirty` stamps from the wall clock. That has
-        //   to stay wall-clock, or an edit landing DURING the push would read as captured
-        //   and have its dirty bit cleared without ever being uploaded.
-        // - this one asks "which stack entries did the upload contain?", against stamps
-        //   the stack orders itself (`UndoStack::next_stamp`). Those can sit slightly
-        //   ahead of the wall clock - a chain step loads entries stamped by whichever
-        //   machine authored them - and an entry above the cutoff is simply never cleared,
-        //   so the next push carries it a second time.
-        //
-        // Taken here, between the flush and the snapshot, so it describes the FILE that is
-        // about to be copied rather than the stack as it stood before the flush. Captured
-        // ahead of `save_project` it could name an instant BELOW an entry the flush then
-        // wrote into the upload: that entry ships, and `speleodb_clear_undo_after_push`
-        // keeps it anyway, so the next push records the operation a second time.
-        //
-        // It still floors on the wall clock, which is what preserves the property the
-        // earlier capture was really protecting: an entry pushed AFTER the snapshot is not
-        // in the upload, stamps above this instant, and survives the clear so the next push
-        // carries it - exactly as `push_start` keeps its dirty bit.
-        let undo_cutoff = self
-            .undo_stack
-            .lock()
-            .ok()
-            .and_then(|stack| stack.newest_stamp())
-            .map_or_else(
-                || push_start.clone(),
-                |newest| newest.max(chrono::Utc::now()).to_rfc3339(),
-            );
-
         // Self-contained snapshot of the live `.stalx` (#195), dirty bit cleared in
         // the COPY so it never rides to the server.
         crate::persistence::Database::vacuum_snapshot(&live, &snapshot)
             .map_err(|e| local_dto(SpeleoDbError::Io(e.to_string())))?;
+
+        // Derive history cleanup from the file just captured, never from the live stack.
+        // An edit can land after save_project and before this point: it is absent from the
+        // snapshot and must retain its undo entry after the confirmed push. Sampling the
+        // live stack here included that edit in the cutoff even though it was not uploaded.
+        let snapshot_db = crate::persistence::Database::open_for_metadata(&snapshot)
+            .map_err(|e| local_dto(SpeleoDbError::Io(e.to_string())))?;
+        let snapshot_newest = snapshot_db
+            .newest_undo_timestamp()
+            .map_err(|e| local_dto(SpeleoDbError::Io(e.to_string())))?;
+        let push_floor = chrono::DateTime::parse_from_rfc3339(&push_start)
+            .map_err(|e| local_dto(SpeleoDbError::Io(e.to_string())))?
+            .with_timezone(&chrono::Utc);
+        let undo_cutoff = snapshot_newest
+            .map_or(push_floor, |newest| newest.max(push_floor))
+            .to_rfc3339();
+        drop(snapshot_db);
+
         // FATAL if it fails: an unsanitized snapshot still carries the pusher's redo
         // history (and a stale dirty bit) and must never be uploaded. In Disabled mode
         // the undo history is fatal to leak too; in Full mode it is the payload.

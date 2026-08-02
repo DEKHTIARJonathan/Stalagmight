@@ -630,7 +630,10 @@ describe('useSpeleoActions - pushing an unwound copy is confirmed first (#303)',
       await result.current.done('msg', { acceptOlderVersion: true });
     });
 
-    expect(invokeIpcMock).toHaveBeenCalledWith('speleodb_done', { message: 'msg' });
+    expect(invokeIpcMock).toHaveBeenCalledWith('speleodb_done', {
+      message: 'msg',
+      acceptOlderVersion: true,
+    });
   });
 
   it('leaves an ordinary dirty copy alone - the guard is not a nag', async () => {
@@ -644,7 +647,27 @@ describe('useSpeleoActions - pushing an unwound copy is confirmed first (#303)',
     });
 
     expect(openDialog).not.toHaveBeenCalled();
-    expect(invokeIpcMock).toHaveBeenCalledWith('speleodb_done', { message: 'msg' });
+    expect(invokeIpcMock).toHaveBeenCalledWith('speleodb_done', {
+      message: 'msg',
+      acceptOlderVersion: false,
+    });
+  });
+
+  it('guards push-without-release too', async () => {
+    seedUnwound(true);
+    const openDialog = vi.fn();
+    useUIStore.setState({ openDialog });
+    const { result } = renderHook(() => useSpeleoActions());
+
+    await act(async () => {
+      expect(await result.current.push('msg')).toBeNull();
+    });
+
+    expect(openDialog).toHaveBeenCalledWith('speleodb-unwound-push', {
+      message: 'msg',
+      mode: 'push',
+    });
+    expect(invokeIpcMock).not.toHaveBeenCalledWith('speleodb_push', expect.anything());
   });
 
   /**

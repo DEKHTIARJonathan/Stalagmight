@@ -111,6 +111,22 @@ describe('SpeleoUnwoundPushDialog (#303)', () => {
     );
   });
 
+  it('acknowledges an explicit push without releasing the lock', async () => {
+    useUIStore.setState({ dialogData: { message: 'push old', mode: 'push' } });
+    invokeIpcMock.mockResolvedValue({ kind: 'pushed' });
+    render(<SpeleoUnwoundPushDialog />);
+
+    await userEvent.click(screen.getByTestId('speleodb-unwound-push-push-anyway'));
+
+    await waitFor(() =>
+      expect(invokeIpcMock).toHaveBeenCalledWith('speleodb_push', {
+        message: 'push old',
+        acceptOlderVersion: true,
+      }),
+    );
+    expect(invokeIpcMock).not.toHaveBeenCalledWith('speleodb_done', expect.anything());
+  });
+
   it('offers both lock outcomes on the explicit Discard action', async () => {
     // Discarding the copy and deciding the lock are two questions. Someone resetting to
     // start again wants to keep editing; someone abandoning a session wants to hand the

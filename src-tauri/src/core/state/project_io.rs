@@ -568,15 +568,17 @@ impl AppState {
             }
         }
 
-        // A copy gets the undo/redo history too (into the temp handle, while it
-        // is still open - the normal path writes them into the REOPENED db after
-        // the rename, but a copy never reopens). This keeps Save a Copy a
-        // faithful Save As minus the link, and it is what lets the detach flow
-        // (convert to unmanaged) carry the edit history onto the file it then
-        // opens.
-        if copy_only {
-            self.persist_undo_stacks_into(&db);
-        }
+        // Persist history while the file is still staged. A partial undo/redo rewrite
+        // must never be renamed into place: try the pair atomically, and if it fails,
+        // atomically clear both stacks and continue with a visible warning.
+        let history_dropped = match self.persist_or_clear_undo_stacks_into(&db) {
+            Ok(dropped) => dropped,
+            Err(e) => {
+                drop(db);
+                let _ = std::fs::remove_file(&temp_path);
+                return save_failure("Failed to finalize undo history", &save_path, &e);
+            }
+        };
 
         // Close the temp database before renaming
         drop(db);
@@ -605,8 +607,10 @@ impl AppState {
                 purpose = "write a detached unlinked copy",
                 "Saved an unlinked copy of a SpeleoDB-managed project"
             );
-            return CommandResult::success()
-                .with_unlinked_copy_path(save_path.display().to_string());
+            let mut result =
+                CommandResult::success().with_unlinked_copy_path(save_path.display().to_string());
+            Self::warn_history_dropped(&mut result, history_dropped);
+            return result;
         }
 
         // Close our own persistent connection to the destination BEFORE the
@@ -677,6 +681,7 @@ impl AppState {
                 // databaseOpen=false and leave DB-backed actions (e.g. Ignore)
                 // disabled until the project is reopened (issue #57 / Codex).
                 let mut result = CommandResult::success();
+                Self::warn_history_dropped(&mut result, history_dropped);
                 result.warnings.push(crate::core::ValidationWarning {
                     code: "DATABASE_NOT_REOPENED".to_string(),
                     message: "File saved, but database could not be reopened. Some features may not work until the project is reopened.".to_string(),
@@ -685,9 +690,6 @@ impl AppState {
                 return result;
             }
         };
-
-        // Persist undo/redo stacks (best-effort, synchronous to avoid race with readers)
-        self.persist_undo_stacks_into(&db);
 
         // Update file path after successful save
         project.file_path = Some(save_path.clone());
@@ -711,17 +713,38 @@ impl AppState {
             purpose = "persist edits safely",
             "Project saved successfully"
         );
-        CommandResult::success().with_path(save_path_str)
+        let mut result = CommandResult::success().with_path(save_path_str);
+        Self::warn_history_dropped(&mut result, history_dropped);
+        result
     }
 
-    /// Persist the undo/redo stacks into `db`, best-effort (shared by the normal
-    /// save, which writes them into the reopened destination, and the copy save,
-    /// which writes them into the temp handle before the rename). Locks
-    /// `undo_stack` only - callers may hold `project` (the established order is
-    /// `project` before `undo_stack`).
-    fn persist_undo_stacks_into(&self, db: &Database) {
-        if let Ok(undo_stack) = self.undo_stack.lock() {
-            let _ = self.persist_locked_undo_stacks_into(db, &undo_stack);
+    fn warn_history_dropped(result: &mut CommandResult, dropped: bool) {
+        if dropped {
+            result.warnings.push(crate::core::ValidationWarning {
+                code: "UNDO_HISTORY_DROPPED".to_owned(),
+                message: "The project was saved, but its Undo and Redo history could not be preserved and was removed.".to_owned(),
+                severity: crate::core::WarningSeverity::Warning,
+            });
+        }
+    }
+
+    pub(super) fn persist_or_clear_undo_stacks_into(&self, db: &Database) -> anyhow::Result<bool> {
+        let undo_stack = self
+            .undo_stack
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let (undo_rows, redo_rows) = self.history_rows_to_persist(db, &undo_stack);
+        match db.replace_history_stacks_with_timestamps(undo_rows, redo_rows) {
+            Ok(()) => Ok(false),
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    purpose = "save project without partial undo history",
+                    "Could not persist the complete Undo and Redo history; saving with both stacks empty"
+                );
+                db.clear_history_stacks()?;
+                Ok(true)
+            }
         }
     }
 
@@ -741,6 +764,28 @@ impl AppState {
         // The link is read from the LOCAL `db` handle rather than through
         // `undo_policy()`: `self.database` still points at the pre-save handle when the
         // normal save calls this, so asking the AppState would consult the wrong file.
+        let (undo_rows, redo_rows) = self.history_rows_to_persist(db, undo_stack);
+        match db.replace_history_stacks_with_timestamps(undo_rows, redo_rows) {
+            Ok(()) => true,
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    purpose = "preserve undo and redo history atomically",
+                    "Failed to persist undo and redo stacks"
+                );
+                false
+            }
+        }
+    }
+
+    fn history_rows_to_persist(
+        &self,
+        db: &Database,
+        undo_stack: &UndoStack,
+    ) -> (
+        Vec<(String, String, Option<String>)>,
+        Vec<(String, String, Option<String>)>,
+    ) {
         let count_limit = {
             let policy = self.undo_policy_for(db.load_speleo_link().ok().flatten().as_ref());
             if policy.unlimited_depth() {
@@ -777,30 +822,7 @@ impl AppState {
         // unconditionally in `PUSH_SNAPSHOT_LOCAL_TABLES`, so this is local-only cost
         // for a local-only feature.
         let redo_rows = undo_stack.rows_to_persist(PersistStack::Redo, count_limit);
-
-        let undo_saved = match db.save_undo_stack_with_timestamps(undo_rows) {
-            Ok(()) => true,
-            Err(e) => {
-                tracing::warn!(
-                    error = %e,
-                    purpose = "preserve undo history",
-                    "Failed to persist undo stack"
-                );
-                false
-            }
-        };
-        let redo_saved = match db.save_redo_stack_with_timestamps(redo_rows) {
-            Ok(()) => true,
-            Err(e) => {
-                tracing::warn!(
-                    error = %e,
-                    purpose = "preserve redo history",
-                    "Failed to persist redo stack"
-                );
-                false
-            }
-        };
-        undo_saved && redo_saved
+        (undo_rows, redo_rows)
     }
 
     /// Put `path` at the head of the recent-projects list and persist it to
