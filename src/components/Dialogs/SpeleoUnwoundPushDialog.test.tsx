@@ -55,8 +55,15 @@ describe('SpeleoUnwoundPushDialog (#303)', () => {
       openDialog: vi.fn(),
       showToast: vi.fn(),
     });
-    useSpeleoStore.setState({ refreshLinkStatus: vi.fn(async () => {}) });
-    useProjectStore.setState({ refreshProjectState: vi.fn(async () => {}) });
+    useSpeleoStore.setState({
+      remoteProjectId: 'p1',
+      refreshLinkStatus: vi.fn(async () => {}),
+    });
+    useProjectStore.setState({
+      refreshProjectState: vi.fn(async () => {}),
+      checkProjectIntegrity: vi.fn(async () => []),
+      isDirty: true,
+    });
   });
 
   it('says the copy is older rather than calling it unsaved work', () => {
@@ -157,6 +164,10 @@ describe('SpeleoUnwoundPushDialog (#303)', () => {
     await waitFor(() =>
       expect(invokeIpcMock).toHaveBeenCalledWith('speleodb_discard_changes', { keepLock: false, acknowledged: true }),
     );
+    await waitFor(() =>
+      expect(useProjectStore.getState().refreshProjectState).toHaveBeenCalled(),
+    );
+    expect(useProjectStore.getState().isDirty).toBe(false);
   });
 
   it('does not offer to release a lock a force-editor never held', async () => {

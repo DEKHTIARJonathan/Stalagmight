@@ -300,6 +300,28 @@ export function speleoOpenProjectStillIs(projectId: string | null): boolean {
   return useSpeleoStore.getState().remoteProjectId === projectId;
 }
 
+export interface SpeleoProjectSessionIdentity {
+  sessionGeneration: number;
+  projectId: string | null;
+}
+
+/** Capture both identities a long-running open-project request is allowed to affect. */
+export function speleoProjectSessionIssuedFor(
+  projectId: string | null,
+): SpeleoProjectSessionIdentity {
+  return { sessionGeneration: speleoSessionIssuedAt(), projectId };
+}
+
+/** The shared guard for requests that bind to both the login and the open project. */
+export function speleoProjectSessionStillCurrent(
+  issuedFor: SpeleoProjectSessionIdentity,
+): boolean {
+  return (
+    speleoSessionStillCurrent(issuedFor.sessionGeneration) &&
+    speleoOpenProjectStillIs(issuedFor.projectId)
+  );
+}
+
 export interface SpeleoLinkSnapshot {
   link: SpeleoLinkState | null;
   projectLinkKind: ProjectLinkKind;

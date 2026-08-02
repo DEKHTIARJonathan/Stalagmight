@@ -64,7 +64,12 @@ beforeEach(() => {
   setLinkOnOpenMock = vi.fn();
   // `keepLocalCopy` compares the refused path against the LIVE open project, so the
   // "nothing open" baseline has to be explicit.
-  useProjectStore.setState({ loadProject: loadProjectMock, project: null, isDirty: false });
+  useProjectStore.setState({
+    loadProject: loadProjectMock,
+    project: null,
+    isDirty: false,
+    checkProjectIntegrity: vi.fn(async () => []),
+  });
   useSpeleoStore.setState({
     setLinkOnOpen: setLinkOnOpenMock,
     link: null,

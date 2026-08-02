@@ -41,7 +41,10 @@ beforeEach(() => {
     isDirty: false,
     checkProjectIntegrity: vi.fn(async () => []),
   });
-  useSpeleoStore.setState({ refreshLinkStatus: refreshLinkStatusMock });
+  useSpeleoStore.setState({
+    remoteProjectId: 'p1',
+    refreshLinkStatus: refreshLinkStatusMock,
+  });
 });
 
 describe('SpeleoRestoreDialog (#218)', () => {

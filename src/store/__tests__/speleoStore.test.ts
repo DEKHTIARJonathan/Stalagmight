@@ -1,5 +1,11 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { useSpeleoStore, PUSH_FAILURE_DIALOGS, isUnwoundNotEdited } from '../speleoStore';
+import {
+  useSpeleoStore,
+  PUSH_FAILURE_DIALOGS,
+  isUnwoundNotEdited,
+  speleoProjectSessionIssuedFor,
+  speleoProjectSessionStillCurrent,
+} from '../speleoStore';
 import type { SpeleoLinkStatus } from '../../types/ipc.generated';
 
 const invokeIpcMock = vi.hoisted(() => vi.fn());
@@ -50,11 +56,40 @@ const reset = () => {
     heldLockPromptOpen: false,
     heldLockPromptPending: true,
     storageChoiceOpen: false,
+    remoteProjectId: null,
+    sessionGeneration: 0,
   });
 };
 
 describe('speleoStore', () => {
   beforeEach(reset);
+
+  describe('open-project request identity', () => {
+    it('rejects a reply after a different remote project opens', () => {
+      useSpeleoStore.setState({ remoteProjectId: 'p1' });
+      const issuedFor = speleoProjectSessionIssuedFor('p1');
+
+      useSpeleoStore.setState({ remoteProjectId: 'p2' });
+
+      expect(speleoProjectSessionStillCurrent(issuedFor)).toBe(false);
+    });
+
+    it('rejects a reply after a new login session starts', () => {
+      useSpeleoStore.setState({ remoteProjectId: 'p1' });
+      const issuedFor = speleoProjectSessionIssuedFor('p1');
+
+      useSpeleoStore.getState().setSessionFromLogin({
+        user_email: 'u@x',
+        endpoint: 'https://x/',
+        keychain_backed: true,
+        storage: 'keychain',
+        keychain: 'available',
+        needs_storage_choice: false,
+      });
+
+      expect(speleoProjectSessionStillCurrent(issuedFor)).toBe(false);
+    });
+  });
 
   describe('session', () => {
     it('setSession maps the backend status', () => {

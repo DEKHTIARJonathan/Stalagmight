@@ -117,7 +117,10 @@ describe('SpeleoRevertDialog', () => {
       expect(invokeIpcMock.mock.calls.some((c) => c[0] === 'speleodb_done')).toBe(true),
     );
     const call = invokeIpcMock.mock.calls.find((c) => c[0] === 'speleodb_done');
-    expect(call?.[1]).toEqual({ message: 'roll back the bad merge' });
+    expect(call?.[1]).toEqual({
+      message: 'roll back the bad merge',
+      acceptOlderVersion: false,
+    });
     expect(closeDialogMock).toHaveBeenCalled();
   });
 

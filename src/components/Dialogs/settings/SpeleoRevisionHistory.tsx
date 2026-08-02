@@ -3,7 +3,11 @@ import { useTranslation } from 'react-i18next';
 import { SettingsSection } from './SettingsSection';
 import { Button } from '../../common/Button';
 import { useUIStore } from '../../../store/uiStore';
-import { useSpeleoStore, speleoSessionIssuedAt, speleoSessionStillCurrent, speleoOpenProjectStillIs } from '../../../store/speleoStore';
+import {
+  speleoProjectSessionIssuedFor,
+  speleoProjectSessionStillCurrent,
+  useSpeleoStore,
+} from '../../../store/speleoStore';
 import { useProjectStore } from '../../../store/projectStore';
 import { useRestoreRevision } from '../../../hooks/useRestoreRevision';
 import { useSpeleoWebLink } from '../../../hooks/useSpeleoWebLink';
@@ -111,10 +115,9 @@ export function SpeleoRevisionHistory() {
     if (!projectId) return;
     setPendingId(rev.id);
     // Captured BEFORE the request; the ambiguity catch checks both.
-    const issuedAt = speleoSessionIssuedAt();
-    const issuedFor = projectId;
+    const issuedFor = speleoProjectSessionIssuedFor(projectId);
     try {
-      await restoreRevision({
+      const applied = await restoreRevision({
         projectId,
         projectName,
         hexsha: rev.id,
@@ -122,6 +125,7 @@ export function SpeleoRevisionHistory() {
         restore: false,
         ...(entryPath ? { entryPath } : {}),
       });
+      if (!applied) return;
     } catch (e) {
       // [#258] More than one openable file: a question, not a failure. No lock is
       // ever held on the View path, so the retry is simply this same call again -
@@ -134,11 +138,7 @@ export function SpeleoRevisionHistory() {
       // A's picker over project B - and its retry cannot succeed, because the backend
       // binds a revision swap to the open project. The owning component is unmounted by
       // then too, so the picker could only sit there showing the mismatch.
-      if (
-        candidates &&
-        speleoSessionStillCurrent(issuedAt) &&
-        speleoOpenProjectStillIs(issuedFor)
-      ) {
+      if (candidates && speleoProjectSessionStillCurrent(issuedFor)) {
         openDumpPicker(candidates, 'stalx', (chosen) => handleView(rev, chosen));
         return;
       }

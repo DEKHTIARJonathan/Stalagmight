@@ -1,10 +1,14 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useUIStore } from '../../store/uiStore';
-import { useSpeleoStore, isUnwoundNotEdited } from '../../store/speleoStore';
-import { useProjectStore } from '../../store/projectStore';
+import {
+  isUnwoundNotEdited,
+  speleoProjectSessionIssuedFor,
+  useSpeleoStore,
+} from '../../store/speleoStore';
 import { invokeIpc, getErrorMessage } from '../../utils/ipc';
 import { holdsWriteLock } from '../../utils/quit';
+import { applySpeleoTreeReplacement } from '../../utils/speleoTreeReplacement';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 
@@ -27,8 +31,6 @@ export default function SpeleoDiscardChangesDialog() {
   const openDialog = useUIStore((s) => s.openDialog);
   const showToast = useUIStore((s) => s.showToast);
   const link = useSpeleoStore((s) => s.link);
-  const refreshLinkStatus = useSpeleoStore((s) => s.refreshLinkStatus);
-  const refreshProjectState = useProjectStore((s) => s.refreshProjectState);
 
   const unwound = isUnwoundNotEdited(link);
   // [#303] Whether the lock question below is even ours to answer. `holdsWriteLock` is
@@ -37,17 +39,19 @@ export default function SpeleoDiscardChangesDialog() {
   const [busy, setBusy] = useState(false);
 
   const run = async (keepLock: boolean) => {
+    const issuedFor = speleoProjectSessionIssuedFor(
+      useSpeleoStore.getState().remoteProjectId,
+    );
     setBusy(true);
     try {
       // [#303] `acknowledged` is this dialog reporting that it put the loss in front of
       // the user; the backend refuses without it. Not a second guess at the decision - it
       // is what stops any OTHER route reaching a verb that destroys un-pushed work.
       await invokeIpc('speleodb_discard_changes', { keepLock, acknowledged: true });
-      // The backend replaced the working copy and reloaded it in place; pull the new
-      // geometry and link state in, the same way the revision swap does.
-      await refreshProjectState();
-      useProjectStore.setState({ isDirty: false });
-      await refreshLinkStatus();
+      if (!(await applySpeleoTreeReplacement(issuedFor))) {
+        closeDialog();
+        return;
+      }
       showToast(
         keepLock
           ? t('speleodb.discardChanges.doneKeptToast')

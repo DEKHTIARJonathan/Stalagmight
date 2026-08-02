@@ -326,7 +326,7 @@ export function useRevertRevision() {
       try {
         // Quiet: this restore is a middle step, and its toast tells the user to push -
         // which is precisely what the next line does for them.
-        await restoreRevision({
+        const applied = await restoreRevision({
           projectId,
           projectName,
           hexsha,
@@ -336,6 +336,15 @@ export function useRevertRevision() {
           quiet: true,
           ...(entryPath ? { entryPath } : {}),
         });
+        if (!applied) {
+          await invokeIpc<null>('speleodb_release_lock_acquired_here').catch((e: unknown) => {
+            console.warn(
+              'revert: could not release the lock after the project changed during restore',
+              e,
+            );
+          });
+          return { kind: 'project_changed' };
+        }
       } catch (e) {
         const refusedForLocalEdits = unpushedLocalEdits(e);
         // Ask the BACKEND whether the copy is dirty, because that is the bit

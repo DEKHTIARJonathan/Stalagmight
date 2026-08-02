@@ -1,10 +1,9 @@
 import { useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useUIStore } from '../store/uiStore';
-import { useProjectStore } from '../store/projectStore';
-import { useSpeleoStore } from '../store/speleoStore';
-import { useGasPlanStore } from '../store/gasPlanStore';
+import { speleoProjectSessionIssuedFor } from '../store/speleoStore';
 import { invokeIpc } from '../utils/ipc';
+import { applySpeleoTreeReplacement } from '../utils/speleoTreeReplacement';
 import type { SpeleoOpenResult } from '../types/ipc.generated';
 
 export interface RestoreRevisionArgs {
@@ -86,10 +85,6 @@ export interface RestoreRevisionArgs {
 export function useRestoreRevision() {
   const { t } = useTranslation();
   const showToast = useUIStore((s) => s.showToast);
-  const setView = useUIStore((s) => s.setView);
-  const clearSelection = useUIStore((s) => s.clearSelection);
-  const refreshProjectState = useProjectStore((s) => s.refreshProjectState);
-  const refreshLinkStatus = useSpeleoStore((s) => s.refreshLinkStatus);
 
   return useCallback(
     async ({
@@ -105,6 +100,7 @@ export function useRestoreRevision() {
       discardUnpushed = false,
       chainForward = false,
     }: RestoreRevisionArgs) => {
+      const issuedFor = speleoProjectSessionIssuedFor(projectId);
       // The backend hardcodes concurrent_session:false for an in-place revision swap
       // (the open project is unchanged), so unlike the open/adopt flow there is no
       // concurrent-session notice to surface here.
@@ -126,50 +122,10 @@ export function useRestoreRevision() {
         // history-keeping Restore is the one caller to reach.
         chainForward: restore && keepUndoHistory && chainForward,
       });
-      // The backend closed + reopened the project at the swapped tree; pull the new
-      // geometry + link state in. The on-disk copy IS the checked-out tree (saved),
-      // so it is clean until the user edits. Clear the selection first: it is keyed by
-      // (section_id, station_index) which the swapped tree may not carry, so a stale
-      // selection could highlight a different station (loadProject's full path clears
-      // it too; this swap path bypasses that path).
-      clearSelection();
-      // ...and every OTHER per-project ref with it. `clearSelection` was the whole
-      // reset here, but merge endpoints, the comment target and the measure endpoints
-      // are keyed the same `(section_id, station_index)` / `(section_id, shot_id)` way
-      // and live in the same store. A project switch resets all of them through
-      // `loadProject`; this swap replaces the tree just as thoroughly and bypasses
-      // `loadProject` entirely, so it was the one replacement path that kept them.
-      //
-      // #258 is what makes that dangerous rather than untidy. Two `.stalx` under one
-      // SpeleoDB project are independent SQLite databases with independently assigned
-      // section ids, so a picker answer can now swap in a DIFFERENT survey whose ids
-      // collide by construction - and a half-armed merge would then resolve its stored
-      // endpoint against whatever holds that id in the new tree.
-      useUIStore.getState().resetToolTransientsForProjectSwitch();
-      // [#345] The gas-plan store is per-survey runtime state - pins, the loaded-plan
-      // baseline, and (since #317) their captured anchors - and has exactly ONE
-      // production caller of `reset()`: `applyDisplaySettings`, reached only via
-      // `loadProject`/`createProject`. This swap bypasses that path entirely, same as
-      // the tool transients above, so without this call a live plan's positional pins
-      // would silently rename themselves onto whatever stations the swapped-in tree
-      // happens to have at those indices - and #258 means that tree can be a genuinely
-      // DIFFERENT survey whose section ids collide with the old one by construction.
-      // The anchor-capture staleness guard only compares pin VALUES, not project
-      // identity (see the guard's own comment in gasPlanStore.ts), so this load path
-      // is the one thing that defeats it. Not routed through `applyDisplaySettings`
-      // itself: that function also forces `appMode` back to survey, resets display
-      // toggles (geometryMode, showDevStats, showIssueSeverity, the Plan/Export
-      // snapshots) and expects a `DisplaySettings` payload this flow never fetches -
-      // all display-preference behaviour this swap has no business touching.
-      useGasPlanStore.getState().reset();
-      setView('single');
-      await refreshProjectState();
-      useProjectStore.setState({ isDirty: false });
-      // The swapped-in revision can carry a different structural-integrity profile than
-      // the tree that was on screen; re-scan so the banner reflects the checked-out
-      // tree instead of the pre-swap one (fire-and-forget, identity-guarded).
-      void useProjectStore.getState().checkProjectIntegrity();
-      await refreshLinkStatus();
+      // The backend closed and reopened the project at the swapped tree. Reconcile every
+      // per-tree frontend store through the shared replacement seam. A false result means
+      // this reply landed after the login or open project changed, so callers must stop.
+      if (!(await applySpeleoTreeReplacement(issuedFor))) return false;
       if (!quiet) {
         showToast(
           restore
@@ -181,14 +137,8 @@ export function useRestoreRevision() {
           restore ? 'success' : 'info',
         );
       }
+      return true;
     },
-    [
-      t,
-      showToast,
-      setView,
-      clearSelection,
-      refreshProjectState,
-      refreshLinkStatus,
-    ],
+    [t, showToast],
   );
 }

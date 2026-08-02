@@ -139,7 +139,10 @@ describe('useRevertRevision - the happy path', () => {
       // A revert walks no chain, so there is no direction to select a guard with.
       chainForward: false,
     });
-    expect(argsOf('speleodb_done')).toEqual({ message: 'undo the bad survey' });
+    expect(argsOf('speleodb_done')).toEqual({
+      message: 'undo the bad survey',
+      acceptOlderVersion: false,
+    });
   });
 
   it('reports each step as it starts', async () => {
@@ -456,7 +459,10 @@ describe('useRevertRevision - resuming at the push', () => {
     expect(issued()).not.toContain('speleodb_start_editing');
     expect(issued()).not.toContain('speleodb_restore_revision');
     // And with the SAME message: a resume publishes the revert the user confirmed.
-    expect(argsOf('speleodb_done')).toEqual({ message: 'undo the bad survey' });
+    expect(argsOf('speleodb_done')).toEqual({
+      message: 'undo the bad survey',
+      acceptOlderVersion: false,
+    });
   });
 
   it('runs past the unsaved-edits guard too, however the dirty flag reads', async () => {

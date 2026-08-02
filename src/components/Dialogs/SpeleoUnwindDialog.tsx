@@ -64,7 +64,7 @@ export default function SpeleoUnwindDialog() {
     setBusy(true);
     setError(null);
     try {
-      await restoreRevision({
+      const applied = await restoreRevision({
         projectId,
         projectName,
         hexsha,
@@ -85,6 +85,10 @@ export default function SpeleoUnwindDialog() {
         // stepping backwards through history.
         quiet: true,
       });
+      if (!applied) {
+        closeDialog();
+        return;
+      }
       closeDialog();
     } catch (e) {
       setError(humanizeSpeleoError(e, t('speleodb.unwind.failed')));

@@ -7,10 +7,13 @@ import {
   asPushKind,
   asDoneKind,
   isUnwoundNotEdited,
+  speleoProjectSessionIssuedFor,
+  speleoProjectSessionStillCurrent,
 } from '../store/speleoStore';
 import { invokeIpc } from '../utils/ipc';
 import { openExitPrompt, type PendingExit } from '../utils/quit';
 import { speleoErrorAction, humanizeSpeleoError } from '../utils/speleoError';
+import { applySpeleoTreeReplacement } from '../utils/speleoTreeReplacement';
 import type {
   DoneResult,
   PushResult,
@@ -87,8 +90,6 @@ export function useSpeleoActions(): SpeleoActions {
   const showToast = useUIStore((s) => s.showToast);
   const openDialog = useUIStore((s) => s.openDialog);
   const loadProject = useProjectStore((s) => s.loadProject);
-  const refreshProjectState = useProjectStore((s) => s.refreshProjectState);
-  const clearSelection = useUIStore((s) => s.clearSelection);
   const applyStartEditing = useSpeleoStore((s) => s.applyStartEditing);
   const applyUpdate = useSpeleoStore((s) => s.applyUpdate);
   const applyDone = useSpeleoStore((s) => s.applyDone);
@@ -142,6 +143,9 @@ export function useSpeleoActions(): SpeleoActions {
   );
 
   const startEditing = useCallback(async (): Promise<boolean> => {
+    const issuedFor = speleoProjectSessionIssuedFor(
+      useSpeleoStore.getState().remoteProjectId,
+    );
     const busyToken = beginBusy();
     try {
       const result = await invokeIpc<StartEditingResult>('speleodb_start_editing');
@@ -157,7 +161,6 @@ export function useSpeleoActions(): SpeleoActions {
           // link state in explicitly - otherwise the old tree stays on screen. Clear
           // the (section_id, station_index)-keyed selection, which the swapped tree may
           // not carry (loadProject's full path clears it; this path bypasses it).
-          clearSelection();
           {
             // Mirrors `takeRemote`: `loadProject` also answers `success: false`
             // when a NEWER load superseded this one, so the swapped tree is not
@@ -171,11 +174,7 @@ export function useSpeleoActions(): SpeleoActions {
             const loaded = await loadProject(result.local_path);
             if (!loaded.success) return false;
           }
-          await refreshProjectState();
-          // Re-scan integrity: the fast-forwarded tree can differ structurally from the
-          // one on screen (identity-guarded, fire-and-forget).
-          void useProjectStore.getState().checkProjectIntegrity();
-          await refreshLinkStatus();
+          if (!(await applySpeleoTreeReplacement(issuedFor))) return false;
           break;
         case 'locked_by':
           showToast(
@@ -219,7 +218,7 @@ export function useSpeleoActions(): SpeleoActions {
       bumpPoll();
       endBusy(busyToken);
     }
-  }, [applyStartEditing, loadProject, refreshProjectState, refreshLinkStatus, clearSelection, showToast, t, handleError, beginBusy, endBusy, bumpPoll]);
+  }, [applyStartEditing, loadProject, showToast, t, handleError, beginBusy, endBusy, bumpPoll]);
 
   const forceEdit = useCallback(async (): Promise<boolean> => {
     const busyToken = beginBusy();
@@ -244,9 +243,13 @@ export function useSpeleoActions(): SpeleoActions {
   }, [refreshLinkStatus, showToast, t, handleError, beginBusy, endBusy, bumpPoll]);
 
   const update = useCallback(async () => {
+    const issuedFor = speleoProjectSessionIssuedFor(
+      useSpeleoStore.getState().remoteProjectId,
+    );
     const busyToken = beginBusy();
     try {
       const result = await invokeIpc<UpdateResult>('speleodb_update');
+      if (!speleoProjectSessionStillCurrent(issuedFor)) return;
       applyUpdate(result);
       switch (result.kind) {
         case 'up_to_date':
@@ -257,7 +260,6 @@ export function useSpeleoActions(): SpeleoActions {
           // loadProject short-circuits on the reopened path - pull geometry + link
           // state in so Update actually resets the view to the new tip. Clear the stale
           // selection for the same reason as the startEditing arm.
-          clearSelection();
           {
             // Same staleness stop as the startEditing arm: a superseded (or
             // failed) reload means the swapped tree is not on screen, so the
@@ -267,11 +269,7 @@ export function useSpeleoActions(): SpeleoActions {
             const loaded = await loadProject(result.local_path);
             if (!loaded.success) break;
           }
-          await refreshProjectState();
-          // Re-scan integrity: the fast-forwarded tree can differ structurally from the
-          // one on screen (identity-guarded, fire-and-forget).
-          void useProjectStore.getState().checkProjectIntegrity();
-          await refreshLinkStatus();
+          await applySpeleoTreeReplacement(issuedFor);
           break;
         case 'divergence_needed':
           break;
@@ -282,7 +280,7 @@ export function useSpeleoActions(): SpeleoActions {
       bumpPoll();
       endBusy(busyToken);
     }
-  }, [applyUpdate, loadProject, refreshProjectState, refreshLinkStatus, clearSelection, showToast, t, handleError, beginBusy, endBusy, bumpPoll]);
+  }, [applyUpdate, loadProject, showToast, t, handleError, beginBusy, endBusy, bumpPoll]);
 
   const push = useCallback(
     async (
@@ -477,6 +475,9 @@ export function useSpeleoActions(): SpeleoActions {
   );
 
   const takeRemote = useCallback(async (): Promise<boolean> => {
+    const issuedFor = speleoProjectSessionIssuedFor(
+      useSpeleoStore.getState().remoteProjectId,
+    );
     const busyToken = beginBusy();
     try {
       // Backend re-pulls + resets the tree to the server tip and returns the
@@ -488,6 +489,7 @@ export function useSpeleoActions(): SpeleoActions {
       // the divergence dialog doesn't close over a project the user left.
       const { success } = await loadProject(localPath);
       if (!success) return false;
+      if (!(await applySpeleoTreeReplacement(issuedFor))) return false;
       showToast(t('speleodb.editBar.toasts.tookRemote'), 'speleodb-took-remote', 'success');
       return true;
     } catch (e) {

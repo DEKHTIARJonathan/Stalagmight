@@ -1,11 +1,11 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useUIStore } from '../../store/uiStore';
-import { useSpeleoStore } from '../../store/speleoStore';
-import { useProjectStore } from '../../store/projectStore';
+import { speleoProjectSessionIssuedFor, useSpeleoStore } from '../../store/speleoStore';
 import { useSpeleoActions } from '../../hooks/useSpeleoActions';
 import { invokeIpc, getErrorMessage } from '../../utils/ipc';
 import { handBackProject, performQuit, readPendingExit } from '../../utils/quit';
+import { applySpeleoTreeReplacement } from '../../utils/speleoTreeReplacement';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 
@@ -40,8 +40,6 @@ export default function SpeleoUnwoundPushDialog() {
   const openDialog = useUIStore((s) => s.openDialog);
   const showToast = useUIStore((s) => s.showToast);
   const dialogData = useUIStore((s) => s.dialogData);
-  const refreshLinkStatus = useSpeleoStore((s) => s.refreshLinkStatus);
-  const refreshProjectState = useProjectStore((s) => s.refreshProjectState);
   const { push, done } = useSpeleoActions();
 
   const message = typeof dialogData.message === 'string' ? dialogData.message : null;
@@ -76,17 +74,19 @@ export default function SpeleoUnwoundPushDialog() {
   };
 
   const discardAndLock = async () => {
+    const issuedFor = speleoProjectSessionIssuedFor(
+      useSpeleoStore.getState().remoteProjectId,
+    );
     setBusy(true);
     try {
       // Keeps the lock: this branch exists so the user can carry on from the latest.
       // [#303] See SpeleoDiscardChangesDialog: the backend refuses an unacknowledged
       // discard, and this dialog's whole body is the acknowledgement.
       await invokeIpc('speleodb_discard_changes', { keepLock: true, acknowledged: true });
-      // The backend replaced the working copy and reloaded it in place, so pull the new
-      // geometry and link state in the same way the revision swap does.
-      await refreshProjectState();
-      useProjectStore.setState({ isDirty: false });
-      await refreshLinkStatus();
+      if (!(await applySpeleoTreeReplacement(issuedFor))) {
+        returnToCaller();
+        return;
+      }
       showToast(t('speleodb.unwoundPush.discardedToast'), 'speleodb-discarded', 'success');
       // Not the exit: this branch keeps the lock so the user can carry on editing, and
       // quitting on a button that says so would be a lie. It still has to hand the exit

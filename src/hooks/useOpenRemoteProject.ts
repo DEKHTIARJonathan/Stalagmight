@@ -4,10 +4,12 @@ import { useUIStore, type ToastKind } from '../store/uiStore';
 import { useProjectStore } from '../store/projectStore';
 import {
   useSpeleoStore,
+  speleoProjectSessionIssuedFor,
   speleoSessionIssuedAt,
   speleoSessionStillCurrent,
 } from '../store/speleoStore';
 import { invokeIpc } from '../utils/ipc';
+import { applySpeleoTreeReplacement } from '../utils/speleoTreeReplacement';
 import {
   speleoErrorAction,
   humanizeSpeleoError,
@@ -278,6 +280,15 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
         // the moment before the attempt, not as fresh as now. Opportunistic, not
         // load-bearing: unawaited, and the restore above already stands on its own.
         void useSpeleoStore.getState().refreshLinkStatus();
+        return { status: 'load_failed' };
+      }
+      // Reopening the file already on screen makes loadProject take its intentional
+      // already-open fast path. The backend may still have replaced the whole tree, so
+      // run the same post-replacement cleanup as fast-forward, discard, and restore.
+      if (
+        alreadyOpen &&
+        !(await applySpeleoTreeReplacement(speleoProjectSessionIssuedFor(projectId)))
+      ) {
         return { status: 'load_failed' };
       }
       if (successToast) showToast(successToast.message, successToast.key, successToast.kind);
