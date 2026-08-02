@@ -189,7 +189,17 @@ beforeAll(() => {
       outcome: { ok: true, durationMs: 10 },
       result: { value: false },
     }),
-    record({ type: 'session-end', v: 1, ts: ts(17), reason: 'app_stop', actions: 15 }),
+    record({
+      type: 'action',
+      v: 1,
+      seq: 16,
+      ts: ts(17),
+      tool: 'map_feature_click',
+      params: { featureType: 'shot', sectionId: 7, shotId: 42, verifySelection: true },
+      resolved: { point: { x: 888, y: 666 }, clearancePx: 12 },
+      outcome: { ok: true, durationMs: 20 },
+    }),
+    record({ type: 'session-end', v: 1, ts: ts(18), reason: 'app_stop', actions: 16 }),
   ];
   fs.writeFileSync(path.join(sessionDir, 'actions.jsonl'), `${lines.join('\n')}\n`);
 });
@@ -213,6 +223,11 @@ describe('generate-replay.mjs', () => {
     // Map clicks replay geography, not the pixels from the recording viewport.
     expect(spec).toContain(`await mapClick(browser, [12.34,-45.6], "right");`);
     expect(spec).not.toContain('999, 777');
+    // Semantic feature clicks resolve the current geometry again during replay.
+    expect(spec).toContain(
+      `await mapFeatureClick(browser, {"featureType":"shot","sectionId":7,"shotId":42,"verifySelection":true});`,
+    );
+    expect(spec).not.toContain('888, 666');
     // Semantic waits remain semantic and keep their recorded arguments.
     expect(spec).toContain(`waitForReplay(browser, {"condition":"app-ready","timeoutMs":4321})`);
     expect(spec).toContain(`waitForReplay(browser, {"condition":"active-tool","tool":"move_station","timeoutMs":7654})`);

@@ -28,6 +28,7 @@ import {
   selectOption,
   targetSelector,
 } from '../lib/controls';
+import { mapFeatureClick } from '../lib/mapControls';
 
 const STORE_NAMES = ['ui', 'project', 'globalView', 'gasPlan', 'speleo', 'export', 'network'] as const;
 
@@ -701,6 +702,40 @@ define('map_click', 'Click a geographic point on the map canvas (lngLat -> pixel
       }),
     { digest: true, sweep: true },
   ),
+);
+
+define(
+  'map_feature_click',
+  'Resolve a visible custom-WebGL shot or station by domain identity, click it, and optionally verify selection.',
+  {
+    featureType: z.enum(['shot', 'station']),
+    sectionId: z.number().int(),
+    shotId: z.number().int().optional(),
+    stationIndex: z.number().int().optional(),
+    button: z.enum(['left', 'right']).optional(),
+    verifySelection: z.boolean().optional(),
+  },
+  (args) =>
+    run(
+      'map_feature_click',
+      args,
+      async () =>
+        session.exclusive(async () => {
+          const resolved = await mapFeatureClick(session.browser, args);
+          return {
+            result: {
+              clicked: true,
+              featureType: resolved.featureType,
+              sectionId: resolved.sectionId,
+              shotId: resolved.shotId,
+              stationIndex: resolved.stationIndex,
+              selectionVerified: resolved.selectionVerified,
+            },
+            resolved,
+          };
+        }),
+      { digest: true, sweep: true },
+    ),
 );
 
 // ----------------------------------------------------------------- seeding

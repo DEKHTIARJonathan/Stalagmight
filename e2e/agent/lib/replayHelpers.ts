@@ -22,10 +22,12 @@ import {
   type SelectOptionRequest,
 } from './controls';
 import { waitForActiveTool, waitForAppReady, waitForMapIdle, waitForUiIdle } from './waiters';
+import { mapFeatureClick, type MapFeatureClickRequest } from './mapControls';
 
 export { invokeInApp as ipc, evalInApp };
 export { callStoreAction as storeAction };
 export { dragPointer, hoverElement, mapClick, queueFileDialogAnswer, scrollTarget, selectOption };
+export { mapFeatureClick };
 
 interface ReplayWaitRequest {
   condition: 'selector' | 'hidden' | 'app-ready' | 'ui-idle' | 'map-idle' | 'active-tool' | 'store-path';
@@ -127,7 +129,7 @@ export async function waitForReplay(browser: Browser, request: ReplayWaitRequest
   }
 }
 
-export type { DragRequest, ElementTarget, ScrollRequest, SelectOptionRequest };
+export type { DragRequest, ElementTarget, MapFeatureClickRequest, ScrollRequest, SelectOptionRequest };
 
 /** Click at a canvas-relative pixel (for map/canvas features with no DOM node). */
 export async function clickAt(

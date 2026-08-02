@@ -58,7 +58,7 @@ async function main(): Promise<void> {
       'screenshot', 'store_state', 'logs', 'wait_for',
       'click', 'type_text', 'press_keys', 'hover', 'drag', 'scroll',
       'select_option', 'element_state', 'file_dialog_answer', 'eval', 'ipc',
-      'store_action', 'map_view', 'map_click',
+      'store_action', 'map_view', 'map_click', 'map_feature_click',
       'seed', 'driver_script', 'check_problems', 'run_scenario',
     ];
     const missing = expected.filter((n) => !names.includes(n));
