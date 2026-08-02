@@ -66,10 +66,29 @@ describe('agent controls', () => {
   });
 
   it('clicks geographic points relative to the live canvas element', async () => {
-    evalInAppMock.mockResolvedValue({ x: 500, y: 400 });
+    evalInAppMock.mockResolvedValue({ x: 500, y: 400, interaction: 'maplibre' });
     const browser = fakeBrowser({});
 
-    await expect(mapClick(browser, [12, 34], 'right')).resolves.toEqual({ x: 500, y: 400 });
+    await expect(mapClick(browser, [12, 34], 'right')).resolves.toEqual({
+      x: 500,
+      y: 400,
+      interaction: 'maplibre',
+    });
     expect(evalInAppMock).toHaveBeenCalledWith(browser, expect.stringContaining('map.fire'), [[12, 34], 'right']);
+    expect(evalInAppMock.mock.calls[0]?.[1]).toContain("canvasRoot.dataset.placementMode === 'true'");
+    expect(evalInAppMock.mock.calls[0]?.[1]).toContain("new PointerEventCtor('pointerdown'");
+  });
+
+  it('reports placement routing and rejects false-positive map clicks', async () => {
+    const browser = fakeBrowser({});
+    evalInAppMock.mockResolvedValueOnce({ x: 320, y: 240, interaction: 'placement' });
+    await expect(mapClick(browser, [-81.78, 24.55])).resolves.toEqual({
+      x: 320,
+      y: 240,
+      interaction: 'placement',
+    });
+
+    evalInAppMock.mockResolvedValueOnce({ error: 'map point is outside the visible viewport' });
+    await expect(mapClick(browser, [0, 0])).rejects.toThrow('map point is outside the visible viewport');
   });
 });

@@ -55,6 +55,12 @@ export interface ElementState {
   truncated: boolean;
 }
 
+export interface MapClickResult {
+  x: number;
+  y: number;
+  interaction: 'maplibre' | 'placement';
+}
+
 export function targetSelector(target: ElementTarget): string | undefined {
   return target.testid !== undefined ? testIdSelector(target.testid) : target.selector;
 }
@@ -232,29 +238,90 @@ export async function mapClick(
   browser: Browser,
   lngLat: [number, number],
   button: 'left' | 'right' = 'left',
-): Promise<{ x: number; y: number }> {
-  const point = await evalInApp<{ x: number; y: number } | null>(
+): Promise<MapClickResult> {
+  const outcome = await evalInApp<MapClickResult | { error: string } | null>(
     browser,
     `
       const map = window.__stalagmight_map__;
       if (!map || !map.project) return null;
       const projected = map.project(args[0]);
-      const canvas = document.querySelector('[data-testid="map-canvas"]');
-      if (!canvas) return null;
-      const rect = canvas.getBoundingClientRect();
+      const canvasRoot = document.querySelector('[data-testid="map-canvas"]');
+      const surface = map.getCanvas && map.getCanvas();
+      if (!canvasRoot || !surface) return null;
+      const rect = surface.getBoundingClientRect();
+      if (projected.x < 0 || projected.y < 0 || projected.x > rect.width || projected.y > rect.height) {
+        return {
+          error: 'map point is outside the visible viewport: [' + args[0][0] + ', ' + args[0][1] + '] projects to [' +
+            Math.round(projected.x) + ', ' + Math.round(projected.y) + '] for a ' +
+            Math.round(rect.width) + 'x' + Math.round(rect.height) + ' map',
+        };
+      }
       const point = { x: Math.round(rect.left + projected.x), y: Math.round(rect.top + projected.y) };
       const eventName = args[1] === 'right' ? 'contextmenu' : 'click';
+
+      // Placement is owned by MapCanvas's React pointer handlers, not MapLibre's
+      // click event. Drive the same DOM path a user does so the placement callback
+      // creates or moves the section instead of reporting a false-positive click.
+      if (canvasRoot.dataset.placementMode === 'true') {
+        if (args[1] === 'right') {
+          const event = new MouseEvent('contextmenu', {
+            bubbles: true,
+            cancelable: true,
+            button: 2,
+            buttons: 2,
+            clientX: point.x,
+            clientY: point.y,
+          });
+          surface.dispatchEvent(event);
+          if (!event.defaultPrevented) return { error: 'placement context-menu event was not handled' };
+        } else {
+          const PointerEventCtor = typeof PointerEvent === 'function' ? PointerEvent : MouseEvent;
+          const down = new PointerEventCtor('pointerdown', {
+            bubbles: true,
+            cancelable: true,
+            button: 0,
+            buttons: 1,
+            clientX: point.x,
+            clientY: point.y,
+            pointerId: 1,
+            pointerType: 'mouse',
+            isPrimary: true,
+          });
+          surface.dispatchEvent(down);
+          surface.dispatchEvent(new PointerEventCtor('pointerup', {
+            bubbles: true,
+            cancelable: true,
+            button: 0,
+            buttons: 0,
+            clientX: point.x,
+            clientY: point.y,
+            pointerId: 1,
+            pointerType: 'mouse',
+            isPrimary: true,
+          }));
+          if (!down.defaultPrevented) return { error: 'placement pointer event was not handled' };
+        }
+        return { ...point, interaction: 'placement' };
+      }
+
       map.fire(eventName, {
         point: { x: projected.x, y: projected.y },
         lngLat: map.unproject([projected.x, projected.y]),
-        originalEvent: new MouseEvent(eventName, { button: args[1] === 'right' ? 2 : 0, clientX: point.x, clientY: point.y }),
+        originalEvent: new MouseEvent(eventName, {
+          bubbles: true,
+          cancelable: true,
+          button: args[1] === 'right' ? 2 : 0,
+          clientX: point.x,
+          clientY: point.y,
+        }),
       });
-      return point;
+      return { ...point, interaction: 'maplibre' };
     `,
     [lngLat, button],
   );
-  if (!point) throw new Error('map not available');
-  return point;
+  if (!outcome) throw new Error('map not available');
+  if ('error' in outcome) throw new Error(outcome.error);
+  return outcome;
 }
 
 export { cssStringLiteral, testIdSelector };

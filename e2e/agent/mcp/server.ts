@@ -686,7 +686,7 @@ define('map_view', 'Read or set the MapLibre view (center/zoom/bearing).', {
   })),
 );
 
-define('map_click', 'Click a geographic point on the map canvas (lngLat -> pixel via map.project).', {
+define('map_click', 'Click a visible geographic point through the active map interaction path.', {
   lngLat: z.array(z.number()).length(2),
   button: z.enum(['left', 'right']).optional(),
 }, (args) =>
@@ -697,8 +697,11 @@ define('map_click', 'Click a geographic point on the map canvas (lngLat -> pixel
       session.exclusive(async () => {
         const b = session.browser;
         const button = args.button ?? 'left';
-        const point = await mapClick(b, args.lngLat as [number, number], button);
-        return { result: { clicked: true }, resolved: { lngLat: args.lngLat, point } };
+        const resolved = await mapClick(b, args.lngLat as [number, number], button);
+        return {
+          result: { clicked: true, interaction: resolved.interaction },
+          resolved: { lngLat: args.lngLat, point: { x: resolved.x, y: resolved.y }, interaction: resolved.interaction },
+        };
       }),
     { digest: true, sweep: true },
   ),
