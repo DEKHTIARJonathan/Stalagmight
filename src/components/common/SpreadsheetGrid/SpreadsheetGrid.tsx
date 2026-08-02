@@ -65,11 +65,7 @@ export interface SpreadsheetGridProps<Row> {
   columns: GridColumn<Row>[];
   rows: Row[];
   /** Stable key per row (used for React keys only). */
-  rowKey: (row: Row, index: number) => string | number;
-  /** Optional semantic test ID for the row's clickable gutter target. */
-  rowTestId?: (row: Row, index: number) => string | undefined;
-  /** Optional semantic test ID for a clickable cell-content target. */
-  cellTestId?: (row: Row, index: number, colKey: string) => string | undefined;
+  rowKey: (row: Row, index: number) => string | number; rowTestId?: (row: Row, index: number) => string | undefined; cellTestId?: (row: Row, index: number, colKey: string) => string | undefined;
   /** Commit a single coerced cell value. */
   onEdit: (rowIndex: number, colKey: string, value: unknown) => void;
   /** Commit many coerced edits as ONE undo unit (paste / fill / clear). */
@@ -198,12 +194,7 @@ const formatEditValue = (value: unknown, locale: string): string => {
 
 export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
   const {
-    columns,
-    rows,
-    rowKey,
-    rowTestId,
-    cellTestId,
-    onEdit,
+    columns, rows, rowKey, rowTestId, cellTestId, onEdit,
     onBatchEdit,
     onClearMissing,
     locale = 'en-US',
@@ -2164,12 +2155,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
                     onMouseEnter={() => onGutterMouseEnter(rowIdx)}
                     onContextMenu={(e) => onGutterContextMenu(rowIdx, e)}
                   >
-                    <span
-                      className="flex h-full w-full items-center justify-center"
-                      data-testid={rowTestId?.(row, rowIdx)}
-                    >
-                      {rowLabel ? rowLabel(row, rowIdx) : rowIdx + 1}
-                    </span>
+                    <span className="flex h-full w-full items-center justify-center" data-testid={rowTestId?.(row, rowIdx)}>{rowLabel ? rowLabel(row, rowIdx) : rowIdx + 1}</span>
                   </div>
                   {visibleColumns.map((col, c) => {
                     const inSel = isInRect(rect, rowIdx, c);
@@ -2218,12 +2204,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
                         {/* Content always renders; the editor (below) overlays the
                             active cell when editing so it fills the whole cell.
                             Plain text truncates with an ellipsis + tooltip. */}
-                        <div
-                          className={`flex min-w-0 flex-1 self-stretch items-center overflow-hidden ${
-                            col.align === 'right' ? 'justify-end' : col.align === 'center' ? 'justify-center' : ''
-                          }`}
-                          data-testid={cellTestId?.(row, rowIdx, col.key)}
-                        >
+                        <div className={`flex min-w-0 flex-1 self-stretch items-center overflow-hidden ${col.align === 'right' ? 'justify-end' : col.align === 'center' ? 'justify-center' : ''}`} data-testid={cellTestId?.(row, rowIdx, col.key)}>
                           {!isEditingCell &&
                             (col.render ? (
                               col.render(row, rowIdx)
