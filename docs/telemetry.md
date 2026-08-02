@@ -467,7 +467,11 @@ cp telemetry-worker/wrangler.toml.example telemetry-worker/wrangler.toml
 
 # Deploy
 cd telemetry-worker
-pnpm install
+# --ignore-workspace is REQUIRED: the repo root has a pnpm-workspace.yaml (it is
+# where pnpm 10+ reads build-script approvals), and pnpm walks upward to find it.
+# Without the flag pnpm installs the ROOT project instead, exits 0, and leaves
+# telemetry-worker/node_modules empty - so the wrangler pin below is never installed.
+pnpm install --ignore-workspace
 CLOUDFLARE_API_TOKEN=... CLOUDFLARE_ACCOUNT_ID=... npx wrangler deploy
 ```
 

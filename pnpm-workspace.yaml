@@ -1,0 +1,33 @@
+# pnpm settings. This file is where pnpm 10+ reads its build-script approvals;
+# the old `pnpm.onlyBuiltDependencies` block in package.json is ignored from
+# pnpm 11 on (see #109).
+#
+# `allowBuilds` must be a MAP of `package: true`, not a list. A list under this
+# key is rejected by both pnpm 10 and 11, and the list form of
+# `onlyBuiltDependencies` works on 10 but not on 11 - the keyed map below is the
+# only shape valid on both majors.
+#
+# esbuild is needed by Vite on every install. edgedriver and geckodriver are
+# needed only by the quarantined WebdriverIO suite under e2e/legacy/.
+#
+# `packages` is not here to declare a monorepo - this repo is a single package.
+# pnpm 9 reads this file only as a workspace definition and aborts with
+# "packages field missing or empty" if the key is absent, and pnpm 9 is the one
+# major that cannot self-switch to the pin, so without this line a contributor
+# on a stale global pnpm 9 hits an error that points nowhere near the cause.
+# Verified layout-identical on pnpm 11 with and without it (same top-level
+# node_modules, same .bin, same .pnpm dir count).
+#
+# ⚠ Any nested standalone project (telemetry-worker/) must install with
+# `pnpm install --ignore-workspace`. pnpm walks UPWARD to find this file, and a
+# nested project not listed here silently installs the root instead: exit 0, no
+# warning, and the nested node_modules is never created. That is caused by this
+# file EXISTING, not by the `packages` key, so it applies on pnpm 9/10/11 alike
+# and dropping `packages` would not avoid it. See docs/telemetry.md.
+packages:
+  - .
+
+allowBuilds:
+  esbuild: true
+  edgedriver: true
+  geckodriver: true

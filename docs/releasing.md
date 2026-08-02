@@ -159,7 +159,7 @@ the day the version was bumped, which may be well before the day it ships.
 
 - **Trigger**: push to master, pull requests to master
 - **Steps**: TypeScript check, Rust tests
-- Installs: system libs, Rust toolchain, Node 24 (from `.nvmrc`), pnpm 9
+- Installs: system libs, Rust toolchain, Node 24 (from `.nvmrc`), pnpm 11 (from `packageManager`)
 
 ### Release (`.github/workflows/release.yml`)
 
