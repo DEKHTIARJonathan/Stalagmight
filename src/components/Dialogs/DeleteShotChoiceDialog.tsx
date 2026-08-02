@@ -108,13 +108,14 @@ export default function DeleteShotChoiceDialog() {
         />
 
         <div className="flex justify-end gap-2">
-          <Button onClick={closeDialog} disabled={isLoading}>
+          <Button onClick={closeDialog} disabled={isLoading} data-testid="delete-shot-choice-cancel">
             Cancel
           </Button>
-          <Button onClick={handleSplit} disabled={isLoading}>
+          <Button onClick={handleSplit} disabled={isLoading} data-testid="delete-shot-choice-split">
             Split Section
           </Button>
           <Button
+            data-testid="delete-shot-choice-shift"
             variant="danger"
             onClick={handleShift}
             disabled={isLoading || shiftBlocked}

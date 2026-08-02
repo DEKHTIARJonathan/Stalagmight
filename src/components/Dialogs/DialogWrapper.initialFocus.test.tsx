@@ -43,6 +43,20 @@ function renderDialog() {
 }
 
 describe('DialogWrapper initial-focus rAF (#289)', () => {
+  it('keeps the header fixed and makes the body scroll within the viewport clamp', () => {
+    render(
+      <DialogWrapper title="Responsive dialog" onClose={() => {}} data-testid="responsive-dialog">
+        <div>Long content</div>
+      </DialogWrapper>,
+    );
+
+    const dialog = screen.getByTestId('responsive-dialog');
+    const body = screen.getByTestId('responsive-dialog-body');
+    expect(dialog).toHaveClass('flex', 'flex-col', 'overflow-hidden', 'max-h-[90vh]');
+    expect(dialog.querySelector('h2')?.parentElement).toHaveClass('shrink-0');
+    expect(body).toHaveClass('min-h-0', 'flex-1', 'overflow-y-auto');
+  });
+
   it('does not steal focus from a control already focused inside the dialog', () => {
     renderDialog();
     const second = screen.getByTestId('second-input');

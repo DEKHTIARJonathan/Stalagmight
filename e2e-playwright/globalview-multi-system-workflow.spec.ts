@@ -1,5 +1,6 @@
 import { test, expect } from './fixtures/coverage';
 import { setupMockedPage, closeProjectViaMenu } from './helpers/app';
+import { systemCardTestId } from './helpers/testIds';
 
 const ALPHA = '/projects/cave-alpha.stalx';
 const BETA = '/projects/cave-beta.stalx';
@@ -13,9 +14,9 @@ test.describe('GlobalView Multi-System Workflow', () => {
   test('handles multi-select merge flow then opens a project and returns to global view', async ({ page }) => {
     await page.getByTestId('globalview-view-toggle-list').click();
 
-    const alphaCard = page.getByTestId(`system-card-${ALPHA}`);
-    const betaCard = page.getByTestId(`system-card-${BETA}`);
-    const gammaCard = page.getByTestId(`system-card-${GAMMA}`);
+    const alphaCard = page.getByTestId(systemCardTestId(ALPHA));
+    const betaCard = page.getByTestId(systemCardTestId(BETA));
+    const gammaCard = page.getByTestId(systemCardTestId(GAMMA));
 
     await alphaCard.click();
     await betaCard.click({ modifiers: ['ControlOrMeta'] });

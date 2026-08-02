@@ -151,6 +151,7 @@ Observation:
 | `store_state(store, path?, maxBytes?)` | Read a Zustand store; no path = key/type summary, dot path = value (JSON-capped). |
 | `logs(level?, peek?)` | New ring lines since last read (error/warn/all); `peek` does not advance. |
 | `wait_for(condition, ...)` | selector / hidden / app-ready / ui-idle / map-idle / active-tool / store-path. |
+| `element_state(testid\|selector)` | Matching count plus visible/enabled/value/checked/ARIA state. `unique: false` flags duplicate runtime IDs. |
 
 Interaction (each runs a cheap oracle sweep after; findings ride the result under `oracle`):
 
@@ -159,11 +160,17 @@ Interaction (each runs a cheap oracle sweep after; findings ride the result unde
 | `click(testid\|selector\|x+y, button?, double?, modifiers?)` | Fresh element resolution, waitForClickable, or a canvas pointer at coords. |
 | `type_text(text, testid?/selector?, clear?, submit?)` | Focus + type; `Control` not `Meta`. |
 | `press_keys(keys[])` | WebDriver key sequence. |
+| `hover(testid\|selector)` | Move the pointer over a fresh element reference. |
+| `drag(from..., to..., button?, durationMs?)` | Drag between test IDs, selectors, or viewport points. |
+| `scroll(testid?/selector?, deltaX?, deltaY?)` | Scroll a target into view or scroll a target/window by pixels. |
+| `select_option(testid\|selector, value)` | Select a native option or a portaled Stalagmight `Select` option by value. |
+| `file_dialog_answer(triggerTestid, kind, path\|paths\|cancel)` | Click the named UI control, answer the picker it opens, and verify that exact answer was consumed. |
 | `store_action(store, action, args?)` | Call a Zustand action (async-aware). |
 | `eval(script, args?)` | Async function body in the webview; returns its value. |
 | `ipc(command, args?)` | `window.__TAURI__.core.invoke`; e.g. `get_recent_logs_since`, `check_project_integrity`. |
 | `map_view(set?)` | Read or set the MapLibre view (center/zoom/bearing). |
-| `map_click(lngLat, button?)` | Geo point -> `map.project()` -> canvas-relative pointer. |
+| `map_click(lngLat, button?)` | Click a visible geographic point through the ordinary or placement path, reject half-open viewport edges, and require the map interaction sequence to advance. |
+| `map_feature_click(featureType, sectionId, shotId?/stationIndex?, button?, verifySelection?)` | Resolve current WebGL geometry by semantic identity, arm a one-use overlap preference, drive the MapLibre pipeline, and prove this click was processed. Selection is also verified by default. |
 | `seed(mode, name?, projectName?)` | Open a fixture / fractal fixture (`e2e/fixtures/`), or create a basic empty project. |
 | `driver_script(script, timeoutMs?)` | Node-context async body with `browser`/`ipc`/`evalInApp`/`readStore`/`callAction`/`log` in scope, under the mutex, for tight loops (one MCP call per action is too slow). On timeout the helpers (and the `browser` proxy) are disabled so a still-running body cannot keep driving the app outside the mutex. |
 
@@ -232,10 +239,12 @@ tolerate a truncated final line.
 
 - **Replay**: `node scripts/generate-replay.mjs <sessionDir> [--out f] [--name n]
   [--assert-final]`. Interaction tools become real WDIO code using `resolved`,
-  including `seed` (replayed as `openProject`/`createProject`), `driver_script`
+  including `seed` (replayed as `loadProject`/`createProject`), `driver_script`
   (re-run with the same helpers), and `run_scenario` (re-run with the recorded
-  seed/iterations); observation tools become numbered comments; inter-action
-  gaps > 250ms become bounded pauses; `--assert-final` turns the last
+  seed/iterations). Map clicks re-project their recorded longitude/latitude,
+  semantic waiters stay semantic, and test IDs are CSS-escaped. Observation
+  tools become numbered comments; inter-action gaps > 250ms become bounded
+  pauses; `--assert-final` turns the last
   `store_state` into a hard expect (skipped if the recorded value was
   truncated). Run via `REPLAY_SPEC=<file> pnpm test:e2e:replay` (spreads the
   base wdio config; single instance, no retries). Curated replays live under

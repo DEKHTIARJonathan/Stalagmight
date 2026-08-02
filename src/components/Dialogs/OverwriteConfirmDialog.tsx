@@ -78,10 +78,10 @@ export default function OverwriteConfirmDialog() {
         </div>
 
         <div className="flex justify-end gap-2 pt-4 border-t border-border">
-          <Button onClick={closeDialog} disabled={isLoading}>
+          <Button onClick={closeDialog} disabled={isLoading} data-testid="overwrite-confirm-cancel">
             Cancel
           </Button>
-          <Button variant="danger" onClick={handleConfirm} disabled={isLoading} data-primary-action="">
+          <Button variant="danger" onClick={handleConfirm} disabled={isLoading} data-primary-action="" data-testid="overwrite-confirm-accept">
             {isLoading ? 'Saving...' : 'Overwrite'}
           </Button>
         </div>

@@ -44,10 +44,10 @@ test.describe('Export Dialog', () => {
     await expect(formatSelect).toBeVisible();
 
     // CSV should be the default selection (check button text)
-    await expect(formatSelect.locator('button').first()).toHaveText('CSV');
+    await expect(formatSelect).toHaveText('CSV');
 
     // Click to open dropdown and verify CSV option is available
-    await formatSelect.locator('button').first().click();
+    await formatSelect.click();
     // The dropdown renders via portal to document.body - locate by role
     const dropdown = page.getByRole('listbox');
     await expect(dropdown.locator('[role="option"]:has-text("CSV")')).toBeVisible();
@@ -74,12 +74,12 @@ test.describe('Export Dialog', () => {
     // Change format to JSON using custom Select component
     const formatSelect = page.locator('[data-testid="data-format-select"]');
     // Click to open dropdown
-    await formatSelect.locator('button').first().click();
+    await formatSelect.click();
     // Click JSON option (portaled listbox - locate globally by role)
     await page.getByRole('listbox').locator('[role="option"]:has-text("JSON")').click();
 
     // Verify JSON is now selected (check button text)
-    await expect(formatSelect.locator('button').first()).toHaveText('JSON');
+    await expect(formatSelect).toHaveText('JSON');
 
     // Preview should not be visible for data export
     const preview = page.locator('[data-testid="export-preview"]');
@@ -106,7 +106,7 @@ test.describe('Export Dialog', () => {
     await expect(imageFormatSelect).toBeVisible();
 
     // Verify available image formats by opening dropdown
-    await imageFormatSelect.locator('button').first().click();
+    await imageFormatSelect.click();
     // The dropdown renders via portal to document.body - locate by role
     const imageDropdown = page.getByRole('listbox');
     await expect(imageDropdown.locator('[role="option"]:has-text("PNG")')).toBeVisible();
@@ -143,12 +143,12 @@ test.describe('Export Dialog', () => {
 
     // Switch to SVG → resolution should disappear
     const imageFormatSelect = page.locator('[data-testid="image-format-select"]');
-    await imageFormatSelect.locator('button').first().click();
+    await imageFormatSelect.click();
     await page.getByRole('listbox').locator('[role="option"]:has-text("SVG")').click();
     await expect(page.locator('[data-testid="resolution-select"]')).not.toBeVisible();
 
     // Switch to PDF → still hidden
-    await imageFormatSelect.locator('button').first().click();
+    await imageFormatSelect.click();
     await page.getByRole('listbox').locator('[role="option"]:has-text("PDF")').click();
     await expect(page.locator('[data-testid="resolution-select"]')).not.toBeVisible();
   });
@@ -267,9 +267,9 @@ test.describe('Export Dialog', () => {
     await expect(exportDialog).toBeVisible({ timeout: 5000 });
 
     const formatSelect = page.locator('[data-testid="data-format-select"]');
-    await formatSelect.locator('button').first().click();
+    await formatSelect.click();
     await page.getByRole('listbox').locator('[role="option"]:has-text("TML (Ariane)")').click();
-    await expect(formatSelect.locator('button').first()).toHaveText('TML (Ariane)');
+    await expect(formatSelect).toHaveText('TML (Ariane)');
 
     await page.getByTestId('export-button').click();
 
@@ -337,7 +337,7 @@ test.describe('Export Dialog', () => {
     await expect(exportDialog).toBeVisible({ timeout: 5000 });
 
     const formatSelect = page.locator('[data-testid="data-format-select"]');
-    await formatSelect.locator('button').first().click();
+    await formatSelect.click();
     await page.getByRole('listbox').locator('[role="option"]:has-text("TML (Ariane)")').click();
 
     await page.getByTestId('export-button').click();
@@ -379,7 +379,7 @@ test.describe('Export Dialog', () => {
     await expect(resolutionSelect).toBeVisible();
 
     // Open the dropdown
-    await resolutionSelect.locator('button').first().click();
+    await resolutionSelect.click();
 
     // Verify 600 DPI option is available (portaled listbox)
     const dropdown = page.getByRole('listbox');

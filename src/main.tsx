@@ -19,6 +19,7 @@ import { useExportStore } from './store/exportStore';
 import { useNetworkStore } from './store/networkStore';
 import { shotMaterialization } from './types/survey-data';
 import { getPerfTimings } from './utils/memoryProbe';
+import type { TestFileDialogQueueEntry } from './utils/fileDialogs';
 
 // Pipe frontend console.* calls into the Rust ring buffer for the debug dialog
 installConsoleCapture();
@@ -63,6 +64,12 @@ declare global {
       simulateLoadingProgress?: (payload: Partial<LoadingState>) => void;
       simulateLoadingError?: (message: string, details?: string) => void;
       resetLoading?: () => void;
+      fileDialogAnswers?: {
+        open: TestFileDialogQueueEntry[];
+        save: TestFileDialogQueueEntry[];
+      };
+      fileDialogConsumptions?: Record<string, 'open' | 'save'>;
+      activeFileDialogTriggerTestId?: string;
     };
   }
 }
@@ -79,6 +86,8 @@ if (import.meta.env.DEV || import.meta.env.MODE === 'test' || import.meta.env.VI
   testAPI.speleoStore = useSpeleoStore;
   testAPI.exportStore = useExportStore;
   testAPI.networkStore = useNetworkStore;
+  testAPI.fileDialogAnswers ??= { open: [], save: [] };
+  testAPI.fileDialogConsumptions ??= {};
   window.__E2E_TEST__ = testAPI;
 
   // Lazy-materialization guard for the load path: the harness reads this after

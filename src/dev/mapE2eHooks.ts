@@ -14,12 +14,16 @@
  * nothing leaks between projects.
  */
 
+import type { SemanticMapTarget } from '../components/Map/surveyLayer/semanticTarget';
+export type { SemanticMapTarget } from '../components/Map/surveyLayer/semanticTarget';
+
 /** The slice of SurveyLayer these hooks read. Structural, to avoid importing the
  *  class (and its MapLibre graph) into this dev-only module. */
 export interface MapE2eSurveyLayer {
   enumerateGeometry(): unknown;
   measuredPathDrawnCounts(): { shots: number; stations: number };
   dragGhostOffset(): unknown;
+  setSemanticTargetPreference(target: SemanticMapTarget): void;
 }
 
 /** What `installMapE2eHooks` needs: live accessors, read at call time so the
@@ -27,6 +31,11 @@ export interface MapE2eSurveyLayer {
 export interface MapE2eHookSources {
   surveyLayer: () => MapE2eSurveyLayer | null | undefined;
   toMeters: (lng: number, lat: number) => { x: number; y: number };
+  controls?: {
+    interactionSequence: () => number;
+    setSemanticTarget: (target: SemanticMapTarget) => boolean;
+    clearSemanticTarget: () => void;
+  };
 }
 
 interface HookWindow {
@@ -34,6 +43,9 @@ interface HookWindow {
   __stalagmight_measured__?: () => unknown;
   __stalagmight_drag_ghost__?: () => unknown;
   __stalagmight_to_meters__?: (lng: number, lat: number) => { x: number; y: number };
+  __stalagmight_map_interaction__?: () => number;
+  __stalagmight_set_map_target__?: (target: SemanticMapTarget) => boolean;
+  __stalagmight_clear_map_target__?: () => void;
 }
 
 /**
@@ -59,11 +71,19 @@ export function installMapE2eHooks(sources: MapE2eHookSources): () => void {
     sources.surveyLayer()?.measuredPathDrawnCounts() ?? { shots: 0, stations: 0 };
   w.__stalagmight_drag_ghost__ = () => sources.surveyLayer()?.dragGhostOffset() ?? null;
   w.__stalagmight_to_meters__ = (lng, lat) => sources.toMeters(lng, lat);
+  if (sources.controls) {
+    w.__stalagmight_map_interaction__ = () => sources.controls!.interactionSequence();
+    w.__stalagmight_set_map_target__ = (target) => sources.controls!.setSemanticTarget(target);
+    w.__stalagmight_clear_map_target__ = () => sources.controls!.clearSemanticTarget();
+  }
 
   return () => {
     delete w.__stalagmight_geometry__;
     delete w.__stalagmight_measured__;
     delete w.__stalagmight_drag_ghost__;
     delete w.__stalagmight_to_meters__;
+    delete w.__stalagmight_map_interaction__;
+    delete w.__stalagmight_set_map_target__;
+    delete w.__stalagmight_clear_map_target__;
   };
 }

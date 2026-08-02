@@ -90,7 +90,7 @@ async function fillCell(page: Page, row: number, colKey: string, value: string):
 
 /** Open the fullscreen-toolbar table picker and return its portaled listbox. */
 async function openTablePicker(page: Page): Promise<Locator> {
-  const trigger = page.getByTestId('table-select-dropdown').getByRole('combobox');
+  const trigger = page.getByTestId('table-select-dropdown');
   await trigger.click();
   const listboxId = await trigger.getAttribute('aria-controls');
   expect(listboxId).toBeTruthy();

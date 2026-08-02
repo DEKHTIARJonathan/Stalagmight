@@ -111,6 +111,7 @@ export function openFromSpeleoDbMenuItem(
         badge={<FolderOpenIcon size={11} />}
         badgeColor="text-blue-400"
         size={ICON_SIZE}
+        testIdPrefix="open-from-speleodb-button-icon"
       />
     ),
     onClick: actions.onOpen,

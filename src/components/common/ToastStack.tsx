@@ -858,6 +858,7 @@ function Toast({
         <button
           type="button"
           aria-label={dismissLabel}
+          data-testid={`toast-dismiss-${item.id}`}
           onClick={onDismiss}
           className={`${
             interactive ? 'pointer-events-auto' : 'pointer-events-none'

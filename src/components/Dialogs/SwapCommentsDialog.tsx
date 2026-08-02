@@ -82,7 +82,7 @@ export default function SwapCommentsDialog() {
           </blockquote>
         </div>
         <div className="flex justify-end gap-2 pt-4 border-t border-border">
-          <Button onClick={handleCancel} disabled={busy}>Cancel</Button>
+          <Button onClick={handleCancel} disabled={busy} data-testid="swap-comments-cancel">Cancel</Button>
           <Button variant="danger" onClick={handleOverwrite} disabled={busy} data-testid="swap-overwrite">
             Overwrite
           </Button>

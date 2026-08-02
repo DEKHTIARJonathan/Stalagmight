@@ -20,20 +20,20 @@ export async function waitForE2EHooks(browser: Browser, timeout = 30000): Promis
 }
 
 /** Wait for the main app container (global view, New Project button, or map). */
-export async function waitForAppReady(browser: Browser): Promise<void> {
+export async function waitForAppReady(browser: Browser, timeout = 30000): Promise<void> {
   await browser.waitUntil(
     async () => {
       if (await browser.$('[data-testid="global-view"]').isExisting()) return true;
       if (await browser.$('button*=New Project').isExisting()) return true;
       return browser.$('[data-testid="map-canvas"]').isExisting();
     },
-    { timeout: 30000, timeoutMsg: 'Application did not load within 30 seconds' },
+    { timeout, timeoutMsg: `Application did not load within ${timeout}ms` },
   );
-  await waitForUiIdle(browser, 200);
+  await waitForUiIdle(browser, 200, timeout);
 }
 
 /** Wait for document-ready + a top-level view present (+ map idle if present). */
-export async function waitForUiIdle(browser: Browser, minDelayMs = 0): Promise<void> {
+export async function waitForUiIdle(browser: Browser, minDelayMs = 0, timeout = 15000): Promise<void> {
   const start = Date.now();
   await browser.waitUntil(
     async () => {
@@ -71,12 +71,12 @@ export async function waitForUiIdle(browser: Browser, minDelayMs = 0): Promise<v
       }
       return Date.now() - start >= minDelayMs;
     },
-    { timeout: 15000, timeoutMsg: 'UI did not reach idle state' },
+    { timeout, timeoutMsg: 'UI did not reach idle state' },
   );
 }
 
 /** Wait for the MapLibre instance to be idle (no-op if no map mounted). */
-export async function waitForMapIdle(browser: Browser, minDelayMs = 0): Promise<void> {
+export async function waitForMapIdle(browser: Browser, minDelayMs = 0, timeout = 10000): Promise<void> {
   const start = Date.now();
   await browser.waitUntil(
     async () => {
@@ -103,16 +103,16 @@ export async function waitForMapIdle(browser: Browser, minDelayMs = 0): Promise<
       });
       return idle && Date.now() - start >= minDelayMs;
     },
-    { timeout: 10000, timeoutMsg: 'Map did not reach idle state' },
+    { timeout, timeoutMsg: 'Map did not reach idle state' },
   );
 }
 
 /** Wait until the map canvas reports the given active tool. */
-export async function waitForActiveTool(browser: Browser, tool: string): Promise<void> {
+export async function waitForActiveTool(browser: Browser, tool: string, timeout = 5000): Promise<void> {
   const canvas = browser.$('[data-testid="map-canvas"]');
-  await canvas.waitForExist({ timeout: 15000 });
+  await canvas.waitForExist({ timeout });
   await browser.waitUntil(async () => (await canvas.getAttribute('data-active-tool')) === tool, {
-    timeout: 5000,
+    timeout,
     timeoutMsg: `Active tool did not switch to ${tool}`,
   });
 }

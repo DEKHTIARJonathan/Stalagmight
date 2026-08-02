@@ -56,8 +56,9 @@ async function main(): Promise<void> {
     const expected = [
       'app_start', 'app_stop', 'app_restart', 'app_status',
       'screenshot', 'store_state', 'logs', 'wait_for',
-      'click', 'type_text', 'press_keys', 'eval', 'ipc',
-      'store_action', 'map_view', 'map_click',
+      'click', 'type_text', 'press_keys', 'hover', 'drag', 'scroll',
+      'select_option', 'element_state', 'file_dialog_answer', 'eval', 'ipc',
+      'store_action', 'map_view', 'map_click', 'map_feature_click',
       'seed', 'driver_script', 'check_problems', 'run_scenario',
     ];
     const missing = expected.filter((n) => !names.includes(n));
@@ -104,6 +105,18 @@ async function main(): Promise<void> {
     const wait = parseText(await call('wait_for', { condition: 'app-ready', timeoutMs: 5000 })) as { met?: boolean };
     check('wait_for app-ready', wait?.met === true);
 
+    const telemetryPrompt = parseText(
+      await call('element_state', { testid: 'telemetry-opt-in-dialog' }),
+    ) as { elements?: Array<{ displayed?: boolean }> };
+    if (telemetryPrompt?.elements?.some((element) => element.displayed)) {
+      await call('click', { testid: 'telemetry-opt-in-no' });
+      await call('wait_for', {
+        condition: 'hidden',
+        selector: '[data-testid="telemetry-opt-in-dialog"]',
+        timeoutMs: 5000,
+      });
+    }
+
     // Oracle self-test (harness doctor): a deliberate backend thread panic (app
     // survives) must surface as a fatal crash-marker finding from check_problems.
     await call('ipc', { command: 'debug_trigger_panic', args: { delayMs: 50 } });
@@ -120,11 +133,129 @@ async function main(): Promise<void> {
     const respondsAfterPanic = parseText(await call('store_state', { store: 'ui', path: 'view' })) as { value?: unknown };
     check('app survives thread panic (still responds)', respondsAfterPanic?.value === 'global');
 
-    // seed + driver_script (do this last: seed opens a project -> single view).
+    // Seed + driver_script (do this last: seed opens a project -> single view).
     const seeded = parseText(await call('seed', { mode: 'fixture' })) as { mode?: string };
-    check('seed opens a fixture project', seeded?.mode === 'fixture', seeded);
+    check('seed opens an isolated copy of the default fixture', seeded?.mode === 'fixture', seeded);
     const seededView = parseText(await call('store_state', { store: 'ui', path: 'view' })) as { value?: unknown };
     check('seed switched to single view', seededView?.value === 'single', seededView?.value);
+    await call('click', { testid: 'telemetry-opt-in-no' });
+    await call('wait_for', {
+      condition: 'hidden',
+      selector: '[data-testid="telemetry-opt-in-dialog"]',
+      timeoutMs: 5000,
+    });
+    await call('wait_for', { condition: 'map-idle', timeoutMs: 10000 });
+    const featureIdentity = parseText(
+      await call('eval', {
+        script:
+          'const geometry = window.__stalagmight_geometry__?.(); const station = geometry?.stations?.[0]; const shot = geometry?.shots?.[0]; return station && shot ? { sectionId: station.sectionId, stationIndex: station.stationIndex, shotId: shot.shotId, center: station.lngLat } : null;',
+      }),
+    ) as { value?: { sectionId?: number; stationIndex?: number; shotId?: number; center?: [number, number] } };
+    const feature = featureIdentity?.value;
+    if (feature?.center) {
+      await call('map_view', { set: { center: feature.center, zoom: 20, bearing: 0 } });
+      await call('wait_for', { condition: 'map-idle', timeoutMs: 10000 });
+    }
+    const semanticClick = feature?.sectionId != null && feature.stationIndex != null
+      ? parseText(
+          await call('map_feature_click', {
+            featureType: 'station',
+            sectionId: feature.sectionId,
+            stationIndex: feature.stationIndex,
+          }),
+        ) as { clicked?: boolean; selectionVerified?: boolean }
+      : null;
+    check(
+      'map_feature_click resolves and selects generated geometry',
+      semanticClick?.clicked === true && semanticClick.selectionVerified === true,
+      semanticClick ?? featureIdentity,
+    );
+    const semanticShotClick = feature?.sectionId != null && feature.shotId != null
+      ? parseText(
+          await call('map_feature_click', {
+            featureType: 'shot',
+            sectionId: feature.sectionId,
+            shotId: feature.shotId,
+          }),
+        ) as { clicked?: boolean; selectionVerified?: boolean }
+      : null;
+    check(
+      'map_feature_click resolves and selects a generated shot',
+      semanticShotClick?.clicked === true && semanticShotClick.selectionVerified === true,
+      semanticShotClick ?? featureIdentity,
+    );
+    const placementSetup = parseText(
+      await call('eval', {
+        script: `
+          const e2e = window.__E2E_TEST__;
+          const map = window.__stalagmight_map__;
+          if (!e2e?.uiStore || !e2e?.projectStore || !map) throw new Error('placement test hooks unavailable');
+          const project = e2e.projectStore.getState().project;
+          const surface = map.getCanvas();
+          const target = map.unproject([surface.clientWidth * 0.65, surface.clientHeight * 0.65]).toArray();
+          const sectionData = {
+            name: 'MCP Placement Section', surveyor: null, date: null, color: '#4ecdc4', direction: null, quality: 1,
+            shots: [{
+              azimuth_in: 90, azimuth_out: 90, length: 10, depth_in: 0, depth_out: 0,
+              pitch_in: null, pitch_out: null, left: null, right: null, up: null, down: null,
+              comment: null, kind: 'Normal', marker_index: null, temperature: null,
+            }],
+          };
+          delete window.__MCP_PLACEMENT_RESULT__;
+          e2e.uiStore.getState().startPlacementMode(sectionData, 0, async (result) => {
+            const created = await e2e.projectStore.getState().createSection(sectionData);
+            window.__MCP_PLACEMENT_RESULT__ = { created, result };
+          });
+          return { before: project.sections.length, target };
+        `,
+      }),
+    ) as { value?: { before?: number; target?: [number, number] } };
+    const placementTarget = placementSetup?.value?.target;
+    const placementClick = placementTarget
+      ? parseText(await call('map_click', { lngLat: placementTarget })) as {
+          clicked?: boolean;
+          interaction?: string;
+        }
+      : null;
+    type PlacementProbe = {
+      value?: { count?: number; placementActive?: boolean; completed?: boolean; success?: boolean };
+    };
+    let placementResult: PlacementProbe | null = null;
+    for (let i = 0; i < 20; i++) {
+      placementResult = parseText(
+        await call('eval', {
+          script: `
+            const e2e = window.__E2E_TEST__;
+            const marker = window.__MCP_PLACEMENT_RESULT__;
+            return {
+              count: e2e.projectStore.getState().project.sections.length,
+              placementActive: e2e.uiStore.getState().placementMode !== null,
+              completed: Boolean(marker?.result?.position),
+              success: marker?.created?.success === true,
+            };
+          `,
+        }),
+      ) as PlacementProbe;
+      if (placementResult?.value?.success) break;
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+    check(
+      'map_click completes active section placement through the map surface',
+      placementClick?.clicked === true &&
+        placementClick.interaction === 'placement' &&
+        placementResult?.value?.placementActive === false &&
+        placementResult?.value?.completed === true &&
+        placementResult?.value?.success === true &&
+        placementResult?.value?.count === (placementSetup?.value?.before ?? -1) + 1,
+      { placementClick, placementSetup, placementResult },
+    );
+    const offscreenClick = await call('map_click', { lngLat: [0, 0] });
+    const offscreenDetail = parseText(offscreenClick);
+    check(
+      'map_click rejects off-viewport coordinates instead of reporting clicked',
+      offscreenClick.isError === true && JSON.stringify(offscreenDetail).includes('outside the visible viewport'),
+      offscreenDetail,
+    );
     const driven = parseText(
       await call('driver_script', { script: 'const v = await readStore("ui", "view"); return v.value;' }),
     ) as { value?: unknown };

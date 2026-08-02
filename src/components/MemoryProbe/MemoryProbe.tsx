@@ -190,11 +190,13 @@ export function MemoryProbe(): JSX.Element | null {
       <div
         style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', userSelect: 'none' }}
         onClick={() => setCollapsed((v) => !v)}
+        data-testid="memory-probe-toggle"
       >
         <strong style={{ flex: 1 }}>mem probe {collapsed ? '▸' : '▾'}</strong>
         {!collapsed && (
           <>
             <button
+              data-testid="memory-probe-copy-snapshot"
               onClick={(e) => {
                 e.stopPropagation();
                 void dumpSnapshot(snapshot, featureBytes, geometryBytes, setDumpStatus);

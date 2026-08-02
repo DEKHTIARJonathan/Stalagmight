@@ -88,6 +88,7 @@ export function Toggle({
           id={generatedLabelId}
           className={`text-text-primary cursor-pointer ${disabled ? 'opacity-50 cursor-not-allowed' : ''}`}
           onClick={handleClick}
+          data-testid={dataTestId ? `${dataTestId}-label` : undefined}
         >
           {label}
         </span>

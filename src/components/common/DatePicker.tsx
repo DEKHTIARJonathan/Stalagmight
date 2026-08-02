@@ -53,8 +53,9 @@ export function DatePicker({
   };
 
   return (
-    <div className="w-full" data-testid={testId}>
+    <div className="w-full" data-testid={testId ? `${testId}-root` : undefined}>
       <ReactDatePicker
+        customInput={<input data-testid={testId} />}
         selected={selectedDate}
         onChange={handleChange}
         dateFormat="yyyy-MM-dd"

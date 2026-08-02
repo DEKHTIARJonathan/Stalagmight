@@ -24,6 +24,7 @@ import type { RecentListItem } from '../recentListItems';
 import type { ProjectMetadata } from '../../../types/project';
 import { useSpeleoLocalStates } from '../../../hooks/useSpeleoLocalStates';
 import { UNPUSHED_ACCENT, type SpeleoLocalStateMap } from '../../../utils/speleoLocalState';
+import { testIdPart } from '../../../utils/testId';
 
 const DIRTY = 'aaaaaaaa-1111-1111-1111-111111111111';
 const CLEAN = 'bbbbbbbb-2222-2222-2222-222222222222';
@@ -92,8 +93,8 @@ function renderTable(localStates: SpeleoLocalStateMap) {
 describe('recents local-edit accent (#270)', () => {
   it('accents only the table rows the IPC reports as having local edits', () => {
     renderTable(STATES);
-    const dirtyRow = screen.getByTestId(`system-row-${DIRTY_PROJECT.file_path}`);
-    const cleanRow = screen.getByTestId(`system-row-${CLEAN_PROJECT.file_path}`);
+    const dirtyRow = screen.getByTestId(`system-row-${testIdPart(DIRTY_PROJECT.file_path)}`);
+    const cleanRow = screen.getByTestId(`system-row-${testIdPart(CLEAN_PROJECT.file_path)}`);
     expect(dirtyRow).toHaveAttribute('data-local-edits', 'true');
     expect(cleanRow).toHaveAttribute('data-local-edits', 'false');
 
@@ -113,7 +114,7 @@ describe('recents local-edit accent (#270)', () => {
     // must read as "no accent", never as an accent-everything or a crash.
     renderTable({});
     for (const p of [DIRTY_PROJECT, CLEAN_PROJECT]) {
-      expect(screen.getByTestId(`system-row-${p.file_path}`)).toHaveAttribute(
+      expect(screen.getByTestId(`system-row-${testIdPart(p.file_path)}`)).toHaveAttribute(
         'data-local-edits',
         'false',
       );
@@ -132,13 +133,17 @@ describe('recents local-edit accent (#270)', () => {
         speleoLock={resolveSpeleoLock(DIRTY_PROJECT, {}, null, {}, STATES)}
       />,
     );
-    const card = screen.getByTestId(`system-card-${DIRTY_PROJECT.file_path}`);
+    const cardTestId = `system-card-${testIdPart(DIRTY_PROJECT.file_path)}`;
+    const card = screen.getByTestId(cardTestId);
     expect(card).toHaveAttribute('data-local-edits', 'true');
     expect(card.getAttribute('style')).toContain('var(--sh-comment)');
     // The badge belongs on the status button, where there is an action to take.
     expect(screen.queryByTestId('speleodb-status-unpushed-badge')).not.toBeInTheDocument();
     // The mark itself carries the same accent as the status button.
-    expect(screen.getByTestId('speleodb-logo-tinted')).toHaveAttribute('data-tint', UNPUSHED_ACCENT);
+    expect(screen.getByTestId(`${cardTestId}-speleo-logo`)).toHaveAttribute(
+      'data-tint',
+      UNPUSHED_ACCENT,
+    );
   });
 
   it('resolveSpeleoLock reports no local edits for an unlisted or unknown project', () => {

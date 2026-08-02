@@ -37,7 +37,7 @@ import { getTileConfig } from '../../utils/tileConfig';
 import { useMapTools } from '../../hooks/useMapTools';
 import { useGasPlanPointMarkers } from './useGasPlanPointMarkers';
 import { useGasPlanDropMarkers } from './useGasPlanDropMarkers';
-import SurveyLayer from './SurveyLayer';
+import SurveyLayer, { type SurveyLayerCallbacks } from './SurveyLayer';
 import { renderFatalMessage } from './surveyLayer/mapErrors';
 import PlacementOverlay from './PlacementOverlay';
 import GridOverlay from './GridOverlay';
@@ -203,6 +203,7 @@ function MapCanvas() {
   const mapContainer = useRef<HTMLDivElement>(null);
   const map = useRef<maplibregl.Map | null>(null);
   const surveyLayerRef = useRef<SurveyLayer | null>(null);
+  const mapInteractionSequenceRef = useRef(0);
   const originMarkerRef = useRef<maplibregl.Marker | null>(null);
   const gasOriginMarkerRef = useRef<maplibregl.Marker | null>(null);
   const gasTurnMarkersRef = useRef<maplibregl.Marker[]>([]);
@@ -998,18 +999,43 @@ function MapCanvas() {
     querySnapAtPoint,
   });
 
+  const noteMapInteraction = useCallback(() => {
+    mapInteractionSequenceRef.current += 1;
+  }, []);
+
   // Combine with hidden feature callbacks for toast feedback
-  const toolCallbacks = useMemo(() => ({
-    ...baseToolCallbacks,
-    onHiddenStationClick: () => {
-      showToast("Enable 'Stations' in Display menu to interact with station markers", 'stations-hidden', 'warning');
-    },
-    onHiddenShotClick: () => {
-      showToast("Enable 'Shots' in Display menu to interact with shot lines", 'shots-hidden', 'warning');
-    },
-    // No stock fallback: surface a subsystem-specific toast (renderFatalMessage).
-    onRenderFatal: (reason: string) => showToast(renderFatalMessage(reason), 'render-fatal', 'error'),
-  }), [baseToolCallbacks, showToast]);
+  const toolCallbacks = useMemo<SurveyLayerCallbacks>(
+    () => ({
+      ...baseToolCallbacks,
+      onStationClick: (ref, event) => {
+        noteMapInteraction();
+        baseToolCallbacks.onStationClick?.(ref, event);
+      },
+      onShotClick: (sectionId, shotId, event) => {
+        noteMapInteraction();
+        baseToolCallbacks.onShotClick?.(sectionId, shotId, event);
+      },
+      onEmptyClick: (event) => {
+        noteMapInteraction();
+        baseToolCallbacks.onEmptyClick?.(event);
+      },
+      onContextMenu: (target, event) => {
+        noteMapInteraction();
+        baseToolCallbacks.onContextMenu?.(target, event);
+      },
+      onHiddenStationClick: () => {
+        noteMapInteraction();
+        showToast("Enable 'Stations' in Display menu to interact with station markers", 'stations-hidden', 'warning');
+      },
+      onHiddenShotClick: () => {
+        noteMapInteraction();
+        showToast("Enable 'Shots' in Display menu to interact with shot lines", 'shots-hidden', 'warning');
+      },
+      // No stock fallback: surface a subsystem-specific toast (renderFatalMessage).
+      onRenderFatal: (reason: string) => showToast(renderFatalMessage(reason), 'render-fatal', 'error'),
+    }),
+    [baseToolCallbacks, noteMapInteraction, showToast],
+  );
 
   // Box select handlers
   const handleBoxSelectStart = useCallback(
@@ -1840,6 +1866,20 @@ function MapCanvas() {
       installMapE2eHooks({
         surveyLayer: () => surveyLayerRef.current,
         toMeters: (lng, lat) => mapCoordsToMeters(lng, lat, gpsOrigin),
+        ...(import.meta.env.DEV || import.meta.env.MODE === 'test' || import.meta.env.VITE_E2E === '1'
+          ? {
+              controls: {
+                interactionSequence: () => mapInteractionSequenceRef.current,
+                setSemanticTarget: (target) => {
+                  const layer = surveyLayerRef.current;
+                  if (!layer) return false;
+                  layer.setSemanticTargetPreference(target);
+                  return true;
+                },
+                clearSemanticTarget: () => surveyLayerRef.current?.setSemanticTargetPreference(null),
+              },
+            }
+          : {}),
       }),
     [surveyLayerRef, mapLoaded, gpsOrigin],
   );
@@ -3725,6 +3765,7 @@ function MapCanvas() {
       if (e.button === 0) {
         e.preventDefault();
         e.stopPropagation();
+        noteMapInteraction();
 
         // On touch devices, pointerDown fires before any pointerMove, so
         // cursorPosition may be null. Compute it from the event to ensure
@@ -3742,7 +3783,7 @@ function MapCanvas() {
         handlePlacementConfirm();
       }
     },
-    [placementMode, handlePlacementConfirm, gpsOrigin, updatePlacementCursor, updatePlacementSnap, checkPlacementSnap]
+    [placementMode, handlePlacementConfirm, gpsOrigin, updatePlacementCursor, updatePlacementSnap, checkPlacementSnap, noteMapInteraction]
   );
 
   // Handle placement mode right-click (cancel)
@@ -3751,10 +3792,11 @@ function MapCanvas() {
       if (placementMode) {
         e.preventDefault();
         e.stopPropagation();
+        noteMapInteraction();
         handlePlacementCancel();
       }
     },
-    [placementMode, handlePlacementCancel]
+    [placementMode, handlePlacementCancel, noteMapInteraction]
   );
 
   // Determine pointerdown handler based on mode and tool

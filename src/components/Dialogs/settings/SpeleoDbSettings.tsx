@@ -239,7 +239,7 @@ export function SpeleoDbSettings({
         {authError && (
           <div
             className="mb-3 p-3 bg-error-10 border border-error-20 rounded text-error text-sm"
-            data-testid="speleodb-settings-error"
+            data-testid="speleodb-account-settings-error"
           >
             {authError}
           </div>

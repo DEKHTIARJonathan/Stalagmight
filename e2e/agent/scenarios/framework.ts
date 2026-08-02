@@ -12,12 +12,17 @@
  * runner's callers perform afterwards turns real problems into findings.
  */
 import type { Browser } from 'webdriverio';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 import { invokeInApp, evalInApp } from '../lib/page';
 import { readStore, callStoreAction, type StoreName } from '../lib/stores';
+import { materializeFixture } from '../lib/fixtures';
 
 /** Minimal session surface a scenario needs; AppSession satisfies it. */
 export interface ScenarioTarget {
   readonly browser: Browser;
+  readonly sessionDir?: string;
   exclusive<T>(fn: () => Promise<T>): Promise<T>;
 }
 
@@ -42,6 +47,7 @@ export interface ScenarioContext {
   metric(key: string, delta?: number): void;
   setMetric(key: string, value: number): void;
   sleep(ms: number): Promise<void>;
+  fixturePath(name: string): string;
   readonly metrics: Record<string, number>;
 }
 
@@ -79,6 +85,9 @@ export function makeContext(
 ): ScenarioContext & { metrics: Record<string, number> } {
   const rand = mulberry32(seed || 1);
   const metrics: Record<string, number> = {};
+  const fixtureDir = target.sessionDir
+    ? path.join(target.sessionDir, 'fixtures')
+    : fs.mkdtempSync(path.join(os.tmpdir(), 'stalagmight-scenario-fixtures-'));
   return {
     get browser() {
       return target.browser;
@@ -102,5 +111,6 @@ export function makeContext(
       metrics[key] = value;
     },
     sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+    fixturePath: (name) => materializeFixture(name, fixtureDir),
   };
 }

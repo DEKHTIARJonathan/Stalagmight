@@ -1,4 +1,47 @@
-import type { SaveDialogOptions } from '@tauri-apps/plugin-dialog';
+import type { OpenDialogOptions, SaveDialogOptions } from '@tauri-apps/plugin-dialog';
+
+export type TestFileDialogAnswer = string | string[] | null;
+export interface TestFileDialogQueueEntry {
+  id: string;
+  value: TestFileDialogAnswer;
+  triggerTestId: string;
+  armed: boolean;
+}
+
+interface FileDialogTestEnv {
+  DEV?: boolean;
+  MODE?: string;
+  VITE_E2E?: string;
+}
+
+export function testFileDialogHooksEnabled(env: FileDialogTestEnv = import.meta.env): boolean {
+  return env.DEV === true || env.MODE === 'test' || env.VITE_E2E === '1';
+}
+
+export function takeTestFileDialogAnswer(kind: 'open' | 'save', triggerTestId?: string): {
+  queued: boolean;
+  value: TestFileDialogAnswer | undefined;
+} {
+  if (!testFileDialogHooksEnabled() || typeof window === 'undefined') {
+    return { queued: false, value: undefined };
+  }
+  const hooks = window.__E2E_TEST__;
+  const queue = hooks?.fileDialogAnswers?.[kind];
+  if (!hooks || !queue) return { queued: false, value: undefined };
+  const entry = queue?.[0];
+  if (!entry?.armed) return { queued: false, value: undefined };
+  if (triggerTestId && entry.triggerTestId !== triggerTestId) {
+    throw new Error(`file dialog answer for ${entry.triggerTestId} cannot be consumed by ${triggerTestId}`);
+  }
+  if (hooks.activeFileDialogTriggerTestId !== entry.triggerTestId) {
+    return { queued: false, value: undefined };
+  }
+  queue.shift();
+  delete hooks.activeFileDialogTriggerTestId;
+  hooks.fileDialogConsumptions ??= {};
+  hooks.fileDialogConsumptions[entry.id] = kind;
+  return { queued: true, value: entry.value };
+}
 
 export const PROJECT_EXTENSION = 'stalx';
 export const DMP_EXTENSION = 'dmp';
@@ -172,6 +215,14 @@ export function exportSaveFilters(label: string, extension: string) {
   return [{ name: label, extensions: [normalizedExt] }];
 }
 
+/** Open a native picker, or consume the next answer queued by the E2E harness. */
+export async function openDialog(options?: OpenDialogOptions, triggerTestId?: string): Promise<string | string[] | null> {
+  const answer = takeTestFileDialogAnswer('open', triggerTestId);
+  if (answer.queued) return answer.value ?? null;
+  const { open } = await import('@tauri-apps/plugin-dialog');
+  return open(options);
+}
+
 /**
  * Wrapper around Tauri's `save()` dialog that fixes Android compatibility.
  *
@@ -183,7 +234,13 @@ export function exportSaveFilters(label: string, extension: string) {
  *
  * On desktop, delegates to the native save dialog.
  */
-export async function saveDialog(options?: SaveDialogOptions): Promise<string | null> {
+export async function saveDialog(options?: SaveDialogOptions, triggerTestId?: string): Promise<string | null> {
+  const answer = takeTestFileDialogAnswer('save', triggerTestId);
+  if (answer.queued) {
+    if (Array.isArray(answer.value)) throw new Error('save dialog test answer must be a single path');
+    return answer.value ?? null;
+  }
+
   if (navigator.userAgent.includes('Android')) {
     // Try the native SAF dialog first. If the result is a content:// URI,
     // extract the filesystem path. Fall back to the in-app picker if the

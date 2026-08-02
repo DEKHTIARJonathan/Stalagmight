@@ -4,9 +4,8 @@
  * default 100). Catches unbounded undo-stack growth / memory creep on repeated
  * imports.
  */
-import * as fs from 'fs';
 import type { Scenario } from './framework';
-import { ensureProjectLoaded, fixturePath, undoDepth } from './common';
+import { ensureProjectLoaded, undoDepth } from './common';
 
 const UNDO_LIMIT = 100;
 const TML_FIXTURE = 'test_simple.tml';
@@ -17,8 +16,7 @@ export const importRepeatedly: Scenario = {
   defaultIterations: 20,
   async run(ctx, { iterations }) {
     await ensureProjectLoaded(ctx);
-    const tml = fixturePath(TML_FIXTURE);
-    if (!fs.existsSync(tml)) throw new Error(`fixture missing: ${tml}`);
+    const tml = ctx.fixturePath(TML_FIXTURE);
 
     const hashRes = (await ctx.callAction('project', 'calculateFileHash', [tml])) as {
       ok: boolean;

@@ -18,17 +18,23 @@ export function SpeleoDbLogo({
   size = 18,
   className,
   tint,
+  testId,
 }: {
   size?: number;
   className?: string;
   /** CSS colour to paint the mark in (e.g. `UNPUSHED_ACCENT`); `currentColor` when omitted. */
   tint?: string | undefined;
+  /** Caller-qualified ID for repeated instances; tinted standalone marks keep the legacy default. */
+  testId?: string | undefined;
 }) {
+  const resolvedTestId = testId ?? (tint ? 'speleodb-logo-tinted' : undefined);
+
   return (
     <span
       className={className}
       aria-hidden="true"
-      {...(tint ? { 'data-testid': 'speleodb-logo-tinted', 'data-tint': tint } : {})}
+      {...(resolvedTestId ? { 'data-testid': resolvedTestId } : {})}
+      {...(tint ? { 'data-tint': tint } : {})}
       style={{
         display: 'inline-block',
         width: size,

@@ -28,6 +28,7 @@ export default function RemoteSystemCard({
   busy = false,
 }: RemoteSystemCardProps) {
   const { t } = useTranslation();
+  const testId = `system-card-remote-${summary.id}`;
   // Gate the whole-card click on `busy` too, not just the Open button - otherwise a
   // click on the card body (or Enter/Space) bypasses the disabled button and fires a
   // concurrent open.
@@ -43,7 +44,7 @@ export default function RemoteSystemCard({
       // #270: a purely-remote row can still have a local cached copy carrying
       // un-pushed work (pulled, edited, then closed) - accent it the same way.
       style={unpushedAccentStyle(lock.hasLocalEdits)}
-      data-testid={`system-card-remote-${summary.id}`}
+      data-testid={testId}
       data-remote="true"
       data-local-edits={lock.hasLocalEdits ? 'true' : 'false'}
       role="button"
@@ -58,8 +59,8 @@ export default function RemoteSystemCard({
       }}
     >
       <h3 className="text-lg font-medium mb-1">{summary.name}</h3>
-      <div className="mb-3" data-testid="system-card-path">
-        <SpeleoRecentInfo info={lock} name={summary.name} />
+      <div className="mb-3" data-testid={`${testId}-path`}>
+        <SpeleoRecentInfo info={lock} name={summary.name} testIdPrefix={`${testId}-speleo`} />
       </div>
 
       <div className="mt-3 pt-3 border-t border-border flex items-center justify-end gap-2">

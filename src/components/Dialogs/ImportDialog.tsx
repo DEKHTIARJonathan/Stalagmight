@@ -331,6 +331,7 @@ export default function ImportDialog() {
               value={surveyor}
               onChange={(e) => setSurveyor(e.target.value)}
               className="w-full"
+              data-testid="import-section-surveyor-input"
             />
           </div>
           <div>
@@ -340,6 +341,7 @@ export default function ImportDialog() {
               value={date}
               onChange={(e) => setDate(e.target.value)}
               className="w-full"
+              data-testid="import-section-date-input"
             />
           </div>
           <div>
@@ -349,6 +351,7 @@ export default function ImportDialog() {
               value={color}
               onChange={(e) => setColor(e.target.value)}
               className="w-full h-9"
+              data-testid="import-section-color-input"
             />
           </div>
         </div>
@@ -357,7 +360,7 @@ export default function ImportDialog() {
         <Panel
           title="Shots"
           headerActions={
-            <button onClick={handleAddShot} className="text-accent text-sm">
+            <button onClick={handleAddShot} className="text-accent text-sm" data-testid="import-section-add-shot">
               + Add Row
             </button>
           }
@@ -369,6 +372,7 @@ export default function ImportDialog() {
                 type="checkbox"
                 checked={showLrud}
                 onChange={(e) => setShowLrud(e.target.checked)}
+                data-testid="import-section-lrud-toggle"
               />
               Include LRUD
             </label>
@@ -423,6 +427,7 @@ export default function ImportDialog() {
                             step="0.1"
                             title={cellErrors[key] ?? undefined}
                             placeholder={isLrud ? '-' : undefined}
+                            data-testid={`import-shot-${rowIndex}-${field}-input`}
                           />
                         </td>
                       );
@@ -443,6 +448,7 @@ export default function ImportDialog() {
                             handleShotChange(rowIndex, 'kind', e.target.checked ? 'Reference' : 'Normal')
                           }
                           onKeyDown={(e) => handleRowKeyDown(e, rowIndex)}
+                          data-testid={`import-shot-${rowIndex}-reference-input`}
                         />
                       </span>
                     </td>
@@ -459,6 +465,7 @@ export default function ImportDialog() {
                         size="sm"
                         variant="ghost"
                         aria-label="Remove shot"
+                        data-testid={`import-shot-${rowIndex}-remove`}
                         className="text-error hover:text-error-80"
                       />
                     </td>
@@ -471,8 +478,8 @@ export default function ImportDialog() {
 
         {/* Actions */}
         <div className="flex justify-end gap-2 pt-4 border-t border-border">
-          <Button onClick={closeDialog}>Cancel</Button>
-          <Button variant="primary" onClick={handleSubmit}>
+          <Button onClick={closeDialog} data-testid="import-section-cancel">Cancel</Button>
+          <Button variant="primary" onClick={handleSubmit} data-testid="import-section-create">
             Create Section
           </Button>
         </div>

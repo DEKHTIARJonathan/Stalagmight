@@ -146,9 +146,15 @@ suggestions.
 
 - [ ] Dialogs have `role="dialog"` and `aria-modal="true"`
 - [ ] Dialog titles have an `id` referenced by the dialog's `aria-labelledby`
-- [ ] Primary buttons have `data-testid`
-- [ ] Form inputs have `data-testid`
+- [ ] Every interactive control has a stable, unique `data-testid`
+- [ ] Controls rendered in a loop include a stable item key in the test ID
 - [ ] Icon-only buttons have `aria-label`
+
+`pnpm lint:test-ids:test && pnpm lint:test-ids` gates the statically provable
+parts of these requirements. The scanner rejects interactive JSX without a test
+ID, duplicate literal sibling IDs, and literal IDs inside `map`, `flatMap`, and
+`Array.from` render callbacks. Dynamic expressions and helper-component reuse
+still require review because static analysis cannot prove their runtime identity.
 
 ### Dialogs (mandatory shape)
 

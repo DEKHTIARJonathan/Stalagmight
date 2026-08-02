@@ -11,13 +11,24 @@ import { LogCursor, type LogLevel } from '../lib/logs';
 import { invokeInApp, evalInApp, capJson } from '../lib/page';
 import { newOracleState, runSweep, type OracleState } from '../lib/oracles';
 import { listScenarios, runScenario } from '../scenarios';
-import { fixturePath, DEFAULT_FIXTURE } from '../scenarios/common';
+import { DEFAULT_FIXTURE, materializeFixture } from '../lib/fixtures';
 import {
   waitForAppReady,
   waitForUiIdle,
   waitForMapIdle,
   waitForActiveTool,
 } from '../lib/waiters';
+import {
+  dragPointer,
+  hoverElement,
+  mapClick,
+  queryElementState,
+  answerFileDialog,
+  scrollTarget,
+  selectOption,
+  targetSelector,
+} from '../lib/controls';
+import { mapFeatureClick } from '../lib/mapControls';
 
 const STORE_NAMES = ['ui', 'project', 'globalView', 'gasPlan', 'speleo', 'export', 'network'] as const;
 
@@ -326,27 +337,31 @@ define(
         const b = session.browser;
         switch (args.condition) {
           case 'selector':
-            await b.$(String(args.selector)).waitForDisplayed({ timeout });
+            if (!args.selector) throw new Error('wait_for selector needs selector');
+            await b.$(args.selector).waitForDisplayed({ timeout });
             break;
           case 'hidden':
-            await b.$(String(args.selector)).waitForDisplayed({ timeout, reverse: true });
+            if (!args.selector) throw new Error('wait_for hidden needs selector');
+            await b.$(args.selector).waitForDisplayed({ timeout, reverse: true });
             break;
           case 'app-ready':
-            await waitForAppReady(b);
+            await waitForAppReady(b, timeout);
             break;
           case 'ui-idle':
-            await waitForUiIdle(b);
+            await waitForUiIdle(b, 0, timeout);
             break;
           case 'map-idle':
-            await waitForMapIdle(b);
+            await waitForMapIdle(b, 0, timeout);
             break;
           case 'active-tool':
-            await waitForActiveTool(b, String(args.tool));
+            if (!args.tool) throw new Error('wait_for active-tool needs tool');
+            await waitForActiveTool(b, args.tool, timeout);
             break;
           case 'store-path':
+            if (!args.store || !args.path) throw new Error('wait_for store-path needs store and path');
             await b.waitUntil(
               async () => {
-                const v = await readStore(b, args.store as StoreName, String(args.path));
+                const v = await readStore(b, args.store as StoreName, args.path!);
                 return JSON.stringify((v as { value?: unknown }).value) === JSON.stringify(args.equals);
               },
               { timeout, timeoutMsg: 'store-path did not match' },
@@ -380,7 +395,7 @@ define(
       args,
       async () => {
         const b = session.browser;
-        const selector = args.testid ? `[data-testid="${args.testid}"]` : args.selector;
+        const selector = targetSelector(args);
         const button = args.button ?? 'left';
         return session.exclusive(async () => {
           let point: { x: number; y: number } | undefined;
@@ -398,10 +413,9 @@ define(
             point = { x: Math.round(args.x), y: Math.round(args.y) };
             await b
               .action('pointer', { parameters: { pointerType: 'mouse' } })
-              .move({ x: point.x, y: point.y })
-              .down({ button })
-              .up({ button })
+              .move({ origin: 'viewport', x: point.x, y: point.y })
               .perform();
+            await clickWithOptions(b, button, args.double, args.modifiers);
           } else {
             throw new Error('click needs one of testid, selector, or x+y');
           }
@@ -428,7 +442,7 @@ define(
       args,
       async () => {
         const b = session.browser;
-        const selector = args.testid ? `[data-testid="${args.testid}"]` : args.selector;
+        const selector = targetSelector(args);
         return session.exclusive(async () => {
           let method: 'keys' | 'paste' = 'keys';
           let verified: boolean | null = null;
@@ -487,6 +501,121 @@ define('press_keys', 'Press a sequence of WebDriver keys (e.g. ["Control","z"]).
     },
     { digest: true, sweep: true },
   ),
+);
+
+define(
+  'hover',
+  'Move the pointer over an element by data-testid or CSS selector.',
+  { testid: z.string().optional(), selector: z.string().optional() },
+  (args) =>
+    run(
+      'hover',
+      args,
+      async () => {
+        const selector = await session.exclusive(() => hoverElement(session.browser, args));
+        return { result: { hovered: true }, resolved: { selector } };
+      },
+      { sweep: true },
+    ),
+);
+
+define(
+  'drag',
+  'Drag from an element or viewport point to another element or viewport point.',
+  {
+    fromTestid: z.string().optional(),
+    fromSelector: z.string().optional(),
+    fromX: z.number().optional(),
+    fromY: z.number().optional(),
+    toTestid: z.string().optional(),
+    toSelector: z.string().optional(),
+    toX: z.number().optional(),
+    toY: z.number().optional(),
+    button: z.enum(['left', 'right', 'middle']).optional(),
+    durationMs: z.number().int().min(0).max(10000).optional(),
+  },
+  (args) =>
+    run(
+      'drag',
+      args,
+      async () => ({
+        result: { dragged: true },
+        resolved: await session.exclusive(() => dragPointer(session.browser, args)),
+      }),
+      { digest: true, sweep: true },
+    ),
+);
+
+define(
+  'scroll',
+  'Scroll an element into view, or scroll an element/window by a pixel delta.',
+  {
+    testid: z.string().optional(),
+    selector: z.string().optional(),
+    deltaX: z.number().optional(),
+    deltaY: z.number().optional(),
+    block: z.enum(['start', 'center', 'end', 'nearest']).optional(),
+    inline: z.enum(['start', 'center', 'end', 'nearest']).optional(),
+  },
+  (args) =>
+    run(
+      'scroll',
+      args,
+      async () => {
+        const selector = await session.exclusive(() => scrollTarget(session.browser, args));
+        return { result: { scrolled: true }, resolved: { selector } };
+      },
+      { sweep: true },
+    ),
+);
+
+define(
+  'select_option',
+  'Select a value from a native select or Stalagmight Select identified by data-testid.',
+  { testid: z.string().optional(), selector: z.string().optional(), value: z.string() },
+  (args) =>
+    run(
+      'select_option',
+      args,
+      async () => ({
+        result: { selected: args.value },
+        resolved: await session.exclusive(() => selectOption(session.browser, args)),
+      }),
+      { digest: true, sweep: true },
+    ),
+);
+
+define(
+  'element_state',
+  'Query matching element count and actionable DOM state. unique=false identifies duplicate runtime test IDs.',
+  { testid: z.string().optional(), selector: z.string().optional() },
+  (args) =>
+    run('element_state', args, async () => ({
+      result: capJson(await session.exclusive(() => queryElementState(session.browser, args)), 16384),
+    })),
+);
+
+define(
+  'file_dialog_answer',
+  'Trigger a real UI control and atomically answer the native open/save dialog it opens.',
+  {
+    kind: z.enum(['open', 'save']),
+    triggerTestid: z.string().min(1),
+    path: z.string().optional(),
+    paths: z.array(z.string()).min(1).optional(),
+    cancel: z.boolean().optional(),
+  },
+  (args) =>
+    run('file_dialog_answer', args, async () => {
+      const choices = Number(args.path !== undefined) + Number(args.paths !== undefined) + Number(args.cancel === true);
+      if (choices !== 1) throw new Error('file_dialog_answer needs exactly one of path, paths, or cancel=true');
+      if (args.kind === 'save' && args.paths) throw new Error('save dialog answer cannot contain multiple paths');
+      const value = args.cancel ? null : (args.paths ?? args.path ?? null);
+      const resolved = await session.exclusive(() =>
+        answerFileDialog(session.browser, args.triggerTestid, args.kind, value),
+      );
+      return { result: { consumed: true, kind: args.kind, triggerTestid: args.triggerTestid }, resolved };
+    }),
 );
 
 // ------------------------------------------------------------ escape hatches
@@ -560,7 +689,7 @@ define('map_view', 'Read or set the MapLibre view (center/zoom/bearing).', {
   })),
 );
 
-define('map_click', 'Click a geographic point on the map canvas (lngLat -> pixel via map.project).', {
+define('map_click', 'Click a visible geographic point through the active map interaction path.', {
   lngLat: z.array(z.number()).length(2),
   button: z.enum(['left', 'right']).optional(),
 }, (args) =>
@@ -570,30 +699,55 @@ define('map_click', 'Click a geographic point on the map canvas (lngLat -> pixel
     async () =>
       session.exclusive(async () => {
         const b = session.browser;
-        const point = await evalInApp<{ x: number; y: number } | null>(
-          b,
-          `
-          const map = window.__stalagmight_map__;
-          if (!map || !map.project) return null;
-          const p = map.project(args[0]);
-          const canvas = document.querySelector('[data-testid="map-canvas"]') || document.querySelector('.maplibregl-canvas');
-          const rect = canvas ? canvas.getBoundingClientRect() : { left: 0, top: 0 };
-          return { x: Math.round(rect.left + p.x), y: Math.round(rect.top + p.y) };
-        `,
-          [args.lngLat],
-        );
-        if (!point) throw new Error('map not available or point off-canvas');
         const button = args.button ?? 'left';
-        await b
-          .action('pointer', { parameters: { pointerType: 'mouse' } })
-          .move({ x: point.x, y: point.y })
-          .down({ button })
-          .up({ button })
-          .perform();
-        return { result: { clicked: true }, resolved: { lngLat: args.lngLat, point } };
+        const resolved = await mapClick(b, args.lngLat as [number, number], button);
+        return {
+          result: { clicked: true, interaction: resolved.interaction, interactionVerified: true },
+          resolved: {
+            lngLat: args.lngLat,
+            point: { x: resolved.x, y: resolved.y },
+            interaction: resolved.interaction,
+            interactionSequence: resolved.interactionSequence,
+          },
+        };
       }),
     { digest: true, sweep: true },
   ),
+);
+
+define(
+  'map_feature_click',
+  'Resolve a visible custom-WebGL shot or station by domain identity, prefer it across overlaps, and prove the map processed this click.',
+  {
+    featureType: z.enum(['shot', 'station']),
+    sectionId: z.number().int(),
+    shotId: z.number().int().optional(),
+    stationIndex: z.number().int().optional(),
+    button: z.enum(['left', 'right']).optional(),
+    verifySelection: z.boolean().optional(),
+  },
+  (args) =>
+    run(
+      'map_feature_click',
+      args,
+      async () =>
+        session.exclusive(async () => {
+          const resolved = await mapFeatureClick(session.browser, args);
+          return {
+            result: {
+              clicked: true,
+              featureType: resolved.featureType,
+              sectionId: resolved.sectionId,
+              shotId: resolved.shotId,
+              stationIndex: resolved.stationIndex,
+              interactionVerified: resolved.interactionVerified,
+              selectionVerified: resolved.selectionVerified,
+            },
+            resolved,
+          };
+        }),
+      { digest: true, sweep: true },
+    ),
 );
 
 // ----------------------------------------------------------------- seeding
@@ -617,13 +771,10 @@ define(
           );
           return { result: { mode: 'basic', result: res } };
         }
-        const fixture = args.name ?? (args.mode === 'fractal' ? 'fractal_plant_iter2.stalx' : DEFAULT_FIXTURE);
-        const p = fixturePath(fixture);
-        if (!fs.existsSync(p)) {
-          throw new Error(`fixture not found: ${p} (fixtures live under e2e/fixtures/)`);
-        }
+        const fixture = args.name ?? (args.mode === 'fractal' ? 'fractal_plant_iter3.stalx' : DEFAULT_FIXTURE);
+        const p = materializeFixture(fixture, `${session.sessionDir}/fixtures`);
         const res = await session.exclusive(() =>
-          callStoreAction(session.browser, 'project', 'openProject', [p]),
+          callStoreAction(session.browser, 'project', 'loadProject', [p]),
         );
         return { result: { mode: args.mode, fixture, result: res }, resolved: { path: p } };
       },

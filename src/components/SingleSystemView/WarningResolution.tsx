@@ -806,16 +806,16 @@ export function WarningResolution({
               {selected === opt.id && opt.manual && (
                 <div className="pl-6 pr-1 pb-1">
                   {opt.manual === 'azimuth' && (
-                    <ManualField value={manual.azimuth ?? ''} onChange={(v) => setManual((m) => ({ ...m, azimuth: v }))} unit="°" placeholder={t('detailPanel.warnings.azimuthLabel')} testId="manual-azimuth" />
+                    <ManualField value={manual.azimuth ?? ''} onChange={(v) => setManual((m) => ({ ...m, azimuth: v }))} unit="°" placeholder={t('detailPanel.warnings.azimuthLabel')} testId={`manual-${opt.id}-azimuth`} />
                   )}
                   {opt.manual === 'azimuthInOut' && (
                     <div className="grid grid-cols-2 gap-2">
-                      <ManualField value={manual.azimuthIn ?? ''} onChange={(v) => setManual((m) => ({ ...m, azimuthIn: v }))} unit="°" placeholder={t('detailPanel.labels.azimuthIn')} testId="manual-azimuth-in" />
-                      <ManualField value={manual.azimuthOut ?? ''} onChange={(v) => setManual((m) => ({ ...m, azimuthOut: v }))} unit="°" placeholder={t('detailPanel.labels.azimuthOut')} testId="manual-azimuth-out" />
+                      <ManualField value={manual.azimuthIn ?? ''} onChange={(v) => setManual((m) => ({ ...m, azimuthIn: v }))} unit="°" placeholder={t('detailPanel.labels.azimuthIn')} testId={`manual-${opt.id}-azimuth-in`} />
+                      <ManualField value={manual.azimuthOut ?? ''} onChange={(v) => setManual((m) => ({ ...m, azimuthOut: v }))} unit="°" placeholder={t('detailPanel.labels.azimuthOut')} testId={`manual-${opt.id}-azimuth-out`} />
                     </div>
                   )}
                   {opt.manual === 'length' && (
-                    <ManualField value={manual.length ?? ''} onChange={(v) => setManual((m) => ({ ...m, length: v }))} unit={t('common.units.meters')} placeholder={t('detailPanel.labels.length')} testId="manual-length" />
+                    <ManualField value={manual.length ?? ''} onChange={(v) => setManual((m) => ({ ...m, length: v }))} unit={t('common.units.meters')} placeholder={t('detailPanel.labels.length')} testId={`manual-${opt.id}-length`} />
                   )}
                   {opt.manual === 'pitch' && (
                     <ManualField
@@ -823,7 +823,7 @@ export function WarningResolution({
                       onChange={(v) => setManual((m) => ({ ...m, pitch: v }))}
                       unit="°"
                       placeholder={t('detailPanel.labels.pitch')}
-                      testId="manual-pitch"
+                      testId={`manual-${opt.id}-pitch`}
                       invalid={(() => {
                         const v = strictNum(manual.pitch);
                         return !Number.isNaN(v) && (v < -90 || v > 90);
@@ -832,8 +832,8 @@ export function WarningResolution({
                   )}
                   {opt.manual === 'depth' && (
                     <div className="grid grid-cols-2 gap-2">
-                      <ManualField value={manual.depthIn ?? ''} onChange={(v) => setManual((m) => ({ ...m, depthIn: v }))} unit={t('common.units.meters')} placeholder={t('detailPanel.labels.depthIn')} testId="manual-depth-in" />
-                      <ManualField value={manual.depthOut ?? ''} onChange={(v) => setManual((m) => ({ ...m, depthOut: v }))} unit={t('common.units.meters')} placeholder={t('detailPanel.labels.depthOut')} testId="manual-depth-out" />
+                      <ManualField value={manual.depthIn ?? ''} onChange={(v) => setManual((m) => ({ ...m, depthIn: v }))} unit={t('common.units.meters')} placeholder={t('detailPanel.labels.depthIn')} testId={`manual-${opt.id}-depth-in`} />
+                      <ManualField value={manual.depthOut ?? ''} onChange={(v) => setManual((m) => ({ ...m, depthOut: v }))} unit={t('common.units.meters')} placeholder={t('detailPanel.labels.depthOut')} testId={`manual-${opt.id}-depth-out`} />
                     </div>
                   )}
                   {opt.manual === 'lrud' && (

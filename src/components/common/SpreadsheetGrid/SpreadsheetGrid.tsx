@@ -65,7 +65,7 @@ export interface SpreadsheetGridProps<Row> {
   columns: GridColumn<Row>[];
   rows: Row[];
   /** Stable key per row (used for React keys only). */
-  rowKey: (row: Row, index: number) => string | number;
+  rowKey: (row: Row, index: number) => string | number; rowTestId?: (row: Row, index: number) => string | undefined; cellTestId?: (row: Row, index: number, colKey: string) => string | undefined;
   /** Commit a single coerced cell value. */
   onEdit: (rowIndex: number, colKey: string, value: unknown) => void;
   /** Commit many coerced edits as ONE undo unit (paste / fill / clear). */
@@ -194,10 +194,7 @@ const formatEditValue = (value: unknown, locale: string): string => {
 
 export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
   const {
-    columns,
-    rows,
-    rowKey,
-    onEdit,
+    columns, rows, rowKey, rowTestId, cellTestId, onEdit,
     onBatchEdit,
     onClearMissing,
     locale = 'en-US',
@@ -2005,9 +2002,9 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
                       className="flex items-center gap-2 px-2 py-0.5 text-xs whitespace-nowrap hover:bg-accent-10"
                       data-testid={`col-toggle-${c.key}`}
                     >
-                      <input
-                        type="checkbox"
+                      <input type="checkbox"
                         checked={!(hiddenColumns ?? []).includes(c.key)}
+                        data-testid={`col-toggle-input-${c.key}`}
                         onChange={() => toggleHidden(c.key)}
                       />
                       {c.header || c.key}
@@ -2158,7 +2155,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
                     onMouseEnter={() => onGutterMouseEnter(rowIdx)}
                     onContextMenu={(e) => onGutterContextMenu(rowIdx, e)}
                   >
-                    {rowLabel ? rowLabel(row, rowIdx) : rowIdx + 1}
+                    <span className="flex h-full w-full items-center justify-center" data-testid={rowTestId?.(row, rowIdx)}>{rowLabel ? rowLabel(row, rowIdx) : rowIdx + 1}</span>
                   </div>
                   {visibleColumns.map((col, c) => {
                     const inSel = isInRect(rect, rowIdx, c);
@@ -2207,14 +2204,16 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
                         {/* Content always renders; the editor (below) overlays the
                             active cell when editing so it fills the whole cell.
                             Plain text truncates with an ellipsis + tooltip. */}
-                        {!isEditingCell &&
-                          (col.render ? (
-                            col.render(row, rowIdx)
-                          ) : (
-                            <span className="sg-cell-text" title={cellText || undefined}>
-                              {cellText}
-                            </span>
-                          ))}
+                        <div className={`flex min-w-0 flex-1 self-stretch items-center overflow-hidden ${col.align === 'right' ? 'justify-end' : col.align === 'center' ? 'justify-center' : ''}`} data-testid={cellTestId?.(row, rowIdx, col.key)}>
+                          {!isEditingCell &&
+                            (col.render ? (
+                              col.render(row, rowIdx)
+                            ) : (
+                              <span className="sg-cell-text" title={cellText || undefined}>
+                                {cellText}
+                              </span>
+                            ))}
+                        </div>
                       </div>
                     );
                   })}
@@ -2409,31 +2408,31 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
           style={{ position: 'fixed', top: ctxMenu.y, left: ctxMenu.x, zIndex: 60 }}
           onMouseDown={(e) => e.stopPropagation()}
         >
-          <button type="button" onClick={() => { void doCopy(); setCtxMenu(null); }}>{labels.copy(ctxShapeSuffix)}<span className="sg-shortcut">{labels.shortcutCopy}</span></button>
-          <button type="button" onClick={() => { void doCut(); setCtxMenu(null); }}>{labels.cut(ctxShapeSuffix)}<span className="sg-shortcut">{labels.shortcutCut}</span></button>
-          <button type="button" onClick={() => { void doPaste(); setCtxMenu(null); }}>{labels.paste}<span className="sg-shortcut">{labels.shortcutPaste}</span></button>
+          <button type="button" data-testid="grid-context-copy" onClick={() => { void doCopy(); setCtxMenu(null); }}>{labels.copy(ctxShapeSuffix)}<span className="sg-shortcut">{labels.shortcutCopy}</span></button>
+          <button type="button" data-testid="grid-context-cut" onClick={() => { void doCut(); setCtxMenu(null); }}>{labels.cut(ctxShapeSuffix)}<span className="sg-shortcut">{labels.shortcutCut}</span></button>
+          <button type="button" data-testid="grid-context-paste" onClick={() => { void doPaste(); setCtxMenu(null); }}>{labels.paste}<span className="sg-shortcut">{labels.shortcutPaste}</span></button>
           {(onInsertRows || onDeleteRows) && <div className="sg-context-sep" />}
           {onInsertRows && (
-            <button type="button" onClick={() => { onInsertRows(rect.r0, rect.r1 - rect.r0 + 1); setCtxMenu(null); }}>
+            <button type="button" data-testid="grid-context-insert-above" onClick={() => { onInsertRows(rect.r0, rect.r1 - rect.r0 + 1); setCtxMenu(null); }}>
               {labels.insertAbove(ctxRowsLabel)}
             </button>
           )}
           {onInsertRows && (
-            <button type="button" onClick={() => { onInsertRows(rect.r1 + 1, rect.r1 - rect.r0 + 1); setCtxMenu(null); }}>
+            <button type="button" data-testid="grid-context-insert-below" onClick={() => { onInsertRows(rect.r1 + 1, rect.r1 - rect.r0 + 1); setCtxMenu(null); }}>
               {labels.insertBelow(ctxRowsLabel)}
             </button>
           )}
           {onDeleteRows && (
-            <button type="button" onClick={() => { onDeleteRows(rect.r0, rect.r1); setCtxMenu(null); }}>
+            <button type="button" data-testid="grid-context-delete-rows" onClick={() => { onDeleteRows(rect.r0, rect.r1); setCtxMenu(null); }}>
               {labels.deleteRows(ctxRowsLabel)}
             </button>
           )}
           <div className="sg-context-sep" />
-          <button type="button" onClick={() => { doClear(); setCtxMenu(null); }}>{labels.clear(ctxShapeSuffix)}<span className="sg-shortcut">{labels.shortcutClear}</span></button>
-          <button type="button" onClick={() => { doFill(true); setCtxMenu(null); }}>{labels.fillDown}<span className="sg-shortcut">{labels.shortcutFillDown}</span></button>
+          <button type="button" data-testid="grid-context-clear" onClick={() => { doClear(); setCtxMenu(null); }}>{labels.clear(ctxShapeSuffix)}<span className="sg-shortcut">{labels.shortcutClear}</span></button>
+          <button type="button" data-testid="grid-context-fill-down" onClick={() => { doFill(true); setCtxMenu(null); }}>{labels.fillDown}<span className="sg-shortcut">{labels.shortcutFillDown}</span></button>
           {ctxExtraItems.length > 0 && <div className="sg-context-sep" />}
-          {ctxExtraItems.map((item) => (
-            <button key={item.label} type="button" onClick={() => { item.onClick(); setCtxMenu(null); }}>
+          {ctxExtraItems.map((item, index) => (
+            <button key={item.label} type="button" data-testid={`grid-context-extra-${index}`} onClick={() => { item.onClick(); setCtxMenu(null); }}>
               {item.label}
             </button>
           ))}
@@ -2446,4 +2445,3 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
 function isColWritable<Row>(c: GridColumn<Row>): boolean {
   return !!(c.editable || c.isEditable);
 }
-

@@ -180,6 +180,7 @@ function SubHeaderPickerMenu({
           {options.map((o) => (
             <button
               key={o.value}
+              data-testid={`${listTestId}-option-${encodeURIComponent(o.value)}`}
               disabled={o.disabled}
               className="flex w-full items-center gap-1.5 rounded px-2 py-0.5 text-left hover:bg-accent-10 disabled:opacity-50"
               onMouseEnter={() => onHoverOption?.(o.value)}
@@ -1192,7 +1193,10 @@ export default function DataTable({ sections }: DataTableProps) {
       if (shot.id < 0) return <span className="opacity-50">+</span>;
       const shotIndex = shotIndexAt(rowIndex);
       return selectedSectionId !== null && shotIndex !== null ? (
-        <span onDoubleClick={() => handlePanToShot(shot)}>
+        <span
+          onDoubleClick={() => handlePanToShot(shot)}
+          data-testid={`data-table-shot-row-label-${selectedSectionId}-${shot.id}`}
+        >
           <EntityBlob entity="shot">{formatShotId(selectedSectionId, shotIndex + 1)}</EntityBlob>
         </span>
       ) : (
@@ -1376,6 +1380,7 @@ export default function DataTable({ sections }: DataTableProps) {
           setSource('data-table');
           triggerCenterOnStation(station.station_ref);
         }}
+        data-testid={`data-table-station-row-label-${station.station_ref.section_id}-${station.station_ref.station_index}`}
       >
         <EntityBlob entity="station">
           {formatStationId(station.station_ref.section_id, station.station_ref.station_index)}
@@ -1782,6 +1787,8 @@ export default function DataTable({ sections }: DataTableProps) {
                 columns={shotColumns}
                 rows={gridShotRows}
                 rowKey={(s) => s.id}
+                rowTestId={(s) => `shot-row-${selectedSection.id}-${s.id}`}
+                cellTestId={(s, _rowIndex, colKey) => `shot-cell-${selectedSection.id}-${s.id}-${colKey}`}
                 locale={numberLocale}
                 height={gridHeight}
                 onEdit={onShotEdit}
@@ -1819,6 +1826,10 @@ export default function DataTable({ sections }: DataTableProps) {
                 columns={stationColumns}
                 rows={sectionStations}
                 rowKey={(s) => s.station_ref.station_index}
+                rowTestId={(s) => `station-row-${s.station_ref.section_id}-${s.station_ref.station_index}`}
+                cellTestId={(s, _rowIndex, colKey) =>
+                  `station-cell-${s.station_ref.section_id}-${s.station_ref.station_index}-${colKey}`
+                }
                 locale={numberLocale}
                 height={gridHeight}
                 onEdit={onStationEdit}
@@ -1928,9 +1939,10 @@ export default function DataTable({ sections }: DataTableProps) {
           data-dropdown-open
           data-testid="data-table-header-menu"
         >
-          {headerMenuItems.map((item) => (
+          {headerMenuItems.map((item, index) => (
             <button
               key={item.label}
+              data-testid={`data-table-header-menu-item-${index}`}
               className="block w-full rounded px-2 py-0.5 text-left hover:bg-accent-10"
               onClick={() => {
                 item.onClick();

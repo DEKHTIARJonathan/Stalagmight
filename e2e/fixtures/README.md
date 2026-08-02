@@ -22,6 +22,11 @@ The DMP format is binary and contains:
 
 See `src-tauri/src/parsers/dmp.rs` for full format documentation.
 
+## Stalagmight Projects
+
+`fractal_plant_iter3.stalx` is the tracked, current-schema project used by the
+agent harness's default `seed(mode: "fixture")` flow and stress scenarios.
+
 ### Usage in Tests
 
 **WebdriverIO (True E2E)**:

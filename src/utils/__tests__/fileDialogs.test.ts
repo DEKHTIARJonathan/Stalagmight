@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { afterEach, beforeEach, describe, it, expect } from 'vitest';
 import {
   ensureExtension,
   projectOpenFilters,
@@ -11,6 +11,10 @@ import {
   PROJECT_EXTENSION,
   DMP_EXTENSION,
   COMPASS_EXTENSIONS,
+  openDialog,
+  saveDialog,
+  takeTestFileDialogAnswer,
+  testFileDialogHooksEnabled,
 } from '../fileDialogs';
 
 // ---------------------------------------------------------------------------
@@ -127,5 +131,109 @@ describe('filter functions', () => {
     expect(PROJECT_EXTENSION).toBe('stalx');
     expect(DMP_EXTENSION).toBe('dmp');
     expect(COMPASS_EXTENSIONS).toEqual(['mak', 'dat']);
+  });
+});
+
+describe('E2E file dialog answers', () => {
+  const originalWindow = globalThis.window;
+
+  beforeEach(() => {
+    Object.defineProperty(globalThis, 'window', {
+      configurable: true,
+      writable: true,
+      value: { __E2E_TEST__: { fileDialogAnswers: { open: [], save: [] }, fileDialogConsumptions: {} } },
+    });
+  });
+
+  afterEach(() => {
+    if (originalWindow === undefined) {
+      Reflect.deleteProperty(globalThis, 'window');
+    } else {
+      Object.defineProperty(globalThis, 'window', {
+        configurable: true,
+        writable: true,
+        value: originalWindow,
+      });
+    }
+  });
+
+  it('consumes queued open paths without opening a native picker', async () => {
+    window.__E2E_TEST__ = {
+      fileDialogAnswers: {
+        open: [{ id: 'open-1', value: ['/tmp/a.dmp', '/tmp/b.dmp'], triggerTestId: 'open-button', armed: true }],
+        save: [],
+      },
+      fileDialogConsumptions: {},
+      activeFileDialogTriggerTestId: 'open-button',
+    };
+    await expect(openDialog({ multiple: true })).resolves.toEqual(['/tmp/a.dmp', '/tmp/b.dmp']);
+    expect(window.__E2E_TEST__.fileDialogAnswers?.open).toEqual([]);
+    expect(window.__E2E_TEST__.fileDialogConsumptions?.['open-1']).toBe('open');
+  });
+
+  it('consumes save paths and explicit cancellation', async () => {
+    window.__E2E_TEST__ = {
+      fileDialogAnswers: {
+        open: [],
+        save: [
+          { id: 'save-1', value: '/tmp/out.stalx', triggerTestId: 'save-button', armed: true },
+          { id: 'save-2', value: null, triggerTestId: 'save-button', armed: true },
+        ],
+      },
+      fileDialogConsumptions: {},
+      activeFileDialogTriggerTestId: 'save-button',
+    };
+    await expect(saveDialog()).resolves.toBe('/tmp/out.stalx');
+    window.__E2E_TEST__.activeFileDialogTriggerTestId = 'save-button';
+    await expect(saveDialog()).resolves.toBeNull();
+    expect(window.__E2E_TEST__.fileDialogConsumptions).toEqual({ 'save-1': 'save', 'save-2': 'save' });
+  });
+
+  it('rejects forged hooks in production builds', () => {
+    expect(testFileDialogHooksEnabled({ DEV: false, MODE: 'production' })).toBe(false);
+  });
+
+  it('does not consume an answer armed by a different trigger', async () => {
+    window.__E2E_TEST__ = {
+      fileDialogAnswers: {
+        open: [{ id: 'open-2', value: '/tmp/wrong.dmp', triggerTestId: 'expected-button', armed: true }],
+        save: [],
+      },
+      fileDialogConsumptions: {},
+      activeFileDialogTriggerTestId: 'other-button',
+    };
+
+    expect(takeTestFileDialogAnswer('open')).toEqual({ queued: false, value: undefined });
+    expect(window.__E2E_TEST__.fileDialogAnswers?.open).toHaveLength(1);
+  });
+
+  it('keeps async answers trigger-qualified until the picker wrapper consumes them', async () => {
+    window.__E2E_TEST__ = {
+      fileDialogAnswers: {
+        open: [],
+        save: [{ id: 'save-async', value: '/tmp/salvaged.json', triggerTestId: 'recovery-export-salvage', armed: true }],
+      },
+      fileDialogConsumptions: {},
+      activeFileDialogTriggerTestId: 'recovery-export-salvage',
+    };
+
+    await Promise.resolve();
+    await expect(saveDialog({}, 'recovery-export-salvage')).resolves.toBe('/tmp/salvaged.json');
+    expect(window.__E2E_TEST__.fileDialogConsumptions?.['save-async']).toBe('save');
+  });
+
+  it('rejects a pending answer when a different picker route tries to consume it', () => {
+    window.__E2E_TEST__ = {
+      fileDialogAnswers: {
+        open: [],
+        save: [{ id: 'save-wrong', value: '/tmp/wrong.json', triggerTestId: 'export-button', armed: true }],
+      },
+      fileDialogConsumptions: {},
+      activeFileDialogTriggerTestId: 'export-button',
+    };
+
+    expect(() => takeTestFileDialogAnswer('save', 'recovery-export-salvage')).toThrow(
+      'cannot be consumed by recovery-export-salvage',
+    );
   });
 });

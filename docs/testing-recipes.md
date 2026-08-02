@@ -630,9 +630,11 @@ await expect(page.getByTestId('detail-preview-popup')).toBeVisible();
 
 ### `Select` (portaled dropdown)
 
-`Select` renders its listbox via `createPortal` into `document.body` with
-`position: fixed`. The listbox is **not** inside the Select's container - it is a
-sibling of `<div id="root">`.
+`Select` puts its public test ID directly on the combobox trigger. The wrapper
+uses `<testId>-root`, the portaled listbox uses `<testId>-listbox`, and each
+option uses `<testId>-option-<encoded-value>`. The listbox renders via
+`createPortal` into `document.body` with `position: fixed`, so it is not inside
+the wrapper - it is a sibling of `<div id="root">`.
 
 1. **Do not locate it by an `.absolute` class.** The portaled listbox has none.
 2. **Do not scope options under the Select container.**
@@ -641,7 +643,7 @@ sibling of `<div id="root">`.
    cannot tell you an element is behind a sticky header.
 
 ```typescript
-const trigger = page.getByTestId('select-number-format').locator('button').first();
+const trigger = page.getByTestId('select-number-format');
 await trigger.click();
 
 // aria-controls may need a render cycle. Use an attribute selector - React
@@ -813,7 +815,7 @@ await expect(page.getByTestId('settings-dialog')).toBeVisible();
 | Root | `global-view` |
 | Map container | `globalview-map` |
 | Survey/markers toggle | `view-mode-toggle` |
-| Per-system marker | `system-marker-{filePath}` |
+| Per-system marker | `system-marker-{encodeURIComponent(filePath)}` |
 | Search input / clear | `globalview-search-input`, `globalview-search-clear` |
 | Right-click menu on a project | `project-context-menu` |
 

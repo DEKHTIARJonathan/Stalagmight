@@ -271,8 +271,7 @@ test.describe('Section and Shot Editing', () => {
     const directionSelect = dialog.getByTestId('section-direction-select');
     await expect(directionSelect).toContainText('In');
 
-    const trigger = directionSelect.locator('button').first();
-    await trigger.click();
+    await directionSelect.click();
 
     const outOption = page.getByRole('listbox').locator('[role="option"]:has-text("Out")');
     await outOption.click();

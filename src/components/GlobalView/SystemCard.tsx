@@ -10,6 +10,7 @@ import { ElidedPath, Tooltip } from '../common';
 import { setProjectActionSource } from '../../utils/telemetry';
 import { useProjectStatFormatters } from './useProjectStatFormatters';
 import { SpeleoRecentInfo, unpushedAccentStyle, type SpeleoLockInfo } from './SpeleoLockBadge';
+import { systemCardTestId } from '../../utils/testId';
 
 interface SystemCardProps {
   name: string;
@@ -42,6 +43,7 @@ export default function SystemCard({
   const { t } = useTranslation();
   const { formatLength } = useProjectStatFormatters();
   const { loadProject } = useProjectStore();
+  const testId = systemCardTestId(filePath);
 
   const handleClick = (e: MouseEvent) => {
     // Single click selects the card
@@ -109,7 +111,7 @@ export default function SystemCard({
       onClick={handleClick}
       onDoubleClick={handleDoubleClick}
       onContextMenu={handleContextMenu}
-      data-testid={`system-card-${filePath}`}
+      data-testid={testId}
       data-local-edits={speleoLock?.hasLocalEdits === true ? 'true' : 'false'}
       role="button"
       tabIndex={0}
@@ -128,14 +130,14 @@ export default function SystemCard({
       {/* SpeleoDB projects show the mark + lock state instead of the local path
           (irrelevant for a linked project, #201); local ones show the path. */}
       {speleoLock?.isRemote ? (
-        <div className="mb-3" data-testid="system-card-path">
-          <SpeleoRecentInfo info={speleoLock} name={name} />
+        <div className="mb-3" data-testid={`${testId}-path`}>
+          <SpeleoRecentInfo info={speleoLock} name={name} testIdPrefix={`${testId}-speleo`} />
         </div>
       ) : (
         <ElidedPath
           path={filePath}
           className="text-xs text-text-tertiary mb-3"
-          data-testid="system-card-path"
+          data-testid={`${testId}-path`}
         />
       )}
 
@@ -152,7 +154,7 @@ export default function SystemCard({
 
       <div className="mt-3 pt-3 border-t border-border text-xs text-text-secondary">
         <Tooltip content={absoluteModified(modifiedAt)}>
-          <span data-testid="system-card-modified">
+          <span data-testid={`${testId}-modified`}>
             {t('globalView.systemCard.modified', { relative: relativeModified(modifiedAt) })}
           </span>
         </Tooltip>

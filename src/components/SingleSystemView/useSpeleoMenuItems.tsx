@@ -72,7 +72,14 @@ export function useSpeleoMenuItems(): AppMenuItem[] {
             // `holdsLock`, which a force-editor does not have.
             id: 'speleodb-menu-reconnect',
             label: t('speleodb.forceEdit.reconnect'),
-            icon: <SpeleoBadgedIcon badge={<LockIcon size={9} />} badgeColor="text-yellow-400" size={sz} />,
+            icon: (
+              <SpeleoBadgedIcon
+                badge={<LockIcon size={9} />}
+                badgeColor="text-yellow-400"
+                size={sz}
+                testIdPrefix="speleodb-menu-reconnect-icon"
+              />
+            ),
             disabled: busy,
             onClick: () => {
               void startEditing();
@@ -82,7 +89,14 @@ export function useSpeleoMenuItems(): AppMenuItem[] {
         ? {
             id: 'speleodb-menu-unlock',
             label: t('speleodb.menu.unlock'),
-            icon: <SpeleoBadgedIcon badge={<LockIcon size={9} />} badgeColor="text-green-400" size={sz} />,
+            icon: (
+              <SpeleoBadgedIcon
+                badge={<LockIcon size={9} />}
+                badgeColor="text-green-400"
+                size={sz}
+                testIdPrefix="speleodb-menu-unlock-icon"
+              />
+            ),
             disabled: busy,
             onClick: () => {
               // Release; the push&release dialog when there are local edits.
@@ -95,7 +109,14 @@ export function useSpeleoMenuItems(): AppMenuItem[] {
         : {
             id: 'speleodb-menu-lock',
             label: t('speleodb.menu.lock'),
-            icon: <SpeleoBadgedIcon badge={<PencilIcon size={9} />} badgeColor="text-yellow-400" size={sz} />,
+            icon: (
+              <SpeleoBadgedIcon
+                badge={<PencilIcon size={9} />}
+                badgeColor="text-yellow-400"
+                size={sz}
+                testIdPrefix="speleodb-menu-lock-icon"
+              />
+            ),
             disabled: busy,
             onClick: () => {
               void startEditing();
@@ -104,7 +125,14 @@ export function useSpeleoMenuItems(): AppMenuItem[] {
       {
         id: 'speleodb-menu-push',
         label: t('speleodb.menu.push'),
-        icon: <SpeleoBadgedIcon badge={<PushGlyph size={9} />} badgeColor="text-green-400" size={sz} />,
+        icon: (
+          <SpeleoBadgedIcon
+            badge={<PushGlyph size={9} />}
+            badgeColor="text-green-400"
+            size={sz}
+            testIdPrefix="speleodb-menu-push-icon"
+          />
+        ),
         // Push-without-unlock needs the WRITE LOCK and something to push. Keyed on
         // `editState === 'editing'` alone, this row was enabled for a force-editor -
         // who has the edit gate open with no lock (#213) and therefore normally has
@@ -126,14 +154,28 @@ export function useSpeleoMenuItems(): AppMenuItem[] {
       {
         id: 'speleodb-menu-discard-changes',
         label: t('speleodb.menu.discardChanges'),
-        icon: <SpeleoBadgedIcon badge={<RefreshGlyph size={11} />} badgeColor="text-red-500" size={sz} />,
+        icon: (
+          <SpeleoBadgedIcon
+            badge={<RefreshGlyph size={11} />}
+            badgeColor="text-red-500"
+            size={sz}
+            testIdPrefix="speleodb-menu-discard-changes-icon"
+          />
+        ),
         disabled: busy || !hasUnpushedEdits,
         onClick: () => openDialog('speleodb-discard-changes'),
       },
       {
         id: 'speleodb-menu-refresh',
         label: t('speleodb.menu.refresh'),
-        icon: <SpeleoBadgedIcon badge={<RefreshGlyph size={11} />} badgeColor="text-blue-400" size={sz} />,
+        icon: (
+          <SpeleoBadgedIcon
+            badge={<RefreshGlyph size={11} />}
+            badgeColor="text-blue-400"
+            size={sz}
+            testIdPrefix="speleodb-menu-refresh-icon"
+          />
+        ),
         disabled: busy,
         onClick: () => {
           void update();
@@ -148,7 +190,12 @@ export function useSpeleoMenuItems(): AppMenuItem[] {
               id: 'speleodb-menu-edit-without-lock',
               label: t('speleodb.menu.editWithoutLock'),
               icon: (
-                <SpeleoBadgedIcon badge={<EditNoLockGlyph size={11} />} badgeColor="text-red-500" size={sz} />
+                <SpeleoBadgedIcon
+                  badge={<EditNoLockGlyph size={11} />}
+                  badgeColor="text-red-500"
+                  size={sz}
+                  testIdPrefix="speleodb-menu-edit-without-lock-icon"
+                />
               ),
               disabled: busy,
               onClick: () => openDialog('speleodb-force-edit'),
@@ -168,6 +215,7 @@ export function useSpeleoMenuItems(): AppMenuItem[] {
             badge={<ExternalLinkGlyph size={9} />}
             badgeColor="text-blue-400"
             size={sz}
+            testIdPrefix="speleodb-menu-open-web-icon"
           />
         ),
         // Signed out (or no remote id yet) there is no URL to resolve, and a row
@@ -179,7 +227,12 @@ export function useSpeleoMenuItems(): AppMenuItem[] {
         id: 'speleodb-menu-project-settings',
         label: t('speleodb.projectDialog.open'),
         icon: (
-          <SpeleoBadgedIcon badge={<SlidersIcon size={9} />} badgeColor="text-blue-400" size={sz} />
+          <SpeleoBadgedIcon
+            badge={<SlidersIcon size={9} />}
+            badgeColor="text-blue-400"
+            size={sz}
+            testIdPrefix="speleodb-menu-project-settings-icon"
+          />
         ),
         onClick: () => openDialog('speleodb-project'),
       },

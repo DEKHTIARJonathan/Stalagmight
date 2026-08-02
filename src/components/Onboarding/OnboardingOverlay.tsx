@@ -1181,6 +1181,7 @@ export default function OnboardingOverlay({
                 className="rounded-md border border-border px-3 py-1.5 text-sm text-text-primary transition-colors hover:bg-background-50"
                 onClick={() => setShowSkipConfirm(false)}
                 type="button"
+                data-testid="onboarding-skip-confirm-cancel"
               >
                 {t('common.actions.cancel')}
               </button>
@@ -1189,6 +1190,7 @@ export default function OnboardingOverlay({
                   className="rounded-md border border-border px-3 py-1.5 text-sm text-text-primary transition-colors hover:bg-background-50"
                   onClick={handleSkipCurrent}
                   type="button"
+                  data-testid="onboarding-skip-current"
                 >
                   {t('onboarding.skipConfirm.skipCurrent')}
                 </button>
@@ -1196,6 +1198,7 @@ export default function OnboardingOverlay({
                   className="rounded-md bg-error px-3 py-1.5 text-sm font-medium text-white transition-opacity hover:opacity-90"
                   onClick={handleSkipAll}
                   type="button"
+                  data-testid="onboarding-skip-all"
                 >
                   {t('onboarding.skipConfirm.skipAll')}
                 </button>
@@ -1207,6 +1210,7 @@ export default function OnboardingOverlay({
                 className="rounded-md px-3 py-1.5 text-sm text-text-secondary transition-colors hover:bg-background-50 hover:text-text-primary"
                 onClick={requestSkip}
                 type="button"
+                data-testid="onboarding-skip"
               >
                 {t('onboarding.actions.skip')}
               </button>
@@ -1216,6 +1220,7 @@ export default function OnboardingOverlay({
                     className="rounded-md border border-border px-3 py-1.5 text-sm text-text-primary transition-colors hover:bg-background-50"
                     onClick={onBack}
                     type="button"
+                    data-testid="onboarding-back"
                   >
                     {t('common.actions.back')}
                   </button>
@@ -1224,6 +1229,7 @@ export default function OnboardingOverlay({
                   className="rounded-md bg-accent px-3 py-1.5 text-sm font-medium text-white transition-opacity hover:opacity-90"
                   onClick={onNext}
                   type="button"
+                  data-testid="onboarding-next"
                 >
                   {isLastStep ? t('common.actions.done') : t('common.actions.next')}
                 </button>

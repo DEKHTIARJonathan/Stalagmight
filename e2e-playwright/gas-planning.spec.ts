@@ -11,6 +11,16 @@ import {
   type SectionSeed,
 } from './helpers/app';
 import { GAS_NEAR } from '../src/utils/gasReach';
+import {
+  gasCylinderRows,
+  gasMarkedLabelInputs,
+  gasMarkedRemoveButtons,
+  gasMarkedRows,
+  gasWaypointDownButtons,
+  gasWaypointRemoveButtons,
+  gasWaypointRows,
+  qualifiedIndexTestIds,
+} from './helpers/testIds';
 
 /**
  * E2E for the gas reachable-frontier overlay, now the Plan workspace mode (#38,
@@ -248,7 +258,7 @@ async function setupOneStageDrop(page: Page): Promise<void> {
   await enterMode(page, 'plan');
   await expect(page.locator('[data-testid="cylinders-table"]')).toBeVisible({ timeout: 3000 });
   await page.selectOption('[data-testid="gas-add-tank"]', 'al80');
-  await page.locator('[data-testid="gas-cylinder-role"]').last().selectOption('stage');
+  await qualifiedIndexTestIds(page, 'gas-cylinder-role').last().selectOption('stage');
   const oneStage = page.locator('[data-testid="gas-reserve-one_stage"]');
   await expect(oneStage).toBeEnabled();
   await oneStage.click();
@@ -633,7 +643,7 @@ test.describe('Gas planning', () => {
 
     // Add a cylinder and set its role to Stage → the rig now carries one stage.
     await page.selectOption('[data-testid="gas-add-tank"]', 'al80');
-    await page.locator('[data-testid="gas-cylinder-role"]').last().selectOption('stage');
+    await qualifiedIndexTestIds(page, 'gas-cylinder-role').last().selectOption('stage');
 
     // 1-stage is now selectable, but clicking it raises the advanced-acknowledgment gate
     // (it must NOT apply until acknowledged).
@@ -665,8 +675,8 @@ test.describe('Gas planning', () => {
   }) => {
     await enterMode(page, 'plan');
     await expect(page.locator('[data-testid="cylinders-table"]')).toBeVisible({ timeout: 3000 });
-    const firstRow = page.locator('[data-testid="gas-cylinder-row"]').first();
-    const toggle = firstRow.locator('[data-testid="gas-cylinder-enabled"]');
+    const firstRow = gasCylinderRows(page).first();
+    const toggle = qualifiedIndexTestIds(page, 'gas-cylinder-enabled').first();
     await expect(toggle).toBeChecked();
     await toggle.uncheck();
     // The row shows its disabled state, and the store carries the flag through to the engine.
@@ -696,7 +706,7 @@ test.describe('Gas planning', () => {
     await expect(page.locator('[data-testid="cylinders-table"]')).toBeVisible({ timeout: 3000 });
     // Carry one stage and select the (acked) 1-stage strategy → the stage-reserve control shows.
     await page.selectOption('[data-testid="gas-add-tank"]', 'al80');
-    await page.locator('[data-testid="gas-cylinder-role"]').last().selectOption('stage');
+    await qualifiedIndexTestIds(page, 'gas-cylinder-role').last().selectOption('stage');
     await page.locator('[data-testid="gas-reserve-one_stage"]').click();
     await page.locator('[data-testid="gas-pushy-ack-confirm"]').click();
     await expect(page.locator('[data-testid="gas-stage-reserve-input"]')).toBeVisible();
@@ -704,11 +714,7 @@ test.describe('Gas planning', () => {
     // Disable that stage. The engine counts only ENABLED stages, so it falls back to All-thirds;
     // the panel must mirror that - the staged-only reserve control disappears and the 1-stage
     // button greys out (before the fix, stageCount counted the disabled stage and both stayed live).
-    await page
-      .locator('[data-testid="gas-cylinder-row"]')
-      .last()
-      .locator('[data-testid="gas-cylinder-enabled"]')
-      .uncheck();
+    await qualifiedIndexTestIds(page, 'gas-cylinder-enabled').last().uncheck();
     await expect(page.locator('[data-testid="gas-stage-reserve-input"]')).toHaveCount(0);
     await expect(page.locator('[data-testid="gas-reserve-one_stage"]')).toBeDisabled();
   });
@@ -719,8 +725,8 @@ test.describe('Gas planning', () => {
     await enterMode(page, 'plan');
     await expect(page.locator('[data-testid="cylinders-table"]')).toBeVisible({ timeout: 3000 });
     // Under a reserve strategy the usable column is READ-ONLY (engine-computed).
-    await expect(page.locator('[data-testid="gas-cylinder-usable-readonly"]').first()).toBeVisible();
-    await expect(page.locator('[data-testid="gas-cylinder-usable"]')).toHaveCount(0);
+    await expect(qualifiedIndexTestIds(page, 'gas-cylinder-usable-readonly').first()).toBeVisible();
+    await expect(qualifiedIndexTestIds(page, 'gas-cylinder-usable')).toHaveCount(0);
 
     // Free is advanced (manual reserves, incl. zero-reserve), so it routes through the advanced
     // acknowledgment the first time - then flips the column to an editable field per budget-role tank.
@@ -728,7 +734,7 @@ test.describe('Gas planning', () => {
     await expect(page.locator('[data-testid="gas-pushy-ack"]')).toBeVisible();
     await page.locator('[data-testid="gas-pushy-ack-confirm"]').click();
     await expect(page.locator('[data-testid="gas-reserve-free"]')).toHaveClass(/ring-accent/);
-    const usable = page.locator('[data-testid="gas-cylinder-usable"]').first();
+    const usable = qualifiedIndexTestIds(page, 'gas-cylinder-usable').first();
     await expect(usable).toBeVisible();
 
     // Typing a usable value stores it on the cylinder (metric mock ⇒ bar 1:1).
@@ -769,7 +775,7 @@ test.describe('Gas planning', () => {
     // Add a stage + select the staged strategy → the gauge flips to "switch pressure", and the
     // stage-drop row shows both a pressure and a distance ("… @ …m").
     await page.selectOption('[data-testid="gas-add-tank"]', 'al80');
-    await page.locator('[data-testid="gas-cylinder-role"]').last().selectOption('stage');
+    await qualifiedIndexTestIds(page, 'gas-cylinder-role').last().selectOption('stage');
     await page.locator('[data-testid="gas-reserve-one_stage"]').click();
     await page.locator('[data-testid="gas-pushy-ack-confirm"]').click();
     await expect(readout).toContainText('Backgas switch pressure');
@@ -973,7 +979,7 @@ test.describe('Gas planning', () => {
       { section_id: 1, station_index: 2 },
       { section_id: 1, station_index: 4 },
     ]);
-    await expect(page.locator('[data-testid="gas-waypoint-row"]')).toHaveCount(2);
+    await expect(gasWaypointRows(page)).toHaveCount(2);
     // One numbered pin per way point on the map.
     await expect(page.locator('[data-testid="gas-waypoint-marker"]')).toHaveCount(2);
 
@@ -992,13 +998,13 @@ test.describe('Gas planning', () => {
     ]);
 
     // Reordering is a real change of plan, so it must actually swap the list.
-    await page.locator('[data-testid="gas-waypoint-down"]').first().click();
+    await gasWaypointDownButtons(page).first().click();
     await expect.poll(() => gasWaypoints(page), { timeout: 2000 }).toEqual([
       { section_id: 1, station_index: 4 },
       { section_id: 1, station_index: 2 },
     ]);
 
-    await page.locator('[data-testid="gas-waypoint-remove"]').first().click();
+    await gasWaypointRemoveButtons(page).first().click();
     await expect
       .poll(() => gasWaypoints(page), { timeout: 2000 })
       .toEqual([{ section_id: 1, station_index: 2 }]);
@@ -1019,10 +1025,10 @@ test.describe('Gas planning', () => {
 
     await openPlanMenu(page, 3);
     await planMenuItem(page, 'Set marked point').click();
-    await expect(page.locator('[data-testid="gas-marked-row"]')).toHaveCount(1);
+    await expect(gasMarkedRows(page)).toHaveCount(1);
     await expect(page.locator('[data-testid="gas-marked-point-marker"]')).toHaveCount(1);
 
-    await page.locator('[data-testid="gas-marked-label-input"]').fill('photo here');
+    await gasMarkedLabelInputs(page).fill('photo here');
     await expect
       .poll(
         () =>
@@ -1044,8 +1050,8 @@ test.describe('Gas planning', () => {
     );
     expect(callsAfter).toBe(callsBefore);
 
-    await page.locator('[data-testid="gas-marked-remove"]').click();
-    await expect(page.locator('[data-testid="gas-marked-row"]')).toHaveCount(0);
+    await gasMarkedRemoveButtons(page).click();
+    await expect(gasMarkedRows(page)).toHaveCount(0);
     await expect(page.locator('[data-testid="gas-marked-point-marker"]')).toHaveCount(0);
   });
 
@@ -1320,7 +1326,7 @@ test.describe('Gas planning', () => {
     await expect(panel.getByTestId('export-show-labels')).toBeVisible();
     const colorSelect = panel.getByTestId('export-color-mode');
     await expect(colorSelect).toBeVisible();
-    await colorSelect.locator('button').first().click();
+    await colorSelect.click();
     const colorList = page.getByRole('listbox');
     await expect(colorList.locator('[role="option"]:has-text("By depth")')).toBeVisible();
     await expect(colorList.locator('[role="option"]:has-text("By distance")')).toBeVisible();
@@ -1328,9 +1334,9 @@ test.describe('Gas planning', () => {
 
     // Switch the format to SVG → the Color dropdown disables (SVG is always monochrome).
     const formatSelect = panel.getByTestId('image-format-select');
-    await formatSelect.locator('button').first().click();
+    await formatSelect.click();
     await page.getByRole('listbox').locator('[role="option"]:has-text("SVG")').click();
-    await expect(colorSelect.locator('button').first()).toBeDisabled();
+    await expect(colorSelect).toBeDisabled();
 
     // Switch to the data export type → the map preview overlay goes away.
     await panel.getByTestId('export-type-data').click();
@@ -1539,7 +1545,7 @@ test.describe('Gas planning', () => {
     await expect(page.locator('[data-testid^="segment-row-"]')).toHaveCount(3);
 
     // Removing a way point merges the two spans it used to separate back into one row.
-    await page.locator('[data-testid="gas-waypoint-remove"]').first().click();
+    await gasWaypointRemoveButtons(page).first().click();
     await expect(page.locator('[data-testid^="segment-row-"]')).toHaveCount(2);
   });
 

@@ -218,7 +218,7 @@ export default function InsertStationDialog() {
         </p>
 
         <div className="flex justify-end gap-2 pt-4 border-t border-border">
-          <Button onClick={handleClose} disabled={isLoading}>
+          <Button onClick={handleClose} disabled={isLoading} data-testid="insert-station-cancel">
             Cancel
           </Button>
           <Button

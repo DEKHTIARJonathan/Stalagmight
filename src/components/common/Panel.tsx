@@ -1,11 +1,10 @@
-import { type ReactNode, useState, useRef, useCallback } from 'react';
+import { type MouseEvent, type ReactNode, useState, useRef, useCallback } from 'react';
 import { ChevronDownIcon, ChevronRightIcon } from './icons';
 import { useResizeHandle } from '../SingleSystemView/useResizeHandle';
 
-interface PanelProps {
+interface PanelPropsBase {
   title?: string;
   children: ReactNode;
-  collapsible?: boolean;
   defaultOpen?: boolean;
   className?: string;
   headerActions?: ReactNode;
@@ -13,6 +12,11 @@ interface PanelProps {
    *  where the surrounding container is already the visual frame. */
   bare?: boolean;
 }
+
+type PanelProps = PanelPropsBase & (
+  | { collapsible: true; testId: string }
+  | { collapsible?: false; testId?: string }
+);
 
 export function Panel({
   title,
@@ -22,18 +26,26 @@ export function Panel({
   className = '',
   headerActions,
   bare = false,
+  testId,
 }: PanelProps) {
   const [isOpen, setIsOpen] = useState(defaultOpen);
 
   return (
-    <div className={`bg-panel ${bare ? '' : 'border border-border rounded'} ${className}`}>
+    <div className={`bg-panel ${bare ? '' : 'border border-border rounded'} ${className}`} data-testid={testId}>
       {title && (
         <div
           className={`
             flex items-center justify-between px-3 py-2 border-b border-border
             ${collapsible ? 'cursor-pointer hover:bg-background-50' : ''}
           `}
-          onClick={collapsible ? () => setIsOpen(!isOpen) : undefined}
+          {...(collapsible
+            ? {
+                role: 'button' as const,
+                tabIndex: 0,
+                'data-testid': `${testId}-header`,
+                onClick: () => setIsOpen(!isOpen),
+              }
+            : {})}
         >
           <div className="flex items-center gap-2">
             {collapsible && (
@@ -44,7 +56,9 @@ export function Panel({
             <h3 className="font-medium text-text-primary">{title}</h3>
           </div>
           {headerActions && (
-            <div onClick={(e) => e.stopPropagation()}>{headerActions}</div>
+            <div {...(collapsible ? { onClick: (e: MouseEvent) => e.stopPropagation() } : {})}>
+              {headerActions}
+            </div>
           )}
         </div>
       )}

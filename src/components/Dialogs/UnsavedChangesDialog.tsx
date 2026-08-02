@@ -98,8 +98,9 @@ export default function UnsavedChangesDialog() {
         </p>
 
         <div className="flex justify-end gap-2 pt-4 border-t border-border">
-          <Button onClick={handleCancel}>Cancel</Button>
+          <Button onClick={handleCancel} data-testid="unsaved-changes-cancel">Cancel</Button>
           <Button
+            data-testid="unsaved-changes-discard"
             variant="danger"
             onClick={handleDiscard}
             {...(pendingQuit ? {} : { 'data-primary-action': '' })}
@@ -107,7 +108,7 @@ export default function UnsavedChangesDialog() {
             {pendingQuit ? 'Discard & Quit' : 'Discard Changes'}
           </Button>
           {pendingQuit && (
-            <Button variant="primary" onClick={handleSaveAndQuit}>
+            <Button variant="primary" onClick={handleSaveAndQuit} data-testid="unsaved-changes-save-quit">
               Save &amp; Quit
             </Button>
           )}

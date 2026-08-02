@@ -3884,6 +3884,7 @@ export default function DmpNewImportDialog({
                     <input
                       type="radio"
                       name="segmentPlacementMode"
+                      data-testid="segment-mode-suggestion-input"
                       checked={segmentPlacementMode === 'suggestion'}
                       onChange={() => setSegmentPlacementMode('suggestion')}
                       className="mt-0.5"
@@ -3906,6 +3907,7 @@ export default function DmpNewImportDialog({
                   <input
                     type="radio"
                     name="segmentPlacementMode"
+                    data-testid="segment-mode-from-existing-input"
                     checked={segmentPlacementMode === 'fromExisting'}
                     onChange={() => setSegmentPlacementMode('fromExisting')}
                     className="mt-0.5"
@@ -4020,6 +4022,7 @@ export default function DmpNewImportDialog({
                   <input
                     type="radio"
                     name="segmentPlacementMode"
+                    data-testid="segment-mode-manual-input"
                     checked={segmentPlacementMode === 'manual'}
                     onChange={() => setSegmentPlacementMode('manual')}
                     className="mt-0.5"
@@ -4094,6 +4097,7 @@ export default function DmpNewImportDialog({
                   <input
                     type="radio"
                     name="segmentPlacementMode"
+                    data-testid="segment-mode-discard-input"
                     checked={segmentPlacementMode === 'discard'}
                     onChange={() => setSegmentPlacementMode('discard')}
                     className="mt-0.5"
@@ -4307,7 +4311,7 @@ export default function DmpNewImportDialog({
         data-testid="cancel-confirm-dialog"
         actions={
           <>
-            <Button onClick={() => setShowCancelConfirm(false)} className={importSecondaryButtonClass}>
+            <Button onClick={() => setShowCancelConfirm(false)} className={importSecondaryButtonClass} data-testid="cancel-confirm-continue">
               {t('common.actions.continue')}
             </Button>
             <Button variant="danger" onClick={onCancel} data-testid="confirm-cancel-button">
@@ -4331,7 +4335,7 @@ export default function DmpNewImportDialog({
         data-testid="back-confirm-dialog"
         actions={
           <>
-            <Button onClick={() => setShowBackConfirm(false)} className={importSecondaryButtonClass}>
+            <Button onClick={() => setShowBackConfirm(false)} className={importSecondaryButtonClass} data-testid="back-confirm-continue">
               {t('common.actions.continue')}
             </Button>
             <Button variant="danger" onClick={onBack} data-testid="confirm-back-button">

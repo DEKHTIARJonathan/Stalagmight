@@ -313,7 +313,7 @@ export default function NewProjectForImportDialog() {
         </div>
 
         <div className="flex justify-end gap-2 pt-4 border-t border-border">
-          <Button onClick={handleCancel} disabled={isCreating}>
+          <Button onClick={handleCancel} disabled={isCreating} data-testid="new-project-for-import-cancel">
             Cancel
           </Button>
           <Button

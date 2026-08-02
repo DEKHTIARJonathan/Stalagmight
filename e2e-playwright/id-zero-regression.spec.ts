@@ -411,8 +411,8 @@ test.describe('ID=0 Edge Cases', () => {
 
     // The Select component is custom - need to click to open dropdown, then select option
     const directionSelect = page.getByTestId('section-direction-select');
-    // Click the trigger button to open dropdown
-    await directionSelect.locator('button').click();
+    // The test ID is attached directly to the trigger button.
+    await directionSelect.click();
 
     // Wait for dropdown and click the "Out" option
     // Use data-testid if available, otherwise scope carefully
@@ -437,7 +437,7 @@ test.describe('ID=0 Edge Cases', () => {
     });
     await expect(dialog).toBeVisible({ timeout: 3000 });
     // Check the select shows "Out"
-    await expect(directionSelect.locator('button')).toHaveText(/Out/i);
+    await expect(directionSelect).toHaveText(/Out/i);
   });
 
   test('Edit Section dialog handles save without changes for id=0', async ({ page }) => {

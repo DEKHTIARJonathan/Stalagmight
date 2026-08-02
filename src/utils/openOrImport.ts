@@ -21,14 +21,13 @@
  * so all three behave identically. Stores are read via `getState()` so this is
  * callable outside React (e.g. from a raw keydown handler).
  */
-import { open } from '@tauri-apps/plugin-dialog';
 import { useProjectStore } from '../store/projectStore';
 import { useUIStore } from '../store/uiStore';
 import { useSpeleoStore, selectSpeleoReadOnly } from '../store/speleoStore';
 import { isEditingBlockedNow } from '../hooks/useEditingBlocked';
 import { getErrorMessage } from './ipc';
 import { extractFilename } from './path';
-import { openOrImportFilters, IMPORTABLE_EXTENSIONS } from './fileDialogs';
+import { openDialog, openOrImportFilters, IMPORTABLE_EXTENSIONS } from './fileDialogs';
 import { clearProjectActionSource } from './telemetry';
 import { needsSpeleoHandBackPrompt } from './quit';
 
@@ -249,7 +248,7 @@ export async function pickAndRoute(
 ): Promise<void> {
   let selected: string | string[] | null;
   try {
-    selected = await open({ multiple: false, filters });
+    selected = await openDialog({ multiple: false, filters });
   } catch (err) {
     // The native picker itself failed (plugin/permission error) - `open()`
     // rejects rather than resolving null. Surface it and drop the entry-point

@@ -233,6 +233,7 @@ export default function DrawShotDialog() {
               onChange={(e) => handleAzimuthInChange(e.target.value)}
               className="w-full"
               placeholder="0-360"
+              data-testid="draw-shot-azimuth-in-input"
             />
           </div>
           <div>
@@ -246,6 +247,7 @@ export default function DrawShotDialog() {
               onChange={(e) => setAzimuthOut(e.target.value)}
               className="w-full"
               placeholder="Same as in"
+              data-testid="draw-shot-azimuth-out-input"
             />
           </div>
         </div>
@@ -262,6 +264,7 @@ export default function DrawShotDialog() {
             onChange={(e) => { lengthAutoInitialized.current = false; setLength(e.target.value); }}
             className="w-full"
             placeholder="Shot distance"
+            data-testid="draw-shot-length-input"
           />
         </div>
 
@@ -275,6 +278,7 @@ export default function DrawShotDialog() {
               onChange={(e) => handleDepthInChange(e.target.value)}
               className="w-full"
               placeholder={currentStationDepth.toFixed(1)}
+              data-testid="draw-shot-depth-in-input"
             />
           </div>
           <div>
@@ -286,13 +290,17 @@ export default function DrawShotDialog() {
               onChange={(e) => setDepthOut(e.target.value)}
               className="w-full"
               placeholder="Same as in"
+              data-testid="draw-shot-depth-out-input"
             />
           </div>
         </div>
 
         {/* LRUD fields (collapsed by default) */}
         <details className="border border-border rounded">
-          <summary className="px-3 py-2 cursor-pointer text-text-secondary hover:text-text-primary">
+          <summary
+            className="px-3 py-2 cursor-pointer text-text-secondary hover:text-text-primary"
+            data-testid="draw-shot-lrud-toggle"
+          >
             LRUD (optional)
           </summary>
           <div className="p-3 pt-0 grid grid-cols-4 gap-2">
@@ -305,6 +313,7 @@ export default function DrawShotDialog() {
                 value={left}
                 onChange={(e) => setLeft(e.target.value)}
                 className="w-full"
+                data-testid="draw-shot-left-input"
               />
             </div>
             <div>
@@ -316,6 +325,7 @@ export default function DrawShotDialog() {
                 value={right}
                 onChange={(e) => setRight(e.target.value)}
                 className="w-full"
+                data-testid="draw-shot-right-input"
               />
             </div>
             <div>
@@ -327,6 +337,7 @@ export default function DrawShotDialog() {
                 value={up}
                 onChange={(e) => setUp(e.target.value)}
                 className="w-full"
+                data-testid="draw-shot-up-input"
               />
             </div>
             <div>
@@ -338,6 +349,7 @@ export default function DrawShotDialog() {
                 value={down}
                 onChange={(e) => setDown(e.target.value)}
                 className="w-full"
+                data-testid="draw-shot-down-input"
               />
             </div>
           </div>
@@ -367,10 +379,10 @@ export default function DrawShotDialog() {
 
         {/* Actions */}
         <div className="flex justify-end gap-2 pt-4 border-t border-border">
-          <Button onClick={handleClose} disabled={isLoading}>
+          <Button onClick={handleClose} disabled={isLoading} data-testid="draw-shot-cancel">
             Cancel
           </Button>
-          <Button variant="primary" onClick={handleCreate} disabled={isLoading}>
+          <Button variant="primary" onClick={handleCreate} disabled={isLoading} data-testid="draw-shot-create">
             {isLoading ? 'Creating...' : 'Create Shot'}
           </Button>
         </div>

@@ -1,5 +1,6 @@
 import { test, expect, Page } from './fixtures/coverage';
 import { setupMockedPage } from './helpers/app';
+import { recoveryBackupItems } from './helpers/testIds';
 
 /**
  * E2E tests for the Corruption Recovery Dialog.
@@ -162,7 +163,7 @@ test.describe('Corruption Recovery Dialog', () => {
     await expect(dialog).toContainText('Select a backup', { timeout: 5000 });
 
     // Should show backup items
-    const backupItems = page.locator('[data-testid="recovery-backup-item"]');
+    const backupItems = recoveryBackupItems(page);
     await expect(backupItems).toHaveCount(2);
 
     // Should show filenames and dates
@@ -180,7 +181,7 @@ test.describe('Corruption Recovery Dialog', () => {
     await expect(dialog).toContainText('Select a backup', { timeout: 5000 });
 
     // Click first backup
-    const firstBackup = page.locator('[data-testid="recovery-backup-item"]').first();
+    const firstBackup = recoveryBackupItems(page).first();
     await firstBackup.click();
 
     // Should show restore success

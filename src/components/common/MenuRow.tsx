@@ -17,6 +17,7 @@ export const MENU_ROW_BASE_CLASS =
   'w-full px-3 py-2 text-left text-sm flex items-center gap-2';
 
 interface MenuRowProps extends ButtonHTMLAttributes<HTMLButtonElement> {
+  'data-testid'?: string;
   /** Row label (rendered in the flex-1 truncating text span). */
   label: string;
   /** Leading icon, rendered only when `showIcons` is true. */
@@ -37,13 +38,14 @@ interface MenuRowProps extends ButtonHTMLAttributes<HTMLButtonElement> {
  * onClick, disabled, data-testid, aria-*, onMouseEnter, …) pass straight through.
  */
 export const MenuRow = forwardRef<HTMLButtonElement, MenuRowProps>(function MenuRow(
-  { label, icon, showIcons, iconStyle, className, children, ...buttonProps },
+  { label, icon, showIcons, iconStyle, className, children, 'data-testid': testId, ...buttonProps },
   ref,
 ) {
   return (
     <button
       {...buttonProps}
       ref={ref}
+      data-testid={testId}
       className={`${MENU_ROW_BASE_CLASS}${className ? ` ${className}` : ''}`}
     >
       {showIcons && (

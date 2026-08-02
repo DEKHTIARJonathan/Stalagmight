@@ -140,10 +140,10 @@ export default function ClosureDialog() {
 
         {/* Actions */}
         <div className="flex justify-end gap-2 pt-4 border-t border-border">
-          <Button onClick={handleClose} disabled={isLoading}>
+          <Button onClick={handleClose} disabled={isLoading} data-testid="closure-cancel">
             Cancel
           </Button>
-          <Button variant="primary" onClick={handleCreate} disabled={isLoading}>
+          <Button variant="primary" onClick={handleCreate} disabled={isLoading} data-testid="closure-create">
             {isLoading ? 'Creating...' : 'Create Closure'}
           </Button>
         </div>

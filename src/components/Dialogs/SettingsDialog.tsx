@@ -841,6 +841,7 @@ export default function SettingsDialog() {
           <p>
             <a
               href="https://stalagmight.com"
+              data-testid="about-website-link"
               target="_blank"
               rel="noopener noreferrer"
               className="text-sm text-accent hover:underline"

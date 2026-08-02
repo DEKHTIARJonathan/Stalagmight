@@ -186,7 +186,7 @@ export default function ReverseSectionDialog() {
         )}
 
         <div className="flex justify-end gap-2 pt-4 border-t border-border">
-          <Button onClick={closeDialog}>Cancel</Button>
+          <Button onClick={closeDialog} data-testid="reverse-section-cancel">Cancel</Button>
           <Button
             variant="primary"
             onClick={handleConfirm}

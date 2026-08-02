@@ -3,39 +3,27 @@
  * deterministic state signature, and a valid minimal SectionData factory (shapes
  * verified against src/types/ipc/{SectionData,ShotData}.ts).
  */
-import * as fs from 'fs';
-import * as path from 'path';
-import { fileURLToPath } from 'url';
 import type { ScenarioContext } from './framework';
-
-const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
-
-export const DEFAULT_FIXTURE = 'fractal_plant_iter2.stalx';
-
-export function fixturePath(name: string): string {
-  // Confine to a basename so a caller-supplied name cannot resolve outside
-  // e2e/fixtures/ (the seed tool passes this through verbatim).
-  return path.join(repoRoot, 'e2e', 'fixtures', path.basename(name));
-}
+export { DEFAULT_FIXTURE } from '../lib/fixtures';
+import { DEFAULT_FIXTURE } from '../lib/fixtures';
 
 export async function hasProject(ctx: ScenarioContext): Promise<boolean> {
   return ctx.eval<boolean>('return !!window.__E2E_TEST__.projectStore.getState().project;');
 }
 
-/** Open a fixture project if none is loaded (openProject also switches to single view). */
+/** Open a fixture project if none is loaded (loadProject also switches to single view). */
 export async function ensureProjectLoaded(ctx: ScenarioContext, fixture = DEFAULT_FIXTURE): Promise<void> {
   if (await hasProject(ctx)) return;
-  const p = fixturePath(fixture);
-  if (!fs.existsSync(p)) throw new Error(`fixture missing: ${p}`);
-  const res = (await ctx.callAction('project', 'openProject', [p])) as {
+  const p = ctx.fixturePath(fixture);
+  const res = (await ctx.callAction('project', 'loadProject', [p])) as {
     ok: boolean;
     error?: string;
     result?: { success?: boolean; error?: string };
   };
   if (!res.ok || res.result?.success === false) {
-    throw new Error(`openProject failed: ${res.result?.error ?? res.error ?? 'unknown'}`);
+    throw new Error(`loadProject failed: ${res.result?.error ?? res.error ?? 'unknown'}`);
   }
-  if (!(await hasProject(ctx))) throw new Error('project still null after openProject');
+  if (!(await hasProject(ctx))) throw new Error('project still null after loadProject');
 }
 
 /** A valid minimal section (two standard shots), unique per index. */

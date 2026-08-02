@@ -40,4 +40,10 @@ describe('SpeleoDbLogo untinted mark (#357 item 11)', () => {
     expect(mark).toHaveAttribute('data-tint', '#ff0');
     expect(mark).toHaveStyle({ backgroundColor: '#ff0' });
   });
+
+  it('uses a caller-qualified testid when supplied', () => {
+    render(<SpeleoDbLogo tint="#ff0" testId="recent-project-logo" />);
+    expect(screen.getByTestId('recent-project-logo')).toHaveAttribute('data-tint', '#ff0');
+    expect(screen.queryByTestId('speleodb-logo-tinted')).not.toBeInTheDocument();
+  });
 });

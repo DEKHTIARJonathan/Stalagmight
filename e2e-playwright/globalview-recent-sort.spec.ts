@@ -1,5 +1,6 @@
 import { test, expect, type Page } from './fixtures/coverage';
 import { setupMockedPage } from './helpers/app';
+import { systemCardTestId } from './helpers/testIds';
 
 /**
  * E2E tests for the Recent Projects enhancements (#46, #47, #48):
@@ -14,10 +15,11 @@ import { setupMockedPage } from './helpers/app';
  *   Local Survey…       /projects/local-survey.stalx 2 sections  -3 days
  */
 
-const ALPHA = 'system-card-/projects/cave-alpha.stalx';
-const BETA = 'system-card-/projects/cave-beta.stalx';
-const GAMMA = 'system-card-/projects/cave-gamma.stalx';
-const LOCAL = 'system-card-/projects/local-survey.stalx';
+const cardTestId = systemCardTestId;
+const ALPHA = cardTestId('/projects/cave-alpha.stalx');
+const BETA = cardTestId('/projects/cave-beta.stalx');
+const GAMMA = cardTestId('/projects/cave-gamma.stalx');
+const LOCAL = cardTestId('/projects/local-survey.stalx');
 
 async function switchToListTab(page: Page): Promise<void> {
   const listTab = page.getByTestId('globalview-view-toggle-list');
@@ -29,7 +31,7 @@ async function switchToListTab(page: Page): Promise<void> {
 /** Document order of the rendered system cards (by their data-testid). */
 async function cardOrder(page: Page): Promise<string[]> {
   return page
-    .locator('[data-testid^="system-card-/"]')
+    .locator('[role="button"][data-testid^="system-card-%2F"]')
     .evaluateAll((els) => els.map((e) => e.getAttribute('data-testid') ?? ''));
 }
 
@@ -45,8 +47,20 @@ test.describe('GlobalView Recent Projects - path, relative time, sort', () => {
     await switchToListTab(page);
   });
 
+  test('renders globally unique test IDs across repeated project cards', async ({ page }) => {
+    const duplicates = await page.locator('[data-testid]').evaluateAll((elements) => {
+      const counts = new Map<string, number>();
+      for (const element of elements) {
+        const id = element.getAttribute('data-testid');
+        if (id) counts.set(id, (counts.get(id) ?? 0) + 1);
+      }
+      return [...counts.entries()].filter(([, count]) => count > 1);
+    });
+    expect(duplicates).toEqual([]);
+  });
+
   test('shows the elided file path under each card, revealed in full on hover (no tooltip)', async ({ page }) => {
-    const path = page.getByTestId(ALPHA).getByTestId('system-card-path');
+    const path = page.getByTestId(`${ALPHA}-path`);
     await expect(path).toBeVisible();
     await expect(path).toHaveAttribute('data-full-path', '/projects/cave-alpha.stalx');
 
@@ -58,8 +72,8 @@ test.describe('GlobalView Recent Projects - path, relative time, sort', () => {
 
   test('an overflowing path scrolls (marquee) in place on hover, not a tooltip', async ({ page }) => {
     // Force the path clip box narrow so the full path overflows regardless of length.
-    await page.addStyleTag({ content: '[data-testid="system-card-path"]{max-width:60px !important}' });
-    const path = page.getByTestId(ALPHA).getByTestId('system-card-path');
+    await page.addStyleTag({ content: '[data-testid^="system-card-%2F"][data-testid$="-path"]{max-width:60px !important}' });
+    const path = page.getByTestId(`${ALPHA}-path`);
     await path.hover();
     const overlay = path.locator('[data-elided-overlay]');
     await expect(overlay).toHaveCount(1); // marquee overlay appears
@@ -90,7 +104,7 @@ test.describe('GlobalView Recent Projects - path, relative time, sort', () => {
   });
 
   test('shows relative edited time, with the exact timestamp on hover', async ({ page }) => {
-    const betaModified = page.getByTestId(BETA).getByTestId('system-card-modified');
+    const betaModified = page.getByTestId(`${BETA}-modified`);
     await expect(betaModified).toBeVisible();
     // -1 day renders as "yesterday" in en locale (Intl.RelativeTimeFormat).
     await expect(betaModified).toContainText(/yesterday/i);

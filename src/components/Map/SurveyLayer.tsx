@@ -1,13 +1,6 @@
 import type { Map as MaplibreMap, MapMouseEvent, ExpressionSpecification } from 'maplibre-gl';
 import type maplibregl from 'maplibre-gl';
-import type {
-  LoopClosure,
-  Section,
-  SectionId,
-  ShotId,
-  Station,
-  StationRef,
-} from '../../types/project';
+import type { LoopClosure, Section, SectionId, ShotId, Station, StationRef } from '../../types/project';
 import type { Config, GpsOrigin, DecimalPrecision } from '../../types/config';
 import type { RouteLeg } from '../../types/ipc.generated';
 import { isNonInteractiveTool } from '../../utils/toolUtils';
@@ -81,11 +74,9 @@ import { watchDevicePixelRatio } from '../../utils/dprWatcher';
 import { clearFeatureCountsForPrefix } from '../../utils/memoryProbe';
 import { shouldSuppressMapError, type MapErrorEventLike } from './surveyLayer/mapErrors';
 import { diffRemovedSectionIds } from './surveyLayer/sectionDiff';
-import {
-  InteractOverlayHideController,
-  overlayPaintDigest,
-  overlayTouchesRemovedSections,
-} from './surveyLayer/interactOverlayHide';
+import { InteractOverlayHideController, overlayPaintDigest, overlayTouchesRemovedSections } from './surveyLayer/interactOverlayHide';
+import type { SemanticMapTarget } from './surveyLayer/semanticTarget';
+import { SemanticTargetPreference } from './surveyLayer/semanticTargetPreference';
 
 export interface SurveyLayerCallbacks {
   onStationClick?: (ref: StationRef, event: MapMouseEvent) => void;
@@ -155,6 +146,7 @@ export default class SurveyLayer {
   private ghostStationsHitboxLayerId = 'survey-ghost-stations-hitbox';
   private ghostShotsHitboxLayerId = 'survey-ghost-shots-hitbox';
   private callbacks: SurveyLayerCallbacks;
+  private semanticTargetPreference = new SemanticTargetPreference({ geometry: () => this.enumerateGeometry(), project: (lngLat) => this.map.project(lngLat), visibility: () => ({ stations: this.stationsVisible, shots: this.shotsVisible }), callbacks: () => this.callbacks });
 
   // Config storage with fallback defaults for when config is null (initial load)
   private config: Config | null = null;
@@ -1137,6 +1129,8 @@ export default class SurveyLayer {
     const stationHitReach = this.getStationHitReach();
     const shotHitReach = this.getShotHitReach();
 
+    if (this.semanticTargetPreference.handleClick(e, stationHitReach, shotHitReach, suppressStationClick, suppressShotClick)) return;
+
     // Stations take priority - resolve nearest station first
     const nearestStation = !suppressStationClick
       ? this.resolveStationAt(e.point.x, e.point.y, stationSections, stationHitReach)
@@ -1188,6 +1182,8 @@ export default class SurveyLayer {
 
     const stationHitReach = this.getStationHitReach();
     const shotHitReach = this.getShotHitReach();
+
+    if (this.semanticTargetPreference.handleContextMenu(e, stationHitReach, shotHitReach)) return;
 
     // Stations take priority
     const nearestStation = this.resolveStationAt(e.point.x, e.point.y, stationSections, stationHitReach);
@@ -1327,6 +1323,9 @@ export default class SurveyLayer {
       visibleKinds: this.visibleKinds(),
     });
   }
+
+  /** Prefer one exact co-located feature for the next development-harness click. */
+  setSemanticTargetPreference(target: SemanticMapTarget | null): void { this.semanticTargetPreference.set(target); }
 
   /**
    * Stations whose rendered hit circle intersects the screen-space box -

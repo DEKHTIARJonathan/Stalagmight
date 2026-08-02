@@ -81,8 +81,7 @@ async function navigateToAppearance(page: Page): Promise<void> {
  * Clicks the combobox trigger, then clicks the matching option.
  */
 async function selectThemeMode(page: Page, label: string): Promise<void> {
-  const selectContainer = page.locator('[data-testid="theme-mode-select"]');
-  const trigger = selectContainer.locator('button[role="combobox"]');
+  const trigger = page.locator('[data-testid="theme-mode-select"]');
   await trigger.click();
 
   // The dropdown is portaled to document.body - find the option there

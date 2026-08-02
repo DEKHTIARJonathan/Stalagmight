@@ -480,9 +480,9 @@ export default function EditSectionDialog() {
             />
 
             <div className="flex justify-end gap-2">
-              <Button onClick={() => setPendingMidDelete(null)}>Cancel</Button>
-              <Button onClick={confirmSplitMidDelete}>Split Section</Button>
-              <Button variant="danger" onClick={confirmShiftMidDelete} disabled={shiftBlocked}>
+              <Button onClick={() => setPendingMidDelete(null)} data-testid="edit-section-delete-cancel">Cancel</Button>
+              <Button onClick={confirmSplitMidDelete} data-testid="edit-section-delete-split">Split Section</Button>
+              <Button variant="danger" onClick={confirmShiftMidDelete} disabled={shiftBlocked} data-testid="edit-section-delete-shift">
                 Shift Geometry
               </Button>
             </div>
@@ -513,10 +513,10 @@ export default function EditSectionDialog() {
             Reverse Section
           </Button>
           <div className="flex-1" />
-          <Button onClick={closeDialog} disabled={isLoading}>
+          <Button onClick={closeDialog} disabled={isLoading} data-testid="edit-section-cancel">
             Cancel
           </Button>
-          <Button variant="primary" onClick={handleSave} disabled={isLoading || pendingMidDelete !== null}>
+          <Button variant="primary" onClick={handleSave} disabled={isLoading || pendingMidDelete !== null} data-testid="edit-section-save">
             {isLoading ? 'Saving...' : 'Save'}
           </Button>
         </div>

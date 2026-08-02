@@ -179,6 +179,7 @@ export function SpeleoStatusButton() {
           badgeColor="text-text-secondary"
           size={20}
           tint={tint}
+          testIdPrefix="speleodb-status-icon"
         />
         {unpushedBadge}
       </button>
@@ -408,7 +409,13 @@ export function SpeleoStatusButton() {
             logo's corner (like the DisplayMenu shot/station symbols), not floating
             on the button. The MARK itself turns yellow while there are un-pushed
             local edits (#270). */}
-        <SpeleoBadgedIcon badge={glyph} badgeColor={glyphColor} size={20} tint={tint} />
+        <SpeleoBadgedIcon
+          badge={glyph}
+          badgeColor={glyphColor}
+          size={20}
+          tint={tint}
+          testIdPrefix="speleodb-status-icon"
+        />
         {unpushedBadge}
       </button>
       {menuOpen && (

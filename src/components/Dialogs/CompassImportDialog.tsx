@@ -224,7 +224,7 @@ export default function CompassImportDialog({ compassFile, filePath }: CompassIm
 
         {/* Footer */}
         <div className="flex justify-end gap-2 pt-4 border-t border-border">
-          <Button onClick={closeDialog}>Cancel</Button>
+          <Button onClick={closeDialog} data-testid="compass-import-cancel">Cancel</Button>
           <Button
             data-primary-action=""
             data-testid="compass-import-confirm"
