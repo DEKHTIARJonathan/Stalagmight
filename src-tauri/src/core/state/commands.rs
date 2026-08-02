@@ -466,10 +466,7 @@ impl AppState {
                     changed = true;
                     self.push_snapshot_undo(Command::RepairIntegrity, before_json, after_json);
                     // Dirty-bit flip (#191, D-B16): repair mutated a remote project.
-                    self.mark_remote_dirty();
-                    // [#303] A repair is a forward mutation like any other, so it too
-                    // invalidates the Unwind walk's position.
-                    self.speleodb_forget_unwind_position();
+                    self.mark_remote_forward_edit();
                 }
             }
         }
@@ -754,11 +751,7 @@ impl AppState {
             // (notably autosave/SaveProject) must NOT mark dirty. Batch pushes its
             // own undo inside execute_batch and flips there.
             if !Self::is_lifecycle_passthrough(&cmd) {
-                self.mark_remote_dirty();
-                // [#303] ...and the copy is no longer merely "where the Unwind walk left
-                // it", so the chain pointer stops excusing that dirty bit. This is what
-                // makes the Unwind confirmation warn again once an unwound copy is edited.
-                self.speleodb_forget_unwind_position();
+                self.mark_remote_forward_edit();
             }
         }
 
@@ -964,10 +957,7 @@ impl AppState {
             // Dirty-bit flip (#191, D-B16): a batch is always a set of mutations
             // (never a lifecycle command), so mark the remote project dirty after
             // its undo entry is pushed. Set-only; no-op for local-only.
-            self.mark_remote_dirty();
-            // [#303] Same for the Unwind chain position: a batch is forward work, so the
-            // pointer no longer describes - or excuses - this copy.
-            self.speleodb_forget_unwind_position();
+            self.mark_remote_forward_edit();
         }
 
         let result = if section_ids.is_empty() {

@@ -998,10 +998,11 @@ mod tests {
     /// it there and the loaded history ships again.
     #[test]
     fn a_forward_edit_keeps_the_watermark_even_as_it_drops_the_chain_pointer() {
-        let forward = std::include_str!("commands.rs");
+        let forward = std::include_str!("app_state.rs");
         assert!(
-            forward.contains("self.speleodb_forget_unwind_position();"),
-            "the forward-command path drops the chain pointer"
+            forward.contains("fn mark_remote_forward_edit")
+                && forward.contains("self.speleodb_forget_unwind_position();"),
+            "the shared forward-edit path drops the chain pointer"
         );
         assert!(
             !forward.contains("speleodb_set_inherited_through"),
@@ -1020,26 +1021,48 @@ mod tests {
     /// on every step of an ordinary walk.
     #[test]
     fn a_forward_edit_forgets_the_unwind_position_but_an_undo_does_not() {
-        let forward = std::include_str!("commands.rs");
-        assert_eq!(
-            forward
-                .matches("self.speleodb_forget_unwind_position();")
-                .count(),
-            3,
-            "all three forward-command sites (execute, repair, batch) must forget the \
-             Unwind position - they are the only places a NEW undo entry is created"
-        );
-        // Each one sits with the dirty-bit flip it belongs to: same condition, same reason.
-        for (before, _) in forward.match_indices("self.speleodb_forget_unwind_position();") {
-            let preceding = &forward[..before];
-            assert!(
-                preceding
-                    .rmatch_indices("self.mark_remote_dirty();")
-                    .next()
-                    .is_some_and(|(dirty, _)| preceding[dirty..].lines().count() <= 6),
-                "the pointer clear belongs beside the dirty flip it explains"
-            );
+        let state_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/core/state");
+        let mut forward_calls = Vec::new();
+        for entry in std::fs::read_dir(state_dir).expect("read state source directory") {
+            let path = entry.expect("state source entry").path();
+            if path.extension().and_then(|v| v.to_str()) != Some("rs") {
+                continue;
+            }
+            let name = path
+                .file_name()
+                .and_then(|v| v.to_str())
+                .expect("file name");
+            let source = std::fs::read_to_string(&path).expect("read state source");
+            if !matches!(
+                name,
+                "app_state.rs" | "undo.rs" | "speleodb.rs" | "speleodb_revisions.rs"
+            ) {
+                assert!(
+                    !source.contains("mark_remote_dirty();"),
+                    "{name} calls the raw dirty marker; forward writers must use \
+                     mark_remote_forward_edit so they also invalidate Unwind"
+                );
+            }
+            if name != "speleodb_revisions.rs" && source.contains("mark_remote_forward_edit();") {
+                forward_calls.push(name.to_owned());
+            }
         }
+        forward_calls.sort();
+        assert_eq!(
+            forward_calls,
+            [
+                "command_comment.rs",
+                "command_delete_split.rs",
+                "command_import.rs",
+                "command_split_shot.rs",
+                "commands.rs",
+                "project_create.rs",
+                "recent_projects.rs",
+                "undo_policy.rs",
+                "warnings.rs",
+            ],
+            "enumerate every direct forward writer so a new path is reviewed explicitly"
+        );
         assert!(
             !std::include_str!("undo.rs").contains("speleodb_forget_unwind_position"),
             "undo / redo walk the loaded history - clearing the position there would warn \
@@ -1059,26 +1082,9 @@ mod tests {
     #[test]
     fn the_undo_mode_setter_forgets_the_unwind_position_too() {
         let policy = std::include_str!("undo_policy.rs");
-        let dirty = policy
-            .find("self.mark_remote_dirty();")
-            .expect("setting the undo mode dirties the link");
-        let forget = policy
-            .find("self.speleodb_forget_unwind_position();")
-            .expect(
-                "...and must drop the chain pointer with it: this writes the project file, \
-                 so the Unwind excuse no longer applies",
-            );
         assert!(
-            forget > dirty && policy[dirty..forget].lines().count() <= 12,
-            "the pointer clear belongs beside the dirty flip it explains"
-        );
-        assert_eq!(
-            policy.matches("self.mark_remote_dirty();").count(),
-            policy
-                .matches("self.speleodb_forget_unwind_position();")
-                .count(),
-            "every dirty flip in this file is a project-file write, so each one needs its \
-             own pointer clear"
+            policy.contains("self.mark_remote_forward_edit();"),
+            "the undo-mode write must use the shared forward-edit bookkeeping"
         );
     }
 

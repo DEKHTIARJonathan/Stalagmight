@@ -15259,6 +15259,78 @@ fn restoring_a_snapshot_keeps_the_live_file_path() {
     );
 }
 
+#[test]
+fn persisted_split_snapshot_carries_no_local_filesystem_path() {
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Private split".to_string(),
+        location: None,
+    });
+    let created = state.execute(Command::CreateSection {
+        name: Some("Single".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#123456".to_string(),
+        direction: None,
+        shots: vec![test_shot_data(10.0)],
+    });
+    let section_id = created.section_id.unwrap();
+    let shot_id = state.get_project_state().unwrap().sections[0].shots[0].id;
+    state.project.lock().unwrap().as_mut().unwrap().file_path =
+        Some(PathBuf::from("/home/alice/private/split.stalx"));
+
+    let result = state.execute_split_shot_at_distance(section_id, shot_id, 4.0);
+    assert!(result.success, "split failed: {:?}", result.error);
+
+    let stack = state.undo_stack.lock().unwrap();
+    let entry = stack.undo_entries().last().expect("split undo entry");
+    let (_, persisted_undo, _) = UndoStack::serialize_entry_with_timestamp(entry).unwrap();
+    assert!(
+        !persisted_undo.contains("alice"),
+        "path leaked: {persisted_undo}"
+    );
+    assert!(
+        !persisted_undo.contains("split.stalx"),
+        "path leaked: {persisted_undo}"
+    );
+}
+
+#[test]
+fn persisted_delete_last_snapshot_carries_no_local_filesystem_path() {
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Private delete".to_string(),
+        location: None,
+    });
+    let created = state.execute(Command::CreateSection {
+        name: Some("Single".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#654321".to_string(),
+        direction: None,
+        shots: vec![test_shot_data(5.0)],
+    });
+    let section_id = created.section_id.unwrap();
+    let shot_id = state.get_project_state().unwrap().sections[0].shots[0].id;
+    state.project.lock().unwrap().as_mut().unwrap().file_path =
+        Some(PathBuf::from("/home/bob/private/delete.stalx"));
+
+    let result = state.execute_delete_last_shot_and_section(section_id, shot_id);
+    assert!(result.success, "delete failed: {:?}", result.error);
+
+    let stack = state.undo_stack.lock().unwrap();
+    let entry = stack.undo_entries().last().expect("delete undo entry");
+    let (_, persisted_undo, _) = UndoStack::serialize_entry_with_timestamp(entry).unwrap();
+    assert!(
+        !persisted_undo.contains("bob"),
+        "path leaked: {persisted_undo}"
+    );
+    assert!(
+        !persisted_undo.contains("delete.stalx"),
+        "path leaked: {persisted_undo}"
+    );
+}
+
 /// [#303] A Full-mode linked project persists BOTH stacks, redo included.
 ///
 /// Pinned because the opposite was tried. The byte budget is applied to the undo and

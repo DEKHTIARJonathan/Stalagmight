@@ -410,6 +410,16 @@ impl AppState {
         }
     }
 
+    /// Record a successful forward mutation of the open project.
+    ///
+    /// A forward edit both dirties the remote link and invalidates the current Unwind
+    /// position. Keep the two operations behind one verb so a new direct command path
+    /// cannot leave real work classified as disposable chain state.
+    pub(super) fn mark_remote_forward_edit(&self) {
+        self.mark_remote_dirty();
+        self.speleodb_forget_unwind_position();
+    }
+
     /// Cancel any active loading operation (idempotent - safe to call anytime)
     pub fn cancel_loading(&self) {
         if let Ok(guard) = self.active_loading.lock() {
@@ -793,7 +803,7 @@ impl AppState {
                 "No project for after snapshot".to_string(),
             ));
         };
-        match serde_json::to_string(p) {
+        match Self::serialize_project_snapshot(p) {
             Ok(json) => Ok(json),
             Err(e) => {
                 tracing::error!(

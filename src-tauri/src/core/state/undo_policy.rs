@@ -81,15 +81,7 @@ impl AppState {
             .map_err(super::speleodb::local_dto)?;
         // The write is an edit of the project file, so the copy is now ahead of the
         // server until it is pushed - the same bookkeeping every other edit does.
-        self.mark_remote_dirty();
-        // ...INCLUDING the other half of it. `mark_remote_dirty` alone left the chain
-        // pointer standing, and the pointer is what EXCUSES the dirty bit: with it set,
-        // `unwind_discards_unpushed` answers false, so the next Unwind renders no warning,
-        // `speleodb_guard_unwind` waves it through, and the swap replaces the copy -
-        // silently reverting the mode the user just chose. This is a mutation of the
-        // project file like any other, so it forfeits the excuse the same way the three
-        // forward-command sites in commands.rs do.
-        self.speleodb_forget_unwind_position();
+        self.mark_remote_forward_edit();
         self.sync_undo_depth_limit();
         tracing::info!(
             mode = ?mode,

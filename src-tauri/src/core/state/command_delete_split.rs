@@ -244,7 +244,7 @@ impl AppState {
         self.push_snapshot_undo(batch_cmd, before_snapshot, after_snapshot);
         // Dirty-bit flip (#191, D-B16): a delete/split mutated a remote project.
         // Set-only; no-op for local-only.
-        self.mark_remote_dirty();
+        self.mark_remote_forward_edit();
 
         tracing::info!(
             section_id,
@@ -488,7 +488,7 @@ impl AppState {
         self.push_snapshot_undo(batch_cmd, before_snapshot, after_snapshot);
         // Dirty-bit flip (#191, D-B16): a delete/split mutated a remote project.
         // Set-only; no-op for local-only.
-        self.mark_remote_dirty();
+        self.mark_remote_forward_edit();
 
         tracing::info!(
             section_id,
@@ -661,7 +661,7 @@ impl AppState {
         self.push_snapshot_undo(batch_cmd, before_snapshot, after_snapshot);
         // Dirty-bit flip (#191, D-B16): a delete/split mutated a remote project.
         // Set-only; no-op for local-only.
-        self.mark_remote_dirty();
+        self.mark_remote_forward_edit();
 
         tracing::info!(
             section_id,
@@ -792,7 +792,7 @@ impl AppState {
 
             // Step 5: Take AFTER snapshot while still holding the lock
             if let Some(p) = proj_guard.as_ref() {
-                match serde_json::to_string(p) {
+                match Self::serialize_project_snapshot(p) {
                     Ok(json) => json,
                     Err(e) => {
                         // Rollback: restore before_snapshot since we already mutated
@@ -837,7 +837,7 @@ impl AppState {
         self.push_snapshot_undo(batch_cmd, before_snapshot, after_snapshot);
         // Dirty-bit flip (#191, D-B16): a delete/split mutated a remote project.
         // Set-only; no-op for local-only.
-        self.mark_remote_dirty();
+        self.mark_remote_forward_edit();
 
         CommandResult::success()
     }
