@@ -231,6 +231,13 @@ async function main(): Promise<void> {
         placementResult?.value?.count === (placementSetup?.value?.before ?? -1) + 1,
       { placementClick, placementSetup, placementResult },
     );
+    const offscreenClick = await call('map_click', { lngLat: [0, 0] });
+    const offscreenDetail = parseText(offscreenClick);
+    check(
+      'map_click rejects off-viewport coordinates instead of reporting clicked',
+      offscreenClick.isError === true && JSON.stringify(offscreenDetail).includes('outside the visible viewport'),
+      offscreenDetail,
+    );
     const driven = parseText(
       await call('driver_script', { script: 'const v = await readStore("ui", "view"); return v.value;' }),
     ) as { value?: unknown };
