@@ -77,6 +77,81 @@ pub(super) fn clear_snapshot_dirty(
         .map_err(|e| SpeleoDbError::Io(format!("could not sanitize the push snapshot: {e}")))
 }
 
+/// Read the undo-sharing inputs from the snapshot that will actually be uploaded.
+/// The live database handle may be absent after a successful save whose reopen failed,
+/// but the installed file and its snapshot still carry the authoritative project policy.
+fn snapshot_undo_metadata(
+    state: &AppState,
+    snapshot: &crate::persistence::Database,
+) -> Result<(bool, Option<String>), SpeleoDbError> {
+    let link = snapshot.load_speleo_link().map_err(|e| {
+        SpeleoDbError::Io(format!(
+            "could not read the undo policy from the push snapshot: {e}"
+        ))
+    })?;
+    let inherited_through = snapshot.load_speleo_undo_watermark().map_err(|e| {
+        SpeleoDbError::Io(format!(
+            "could not read the undo watermark from the push snapshot: {e}"
+        ))
+    })?;
+    Ok((
+        state.undo_policy_for(link.as_ref()).pushes_history(),
+        inherited_through,
+    ))
+}
+
+#[cfg(test)]
+mod snapshot_undo_metadata_tests {
+    use super::*;
+    use crate::models::{Project, SpeleoLink, UndoMode};
+    use crate::persistence::Database;
+    use crate::test_helpers::with_isolated_config;
+    use tempfile::TempDir;
+
+    #[test]
+    fn full_snapshot_policy_survives_an_absent_live_database_handle() {
+        with_isolated_config(|| {
+            let state = AppState::new().expect("construct state");
+            state.config.lock().expect("config lock").speleodb.undo_mode = UndoMode::Disabled;
+            assert!(
+                !state.undo_policy().pushes_history(),
+                "the old live-handle lookup classifies an unopened state as local"
+            );
+
+            let temp = TempDir::new().expect("temp dir");
+            let path = temp.path().join("snapshot.stalx");
+            {
+                let mut db = Database::open(&path).expect("create snapshot");
+                db.save_project(&Project::new("Snapshot".to_owned(), None))
+                    .expect("save project");
+                db.save_speleo_link(Some(&SpeleoLink {
+                    endpoint: "https://example.invalid".to_owned(),
+                    project_id: "11111111-1111-1111-1111-111111111111".to_owned(),
+                    project_name: "Snapshot".to_owned(),
+                    base_commit_sha: None,
+                    has_unpushed_edits: true,
+                    last_edit_at: None,
+                    last_verify_at: None,
+                    undo_mode: Some(UndoMode::Full),
+                }))
+                .expect("save link");
+                db.save_speleo_undo_watermark(Some("2026-08-02T10:00:00+00:00"))
+                    .expect("save watermark");
+            }
+
+            let snapshot = Database::open_for_metadata(&path).expect("open snapshot metadata");
+            let (keep_undo, inherited_through) =
+                snapshot_undo_metadata(&state, &snapshot).expect("read snapshot policy");
+
+            assert!(keep_undo, "the snapshot's explicit Full policy wins");
+            assert_eq!(
+                inherited_through.as_deref(),
+                Some("2026-08-02T10:00:00+00:00")
+            );
+        });
+    }
+}
+
 /// The server `type` an un-adopted Ariane project carries. Compared
 /// case-insensitively: the API answers `ARIANE` on a GET and takes `ariane` on a
 /// PATCH, and which one a given payload used is not a distinction worth trusting.
@@ -773,27 +848,23 @@ impl AppState {
         }
         self.speleodb_render_tml(&tml).map_err(local_dto)?;
 
-        // [#303] Resolve the undo policy from the LIVE file, before the snapshot's own
-        // link row is scrubbed. Full + linked ships the history the flush above just
-        // persisted (which is why this reads after `save_project`, not before);
-        // everything else strips it exactly as before.
-        let keep_undo = self.undo_policy().pushes_history();
-        // [#303] ...and how much of that history was only LOADED here by a chain step. Read
-        // from the live file for the same reason and at the same moment: the flush above
-        // has just written the stack these rows are cut from.
-        let inherited_through = self.speleodb_inherited_through();
-
         // Self-contained snapshot of the live `.stalx` (#195), dirty bit cleared in
         // the COPY so it never rides to the server.
         crate::persistence::Database::vacuum_snapshot(&live, &snapshot)
             .map_err(|e| local_dto(SpeleoDbError::Io(e.to_string())))?;
 
-        // Derive history cleanup from the file just captured, never from the live stack.
+        // Derive policy and history cleanup from the file just captured, never from the
+        // live handle or stack. `save_project` can return success with a
+        // DATABASE_NOT_REOPENED warning, which deliberately leaves `self.database` empty;
+        // consulting `undo_policy()` there classifies a linked Full project as local and
+        // strips the history from an upload whose snapshot still says Full.
         // An edit can land after save_project and before this point: it is absent from the
         // snapshot and must retain its undo entry after the confirmed push. Sampling the
         // live stack here included that edit in the cutoff even though it was not uploaded.
         let snapshot_db = crate::persistence::Database::open_for_metadata(&snapshot)
             .map_err(|e| local_dto(SpeleoDbError::Io(e.to_string())))?;
+        let (keep_undo, inherited_through) =
+            snapshot_undo_metadata(self, &snapshot_db).map_err(local_dto)?;
         let snapshot_newest = snapshot_db
             .newest_undo_timestamp()
             .map_err(|e| local_dto(SpeleoDbError::Io(e.to_string())))?;

@@ -285,26 +285,6 @@ impl AppState {
             .flatten()
     }
 
-    /// [#303] The instant through which this copy's undo stack was INHERITED from a
-    /// revision a chain step loaded, if any.
-    ///
-    /// Everything at or before it came out of a commit the server already holds, so the
-    /// push cuts it from the upload rather than recording those operations a second time.
-    /// `None` is the ordinary case - a lock clears the stack, so every entry is this
-    /// session's and the whole lot ships.
-    pub(super) fn speleodb_inherited_through(&self) -> Option<String> {
-        self.database
-            .lock()
-            .ok()
-            .and_then(|guard| {
-                guard
-                    .as_ref()
-                    .map(crate::persistence::Database::load_speleo_undo_watermark)
-            })?
-            .ok()
-            .flatten()
-    }
-
     /// [#303] Record (or clear) that watermark.
     ///
     /// Best-effort on the way in, like the chain pointer - but the two failures are not
