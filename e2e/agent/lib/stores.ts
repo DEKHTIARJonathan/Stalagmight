@@ -136,7 +136,7 @@ export async function postDigest(browser: Browser): Promise<PostDigest> {
       window as unknown as {
         __E2E_TEST__?: {
           uiStore?: { getState: () => { view?: string; activeDialog?: string | null; activeTool?: string | null } };
-          projectStore?: { getState: () => { project?: { metadata?: { name?: string } } | null } };
+          projectStore?: { getState: () => { project?: { name?: string } | null } };
         };
       }
     ).__E2E_TEST__;
@@ -146,7 +146,7 @@ export async function postDigest(browser: Browser): Promise<PostDigest> {
       view: ui?.view ?? null,
       dialog: ui?.activeDialog ?? null,
       activeTool: ui?.activeTool ?? null,
-      projectName: project?.metadata?.name ?? null,
+      projectName: project?.name ?? null,
       projectOpen: Boolean(project),
     };
   }) as Promise<PostDigest>;
