@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use chrono::Utc;
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, Transaction};
 use std::path::Path;
 
 use super::{BackupInfo, Database, SalvagedData, SalvagedSection};
@@ -50,13 +50,19 @@ impl Database {
     ///
     /// - `display_settings` - per-machine VIEW toggles (grid, layer/feature
     ///   visibility, color mode, grid spacing); a collaborator pulls their own view.
-    /// - `undo_stack` / `redo_stack` - the editor's local edit-session history
-    ///   (#194 b3). NOT shared state, and a *data-corruption* vector if it rode: an
-    ///   adopting collaborator pressing Ctrl-Z would replay the pusher's command
+    /// - `undo_stack` - the editor's edit-session history. Stripped UNLESS the project
+    ///   is in [`crate::models::UndoMode::Full`] (#303), which is the whole point of the
+    ///   hybrid stack: the commit carries the operations that produced it so undo can
+    ///   chain backwards commit by commit. See [`Self::sanitize_push_snapshot`]'s
+    ///   `keep_undo` for the conditional, and note that the #194 b3 hazard it relaxes -
+    ///   an adopting collaborator pressing Ctrl-Z and replaying the pusher's command
     ///   (and its `undo_data_json` prior-state payload) against a now-different tree,
-    ///   silently wiping pitch/LRUD/comment/marker/temperature - the same hazard
-    ///   `drop_legacy_undo_history` guards against. Stripping here is what makes
-    ///   every adopt-remote path (`do_load_project_full`) start with a clean slate.
+    ///   silently wiping pitch/LRUD/comment/marker/temperature - is contained
+    ///   elsewhere: a pulled stack is cleared on EVERY implicit adopt path, and is only
+    ///   ever handed back through the explicit, confirmed, lock-held Unwind.
+    /// - `redo_stack` - stripped ALWAYS (clarification #1). A redo branch replays
+    ///   FORWARD onto a state the server has now committed past, so it is the stale
+    ///   replay hazard with none of the undo side's value.
     /// - `collab_state` - the LOCAL wiring of the since-removed Ariane collab mode
     ///   (sibling `.tml` filesystem path, baseline, per-machine autosave toggle).
     ///   Meaningless to a remote collaborator and never theirs to inherit. It stays
@@ -69,11 +75,18 @@ impl Database {
     ///   strip loop `continue`s on a table that is absent, so carrying the entry
     ///   costs one `sqlite_master` probe per push and keeps the fence honest for the
     ///   downgrade-and-return round trip.
+    /// - `speleo_undo_chain` - which revision this machine has unwound to (#303). Local
+    ///   progress through history, not a property of the project.
+    /// - `speleo_undo_watermark` - how far THIS machine's stack was inherited from a
+    ///   loaded revision (#303). It exists to decide what to cut from the upload; shipping
+    ///   it would tell the next puller to cut their own history against our clock.
     const PUSH_SNAPSHOT_LOCAL_TABLES: &[&str] = &[
         "display_settings",
         "undo_stack",
         "redo_stack",
         "collab_state",
+        "speleo_undo_chain",
+        "speleo_undo_watermark",
     ];
 
     /// The subset of [`Self::PUSH_SNAPSHOT_LOCAL_TABLES`] whose strip is FATAL to the
@@ -81,16 +94,139 @@ impl Database {
     /// and the data-CORRUPTION vector on adopt (#194 b3). If they cannot be emptied
     /// the snapshot must not be uploaded at all.
     ///
-    /// The others (`display_settings`, `collab_state`) are privacy-neutral local
-    /// prefs / wiring: aborting a push over them would be a worse outcome for the
-    /// user than the (harmless) leak, so a failure there stays a warning.
+    /// `undo_stack` is here only when the strip is actually REQUESTED - in
+    /// [`crate::models::UndoMode::Full`] (#303) the undo history is meant to ride, so
+    /// there is nothing to fail over. `redo_stack` is unconditional: it is never
+    /// uploaded in any mode.
     ///
-    /// "Subset" is LOAD-BEARING, not descriptive: the strip loop iterates
-    /// `PUSH_SNAPSHOT_LOCAL_TABLES` and only consults this list to decide how loudly
-    /// to fail, so a name that appears HERE but not THERE is never visited and its
-    /// fatality never fires - it would read as guarded while being entirely inert.
-    /// `fatal_tables_are_a_subset_of_local_tables` pins the relationship.
-    const PUSH_SNAPSHOT_FATAL_TABLES: &[&str] = &["undo_stack", "redo_stack"];
+    /// The chain pointer and watermark are fatal too. They define how inherited rows are
+    /// classified, so shipping one without the matching stack cleanup can make a later
+    /// client cut or retain the wrong history. All four history tables are stripped in
+    /// one transaction.
+    ///
+    /// "Subset" is part of the policy contract: the atomic helper iterates this list,
+    /// while the best-effort loop skips it. The sibling test pins that every fatal table
+    /// is also documented and classified as local-only.
+    const PUSH_SNAPSHOT_FATAL_TABLES: &[&str] = &[
+        "undo_stack",
+        "redo_stack",
+        "speleo_undo_chain",
+        "speleo_undo_watermark",
+    ];
+
+    /// [#303] Delete the undo rows a chain step INHERITED, leaving the ones authored in
+    /// this session. Snapshot-only: the live stack keeps everything, so the user can still
+    /// undo back through the loaded history after the push.
+    ///
+    /// Timestamps decide it, not positions - see `save_speleo_undo_watermark` for why a
+    /// position watermark would delete the user's own work once the stack shrinks. Rows are
+    /// parsed and compared in Rust rather than in SQL because `executed_at` is written with
+    /// variable fractional digits, so a lexicographic `<=` would be answering a slightly
+    /// different question than it appears to.
+    ///
+    /// A missing timestamp is legacy and therefore inherited, but missing values must be
+    /// one prefix of the stack. Malformed, non-monotonic, or later-missing timestamps make
+    /// the cutoff ambiguous, so they refuse the push instead of being normalized.
+    fn cut_inherited_undo_rows(tx: &Transaction<'_>, watermark: &str) -> Result<usize> {
+        let Ok(cutoff) = chrono::DateTime::parse_from_rfc3339(watermark) else {
+            // An unreadable watermark must not silently widen into "cut nothing": that is
+            // the duplication bug. Fail the push instead - it is recoverable, a wrong
+            // commit is not.
+            anyhow::bail!("unparseable inherited-history watermark `{watermark}`");
+        };
+        let mut doomed: Vec<i64> = Vec::new();
+        {
+            let mut stmt =
+                tx.prepare("SELECT id, executed_at FROM undo_stack ORDER BY sequence")?;
+            let rows = stmt.query_map([], |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, Option<String>>(1)?))
+            })?;
+            let mut previous = None;
+            let mut saw_timestamp = false;
+            for row in rows {
+                let (id, executed_at) = row?;
+                let inherited = match executed_at.as_deref() {
+                    None if saw_timestamp => anyhow::bail!(
+                        "missing undo timestamp after a timestamped row; refusing an ambiguous inherited-history cut"
+                    ),
+                    None => true,
+                    Some(raw) => {
+                        let stamp = chrono::DateTime::parse_from_rfc3339(raw)
+                            .with_context(|| format!("malformed undo timestamp `{raw}`"))?;
+                        if previous.is_some_and(|prev| stamp < prev) {
+                            anyhow::bail!(
+                                "non-monotonic undo timestamps; refusing an ambiguous inherited-history cut"
+                            );
+                        }
+                        previous = Some(stamp);
+                        saw_timestamp = true;
+                        stamp <= cutoff
+                    }
+                };
+                if inherited {
+                    doomed.push(id);
+                }
+            }
+        }
+        {
+            let mut delete = tx.prepare("DELETE FROM undo_stack WHERE id = ?1")?;
+            for id in &doomed {
+                delete.execute([id])?;
+            }
+        }
+        Ok(doomed.len())
+    }
+
+    fn clear_push_history_metadata(
+        conn: &Connection,
+        keep_undo: bool,
+        inherited_through: Option<&str>,
+        chain_pointer_present: bool,
+    ) -> Result<()> {
+        let tx = conn
+            .unchecked_transaction()
+            .context("begin push history cleanup transaction")?;
+
+        let delete_whole_undo =
+            !keep_undo || (inherited_through.is_none() && chain_pointer_present);
+        if keep_undo {
+            if let Some(watermark) = inherited_through {
+                if Self::table_exists_on(&tx, "undo_stack")? {
+                    let cut = Self::cut_inherited_undo_rows(&tx, watermark)?;
+                    tracing::debug!(
+                        cut,
+                        watermark = %watermark,
+                        "sanitize_push_snapshot: dropped inherited undo rows from the upload"
+                    );
+                }
+            } else if chain_pointer_present {
+                tracing::warn!(
+                    purpose = "fail closed on an unknown inherited-history extent (#303)",
+                    "a chain step is recorded but its watermark is missing; stripping the \
+                     whole undo history from this push rather than risk duplicating a \
+                     loaded revision's operations"
+                );
+            }
+        }
+
+        for table in Self::PUSH_SNAPSHOT_FATAL_TABLES {
+            if *table == "undo_stack" && !delete_whole_undo {
+                continue;
+            }
+            if !Self::table_exists_on(&tx, table)? {
+                continue;
+            }
+            tx.execute(&format!("DELETE FROM {table}"), [])
+                .with_context(|| {
+                    format!(
+                        "could not strip `{table}` from the push snapshot; refusing to upload it"
+                    )
+                })?;
+        }
+
+        tx.commit().context("commit push history cleanup")?;
+        Ok(())
+    }
 
     /// Sanitize a push SNAPSHOT in place (#197/#194) before upload:
     ///
@@ -98,6 +234,13 @@ impl Database {
     ///   local hand-off state, never server state (the next puller re-stamps it);
     /// - empties every table in [`Self::PUSH_SNAPSHOT_LOCAL_TABLES`] - per-machine /
     ///   per-session local state that must not proliferate.
+    ///
+    /// `keep_undo` (#303) exempts `undo_stack` from that strip, for a project resolved to
+    /// [`crate::models::UndoMode::Full`]: there the history since the last commit is the
+    /// payload, and shipping it is what lets undo chain backwards commit by commit.
+    /// `redo_stack` is stripped either way. The caller resolves the mode - this function
+    /// must not, because it runs on a snapshot COPY whose link row is about to be
+    /// scrubbed and is in no position to arbitrate policy.
     ///
     /// Everything else PROLIFERATES with the project, by design: survey data,
     /// `project_settings` (shared validation config #57), AND the durable
@@ -110,38 +253,67 @@ impl Database {
     /// Operates on a SNAPSHOT copy via its own connection; the live project file is
     /// never touched.
     ///
-    /// FAIL-CLOSED, per table. A table that is ABSENT is skipped (an older snapshot
-    /// shape legitimately lacks it, and what does not exist cannot leak). A table
-    /// that EXISTS but cannot be emptied is fatal for
-    /// [`Self::PUSH_SNAPSHOT_FATAL_TABLES`] and a logged warning for the rest, so a
-    /// snapshot still holding the pusher's undo/redo history - or a dirty bit -
-    /// never reaches the upload.
+    /// FAIL-CLOSED for history. A table that is ABSENT is skipped (an older snapshot
+    /// shape legitimately lacks it, and what does not exist cannot leak). The fatal
+    /// history tables are cleaned in one transaction; local preferences remain
+    /// best-effort. A snapshot still holding history metadata or a dirty bit never
+    /// reaches the upload.
     ///
     /// Finishes with a `VACUUM`, which is load-bearing rather than cosmetic: `DELETE`
     /// only marks pages free, so without it every deleted undo row is still
     /// physically present in the bytes that get uploaded. `VACUUM` rewrites the file
     /// from the live pages, dropping the freed ones for real.
-    pub fn sanitize_push_snapshot(snapshot: &Path) -> Result<()> {
-        // NOT a transaction: VACUUM cannot run inside one, and rusqlite only opens
-        // an explicit transaction when asked, so these statements auto-commit
-        // individually and the VACUUM at the end runs outside any.
+    /// [#303] Is a chain pointer recorded in this snapshot?
+    ///
+    /// Read from the SNAPSHOT rather than the live database because that is the copy whose
+    /// undo rows are about to be judged, and because `sanitize_push_snapshot` takes a bare
+    /// path, not an `AppState`. The caller captures this before any local table is stripped,
+    /// so the privacy decision cannot depend on `PUSH_SNAPSHOT_LOCAL_TABLES` ordering.
+    ///
+    /// An absent table answers false - a file that never had a chain step.
+    fn chain_pointer_present(conn: &Connection) -> Result<bool> {
+        if !Self::table_exists_on(conn, "speleo_undo_chain")? {
+            return Ok(false);
+        }
+        let rows: i64 =
+            conn.query_row("SELECT COUNT(*) FROM speleo_undo_chain", [], |r| r.get(0))?;
+        Ok(rows > 0)
+    }
+
+    pub fn sanitize_push_snapshot(
+        snapshot: &Path,
+        keep_undo: bool,
+        inherited_through: Option<&str>,
+    ) -> Result<()> {
+        // No transaction spans the WHOLE sanitizer: VACUUM cannot run inside one.
+        // The history tables use one short transaction that commits before compaction.
         let conn = Connection::open(snapshot).context("open snapshot to sanitize for push")?;
-        // The undo/redo strip is FIRST because it is the data-CORRUPTION vector on
-        // adopt (#194 b3): it must run even if the dirty-bit clear below were to
-        // fail, which the old ordering (dirty-clear first) did not guarantee (#197
-        // review). Table names are compile-time literals (no injection surface).
+        // Capture this from the untouched snapshot. The missing-watermark branch below
+        // must not change meaning when the local-table list is reordered.
+        let chain_pointer_present =
+            keep_undo && inherited_through.is_none() && Self::chain_pointer_present(&conn)?;
+        // The history cleanup is one fatal transaction. A failed chain/watermark strip
+        // must roll back the undo/redo deletes too, leaving no half-sanitized snapshot.
+        Self::clear_push_history_metadata(
+            &conn,
+            keep_undo,
+            inherited_through,
+            chain_pointer_present,
+        )?;
+
+        // The remaining local tables are preferences or obsolete local wiring. Their
+        // cleanup remains best-effort because a failed view-setting strip is not allowed
+        // to block publishing survey data.
         for table in Self::PUSH_SNAPSHOT_LOCAL_TABLES {
+            if Self::PUSH_SNAPSHOT_FATAL_TABLES.contains(table) {
+                continue;
+            }
             if !Self::table_exists_on(&conn, table)? {
                 // An older snapshot shape simply has no such table - nothing local
                 // can be riding in it, so this must not abort the push.
                 continue;
             }
             if let Err(e) = conn.execute(&format!("DELETE FROM {table}"), []) {
-                if Self::PUSH_SNAPSHOT_FATAL_TABLES.contains(table) {
-                    return Err(anyhow::Error::from(e).context(format!(
-                        "could not strip `{table}` from the push snapshot; refusing to upload it"
-                    )));
-                }
                 tracing::warn!(
                     error = %e,
                     table = %table,
@@ -473,13 +645,8 @@ mod tests {
 
     #[test]
     fn fatal_tables_are_a_subset_of_local_tables() {
-        // The doc calls PUSH_SNAPSHOT_FATAL_TABLES "the subset of
-        // PUSH_SNAPSHOT_LOCAL_TABLES whose strip is FATAL", and nothing enforced it.
-        // The relationship is load-bearing, not descriptive: `sanitize_push_snapshot`
-        // ITERATES the local list and only consults the fatal one to decide how loudly
-        // to fail, so a table named fatal-but-not-local is never visited at all - it
-        // reads as guarded while being completely inert, which is the worst state for a
-        // data-corruption guard to be in.
+        // Every atomic/fatal history table is also part of the documented local-only
+        // policy set. The sanitizer's best-effort loop skips exactly this subset.
         for table in Database::PUSH_SNAPSHOT_FATAL_TABLES {
             assert!(
                 Database::PUSH_SNAPSHOT_LOCAL_TABLES.contains(table),
@@ -487,6 +654,124 @@ mod tests {
                  the strip loop never visits it and its fatality can never fire"
             );
         }
+    }
+
+    #[test]
+    fn history_cleanup_is_fatal_and_rolls_back_as_one_unit() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let snapshot = dir.path().join("snap.stalx");
+        let mut db = Database::open(&snapshot).expect("open snapshot");
+        db.save_project(&crate::models::Project::new("Snapshot".to_owned(), None))
+            .expect("seed project");
+        db.save_undo_stack(vec![(r#"{"c":1}"#.to_owned(), r#"{"u":1}"#.to_owned())])
+            .expect("seed undo");
+        db.save_redo_stack_with_timestamps(vec![(
+            r#"{"c":2}"#.to_owned(),
+            r#"{"u":2}"#.to_owned(),
+            None,
+        )])
+        .expect("seed redo");
+        db.save_speleo_undo_chain(Some("older-tip"))
+            .expect("seed chain pointer");
+        db.save_speleo_undo_watermark(Some("2026-08-01T00:00:00+00:00"))
+            .expect("seed watermark");
+        db.conn
+            .execute_batch(
+                "CREATE TRIGGER block_chain_delete BEFORE DELETE ON speleo_undo_chain \
+                 BEGIN SELECT RAISE(ABORT, 'chain delete blocked'); END;",
+            )
+            .expect("install blocker");
+        drop(db);
+
+        let err = Database::sanitize_push_snapshot(&snapshot, false, None)
+            .expect_err("a history-metadata cleanup failure must refuse the push");
+        assert!(format!("{err:#}").contains("speleo_undo_chain"));
+
+        let db = Database::open_existing(&snapshot).expect("reopen refused snapshot");
+        assert_eq!(db.load_undo_stack().expect("load undo").len(), 1);
+        assert_eq!(
+            db.load_redo_stack_with_timestamps()
+                .expect("load redo")
+                .len(),
+            1
+        );
+        assert_eq!(
+            db.load_speleo_undo_chain().expect("load chain pointer"),
+            Some("older-tip".to_owned())
+        );
+        assert_eq!(
+            db.load_speleo_undo_watermark().expect("load watermark"),
+            Some("2026-08-01T00:00:00+00:00".to_owned())
+        );
+    }
+
+    #[test]
+    fn inherited_history_cut_rejects_invalid_timestamp_shapes() {
+        fn rejected(stamps: [Option<&str>; 2], expected: &str) {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let snapshot = dir.path().join("snap.stalx");
+            let mut db = Database::open(&snapshot).expect("open snapshot");
+            db.save_project(&crate::models::Project::new("Snapshot".to_owned(), None))
+                .expect("seed project");
+            if stamps.iter().any(Option::is_none) {
+                // Legacy schemas allowed NULL timestamps. Recreate only this fixture
+                // table so the invalid legacy ordering remains representable.
+                db.conn
+                    .execute_batch(
+                        "DROP TABLE undo_stack; \
+                         CREATE TABLE undo_stack ( \
+                           id INTEGER PRIMARY KEY, sequence INTEGER NOT NULL, \
+                           command_json BLOB NOT NULL, undo_data_json BLOB NOT NULL, \
+                           executed_at TEXT \
+                         );",
+                    )
+                    .expect("make legacy nullable timestamp table");
+            }
+            let row = |name: &str| {
+                (
+                    format!(r#"{{"type":"{name}"}}"#),
+                    r#"{"undo":true}"#.to_owned(),
+                    Some("2026-08-01T00:00:00+00:00".to_owned()),
+                )
+            };
+            db.save_undo_stack_with_timestamps(vec![row("First"), row("Second")])
+                .expect("seed undo");
+            for (sequence, stamp) in stamps.into_iter().enumerate() {
+                db.conn
+                    .execute(
+                        "UPDATE undo_stack SET executed_at = ?1 WHERE sequence = ?2",
+                        rusqlite::params![stamp, sequence as i64],
+                    )
+                    .expect("shape timestamp fixture");
+            }
+            drop(db);
+
+            let err = Database::sanitize_push_snapshot(
+                &snapshot,
+                true,
+                Some("2026-08-01T00:00:01+00:00"),
+            )
+            .expect_err("an ambiguous cutoff must refuse the push");
+            assert!(format!("{err:#}").contains(expected));
+            assert_eq!(
+                Database::open_existing(&snapshot)
+                    .expect("reopen refused snapshot")
+                    .load_undo_stack()
+                    .expect("load undo")
+                    .len(),
+                2,
+                "a refused cutoff must leave the history untouched"
+            );
+        }
+
+        rejected(
+            [Some("not-a-timestamp"), Some("2026-08-01T00:00:00+00:00")],
+            "malformed undo timestamp",
+        );
+        rejected(
+            [Some("2026-08-01T00:00:00+00:00"), None],
+            "missing undo timestamp after a timestamped row",
+        );
     }
 
     #[test]
@@ -510,7 +795,7 @@ mod tests {
         db.save_display_setting("grid", "on").expect("seed a local");
         drop(db);
 
-        Database::sanitize_push_snapshot(&snapshot).expect("sanitize");
+        Database::sanitize_push_snapshot(&snapshot, false, None).expect("sanitize");
 
         assert!(
             !Database::vacuum_temp_path(&snapshot).exists(),
@@ -544,7 +829,8 @@ mod tests {
         let stale = Database::vacuum_temp_path(&snapshot);
         std::fs::write(&stale, b"leftover from a killed push").expect("plant a leftover");
 
-        Database::sanitize_push_snapshot(&snapshot).expect("sanitize past the leftover");
+        Database::sanitize_push_snapshot(&snapshot, false, None)
+            .expect("sanitize past the leftover");
 
         assert!(
             !stale.exists(),
@@ -589,7 +875,7 @@ mod tests {
             eprintln!("Skipping: test requires non-root (chmod 555 has no effect as root)");
             return;
         }
-        let result = Database::sanitize_push_snapshot(&snapshot);
+        let result = Database::sanitize_push_snapshot(&snapshot, false, None);
         std::fs::set_permissions(&staging, std::fs::Permissions::from_mode(0o755))
             .expect("restore permissions so tempdir can clean up");
 

@@ -903,10 +903,15 @@ impl Database {
         } else {
             "NULL"
         };
+        let undo_mode = if columns.contains("undo_mode") {
+            "undo_mode"
+        } else {
+            "NULL"
+        };
 
         let row = self.conn.query_row(
             &format!(
-                "SELECT endpoint, project_id, project_name, base_commit_sha, has_unpushed_edits, {last_edit_at}, {last_verify_at}
+                "SELECT endpoint, project_id, project_name, base_commit_sha, has_unpushed_edits, {last_edit_at}, {last_verify_at}, {undo_mode}
                  FROM speleo_link WHERE id = 1"
             ),
             [],
@@ -919,6 +924,13 @@ impl Database {
                     has_unpushed_edits: row.get::<_, i64>(4)? != 0,
                     last_edit_at: row.get::<_, Option<String>>(5)?,
                     last_verify_at: row.get::<_, Option<String>>(6)?,
+                    // [#303] An unrecognized string reads as `UndoMode::Unknown`, which
+                    // resolves to the default rather than failing the load - the same
+                    // tolerance the serde sentinel gives a hand-edited config.
+                    undo_mode: row
+                        .get::<_, Option<String>>(7)?
+                        .as_deref()
+                        .map(crate::models::UndoMode::from_db_str),
                 })
             },
         );

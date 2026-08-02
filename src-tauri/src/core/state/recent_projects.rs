@@ -557,7 +557,7 @@ impl AppState {
             }
             // Dirty-bit flip (#191, D-B16): the gated open project was mutated.
             // Set-only; no-op for local-only (no speleo_link).
-            self.mark_remote_dirty();
+            self.mark_remote_forward_edit();
         }
 
         tracing::info!(path = ?path, "Renamed project");

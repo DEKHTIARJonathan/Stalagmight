@@ -18,6 +18,7 @@ import { SectionMetadataForm } from '../common/SectionMetadataForm';
 import { buildZeroDatumSectionConfig, finalizePlacementForReverse } from '../../utils/importSectionConfig';
 import { ShotTableEditor, type EditableShot } from '../common/ShotTableEditor';
 import { useProjectStore } from '../../store/projectStore';
+import { useSpeleoStore } from '../../store/speleoStore';
 import { convertToEditableShots } from '../../hooks/useImportState';
 import { editableShotToShotData, editableShotsToDmpSection } from '../../utils/shotConversion';
 import {
@@ -70,6 +71,15 @@ interface DmpNewImportDialogProps {
   savedManualPlacingState?: SavedManualPlacingState | undefined;
   /** If true, immediately start map placement when the dialog opens in manual placing phase. */
   autoStartManualPlacement?: boolean;
+}
+
+/** Mirror both frontend stores after a direct `import_sections` mutation. */
+export function markSuccessfulDmpImportDirty(
+  markProjectDirty = useProjectStore.getState().markDirty,
+  markForwardEdit = useSpeleoStore.getState().markForwardEdit,
+): void {
+  markProjectDirty();
+  markForwardEdit();
 }
 
 // SectionEditState and ConfirmedOverlapInfo imported from batchImportHelpers
@@ -1211,7 +1221,6 @@ export default function DmpNewImportDialog({
   // Store selectors
   const importSections = useProjectStore((s) => s.importSections);
   const refreshProjectState = useProjectStore((s) => s.refreshProjectState);
-  const markDirty = useProjectStore((s) => s.markDirty);
   const config = useProjectStore((s) => s.config);
   const updateConfig = useProjectStore((s) => s.updateConfig);
   const resolvedTheme = useUIStore((s) => s.resolvedTheme);
@@ -2201,7 +2210,7 @@ export default function DmpNewImportDialog({
           // Imports bypass executeCommand, so mark dirty ourselves - the sections
           // then register as unsaved (autosave + the project-close guard);
           // window-close is guarded separately by isImportInProgress (App.tsx) (#110).
-          markDirty();
+          markSuccessfulDmpImportDirty();
 
           // Build DMP index -> section_id mapping for late import.
           // Use backend response ordering directly; it matches submitted configs.
@@ -2249,7 +2258,7 @@ export default function DmpNewImportDialog({
       transitionToPlacingInFlightRef.current = false;
       suggestionActionInFlightRef.current = false;
     }
-  }, [zeroDatumConfig, dmpFile, selectionConfig, overlapMode, onComplete, refreshProjectState, markDirty, resolvedTheme]);
+  }, [zeroDatumConfig, dmpFile, selectionConfig, overlapMode, onComplete, refreshProjectState, resolvedTheme]);
 
   // On mount: import zero datum section and fire suggest_all_import_placements
   useEffect(() => {
@@ -2425,7 +2434,7 @@ export default function DmpNewImportDialog({
             }
 
             await refreshProjectState();
-            markDirty(); // #110: mark unsaved (autosave + project-close guard)
+            markSuccessfulDmpImportDirty();
 
             for (let i = 0; i < segmentDmpIndices.length; i++) {
               const sectionId = result.section_ids[i];
@@ -2518,7 +2527,7 @@ export default function DmpNewImportDialog({
           }
 
           await refreshProjectState();
-          markDirty(); // #110: mark unsaved (autosave + project-close guard)
+          markSuccessfulDmpImportDirty();
           existingShotUpdatesRef.current = removeExistingShotUpdatesForSections(
             existingShotUpdatesRef.current,
             emittedSet,
@@ -3321,7 +3330,7 @@ export default function DmpNewImportDialog({
       }
 
       await refreshProjectState();
-      markDirty(); // #110: mark unsaved (autosave + project-close guard)
+      markSuccessfulDmpImportDirty();
 
       for (let i = 0; i < segmentDmpIndices.length; i++) {
         const sectionId = result.section_ids[i];
@@ -3336,7 +3345,7 @@ export default function DmpNewImportDialog({
 
       return true;
     },
-    [buildBatchImport, dmpFile, markDirty, refreshProjectState, selectionConfig, zeroDatumConfig?.sectionIndex, resolvedTheme],
+    [buildBatchImport, dmpFile, refreshProjectState, selectionConfig, zeroDatumConfig?.sectionIndex, resolvedTheme],
   );
 
   // Manual map placement for a segment

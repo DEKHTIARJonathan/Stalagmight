@@ -7,6 +7,15 @@ Update this file every time a new version is tagged.
 
 ## [Unreleased]
 
+### Added
+
+- **Undo history that follows a SpeleoDB project through its history** - a linked project now stores the operations that produced each revision, so undo is no longer confined to one session. Undo to the start of your session, then use **Unwind to previous SpeleoDB version** at the bottom of the undo history to load the edit history stored with an earlier revision and keep going, revision by revision, back towards the creation of the file. Nothing is duplicated between revisions: each one carries only the operations made since the one before it. The SpeleoDB project dialog offers **No undo history** for very large projects, where undo still works locally but is stripped before every push ([#303](https://github.com/Stalagmight/Stalagmight/issues/303))
+
+### Changed
+
+- Undo history for a SpeleoDB project is no longer capped at a fixed number of steps; it is bounded by total size instead, so ordinary editing keeps hundreds of steps while whole-survey operations (deleting a section, an import) keep as many as fit ([#303](https://github.com/Stalagmight/Stalagmight/issues/303))
+- Taking the write lock on a project that matches the server clears the undo history from the previous editor's session, so Ctrl+Z can never replay somebody else's operation. Locking a copy that still holds your own un-pushed edits keeps your history ([#303](https://github.com/Stalagmight/Stalagmight/issues/303))
+
 ### Fixed
 
 #### SpeleoDB

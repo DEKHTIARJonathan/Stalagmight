@@ -46,6 +46,7 @@ import type { UnrecognisedShotKind } from '../types/ipc/UnrecognisedShotKind';
 import type { SurveyData } from '../types/survey-data';
 import { emptySurveyData, surveyDataFromLegacy, surveyDataWithAdjustedStations } from '../types/survey-data';
 import { createProjectConfigActions, type ProjectConfigActions } from './projectConfigActions';
+import { runProjectSwitch } from '../utils/projectTransition';
 
 type ShotUpdatesPatch = Partial<ShotUpdates>;
 
@@ -100,6 +101,12 @@ const initialLoadingState: LoadingState = {
 
 // Separate client operation ID for race detection (independent of backend loading ID)
 let clientOpIdCounter = 0;
+let projectTreeGenerationCounter = 0;
+
+function nextProjectTreeGeneration(): number {
+  projectTreeGenerationCounter += 1;
+  return projectTreeGenerationCounter;
+}
 
 // Monotonic sequence so overlapping fire-and-forget integrity checks are
 // last-issued-wins: an earlier check that resolves after a newer one was started
@@ -191,6 +198,13 @@ export interface LoadProjectOutcome {
 export interface ProjectStore extends ProjectConfigActions {
   // State
   project: Project | null;
+  /**
+   * Monotonic identity of the measured project tree currently mirrored in this store.
+   * Incremented on every successful load, create, refresh, and close so async caches can
+   * distinguish same-path revision swaps and in-memory edits whose project metadata did
+   * not change.
+   */
+  projectTreeGeneration: number;
   /**
    * Whether the open project is backed by an on-disk database. A new project
    * created with a deferred initial save reserves `project.file_path` but leaves
@@ -509,6 +523,7 @@ function runSerialized<T>(work: () => Promise<T>): Promise<T> {
 function clearOpenProjectState(set: (partial: Partial<ProjectStore>) => void): void {
   set({
     project: null,
+    projectTreeGeneration: nextProjectTreeGeneration(),
     databaseOpen: false,
     stations: [],
     surveyData: null,
@@ -586,7 +601,13 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         // #204: mirror the backend's mark_remote_dirty so the SpeleoDB action shell
         // knows there are un-pushed edits (drives the button's push&release-with-
         // comment flow). No-op for a local project (no link).
-        useSpeleoStore.getState().markDirty();
+        //
+        // [#303] Both halves, not just the dirty bit: `execute` pairs mark_remote_dirty
+        // with speleodb_forget_unwind_position (commands.rs:757-761), so a forward edit
+        // also stops the copy being "merely unwound". Mirroring through `markDirty`
+        // alone was a no-op here - an unwound copy is already dirty - which left the
+        // discard prompts offering to throw away the edit that just landed.
+        useSpeleoStore.getState().markForwardEdit();
         // A command can RESOLVE (or surface) an integrity issue - e.g. removing a
         // drifted loop closure clears its banner entry - so re-check, mirroring
         // executeUndoRedo. refreshProjectState doesn't re-check, and the next save
@@ -734,6 +755,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   return {
   // Initial state
   project: null,
+  projectTreeGeneration: 0,
   databaseOpen: false,
   stations: [],
   surveyData: null,
@@ -841,7 +863,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       if (key !== path) inFlightLoads.delete(key);
     }
 
-    const promise: Promise<LoadProjectOutcome> = (async () => {
+    const promise: Promise<LoadProjectOutcome> = runProjectSwitch(async () => {
       // [perf-debug] Trace each post-IPC step distinctly so we know whether
       // the visible "stuck progress bar" freeze is JSON.parse on the IPC
       // resolution, the Zustand set, the view switch / MapCanvas mount, or
@@ -902,6 +924,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         const tSetStart = performance.now();
         set({
           project: result.project,
+          projectTreeGeneration: nextProjectTreeGeneration(),
           stations: result.stations,
           surveyData: result.surveyData,
           // Adjusted geometry is lazily (re)fetched by the map when the adjusted
@@ -1108,7 +1131,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         clearProjectActionSource();
         return { success: false };
       }
-    })();
+    });
 
     inFlightLoads.set(path, promise);
     void promise.finally(() => {
@@ -1118,7 +1141,8 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   },
 
   // Project operations - uses consolidated create_project_full command
-  createProject: async (name: string, projectLocation?: string, options?: CreateProjectOptions) => {
+  createProject: (name: string, projectLocation?: string, options?: CreateProjectOptions) =>
+    runProjectSwitch(async () => {
     // ALWAYS cancel first - NO isLoading guard
     await get().cancelLoading();
 
@@ -1161,6 +1185,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       // stations yet, so `surveyData` starts as an empty SoA.
       set({
         project: result.project,
+        projectTreeGeneration: nextProjectTreeGeneration(),
         // A deferred new project has no on-disk database until the first save.
         databaseOpen: !deferred,
         stations: [],
@@ -1205,7 +1230,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       }
       return emptyCommandResult(false, error.message);
     }
-  },
+    }),
 
   saveProject: async (path?: string, isAutosave?: boolean) => {
     // The Rust save path heals duplicate shot UUIDs / orphan section offsets /
@@ -1324,7 +1349,9 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       // mirror the SpeleoDB dirty bit so the status button offers push (no-op for a
       // local project). The import command usually already marks it via
       // executeCommand; this keeps the two dirty flags in lockstep on every path.
-      useSpeleoStore.getState().markDirty();
+      // [#303] Forward work, so it drops the chain pointer too - the import reached the
+      // backend through `execute`, which already forgot it there.
+      useSpeleoStore.getState().markForwardEdit();
       return true;
     }
     // New project: the initial save is deferred, so the import is invisible until
@@ -1361,29 +1388,31 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     return true;
   },
 
-  closeProject: async (opts) => {
+  closeProject: (opts) => {
     // Guard against concurrent close operations (rapid Back clicks or double Discard)
     if (get().isClosing) {
       debugLog('[projectStore] closeProject ignored - already closing');
-      return emptyCommandResult(false, 'Already closing');
+      return Promise.resolve(emptyCommandResult(false, 'Already closing'));
     }
 
     set({ isClosing: true });
-    try {
-      const result = await invokeIpc<CommandResult>(
-        'close_project',
-        // Default: release a held SpeleoDB lock so the close doesn't strand it
-        // (fix 1). The keep-lock close path passes { releaseLock: false }.
-        { releaseLock: opts?.releaseLock ?? true },
-        { purpose: 'close project and release resources' },
-      );
-      if (result.success) {
-        clearOpenProjectState(set);
+    return runProjectSwitch(async () => {
+      try {
+        const result = await invokeIpc<CommandResult>(
+          'close_project',
+          // Default: release a held SpeleoDB lock so the close doesn't strand it
+          // (fix 1). The keep-lock close path passes { releaseLock: false }.
+          { releaseLock: opts?.releaseLock ?? true },
+          { purpose: 'close project and release resources' },
+        );
+        if (result.success) {
+          clearOpenProjectState(set);
+        }
+        return result;
+      } finally {
+        set({ isClosing: false });
       }
-      return result;
-    } finally {
-      set({ isClosing: false });
-    }
+    });
   },
 
   isShotFrozen: (sectionId: number, shotIndex: number) => {
@@ -1406,6 +1435,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         const surveyData = surveyDataFromLegacy(state.project.sections, state.stations);
         set({
           project: state.project,
+          projectTreeGeneration: nextProjectTreeGeneration(),
           stations: state.stations,
           surveyData,
           // Any edit changes measured geometry → the cached adjusted view is stale.
@@ -1445,6 +1475,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         { sectionId, shotId, warningCode, comment },
         { purpose: 'acknowledge validation warning', fields: { sectionId, shotId, warningCode } }
       );
+      useSpeleoStore.getState().markForwardEdit();
       await get().refreshWarnings();
       return true;
     } catch (e) {
@@ -1462,6 +1493,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         { sectionId, shotId, warningCode },
         { purpose: 'reopen validation warning', fields: { sectionId, shotId, warningCode } }
       );
+      useSpeleoStore.getState().markForwardEdit();
       await get().refreshWarnings();
     } catch (e) {
       console.error('Failed to unresolve warning:', e);
@@ -1583,7 +1615,10 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         // executeCommand/executeUndoRedo do) so the status button offers push &
         // prompts for a commit message rather than reading "editing clean". No-op
         // for a local project (no link).
-        useSpeleoStore.getState().markDirty();
+        // [#303] `repair_integrity` pairs it with speleodb_forget_unwind_position under
+        // the same `changed` guard this branch is under (commands.rs:467-473), so mirror
+        // both halves.
+        useSpeleoStore.getState().markForwardEdit();
       }
       return result;
     } catch (e) {
@@ -1634,7 +1669,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   // removeFromRecentProjects, which only forgets the entry). The backend hands the
   // file to the OS delete; on success we refresh both the loaded list and the
   // config so the project disappears from the available AND "missing" recent rows.
-  deleteProject: async (path: string) => {
+  deleteProject: (path: string) => runProjectSwitch(async () => {
     try {
       const result = await invokeIpc<CommandResult>(
         'delete_project',
@@ -1676,7 +1711,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       console.error('Failed to delete project:', e);
       return emptyCommandResult(false, String(e));
     }
-  },
+  }),
 
   // Section operations
   createSection: async (data: SectionData) => {

@@ -47,7 +47,10 @@ beforeEach(() => {
     checkProjectIntegrity: vi.fn(async () => []),
     isDirty: true,
   });
-  useSpeleoStore.setState({ refreshLinkStatus: vi.fn(async () => {}) });
+  useSpeleoStore.setState({
+    remoteProjectId: 'p1',
+    refreshLinkStatus: vi.fn(async () => {}),
+  });
   useUIStore.setState({ showToast: vi.fn(), setView: vi.fn(), clearSelection: vi.fn() });
 });
 
@@ -94,5 +97,23 @@ describe('useRestoreRevision resets the gas-plan store (#345)', () => {
     expect(after.loadedPlanId).toBeNull();
     expect(after.loadedPlanBaseline).toBeNull();
     expect(after.pushyAck).toBe(false);
+  });
+
+  it('does not apply stale cleanup after the open remote project changes', async () => {
+    invokeIpcMock.mockImplementation(async () => {
+      useSpeleoStore.setState({ remoteProjectId: 'p2' });
+      return RESTORED;
+    });
+    useGasPlanStore.getState().setEndpoint({ section_id: 1, station_index: 2 });
+
+    const { result } = renderHook(() => useRestoreRevision());
+    let applied = true;
+    await act(async () => {
+      applied = await result.current(ARGS);
+    });
+
+    expect(applied).toBe(false);
+    expect(useGasPlanStore.getState().endpoint).toEqual({ section_id: 1, station_index: 2 });
+    expect(useProjectStore.getState().refreshProjectState).not.toHaveBeenCalled();
   });
 });

@@ -188,6 +188,27 @@ impl AppState {
                 Vec::new()
             }
         };
+        // [#303] ...and the inherited-history watermark that goes with them. Read from the
+        // SAME database handle, before it is swapped, so it describes these entries.
+        // `UndoStack::next_stamp` needs it to keep a new entry above the cut the push
+        // applies; without it, reopening an unwound project would lose the floor while
+        // keeping the rows it protects against.
+        let speleo_undo_watermark = db
+            .load_speleo_undo_watermark()
+            .ok()
+            .flatten()
+            .and_then(|ts| {
+                chrono::DateTime::parse_from_rfc3339(&ts)
+                    .ok()
+                    .map(|dt| dt.with_timezone(&chrono::Utc))
+            });
+        // [#303] ...and the link that decides how deep the stack those entries land in is
+        // allowed to be. Read off the same handle for the same reason, and used below
+        // BEFORE the restore - see the arming call for what a late one costs.
+        let mut speleo_link = db.load_speleo_link().ok().flatten();
+        if let Some(link) = &mut speleo_link {
+            self.materialize_undo_mode(&db, link);
+        }
 
         // ALL commits under ONE `project` acquisition, exactly as
         // `do_load_project_full`'s finalization and for the same reason (round
@@ -205,8 +226,9 @@ impl AppState {
         self.bump_speleodb_session();
 
         // [Track B] (#191) Read-only edit gate: remote ⇒ edit disabled,
-        // local-only ⇒ enabled (see do_load_project_full). Read before `db` moves.
-        let is_remote = matches!(db.load_speleo_link(), Ok(Some(_)));
+        // local-only ⇒ enabled (see do_load_project_full). Off the link read above,
+        // which came from the same handle before `db` moves.
+        let is_remote = speleo_link.is_some();
         self.set_edit_enabled(!is_remote);
         // #213: force-edit is per-session; a fresh open never starts force-editing.
         self.set_force_editing(false);
@@ -223,8 +245,26 @@ impl AppState {
         self.clear_display_settings_cache();
         self.invalidate_adjusted_cache();
 
+        // [#303] Arm the depth bound for the project about to be restored BEFORE its
+        // entries go in, not after. `load_from_persisted_with_timestamps` ends in
+        // `enforce_depth_limit`, so whichever bound is in force at that instant is the one
+        // that trims - and until this call it is still the PREVIOUS project's (or the
+        // startup default, `Count(undo_history_limit)`). A Full-mode linked project holding
+        // more than that many entries therefore lost the oldest ones on open, the next
+        // full-rewrite save wrote the truncation to disk, and the next push shipped a
+        // commit missing the history it was supposed to carry. Re-arming afterwards cannot
+        // undo it: Count -> Bytes has nothing to put back.
+        //
+        // Resolved from the link read off the file's own handle rather than through
+        // `undo_policy()`, which takes the `database` lock this path is mid-swap on.
+        self.sync_undo_depth_limit_for(speleo_link.as_ref());
+
         // Restore persisted undo/redo stacks
         if let Ok(mut undo_stack) = self.undo_stack.lock() {
+            // [#303] Unconditionally, and before the entries: a project with no history
+            // can still carry a watermark, and a value left over from the PREVIOUS project
+            // would otherwise floor this one's stamps at an unrelated instant.
+            undo_stack.set_inherited_through(speleo_undo_watermark);
             if undo_entries.is_empty() && redo_entries.is_empty() {
                 undo_stack.clear();
             } else {
@@ -236,6 +276,11 @@ impl AppState {
                 );
             }
         }
+
+        // No second `sync_undo_depth_limit()` after the restore: it would re-resolve the
+        // SAME policy from the SAME file and re-apply the SAME bound, and the one thing it
+        // could still do differently is fail its `database` lock and fall back to the count
+        // window - i.e. re-introduce the truncation the arming above exists to avoid.
 
         // Add to recent projects and persist to config
         let path_display = format!("{}", path.display());
@@ -709,6 +754,29 @@ impl AppState {
                 Vec::new()
             }
         };
+        // [#303] ...and the inherited-history watermark that goes with them. Read from the
+        // SAME database handle, before it is swapped, so it describes these entries.
+        // `UndoStack::next_stamp` needs it to keep a new entry above the cut the push
+        // applies; without it, reopening an unwound project would lose the floor while
+        // keeping the rows it protects against.
+        let speleo_undo_watermark = db
+            .load_speleo_undo_watermark()
+            .ok()
+            .flatten()
+            .and_then(|ts| {
+                chrono::DateTime::parse_from_rfc3339(&ts)
+                    .ok()
+                    .map(|dt| dt.with_timezone(&chrono::Utc))
+            });
+        // [#303] ...and the link that bounds the stack they land in, off the same handle
+        // and for the same reason. Used before the restore below - see the arming call.
+        // This is the INCOMING file's link; the detached release just below reads the
+        // OUTGOING project's through the still-live handle, and the two are not
+        // interchangeable.
+        let mut speleo_link = db.load_speleo_link().ok().flatten();
+        if let Some(link) = &mut speleo_link {
+            self.materialize_undo_mode(&db, link);
+        }
 
         // All finalization commits use unwrap_or_else(PoisonError::into_inner) to ensure
         // data is written even if a previous panic poisoned a mutex. This is acceptable
@@ -756,8 +824,9 @@ impl AppState {
         // carrying a speleo_link row) opened WITHOUT a write lock is read-only.
         // There is no lock-acquire path yet (#191), so the rule is simply: remote
         // ⇒ edit disabled; local-only ⇒ edit enabled (default-true; the gate is a
-        // no-op off-SpeleoDB). Read before `db` is moved into the handle slot.
-        let is_remote = matches!(db.load_speleo_link(), Ok(Some(_)));
+        // no-op off-SpeleoDB). Off the link read above, taken from the same handle
+        // before `db` is moved into the handle slot.
+        let is_remote = speleo_link.is_some();
         self.set_edit_enabled(!is_remote);
         // #213: force-edit is per-session; a fresh open never starts force-editing.
         self.set_force_editing(false);
@@ -775,12 +844,22 @@ impl AppState {
         self.clear_display_settings_cache();
         self.invalidate_adjusted_cache();
 
+        // [#303] As in the non-staged load: arm the depth bound BEFORE the entries are
+        // restored under it, from the link read off this file's own handle. Late, the
+        // restore's own `enforce_depth_limit` would trim a Full-mode project's history
+        // down to the count window and no later re-arm could put it back.
+        self.sync_undo_depth_limit_for(speleo_link.as_ref());
+
         // Commit 4: Undo/redo stack restore
         {
             let mut undo_stack = self
                 .undo_stack
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
+            // [#303] Unconditionally, and before the entries: a project with no history
+            // can still carry a watermark, and a value left over from the PREVIOUS project
+            // would otherwise floor this one's stamps at an unrelated instant.
+            undo_stack.set_inherited_through(speleo_undo_watermark);
             if undo_entries.is_empty() && redo_entries.is_empty() {
                 undo_stack.clear();
             } else {

@@ -3,6 +3,10 @@ import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
+import { SpeleoDbLogo } from '../common/SpeleoDbLogo';
+import { useUnwindTarget, type ChainDirection } from '../../hooks/useUnwindTarget';
+import { useSpeleoStore } from '../../store/speleoStore';
+import { holdsWriteLock } from '../../utils/quit';
 import { useDismissableLayer } from '../../hooks/useDismissableLayer';
 import { getErrorMessage } from '../../utils/ipc';
 import { setSource } from '../../utils/telemetry';
@@ -54,6 +58,22 @@ interface UndoHistoryDropdownProps {
   ariaLabel?: string;
   /** Tighten the trigger's padding at the toolbar's final condensation stage. */
   compact?: boolean;
+  /**
+   * [#303] Let HOVER (and ArrowDown) open the panel even while `disabled` - the case being
+   * an empty undo stack on a linked project, where the panel's only content is the Unwind
+   * entry that continues the walk past the commit boundary.
+   *
+   * The BUTTON stays inert either way: Undo / Ctrl+Z on an empty stack must keep doing
+   * nothing, and the Unwind is deliberately reachable only through its own entry plus a
+   * confirmation. This opens the panel; it never performs anything. Together with a held
+   * write lock it also drops the DOM `disabled` attribute, so the trigger keeps a tab stop
+   * - without one the entry had no keyboard route at all - and `handleButtonClick` holds
+   * the "performs nothing" line.
+   *
+   * The toolbar passes it for the undo trigger unless something else (placement mode)
+   * is the reason for `disabled` - that reason must still suppress the panel.
+   */
+  hoverableWhenEmpty?: boolean;
 }
 
 /** Map command types to icon components (matching toolbar icon style) */
@@ -250,6 +270,7 @@ export default function UndoHistoryDropdown({
   testId,
   ariaLabel,
   compact = false,
+  hoverableWhenEmpty = false,
 }: UndoHistoryDropdownProps) {
   const { t } = useTranslation();
   const modeLabel = mode === 'undo' ? t('undo.actions.undo') : t('undo.actions.redo');
@@ -283,6 +304,9 @@ export default function UndoHistoryDropdown({
   const containerRef = useRef<HTMLDivElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
+  // [#303] The pinned chain-step entry, so a keyboard open with an empty list can land on
+  // the one thing the panel is showing.
+  const chainStepRef = useRef<HTMLButtonElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const hoverTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const leaveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -297,6 +321,33 @@ export default function UndoHistoryDropdown({
   isOpenRef.current = isOpen;
   // Unique ID for ARIA attributes
   const menuId = useId();
+
+  // [#303] The "Unwind to previous SpeleoDB version" entry, pinned below the list.
+  //
+  // Offered only on the UNDO side of a linked project whose write lock we genuinely
+  // hold (a force-editor holds none, and the backend refuses them), and only once the
+  // local stack is EMPTY - which is what makes "the working copy equals a commit" true.
+  // With entries still on the stack, walking history would discard the un-undone ones,
+  // so the backend refuses that too and there is nothing to offer.
+  const iHoldLock = useSpeleoStore((s) => holdsWriteLock(s.link));
+  // Read from the hover/queue callbacks, which must not re-create themselves every time
+  // the lock state changes (the same reason `disabledRef` exists).
+  const iHoldLockRef = useRef(iHoldLock);
+  iHoldLockRef.current = iHoldLock;
+  const hoverableWhenEmptyRef = useRef(hoverableWhenEmpty);
+  hoverableWhenEmptyRef.current = hoverableWhenEmpty;
+  // [#303] The chain step past the bottom of THIS stack, in this dropdown's own
+  // direction. Undo offers the walk back, redo the walk forward, and each is offered on
+  // the same condition: its own stack is exhausted, so the next step is past a commit
+  // boundary rather than another entry in the list.
+  const chainDirection: ChainDirection = mode === 'undo' ? 'back' : 'forward';
+  const canOfferChainStep = iHoldLock && items.length === 0;
+  const { target: chainTarget, resolve: resolveChainTarget } = useUnwindTarget(
+    isOpen && canOfferChainStep,
+    chainDirection,
+  );
+  const showChainStep = canOfferChainStep && chainTarget !== null;
+  const isForward = chainDirection === 'forward';
 
   const { getUndoStack, getRedoStack, undoTo, redoTo, undo, redo, canUndo, canRedo } = useProjectStore();
   const { openDialog } = useUIStore();
@@ -439,13 +490,25 @@ export default function UndoHistoryDropdown({
         scrollContainerRef.current.scrollTo({ top: 0 });
       }
 
-      // Close-on-empty: if stack is now empty, discard remaining queued actions and hard close
-      if (refreshedStack.length === 0) {
+      // Close-on-empty: if stack is now empty, discard remaining queued actions and hard
+      // close.
+      //
+      // [#303] UNLESS a revision-chain step can be on offer. Undoing or redoing the last
+      // local entry is exactly when a history walk reaches a commit boundary, and closing
+      // the panel there hides the pinned control that continues in that same direction.
+      if (refreshedStack.length === 0 && !iHoldLockRef.current) {
         actionQueueRef.current = [];
         isActionInProgressRef.current = false;
         setIsActionInProgress(false);
         setAnnouncement(t('undo.announcement.none'));
         hardClose();
+        return;
+      }
+      if (refreshedStack.length === 0) {
+        actionQueueRef.current = [];
+        isActionInProgressRef.current = false;
+        setIsActionInProgress(false);
+        setAnnouncement(t('undo.announcement.none'));
         return;
       }
 
@@ -472,7 +535,9 @@ export default function UndoHistoryDropdown({
 
   // Open dropdown with delay
   const openDropdown = useCallback(() => {
-    if (disabledRef.current) return;
+    // [#303] `hoverableWhenEmpty` is the one waiver: an empty undo stack disables the
+    // BUTTON but must still be able to show the Unwind entry.
+    if (disabledRef.current && !hoverableWhenEmptyRef.current) return;
 
     // Clear any pending leave timeout
     if (leaveTimeoutRef.current) {
@@ -486,7 +551,10 @@ export default function UndoHistoryDropdown({
     // Set hover timeout for 300ms delay
     hoverTimeoutRef.current = setTimeout(async () => {
       // Bail out if token changed (any close path was triggered) or disabled is now true
-      if (hoverTokenRef.current !== currentToken || disabledRef.current) {
+      if (
+        hoverTokenRef.current !== currentToken ||
+        (disabledRef.current && !hoverableWhenEmptyRef.current)
+      ) {
         return;
       }
 
@@ -495,19 +563,45 @@ export default function UndoHistoryDropdown({
         const stack = await fetchStack();
 
         // Re-check token and disabled after async operation
-        if (hoverTokenRef.current !== currentToken || disabledRef.current) {
+        if (
+          hoverTokenRef.current !== currentToken ||
+          (disabledRef.current && !hoverableWhenEmptyRef.current)
+        ) {
           return;
         }
 
-        // Only open if there are items
+        // Open when there is something to show.
         if (stack.length > 0) {
+          setIsOpen(true);
+          return;
+        }
+
+        // [#303] An EMPTY stack can still be something to show, in EITHER dropdown: the
+        // chain-step entry lives past the bottom of the stack (back a version under Undo,
+        // forward a version under Redo), and this dropdown is its only trigger. But only
+        // if a step exists - resolve it FIRST and open only on an answer. Opening
+        // optimistically and resolving afterwards popped an empty "No undo actions." panel
+        // on any linked project whose lock is held, and nothing ever took it away again:
+        // the comment that used to sit here claimed the panel closed itself, and no such
+        // code was ever written.
+        if (!iHoldLockRef.current) return;
+        const chainStep = await resolveChainTarget();
+        // Same re-check as after `fetchStack`: a hover cancelled during the resolve must
+        // not open the panel it no longer wants.
+        if (
+          hoverTokenRef.current !== currentToken ||
+          (disabledRef.current && !hoverableWhenEmptyRef.current)
+        ) {
+          return;
+        }
+        if (chainStep) {
           setIsOpen(true);
         }
       } catch {
         // Error already logged in fetchStack
       }
     }, 300);
-  }, [fetchStack]);
+  }, [fetchStack, resolveChainTarget]);
 
   // Close dropdown with small delay buffer (for mouse leave)
   const closeDropdown = useCallback((event?: React.MouseEvent) => {
@@ -648,31 +742,65 @@ export default function UndoHistoryDropdown({
       }
     }
 
-    // Arrow Down opens dropdown and focuses first item
-    if (event.key === 'ArrowDown' && !isOpen && !disabledRef.current) {
+    // Arrow Down opens dropdown and focuses first item.
+    // [#303] `hoverableWhenEmpty` lets it through while `disabled` too - that is the state
+    // the chain-step entry exists for, and the mouse has been able to open it since the
+    // entry landed. The button still performs nothing; this only opens the panel.
+    if (
+      event.key === 'ArrowDown' &&
+      !isOpen &&
+      (!disabledRef.current || hoverableWhenEmptyRef.current)
+    ) {
       event.preventDefault();
       // Fetch stack and open
       const stack = await fetchStack();
-      if (stack.length > 0) {
+      // [#303] Mirror of the hover path in `openDropdown`, deliberately: an empty stack
+      // opens only when a chain step actually resolves, so the two routes to this panel
+      // cannot disagree about whether there is anything in it.
+      const chainStep =
+        stack.length === 0 && iHoldLockRef.current ? await resolveChainTarget() : null;
+      if (stack.length > 0 || chainStep) {
         // Mark as keyboard navigation for focus management
         keyboardNavActiveRef.current = true;
         setIsOpen(true);
-        // Set first item as active after React renders (store timeout for cleanup)
-        keyboardOpenTimeoutRef.current = setTimeout(() => {
-          setActiveIndex(0);
-          scrollActiveItemIntoView(0);
-          keyboardOpenTimeoutRef.current = null;
-        }, 0);
+        if (stack.length > 0) {
+          // Set first item as active after React renders (store timeout for cleanup)
+          keyboardOpenTimeoutRef.current = setTimeout(() => {
+            setActiveIndex(0);
+            scrollActiveItemIntoView(0);
+            keyboardOpenTimeoutRef.current = null;
+          }, 0);
+        }
+        // [#303] An empty list has no index to make active, and the chain step is not one
+        // anyway - it is not in `items`. The keyboard-open focus effect lands on it
+        // instead; deferring the focus here as well raced that effect and lost, because a
+        // `setTimeout(0)` scheduled before the commit can fire on either side of it.
       }
     }
-  }, [isOpen, items, activeIndex, fetchStack, scrollActiveItemIntoView, handleItemClick, hardClose]);
+  }, [
+    isOpen,
+    items,
+    activeIndex,
+    fetchStack,
+    resolveChainTarget,
+    scrollActiveItemIntoView,
+    handleItemClick,
+    hardClose,
+  ]);
 
   // Handle keyboard navigation when dropdown is open
   const handleDropdownKeyDown = useCallback((event: React.KeyboardEvent) => {
-    if (!isOpen || items.length === 0) return;
+    // [#303] Only `isOpen` gates the whole handler. An open panel with an EMPTY list is a
+    // real state now (the chain-step entry is its only content), and bailing on
+    // `items.length === 0` made it a dead end: Escape did not close it, and the entry's
+    // own Enter had to survive this handler untouched. Each list branch carries its own
+    // emptiness guard instead, placed BEFORE `preventDefault` so a key this panel has no
+    // list use for still reaches the focused entry.
+    if (!isOpen) return;
 
     switch (event.key) {
       case 'ArrowDown': {
+        if (items.length === 0) break;
         event.preventDefault();
         const nextIndex = activeIndex < items.length - 1 ? activeIndex + 1 : 0;
         setActiveIndex(nextIndex);
@@ -680,6 +808,7 @@ export default function UndoHistoryDropdown({
         break;
       }
       case 'ArrowUp': {
+        if (items.length === 0) break;
         event.preventDefault();
         const prevIndex = activeIndex > 0 ? activeIndex - 1 : items.length - 1;
         setActiveIndex(prevIndex);
@@ -687,6 +816,7 @@ export default function UndoHistoryDropdown({
         break;
       }
       case 'Enter': {
+        if (items.length === 0) break;
         event.preventDefault();
         const item = items[activeIndex];
         if (item && activeIndex >= 0 && activeIndex < items.length) {
@@ -702,12 +832,14 @@ export default function UndoHistoryDropdown({
         break;
       }
       case 'Home': {
+        if (items.length === 0) break;
         event.preventDefault();
         setActiveIndex(0);
         scrollActiveItemIntoView(0);
         break;
       }
       case 'End': {
+        if (items.length === 0) break;
         event.preventDefault();
         const lastIndex = items.length - 1;
         setActiveIndex(lastIndex);
@@ -786,6 +918,10 @@ export default function UndoHistoryDropdown({
         event.stopPropagation();
         event.preventDefault();
 
+        // A chain-only panel has no local action for these shortcuts. Crossing a server
+        // commit boundary remains an explicit click/Enter plus confirmation.
+        if (items.length === 0) return;
+
         // Use first item for context
         const firstItem = items[0];
         const context = firstItem
@@ -834,12 +970,19 @@ export default function UndoHistoryDropdown({
 
   // Focus dropdown when opened via keyboard (only when keyboardNavActiveRef is true)
   useEffect(() => {
-    if (isOpen && keyboardNavActiveRef.current && dropdownRef.current) {
-      dropdownRef.current.focus();
+    if (!isOpen || !keyboardNavActiveRef.current) return;
+    // [#303] With an empty list the chain step is the whole panel, so it takes the focus
+    // the container would otherwise hold - the panel is otherwise a place the keyboard can
+    // enter and find nothing. Landing here rather than in a deferred callback is what
+    // makes it deterministic: this runs after the commit that rendered the entry.
+    const landing =
+      items.length === 0 && chainStepRef.current ? chainStepRef.current : dropdownRef.current;
+    if (landing) {
+      landing.focus();
       // Clear the flag after focusing to prevent re-focusing on hover state changes
       keyboardNavActiveRef.current = false;
     }
-  }, [isOpen]);
+  }, [isOpen, items]);
 
   // Refetch stack when undo/redo availability changes (from external edits, etc.)
   // This ensures the dropdown stays in sync with the actual undo stack state
@@ -867,7 +1010,20 @@ export default function UndoHistoryDropdown({
         ref={buttonRef}
         onClick={handleButtonClick}
         onKeyDown={handleButtonKeyDown}
-        disabled={disabled}
+        // [#303] A `disabled` button is not in the tab order, which left the chain-step
+        // entry reachable by mouse only - the panel behind it had no keyboard route at
+        // all. So an empty stack that MIGHT still have a chain step keeps its tab stop.
+        // The button performs nothing either way: `handleButtonClick` still returns on
+        // `disabledRef`, and the styling below stays keyed on the ORIGINAL `disabled` so
+        // it reads inert.
+        //
+        // The accepted cost is a tab stop that can open a panel with nothing in it (the
+        // chain step resolves to `null`). `hoverableWhenEmpty` alone would have been a
+        // worse deal: the toolbar passes it as `!placementModeActive`, so it is true on a
+        // LOCAL project too, and there the panel can never open - a tab stop that does
+        // nothing at all, in every project. `iHoldLock` is the rest of the condition
+        // `openDropdown` opens on, which keeps focusable and can-open the same set.
+        disabled={disabled && !(hoverableWhenEmpty && iHoldLock)}
         aria-label={ariaLabel}
         aria-expanded={isOpen}
         aria-haspopup="menu"
@@ -923,7 +1079,13 @@ export default function UndoHistoryDropdown({
           >
             {items.length === 0 ? (
               <div className="px-3 py-4 text-center text-text-secondary text-sm">
-                {t('undo.history.empty', { mode: modeLabel })}
+                {showChainStep
+                  ? t(
+                      isForward
+                        ? 'undo.history.rewind.emptyWithRewind'
+                        : 'undo.history.unwind.emptyWithUnwind',
+                    )
+                  : t('undo.history.empty', { mode: modeLabel })}
               </div>
             ) : (
               items.map((item, idx) => {
@@ -976,6 +1138,69 @@ export default function UndoHistoryDropdown({
               })
             )}
           </div>
+
+          {/* [#303] The chain-step entry, pinned below the list rather than inside it: it
+              is not a stack position, it is the step PAST the bottom of the stack - back a
+              version under Undo, forward a version under Redo. Clicking it never acts - it
+              opens a confirmation, because the action downloads a revision and replaces the
+              working copy. */}
+          {showChainStep && chainTarget && (
+            <button
+              ref={chainStepRef}
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                hardClose();
+                openDialog('speleodb-unwind', {
+                  hexsha: chainTarget.hexsha,
+                  // [#303] Each flag is read only off the direction that actually carries
+                  // it. `chainTarget` is a union discriminated on that direction, so the
+                  // other direction's `false` is a value this dropdown states rather than
+                  // the `undefined` the old intersection type lied about; the dialog reads
+                  // all three with `=== true`, so the two are the same to it.
+                  isCurrent: chainTarget.direction === 'back' ? chainTarget.is_current : false,
+                  // Which way this step walks. The confirmation shares one component for
+                  // both because the mechanics are identical - one revision swap keeping
+                  // the history - and only the wording differs.
+                  forward: isForward,
+                  // Where a forward step lands: back ON base, i.e. the latest version, so
+                  // the dialog can say that rather than naming a revision.
+                  isLatest: chainTarget.direction === 'forward' ? chainTarget.is_latest : false,
+                  // [#303] Carried through so the confirmation can warn on OPEN. This
+                  // dropdown offers the entry whenever the UNDO stack is empty, which
+                  // undoing everything also satisfies - and that copy is dirty, with the
+                  // undone steps on the redo stack. Without the flag the dialog looked
+                  // ordinary and the action failed once pressed. A forward step can never
+                  // carry it: it needs a chain pointer, and a pointer is exactly what makes
+                  // the dirt excusable - which is why only the backward arm has the field.
+                  discardsUnpushed:
+                    chainTarget.direction === 'back' && chainTarget.discards_unpushed,
+                });
+              }}
+              className="w-full px-3 py-2 flex items-center gap-2 text-left border-t border-border
+                         hover:bg-background-50 transition-colors"
+              data-testid={`${testId}-unwind`}
+              // [#303] Focusable, unlike the list items above: those are driven by the
+              // roving-tabindex model (`activeIndex` + `aria-activedescendant`) and this
+              // entry is not in `items` at all. When it is the panel's only content the
+              // keyboard-open path focuses it here, and Enter then reaches its `onClick`
+              // natively - `handleDropdownKeyDown` deliberately leaves Enter alone on an
+              // empty list.
+              tabIndex={0}
+            >
+              <span className="w-5 h-5 flex items-center justify-center shrink-0">
+                <SpeleoDbLogo size={14} />
+              </span>
+              <div className="flex-1 min-w-0">
+                <div className="text-sm text-text-primary truncate">
+                  {t(isForward ? 'undo.history.rewind.label' : 'undo.history.unwind.label')}
+                </div>
+                <div className="text-xs text-text-secondary">
+                  {t(isForward ? 'undo.history.rewind.hint' : 'undo.history.unwind.hint')}
+                </div>
+              </div>
+            </button>
+          )}
         </div>
       )}
 

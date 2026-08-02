@@ -58,6 +58,57 @@ pub(super) fn preserved_display_settings(dest: &Path) -> HashMap<String, String>
         .unwrap_or_default()
 }
 
+/// [#303] The `speleo_link.undo_mode` already recorded in the `.stalx` at `dest`.
+///
+/// Every stamp site rewrites the WHOLE link row, so without this a pull / fast-forward /
+/// revision swap would reset the project's explicit undo policy, silently discarding a
+/// `Disabled` that the project owner set precisely because the
+/// project is too big to ship undo snapshots. The value rides in the pushed snapshot
+/// (it is project state, not machine state), so the value in the file we just extracted
+/// IS the authoritative answer and the stamp has to carry it forward.
+///
+/// `None` when the file carries no link or a legacy NULL. The caller materializes the
+/// application default before stamping the shared row. Takes the handle each stamp site
+/// has ALREADY opened on the file it is about to stamp, rather than a path: a second
+/// connection to a file mid-replace is exactly what the rest of this module avoids.
+pub(super) fn preserved_undo_mode(
+    db: &crate::persistence::Database,
+) -> Option<crate::models::UndoMode> {
+    db.load_speleo_link()
+        .ok()
+        .flatten()
+        .and_then(|l| l.undo_mode)
+}
+
+/// [#303] Empty the undo/redo tables in a freshly-downloaded cache file.
+///
+/// The file arrives carrying whatever the last pusher's session held (a Full-mode push
+/// ships its undo history on purpose), and inheriting that implicitly is the #194 b3
+/// replay hazard. Clearing it HERE - in the bytes on disk, before anything opens them -
+/// rather than in memory after the load is deliberate: the load path reads these tables
+/// into the live stack, and a clear that only touched memory would leave the history in
+/// the file for the next open to pick up again.
+///
+/// Fatal while the file is still staged. A downloaded database is never installed until
+/// all inherited history metadata has been removed successfully.
+fn drop_inherited_undo(dest: &Path) -> Result<(), SpeleoDbError> {
+    crate::persistence::Database::clear_undo_history_at(dest).map_err(|e| {
+        SpeleoDbError::Io(format!(
+            "could not clear inherited history from {}: {e}",
+            dest.display()
+        ))
+    })
+}
+
+fn sanitized_download_path(dest: &Path) -> std::path::PathBuf {
+    let mut name = dest
+        .file_name()
+        .unwrap_or_else(|| std::ffi::OsStr::new("project.stalx"))
+        .to_os_string();
+    name.push(".sanitize.tmp");
+    dest.with_file_name(name)
+}
+
 /// Re-apply preserved local `display_settings` into a freshly-downloaded cache file
 /// (companion to [`preserved_display_settings`]). Best-effort per key - a failed
 /// restore only means that one view toggle falls back to its default.
@@ -88,6 +139,26 @@ pub(super) enum LocalEditsPolicy {
     /// Discard them: the user confirmed it (take-remote's destroy-confirmation, or
     /// the "take remote and discard local" branch of the open-project prompt).
     Discard,
+}
+
+/// [#303] What to do with the undo history riding IN the downloaded `.stalx`.
+///
+/// Now that a Full-mode push ships its undo stack, every server copy arrives carrying
+/// the last pusher's edit history. Inheriting that IMPLICITLY is the #194 b3 hazard:
+/// press Ctrl-Z on a freshly-pulled project and you replay a stranger's command, with
+/// its prior-state payload, against a tree you have not looked at yet.
+///
+/// So the default is [`Self::Drop`] on every path that replaces the cache file, and the
+/// history is only ever handed back through the ONE explicit, confirmed, lock-held route
+/// that exists to ask for it: the Unwind. `undo_history_keep_is_unwind_only` pins that
+/// there is exactly one `Keep` site, the same way the `LocalEditsPolicy::Discard`
+/// tripwire pins the waivers above.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum InheritedUndo {
+    /// Empty the downloaded file's undo/redo tables. Every implicit adopt path.
+    Drop,
+    /// Keep them: the caller is the Unwind, and that history is what it came for.
+    Keep,
 }
 
 impl AppState {
@@ -172,9 +243,10 @@ impl AppState {
         entry: &str,
         dest: &Path,
         project_id: &str,
+        undo: InheritedUndo,
     ) -> Result<HashMap<String, String>, SpeleoDbError> {
         self.guard_local_edits(project_id, dest)?;
-        self.replace_cache_stalx_abandoning(dump, entry, dest)
+        self.replace_cache_stalx_abandoning(dump, entry, dest, undo)
     }
 
     /// [`AppState::replace_cache_stalx`] or its abandoning sibling, chosen by an
@@ -188,10 +260,15 @@ impl AppState {
         dest: &Path,
         project_id: &str,
         policy: LocalEditsPolicy,
+        undo: InheritedUndo,
     ) -> Result<HashMap<String, String>, SpeleoDbError> {
         match policy {
-            LocalEditsPolicy::Protect => self.replace_cache_stalx(dump, entry, dest, project_id),
-            LocalEditsPolicy::Discard => self.replace_cache_stalx_abandoning(dump, entry, dest),
+            LocalEditsPolicy::Protect => {
+                self.replace_cache_stalx(dump, entry, dest, project_id, undo)
+            }
+            LocalEditsPolicy::Discard => {
+                self.replace_cache_stalx_abandoning(dump, entry, dest, undo)
+            }
         }
     }
 
@@ -205,6 +282,7 @@ impl AppState {
         dump: &mut Dump<'_>,
         entry: &str,
         dest: &Path,
+        undo: InheritedUndo,
     ) -> Result<HashMap<String, String>, SpeleoDbError> {
         let preserved_view = preserved_display_settings(dest);
         // Closing BEFORE the extract is the point (a live mmap must not survive into
@@ -216,8 +294,36 @@ impl AppState {
         // `dest` is still the file we just closed and re-opening restores the
         // pre-call state (bar the undo history, which the close spent either way).
         let closed = self.close_project_if_open_at(dest);
-        match dump.extract_entry_to(entry, dest) {
-            Ok(()) => Ok(preserved_view),
+        let staged = sanitized_download_path(dest);
+        let _ = std::fs::remove_file(&staged);
+        match dump.extract_entry_to(entry, &staged) {
+            Ok(()) => {
+                // [#303] THE chokepoint. Every server `.stalx` that becomes the local
+                // cache file passes through here, so dropping the inherited history in
+                // one place is what makes "a pulled stack is never silently adopted"
+                // true of the pull, the fast-forward AND the revision swap at once,
+                // without each of them having to remember.
+                if matches!(undo, InheritedUndo::Drop) {
+                    if let Err(e) = drop_inherited_undo(&staged) {
+                        let _ = std::fs::remove_file(&staged);
+                        if closed {
+                            let _ = self.open_project(dest.to_path_buf());
+                        }
+                        return Err(e);
+                    }
+                }
+                if let Err(e) = std::fs::rename(&staged, dest) {
+                    let _ = std::fs::remove_file(&staged);
+                    if closed {
+                        let _ = self.open_project(dest.to_path_buf());
+                    }
+                    return Err(SpeleoDbError::Io(format!(
+                        "could not install sanitized download at {}: {e}",
+                        dest.display()
+                    )));
+                }
+                Ok(preserved_view)
+            }
             Err(e) => {
                 if closed {
                     let reopened = self.open_project(dest.to_path_buf());
@@ -294,6 +400,25 @@ mod tests {
         );
     }
 
+    /// [#303] Spec item 15's structural half, and the reason `InheritedUndo` is a named
+    /// enum rather than a bool: KEEPING a downloaded copy's undo history is a waiver of
+    /// the #194 b3 guard, so there must be exactly ONE place in the whole orchestration
+    /// that asks for it - the Unwind, which exists to fetch that history back under an
+    /// explicit, confirmed, lock-held action.
+    ///
+    /// Same shape as `the_orchestration_never_calls_the_abandoning_replace_directly`
+    /// above: a diff that adds a second `Keep` site fails here and has to justify itself.
+    #[test]
+    fn undo_history_keep_is_unwind_only() {
+        let keeps = speleodb_prod_matches("InheritedUndo::Keep", &["speleodb_cache.rs"]);
+        assert_eq!(
+            keeps, 1,
+            "exactly one production site may keep a downloaded copy's undo history (the \
+             Unwind); found {keeps}. Every other adopt path inherits a stranger's \
+             history one Ctrl-Z away from the user (#194 b3)."
+        );
+    }
+
     /// A `.stalx` at `path` linked to [`ID`], carrying the given un-pushed-edits bit.
     fn seed_linked_stalx(path: &Path, dirty: bool) {
         let mut db = Database::open(path).expect("open db");
@@ -307,20 +432,36 @@ mod tests {
             has_unpushed_edits: dirty,
             last_edit_at: dirty.then(|| "2026-07-27T10:00:00Z".to_owned()),
             last_verify_at: None,
+            undo_mode: None,
         }))
         .expect("save link");
     }
 
-    /// A one-entry ZIP standing in for a downloaded dump. The body is not a `.stalx`
-    /// - nothing here re-opens it, and the point is only whether it reached `dest`.
+    /// A one-entry ZIP standing in for a downloaded dump.
     fn server_dump() -> Vec<u8> {
         use std::io::Write as _;
+        let temp = tempfile::TempDir::new().expect("server project temp");
+        let project = temp.path().join("server.stalx");
+        {
+            let mut db = Database::open(&project).expect("open server project");
+            db.save_project(&Project::new("Server Copy".to_owned(), None))
+                .expect("save server project");
+        }
+        let bytes = std::fs::read(project).expect("read server project");
         let mut writer = zip::write::ZipWriter::new(std::io::Cursor::new(Vec::<u8>::new()));
         let opts = zip::write::SimpleFileOptions::default()
             .compression_method(zip::CompressionMethod::Stored);
         writer.start_file(ENTRY, opts).expect("start_file");
-        writer.write_all(b"the server copy").expect("write entry");
+        writer.write_all(&bytes).expect("write entry");
         writer.finish().expect("finish zip").into_inner()
+    }
+
+    fn replaced_project_name(path: &Path) -> String {
+        Database::open_existing(path)
+            .expect("open replaced project")
+            .load_project()
+            .expect("load replaced project")
+            .name
     }
 
     #[test]
@@ -337,7 +478,13 @@ mod tests {
         let zip = server_dump();
 
         let err = state
-            .replace_cache_stalx(&mut Dump::open(&zip).expect("open dump"), ENTRY, &dest, ID)
+            .replace_cache_stalx(
+                &mut Dump::open(&zip).expect("open dump"),
+                ENTRY,
+                &dest,
+                ID,
+                InheritedUndo::Drop,
+            )
             .expect_err("un-pushed edits must refuse the plain replace");
         assert!(
             matches!(err, SpeleoDbError::WouldDiscardLocalEdits { .. }),
@@ -356,6 +503,7 @@ mod tests {
                 &dest,
                 ID,
                 LocalEditsPolicy::Protect,
+                InheritedUndo::Drop,
             )
             .expect_err("Protect is the same refusal");
         assert!(matches!(err, SpeleoDbError::WouldDiscardLocalEdits { .. }));
@@ -372,12 +520,165 @@ mod tests {
                 &dest,
                 ID,
                 LocalEditsPolicy::Discard,
+                InheritedUndo::Drop,
             )
             .expect("the confirmed-discard waiver replaces the copy");
         assert_eq!(
-            std::fs::read(&dest).expect("read dest"),
-            b"the server copy",
+            replaced_project_name(&dest),
+            "Server Copy",
             "and only that waiver actually overwrites it"
+        );
+    }
+
+    /// [#303] Spec item 15's behavioural half: a replace that carries
+    /// `InheritedUndo::Drop` leaves every downloaded history table EMPTY, and one that
+    /// carries `Keep` leaves them intact.
+    ///
+    /// Asserted on the FILE rather than on the in-memory stack, because that is where it
+    /// has to be true: the load path reads these tables into the live stack, so a clear
+    /// that only touched memory would leave the history on disk for the next open.
+    #[test]
+    fn a_dropped_replace_empties_the_downloaded_undo_tables() {
+        /// A real `.stalx` dump entry carrying two undo rows and one redo row, standing
+        /// in for a Full-mode push's snapshot.
+        fn dump_with_history() -> Vec<u8> {
+            use std::io::Write as _;
+            let temp = tempfile::TempDir::new().expect("temp");
+            let seeded = temp.path().join("seeded.stalx");
+            {
+                let mut db = Database::open(&seeded).expect("open seed");
+                db.save_project(&Project::new("Pushed".to_owned(), None))
+                    .expect("save project");
+                db.save_undo_stack(vec![
+                    (r#"{"c":1}"#.to_owned(), r#"{"u":1}"#.to_owned()),
+                    (r#"{"c":2}"#.to_owned(), r#"{"u":2}"#.to_owned()),
+                ])
+                .expect("seed undo");
+                db.save_redo_stack_with_timestamps(vec![(
+                    r#"{"c":3}"#.to_owned(),
+                    r#"{"u":3}"#.to_owned(),
+                    None,
+                )])
+                .expect("seed redo");
+                db.save_speleo_undo_chain(Some("older-revision"))
+                    .expect("seed chain pointer");
+                db.save_speleo_undo_watermark(Some("2026-08-01T00:00:00+00:00"))
+                    .expect("seed watermark");
+            }
+            let bytes = std::fs::read(&seeded).expect("read seed");
+            let mut writer = zip::write::ZipWriter::new(std::io::Cursor::new(Vec::<u8>::new()));
+            let opts = zip::write::SimpleFileOptions::default()
+                .compression_method(zip::CompressionMethod::Stored);
+            writer.start_file(ENTRY, opts).expect("start_file");
+            writer.write_all(&bytes).expect("write entry");
+            writer.finish().expect("finish zip").into_inner()
+        }
+
+        let history = |path: &Path| -> (usize, usize, Option<String>, Option<String>) {
+            let db = Database::open_existing(path).expect("open replaced");
+            (
+                db.load_undo_stack_with_timestamps()
+                    .expect("load undo")
+                    .len(),
+                db.load_redo_stack_with_timestamps()
+                    .expect("load redo")
+                    .len(),
+                db.load_speleo_undo_chain().expect("load chain pointer"),
+                db.load_speleo_undo_watermark().expect("load watermark"),
+            )
+        };
+
+        let state = AppState::new().expect("state");
+        let zip = dump_with_history();
+
+        // Sanity: the fixture really does carry history, so the assertions below are not
+        // passing vacuously.
+        let temp = tempfile::TempDir::new().expect("temp");
+        let kept = temp.path().join("kept.stalx");
+        state
+            .replace_cache_stalx_abandoning(
+                &mut Dump::open(&zip).expect("open dump"),
+                ENTRY,
+                &kept,
+                InheritedUndo::Keep,
+            )
+            .expect("replace with Keep");
+        assert_eq!(
+            history(&kept),
+            (
+                2,
+                1,
+                Some("older-revision".to_owned()),
+                Some("2026-08-01T00:00:00+00:00".to_owned()),
+            ),
+            "Keep leaves the downloaded history in place - what the Unwind needs"
+        );
+
+        let dropped = temp.path().join("dropped.stalx");
+        state
+            .replace_cache_stalx_abandoning(
+                &mut Dump::open(&zip).expect("open dump"),
+                ENTRY,
+                &dropped,
+                InheritedUndo::Drop,
+            )
+            .expect("replace with Drop");
+        assert_eq!(
+            history(&dropped),
+            (0, 0, None, None),
+            "Drop empties all history metadata, so no adopt path can inherit it (#194 b3)"
+        );
+    }
+
+    #[test]
+    fn failed_history_cleanup_leaves_the_existing_cache_untouched() {
+        use std::io::Write as _;
+
+        let seed_dir = tempfile::TempDir::new().expect("seed temp");
+        let seeded = seed_dir.path().join("seeded.stalx");
+        {
+            let mut db = Database::open(&seeded).expect("open seed");
+            db.save_project(&Project::new("Pushed".to_owned(), None))
+                .expect("save project");
+            db.save_undo_stack(vec![(r#"{"c":1}"#.to_owned(), r#"{"u":1}"#.to_owned())])
+                .expect("seed undo");
+        }
+        rusqlite::Connection::open(&seeded)
+            .expect("reopen seed")
+            .execute_batch(
+                "CREATE TRIGGER block_undo_delete BEFORE DELETE ON undo_stack \
+                 BEGIN SELECT RAISE(ABORT, 'blocked'); END;",
+            )
+            .expect("install blocking trigger");
+        let bytes = std::fs::read(&seeded).expect("read seed");
+        let mut writer = zip::write::ZipWriter::new(std::io::Cursor::new(Vec::<u8>::new()));
+        writer
+            .start_file(ENTRY, zip::write::SimpleFileOptions::default())
+            .expect("start entry");
+        writer.write_all(&bytes).expect("write entry");
+        let zip = writer.finish().expect("finish zip").into_inner();
+
+        let temp = tempfile::TempDir::new().expect("temp");
+        let dest = temp.path().join("project.stalx");
+        std::fs::write(&dest, b"original cache").expect("seed destination");
+        let before = std::fs::read(&dest).expect("read destination");
+        let state = AppState::new().expect("state");
+
+        let err = state
+            .replace_cache_stalx_abandoning(
+                &mut Dump::open(&zip).expect("open dump"),
+                ENTRY,
+                &dest,
+                InheritedUndo::Drop,
+            )
+            .expect_err("cleanup failure must abort adoption");
+        assert!(err
+            .to_string()
+            .contains("could not clear inherited history"));
+        assert_eq!(std::fs::read(&dest).expect("read destination"), before);
+        assert!(
+            !sanitized_download_path(&dest).exists(),
+            "failed staged download must be cleaned up"
         );
     }
 
@@ -392,11 +693,17 @@ mod tests {
         let zip = server_dump();
 
         state
-            .replace_cache_stalx(&mut Dump::open(&zip).expect("open dump"), ENTRY, &dest, ID)
+            .replace_cache_stalx(
+                &mut Dump::open(&zip).expect("open dump"),
+                ENTRY,
+                &dest,
+                ID,
+                InheritedUndo::Drop,
+            )
             .expect("a clean local copy needs no waiver");
         assert_eq!(
-            std::fs::read(&dest).expect("read dest"),
-            b"the server copy",
+            replaced_project_name(&dest),
+            "Server Copy",
             "the server copy landed"
         );
     }

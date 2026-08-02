@@ -352,6 +352,19 @@ impl AppState {
             has_unpushed_edits: true,
             last_edit_at: Some(chrono::Utc::now().to_rfc3339()),
             last_verify_at: None,
+            // [#303] A new link materializes the application default immediately.
+            // Re-publishing a detached managed copy preserves its explicit project value.
+            undo_mode: Some({
+                let db_guard = self.database.lock().map_err(|_| {
+                    local_dto(SpeleoDbError::Io("database lock poisoned".to_owned()))
+                })?;
+                let db = db_guard.as_ref().ok_or_else(|| {
+                    local_dto(SpeleoDbError::Io(
+                        "no open database after writing the cache file".to_owned(),
+                    ))
+                })?;
+                self.effective_undo_mode(super::speleodb_cache::preserved_undo_mode(db))
+            }),
         };
         {
             let db_guard = self

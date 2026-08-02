@@ -27,12 +27,14 @@ use crate::core::AppState;
 // the typed SpeleoDbAction) instead of a flattened String, so the FE branches on
 // `err.action`. The orchestration `AppState::speleodb_*` methods build the DTO at
 // the call site where the endpoint is known.
+use crate::models::UndoMode;
 use crate::speleodb::{
     DoneResult, Permission, PushResult, SpeleoAdoptResult, SpeleoCollaborators, SpeleoDbAction,
     SpeleoDumpCandidate, SpeleoErrorDto, SpeleoLinkStatus, SpeleoLocalProjectState,
     SpeleoLoginResult, SpeleoOpenResult, SpeleoProjectMetadata, SpeleoProjectMetadataPatch,
     SpeleoProjectSummary, SpeleoPublishParams, SpeleoPublishResult, SpeleoRevision,
-    SpeleoSessionStatus, SpeleoTeamOption, SpeleoUserSuggestion, StartEditingResult, UpdateResult,
+    SpeleoRewindTarget, SpeleoSessionStatus, SpeleoTeamOption, SpeleoUnwindTarget,
+    SpeleoUserSuggestion, StartEditingResult, UpdateResult,
 };
 
 /// Run a blocking SpeleoDB orchestration call off the main thread. The
@@ -230,8 +232,12 @@ pub async fn speleodb_start_editing(app: AppHandle) -> Result<StartEditingResult
 pub async fn speleodb_done(
     app: AppHandle,
     message: Option<String>,
+    accept_older_version: Option<bool>,
 ) -> Result<DoneResult, SpeleoErrorDto> {
-    run_blocking(app, move |s| s.speleodb_done(message)).await
+    run_blocking(app, move |s| {
+        s.speleodb_done_acknowledged(message, accept_older_version.unwrap_or(false))
+    })
+    .await
 }
 
 /// Read-only refresh of the open project against the server (#197): no lock is
@@ -248,8 +254,12 @@ pub async fn speleodb_update(app: AppHandle) -> Result<UpdateResult, SpeleoError
 pub async fn speleodb_push(
     app: AppHandle,
     message: Option<String>,
+    accept_older_version: Option<bool>,
 ) -> Result<PushResult, SpeleoErrorDto> {
-    run_blocking(app, move |s| s.speleodb_push_only(message)).await
+    run_blocking(app, move |s| {
+        s.speleodb_push_only_acknowledged(message, accept_older_version.unwrap_or(false))
+    })
+    .await
 }
 
 /// Take the SpeleoDB version, DISCARDING local unpushed edits (#198 "Take
@@ -336,6 +346,20 @@ pub async fn speleodb_get_revisions(
 /// exists because a restore itself stamps the working copy as un-pushed, so without
 /// it Restore was single-use: restoring a second revision refused over edits the
 /// first restore had just created.
+///
+/// `keep_undo_history` (#303) is the "Unwind to previous SpeleoDB version" flavour: the
+/// downloaded copy's undo history is KEPT rather than dropped, because that history is
+/// what the action came for. Its extra preconditions (an empty undo stack, and any dirt
+/// being a previous Unwind's own doing) are enforced in the backend, never trusted from
+/// here.
+///
+/// `discard_unpushed` (#303) says the Unwind dialog raised its red warning and the user
+/// went ahead anyway - the copy holds un-pushed work that this swap replaces (typically
+/// edits the user undid, which sit on the redo stack). It is an acknowledgement, not a
+/// decision: `speleodb_unwind_target.discards_unpushed` is what tells the FE to warn, and
+/// the backend re-derives the same predicate before honouring this. Omitted or `false`,
+/// the guard refuses exactly as it did before, so nothing else that passes
+/// `keep_undo_history` can discard un-pushed work by accident.
 #[tauri::command]
 pub async fn speleodb_restore_revision(
     app: AppHandle,
@@ -345,8 +369,14 @@ pub async fn speleodb_restore_revision(
     restore: bool,
     discard_local: Option<bool>,
     entry_path: Option<String>,
+    keep_undo_history: Option<bool>,
+    discard_unpushed: Option<bool>,
+    chain_forward: Option<bool>,
 ) -> Result<SpeleoOpenResult, SpeleoErrorDto> {
     let discard_local = discard_local.unwrap_or(false);
+    let keep_undo_history = keep_undo_history.unwrap_or(false);
+    let discard_unpushed = discard_unpushed.unwrap_or(false);
+    let chain_forward = chain_forward.unwrap_or(false);
     run_blocking(app, move |s| {
         s.speleodb_restore_revision(
             project_id,
@@ -355,9 +385,89 @@ pub async fn speleodb_restore_revision(
             restore,
             discard_local,
             entry_path,
+            keep_undo_history,
+            discard_unpushed,
+            chain_forward,
         )
     })
     .await
+}
+
+/// [#303] Which revision the next "Unwind to previous SpeleoDB version" would load, or
+/// `None` when there is nothing left to reach (an empty repo, the root of the history, or
+/// a project whose undo history is not pushed at all).
+///
+/// Read-only and permission-free, like the revision list it reads. Costs one
+/// `GET /revisions/`, so the frontend asks when the undo dropdown opens rather than on
+/// every status poll.
+#[tauri::command]
+pub async fn speleodb_unwind_target(
+    app: AppHandle,
+) -> Result<Option<SpeleoUnwindTarget>, SpeleoErrorDto> {
+    run_blocking(app, AppState::speleodb_unwind_target).await
+}
+
+/// [#303] Discard the local copy and return to the server tip.
+///
+/// The way out of a copy the user does not want to keep - most often one a chain step
+/// walked back through history, where the dirty bit means "this is an older version",
+/// not "you have work to save". Both callers confirm first: the push dialog raised when
+/// a copy is dirty only because it was unwound, and the explicit Discard menu action,
+/// which offers it over ordinary edits too and says so.
+///
+/// DESTRUCTIVE and deliberately not second-guessed here: the backend does not re-check
+/// that the copy was merely unwound, because the menu action reaches it with real edits
+/// pending on purpose.
+///
+/// What it does insist on is `acknowledged` - the caller reporting that it put the loss in
+/// front of the user, the same shape as the Unwind guard's `discard_unpushed`. Without it
+/// the backend has no way to tell a confirmed discard from a stray invocation of the one
+/// verb here that destroys work irrecoverably. It is NOT a read-only or lock gate: a 401
+/// auto-drop leaves the session read-only while still holding un-pushed work, and this is
+/// the way out of that state.
+///
+/// `keep_lock` decides the only thing left once the copy is gone - carry on editing from
+/// the latest, or hand the project back. Keeping returns the Start-editing outcome, so a
+/// lock someone else took meanwhile surfaces as it would anywhere else; releasing returns
+/// `null`, which is not the same as an editing result and must not be read as one.
+#[tauri::command]
+pub async fn speleodb_discard_changes(
+    app: AppHandle,
+    keep_lock: bool,
+    acknowledged: bool,
+) -> Result<Option<StartEditingResult>, SpeleoErrorDto> {
+    run_blocking(app, move |s| {
+        s.speleodb_discard_changes(keep_lock, acknowledged)
+    })
+    .await
+}
+
+/// [#303] Which revision a "Redo into next SpeleoDB version" step would load, or `None`
+/// when there is nothing ahead: not mid-walk (the copy is already at BASE), already back
+/// at BASE, or a chain pointer that cannot be walked from.
+///
+/// That first case is also how an edit removes the direction - a forward command drops the
+/// chain pointer, so this stops resolving and the frontend hides the entry rather than
+/// offering a step that would discard the edit.
+///
+/// Same cost and same timing as its backward twin: one `GET /revisions/`, asked when the
+/// redo dropdown opens rather than on every status poll.
+#[tauri::command]
+pub async fn speleodb_rewind_target(
+    app: AppHandle,
+) -> Result<Option<SpeleoRewindTarget>, SpeleoErrorDto> {
+    run_blocking(app, AppState::speleodb_rewind_target).await
+}
+
+/// [#303] Set the open project's per-project undo-history policy
+/// (`speleo_link.undo_mode`).
+///
+/// EDIT-SESSION-REQUIRED: this writes the `.stalx`, which is project state that rides to
+/// the server in the next push, so every collaborator inherits it. Force editing uses
+/// the same gate deliberately - see `AppState::speleodb_set_undo_mode`.
+#[tauri::command]
+pub async fn speleodb_set_undo_mode(app: AppHandle, mode: UndoMode) -> Result<(), SpeleoErrorDto> {
+    run_blocking(app, move |s| s.speleodb_set_undo_mode(mode)).await
 }
 
 /// Set the open project's server-side `exclude_geojson` flag (#200

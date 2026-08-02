@@ -13,6 +13,7 @@ import type {
   SpeleoSessionStatus,
   StartEditingResult,
   TokenStorage,
+  UndoMode,
   UpdateResult,
 } from '../types/ipc.generated';
 import { invokeIpc, getErrorMessage } from '../utils/ipc';
@@ -148,6 +149,21 @@ export interface SpeleoSession {
   keychain: KeychainReport;
 }
 
+/**
+ * [#303] "This copy is dirty ONLY because a chain step walked it back" - the question the
+ * push routes, the close prompt and the status button all ask.
+ *
+ * Derived here rather than reported pre-combined by the backend, because the two halves
+ * arrive at different times: a step onto the tip leaves the copy CLEAN, so the composite
+ * was false at the moment of the poll, and the Undo that follows marks `hasUnpushedEdits`
+ * optimistically without asking the backend anything. Composing locally is what makes the
+ * status button react to that Undo instead of waiting a poll interval - which is exactly
+ * how it was still offering "Push & release" after an unwind.
+ */
+export function isUnwoundNotEdited(link: SpeleoLinkState | null | undefined): boolean {
+  return !!link && link.unwound && link.hasUnpushedEdits;
+}
+
 export interface SpeleoLinkState {
   permission: Permission | null;
   editState: SpeleoEditState;
@@ -162,6 +178,12 @@ export interface SpeleoLinkState {
   lockedByOther: boolean;
   hasUnpushedEdits: boolean;
   /**
+   * [#303] A chain step has moved this copy off the server tip - an Unwind (or a forward
+   * step) is mid-walk. RAW, not combined with `hasUnpushedEdits`: use
+   * {@link isUnwoundNotEdited} for the question the UI actually asks.
+   */
+  unwound: boolean;
+  /**
    * [#213] We are editing this remote project WITHOUT the write lock (force-edit):
    * `editState === 'editing'` but no lock is held, so the `.stalx` cannot be merged
    * until we reconnect and acquire the lock. Drives the persistent big-red banner
@@ -170,6 +192,8 @@ export interface SpeleoLinkState {
    * open/close/reconnect).
    */
   forceEditing: boolean;
+  /** [#303] This project's explicit undo-history policy. */
+  undoMode: UndoMode;
   /**
    * [#213] The `SpeleoDbConfig.allow_force_edit` opt-in (a global preference,
    * mirrored per-poll onto the link). Gates whether the read-only "Edit without
@@ -270,6 +294,28 @@ export function speleoOpenProjectStillIs(projectId: string | null): boolean {
   return useSpeleoStore.getState().remoteProjectId === projectId;
 }
 
+export interface SpeleoProjectSessionIdentity {
+  sessionGeneration: number;
+  projectId: string | null;
+}
+
+/** Capture both identities a long-running open-project request is allowed to affect. */
+export function speleoProjectSessionIssuedFor(
+  projectId: string | null,
+): SpeleoProjectSessionIdentity {
+  return { sessionGeneration: speleoSessionIssuedAt(), projectId };
+}
+
+/** The shared guard for requests that bind to both the login and the open project. */
+export function speleoProjectSessionStillCurrent(
+  issuedFor: SpeleoProjectSessionIdentity,
+): boolean {
+  return (
+    speleoSessionStillCurrent(issuedFor.sessionGeneration) &&
+    speleoOpenProjectStillIs(issuedFor.projectId)
+  );
+}
+
 export interface SpeleoLinkSnapshot {
   link: SpeleoLinkState | null;
   projectLinkKind: ProjectLinkKind;
@@ -300,6 +346,12 @@ interface SpeleoStore {
    * itself. Nothing renders it.
    */
   sessionGeneration: number;
+  /**
+   * [#303] Version of the backend state used to resolve the next Unwind/Rewind target.
+   * Unlike `sessionGeneration`, this moves for link-only operations such as a push or
+   * undo-policy change, where the open project and its rendered tree stay the same.
+   */
+  chainTargetGeneration: number;
   /** The open project's link/edit state, or `null` when it is local / none open. */
   link: SpeleoLinkState | null;
   /**
@@ -635,6 +687,25 @@ interface SpeleoStore {
   applyPush: (r: PushResult) => void;
   /** First successful mutation while editing flips the dirty indicator on. */
   markDirty: () => void;
+  /**
+   * [#303] A FORWARD edit, as opposed to an undo/redo: dirty, AND no longer merely
+   * "where the Unwind walk left it". Mirrors the backend pairing - `mark_remote_dirty()`
+   * followed by `speleodb_forget_unwind_position()` at commands.rs:757-761 (and the
+   * batch/repair sites).
+   *
+   * Deliberately NOT `markDirty`, which short-circuits when the link is already dirty.
+   * An unwound copy is always already dirty (`revision_swap_base` stamps the bit on any
+   * restore off tip), so mirroring a forward edit through `markDirty` was a total no-op:
+   * `unwound` survived until the next `speleodb_link_status` poll, up to
+   * `MIN_POLL_INTERVAL_SECONDS` away. Inside that window {@link isUnwoundNotEdited} still
+   * held, so SpeleoStatusButton, the lock menu, the `done()` guard and both exit prompts
+   * offered "Discard and take the latest" over work the user had just drawn.
+   *
+   * Undo/redo keeps `markDirty`: the backend deliberately does NOT drop the chain pointer
+   * on an undo, and a structural tripwire in speleodb_revisions.rs asserts that undo.rs
+   * never calls `speleodb_forget_unwind_position`.
+   */
+  markForwardEdit: () => void;
 
   // --- seams ---
   clearDivergence: () => void;
@@ -662,6 +733,13 @@ interface SpeleoStore {
       rendering-disabled banner and re-seeds link status. Throws on failure so the
       banner can surface it. */
   enableRendering: () => Promise<void>;
+  /** [#303] Set the open project's explicit undo-history policy. LOCK-REQUIRED: the value
+      lands in the `.stalx` and rides to the server on the next push, so it becomes
+      every collaborator's. Throws on refusal (no lock, or a local project) so the
+      control can surface it, and re-seeds link status on success. */
+  setUndoMode: (mode: UndoMode) => Promise<void>;
+  /** Invalidate any cached Unwind/Rewind target after a successful tree replacement. */
+  invalidateChainTargets: () => void;
   dismissBanner: () => void;
 }
 
@@ -749,6 +827,7 @@ const disownBusy = (): void => {
 export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
   session: null,
   sessionGeneration: 0,
+  chainTargetGeneration: 0,
   link: null,
   // Pessimistic until a project open resolves it: an unresolved gate is closed.
   projectLinkKind: 'unknown',
@@ -878,8 +957,12 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
           lockHolder: null,
           lockedByOther: false,
           hasUnpushedEdits: false,
+          unwound: false,
           forceEditing: false,
           forceEditAllowed: false,
+          // [#303] Placeholder until the first status reply supplies the project's
+          // explicit value.
+          undoMode: 'full',
           remoteState: 'unknown',
           noAccess: false,
           serverError: null,
@@ -1370,10 +1453,13 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
         // and the backend gate stays the real enforcement.
         lockedByOther: editState !== 'editing' && !!s.lock_holder,
         hasUnpushedEdits: s.has_unpushed_edits,
+        unwound: s.unwound,
         // #213: force-edit (edit-enabled WITHOUT a held lock) is backend-authoritative
         // and reported every poll; a reconnect that acquires the lock clears it there.
         forceEditing: s.force_editing,
         forceEditAllowed: s.allow_force_edit,
+        // [#303] Backend-resolved explicit project policy.
+        undoMode: s.undo_mode,
         remoteState: s.remote_state,
         noAccess: s.access_denied,
         serverError: s.server_error,
@@ -1416,10 +1502,13 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
         lockHolder: null,
         lockedByOther: false,
         hasUnpushedEdits,
+        // A fresh pull is at the server tip, so no chain step has walked it anywhere.
+        unwound: false,
         // A fresh pull always opens without the lock and not force-editing;
         // `seedFromStatus` refines the opt-in + any force-edit on the first poll.
         forceEditing: false,
         forceEditAllowed: false,
+        undoMode: 'full',
         // A pull just took the server tip, so up-to-date is true by construction -
         // but only for a pull. A seed that already knows the copy holds un-pushed
         // edits is by definition NOT in sync, so claim nothing until the first poll
@@ -1566,11 +1655,13 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
               ...state.link,
               editState: 'read-only',
               hasUnpushedEdits: false,
+              unwound: false,
               lockHolder: null,
               lockedByOther: false,
               remoteState: 'up_to_date',
               serverError: null,
             },
+            chainTargetGeneration: state.chainTargetGeneration + 1,
             divergence: null,
             banner: null,
           };
@@ -1603,9 +1694,11 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
             link: {
               ...state.link,
               hasUnpushedEdits: false,
+              unwound: false,
               remoteState: 'up_to_date',
               serverError: null,
             },
+            chainTargetGeneration: state.chainTargetGeneration + 1,
             banner: null,
           };
         case 'divergence_needed':
@@ -1625,6 +1718,21 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
     set((state) =>
       state.link && !state.link.hasUnpushedEdits
         ? { link: { ...state.link, hasUnpushedEdits: true } }
+        : {},
+    ),
+
+  // [#303] Both halves of the backend's post-edit bookkeeping, not just the dirty bit.
+  // The `unwound` term in the guard is what makes this fire on an already-dirty link -
+  // exactly the case `markDirty` skips, and exactly the case an unwound copy is always
+  // in. Still returns `{}` when nothing would change, so the identity check that
+  // `refreshLinkStatus` uses to spot a concurrent mutation keeps working.
+  markForwardEdit: () =>
+    set((state) =>
+      state.link && (!state.link.hasUnpushedEdits || state.link.unwound)
+        ? {
+            link: { ...state.link, hasUnpushedEdits: true, unwound: false },
+            chainTargetGeneration: state.chainTargetGeneration + 1,
+          }
         : {},
     ),
 
@@ -1655,6 +1763,21 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
     set((state) => (state.banner?.kind === 'rendering_disabled' ? { banner: null } : {}));
     await get().refreshLinkStatus();
   },
+
+  setUndoMode: async (mode) => {
+    // [#303] Throws on failure so the caller (the settings control) renders the
+    // refusal - most usefully the lock one, since this writes the `.stalx` and so
+    // becomes every collaborator's policy on the next push.
+    await invokeIpc<null>('speleodb_set_undo_mode', { mode });
+    // The backend policy changed even if the best-effort status refresh below cannot
+    // reach the server, so a target resolved under the old policy is already stale.
+    get().invalidateChainTargets();
+    // Re-read so the store reflects the committed backend value.
+    await get().refreshLinkStatus();
+  },
+
+  invalidateChainTargets: () =>
+    set((state) => ({ chainTargetGeneration: state.chainTargetGeneration + 1 })),
 
   dismissBanner: () => set({ banner: null }),
 }));
@@ -1687,6 +1810,7 @@ export const PUSH_FAILURE_DIALOGS: readonly string[] = [
   'speleodb-close',
   'speleodb-quit',
   'speleodb-revert',
+  'speleodb-unwound-push',
 ];
 
 /**

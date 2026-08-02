@@ -18,7 +18,9 @@
 use std::path::Path;
 
 use super::speleodb::{local_dto, lock_held_by_me, type_says_managed, validate_project_id, DumpAt};
-use super::speleodb_cache::{restore_display_settings, LocalEditsPolicy};
+use super::speleodb_cache::{
+    preserved_undo_mode, restore_display_settings, InheritedUndo, LocalEditsPolicy,
+};
 use super::speleodb_revisions::validate_hexsha;
 use super::{AppState, VirtualShotMode};
 use crate::speleodb::contract::{dto_for_error, Endpoint};
@@ -850,7 +852,16 @@ impl AppState {
         // the frontend re-enters through `speleodb_open_project_discarding_local`
         // if - and only if - the user chose to abandon the local copy.
         let preserved_view = self
-            .replace_cache_stalx_with(&mut dump, &entry, &dest, &project_id, policy)
+            .replace_cache_stalx_with(
+                &mut dump,
+                &entry,
+                &dest,
+                &project_id,
+                policy,
+                // [#303] A pull adopts the server's tree; its undo history is the last
+                // pusher's and is never inherited implicitly.
+                InheritedUndo::Drop,
+            )
             .map_err(local_dto)?;
 
         // Concurrent same-account session notice (#193 b8): if the server already
@@ -874,6 +885,8 @@ impl AppState {
         match crate::persistence::Database::open_existing(&dest) {
             Ok(db) => {
                 restore_display_settings(&db, &preserved_view);
+                // [#303] Read BEFORE the upsert below overwrites the whole row.
+                let pulled_undo_mode = preserved_undo_mode(&db);
                 let link = crate::models::SpeleoLink {
                     endpoint,
                     project_id: project_id.clone(),
@@ -882,6 +895,9 @@ impl AppState {
                     has_unpushed_edits: false,
                     last_edit_at: None,   // freshly pulled: no local edits yet
                     last_verify_at: None, // no lock held on pull; stamped on acquire (#202)
+                    // [#303] Carried from the file we just extracted. A legacy NULL is
+                    // initialized once from the application default and stamped explicitly.
+                    undo_mode: Some(self.effective_undo_mode(pulled_undo_mode)),
                 };
                 if let Err(e) = db.save_speleo_link(Some(&link)) {
                     // Non-fatal: the pull succeeded and the file is openable; the
@@ -1231,6 +1247,13 @@ impl AppState {
         // The conversion IS the edit and it happened just now, so `now` is both true and
         // the value that works: the push below starts after this line, so
         // `last_edit_at <= push_start` and a landed push clears the bit.
+        //
+        // [#303] Adoption builds the `.stalx` from an imported `.tml`, so there is
+        // normally no prior link to carry an undo policy from - but the file can be a
+        // re-adopt over an existing cache copy, and that copy's override is still the
+        // project's answer. Read it off the SAME live handle before the upsert
+        // overwrites the row; no link yet initializes from the global default once.
+        let adopted_undo_mode = self.speleodb_open_link().ok().and_then(|l| l.undo_mode);
         let stamped = self.speleodb_set_open_link(&crate::models::SpeleoLink {
             endpoint: endpoint.clone(),
             project_id: project_id.clone(),
@@ -1239,6 +1262,7 @@ impl AppState {
             has_unpushed_edits: true,
             last_edit_at: Some(chrono::Utc::now().to_rfc3339()),
             last_verify_at: None,
+            undo_mode: Some(self.effective_undo_mode(adopted_undo_mode)),
         });
         if let Err(e) = &stamped {
             tracing::warn!(
@@ -2002,14 +2026,26 @@ impl AppState {
         // file before the replace. The reload below re-opens it and already resets
         // undo/redo, so hoisting the close ahead of the extract is behaviour-
         // preserving.
-        let preserved_view =
-            self.replace_cache_stalx_with(&mut dump, &entry, &dest, project_id, policy)?;
+        let preserved_view = self.replace_cache_stalx_with(
+            &mut dump,
+            &entry,
+            &dest,
+            project_id,
+            policy,
+            // [#303] A fast-forward re-pulls the server copy and then OPENS the edit
+            // gate, so inheriting the pusher's stack here would put a stranger's
+            // operations one Ctrl-Z away.
+            InheritedUndo::Drop,
+        )?;
 
         // Re-stamp the hand-off link onto the refreshed file: BASE advances to the
         // server tip, the dirty bit clears, last_edit_at resets (clean checkout).
         match crate::persistence::Database::open_existing(&dest) {
             Ok(db) => {
                 restore_display_settings(&db, &preserved_view);
+                // [#303] The fast-forwarded file is the server's, so its undo policy is
+                // authoritative; read it before this re-stamp overwrites the row.
+                let pulled_undo_mode = preserved_undo_mode(&db);
                 let new_link = crate::models::SpeleoLink {
                     endpoint: endpoint.to_owned(),
                     project_id: project_id.clone(),
@@ -2023,6 +2059,7 @@ impl AppState {
                     // IS a lock re-verify point (#202): stamp it so the 20-min lazy
                     // re-verify starts its window from the pull, not from acquire-time.
                     last_verify_at: Some(chrono::Utc::now().to_rfc3339()),
+                    undo_mode: Some(self.effective_undo_mode(pulled_undo_mode)),
                 };
                 if let Err(e) = db.save_speleo_link(Some(&new_link)) {
                     tracing::warn!(
@@ -2045,14 +2082,28 @@ impl AppState {
 
         // Reload from the refreshed cache file. close_project clears the in-memory
         // project so do_load_project_full's "already open" guard won't reject the
-        // same path; do_load_project_full re-opens it. The pulled snapshot carries
-        // NO undo/redo history (stripped on push by sanitize_push_snapshot, #194 b3),
-        // so the reload starts the in-memory stacks empty - i.e. adopt-remote resets
-        // undo/redo, never inheriting the pusher's edit history.
+        // same path; do_load_project_full re-opens it.
+        //
+        // [#303] The pulled snapshot MAY carry undo history now - a Full-mode push ships
+        // it deliberately - so the reload starting with empty stacks is no longer a
+        // property of the push. It is a property of the replace above, which passed
+        // `InheritedUndo::Drop` and emptied those tables in the downloaded file. That
+        // matters most on this path: a fast-forward opens the edit gate straight
+        // afterwards, so an inherited stack would be one Ctrl-Z from replaying another
+        // editor's operation (#194 b3).
         let local_path = dest.to_string_lossy().into_owned();
         self.close_project();
         self.do_load_project_full(dest)
             .map_err(|e| SpeleoDbError::Io(format!("reload after fast-forward failed: {e}")))?;
+        // [#303] The working copy is now the server tip, so any Unwind chain position
+        // from before describes a copy that no longer exists - the next Unwind restarts
+        // from the new BASE. The replaced file carries no chain row either (it is
+        // stripped from every push snapshot), so this is belt-and-braces for the case
+        // where the replace left the old one behind.
+        self.speleodb_set_unwound_from(None);
+        // ...and the same for the inherited-history watermark: the stack this copy carries
+        // came from the server tip, not from a chain step, so nothing in it is inherited.
+        self.speleodb_set_inherited_through(None);
         Ok(local_path)
     }
 }
@@ -3697,10 +3748,10 @@ mod tests {
         );
         assert_eq!(
             speleodb_prod_matches("speleodb_resolve_entry_remembering(", &[]),
-            5,
-            "expected one definition plus the four classify sites (pull, fast-forward, \
-             restore, and the lock-free probe); a change here means a site was added or \
-             one stopped remembering"
+            6,
+            "expected one definition plus the five classify sites (pull, fast-forward, \
+             restore, rewind-target resolution, and the lock-free probe); a change here \
+             means a site was added or one stopped remembering"
         );
     }
 

@@ -4,7 +4,11 @@ import { Button } from '../common/Button';
 import { AlertDialog } from './AlertDialog';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
-import { useSpeleoStore, speleoSessionIssuedAt, speleoSessionStillCurrent } from '../../store/speleoStore';
+import {
+  speleoProjectSessionIssuedFor,
+  speleoProjectSessionStillCurrent,
+  useSpeleoStore,
+} from '../../store/speleoStore';
 import { useRevertRevision } from '../../hooks/useRevertRevision';
 import { SpeleoPushFailureNotice } from './SpeleoPushFailureNotice';
 
@@ -111,7 +115,7 @@ export default function SpeleoRevertDialog() {
     // control must not linger over an outcome it no longer describes.
     setRetryUpload(false);
     // Captured BEFORE the composite runs; the ambiguity arm checks it.
-    const issuedAt = speleoSessionIssuedAt();
+    const issuedFor = speleoProjectSessionIssuedFor(projectId);
     const outcome = await revertRevision({
       projectId,
       projectName,
@@ -157,7 +161,7 @@ export default function SpeleoRevertDialog() {
         // this outcome is an unbounded download, and a concurrent 401 can tear the
         // surface down while it is out. Without the picker there is nothing to suspend
         // on, so `busy` is released rather than deliberately held.
-        if (!speleoSessionStillCurrent(issuedAt)) {
+        if (!speleoProjectSessionStillCurrent(issuedFor)) {
           setBusy(false);
           return;
         }

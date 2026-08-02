@@ -1,5 +1,11 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { useSpeleoStore, PUSH_FAILURE_DIALOGS } from '../speleoStore';
+import {
+  useSpeleoStore,
+  PUSH_FAILURE_DIALOGS,
+  isUnwoundNotEdited,
+  speleoProjectSessionIssuedFor,
+  speleoProjectSessionStillCurrent,
+} from '../speleoStore';
 import type { SpeleoLinkStatus } from '../../types/ipc.generated';
 
 const invokeIpcMock = vi.hoisted(() => vi.fn());
@@ -21,12 +27,15 @@ const status = (o: Partial<SpeleoLinkStatus> = {}): SpeleoLinkStatus => ({
   is_remote: true,
   edit_enabled: false,
   has_unpushed_edits: false,
+  unwound: false,
   permission: 'READ_AND_WRITE',
   lock_holder: null,
   remote_state: 'up_to_date',
   access_denied: false,
   server_error: null,
   exclude_geojson: false,
+  // [#303] The hybrid undo stack's policy pair: Full, from the global default.
+  undo_mode: 'full',
   force_editing: false,
   allow_force_edit: false,
   project_id: null,
@@ -46,11 +55,41 @@ const reset = () => {
     heldLockPromptOpen: false,
     heldLockPromptPending: true,
     storageChoiceOpen: false,
+    remoteProjectId: null,
+    sessionGeneration: 0,
+    chainTargetGeneration: 0,
   });
 };
 
 describe('speleoStore', () => {
   beforeEach(reset);
+
+  describe('open-project request identity', () => {
+    it('rejects a reply after a different remote project opens', () => {
+      useSpeleoStore.setState({ remoteProjectId: 'p1' });
+      const issuedFor = speleoProjectSessionIssuedFor('p1');
+
+      useSpeleoStore.setState({ remoteProjectId: 'p2' });
+
+      expect(speleoProjectSessionStillCurrent(issuedFor)).toBe(false);
+    });
+
+    it('rejects a reply after a new login session starts', () => {
+      useSpeleoStore.setState({ remoteProjectId: 'p1' });
+      const issuedFor = speleoProjectSessionIssuedFor('p1');
+
+      useSpeleoStore.getState().setSessionFromLogin({
+        user_email: 'u@x',
+        endpoint: 'https://x/',
+        keychain_backed: true,
+        storage: 'keychain',
+        keychain: 'available',
+        needs_storage_choice: false,
+      });
+
+      expect(speleoProjectSessionStillCurrent(issuedFor)).toBe(false);
+    });
+  });
 
   describe('session', () => {
     it('setSession maps the backend status', () => {
@@ -507,8 +546,10 @@ describe('speleoStore', () => {
         lockHolder: null,
         lockedByOther: false,
         hasUnpushedEdits: false,
+        unwound: false,
         forceEditing: false,
         forceEditAllowed: false,
+        undoMode: 'full',
         remoteState: 'up_to_date',
         noAccess: false,
         serverError: null,
@@ -603,6 +644,7 @@ describe('speleoStore', () => {
     );
 
     it('released → read-only, dirty + lock holder cleared, divergence cleared', () => {
+      const generation = useSpeleoStore.getState().chainTargetGeneration;
       useSpeleoStore.getState().applyDone({ kind: 'released' });
       const s = useSpeleoStore.getState();
       expect(s.link?.editState).toBe('read-only');
@@ -611,6 +653,7 @@ describe('speleoStore', () => {
       expect(s.link?.lockHolder).toBeNull();
       expect(s.link?.lockedByOther).toBe(false);
       expect(s.divergence).toBeNull();
+      expect(s.chainTargetGeneration).toBe(generation + 1);
     });
 
     it('released clears a lingering push-unconfirmed banner', () => {
@@ -645,6 +688,7 @@ describe('speleoStore', () => {
 
     it('pushed → keeps the lock, clears dirty + banner, resets remote state', () => {
       useSpeleoStore.setState({ banner: { kind: 'push_unconfirmed' } });
+      const generation = useSpeleoStore.getState().chainTargetGeneration;
       useSpeleoStore.getState().applyPush({ kind: 'pushed' });
       const s = useSpeleoStore.getState();
       // Push behaves like push&release WITHOUT releasing the lock - still editing.
@@ -652,6 +696,7 @@ describe('speleoStore', () => {
       expect(s.link?.hasUnpushedEdits).toBe(false);
       expect(s.link?.remoteState).toBe('up_to_date');
       expect(s.banner).toBeNull();
+      expect(s.chainTargetGeneration).toBe(generation + 1);
     });
 
     it('divergence_needed → divergence origin push, stays editing', () => {
@@ -680,6 +725,51 @@ describe('speleoStore', () => {
       useSpeleoStore.getState().markDirty();
       expect(useSpeleoStore.getState().link).toBeNull();
     });
+
+    // [#303] The bug this pair exists to prevent: `markDirty` short-circuits on an
+    // already-dirty link, and an unwound copy is ALWAYS already dirty, so mirroring a
+    // forward edit through it left `unwound` standing until the next poll - and
+    // `isUnwoundNotEdited` kept routing the user to a discard of work they just made.
+    it('markDirty leaves unwound standing on an already-dirty link', () => {
+      useSpeleoStore
+        .getState()
+        .seedFromStatus(status({ edit_enabled: true, has_unpushed_edits: true, unwound: true }));
+      useSpeleoStore.getState().markDirty();
+      expect(useSpeleoStore.getState().link?.unwound).toBe(true);
+      expect(isUnwoundNotEdited(useSpeleoStore.getState().link)).toBe(true);
+    });
+
+    it('markForwardEdit clears unwound even when already dirty', () => {
+      useSpeleoStore
+        .getState()
+        .seedFromStatus(status({ edit_enabled: true, has_unpushed_edits: true, unwound: true }));
+      const generation = useSpeleoStore.getState().chainTargetGeneration;
+      useSpeleoStore.getState().markForwardEdit();
+      const link = useSpeleoStore.getState().link;
+      expect(link?.hasUnpushedEdits).toBe(true);
+      expect(link?.unwound).toBe(false);
+      expect(isUnwoundNotEdited(link)).toBe(false);
+      expect(useSpeleoStore.getState().chainTargetGeneration).toBe(generation + 1);
+    });
+
+    it('markForwardEdit dirties a clean link and no-ops when nothing changes', () => {
+      useSpeleoStore.getState().seedFromStatus(status({ edit_enabled: true }));
+      const generation = useSpeleoStore.getState().chainTargetGeneration;
+      useSpeleoStore.getState().markForwardEdit();
+      const after = useSpeleoStore.getState().link;
+      expect(after?.hasUnpushedEdits).toBe(true);
+      expect(after?.unwound).toBe(false);
+      // Identity is preserved on a true no-op: refreshLinkStatus uses it to detect a
+      // concurrent mutation, so a gratuitous new object would discard live replies.
+      useSpeleoStore.getState().markForwardEdit();
+      expect(useSpeleoStore.getState().link).toBe(after);
+      expect(useSpeleoStore.getState().chainTargetGeneration).toBe(generation + 1);
+    });
+
+    it('markForwardEdit is a no-op with no link', () => {
+      useSpeleoStore.getState().markForwardEdit();
+      expect(useSpeleoStore.getState().link).toBeNull();
+    });
   });
 
   describe('clearLink', () => {
@@ -691,6 +781,25 @@ describe('speleoStore', () => {
       expect(s.link).toBeNull();
       expect(s.divergence).toBeNull();
       expect(s.banner).toBeNull();
+    });
+  });
+
+  describe('setUndoMode', () => {
+    it('invalidates chain targets after the backend accepts the policy change', async () => {
+      useSpeleoStore.getState().seedFromStatus(status({ edit_enabled: true }));
+      invokeIpcMock.mockImplementation((command: string) => {
+        if (command === 'speleodb_set_undo_mode') return Promise.resolve(null);
+        if (command === 'speleodb_link_status') {
+          return Promise.resolve(status({ edit_enabled: true, undo_mode: 'disabled' }));
+        }
+        return Promise.resolve(null);
+      });
+      const generation = useSpeleoStore.getState().chainTargetGeneration;
+
+      await useSpeleoStore.getState().setUndoMode('disabled');
+
+      expect(useSpeleoStore.getState().chainTargetGeneration).toBe(generation + 1);
+      expect(useSpeleoStore.getState().link?.undoMode).toBe('disabled');
     });
   });
 
@@ -992,8 +1101,10 @@ describe('speleoStore', () => {
           lockHolder: null,
           lockedByOther: false,
           hasUnpushedEdits: true,
+          unwound: false,
           forceEditing: false,
           forceEditAllowed: false,
+          undoMode: 'full',
           remoteState: 'unknown',
           noAccess: false,
           serverError: null,
@@ -1071,12 +1182,15 @@ describe('speleoStore', () => {
   // full-viewport scrim, so the banner behind it is covered and unclickable. It
   // belongs on the suppress list with the other dialogs that own a failure.
   describe('PUSH_FAILURE_DIALOGS', () => {
-    it.each(['speleodb-done', 'speleodb-close', 'speleodb-quit', 'speleodb-revert'])(
-      'covers %s',
-      (id) => {
-        expect(PUSH_FAILURE_DIALOGS).toContain(id);
-      },
-    );
+    it.each([
+      'speleodb-done',
+      'speleodb-close',
+      'speleodb-quit',
+      'speleodb-revert',
+      'speleodb-unwound-push',
+    ])('covers %s', (id) => {
+      expect(PUSH_FAILURE_DIALOGS).toContain(id);
+    });
   });
 });
 

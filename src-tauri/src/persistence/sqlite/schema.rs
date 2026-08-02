@@ -25,6 +25,7 @@ pub(super) const PRESERVED_SPELEOLINK_COLUMNS: &[(&str, &str, bool)] = &[
     ("has_unpushed_edits", "INTEGER", true),
     ("last_edit_at", "TEXT", false), // v10; nullable = never edited since pull
     ("last_verify_at", "TEXT", false), // v11; nullable = never re-verified since pull
+    ("undo_mode", "TEXT", false),    // v16; nullable only for legacy initialization (#303)
 ];
 
 impl Database {
@@ -310,7 +311,8 @@ impl Database {
                 base_commit_sha TEXT,
                 has_unpushed_edits INTEGER NOT NULL DEFAULT 0,
                 last_edit_at TEXT,
-                last_verify_at TEXT
+                last_verify_at TEXT,
+                undo_mode TEXT
             )",
             [],
         )?;
@@ -368,6 +370,52 @@ impl Database {
                 .execute("ALTER TABLE speleo_link ADD COLUMN last_verify_at TEXT", [])?;
             tracing::info!("Added last_verify_at column to speleo_link table (schema v11)");
         }
+
+        // Add undo_mode column to an EXISTING pre-v16 speleo_link (schema v15→v16: the
+        // per-project undo-history policy, #303). Same idempotent ALTER pattern as the
+        // two above. No SQL backfill: the application materializes NULL from its configured
+        // default on the first open, when that machine-specific value is available.
+        let has_undo_mode_column: bool = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('speleo_link') WHERE name='undo_mode'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|c| c > 0)
+            .unwrap_or(false);
+        if !has_undo_mode_column {
+            self.conn
+                .execute("ALTER TABLE speleo_link ADD COLUMN undo_mode TEXT", [])?;
+            tracing::info!("Added undo_mode column to speleo_link table (schema v16)");
+        }
+
+        // Ensure the speleo_undo_chain table exists (schema v16: the Unwind chain
+        // pointer, #303). CREATE IF NOT EXISTS - the speleo_link pattern, not the ALTER
+        // pattern - so a legacy file gains it on open_existing. Local-only, so nothing
+        // to backfill and nothing to carry forward: an absent row simply means "not
+        // mid-unwind".
+        self.conn.execute(
+            "CREATE TABLE IF NOT EXISTS speleo_undo_chain (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                unwound_from_sha TEXT NOT NULL
+            )",
+            [],
+        )?;
+
+        // [#303] Its sibling, on the same terms. Created HERE rather than lazily on first
+        // write (which is what `save_speleo_undo_watermark` used to be the only creator of)
+        // so that "the table is absent" and "there is no watermark" stop being the same
+        // observable state - the push has to tell them apart to decide whether it may keep
+        // undo history - and so a maintainer tracing the migration finds it where its
+        // sibling is rather than inside a setter.
+        self.conn.execute(
+            "CREATE TABLE IF NOT EXISTS speleo_undo_watermark (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                inherited_through TEXT NOT NULL
+            )",
+            [],
+        )?;
 
         // Add uuid column to shots table (schema v5→v6: per-shot UUIDs,
         // the stable station identity every cross-reference anchors to
@@ -1173,6 +1221,29 @@ impl Database {
             // that. The history is not worth the risk.
             self.drop_legacy_undo_history()?;
         }
+        if current < 16 {
+            // [#303] Same drop again, for a different reason: PRIVACY, not replay safety.
+            //
+            // Until v16 an undo `ProjectSnapshot` / `ProjectSnapshotPair` was
+            // `serde_json::to_string(project)` over the WHOLE `Project`, including
+            // `file_path` - an absolute path on the authoring machine
+            // (`/home/<user>/…`, `C:\Users\<Real Name>\…`). That was harmless while the
+            // push stripped `undo_stack` unconditionally; v16 makes Full mode ship it, so
+            // those rows would ride into the project's git history, permanently, readable
+            // by every collaborator and by whoever runs the server.
+            //
+            // `AppState::serialize_project_snapshot` clears the field from here on, but it
+            // is producer-side: it cannot reach rows already on disk. Nor does the
+            // clear-on-lock path, which deliberately skips a copy that is already dirty
+            // ("the user's own history survives") - i.e. exactly the upgrade-with-unpushed-
+            // work case. Dropping the pre-v16 stacks at the migration is the only place
+            // that catches every existing file before its first push.
+            //
+            // The cost is the same one v13 and v15 already charged: a one-time loss of
+            // local undo history at upgrade, for history that was capped and best-effort
+            // anyway.
+            self.drop_legacy_undo_history()?;
+        }
         self.set_user_version(SCHEMA_VERSION)?;
         // Keep project-level schema_version in sync with PRAGMA user_version.
         let _ = self.conn.execute(
@@ -1294,6 +1365,7 @@ impl Database {
             -- base_commit_sha NULL = empty-repo BASE (never coerced to ''). is_remote is
             -- DERIVED from EXISTS(this table), never stored. ADDITIVE: no future migration
             -- rewrites this table (see PRESERVED_SPELEOLINK_COLUMNS / carry-forward fence).
+            -- undo_mode NULL (v16) = legacy/uninitialized; materialized on open (#303).
             CREATE TABLE IF NOT EXISTS speleo_link (
                 id INTEGER PRIMARY KEY CHECK (id = 1),
                 endpoint TEXT NOT NULL,
@@ -1302,7 +1374,28 @@ impl Database {
                 base_commit_sha TEXT,
                 has_unpushed_edits INTEGER NOT NULL DEFAULT 0,
                 last_edit_at TEXT,
-                last_verify_at TEXT
+                last_verify_at TEXT,
+                undo_mode TEXT
+            );
+
+            -- [#303] Which SpeleoDB revision the working copy has been UNWOUND to, so
+            -- the next Unwind walks to that revision's first parent rather than back to
+            -- BASE. Single row id=1; absent row = not mid-unwind (next target is BASE).
+            -- LOCAL-ONLY: per-machine progress through history, stripped from every push
+            -- snapshot (PUSH_SNAPSHOT_LOCAL_TABLES).
+            CREATE TABLE IF NOT EXISTS speleo_undo_chain (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                unwound_from_sha TEXT NOT NULL
+            );
+
+            -- [#303] How far the loaded history reaches: every undo row stamped at or
+            -- before this instant came off a revision a chain step downloaded, so the next
+            -- push cuts them rather than shipping them a second time. Single row id=1;
+            -- absent row = nothing inherited. LOCAL-ONLY, stripped from every push
+            -- snapshot (PUSH_SNAPSHOT_LOCAL_TABLES).
+            CREATE TABLE IF NOT EXISTS speleo_undo_watermark (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                inherited_through TEXT NOT NULL
             );
 
             -- Undo/redo stack (BLOB columns hold gzip-compressed JSON)

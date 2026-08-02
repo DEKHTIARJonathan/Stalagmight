@@ -975,6 +975,7 @@ mod tests {
     #[test]
     fn test_entry_to_history_item_with_timestamp() {
         let entry = UndoEntry {
+            command_bytes: None,
             command: Command::CreateSection {
                 name: Some("Test Section".to_string()),
                 surveyor: None,
@@ -1013,6 +1014,7 @@ mod tests {
         let before_json = serde_json::to_string(&project).unwrap();
 
         let entry = UndoEntry {
+            command_bytes: None,
             command: Command::DeleteSection { section_id: 5 },
             undo_data: UndoData::ProjectSnapshotPair {
                 before: before_json,
@@ -1037,6 +1039,7 @@ mod tests {
     #[test]
     fn test_derive_preview_data_update_shot() {
         let entry = UndoEntry {
+            command_bytes: None,
             command: Command::UpdateShot {
                 section_id: 0,
                 shot_id: 0,
@@ -1071,6 +1074,7 @@ mod tests {
         names.insert(1, Some("Side Tunnel".to_string()));
 
         let entry = UndoEntry {
+            command_bytes: None,
             command: Command::MergeStations {
                 station_a: StationRef::new(0, 0),
                 station_b: StationRef::new(1, 0),
@@ -1095,6 +1099,7 @@ mod tests {
     #[test]
     fn test_derive_preview_data_merge_stations_without_names() {
         let entry = UndoEntry {
+            command_bytes: None,
             command: Command::MergeStations {
                 station_a: StationRef::new(0, 0),
                 station_b: StationRef::new(1, 0),
@@ -1116,6 +1121,7 @@ mod tests {
     #[test]
     fn test_derive_preview_data_set_zero_datum() {
         let entry = UndoEntry {
+            command_bytes: None,
             command: Command::SetZeroDatum {
                 station_ref: StationRef::new(0, 0),
                 coordinates: GpsCoordinates::new(45.123_456, -73.654_321, 100.0).unwrap(),
@@ -1142,6 +1148,7 @@ mod tests {
         names.insert(2, Some("East Wing".to_string()));
 
         let entry = UndoEntry {
+            command_bytes: None,
             command: Command::MoveSection {
                 section_id: 2,
                 offset: Coordinates::new(0.0, 5.0, 0.0),
@@ -1160,6 +1167,7 @@ mod tests {
     #[test]
     fn test_derive_preview_data_move_station() {
         let entry = UndoEntry {
+            command_bytes: None,
             command: Command::MoveStation {
                 station_ref: StationRef::new(1, 3),
                 offset: Coordinates::new(5.0, 0.0, -2.0),
@@ -1178,6 +1186,7 @@ mod tests {
         // The inverse command supplies the previous kind, so the preview can
         // show a real Jump -> Reference transition rather than a guessed one.
         let entry = UndoEntry {
+            command_bytes: None,
             command: Command::SetShotKind {
                 section_id: 1,
                 shot_id: 2,
@@ -1202,6 +1211,7 @@ mod tests {
         // No captured inverse (e.g. the shot vanished): the new kind still
         // renders, the old side is simply blank rather than wrong.
         let entry = UndoEntry {
+            command_bytes: None,
             command: Command::SetShotKind {
                 section_id: 1,
                 shot_id: 2,
@@ -1220,6 +1230,7 @@ mod tests {
     #[test]
     fn test_derive_preview_data_create_loop_closure() {
         let entry = UndoEntry {
+            command_bytes: None,
             command: Command::CreateLoopClosure {
                 station_a: StationRef::new(1, 0),
                 station_b: StationRef::new(2, 3),
@@ -1240,6 +1251,7 @@ mod tests {
     #[test]
     fn test_derive_preview_data_remove_zero_datum_with_gps() {
         let entry = UndoEntry {
+            command_bytes: None,
             command: Command::RemoveZeroDatum {
                 station_ref: StationRef::new(0, 0),
             },
@@ -1262,6 +1274,7 @@ mod tests {
     #[test]
     fn test_derive_preview_data_batch_lists_subcommands_with_details() {
         let entry = UndoEntry {
+            command_bytes: None,
             command: Command::Batch {
                 commands: vec![
                     Command::DeleteShot {
@@ -1303,6 +1316,7 @@ mod tests {
     fn test_derive_preview_data_default_fallback_never_none() {
         // DeleteShot with non-matching undo data should still produce preview via fallback
         let entry = UndoEntry {
+            command_bytes: None,
             command: Command::DeleteShot {
                 section_id: 1,
                 shot_id: 2,
@@ -1321,6 +1335,7 @@ mod tests {
         use crate::models::SectionUpdates;
 
         let entry = UndoEntry {
+            command_bytes: None,
             command: Command::UpdateSectionMetadata {
                 section_id: 1,
                 updates: SectionUpdates {
@@ -1349,6 +1364,7 @@ mod tests {
         use crate::models::{SectionUpdates, SurveyDirection};
 
         let entry = UndoEntry {
+            command_bytes: None,
             command: Command::UpdateSectionMetadata {
                 section_id: 1,
                 updates: SectionUpdates {
@@ -1389,6 +1405,7 @@ mod tests {
         use crate::models::{SectionUpdates, SurveyDirection};
 
         let entry = UndoEntry {
+     command_bytes: None,
             command: Command::UpdateSectionMetadata {
                 section_id: 1,
                 updates: SectionUpdates {

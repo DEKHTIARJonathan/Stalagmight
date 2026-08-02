@@ -25,8 +25,10 @@ const LINK: SpeleoLinkState = {
   lockHolder: null,
   lockedByOther: false,
   hasUnpushedEdits: false,
+  unwound: false,
   forceEditing: false,
   forceEditAllowed: false,
+  undoMode: 'full',
   remoteState: 'up_to_date',
   noAccess: false,
   serverError: null,
@@ -125,8 +127,21 @@ describe('useRevertRevision - the happy path', () => {
       // [#258] A first attempt sends no chosen entry, which is what makes the
       // backend classify the dump normally rather than honour a stale pick.
       entryPath: null,
+      // [#303] A revert is not an Unwind: it rides the old tree FORWARD, so the
+      // downloaded copy's undo history is dropped like any other adopt.
+      keepUndoHistory: false,
+      // ...and with no history kept there is no un-pushed-work waiver to acknowledge.
+      // Pinned false deliberately: this flag is the ONE thing that lets the backend
+      // discard work the user never pushed, and no path but the Unwind confirmation
+      // may ever carry it.
+      discardUnpushed: false,
+      // A revert walks no chain, so there is no direction to select a guard with.
+      chainForward: false,
     });
-    expect(argsOf('speleodb_done')).toEqual({ message: 'undo the bad survey' });
+    expect(argsOf('speleodb_done')).toEqual({
+      message: 'undo the bad survey',
+      acceptOlderVersion: false,
+    });
   });
 
   it('reports each step as it starts', async () => {
@@ -443,7 +458,10 @@ describe('useRevertRevision - resuming at the push', () => {
     expect(issued()).not.toContain('speleodb_start_editing');
     expect(issued()).not.toContain('speleodb_restore_revision');
     // And with the SAME message: a resume publishes the revert the user confirmed.
-    expect(argsOf('speleodb_done')).toEqual({ message: 'undo the bad survey' });
+    expect(argsOf('speleodb_done')).toEqual({
+      message: 'undo the bad survey',
+      acceptOlderVersion: false,
+    });
   });
 
   it('runs past the unsaved-edits guard too, however the dirty flag reads', async () => {

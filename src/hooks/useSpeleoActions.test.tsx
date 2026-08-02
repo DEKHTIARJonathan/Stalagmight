@@ -220,8 +220,10 @@ describe('useSpeleoActions - the release toast reflects whether anything was upl
         lockHolder: null,
         lockedByOther: false,
         hasUnpushedEdits,
+        unwound: false,
         forceEditing: false,
         forceEditAllowed: false,
+        undoMode: 'full',
         remoteState: 'up_to_date',
         noAccess: false,
         serverError: null,
@@ -313,6 +315,33 @@ describe('useSpeleoActions - toast kinds', () => {
 });
 
 describe('useSpeleoActions - fast-forward resets the on-screen tree (#218)', () => {
+  it('does not route a start-editing reply after the open project changes', async () => {
+    let finishRequest!: (value: { kind: 'editing' }) => void;
+    invokeIpcMock.mockReturnValue(
+      new Promise<{ kind: 'editing' }>((resolve) => {
+        finishRequest = resolve;
+      }),
+    );
+    const applyStartEditing = vi.fn();
+    useSpeleoStore.setState({ remoteProjectId: 'p1', applyStartEditing });
+    const { result } = renderHook(() => useSpeleoActions());
+    let pending!: Promise<boolean>;
+    act(() => {
+      pending = result.current.startEditing();
+    });
+    await vi.waitFor(() => expect(invokeIpcMock).toHaveBeenCalled());
+
+    useSpeleoStore.setState({ remoteProjectId: 'p2' });
+    finishRequest({ kind: 'editing' });
+
+    let held: boolean | undefined;
+    await act(async () => {
+      held = await pending;
+    });
+    expect(held).toBe(false);
+    expect(applyStartEditing).not.toHaveBeenCalled();
+  });
+
   it('update (→ fast_forwarded) refreshes geometry + link state', async () => {
     // The backend FF reload reopens the SAME path, so loadProject short-circuits on
     // the "already open" guard; without the explicit refresh the old tree would stay
@@ -400,6 +429,131 @@ describe('useSpeleoActions - fast-forward resets the on-screen tree (#218)', () 
 
     expect(refreshProjectState).not.toHaveBeenCalled();
     expect(refreshLinkStatus).not.toHaveBeenCalled();
+  });
+});
+
+describe('useSpeleoActions - discard routes every StartEditingResult (#303)', () => {
+  const setup = () => {
+    const loadProject = vi.fn(async () => ({ success: true }));
+    const refreshProjectState = vi.fn(async () => {});
+    const refreshLinkStatus = vi.fn(async () => {});
+    const applyStartEditing = vi.fn();
+    useProjectStore.setState({
+      loadProject,
+      refreshProjectState,
+      checkProjectIntegrity: vi.fn(async () => []),
+    });
+    useSpeleoStore.setState({
+      remoteProjectId: 'p1',
+      applyStartEditing,
+      refreshLinkStatus,
+    });
+    return { loadProject, refreshProjectState, refreshLinkStatus, applyStartEditing };
+  };
+
+  it('distinguishes a released discard from a kept edit session', async () => {
+    const { applyStartEditing } = setup();
+    invokeIpcMock.mockResolvedValue(null);
+    const { result } = renderHook(() => useSpeleoActions());
+    let outcome: Awaited<ReturnType<typeof result.current.discardChanges>> | undefined;
+
+    await act(async () => {
+      outcome = await result.current.discardChanges(false);
+    });
+
+    expect(outcome).toBe('released');
+    expect(applyStartEditing).not.toHaveBeenCalled();
+    expect(invokeIpcMock).toHaveBeenCalledWith('speleodb_discard_changes', {
+      keepLock: false,
+      acknowledged: true,
+    });
+  });
+
+  it('applies the ordinary editing result after keeping the lock', async () => {
+    const { applyStartEditing, refreshProjectState } = setup();
+    const editing = { kind: 'editing' } as const;
+    invokeIpcMock.mockResolvedValue(editing);
+    const { result } = renderHook(() => useSpeleoActions());
+    let outcome: Awaited<ReturnType<typeof result.current.discardChanges>> | undefined;
+
+    await act(async () => {
+      outcome = await result.current.discardChanges(true);
+    });
+
+    expect(outcome).toBe('editing');
+    expect(applyStartEditing).toHaveBeenCalledWith(editing);
+    expect(refreshProjectState).toHaveBeenCalled();
+  });
+
+  it('applies lock contention instead of pretending the lock was kept', async () => {
+    const { applyStartEditing } = setup();
+    const locked = { kind: 'locked_by', email: 'other@example.com' } as const;
+    invokeIpcMock.mockResolvedValue(locked);
+    const { result } = renderHook(() => useSpeleoActions());
+    let outcome: Awaited<ReturnType<typeof result.current.discardChanges>> | undefined;
+
+    await act(async () => {
+      outcome = await result.current.discardChanges(true);
+    });
+
+    expect(outcome).toBe('discarded_without_lock');
+    expect(applyStartEditing).toHaveBeenCalledWith(locked);
+    expect(useUIStore.getState().showToast).toHaveBeenCalledWith(
+      expect.any(String),
+      'speleodb-locked-by',
+      'warning',
+    );
+  });
+
+  it('applies divergence and reloads a fast-forwarded result', async () => {
+    const { applyStartEditing, loadProject } = setup();
+    const fastForwarded = { kind: 'fast_forwarded', local_path: '/tip.stalx' } as const;
+    invokeIpcMock.mockResolvedValue(fastForwarded);
+    const { result } = renderHook(() => useSpeleoActions());
+    let outcome: Awaited<ReturnType<typeof result.current.discardChanges>> | undefined;
+
+    await act(async () => {
+      outcome = await result.current.discardChanges(true);
+    });
+
+    expect(outcome).toBe('editing');
+    expect(applyStartEditing).toHaveBeenCalledWith(fastForwarded);
+    expect(loadProject).toHaveBeenCalledWith('/tip.stalx');
+
+    const divergence = { kind: 'divergence_needed' } as const;
+    invokeIpcMock.mockResolvedValueOnce(divergence);
+    await act(async () => {
+      outcome = await result.current.discardChanges(true);
+    });
+    expect(outcome).toBe('discarded_without_lock');
+    expect(applyStartEditing).toHaveBeenCalledWith(divergence);
+  });
+
+  it('does not route a discard reply after the open project changes', async () => {
+    const { applyStartEditing, refreshProjectState } = setup();
+    let finishRequest!: (value: { kind: 'editing' }) => void;
+    invokeIpcMock.mockReturnValue(
+      new Promise<{ kind: 'editing' }>((resolve) => {
+        finishRequest = resolve;
+      }),
+    );
+    const { result } = renderHook(() => useSpeleoActions());
+    let pending!: ReturnType<typeof result.current.discardChanges>;
+    act(() => {
+      pending = result.current.discardChanges(true);
+    });
+    await vi.waitFor(() => expect(invokeIpcMock).toHaveBeenCalled());
+
+    useSpeleoStore.setState({ remoteProjectId: 'p2' });
+    finishRequest({ kind: 'editing' });
+
+    let outcome: Awaited<typeof pending> | undefined;
+    await act(async () => {
+      outcome = await pending;
+    });
+    expect(outcome).toBe('stale');
+    expect(applyStartEditing).not.toHaveBeenCalled();
+    expect(refreshProjectState).not.toHaveBeenCalled();
   });
 });
 
@@ -570,5 +724,146 @@ describe('useSpeleoActions - startEditing falls to the REFUSING answer (#270)', 
     });
 
     expect(held).toBe(true);
+  });
+});
+
+/**
+ * [#303] The guard that makes every push route safe at once.
+ *
+ * Placed in the hook rather than in each caller because there are four ways to reach a
+ * push - the status button, the SpeleoDB menu, the close prompt and the quit prompt - and
+ * the trap was that one of them made it the primary action. A guard per caller would have
+ * fixed that one and left the others.
+ */
+describe('useSpeleoActions - pushing an unwound copy is confirmed first (#303)', () => {
+  const seedUnwound = (unwoundNotEdited: boolean) =>
+    useSpeleoStore.setState({
+      link: {
+        permission: 'READ_AND_WRITE',
+        editState: 'editing',
+        lockHolder: null,
+        lockedByOther: false,
+        hasUnpushedEdits: true,
+        unwound: unwoundNotEdited,
+        forceEditing: false,
+        forceEditAllowed: false,
+        undoMode: 'full',
+        remoteState: 'up_to_date',
+        noAccess: false,
+        serverError: null,
+      },
+    });
+
+  it('raises the confirmation instead of uploading', async () => {
+    seedUnwound(true);
+    const openDialog = vi.fn();
+    useUIStore.setState({ openDialog });
+    const { result } = renderHook(() => useSpeleoActions());
+
+    let outcome: unknown;
+    await act(async () => {
+      outcome = await result.current.done('msg');
+    });
+
+    expect(openDialog).toHaveBeenCalledWith('speleodb-unwound-push', { message: 'msg' });
+    expect(invokeIpcMock).not.toHaveBeenCalledWith('speleodb_done', expect.anything());
+    // Null, not a result: the close prompt only leaves once a push RELEASES, so a
+    // fabricated outcome here would let it walk away mid-confirmation.
+    expect(outcome).toBeNull();
+  });
+
+  it('uploads once the confirmation reports the user chose it', async () => {
+    seedUnwound(true);
+    const { result } = renderHook(() => useSpeleoActions());
+
+    await act(async () => {
+      await result.current.done('msg', { acceptOlderVersion: true });
+    });
+
+    expect(invokeIpcMock).toHaveBeenCalledWith('speleodb_done', {
+      message: 'msg',
+      acceptOlderVersion: true,
+    });
+  });
+
+  it('leaves an ordinary dirty copy alone - the guard is not a nag', async () => {
+    seedUnwound(false);
+    const openDialog = vi.fn();
+    useUIStore.setState({ openDialog });
+    const { result } = renderHook(() => useSpeleoActions());
+
+    await act(async () => {
+      await result.current.done('msg');
+    });
+
+    expect(openDialog).not.toHaveBeenCalled();
+    expect(invokeIpcMock).toHaveBeenCalledWith('speleodb_done', {
+      message: 'msg',
+      acceptOlderVersion: false,
+    });
+  });
+
+  it('guards push-without-release too', async () => {
+    seedUnwound(true);
+    const openDialog = vi.fn();
+    useUIStore.setState({ openDialog });
+    const { result } = renderHook(() => useSpeleoActions());
+
+    await act(async () => {
+      expect(await result.current.push('msg')).toBeNull();
+    });
+
+    expect(openDialog).toHaveBeenCalledWith('speleodb-unwound-push', {
+      message: 'msg',
+      mode: 'push',
+    });
+    expect(invokeIpcMock).not.toHaveBeenCalledWith('speleodb_push', expect.anything());
+  });
+
+  /**
+   * [#303] Answering `null` is only safe for a caller that stays put. The exit prompts do
+   * not: they are already evicted from uiStore's single `activeDialog` slot by the time
+   * they read it, so the quit or close the user asked for went with them - the push then
+   * happened from inside the confirmation and the app carried on running regardless.
+   * `pendingExit` is the intent riding along so the confirmation can finish it.
+   */
+  it('carries an exit caller intent, and the return hop back to its prompt', async () => {
+    seedUnwound(true);
+    const openDialog = vi.fn();
+    useUIStore.setState({
+      openDialog,
+      activeDialog: 'speleodb-quit',
+      dialogData: { cancelReturnsTo: 'dmp-selection' },
+    });
+    const { result } = renderHook(() => useSpeleoActions());
+
+    await act(async () => {
+      await result.current.done(null, { pendingExit: { kind: 'quit' } });
+    });
+
+    expect(openDialog).toHaveBeenCalledWith('speleodb-unwound-push', {
+      message: null,
+      pendingExit: { kind: 'quit' },
+      // The displaced prompt AND its own data, so cancelling twice walks back to the
+      // import wizard the quit guard displaced rather than stopping one hop short.
+      cancelReturnsTo: 'speleodb-quit',
+      cancelReturnsData: { cancelReturnsTo: 'dmp-selection' },
+    });
+  });
+
+  it('records no return hop for the routes with no exit waiting', async () => {
+    // The status button and the lock menu are pressable with another dialog on screen,
+    // and nothing is mid-flow there: raising a return hop would put a dialog the user
+    // had already left back on top of them.
+    seedUnwound(true);
+    const openDialog = vi.fn();
+    useUIStore.setState({ openDialog, activeDialog: 'speleodb-done', dialogData: {} });
+    const { result } = renderHook(() => useSpeleoActions());
+
+    await act(async () => {
+      await result.current.done(null);
+    });
+
+    expect(openDialog).toHaveBeenCalledWith('speleodb-unwound-push', { message: null });
   });
 });

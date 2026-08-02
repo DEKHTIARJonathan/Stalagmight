@@ -29,10 +29,12 @@ mod speleodb_lock_release;
 mod speleodb_logout;
 mod speleodb_project;
 mod speleodb_pull;
+mod speleodb_push;
 mod speleodb_revisions;
 mod speleodb_session;
 mod undo;
 mod undo_capture;
+mod undo_policy;
 mod undo_restore;
 mod warnings;
 

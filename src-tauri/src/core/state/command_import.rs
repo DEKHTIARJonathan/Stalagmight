@@ -188,7 +188,7 @@ impl AppState {
         self.push_snapshot_undo(batch_cmd, snapshot, after_snapshot);
         // Dirty-bit flip (#191, D-B16): a create+merge import mutated a remote
         // project. Set-only; no-op for local-only.
-        self.mark_remote_dirty();
+        self.mark_remote_forward_edit();
 
         // Combine warnings from both operations
         let mut all_warnings = create_result.warnings;
@@ -1067,7 +1067,7 @@ impl AppState {
         );
         // Dirty-bit flip (#191, D-B16): a sections import mutated a remote
         // project. Set-only; no-op for local-only.
-        self.mark_remote_dirty();
+        self.mark_remote_forward_edit();
 
         let result = CommandResult::success().with_section_ids(all_section_ids);
         if all_warnings.is_empty() {

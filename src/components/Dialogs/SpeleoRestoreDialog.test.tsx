@@ -41,7 +41,10 @@ beforeEach(() => {
     isDirty: false,
     checkProjectIntegrity: vi.fn(async () => []),
   });
-  useSpeleoStore.setState({ refreshLinkStatus: refreshLinkStatusMock });
+  useSpeleoStore.setState({
+    remoteProjectId: 'p1',
+    refreshLinkStatus: refreshLinkStatusMock,
+  });
 });
 
 describe('SpeleoRestoreDialog (#218)', () => {
@@ -73,6 +76,16 @@ describe('SpeleoRestoreDialog (#218)', () => {
       discardLocal: false,
       // [#258] and it names no dump entry, so the backend classifies normally.
       entryPath: null,
+      // [#303] A plain Restore drops the downloaded copy's undo history like every
+      // other adopt path; only the Unwind keeps it.
+      keepUndoHistory: false,
+      // ...so there is no un-pushed-work waiver to acknowledge either. Pinned false:
+      // this flag is the only thing that lets the backend discard work the user never
+      // pushed, and it belongs to the Unwind confirmation alone.
+      discardUnpushed: false,
+      // ...and with no history kept there is no chain step, so no direction to pick a
+      // guard with either.
+      chainForward: false,
     });
     expect(closeDialogMock).toHaveBeenCalled();
     expect(showToastMock).toHaveBeenCalled();

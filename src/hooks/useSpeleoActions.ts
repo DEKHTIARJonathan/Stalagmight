@@ -2,9 +2,18 @@ import { useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useUIStore } from '../store/uiStore';
 import { useProjectStore } from '../store/projectStore';
-import { useSpeleoStore, asPushKind, asDoneKind } from '../store/speleoStore';
+import {
+  useSpeleoStore,
+  asPushKind,
+  asDoneKind,
+  isUnwoundNotEdited,
+  speleoProjectSessionIssuedFor,
+  speleoProjectSessionStillCurrent,
+} from '../store/speleoStore';
 import { invokeIpc } from '../utils/ipc';
+import { openExitPrompt, type PendingExit } from '../utils/quit';
 import { speleoErrorAction, humanizeSpeleoError } from '../utils/speleoError';
+import { applySpeleoTreeReplacement } from '../utils/speleoTreeReplacement';
 import type {
   DoneResult,
   PushResult,
@@ -31,6 +40,11 @@ export interface SpeleoActions {
       treating a refusal as success there dismisses the prompt and discards the
       remaining locks. */
   startEditing: () => Promise<boolean>;
+  /** Discard the local copy and route the optional Start Editing result returned
+      when the caller asks to keep editing. The discard error is left to the caller. */
+  discardChanges: (
+    keepLock: boolean,
+  ) => Promise<'editing' | 'released' | 'discarded_without_lock' | 'stale'>;
   /** #213 (E2): enter optimistic force-edit - edit WITHOUT the write lock (offline,
       or while someone else holds it). Gated on the `allow_force_edit` opt-in (the
       backend refuses otherwise) and behind a big-red destructive confirm; the caller
@@ -43,10 +57,25 @@ export interface SpeleoActions {
   /** Push edits without releasing the lock (T2d) - collects an optional message.
       Returns the backend outcome (or `null` if the call threw) so callers can keep
       a dialog open on a `divergence_needed` / `push_unconfirmed` result. */
-  push: (message?: string | null) => Promise<PushResult | null>;
+  push: (
+    message?: string | null,
+    opts?: { acceptOlderVersion?: boolean },
+  ) => Promise<PushResult | null>;
   /** The backend outcome, or `null` if the call threw. Callers key off `.kind`
-      (e.g. the close flow only leaves once the lock is actually `released`). */
-  done: (message?: string | null) => Promise<DoneResult | null>;
+      (e.g. the close flow only leaves once the lock is actually `released`).
+      [#303] Also `null` - having raised its own confirmation instead - when the copy is
+      dirty only because a chain step walked it back to an older version, since pushing
+      that publishes a revert rather than saving work. `acceptOlderVersion` is that
+      confirmation reporting the user chose it knowingly.
+      [#303] `pendingExit` is for the callers whose CONTINUATION is the thing at risk when
+      that happens: an exit prompt reads the `null` as "did not release" and stays put,
+      but it has already been evicted from uiStore's single dialog slot, so the quit or
+      close the user asked for is simply gone. Handing the intent over lets the
+      confirmation finish it. */
+  done: (
+    message?: string | null,
+    opts?: { acceptOlderVersion?: boolean; pendingExit?: PendingExit },
+  ) => Promise<DoneResult | null>;
   /** #198 "Take remote": DISCARD local unpushed edits and reset to the server
       tip. Returns `true` once the tree is reloaded, `false` if the call threw.
       The caller must gate this behind a destroy-confirmation. */
@@ -64,9 +93,8 @@ export function useSpeleoActions(): SpeleoActions {
   const beginBusy = useSpeleoStore((s) => s.beginBusy);
   const endBusy = useSpeleoStore((s) => s.endBusy);
   const showToast = useUIStore((s) => s.showToast);
+  const openDialog = useUIStore((s) => s.openDialog);
   const loadProject = useProjectStore((s) => s.loadProject);
-  const refreshProjectState = useProjectStore((s) => s.refreshProjectState);
-  const clearSelection = useUIStore((s) => s.clearSelection);
   const applyStartEditing = useSpeleoStore((s) => s.applyStartEditing);
   const applyUpdate = useSpeleoStore((s) => s.applyUpdate);
   const applyDone = useSpeleoStore((s) => s.applyDone);
@@ -119,42 +147,33 @@ export function useSpeleoActions(): SpeleoActions {
     [clearSession, showToast, t],
   );
 
-  const startEditing = useCallback(async (): Promise<boolean> => {
-    const busyToken = beginBusy();
-    try {
-      const result = await invokeIpc<StartEditingResult>('speleodb_start_editing');
+  const routeStartEditingResult = useCallback(
+    async (
+      result: StartEditingResult,
+      showEditingToast: boolean,
+      issuedFor: ReturnType<typeof speleoProjectSessionIssuedFor>,
+    ): Promise<{ editing: boolean; treeReplaced: boolean; landed: boolean }> => {
+      if (!speleoProjectSessionStillCurrent(issuedFor)) {
+        return { editing: false, treeReplaced: false, landed: false };
+      }
       applyStartEditing(result);
       switch (result.kind) {
         case 'editing':
-          showToast(t('speleodb.editBar.toasts.editing'), 'speleodb-editing', 'success');
-          break;
-        case 'fast_forwarded':
-          // Backend swapped the tree; reload so the view matches. loadProject
-          // short-circuits when the backend reopened the SAME path (its "already
-          // open" guard returns without re-reading), so pull the swapped geometry +
-          // link state in explicitly - otherwise the old tree stays on screen. Clear
-          // the (section_id, station_index)-keyed selection, which the swapped tree may
-          // not carry (loadProject's full path clears it; this path bypasses it).
-          clearSelection();
-          {
-            // Mirrors `takeRemote`: `loadProject` also answers `success: false`
-            // when a NEWER load superseded this one, so the swapped tree is not
-            // what is on screen. Reporting `true` from there would tell the
-            // held-lock prompt we hold this lock and hand the shell over (it then
-            // discards every remaining lock), and `useRevertRevision` would go
-            // straight on to restore + push against a project the user left.
-            // `refreshProjectState` has no staleness guard of its own and
-            // overwrites project/stations/surveyData wholesale, so it must not run
-            // either.
-            const loaded = await loadProject(result.local_path);
-            if (!loaded.success) return false;
+          if (showEditingToast) {
+            showToast(t('speleodb.editBar.toasts.editing'), 'speleodb-editing', 'success');
           }
-          await refreshProjectState();
-          // Re-scan integrity: the fast-forwarded tree can differ structurally from the
-          // one on screen (identity-guarded, fire-and-forget).
-          void useProjectStore.getState().checkProjectIntegrity();
-          await refreshLinkStatus();
-          break;
+          return { editing: true, treeReplaced: false, landed: true };
+        case 'fast_forwarded': {
+          const loaded = await loadProject(result.local_path);
+          if (!speleoProjectSessionStillCurrent(issuedFor)) {
+            return { editing: false, treeReplaced: false, landed: false };
+          }
+          return {
+            editing: loaded.success,
+            treeReplaced: true,
+            landed: loaded.success,
+          };
+        }
         case 'locked_by':
           showToast(
             t('speleodb.editBar.toasts.lockedBy', {
@@ -163,41 +182,69 @@ export function useSpeleoActions(): SpeleoActions {
             'speleodb-locked-by',
             'warning',
           );
-          // Someone else holds it - we did NOT get the lock.
-          return false;
+          return { editing: false, treeReplaced: false, landed: true };
         case 'divergence_needed':
-          // #198 seam: applyStartEditing recorded the divergence origin. The
-          // divergence dialog decides what happens next. `false` means "we are not
-          // editing", NOT "no lock exists": a lock this call TOOK is handed back
-          // before we get here, but one it merely RESUMED is deliberately kept, so
-          // a divergence cannot free a project whose un-pushed work the lock was
-          // guarding. Either way there is no edit session, which is what callers
-          // gate on.
-          return false;
+          return { editing: false, treeReplaced: false, landed: true };
         default: {
-          // A variant this frontend has not been taught must NOT fall through to
-          // the permissive `return true` below. That answer means "we hold the
-          // lock", and callers act on it destructively: the held-lock prompt
-          // dismisses itself AND discards every remaining lock, with no way to
-          // re-raise it until the next login scan. The `never` binding makes a new
-          // backend variant a COMPILE error here; at runtime it answers "no".
           const _exhaustive: never = result;
           void _exhaustive;
           console.warn('[speleodb] unhandled start-editing result:', result);
-          return false;
+          return { editing: false, treeReplaced: false, landed: false };
         }
       }
-      return true;
+    },
+    [applyStartEditing, loadProject, showToast, t],
+  );
+
+  const startEditing = useCallback(async (): Promise<boolean> => {
+    const issuedFor = speleoProjectSessionIssuedFor(
+      useSpeleoStore.getState().remoteProjectId,
+    );
+    const busyToken = beginBusy();
+    try {
+      const result = await invokeIpc<StartEditingResult>('speleodb_start_editing');
+      const routed = await routeStartEditingResult(result, true, issuedFor);
+      if (!routed.landed) return false;
+      if (routed.treeReplaced && !(await applySpeleoTreeReplacement(issuedFor))) {
+        return false;
+      }
+      return routed.editing;
     } catch (e) {
       handleError(e, 'speleodb.editBar.toasts.startFailed');
       return false;
     } finally {
-      // Reset the poll timer so the next poll is a full interval out - a buffer
-      // past the just-issued lock change the server mutex may not yet reflect (1b).
       bumpPoll();
       endBusy(busyToken);
     }
-  }, [applyStartEditing, loadProject, refreshProjectState, refreshLinkStatus, clearSelection, showToast, t, handleError, beginBusy, endBusy, bumpPoll]);
+  }, [routeStartEditingResult, handleError, beginBusy, endBusy, bumpPoll]);
+
+  const discardChanges = useCallback(
+    async (
+      keepLock: boolean,
+    ): Promise<'editing' | 'released' | 'discarded_without_lock' | 'stale'> => {
+      const issuedFor = speleoProjectSessionIssuedFor(
+        useSpeleoStore.getState().remoteProjectId,
+      );
+      const busyToken = beginBusy();
+      try {
+        const result = await invokeIpc<StartEditingResult | null>('speleodb_discard_changes', {
+          keepLock,
+          acknowledged: true,
+        });
+        const routed = result
+          ? await routeStartEditingResult(result, false, issuedFor)
+          : null;
+        if (routed && !routed.landed) return 'stale';
+        if (!(await applySpeleoTreeReplacement(issuedFor))) return 'stale';
+        if (!result) return 'released';
+        return routed?.editing ? 'editing' : 'discarded_without_lock';
+      } finally {
+        bumpPoll();
+        endBusy(busyToken);
+      }
+    },
+    [routeStartEditingResult, beginBusy, endBusy, bumpPoll],
+  );
 
   const forceEdit = useCallback(async (): Promise<boolean> => {
     const busyToken = beginBusy();
@@ -222,9 +269,13 @@ export function useSpeleoActions(): SpeleoActions {
   }, [refreshLinkStatus, showToast, t, handleError, beginBusy, endBusy, bumpPoll]);
 
   const update = useCallback(async () => {
+    const issuedFor = speleoProjectSessionIssuedFor(
+      useSpeleoStore.getState().remoteProjectId,
+    );
     const busyToken = beginBusy();
     try {
       const result = await invokeIpc<UpdateResult>('speleodb_update');
+      if (!speleoProjectSessionStillCurrent(issuedFor)) return;
       applyUpdate(result);
       switch (result.kind) {
         case 'up_to_date':
@@ -235,7 +286,6 @@ export function useSpeleoActions(): SpeleoActions {
           // loadProject short-circuits on the reopened path - pull geometry + link
           // state in so Update actually resets the view to the new tip. Clear the stale
           // selection for the same reason as the startEditing arm.
-          clearSelection();
           {
             // Same staleness stop as the startEditing arm: a superseded (or
             // failed) reload means the swapped tree is not on screen, so the
@@ -245,11 +295,7 @@ export function useSpeleoActions(): SpeleoActions {
             const loaded = await loadProject(result.local_path);
             if (!loaded.success) break;
           }
-          await refreshProjectState();
-          // Re-scan integrity: the fast-forwarded tree can differ structurally from the
-          // one on screen (identity-guarded, fire-and-forget).
-          void useProjectStore.getState().checkProjectIntegrity();
-          await refreshLinkStatus();
+          await applySpeleoTreeReplacement(issuedFor);
           break;
         case 'divergence_needed':
           break;
@@ -260,10 +306,17 @@ export function useSpeleoActions(): SpeleoActions {
       bumpPoll();
       endBusy(busyToken);
     }
-  }, [applyUpdate, loadProject, refreshProjectState, refreshLinkStatus, clearSelection, showToast, t, handleError, beginBusy, endBusy, bumpPoll]);
+  }, [applyUpdate, loadProject, showToast, t, handleError, beginBusy, endBusy, bumpPoll]);
 
   const push = useCallback(
-    async (message?: string | null): Promise<PushResult | null> => {
+    async (
+      message?: string | null,
+      opts?: { acceptOlderVersion?: boolean },
+    ): Promise<PushResult | null> => {
+      if (!opts?.acceptOlderVersion && isUnwoundNotEdited(useSpeleoStore.getState().link)) {
+        openDialog('speleodb-unwound-push', { message: message ?? null, mode: 'push' });
+        return null;
+      }
       const busyToken = beginBusy();
       // A fresh attempt supersedes the previous failure banner (#260); a landed
       // push clears the whole slot via applyPush, and any outcome that leaves the
@@ -271,7 +324,10 @@ export function useSpeleoActions(): SpeleoActions {
       // arm, which neither lands nor throws.
       clearPushFailedBanner();
       try {
-        const result = await invokeIpc<PushResult>('speleodb_push', { message: message ?? null });
+        const result = await invokeIpc<PushResult>('speleodb_push', {
+          message: message ?? null,
+          acceptOlderVersion: opts?.acceptOlderVersion ?? false,
+        });
         applyPush(result);
         const kind = asPushKind(result.kind);
         if (kind === 'pushed') {
@@ -329,11 +385,43 @@ export function useSpeleoActions(): SpeleoActions {
       flushToDiskAfterPush,
       raisePushFailedBanner,
       clearPushFailedBanner,
+      openDialog,
     ],
   );
 
   const done = useCallback(
-    async (message?: string | null): Promise<DoneResult | null> => {
+    async (
+      message?: string | null,
+      opts?: { acceptOlderVersion?: boolean; pendingExit?: PendingExit },
+    ): Promise<DoneResult | null> => {
+      // [#303] The copy is dirty ONLY because a chain step walked it back to an older
+      // version - the user has edited nothing. Pushing here does not save anyone's work,
+      // it records the OLD survey over the newer one for every collaborator, and that is
+      // not what "finish editing" means to the person pressing it.
+      //
+      // Guarded HERE rather than in each caller because every route to a push comes
+      // through this hook - the status button, the SpeleoDB menu, the close prompt and the
+      // quit prompt - and the trap was that one of them made pushing the primary action.
+      // `acceptOlderVersion` is the confirmation reporting that the user was shown what it
+      // does and chose it anyway.
+      if (!opts?.acceptOlderVersion && isUnwoundNotEdited(useSpeleoStore.getState().link)) {
+        const data = { message: message ?? null };
+        if (opts?.pendingExit) {
+          // Raised out of an exit prompt, so it inherits that prompt's obligations: this
+          // call EVICTS the prompt from uiStore's single `activeDialog` slot, and
+          // `openExitPrompt` is what records the eviction so Cancel can put it back. The
+          // intent rides along so "Upload this older version" ends in the quit / close the
+          // user actually asked for, instead of a released lock and a window still open.
+          openExitPrompt('speleodb-unwound-push', { ...data, pendingExit: opts.pendingExit });
+        } else {
+          // Nothing is waiting on the outcome (the status button, the lock menu): the
+          // confirmation is the whole interaction, exactly as it shipped.
+          openDialog('speleodb-unwound-push', data);
+        }
+        // Null, not a result: the caller is mid-flow (the close prompt only leaves once a
+        // push RELEASES) and must stay put while the confirmation is up.
+        return null;
+      }
       const busyToken = beginBusy();
       clearPushFailedBanner();
       // #260: "Changes uploaded and the write lock released." lied whenever there was nothing to
@@ -343,7 +431,10 @@ export function useSpeleoActions(): SpeleoActions {
       // it BEFORE the call.
       const hadUnpushedEdits = useSpeleoStore.getState().link?.hasUnpushedEdits ?? false;
       try {
-        const result = await invokeIpc<DoneResult>('speleodb_done', { message: message ?? null });
+        const result = await invokeIpc<DoneResult>('speleodb_done', {
+          message: message ?? null,
+          acceptOlderVersion: opts?.acceptOlderVersion ?? false,
+        });
         applyDone(result);
         switch (asDoneKind(result.kind)) {
           case 'released':
@@ -410,6 +501,9 @@ export function useSpeleoActions(): SpeleoActions {
   );
 
   const takeRemote = useCallback(async (): Promise<boolean> => {
+    const issuedFor = speleoProjectSessionIssuedFor(
+      useSpeleoStore.getState().remoteProjectId,
+    );
     const busyToken = beginBusy();
     try {
       // Backend re-pulls + resets the tree to the server tip and returns the
@@ -421,6 +515,7 @@ export function useSpeleoActions(): SpeleoActions {
       // the divergence dialog doesn't close over a project the user left.
       const { success } = await loadProject(localPath);
       if (!success) return false;
+      if (!(await applySpeleoTreeReplacement(issuedFor))) return false;
       showToast(t('speleodb.editBar.toasts.tookRemote'), 'speleodb-took-remote', 'success');
       return true;
     } catch (e) {
@@ -432,5 +527,5 @@ export function useSpeleoActions(): SpeleoActions {
     }
   }, [loadProject, showToast, t, handleError, beginBusy, endBusy, bumpPoll]);
 
-  return { busy, startEditing, forceEdit, update, push, done, takeRemote };
+  return { busy, startEditing, discardChanges, forceEdit, update, push, done, takeRemote };
 }

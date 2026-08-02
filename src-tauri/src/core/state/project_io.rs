@@ -1,5 +1,5 @@
 use super::AppState;
-use crate::core::{CommandResult, UndoStack};
+use crate::core::{CommandResult, PersistStack, UndoStack};
 use crate::models::{Project, SectionId};
 use crate::persistence::Database;
 use std::path::{Path, PathBuf};
@@ -439,6 +439,44 @@ impl AppState {
                 ));
             }
         }
+        // [#303] The Unwind chain pointer needs the same treatment, and for a sharper
+        // reason than "it would be lost". Losing it is documented as benign - the next
+        // Unwind restarts from BASE - but the pointer is also what EXCUSES the dirty bit
+        // a walk leaves behind. Dropped here, a copy the user only unwound reads as
+        // holding un-pushed work nobody warned them about, so the confirmation and the
+        // backend guard disagree: the dialog resolved the flag before an autosave, the
+        // guard re-derived it after, and the Unwind failed on press with "this copy holds
+        // un-pushed edits that the undo history no longer covers". A scripted run never
+        // sees it because nothing saves in between; a person pausing between two Unwinds
+        // hits it every time.
+        // A detached copy deliberately sheds both markers, so it does not need to read
+        // them. For a managed save, keep absence distinct from a read error: if either
+        // marker cannot be preserved, the selected fail-closed policy is to save the
+        // survey with no undo history rather than publish unclassified inherited rows.
+        let marker_snapshot = if copy_only {
+            Ok((None, None))
+        } else {
+            let db_guard = self.database.lock().unwrap_or_else(|e| e.into_inner());
+            match db_guard.as_ref() {
+                Some(db) => db.load_speleo_undo_chain().and_then(|chain| {
+                    db.load_speleo_undo_watermark()
+                        .map(|watermark| (chain, watermark))
+                }),
+                None => Ok((None, None)),
+            }
+        };
+        let (speleo_undo_chain, speleo_undo_watermark, mut marker_preservation_failed) =
+            match marker_snapshot {
+                Ok((chain, watermark)) => (chain, watermark, false),
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        purpose = "save without unclassified inherited undo history (#303)",
+                        "Could not read the undo-chain metadata; the saved file will drop Undo and Redo history"
+                    );
+                    (None, None, true)
+                }
+            };
 
         // Remove any leftover temp file from previous failed saves
         if temp_path.exists() {
@@ -495,6 +533,12 @@ impl AppState {
         // dirty bit is set-only here - only a later server push clears it.
         // EXCEPT on a copy save, where dropping the row is the whole point: the
         // copy is a plain unmanaged project.
+        // [#303] The chain position and the inherited-history watermark join the link
+        // under the SAME guard, rather than each carrying their own: all three describe
+        // this machine's relationship to the SERVER, so a copy that has deliberately shed
+        // its link must shed them too. A copy that kept the watermark and was later linked
+        // would have its own first push cut the user's history as "inherited". Grouped
+        // because the per-site version of this rule has already been missed once.
         if !copy_only {
             if let Some(link) = &speleo_link {
                 if let Err(e) = db.save_speleo_link(Some(link)) {
@@ -505,16 +549,62 @@ impl AppState {
                     );
                 }
             }
+            // [#303] ...and the Unwind chain position with it. Only written when one exists:
+            // `None` is already the fresh file's state, and writing it unconditionally would
+            // mean every save of every project touched this table for nothing.
+            if let Some(sha) = &speleo_undo_chain {
+                if let Err(e) = db.save_speleo_undo_chain(Some(sha)) {
+                    marker_preservation_failed = true;
+                    tracing::warn!(
+                        error = %e,
+                        purpose = "preserve the Unwind chain position on save (#303)",
+                        "Failed to copy speleo_undo_chain onto the fresh save file; Undo and \
+                         Redo history will be removed from the saved file"
+                    );
+                }
+            }
+
+            // [#303] Likewise the inherited-history watermark.
+            if let Some(ts) = &speleo_undo_watermark {
+                if let Err(e) = db.save_speleo_undo_watermark(Some(ts)) {
+                    marker_preservation_failed = true;
+                    tracing::warn!(
+                        error = %e,
+                        purpose = "preserve the inherited-history watermark on save (#303)",
+                        "Failed to copy speleo_undo_watermark onto the fresh save file; Undo and \
+                         Redo history will be removed from the saved file"
+                    );
+                }
+            }
         }
 
-        // A copy gets the undo/redo history too (into the temp handle, while it
-        // is still open - the normal path writes them into the REOPENED db after
-        // the rename, but a copy never reopens). This keeps Save a Copy a
-        // faithful Save As minus the link, and it is what lets the detach flow
-        // (convert to unmanaged) carry the edit history onto the file it then
-        // opens.
-        if copy_only {
-            self.persist_undo_stacks_into(&db);
+        // Persist history while the file is still staged. A partial undo/redo rewrite
+        // must never be renamed into place: try the pair atomically, and if it fails,
+        // atomically clear both stacks and continue with a visible warning.
+        let mut history_dropped = match self.persist_or_clear_undo_stacks_into(&db) {
+            Ok(dropped) => dropped,
+            Err(e) => {
+                drop(db);
+                let _ = std::fs::remove_file(&temp_path);
+                return save_failure("Failed to finalize undo history", &save_path, &e);
+            }
+        };
+        if marker_preservation_failed {
+            if let Err(e) = db.clear_history_stacks() {
+                drop(db);
+                let _ = std::fs::remove_file(&temp_path);
+                return save_failure("Failed to remove unclassified undo history", &save_path, &e);
+            }
+            history_dropped = true;
+            // Keep the fresh file coherent where possible. History is already empty, so
+            // failure here cannot expose inherited rows and must not turn the selected
+            // continue-saving policy back into a refused save.
+            if let Err(e) = db.save_speleo_undo_chain(None) {
+                tracing::warn!(error = %e, "Could not clear the saved undo-chain pointer");
+            }
+            if let Err(e) = db.save_speleo_undo_watermark(None) {
+                tracing::warn!(error = %e, "Could not clear the saved undo watermark");
+            }
         }
 
         // Close the temp database before renaming
@@ -544,8 +634,10 @@ impl AppState {
                 purpose = "write a detached unlinked copy",
                 "Saved an unlinked copy of a SpeleoDB-managed project"
             );
-            return CommandResult::success()
-                .with_unlinked_copy_path(save_path.display().to_string());
+            let mut result =
+                CommandResult::success().with_unlinked_copy_path(save_path.display().to_string());
+            Self::warn_history_dropped(&mut result, history_dropped);
+            return result;
         }
 
         // Close our own persistent connection to the destination BEFORE the
@@ -595,6 +687,19 @@ impl AppState {
         self.initial_save_deferred
             .store(false, std::sync::atomic::Ordering::Relaxed);
 
+        // The installed file deliberately has no history because its chain metadata
+        // could not be classified safely. Drop the live mirror at the same commit point:
+        // otherwise a later save can write these same unclassified rows straight back
+        // into the now-valid database and undo the fail-closed fallback.
+        if marker_preservation_failed {
+            let mut undo_stack = self
+                .undo_stack
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            undo_stack.clear();
+            undo_stack.set_inherited_through(None);
+        }
+
         // Reopen the database at the final path
         let db = match Database::open(&save_path) {
             Ok(db) => db,
@@ -616,6 +721,7 @@ impl AppState {
                 // databaseOpen=false and leave DB-backed actions (e.g. Ignore)
                 // disabled until the project is reopened (issue #57 / Codex).
                 let mut result = CommandResult::success();
+                Self::warn_history_dropped(&mut result, history_dropped);
                 result.warnings.push(crate::core::ValidationWarning {
                     code: "DATABASE_NOT_REOPENED".to_string(),
                     message: "File saved, but database could not be reopened. Some features may not work until the project is reopened.".to_string(),
@@ -624,9 +730,6 @@ impl AppState {
                 return result;
             }
         };
-
-        // Persist undo/redo stacks (best-effort, synchronous to avoid race with readers)
-        self.persist_undo_stacks_into(&db);
 
         // Update file path after successful save
         project.file_path = Some(save_path.clone());
@@ -650,46 +753,116 @@ impl AppState {
             purpose = "persist edits safely",
             "Project saved successfully"
         );
-        CommandResult::success().with_path(save_path_str)
+        let mut result = CommandResult::success().with_path(save_path_str);
+        Self::warn_history_dropped(&mut result, history_dropped);
+        result
     }
 
-    /// Persist the undo/redo stacks into `db`, best-effort (shared by the normal
-    /// save, which writes them into the reopened destination, and the copy save,
-    /// which writes them into the temp handle before the rename). Locks
-    /// `undo_stack` only - callers may hold `project` (the established order is
-    /// `project` before `undo_stack`).
-    fn persist_undo_stacks_into(&self, db: &Database) {
-        let persist_limit = self
-            .config
+    fn warn_history_dropped(result: &mut CommandResult, dropped: bool) {
+        if dropped {
+            result.warnings.push(crate::core::ValidationWarning {
+                code: "UNDO_HISTORY_DROPPED".to_owned(),
+                message: "The project was saved, but its Undo and Redo history could not be preserved and was removed.".to_owned(),
+                severity: crate::core::WarningSeverity::Warning,
+            });
+        }
+    }
+
+    pub(super) fn persist_or_clear_undo_stacks_into(&self, db: &Database) -> anyhow::Result<bool> {
+        let undo_stack = self
+            .undo_stack
             .lock()
-            .map(|c| c.general.undo_persist_limit)
-            .unwrap_or(20);
-
-        if let Ok(undo_stack) = self.undo_stack.lock() {
-            let undo_entries: Vec<_> = undo_stack
-                .entries_to_persist(persist_limit)
-                .filter_map(UndoStack::serialize_entry_with_timestamp)
-                .collect();
-            let redo_entries: Vec<_> = undo_stack
-                .redo_entries_to_persist(persist_limit)
-                .filter_map(UndoStack::serialize_entry_with_timestamp)
-                .collect();
-
-            if let Err(e) = db.save_undo_stack_with_timestamps(undo_entries) {
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let (undo_rows, redo_rows) = self.history_rows_to_persist(db, &undo_stack);
+        match db.replace_history_stacks_with_timestamps(undo_rows, redo_rows) {
+            Ok(()) => Ok(false),
+            Err(e) => {
                 tracing::warn!(
                     error = %e,
-                    purpose = "preserve undo history",
-                    "Failed to persist undo stack"
+                    purpose = "save project without partial undo history",
+                    "Could not persist the complete Undo and Redo history; saving with both stacks empty"
                 );
-            }
-            if let Err(e) = db.save_redo_stack_with_timestamps(redo_entries) {
-                tracing::warn!(
-                    error = %e,
-                    purpose = "preserve redo history",
-                    "Failed to persist redo stack"
-                );
+                db.clear_history_stacks()?;
+                Ok(true)
             }
         }
+    }
+
+    /// Persist an already-locked stack. The confirmed-push path uses this while it
+    /// holds the live database and undo guards, so no late edit can land between
+    /// pruning memory and rewriting SQLite.
+    pub(super) fn persist_locked_undo_stacks_into(
+        &self,
+        db: &Database,
+        undo_stack: &UndoStack,
+    ) -> bool {
+        // [#303] A Full-mode SpeleoDB-linked project persists its WHOLE history (bounded
+        // by the byte budget, not by a count) because that history is what rides in the
+        // next commit and gives undo its cross-commit reach. Everything else - local
+        // projects, Disabled mode - keeps the `undo_persist_limit` window unchanged.
+        //
+        // The link is read from the LOCAL `db` handle rather than through
+        // `undo_policy()`: `self.database` still points at the pre-save handle when the
+        // normal save calls this, so asking the AppState would consult the wrong file.
+        let (undo_rows, redo_rows) = self.history_rows_to_persist(db, undo_stack);
+        match db.replace_history_stacks_with_timestamps(undo_rows, redo_rows) {
+            Ok(()) => true,
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    purpose = "preserve undo and redo history atomically",
+                    "Failed to persist undo and redo stacks"
+                );
+                false
+            }
+        }
+    }
+
+    fn history_rows_to_persist(
+        &self,
+        db: &Database,
+        undo_stack: &UndoStack,
+    ) -> (
+        Vec<(String, String, Option<String>)>,
+        Vec<(String, String, Option<String>)>,
+    ) {
+        let count_limit = {
+            let policy = self.undo_policy_for(db.load_speleo_link().ok().flatten().as_ref());
+            if policy.unlimited_depth() {
+                None
+            } else {
+                Some(
+                    self.config
+                        .lock()
+                        .map(|c| c.general.undo_persist_limit)
+                        .unwrap_or(20),
+                )
+            }
+        };
+
+        // Every save writes the WHOLE (windowed) stack, because the pipeline above
+        // built a fresh temp file and renamed it over the target: the reopened `db`
+        // has no undo tables to add to. See `UndoStack::rows_to_persist`.
+        let undo_rows = undo_stack.rows_to_persist(PersistStack::Undo, count_limit);
+
+        // [#303] Redo is persisted in EVERY mode, including Full, where that means a
+        // save can write up to 2x `UNDO_BYTE_BUDGET_BYTES` - the budget is applied to
+        // the two stacks independently.
+        //
+        // That doubling is deliberate and was re-decided after review, so do not
+        // "fix" it by skipping redo in Full mode: that change was made and reversed.
+        // The reasoning is that 64 MiB is a CEILING, not growth - each stack is
+        // bounded by the budget, and a confirmed push clears the undo history - and
+        // that persisting redo is what keeps a redo branch alive across a close and
+        // reopen. Dropping it bought a smaller save on exactly the projects whose
+        // saves are largest, and cost redo-after-reopen on all of them, which is the
+        // worse end of the trade.
+        //
+        // None of the redo half reaches the server either way: `redo_stack` is
+        // unconditionally in `PUSH_SNAPSHOT_LOCAL_TABLES`, so this is local-only cost
+        // for a local-only feature.
+        let redo_rows = undo_stack.rows_to_persist(PersistStack::Redo, count_limit);
+        (undo_rows, redo_rows)
     }
 
     /// Put `path` at the head of the recent-projects list and persist it to
@@ -774,6 +947,9 @@ impl AppState {
             let mut undo_stack = self.undo_stack.lock().unwrap_or_else(|e| e.into_inner());
             tracing::debug!("close_project: clearing undo stack");
             undo_stack.clear();
+            // [#303] Back onto the configured entry window: the next project to open is
+            // local until a link says otherwise.
+            undo_stack.use_count_limit();
             tracing::debug!("close_project: undo stack cleared");
         }
 

@@ -3,7 +3,11 @@ import { useTranslation } from 'react-i18next';
 import { Button } from '../common/Button';
 import { AlertDialog } from './AlertDialog';
 import { useUIStore } from '../../store/uiStore';
-import { useSpeleoStore, speleoSessionIssuedAt, speleoSessionStillCurrent, speleoOpenProjectStillIs } from '../../store/speleoStore';
+import {
+  speleoProjectSessionIssuedFor,
+  speleoProjectSessionStillCurrent,
+  useSpeleoStore,
+} from '../../store/speleoStore';
 import { useProjectStore } from '../../store/projectStore';
 import { useRestoreRevision } from '../../hooks/useRestoreRevision';
 import { humanizeSpeleoError, unpushedLocalEdits, dumpCandidates } from '../../utils/speleoError';
@@ -71,13 +75,12 @@ export default function SpeleoRestoreDialog() {
     setError(null);
     // Captured BEFORE the request, so the ambiguity catch can tell whether the session
     // that issued it is still the one signed in - and whether the project still is.
-    const issuedAt = speleoSessionIssuedAt();
-    const issuedFor = projectId;
+    const issuedFor = speleoProjectSessionIssuedFor(projectId);
     try {
       // Restore mode: the backend reopens the swapped tree with editing re-enabled
       // and the hook pulls it into the view. Close the confirm only on success so a
       // failure keeps the inline error visible.
-      await restoreRevision({
+      const applied = await restoreRevision({
         projectId,
         projectName,
         hexsha,
@@ -86,6 +89,10 @@ export default function SpeleoRestoreDialog() {
         discardLocal,
         ...(entryPath ? { entryPath } : {}),
       });
+      if (!applied) {
+        closeDialog();
+        return;
+      }
       closeDialog();
     } catch (e) {
       // [#258] The write lock is held for this whole call and is NOT touched here, so
@@ -98,11 +105,7 @@ export default function SpeleoRestoreDialog() {
       // the project one, which the open verbs must NOT use - a restore binds to whatever
       // is open, so a picker raised for a project that is no longer it offers a choice
       // the backend will refuse.
-      if (
-        candidates &&
-        speleoSessionStillCurrent(issuedAt) &&
-        speleoOpenProjectStillIs(issuedFor)
-      ) {
+      if (candidates && speleoProjectSessionStillCurrent(issuedFor)) {
         openDumpPicker(
           candidates,
           'stalx',

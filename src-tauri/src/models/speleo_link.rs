@@ -42,4 +42,19 @@ pub struct SpeleoLink {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub last_verify_at: Option<String>,
+    /// [#303] Whether this project's undo history rides to the server (schema v16).
+    /// NULL is a legacy/uninitialized value only: the first open materializes the
+    /// application default into this field, after which the project is explicitly
+    /// `Full` or `Disabled` on every machine.
+    ///
+    /// Stored HERE, in the `.stalx`, on purpose: it is a property of the project,
+    /// not of the machine editing it. The row rides to the server in the pushed
+    /// snapshot (only `has_unpushed_edits` / `last_edit_at` are cleared there), so a
+    /// project marked `Disabled` because it is too big to ship undo snapshots stays
+    /// marked that way for every collaborator who pulls it. Changing it therefore
+    /// requires the write lock and lands on the next push, like any other edit to
+    /// the project file.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub undo_mode: Option<crate::models::UndoMode>,
 }

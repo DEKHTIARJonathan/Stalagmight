@@ -152,6 +152,8 @@ impl AppState {
 
         if let Ok(mut undo_stack) = self.undo_stack.lock() {
             undo_stack.clear();
+            // [#303] A brand-new project is local: the configured entry window.
+            undo_stack.use_count_limit();
         }
 
         // Clear display settings cache for new project
@@ -222,7 +224,7 @@ impl AppState {
                     );
                     // Dirty-bit flip (#191, D-B16): settings mutated a remote
                     // project. Set-only; no-op for local-only.
-                    self.mark_remote_dirty();
+                    self.mark_remote_forward_edit();
                 }
             }
         }

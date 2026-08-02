@@ -267,6 +267,19 @@ export function useRevertRevision() {
 
       onStep?.('locking');
       if (!(await startEditing())) {
+        // The shared start-editing router now rejects a reply before applying it when
+        // the open project changed during the acquire. The backend may still have taken
+        // this process's lock, so unwind that provenance-scoped claim before classifying
+        // the false result as ordinary contention or failure.
+        if (useSpeleoStore.getState().remoteProjectId !== projectId) {
+          await invokeIpc<null>('speleodb_release_lock_acquired_here').catch((e: unknown) => {
+            console.warn(
+              'revert: could not release the lock taken before the project changed',
+              e,
+            );
+          });
+          return { kind: 'project_changed' };
+        }
         // `startEditing` resolves false for three different reasons, and only one of
         // them leaves anything for us to say.
         if (useSpeleoStore.getState().divergence !== null) {
@@ -326,7 +339,7 @@ export function useRevertRevision() {
       try {
         // Quiet: this restore is a middle step, and its toast tells the user to push -
         // which is precisely what the next line does for them.
-        await restoreRevision({
+        const applied = await restoreRevision({
           projectId,
           projectName,
           hexsha,
@@ -336,6 +349,15 @@ export function useRevertRevision() {
           quiet: true,
           ...(entryPath ? { entryPath } : {}),
         });
+        if (!applied) {
+          await invokeIpc<null>('speleodb_release_lock_acquired_here').catch((e: unknown) => {
+            console.warn(
+              'revert: could not release the lock after the project changed during restore',
+              e,
+            );
+          });
+          return { kind: 'project_changed' };
+        }
       } catch (e) {
         const refusedForLocalEdits = unpushedLocalEdits(e);
         // Ask the BACKEND whether the copy is dirty, because that is the bit

@@ -16,7 +16,7 @@
 import { useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useUIStore } from '../../store/uiStore';
-import { useSpeleoStore } from '../../store/speleoStore';
+import { useSpeleoStore, isUnwoundNotEdited } from '../../store/speleoStore';
 import { useSpeleoActions } from '../../hooks/useSpeleoActions';
 import { useSpeleoWebLink } from '../../hooks/useSpeleoWebLink';
 import {
@@ -44,6 +44,9 @@ export function useSpeleoMenuItems(): AppMenuItem[] {
   const editState = useSpeleoStore((s) => s.link?.editState ?? null);
   const forceEditing = useSpeleoStore((s) => s.link?.forceEditing ?? false);
   const hasUnpushedEdits = useSpeleoStore((s) => s.link?.hasUnpushedEdits ?? false);
+  // [#303] Dirty only because a chain step walked the copy back - pushing that publishes
+  // a revert, so the rows that would push route to their own confirmation instead.
+  const unwoundNotEdited = useSpeleoStore((s) => isUnwoundNotEdited(s.link));
   const forceEditAllowed = useSpeleoStore((s) => s.link?.forceEditAllowed ?? false);
   // Derived in the SELECTOR so this stays a boolean primitive like its neighbours -
   // the shared predicate applied to the link object, not a sixth hand-rolled copy of
@@ -83,7 +86,9 @@ export function useSpeleoMenuItems(): AppMenuItem[] {
             disabled: busy,
             onClick: () => {
               // Release; the push&release dialog when there are local edits.
-              if (hasUnpushedEdits) openDialog('speleodb-done');
+              // [#303] An unwound copy is not work to push - see the status button.
+              if (unwoundNotEdited) openDialog('speleodb-unwound-push');
+              else if (hasUnpushedEdits) openDialog('speleodb-done');
               else void done(null);
             },
           }
@@ -110,6 +115,20 @@ export function useSpeleoMenuItems(): AppMenuItem[] {
         // Collect a commit message via the done dialog in push mode (like
         // push & release, but the lock is retained - fix 8).
         onClick: () => openDialog('speleodb-done', { mode: 'push' }),
+      },
+      // [#303] The way out of a copy the user does not want to keep: drop it and come back
+      // at the server tip. Whether the lock is kept or handed back is the dialog's
+      // question, not this row's - both are ordinary answers to "discard". Offered
+      // whenever there IS something to discard - most often a copy a chain step walked
+      // back through history, where the dirty bit means "this is older", not "you have
+      // work to save", but deliberately available over ordinary edits too. Destructive, so
+      // it confirms first.
+      {
+        id: 'speleodb-menu-discard-changes',
+        label: t('speleodb.menu.discardChanges'),
+        icon: <SpeleoBadgedIcon badge={<RefreshGlyph size={11} />} badgeColor="text-red-500" size={sz} />,
+        disabled: busy || !hasUnpushedEdits,
+        onClick: () => openDialog('speleodb-discard-changes'),
       },
       {
         id: 'speleodb-menu-refresh',
@@ -173,6 +192,7 @@ export function useSpeleoMenuItems(): AppMenuItem[] {
     forceEditing,
     holdsLock,
     hasUnpushedEdits,
+    unwoundNotEdited,
     forceEditAllowed,
     busy,
     startEditing,

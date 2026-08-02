@@ -12,17 +12,25 @@
 //! - **lock + edit gate**: acquire on Start editing (with the reconcile verdict),
 //!   optimistic force-edit without a lock, periodic re-verify, and the
 //!   release paths (Done / logout / close / app-exit / "release all").
-//! - **push**: the BASE-SHA fence, snapshot sanitize, upload, and the
-//!   divergence / unconfirmed outcomes; plus Update (read-only fast-forward),
-//!   Take-remote, and revision view/restore.
+//! - **take-remote**: abandoning local work for the server's copy.
 //! - **persistence**: the `speleo_link` row that makes a project remote (and
 //!   `speleodb_unlink`, which makes it plain again).
 //! - **project admin**: metadata PATCH, publish (create-on-SDB), collaborators /
 //!   teams, and project delete.
+//!
+//! Split out along this same axis, and no longer here: the **push** half - the
+//! BASE-SHA fence, snapshot sanitize, upload, the divergence / unconfirmed
+//! outcomes, and the Done / Push / Update verdicts - now lives in
+//! [`super::speleodb_push`] (#275). Revision history and the View / Restore swap
+//! live in [`super::speleodb_revisions`].
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use super::speleodb_cache::LocalEditsPolicy;
+// [#275] The push half (fence, snapshot, upload, Done/Push/Update) lives in
+// `speleodb_push`; the lock + edit gate here still consults its outcome type and
+// its empty-tip-tolerant head read.
+use super::speleodb_push::{head_with_empty_retry, PushOutcome};
 use super::AppState;
 use crate::speleodb::auth::{account_key, SecretStoreError, TokenStore, TokenTier};
 use crate::speleodb::client;
@@ -30,12 +38,11 @@ use crate::speleodb::client;
 // conversion. [Integration] map_status/SpeleoDbAction also drive Track C's C5
 // 401 auto-drop (auth_error_drops_token).
 use crate::speleodb::contract::{dto_for_error, map_status, Endpoint};
-use crate::speleodb::sync::{self, PushPlan, ReconcileVerdict};
+use crate::speleodb::sync::{self, ReconcileVerdict};
 use crate::speleodb::SpeleoDbAction;
 use crate::speleodb::{
-    DoneResult, KeychainReport, PushResult, RemoteState, SpeleoDbError, SpeleoErrorDto,
-    SpeleoLinkStatus, SpeleoLoginResult, SpeleoSessionStatus, StartEditingResult, TokenStorage,
-    UpdateResult,
+    KeychainReport, RemoteState, SpeleoDbError, SpeleoErrorDto, SpeleoLinkStatus,
+    SpeleoLoginResult, SpeleoSessionStatus, StartEditingResult, TokenStorage,
 };
 
 /// Per-session SpeleoDB connection state held in [`AppState`]. The token lives
@@ -446,39 +453,9 @@ impl SpeleoDbSession {
     }
 }
 
-/// Internal verdict of the push half of `speleodb_done`.
-#[derive(Debug)]
-pub(super) enum PushOutcome {
-    /// The push landed (200 → BASE advanced; or 304 → already at the tip). The dirty
-    /// bit was cleared UNLESS an edit landed after push_start (then it is retained for
-    /// the next push), so the caller must re-check it before releasing the lock.
-    Confirmed,
-    /// A stranger commit sits between our BASE and the server tip - never pushed.
-    /// Stay locked + dirty for the user to reconcile (#198).
-    Diverged,
-    /// The push outcome was ambiguous (transport drop / retried-then-exhausted
-    /// 5xx): we don't know whether it landed. Stay locked + dirty; the next
-    /// attempt recovers via ancestry (#193).
-    Unconfirmed,
-}
-
-/// Sanitize a push SNAPSHOT copy before upload: clear the dirty bit and strip the
-/// per-machine / per-session LOCAL tables so they don't ride to the server (#197).
-/// All durable project data - survey, config, import-dedup, resolved-warnings -
-/// proliferates with the project. See
-/// [`crate::persistence::Database::sanitize_push_snapshot`] for the exact set and
-/// for which failures are fatal (stripping the undo/redo history and clearing the
-/// dirty bit are; the privacy-neutral local prefs are not).
-///
-/// FATAL for the push: an unsanitized snapshot must never be uploaded.
-/// The server `type` an un-adopted Ariane project carries. Compared
-/// case-insensitively: the API answers `ARIANE` on a GET and takes `ariane` on a
-/// PATCH, and which one a given payload used is not a distinction worth trusting.
-const ARIANE_PROJECT_TYPE: &str = "ariane";
-
 /// The server `type` a project Stalagmight manages carries - the state adoption
 /// exists to leave behind. Compared case-insensitively for the same reason
-/// [`ARIANE_PROJECT_TYPE`] is.
+/// the Ariane project type is.
 const MANAGED_PROJECT_TYPE: &str = "other";
 
 /// Is the server already calling this a project we manage?
@@ -491,54 +468,6 @@ const MANAGED_PROJECT_TYPE: &str = "other";
 pub(super) fn type_says_managed(server_kind: Option<&str>) -> bool {
     server_kind.is_some_and(|kind| kind.trim().eq_ignore_ascii_case(MANAGED_PROJECT_TYPE))
 }
-
-/// Does the server still class this project as an Ariane one?
-///
-/// `None` - the type could not be read - is NOT "yes". A missing answer is the one
-/// case where acting would be a write issued against a project whose current state we
-/// failed to establish, and the cost of waiting is one push: the next one reads it
-/// again. Unknown types are left alone for the same reason, since only `ariane` is
-/// the state adoption is meant to leave behind.
-pub(super) fn type_still_says_ariane(server_kind: Option<&str>) -> bool {
-    server_kind.is_some_and(|kind| kind.trim().eq_ignore_ascii_case(ARIANE_PROJECT_TYPE))
-}
-
-fn clear_snapshot_dirty(snapshot: &Path) -> Result<(), SpeleoDbError> {
-    crate::persistence::Database::sanitize_push_snapshot(snapshot)
-        .map_err(|e| SpeleoDbError::Io(format!("could not sanitize the push snapshot: {e}")))
-}
-
-/// Resolve the server head, re-fetching ONCE when a recorded BASE meets an empty
-/// tip (#192). `(base Some, tip None)` is the fence's fail-closed trigger - but a
-/// momentary empty read (replication lag, or a race right after project creation)
-/// must not be mistaken for "the history is gone," so re-fetch a single time
-/// before letting the caller fail closed. `(base None, tip None)` is the valid
-/// empty-repo state and never retries. Generic over the injected `fetch` so the
-/// retry is unit-tested without HTTP.
-pub(super) fn head_with_empty_retry<F>(
-    base: Option<&str>,
-    mut fetch: F,
-) -> Result<(Option<String>, Vec<crate::speleodb::models::RevisionCommit>), SpeleoDbError>
-where
-    F: FnMut() -> Result<
-        (Option<String>, Vec<crate::speleodb::models::RevisionCommit>),
-        SpeleoDbError,
-    >,
-{
-    let first = fetch()?;
-    // Key the retry on the TRUE transient signal - an EMPTY commit list - not on
-    // `tip.is_none()`: tip_of also returns None for a multi-leaf FORK, which is not
-    // transient and must fail closed immediately rather than waste a second GET
-    // (#197 review). A recorded BASE meeting an empty history is the momentary
-    // empty-read case (replication lag / a race right after project creation).
-    if base.is_some() && first.1.is_empty() {
-        // Re-fetch exactly once, then trust the result (a still-empty second read
-        // lets the fence fail closed).
-        return fetch();
-    }
-    Ok(first)
-}
-
 impl AppState {
     /// Resolve the effective endpoint. Precedence: explicit dialog override →
     /// `DEV_SPELEODB_URL` env (dev default) → persisted `config.speleodb.endpoint`.
@@ -741,12 +670,18 @@ impl AppState {
                     is_remote: false,
                     edit_enabled: self.edit_enabled(),
                     has_unpushed_edits: false,
+                    // Not remote: there is no chain to be mid-walk on.
+                    unwound: false,
                     permission: None,
                     lock_holder: None,
                     remote_state: RemoteState::Unknown,
                     access_denied: false,
                     server_error: None,
                     exclude_geojson: false,
+                    // [#303] A local project has no undo POLICY (the fixed window is
+                    // unconditional there), so report the global default and leave the
+                    // control - which only renders for a remote project - unbothered.
+                    undo_mode: self.undo_mode_status(),
                     force_editing: self.force_editing(),
                     allow_force_edit: self.speleodb_allow_force_edit(),
                     project_id: None,
@@ -877,12 +812,20 @@ impl AppState {
             is_remote: true,
             edit_enabled,
             has_unpushed_edits,
+            // [#303] Mid-walk: a chain step has moved this copy off the tip. Reported RAW
+            // so the frontend can combine it with its own optimistic dirty bit - a step onto
+            // the tip leaves the copy clean, so a pre-combined flag was false at the only
+            // moment the frontend polls.
+            unwound: self.speleodb_unwound_from().is_some(),
             permission,
             lock_holder,
             remote_state,
             access_denied,
             server_error,
             exclude_geojson,
+            // [#303] Resolved from the explicit project value. The global default is
+            // consulted only while initializing a legacy NULL on open.
+            undo_mode: self.undo_policy_for(Some(&link)).mode,
             // #213: report force-edit so the FE renders the big-red banner + offers
             // Reconnect. An online force-editor whose tip moved already surfaces via
             // `remote_state` (RemoteAhead/Conflict); offline it stays Unknown (skipped).
@@ -1353,7 +1296,7 @@ impl AppState {
     /// belongs in front of it. Each arm therefore binds the outcome here and returns
     /// it unchanged after its write, which keeps concluding and invalidating together
     /// while putting both ahead of anything fallible.
-    fn speleodb_revision_landed(&self, project_id: &str) -> PushOutcome {
+    pub(super) fn speleodb_revision_landed(&self, project_id: &str) -> PushOutcome {
         self.speleodb_note_prior_push_landed(project_id);
         PushOutcome::Confirmed
     }
@@ -1373,7 +1316,7 @@ impl AppState {
     /// fail, and the upload it continues into can come back ambiguous - and on either
     /// path the function returns having proved a revision exists that our remembered
     /// choice predates, with the choice still standing.
-    fn speleodb_note_prior_push_landed(&self, project_id: &str) {
+    pub(super) fn speleodb_note_prior_push_landed(&self, project_id: &str) {
         self.speleodb_forget_dump_entry(project_id);
     }
 
@@ -1750,6 +1693,14 @@ impl AppState {
                 "already editing with the write lock held".to_owned(),
             )));
         }
+        // [#303] Clear-on-lock, best-effort arm (q24). A force-edit takes NO lock and
+        // runs no reconcile, so the "copy matches git" fence cannot be evaluated here -
+        // but a force-editor is starting an edit session all the same, and the stack it
+        // would start with is still whatever the last pusher shipped. Clearing
+        // unconditionally is the safe direction: force-edit already carries the big-red
+        // unmergeable-`.stalx` warning, so losing an inherited history is the least of
+        // what that session is accepting.
+        self.speleodb_clear_inherited_undo("force-edit session started without a lock");
         self.set_edit_enabled(true);
         self.set_force_editing(true);
         Ok(())
@@ -2020,6 +1971,26 @@ impl AppState {
                 {
                     release_unless_kept(Some(&e));
                     return Err(local_dto(e));
+                }
+                // [#303] Clear-on-lock (clarification #2 / q14), gated on the copy really
+                // being the file that is in git: `UpToDate` means BASE == the server tip,
+                // and a clean link means we hold nothing the server has not seen. Under
+                // both, whatever undo history is here describes operations that are
+                // already committed - a stack inherited from the last pusher - and
+                // starting an edit session one Ctrl-Z away from a stranger's operation is
+                // the #194 b3 hazard.
+                //
+                // The guard is what makes the maintainer's case work: lock, edit, unlock
+                // WITHOUT pushing, re-lock. That copy is dirty, so this does not fire and
+                // the user's own history survives.
+                //
+                // AFTER the commit, not before: a session torn down in the window above
+                // refuses with nothing committed, and clearing there would have thrown
+                // away a stack the aborted session never went on to use.
+                if !link.has_unpushed_edits {
+                    self.speleodb_clear_inherited_undo(
+                        "lock acquired over a copy that matches git",
+                    );
                 }
                 Ok(StartEditingResult::Editing)
             }
@@ -2445,675 +2416,38 @@ impl AppState {
         }
     }
 
-    /// Render the open remote project to a scratch `ariane.tml` at `dest` for
-    /// co-push (#196). Mints a stable UUID for any shot still missing one - a
-    /// no-op for modern files; for legacy pre-v6 shots it mints AND persists so
-    /// the canonical `.stalx` (hence its push snapshot) shares the identity the
-    /// `.tml` carries. Renders via `export_tml_for_speleodb` into a throwaway
-    /// sidecar - the same document as the user-facing export, hardened for the
-    /// server's GeoJSON conversion.
-    fn speleodb_render_tml(&self, dest: &Path) -> Result<(), SpeleoDbError> {
-        // Snapshot the in-memory project so the UUID-persist + render run without
-        // holding the project lock across the database lock.
-        let (project, minted) = {
-            let mut proj_guard = self
-                .project
-                .lock()
-                .map_err(|_| SpeleoDbError::Io("project lock poisoned".to_owned()))?;
-            let project = proj_guard.as_mut().ok_or(SpeleoDbError::NoRemoteProject)?;
-            let minted = project.sections.iter().any(|s| {
-                s.shots
-                    .iter()
-                    .any(|sh| sh.uuid.as_deref().map_or(true, str::is_empty))
-            });
-            project.ensure_shot_uuids();
-            (project.clone(), minted)
-        };
-        // Persist freshly-minted UUIDs so the snapshot .stalx matches the .tml.
-        // save_project does NOT clear the SpeleoDB dirty bit (speleo_link is
-        // excluded), so this is safe to call inside the push pipeline.
-        if minted {
-            if let Ok(mut db_guard) = self.database.lock() {
-                if let Some(db) = db_guard.as_mut() {
-                    if let Err(e) = db.save_project(&project) {
-                        tracing::warn!(
-                            error = %e,
-                            purpose = "persist freshly-minted shot UUIDs before push",
-                            "speleodb_render_tml: failed to persist minted UUIDs"
-                        );
-                    }
-                }
+    /// [#303] Drop the in-memory undo/redo stacks when an edit session starts over a
+    /// copy whose history is not ours - the clear-on-lock rule (clarification #2).
+    ///
+    /// The download-replace chokepoint already empties the TABLES of every server copy
+    /// it writes (see `InheritedUndo`), so in the ordinary flow this is a no-op. It is
+    /// here for the copies that path never touched: a `.stalx` opened directly from disk
+    /// (Save As'd, hand-copied, shared as a bare file), or one written by a build that
+    /// predates the drop. Cheap, and the alternative is starting an edit session one
+    /// Ctrl-Z away from a stranger's operation.
+    ///
+    /// `reason` goes to the log so the disappearance of a visible history is explicable.
+    fn speleodb_clear_inherited_undo(&self, reason: &str) {
+        // A fresh edit session starts at BASE, so any chain position from an earlier one
+        // is stale: the next Unwind restarts from BASE rather than resuming a walk that
+        // described a different working copy.
+        self.speleodb_set_unwound_from(None);
+        // ...and with the inherited history about to go with it, nothing in the stack is
+        // inherited any more. A watermark left behind would cut this session's own work
+        // out of its first push.
+        self.speleodb_set_inherited_through(None);
+        if let Ok(mut stack) = self.undo_stack.lock() {
+            if stack.is_empty() && !stack.can_redo() {
+                return;
             }
-        }
-        crate::export::tml::export_tml_for_speleodb(&project, dest)
-            .map_err(|e| SpeleoDbError::Io(format!("render .tml failed: {e}")))?;
-        Ok(())
-    }
-
-    /// Push the open project's edits (if any) and release the write lock,
-    /// returning to read-only (#197). On a confirmed push (or nothing to push) the
-    /// lock is released and the edit gate dropped; on divergence or an ambiguous
-    /// push, the lock + dirty bit are retained so no edits are lost. `message` is
-    /// the commit message (a generic default is used when blank).
-    pub(crate) fn speleodb_done(
-        &self,
-        message: Option<String>,
-    ) -> Result<DoneResult, SpeleoErrorDto> {
-        let link = self.speleodb_validated_link()?;
-
-        // #213: a force-editor is edit-enabled but holds NO lock, so Done cannot push
-        // (the server would 403 the lockless upload). The FE offers "Reconnect to
-        // sync" (Start editing) instead; guard here as a backstop.
-        if self.force_editing() {
-            return Err(local_dto(SpeleoDbError::Io(
-                "reconnect to acquire the write lock before pushing".to_owned(),
-            )));
-        }
-
-        // Edit-session gate: Done acts only on an ACTIVE edit session. The edit gate
-        // is set true only by Start editing (after acquiring the lock) / its FF arm,
-        // so `!edit_enabled` means we hold no lock - opened read-only, or already
-        // finished. Releasing here would POST /release/ for a mutex this session
-        // never acquired (a confusing Fence error, or a 401 that auto-drops the
-        // token). We are already read-only, so answer without a server call.
-        //
-        // `NotEditing`, NOT `Released`: the two are only the same when the project
-        // is clean, and the gate can be closed over a project that is still dirty -
-        // a 401 auto-drop runs `speleodb_forget`, which closes the gate and
-        // deliberately leaves `has_unpushed_edits` set so the work is not forgotten.
-        // Reporting that as `Released` told the frontend the edits had landed, which
-        // cleared its dirty state and disarmed the quit guard over work nothing ever
-        // uploaded. The honest answer is "there was no edit session to finish".
-        if !self.edit_enabled() {
-            return Ok(DoneResult::NotEditing);
-        }
-
-        let (endpoint, token) = self.speleodb_active_token().map_err(local_dto)?;
-        let insecure_http = self.speleodb_insecure_http();
-
-        // Dirty-bit gate: only push when there are un-pushed edits.
-        let outcome = if link.has_unpushed_edits {
-            self.speleodb_push(&endpoint, &token, insecure_http, &link, message)?
-        } else {
-            PushOutcome::Confirmed
-        };
-
-        match outcome {
-            PushOutcome::Confirmed => {
-                // A 200 push advances BASE but RETAINS the dirty bit when an edit
-                // landed after push_start (edits_captured_by_push == false): that edit
-                // is not on the server yet. Re-read the link and, if it is still dirty,
-                // keep the lock + editability and report PushUnconfirmed so a retry of
-                // Done re-pushes the late edit - releasing now would strand it
-                // read-only until a fresh Start editing. Only release once clean.
-                let still_dirty = self
-                    .speleodb_open_link()
-                    .map_err(local_dto)?
-                    .has_unpushed_edits;
-                if still_dirty {
-                    return Ok(DoneResult::PushUnconfirmed);
-                }
-                // Edits are safely on the server; release the lock and go
-                // read-only. Drop the edit gate only after a confirmed release -
-                // if release fails the lock is still held, so a retry of Done
-                // (now a no-op push, dirty already cleared) re-attempts it.
-                self.speleodb_handle_auth(
-                    Endpoint::Release,
-                    client::release_lock(&endpoint, &token, insecure_http, &link.project_id),
-                )
-                .map_err(|e| dto_for_error(Endpoint::Release, &e))?;
-                self.set_edit_enabled(false);
-                // The lock this process took is back with the server; the edit session
-                // it licensed is over. This project's claim, not the account's whole
-                // set - Done released one mutex.
-                self.speleodb_forget_lock_acquired_for(&link.project_id);
-                Ok(DoneResult::Released)
-            }
-            // Stay locked + dirty so the user can reconcile / a retry can recover.
-            PushOutcome::Diverged => Ok(DoneResult::DivergenceNeeded),
-            PushOutcome::Unconfirmed => Ok(DoneResult::PushUnconfirmed),
-        }
-    }
-
-    /// Push the open project's edits to the server **without** releasing the lock
-    /// (T2d "Push"): the same fence + ancestry-recovery + upload as
-    /// [`Self::speleodb_done`]'s push half, but the mutex is retained in every arm
-    /// so editing continues. A no-op (reports `Pushed`) when not in an edit session
-    /// or when there is nothing to push.
-    pub(crate) fn speleodb_push_only(
-        &self,
-        message: Option<String>,
-    ) -> Result<PushResult, SpeleoErrorDto> {
-        let link = self.speleodb_validated_link()?;
-
-        // #213: a force-editor holds no lock, so a push would 403. Refuse with the
-        // same reconnect hint as Done (the FE never offers push in force-edit).
-        if self.force_editing() {
-            return Err(local_dto(SpeleoDbError::Io(
-                "reconnect to acquire the write lock before pushing".to_owned(),
-            )));
-        }
-
-        // Push acts only on an ACTIVE edit session (a held lock); without it there
-        // is no lock and nothing to push - answer locally rather than earn a
-        // confusing 403 Fence.
-        //
-        // The two no-ops are reported DIFFERENTLY on purpose. A closed gate is not
-        // proof the work landed: `speleodb_forget` (the 401 auto-drop) closes the
-        // gate while leaving `has_unpushed_edits` set, so folding this case into
-        // `Pushed` told the frontend the edits were on the server, cleared its dirty
-        // state and disarmed the quit guard over an upload that never happened. A
-        // gate that IS open with a clean link is a true no-op and stays `Pushed`.
-        if !self.edit_enabled() {
-            return Ok(PushResult::NotEditing);
-        }
-        if !link.has_unpushed_edits {
-            return Ok(PushResult::Pushed);
-        }
-
-        let (endpoint, token) = self.speleodb_active_token().map_err(local_dto)?;
-        let insecure_http = self.speleodb_insecure_http();
-
-        match self.speleodb_push(&endpoint, &token, insecure_http, &link, message)? {
-            PushOutcome::Confirmed => {
-                // A late edit after push_start leaves the dirty bit set (not yet on
-                // the server); report PushUnconfirmed so a retry re-pushes it. The
-                // lock is retained either way.
-                let still_dirty = self
-                    .speleodb_open_link()
-                    .map_err(local_dto)?
-                    .has_unpushed_edits;
-                if still_dirty {
-                    Ok(PushResult::PushUnconfirmed)
-                } else {
-                    Ok(PushResult::Pushed)
-                }
-            }
-            PushOutcome::Diverged => Ok(PushResult::DivergenceNeeded),
-            PushOutcome::Unconfirmed => Ok(PushResult::PushUnconfirmed),
-        }
-    }
-
-    /// Read-only refresh of the open project against the server (#197): no lock is
-    /// taken. UpToDate / FastForward (re-pull + reload) / DivergenceNeeded.
-    pub(crate) fn speleodb_update(&self) -> Result<UpdateResult, SpeleoErrorDto> {
-        let link = self.speleodb_validated_link()?;
-        let (endpoint, token) = self.speleodb_active_token().map_err(local_dto)?;
-        let insecure_http = self.speleodb_insecure_http();
-
-        let (tip, commits) = head_with_empty_retry(link.base_commit_sha.as_deref(), || {
-            self.speleodb_server_head(&endpoint, &token, insecure_http, &link.project_id)
-        })
-        .map_err(|e| dto_for_error(Endpoint::GetProject, &e))?;
-
-        match sync::reconcile_verdict(
-            link.base_commit_sha.as_deref(),
-            tip.as_deref(),
-            link.has_unpushed_edits,
-            &commits,
-        ) {
-            ReconcileVerdict::UpToDate => Ok(UpdateResult::UpToDate),
-            ReconcileVerdict::FastForward => {
-                // speleodb_fast_forward reloads in place, which re-derives the edit
-                // gate from is_remote (= false for a remote project). If the caller
-                // was mid-edit-session (gate on, lock held - reachable if the lock
-                // lapsed/was admin-released and another writer advanced the tip),
-                // a clean FF must NOT silently strip editability; restore it after
-                // the reload, mirroring speleodb_start_editing's FF arm. Captured
-                // BEFORE the reload (which sets the gate false). FF only fires with
-                // dirty == false, so there are no un-pushed edits to strand.
-                //
-                // The pair, not `edit_enabled` alone (#213, matching the release
-                // verbs): a force-editor is edit-enabled while holding NO lock, and
-                // the reload clears `force_editing`. Restoring on the gate alone
-                // therefore laundered a lockless force-edit session into an
-                // ordinary-looking editing one - editable, un-flagged, and with the
-                // big-red "this .stalx cannot be merged" banner gone. Only a genuine
-                // lock-holding session is restored; a force-editor lands read-only
-                // (nothing to strand - FF requires a clean copy) and re-enters
-                // deliberately via Start editing or Force edit.
-                let was_editing = self.edit_enabled() && !self.force_editing();
-                // Captured BEFORE the reload, which shuts the gate and lets a poll
-                // landing in that window clear the record: this is the last point the
-                // pre-reload truth exists. Kept SEPARATE from `was_editing` on
-                // purpose - the gate is a permission ("may I edit?"), the record is
-                // provenance ("did I take this lock?"), and the poll at the bottom of
-                // `speleodb_link_status` can re-derive the gate from nothing but a
-                // matching holder email. Restoring the record from the gate would
-                // therefore mint provenance for a lock this process never took - an
-                // inherited or sibling-session lock - and license it to explain away
-                // another session's commit as our own unrecorded push.
-                let had_lock_record = self.speleodb_lock_acquired_here(&link.project_id);
-                let local_path = self
-                    .speleodb_fast_forward(
-                        &endpoint,
-                        &token,
-                        insecure_http,
-                        &link,
-                        tip.as_deref(),
-                        LocalEditsPolicy::Protect,
-                    )
-                    .map_err(local_dto)?;
-                if was_editing {
-                    self.set_edit_enabled(true);
-                    // Restore the record only where there was one to restore: the
-                    // reload shut the gate, and a status poll landing in that window
-                    // drops the record (as start-editing's FF arm re-records for the
-                    // same reason). A session that held no record keeps none - the
-                    // gate is restored either way, so an inherited lock stays as
-                    // editable as it was, just without an authorship claim it never
-                    // earned.
-                    if had_lock_record {
-                        self.speleodb_note_lock_acquired(Some(&link.project_id));
-                    }
-                }
-                Ok(UpdateResult::FastForwarded { local_path })
-            }
-            // A fork, a moved tip our BASE isn't an ancestor of, OR a server
-            // inconsistency (non-linear / multi-root / a recorded BASE with no tip):
-            // surface the divergence prompt, never a hard error (#193 b2).
-            ReconcileVerdict::Diverged => Ok(UpdateResult::DivergenceNeeded),
-        }
-    }
-
-    /// Resolve the server's TRUE HEAD and return it with the full revision
-    /// history. The server's `latest_commit` field (carried by acquire /
-    /// get_project / list) is `max(authored_date)` and ties to the ROOT creation
-    /// commit when commits land within the same second - verified unreliable both
-    /// live and in the server source - so every fence resolves the tip from the
-    /// parent-id topology ([`sync::tip_of`]) instead. Returns `(tip, commits)`;
-    /// `tip` is `None` for an empty / ambiguous (forked) history.
-    pub(super) fn speleodb_server_head(
-        &self,
-        endpoint: &str,
-        token: &str,
-        insecure_http: bool,
-        project_id: &str,
-    ) -> Result<(Option<String>, Vec<crate::speleodb::models::RevisionCommit>), SpeleoDbError> {
-        // No GetRevisions endpoint exists; reuse GetProject for the auth/error map.
-        let history = self.speleodb_handle_auth(
-            Endpoint::GetProject,
-            client::get_revisions(endpoint, token, insecure_http, project_id),
-        )?;
-        let tip = sync::tip_of(&history.commits).map(str::to_owned);
-        Ok((tip, history.commits))
-    }
-
-    /// The push half of [`Self::speleodb_done`]: fence BASE vs the server tip,
-    /// recover via ancestry (#193) if the tip moved under our lock, then upload the
-    /// snapshot + render.
-    fn speleodb_push(
-        &self,
-        endpoint: &str,
-        token: &str,
-        insecure_http: bool,
-        link: &crate::models::SpeleoLink,
-        message: Option<String>,
-    ) -> Result<PushOutcome, SpeleoErrorDto> {
-        let project_id = &link.project_id;
-
-        // Authoritative server tip - the revision topology, NOT the unreliable
-        // latest_commit field (see speleodb_server_head). The fetched history is
-        // reused for ancestry recovery below, so this is the only revisions GET.
-        let (tip, commits) = head_with_empty_retry(link.base_commit_sha.as_deref(), || {
-            self.speleodb_server_head(endpoint, token, insecure_http, project_id)
-        })
-        .map_err(|e| dto_for_error(Endpoint::GetProject, &e))?;
-
-        // `my_email` identifies our own landed commits in the BASE..tip gap (#193).
-        // We are authenticated to be here; if it is somehow absent, plan_push can't
-        // match any commit as "mine" and safely routes to the divergence prompt
-        // rather than guessing. That is the right default, but it is indistinguishable
-        // from a genuine divergence in the UI, so say so in the log - otherwise a
-        // "conflict" nobody can explain has no trace of why it was reported.
-        let my_email = self.speleodb_my_email().unwrap_or_else(|| {
-            tracing::warn!(
-                project_id,
-                purpose = "push ancestry recovery (#193)",
-                "no session email: our own landed commits cannot be identified, so a moved \
-                 tip will fail closed to the divergence prompt"
+            let dropped = stack.len();
+            stack.clear();
+            tracing::info!(
+                dropped,
+                reason,
+                purpose = "never inherit another editor's undo history (#194 b3 / #303)",
+                "Cleared the undo history carried by the opened copy"
             );
-            String::new()
-        });
-
-        // push-start is not persisted, so the ancestry timing stays conservative
-        // (clear_dirty == false → AdoptThenUpload, never AdoptConfirmed) and we
-        // re-push on top of any landed commit - a no-op 304 if nothing changed.
-        match sync::plan_push(
-            link.base_commit_sha.as_deref(),
-            tip.as_deref(),
-            &commits,
-            &my_email,
-            link.last_edit_at.as_deref(),
-            None,
-        ) {
-            // base == tip: push our edits directly.
-            PushPlan::Upload => {}
-            // Our prior (ambiguous) push landed; adopt the tip as BASE, then push the
-            // current state on top (a 304 if nothing changed since).
-            PushPlan::AdoptThenUpload => {
-                // [#258] This arm PROVES a prior upload landed, so the remembered
-                // choice is stale here just as surely as in the arms that return
-                // Confirmed - and it is the reachable one of the two adoption plans.
-                // Ahead of the fallible write for the usual reason, and ahead of the
-                // upload below because that upload can come back ambiguous and return
-                // without concluding anything.
-                self.speleodb_note_prior_push_landed(project_id);
-                self.speleodb_mutate_link(|l| l.base_commit_sha = tip.clone())
-                    .map_err(local_dto)?;
-            }
-            // Forward-compatible only (unreachable while push-start is unpersisted):
-            // the prior push landed and no edit followed, so adopt the tip and clear
-            // dirty without a redundant re-push.
-            PushPlan::AdoptConfirmed => {
-                // The prior push DID land; this arm only recognises it late. Concluded
-                // ahead of the fallible link write, like the 200 and 304 arms: the
-                // recall went stale when that upload landed, so a failure to record
-                // the adoption locally must not be what leaves it standing.
-                let landed = self.speleodb_revision_landed(project_id);
-                self.speleodb_mutate_link(|l| {
-                    l.base_commit_sha = tip.clone();
-                    l.has_unpushed_edits = false;
-                    l.last_edit_at = None;
-                })
-                .map_err(local_dto)?;
-                return Ok(landed);
-            }
-            // A stranger's commit, OR a server inconsistency (non-linear / multi-root
-            // / a recorded BASE with no tip): never overwrite or guess - surface the
-            // divergence prompt (#193 b2 + b5). Stays locked + dirty in speleodb_done.
-            PushPlan::Diverged => return Ok(PushOutcome::Diverged),
-        }
-
-        // Normal push (Done / Push): fold the SDB-authoritative name pre-push (#216).
-        self.speleodb_upload(endpoint, token, insecure_http, link, message, true)
-    }
-
-    /// Build the upload (VACUUM snapshot with the dirty bit cleared in the copy +
-    /// the `.tml` render) and push it as one commit, then reconcile the dirty bit
-    /// from the result.
-    pub(super) fn speleodb_upload(
-        &self,
-        endpoint: &str,
-        token: &str,
-        insecure_http: bool,
-        link: &crate::models::SpeleoLink,
-        message: Option<String>,
-        fold_metadata: bool,
-    ) -> Result<PushOutcome, SpeleoErrorDto> {
-        let project_id = &link.project_id;
-        let commit_message = message
-            .map(|m| m.trim().to_owned())
-            .filter(|m| !m.is_empty())
-            .unwrap_or_else(|| "Updated in Stalagmight".to_owned());
-
-        // [#216] Pre-push SDB → `.stalx` metadata fold. The project name is stored on
-        // BOTH the server and the embedded `.stalx` (via the Project model), and SDB is
-        // authoritative for it (edited through the Project Settings tab, or by another
-        // session / the web UI). Fold the server's current name into the open project
-        // BEFORE the flush below so the pushed snapshot carries the authoritative name.
-        // Name is the only dual-stored field today (description/country/visibility live
-        // only on the server). Best-effort and NON-fatal: a direct GET (NOT via the auth
-        // handler, so a spurious 401 on this consistency refresh can't auto-drop the
-        // session mid-push - the upload itself routes through the handler and catches a
-        // truly dead token), and the fold never dirties the link. Skipped on the initial
-        // publish push (`fold_metadata == false`): that GET would hit a project created
-        // milliseconds earlier whose name is already known-current, a wasted round-trip.
-        // The server's project `type` at push time, read off the SAME GET as the name
-        // fold so the self-heal below costs no extra round-trip. `None` means we could
-        // not read it, which is not the same as "it is fine" - see the heal.
-        let mut server_kind: Option<String> = None;
-        if fold_metadata {
-            // `fetched`, not `project`, and deliberately so:
-            // `bump_sites_are_exactly_the_known_set` recognises a commit into the
-            // AppState project slot by the shape of the assignment, and assigning
-            // anything derived from a binding named `project` reads as one. The
-            // tripwire is a text heuristic on purpose - keeping look-alikes out of the
-            // tree is cheaper than teaching it to parse Rust, and far cheaper than the
-            // session-boundary bug it exists to catch. (Which is also why this comment
-            // describes the needle rather than quoting it.)
-            match client::get_project(endpoint, token, insecure_http, project_id) {
-                Ok(fetched) => {
-                    self.speleodb_fold_local_name(&fetched.name);
-                    server_kind = Some(fetched.kind);
-                }
-                Err(e) => tracing::warn!(
-                    error = %e,
-                    project_id,
-                    purpose = "pre-push SDB->.stalx name fold (#216)",
-                    "speleodb_upload: could not GET project to fold the authoritative name; pushing the local name"
-                ),
-            }
-        }
-
-        // The live on-disk `.stalx` (the open project's cache file) and the scratch
-        // snapshot / render paths beside it.
-        let live = self.speleodb_cache_path(project_id).map_err(local_dto)?;
-        let dir = live
-            .parent()
-            .ok_or_else(|| local_dto(SpeleoDbError::Io("cache path has no parent".to_owned())))?;
-        let snapshot = dir.join("snapshot.stalx");
-        let tml = dir.join("ariane.tml");
-
-        // Push-start fence (#197): capture the instant BEFORE the flush/snapshot.
-        // Any edit recorded after this (last_edit_at > push_start) is NOT in the
-        // snapshot we upload, so a confirmed push must NOT clear its dirty bit - it
-        // is re-pushed on the next Done instead of being silently dropped. (dirty
-        // edits always carry a last_edit_at: mark_remote_dirty stamps both
-        // together, so the None branch of edits_captured_by_push is unreachable for
-        // a real dirty bit here.)
-        let push_start = chrono::Utc::now().to_rfc3339();
-
-        // Flush in-memory state to the live `.stalx` FIRST, THEN render the `.tml`.
-        // save_project heals the in-memory project (mints + DEDUPS shot UUIDs and
-        // sanitizes non-finite geometry); rendering the `.tml` after that heal is
-        // what guarantees the co-pushed `.tml` and the `.stalx` snapshot agree on
-        // shot identity + geometry. Rendering first would ship a `.tml` built from
-        // the un-healed project for a legacy file carrying within-section duplicate
-        // UUIDs or non-finite values (#196).
-        if !self.save_project(None).success {
-            return Err(local_dto(SpeleoDbError::Io(
-                "failed to flush project before push".to_owned(),
-            )));
-        }
-        self.speleodb_render_tml(&tml).map_err(local_dto)?;
-
-        // Self-contained snapshot of the live `.stalx` (#195), dirty bit cleared in
-        // the COPY so it never rides to the server.
-        crate::persistence::Database::vacuum_snapshot(&live, &snapshot)
-            .map_err(|e| local_dto(SpeleoDbError::Io(e.to_string())))?;
-        // FATAL if it fails: an unsanitized snapshot still carries the pusher's
-        // undo/redo history (and a stale dirty bit) and must never be uploaded.
-        clear_snapshot_dirty(&snapshot).map_err(local_dto)?;
-
-        let result = self.speleodb_handle_auth(
-            Endpoint::UploadAuto,
-            client::upload_auto(
-                endpoint,
-                token,
-                insecure_http,
-                project_id,
-                &snapshot,
-                &tml,
-                &commit_message,
-            ),
-        );
-        match result {
-            // 200: BASE advances to the adopted hexsha. Clear the dirty bit ONLY if
-            // no edit was recorded after push_start (else a concurrent edit during
-            // the upload would be dropped - keep it dirty so the next Done re-pushes
-            // it). BASE advances: the uploaded snapshot IS the new base; a kept late
-            // edit is a clean second commit on top of it.
-            Ok(pushed) => {
-                // Conclude the landing FIRST, before any fallible local bookkeeping.
-                // A 200 means the revision is on the server; the recall went stale at
-                // that moment, not when we finished writing the link row. Leaving the
-                // invalidation after the `?` below meant a disk/db failure returned
-                // with a choice we already knew was stale still standing - and the
-                // next discarding open would extract that pre-push entry and stamp it
-                // with the new tip, which is the exact rollback the recall drop is
-                // here to prevent. The outcome is held and returned unchanged, so the
-                // "landed" conclusion and the invalidation still cannot drift apart.
-                let landed = self.speleodb_revision_landed(project_id);
-                self.speleodb_heal_managed_type(
-                    endpoint,
-                    token,
-                    insecure_http,
-                    project_id,
-                    server_kind.as_deref(),
-                );
-                let new_base = pushed.latest_commit.as_ref().map(|c| c.id.clone());
-                self.speleodb_mutate_link(|l| {
-                    // NEVER let a successful push move BASE BACKWARD. A None BASE
-                    // over a dirty copy fences straight to Diverged, then walks the
-                    // whole history to the service-account creation root and calls
-                    // that a stranger's commit; the user gets a divergence prompt
-                    // against their own just-landed push. Keeping the previous BASE
-                    // instead costs at most one redundant ancestry recovery on the
-                    // next push, which is exactly what that machinery is for. Mirrors
-                    // the same guard the revision-restore path already applies.
-                    //
-                    // Presence is a sufficient test only because
-                    // `parse_upload_auto_response` now populates `latest_commit`
-                    // SOLELY from the 200 envelope's authoritative top-level
-                    // `hexsha`. It used to fall back to the response's own
-                    // eventually-consistent `latest_commit`, which is documented (and
-                    // was observed live) still pointing at the PRIOR tip right after
-                    // a push - a stale ancestor that sails through this check and
-                    // moves BASE backward past every intervening commit, which is the
-                    // exact failure the guard is here to prevent.
-                    if new_base.is_some() {
-                        l.base_commit_sha = new_base;
-                    } else {
-                        tracing::warn!(
-                            project_id,
-                            "upload 200 carried no commit sha; keeping the previous BASE \
-                             rather than resetting it to the empty-repo sentinel"
-                        );
-                    }
-                    if sync::edits_captured_by_push(l.last_edit_at.as_deref(), Some(&push_start)) {
-                        l.has_unpushed_edits = false;
-                        l.last_edit_at = None;
-                    }
-                })
-                .map_err(local_dto)?;
-                Ok(landed)
-            }
-            Err(e) => {
-                // 304: the remote tree already matches - clear dirty (same push-start
-                // guard as the 200 path), BASE unchanged.
-                if matches!(&e, SpeleoDbError::Status { status: 304, .. }) {
-                    // A 304 does not mean nothing ever landed. The documented recovery
-                    // adopts a prior upload whose response was lost, then re-uploads
-                    // identical content - and it is THAT upload which made the recall
-                    // stale, whatever this attempt returns. Concluded ahead of the
-                    // fallible link write for the same reason as the 200 arm.
-                    let landed = self.speleodb_revision_landed(project_id);
-                    self.speleodb_heal_managed_type(
-                        endpoint,
-                        token,
-                        insecure_http,
-                        project_id,
-                        server_kind.as_deref(),
-                    );
-                    self.speleodb_mutate_link(|l| {
-                        if sync::edits_captured_by_push(
-                            l.last_edit_at.as_deref(),
-                            Some(&push_start),
-                        ) {
-                            l.has_unpushed_edits = false;
-                            l.last_edit_at = None;
-                        }
-                    })
-                    .map_err(local_dto)?;
-                    return Ok(landed);
-                }
-                // Ambiguous (retried-then-exhausted 5xx, or a transport drop): we
-                // don't know whether it landed - stay dirty, recover via ancestry
-                // on the next attempt.
-                let ambiguous = match &e {
-                    SpeleoDbError::Status { status, .. } => {
-                        map_status(Endpoint::UploadAuto, *status) == SpeleoDbAction::StayDirty
-                    }
-                    SpeleoDbError::Transport { .. } => true,
-                    _ => false,
-                };
-                if ambiguous {
-                    tracing::warn!(
-                        error = %e,
-                        purpose = "preserve un-pushed edits after an ambiguous push",
-                        "speleodb push: ambiguous result; staying dirty for ancestry recovery"
-                    );
-                    return Ok(PushOutcome::Unconfirmed);
-                }
-                // A hard rejection (403 fence, 4xx, parse): surface it.
-                Err(dto_for_error(Endpoint::UploadAuto, &e))
-            }
-        }
-    }
-
-    /// A project with a `.stalx` on the server is a Stalagmight project, so the server
-    /// `type` should say so. Flip it when it still says `ariane`.
-    ///
-    /// Adoption does this itself on the push it performs, and that covers the ordinary
-    /// route. It does NOT cover the one that skips that push: adoption declines to push
-    /// through somebody else's write lock (and cannot push at all offline or read-only),
-    /// so it converts locally and leaves the flip undone - and the Start-editing → Done
-    /// the user then runs had no reason to touch the project type. The result was a
-    /// permanent half-state: the `.stalx` up on the server under a project that still
-    /// advertises itself as Ariane, keeps offering Adopt, and makes later `.tml` edits
-    /// look authoritative to whoever makes them. Nothing in the app ever finished it.
-    ///
-    /// So the finishing move belongs to the push rather than to adoption: every push
-    /// that lands is proof the project is Stalagmight-managed, whichever route got it
-    /// there. Idempotent - a project already typed `other` costs nothing, which is
-    /// every push after the first.
-    ///
-    /// Called only from arms where the upload CONCLUDED, never before one. Flipping
-    /// ahead of a landing recreates the state this exists to avoid: a project typed
-    /// `other` whose only file is the Ariane one that type says to disregard, openable
-    /// by nobody.
-    ///
-    /// `server_kind` is the type read before the upload. `None` means we do not have
-    /// one - either the read failed, or it never ran (`fold_metadata == false`, the
-    /// initial publish push, where the project was created milliseconds ago and its
-    /// type is ours already). This declines to act on either: the flip is not urgent,
-    /// and guessing costs a write against a project we know nothing current about. The
-    /// next push reads it again.
-    ///
-    /// Called directly rather than through the auth handler, like adoption's own flip
-    /// and for the same reason: this is a swallowed best-effort call at the end of a
-    /// successful push, so a spurious 401 here would drop the session - keychain entry
-    /// included - over work that already landed.
-    fn speleodb_heal_managed_type(
-        &self,
-        endpoint: &str,
-        token: &str,
-        insecure_http: bool,
-        project_id: &str,
-        server_kind: Option<&str>,
-    ) {
-        if !type_still_says_ariane(server_kind) {
-            return;
-        }
-        match client::patch_project(
-            endpoint,
-            token,
-            insecure_http,
-            project_id,
-            r#"{"type":"other"}"#,
-        ) {
-            Ok(_) => tracing::info!(
-                project_id,
-                purpose = "finish an adoption whose own push never ran",
-                "speleodb: flipped the server project type ariane->other after a landed push"
-            ),
-            Err(e) => tracing::warn!(
-                error = %e,
-                project_id,
-                purpose = "finish an adoption whose own push never ran",
-                "speleodb: could not flip the project type after a landed push; the next push retries"
-            ),
         }
     }
 
@@ -3261,16 +2595,19 @@ impl AppState {
 )]
 mod tests {
     use super::{
-        auth_error_drops_token, clear_snapshot_dirty, head_with_empty_retry,
-        is_local_edits_refusal, local_dto, lock_held_by_me, resolve_endpoint, reverify_due,
-        type_says_managed, type_still_says_ariane, validate_project_id,
-        whoami_indicates_dead_token, Endpoint, PushOutcome, SpeleoDbSession,
-        REVERIFY_INTERVAL_SECS,
+        auth_error_drops_token, is_local_edits_refusal, local_dto, lock_held_by_me,
+        resolve_endpoint, reverify_due, type_says_managed, validate_project_id,
+        whoami_indicates_dead_token, Endpoint, SpeleoDbSession, REVERIFY_INTERVAL_SECS,
     };
+    // [#275] The push half now lives in `speleodb_push`; these tests still exercise it
+    // from here (they share this module's fixtures), so they reach it by its new path.
     use crate::core::state::speleodb_cache::{
-        preserved_display_settings, restore_display_settings,
+        preserved_display_settings, restore_display_settings, InheritedUndo,
     };
     use crate::core::state::speleodb_pull::classify_dump_entry;
+    use crate::core::state::speleodb_push::{
+        clear_snapshot_dirty, head_with_empty_retry, type_still_says_ariane, PushOutcome,
+    };
     use crate::core::state::tests_support::speleodb_prod_matches;
     use crate::models::{Project, SpeleoLink};
     use crate::persistence::Database;
@@ -3369,7 +2706,7 @@ mod tests {
         // exists to avoid - a project typed `other` whose only file is the Ariane one
         // that type says to disregard. Checked arm by arm rather than once, so a heal
         // added ahead of its landing cannot hide behind an earlier well-formed pair.
-        let src = prod_source();
+        let src = push_prod_source();
         let upload = src
             .find("fn speleodb_upload")
             .expect("the upload is defined");
@@ -3475,11 +2812,12 @@ mod tests {
                 has_unpushed_edits: true,
                 last_edit_at: Some("2026-06-27T10:00:00+00:00".to_owned()),
                 last_verify_at: None,
+                undo_mode: None,
             }))
             .expect("stamp dirty link");
         }
 
-        clear_snapshot_dirty(&path).expect("sanitize the snapshot");
+        clear_snapshot_dirty(&path, false, None).expect("sanitize the snapshot");
 
         let db = Database::open_existing(&path).expect("reopen snapshot");
         let link = db
@@ -3718,26 +3056,20 @@ mod tests {
             db.save_display_setting("grid", "off").expect("save grid");
         }
 
-        // A server dump carrying a fresh `.stalx` (contents are opaque here - the
-        // swap is what's under test).
-        let zip = {
-            use std::io::Write as _;
-            let mut writer = zip::write::ZipWriter::new(std::io::Cursor::new(Vec::<u8>::new()));
-            let opts = zip::write::SimpleFileOptions::default()
-                .compression_method(zip::CompressionMethod::Stored);
-            writer
-                .start_file("misc/project.stalx", opts)
-                .expect("start_file");
-            writer.write_all(b"SERVER-COPY").expect("write entry");
-            writer.finish().expect("finish zip").into_inner()
-        };
+        let zip = server_dump_zip();
 
         let state = AppState::new().expect("state");
         assert!(state.open_project(dest.clone()).success, "open the cache");
 
         let mut dump = crate::speleodb::dump::Dump::open(&zip).expect("open dump");
         let preserved = state
-            .replace_cache_stalx(&mut dump, "misc/project.stalx", &dest, GUARD_ID)
+            .replace_cache_stalx(
+                &mut dump,
+                "misc/project.stalx",
+                &dest,
+                GUARD_ID,
+                InheritedUndo::Drop,
+            )
             .expect("replace the cache file");
 
         assert_eq!(
@@ -3749,9 +3081,10 @@ mod tests {
             !project_is_open(&state),
             "the live handle is dropped before the file is replaced"
         );
+        let replaced = Database::open_existing(&dest).expect("open replaced file");
         assert_eq!(
-            std::fs::read(&dest).expect("read replaced file"),
-            b"SERVER-COPY",
+            replaced.load_project().expect("load replaced project").name,
+            "Server Copy",
             "the destination now holds the downloaded copy"
         );
         let leftovers: Vec<_> = std::fs::read_dir(temp.path())
@@ -3786,6 +3119,9 @@ mod tests {
             has_unpushed_edits: dirty,
             last_edit_at: dirty.then(|| "2026-07-26T09:00:00Z".to_owned()),
             last_verify_at: None,
+            // Current linked fixtures carry an explicit project policy. Legacy NULL
+            // behavior is covered separately by the undo-policy migration tests.
+            undo_mode: Some(crate::models::UndoMode::Full),
         }))
         .expect("save link");
     }
@@ -3793,14 +3129,56 @@ mod tests {
     /// A one-entry server dump whose `.stalx` payload is recognisable on disk.
     fn server_dump_zip() -> Vec<u8> {
         use std::io::Write as _;
+        let temp = TempDir::new().expect("server project temp dir");
+        let project = temp.path().join("server.stalx");
+        seed_stalx(&project, "Server Copy");
+        let bytes = std::fs::read(project).expect("read server project");
         let mut writer = zip::write::ZipWriter::new(std::io::Cursor::new(Vec::<u8>::new()));
         let opts = zip::write::SimpleFileOptions::default()
             .compression_method(zip::CompressionMethod::Stored);
         writer
             .start_file("misc/project.stalx", opts)
             .expect("start_file");
-        writer.write_all(b"SERVER-COPY").expect("write entry");
+        writer.write_all(&bytes).expect("write entry");
         writer.finish().expect("finish zip").into_inner()
+    }
+
+    /// [#303] The discard verb destroys un-pushed work with no way back, and until now it
+    /// validated nothing but a link and a token - so the backend could not tell a
+    /// confirmed discard from a stray call. `acknowledged` is the caller reporting that it
+    /// showed the loss, the same shape as `speleodb_guard_unwind`'s `discard_unpushed`.
+    ///
+    /// It is NOT a lock or read-only gate, which was considered and rejected: a 401
+    /// auto-drop leaves the session read-only while the copy still holds un-pushed work,
+    /// and discard is the way out of exactly that state.
+    #[test]
+    fn discarding_the_local_copy_needs_the_callers_acknowledgement() {
+        let temp = TempDir::new().expect("temp dir");
+        let dest = temp.path().join("discard.stalx");
+        seed_linked_stalx(&dest, GUARD_ID, true);
+        let state = AppState::new().expect("state");
+        assert!(state.open_project(dest).success, "open the linked copy");
+
+        let refused = state
+            .speleodb_discard_changes(true, false)
+            .expect_err("an unacknowledged discard must be refused");
+        assert!(
+            refused.message.contains("confirmed"),
+            "the refusal must say what is missing, got {:?}",
+            refused.message
+        );
+
+        // ...and the acknowledgement is the ONLY thing that refusal was about: with it
+        // set, the same call gets as far as the session token (absent in this offline
+        // fixture) instead. Without this half, deleting the check would leave the test
+        // passing on whatever error came next.
+        let acknowledged = state
+            .speleodb_discard_changes(true, true)
+            .expect_err("offline fixture: there is no session token to reach the server with");
+        assert_ne!(
+            acknowledged.message, refused.message,
+            "an acknowledged discard must get past the acknowledgement gate"
+        );
     }
 
     #[test]
@@ -3937,7 +3315,12 @@ mod tests {
 
         let mut dump = crate::speleodb::dump::Dump::open(&zip).expect("open dump");
         let err = state
-            .replace_cache_stalx_abandoning(&mut dump, "no/such/entry.stalx", &dest)
+            .replace_cache_stalx_abandoning(
+                &mut dump,
+                "no/such/entry.stalx",
+                &dest,
+                InheritedUndo::Drop,
+            )
             .expect_err("extracting a missing entry must fail");
         assert!(
             !matches!(err, SpeleoDbError::WouldDiscardLocalEdits { .. }),
@@ -4015,7 +3398,13 @@ mod tests {
 
         let mut dump = crate::speleodb::dump::Dump::open(&zip).expect("open dump");
         let refused = state
-            .replace_cache_stalx(&mut dump, "misc/project.stalx", &dest, GUARD_ID)
+            .replace_cache_stalx(
+                &mut dump,
+                "misc/project.stalx",
+                &dest,
+                GUARD_ID,
+                InheritedUndo::Drop,
+            )
             .expect_err("the guarded verb must refuse");
         assert!(matches!(
             refused,
@@ -4029,11 +3418,17 @@ mod tests {
 
         let mut dump = crate::speleodb::dump::Dump::open(&zip).expect("reopen dump");
         state
-            .replace_cache_stalx_abandoning(&mut dump, "misc/project.stalx", &dest)
+            .replace_cache_stalx_abandoning(
+                &mut dump,
+                "misc/project.stalx",
+                &dest,
+                InheritedUndo::Drop,
+            )
             .expect("the abandoning verb still discards on purpose");
+        let replaced = Database::open_existing(&dest).expect("open replaced file");
         assert_eq!(
-            std::fs::read(&dest).expect("read replaced file"),
-            b"SERVER-COPY",
+            replaced.load_project().expect("load replaced project").name,
+            "Server Copy",
             "the confirmed-discard path keeps working"
         );
     }
@@ -4209,7 +3604,7 @@ mod tests {
         // the live bytes - is then what upload_auto streams. The ordering can't be
         // observed without a client seam, so pin it structurally (like the
         // BASE-advance tripwire); the live round-trips prove the behaviour itself.
-        let src = include_str!("speleodb.rs");
+        let src = push_prod_source();
         let upload = src
             .split_once("fn speleodb_upload")
             .map(|(_, rest)| rest)
@@ -4266,6 +3661,7 @@ mod tests {
             has_unpushed_edits: false,
             last_edit_at: None,
             last_verify_at: None,
+            undo_mode: None,
         }))
         .expect("save link");
         drop(db);
@@ -4336,6 +3732,7 @@ mod tests {
             has_unpushed_edits: dirty,
             last_edit_at: dirty.then(|| "2026-07-27T10:00:00Z".to_owned()),
             last_verify_at: None,
+            undo_mode: None,
         }))
         .expect("save link");
         drop(db);
@@ -4775,6 +4172,7 @@ mod tests {
             has_unpushed_edits: true,
             last_edit_at: None,
             last_verify_at: None,
+            undo_mode: None,
         };
 
         state.set_force_editing(true);
@@ -4870,6 +4268,7 @@ mod tests {
             has_unpushed_edits: true,
             last_edit_at: None,
             last_verify_at: None,
+            undo_mode: None,
         };
         assert_eq!(
             state.speleodb_remote_state(&base, "tok-1", false, &link, Some("u@x")),
@@ -5377,11 +4776,7 @@ mod tests {
         // above: reaching that arm needs a successful fast-forward, and the reload
         // resolves an app cache dir that only the env-gated live tests initialise, so
         // there is no unit-level seam to observe the restore through.
-        let src = include_str!("speleodb.rs");
-        let prod = src
-            .split("#[cfg(test)]")
-            .next()
-            .expect("production region precedes the test module");
+        let prod = push_prod_source();
         let update = prod
             .split_once("fn speleodb_update")
             .map(|(_, rest)| rest)
@@ -5407,6 +4802,20 @@ mod tests {
             .expect("production region precedes the test module")
     }
 
+    /// [#275] The same, for the push half after it moved to `speleodb_push.rs`.
+    ///
+    /// The tripwires that pin the upload's internal ORDERING (flush before snapshot,
+    /// heal only after a landing, the fast-forward's lock-pair capture) are structural
+    /// assertions about that source, so they have to follow it. Left pointed at
+    /// `speleodb.rs` they would not fail - they would stop finding the function at all
+    /// and panic in `expect`, which reports the wrong thing entirely.
+    fn push_prod_source() -> &'static str {
+        include_str!("speleodb_push.rs")
+            .split("\n#[cfg(test)]")
+            .next()
+            .expect("production region precedes the test module")
+    }
+
     #[test]
     fn update_restores_the_acquisition_record_only_where_one_existed() {
         // Sibling of the tripwire above, on the OTHER half of the same restore. The
@@ -5422,7 +4831,7 @@ mod tests {
         // Structural for the same reason as the sibling: reaching this arm needs a
         // successful fast-forward, whose reload resolves an app cache dir that only
         // the env-gated live tests initialise.
-        let update = prod_source()
+        let update = push_prod_source()
             .split_once("fn speleodb_update")
             .map(|(_, rest)| rest)
             .and_then(|rest| rest.split("\n    fn ").next())
@@ -8471,11 +7880,21 @@ mod tests {
 
     #[test]
     #[ignore = "hits the live SpeleoDB box; needs DEV_SPELEODB_* (run with --ignored --test-threads=1)"]
-    fn live_orch_pushed_snapshot_carries_no_undo_history() {
-        // #194 b3: an edit builds local undo history; after Done (push), the copy
-        // the SERVER stores must carry NO undo/redo - so any collaborator adopting
-        // it starts with a clean slate (never inheriting + replaying the pusher's
-        // edit history, a data-corruption vector).
+    fn live_orch_pushed_snapshot_carries_the_undo_history_since_the_last_commit() {
+        // [#303] The end-to-end shape of the hybrid stack, against the real server. This
+        // test used to assert the OPPOSITE (`..._carries_no_undo_history`, #194 b3) and
+        // is inverted deliberately - three assertions, all of which flipped:
+        //
+        // 1. the pushed snapshot DOES carry the undo history (Full mode is the default),
+        //    which is what gives undo cross-commit reach;
+        // 2. it carries NO redo, in any mode (clarification #1); and
+        // 3. the LOCAL stack is EMPTY after the push (clear-on-push, q8): those
+        //    operations are in the commit now, so keeping them would duplicate them in
+        //    the next one.
+        //
+        // The #194 b3 hazard the first assertion relaxes is contained elsewhere now: a
+        // pulled stack is cleared on every implicit adopt path, and is only handed back
+        // through the explicit, confirmed, lock-held Unwind.
         let Some((url, email, password)) = orch_env() else {
             return;
         };
@@ -8516,37 +7935,82 @@ mod tests {
         );
         state.speleodb_done(None).expect("done");
 
-        // Sanity: the LOCAL file kept the editor's undo (only the uploaded snapshot
-        // is sanitized, never the live file).
-        let live_undo = Database::open_existing(&live_path)
-            .expect("open live")
-            .load_undo_stack_with_timestamps()
-            .expect("load live undo");
-        assert!(
-            !live_undo.is_empty(),
-            "sanity: the editor accumulated undo history locally"
+        // [#303] Clear-on-push, in memory: the operation that push carried is gone, so
+        // the next commit cannot duplicate it.
+        assert_eq!(
+            state.undo_stack.lock().expect("undo stack lock").len(),
+            0,
+            "a confirmed push clears the undo entries it uploaded (q8)"
         );
 
-        // Re-download the SERVER's copy: it must carry NO undo/redo (the strip).
+        // Re-download the SERVER's copy and read what the commit actually stored.
         let server = state
             .speleodb_open_project(id.clone(), "orch-undo".to_owned(), None, None)
             .expect("re-download server copy");
         let server_db =
             Database::open_existing(Path::new(&server.local_path)).expect("open server copy");
         assert!(
-            server_db
+            !server_db
                 .load_undo_stack_with_timestamps()
                 .expect("load server undo")
                 .is_empty(),
-            "the pushed snapshot must carry no undo history (#194 b3)"
+            "Full mode must ship the undo history since the last commit (#303) - this is \
+             what lets a later Unwind fetch it back and keep undoing past the commit"
         );
         assert!(
             server_db
                 .load_redo_stack_with_timestamps()
                 .expect("load server redo")
                 .is_empty(),
-            "the pushed snapshot must carry no redo history (#194 b3)"
+            "redo is never uploaded, in any mode (clarification #1)"
         );
+
+        // And the second push carries ONLY the second edit - the point of the whole
+        // exercise (no duplication across commits). Re-acquire, edit, Done again.
+        state
+            .speleodb_start_editing()
+            .expect("start_editing for the second push");
+        assert!(
+            state
+                .execute(Command::CreateSection {
+                    name: Some("undo-edit-2".to_owned()),
+                    surveyor: None,
+                    date: None,
+                    color: "#123456".to_owned(),
+                    direction: None,
+                    shots: vec![ShotData {
+                        length: 7.0,
+                        ..Default::default()
+                    }],
+                })
+                .success,
+            "second edit succeeds while editing"
+        );
+        state.speleodb_done(None).expect("second done");
+
+        let server2 = state
+            .speleodb_open_project(id.clone(), "orch-undo".to_owned(), None, None)
+            .expect("re-download after the second push");
+        let commit2 = Database::open_existing(Path::new(&server2.local_path))
+            .expect("open second server copy")
+            .load_undo_stack_with_timestamps()
+            .expect("load second server undo");
+        assert_eq!(
+            commit2.len(),
+            1,
+            "commit 2 must carry ONLY the operations made after commit 1, not the whole \
+             session again - got {commit2:?}"
+        );
+        assert!(
+            commit2
+                .iter()
+                .all(|(_, command_json, ..)| command_json.contains("undo-edit-2")),
+            "and specifically the SECOND edit, not the first: {commit2:?}"
+        );
+
+        // `live_path` is the same cache file throughout; naming it keeps the re-download
+        // assertions above honestly about the SERVER's copy rather than this one.
+        assert!(live_path.exists(), "the local cache file is still there");
     }
 
     #[test]

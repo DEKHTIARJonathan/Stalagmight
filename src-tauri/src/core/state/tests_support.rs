@@ -33,7 +33,7 @@ impl AppState {
 /// this count source-level facts about the orchestration, and the orchestration is
 /// spread across the family - a scan that stops seeing a file stops guarding it, and
 /// an absence assertion goes on passing while it does.
-fn speleodb_prod_sources() -> [(&'static str, &'static str); 12] {
+fn speleodb_prod_sources() -> [(&'static str, &'static str); 13] {
     [
         ("speleodb.rs", include_str!("speleodb.rs")),
         ("speleodb_admin.rs", include_str!("speleodb_admin.rs")),
@@ -54,13 +54,19 @@ fn speleodb_prod_sources() -> [(&'static str, &'static str); 12] {
         ("speleodb_logout.rs", include_str!("speleodb_logout.rs")),
         ("speleodb_project.rs", include_str!("speleodb_project.rs")),
         ("speleodb_pull.rs", include_str!("speleodb_pull.rs")),
+        ("speleodb_push.rs", include_str!("speleodb_push.rs")),
         (
             "speleodb_revisions.rs",
             include_str!("speleodb_revisions.rs"),
         ),
         ("speleodb_session.rs", include_str!("speleodb_session.rs")),
     ]
-    .map(|(name, src)| (name, src.split("#[cfg(test)]").next().unwrap_or(src)))
+    .map(|(name, src)| {
+        // Only the top-level test module ends production. `speleodb_push.rs` also has
+        // a test-only method, whose indented attribute must not truncate every source
+        // scan before the real push implementation.
+        (name, src.split("\n#[cfg(test)]").next().unwrap_or(src))
+    })
 }
 
 /// How many times `needle` appears across the family's production regions.
@@ -83,14 +89,14 @@ mod tests {
     /// The array above must list EVERY `speleodb*.rs` in the family, and nothing
     /// enforced that but a doc comment.
     ///
-    /// It matters because of what rides on it. Two of the tripwires it feeds are
-    /// ABSENCE assertions - `replace_cache_stalx_abandoning` must have no caller outside
-    /// its own file, `write_collab_sibling` likewise - and an absence assertion over a
-    /// scan that has stopped seeing a file goes on passing while the thing it forbids
-    /// walks in through that file. A forgotten line is loud for the counting tripwires
-    /// and completely silent for those two, which is the wrong way round. The #275 plan
-    /// schedules two more modules (`speleodb_push.rs`, `speleodb_session.rs`), so this
-    /// is not hypothetical.
+    /// It matters because of what rides on it. One of the tripwires it feeds is an
+    /// ABSENCE assertion - `replace_cache_stalx_abandoning` must have no caller outside
+    /// its own file - and an absence assertion over a scan that has stopped seeing a
+    /// file goes on passing while the thing it forbids walks in through that file. A
+    /// forgotten line is loud for the counting tripwires and completely silent for that
+    /// one, which is the wrong way round. Not hypothetical: every module the #275 plan
+    /// scheduled has since landed - `speleodb_session.rs`, and now `speleodb_push.rs` -
+    /// and each one arrived as a file this array had to grow a line for.
     ///
     /// `include_str!` needs literal paths, so the array itself cannot be derived. What
     /// CAN be derived is whether it is complete - read the directory and say which file

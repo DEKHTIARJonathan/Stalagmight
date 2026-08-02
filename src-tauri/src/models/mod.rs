@@ -8,6 +8,7 @@ pub mod section;
 pub mod shot;
 pub mod speleo_link;
 pub mod station;
+pub mod undo_mode;
 pub mod warning;
 
 pub use angle::*;
@@ -21,4 +22,5 @@ pub use shot::*;
 pub use speleo_link::*;
 pub use station::ClosureStrategy;
 pub use station::*;
+pub use undo_mode::*;
 pub use warning::*;

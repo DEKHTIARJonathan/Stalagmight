@@ -14,10 +14,6 @@ use crate::models::{ShotData, ShotId, ShotUpdates};
 /// variant can't silently skip an integrity step.
 #[derive(Debug, Clone, Copy)]
 struct CommandIntegrity {
-    /// Can drift section offsets (move merged partners out of alignment) and so
-    /// needs the post-command geometry reconcile. Pure metadata/lifecycle edits
-    /// cannot, so they skip it.
-    affects_geometry: bool,
     /// Can introduce a dangling/out-of-range cross-reference - by removing a
     /// referenced entity or renumbering station indices - and so needs the
     /// (expensive) whole-project rollback snapshot to reject corruption at the
@@ -127,28 +123,19 @@ impl AppState {
     fn command_integrity(cmd: &Command) -> CommandIntegrity {
         use Command::*;
         // Named profiles keep the table readable; every variant maps to exactly one.
-        const INERT: CommandIntegrity = CommandIntegrity {
-            affects_geometry: false,
-            can_dangle_refs: false,
-            can_orphan_closures: false,
-        };
-        const GEOMETRY_ONLY: CommandIntegrity = CommandIntegrity {
-            affects_geometry: true,
+        const SAFE_REFS: CommandIntegrity = CommandIntegrity {
             can_dangle_refs: false,
             can_orphan_closures: false,
         };
         const REMOVES: CommandIntegrity = CommandIntegrity {
-            affects_geometry: true,
             can_dangle_refs: true,
             can_orphan_closures: true,
         };
         const CREATE_SHOT: CommandIntegrity = CommandIntegrity {
-            affects_geometry: true,
             can_dangle_refs: true,
             can_orphan_closures: false,
         };
         const UNMERGE: CommandIntegrity = CommandIntegrity {
-            affects_geometry: true,
             can_dangle_refs: false,
             can_orphan_closures: true,
         };
@@ -172,7 +159,7 @@ impl AppState {
             | SetStationComment { .. }
             | MoveComment { .. }
             | RepairIntegrity
-            | UpdateProjectSettings => INERT,
+            | UpdateProjectSettings => SAFE_REFS,
 
             // Remove an entity / renumber stations: can dangle refs AND strand a
             // section behind a sole-bridge closure.
@@ -186,10 +173,9 @@ impl AppState {
             // already-drifted project as a side effect of an edit whose undo
             // does not invert that geometry change (the asymmetric-undo hazard
             // spelled out for SetStationComment above).
-            Batch { commands } => commands.iter().fold(INERT, |acc, c| {
+            Batch { commands } => commands.iter().fold(SAFE_REFS, |acc, c| {
                 let f = Self::command_integrity(c);
                 CommandIntegrity {
-                    affects_geometry: acc.affects_geometry || f.affects_geometry,
                     can_dangle_refs: acc.can_dangle_refs || f.can_dangle_refs,
                     can_orphan_closures: acc.can_orphan_closures || f.can_orphan_closures,
                 }
@@ -203,22 +189,9 @@ impl AppState {
             // dangling reference.
             UnmergeStations { .. } | UnmergeStationPair { .. } => UNMERGE,
 
-            // Everything else shifts geometry but keeps refs valid and connectivity
-            // intact, so it needs only the reconcile. UpdateShot belongs here too: a
-            // length/azimuth/depth edit moves stations, and its bespoke
-            // realign_after_shot_edit no-ops on a merge group with no zero datum, so
-            // without the reconcile epilogue a shot edit upstream of a datum-less
-            // merge would leave the partners drifted until a later load/repair.
-            // An UpdateShot that changes no station-moving field (a comment, an
-            // LRUD, a Jump/Reference reclassify typed or pasted into the data
-            // table) is metadata, and the rationale below does not apply to it.
-            UpdateShot { updates, .. } if !updates.touches_geometry() => INERT,
-
-            // Reverse renumbers every station in a section but rewrites its own
-            // external refs to the mirrored stations as part of the operation, so
-            // nothing is left dangling and no closure is stranded. World coords are
-            // invariant by construction; the reconcile epilogue is a no-op that
-            // keeps it uniform with the other station-moving commands.
+            // Everything else keeps references valid and cannot strand a closure.
+            // Whether it also needs geometry reconciliation is the separate,
+            // exhaustive Command::affects_geometry classification.
             ReverseSection { .. }
             | CreateSection { .. }
             | UpdateShot { .. }
@@ -229,30 +202,7 @@ impl AppState {
             | RemoveZeroDatum { .. }
             | MoveSection { .. }
             | MoveSegment { .. }
-            | MoveStation { .. } => GEOMETRY_ONLY,
-        }
-    }
-
-    /// Whether a *specific* command instance warrants the geometry-reconcile
-    /// epilogue. Refines the per-variant [`CommandIntegrity::affects_geometry`]
-    /// flag with a per-instance check for [`Command::UpdateShot`]: the same
-    /// command carries both geometry edits (length/azimuth/depth/pitch - must
-    /// reconcile) and pure metadata edits (comment/LRUD/reference - must NOT).
-    /// Running the reconcile on a metadata-only edit would heal an already-drifted
-    /// project as a side effect, while its undo only restores the metadata - the
-    /// same asymmetric undo that keeps `SetStationComment` INERT (see
-    /// `command_integrity`). The variant flag stays `true` (it CAN move stations);
-    /// only the epilogue decision is instance-aware.
-    ///
-    /// A [`Command::Batch`] inherits the union of its members, so a metadata-only
-    /// batch (a multi-cell comment/LRUD paste) skips the reconcile at BOTH the
-    /// inner `execute_batch` epilogue and the outer `execute` epilogue that re-runs
-    /// it - otherwise the outer pass would heal the drift the inner pass left.
-    fn cmd_affects_geometry(cmd: &Command) -> bool {
-        match cmd {
-            Command::UpdateShot { updates, .. } => updates.touches_geometry(),
-            Command::Batch { commands } => commands.iter().any(Self::cmd_affects_geometry),
-            other => Self::command_integrity(other).affects_geometry,
+            | MoveStation { .. } => SAFE_REFS,
         }
     }
 
@@ -466,7 +416,7 @@ impl AppState {
                     changed = true;
                     self.push_snapshot_undo(Command::RepairIntegrity, before_json, after_json);
                     // Dirty-bit flip (#191, D-B16): repair mutated a remote project.
-                    self.mark_remote_dirty();
+                    self.mark_remote_forward_edit();
                 }
             }
         }
@@ -699,8 +649,8 @@ impl AppState {
         // reconcile geometry so no command path can leave merged stations
         // drifted (a no-op when nothing moved; skipped during bulk import). A
         // metadata-only UpdateShot (comment/LRUD/reference) is excluded - see
-        // `cmd_affects_geometry` - so it can't silently heal drift with no undo.
-        if result.success && Self::cmd_affects_geometry(&cmd) {
+        // `Command::affects_geometry` - so it can't silently heal drift with no undo.
+        if result.success && cmd.affects_geometry() {
             self.reconcile_geometry();
         }
 
@@ -751,7 +701,7 @@ impl AppState {
             // (notably autosave/SaveProject) must NOT mark dirty. Batch pushes its
             // own undo inside execute_batch and flips there.
             if !Self::is_lifecycle_passthrough(&cmd) {
-                self.mark_remote_dirty();
+                self.mark_remote_forward_edit();
             }
         }
 
@@ -837,12 +787,14 @@ impl AppState {
     /// intact, self-validates length/finiteness/frozen-geometry, and a geometry
     /// edit has the moved stations baked in by the batch epilogue's
     /// `reconcile_geometry()` - which the epilogue runs only when the batch
-    /// actually touches geometry (see `cmd_affects_geometry`), so a metadata-only
+    /// actually touches geometry (see `Command::affects_geometry`), so a metadata-only
     /// UpdateShot batch (comment/LRUD/reference) commits WITHOUT reconciling.
     /// `SetStationComment` is still NOT allowed: as a whole it is INERT metadata
     /// (see `command_integrity_profiles_are_stable`), so it would never carry the
     /// geometry that justifies a batch; comment edits stay one-command-per-undo.
-    fn is_batch_allowed(cmd: &Command) -> bool {
+    pub(super) fn is_batch_allowed(cmd: &Command) -> bool {
+        // The allowlist also prevents a path-bearing lifecycle command from being
+        // nested inside an otherwise undoable Batch and uploaded in Full mode.
         matches!(
             cmd,
             Command::CreateSection { .. }
@@ -931,7 +883,7 @@ impl AppState {
         // CreateLoopClosure can itself create the sole-bridge closure that needs it.
         //
         // The reconcile, however, is gated exactly as execute() gates its own (see
-        // cmd_affects_geometry): a batch that touches no geometry (a multi-cell
+        // Command::affects_geometry): a batch that touches no geometry (a multi-cell
         // paste/fill of comments / LRUD / reference flags - all metadata-only
         // UpdateShots) must NOT reconcile, or it would heal an already-drifted
         // project as a side effect of a metadata edit whose undo only restores the
@@ -939,7 +891,7 @@ impl AppState {
         // batches entirely). The outer execute() epilogue applies the same gate to
         // the Batch command, so the two passes agree.
         self.convert_orphan_closures_in_open_project();
-        if commands.iter().any(Self::cmd_affects_geometry) {
+        if commands.iter().any(Command::affects_geometry) {
             self.reconcile_geometry();
         }
 
@@ -955,7 +907,7 @@ impl AppState {
             // Dirty-bit flip (#191, D-B16): a batch is always a set of mutations
             // (never a lifecycle command), so mark the remote project dirty after
             // its undo entry is pushed. Set-only; no-op for local-only.
-            self.mark_remote_dirty();
+            self.mark_remote_forward_edit();
         }
 
         let result = if section_ids.is_empty() {
@@ -991,7 +943,11 @@ mod integrity_capability_tests {
     fn command_integrity_profiles_are_stable() {
         let caps = |cmd: &Command| {
             let i = AppState::command_integrity(cmd);
-            (i.affects_geometry, i.can_dangle_refs, i.can_orphan_closures)
+            (
+                cmd.affects_geometry(),
+                i.can_dangle_refs,
+                i.can_orphan_closures,
+            )
         };
 
         // INERT (no geometry, no refs).

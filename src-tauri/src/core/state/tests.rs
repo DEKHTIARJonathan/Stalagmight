@@ -5,7 +5,7 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 
 use crate::core::undo::{UndoData, UndoEntry};
-use crate::core::{Command, CommandResult, UndoStack};
+use crate::core::{Command, CommandResult, PersistStack, UndoStack};
 use crate::models::{
     ClosureStrategy, Coordinates, GpsCoordinates, ImportPlacement, ImportSectionConfig,
     LoopClosure, Project, SectionData, SectionId, SectionUpdates, ShotData, ShotId, ShotKind,
@@ -225,6 +225,7 @@ fn test_open_project_restores_undo_redo_and_assigns_closure_ids() {
     // the redo stack is not filtered (a `None` redo entry re-executes its command
     // correctly), and `redo_len() == 1` below is the pin for that.
     let undo_entry = UndoEntry {
+        command_bytes: None,
         command: Command::CreateProject {
             name: "Undo Project".to_string(),
             location: None,
@@ -233,6 +234,7 @@ fn test_open_project_restores_undo_redo_and_assigns_closure_ids() {
         timestamp: None,
     };
     let redo_entry = UndoEntry {
+        command_bytes: None,
         command: Command::CloseProject,
         undo_data: UndoData::None,
         timestamp: None,
@@ -272,6 +274,80 @@ fn test_open_project_restores_undo_redo_and_assigns_closure_ids() {
         Command::CloseProject => {}
         other => panic!("Unexpected redo entry: {other:?}"),
     }
+}
+
+/// [#303] A Full-mode linked project opens with ALL of its persisted history, however
+/// far past the entry-count window it reaches.
+///
+/// The bound has to be armed BEFORE the restore, and that ordering is the whole test:
+/// `load_from_persisted_with_timestamps` ends in `enforce_depth_limit`, so whatever bound
+/// is in force at that instant is the one that trims. Arming afterwards meant the restore
+/// ran under the startup default `Count(undo_history_limit)` and evicted everything older
+/// than the window on the way in - which Count -> Bytes cannot undo. The next
+/// full-rewrite save then wrote the truncation to disk and the next push shipped a commit
+/// missing the history it was meant to carry.
+#[test]
+fn opening_a_full_mode_project_restores_history_deeper_than_the_count_window() {
+    // `open_project` writes the recent-projects list into the global config, and the
+    // entry-count window this test reasons about is read from it too.
+    crate::test_helpers::with_isolated_config(|| {
+        let temp_dir = TempDir::new().unwrap();
+        let path = temp_dir.path().join("deep_history.stalx");
+
+        // Half again over the 100-entry default window, so the shortfall is unambiguous.
+        const PERSISTED: usize = 150;
+        let now = chrono::Utc::now();
+        let entries: Vec<_> = (0..PERSISTED)
+            .map(|i| {
+                let entry = UndoEntry {
+                    command_bytes: None,
+                    command: Command::CreateProject {
+                        name: format!("Entry {i}"),
+                        location: None,
+                    },
+                    // Real undo data: the loader drops `UndoData::None` from the undo
+                    // stack, which would test that filter instead of the depth bound.
+                    undo_data: UndoData::InverseCommand(Command::CloseProject),
+                    timestamp: Some(now + chrono::Duration::seconds(i as i64)),
+                };
+                UndoStack::serialize_entry_with_timestamp(&entry).unwrap()
+            })
+            .collect();
+
+        let mut db = Database::open(&path).unwrap();
+        db.save_project(&Project::new("Deep".to_string(), None))
+            .unwrap();
+        // Full mode SET ON THE LINK, not inherited from the global default: this test is
+        // about the arming order, so the policy must not depend on a config value another
+        // test could reasonably change.
+        db.save_speleo_link(Some(&SpeleoLink {
+            undo_mode: Some(crate::models::UndoMode::Full),
+            ..fixture_speleo_link()
+        }))
+        .unwrap();
+        db.save_undo_stack_with_timestamps(entries).unwrap();
+        drop(db);
+
+        let state = AppState::new().unwrap();
+        assert!(state.open_project(path).success);
+
+        let stack = state.undo_stack.lock().unwrap();
+        assert_eq!(
+            stack.len(),
+            PERSISTED,
+            "a Full-mode project is on the byte budget, so every persisted entry must \
+             survive the open - a short stack means the count window was still armed \
+             when the entries were restored"
+        );
+        // The oldest is the one a count trim evicts first, so name it explicitly.
+        assert!(
+            matches!(
+                &stack.undo_entries().last().unwrap().command,
+                Command::CreateProject { name, .. } if name == "Entry 0"
+            ),
+            "the OLDEST entry is what a front eviction takes, so it is the one worth pinning"
+        );
+    });
 }
 
 /// Shot with every nullable field populated - the fields a replayed legacy
@@ -362,6 +438,66 @@ fn test_open_project_drops_legacy_null_style_undo_history() {
     assert_eq!(shot.comment.as_deref(), Some("original"));
     assert_eq!(shot.marker_index, Some(2));
     assert_eq!(shot.temperature, Some(14.5));
+}
+
+#[test]
+fn a_second_save_with_no_new_edit_still_persists_the_undo_history() {
+    // [#303] THE regression guard for the bug the first cut of the hybrid stack
+    // shipped: consecutive saves with nothing changed in between.
+    //
+    // `save_project` writes a FRESH `.stalx.tmp` and renames it over the target, then
+    // writes the undo tables into the reopened file. A persist that "optimized" by
+    // skipping rows it believed were already on disk therefore wrote NOTHING into a file
+    // that had NOTHING - and the history vanished. Live, that is what a SpeleoDB push
+    // hits: its own flush is a save, and it very often follows another one (an autosave,
+    // or the save the frontend runs after a reload), so the commit it produced carried
+    // no undo history at all.
+    //
+    // Two saves, one edit. The second must leave the history on disk.
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("twice.stalx");
+
+    let state = AppState::new().unwrap();
+    assert!(state.create_project("Twice".to_string(), None).success);
+    assert!(
+        state
+            .execute(Command::CreateSection {
+                name: Some("only-edit".to_string()),
+                surveyor: None,
+                date: None,
+                color: "#abcdef".to_string(),
+                direction: None,
+                shots: vec![ShotData {
+                    length: 5.0,
+                    ..Default::default()
+                }],
+            })
+            .success
+    );
+
+    assert!(state.save_project(Some(path.clone())).success);
+    let after_first = Database::open_existing(&path)
+        .unwrap()
+        .load_undo_stack_with_timestamps()
+        .unwrap()
+        .len();
+    assert_eq!(
+        after_first, 1,
+        "the first save persists the edit's undo entry"
+    );
+
+    // No edit in between - exactly the shape a push's flush after an autosave has.
+    assert!(state.save_project(Some(path.clone())).success);
+    let after_second = Database::open_existing(&path)
+        .unwrap()
+        .load_undo_stack_with_timestamps()
+        .unwrap()
+        .len();
+    assert_eq!(
+        after_second, 1,
+        "a save with nothing changed must still write the history - the file it writes \
+         into was just rebuilt, so anything it skips is gone for good"
+    );
 }
 
 #[test]
@@ -1501,6 +1637,7 @@ fn redo_legacy_prepend_createshot_reanchors_section_start() {
     // A LEGACY redo entry: prepend (position 0) with NO anchor fields, as a
     // pre-anchor build would have persisted it.
     let entry = UndoEntry {
+        command_bytes: None,
         command: Command::CreateShot {
             section_id: a,
             shot: test_shot_data(5.0),
@@ -1656,6 +1793,7 @@ fn test_redo_fails_with_invalid_project_snapshot_pair() {
     let state = AppState::new().unwrap();
     let mut stack = state.undo_stack.lock().unwrap();
     let entry = UndoEntry {
+        command_bytes: None,
         command: Command::CloseProject,
         undo_data: UndoData::ProjectSnapshotPair {
             before: "{}".to_string(),
@@ -1679,6 +1817,7 @@ fn test_redo_fails_for_command_not_allowed_in_undo_context() {
     let state = AppState::new().unwrap();
     let mut stack = state.undo_stack.lock().unwrap();
     let entry = UndoEntry {
+        command_bytes: None,
         command: Command::MergeProjects {
             source_paths: Vec::new(),
             output_path: PathBuf::from("out.stalx"),
@@ -4826,6 +4965,7 @@ fn test_redo_project_snapshot_pair_fails_when_project_lock_poisoned() {
     let after = serde_json::to_string(&Project::new("After".to_string(), None)).unwrap();
 
     let entry = UndoEntry {
+        command_bytes: None,
         command: Command::CloseProject,
         undo_data: UndoData::ProjectSnapshotPair { before, after },
         timestamp: None,
@@ -4928,6 +5068,93 @@ fn test_is_undoable_commands() {
         after_shot_id: None,
         before_shot_id: None,
     }));
+}
+
+#[test]
+fn path_bearing_commands_never_enter_shared_undo_history() {
+    let private = PathBuf::from("/home/alice/private/survey.stalx");
+    let commands = [
+        Command::OpenProject {
+            path: private.clone(),
+        },
+        Command::SaveProject {
+            path: Some(private.clone()),
+        },
+        Command::MergeProjects {
+            source_paths: vec![private.clone()],
+            output_path: private,
+            output_name: "Merged".to_string(),
+            archive_originals: false,
+        },
+    ];
+
+    for command in commands {
+        assert!(
+            !AppState::is_undoable(&command),
+            "a filesystem-path command must never enter Full-mode shared undo: {command:?}"
+        );
+        assert!(
+            !AppState::is_batch_allowed(&command),
+            "a filesystem-path command must not bypass the privacy fence inside Batch: {command:?}"
+        );
+    }
+}
+
+#[test]
+fn confirmed_push_persists_the_pruned_undo_and_redo_stacks() {
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("post-push-history.stalx");
+    let cutoff = chrono::Utc::now();
+    let row = |name: &str, stamp: chrono::DateTime<chrono::Utc>| {
+        (
+            serde_json::to_string(&Command::CreateProject {
+                name: name.to_string(),
+                location: None,
+            })
+            .unwrap(),
+            serde_json::to_string(&UndoData::InverseCommand(Command::CloseProject)).unwrap(),
+            Some(stamp.to_rfc3339()),
+        )
+    };
+    let old = row("old", cutoff - chrono::Duration::hours(1));
+    let late = row("late", cutoff + chrono::Duration::hours(1));
+    let redo = row("redo", cutoff + chrono::Duration::hours(2));
+
+    let mut db = Database::open(&path).unwrap();
+    db.save_project(&Project::new("Post push".to_string(), None))
+        .unwrap();
+    db.save_speleo_link(Some(&fixture_speleo_link())).unwrap();
+    db.save_undo_stack_with_timestamps(vec![old.clone(), late.clone()])
+        .unwrap();
+    db.save_redo_stack_with_timestamps(vec![redo.clone()])
+        .unwrap();
+    db.save_speleo_undo_chain(Some("previous-tip")).unwrap();
+    db.save_speleo_undo_watermark(Some(&cutoff.to_rfc3339()))
+        .unwrap();
+
+    let state = AppState::new().unwrap();
+    state
+        .undo_stack
+        .lock()
+        .unwrap()
+        .load_from_persisted_with_timestamps(vec![old, late], vec![redo]);
+    *state.database.lock().unwrap() = Some(db);
+
+    state.speleodb_clear_undo_after_push(&cutoff.to_rfc3339());
+
+    let stack = state.undo_stack.lock().unwrap();
+    assert_eq!(stack.len(), 1, "the late edit remains undoable in memory");
+    assert_eq!(stack.redo_len(), 0, "redo never survives a confirmed push");
+    drop(stack);
+
+    let database = state.database.lock().unwrap();
+    let db = database.as_ref().unwrap();
+    let disk_undo = db.load_undo_stack_with_timestamps().unwrap();
+    assert_eq!(disk_undo.len(), 1, "uploaded rows are removed from SQLite");
+    assert!(disk_undo[0].1.contains("late"));
+    assert!(db.load_redo_stack_with_timestamps().unwrap().is_empty());
+    assert_eq!(db.load_speleo_undo_chain().unwrap(), None);
+    assert_eq!(db.load_speleo_undo_watermark().unwrap(), None);
 }
 
 // === Config Tests ===
@@ -7157,6 +7384,7 @@ fn test_redo_failure_preserves_entry_on_redo_stack() {
     // Push an entry onto the redo stack that will fail when re-executed
     let mut stack = state.undo_stack.lock().unwrap();
     let entry = UndoEntry {
+        command_bytes: None,
         command: Command::CloseProject,
         undo_data: UndoData::ProjectSnapshotPair {
             before: "{}".to_string(),
@@ -7265,6 +7493,7 @@ fn test_redo_failure_preserves_entry_at_top_lifo_order() {
 
     // Valid redo entry (bottom)
     stack.push_redo(UndoEntry {
+        command_bytes: None,
         command: Command::CreateSection {
             name: Some("Valid".to_string()),
             surveyor: None,
@@ -7279,6 +7508,7 @@ fn test_redo_failure_preserves_entry_at_top_lifo_order() {
 
     // Invalid redo entry (top) - will fail because "after" JSON is invalid
     stack.push_redo(UndoEntry {
+        command_bytes: None,
         command: Command::CloseProject,
         undo_data: UndoData::ProjectSnapshotPair {
             before: "{}".to_string(),
@@ -7350,6 +7580,7 @@ fn test_undo_to_partial_completion_stops_at_failed_step() {
 
         // Push invalid entry at position where Section 1 was
         stack.push_undo(UndoEntry {
+            command_bytes: None,
             command: Command::UpdateShot {
                 section_id: 999,
                 shot_id: 999,
@@ -7462,6 +7693,7 @@ fn test_redo_to_partial_completion_stops_at_failed_step() {
         let top = stack.pop_redo().unwrap(); // SectionA (last undone = first to redo)
                                              // Push invalid entry
         stack.push_redo(UndoEntry {
+            command_bytes: None,
             command: Command::CloseProject,
             undo_data: UndoData::ProjectSnapshotPair {
                 before: "{}".to_string(),
@@ -7587,6 +7819,7 @@ fn test_redo_failure_with_project_lock_preserves_entry() {
     let after = serde_json::to_string(&Project::new("After".to_string(), None)).unwrap();
 
     let entry = UndoEntry {
+        command_bytes: None,
         command: Command::CloseProject,
         undo_data: UndoData::ProjectSnapshotPair { before, after },
         timestamp: None,
@@ -14941,6 +15174,438 @@ fn test_save_project_persists_undo_redo_stacks() {
 }
 
 #[test]
+fn failed_atomic_history_replacement_falls_back_to_empty_stacks() {
+    let temp_dir = TempDir::new().unwrap();
+    let path = temp_dir.path().join("history-fallback.stalx");
+    let db = Database::open(&path).unwrap();
+    db.save_undo_stack_with_timestamps(vec![(
+        r#"{"type":"OldUndo"}"#.to_owned(),
+        r#"{"kind":"old"}"#.to_owned(),
+        None,
+    )])
+    .unwrap();
+    db.save_redo_stack_with_timestamps(vec![(
+        r#"{"type":"OldRedo"}"#.to_owned(),
+        r#"{"kind":"old"}"#.to_owned(),
+        None,
+    )])
+    .unwrap();
+
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "History fallback".to_owned(),
+        location: None,
+    });
+    state.execute(Command::CreateSection {
+        name: Some("Redo candidate".to_owned()),
+        surveyor: None,
+        date: None,
+        color: "#ff0000".to_owned(),
+        direction: None,
+        shots: vec![test_shot_data(2.0)],
+    });
+    state.undo();
+
+    rusqlite::Connection::open(&path)
+        .unwrap()
+        .execute_batch(
+            "CREATE TRIGGER reject_redo_insert BEFORE INSERT ON redo_stack \
+             BEGIN SELECT RAISE(FAIL, 'redo rejected'); END;",
+        )
+        .unwrap();
+
+    let dropped = state
+        .persist_or_clear_undo_stacks_into(&db)
+        .expect("the empty-history fallback should succeed");
+
+    assert!(dropped, "the caller must surface the history-loss warning");
+    assert!(db.load_undo_stack_with_timestamps().unwrap().is_empty());
+    assert!(db.load_redo_stack_with_timestamps().unwrap().is_empty());
+}
+
+#[test]
+fn unreadable_undo_markers_save_without_history() {
+    let temp_dir = TempDir::new().unwrap();
+    let path = temp_dir.path().join("unreadable-undo-markers.stalx");
+    {
+        let mut db = Database::open(&path).unwrap();
+        db.save_project(&Project::new("Marker fallback".to_owned(), None))
+            .unwrap();
+        db.save_speleo_link(Some(&fixture_speleo_link())).unwrap();
+        db.save_speleo_undo_chain(Some("older-tip")).unwrap();
+        db.save_speleo_undo_watermark(Some("2026-08-01T00:00:00+00:00"))
+            .unwrap();
+    }
+
+    let state = AppState::new().unwrap();
+    assert!(state.open_project(path.clone()).success);
+    state.undo_stack.lock().unwrap().push_with_data(
+        Command::CreateSection {
+            name: Some("Local edit".to_owned()),
+            surveyor: None,
+            date: None,
+            color: "#ff0000".to_owned(),
+            direction: None,
+            shots: Vec::new(),
+        },
+        UndoData::None,
+    );
+    state.undo_stack.lock().unwrap().push_with_data(
+        Command::CreateSection {
+            name: Some("Redo candidate".to_owned()),
+            surveyor: None,
+            date: None,
+            color: "#00ff00".to_owned(),
+            direction: None,
+            shots: Vec::new(),
+        },
+        UndoData::None,
+    );
+    state.undo();
+
+    // Keep the table present but remove the column the marker reader requires. The
+    // survey database and undo rows remain readable, isolating the marker-failure path.
+    rusqlite::Connection::open(&path)
+        .unwrap()
+        .execute_batch(
+            "DROP TABLE speleo_undo_watermark;
+             CREATE TABLE speleo_undo_watermark (
+                 id INTEGER PRIMARY KEY CHECK (id = 1),
+                 broken_value TEXT NOT NULL
+             );
+             INSERT INTO speleo_undo_watermark (id, broken_value) VALUES (1, 'broken');",
+        )
+        .unwrap();
+
+    let result = state.save_project(None);
+
+    assert!(result.success, "the survey save continues: {result:?}");
+    assert!(
+        result
+            .warnings
+            .iter()
+            .any(|warning| warning.code == "UNDO_HISTORY_DROPPED"),
+        "history loss must be visible to the caller: {result:?}"
+    );
+    let db_guard = state.database.lock().unwrap();
+    let db = db_guard.as_ref().expect("saved database reopened");
+    assert!(db.load_undo_stack_with_timestamps().unwrap().is_empty());
+    assert!(db.load_redo_stack_with_timestamps().unwrap().is_empty());
+    assert_eq!(db.load_speleo_undo_chain().unwrap(), None);
+    assert_eq!(db.load_speleo_undo_watermark().unwrap(), None);
+    drop(db_guard);
+
+    let undo_stack = state.undo_stack.lock().unwrap();
+    assert!(
+        !undo_stack.can_undo(),
+        "the live undo stack must be cleared"
+    );
+    assert!(
+        !undo_stack.can_redo(),
+        "the live redo stack must be cleared"
+    );
+    drop(undo_stack);
+
+    // The replacement database is valid now. A later save must not resurrect the
+    // unclassified rows from memory after the marker-failure fallback has cleared them.
+    assert!(state.save_project(None).success);
+    let db_guard = state.database.lock().unwrap();
+    let db = db_guard
+        .as_ref()
+        .expect("database reopened after second save");
+    assert!(db.load_undo_stack_with_timestamps().unwrap().is_empty());
+    assert!(db.load_redo_stack_with_timestamps().unwrap().is_empty());
+}
+
+/// [#303] Changing the undo mode really does need the edit gate.
+///
+/// The sibling test in `undo_policy.rs` asserts this with NO project open, so
+/// `speleodb_validated_link()?` errors one line before the `edit_enabled()` gate is ever
+/// reached - delete the gate and it stays green. This one opens a real linked project so
+/// the gate is the thing under test, and its companion source-text tripwire only pins the
+/// gate's POSITION, not that it fires.
+#[test]
+fn setting_the_undo_mode_on_a_linked_project_needs_the_edit_gate() {
+    let temp_dir = TempDir::new().unwrap();
+    let save_path = temp_dir.path().join("undo-mode-gate.stalx");
+    {
+        let mut db = Database::open(&save_path).unwrap();
+        db.save_project(&Project::new("Linked".to_string(), None))
+            .unwrap();
+        db.save_speleo_link(Some(&fixture_speleo_link())).unwrap();
+    }
+
+    let state = AppState::new().unwrap();
+    assert!(state.open_project(save_path).success);
+    // A remote open leaves editing disabled, which is exactly the state under test.
+    assert!(!state.edit_enabled(), "a remote open starts read-only");
+
+    let err = state
+        .speleodb_set_undo_mode(crate::models::UndoMode::Disabled)
+        .expect_err("a read-only session must not change what the project ships");
+    assert!(
+        err.message.contains("start editing"),
+        "the refusal must be the edit-gate one, not the absent-link one, got {err:?}"
+    );
+
+    // ...and with the gate open the same call succeeds, so the test is pinning the gate
+    // rather than some unrelated refusal.
+    state.set_edit_enabled(true);
+    state
+        .speleodb_set_undo_mode(crate::models::UndoMode::Disabled)
+        .expect("with an edit session the override is settable");
+
+    // Force editing is intentionally the same gate. It carries conflict risk, but the
+    // user explicitly accepted that mode and its commands may edit this same project file.
+    state.set_force_editing(true);
+    state
+        .speleodb_set_undo_mode(crate::models::UndoMode::Full)
+        .expect("force editing may change the project policy too");
+}
+
+#[test]
+fn setting_the_undo_mode_serializes_with_full_file_saves() {
+    let temp_dir = TempDir::new().unwrap();
+    let save_path = temp_dir.path().join("undo-mode-save-lock.stalx");
+    {
+        let mut db = Database::open(&save_path).unwrap();
+        db.save_project(&Project::new("Linked".to_owned(), None))
+            .unwrap();
+        db.save_speleo_link(Some(&fixture_speleo_link())).unwrap();
+    }
+
+    let state = Arc::new(AppState::new().unwrap());
+    assert!(state.open_project(save_path).success);
+    state.set_edit_enabled(true);
+    let save_guard = state.project.lock().unwrap();
+    let worker_state = Arc::clone(&state);
+    let (sent, received) = std::sync::mpsc::channel();
+    let worker = std::thread::spawn(move || {
+        let result = worker_state.speleodb_set_undo_mode(crate::models::UndoMode::Disabled);
+        sent.send(result).unwrap();
+    });
+
+    assert!(
+        received
+            .recv_timeout(std::time::Duration::from_millis(100))
+            .is_err(),
+        "the mode write ran while a full-file save owned the project lock"
+    );
+    drop(save_guard);
+    received
+        .recv_timeout(std::time::Duration::from_secs(2))
+        .expect("mode write completes after the save lock is released")
+        .expect("mode write succeeds");
+    worker.join().unwrap();
+
+    let db_guard = state.database.lock().unwrap();
+    let link = db_guard
+        .as_ref()
+        .unwrap()
+        .load_speleo_link()
+        .unwrap()
+        .unwrap();
+    assert_eq!(link.undo_mode, Some(crate::models::UndoMode::Disabled));
+    assert!(link.has_unpushed_edits);
+}
+
+/// [#303] An undo snapshot must not carry this machine's filesystem paths.
+///
+/// Full mode ships `undo_stack` to the server on purpose, and every `ProjectSnapshot` /
+/// `ProjectSnapshotPair` is a whole serialized `Project` - so an unscrubbed `file_path`
+/// writes `/home/<user>/…` or `C:\Users\<Real Name>\…` into the project's git history,
+/// permanently and readable by every collaborator. Snapshot pairs come from Delete shot,
+/// Delete section, Reverse section and every Batch import, so this is routine editing.
+#[test]
+fn a_project_snapshot_carries_no_local_filesystem_path() {
+    let mut project = Project::new("Leaky".to_string(), None);
+    project.file_path = Some(PathBuf::from("/home/victim/caves/secret-sump.stalx"));
+
+    let json = AppState::serialize_project_snapshot(&project).expect("serializes");
+
+    assert!(
+        !json.contains("victim"),
+        "the snapshot leaked a local path: {json}"
+    );
+    assert!(
+        !json.contains("secret-sump.stalx"),
+        "the snapshot leaked a local filename: {json}"
+    );
+    // The survey itself must still be there - scrubbing must not cost the payload.
+    assert!(json.contains("Leaky"), "the snapshot lost the project name");
+}
+
+/// ...and restoring one must not lose track of where the file lives.
+///
+/// The path is cleared on the way out, so the way back has to re-apply the live value or
+/// an undo would leave the app believing the project was never saved - and the next save
+/// would prompt for a location.
+#[test]
+fn restoring_a_snapshot_keeps_the_live_file_path() {
+    let mut live = Project::new("Cave".to_string(), None);
+    live.file_path = Some(PathBuf::from("/home/me/cave.stalx"));
+    let snapshot = AppState::serialize_project_snapshot(&live).expect("serializes");
+
+    let mut slot = Some(live);
+    assert!(AppState::restore_snapshot_into(&mut slot, &snapshot));
+
+    assert_eq!(
+        slot.as_ref().and_then(|p| p.file_path.clone()),
+        Some(PathBuf::from("/home/me/cave.stalx")),
+        "the restore must carry the live path across, not the snapshot's (absent) one"
+    );
+}
+
+#[test]
+fn persisted_split_snapshot_carries_no_local_filesystem_path() {
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Private split".to_string(),
+        location: None,
+    });
+    let created = state.execute(Command::CreateSection {
+        name: Some("Single".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#123456".to_string(),
+        direction: None,
+        shots: vec![test_shot_data(10.0)],
+    });
+    let section_id = created.section_id.unwrap();
+    let shot_id = state.get_project_state().unwrap().sections[0].shots[0].id;
+    state.project.lock().unwrap().as_mut().unwrap().file_path =
+        Some(PathBuf::from("/home/alice/private/split.stalx"));
+
+    let result = state.execute_split_shot_at_distance(section_id, shot_id, 4.0);
+    assert!(result.success, "split failed: {:?}", result.error);
+
+    let stack = state.undo_stack.lock().unwrap();
+    let entry = stack.undo_entries().last().expect("split undo entry");
+    let (_, persisted_undo, _) = UndoStack::serialize_entry_with_timestamp(entry).unwrap();
+    assert!(
+        !persisted_undo.contains("alice"),
+        "path leaked: {persisted_undo}"
+    );
+    assert!(
+        !persisted_undo.contains("split.stalx"),
+        "path leaked: {persisted_undo}"
+    );
+}
+
+#[test]
+fn persisted_delete_last_snapshot_carries_no_local_filesystem_path() {
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Private delete".to_string(),
+        location: None,
+    });
+    let created = state.execute(Command::CreateSection {
+        name: Some("Single".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#654321".to_string(),
+        direction: None,
+        shots: vec![test_shot_data(5.0)],
+    });
+    let section_id = created.section_id.unwrap();
+    let shot_id = state.get_project_state().unwrap().sections[0].shots[0].id;
+    state.project.lock().unwrap().as_mut().unwrap().file_path =
+        Some(PathBuf::from("/home/bob/private/delete.stalx"));
+
+    let result = state.execute_delete_last_shot_and_section(section_id, shot_id);
+    assert!(result.success, "delete failed: {:?}", result.error);
+
+    let stack = state.undo_stack.lock().unwrap();
+    let entry = stack.undo_entries().last().expect("delete undo entry");
+    let (_, persisted_undo, _) = UndoStack::serialize_entry_with_timestamp(entry).unwrap();
+    assert!(
+        !persisted_undo.contains("bob"),
+        "path leaked: {persisted_undo}"
+    );
+    assert!(
+        !persisted_undo.contains("delete.stalx"),
+        "path leaked: {persisted_undo}"
+    );
+}
+
+/// [#303] A Full-mode linked project persists BOTH stacks, redo included.
+///
+/// Pinned because the opposite was tried. The byte budget is applied to the undo and
+/// redo stacks independently, so a Full-mode save can write up to twice
+/// `UNDO_BYTE_BUDGET_BYTES` - which reads like a bug, and was briefly "fixed" by
+/// dropping redo from the Full-mode save. It was reversed: 64 MiB is a ceiling rather
+/// than growth (each stack is budgeted, and a confirmed push clears the undo history),
+/// and persisting redo is what keeps a redo branch alive across a close and reopen.
+///
+/// So this test exists to fail if someone re-derives that fix. None of the redo half
+/// reaches the server in any mode - `redo_stack` is unconditionally in
+/// `PUSH_SNAPSHOT_LOCAL_TABLES` - so the cost is local and so is the benefit.
+#[test]
+fn full_mode_save_persists_both_stacks() {
+    let temp_dir = TempDir::new().unwrap();
+    let save_path = temp_dir.path().join("full-mode-undo.stalx");
+
+    // Seed a linked `.stalx` with the per-project override set explicitly, so the
+    // policy does not depend on whatever the global default happens to be.
+    {
+        let mut db = Database::open(&save_path).unwrap();
+        db.save_project(&Project::new("Linked".to_string(), None))
+            .unwrap();
+        db.save_speleo_link(Some(&SpeleoLink {
+            undo_mode: Some(crate::models::UndoMode::Full),
+            ..fixture_speleo_link()
+        }))
+        .unwrap();
+    }
+
+    let state = AppState::new().unwrap();
+    assert!(state.open_project(save_path.clone()).success);
+    // A remote open leaves editing disabled; this test is about the save path, not the
+    // lock, so take the write side the way a lock-acquire would.
+    state.set_edit_enabled(true);
+
+    state.execute(Command::CreateSection {
+        name: Some("Kept".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#ff0000".to_string(),
+        direction: None,
+        shots: vec![test_shot_data(5.0)],
+    });
+    state.execute(Command::CreateSection {
+        name: Some("Undone".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#00ff00".to_string(),
+        direction: None,
+        shots: vec![test_shot_data(3.0)],
+    });
+    state.undo();
+    assert!(
+        state.can_redo(),
+        "the undo must leave a redo branch in memory"
+    );
+
+    let saved = state.save_project(None);
+    assert!(saved.success, "save failed: {:?}", saved.error);
+
+    let db = Database::open_existing(&save_path).unwrap();
+    assert!(
+        !db.load_undo_stack_with_timestamps()
+            .unwrap_or_default()
+            .is_empty(),
+        "Full mode persists the undo history - that is what rides in the next commit"
+    );
+    assert!(
+        !db.load_redo_stack_with_timestamps()
+            .unwrap_or_default()
+            .is_empty(),
+        "Full mode persists redo too - the 2x save cost is an accepted ceiling, and \
+         dropping it would cost redo-after-reopen"
+    );
+}
+
+#[test]
 fn test_open_project_missing_file() {
     let state = AppState::new().unwrap();
     let result = state.open_project(PathBuf::from("/nonexistent/path/project.stalx"));
@@ -20099,6 +20764,7 @@ fn fixture_speleo_link() -> SpeleoLink {
         has_unpushed_edits: false,
         last_edit_at: None,
         last_verify_at: None,
+        undo_mode: None,
     }
 }
 
@@ -20139,6 +20805,29 @@ fn remote_fixture_editable() -> (AppState, SectionId, ShotId, TempDir) {
     let (state, sid, shid, temp) = remote_fixture();
     state.set_edit_enabled(true);
     (state, sid, shid, temp)
+}
+
+#[test]
+fn unwound_pushes_require_an_explicit_backend_acknowledgement() {
+    let (state, _sid, _shid, _temp) = remote_fixture_editable();
+    state.mark_remote_dirty();
+    state.speleodb_set_unwound_from(Some("abc123"));
+
+    let refused = state
+        .speleodb_push_only_acknowledged(None, false)
+        .expect_err("unacknowledged older-version push must fail closed");
+    assert!(
+        refused.message.contains("older unwound revision"),
+        "unexpected refusal: {refused:?}"
+    );
+
+    let acknowledged = state
+        .speleodb_push_only_acknowledged(None, true)
+        .expect_err("fixture is deliberately signed out");
+    assert!(
+        !acknowledged.message.contains("older unwound revision"),
+        "the explicit acknowledgement must pass the older-version guard"
+    );
 }
 
 /// Read has_unpushed_edits straight from the open database.
@@ -20962,19 +21651,22 @@ fn a_persisted_none_entry_does_not_block_the_history_beneath_it() {
     let mut persisted: Vec<(String, String, Option<String>)> = {
         let stack = state.undo_stack.lock().unwrap();
         assert_eq!(stack.len(), 2);
-        stack
-            .entries_to_persist(20)
-            .map(|e| UndoStack::serialize_entry_with_timestamp(e).unwrap())
-            .collect()
+        stack.rows_to_persist(PersistStack::Undo, Some(20))
     };
+    let poison_timestamp = persisted
+        .last()
+        .and_then(|(_, _, timestamp)| timestamp.as_deref())
+        .and_then(|timestamp| chrono::DateTime::parse_from_rfc3339(timestamp).ok())
+        .map(|timestamp| timestamp.with_timezone(&chrono::Utc) + chrono::Duration::nanoseconds(1));
     persisted.push(
         UndoStack::serialize_entry_with_timestamp(&UndoEntry {
+            command_bytes: None,
             command: Command::ReverseSection {
                 section_id: 1,
                 swap_left_right: false,
             },
             undo_data: UndoData::None,
-            timestamp: None,
+            timestamp: poison_timestamp,
         })
         .unwrap(),
     );
@@ -21042,6 +21734,7 @@ fn redoing_an_unundoable_entry_does_not_re_wedge_the_undo_stack() {
     {
         let mut stack = state.undo_stack.lock().unwrap();
         stack.push_redo(UndoEntry {
+            command_bytes: None,
             command: Command::ReverseSection {
                 section_id: waypoint_id,
                 swap_left_right: false,
@@ -21165,7 +21858,7 @@ fn a_shotless_reverse_leaves_the_redo_branch_intact() {
     );
 }
 
-/// `entries_to_persist` copies the stack verbatim, so an unfiltered load would
+/// `rows_to_persist` copies the stack verbatim, so an unfiltered load would
 /// write the poison straight back to disk on the next save.
 #[test]
 fn a_loaded_none_entry_is_not_re_persisted() {
@@ -21173,12 +21866,14 @@ fn a_loaded_none_entry_is_not_re_persisted() {
 
     let persisted: Vec<(String, String, Option<String>)> = vec![
         UndoStack::serialize_entry_with_timestamp(&UndoEntry {
+            command_bytes: None,
             command: Command::DeleteSection { section_id: 7 },
             undo_data: UndoData::InverseCommand(Command::DeleteSection { section_id: 7 }),
             timestamp: None,
         })
         .unwrap(),
         UndoStack::serialize_entry_with_timestamp(&UndoEntry {
+            command_bytes: None,
             command: Command::ReverseSection {
                 section_id: 1,
                 swap_left_right: false,
@@ -21192,12 +21887,14 @@ fn a_loaded_none_entry_is_not_re_persisted() {
     let mut stack = state.undo_stack.lock().unwrap();
     stack.load_from_persisted_with_timestamps(persisted, vec![]);
 
-    let to_persist: Vec<&UndoEntry> = stack.entries_to_persist(20).collect();
+    let to_persist = stack.rows_to_persist(PersistStack::Undo, Some(20));
     assert_eq!(to_persist.len(), 1);
+    // The rows are already serialized, and a `UndoData::None` is the unit variant, so
+    // it reaches the database as the bare JSON string `"None"`.
     assert!(
         !to_persist
             .iter()
-            .any(|e| matches!(e.undo_data, UndoData::None)),
+            .any(|(_, undo_data_json, _)| undo_data_json == r#""None""#),
         "the poison must not be written back to disk"
     );
 }
@@ -21212,6 +21909,7 @@ fn a_failed_undo_still_pushes_its_entry_back() {
 
     let persisted: Vec<(String, String, Option<String>)> =
         vec![UndoStack::serialize_entry_with_timestamp(&UndoEntry {
+            command_bytes: None,
             command: Command::UpdateShot {
                 section_id: 1,
                 shot_id: 1,

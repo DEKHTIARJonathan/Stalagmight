@@ -373,7 +373,7 @@ impl AppState {
         self.save_resolved_warning(warning)
             .map_err(|e| e.to_string())?;
         // Dirty-bit flip (#191/#197): set-only; no-op for local-only (no speleo_link).
-        self.mark_remote_dirty();
+        self.mark_remote_forward_edit();
         Ok(())
     }
 
@@ -391,7 +391,7 @@ impl AppState {
             .map_err(|f| f.error.unwrap_or_default())?;
         self.delete_resolved_warning(section_id, shot_id, warning_code, shot_uuid)
             .map_err(|e| e.to_string())?;
-        self.mark_remote_dirty();
+        self.mark_remote_forward_edit();
         Ok(())
     }
 

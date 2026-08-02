@@ -10,7 +10,7 @@
 
 use chrono::Utc;
 use stalagmight_lib::config::{CacheConfig, Config, ValidationConfig};
-use stalagmight_lib::core::{Command, UndoData, UndoEntry, UndoStack, Validator};
+use stalagmight_lib::core::{Command, PersistStack, UndoData, UndoEntry, UndoStack, Validator};
 use stalagmight_lib::models::{
     ClosureStrategy, Coordinates, GpsCoordinates, LoopClosure, Project, Section, SectionData,
     SectionUpdates, Shot, ShotData, ShotKind, ShotUpdates, StationMerge, StationRef,
@@ -549,6 +549,7 @@ fn test_undo_clears_redo_stack() {
 #[test]
 fn test_batch_command_structure() {
     let entry = UndoEntry {
+        command_bytes: None,
         command: Command::CreateSection {
             name: Some("Test".to_string()),
             surveyor: None,
@@ -588,18 +589,15 @@ fn test_undo_persistence() {
         UndoData::InverseCommand(Command::DeleteSection { section_id: 0 }),
     );
 
-    // Get entries to persist
-    let entries: Vec<_> = stack.entries_to_persist(10).collect();
-    assert_eq!(entries.len(), 1);
+    // Get the serialized rows to persist
+    let rows = stack.rows_to_persist(PersistStack::Undo, Some(10));
+    assert_eq!(rows.len(), 1);
 
-    // Serialize
-    let serialized: Vec<_> = entries
-        .iter()
-        .filter_map(|e| UndoStack::serialize_entry(e))
+    // Load into new stack (the untimestamped loader takes the pair, not the triple)
+    let serialized: Vec<(String, String)> = rows
+        .into_iter()
+        .map(|(command_json, undo_data_json, _)| (command_json, undo_data_json))
         .collect();
-    assert_eq!(serialized.len(), 1);
-
-    // Load into new stack
     let mut new_stack = UndoStack::new();
     new_stack.load_from_persisted(serialized);
     assert_eq!(new_stack.len(), 1);

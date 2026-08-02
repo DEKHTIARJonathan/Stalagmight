@@ -44,8 +44,10 @@ const openLink = (o: Partial<SpeleoLinkState> = {}): SpeleoLinkState => ({
   lockHolder: null,
   lockedByOther: false,
   hasUnpushedEdits: false,
+  unwound: false,
   forceEditing: false,
   forceEditAllowed: false,
+  undoMode: 'full',
   remoteState: 'up_to_date',
   noAccess: false,
   serverError: null,
@@ -61,7 +63,12 @@ beforeEach(() => {
   setLinkOnOpenMock = vi.fn();
   // `keepLocalCopy` compares the refused path against the LIVE open project, so the
   // "nothing open" baseline has to be explicit.
-  useProjectStore.setState({ loadProject: loadProjectMock, project: null, isDirty: false });
+  useProjectStore.setState({
+    loadProject: loadProjectMock,
+    project: null,
+    isDirty: false,
+    checkProjectIntegrity: vi.fn(async () => []),
+  });
   useSpeleoStore.setState({
     setLinkOnOpen: setLinkOnOpenMock,
     link: null,
@@ -510,8 +517,10 @@ describe('useOpenRemoteProject (#218)', () => {
       lockHolder: null,
       lockedByOther: false,
       hasUnpushedEdits: true,
+      unwound: false,
       forceEditing: false,
       forceEditAllowed: false,
+      undoMode: 'full' as const,
       remoteState: 'up_to_date' as const,
       noAccess: false,
       serverError: null,

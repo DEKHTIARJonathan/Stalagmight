@@ -92,6 +92,51 @@ pub(crate) struct RevisionHistory {
     pub(crate) commits: Vec<RevisionCommit>,
 }
 
+/// [#303] Which revision the next "Unwind to previous SpeleoDB version" would load.
+///
+/// `is_current` distinguishes the two shapes of the same action, which the confirmation
+/// dialog has to word differently:
+///
+/// - `true` - the target is the commit the working copy ALREADY equals (the first step
+///   after a push). Nothing moves; what comes back is the undo history that produced this
+///   state, so the user can keep stepping backwards through their own pushed operations.
+/// - `false` - the target is an ancestor, so the working copy DOES move back, and any
+///   later push lands that older content as a new forward commit.
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export)]
+pub struct SpeleoUnwindTarget {
+    /// 40-hex commit SHA to check out.
+    pub hexsha: String,
+    /// The target is the working copy's own commit rather than an ancestor.
+    pub is_current: bool,
+    /// [#303] Going ahead would throw away un-pushed work: the copy is dirty and no
+    /// Unwind chain pointer accounts for it, so the swap replaces edits the user never
+    /// pushed (and the redo steps that would have replayed them).
+    ///
+    /// The dialog raises its red warning on this, and only a caller that passes the
+    /// matching acknowledgement gets past the backend guard - the frontend is told what
+    /// will happen, it is not trusted to decide it.
+    pub discards_unpushed: bool,
+}
+
+/// [#303] Which revision a FORWARD chain step would check out - the mirror of
+/// [`SpeleoUnwindTarget`], walking back up toward BASE.
+///
+/// Deliberately carries no `discards_unpushed`. A forward step is only defined while a
+/// chain pointer exists, and `unwind_discards_unpushed` is false whenever one does, so the
+/// field could only ever be `false` - a permanently dead warning that would read as though
+/// the case had been considered and could fire. An edit drops the pointer, which is what
+/// removes this direction entirely rather than warning about it.
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export)]
+pub struct SpeleoRewindTarget {
+    /// 40-hex commit SHA to check out.
+    pub hexsha: String,
+    /// This step lands back ON BASE, i.e. returns the copy to the latest version, so the
+    /// confirmation can say that rather than naming a revision.
+    pub is_latest: bool,
+}
+
 /// [#218] One commit projected for the frontend revision-history view. A read-only
 /// slice of [`RevisionCommit`] carrying only what the UI renders (no token, no
 /// server-internal fields). The list is server-ordered (newest first).
@@ -725,6 +770,25 @@ pub struct SpeleoLinkStatus {
     pub edit_enabled: bool,
     /// The command-driven dirty bit: un-pushed remote edits are pending.
     pub has_unpushed_edits: bool,
+    /// [#303] A chain step has moved this copy off the server tip: an Unwind (or a forward
+    /// step) is mid-walk.
+    ///
+    /// The two are not the same thing, and conflating them is how a look at history turned
+    /// into a published revert: the close prompt read the dirty bit, said "you have
+    /// unpushed changes", and offered to push as its primary action. Pushing here does not
+    /// save anyone's work; it records the OLD survey over the newer one for every
+    /// collaborator.
+    ///
+    /// True exactly while the Unwind chain pointer stands, since any forward command drops
+    /// it (`speleodb_forget_unwind_position`) - so the moment the user really does edit,
+    /// this goes false and the ordinary "unpushed changes" wording is correct again.
+    ///
+    /// RAW rather than combined with the dirty bit, which it was at first and could not
+    /// stay: a step onto the tip leaves the copy CLEAN, so the composite was false at the
+    /// only moment the frontend polls, and the Undo that follows marks dirty optimistically
+    /// without asking the backend anything. The frontend therefore has to be able to
+    /// compose the two itself, which means holding this half unmixed.
+    pub unwound: bool,
     /// This user's permission tier on the project. Best-effort - `None` when
     /// logged out / offline / the lookup failed.
     pub permission: Option<Permission>,
@@ -755,6 +819,8 @@ pub struct SpeleoLinkStatus {
     /// over the same `get_project` probe; `false` when logged out / offline / the
     /// lookup failed (never nag on a transient miss).
     pub exclude_geojson: bool,
+    /// [#303] The project's undo-history policy - what its next push will carry.
+    pub undo_mode: crate::models::UndoMode,
     /// [#213] The open remote project is being force-edited WITHOUT the write lock
     /// (`edit_enabled` is also true, but no lock is held). Drives the persistent
     /// big-red "unmergeable `.stalx`" banner + the "Reconnect to sync" action, and
@@ -1005,12 +1071,14 @@ mod tests {
             is_remote: true,
             edit_enabled: false,
             has_unpushed_edits: false,
+            unwound: false,
             permission: Some(Permission::ReadAndWrite),
             lock_holder: Some("holder@example.com".to_owned()),
             remote_state: RemoteState::RemoteAhead,
             access_denied: false,
             server_error: None,
             exclude_geojson: false,
+            undo_mode: crate::models::UndoMode::Full,
             force_editing: false,
             allow_force_edit: false,
             project_id: Some("11111111-1111-1111-1111-111111111111".to_owned()),

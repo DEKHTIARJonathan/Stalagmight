@@ -406,6 +406,7 @@ mod tests {
             has_unpushed_edits: dirty,
             last_edit_at: dirty.then(|| "2026-07-26T00:00:00Z".to_owned()),
             last_verify_at: None,
+            undo_mode: None,
         }))
         .expect("save link");
         path
@@ -518,6 +519,7 @@ mod tests {
             has_unpushed_edits: true,
             last_edit_at: Some("2026-07-26T12:00:00Z".to_owned()),
             last_verify_at: None,
+            undo_mode: None,
         }))
         .expect("save link");
         drop(db);
@@ -567,6 +569,7 @@ mod tests {
                 has_unpushed_edits: false,
                 last_edit_at: None,
                 last_verify_at: None,
+                undo_mode: None,
             }))
             .expect("save link");
             drop(db);
@@ -756,6 +759,7 @@ mod tests {
             has_unpushed_edits: false,
             last_edit_at: None,
             last_verify_at: None,
+            undo_mode: None,
         }))
         .expect("save link");
         drop(db);
@@ -809,6 +813,7 @@ mod tests {
             has_unpushed_edits: true,
             last_edit_at: Some("2026-07-26T12:00:00Z".to_owned()),
             last_verify_at: None,
+            undo_mode: None,
         }))
         .expect("save link");
         drop(db);

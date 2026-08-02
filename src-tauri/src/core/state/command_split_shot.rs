@@ -106,7 +106,7 @@ impl AppState {
         self.push_snapshot_undo(batch_cmd, before_snapshot, after_snapshot);
         // Dirty-bit flip (#191, D-B16): a split mutated a remote project.
         // Set-only; no-op for local-only.
-        self.mark_remote_dirty();
+        self.mark_remote_forward_edit();
 
         tracing::info!(
             section_id,

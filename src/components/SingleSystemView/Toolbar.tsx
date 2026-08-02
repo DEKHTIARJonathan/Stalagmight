@@ -448,6 +448,12 @@ export default function Toolbar({
             <UndoHistoryDropdown
               mode="undo"
               disabled={placementModeActive || !canUndo}
+              // [#303] An empty undo stack still has something to show on a linked
+              // project: the Unwind entry that continues the walk past the commit
+              // boundary. The button stays disabled (Undo / Ctrl+Z must keep doing
+              // nothing); only HOVER opens the panel. Placement mode is excluded - that
+              // reason for `disabled` must still suppress the panel entirely.
+              hoverableWhenEmpty={!placementModeActive}
               onSingleAction={onUndo}
               testId="toolbar-undo-button"
               ariaLabel={t('common.actions.undo')}
@@ -470,6 +476,11 @@ export default function Toolbar({
             <UndoHistoryDropdown
               mode="redo"
               disabled={placementModeActive || !canRedo}
+              // [#303] The same reason as the undo side, in the other direction: an empty
+              // redo stack still has the forward chain step to show ("Redo into next
+              // SpeleoDB version"), and hover is the only way to reach it while the button
+              // itself stays correctly disabled.
+              hoverableWhenEmpty={!placementModeActive}
               onSingleAction={onRedo}
               testId="toolbar-redo-button"
               ariaLabel={t('common.actions.redo')}
