@@ -297,7 +297,10 @@ export default function DrawShotDialog() {
 
         {/* LRUD fields (collapsed by default) */}
         <details className="border border-border rounded">
-          <summary className="px-3 py-2 cursor-pointer text-text-secondary hover:text-text-primary">
+          <summary
+            className="px-3 py-2 cursor-pointer text-text-secondary hover:text-text-primary"
+            data-testid="draw-shot-lrud-toggle"
+          >
             LRUD (optional)
           </summary>
           <div className="p-3 pt-0 grid grid-cols-4 gap-2">

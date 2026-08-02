@@ -132,7 +132,10 @@ export default function ExportControls({
               { name: 'TMLU (XML)', extensions: ['tmlu'] },
             ]
           : exportSaveFilters(dataFormat.toUpperCase(), dataFormat);
-        const selected = await saveDialog({ filters });
+        const selected = await saveDialog(
+          { filters },
+          options?.skipTmlAnchorCheck ? 'tml-unanchored-warning-continue' : 'export-button',
+        );
 
         if (selected) {
           // For TML, preserve the extension the OS dialog appended.
@@ -169,9 +172,10 @@ export default function ExportControls({
         }
       } else {
         const extension = imageOptions.format;
-        const selected = await saveDialog({
-          filters: exportSaveFilters(imageOptions.format.toUpperCase(), extension),
-        });
+        const selected = await saveDialog(
+          { filters: exportSaveFilters(imageOptions.format.toUpperCase(), extension) },
+          'export-button',
+        );
 
         if (selected) {
           const finalPath = ensureExtension(selected, extension);

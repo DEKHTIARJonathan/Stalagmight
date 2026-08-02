@@ -137,7 +137,7 @@ export default function CorruptionRecoveryDialog() {
         title: 'Save Salvaged Data',
         defaultPath: 'salvaged-data.json',
         filters: [{ name: 'JSON', extensions: ['json'] }],
-      });
+      }, 'recovery-export-salvage');
 
       if (!destPath) {
         // User cancelled save dialog

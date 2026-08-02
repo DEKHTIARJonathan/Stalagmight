@@ -18,7 +18,7 @@ export function testFileDialogHooksEnabled(env: FileDialogTestEnv = import.meta.
   return env.DEV === true || env.MODE === 'test' || env.VITE_E2E === '1';
 }
 
-export function takeTestFileDialogAnswer(kind: 'open' | 'save'): {
+export function takeTestFileDialogAnswer(kind: 'open' | 'save', triggerTestId?: string): {
   queued: boolean;
   value: TestFileDialogAnswer | undefined;
 } {
@@ -30,6 +30,9 @@ export function takeTestFileDialogAnswer(kind: 'open' | 'save'): {
   if (!hooks || !queue) return { queued: false, value: undefined };
   const entry = queue?.[0];
   if (!entry?.armed) return { queued: false, value: undefined };
+  if (triggerTestId && entry.triggerTestId !== triggerTestId) {
+    throw new Error(`file dialog answer for ${entry.triggerTestId} cannot be consumed by ${triggerTestId}`);
+  }
   if (hooks.activeFileDialogTriggerTestId !== entry.triggerTestId) {
     return { queued: false, value: undefined };
   }
@@ -213,8 +216,8 @@ export function exportSaveFilters(label: string, extension: string) {
 }
 
 /** Open a native picker, or consume the next answer queued by the E2E harness. */
-export async function openDialog(options?: OpenDialogOptions): Promise<string | string[] | null> {
-  const answer = takeTestFileDialogAnswer('open');
+export async function openDialog(options?: OpenDialogOptions, triggerTestId?: string): Promise<string | string[] | null> {
+  const answer = takeTestFileDialogAnswer('open', triggerTestId);
   if (answer.queued) return answer.value ?? null;
   const { open } = await import('@tauri-apps/plugin-dialog');
   return open(options);
@@ -231,8 +234,8 @@ export async function openDialog(options?: OpenDialogOptions): Promise<string | 
  *
  * On desktop, delegates to the native save dialog.
  */
-export async function saveDialog(options?: SaveDialogOptions): Promise<string | null> {
-  const answer = takeTestFileDialogAnswer('save');
+export async function saveDialog(options?: SaveDialogOptions, triggerTestId?: string): Promise<string | null> {
+  const answer = takeTestFileDialogAnswer('save', triggerTestId);
   if (answer.queued) {
     if (Array.isArray(answer.value)) throw new Error('save dialog test answer must be a single path');
     return answer.value ?? null;

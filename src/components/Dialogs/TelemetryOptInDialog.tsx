@@ -75,7 +75,7 @@ export default function TelemetryOptInDialog({
         </p>
 
         <details className="text-sm text-text-tertiary">
-          <summary className="cursor-pointer hover:text-text-secondary">
+          <summary className="cursor-pointer hover:text-text-secondary" data-testid="telemetry-opt-in-details-toggle">
             {t('telemetry.optIn.whatWeCollect', 'What we collect')}
           </summary>
           <ul className="mt-2 ml-4 list-disc space-y-1">

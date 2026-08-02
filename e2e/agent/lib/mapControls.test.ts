@@ -38,7 +38,8 @@ describe('mapFeatureClick', () => {
       .mockResolvedValueOnce({
         interactionSequence: 5,
         selection: { type: 'shot', sectionId: 7, shotId: 42 },
-      });
+      })
+      .mockResolvedValueOnce(undefined);
 
     await expect(mapFeatureClick(browser, { featureType: 'shot', sectionId: 7, shotId: 42 })).resolves.toMatchObject({
       point: { x: 120, y: 230 },
@@ -47,7 +48,7 @@ describe('mapFeatureClick', () => {
     expect(evalInAppMock.mock.calls[0]?.[1]).toContain('__stalagmight_geometry__');
     expect(evalInAppMock.mock.calls[0]?.[1]).not.toContain('map.fire');
     expect(evalInAppMock.mock.calls[1]?.[1]).toContain('document.elementFromPoint');
-    expect(evalInAppMock.mock.calls[2]?.[1]).toContain('__stalagmight_clear_map_target__');
+    expect(evalInAppMock.mock.calls[3]?.[1]).toContain('__stalagmight_clear_map_target__');
   });
 
   it('fails when overlapping geometry selects a different feature', async () => {
@@ -68,7 +69,8 @@ describe('mapFeatureClick', () => {
       .mockResolvedValueOnce({
         interactionSequence: 9,
         selection: { type: 'station', stationRef: { section_id: 3, station_index: 9 } },
-      });
+      })
+      .mockResolvedValueOnce(undefined);
 
     await expect(
       mapFeatureClick(browser, { featureType: 'station', sectionId: 3, stationIndex: 8 }),
@@ -90,7 +92,8 @@ describe('mapFeatureClick', () => {
         interactionSequenceBefore: 10,
       })
       .mockResolvedValueOnce('canvas.maplibregl-canvas')
-      .mockResolvedValueOnce({ interactionSequence: 11, selection: null });
+      .mockResolvedValueOnce({ interactionSequence: 11, selection: null })
+      .mockResolvedValueOnce(undefined);
 
     await expect(
       mapFeatureClick(browser, {
@@ -101,7 +104,7 @@ describe('mapFeatureClick', () => {
         verifySelection: false,
       }),
     ).resolves.toMatchObject({ selectionVerified: false });
-    expect(evalInAppMock).toHaveBeenCalledTimes(3);
+    expect(evalInAppMock).toHaveBeenCalledTimes(4);
   });
 
   it('rejects a click when stale selection makes it look successful', async () => {
@@ -122,10 +125,34 @@ describe('mapFeatureClick', () => {
       .mockResolvedValueOnce({
         interactionSequence: 12,
         selection: { type: 'station', stationRef: { section_id: 3, station_index: 8 } },
-      });
+      })
+      .mockResolvedValueOnce(undefined);
 
     await expect(
       mapFeatureClick(browser, { featureType: 'station', sectionId: 3, stationIndex: 8 }),
     ).rejects.toThrow('did not reach a semantic map interaction handler');
+  });
+
+  it('clears an armed semantic target when pointer dispatch fails', async () => {
+    const browser = pointerBrowser();
+    evalInAppMock
+      .mockResolvedValueOnce({
+        featureType: 'station',
+        sectionId: 3,
+        stationIndex: 8,
+        lngLat: [1, 2],
+        canvasPoint: { x: 20, y: 30 },
+        canvasSize: { width: 200, height: 100 },
+        point: { x: 120, y: 230 },
+        clearancePx: 0,
+        interactionSequenceBefore: 12,
+      })
+      .mockRejectedValueOnce(new Error('pointer dispatch failed'))
+      .mockResolvedValueOnce(undefined);
+
+    await expect(
+      mapFeatureClick(browser, { featureType: 'station', sectionId: 3, stationIndex: 8 }),
+    ).rejects.toThrow('pointer dispatch failed');
+    expect(evalInAppMock.mock.calls[2]?.[1]).toContain('__stalagmight_clear_map_target__');
   });
 });

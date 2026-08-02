@@ -150,9 +150,11 @@ suggestions.
 - [ ] Controls rendered in a loop include a stable item key in the test ID
 - [ ] Icon-only buttons have `aria-label`
 
-`pnpm lint:test-ids:test && pnpm lint:test-ids` gates these requirements. The
-scanner rejects interactive JSX without a test ID and literal IDs inside map
-callbacks, where one source literal would produce duplicate runtime elements.
+`pnpm lint:test-ids:test && pnpm lint:test-ids` gates the statically provable
+parts of these requirements. The scanner rejects interactive JSX without a test
+ID, duplicate literal sibling IDs, and literal IDs inside `map`, `flatMap`, and
+`Array.from` render callbacks. Dynamic expressions and helper-component reuse
+still require review because static analysis cannot prove their runtime identity.
 
 ### Dialogs (mandatory shape)
 

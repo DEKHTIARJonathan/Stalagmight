@@ -206,4 +206,34 @@ describe('E2E file dialog answers', () => {
     expect(takeTestFileDialogAnswer('open')).toEqual({ queued: false, value: undefined });
     expect(window.__E2E_TEST__.fileDialogAnswers?.open).toHaveLength(1);
   });
+
+  it('keeps async answers trigger-qualified until the picker wrapper consumes them', async () => {
+    window.__E2E_TEST__ = {
+      fileDialogAnswers: {
+        open: [],
+        save: [{ id: 'save-async', value: '/tmp/salvaged.json', triggerTestId: 'recovery-export-salvage', armed: true }],
+      },
+      fileDialogConsumptions: {},
+      activeFileDialogTriggerTestId: 'recovery-export-salvage',
+    };
+
+    await Promise.resolve();
+    await expect(saveDialog({}, 'recovery-export-salvage')).resolves.toBe('/tmp/salvaged.json');
+    expect(window.__E2E_TEST__.fileDialogConsumptions?.['save-async']).toBe('save');
+  });
+
+  it('rejects a pending answer when a different picker route tries to consume it', () => {
+    window.__E2E_TEST__ = {
+      fileDialogAnswers: {
+        open: [],
+        save: [{ id: 'save-wrong', value: '/tmp/wrong.json', triggerTestId: 'export-button', armed: true }],
+      },
+      fileDialogConsumptions: {},
+      activeFileDialogTriggerTestId: 'export-button',
+    };
+
+    expect(() => takeTestFileDialogAnswer('save', 'recovery-export-salvage')).toThrow(
+      'cannot be consumed by recovery-export-salvage',
+    );
+  });
 });

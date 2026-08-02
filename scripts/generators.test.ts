@@ -46,7 +46,7 @@ beforeAll(() => {
       ts: ts(1),
       tool: 'seed',
       params: { mode: 'fixture', name: 'fractal_plant_iter3.stalx' },
-      resolved: { path: '/repo/e2e/fixtures/fractal_plant_iter3.stalx' },
+      resolved: { path: '/repo/.agent-artifacts/sessions/golden-fixture/fixtures/fractal_plant_iter3.stalx' },
       outcome: { ok: true, durationMs: 120 },
     }),
     record({
@@ -213,8 +213,11 @@ describe('generate-replay.mjs', () => {
     execFileSync(process.execPath, [replayGen, sessionDir, '--out', out], { encoding: 'utf8' });
     const spec = fs.readFileSync(out, 'utf8');
 
-    // seed -> a real loadProject call using the RESOLVED fixture path.
-    expect(spec).toContain(`'loadProject', ["/repo/e2e/fixtures/fractal_plant_iter3.stalx"]`);
+    // seed -> a fresh copy of the tracked fixture, never the prunable recorded artifact path.
+    expect(spec).toContain(
+      `'loadProject', [materializeReplayFixture("fractal_plant_iter3.stalx")]`,
+    );
+    expect(spec).not.toContain('/repo/.agent-artifacts/sessions/golden-fixture');
     // click -> the resolved selector, clicked.
     expect(spec).toContain(`replayClick(browser, {"selector":"[data-testid=\\"save-button\\"]"})`);
     // Unsafe legacy resolved selectors are rebuilt from the recorded test ID.

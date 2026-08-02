@@ -19,7 +19,7 @@ assert.match(
     'repeated.tsx',
     'const view = rows.map((row) => <button data-testid="remove-row">Remove</button>);',
   )[0]?.message ?? '',
-  /include row identity/,
+  /include item identity/,
 );
 
 assert.match(
@@ -42,7 +42,44 @@ assert.match(
     'repeated-prop.tsx',
     'const view = rows.map((row) => <Button testId="remove-row">Remove</Button>);',
   )[0]?.message ?? '',
-  /include row identity/,
+  /include item identity/,
+);
+
+assert.match(
+  analyzeSource(
+    'flat-repeated.tsx',
+    'const view = rows.flatMap((row) => <button data-testid="remove-row">Remove</button>);',
+  )[0]?.message ?? '',
+  /include item identity/,
+);
+
+assert.match(
+  analyzeSource(
+    'array-from-repeated.tsx',
+    'const view = Array.from({ length: 2 }, (_, index) => <button data-testid="remove-row">Remove</button>);',
+  )[0]?.message ?? '',
+  /include item identity/,
+);
+
+assert.deepEqual(
+  analyzeSource(
+    'unstable-expression.tsx',
+    'const view = rows.map((row) => <button data-testid={sharedTestId}>Remove</button>);',
+  ),
+  [],
+);
+
+assert.match(
+  analyzeSource(
+    'duplicate-siblings.tsx',
+    'const view = <><button data-testid="same">One</button><button data-testid="same">Two</button></>;',
+  ).at(-1)?.message ?? '',
+  /duplicated in one JSX container/,
+);
+
+assert.match(
+  analyzeSource('summary.tsx', 'const view = <summary>Details</summary>;')[0]?.message ?? '',
+  /has no data-testid/,
 );
 
 assert.deepEqual(

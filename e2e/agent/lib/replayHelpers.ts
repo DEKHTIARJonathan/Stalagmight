@@ -6,6 +6,9 @@
  * replays from harness refactors.
  */
 import type { Browser } from 'webdriverio';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { invokeInApp, evalInApp } from './page';
 import { readStore, callStoreAction, type StoreName } from './stores';
 import { runScenario } from '../scenarios';
@@ -23,11 +26,17 @@ import {
 } from './controls';
 import { waitForActiveTool, waitForAppReady, waitForMapIdle, waitForUiIdle } from './waiters';
 import { mapFeatureClick, type MapFeatureClickRequest } from './mapControls';
+import { materializeFixture } from './fixtures';
 
 export { invokeInApp as ipc, evalInApp };
 export { callStoreAction as storeAction };
 export { answerFileDialog, dragPointer, hoverElement, mapClick, scrollTarget, selectOption };
 export { mapFeatureClick };
+
+/** Give every replay seed a fresh copy that the app may safely migrate or save. */
+export function materializeReplayFixture(name: string): string {
+  return materializeFixture(name, mkdtempSync(join(tmpdir(), 'stalagmight-replay-fixture-')));
+}
 
 interface ReplayWaitRequest {
   condition: 'selector' | 'hidden' | 'app-ready' | 'ui-idle' | 'map-idle' | 'active-tool' | 'store-path';
@@ -173,7 +182,10 @@ export async function driverScript(
         fence();
         const value = Reflect.get(target, prop) as unknown;
         return typeof value === 'function'
-          ? (value as (...args: unknown[]) => unknown).bind(target)
+          ? (...args: unknown[]) => {
+              fence();
+              return Reflect.apply(value as (...callArgs: unknown[]) => unknown, target, args);
+            }
           : value;
       },
     }),
@@ -201,6 +213,7 @@ export async function driverScript(
     `return (async () => { const { browser, ipc, evalInApp, readStore, callAction, log } = helpers; ${script} })();`,
   );
   let timer: NodeJS.Timeout | undefined;
+  const body = fn(helpers) as Promise<unknown>;
   const timeout = new Promise<never>((_, reject) => {
     timer = setTimeout(
       () => {
@@ -211,7 +224,24 @@ export async function driverScript(
     );
   });
   try {
-    return await Promise.race([fn(helpers) as Promise<unknown>, timeout]);
+    return await Promise.race([body, timeout]);
+  } catch (error) {
+    if (!expired) throw error;
+    // A replay timeout is terminal for its dedicated WebDriver session. This
+    // also quarantines element/action handles captured before the timeout.
+    if (typeof browser.deleteSession === 'function') await browser.deleteSession().catch(() => undefined);
+    const settled = await Promise.race([
+      body.then(() => true, () => true),
+      new Promise<false>((resolve) => setTimeout(() => resolve(false), 10000)),
+    ]);
+    if (!settled) {
+      throw new Error(
+        `replayed driver_script timed out after ${timeoutMs}ms and is still running; WebDriver session closed`,
+      );
+    }
+    throw new Error(
+      `replayed driver_script timed out after ${timeoutMs}ms (body settled during the grace window; helpers disabled)`,
+    );
   } finally {
     if (timer) clearTimeout(timer);
   }

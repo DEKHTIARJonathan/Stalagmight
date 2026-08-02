@@ -168,22 +168,30 @@ export async function mapFeatureClick(
     [request],
   );
 
-  const target = await dispatchMapPointer(browser, resolved.point, request.button);
-
-  const postClick = await evalInApp<MapPostClickState>(
-    browser,
-    `
-      const readInteraction = window.__stalagmight_map_interaction__;
-      const clearSemanticTarget = window.__stalagmight_clear_map_target__;
-      if (typeof readInteraction !== 'function') throw new Error('semantic map controls are unavailable');
-      const state = {
-        interactionSequence: readInteraction(),
-        selection: window.__E2E_TEST__?.uiStore?.getState().selection ?? null,
-      };
-      if (typeof clearSemanticTarget === 'function') clearSemanticTarget();
-      return state;
-    `,
-  );
+  let target = 'unknown target';
+  let postClick: MapPostClickState;
+  try {
+    target = await dispatchMapPointer(browser, resolved.point, request.button);
+    postClick = await evalInApp<MapPostClickState>(
+      browser,
+      `
+        const readInteraction = window.__stalagmight_map_interaction__;
+        if (typeof readInteraction !== 'function') throw new Error('semantic map controls are unavailable');
+        return {
+          interactionSequence: readInteraction(),
+          selection: window.__E2E_TEST__?.uiStore?.getState().selection ?? null,
+        };
+      `,
+    );
+  } finally {
+    await evalInApp(
+      browser,
+      `
+        const clearSemanticTarget = window.__stalagmight_clear_map_target__;
+        if (typeof clearSemanticTarget === 'function') clearSemanticTarget();
+      `,
+    );
+  }
   if (postClick.interactionSequence <= resolved.interactionSequenceBefore) {
     throw new Error(`map_feature_click did not reach a semantic map interaction handler via ${target}`);
   }

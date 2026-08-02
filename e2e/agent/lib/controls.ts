@@ -288,11 +288,6 @@ export async function answerFileDialog(
       trigger.addEventListener('click', () => {
         entry.armed = true;
         testApi.activeFileDialogTriggerTestId = entry.triggerTestId;
-        setTimeout(() => {
-          if (testApi.activeFileDialogTriggerTestId === entry.triggerTestId) {
-            delete testApi.activeFileDialogTriggerTestId;
-          }
-        }, 0);
       }, { capture: true, once: true });
       return true;
     `,

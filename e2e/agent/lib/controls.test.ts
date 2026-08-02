@@ -70,6 +70,7 @@ describe('agent controls', () => {
     expect(result).toMatchObject({ selector, consumed: true });
     expect(trigger.click).toHaveBeenCalledOnce();
     expect(evalInAppMock.mock.calls[0]?.[1]).toContain('entry.armed = true');
+    expect(evalInAppMock.mock.calls[0]?.[1]).not.toContain('setTimeout');
     expect(evalInAppMock.mock.calls[1]?.[1]).toContain('fileDialogConsumptions');
   });
 

@@ -12,6 +12,7 @@ export const INTERACTIVE_TAGS = new Set([
   'input',
   'select',
   'textarea',
+  'summary',
   'Button',
   'IconButton',
   'MenuRow',
@@ -81,23 +82,41 @@ function isInteractive(node, tag) {
   return hasAttribute(node, [...INTERACTION_HANDLERS]);
 }
 
-function isInsideMapCallback(node) {
+function repeatedCallback(node) {
   for (let current = node.parent; current; current = current.parent) {
     if (
-      ts.isCallExpression(current) &&
-      ts.isPropertyAccessExpression(current.expression) &&
-      current.expression.name.text === 'map'
+      (ts.isArrowFunction(current) || ts.isFunctionExpression(current)) &&
+      ts.isCallExpression(current.parent) &&
+      current.parent.arguments.includes(current)
     ) {
-      return true;
+      const call = current.parent;
+      if (
+        ts.isPropertyAccessExpression(call.expression) &&
+        (['map', 'flatMap'].includes(call.expression.name.text) ||
+          (call.expression.expression.getText() === 'Array' && call.expression.name.text === 'from'))
+      ) {
+        return current;
+      }
     }
     if (ts.isSourceFile(current)) return false;
   }
-  return false;
+  return null;
+}
+
+function containingJsxParent(node) {
+  let current = node.parent;
+  if (ts.isJsxElement(current)) current = current.parent;
+  for (; current; current = current.parent) {
+    if (ts.isJsxElement(current) || ts.isJsxFragment(current)) return current;
+    if (ts.isSourceFile(current)) return null;
+  }
+  return null;
 }
 
 export function analyzeSource(fileName, sourceText) {
   const source = ts.createSourceFile(fileName, sourceText, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
   const findings = [];
+  const literalContainers = new Map();
 
   function visit(node) {
     if (ts.isJsxOpeningElement(node) || ts.isJsxSelfClosingElement(node)) {
@@ -107,12 +126,22 @@ export function analyzeSource(fileName, sourceText) {
         findings.push({ fileName, line, message: `<${tag}> has no data-testid/testId` });
       }
       const literal = literalTestId(node);
-      if (literal && isInsideMapCallback(node)) {
+      const callback = repeatedCallback(node);
+      if (callback && literal) {
         findings.push({
           fileName,
           line,
-          message: `literal test ID "${literal}" is rendered inside map(); include row identity`,
+          message: `test ID${literal ? ` "${literal}"` : ''} is rendered repeatedly; include item identity`,
         });
+      }
+      if (literal) {
+        const container = containingJsxParent(node);
+        const prior = literalContainers.get(literal);
+        if (container && prior === container) {
+          findings.push({ fileName, line, message: `literal test ID "${literal}" is duplicated in one JSX container` });
+        } else if (container) {
+          literalContainers.set(literal, container);
+        }
       }
     }
     ts.forEachChild(node, visit);
