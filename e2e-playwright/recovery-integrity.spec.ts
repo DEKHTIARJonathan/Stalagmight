@@ -1,5 +1,6 @@
 import { test, expect } from './fixtures/coverage';
 import { setupMockedPage } from './helpers/app';
+import { recoveryBackupItems } from './helpers/testIds';
 
 async function openRecoveryDialog(page: import('./fixtures/coverage').Page): Promise<void> {
   await page.evaluate(() => {
@@ -52,9 +53,9 @@ test.describe('Recovery Integrity Workflow', () => {
     await expect(page.getByTestId('corruption-recovery-dialog')).toBeVisible({ timeout: 5000 });
 
     await page.getByTestId('recovery-restore-backup').click();
-    await expect(page.locator('[data-testid="recovery-backup-item"]')).toHaveCount(1);
+    await expect(recoveryBackupItems(page)).toHaveCount(1);
 
-    await page.locator('[data-testid="recovery-backup-item"]').first().click();
+    await recoveryBackupItems(page).first().click();
     await expect(page.getByText('Restore Succeeded')).toBeVisible({ timeout: 5000 });
 
     await page.getByTestId('corruption-recovery-dialog').getByRole('button', { name: 'Open Project' }).click();

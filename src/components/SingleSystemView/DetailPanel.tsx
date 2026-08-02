@@ -23,6 +23,7 @@ import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
 import { useActiveStations } from '../../hooks/useActiveStations';
 import { setSource, trackContextMenuAction } from '../../utils/telemetry';
 import { SHOT_KIND_LABEL_KEY, nextShotKind } from '../../utils/shotKind';
+import { warningKey, warningResolveTestId, warningUndoResolveTestId } from '../../utils/testId';
 
 /** Center/locate glyph (small ring + edge spokes), filled so it stays crisp
  *  under the page-zoom UI scale. Shared by the per-entity "center on map"
@@ -215,9 +216,6 @@ type WarningFlow =
 // can put their representative on the SAME shot (e.g. stations 0 and 1 both map to
 // shot 0), sharing sectionId/shotId/code but differing by datum - without this they
 // collapse and the resolve flow would act on the wrong datum (issue #57 / Codex).
-const warningKey = (w: ProjectWarning) =>
-  `${w.sectionId}:${w.shotId}:${w.code}${w.datumStationIndex !== undefined ? `:d${w.datumStationIndex}` : ''}`;
-
 function WarningsContent({ warnings, project, onWarningClick }: WarningsContentProps) {
   const { t } = useTranslation();
   const { unresolveWarning } = useProjectStore(
@@ -484,7 +482,7 @@ function WarningsContent({ warnings, project, onWarningClick }: WarningsContentP
             const index = vItem.index;
             return (
             <div
-              key={`${warning.sectionId}-${warning.shotId}-${warning.code}-${index}`}
+              key={warningKey(warning)}
               data-index={index}
               ref={rowVirtualizer.measureElement}
               role="listitem"
@@ -502,7 +500,7 @@ function WarningsContent({ warnings, project, onWarningClick }: WarningsContentP
                 (issue #57) instead of the button reserving its own column. */}
             {warning.isResolved ? (
               <button onClick={(e) => handleUndoResolve(e, warning)}
-                data-testid={`warning-${index}-undo-resolve`}
+                data-testid={warningUndoResolveTestId(warning)}
                 className="float-right ml-2 text-xs px-2 py-0.5 rounded bg-background-50 hover:bg-background text-text-secondary"
                 title={t('detailPanel.warnings.markUnresolved')}
               >
@@ -513,7 +511,7 @@ function WarningsContent({ warnings, project, onWarningClick }: WarningsContentP
                 onClick={(e) => startResolve(e, warning)}
                 className="float-right ml-2 text-xs px-2 py-0.5 rounded bg-background-50 hover:bg-background text-text-primary"
                 title={t('detailPanel.warnings.resolve')}
-                data-testid={`warning-${index}-resolve`}
+                data-testid={warningResolveTestId(warning)}
               >
                 {t('detailPanel.warnings.resolve')}
               </button>

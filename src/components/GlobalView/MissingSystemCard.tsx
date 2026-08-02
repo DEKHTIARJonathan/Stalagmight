@@ -1,7 +1,7 @@
 import { type MouseEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ElidedPath } from '../common';
-import { testIdPart } from '../../utils/testId';
+import { missingSystemCardRemoveTestId, missingSystemCardTestId } from '../../utils/testId';
 
 interface MissingSystemCardProps {
   name: string;
@@ -25,7 +25,7 @@ export default function MissingSystemCard({ name, filePath, onRemove }: MissingS
   return (
     <div
       className="bg-panel border border-border border-dashed rounded-lg p-4 opacity-70"
-      data-testid={`system-card-missing-${testIdPart(filePath)}`}
+      data-testid={missingSystemCardTestId(filePath)}
       data-missing="true"
     >
       <div className="flex items-start justify-between gap-2">
@@ -41,7 +41,7 @@ export default function MissingSystemCard({ name, filePath, onRemove }: MissingS
           type="button"
           onClick={handleRemove}
           className="text-xs text-text-secondary hover:text-danger underline"
-          data-testid={`system-card-missing-remove-${testIdPart(filePath)}`}
+          data-testid={missingSystemCardRemoveTestId(filePath)}
         >
           {t('globalView.recent.missing.remove')}
         </button>

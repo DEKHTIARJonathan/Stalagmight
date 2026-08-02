@@ -14,6 +14,7 @@ import {
   waitForMapIdle,
   type SectionSeed,
 } from './helpers/app';
+import { warningResolveButtons } from './helpers/testIds';
 
 /** Seed data: one section with shots. */
 const sectionSeeds: SectionSeed[] = [
@@ -310,7 +311,7 @@ test.describe('Validation Error Recovery (SPEC 14.5)', () => {
     await expect(page.locator('text=Azimuth difference exceeds threshold')).toBeVisible();
 
     // Resolve buttons rendered for each unresolved warning
-    const resolveButtons = page.getByTestId('resolve-warning');
+    const resolveButtons = warningResolveButtons(page);
     await expect(resolveButtons).toHaveCount(2);
     await expect(resolveButtons.first()).toHaveText('Resolve');
   });
@@ -376,7 +377,7 @@ test.describe('Validation Error Recovery (SPEC 14.5)', () => {
     ]);
 
     await page.getByTestId('detail-tab-warnings').click();
-    await page.getByTestId('resolve-warning').first().click();
+    await warningResolveButtons(page).first().click();
 
     // The resolution view reuses this panel (issue #57) and offers the
     // azimuth-specific options plus Ignore.
@@ -388,7 +389,7 @@ test.describe('Validation Error Recovery (SPEC 14.5)', () => {
     // Back returns to the list.
     await page.getByTestId('warning-resolution-back').click();
     await expect(page.getByTestId('warnings-content')).toBeVisible();
-    await expect(page.getByTestId('resolve-warning').first()).toBeVisible();
+    await expect(warningResolveButtons(page).first()).toBeVisible();
   });
 
   test('Resolve all steps through warnings with a progress indicator', async ({ page }) => {
@@ -440,7 +441,7 @@ test.describe('Validation Error Recovery (SPEC 14.5)', () => {
     ]);
 
     await page.getByTestId('detail-tab-warnings').click();
-    await page.getByTestId('resolve-warning').first().click();
+    await warningResolveButtons(page).first().click();
 
     // Structural over-anchoring is an error, never suppressed (issue #57): the
     // resolution view offers one "keep this datum" option per anchor plus
@@ -472,7 +473,7 @@ test.describe('Validation Error Recovery (SPEC 14.5)', () => {
     ]);
 
     await page.getByTestId('detail-tab-warnings').click();
-    await page.getByTestId('resolve-warning').first().click();
+    await warningResolveButtons(page).first().click();
     await expect(page.getByTestId('warning-resolution')).toBeVisible();
     // Depth is trusted, so resolution adjusts the inclination (and length when a
     // pitch is recorded) - never the depth. This seed shot has no recorded pitch,
@@ -503,7 +504,7 @@ test.describe('Validation Error Recovery (SPEC 14.5)', () => {
     ]);
 
     await page.getByTestId('detail-tab-warnings').click();
-    await page.getByTestId('resolve-warning').first().click();
+    await warningResolveButtons(page).first().click();
     await expect(page.getByTestId('warning-resolution')).toBeVisible();
     // A shot failing the minimum-length test offers Set length, Delete this shot,
     // and Ignore. "Set length" is the default (first enabled); delete is offered.
@@ -542,7 +543,7 @@ test.describe('Validation Error Recovery (SPEC 14.5)', () => {
     await expect(page.getByTestId('warnings-content')).toBeVisible();
     // With 200 warnings the virtualizer mounts only the visible window, not all
     // rows - so far fewer Resolve buttons are in the DOM than warnings.
-    const rendered = await page.getByTestId('resolve-warning').count();
+    const rendered = await warningResolveButtons(page).count();
     expect(rendered).toBeGreaterThan(0);
     expect(rendered).toBeLessThan(many.length);
   });
@@ -632,7 +633,7 @@ test.describe('Validation Error Recovery (SPEC 14.5)', () => {
     ]);
 
     await page.getByTestId('detail-tab-warnings').click();
-    await page.getByTestId('resolve-warning').first().click();
+    await warningResolveButtons(page).first().click();
     await expect(page.getByTestId('warning-resolution')).toBeVisible();
 
     // Full focus: the shot is selected (which highlights it on the map and

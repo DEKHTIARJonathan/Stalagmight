@@ -1,10 +1,11 @@
 import { test, expect } from './fixtures/coverage';
 import { setupMockedPage, switchRecentView } from './helpers/app';
+import { systemCardTestId } from './helpers/testIds';
 
 const ALPHA_MARKER = `system-marker-${encodeURIComponent('/projects/cave-alpha.stalx')}`;
 const BETA_MARKER = `system-marker-${encodeURIComponent('/projects/cave-beta.stalx')}`;
 const GAMMA_MARKER = `system-marker-${encodeURIComponent('/projects/cave-gamma.stalx')}`;
-const ALPHA_CARD = `system-card-${encodeURIComponent('/projects/cave-alpha.stalx')}`;
+const ALPHA_CARD = systemCardTestId('/projects/cave-alpha.stalx');
 
 test.describe('GlobalView Map', () => {
   test.beforeEach(async ({ page }) => {

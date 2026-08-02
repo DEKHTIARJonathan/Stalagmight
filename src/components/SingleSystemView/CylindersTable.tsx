@@ -6,6 +6,7 @@ import { isBudgetRole } from '../../utils/gasRoles';
 import { pressureFromDisplay, pressureToDisplay } from '../../utils/formatGas';
 import { TANK_PRESETS, cylinderFromPreset } from '../../utils/tankPresets';
 import type { CylRole } from '../../types/ipc.generated';
+import { gasCylinderRowTestId } from '../../utils/testId';
 
 const CYL_ROLES: readonly CylRole[] = ['back_gas', 'stage', 'dil_out', 'bailout', 'deco'];
 
@@ -89,7 +90,7 @@ export function CylindersTable() {
               key={idx}
               className={`border-t border-border ${dimmed ? 'opacity-50' : ''}`}
               title={dimReason}
-              data-testid={`gas-cylinder-row-${idx}`}
+              data-testid={gasCylinderRowTestId(idx)}
               data-enabled={cyl.enabled}
             >
               <td className="py-1 pr-2">

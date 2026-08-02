@@ -154,7 +154,14 @@ export function useSpeleoMenuItems(): AppMenuItem[] {
       {
         id: 'speleodb-menu-discard-changes',
         label: t('speleodb.menu.discardChanges'),
-        icon: <SpeleoBadgedIcon badge={<RefreshGlyph size={11} />} badgeColor="text-red-500" size={sz} />,
+        icon: (
+          <SpeleoBadgedIcon
+            badge={<RefreshGlyph size={11} />}
+            badgeColor="text-red-500"
+            size={sz}
+            testIdPrefix="speleodb-menu-discard-changes-icon"
+          />
+        ),
         disabled: busy || !hasUnpushedEdits,
         onClick: () => openDialog('speleodb-discard-changes'),
       },

@@ -10,6 +10,7 @@ import type { RepairResult } from '../../types/ipc/RepairResult';
 import type { BackupInfo } from '../../types/ipc/BackupInfo';
 import type { SalvagedData } from '../../types/ipc/SalvagedData';
 import { trackDialogComplete, setProjectActionSource } from '../../utils/telemetry';
+import { recoveryBackupItemTestId } from '../../utils/testId';
 
 type Step = 'choose' | 'repairing' | 'listing-backups' | 'pick-backup' | 'restoring' | 'salvaging' | 'result';
 
@@ -285,7 +286,7 @@ export default function CorruptionRecoveryDialog() {
                   type="button"
                   onClick={() => handleRestoreBackup(backup.path)}
                   className="w-full text-left p-2 rounded border border-border hover:bg-surface-alt transition-colors"
-                  data-testid={`recovery-backup-item-${index}`}
+                  data-testid={recoveryBackupItemTestId(index)}
                 >
                   <div className="font-mono text-sm">{filename}</div>
                   <div className="text-xs text-text-tertiary mt-0.5">

@@ -1,5 +1,6 @@
 import { test, expect, type Page } from './fixtures/coverage';
 import { setupMockedPage } from './helpers/app';
+import { systemCardTestId } from './helpers/testIds';
 
 /**
  * E2E tests for GlobalView multi-select and batch operations.
@@ -31,18 +32,18 @@ test.describe('GlobalView Multi-Select', () => {
     await setupMockedPage(page);
     await switchToListTab(page);
     // Verify cards rendered
-    await expect(page.getByTestId(`system-card-${ALPHA}`)).toBeVisible();
+    await expect(page.getByTestId(systemCardTestId(ALPHA))).toBeVisible();
   });
 
   test('single click selects card with ring-accent class', async ({ page }) => {
-    const card = page.getByTestId(`system-card-${ALPHA}`);
+    const card = page.getByTestId(systemCardTestId(ALPHA));
     await card.click();
     await expect(card).toHaveClass(/ring-accent/);
   });
 
   test('Ctrl+click toggles multi-selection', async ({ page }) => {
-    const cardAlpha = page.getByTestId(`system-card-${ALPHA}`);
-    const cardBeta = page.getByTestId(`system-card-${BETA}`);
+    const cardAlpha = page.getByTestId(systemCardTestId(ALPHA));
+    const cardBeta = page.getByTestId(systemCardTestId(BETA));
 
     // Select Alpha
     await cardAlpha.click();
@@ -58,9 +59,9 @@ test.describe('GlobalView Multi-Select', () => {
   });
 
   test('Ctrl+click preserves prior selection', async ({ page }) => {
-    const cardAlpha = page.getByTestId(`system-card-${ALPHA}`);
-    const cardBeta = page.getByTestId(`system-card-${BETA}`);
-    const cardGamma = page.getByTestId(`system-card-${GAMMA}`);
+    const cardAlpha = page.getByTestId(systemCardTestId(ALPHA));
+    const cardBeta = page.getByTestId(systemCardTestId(BETA));
+    const cardGamma = page.getByTestId(systemCardTestId(GAMMA));
 
     // Select Alpha via normal click
     await cardAlpha.click();
@@ -78,14 +79,14 @@ test.describe('GlobalView Multi-Select', () => {
   test('Ctrl+A selects all projects in list view', async ({ page }) => {
     await page.keyboard.press('ControlOrMeta+a');
 
-    await expect(page.getByTestId(`system-card-${ALPHA}`)).toHaveClass(/ring-accent/);
-    await expect(page.getByTestId(`system-card-${BETA}`)).toHaveClass(/ring-accent/);
-    await expect(page.getByTestId(`system-card-${GAMMA}`)).toHaveClass(/ring-accent/);
-    await expect(page.getByTestId(`system-card-${LOCAL}`)).toHaveClass(/ring-accent/);
+    await expect(page.getByTestId(systemCardTestId(ALPHA))).toHaveClass(/ring-accent/);
+    await expect(page.getByTestId(systemCardTestId(BETA))).toHaveClass(/ring-accent/);
+    await expect(page.getByTestId(systemCardTestId(GAMMA))).toHaveClass(/ring-accent/);
+    await expect(page.getByTestId(systemCardTestId(LOCAL))).toHaveClass(/ring-accent/);
   });
 
   test('Escape deselects all', async ({ page }) => {
-    const cardAlpha = page.getByTestId(`system-card-${ALPHA}`);
+    const cardAlpha = page.getByTestId(systemCardTestId(ALPHA));
 
     // Select
     await cardAlpha.click();
@@ -97,8 +98,8 @@ test.describe('GlobalView Multi-Select', () => {
   });
 
   test('merge button appears when 2+ selected', async ({ page }) => {
-    const cardAlpha = page.getByTestId(`system-card-${ALPHA}`);
-    const cardBeta = page.getByTestId(`system-card-${BETA}`);
+    const cardAlpha = page.getByTestId(systemCardTestId(ALPHA));
+    const cardBeta = page.getByTestId(systemCardTestId(BETA));
 
     // Single select - no merge button
     await cardAlpha.click();
@@ -110,8 +111,8 @@ test.describe('GlobalView Multi-Select', () => {
   });
 
   test('merge button hidden when fewer than 2 selected', async ({ page }) => {
-    const cardAlpha = page.getByTestId(`system-card-${ALPHA}`);
-    const cardBeta = page.getByTestId(`system-card-${BETA}`);
+    const cardAlpha = page.getByTestId(systemCardTestId(ALPHA));
+    const cardBeta = page.getByTestId(systemCardTestId(BETA));
 
     // Multi-select then deselect back to 1
     await cardAlpha.click();
@@ -123,8 +124,8 @@ test.describe('GlobalView Multi-Select', () => {
   });
 
   test('context menu Merge option visible when 2+ selected', async ({ page }) => {
-    const cardAlpha = page.getByTestId(`system-card-${ALPHA}`);
-    const cardBeta = page.getByTestId(`system-card-${BETA}`);
+    const cardAlpha = page.getByTestId(systemCardTestId(ALPHA));
+    const cardBeta = page.getByTestId(systemCardTestId(BETA));
 
     // Multi-select
     await cardAlpha.click();
@@ -139,8 +140,8 @@ test.describe('GlobalView Multi-Select', () => {
   });
 
   test('context menu Remove shows batch count when 2+ selected', async ({ page }) => {
-    const cardAlpha = page.getByTestId(`system-card-${ALPHA}`);
-    const cardBeta = page.getByTestId(`system-card-${BETA}`);
+    const cardAlpha = page.getByTestId(systemCardTestId(ALPHA));
+    const cardBeta = page.getByTestId(systemCardTestId(BETA));
 
     // Multi-select two cards
     await cardAlpha.click();
@@ -156,8 +157,8 @@ test.describe('GlobalView Multi-Select', () => {
   });
 
   test('right-click on unselected card re-selects it', async ({ page }) => {
-    const cardAlpha = page.getByTestId(`system-card-${ALPHA}`);
-    const cardBeta = page.getByTestId(`system-card-${BETA}`);
+    const cardAlpha = page.getByTestId(systemCardTestId(ALPHA));
+    const cardBeta = page.getByTestId(systemCardTestId(BETA));
 
     // Select Alpha
     await cardAlpha.click();
@@ -174,7 +175,7 @@ test.describe('GlobalView Multi-Select', () => {
   });
 
   test('Delete key removes selected from recent', async ({ page }) => {
-    const cardAlpha = page.getByTestId(`system-card-${ALPHA}`);
+    const cardAlpha = page.getByTestId(systemCardTestId(ALPHA));
 
     // Select Alpha
     await cardAlpha.click();
@@ -192,7 +193,7 @@ test.describe('GlobalView Multi-Select', () => {
   });
 
   test('Enter key opens selected project', async ({ page }) => {
-    const cardAlpha = page.getByTestId(`system-card-${ALPHA}`);
+    const cardAlpha = page.getByTestId(systemCardTestId(ALPHA));
 
     // Select Alpha
     await cardAlpha.click();

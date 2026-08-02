@@ -1,5 +1,6 @@
 import { test, expect, type Page } from './fixtures/coverage';
 import { setupMockedPage } from './helpers/app';
+import { systemCardTestId } from './helpers/testIds';
 
 /**
  * E2E tests for the Recent Projects enhancements (#46, #47, #48):
@@ -14,7 +15,7 @@ import { setupMockedPage } from './helpers/app';
  *   Local Survey…       /projects/local-survey.stalx 2 sections  -3 days
  */
 
-const cardTestId = (path: string) => `system-card-${encodeURIComponent(path)}`;
+const cardTestId = systemCardTestId;
 const ALPHA = cardTestId('/projects/cave-alpha.stalx');
 const BETA = cardTestId('/projects/cave-beta.stalx');
 const GAMMA = cardTestId('/projects/cave-gamma.stalx');

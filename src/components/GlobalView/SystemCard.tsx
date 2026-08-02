@@ -10,7 +10,7 @@ import { ElidedPath, Tooltip } from '../common';
 import { setProjectActionSource } from '../../utils/telemetry';
 import { useProjectStatFormatters } from './useProjectStatFormatters';
 import { SpeleoRecentInfo, unpushedAccentStyle, type SpeleoLockInfo } from './SpeleoLockBadge';
-import { testIdPart } from '../../utils/testId';
+import { systemCardTestId } from '../../utils/testId';
 
 interface SystemCardProps {
   name: string;
@@ -43,7 +43,7 @@ export default function SystemCard({
   const { t } = useTranslation();
   const { formatLength } = useProjectStatFormatters();
   const { loadProject } = useProjectStore();
-  const testId = `system-card-${testIdPart(filePath)}`;
+  const testId = systemCardTestId(filePath);
 
   const handleClick = (e: MouseEvent) => {
     // Single click selects the card

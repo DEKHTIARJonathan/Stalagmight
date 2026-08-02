@@ -12,7 +12,7 @@ import type { RecentSortField, RecentSortDirection } from './useRecentSort';
 import { SpeleoRecentInfo, resolveSpeleoLock, unpushedAccentStyle } from './SpeleoLockBadge';
 import type { SpeleoProjectSummary } from '../../types/ipc.generated';
 import type { SpeleoLocalStateMap } from '../../utils/speleoLocalState';
-import { testIdPart } from '../../utils/testId';
+import { missingSystemRowTestId, systemRowTestId, testIdPart } from '../../utils/testId';
 
 interface SystemTableProps {
   items: RecentListItem[];
@@ -163,7 +163,7 @@ export function SystemTable({
               <tr
                 key={item.filePath}
                 className="border-b border-border opacity-70"
-                data-testid={`system-row-missing-${testIdPart(item.filePath)}`}
+                data-testid={missingSystemRowTestId(item.filePath)}
                 data-missing="true"
               >
                 <td className={`${cellClass} text-text-secondary line-through decoration-1`}>{item.name}</td>
@@ -270,7 +270,7 @@ export function SystemTable({
               className={`border-b border-border cursor-pointer transition-colors ${
                 isSelected ? 'bg-accent-10' : 'hover:bg-panel'
               }`}
-              data-testid={`system-row-${testIdPart(item.filePath)}`}
+              data-testid={systemRowTestId(item.filePath)}
               data-local-edits={lock.hasLocalEdits ? 'true' : 'false'}
               role="button"
               tabIndex={0}

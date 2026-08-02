@@ -1,9 +1,10 @@
 import { test, expect } from './fixtures/coverage';
 import { setupMockedPage } from './helpers/app';
+import { systemCardTestId } from './helpers/testIds';
 
-const ALPHA_CARD = `system-card-${encodeURIComponent('/projects/cave-alpha.stalx')}`;
-const BETA_CARD = `system-card-${encodeURIComponent('/projects/cave-beta.stalx')}`;
-const LOCAL_CARD = `system-card-${encodeURIComponent('/projects/local-survey.stalx')}`;
+const ALPHA_CARD = systemCardTestId('/projects/cave-alpha.stalx');
+const BETA_CARD = systemCardTestId('/projects/cave-beta.stalx');
+const LOCAL_CARD = systemCardTestId('/projects/local-survey.stalx');
 const ALPHA_MARKER = `system-marker-${encodeURIComponent('/projects/cave-alpha.stalx')}`;
 
 test.describe('GlobalView Metadata Panel', () => {

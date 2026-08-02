@@ -1,5 +1,6 @@
 import { test, expect, type Page } from './fixtures/coverage';
 import { setupMockedPage } from './helpers/app';
+import { systemCardTestId } from './helpers/testIds';
 
 /**
  * E2E for renaming a project from the GlobalView metadata panel.
@@ -10,7 +11,7 @@ import { setupMockedPage } from './helpers/app';
 const ALPHA = '/projects/cave-alpha.stalx';
 
 async function selectAlpha(page: Page): Promise<void> {
-  await page.getByTestId(`system-card-${ALPHA}`).click();
+  await page.getByTestId(systemCardTestId(ALPHA)).click();
   await expect(page.getByTestId('metadata-name')).toContainText('Cave System Alpha');
 }
 
@@ -33,7 +34,7 @@ test.describe('GlobalView - rename project', () => {
     // Panel reflects the new name (after the recents list refreshes).
     await expect(page.getByTestId('metadata-name')).toContainText('Renamed Cave');
     // And the card in the list updates too.
-    await expect(page.getByTestId(`system-card-${ALPHA}`)).toContainText('Renamed Cave');
+    await expect(page.getByTestId(systemCardTestId(ALPHA))).toContainText('Renamed Cave');
   });
 
   test('saves on Enter', async ({ page }) => {
