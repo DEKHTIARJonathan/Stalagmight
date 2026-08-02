@@ -166,6 +166,71 @@ async function main(): Promise<void> {
       semanticShotClick?.clicked === true && semanticShotClick.selectionVerified === true,
       semanticShotClick ?? featureIdentity,
     );
+    const placementSetup = parseText(
+      await call('eval', {
+        script: `
+          const e2e = window.__E2E_TEST__;
+          const map = window.__stalagmight_map__;
+          if (!e2e?.uiStore || !e2e?.projectStore || !map) throw new Error('placement test hooks unavailable');
+          const project = e2e.projectStore.getState().project;
+          const surface = map.getCanvas();
+          const target = map.unproject([surface.clientWidth * 0.65, surface.clientHeight * 0.65]).toArray();
+          const sectionData = {
+            name: 'MCP Placement Section', surveyor: null, date: null, color: '#4ecdc4', direction: null, quality: 1,
+            shots: [{
+              azimuth_in: 90, azimuth_out: 90, length: 10, depth_in: 0, depth_out: 0,
+              pitch_in: null, pitch_out: null, left: null, right: null, up: null, down: null,
+              comment: null, kind: 'Normal', marker_index: null, temperature: null,
+            }],
+          };
+          delete window.__MCP_PLACEMENT_RESULT__;
+          e2e.uiStore.getState().startPlacementMode(sectionData, 0, async (result) => {
+            const created = await e2e.projectStore.getState().createSection(sectionData);
+            window.__MCP_PLACEMENT_RESULT__ = { created, result };
+          });
+          return { before: project.sections.length, target };
+        `,
+      }),
+    ) as { value?: { before?: number; target?: [number, number] } };
+    const placementTarget = placementSetup?.value?.target;
+    const placementClick = placementTarget
+      ? parseText(await call('map_click', { lngLat: placementTarget })) as {
+          clicked?: boolean;
+          interaction?: string;
+        }
+      : null;
+    type PlacementProbe = {
+      value?: { count?: number; placementActive?: boolean; completed?: boolean; success?: boolean };
+    };
+    let placementResult: PlacementProbe | null = null;
+    for (let i = 0; i < 20; i++) {
+      placementResult = parseText(
+        await call('eval', {
+          script: `
+            const e2e = window.__E2E_TEST__;
+            const marker = window.__MCP_PLACEMENT_RESULT__;
+            return {
+              count: e2e.projectStore.getState().project.sections.length,
+              placementActive: e2e.uiStore.getState().placementMode !== null,
+              completed: Boolean(marker?.result?.position),
+              success: marker?.created?.success === true,
+            };
+          `,
+        }),
+      ) as PlacementProbe;
+      if (placementResult?.value?.success) break;
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+    check(
+      'map_click completes active section placement through the map surface',
+      placementClick?.clicked === true &&
+        placementClick.interaction === 'placement' &&
+        placementResult?.value?.placementActive === false &&
+        placementResult?.value?.completed === true &&
+        placementResult?.value?.success === true &&
+        placementResult?.value?.count === (placementSetup?.value?.before ?? -1) + 1,
+      { placementClick, placementSetup, placementResult },
+    );
     const driven = parseText(
       await call('driver_script', { script: 'const v = await readStore("ui", "view"); return v.value;' }),
     ) as { value?: unknown };
