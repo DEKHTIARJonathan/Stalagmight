@@ -1009,36 +1009,58 @@ impl AppState {
     /// the undo session (Q23) - one rule, so "what happened to my history" has one
     /// answer.
     ///
-    /// Best-effort: a poisoned lock leaves the stack alone rather than failing a push
-    /// that has already landed on the server.
-    fn speleodb_clear_undo_after_push(&self, push_start: &str) {
-        let Ok(cutoff) = chrono::DateTime::parse_from_rfc3339(push_start) else {
+    /// Best-effort because the push has already landed. Poisoned guards are recovered;
+    /// a disk failure retains the chain metadata so stale rows still fail closed on reopen.
+    pub(super) fn speleodb_clear_undo_after_push(&self, undo_cutoff: &str) {
+        let Ok(cutoff) = chrono::DateTime::parse_from_rfc3339(undo_cutoff) else {
             tracing::warn!(
-                push_start,
+                undo_cutoff,
                 purpose = "clear undo history after a confirmed push (#303)",
-                "could not parse the push-start instant; leaving the undo stack alone"
+                "could not parse the undo cutoff; leaving the undo stack alone"
             );
             return;
         };
         let cutoff = cutoff.with_timezone(&chrono::Utc);
-        // The chain pointer described a walk backwards from the PREVIOUS tip. This push
-        // made a new commit, so the next Unwind must restart from the new BASE - whose
-        // file carries the history this push just uploaded.
-        self.speleodb_set_unwound_from(None);
-        // The watermark goes with it: the clear-on-push below empties the stack of
-        // everything the upload carried, inherited rows included, so there is nothing left
-        // for it to describe.
-        self.speleodb_set_inherited_through(None);
-        if let Ok(mut stack) = self.undo_stack.lock() {
-            let dropped = stack.drop_entries_up_to(cutoff);
-            if dropped > 0 {
-                tracing::info!(
-                    dropped,
-                    remaining = stack.len(),
-                    purpose = "avoid duplicating pushed history in the next commit (#303)",
-                    "Cleared the undo entries carried by a confirmed push"
-                );
-            }
+        let database = self
+            .database
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut stack = self
+            .undo_stack
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let dropped = stack.drop_entries_up_to(cutoff);
+        let Some(db) = database.as_ref() else {
+            tracing::warn!(
+                dropped,
+                purpose = "persist confirmed-push undo cleanup (#303)",
+                "no live database handle; retaining the chain metadata so stale disk rows remain classified"
+            );
+            return;
+        };
+        if !self.persist_locked_undo_stacks_into(db, &stack) {
+            tracing::warn!(
+                dropped,
+                purpose = "persist confirmed-push undo cleanup (#303)",
+                "could not persist the pruned history; retaining the chain metadata so stale disk rows remain classified"
+            );
+            return;
         }
+        let remaining = stack.len();
+        drop(stack);
+        drop(database);
+
+        // Only clear the chain metadata after the disk rows are gone. If persistence
+        // failed, retaining these markers makes a reopen fail closed instead of
+        // treating stale uploaded rows as fresh history.
+        self.speleodb_set_unwound_from(None);
+        self.speleodb_set_inherited_through(None);
+        tracing::info!(
+            dropped,
+            remaining,
+            undo_cutoff,
+            purpose = "avoid duplicating pushed history in the next commit (#303)",
+            "Persisted the undo cleanup for a confirmed push"
+        );
     }
 }

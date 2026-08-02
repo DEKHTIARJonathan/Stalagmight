@@ -1,5 +1,5 @@
 use super::AppState;
-use crate::core::{CommandResult, PersistStack};
+use crate::core::{CommandResult, PersistStack, UndoStack};
 use crate::models::{Project, SectionId};
 use crate::persistence::Database;
 use std::path::{Path, PathBuf};
@@ -720,6 +720,19 @@ impl AppState {
     /// `undo_stack` only - callers may hold `project` (the established order is
     /// `project` before `undo_stack`).
     fn persist_undo_stacks_into(&self, db: &Database) {
+        if let Ok(undo_stack) = self.undo_stack.lock() {
+            let _ = self.persist_locked_undo_stacks_into(db, &undo_stack);
+        }
+    }
+
+    /// Persist an already-locked stack. The confirmed-push path uses this while it
+    /// holds the live database and undo guards, so no late edit can land between
+    /// pruning memory and rewriting SQLite.
+    pub(super) fn persist_locked_undo_stacks_into(
+        &self,
+        db: &Database,
+        undo_stack: &UndoStack,
+    ) -> bool {
         // [#303] A Full-mode SpeleoDB-linked project persists its WHOLE history (bounded
         // by the byte budget, not by a count) because that history is what rides in the
         // next commit and gives undo its cross-commit reach. Everything else - local
@@ -742,48 +755,52 @@ impl AppState {
             }
         };
 
-        if let Ok(undo_stack) = self.undo_stack.lock() {
-            // Every save writes the WHOLE (windowed) stack, because the pipeline above
-            // built a fresh temp file and renamed it over the target: the reopened `db`
-            // has no undo tables to add to. See `UndoStack::rows_to_persist`.
-            let undo_rows = undo_stack.rows_to_persist(PersistStack::Undo, count_limit);
+        // Every save writes the WHOLE (windowed) stack, because the pipeline above
+        // built a fresh temp file and renamed it over the target: the reopened `db`
+        // has no undo tables to add to. See `UndoStack::rows_to_persist`.
+        let undo_rows = undo_stack.rows_to_persist(PersistStack::Undo, count_limit);
 
-            // [#303] Redo is persisted in EVERY mode, including Full, where that means a
-            // save can write up to 2x `UNDO_BYTE_BUDGET_BYTES` - the budget is applied to
-            // the two stacks independently.
-            //
-            // That doubling is deliberate and was re-decided after review, so do not
-            // "fix" it by skipping redo in Full mode: that change was made and reversed.
-            // The reasoning is that 64 MiB is a CEILING, not growth - each stack is
-            // bounded by the budget, and a confirmed push clears the undo history - and
-            // that persisting redo is what keeps a redo branch alive across a close and
-            // reopen. Dropping it bought a smaller save on exactly the projects whose
-            // saves are largest, and cost redo-after-reopen on all of them, which is the
-            // worse end of the trade.
-            //
-            // None of the redo half reaches the server either way: `redo_stack` is
-            // unconditionally in `PUSH_SNAPSHOT_LOCAL_TABLES`, so this is local-only cost
-            // for a local-only feature.
-            let redo_rows = undo_stack.rows_to_persist(PersistStack::Redo, count_limit);
+        // [#303] Redo is persisted in EVERY mode, including Full, where that means a
+        // save can write up to 2x `UNDO_BYTE_BUDGET_BYTES` - the budget is applied to
+        // the two stacks independently.
+        //
+        // That doubling is deliberate and was re-decided after review, so do not
+        // "fix" it by skipping redo in Full mode: that change was made and reversed.
+        // The reasoning is that 64 MiB is a CEILING, not growth - each stack is
+        // bounded by the budget, and a confirmed push clears the undo history - and
+        // that persisting redo is what keeps a redo branch alive across a close and
+        // reopen. Dropping it bought a smaller save on exactly the projects whose
+        // saves are largest, and cost redo-after-reopen on all of them, which is the
+        // worse end of the trade.
+        //
+        // None of the redo half reaches the server either way: `redo_stack` is
+        // unconditionally in `PUSH_SNAPSHOT_LOCAL_TABLES`, so this is local-only cost
+        // for a local-only feature.
+        let redo_rows = undo_stack.rows_to_persist(PersistStack::Redo, count_limit);
 
-            if let Err(e) = db.save_undo_stack_with_timestamps(undo_rows) {
+        let undo_saved = match db.save_undo_stack_with_timestamps(undo_rows) {
+            Ok(()) => true,
+            Err(e) => {
                 tracing::warn!(
                     error = %e,
                     purpose = "preserve undo history",
                     "Failed to persist undo stack"
                 );
+                false
             }
-            if let Err(e) = db.save_redo_stack_with_timestamps(redo_rows) {
+        };
+        let redo_saved = match db.save_redo_stack_with_timestamps(redo_rows) {
+            Ok(()) => true,
+            Err(e) => {
                 tracing::warn!(
                     error = %e,
                     purpose = "preserve redo history",
                     "Failed to persist redo stack"
                 );
+                false
             }
-            // Both failures are already logged. Nothing to reconcile afterwards: the
-            // next save rewrites the whole stack regardless, so a partial failure costs
-            // this file's history and not the next one's.
-        }
+        };
+        undo_saved && redo_saved
     }
 
     /// Put `path` at the head of the recent-projects list and persist it to

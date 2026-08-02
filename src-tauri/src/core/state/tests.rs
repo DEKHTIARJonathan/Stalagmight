@@ -5100,6 +5100,63 @@ fn path_bearing_commands_never_enter_shared_undo_history() {
     }
 }
 
+#[test]
+fn confirmed_push_persists_the_pruned_undo_and_redo_stacks() {
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("post-push-history.stalx");
+    let cutoff = chrono::Utc::now();
+    let row = |name: &str, stamp: chrono::DateTime<chrono::Utc>| {
+        (
+            serde_json::to_string(&Command::CreateProject {
+                name: name.to_string(),
+                location: None,
+            })
+            .unwrap(),
+            serde_json::to_string(&UndoData::InverseCommand(Command::CloseProject)).unwrap(),
+            Some(stamp.to_rfc3339()),
+        )
+    };
+    let old = row("old", cutoff - chrono::Duration::hours(1));
+    let late = row("late", cutoff + chrono::Duration::hours(1));
+    let redo = row("redo", cutoff + chrono::Duration::hours(2));
+
+    let mut db = Database::open(&path).unwrap();
+    db.save_project(&Project::new("Post push".to_string(), None))
+        .unwrap();
+    db.save_speleo_link(Some(&fixture_speleo_link())).unwrap();
+    db.save_undo_stack_with_timestamps(vec![old.clone(), late.clone()])
+        .unwrap();
+    db.save_redo_stack_with_timestamps(vec![redo.clone()])
+        .unwrap();
+    db.save_speleo_undo_chain(Some("previous-tip")).unwrap();
+    db.save_speleo_undo_watermark(Some(&cutoff.to_rfc3339()))
+        .unwrap();
+
+    let state = AppState::new().unwrap();
+    state
+        .undo_stack
+        .lock()
+        .unwrap()
+        .load_from_persisted_with_timestamps(vec![old, late], vec![redo]);
+    *state.database.lock().unwrap() = Some(db);
+
+    state.speleodb_clear_undo_after_push(&cutoff.to_rfc3339());
+
+    let stack = state.undo_stack.lock().unwrap();
+    assert_eq!(stack.len(), 1, "the late edit remains undoable in memory");
+    assert_eq!(stack.redo_len(), 0, "redo never survives a confirmed push");
+    drop(stack);
+
+    let database = state.database.lock().unwrap();
+    let db = database.as_ref().unwrap();
+    let disk_undo = db.load_undo_stack_with_timestamps().unwrap();
+    assert_eq!(disk_undo.len(), 1, "uploaded rows are removed from SQLite");
+    assert!(disk_undo[0].1.contains("late"));
+    assert!(db.load_redo_stack_with_timestamps().unwrap().is_empty());
+    assert_eq!(db.load_speleo_undo_chain().unwrap(), None);
+    assert_eq!(db.load_speleo_undo_watermark().unwrap(), None);
+}
+
 // === Config Tests ===
 
 #[test]

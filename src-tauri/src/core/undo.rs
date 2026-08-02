@@ -542,11 +542,11 @@ impl UndoStack {
     /// and the hybrid model's answer to "undo past the last commit" is the explicit
     /// Unwind, not a second copy of the history.
     ///
-    /// Keyed on the push-start instant rather than clearing everything, because an edit
-    /// that landed AFTER the snapshot was taken is not on the server: `speleodb_upload`
-    /// deliberately keeps its dirty bit so the next push carries it, so its undo entry
-    /// has to survive too. Clearing the lot would leave a dirty project whose pending
-    /// edit had no history at all.
+    /// Keyed on the upload's undo cutoff rather than clearing everything, because an
+    /// edit that landed AFTER the snapshot was taken is not on the server:
+    /// `speleodb_upload` deliberately keeps its dirty bit so the next push carries it,
+    /// so its undo entry has to survive too. Clearing the lot would leave a dirty
+    /// project whose pending edit had no history at all.
     ///
     /// Entries with NO timestamp are legacy persisted ones, which necessarily predate
     /// this session's push, so they are dropped.
