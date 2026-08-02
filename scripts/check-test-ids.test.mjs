@@ -102,6 +102,14 @@ assert.match(
 );
 
 assert.match(
+  analyzeSource(
+    'unconditional-and-conditional.tsx',
+    'const view = <><button data-testid="same">Always</button>{flag && <button data-testid="same">Sometimes</button>}</>;',
+  ).at(-1)?.message ?? '',
+  /duplicated in one JSX container/,
+);
+
+assert.match(
   analyzeSource('summary.tsx', 'const view = <summary>Details</summary>;')[0]?.message ?? '',
   /has no data-testid/,
 );
