@@ -8,6 +8,9 @@ use crate::models::{
     GpsCoordinates, LoopClosure, SectionData, SectionId, ShotData, ShotId, StationRef,
 };
 
+mod budget;
+mod persistence;
+
 /// Default maximum number of undo entries to keep in memory
 const DEFAULT_UNDO_HISTORY_LIMIT: usize = 100;
 
@@ -116,7 +119,9 @@ pub struct UndoEntry {
     pub timestamp: Option<DateTime<Utc>>,
     /// [#303] Serialized byte length of `command`, measured once when the entry was
     /// pushed. `None` for an entry restored from disk (nothing persists it) or built by a
-    /// test literal.
+    /// test literal. [`UndoStack::estimated_size`] deliberately charges those restored
+    /// commands the historical 512-byte flat estimate instead of reserializing them;
+    /// their undo payload is still counted separately and normally dominates the entry.
     ///
     /// The byte budget bounds what a Full-mode save gzips and what the next commit
     /// carries, and `command_json` is half of what gets written - but `estimated_size`
@@ -566,117 +571,6 @@ impl UndoStack {
         before - self.undo_stack.len()
     }
 
-    /// [#303] Estimated serialized size of one entry, in bytes.
-    ///
-    /// An ESTIMATE by design: it exists to bound growth, and measuring exactly would
-    /// mean serializing the whole stack on every push - the cost the byte budget is
-    /// there to avoid. The dominant terms are exact (the snapshot variants hold their
-    /// JSON as `String` already, so their length is the real payload); the structured
-    /// variants are approximated from their element counts, and everything else is
-    /// small enough that the flat overhead covers it.
-    pub fn estimated_size(entry: &UndoEntry) -> usize {
-        /// Roughly the JSON size of one serialized shot, from the measured
-        /// project-shaped payload (~420 bytes/shot).
-        const BYTES_PER_SHOT: usize = 420;
-        /// Command JSON plus enum/field scaffolding for any entry.
-        const ENTRY_OVERHEAD: usize = 512;
-
-        let payload = match &entry.undo_data {
-            // Exact: these hold the serialized project already.
-            UndoData::ProjectSnapshot(json) => json.len(),
-            UndoData::ProjectSnapshotPair { before, after } => before.len() + after.len(),
-            UndoData::PreviousValues { values_json, .. } => values_json.len(),
-            // Approximated from element counts - a section snapshot of a big section is
-            // the only other variant that can reach megabytes.
-            UndoData::SectionSnapshot { section_data, .. }
-            | UndoData::CreatedSectionSnapshot { section_data, .. } => {
-                section_data.shots.len() * BYTES_PER_SHOT
-            }
-            UndoData::ShotSnapshot { .. } | UndoData::CreatedShotSnapshot { .. } => BYTES_PER_SHOT,
-            UndoData::MergeInfo {
-                removed_closures,
-                previous_offsets,
-                ..
-            } => removed_closures.len() * 256 + previous_offsets.len() * 64,
-            UndoData::UnmergeInfo {
-                removed_closures, ..
-            } => removed_closures.len() * 256,
-            UndoData::ClosureInfo { .. } => 256,
-            UndoData::ZeroDatumInfo {
-                previous_offsets, ..
-            } => previous_offsets.len() * 64,
-            UndoData::SegmentMoveInfo {
-                affected_sections,
-                previous_offsets,
-                ..
-            } => affected_sections.len() * 16 + previous_offsets.len() * 64,
-            UndoData::StationMoveInfo { .. } => 2 * BYTES_PER_SHOT,
-            UndoData::InverseCommand(_) | UndoData::None => 0,
-        };
-        // [#303] The command's own bytes, exactly, when the push measured them. An entry
-        // restored from disk has no stored value (nothing persists it), so it falls back
-        // to the flat overhead - the pre-#303 behaviour, and acceptable because a load is
-        // immediately followed by the trim that would have used it anyway.
-        payload + entry.command_bytes.unwrap_or(ENTRY_OVERHEAD)
-    }
-
-    /// [#303] Total estimated size of the undo stack (the budget's subject).
-    pub fn estimated_undo_bytes(&self) -> usize {
-        self.undo_stack.iter().map(Self::estimated_size).sum()
-    }
-
-    /// Apply whichever bound is active to BOTH stacks, evicting oldest-first.
-    ///
-    /// Under `Bytes`, the newest entry is always kept even if it alone exceeds the
-    /// budget: dropping it would silently discard the operation the user just did, and
-    /// a single entry over the budget is a very large import, not runaway growth.
-    fn enforce_depth_limit(&mut self) {
-        match self.depth_limit {
-            DepthLimit::Count(limit) => {
-                Self::trim_to_count(&mut self.undo_stack, limit);
-                Self::trim_to_count(&mut self.redo_stack, limit);
-            }
-            DepthLimit::Bytes(budget) => {
-                let (undo_dropped, undo_bytes) = Self::trim_to_bytes(&mut self.undo_stack, budget);
-                Self::trim_to_bytes(&mut self.redo_stack, budget);
-                if undo_dropped > 0 {
-                    // ONE counted line, not one per entry: the trim is a policy outcome
-                    // the user may need explained ("why can't I undo further?"), but a
-                    // long import must not turn it into a log flood.
-                    tracing::info!(
-                        dropped = undo_dropped,
-                        remaining = self.undo_stack.len(),
-                        estimated_bytes = undo_bytes,
-                        budget,
-                        purpose = "bound a Full-mode SpeleoDB project's undo history (#303)",
-                        "Trimmed oldest undo entries to stay within the undo byte budget"
-                    );
-                }
-            }
-        }
-    }
-
-    /// Evict from the front until at most `limit` entries remain.
-    fn trim_to_count(stack: &mut VecDeque<UndoEntry>, limit: usize) {
-        while stack.len() > limit {
-            stack.pop_front();
-        }
-    }
-
-    /// Evict from the front until the estimated total is at most `budget`, always
-    /// keeping the newest entry. Returns (evicted, remaining estimated bytes).
-    fn trim_to_bytes(stack: &mut VecDeque<UndoEntry>, budget: usize) -> (u64, usize) {
-        let mut total: usize = stack.iter().map(Self::estimated_size).sum();
-        let mut dropped = 0;
-        while total > budget && stack.len() > 1 {
-            if let Some(front) = stack.pop_front() {
-                total = total.saturating_sub(Self::estimated_size(&front));
-                dropped += 1;
-            }
-        }
-        (dropped, total)
-    }
-
     /// Clear the redo stack only, leaving undo history intact.
     ///
     /// `push_with_data` already clears redo as part of pushing; this is for the
@@ -701,245 +595,6 @@ impl UndoStack {
     /// Get the undo data for the last undoable command
     pub fn peek_undo_data(&self) -> Option<&UndoData> {
         self.undo_stack.back().map(|e| &e.undo_data)
-    }
-
-    /// [#303] Every row a save must write for one stack, in stack order and in the
-    /// tuple shape `Database::save_undo_stack_with_timestamps` takes.
-    ///
-    /// EVERY save writes the whole (windowed) stack. That is not laziness - it is forced
-    /// by the save pipeline: `save_project` builds a FRESH `.stalx.tmp`, renames it over
-    /// the target, and only then writes the undo tables into the reopened file
-    /// (`project_io.rs`). Nothing survives that rename, so there is no "already in the
-    /// destination" for a save to skip.
-    ///
-    /// An earlier version of this tried to be incremental (write only the ids at or
-    /// after the first changed one) and SILENTLY DROPPED the history: any save with no
-    /// undo change since the last one - an idle autosave, or the push's own flush right
-    /// after another save - wrote zero rows into a file that had none, so the commit it
-    /// produced carried no history at all. The unit test that "proved" the optimization
-    /// ran the database helper against a database that persisted between calls, which is
-    /// exactly the assumption the save path breaks. That is why the whole plan/sync
-    /// apparatus is gone and `Database::save_{undo,redo}_stack_with_timestamps` are
-    /// plain full rewrites: the honest shape is the only correct one here.
-    ///
-    /// `count_limit` is the persisted window: `Some(n)` keeps the last n entries (a local
-    /// project, or Disabled mode), `None` keeps all of them - Full mode, where the byte
-    /// budget has already bounded the stack.
-    ///
-    /// An entry that fails to serialize is SKIPPED rather than aborting the save, the
-    /// same best-effort contract the rest of the persist path keeps.
-    #[must_use]
-    pub fn rows_to_persist(
-        &self,
-        stack: PersistStack,
-        count_limit: Option<usize>,
-    ) -> Vec<(String, String, Option<String>)> {
-        let entries = match stack {
-            PersistStack::Undo => &self.undo_stack,
-            PersistStack::Redo => &self.redo_stack,
-        };
-
-        let skip = match count_limit {
-            Some(limit) if entries.len() > limit => entries.len() - limit,
-            _ => 0,
-        };
-
-        entries
-            .iter()
-            .skip(skip)
-            .filter_map(Self::serialize_entry_with_timestamp)
-            .collect()
-    }
-
-    /// Serialize an entry to JSON for persistence
-    /// Returns (command_json, undo_data_json, timestamp_iso8601)
-    pub fn serialize_entry(entry: &UndoEntry) -> Option<(String, String)> {
-        let command_json = serde_json::to_string(&entry.command).ok()?;
-        let undo_data_json = serde_json::to_string(&entry.undo_data).ok()?;
-        Some((command_json, undo_data_json))
-    }
-
-    /// Serialize an entry with timestamp for database persistence
-    /// Returns (command_json, undo_data_json, timestamp_iso8601)
-    pub fn serialize_entry_with_timestamp(
-        entry: &UndoEntry,
-    ) -> Option<(String, String, Option<String>)> {
-        let command_json = serde_json::to_string(&entry.command).ok()?;
-        let undo_data_json = serde_json::to_string(&entry.undo_data).ok()?;
-        let timestamp_str = entry.timestamp.map(|t| t.to_rfc3339());
-        Some((command_json, undo_data_json, timestamp_str))
-    }
-
-    /// Deserialize an entry from JSON
-    pub fn deserialize_entry(command_json: &str, undo_data_json: &str) -> Option<UndoEntry> {
-        let command: Command = match serde_json::from_str(command_json) {
-            Ok(command) => command,
-            Err(e) => {
-                // A command that no longer exists in this build (e.g. a variant
-                // removed in a newer version) can't be deserialized. Skip the
-                // entry rather than aborting the whole load, but log it so the
-                // truncation of undo history is not silent.
-                tracing::warn!(
-                    error = %e,
-                    purpose = "load persisted undo history",
-                    "Skipping an undo entry whose command could not be deserialized; its undo step is dropped"
-                );
-                return None;
-            }
-        };
-        let undo_data: UndoData = serde_json::from_str(undo_data_json).ok()?;
-        Some(UndoEntry {
-            command_bytes: None,
-            command,
-            undo_data,
-            timestamp: None, // Legacy entries without timestamp
-        })
-    }
-
-    /// Deserialize an entry from JSON with optional timestamp
-    pub fn deserialize_entry_with_timestamp(
-        command_json: &str,
-        undo_data_json: &str,
-        timestamp_str: Option<&str>,
-    ) -> Option<UndoEntry> {
-        let command: Command = match serde_json::from_str(command_json) {
-            Ok(command) => command,
-            Err(e) => {
-                // A command that no longer exists in this build (e.g. a variant
-                // removed in a newer version) can't be deserialized. Skip the
-                // entry rather than aborting the whole load, but log it so the
-                // truncation of undo history is not silent.
-                tracing::warn!(
-                    error = %e,
-                    purpose = "load persisted undo history",
-                    "Skipping an undo entry whose command could not be deserialized; its undo step is dropped"
-                );
-                return None;
-            }
-        };
-        let undo_data: UndoData = serde_json::from_str(undo_data_json).ok()?;
-        let timestamp = timestamp_str
-            .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
-            .map(|dt| dt.with_timezone(&Utc));
-        Some(UndoEntry {
-            command_bytes: None,
-            command,
-            undo_data,
-            timestamp,
-        })
-    }
-
-    /// True when `undo()` can actually apply this entry.
-    ///
-    /// A [`UndoData::None`] entry cannot be applied: `undo_inner` maps that variant
-    /// to a failure, and the failure epilogue pushes the entry straight BACK onto the
-    /// undo stack. So the top of the stack is unpoppable forever and every older
-    /// entry underneath it is permanently unreachable - the stack is wedged. The
-    /// command path now refuses to push such an entry, but stacks written before that
-    /// guard are ON DISK and are restored verbatim (and re-persisted on every save),
-    /// so the poison also has to be dropped at load.
-    ///
-    /// Applied to the UNDO stack only. A redo entry with `UndoData::None` redoes
-    /// CORRECTLY - `redo_inner`'s catch-all arm re-executes `entry.command` and never
-    /// reads `undo_data` - so filtering the redo stack would destroy working
-    /// functionality and shift the indices `redo_to` is called with.
-    fn is_applicable(entry: &UndoEntry) -> bool {
-        !matches!(entry.undo_data, UndoData::None)
-    }
-
-    /// Emit a single counted warning for the entries a load dropped as unapplicable,
-    /// naming the commands so the truncation of history is not silent.
-    fn warn_dropped_unapplicable(dropped: &[String]) {
-        if dropped.is_empty() {
-            return;
-        }
-        tracing::warn!(
-            count = dropped.len(),
-            commands = %dropped.join("; "),
-            purpose = "load persisted undo history",
-            "Dropped persisted undo entries that carry no undo data; they could not be undone and would have blocked every older entry"
-        );
-    }
-
-    /// Load entries from persisted data
-    pub fn load_from_persisted(&mut self, entries: Vec<(String, String)>) {
-        self.undo_stack.clear();
-        self.redo_stack.clear();
-
-        let mut dropped: Vec<String> = Vec::new();
-        for (command_json, undo_data_json) in entries {
-            if let Some(entry) = Self::deserialize_entry(&command_json, &undo_data_json) {
-                if Self::is_applicable(&entry) {
-                    self.undo_stack.push_back(entry);
-                } else {
-                    dropped.push(entry.command.description());
-                }
-            }
-        }
-        Self::warn_dropped_unapplicable(&dropped);
-
-        self.enforce_depth_limit();
-    }
-
-    /// Load entries from persisted data with timestamps
-    pub fn load_from_persisted_with_timestamps(
-        &mut self,
-        undo_entries: Vec<(String, String, Option<String>)>,
-        redo_entries: Vec<(String, String, Option<String>)>,
-    ) {
-        self.undo_stack.clear();
-        self.redo_stack.clear();
-
-        let mut dropped: Vec<String> = Vec::new();
-        for (command_json, undo_data_json, timestamp_str) in undo_entries {
-            if let Some(entry) = Self::deserialize_entry_with_timestamp(
-                &command_json,
-                &undo_data_json,
-                timestamp_str.as_deref(),
-            ) {
-                if Self::is_applicable(&entry) {
-                    self.undo_stack.push_back(entry);
-                } else {
-                    dropped.push(entry.command.description());
-                }
-            }
-        }
-        Self::warn_dropped_unapplicable(&dropped);
-
-        // [#303] The undo stack must be ASCENDING in time, and nothing on the way in
-        // enforced it. `drop_entries_up_to` finds the post-push cut with `partition_point`,
-        // which is only meaningful on a monotone predicate; over an unsorted stack it
-        // returns an arbitrary boundary and `drain(..keep_from)` then deletes a wrong
-        // prefix - i.e. clear-on-push eats entries the upload never carried.
-        //
-        // Every file this app writes satisfies it (new entries are stamped above the one
-        // beneath and appended, undo/redo is an order-preserving stack pair, and both trims
-        // evict from the front), so this only fires on a corrupt or hand-crafted file - and
-        // this is the path that ingests another machine's history. Refuse rather than sort:
-        // stack order IS undo order, so reordering would silently change what undo does,
-        // turning a detectable fault into an invisible one.
-        if !Self::stamps_ascend(&self.undo_stack) {
-            tracing::warn!(
-                entries = self.undo_stack.len(),
-                purpose = "refuse a non-monotonic undo stack (#303)",
-                "loaded undo history is not in time order; dropping it rather than risk \
-                 deleting the wrong entries on the next push"
-            );
-            self.undo_stack.clear();
-        }
-
-        // The redo stack is loaded UNFILTERED on purpose - see `is_applicable`.
-        for (command_json, undo_data_json, timestamp_str) in redo_entries {
-            if let Some(entry) = Self::deserialize_entry_with_timestamp(
-                &command_json,
-                &undo_data_json,
-                timestamp_str.as_deref(),
-            ) {
-                self.redo_stack.push_back(entry);
-            }
-        }
-
-        self.enforce_depth_limit();
     }
 
     /// Get the number of entries in the undo stack
@@ -2451,17 +2106,24 @@ mod tests {
         );
     }
 
-    /// An entry restored from disk has no measurement, and falls back to the flat
-    /// overhead rather than pretending to know - the pre-#303 behaviour.
+    /// Restored entries deliberately retain the 512-byte command estimate. The undo
+    /// payload remains separately counted, so this approximation does not erase the
+    /// dominant term for snapshot-heavy history.
     #[test]
-    fn a_restored_entry_falls_back_to_the_flat_overhead() {
-        let entry = UndoEntry {
+    fn restored_entries_use_the_documented_flat_command_estimate() {
+        let small = UndoEntry {
             command_bytes: None,
             command: test_create_section_command("S0"),
             undo_data: UndoData::None,
             timestamp: None,
         };
-        assert_eq!(UndoStack::estimated_size(&entry), 512);
+        assert_eq!(UndoStack::estimated_size(&small), 512);
+
+        let payload = UndoEntry {
+            undo_data: UndoData::ProjectSnapshot("x".repeat(2_048)),
+            ..small
+        };
+        assert_eq!(UndoStack::estimated_size(&payload), 2_048 + 512);
     }
 
     /// [#303] A load whose stamps are not in time order is refused, not sorted.
