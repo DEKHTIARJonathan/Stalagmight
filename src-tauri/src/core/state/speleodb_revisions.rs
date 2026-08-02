@@ -1268,9 +1268,11 @@ mod tests {
                 .and_then(|v| v.to_str())
                 .expect("file name");
             let source = std::fs::read_to_string(&path).expect("read state source");
+            // Test fixtures may set up a dirty state directly; this tripwire governs
+            // production mutation paths only.
             if !matches!(
                 name,
-                "app_state.rs" | "undo.rs" | "speleodb.rs" | "speleodb_revisions.rs"
+                "app_state.rs" | "undo.rs" | "speleodb.rs" | "speleodb_revisions.rs" | "tests.rs"
             ) {
                 assert!(
                     !source.contains("mark_remote_dirty();"),
