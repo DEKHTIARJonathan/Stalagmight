@@ -42,6 +42,8 @@ beforeEach(() => {
       currentComment: 'old tree',
     },
     measureStart: { kind: 'point', x: 1, y: 2, z: 3 },
+    distanceGradientOrigin: { section_id: 1, station_index: 2 },
+    distanceField: {} as never,
   });
   useGasPlanStore.getState().reset();
   useGasPlanStore.getState().setEndpoint({ section_id: 1, station_index: 2 });
@@ -61,6 +63,8 @@ describe('applySpeleoTreeReplacement', () => {
       mergeStationB: null,
       commentTarget: null,
       measureStart: null,
+      distanceGradientOrigin: null,
+      distanceField: null,
     });
     expect(useGasPlanStore.getState().endpoint).toBeNull();
     expect(refreshProjectState).toHaveBeenCalledOnce();

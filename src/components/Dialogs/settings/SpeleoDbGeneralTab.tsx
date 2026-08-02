@@ -32,27 +32,18 @@ export function SpeleoDbGeneralTab({ metadata }: { metadata: SpeleoProjectMetada
     handleEnableRendering,
   } = metadata;
 
-  if (loading) {
-    return (
+  const metadataContent = loading ? (
       <p className="text-text-secondary text-sm" data-testid="speleodb-settings-loading">
         {t('speleodb.projectSettings.loading')}
       </p>
-    );
-  }
-
-  if (loadError || !form || !baseline) {
-    return (
+    ) : loadError || !form || !baseline ? (
       <div className="space-y-3" data-testid="speleodb-settings-error">
         <p className="text-error text-sm">{loadError ?? t('speleodb.projectSettings.loadFailed')}</p>
         <Button variant="secondary" onClick={() => void reload()} data-testid="speleodb-settings-retry">
           {t('speleodb.projectSettings.retry')}
         </Button>
       </div>
-    );
-  }
-
-  return (
-    <div data-testid="speleodb-settings-tab">
+    ) : (
       <SettingsSection title={t('speleodb.projectSettings.title')}>
         {!canEdit && (
           <div
@@ -191,11 +182,14 @@ export function SpeleoDbGeneralTab({ metadata }: { metadata: SpeleoProjectMetada
           )}
         </div>
 
-        {/* [#303] The one field here that is PROJECT-file state rather than server
-            metadata, which its own copy says. It belongs in this dialog anyway: this is
-            where a user comes to ask how the project is set up. */}
-        <SpeleoUndoModeControl />
       </SettingsSection>
+    );
+
+  return (
+    <div className="space-y-3" data-testid="speleodb-settings-tab">
+      {metadataContent}
+      {/* Local project-file state stays available when server metadata is offline. */}
+      <SpeleoUndoModeControl />
     </div>
   );
 }

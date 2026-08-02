@@ -69,6 +69,26 @@ beforeEach(() => {
 const renderTarget = () => renderHook(() => useUnwindTarget(false));
 
 describe('useUnwindTarget - overlapping lookups (#303)', () => {
+  it('reuses the just-resolved target when the panel opens', async () => {
+    invokeIpcMock.mockResolvedValue(OLDER);
+    const { result, rerender } = renderHook(
+      ({ enabled }) => useUnwindTarget(enabled),
+      { initialProps: { enabled: false } },
+    );
+
+    await act(async () => {
+      await result.current.resolve();
+    });
+    expect(invokeIpcMock).toHaveBeenCalledTimes(1);
+
+    rerender({ enabled: true });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(invokeIpcMock).toHaveBeenCalledTimes(1);
+    expect(result.current.target).toEqual(asBack(OLDER));
+  });
+
   it('keeps the newest answer when an older request replies last', async () => {
     const first = deferred<SpeleoUnwindTarget | null>();
     const second = deferred<SpeleoUnwindTarget | null>();

@@ -156,8 +156,7 @@ export function useUnwindTarget(
     return remember(value);
   }, [fetchTarget, remember]);
 
-  // The open-panel path: always a real fetch, since a push or a lock change while the
-  // panel sits open is exactly what it is there to notice.
+  // Explicit refresh path for a panel that is already open and wants a current answer.
   const refresh = useCallback(async () => {
     await fetchNewest();
   }, [fetchNewest]);
@@ -184,8 +183,11 @@ export function useUnwindTarget(
       setTarget(null);
       return;
     }
-    void refresh();
-  }, [enabled, refresh]);
+    // Opening is normally preceded immediately by `resolve()` so the caller knows
+    // whether there is anything to show. Reuse that project-bound TTL entry instead of
+    // downloading and parsing the same revision a second time.
+    void resolve();
+  }, [enabled, resolve]);
 
   return { target, refresh, resolve };
 }

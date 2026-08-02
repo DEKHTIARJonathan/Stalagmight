@@ -21,6 +21,7 @@ export async function applySpeleoTreeReplacement(
     const ui = useUIStore.getState();
     ui.clearSelection();
     ui.resetToolTransientsForProjectSwitch();
+    ui.setDistanceGradientOrigin(null);
     useGasPlanStore.getState().reset();
     ui.setView('single');
 

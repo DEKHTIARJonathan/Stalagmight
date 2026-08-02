@@ -163,6 +163,19 @@ describe('SpeleoDbGeneralTab', () => {
     expect(await screen.findByTestId('speleodb-settings-name')).toHaveValue('Cave A');
   });
 
+  it('keeps the local undo setting available when server metadata is offline', async () => {
+    invokeIpcMock.mockRejectedValue(new Error('offline'));
+    seedRemote('READ_AND_WRITE');
+    useSpeleoStore.setState((state) => ({
+      link: state.link ? { ...state.link, editState: 'editing' } : null,
+    }));
+    render(<Harness />);
+
+    expect(await screen.findByTestId('speleodb-settings-error')).toBeInTheDocument();
+    expect(screen.getByTestId('speleodb-undo-mode')).toBeInTheDocument();
+    expect(screen.getByTestId('speleodb-undo-mode-disabled-input')).toBeEnabled();
+  });
+
   it('does not call the server for a project with no SpeleoDB link', async () => {
     invokeIpcMock.mockResolvedValue(META);
     render(<Harness />);
