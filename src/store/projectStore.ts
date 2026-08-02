@@ -1475,6 +1475,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         { sectionId, shotId, warningCode, comment },
         { purpose: 'acknowledge validation warning', fields: { sectionId, shotId, warningCode } }
       );
+      useSpeleoStore.getState().markForwardEdit();
       await get().refreshWarnings();
       return true;
     } catch (e) {
@@ -1492,6 +1493,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         { sectionId, shotId, warningCode },
         { purpose: 'reopen validation warning', fields: { sectionId, shotId, warningCode } }
       );
+      useSpeleoStore.getState().markForwardEdit();
       await get().refreshWarnings();
     } catch (e) {
       console.error('Failed to unresolve warning:', e);
