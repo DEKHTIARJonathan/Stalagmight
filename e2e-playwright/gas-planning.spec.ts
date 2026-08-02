@@ -11,7 +11,16 @@ import {
   type SectionSeed,
 } from './helpers/app';
 import { GAS_NEAR } from '../src/utils/gasReach';
-import { gasCylinderRows, qualifiedIndexTestIds } from './helpers/testIds';
+import {
+  gasCylinderRows,
+  gasMarkedLabelInputs,
+  gasMarkedRemoveButtons,
+  gasMarkedRows,
+  gasWaypointDownButtons,
+  gasWaypointRemoveButtons,
+  gasWaypointRows,
+  qualifiedIndexTestIds,
+} from './helpers/testIds';
 
 /**
  * E2E for the gas reachable-frontier overlay, now the Plan workspace mode (#38,
@@ -970,7 +979,7 @@ test.describe('Gas planning', () => {
       { section_id: 1, station_index: 2 },
       { section_id: 1, station_index: 4 },
     ]);
-    await expect(page.locator('[data-testid="gas-waypoint-row"]')).toHaveCount(2);
+    await expect(gasWaypointRows(page)).toHaveCount(2);
     // One numbered pin per way point on the map.
     await expect(page.locator('[data-testid="gas-waypoint-marker"]')).toHaveCount(2);
 
@@ -989,13 +998,13 @@ test.describe('Gas planning', () => {
     ]);
 
     // Reordering is a real change of plan, so it must actually swap the list.
-    await page.locator('[data-testid="gas-waypoint-down"]').first().click();
+    await gasWaypointDownButtons(page).first().click();
     await expect.poll(() => gasWaypoints(page), { timeout: 2000 }).toEqual([
       { section_id: 1, station_index: 4 },
       { section_id: 1, station_index: 2 },
     ]);
 
-    await page.locator('[data-testid="gas-waypoint-remove"]').first().click();
+    await gasWaypointRemoveButtons(page).first().click();
     await expect
       .poll(() => gasWaypoints(page), { timeout: 2000 })
       .toEqual([{ section_id: 1, station_index: 2 }]);
@@ -1016,10 +1025,10 @@ test.describe('Gas planning', () => {
 
     await openPlanMenu(page, 3);
     await planMenuItem(page, 'Set marked point').click();
-    await expect(page.locator('[data-testid="gas-marked-row"]')).toHaveCount(1);
+    await expect(gasMarkedRows(page)).toHaveCount(1);
     await expect(page.locator('[data-testid="gas-marked-point-marker"]')).toHaveCount(1);
 
-    await page.locator('[data-testid="gas-marked-label-input"]').fill('photo here');
+    await gasMarkedLabelInputs(page).fill('photo here');
     await expect
       .poll(
         () =>
@@ -1041,8 +1050,8 @@ test.describe('Gas planning', () => {
     );
     expect(callsAfter).toBe(callsBefore);
 
-    await page.locator('[data-testid="gas-marked-remove"]').click();
-    await expect(page.locator('[data-testid="gas-marked-row"]')).toHaveCount(0);
+    await gasMarkedRemoveButtons(page).click();
+    await expect(gasMarkedRows(page)).toHaveCount(0);
     await expect(page.locator('[data-testid="gas-marked-point-marker"]')).toHaveCount(0);
   });
 
@@ -1536,7 +1545,7 @@ test.describe('Gas planning', () => {
     await expect(page.locator('[data-testid^="segment-row-"]')).toHaveCount(3);
 
     // Removing a way point merges the two spans it used to separate back into one row.
-    await page.locator('[data-testid="gas-waypoint-remove"]').first().click();
+    await gasWaypointRemoveButtons(page).first().click();
     await expect(page.locator('[data-testid^="segment-row-"]')).toHaveCount(2);
   });
 

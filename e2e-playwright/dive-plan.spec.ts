@@ -1,6 +1,7 @@
 import { test, expect, Page } from './fixtures/coverage';
 import { setupTauriMocks } from './mocks/tauri-ipc';
 import { seedProjectWithSections, deleteShotAt, type SectionSeed } from './helpers/app';
+import { gasWaypointUnresolvedIndicators } from './helpers/testIds';
 
 /**
  * E2E for dive-plan persistence (#244): the "Previous dive plans" bar in Plan mode
@@ -387,7 +388,7 @@ test.describe('Dive-plan persistence (#244)', () => {
     // The #310 fix landed in this same branch: losing both neighbours of a pinned way point
     // marks that pin unresolved (`gasPlanStore.ts`'s `unresolved.waypoints`, per the doc comment
     // "a flagged pin is never sent to the gas engine and blocks a Save"), and `GasPlanPanel.tsx`
-    // renders `data-testid="gas-waypoint-unresolved"` on the affected row (~:449). Both the store
+    // renders an indexed `gas-waypoint-unresolved-*` test ID on the affected row. Both the store
     // predicate and the DOM testid are asserted below so the test pins the mechanism, not just
     // one layer of it.
     await expect
@@ -406,7 +407,7 @@ test.describe('Dive-plan persistence (#244)', () => {
         { timeout: 3000 },
       )
       .toBe(true);
-    await expect(page.locator('[data-testid="gas-waypoint-unresolved"]').first()).toBeVisible({
+    await expect(gasWaypointUnresolvedIndicators(page).first()).toBeVisible({
       timeout: 3000,
     });
     await expect(page.locator('[data-testid="dive-plan-save"]')).toBeDisabled();
