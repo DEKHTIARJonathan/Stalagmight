@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { afterEach, beforeEach, describe, it, expect } from 'vitest';
 import {
   ensureExtension,
   projectOpenFilters,
@@ -11,6 +11,8 @@ import {
   PROJECT_EXTENSION,
   DMP_EXTENSION,
   COMPASS_EXTENSIONS,
+  openDialog,
+  saveDialog,
 } from '../fileDialogs';
 
 // ---------------------------------------------------------------------------
@@ -127,5 +129,41 @@ describe('filter functions', () => {
     expect(PROJECT_EXTENSION).toBe('stalx');
     expect(DMP_EXTENSION).toBe('dmp');
     expect(COMPASS_EXTENSIONS).toEqual(['mak', 'dat']);
+  });
+});
+
+describe('E2E file dialog answers', () => {
+  const originalWindow = globalThis.window;
+
+  beforeEach(() => {
+    Object.defineProperty(globalThis, 'window', {
+      configurable: true,
+      writable: true,
+      value: { __E2E_TEST__: { fileDialogAnswers: { open: [], save: [] } } },
+    });
+  });
+
+  afterEach(() => {
+    if (originalWindow === undefined) {
+      Reflect.deleteProperty(globalThis, 'window');
+    } else {
+      Object.defineProperty(globalThis, 'window', {
+        configurable: true,
+        writable: true,
+        value: originalWindow,
+      });
+    }
+  });
+
+  it('consumes queued open paths without opening a native picker', async () => {
+    window.__E2E_TEST__ = { fileDialogAnswers: { open: [['/tmp/a.dmp', '/tmp/b.dmp']], save: [] } };
+    await expect(openDialog({ multiple: true })).resolves.toEqual(['/tmp/a.dmp', '/tmp/b.dmp']);
+    expect(window.__E2E_TEST__.fileDialogAnswers?.open).toEqual([]);
+  });
+
+  it('consumes save paths and explicit cancellation', async () => {
+    window.__E2E_TEST__ = { fileDialogAnswers: { open: [], save: ['/tmp/out.stalx', null] } };
+    await expect(saveDialog()).resolves.toBe('/tmp/out.stalx');
+    await expect(saveDialog()).resolves.toBeNull();
   });
 });

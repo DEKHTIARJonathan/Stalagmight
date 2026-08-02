@@ -458,6 +458,7 @@ export function Select({
           role="option"
           id={getOptionId(optionIndex)}
           data-testid={testId ? `${testId}-option-${encodeURIComponent(option.value)}` : undefined}
+          data-value={option.value}
           aria-selected={isSelected}
           aria-disabled={option.disabled || undefined}
           className={`w-full px-3 py-2 text-left text-sm cursor-pointer ${

@@ -230,7 +230,11 @@ export function SystemTable({
                   {item.summary.name}
                 </td>
                 <td className={cellClass}>
-                  <SpeleoRecentInfo info={remoteLock} name={item.summary.name} />
+                  <SpeleoRecentInfo
+                    info={remoteLock}
+                    name={item.summary.name}
+                    testIdPrefix={`system-row-remote-${item.projectId}-speleo`}
+                  />
                 </td>
                 <td className={`${cellClass} text-text-tertiary text-right`} colSpan={2}>
                   {t('globalView.recent.remote.onSpeleoDb')}
@@ -294,9 +298,17 @@ export function SystemTable({
                 {/* SpeleoDB projects show the mark + lock state instead of the local
                     path (irrelevant for a linked project, #201); local ones show it. */}
                 {lock.isRemote ? (
-                  <SpeleoRecentInfo info={lock} name={project.name} />
+                  <SpeleoRecentInfo
+                    info={lock}
+                    name={project.name}
+                    testIdPrefix={`system-row-${testIdPart(item.filePath)}-speleo`}
+                  />
                 ) : (
-                  <ElidedPath path={item.filePath} className="text-xs text-text-tertiary" />
+                  <ElidedPath
+                    path={item.filePath}
+                    className="text-xs text-text-tertiary"
+                    data-testid={`system-row-${testIdPart(item.filePath)}-path`}
+                  />
                 )}
               </td>
               <td className={`${cellClass} text-right tabular-nums`}>{formatNumber(project.section_count)}</td>

@@ -1,4 +1,16 @@
-import type { SaveDialogOptions } from '@tauri-apps/plugin-dialog';
+import type { OpenDialogOptions, SaveDialogOptions } from '@tauri-apps/plugin-dialog';
+
+export type TestFileDialogAnswer = string | string[] | null;
+
+function takeTestFileDialogAnswer(kind: 'open' | 'save'): {
+  queued: boolean;
+  value: TestFileDialogAnswer | undefined;
+} {
+  if (typeof window === 'undefined') return { queued: false, value: undefined };
+  const queue = window.__E2E_TEST__?.fileDialogAnswers?.[kind];
+  if (!queue?.length) return { queued: false, value: undefined };
+  return { queued: true, value: queue.shift() };
+}
 
 export const PROJECT_EXTENSION = 'stalx';
 export const DMP_EXTENSION = 'dmp';
@@ -172,6 +184,14 @@ export function exportSaveFilters(label: string, extension: string) {
   return [{ name: label, extensions: [normalizedExt] }];
 }
 
+/** Open a native picker, or consume the next answer queued by the E2E harness. */
+export async function openDialog(options?: OpenDialogOptions): Promise<string | string[] | null> {
+  const answer = takeTestFileDialogAnswer('open');
+  if (answer.queued) return answer.value ?? null;
+  const { open } = await import('@tauri-apps/plugin-dialog');
+  return open(options);
+}
+
 /**
  * Wrapper around Tauri's `save()` dialog that fixes Android compatibility.
  *
@@ -184,6 +204,12 @@ export function exportSaveFilters(label: string, extension: string) {
  * On desktop, delegates to the native save dialog.
  */
 export async function saveDialog(options?: SaveDialogOptions): Promise<string | null> {
+  const answer = takeTestFileDialogAnswer('save');
+  if (answer.queued) {
+    if (Array.isArray(answer.value)) throw new Error('save dialog test answer must be a single path');
+    return answer.value ?? null;
+  }
+
   if (navigator.userAgent.includes('Android')) {
     // Try the native SAF dialog first. If the result is a content:// URI,
     // extract the filesystem path. Fall back to the in-app picker if the

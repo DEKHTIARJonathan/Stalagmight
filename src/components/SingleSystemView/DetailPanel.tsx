@@ -444,8 +444,7 @@ function WarningsContent({ warnings, project, onWarningClick }: WarningsContentP
         const actions = (
           <>
             {resolvedCount > 0 && (
-              <button
-                onClick={() => setShowResolved(!showResolved)}
+              <button onClick={() => setShowResolved(!showResolved)}
                 data-testid="warnings-show-resolved-toggle"
                 className="text-xs text-accent hover:underline"
               >
@@ -502,8 +501,7 @@ function WarningsContent({ warnings, project, onWarningClick }: WarningsContentP
             {/* Action button floats right so the warning text wraps around it
                 (issue #57) instead of the button reserving its own column. */}
             {warning.isResolved ? (
-              <button
-                onClick={(e) => handleUndoResolve(e, warning)}
+              <button onClick={(e) => handleUndoResolve(e, warning)}
                 data-testid={`warning-${index}-undo-resolve`}
                 className="float-right ml-2 text-xs px-2 py-0.5 rounded bg-background-50 hover:bg-background text-text-secondary"
                 title={t('detailPanel.warnings.markUnresolved')}
@@ -562,8 +560,7 @@ function WarningsContent({ warnings, project, onWarningClick }: WarningsContentP
                       {/* The shot pill navigates to Details (select + switch tab),
                           its prior behaviour; stopPropagation keeps the row's
                           select-only handler from also firing. */}
-                      <button
-                        type="button"
+                      <button type="button"
                         onClick={(e) => {
                           e.stopPropagation();
                           setSource('detail-panel');

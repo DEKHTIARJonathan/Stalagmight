@@ -87,6 +87,12 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm tsc --noEmit
+      # UI selector contract: every interactive production control has a stable
+      # test ID, and IDs rendered in repeated map rows are item-specific.
+      - name: UI test ID contract
+        run: |
+          pnpm lint:test-ids:test
+          pnpm lint:test-ids
       # Agent-harness typecheck (tsconfig.agent.json covers e2e/agent + e2e/lib).
       # The harness runs via tsx, which transpiles WITHOUT type-checking, and it
       # is exercised on-demand only - this seconds-cheap step is its one

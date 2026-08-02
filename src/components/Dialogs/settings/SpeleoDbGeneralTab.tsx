@@ -37,7 +37,7 @@ export function SpeleoDbGeneralTab({ metadata }: { metadata: SpeleoProjectMetada
         {t('speleodb.projectSettings.loading')}
       </p>
     ) : loadError || !form || !baseline ? (
-      <div className="space-y-3" data-testid="speleodb-settings-error">
+      <div className="space-y-3" data-testid="speleodb-project-settings-error">
         <p className="text-error text-sm">{loadError ?? t('speleodb.projectSettings.loadFailed')}</p>
         <Button variant="secondary" onClick={() => void reload()} data-testid="speleodb-settings-retry">
           {t('speleodb.projectSettings.retry')}

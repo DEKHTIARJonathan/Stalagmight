@@ -2005,11 +2005,10 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
                       className="flex items-center gap-2 px-2 py-0.5 text-xs whitespace-nowrap hover:bg-accent-10"
                       data-testid={`col-toggle-${c.key}`}
                     >
-                    <input
-                      type="checkbox"
-                      checked={!(hiddenColumns ?? []).includes(c.key)}
-                      data-testid={`col-toggle-input-${c.key}`}
-                      onChange={() => toggleHidden(c.key)}
+                      <input type="checkbox"
+                        checked={!(hiddenColumns ?? []).includes(c.key)}
+                        data-testid={`col-toggle-input-${c.key}`}
+                        onChange={() => toggleHidden(c.key)}
                       />
                       {c.header || c.key}
                     </label>

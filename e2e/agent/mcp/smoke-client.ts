@@ -56,7 +56,8 @@ async function main(): Promise<void> {
     const expected = [
       'app_start', 'app_stop', 'app_restart', 'app_status',
       'screenshot', 'store_state', 'logs', 'wait_for',
-      'click', 'type_text', 'press_keys', 'eval', 'ipc',
+      'click', 'type_text', 'press_keys', 'hover', 'drag', 'scroll',
+      'select_option', 'element_state', 'file_dialog_answer', 'eval', 'ipc',
       'store_action', 'map_view', 'map_click',
       'seed', 'driver_script', 'check_problems', 'run_scenario',
     ];

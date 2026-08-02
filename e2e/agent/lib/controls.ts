@@ -1,0 +1,258 @@
+import type { Browser } from 'webdriverio';
+import { evalInApp } from './page';
+import { cssStringLiteral, testIdSelector } from '../../../scripts/lib/test-id-selector.mjs';
+
+export interface ElementTarget {
+  testid?: string;
+  selector?: string;
+}
+
+export interface DragRequest {
+  fromTestid?: string;
+  fromSelector?: string;
+  fromX?: number;
+  fromY?: number;
+  toTestid?: string;
+  toSelector?: string;
+  toX?: number;
+  toY?: number;
+  button?: 'left' | 'right' | 'middle';
+  durationMs?: number;
+}
+
+export interface ScrollRequest extends ElementTarget {
+  deltaX?: number;
+  deltaY?: number;
+  block?: ScrollLogicalPosition;
+  inline?: ScrollLogicalPosition;
+}
+
+export interface SelectOptionRequest extends ElementTarget {
+  value: string;
+}
+
+export interface ElementState {
+  selector: string;
+  count: number;
+  unique: boolean;
+  elements: Array<{
+    index: number;
+    tag: string;
+    testid: string | null;
+    id: string | null;
+    role: string | null;
+    text: string;
+    value: string | null;
+    displayed: boolean;
+    disabled: boolean;
+    checked: boolean | null;
+    selected: boolean | null;
+    ariaChecked: string | null;
+    ariaExpanded: string | null;
+    ariaPressed: string | null;
+    ariaSelected: string | null;
+  }>;
+  truncated: boolean;
+}
+
+export function targetSelector(target: ElementTarget): string | undefined {
+  return target.testid !== undefined ? testIdSelector(target.testid) : target.selector;
+}
+
+function requireSelector(target: ElementTarget, action: string): string {
+  const selector = targetSelector(target);
+  if (!selector) throw new Error(`${action} needs testid or selector`);
+  return selector;
+}
+
+export async function hoverElement(browser: Browser, target: ElementTarget): Promise<string> {
+  const selector = requireSelector(target, 'hover');
+  const element = browser.$(selector);
+  await element.waitForDisplayed({ timeout: 5000 });
+  await element.moveTo();
+  return selector;
+}
+
+export async function dragPointer(browser: Browser, request: DragRequest): Promise<{
+  fromSelector?: string;
+  toSelector?: string;
+  fromPoint?: { x: number; y: number };
+  toPoint?: { x: number; y: number };
+}> {
+  const fromSelector = targetSelector({ testid: request.fromTestid, selector: request.fromSelector });
+  const toSelector = targetSelector({ testid: request.toTestid, selector: request.toSelector });
+  const hasFromPoint = typeof request.fromX === 'number' && typeof request.fromY === 'number';
+  const hasToPoint = typeof request.toX === 'number' && typeof request.toY === 'number';
+  if (!fromSelector && !hasFromPoint) throw new Error('drag needs fromTestid/fromSelector or fromX+fromY');
+  if (!toSelector && !hasToPoint) throw new Error('drag needs toTestid/toSelector or toX+toY');
+
+  const pointer = browser.action('pointer', { parameters: { pointerType: 'mouse' } });
+  if (fromSelector) {
+    const source = browser.$(fromSelector);
+    await source.waitForDisplayed({ timeout: 5000 });
+    pointer.move({ origin: source, x: 0, y: 0 });
+  } else {
+    pointer.move({ origin: 'viewport', x: Math.round(request.fromX!), y: Math.round(request.fromY!) });
+  }
+  pointer.down({ button: request.button ?? 'left' }).pause(50);
+  if (toSelector) {
+    const target = browser.$(toSelector);
+    await target.waitForDisplayed({ timeout: 5000 });
+    pointer.move({ origin: target, x: 0, y: 0, duration: request.durationMs ?? 500 });
+  } else {
+    pointer.move({
+      origin: 'viewport',
+      x: Math.round(request.toX!),
+      y: Math.round(request.toY!),
+      duration: request.durationMs ?? 500,
+    });
+  }
+  await pointer.up({ button: request.button ?? 'left' }).perform();
+
+  return {
+    fromSelector,
+    toSelector,
+    fromPoint: hasFromPoint ? { x: Math.round(request.fromX!), y: Math.round(request.fromY!) } : undefined,
+    toPoint: hasToPoint ? { x: Math.round(request.toX!), y: Math.round(request.toY!) } : undefined,
+  };
+}
+
+export async function scrollTarget(browser: Browser, request: ScrollRequest): Promise<string | undefined> {
+  const selector = targetSelector(request);
+  const hasDelta = request.deltaX !== undefined || request.deltaY !== undefined;
+  if (!hasDelta) {
+    if (!selector) throw new Error('scroll without deltaX/deltaY needs testid or selector');
+    const element = browser.$(selector);
+    await element.waitForExist({ timeout: 5000 });
+    await element.scrollIntoView({
+      behavior: 'instant',
+      block: request.block ?? 'center',
+      inline: request.inline ?? 'nearest',
+    });
+    return selector;
+  }
+
+  await evalInApp(
+    browser,
+    `
+      const selector = args[0];
+      const target = selector ? document.querySelector(selector) : window;
+      if (!target) throw new Error('scroll target not found: ' + selector);
+      target.scrollBy({ left: args[1], top: args[2], behavior: 'instant' });
+      return true;
+    `,
+    [selector ?? null, request.deltaX ?? 0, request.deltaY ?? 0],
+  );
+  return selector;
+}
+
+export async function selectOption(browser: Browser, request: SelectOptionRequest): Promise<{
+  selector: string;
+  optionSelector?: string;
+  native: boolean;
+}> {
+  const selector = requireSelector(request, 'select_option');
+  const trigger = browser.$(selector);
+  await trigger.waitForDisplayed({ timeout: 5000 });
+  if ((await trigger.getTagName()).toLowerCase() === 'select') {
+    await trigger.selectByAttribute('value', request.value);
+    return { selector, native: true };
+  }
+
+  const testId = request.testid ?? (await trigger.getAttribute('data-testid'));
+  if (!testId) {
+    throw new Error('custom select_option needs a testid so its portaled option can be targeted');
+  }
+  await trigger.waitForClickable({ timeout: 5000 });
+  await trigger.click();
+  const optionSelector = testIdSelector(`${testId}-option-${encodeURIComponent(request.value)}`);
+  const option = browser.$(optionSelector);
+  await option.waitForClickable({ timeout: 5000 });
+  await option.click();
+  return { selector, optionSelector, native: false };
+}
+
+export async function queryElementState(browser: Browser, target: ElementTarget): Promise<ElementState> {
+  const selector = requireSelector(target, 'element_state');
+  return evalInApp<ElementState>(
+    browser,
+    `
+      const selector = args[0];
+      const nodes = Array.from(document.querySelectorAll(selector));
+      const elements = nodes.slice(0, 50).map((node, index) => {
+        const el = node;
+        const style = getComputedStyle(el);
+        const rect = el.getBoundingClientRect();
+        const hasValue = 'value' in el;
+        const hasChecked = 'checked' in el;
+        const hasSelected = 'selected' in el;
+        return {
+          index,
+          tag: el.tagName.toLowerCase(),
+          testid: el.getAttribute('data-testid'),
+          id: el.id || null,
+          role: el.getAttribute('role'),
+          text: (el.textContent || '').trim().slice(0, 500),
+          value: hasValue ? String(el.value) : null,
+          displayed: style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0,
+          disabled: Boolean(el.disabled || el.getAttribute('aria-disabled') === 'true'),
+          checked: hasChecked ? Boolean(el.checked) : null,
+          selected: hasSelected ? Boolean(el.selected) : null,
+          ariaChecked: el.getAttribute('aria-checked'),
+          ariaExpanded: el.getAttribute('aria-expanded'),
+          ariaPressed: el.getAttribute('aria-pressed'),
+          ariaSelected: el.getAttribute('aria-selected'),
+        };
+      });
+      return { selector, count: nodes.length, unique: nodes.length === 1, elements, truncated: nodes.length > elements.length };
+    `,
+    [selector],
+  );
+}
+
+export async function queueFileDialogAnswer(
+  browser: Browser,
+  kind: 'open' | 'save',
+  value: string | string[] | null,
+): Promise<void> {
+  const queued = await evalInApp<boolean>(
+    browser,
+    `
+      const hooks = window.__E2E_TEST__ && window.__E2E_TEST__.fileDialogAnswers;
+      if (!hooks || !Array.isArray(hooks[args[0]])) return false;
+      hooks[args[0]].push(args[1]);
+      return true;
+    `,
+    [kind, value],
+  );
+  if (!queued) throw new Error('file dialog hooks are unavailable; start an E2E build');
+}
+
+export async function mapClick(
+  browser: Browser,
+  lngLat: [number, number],
+  button: 'left' | 'right' = 'left',
+): Promise<{ x: number; y: number }> {
+  const point = await evalInApp<{ x: number; y: number } | null>(
+    browser,
+    `
+      const map = window.__stalagmight_map__;
+      if (!map || !map.project) return null;
+      const projected = map.project(args[0]);
+      const canvas = document.querySelector('[data-testid="map-canvas"]') || document.querySelector('.maplibregl-canvas');
+      const rect = canvas ? canvas.getBoundingClientRect() : { left: 0, top: 0 };
+      return { x: Math.round(rect.left + projected.x), y: Math.round(rect.top + projected.y) };
+    `,
+    [lngLat],
+  );
+  if (!point) throw new Error('map not available');
+  await browser
+    .action('pointer', { parameters: { pointerType: 'mouse' } })
+    .move({ origin: 'viewport', x: point.x, y: point.y })
+    .down({ button })
+    .up({ button })
+    .perform();
+  return point;
+}
+
+export { cssStringLiteral, testIdSelector };

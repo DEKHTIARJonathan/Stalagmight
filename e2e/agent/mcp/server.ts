@@ -18,6 +18,16 @@ import {
   waitForMapIdle,
   waitForActiveTool,
 } from '../lib/waiters';
+import {
+  dragPointer,
+  hoverElement,
+  mapClick,
+  queryElementState,
+  queueFileDialogAnswer,
+  scrollTarget,
+  selectOption,
+  targetSelector,
+} from '../lib/controls';
 
 const STORE_NAMES = ['ui', 'project', 'globalView', 'gasPlan', 'speleo', 'export', 'network'] as const;
 
@@ -326,27 +336,31 @@ define(
         const b = session.browser;
         switch (args.condition) {
           case 'selector':
-            await b.$(String(args.selector)).waitForDisplayed({ timeout });
+            if (!args.selector) throw new Error('wait_for selector needs selector');
+            await b.$(args.selector).waitForDisplayed({ timeout });
             break;
           case 'hidden':
-            await b.$(String(args.selector)).waitForDisplayed({ timeout, reverse: true });
+            if (!args.selector) throw new Error('wait_for hidden needs selector');
+            await b.$(args.selector).waitForDisplayed({ timeout, reverse: true });
             break;
           case 'app-ready':
-            await waitForAppReady(b);
+            await waitForAppReady(b, timeout);
             break;
           case 'ui-idle':
-            await waitForUiIdle(b);
+            await waitForUiIdle(b, 0, timeout);
             break;
           case 'map-idle':
-            await waitForMapIdle(b);
+            await waitForMapIdle(b, 0, timeout);
             break;
           case 'active-tool':
-            await waitForActiveTool(b, String(args.tool));
+            if (!args.tool) throw new Error('wait_for active-tool needs tool');
+            await waitForActiveTool(b, args.tool, timeout);
             break;
           case 'store-path':
+            if (!args.store || !args.path) throw new Error('wait_for store-path needs store and path');
             await b.waitUntil(
               async () => {
-                const v = await readStore(b, args.store as StoreName, String(args.path));
+                const v = await readStore(b, args.store as StoreName, args.path!);
                 return JSON.stringify((v as { value?: unknown }).value) === JSON.stringify(args.equals);
               },
               { timeout, timeoutMsg: 'store-path did not match' },
@@ -380,7 +394,7 @@ define(
       args,
       async () => {
         const b = session.browser;
-        const selector = args.testid ? `[data-testid="${args.testid}"]` : args.selector;
+        const selector = targetSelector(args);
         const button = args.button ?? 'left';
         return session.exclusive(async () => {
           let point: { x: number; y: number } | undefined;
@@ -398,10 +412,9 @@ define(
             point = { x: Math.round(args.x), y: Math.round(args.y) };
             await b
               .action('pointer', { parameters: { pointerType: 'mouse' } })
-              .move({ x: point.x, y: point.y })
-              .down({ button })
-              .up({ button })
+              .move({ origin: 'viewport', x: point.x, y: point.y })
               .perform();
+            await clickWithOptions(b, button, args.double, args.modifiers);
           } else {
             throw new Error('click needs one of testid, selector, or x+y');
           }
@@ -428,7 +441,7 @@ define(
       args,
       async () => {
         const b = session.browser;
-        const selector = args.testid ? `[data-testid="${args.testid}"]` : args.selector;
+        const selector = targetSelector(args);
         return session.exclusive(async () => {
           let method: 'keys' | 'paste' = 'keys';
           let verified: boolean | null = null;
@@ -487,6 +500,118 @@ define('press_keys', 'Press a sequence of WebDriver keys (e.g. ["Control","z"]).
     },
     { digest: true, sweep: true },
   ),
+);
+
+define(
+  'hover',
+  'Move the pointer over an element by data-testid or CSS selector.',
+  { testid: z.string().optional(), selector: z.string().optional() },
+  (args) =>
+    run(
+      'hover',
+      args,
+      async () => {
+        const selector = await session.exclusive(() => hoverElement(session.browser, args));
+        return { result: { hovered: true }, resolved: { selector } };
+      },
+      { sweep: true },
+    ),
+);
+
+define(
+  'drag',
+  'Drag from an element or viewport point to another element or viewport point.',
+  {
+    fromTestid: z.string().optional(),
+    fromSelector: z.string().optional(),
+    fromX: z.number().optional(),
+    fromY: z.number().optional(),
+    toTestid: z.string().optional(),
+    toSelector: z.string().optional(),
+    toX: z.number().optional(),
+    toY: z.number().optional(),
+    button: z.enum(['left', 'right', 'middle']).optional(),
+    durationMs: z.number().int().min(0).max(10000).optional(),
+  },
+  (args) =>
+    run(
+      'drag',
+      args,
+      async () => ({
+        result: { dragged: true },
+        resolved: await session.exclusive(() => dragPointer(session.browser, args)),
+      }),
+      { digest: true, sweep: true },
+    ),
+);
+
+define(
+  'scroll',
+  'Scroll an element into view, or scroll an element/window by a pixel delta.',
+  {
+    testid: z.string().optional(),
+    selector: z.string().optional(),
+    deltaX: z.number().optional(),
+    deltaY: z.number().optional(),
+    block: z.enum(['start', 'center', 'end', 'nearest']).optional(),
+    inline: z.enum(['start', 'center', 'end', 'nearest']).optional(),
+  },
+  (args) =>
+    run(
+      'scroll',
+      args,
+      async () => {
+        const selector = await session.exclusive(() => scrollTarget(session.browser, args));
+        return { result: { scrolled: true }, resolved: { selector } };
+      },
+      { sweep: true },
+    ),
+);
+
+define(
+  'select_option',
+  'Select a value from a native select or Stalagmight Select identified by data-testid.',
+  { testid: z.string().optional(), selector: z.string().optional(), value: z.string() },
+  (args) =>
+    run(
+      'select_option',
+      args,
+      async () => ({
+        result: { selected: args.value },
+        resolved: await session.exclusive(() => selectOption(session.browser, args)),
+      }),
+      { digest: true, sweep: true },
+    ),
+);
+
+define(
+  'element_state',
+  'Query matching element count and actionable DOM state. unique=false identifies duplicate runtime test IDs.',
+  { testid: z.string().optional(), selector: z.string().optional() },
+  (args) =>
+    run('element_state', args, async () => ({
+      result: capJson(await session.exclusive(() => queryElementState(session.browser, args)), 16384),
+    })),
+);
+
+define(
+  'file_dialog_answer',
+  'Queue the next test-only native open/save dialog result, then trigger the picker through the real UI.',
+  {
+    kind: z.enum(['open', 'save']),
+    path: z.string().optional(),
+    paths: z.array(z.string()).min(1).optional(),
+    cancel: z.boolean().optional(),
+  },
+  (args) =>
+    run('file_dialog_answer', args, async () => {
+      const choices = Number(args.path !== undefined) + Number(args.paths !== undefined) + Number(args.cancel === true);
+      if (choices !== 1) throw new Error('file_dialog_answer needs exactly one of path, paths, or cancel=true');
+      if (args.kind === 'save' && args.paths) throw new Error('save dialog answer cannot contain multiple paths');
+      const value = args.cancel ? null : (args.paths ?? args.path ?? null);
+      await session.exclusive(() => queueFileDialogAnswer(session.browser, args.kind, value));
+      return { result: { queued: true, kind: args.kind, value } };
+    }),
 );
 
 // ------------------------------------------------------------ escape hatches
@@ -570,26 +695,8 @@ define('map_click', 'Click a geographic point on the map canvas (lngLat -> pixel
     async () =>
       session.exclusive(async () => {
         const b = session.browser;
-        const point = await evalInApp<{ x: number; y: number } | null>(
-          b,
-          `
-          const map = window.__stalagmight_map__;
-          if (!map || !map.project) return null;
-          const p = map.project(args[0]);
-          const canvas = document.querySelector('[data-testid="map-canvas"]') || document.querySelector('.maplibregl-canvas');
-          const rect = canvas ? canvas.getBoundingClientRect() : { left: 0, top: 0 };
-          return { x: Math.round(rect.left + p.x), y: Math.round(rect.top + p.y) };
-        `,
-          [args.lngLat],
-        );
-        if (!point) throw new Error('map not available or point off-canvas');
         const button = args.button ?? 'left';
-        await b
-          .action('pointer', { parameters: { pointerType: 'mouse' } })
-          .move({ x: point.x, y: point.y })
-          .down({ button })
-          .up({ button })
-          .perform();
+        const point = await mapClick(b, args.lngLat as [number, number], button);
         return { result: { clicked: true }, resolved: { lngLat: args.lngLat, point } };
       }),
     { digest: true, sweep: true },

@@ -170,7 +170,7 @@ describe('SpeleoDbGeneralTab', () => {
     }));
     render(<Harness />);
 
-    expect(await screen.findByTestId('speleodb-settings-error')).toBeInTheDocument();
+    expect(await screen.findByTestId('speleodb-project-settings-error')).toBeInTheDocument();
     expect(screen.getByTestId('speleodb-undo-mode')).toBeInTheDocument();
     expect(screen.getByTestId('speleodb-undo-mode-disabled-input')).toBeEnabled();
   });

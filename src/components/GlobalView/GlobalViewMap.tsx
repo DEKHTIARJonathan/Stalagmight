@@ -12,6 +12,7 @@ import { useUIStore } from '../../store/uiStore';
 import { useNetworkStore } from '../../store/networkStore';
 import { formatFixed, formatNumber } from '../../i18n/format';
 import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
+import { testIdPart } from '../../utils/testId';
 
 /** Local storage key for persisting map position/zoom. */
 const MAP_STATE_STORAGE_KEY = 'globalViewMapState';
@@ -811,7 +812,7 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
       // Create container element (fixed size, handles positioning)
       const el = document.createElement('div');
       el.className = 'globalview-system-marker';
-      el.setAttribute('data-testid', `system-marker-${project.file_path}`);
+      el.setAttribute('data-testid', `system-marker-${testIdPart(project.file_path)}`);
       el.style.cssText = `
         width: 24px;
         height: 24px;

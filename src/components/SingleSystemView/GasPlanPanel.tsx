@@ -476,17 +476,17 @@ export function GasPlanPanel() {
               <p className="text-xs opacity-60 mt-0.5">{t('gasPanel.route.waypointsHint')}</p>
             )}
             {unresolvedWaypoint !== null && (
-              <p className="text-xs text-error mt-1" data-testid="gas-waypoint-warning">
+              <p className="text-xs text-error mt-1" data-testid="gas-waypoint-warning-unresolved">
                 {t('gasPanel.route.warnUnresolved', { n: unresolvedWaypoint + 1 })}
               </p>
             )}
             {unresolvedWaypoint === null && stalledWaypoint !== null && (
-              <p className="text-xs text-error mt-1" data-testid="gas-waypoint-warning">
+              <p className="text-xs text-error mt-1" data-testid="gas-waypoint-warning-unreachable">
                 {t('gasPanel.route.warnUnreachable', { n: stalledWaypoint + 1 })}
               </p>
             )}
             {stalledWaypoint === null && waypointsOverBudget && (
-              <p className="text-xs text-error mt-1" data-testid="gas-waypoint-warning">
+              <p className="text-xs text-error mt-1" data-testid="gas-waypoint-warning-over-budget">
                 {t('gasPanel.route.warnOverBudget')}
               </p>
             )}

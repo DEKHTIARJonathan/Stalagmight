@@ -146,9 +146,13 @@ suggestions.
 
 - [ ] Dialogs have `role="dialog"` and `aria-modal="true"`
 - [ ] Dialog titles have an `id` referenced by the dialog's `aria-labelledby`
-- [ ] Primary buttons have `data-testid`
-- [ ] Form inputs have `data-testid`
+- [ ] Every interactive control has a stable, unique `data-testid`
+- [ ] Controls rendered in a loop include a stable item key in the test ID
 - [ ] Icon-only buttons have `aria-label`
+
+`pnpm lint:test-ids:test && pnpm lint:test-ids` gates these requirements. The
+scanner rejects interactive JSX without a test ID and literal IDs inside map
+callbacks, where one source literal would produce duplicate runtime elements.
 
 ### Dialogs (mandatory shape)
 

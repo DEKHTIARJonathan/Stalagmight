@@ -12,6 +12,7 @@ import { execFileSync } from 'child_process';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { testIdSelector } from './lib/test-id-selector.mjs';
 
 const repoRoot = path.resolve(__dirname, '..');
 const replayGen = path.join(repoRoot, 'scripts', 'generate-replay.mjs');
@@ -91,12 +92,104 @@ beforeAll(() => {
       v: 1,
       seq: 5,
       ts: ts(6),
+      tool: 'click',
+      params: { testid: 'C:\\Caves\\"quoted".stalx' },
+      resolved: { selector: '[data-testid="C:\\Caves\\"quoted".stalx"]' },
+      outcome: { ok: true, durationMs: 10 },
+    }),
+    record({
+      type: 'action',
+      v: 1,
+      seq: 6,
+      ts: ts(7),
+      tool: 'map_click',
+      params: { lngLat: [12.34, -45.6], button: 'right' },
+      resolved: { lngLat: [12.34, -45.6], point: { x: 999, y: 777 } },
+      outcome: { ok: true, durationMs: 20 },
+    }),
+    record({
+      type: 'action',
+      v: 1,
+      seq: 7,
+      ts: ts(8),
+      tool: 'wait_for',
+      params: { condition: 'app-ready', timeoutMs: 4321 },
+      outcome: { ok: true, durationMs: 10 },
+    }),
+    record({
+      type: 'action',
+      v: 1,
+      seq: 8,
+      ts: ts(9),
+      tool: 'wait_for',
+      params: { condition: 'active-tool', tool: 'move_station', timeoutMs: 7654 },
+      outcome: { ok: true, durationMs: 10 },
+    }),
+    record({
+      type: 'action',
+      v: 1,
+      seq: 9,
+      ts: ts(10),
+      tool: 'wait_for',
+      params: { condition: 'store-path', store: 'ui', path: 'activeTool', equals: 'move_station' },
+      outcome: { ok: true, durationMs: 10 },
+    }),
+    record({
+      type: 'action',
+      v: 1,
+      seq: 10,
+      ts: ts(11),
+      tool: 'hover',
+      params: { testid: 'toolbar-undo-button' },
+      outcome: { ok: true, durationMs: 10 },
+    }),
+    record({
+      type: 'action',
+      v: 1,
+      seq: 11,
+      ts: ts(12),
+      tool: 'drag',
+      params: { fromTestid: 'station-a', toTestid: 'station-b', durationMs: 250 },
+      outcome: { ok: true, durationMs: 260 },
+    }),
+    record({
+      type: 'action',
+      v: 1,
+      seq: 12,
+      ts: ts(13),
+      tool: 'scroll',
+      params: { testid: 'warnings-content', deltaY: 400 },
+      outcome: { ok: true, durationMs: 10 },
+    }),
+    record({
+      type: 'action',
+      v: 1,
+      seq: 13,
+      ts: ts(14),
+      tool: 'select_option',
+      params: { testid: 'select-number-format', value: 'en-US' },
+      outcome: { ok: true, durationMs: 10 },
+    }),
+    record({
+      type: 'action',
+      v: 1,
+      seq: 14,
+      ts: ts(15),
+      tool: 'file_dialog_answer',
+      params: { kind: 'open', path: 'C:\\Caves\\survey.dmp' },
+      outcome: { ok: true, durationMs: 10 },
+    }),
+    record({
+      type: 'action',
+      v: 1,
+      seq: 15,
+      ts: ts(16),
       tool: 'store_state',
       params: { store: 'project', path: 'isDirty' },
       outcome: { ok: true, durationMs: 10 },
       result: { value: false },
     }),
-    record({ type: 'session-end', v: 1, ts: ts(7), reason: 'app_stop', actions: 5 }),
+    record({ type: 'session-end', v: 1, ts: ts(17), reason: 'app_stop', actions: 15 }),
   ];
   fs.writeFileSync(path.join(sessionDir, 'actions.jsonl'), `${lines.join('\n')}\n`);
 });
@@ -114,7 +207,23 @@ describe('generate-replay.mjs', () => {
     // seed -> a real openProject call using the RESOLVED fixture path.
     expect(spec).toContain(`'openProject', ["/repo/e2e/fixtures/fractal_plant_iter2.stalx"]`);
     // click -> the resolved selector, clicked.
-    expect(spec).toContain(`await $("[data-testid=\\"save-button\\"]").click();`);
+    expect(spec).toContain(`replayClick(browser, {"selector":"[data-testid=\\"save-button\\"]"})`);
+    // Unsafe legacy resolved selectors are rebuilt from the recorded test ID.
+    expect(spec).toContain(JSON.stringify(testIdSelector('C:\\Caves\\"quoted".stalx')).slice(1, -1));
+    // Map clicks replay geography, not the pixels from the recording viewport.
+    expect(spec).toContain(`await mapClick(browser, [12.34,-45.6], "right");`);
+    expect(spec).not.toContain('999, 777');
+    // Semantic waits remain semantic and keep their recorded arguments.
+    expect(spec).toContain(`waitForReplay(browser, {"condition":"app-ready","timeoutMs":4321})`);
+    expect(spec).toContain(`waitForReplay(browser, {"condition":"active-tool","tool":"move_station","timeoutMs":7654})`);
+    expect(spec).toContain(`waitForReplay(browser, {"condition":"store-path","store":"ui","path":"activeTool","equals":"move_station"})`);
+    expect(spec).not.toContain('pause(browser, 300); // wait_for');
+    // First-class controls and native-dialog answers are replayable actions.
+    expect(spec).toContain(`hoverElement(browser, {"testid":"toolbar-undo-button"})`);
+    expect(spec).toContain(`dragPointer(browser, {"fromTestid":"station-a","toTestid":"station-b","durationMs":250})`);
+    expect(spec).toContain(`scrollTarget(browser, {"testid":"warnings-content","deltaY":400})`);
+    expect(spec).toContain(`selectOption(browser, {"testid":"select-number-format","value":"en-US"})`);
+    expect(spec).toContain(`queueFileDialogAnswer(browser, "open", "C:\\\\Caves\\\\survey.dmp")`);
     // Timed-out driver_script -> recorded timeout threaded through AND the
     // failure tolerated, so the replay proceeds past it the way the live run did.
     const dsLine = spec.split('\n').find((l) => l.includes('driverScript(browser,'));
@@ -126,6 +235,16 @@ describe('generate-replay.mjs', () => {
     // Observation-only tools stay comments.
     expect(spec).toContain('store_state');
     expect(spec).not.toContain('await storeState');
+  });
+});
+
+describe('testIdSelector', () => {
+  it('targets exact IDs containing Windows separators, quotes, and control characters', () => {
+    expect(testIdSelector('C:\\Caves\\survey.stalx')).toBe(
+      '[data-testid="C:\\\\Caves\\\\survey.stalx"]',
+    );
+    expect(testIdSelector('path-"quoted"')).toBe('[data-testid="path-\\"quoted\\""]');
+    expect(testIdSelector('line\nbreak')).toBe('[data-testid="line\\A break"]');
   });
 });
 

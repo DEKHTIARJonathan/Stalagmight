@@ -85,6 +85,7 @@ export function SpeleoLockBadge({
   lockedByMe,
   hasLocalEdits = false,
   size = 18,
+  testIdPrefix,
 }: {
   isRemote: boolean;
   /** Holder email, `null` = free, `undefined` = not scanned (logged out / offline). */
@@ -93,6 +94,7 @@ export function SpeleoLockBadge({
   /** #270: paint the mark yellow - this machine has edits the server does not. */
   hasLocalEdits?: boolean;
   size?: number;
+  testIdPrefix: string;
 }) {
   const { t } = useTranslation();
   if (!isRemote) return null;
@@ -102,7 +104,7 @@ export function SpeleoLockBadge({
   if (lockedByMe) {
     return (
       <Tooltip content={t('speleodb.recentBadge.lockedByYou')}>
-        <span data-testid="speleo-recent-badge-locked-me">
+        <span data-testid={`${testIdPrefix}-badge-locked-me`}>
           <SpeleoBadgedIcon
             badge={<PenGlyph size={10} />}
             badgeColor="text-success"
@@ -116,7 +118,7 @@ export function SpeleoLockBadge({
   if (lockHolder) {
     return (
       <Tooltip content={t('speleodb.recentBadge.lockedByOther', { email: lockHolder })}>
-        <span data-testid="speleo-recent-badge-locked-other">
+        <span data-testid={`${testIdPrefix}-badge-locked-other`}>
           <SpeleoBadgedIcon badge={<HourglassGlyph />} badgeColor="text-warning" size={size} tint={tint} />
         </span>
       </Tooltip>
@@ -124,7 +126,7 @@ export function SpeleoLockBadge({
   }
   return (
     <Tooltip content={t('speleodb.recentBadge.remote')}>
-      <span data-testid="speleo-recent-badge-remote">
+      <span data-testid={`${testIdPrefix}-badge-remote`}>
         <SpeleoDbLogo size={size} tint={tint} />
       </span>
     </Tooltip>
@@ -144,11 +146,13 @@ export function SpeleoRecentInfo({
   info,
   name,
   size = 16,
+  testIdPrefix,
 }: {
   info: SpeleoLockInfo;
   /** Local project name, used as the label when the SpeleoDB name isn't scanned. */
   name: string;
   size?: number;
+  testIdPrefix: string;
 }) {
   const { t } = useTranslation();
   if (!info.isRemote) return null;
@@ -160,9 +164,9 @@ export function SpeleoRecentInfo({
   return (
     <span
       className="inline-flex items-center gap-1.5 min-w-0 text-xs text-text-tertiary"
-      data-testid="speleo-recent-info"
+      data-testid={`${testIdPrefix}-info`}
     >
-      <SpeleoLockBadge {...info} size={size} />
+      <SpeleoLockBadge {...info} size={size} testIdPrefix={testIdPrefix} />
       <span className="truncate">
         {t('speleodb.recentInfo.prefix', { name: info.speleoName ?? name })}
         {/* The middot + lock detail sit a shade back from the project name. */}
