@@ -87,7 +87,7 @@ test.describe('GlobalView Recent Projects - search, table view, missing files', 
 
   test('clicking column headers sorts the table and shows the indicator', async ({ page }) => {
     const rowOrder = () =>
-      page.locator('[data-testid^="system-row-%2F"]').evaluateAll((els) =>
+      page.locator('tr[data-testid^="system-row-%2F"]').evaluateAll((els) =>
         els.map((e) => e.getAttribute('data-testid'))
       );
     const row = systemRowTestId;
