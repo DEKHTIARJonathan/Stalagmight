@@ -61,7 +61,7 @@ export default function SavePermissionDialog() {
         )}
 
         <div className="flex justify-end pt-4 border-t border-border">
-          <Button variant="primary" onClick={handleClose}>OK</Button>
+          <Button variant="primary" onClick={handleClose} data-testid="save-permission-close">OK</Button>
         </div>
       </div>
     </DialogWrapper>

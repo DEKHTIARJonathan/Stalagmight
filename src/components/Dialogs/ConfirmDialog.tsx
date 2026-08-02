@@ -289,8 +289,9 @@ export default function ConfirmDialog() {
         )}
 
         <div className="flex justify-end gap-2 pt-4 border-t border-border">
-          <Button onClick={closeDialog}>Cancel</Button>
+          <Button onClick={closeDialog} data-testid="confirm-dialog-cancel">Cancel</Button>
           <Button
+            data-testid="confirm-dialog-confirm"
             variant="danger"
             onClick={handleConfirm}
             disabled={type === 'station' || isSubmitting}

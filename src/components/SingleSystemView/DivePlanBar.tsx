@@ -315,6 +315,7 @@ export function DivePlanBar() {
           </button>
           <button
             type="button"
+            data-testid="dive-plan-save-as-cancel"
             className="px-2 py-1 text-xs rounded border border-border hover:bg-panel"
             onClick={() => setPending({ kind: 'none' })}
           >
@@ -340,6 +341,7 @@ export function DivePlanBar() {
             </button>
             <button
               type="button"
+              data-testid="dive-plan-delete-confirm-cancel"
               className="px-2 py-0.5 rounded border border-border hover:bg-panel"
               onClick={() => setPending({ kind: 'none' })}
             >
@@ -370,6 +372,7 @@ export function DivePlanBar() {
             </button>
             <button
               type="button"
+              data-testid="dive-plan-switch-confirm-cancel"
               className="px-2 py-0.5 rounded border border-border hover:bg-panel"
               onClick={() => setPending({ kind: 'none' })}
             >

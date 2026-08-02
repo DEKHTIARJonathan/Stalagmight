@@ -190,6 +190,7 @@ export default function GpxPlacementDialog() {
                     <select
                       className="text-sm bg-surface border border-border rounded px-1 py-0.5"
                       value={zeroDatumIndices[i] ?? 0}
+                      data-testid={`gpx-placement-zero-datum-${i}`}
                       onChange={(e) => handleZeroDatumChange(i, parseInt(e.target.value, 10))}
                     >
                       {Array.from({ length: sec.pointCount }, (_, si) => (
@@ -213,11 +214,11 @@ export default function GpxPlacementDialog() {
 
         {/* Footer */}
         <div className="flex justify-between pt-4 border-t border-border">
-          <Button onClick={handleBack} disabled={isImporting}>
+          <Button onClick={handleBack} disabled={isImporting} data-testid="gpx-placement-back">
             Back
           </Button>
           <div className="flex gap-2">
-            <Button onClick={closeDialog} disabled={isImporting}>
+            <Button onClick={closeDialog} disabled={isImporting} data-testid="gpx-placement-cancel">
               Cancel
             </Button>
             <Button

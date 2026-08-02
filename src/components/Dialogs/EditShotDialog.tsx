@@ -177,6 +177,7 @@ export default function EditShotDialog() {
               className="w-full"
               step="0.1"
               disabled={frozen}
+              data-testid="edit-shot-azimuth-in-input"
             />
           </div>
           <div>
@@ -188,6 +189,7 @@ export default function EditShotDialog() {
               className="w-full"
               step="0.1"
               disabled={frozen}
+              data-testid="edit-shot-azimuth-out-input"
             />
           </div>
         </div>
@@ -202,6 +204,7 @@ export default function EditShotDialog() {
             step="0.01"
             min="0"
             disabled={frozen}
+            data-testid="edit-shot-length-input"
           />
         </div>
 
@@ -215,6 +218,7 @@ export default function EditShotDialog() {
               className="w-full"
               step="0.1"
               disabled={frozen}
+              data-testid="edit-shot-depth-in-input"
             />
           </div>
           <div>
@@ -226,6 +230,7 @@ export default function EditShotDialog() {
               className="w-full"
               step="0.1"
               disabled={frozen}
+              data-testid="edit-shot-depth-out-input"
             />
           </div>
         </div>
@@ -243,6 +248,7 @@ export default function EditShotDialog() {
               max="90"
               placeholder="Optional"
               disabled={frozen}
+              data-testid="edit-shot-pitch-in-input"
             />
           </div>
           <div>
@@ -257,6 +263,7 @@ export default function EditShotDialog() {
               max="90"
               placeholder="Optional"
               disabled={frozen}
+              data-testid="edit-shot-pitch-out-input"
             />
           </div>
         </div>
@@ -272,6 +279,7 @@ export default function EditShotDialog() {
                 className="w-full"
                 step="0.1"
                 placeholder="L"
+                data-testid="edit-shot-left-input"
               />
             </div>
             <div>
@@ -282,6 +290,7 @@ export default function EditShotDialog() {
                 className="w-full"
                 step="0.1"
                 placeholder="R"
+                data-testid="edit-shot-right-input"
               />
             </div>
             <div>
@@ -292,6 +301,7 @@ export default function EditShotDialog() {
                 className="w-full"
                 step="0.1"
                 placeholder="U"
+                data-testid="edit-shot-up-input"
               />
             </div>
             <div>
@@ -302,6 +312,7 @@ export default function EditShotDialog() {
                 className="w-full"
                 step="0.1"
                 placeholder="D"
+                data-testid="edit-shot-down-input"
               />
             </div>
           </div>
@@ -314,14 +325,15 @@ export default function EditShotDialog() {
             onChange={(e) => setComment(e.target.value)}
             className="w-full h-20 resize-none"
             placeholder="Optional comment"
+            data-testid="edit-shot-comment-input"
           />
         </div>
 
         <div className="flex justify-end gap-2 pt-4 border-t border-border">
-          <Button onClick={closeDialog} disabled={isLoading}>
+          <Button onClick={closeDialog} disabled={isLoading} data-testid="edit-shot-cancel">
             Cancel
           </Button>
-          <Button variant="primary" onClick={handleSave} disabled={isLoading}>
+          <Button variant="primary" onClick={handleSave} disabled={isLoading} data-testid="edit-shot-save">
             {isLoading ? 'Saving...' : 'Save'}
           </Button>
         </div>

@@ -4,6 +4,7 @@ type ButtonVariant = 'primary' | 'secondary' | 'ghost' | 'danger';
 type ButtonSize = 'sm' | 'md' | 'lg';
 
 interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
+  'data-testid'?: string;
   variant?: ButtonVariant;
   size?: ButtonSize;
   children: ReactNode;
@@ -30,6 +31,7 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button
   icon,
   className = '',
   disabled,
+  'data-testid': testId,
   ...props
 }, ref) {
   return (
@@ -44,6 +46,7 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button
         ${className}
       `}
       disabled={disabled}
+      data-testid={testId}
       {...(variant === 'primary' ? { 'data-primary-action': '' } : {})}
       {...props}
     >
@@ -54,6 +57,7 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button
 });
 
 interface IconButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
+  'data-testid'?: string;
   icon: ReactNode;
   variant?: ButtonVariant;
   size?: ButtonSize;
@@ -68,6 +72,7 @@ export const IconButton = forwardRef<HTMLButtonElement, IconButtonProps>(functio
   tooltip,
   active,
   className = '',
+  'data-testid': testId,
   ...props
 }, ref) {
   const iconSizes: Record<ButtonSize, string> = {
@@ -89,6 +94,7 @@ export const IconButton = forwardRef<HTMLButtonElement, IconButtonProps>(functio
         ${className}
       `}
       title={tooltip}
+      data-testid={testId}
       {...props}
     >
       {icon}

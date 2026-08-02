@@ -371,6 +371,7 @@ export function DialogWrapper({
         <div className="flex items-center justify-between px-4 py-3 border-b border-border">
           <h2 id={titleId} className="text-lg font-medium">{title}</h2>
           <IconButton
+            data-testid={testId ? `${testId}-close` : 'dialog-close'}
             type="button"
             onClick={requestClose}
             icon={<CloseIcon size={14} />}
@@ -406,8 +407,8 @@ export function DialogWrapper({
               <p>You have unsaved changes. Are you sure you want to close?</p>
               <p className="text-text-secondary text-sm">Your changes will be lost.</p>
               <div className="flex justify-end gap-2 pt-4 border-t border-border">
-                <Button type="button" onClick={handleCancelDiscard}>Cancel</Button>
-                <Button type="button" variant="danger" onClick={handleConfirmDiscard}>
+                <Button type="button" onClick={handleCancelDiscard} data-testid="dirty-dialog-keep-editing">Cancel</Button>
+                <Button type="button" variant="danger" onClick={handleConfirmDiscard} data-testid="dirty-dialog-discard">
                   Discard Changes
                 </Button>
               </div>

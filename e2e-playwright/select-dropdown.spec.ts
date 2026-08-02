@@ -27,7 +27,7 @@ async function navigateToGeneralTab(page: Page): Promise<void> {
 
 /** Get the trigger button of the subject Select. */
 function getSelectTrigger(page: Page): Locator {
-  return page.getByTestId('select-number-format').locator('button').first();
+  return page.getByTestId('select-number-format');
 }
 
 async function pressUntilActiveDescendant(

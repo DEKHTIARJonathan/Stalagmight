@@ -641,7 +641,7 @@ sibling of `<div id="root">`.
    cannot tell you an element is behind a sticky header.
 
 ```typescript
-const trigger = page.getByTestId('select-number-format').locator('button').first();
+const trigger = page.getByTestId('select-number-format');
 await trigger.click();
 
 // aria-controls may need a render cycle. Use an attribute selector - React

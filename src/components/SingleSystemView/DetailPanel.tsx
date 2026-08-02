@@ -446,6 +446,7 @@ function WarningsContent({ warnings, project, onWarningClick }: WarningsContentP
             {resolvedCount > 0 && (
               <button
                 onClick={() => setShowResolved(!showResolved)}
+                data-testid="warnings-show-resolved-toggle"
                 className="text-xs text-accent hover:underline"
               >
                 {showResolved ? t('detailPanel.warnings.hideResolved') : t('detailPanel.warnings.showResolved')}
@@ -503,6 +504,7 @@ function WarningsContent({ warnings, project, onWarningClick }: WarningsContentP
             {warning.isResolved ? (
               <button
                 onClick={(e) => handleUndoResolve(e, warning)}
+                data-testid={`warning-${index}-undo-resolve`}
                 className="float-right ml-2 text-xs px-2 py-0.5 rounded bg-background-50 hover:bg-background text-text-secondary"
                 title={t('detailPanel.warnings.markUnresolved')}
               >
@@ -513,7 +515,7 @@ function WarningsContent({ warnings, project, onWarningClick }: WarningsContentP
                 onClick={(e) => startResolve(e, warning)}
                 className="float-right ml-2 text-xs px-2 py-0.5 rounded bg-background-50 hover:bg-background text-text-primary"
                 title={t('detailPanel.warnings.resolve')}
-                data-testid="resolve-warning"
+                data-testid={`warning-${index}-resolve`}
               >
                 {t('detailPanel.warnings.resolve')}
               </button>
@@ -542,7 +544,7 @@ function WarningsContent({ warnings, project, onWarningClick }: WarningsContentP
               onClick={() => onWarningClick(warning)}
               onDoubleClick={() => triggerPanToShot(warning.sectionId, warning.shotId)}
               className={`text-left cursor-pointer rounded${showPills ? '' : ' focus:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-inset'}`}
-              data-testid="warning-message"
+              data-testid={`warning-${index}-message`}
             >
               <span className={`mr-1.5 align-text-bottom inline-block ${warning.severity === 'error' ? 'text-error' : 'text-warning'}`}>
                 {warning.isResolved
@@ -572,6 +574,7 @@ function WarningsContent({ warnings, project, onWarningClick }: WarningsContentP
                         aria-label={t('detailPanel.warnings.openShotDetails', {
                           shot: formatShotId(warning.sectionId, warning.shotIndex + 1),
                         })}
+                        data-testid={`warning-${index}-open-shot`}
                       >
                         <EntityBlob entity="shot">
                           {formatShotId(warning.sectionId, warning.shotIndex + 1)}
@@ -1428,7 +1431,7 @@ function ProjectStats({ project, stats, stations }: ProjectStatsProps) {
         bare
         title={t('detailPanel.projectStats.title')}
         headerActions={
-          <button type="button" tabIndex={-1} aria-hidden="true" className="p-1 invisible">
+          <button type="button" tabIndex={-1} aria-hidden="true" className="p-1 invisible" data-testid="project-stats-header-placeholder">
             <svg className="w-4 h-4" viewBox="0 0 24 24" />
           </button>
         }

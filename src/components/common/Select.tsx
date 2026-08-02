@@ -457,6 +457,7 @@ export function Select({
           ref={(el) => { optionRefs.current[optionIndex] = el; }}
           role="option"
           id={getOptionId(optionIndex)}
+          data-testid={testId ? `${testId}-option-${encodeURIComponent(option.value)}` : undefined}
           aria-selected={isSelected}
           aria-disabled={option.disabled || undefined}
           className={`w-full px-3 py-2 text-left text-sm cursor-pointer ${
@@ -525,12 +526,13 @@ export function Select({
       };
 
   return (
-    <div className={`relative ${className}`} data-testid={testId} data-dropdown-open={isOpen || undefined}>
+    <div className={`relative ${className}`} data-testid={testId ? `${testId}-root` : undefined} data-dropdown-open={isOpen || undefined}>
       {/* Trigger button */}
       <button
         ref={triggerRef}
         type="button"
         role="combobox"
+        data-testid={testId}
         className={`w-full px-3 py-2 bg-background border border-border rounded text-left flex items-center justify-between ${
           disabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer hover:border-accent'
         }`}
@@ -575,6 +577,7 @@ export function Select({
           ref={dropdownRef}
           role="listbox"
           id={listboxId}
+          data-testid={testId ? `${testId}-listbox` : undefined}
           aria-label={ariaLabel}
           aria-labelledby={ariaLabelledBy}
           className="bg-panel border border-border rounded shadow-lg max-h-60 overflow-auto"

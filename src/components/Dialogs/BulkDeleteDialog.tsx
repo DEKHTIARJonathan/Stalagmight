@@ -265,7 +265,7 @@ export default function BulkDeleteDialog() {
         />
 
         <div className="flex justify-end gap-2 pt-4 border-t border-border">
-          <Button onClick={closeDialog} disabled={isLoading}>
+          <Button onClick={closeDialog} disabled={isLoading} data-testid="bulk-delete-cancel">
             Cancel
           </Button>
           {isInterior && (

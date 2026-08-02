@@ -232,7 +232,7 @@ test.describe('Dialog Coverage - Edit Section', () => {
     const surveyorInput = dialog.getByTestId('section-surveyor-input');
     const qualityInput = dialog.getByTestId('section-quality-input');
     const colorHexInput = dialog.getByTestId('section-color-hex-input');
-    const dateInput = dialog.getByTestId('section-date-input').locator('input');
+    const dateInput = dialog.getByTestId('section-date-input');
 
     await nameInput.fill('Updated Section');
     await surveyorInput.fill('New Surveyor');

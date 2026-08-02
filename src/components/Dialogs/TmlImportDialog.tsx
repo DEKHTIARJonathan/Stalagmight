@@ -281,7 +281,7 @@ export default function TmlImportDialog({ tmlFile, filePath }: TmlImportDialogPr
 
         {/* Footer */}
         <div className="flex justify-end gap-2 pt-4 border-t border-border">
-          <Button onClick={closeDialog}>Cancel</Button>
+          <Button onClick={closeDialog} data-testid="tml-import-cancel">Cancel</Button>
           <Button
             data-primary-action=""
             data-testid="tml-import-confirm"

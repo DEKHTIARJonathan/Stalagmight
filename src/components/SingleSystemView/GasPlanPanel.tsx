@@ -412,14 +412,14 @@ export function GasPlanPanel() {
                   <li
                     key={`${w.section_id}:${w.station_index}:${i}`}
                     className="flex items-center gap-2 text-xs"
-                    data-testid="gas-waypoint-row"
+                    data-testid={`gas-waypoint-row-${i}`}
                   >
                     <span className="opacity-60 w-4 text-right">{i + 1}.</span>
                     <span className="font-mono flex-1">
                       {formatStationId(w.section_id, w.station_index)}
                     </span>
                     {unresolved.waypoints[i] && (
-                      <span className="text-error" data-testid="gas-waypoint-unresolved">
+                      <span className="text-error" data-testid={`gas-waypoint-unresolved-${i}`}>
                         {t('gasPanel.route.unresolvedBadge')}
                       </span>
                     )}
@@ -428,7 +428,7 @@ export function GasPlanPanel() {
                         chain stalled here or before it. */}
                     <span
                       className={gasKnown && waypointGas[i] == null ? 'text-error' : 'opacity-70'}
-                      data-testid="gas-waypoint-gas"
+                      data-testid={`gas-waypoint-gas-${i}`}
                     >
                       {!gasKnown || waypointGas.length <= i
                         ? t('gasPanel.route.pending')
@@ -443,7 +443,7 @@ export function GasPlanPanel() {
                       disabled={i === 0}
                       aria-label={t('gasPanel.route.moveUp')}
                       title={t('gasPanel.route.moveUp')}
-                      data-testid="gas-waypoint-up"
+                      data-testid={`gas-waypoint-up-${i}`}
                     >
                       &uarr;
                     </button>
@@ -454,7 +454,7 @@ export function GasPlanPanel() {
                       disabled={i === waypoints.length - 1}
                       aria-label={t('gasPanel.route.moveDown')}
                       title={t('gasPanel.route.moveDown')}
-                      data-testid="gas-waypoint-down"
+                      data-testid={`gas-waypoint-down-${i}`}
                     >
                       &darr;
                     </button>
@@ -464,7 +464,7 @@ export function GasPlanPanel() {
                       onClick={() => removeWaypoint(i)}
                       aria-label={t('gasPanel.route.remove')}
                       title={t('gasPanel.route.remove')}
-                      data-testid="gas-waypoint-remove"
+                      data-testid={`gas-waypoint-remove-${i}`}
                     >
                       &times;
                     </button>
@@ -506,7 +506,7 @@ export function GasPlanPanel() {
                 <li
                   key={`${m.station.section_id}:${m.station.station_index}:${i}`}
                   className="flex items-center gap-2 text-xs"
-                  data-testid="gas-marked-row"
+                  data-testid={`gas-marked-row-${i}`}
                 >
                   <span className="font-mono">
                     {formatStationId(m.station.section_id, m.station.station_index)}
@@ -520,7 +520,7 @@ export function GasPlanPanel() {
                     // never be long enough for the save to reject the whole plan.
                     maxLength={MAX_MARKED_LABEL_CHARS}
                     className="flex-1 min-w-0 bg-transparent border border-border rounded px-1 py-0.5"
-                    data-testid="gas-marked-label-input"
+                    data-testid={`gas-marked-label-input-${i}`}
                   />
                   <button
                     type="button"
@@ -528,7 +528,7 @@ export function GasPlanPanel() {
                     onClick={() => removeMarkedPoint(i)}
                     aria-label={t('gasPanel.marked.remove')}
                     title={t('gasPanel.marked.remove')}
-                    data-testid="gas-marked-remove"
+                    data-testid={`gas-marked-remove-${i}`}
                   >
                     &times;
                   </button>

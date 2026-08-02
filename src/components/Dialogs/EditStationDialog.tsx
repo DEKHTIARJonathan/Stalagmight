@@ -250,6 +250,7 @@ export default function EditStationDialog() {
             <input
               type="checkbox"
               id="zeroDatum"
+              data-testid="station-zero-datum-input"
               checked={isZeroDatum}
               onChange={(e) => setIsZeroDatumState(e.target.checked)}
               className="w-4 h-4"
@@ -304,10 +305,10 @@ export default function EditStationDialog() {
         </div>
 
         <div className="flex justify-end gap-2 pt-4 border-t border-border">
-          <Button onClick={closeDialog} disabled={isLoading}>
+          <Button onClick={closeDialog} disabled={isLoading} data-testid="edit-station-cancel">
             Cancel
           </Button>
-          <Button variant="primary" onClick={handleSave} disabled={isLoading}>
+          <Button variant="primary" onClick={handleSave} disabled={isLoading} data-testid="edit-station-save">
             {isLoading ? 'Saving...' : 'Save'}
           </Button>
         </div>

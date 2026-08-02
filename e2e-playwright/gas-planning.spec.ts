@@ -1320,7 +1320,7 @@ test.describe('Gas planning', () => {
     await expect(panel.getByTestId('export-show-labels')).toBeVisible();
     const colorSelect = panel.getByTestId('export-color-mode');
     await expect(colorSelect).toBeVisible();
-    await colorSelect.locator('button').first().click();
+    await colorSelect.click();
     const colorList = page.getByRole('listbox');
     await expect(colorList.locator('[role="option"]:has-text("By depth")')).toBeVisible();
     await expect(colorList.locator('[role="option"]:has-text("By distance")')).toBeVisible();
@@ -1328,9 +1328,9 @@ test.describe('Gas planning', () => {
 
     // Switch the format to SVG → the Color dropdown disables (SVG is always monochrome).
     const formatSelect = panel.getByTestId('image-format-select');
-    await formatSelect.locator('button').first().click();
+    await formatSelect.click();
     await page.getByRole('listbox').locator('[role="option"]:has-text("SVG")').click();
-    await expect(colorSelect.locator('button').first()).toBeDisabled();
+    await expect(colorSelect).toBeDisabled();
 
     // Switch to the data export type → the map preview overlay goes away.
     await panel.getByTestId('export-type-data').click();

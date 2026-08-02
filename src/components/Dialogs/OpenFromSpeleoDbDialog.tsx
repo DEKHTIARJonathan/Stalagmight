@@ -291,10 +291,10 @@ export default function OpenFromSpeleoDbDialog() {
                   : ''}
               </span>
               <div className="flex gap-2">
-                <Button onClick={() => void handleRefresh()} disabled={busy}>
+                <Button onClick={() => void handleRefresh()} disabled={busy} data-testid="open-from-speleodb-refresh">
                   {t('speleodb.browser.refresh')}
                 </Button>
-                <Button onClick={closeDialog} disabled={busy}>
+                <Button onClick={closeDialog} disabled={busy} data-testid="open-from-speleodb-close">
                   {t('common.actions.close')}
                 </Button>
               </div>

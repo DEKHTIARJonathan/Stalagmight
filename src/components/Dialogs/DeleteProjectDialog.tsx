@@ -102,7 +102,7 @@ export default function DeleteProjectDialog() {
         )}
 
         <div className="flex justify-end gap-2 pt-4 border-t border-border">
-          <Button onClick={closeDialog} disabled={isDeleting}>
+          <Button onClick={closeDialog} disabled={isDeleting} data-testid="delete-project-cancel">
             Cancel
           </Button>
           <Button

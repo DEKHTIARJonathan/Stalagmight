@@ -222,7 +222,7 @@ export default function MergeProjectsDialog() {
 
         {/* Actions */}
         <div className="flex justify-end gap-2 pt-4 border-t border-border">
-          <Button onClick={handleClose} disabled={isLoading}>
+          <Button onClick={handleClose} disabled={isLoading} data-testid="merge-projects-cancel">
             Cancel
           </Button>
           <Button

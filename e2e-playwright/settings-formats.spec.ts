@@ -82,7 +82,7 @@ test.describe('Settings - Number Format', () => {
     await expect(saveButton).toBeDisabled();
 
     // Open the select dropdown and pick a different format
-    const trigger = page.locator('[data-testid="select-number-format"] button').first();
+    const trigger = page.locator('[data-testid="select-number-format"]');
     await trigger.click();
 
     // Select "Period (1,234.5)" option (en-US)
@@ -98,7 +98,7 @@ test.describe('Settings - Number Format', () => {
     await navigateToGeneralTab(page);
 
     // Change number format
-    const trigger = page.locator('[data-testid="select-number-format"] button').first();
+    const trigger = page.locator('[data-testid="select-number-format"]');
     await trigger.click();
     const option = page.getByRole('listbox').locator('[role="option"]').nth(1);
     await option.click();
@@ -118,7 +118,7 @@ test.describe('Settings - Number Format', () => {
     await navigateToGeneralTab(page);
 
     // Open dropdown
-    const trigger = page.locator('[data-testid="select-number-format"] button').first();
+    const trigger = page.locator('[data-testid="select-number-format"]');
     await trigger.click();
 
     // Should have 4 options
@@ -161,7 +161,7 @@ test.describe('Settings - Date Format', () => {
     await expect(saveButton).toBeDisabled();
 
     // Open date format dropdown
-    const trigger = page.locator('[data-testid="select-date-format"] button').first();
+    const trigger = page.locator('[data-testid="select-date-format"]');
     await trigger.click();
 
     // Select a different format
@@ -175,7 +175,7 @@ test.describe('Settings - Date Format', () => {
     await openSettingsDialog(page);
     await navigateToGeneralTab(page);
 
-    const trigger = page.locator('[data-testid="select-date-format"] button').first();
+    const trigger = page.locator('[data-testid="select-date-format"]');
     await trigger.click();
 
     const options = page.getByRole('listbox').locator('[role="option"]');

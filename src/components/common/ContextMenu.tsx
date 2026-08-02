@@ -776,6 +776,7 @@ export default function ContextMenu() {
       <div
         ref={menuRef}
         className="absolute bg-panel border border-border rounded-lg shadow-xl py-1 min-w-[180px]"
+        data-testid="context-menu"
         style={{ left: adjustedPosition.x, top: adjustedPosition.y }}
       >
         {items.map((item, index) => {
@@ -786,6 +787,7 @@ export default function ContextMenu() {
           return (
             <MenuRow
               key={index}
+              data-testid={`context-menu-item-${index}`}
               onClick={() => { setSource('context-menu'); item.action(); }}
               disabled={item.disabled}
               label={item.label}

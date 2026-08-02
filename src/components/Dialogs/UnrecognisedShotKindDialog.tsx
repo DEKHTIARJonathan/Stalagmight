@@ -153,7 +153,7 @@ export default function UnrecognisedShotKindDialog() {
         )}
 
         <div className="flex justify-end gap-2">
-          <Button variant="secondary" onClick={closeDialog} disabled={busy}>
+          <Button variant="secondary" onClick={closeDialog} disabled={busy} data-testid="unrecognised-kind-keep-reference">
             {t('dialogs.unrecognisedShotKind.keepAsReference')}
           </Button>
           <Button

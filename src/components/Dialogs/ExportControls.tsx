@@ -554,7 +554,7 @@ export default function ExportControls({
         }
       >
         {!isPanel && (
-          <Button onClick={() => onComplete?.()} disabled={isExporting}>
+          <Button onClick={() => onComplete?.()} disabled={isExporting} data-testid="export-cancel">
             Cancel
           </Button>
         )}
@@ -608,7 +608,7 @@ export default function ExportControls({
             </p>
             <ul className="list-disc pl-5 space-y-1 text-sm max-h-40 overflow-y-auto">
               {tmlDiscardedSections.map((section) => (
-                <li key={section.id} data-testid="tml-unanchored-section-item">
+                <li key={section.id} data-testid={`tml-unanchored-section-item-${section.id}`}>
                   {formatSectionLabel(section)}
                 </li>
               ))}

@@ -206,6 +206,7 @@ export default function GpxSelectionDialog({ gpxFile, filePath }: GpxSelectionDi
         {gpxFile.waypoints.length > 0 && (
           <div className="border border-border rounded">
             <button
+              data-testid="gpx-waypoints-toggle"
               className="w-full px-3 py-2 text-left text-sm font-medium flex items-center gap-1 hover:bg-surface-alt"
               onClick={() => setShowWaypoints(!showWaypoints)}
             >
@@ -243,6 +244,7 @@ export default function GpxSelectionDialog({ gpxFile, filePath }: GpxSelectionDi
         {gpxFile.tracks.length > 0 && (
           <div className="border border-border rounded">
             <button
+              data-testid="gpx-tracks-toggle"
               className="w-full px-3 py-2 text-left text-sm font-medium flex items-center gap-1 hover:bg-surface-alt"
               onClick={() => setShowTracks(!showTracks)}
             >
@@ -280,6 +282,7 @@ export default function GpxSelectionDialog({ gpxFile, filePath }: GpxSelectionDi
         {gpxFile.routes.length > 0 && (
           <div className="border border-border rounded">
             <button
+              data-testid="gpx-routes-toggle"
               className="w-full px-3 py-2 text-left text-sm font-medium flex items-center gap-1 hover:bg-surface-alt"
               onClick={() => setShowRoutes(!showRoutes)}
             >
@@ -318,7 +321,7 @@ export default function GpxSelectionDialog({ gpxFile, filePath }: GpxSelectionDi
 
         {/* Footer */}
         <div className="flex justify-end gap-2 pt-4 border-t border-border">
-          <Button onClick={closeDialog}>Cancel</Button>
+          <Button onClick={closeDialog} data-testid="gpx-selection-cancel">Cancel</Button>
           {waypointsOnly ? (
             <Button
               data-primary-action=""

@@ -377,7 +377,7 @@ export default function WallsImportDialog({ wallsFile, filePath }: WallsImportDi
 
         {/* Footer */}
         <div className="flex justify-end gap-2 pt-4 border-t border-border">
-          <Button onClick={closeDialog}>Cancel</Button>
+          <Button onClick={closeDialog} data-testid="walls-import-cancel">Cancel</Button>
           <Button
             data-primary-action=""
             data-testid="walls-import-confirm"

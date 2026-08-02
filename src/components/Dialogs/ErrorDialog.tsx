@@ -90,7 +90,7 @@ export default function ErrorDialog() {
           >
             {copyFeedback === 'copied' ? 'Copied!' : copyFeedback === 'failed' ? 'Failed' : 'Copy to clipboard'}
           </button>
-          <Button onClick={handleClose}>OK</Button>
+          <Button onClick={handleClose} data-testid="error-dialog-close">OK</Button>
         </div>
       </div>
     </DialogWrapper>

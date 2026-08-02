@@ -10,6 +10,7 @@ import { ElidedPath, Tooltip } from '../common';
 import { setProjectActionSource } from '../../utils/telemetry';
 import { useProjectStatFormatters } from './useProjectStatFormatters';
 import { SpeleoRecentInfo, unpushedAccentStyle, type SpeleoLockInfo } from './SpeleoLockBadge';
+import { testIdPart } from '../../utils/testId';
 
 interface SystemCardProps {
   name: string;
@@ -109,7 +110,7 @@ export default function SystemCard({
       onClick={handleClick}
       onDoubleClick={handleDoubleClick}
       onContextMenu={handleContextMenu}
-      data-testid={`system-card-${filePath}`}
+      data-testid={`system-card-${testIdPart(filePath)}`}
       data-local-edits={speleoLock?.hasLocalEdits === true ? 'true' : 'false'}
       role="button"
       tabIndex={0}

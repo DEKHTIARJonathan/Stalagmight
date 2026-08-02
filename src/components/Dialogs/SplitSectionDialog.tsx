@@ -103,7 +103,7 @@ export default function SplitSectionDialog() {
         </div>
 
         <div className="flex justify-end gap-2 pt-4 border-t border-border">
-          <Button onClick={handleClose} disabled={isLoading}>
+          <Button onClick={handleClose} disabled={isLoading} data-testid="split-section-cancel">
             Cancel
           </Button>
           <Button

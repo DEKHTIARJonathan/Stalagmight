@@ -758,6 +758,7 @@ export function MapDevStats({ map }: MapDevStatsProps) {
         <div className="pl-2 flex flex-wrap gap-1">
           <button
             onClick={toggleTileBoundaries}
+            data-testid="map-dev-toggle-tile-boundaries"
             className={`px-1.5 py-0.5 rounded text-[10px] border ${
               showTileBoundaries
                 ? 'bg-accent-30 border-accent text-accent'
@@ -769,6 +770,7 @@ export function MapDevStats({ map }: MapDevStatsProps) {
           </button>
           <button
             onClick={toggleCollisionBoxes}
+            data-testid="map-dev-toggle-collision-boxes"
             className={`px-1.5 py-0.5 rounded text-[10px] border ${
               showCollisionBoxes
                 ? 'bg-accent-30 border-accent text-accent'
@@ -780,6 +782,7 @@ export function MapDevStats({ map }: MapDevStatsProps) {
           </button>
           <button
             onClick={toggleOverdraw}
+            data-testid="map-dev-toggle-overdraw"
             className={`px-1.5 py-0.5 rounded text-[10px] border ${
               showOverdraw
                 ? 'bg-accent-30 border-accent text-accent'
@@ -791,6 +794,7 @@ export function MapDevStats({ map }: MapDevStatsProps) {
           </button>
           <button
             onClick={toggleSymbols}
+            data-testid="map-dev-toggle-symbols"
             className={`px-1.5 py-0.5 rounded text-[10px] border ${
               hideSymbols
                 ? 'bg-error-20 border-error text-error'
@@ -802,6 +806,7 @@ export function MapDevStats({ map }: MapDevStatsProps) {
           </button>
           <button
             onClick={toggleAllLayers}
+            data-testid="map-dev-toggle-all-layers"
             className={`px-1.5 py-0.5 rounded text-[10px] border ${
               hideAllLayers
                 ? 'bg-error-20 border-error text-error'

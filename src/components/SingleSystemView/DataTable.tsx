@@ -180,6 +180,7 @@ function SubHeaderPickerMenu({
           {options.map((o) => (
             <button
               key={o.value}
+              data-testid={`${listTestId}-option-${encodeURIComponent(o.value)}`}
               disabled={o.disabled}
               className="flex w-full items-center gap-1.5 rounded px-2 py-0.5 text-left hover:bg-accent-10 disabled:opacity-50"
               onMouseEnter={() => onHoverOption?.(o.value)}
@@ -1928,9 +1929,10 @@ export default function DataTable({ sections }: DataTableProps) {
           data-dropdown-open
           data-testid="data-table-header-menu"
         >
-          {headerMenuItems.map((item) => (
+          {headerMenuItems.map((item, index) => (
             <button
               key={item.label}
+              data-testid={`data-table-header-menu-item-${index}`}
               className="block w-full rounded px-2 py-0.5 text-left hover:bg-accent-10"
               onClick={() => {
                 item.onClick();

@@ -113,6 +113,7 @@ export function LoadingProgress({
               className="text-sm text-text-tertiary hover:text-text-secondary"
               aria-expanded={detailsExpanded}
               aria-controls={detailsId}
+              data-testid="loading-error-details-toggle"
             >
               {detailsExpanded ? t('loading.error.hideDetails') : t('loading.error.showDetails')}
             </button>
@@ -133,6 +134,7 @@ export function LoadingProgress({
             <button
               type="button"
               onClick={onRetry}
+              data-testid="loading-error-retry"
               className="px-3 py-1.5 bg-accent text-accent-on rounded hover:bg-accent-90 transition-colors"
             >
               {t('common.actions.retry')}
@@ -142,6 +144,7 @@ export function LoadingProgress({
             type="button"
             onClick={onCancel}
             disabled={!onCancel}
+            data-testid="loading-error-dismiss"
             className="px-3 py-1.5 bg-surface-alt text-text-primary rounded hover:bg-border transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {t('common.actions.dismiss')}
@@ -151,6 +154,7 @@ export function LoadingProgress({
             onClick={handleCopyError}
             className="px-3 py-1.5 text-text-secondary hover:text-text-primary transition-colors"
             title={t('loading.error.copyTitle')}
+            data-testid="loading-error-copy"
           >
             {copyFeedback === 'copied'
               ? t('loading.error.copied')
@@ -236,6 +240,7 @@ export function LoadingProgress({
         <button
           type="button"
           onClick={onCancel}
+          data-testid="loading-progress-cancel"
           className="text-sm text-text-secondary hover:text-text-primary transition-colors"
         >
           {t('common.actions.cancel')}

@@ -42,6 +42,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
           )}
           <button
             onClick={this.resetError}
+            data-testid="error-boundary-reset"
             className="px-3 py-1.5 text-sm rounded border border-border bg-panel text-text-primary hover:bg-border transition-colors"
           >
             Try Again

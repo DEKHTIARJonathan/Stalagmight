@@ -274,10 +274,10 @@ export default function SectionAdjustDialog() {
         )}
 
         <div className="flex justify-end gap-2 pt-4 border-t border-border">
-          <Button onClick={handleCancel} disabled={isLoading}>
+          <Button onClick={handleCancel} disabled={isLoading} data-testid="section-adjust-cancel">
             Cancel
           </Button>
-          <Button variant="primary" onClick={handleApply} disabled={isLoading}>
+          <Button variant="primary" onClick={handleApply} disabled={isLoading} data-testid="section-adjust-apply">
             {isLoading ? 'Applying...' : 'Apply'}
           </Button>
         </div>

@@ -1159,6 +1159,7 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
       {/* Fit to bounds button */}
       <button
         onClick={fitToBounds}
+        data-testid="globalview-map-fit-all"
         className="absolute top-2 left-2 bg-panel border border-border rounded px-2 py-1 text-sm hover:bg-background"
         title={t('globalView.map.fitAllTitle')}
       >

@@ -12,6 +12,7 @@ import type { RecentSortField, RecentSortDirection } from './useRecentSort';
 import { SpeleoRecentInfo, resolveSpeleoLock, unpushedAccentStyle } from './SpeleoLockBadge';
 import type { SpeleoProjectSummary } from '../../types/ipc.generated';
 import type { SpeleoLocalStateMap } from '../../utils/speleoLocalState';
+import { testIdPart } from '../../utils/testId';
 
 interface SystemTableProps {
   items: RecentListItem[];
@@ -162,7 +163,7 @@ export function SystemTable({
               <tr
                 key={item.filePath}
                 className="border-b border-border opacity-70"
-                data-testid={`system-row-missing-${item.filePath}`}
+                data-testid={`system-row-missing-${testIdPart(item.filePath)}`}
                 data-missing="true"
               >
                 <td className={`${cellClass} text-text-secondary line-through decoration-1`}>{item.name}</td>
@@ -177,7 +178,7 @@ export function SystemTable({
                     type="button"
                     onClick={() => onRemoveMissing(item.filePath)}
                     className="text-xs text-text-secondary hover:text-danger underline"
-                    data-testid={`system-row-missing-remove-${item.filePath}`}
+                    data-testid={`system-row-missing-remove-${testIdPart(item.filePath)}`}
                   >
                     {t('globalView.recent.missing.remove')}
                   </button>
@@ -265,7 +266,7 @@ export function SystemTable({
               className={`border-b border-border cursor-pointer transition-colors ${
                 isSelected ? 'bg-accent-10' : 'hover:bg-panel'
               }`}
-              data-testid={`system-row-${item.filePath}`}
+              data-testid={`system-row-${testIdPart(item.filePath)}`}
               data-local-edits={lock.hasLocalEdits ? 'true' : 'false'}
               role="button"
               tabIndex={0}
@@ -302,7 +303,7 @@ export function SystemTable({
               <td className={`${cellClass} text-right tabular-nums`}>{formatLength(project.total_length)}</td>
               <td className={`${cellClass} text-text-secondary`}>
                 <Tooltip content={absolute(project.modified_at)}>
-                  <span data-testid={`system-row-modified-${item.filePath}`}>{relative(project.modified_at)}</span>
+                  <span data-testid={`system-row-modified-${testIdPart(item.filePath)}`}>{relative(project.modified_at)}</span>
                 </Tooltip>
               </td>
             </tr>

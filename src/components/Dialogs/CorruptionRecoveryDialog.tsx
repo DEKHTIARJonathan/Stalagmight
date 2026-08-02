@@ -244,7 +244,7 @@ export default function CorruptionRecoveryDialog() {
           </div>
 
           <div className="flex justify-end pt-4 border-t border-border">
-            <Button onClick={closeDialog}>Cancel</Button>
+            <Button onClick={closeDialog} data-testid="recovery-cancel">Cancel</Button>
           </div>
         </div>
       );
@@ -272,7 +272,7 @@ export default function CorruptionRecoveryDialog() {
         <div className="space-y-4">
           <p className="text-text-secondary">Select a backup to restore:</p>
           <div className="space-y-1 max-h-60 overflow-auto">
-            {backups.map((backup) => {
+            {backups.map((backup, index) => {
               // sizeBytes comes as bigint from ts-rs but may arrive as number from Tauri IPC
               const sizeNum = typeof backup.sizeBytes === 'bigint'
                 ? Number(backup.sizeBytes)
@@ -285,7 +285,7 @@ export default function CorruptionRecoveryDialog() {
                   type="button"
                   onClick={() => handleRestoreBackup(backup.path)}
                   className="w-full text-left p-2 rounded border border-border hover:bg-surface-alt transition-colors"
-                  data-testid="recovery-backup-item"
+                  data-testid={`recovery-backup-item-${index}`}
                 >
                   <div className="font-mono text-sm">{filename}</div>
                   <div className="text-xs text-text-tertiary mt-0.5">
@@ -296,7 +296,7 @@ export default function CorruptionRecoveryDialog() {
             })}
           </div>
           <div className="flex justify-end pt-4 border-t border-border">
-            <Button onClick={handleBackToChoose}>Back</Button>
+            <Button onClick={handleBackToChoose} data-testid="recovery-backup-back">Back</Button>
           </div>
         </div>
       );
@@ -312,12 +312,12 @@ export default function CorruptionRecoveryDialog() {
           <p className="text-text-secondary whitespace-pre-wrap">{result.message}</p>
           <div className="flex justify-end gap-2 pt-4 border-t border-border">
             {!result.success && (
-              <Button onClick={handleBackToChoose}>Try Another Option</Button>
+              <Button onClick={handleBackToChoose} data-testid="recovery-result-retry">Try Another Option</Button>
             )}
             {result.canReopen ? (
-              <Button variant="primary" onClick={handleReopen}>Open Project</Button>
+              <Button variant="primary" onClick={handleReopen} data-testid="recovery-result-reopen">Open Project</Button>
             ) : (
-              <Button onClick={() => { trackDialogComplete('corruption-recovery'); closeDialog(); }}>Close</Button>
+              <Button onClick={() => { trackDialogComplete('corruption-recovery'); closeDialog(); }} data-testid="recovery-result-close">Close</Button>
             )}
           </div>
         </div>

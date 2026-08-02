@@ -89,7 +89,7 @@ export function CylindersTable() {
               key={idx}
               className={`border-t border-border ${dimmed ? 'opacity-50' : ''}`}
               title={dimReason}
-              data-testid="gas-cylinder-row"
+              data-testid={`gas-cylinder-row-${idx}`}
               data-enabled={cyl.enabled}
             >
               <td className="py-1 pr-2">
@@ -98,7 +98,7 @@ export function CylindersTable() {
                   checked={cyl.enabled}
                   onChange={(e) => setEnabled(idx, e.target.checked)}
                   aria-label={t('gasPanel.tanks.enabledAria', { tank: tankName })}
-                  data-testid="gas-cylinder-enabled"
+                  data-testid={`gas-cylinder-enabled-${idx}`}
                 />
               </td>
               <td className="py-1 pr-3 font-medium">{cyl.label ?? `${cyl.water_volume_l}L`}</td>
@@ -111,7 +111,7 @@ export function CylindersTable() {
                   displayPrecision={0}
                   className="w-20 bg-transparent border border-border rounded px-1 py-0.5"
                   ariaLabel={t('gasPanel.tanks.fillAria', { tank: tankName })}
-                  testId="gas-cylinder-fill"
+                  testId={`gas-cylinder-fill-${idx}`}
                 />
               </td>
               <td className="py-1 pr-3">
@@ -133,12 +133,12 @@ export function CylindersTable() {
                     allowZero
                     className="w-20 bg-transparent border border-border rounded px-1 py-0.5"
                     ariaLabel={t('gasPanel.tanks.usableAria', { tank: tankName })}
-                    testId="gas-cylinder-usable"
+                    testId={`gas-cylinder-usable-${idx}`}
                   />
                 ) : (
                   // Read-only: the engine's per-row usable bar (`0` for disabled / non-budget rows
                   // shows as a dash). Falls back to a dash until the first reach field lands.
-                  <span className="opacity-70" data-testid="gas-cylinder-usable-readonly">
+                  <span className="opacity-70" data-testid={`gas-cylinder-usable-readonly-${idx}`}>
                     {usableBars && usableBars[idx] !== undefined && usableBars[idx] > 0
                       ? Math.round(pressureToDisplay(usableBars[idx], units))
                       : '-'}
@@ -150,7 +150,7 @@ export function CylindersTable() {
                   value={cyl.role}
                   onChange={(e) => setRole(idx, e.target.value as CylRole)}
                   className="text-xs bg-transparent border border-border rounded px-1 py-0.5"
-                  data-testid="gas-cylinder-role"
+                  data-testid={`gas-cylinder-role-${idx}`}
                 >
                   {CYL_ROLES.map((role) => (
                     <option key={role} value={role}>
@@ -165,7 +165,7 @@ export function CylindersTable() {
                   className="text-xs px-1 opacity-60 hover:opacity-100"
                   onClick={() => removeCylinder(idx)}
                   aria-label={t('gasPanel.tanks.removeAria', { tank: tankName })}
-                  data-testid="gas-cylinder-remove"
+                  data-testid={`gas-cylinder-remove-${idx}`}
                 >
                   ✕
                 </button>

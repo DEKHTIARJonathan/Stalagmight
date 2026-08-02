@@ -103,7 +103,7 @@ export default function RemoveClosureDialog() {
         <div className="space-y-4">
           <p className="text-error text-sm">Station not found.</p>
           <div className="flex justify-end">
-            <Button onClick={closeDialog}>Close</Button>
+            <Button onClick={closeDialog} data-testid="remove-closure-close">Close</Button>
           </div>
         </div>
       </DialogWrapper>
@@ -150,7 +150,7 @@ export default function RemoveClosureDialog() {
         </div>
 
         <div className="flex justify-end gap-2 pt-2 border-t border-border">
-          <Button onClick={closeDialog} disabled={isLoading}>Cancel</Button>
+          <Button onClick={closeDialog} disabled={isLoading} data-testid="remove-closure-cancel">Cancel</Button>
           <Button
             variant="primary"
             onClick={handleConfirm}

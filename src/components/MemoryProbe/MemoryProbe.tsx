@@ -195,6 +195,7 @@ export function MemoryProbe(): JSX.Element | null {
         {!collapsed && (
           <>
             <button
+              data-testid="memory-probe-copy-snapshot"
               onClick={(e) => {
                 e.stopPropagation();
                 void dumpSnapshot(snapshot, featureBytes, geometryBytes, setDumpStatus);
