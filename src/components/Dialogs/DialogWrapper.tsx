@@ -93,7 +93,7 @@ interface DialogWrapperProps {
   maxHeight?: string;
   /** Whether clicking the backdrop closes the dialog. Defaults to true. */
   closeOnBackdropClick?: boolean;
-  /** Override overflow behavior. Defaults to 'auto'. Use 'hidden' for fixed footer layouts. */
+  /** Body overflow behavior. Defaults to 'auto'; the header always remains visible. */
   overflow?: 'auto' | 'hidden';
   /** Additional className for the body content wrapper. */
   bodyClassName?: string;
@@ -365,10 +365,10 @@ export function DialogWrapper({
         aria-modal="true"
         aria-labelledby={titleId}
         data-testid={testId}
-        className={`relative bg-panel border border-border rounded-lg shadow-xl ${containerSizing} overflow-${overflow} ${overflow === 'hidden' ? 'flex flex-col' : ''}`}
+        className={`relative flex flex-col overflow-hidden bg-panel border border-border rounded-lg shadow-xl ${containerSizing}`}
         style={fixedSize ? { width: fixedSize.width, height: fixedSize.height } : undefined}
       >
-        <div className="flex items-center justify-between px-4 py-3 border-b border-border">
+        <div className="flex shrink-0 items-center justify-between px-4 py-3 border-b border-border">
           <h2 id={titleId} className="text-lg font-medium">{title}</h2>
           <IconButton
             data-testid={testId ? `${testId}-close` : 'dialog-close'}
@@ -381,7 +381,10 @@ export function DialogWrapper({
             className="text-text-secondary hover:text-text-primary"
           />
         </div>
-        <div className={bodyClassName}>
+        <div
+          className={`min-h-0 flex-1 ${overflow === 'auto' ? 'overflow-y-auto' : 'overflow-hidden'} ${bodyClassName}`}
+          data-testid={testId ? `${testId}-body` : undefined}
+        >
           {typeof children === 'function' ? children({ requestClose }) : children}
         </div>
       </div>
