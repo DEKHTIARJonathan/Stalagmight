@@ -31,6 +31,8 @@ export async function applySpeleoTreeReplacement(
     useProjectStore.setState({ isDirty: false });
     void useProjectStore.getState().checkProjectIntegrity();
     await useSpeleoStore.getState().refreshLinkStatus();
-    return !issuedFor || speleoProjectSessionStillCurrent(issuedFor);
+    if (issuedFor && !speleoProjectSessionStillCurrent(issuedFor)) return false;
+    useSpeleoStore.getState().invalidateChainTargets();
+    return true;
   });
 }

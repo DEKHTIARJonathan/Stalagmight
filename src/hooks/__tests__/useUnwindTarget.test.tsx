@@ -61,6 +61,7 @@ beforeEach(() => {
     projectLinkKind: 'remote',
     remoteProjectId: 'p1',
     sessionGeneration: 1,
+    chainTargetGeneration: 1,
   });
 });
 
@@ -268,6 +269,26 @@ describe('useUnwindTarget - the memo is bound to the project', () => {
     });
     act(() => {
       useSpeleoStore.setState({ sessionGeneration: 2 });
+    });
+
+    let next: ChainTarget | null = null;
+    await act(async () => {
+      next = await result.current.resolve();
+    });
+
+    expect(next).toEqual(asBack(NEWER));
+    expect(invokeIpcMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('re-fetches after a link-only chain change', async () => {
+    invokeIpcMock.mockResolvedValueOnce(OLDER).mockResolvedValueOnce(NEWER);
+    const { result } = renderTarget();
+
+    await act(async () => {
+      await result.current.resolve();
+    });
+    act(() => {
+      useSpeleoStore.getState().invalidateChainTargets();
     });
 
     let next: ChainTarget | null = null;

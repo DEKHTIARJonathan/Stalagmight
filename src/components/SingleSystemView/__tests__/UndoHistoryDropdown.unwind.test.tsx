@@ -8,7 +8,7 @@
  * unchanged by its existence.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
 const invokeIpcMock = vi.hoisted(() => vi.fn());
@@ -23,6 +23,7 @@ import { useProjectStore } from '../../../store/projectStore';
 import { useUIStore } from '../../../store/uiStore';
 
 const originalGetRedoStack = useProjectStore.getState().getRedoStack;
+const originalUndo = useProjectStore.getState().undo;
 const originalRedo = useProjectStore.getState().redo;
 
 /** A remote link whose write lock we hold (or not), which is what gates the entry. */
@@ -88,6 +89,7 @@ describe('UndoHistoryDropdown - the Unwind entry (#303)', () => {
       canUndo: false,
       canRedo: false,
       getRedoStack: originalGetRedoStack,
+      undo: originalUndo,
       redo: originalRedo,
     });
     useUIStore.setState({ activeDialog: null, dialogData: {} });
@@ -234,6 +236,20 @@ describe('UndoHistoryDropdown - the Unwind entry (#303)', () => {
     expect(onSingleAction).not.toHaveBeenCalled();
   });
 
+  it('ignores Ctrl+Z while the empty panel offers only Unwind', async () => {
+    const undo = vi.fn(async () => ({ success: false }));
+    useProjectStore.setState({ undo: undo as never });
+    seedLink(true);
+    renderUndo();
+    await hoverOpen();
+    await screen.findByTestId('toolbar-undo-button-unwind');
+
+    fireEvent.keyDown(document, { key: 'z', ctrlKey: true });
+
+    expect(undo).not.toHaveBeenCalled();
+    expect(useUIStore.getState().activeDialog).toBeNull();
+  });
+
   it('does not open at all when placement mode is the reason for disabled', async () => {
     // The toolbar passes `hoverableWhenEmpty={false}` then: that reason for `disabled`
     // must suppress the panel entirely, not just the button.
@@ -290,6 +306,26 @@ describe('UndoHistoryDropdown - the Unwind entry (#303)', () => {
       expect(screen.getByText(/Redo into next SpeleoDB version/)).toBeInTheDocument();
       expect(invokeIpcMock).toHaveBeenCalledWith('speleodb_rewind_target');
       expect(invokeIpcMock).not.toHaveBeenCalledWith('speleodb_unwind_target');
+    });
+
+    it('ignores Ctrl+Y while the empty panel offers only Rewind', async () => {
+      const redo = vi.fn(async () => ({ success: false }));
+      useProjectStore.setState({ redo: redo as never });
+      invokeIpcMock.mockImplementation((cmd: string) => {
+        if (cmd === 'get_undo_stack' || cmd === 'get_redo_stack') return Promise.resolve([]);
+        if (cmd === 'speleodb_rewind_target')
+          return Promise.resolve({ hexsha: 'fedcba9876543210', is_latest: false });
+        return Promise.resolve(null);
+      });
+      seedLink(true);
+      renderRedo();
+      await hoverRedo();
+      await screen.findByTestId('toolbar-redo-button-unwind');
+
+      fireEvent.keyDown(document, { key: 'y', ctrlKey: true });
+
+      expect(redo).not.toHaveBeenCalled();
+      expect(useUIStore.getState().activeDialog).toBeNull();
     });
 
     it('stays open when the last local redo reaches the next revision boundary', async () => {

@@ -346,6 +346,12 @@ interface SpeleoStore {
    * itself. Nothing renders it.
    */
   sessionGeneration: number;
+  /**
+   * [#303] Version of the backend state used to resolve the next Unwind/Rewind target.
+   * Unlike `sessionGeneration`, this moves for link-only operations such as a push or
+   * undo-policy change, where the open project and its rendered tree stay the same.
+   */
+  chainTargetGeneration: number;
   /** The open project's link/edit state, or `null` when it is local / none open. */
   link: SpeleoLinkState | null;
   /**
@@ -732,6 +738,8 @@ interface SpeleoStore {
       every collaborator's. Throws on refusal (no lock, or a local project) so the
       control can surface it, and re-seeds link status on success. */
   setUndoMode: (mode: UndoMode) => Promise<void>;
+  /** Invalidate any cached Unwind/Rewind target after a successful tree replacement. */
+  invalidateChainTargets: () => void;
   dismissBanner: () => void;
 }
 
@@ -819,6 +827,7 @@ const disownBusy = (): void => {
 export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
   session: null,
   sessionGeneration: 0,
+  chainTargetGeneration: 0,
   link: null,
   // Pessimistic until a project open resolves it: an unresolved gate is closed.
   projectLinkKind: 'unknown',
@@ -1652,6 +1661,7 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
               remoteState: 'up_to_date',
               serverError: null,
             },
+            chainTargetGeneration: state.chainTargetGeneration + 1,
             divergence: null,
             banner: null,
           };
@@ -1688,6 +1698,7 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
               remoteState: 'up_to_date',
               serverError: null,
             },
+            chainTargetGeneration: state.chainTargetGeneration + 1,
             banner: null,
           };
         case 'divergence_needed':
@@ -1718,7 +1729,10 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
   markForwardEdit: () =>
     set((state) =>
       state.link && (!state.link.hasUnpushedEdits || state.link.unwound)
-        ? { link: { ...state.link, hasUnpushedEdits: true, unwound: false } }
+        ? {
+            link: { ...state.link, hasUnpushedEdits: true, unwound: false },
+            chainTargetGeneration: state.chainTargetGeneration + 1,
+          }
         : {},
     ),
 
@@ -1755,9 +1769,15 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
     // refusal - most usefully the lock one, since this writes the `.stalx` and so
     // becomes every collaborator's policy on the next push.
     await invokeIpc<null>('speleodb_set_undo_mode', { mode });
+    // The backend policy changed even if the best-effort status refresh below cannot
+    // reach the server, so a target resolved under the old policy is already stale.
+    get().invalidateChainTargets();
     // Re-read so the store reflects the committed backend value.
     await get().refreshLinkStatus();
   },
+
+  invalidateChainTargets: () =>
+    set((state) => ({ chainTargetGeneration: state.chainTargetGeneration + 1 })),
 
   dismissBanner: () => set({ banner: null }),
 }));
@@ -1790,6 +1810,7 @@ export const PUSH_FAILURE_DIALOGS: readonly string[] = [
   'speleodb-close',
   'speleodb-quit',
   'speleodb-revert',
+  'speleodb-unwound-push',
 ];
 
 /**

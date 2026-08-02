@@ -22,6 +22,7 @@ beforeEach(() => {
   useSpeleoStore.setState({
     session: null,
     sessionGeneration: 0,
+    chainTargetGeneration: 0,
     remoteProjectId: 'p1',
     refreshLinkStatus,
   });
@@ -71,6 +72,7 @@ describe('applySpeleoTreeReplacement', () => {
     expect(useProjectStore.getState().isDirty).toBe(false);
     expect(checkProjectIntegrity).toHaveBeenCalledOnce();
     expect(refreshLinkStatus).toHaveBeenCalledOnce();
+    expect(useSpeleoStore.getState().chainTargetGeneration).toBe(1);
   });
 
   it('does not touch the new project when the captured identity is stale', async () => {

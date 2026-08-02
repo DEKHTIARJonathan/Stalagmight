@@ -66,6 +66,7 @@ function projectIdentityKey(): string {
     project?.file_path ?? '',
     speleoState.remoteProjectId ?? '',
     speleoState.sessionGeneration,
+    speleoState.chainTargetGeneration,
   ].join('|');
 }
 
@@ -82,6 +83,7 @@ export function useUnwindTarget(
   const isRemote = useSpeleoStore((s) => s.projectLinkKind === 'remote');
   const remoteProjectId = useSpeleoStore((s) => s.remoteProjectId);
   const sessionGeneration = useSpeleoStore((s) => s.sessionGeneration);
+  const chainTargetGeneration = useSpeleoStore((s) => s.chainTargetGeneration);
   const projectTreeGeneration = useProjectStore((s) => s.projectTreeGeneration);
 
   // The memo carries the inputs it was fetched for, so a change of direction, of
@@ -106,6 +108,7 @@ export function useUnwindTarget(
       projectTreeGeneration,
       remoteProjectId,
       sessionGeneration,
+      chainTargetGeneration,
     ],
   );
   const cacheRef = useRef<{ at: number; key: string; value: ChainTarget | null } | null>(null);

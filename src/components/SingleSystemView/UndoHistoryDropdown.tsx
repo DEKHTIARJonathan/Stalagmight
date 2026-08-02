@@ -918,6 +918,10 @@ export default function UndoHistoryDropdown({
         event.stopPropagation();
         event.preventDefault();
 
+        // A chain-only panel has no local action for these shortcuts. Crossing a server
+        // commit boundary remains an explicit click/Enter plus confirmation.
+        if (items.length === 0) return;
+
         // Use first item for context
         const firstItem = items[0];
         const context = firstItem
