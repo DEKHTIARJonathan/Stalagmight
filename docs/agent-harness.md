@@ -170,7 +170,7 @@ Interaction (each runs a cheap oracle sweep after; findings ride the result unde
 | `ipc(command, args?)` | `window.__TAURI__.core.invoke`; e.g. `get_recent_logs_since`, `check_project_integrity`. |
 | `map_view(set?)` | Read or set the MapLibre view (center/zoom/bearing). |
 | `map_click(lngLat, button?)` | Geo point -> `map.project()` -> canvas-relative pointer. |
-| `map_feature_click(featureType, sectionId, shotId?/stationIndex?, button?, verifySelection?)` | Resolve current WebGL geometry by semantic identity, choose a safe point, click it, and verify selection by default. Disable verification for tools whose click intentionally has another effect. |
+| `map_feature_click(featureType, sectionId, shotId?/stationIndex?, button?, verifySelection?)` | Resolve current WebGL geometry by semantic identity, choose a safe point, drive the MapLibre interaction pipeline, and verify selection by default. Disable verification for tools whose click intentionally has another effect. |
 | `seed(mode, name?, projectName?)` | Open a fixture / fractal fixture (`e2e/fixtures/`), or create a basic empty project. |
 | `driver_script(script, timeoutMs?)` | Node-context async body with `browser`/`ipc`/`evalInApp`/`readStore`/`callAction`/`log` in scope, under the mutex, for tight loops (one MCP call per action is too slow). On timeout the helpers (and the `browser` proxy) are disabled so a still-running body cannot keep driving the app outside the mutex. |
 

@@ -139,15 +139,29 @@ async function main(): Promise<void> {
     const featureIdentity = parseText(
       await call('eval', {
         script:
-          'const section = window.__E2E_TEST__?.projectStore?.getState().project?.sections?.[0]; const shot = window.__stalagmight_geometry__?.()?.shots?.[0]; return section && shot ? { sectionId: section.id, shotId: section.shots?.[0]?.id, center: [(shot.from[0] + shot.to[0]) / 2, (shot.from[1] + shot.to[1]) / 2] } : null;',
+          'const geometry = window.__stalagmight_geometry__?.(); const station = geometry?.stations?.[0]; const shot = geometry?.shots?.[0]; return station && shot ? { sectionId: station.sectionId, stationIndex: station.stationIndex, shotId: shot.shotId, center: station.lngLat } : null;',
       }),
-    ) as { value?: { sectionId?: number; shotId?: number; center?: [number, number] } };
+    ) as { value?: { sectionId?: number; stationIndex?: number; shotId?: number; center?: [number, number] } };
     const feature = featureIdentity?.value;
     if (feature?.center) {
-      await call('map_view', { set: { center: feature.center, zoom: 17, bearing: 0 } });
+      await call('map_view', { set: { center: feature.center, zoom: 20, bearing: 0 } });
       await call('wait_for', { condition: 'map-idle', timeoutMs: 10000 });
     }
-    const semanticClick = feature?.sectionId != null && feature.shotId != null
+    const semanticClick = feature?.sectionId != null && feature.stationIndex != null
+      ? parseText(
+          await call('map_feature_click', {
+            featureType: 'station',
+            sectionId: feature.sectionId,
+            stationIndex: feature.stationIndex,
+          }),
+        ) as { clicked?: boolean; selectionVerified?: boolean }
+      : null;
+    check(
+      'map_feature_click resolves and selects generated geometry',
+      semanticClick?.clicked === true && semanticClick.selectionVerified === true,
+      semanticClick ?? featureIdentity,
+    );
+    const semanticShotClick = feature?.sectionId != null && feature.shotId != null
       ? parseText(
           await call('map_feature_click', {
             featureType: 'shot',
@@ -157,9 +171,9 @@ async function main(): Promise<void> {
         ) as { clicked?: boolean; selectionVerified?: boolean }
       : null;
     check(
-      'map_feature_click resolves and selects a fixture shot',
-      semanticClick?.clicked === true && semanticClick.selectionVerified === true,
-      semanticClick ?? featureIdentity,
+      'map_feature_click resolves and selects a generated shot',
+      semanticShotClick?.clicked === true && semanticShotClick.selectionVerified === true,
+      semanticShotClick ?? featureIdentity,
     );
     const driven = parseText(
       await call('driver_script', { script: 'const v = await readStore("ui", "view"); return v.value;' }),

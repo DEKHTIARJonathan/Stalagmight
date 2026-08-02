@@ -7,26 +7,14 @@ import { mapFeatureClick } from './mapControls';
 import type { Browser } from 'webdriverio';
 
 function pointerBrowser() {
-  const pointer = {
-    move: vi.fn(),
-    down: vi.fn(),
-    up: vi.fn(),
-    perform: vi.fn(),
-  };
-  pointer.move.mockReturnValue(pointer);
-  pointer.down.mockReturnValue(pointer);
-  pointer.up.mockReturnValue(pointer);
-  return {
-    browser: { action: vi.fn().mockReturnValue(pointer) } as unknown as Browser,
-    pointer,
-  };
+  return {} as Browser;
 }
 
 beforeEach(() => vi.clearAllMocks());
 
 describe('mapFeatureClick', () => {
   it('resolves a semantic shot, clicks the fresh point, and verifies selection', async () => {
-    const { browser, pointer } = pointerBrowser();
+    const browser = pointerBrowser();
     evalInAppMock
       .mockResolvedValueOnce({
         featureType: 'shot',
@@ -34,6 +22,7 @@ describe('mapFeatureClick', () => {
         shotId: 42,
         lngLat: [1, 2],
         canvasPoint: { x: 20, y: 30 },
+        canvasSize: { width: 200, height: 100 },
         point: { x: 120, y: 230 },
         clearancePx: 9.5,
       })
@@ -44,13 +33,11 @@ describe('mapFeatureClick', () => {
       selectionVerified: true,
     });
     expect(evalInAppMock.mock.calls[0]?.[1]).toContain('__stalagmight_geometry__');
-    expect(pointer.move).toHaveBeenCalledWith({ origin: 'viewport', x: 120, y: 230 });
-    expect(pointer.down).toHaveBeenCalledWith({ button: 'left' });
-    expect(pointer.perform).toHaveBeenCalledOnce();
+    expect(evalInAppMock.mock.calls[0]?.[1]).toContain('map.fire');
   });
 
   it('fails when overlapping geometry selects a different feature', async () => {
-    const { browser } = pointerBrowser();
+    const browser = pointerBrowser();
     evalInAppMock
       .mockResolvedValueOnce({
         featureType: 'station',
@@ -58,6 +45,7 @@ describe('mapFeatureClick', () => {
         stationIndex: 8,
         lngLat: [1, 2],
         canvasPoint: { x: 20, y: 30 },
+        canvasSize: { width: 200, height: 100 },
         point: { x: 120, y: 230 },
         clearancePx: 0,
       })
@@ -69,13 +57,14 @@ describe('mapFeatureClick', () => {
   });
 
   it('allows non-selection map tools to skip selection verification', async () => {
-    const { browser } = pointerBrowser();
+    const browser = pointerBrowser();
     evalInAppMock.mockResolvedValueOnce({
       featureType: 'station',
       sectionId: 3,
       stationIndex: 8,
       lngLat: [1, 2],
       canvasPoint: { x: 20, y: 30 },
+      canvasSize: { width: 200, height: 100 },
       point: { x: 120, y: 230 },
       clearancePx: 0,
     });

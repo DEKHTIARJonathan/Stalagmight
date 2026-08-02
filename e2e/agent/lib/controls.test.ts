@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const evalInAppMock = vi.hoisted(() => vi.fn());
 vi.mock('./page', () => ({ evalInApp: evalInAppMock }));
 
-import { hoverElement, queueFileDialogAnswer, selectOption, targetSelector, testIdSelector } from './controls';
+import { hoverElement, mapClick, queueFileDialogAnswer, selectOption, targetSelector, testIdSelector } from './controls';
 import type { Browser } from 'webdriverio';
 
 function fakeBrowser(elements: Record<string, Record<string, ReturnType<typeof vi.fn>>>) {
@@ -63,5 +63,13 @@ describe('agent controls', () => {
     await expect(queueFileDialogAnswer(fakeBrowser({}), 'save', null)).rejects.toThrow(
       'file dialog hooks are unavailable',
     );
+  });
+
+  it('clicks geographic points relative to the live canvas element', async () => {
+    evalInAppMock.mockResolvedValue({ x: 500, y: 400 });
+    const browser = fakeBrowser({});
+
+    await expect(mapClick(browser, [12, 34], 'right')).resolves.toEqual({ x: 500, y: 400 });
+    expect(evalInAppMock).toHaveBeenCalledWith(browser, expect.stringContaining('map.fire'), [[12, 34], 'right']);
   });
 });

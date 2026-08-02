@@ -239,19 +239,21 @@ export async function mapClick(
       const map = window.__stalagmight_map__;
       if (!map || !map.project) return null;
       const projected = map.project(args[0]);
-      const canvas = document.querySelector('[data-testid="map-canvas"]') || document.querySelector('.maplibregl-canvas');
-      const rect = canvas ? canvas.getBoundingClientRect() : { left: 0, top: 0 };
-      return { x: Math.round(rect.left + projected.x), y: Math.round(rect.top + projected.y) };
+      const canvas = document.querySelector('[data-testid="map-canvas"]');
+      if (!canvas) return null;
+      const rect = canvas.getBoundingClientRect();
+      const point = { x: Math.round(rect.left + projected.x), y: Math.round(rect.top + projected.y) };
+      const eventName = args[1] === 'right' ? 'contextmenu' : 'click';
+      map.fire(eventName, {
+        point: { x: projected.x, y: projected.y },
+        lngLat: map.unproject([projected.x, projected.y]),
+        originalEvent: new MouseEvent(eventName, { button: args[1] === 'right' ? 2 : 0, clientX: point.x, clientY: point.y }),
+      });
+      return point;
     `,
-    [lngLat],
+    [lngLat, button],
   );
   if (!point) throw new Error('map not available');
-  await browser
-    .action('pointer', { parameters: { pointerType: 'mouse' } })
-    .move({ origin: 'viewport', x: point.x, y: point.y })
-    .down({ button })
-    .up({ button })
-    .perform();
   return point;
 }
 

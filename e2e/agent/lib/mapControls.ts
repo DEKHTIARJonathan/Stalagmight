@@ -18,6 +18,7 @@ export interface ResolvedMapFeatureClick {
   stationIndex?: number;
   lngLat: [number, number];
   canvasPoint: { x: number; y: number };
+  canvasSize: { width: number; height: number };
   point: { x: number; y: number };
   clearancePx: number;
   selectionVerified: boolean;
@@ -69,7 +70,7 @@ export async function mapFeatureClick(
       if (!geometry || !Array.isArray(geometry.stations) || !Array.isArray(geometry.shots)) {
         throw new Error('map geometry is unavailable');
       }
-      const canvas = document.querySelector('.maplibregl-canvas') || document.querySelector('[data-testid="map-canvas"]');
+      const canvas = document.querySelector('[data-testid="map-canvas"]');
       if (!canvas) throw new Error('map canvas is unavailable');
       const rect = canvas.getBoundingClientRect();
       const project = (lngLat) => {
@@ -92,6 +93,7 @@ export async function mapFeatureClick(
         ...(request.featureType === 'shot' ? { shotId: request.shotId } : { stationIndex: request.stationIndex }),
         lngLat,
         canvasPoint: { x: Math.round(canvasPoint.x), y: Math.round(canvasPoint.y) },
+        canvasSize: { width: rect.width, height: rect.height },
         point: { x: Math.round(rect.left + canvasPoint.x), y: Math.round(rect.top + canvasPoint.y) },
         clearancePx: Number.isFinite(clearancePx) ? Math.round(clearancePx * 100) / 100 : 0,
       });
@@ -103,7 +105,14 @@ export async function mapFeatureClick(
         if (!station) throw new Error('station feature not found or not visible');
         const point = project(station.lngLat);
         if (!inside(point)) throw new Error('station feature is outside the map viewport');
-        return finish(station.lngLat, point, 0);
+        const resolved = finish(station.lngLat, point, 0);
+        const eventName = request.button === 'right' ? 'contextmenu' : 'click';
+        map.fire(eventName, {
+          point: resolved.canvasPoint,
+          lngLat: map.unproject(resolved.canvasPoint),
+          originalEvent: new MouseEvent(eventName, { button: request.button === 'right' ? 2 : 0, clientX: resolved.point.x, clientY: resolved.point.y }),
+        });
+        return resolved;
       }
 
       const shot = geometry.shots.find(
@@ -139,18 +148,17 @@ export async function mapFeatureClick(
         shot.from[0] + (shot.to[0] - shot.from[0]) * best.t,
         shot.from[1] + (shot.to[1] - shot.from[1]) * best.t,
       ];
-      return finish(lngLat, best.point, best.clearance);
+      const resolved = finish(lngLat, best.point, best.clearance);
+      const eventName = request.button === 'right' ? 'contextmenu' : 'click';
+      map.fire(eventName, {
+        point: resolved.canvasPoint,
+        lngLat: map.unproject(resolved.canvasPoint),
+        originalEvent: new MouseEvent(eventName, { button: request.button === 'right' ? 2 : 0, clientX: resolved.point.x, clientY: resolved.point.y }),
+      });
+      return resolved;
     `,
     [request],
   );
-
-  const button = request.button ?? 'left';
-  await browser
-    .action('pointer', { parameters: { pointerType: 'mouse' } })
-    .move({ origin: 'viewport', x: resolved.point.x, y: resolved.point.y })
-    .down({ button })
-    .up({ button })
-    .perform();
 
   const shouldVerify = request.verifySelection ?? true;
   if (shouldVerify) {
