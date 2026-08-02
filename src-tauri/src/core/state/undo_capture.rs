@@ -562,6 +562,10 @@ impl AppState {
 
     /// Check if a command should be pushed to undo stack
     pub(super) fn is_undoable(cmd: &Command) -> bool {
+        // This is also a privacy boundary for Full-mode SpeleoDB history: the
+        // lifecycle variants below carry local filesystem paths, so making one
+        // undoable can publish those paths in `command_json`. Keep this list and
+        // `path_bearing_commands_never_enter_shared_undo_history` in sync.
         !matches!(
             cmd,
             Command::OpenProject { .. }

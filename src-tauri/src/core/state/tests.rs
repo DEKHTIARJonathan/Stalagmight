@@ -5070,6 +5070,36 @@ fn test_is_undoable_commands() {
     }));
 }
 
+#[test]
+fn path_bearing_commands_never_enter_shared_undo_history() {
+    let private = PathBuf::from("/home/alice/private/survey.stalx");
+    let commands = [
+        Command::OpenProject {
+            path: private.clone(),
+        },
+        Command::SaveProject {
+            path: Some(private.clone()),
+        },
+        Command::MergeProjects {
+            source_paths: vec![private.clone()],
+            output_path: private,
+            output_name: "Merged".to_string(),
+            archive_originals: false,
+        },
+    ];
+
+    for command in commands {
+        assert!(
+            !AppState::is_undoable(&command),
+            "a filesystem-path command must never enter Full-mode shared undo: {command:?}"
+        );
+        assert!(
+            !AppState::is_batch_allowed(&command),
+            "a filesystem-path command must not bypass the privacy fence inside Batch: {command:?}"
+        );
+    }
+}
+
 // === Config Tests ===
 
 #[test]

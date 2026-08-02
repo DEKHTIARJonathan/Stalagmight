@@ -849,7 +849,9 @@ impl AppState {
     /// `SetStationComment` is still NOT allowed: as a whole it is INERT metadata
     /// (see `command_integrity_profiles_are_stable`), so it would never carry the
     /// geometry that justifies a batch; comment edits stay one-command-per-undo.
-    fn is_batch_allowed(cmd: &Command) -> bool {
+    pub(super) fn is_batch_allowed(cmd: &Command) -> bool {
+        // The allowlist also prevents a path-bearing lifecycle command from being
+        // nested inside an otherwise undoable Batch and uploaded in Full mode.
         matches!(
             cmd,
             Command::CreateSection { .. }

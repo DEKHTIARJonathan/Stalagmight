@@ -130,9 +130,12 @@ impl Database {
             // commit is not.
             anyhow::bail!("unparseable inherited-history watermark `{watermark}`");
         };
+        let tx = conn
+            .unchecked_transaction()
+            .context("begin inherited undo cut transaction")?;
         let mut doomed: Vec<i64> = Vec::new();
         {
-            let mut stmt = conn.prepare("SELECT id, executed_at FROM undo_stack")?;
+            let mut stmt = tx.prepare("SELECT id, executed_at FROM undo_stack")?;
             let rows = stmt.query_map([], |row| {
                 Ok((row.get::<_, i64>(0)?, row.get::<_, Option<String>>(1)?))
             })?;
@@ -147,9 +150,13 @@ impl Database {
                 }
             }
         }
-        for id in &doomed {
-            conn.execute("DELETE FROM undo_stack WHERE id = ?1", [id])?;
+        {
+            let mut delete = tx.prepare("DELETE FROM undo_stack WHERE id = ?1")?;
+            for id in &doomed {
+                delete.execute([id])?;
+            }
         }
+        tx.commit().context("commit inherited undo cut")?;
         Ok(doomed.len())
     }
 
@@ -193,8 +200,8 @@ impl Database {
     ///
     /// Read from the SNAPSHOT rather than the live database because that is the copy whose
     /// undo rows are about to be judged, and because `sanitize_push_snapshot` takes a bare
-    /// path, not an `AppState`. Safe to read here: `speleo_undo_chain` is stripped later in
-    /// `PUSH_SNAPSHOT_LOCAL_TABLES` than `undo_stack`, so it is still present at that point.
+    /// path, not an `AppState`. The caller captures this before any local table is stripped,
+    /// so the privacy decision cannot depend on `PUSH_SNAPSHOT_LOCAL_TABLES` ordering.
     ///
     /// An absent table answers false - a file that never had a chain step.
     fn chain_pointer_present(conn: &Connection) -> Result<bool> {
@@ -211,10 +218,14 @@ impl Database {
         keep_undo: bool,
         inherited_through: Option<&str>,
     ) -> Result<()> {
-        // NOT a transaction: VACUUM cannot run inside one, and rusqlite only opens
-        // an explicit transaction when asked, so these statements auto-commit
-        // individually and the VACUUM at the end runs outside any.
+        // No transaction spans the WHOLE sanitizer: VACUUM cannot run inside one.
+        // Individual helpers may use short transactions that commit before the final
+        // compaction; the inherited-row cut does so to stay atomic at large depths.
         let conn = Connection::open(snapshot).context("open snapshot to sanitize for push")?;
+        // Capture this from the untouched snapshot. The missing-watermark branch below
+        // must not change meaning when the local-table list is reordered.
+        let chain_pointer_present =
+            keep_undo && inherited_through.is_none() && Self::chain_pointer_present(&conn)?;
         // The undo/redo strip is FIRST because it is the data-CORRUPTION vector on
         // adopt (#194 b3): it must run even if the dirty-bit clear below were to
         // fail, which the old ordering (dirty-clear first) did not guarantee (#197
@@ -249,12 +260,11 @@ impl Database {
                 // exact failure the cut exists to prevent. An unparseable watermark
                 // already fails closed here; an absent one silently did not.
                 //
-                // The chain pointer separates them, and it is still readable because
-                // `speleo_undo_chain` is stripped LATER in this same list. Unknown extent
-                // means strip the lot: fall through to the ordinary (fatal) strip below
-                // rather than `continue`, so a snapshot that cannot be cleaned refuses the
-                // upload instead of carrying someone else's history into the commit.
-                if !Self::chain_pointer_present(&conn)? {
+                // The chain pointer separates them. Unknown extent means strip the lot:
+                // fall through to the ordinary (fatal) strip below rather than `continue`,
+                // so a snapshot that cannot be cleaned refuses the upload instead of
+                // carrying someone else's history into the commit.
+                if !chain_pointer_present {
                     continue;
                 }
                 tracing::warn!(

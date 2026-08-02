@@ -4563,6 +4563,41 @@ fn sanitize_push_snapshot_cuts_undo_rows_inherited_by_a_chain_step() {
     );
 }
 
+#[test]
+fn inherited_undo_cut_rolls_back_all_deletes_on_failure() {
+    let temp = TempDir::new().unwrap();
+    let (path, watermark) = snapshot_with_inherited_and_own_rows(
+        &temp,
+        "atomic-cut.stalx",
+        &["loaded_a", "loaded_b"],
+        &["mine"],
+    );
+    {
+        let db = Database::open_existing(&path).unwrap();
+        db.conn
+            .execute_batch(
+                "CREATE TRIGGER block_second_inherited_delete
+                 BEFORE DELETE ON undo_stack
+                 WHEN OLD.sequence = 1
+                 BEGIN
+                   SELECT RAISE(ABORT, 'blocked inherited delete');
+                 END;",
+            )
+            .unwrap();
+    }
+
+    let err = Database::sanitize_push_snapshot(&path, true, Some(&watermark)).unwrap_err();
+    assert!(
+        format!("{err:#}").contains("blocked inherited delete"),
+        "the injected delete failure must surface, got {err:#}"
+    );
+    assert_eq!(
+        surviving_undo_commands(&path).len(),
+        3,
+        "the first delete must roll back when a later row cannot be removed"
+    );
+}
+
 /// The case a POSITION watermark would have destroyed, which is why this one is a
 /// timestamp. Entries are written back with `sequence` = position, so after undoing into
 /// the loaded history and editing, the user's new row occupies the id a loaded row had -
