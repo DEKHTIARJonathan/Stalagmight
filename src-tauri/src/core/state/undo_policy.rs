@@ -69,6 +69,12 @@ impl AppState {
         &self,
         mode: Option<UndoMode>,
     ) -> Result<(), SpeleoErrorDto> {
+        // Save rewrites the whole database while holding `project`, then renames the
+        // fresh file over the live one. Hold the same lock through this database edit so
+        // a save cannot snapshot the old mode and overwrite a successful setting change.
+        let project_guard = self.project.lock().map_err(|_| {
+            super::speleodb::local_dto(SpeleoDbError::Io("project lock poisoned".to_owned()))
+        })?;
         // Must be a remote project: a local one has no policy to set (the fixed window is
         // unconditional there), and no link row to write it into.
         let _link = self.speleodb_validated_link()?;
@@ -77,11 +83,17 @@ impl AppState {
                 "start editing before changing the undo-history setting".to_owned(),
             )));
         }
-        self.speleodb_mutate_link(|l| l.undo_mode = mode)
-            .map_err(super::speleodb::local_dto)?;
-        // The write is an edit of the project file, so the copy is now ahead of the
-        // server until it is pushed - the same bookkeeping every other edit does.
-        self.mark_remote_forward_edit();
+        let db_guard = self.database.lock().map_err(|_| {
+            super::speleodb::local_dto(SpeleoDbError::Io("database lock poisoned".to_owned()))
+        })?;
+        let db = db_guard
+            .as_ref()
+            .ok_or_else(|| super::speleodb::local_dto(SpeleoDbError::NoRemoteProject))?;
+        let now = chrono::Utc::now().to_rfc3339();
+        db.set_speleo_undo_mode_and_mark_forward_edit(mode, &now)
+            .map_err(|e| super::speleodb::local_dto(SpeleoDbError::Io(e.to_string())))?;
+        drop(db_guard);
+        drop(project_guard);
         self.sync_undo_depth_limit();
         tracing::info!(
             mode = ?mode,
@@ -351,7 +363,7 @@ mod tests {
             .find("if !self.edit_enabled()")
             .expect("the verb must check the edit gate");
         let write = verb
-            .find("self.speleodb_mutate_link(")
+            .find("set_speleo_undo_mode_and_mark_forward_edit")
             .expect("the verb writes the link");
         assert!(
             gate < write,

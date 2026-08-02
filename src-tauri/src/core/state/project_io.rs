@@ -449,24 +449,34 @@ impl AppState {
         // un-pushed edits that the undo history no longer covers". A scripted run never
         // sees it because nothing saves in between; a person pausing between two Unwinds
         // hits it every time.
-        let speleo_undo_chain = {
+        // A detached copy deliberately sheds both markers, so it does not need to read
+        // them. For a managed save, keep absence distinct from a read error: if either
+        // marker cannot be preserved, the selected fail-closed policy is to save the
+        // survey with no undo history rather than publish unclassified inherited rows.
+        let marker_snapshot = if copy_only {
+            Ok((None, None))
+        } else {
             let db_guard = self.database.lock().unwrap_or_else(|e| e.into_inner());
-            db_guard
-                .as_ref()
-                .and_then(|db| db.load_speleo_undo_chain().ok().flatten())
+            match db_guard.as_ref() {
+                Some(db) => db.load_speleo_undo_chain().and_then(|chain| {
+                    db.load_speleo_undo_watermark()
+                        .map(|watermark| (chain, watermark))
+                }),
+                None => Ok((None, None)),
+            }
         };
-
-        // [#303] ...and the inherited-history watermark, for the same reason and with a
-        // sharper failure. It decides which undo rows are cut from the next upload, so a
-        // save that dropped it would silently let a loaded revision's history ride into
-        // the commit as though the user had authored it here - the very duplication the
-        // watermark exists to prevent, reintroduced by an idle autosave.
-        let speleo_undo_watermark = {
-            let db_guard = self.database.lock().unwrap_or_else(|e| e.into_inner());
-            db_guard
-                .as_ref()
-                .and_then(|db| db.load_speleo_undo_watermark().ok().flatten())
-        };
+        let (speleo_undo_chain, speleo_undo_watermark, mut marker_preservation_failed) =
+            match marker_snapshot {
+                Ok((chain, watermark)) => (chain, watermark, false),
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        purpose = "save without unclassified inherited undo history (#303)",
+                        "Could not read the undo-chain metadata; the saved file will drop Undo and Redo history"
+                    );
+                    (None, None, true)
+                }
+            };
 
         // Remove any leftover temp file from previous failed saves
         if temp_path.exists() {
@@ -544,12 +554,12 @@ impl AppState {
             // mean every save of every project touched this table for nothing.
             if let Some(sha) = &speleo_undo_chain {
                 if let Err(e) = db.save_speleo_undo_chain(Some(sha)) {
+                    marker_preservation_failed = true;
                     tracing::warn!(
                         error = %e,
                         purpose = "preserve the Unwind chain position on save (#303)",
-                        "Failed to copy speleo_undo_chain onto the fresh save file; the next \
-                         Unwind will restart from BASE and may warn about un-pushed work that \
-                         is only a previous Unwind's own doing"
+                        "Failed to copy speleo_undo_chain onto the fresh save file; Undo and \
+                         Redo history will be removed from the saved file"
                     );
                 }
             }
@@ -557,12 +567,12 @@ impl AppState {
             // [#303] Likewise the inherited-history watermark.
             if let Some(ts) = &speleo_undo_watermark {
                 if let Err(e) = db.save_speleo_undo_watermark(Some(ts)) {
+                    marker_preservation_failed = true;
                     tracing::warn!(
                         error = %e,
                         purpose = "preserve the inherited-history watermark on save (#303)",
-                        "Failed to copy speleo_undo_watermark onto the fresh save file; the next \
-                         push would carry the loaded revision's history as if it had been \
-                         authored in this session"
+                        "Failed to copy speleo_undo_watermark onto the fresh save file; Undo and \
+                         Redo history will be removed from the saved file"
                     );
                 }
             }
@@ -571,7 +581,7 @@ impl AppState {
         // Persist history while the file is still staged. A partial undo/redo rewrite
         // must never be renamed into place: try the pair atomically, and if it fails,
         // atomically clear both stacks and continue with a visible warning.
-        let history_dropped = match self.persist_or_clear_undo_stacks_into(&db) {
+        let mut history_dropped = match self.persist_or_clear_undo_stacks_into(&db) {
             Ok(dropped) => dropped,
             Err(e) => {
                 drop(db);
@@ -579,6 +589,23 @@ impl AppState {
                 return save_failure("Failed to finalize undo history", &save_path, &e);
             }
         };
+        if marker_preservation_failed {
+            if let Err(e) = db.clear_history_stacks() {
+                drop(db);
+                let _ = std::fs::remove_file(&temp_path);
+                return save_failure("Failed to remove unclassified undo history", &save_path, &e);
+            }
+            history_dropped = true;
+            // Keep the fresh file coherent where possible. History is already empty, so
+            // failure here cannot expose inherited rows and must not turn the selected
+            // continue-saving policy back into a refused save.
+            if let Err(e) = db.save_speleo_undo_chain(None) {
+                tracing::warn!(error = %e, "Could not clear the saved undo-chain pointer");
+            }
+            if let Err(e) = db.save_speleo_undo_watermark(None) {
+                tracing::warn!(error = %e, "Could not clear the saved undo watermark");
+            }
+        }
 
         // Close the temp database before renaming
         drop(db);

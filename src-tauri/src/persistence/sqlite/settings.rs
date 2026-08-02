@@ -202,6 +202,29 @@ impl Database {
         Ok(rows > 0)
     }
 
+    /// Change the per-project undo policy and record the change as forward work in one
+    /// transaction. Clearing the chain pointer is part of the same commit: leaving it
+    /// behind would make the UI classify this real edit as a disposable Unwind step.
+    pub fn set_speleo_undo_mode_and_mark_forward_edit(
+        &self,
+        mode: Option<crate::models::UndoMode>,
+        last_edit_at: &str,
+    ) -> Result<()> {
+        let tx = self.conn.unchecked_transaction()?;
+        let rows = tx.execute(
+            "UPDATE speleo_link
+             SET undo_mode = ?1, has_unpushed_edits = 1, last_edit_at = ?2
+             WHERE id = 1",
+            params![mode.map(crate::models::UndoMode::as_db_str), last_edit_at,],
+        )?;
+        if rows == 0 {
+            anyhow::bail!("No SpeleoDB link row to update");
+        }
+        tx.execute("DELETE FROM speleo_undo_chain", [])?;
+        tx.commit()?;
+        Ok(())
+    }
+
     /// Rename the project's display name without rewriting the whole project.
     /// A targeted `UPDATE` on the single `project` row; leaves `modified_at`
     /// untouched so a rename doesn't reorder the recent list by edit time.

@@ -15223,6 +15223,66 @@ fn failed_atomic_history_replacement_falls_back_to_empty_stacks() {
     assert!(db.load_redo_stack_with_timestamps().unwrap().is_empty());
 }
 
+#[test]
+fn unreadable_undo_markers_save_without_history() {
+    let temp_dir = TempDir::new().unwrap();
+    let path = temp_dir.path().join("unreadable-undo-markers.stalx");
+    {
+        let mut db = Database::open(&path).unwrap();
+        db.save_project(&Project::new("Marker fallback".to_owned(), None))
+            .unwrap();
+        db.save_speleo_link(Some(&fixture_speleo_link())).unwrap();
+        db.save_speleo_undo_chain(Some("older-tip")).unwrap();
+        db.save_speleo_undo_watermark(Some("2026-08-01T00:00:00+00:00"))
+            .unwrap();
+    }
+
+    let state = AppState::new().unwrap();
+    assert!(state.open_project(path.clone()).success);
+    state.undo_stack.lock().unwrap().push_with_data(
+        Command::CreateSection {
+            name: Some("Local edit".to_owned()),
+            surveyor: None,
+            date: None,
+            color: "#ff0000".to_owned(),
+            direction: None,
+            shots: Vec::new(),
+        },
+        UndoData::None,
+    );
+
+    // Keep the table present but remove the column the marker reader requires. The
+    // survey database and undo rows remain readable, isolating the marker-failure path.
+    rusqlite::Connection::open(&path)
+        .unwrap()
+        .execute_batch(
+            "DROP TABLE speleo_undo_watermark;
+             CREATE TABLE speleo_undo_watermark (
+                 id INTEGER PRIMARY KEY CHECK (id = 1),
+                 broken_value TEXT NOT NULL
+             );
+             INSERT INTO speleo_undo_watermark (id, broken_value) VALUES (1, 'broken');",
+        )
+        .unwrap();
+
+    let result = state.save_project(None);
+
+    assert!(result.success, "the survey save continues: {result:?}");
+    assert!(
+        result
+            .warnings
+            .iter()
+            .any(|warning| warning.code == "UNDO_HISTORY_DROPPED"),
+        "history loss must be visible to the caller: {result:?}"
+    );
+    let db_guard = state.database.lock().unwrap();
+    let db = db_guard.as_ref().expect("saved database reopened");
+    assert!(db.load_undo_stack_with_timestamps().unwrap().is_empty());
+    assert!(db.load_redo_stack_with_timestamps().unwrap().is_empty());
+    assert_eq!(db.load_speleo_undo_chain().unwrap(), None);
+    assert_eq!(db.load_speleo_undo_watermark().unwrap(), None);
+}
+
 /// [#303] Changing the undo mode really does need the edit gate.
 ///
 /// The sibling test in `undo_policy.rs` asserts this with NO project open, so
@@ -15267,6 +15327,52 @@ fn setting_the_undo_mode_on_a_linked_project_needs_the_edit_gate() {
     state
         .speleodb_set_undo_mode(Some(crate::models::UndoMode::Full))
         .expect("force editing may change the project policy too");
+}
+
+#[test]
+fn setting_the_undo_mode_serializes_with_full_file_saves() {
+    let temp_dir = TempDir::new().unwrap();
+    let save_path = temp_dir.path().join("undo-mode-save-lock.stalx");
+    {
+        let mut db = Database::open(&save_path).unwrap();
+        db.save_project(&Project::new("Linked".to_owned(), None))
+            .unwrap();
+        db.save_speleo_link(Some(&fixture_speleo_link())).unwrap();
+    }
+
+    let state = Arc::new(AppState::new().unwrap());
+    assert!(state.open_project(save_path).success);
+    state.set_edit_enabled(true);
+    let save_guard = state.project.lock().unwrap();
+    let worker_state = Arc::clone(&state);
+    let (sent, received) = std::sync::mpsc::channel();
+    let worker = std::thread::spawn(move || {
+        let result = worker_state.speleodb_set_undo_mode(Some(crate::models::UndoMode::Disabled));
+        sent.send(result).unwrap();
+    });
+
+    assert!(
+        received
+            .recv_timeout(std::time::Duration::from_millis(100))
+            .is_err(),
+        "the mode write ran while a full-file save owned the project lock"
+    );
+    drop(save_guard);
+    received
+        .recv_timeout(std::time::Duration::from_secs(2))
+        .expect("mode write completes after the save lock is released")
+        .expect("mode write succeeds");
+    worker.join().unwrap();
+
+    let db_guard = state.database.lock().unwrap();
+    let link = db_guard
+        .as_ref()
+        .unwrap()
+        .load_speleo_link()
+        .unwrap()
+        .unwrap();
+    assert_eq!(link.undo_mode, Some(crate::models::UndoMode::Disabled));
+    assert!(link.has_unpushed_edits);
 }
 
 /// [#303] An undo snapshot must not carry this machine's filesystem paths.

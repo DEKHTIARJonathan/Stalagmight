@@ -4894,6 +4894,68 @@ fn touch_speleo_link_dirty_is_targeted_and_locality_aware() {
 }
 
 #[test]
+fn undo_mode_forward_edit_is_one_atomic_metadata_change() {
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("undo-mode-forward-edit.stalx");
+    let mut db = Database::open(&path).unwrap();
+    db.save_project(&Project::new("Undo mode".to_owned(), None))
+        .unwrap();
+    db.save_speleo_link(Some(&sample_speleo_link(Some("base-sha"), false)))
+        .unwrap();
+    db.save_speleo_undo_chain(Some("older-tip")).unwrap();
+    db.save_speleo_undo_watermark(Some("2026-08-01T00:00:00+00:00"))
+        .unwrap();
+
+    db.set_speleo_undo_mode_and_mark_forward_edit(
+        Some(crate::models::UndoMode::Disabled),
+        "2026-08-02T01:02:03+00:00",
+    )
+    .unwrap();
+
+    let link = db.load_speleo_link().unwrap().unwrap();
+    assert_eq!(link.undo_mode, Some(crate::models::UndoMode::Disabled));
+    assert!(link.has_unpushed_edits);
+    assert_eq!(
+        link.last_edit_at.as_deref(),
+        Some("2026-08-02T01:02:03+00:00")
+    );
+    assert_eq!(db.load_speleo_undo_chain().unwrap(), None);
+    assert_eq!(
+        db.load_speleo_undo_watermark().unwrap().as_deref(),
+        Some("2026-08-01T00:00:00+00:00"),
+        "a forward edit clears the chain position, not the inherited-history cutoff"
+    );
+}
+
+#[test]
+fn undo_mode_forward_edit_rolls_back_when_chain_clear_fails() {
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("undo-mode-rollback.stalx");
+    let mut db = Database::open(&path).unwrap();
+    db.save_project(&Project::new("Undo mode".to_owned(), None))
+        .unwrap();
+    db.save_speleo_link(Some(&sample_speleo_link(Some("base-sha"), false)))
+        .unwrap();
+    db.conn
+        .execute_batch(
+            "DROP TABLE speleo_undo_chain;
+             CREATE VIEW speleo_undo_chain AS SELECT 'older-tip' AS unwound_from_sha;",
+        )
+        .unwrap();
+
+    db.set_speleo_undo_mode_and_mark_forward_edit(
+        Some(crate::models::UndoMode::Disabled),
+        "2026-08-02T01:02:03+00:00",
+    )
+    .expect_err("a chain-clear failure must roll back the link update");
+
+    let link = db.load_speleo_link().unwrap().unwrap();
+    assert_eq!(link.undo_mode, None);
+    assert!(!link.has_unpushed_edits);
+    assert_eq!(link.last_edit_at, None);
+}
+
+#[test]
 fn preserved_speleolink_columns_match_head_schema() {
     // Structural HEAD-schema guard: every (name, decl_type, notnull) in
     // PRESERVED_SPELEOLINK_COLUMNS must match the live table exactly. Fails the

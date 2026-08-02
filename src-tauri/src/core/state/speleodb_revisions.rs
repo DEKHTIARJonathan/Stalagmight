@@ -1312,16 +1312,15 @@ mod tests {
     /// `a_forward_edit_forgets_the_unwind_position_but_an_undo_does_not` counts sites in
     /// `commands.rs`, so it was blind to `speleodb_set_undo_mode` - which writes
     /// `speleo_link.undo_mode` into the `.stalx`, rides to the server in the next push, and
-    /// is therefore an edit of the project like any other. It dirtied the copy without
-    /// dropping the chain pointer, and the pointer is what EXCUSES the dirty bit: the next
-    /// Unwind's `discards_unpushed` answered false, so no warning rendered, the guard waved
-    /// it through, and the swap silently reverted the mode the user had just chosen.
+    /// is therefore an edit of the project like any other. The mode, dirty stamp, and chain
+    /// clear now share one database transaction: calling the older best-effort helper here
+    /// would re-open both the half-write and silent-Unwind hazards.
     #[test]
     fn the_undo_mode_setter_forgets_the_unwind_position_too() {
         let policy = std::include_str!("undo_policy.rs");
         assert!(
-            policy.contains("self.mark_remote_forward_edit();"),
-            "the undo-mode write must use the shared forward-edit bookkeeping"
+            policy.contains("set_speleo_undo_mode_and_mark_forward_edit"),
+            "the undo-mode write must atomically dirty the link and clear the chain pointer"
         );
     }
 
