@@ -4406,14 +4406,17 @@ fn speleo_link_undo_mode_roundtrips_and_none_stays_null() {
         "None must clear the column to SQL NULL, never write a default spelling"
     );
 
-    // An unrecognized value (a newer build, or a hand-edit) reads as Unknown, which
-    // resolves to the default rather than failing the load.
+    // An unrecognized value (a newer build, or a hand-edit) fails closed without
+    // making the whole project unloadable.
     db.conn
         .execute("UPDATE speleo_link SET undo_mode = 'sideways'", [])
         .unwrap();
     let loaded = db.load_speleo_link().unwrap().unwrap().undo_mode;
-    assert_eq!(loaded, Some(UndoMode::Unknown));
-    assert!(loaded.unwrap().pushes_history(), "Unknown resolves to Full");
+    assert_eq!(loaded, Some(UndoMode::Disabled));
+    assert!(
+        !loaded.unwrap().pushes_history(),
+        "malformed database values must not publish undo history"
+    );
 }
 
 /// [#303] Spec item 22, persistence half: the Unwind chain pointer survives a close and
