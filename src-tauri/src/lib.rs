@@ -1124,7 +1124,7 @@ fn handle_tile_request(
         }
         result
     };
-    let cache_enabled = cache_config.is_provider_cache_enabled(provider);
+    let cache_enabled = cache_config.tile_cache_enabled;
     let response = handle_tile_request_with_fetcher(
         provider,
         z,
@@ -1194,7 +1194,7 @@ pub fn tile_fetch_impl(
         return Err(format!("Unknown provider: {provider}"));
     }
 
-    let cache_enabled = cache_config.is_provider_cache_enabled(provider);
+    let cache_enabled = cache_config.tile_cache_enabled;
     let stats_ref = Arc::clone(stats);
     let fetch_fn = move |p: &str,
                          z: u32,
@@ -2584,27 +2584,16 @@ mod tests {
     // === Per-provider cache toggle tests ===
 
     #[test]
-    fn test_provider_cache_disabled_skips_cache_read_and_write() {
-        use std::collections::HashMap;
-
+    fn test_cache_disabled_skips_cache_read_and_write() {
         let cache = make_test_cache();
         let tilemap_cache = make_test_tilemap_cache();
 
-        // Configure esri provider with offline_caching = false
-        let mut providers = HashMap::new();
-        providers.insert(
-            "esri".to_string(),
-            config::ProviderCacheConfig {
-                offline_caching: false,
-                ttl_days: None,
-            },
-        );
+        // One switch decides whether the cache is touched at all.
         let cache_config = config::CacheConfig {
-            tile_cache_enabled: true,
-            providers,
+            tile_cache_enabled: false,
             ..Default::default()
         };
-        let cache_enabled = cache_config.is_provider_cache_enabled("esri");
+        let cache_enabled = cache_config.tile_cache_enabled;
         assert!(!cache_enabled);
 
         // Mock fetch that succeeds
@@ -2648,9 +2637,7 @@ mod tests {
     }
 
     #[test]
-    fn test_provider_cache_disabled_no_stale_fallback() {
-        use std::collections::HashMap;
-
+    fn test_cache_disabled_no_stale_fallback() {
         // Use a cache with 0 TTL so tiles are immediately stale
         let cache = Arc::new(Mutex::new(Some(TileCache::in_memory(10, 0).unwrap())));
         let tilemap_cache = make_test_tilemap_cache();
@@ -2665,21 +2652,12 @@ mod tests {
                 .unwrap();
         }
 
-        // Configure esri with caching disabled
-        let mut providers = HashMap::new();
-        providers.insert(
-            "esri".to_string(),
-            config::ProviderCacheConfig {
-                offline_caching: false,
-                ttl_days: None,
-            },
-        );
+        // Caching off: even a tile already on disk must not be reached for.
         let cache_config = config::CacheConfig {
-            tile_cache_enabled: true,
-            providers,
+            tile_cache_enabled: false,
             ..Default::default()
         };
-        let cache_enabled = cache_config.is_provider_cache_enabled("esri");
+        let cache_enabled = cache_config.tile_cache_enabled;
 
         // Network fails
         let mock_fetch =
@@ -2705,26 +2683,18 @@ mod tests {
     }
 
     #[test]
-    fn test_is_provider_cache_enabled_defaults() {
+    fn tile_caching_is_on_by_default_with_no_per_provider_exceptions() {
         let config = config::CacheConfig::default();
-        // ESRI caching is on by default. Note what this flag does and does not
-        // decide: it permits the cache to be CONSULTED for a provider. Whether
-        // any given tile is actually written is a separate gate in
-        // `TileCache::put`, which stores only on an explicit `Cache-Control`
-        // grant - so "enabled" here never means "store whatever comes back".
-        assert!(config.is_provider_cache_enabled("esri"));
-        // Unlisted provider defaults to enabled
-        assert!(config.is_provider_cache_enabled("anything"));
-    }
-
-    #[test]
-    fn test_is_provider_cache_enabled_global_off() {
-        let config = config::CacheConfig {
-            tile_cache_enabled: false,
-            ..Default::default()
-        };
-        // Global off overrides everything
-        assert!(!config.is_provider_cache_enabled("esri"));
+        // One switch, no provider carve-outs. Note what this flag does and does
+        // not decide: it permits the cache to be touched at all. Whether any
+        // given tile is actually written is a separate gate in `TileCache::put`,
+        // which stores only on an explicit `Cache-Control` grant - so "enabled"
+        // here never means "store whatever comes back".
+        assert!(config.tile_cache_enabled);
+        assert!(
+            config.providers.is_empty(),
+            "per-provider overrides are opt-in TTLs, not a second on/off switch"
+        );
     }
 
     // === Response builder tests ===

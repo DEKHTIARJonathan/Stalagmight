@@ -477,9 +477,6 @@ fn default_inclination_mode() -> String {
 /// Per-provider cache override
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct ProviderCacheConfig {
-    /// Whether offline caching is enabled for this provider
-    #[serde(default = "default_true")]
-    pub offline_caching: bool,
     /// Retention TTL for this provider's tiles, in days. Falls back to the
     /// global `tile_ttl_days` when unset.
     ///
@@ -509,18 +506,6 @@ pub struct CacheConfig {
 }
 
 impl CacheConfig {
-    /// Check whether caching is enabled for a specific provider.
-    /// Returns false if the global toggle is off, or if the provider
-    /// has explicitly disabled offline caching.
-    pub fn is_provider_cache_enabled(&self, provider: &str) -> bool {
-        if !self.tile_cache_enabled {
-            return false;
-        }
-        self.providers
-            .get(provider)
-            .map_or(true, |p| p.offline_caching)
-    }
-
     /// Per-provider retention TTLs in days, for every provider that overrides
     /// the global one. Providers absent from the map use `tile_ttl_days`.
     pub fn provider_ttl_days(&self) -> HashMap<String, u32> {

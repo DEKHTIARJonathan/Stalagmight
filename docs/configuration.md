@@ -126,16 +126,16 @@ enabled_merge = true                # Enable snap-to-station in merge tool
 enabled_measure = true              # Enable snap-to-station in measure tool
 
 [cache]
-tile_cache_enabled = true           # Master switch for all providers
+tile_cache_enabled = true           # The one on/off switch for tile caching
 tile_cache_max_mb = 500             # Maximum cache size in MB
 tile_ttl_days = 30                  # Default retention: days a tile stays on disk
-# Per-provider override; every provider defaults to enabled.
+# Per-provider retention override; omit to use tile_ttl_days.
 # [cache.providers.esri]
-# offline_caching = true
-# ttl_days = 7                      # Retention for this provider; omit to use tile_ttl_days
+# ttl_days = 7
 #
-# `offline_caching` permits the cache to be CONSULTED for a provider. It does
-# not decide what gets written: a tile is stored ONLY if its response carried a
+# There is no per-provider on/off switch, because config is not what decides
+# whether a tile is stored. `tile_cache_enabled` permits the cache to be used at
+# all; after that a tile is written ONLY if its response carried a
 # `Cache-Control` granting it (a `max-age`, or `no-cache` for "keep but always
 # revalidate"). A response with no directive is served and dropped - silence is
 # not read as consent, so the app holds third-party imagery only where the

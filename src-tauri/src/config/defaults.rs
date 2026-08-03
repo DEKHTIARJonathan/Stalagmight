@@ -4,9 +4,8 @@ use super::{
     DecimalPrecision, DepthGradientConfig, DisplayConfig, ExportConfig, GasConfig, GeneralConfig,
     GlobalViewConfig, GpsOrigin, ImportConfig, LengthUnit, LoggingConfig, MapAnimationConfig,
     MapConfig, MapControlsConfig, MapSnapConfig, PanelsConfig, PlacementSuggestionConfig,
-    ProviderCacheConfig, SectionColorsConfig, ShortcutFeedback, ShortcutsConfig, ShotConfig,
-    SpeleoDbConfig, StationConfig, SyntacticHighlightingConfig, UnitsConfig, ValidationConfig,
-    WebkitMemoryConfig,
+    SectionColorsConfig, ShortcutFeedback, ShortcutsConfig, ShotConfig, SpeleoDbConfig,
+    StationConfig, SyntacticHighlightingConfig, UnitsConfig, ValidationConfig, WebkitMemoryConfig,
 };
 
 #[expect(clippy::derivable_impls)]
@@ -290,22 +289,11 @@ impl Default for CacheConfig {
             tile_cache_enabled: true,
             tile_cache_max_mb: 500, // per SPEC.md
             tile_ttl_days: 30,
-            providers: std::collections::HashMap::from([(
-                "esri".to_string(),
-                ProviderCacheConfig {
-                    // On, but the cache itself only writes a tile whose response
-                    // carried an explicit `Cache-Control` grant. Esri sends
-                    // `max-age=86400` on every tile, so its imagery caches for
-                    // the day it grants and is then revalidated with an ETag
-                    // rather than re-downloaded. A provider that grants nothing
-                    // still gets no disk.
-                    offline_caching: true,
-                    // Unset: the global tile_ttl_days bounds RETENTION (how long
-                    // a tile survives to answer offline). Freshness is capped by
-                    // the provider's own max-age regardless.
-                    ttl_days: None,
-                },
-            )]),
+            // No per-provider overrides by default. The single on/off switch is
+            // `tile_cache_enabled`; whether any given tile is actually written
+            // is decided per response by its `Cache-Control` grant, not by
+            // config (see `crate::cache::tiles`).
+            providers: std::collections::HashMap::new(),
         }
     }
 }
