@@ -143,6 +143,11 @@ export interface SpreadsheetGridProps<Row> {
    *  true; hosts that fold the grid into their own chrome turn it off and
    *  track {@link onSelectionChange} instead. */
   showToolbar?: boolean;
+  /** Namespace for the built-in toolbar's test IDs (`<prefix>-columns-menu`,
+   *  `<prefix>-maximize`). Defaults to `data-table` for the original host; a
+   *  SECOND grid with the toolbar shown must override it, or both grids answer
+   *  to the same selector whenever they are mounted together. */
+  toolbarTestIdPrefix?: string;
   /** Right-click on a column header - let the host show its own menu (hide
    *  column, switch column families, ...). The grid only prevents the native
    *  menu when this is set. */
@@ -217,7 +222,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
     cellClassName,
     rowLabel,
     gutterWidth = GUTTER_WIDTH,
-    showToolbar = true,
+    showToolbar = true, toolbarTestIdPrefix = 'data-table',
     labels: labelOverrides,
     onHeaderContextMenu,
     onSelectionChange,
@@ -1986,7 +1991,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
               <button
                 type="button"
                 className="text-xs px-2 py-0.5 rounded hover:bg-accent-10"
-                data-testid="data-table-columns-menu"
+                data-testid={`${toolbarTestIdPrefix}-columns-menu`}
                 onClick={() => setMenuOpen((v) => !v)}
               >
                 {labels.columnsButton}
@@ -2018,7 +2023,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
             <button
               type="button"
               className="text-xs px-2 py-0.5 rounded hover:bg-accent-10"
-              data-testid="data-table-maximize"
+              data-testid={`${toolbarTestIdPrefix}-maximize`}
               onClick={onToggleMaximize}
             >
               {maximized ? labels.restore : labels.maximize}
