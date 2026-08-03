@@ -2168,6 +2168,13 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               return section;
             });
             const sectionIds = importedSections.map((section) => section.id as number);
+            const importedShotCount = importedSections.reduce(
+              (sum, section) => sum + (section.shots as unknown[]).length,
+              0
+            );
+            const sourceLabel = (args?.sourceLabel as string | null | undefined) ?? null;
+            const sourceFileName = (args?.sourceFileName as string | null | undefined) ?? null;
+            const sectionsFoundArg = (args?.sectionsFound as number | null | undefined) ?? null;
             return {
               success: true,
               warnings: [],
@@ -2175,21 +2182,46 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               section_ids: sectionIds,
               ...(sectionIds[0] != null ? { section_id: sectionIds[0] } : {}),
               sections: importedSections,
+              import_receipt: {
+                source_format: sourceLabel ?? 'mNemo DMP',
+                file_name: sourceFileName ?? '',
+                sections_found: sectionsFoundArg ?? sectionIds.length,
+                sections_imported: sectionIds.length,
+                shot_count: importedShotCount,
+                closures_requested: 0,
+                closures_created: 0,
+                unit_conversion: null,
+                warnings: [],
+              },
             };
           }
 
-          case 'execute_walls_import':
+          case 'execute_walls_import': {
             // Record the import args (selectedSurveys, includeSplays, …) for
             // assertions, then return a one-section success so the dialog runs
             // its "imported" exit path (not the "nothing imported" branch).
             wallsImportCalls.push({ ...(args ?? {}) });
+            const wallsPath = (args?.path as string | undefined) ?? '';
+            const wallsFileName = wallsPath.split('/').pop() ?? wallsPath;
             return {
               success: true,
               warnings: [],
               error: null,
               section_ids: [1],
               section_id: 1,
+              import_receipt: {
+                source_format: 'Walls',
+                file_name: wallsFileName,
+                sections_found: 1,
+                sections_imported: 1,
+                shot_count: 0,
+                closures_requested: 0,
+                closures_created: 0,
+                unit_conversion: null,
+                warnings: [],
+              },
             };
+          }
 
           // File hash tracking for duplicate detection
           case 'calculate_file_hash':
@@ -2391,12 +2423,28 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               currentProject.modified_at = new Date().toISOString();
             }
 
+            const gpxShotCount = createdSectionIds.reduce((sum, sectionId) => {
+              const section = currentProject?.sections.find((s) => s.id === sectionId);
+              return sum + (section ? (section.shots as unknown[]).length : 0);
+            }, 0);
+            const gpxFileName = (filePath ?? '').split('/').pop() ?? filePath ?? '';
             return {
               success: true,
               warnings: [],
               error: null,
               section_ids: createdSectionIds,
               ...(createdSectionIds[0] != null ? { section_id: createdSectionIds[0] } : {}),
+              import_receipt: {
+                source_format: 'GPX',
+                file_name: gpxFileName,
+                sections_found: createdSectionIds.length,
+                sections_imported: createdSectionIds.length,
+                shot_count: gpxShotCount,
+                closures_requested: 0,
+                closures_created: 0,
+                unit_conversion: null,
+                warnings: [],
+              },
             };
           }
 
