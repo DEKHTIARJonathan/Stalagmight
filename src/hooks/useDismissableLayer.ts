@@ -13,6 +13,16 @@ interface UseDismissableLayerOptions {
    *  portal's captured position can't go stale; an unrelated scroller elsewhere in
    *  the app is ignored. Defaults to `contains`. */
   scrollSafe?: Array<RefObject<HTMLElement | null>>;
+  /** The region the layer's captured position is anchored to: a scroll ANYWHERE
+   *  inside it dismisses.
+   *
+   *  Needed by layers that pin themselves to cursor coordinates and render as a
+   *  `position:fixed` sibling of the thing they point at, because then `contains`
+   *  holds only the menu, whose own ancestors are just body/html - the scroll that
+   *  actually strands it (the grid the header cell lives in) is neither an
+   *  ancestor of the menu nor the page. Pass the enclosing panel and that scroll
+   *  is covered, while a scroll outside the panel still is not. */
+  anchorScope?: RefObject<HTMLElement | null>;
 }
 
 /**
@@ -33,6 +43,7 @@ export function useDismissableLayer({
   onDismiss,
   contains,
   scrollSafe,
+  anchorScope,
 }: UseDismissableLayerOptions): void {
   const onDismissRef = useRef(onDismiss);
   onDismissRef.current = onDismiss;
@@ -40,6 +51,8 @@ export function useDismissableLayer({
   containsRef.current = contains;
   const scrollSafeRef = useRef(scrollSafe ?? contains);
   scrollSafeRef.current = scrollSafe ?? contains;
+  const anchorScopeRef = useRef(anchorScope);
+  anchorScopeRef.current = anchorScope;
 
   useEffect(() => {
     if (!open) return undefined;
@@ -73,7 +86,12 @@ export function useDismissableLayer({
         containsRef.current.some((r) => {
           const el = r.current;
           return el !== null && el !== target && target.contains(el);
-        });
+        }) ||
+        // ...or the scroll happened inside the region the layer is anchored to.
+        // The ancestor test above cannot see this case: a menu pinned to cursor
+        // coordinates renders as a fixed sibling of the scroller, so the scroller
+        // contains the ANCHOR but not the menu.
+        anchorScopeRef.current?.current?.contains(target) === true;
       if (!movesLayer) return;
       onDismissRef.current();
     };

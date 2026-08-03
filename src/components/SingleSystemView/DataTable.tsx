@@ -595,6 +595,10 @@ export default function DataTable({ sections }: DataTableProps) {
   // Right-click on a column header: hide it / switch the angle family's mode.
   const [headerMenu, setHeaderMenu] = useState<{ x: number; y: number; colKey: string } | null>(null);
   const headerMenuRef = useRef<HTMLDivElement | null>(null);
+  // The panel root, handed to the cursor-pinned menus below as their anchor
+  // scope: they are fixed siblings of the grid, so a grid scroll strands them
+  // without being an ancestor of anything in their `contains`.
+  const panelRef = useRef<HTMLDivElement | null>(null);
   // Flip the menu above/left of the cursor when it would cross a viewport edge.
   useLayoutEffect(() => {
     const el = headerMenuRef.current;
@@ -612,6 +616,7 @@ export default function DataTable({ sections }: DataTableProps) {
     open: headerMenu !== null,
     onDismiss: () => setHeaderMenu(null),
     contains: [headerMenuRef],
+    anchorScope: panelRef,
   });
   useEffect(() => {
     if (!headerMenu) return undefined;
@@ -1282,6 +1287,7 @@ export default function DataTable({ sections }: DataTableProps) {
     open: connMenu !== null,
     onDismiss: () => setConnMenu(null),
     contains: [connMenuRef],
+    anchorScope: panelRef,
   });
   useEffect(() => {
     if (!connMenu) return undefined;
@@ -1575,6 +1581,7 @@ export default function DataTable({ sections }: DataTableProps) {
 
   return (
     <div
+      ref={panelRef}
       // Fill the Dock's panel body (it owns the size + the open/close slide). A
       // self height + `transition-all` here animated the height over 300ms on
       // every resize tick, so the table visibly lagged the dragged panel edge.
