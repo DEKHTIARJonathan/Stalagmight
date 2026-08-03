@@ -190,11 +190,14 @@ export function MapAttribution({
       >
         <button
           type="button"
+          // Click is the ONLY thing that pins, deliberately. Opening on focus as
+          // well made the first click a no-op: a browser focuses a button on
+          // mouse-down, so `onFocus` opened the panel and the click that
+          // followed toggled it straight back shut - leaving the names
+          // unreachable by tap, where there is no hover to fall back on. All
+          // three inputs still reach them: hover dwells, tap clicks, and a
+          // keyboard Enter/Space arrives here as a click on a <button>.
           onClick={togglePinned}
-          // Keyboard users get the same panel: tabbing to the button pins it,
-          // tabbing away releases it.
-          onFocus={() => setPinned(true)}
-          onBlur={() => setPinned(false)}
           aria-expanded={pinned}
           aria-label={t('map.attribution.expandAria')}
           title={text}

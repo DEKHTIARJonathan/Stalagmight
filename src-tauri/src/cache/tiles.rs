@@ -39,6 +39,17 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+/// Ceiling on a provider's `max-age`, in seconds (one year).
+///
+/// `max-age` arrives off the network, so it is an untrusted number that this
+/// module then adds to the clock. Without a ceiling, `max-age=<i64::MAX>`
+/// overflows the addition: a debug build panics *inside* the tile-cache mutex,
+/// poisoning it and silently disabling caching for the rest of the session,
+/// while a release build wraps to a negative expiry the tile can never satisfy.
+/// A year is far beyond any real basemap grant (Esri sends a day), so clamping
+/// here costs nothing legitimate.
+const MAX_GRANT_SECONDS: i64 = 365 * 24 * 60 * 60;
+
 /// Freshness directives read off a tile response.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct CachePolicy {
@@ -54,9 +65,20 @@ pub struct CachePolicy {
 }
 
 impl CachePolicy {
+    /// Seconds of storage the provider granted, or `None` for no permission.
+    ///
+    /// **The single gate.** Both write paths - `put` for a fetched body and
+    /// `refresh_validated` for a `304` - ask this and nothing else. They used to
+    /// carry the rule separately and drifted: the revalidation path never
+    /// checked `no_store`, so a provider revoking permission on a 304 had its
+    /// tile kept AND its retention extended.
+    pub fn granted_seconds(&self) -> Option<i64> {
+        self.max_age_seconds.filter(|_| !self.no_store)
+    }
+
     /// Whether the provider granted permission to write this response to disk.
     pub fn permits_storage(&self) -> bool {
-        !self.no_store && self.max_age_seconds.is_some()
+        self.granted_seconds().is_some()
     }
 }
 
@@ -90,7 +112,7 @@ impl TileEntry {
     /// travel with it rather than the original `max-age`.
     pub fn remaining_policy(&self, now: i64) -> CachePolicy {
         CachePolicy {
-            max_age_seconds: self.expires_at.map(|at| (at - now).max(0)),
+            max_age_seconds: self.expires_at.map(|at| at.saturating_sub(now).max(0)),
             no_store: false,
         }
     }
@@ -116,7 +138,9 @@ pub fn parse_cache_control(header: &str) -> CachePolicy {
             // header would silently disable caching for a whole provider.
             if let Ok(seconds) = value.trim().parse::<i64>() {
                 if seconds >= 0 {
-                    policy.max_age_seconds = Some(seconds);
+                    // Clamped: this number is remote input and gets added to the
+                    // clock below. See MAX_GRANT_SECONDS.
+                    policy.max_age_seconds = Some(seconds.min(MAX_GRANT_SECONDS));
                 }
             }
         }
@@ -455,7 +479,7 @@ impl TileCache {
         // `max-age` is simply silence, and this cache does not read silence as
         // consent. Either way any copy we already hold goes with it - a provider
         // that stops granting should not leave us holding yesterday's grant.
-        let Some(max_age) = policy.max_age_seconds.filter(|_| !policy.no_store) else {
+        let Some(max_age) = policy.granted_seconds() else {
             self.conn.execute(
                 "DELETE FROM tiles WHERE provider = ?1 AND z = ?2 AND y = ?3 AND x = ?4",
                 params![provider, z, y, x],
@@ -463,7 +487,7 @@ impl TileCache {
             return Ok(());
         };
 
-        let expires_at = now + max_age;
+        let expires_at = now.saturating_add(max_age);
 
         // Reject tiles larger than the entire cache
         if new_size > self.max_bytes {
@@ -531,11 +555,23 @@ impl TileCache {
         policy: CachePolicy,
     ) -> Result<bool> {
         let now = Self::now();
-        let expires_at = policy.max_age_seconds.map(|max_age| now + max_age);
+
+        // Same gate as `put`. A revalidation is still a grant decision: if the
+        // provider answered the 304 without permission (or with `no-store`),
+        // the copy goes rather than having its life extended.
+        let Some(max_age) = policy.granted_seconds() else {
+            self.conn.execute(
+                "DELETE FROM tiles WHERE provider = ?1 AND z = ?2 AND y = ?3 AND x = ?4",
+                params![provider, z, y, x],
+            )?;
+            return Ok(false);
+        };
+
+        let expires_at = now.saturating_add(max_age);
         let updated = self.conn.execute(
             "UPDATE tiles SET fetched_at = ?1, accessed_at = ?1, expires_at = ?2
              WHERE provider = ?3 AND z = ?4 AND y = ?5 AND x = ?6",
-            params![now, expires_at, provider, z, y, x],
+            params![now, Some(expires_at), provider, z, y, x],
         )?;
         Ok(updated > 0)
     }
@@ -1872,5 +1908,133 @@ mod tests {
             .unwrap();
         assert!(!refreshed);
         assert!(cache.get_stale("esri", 9, 9, 9).is_none());
+    }
+
+    // === Remote max-age is untrusted arithmetic input ===
+
+    #[test]
+    fn an_absurd_max_age_is_clamped_rather_than_overflowing_the_clock() {
+        // `max-age` comes off the network and is then ADDED to the clock. Left
+        // unbounded, i64::MAX panics the addition in a debug build - inside the
+        // tile-cache mutex, which poisons it and silently kills caching for the
+        // session - and wraps to a negative expiry in release.
+        let policy = parse_cache_control(&format!("max-age={}", i64::MAX));
+        assert_eq!(policy.max_age_seconds, Some(MAX_GRANT_SECONDS));
+
+        let ordinary = parse_cache_control("max-age=86400");
+        assert_eq!(
+            ordinary.max_age_seconds,
+            Some(86_400),
+            "a real grant must pass through untouched"
+        );
+    }
+
+    #[test]
+    fn a_hostile_max_age_neither_panics_nor_makes_the_tile_unservable() {
+        let mut cache = TileCache::in_memory(10, 30).unwrap();
+        // Straight past the parser, as a hand-built policy - the belt to the
+        // clamp's braces, and the shape the existing tests already construct.
+        cache
+            .put(
+                "esri",
+                1,
+                2,
+                3,
+                b"tile",
+                "image/jpeg",
+                CachePolicy {
+                    max_age_seconds: Some(i64::MAX),
+                    no_store: false,
+                },
+                None,
+            )
+            .unwrap();
+
+        let entry = cache
+            .get("esri", 1, 2, 3)
+            .expect("a saturated expiry is far-future, so the tile stays servable");
+        assert!(entry.expires_at.unwrap() > TileCache::now());
+    }
+
+    #[test]
+    fn a_saturated_parent_hands_a_child_a_bounded_grant() {
+        // remaining_policy subtracts; an i64::MAX expiry must not wrap it.
+        let entry = TileEntry {
+            data: vec![],
+            content_type: "image/jpeg".to_string(),
+            size_bytes: 0,
+            fetched_at: 0,
+            accessed_at: 0,
+            expires_at: Some(i64::MAX),
+            etag: None,
+        };
+        assert_eq!(entry.remaining_policy(0).max_age_seconds, Some(i64::MAX));
+        assert_eq!(
+            entry.remaining_policy(i64::MIN).max_age_seconds,
+            Some(i64::MAX),
+            "saturating, not wrapping"
+        );
+    }
+
+    // === One grant gate, applied on BOTH write paths ===
+
+    #[test]
+    fn revalidation_that_revokes_the_grant_drops_the_copy() {
+        // The 304 path used to skip this check entirely: a provider answering
+        // "still current, but stop storing it" had its tile kept AND its
+        // retention extended, the exact opposite of what put() promises.
+        let mut cache = TileCache::in_memory(10, 30).unwrap();
+        cache
+            .put_granted("esri", 1, 2, 3, b"tile", "image/jpeg")
+            .unwrap();
+        assert!(cache.get("esri", 1, 2, 3).is_some());
+
+        let refreshed = cache
+            .refresh_validated(
+                "esri",
+                1,
+                2,
+                3,
+                CachePolicy {
+                    max_age_seconds: Some(86_400),
+                    no_store: true,
+                },
+            )
+            .unwrap();
+
+        assert!(!refreshed, "nothing was refreshed - the row is gone");
+        assert_eq!(cache.get_stats().tile_count, 0);
+    }
+
+    #[test]
+    fn a_304_carrying_no_grant_at_all_also_drops_the_copy() {
+        // Silence on a revalidation is silence, same as on a fetch.
+        let mut cache = TileCache::in_memory(10, 30).unwrap();
+        cache
+            .put_granted("esri", 1, 2, 3, b"tile", "image/jpeg")
+            .unwrap();
+
+        let refreshed = cache
+            .refresh_validated("esri", 1, 2, 3, CachePolicy::default())
+            .unwrap();
+
+        assert!(!refreshed);
+        assert_eq!(cache.get_stats().tile_count, 0);
+    }
+
+    #[test]
+    fn granted_seconds_is_the_one_gate_both_paths_ask() {
+        assert_eq!(
+            parse_cache_control("max-age=86400").granted_seconds(),
+            Some(86_400)
+        );
+        assert_eq!(parse_cache_control("no-cache").granted_seconds(), Some(0));
+        assert_eq!(parse_cache_control("no-store").granted_seconds(), None);
+        assert_eq!(
+            parse_cache_control("no-store, max-age=86400").granted_seconds(),
+            None,
+            "no-store beats a max-age sent alongside it"
+        );
+        assert_eq!(CachePolicy::default().granted_seconds(), None);
     }
 }

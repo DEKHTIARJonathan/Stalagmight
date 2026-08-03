@@ -13,6 +13,7 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, act, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 
 const invokeIpc = vi.fn();
 vi.mock('../../../utils/ipc', () => ({
@@ -168,33 +169,46 @@ describe('MapAttribution', () => {
     });
 
     it('pins open on click, for pointers that never hover', async () => {
+      // `userEvent`, not `fireEvent`: a browser focuses a button on mouse-down,
+      // so the real sequence is focus THEN click. A bare `fireEvent.click`
+      // dispatches no focus and so cannot see a focus/click handler pair that
+      // cancel each other out - which is exactly the bug this once hid, leaving
+      // the names unreachable by tap.
+      const user = userEvent.setup();
       render(<MapAttribution visible variant="compact" />);
       const toggle = await screen.findByTestId('map-attribution-toggle');
 
-      fireEvent.click(toggle);
+      await user.click(toggle);
       expect(screen.getByTestId('map-attribution-panel')).toHaveTextContent(LIVE);
       expect(toggle).toHaveAttribute('aria-expanded', 'true');
 
-      fireEvent.click(toggle);
+      await user.click(toggle);
       expect(screen.queryByTestId('map-attribution-panel')).not.toBeInTheDocument();
     });
 
-    it('opens on focus so the names are reachable by keyboard', async () => {
+    it('reaches the names from the keyboard', async () => {
+      // Tab to it, press Enter. A <button> turns Enter/Space into a click, so
+      // the keyboard route is the click route - no separate focus handling, and
+      // nothing for a click to fight with.
+      const user = userEvent.setup();
       render(<MapAttribution visible variant="compact" />);
       const toggle = await screen.findByTestId('map-attribution-toggle');
 
-      fireEvent.focus(toggle);
-      expect(screen.getByTestId('map-attribution-panel')).toHaveTextContent(LIVE);
-
-      fireEvent.blur(toggle);
+      await user.tab();
+      expect(toggle).toHaveFocus();
+      // Focus alone must NOT open it; that is what used to cancel the click.
       expect(screen.queryByTestId('map-attribution-panel')).not.toBeInTheDocument();
+
+      await user.keyboard('{Enter}');
+      expect(screen.getByTestId('map-attribution-panel')).toHaveTextContent(LIVE);
     });
 
     it('closes a pinned panel on Escape', async () => {
+      const user = userEvent.setup();
       render(<MapAttribution visible variant="compact" />);
       const toggle = await screen.findByTestId('map-attribution-toggle');
 
-      fireEvent.click(toggle);
+      await user.click(toggle);
       expect(screen.getByTestId('map-attribution-panel')).toBeInTheDocument();
 
       fireEvent.keyDown(window, { key: 'Escape' });
