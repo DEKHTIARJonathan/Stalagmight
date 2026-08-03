@@ -26,6 +26,10 @@ permissions:
 
 jobs:
   harness:
+    # Upstream-only: the job hard-pins a self-hosted runner forks don't have, so
+    # a fork dispatch would queue for 24h and then vanish. Fork users: run the
+    # harness locally (docs/agent-harness.md) or repoint runs-on in your branch.
+    if: github.repository == 'Stalagmight/Stalagmight'
     runs-on: [self-hosted, ubuntu-latest-local]
     # The debug build dominates; tauri-driver and the smoke run are minutes. Well
     # under the 6h default, which is the actual risk on a self-hosted runner.
