@@ -72,6 +72,12 @@ test.describe('Walls import dialog - survey selection gating', () => {
     await confirm.click();
     await expect(page.getByTestId('walls-import-dialog')).toBeHidden();
 
+    const receiptDialog = page.getByTestId('import-receipt-dialog');
+    await expect(receiptDialog).toBeVisible({ timeout: 10000 });
+    await expect(receiptDialog).toContainText('Walls');
+    await page.getByTestId('import-receipt-continue').click();
+    await expect(receiptDialog).toBeHidden();
+
     const calls = await getWallsImportCalls(page);
     expect(calls).toHaveLength(1);
     // select-all ⇒ omit the filter (null), so a full import stays unfiltered.
