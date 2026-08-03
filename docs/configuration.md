@@ -139,10 +139,16 @@ tile_ttl_days = 30                  # Default retention: days a tile stays on di
 # TTL is RETENTION - how long a tile stays on disk to answer offline. It is not
 # how long a tile may be served as current: that is separately capped by the
 # provider's own `Cache-Control: max-age` (Esri sends `max-age=86400`), recorded
-# per tile when it is cached. Past that the tile is re-fetched on every request
-# and the stored copy is only used if the fetch fails - `stale-if-error`. So
-# raising ttl_days lengthens the offline window; it can never make the app show
-# stale imagery as though it were fresh.
+# per tile when it is cached. So raising ttl_days lengthens the offline window;
+# it can never make the app show stale imagery as though it were fresh.
+#
+# Past max-age the tile is REVALIDATED, not re-downloaded: the request carries
+# the stored ETag as If-None-Match, and Esri answers an unchanged tile with
+# `304 Not Modified` and no body (~20 KB saved per tile over real imagery).
+# A 304 re-stamps the tile as current, so a slow-changing basemap costs one
+# body-less round trip per tile per day rather than a full re-fetch. The stored
+# copy is only served without asking when the network call fails outright -
+# `stale-if-error`.
 
 [global_view]
 fps_threshold = 30                  # FPS below which auto-throttle activates

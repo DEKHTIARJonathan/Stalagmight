@@ -53,6 +53,10 @@ pub struct TileEntry {
     /// Unix timestamp the provider's `max-age` runs out, if it sent one.
     /// `None` = the provider said nothing, so only the configured TTL applies.
     pub expires_at: Option<i64>,
+    /// Validator from the response this tile came in, for a conditional
+    /// re-fetch. `None` = no `ETag`, so revalidation is not possible and a
+    /// re-fetch has to pull the whole body.
+    pub etag: Option<String>,
 }
 
 impl TileEntry {
@@ -320,7 +324,7 @@ impl TileCache {
              WHERE provider = ?2 AND z = ?3 AND y = ?4 AND x = ?5
                AND fetched_at > ?6
                AND (expires_at IS NULL OR expires_at > ?1)
-             RETURNING data, content_type, size_bytes, fetched_at, accessed_at, expires_at",
+             RETURNING data, content_type, size_bytes, fetched_at, accessed_at, expires_at, etag",
             params![now, provider, z, y, x, min_fetched_at],
             |row| {
                 Ok(TileEntry {
@@ -330,6 +334,7 @@ impl TileCache {
                     fetched_at: row.get(3)?,
                     accessed_at: row.get(4)?,
                     expires_at: row.get(5)?,
+                    etag: row.get(6)?,
                 })
             },
         );
@@ -370,7 +375,7 @@ impl TileCache {
 
         // The complement of `get`'s predicate: too old, OR past its max-age.
         let result: Result<TileEntry, rusqlite::Error> = self.conn.query_row(
-            "SELECT data, content_type, size_bytes, fetched_at, accessed_at, expires_at FROM tiles
+            "SELECT data, content_type, size_bytes, fetched_at, accessed_at, expires_at, etag FROM tiles
              WHERE provider = ?1 AND z = ?2 AND y = ?3 AND x = ?4
                AND (fetched_at <= ?5 OR (expires_at IS NOT NULL AND expires_at <= ?6))",
             params![provider, z, y, x, min_fetched_at, now],
@@ -382,6 +387,7 @@ impl TileCache {
                     fetched_at: row.get(3)?,
                     accessed_at: row.get(4)?,
                     expires_at: row.get(5)?,
+                    etag: row.get(6)?,
                 })
             },
         );
@@ -481,6 +487,51 @@ impl TileCache {
             params![provider, z, y, x, data, content_type, new_size as i64, now, now, expires_at, etag],
         )?;
 
+        Ok(())
+    }
+
+    /// Re-stamp a tile the provider just confirmed is still current (a `304`).
+    ///
+    /// Moves both clocks forward without touching the bytes: `expires_at` from
+    /// the freshly-returned directives, and `fetched_at` because the copy WAS
+    /// just validated - it is current imagery, not an old file being kept alive.
+    /// That is what lets a revalidating client hold a tile indefinitely while
+    /// the provider keeps saying it has not changed.
+    ///
+    /// Returns whether a row was actually updated.
+    pub fn refresh_validated(
+        &mut self,
+        provider: &str,
+        z: u32,
+        y: u32,
+        x: u32,
+        policy: CachePolicy,
+    ) -> Result<bool> {
+        let now = Self::now();
+        let expires_at = policy.max_age_seconds.map(|max_age| now + max_age);
+        let updated = self.conn.execute(
+            "UPDATE tiles SET fetched_at = ?1, accessed_at = ?1, expires_at = ?2
+             WHERE provider = ?3 AND z = ?4 AND y = ?5 AND x = ?6",
+            params![now, expires_at, provider, z, y, x],
+        )?;
+        Ok(updated > 0)
+    }
+
+    /// Push a tile past its provider `max-age` without touching retention.
+    /// Lets a test reach the revalidation window without sleeping through it.
+    #[cfg(test)]
+    pub fn expire_max_age_for_test(
+        &mut self,
+        provider: &str,
+        z: u32,
+        y: u32,
+        x: u32,
+    ) -> Result<()> {
+        self.conn.execute(
+            "UPDATE tiles SET expires_at = ?1
+                 WHERE provider = ?2 AND z = ?3 AND y = ?4 AND x = ?5",
+            params![Self::now() - 1, provider, z, y, x],
+        )?;
         Ok(())
     }
 
@@ -1529,6 +1580,7 @@ mod tests {
             fetched_at: now - 100,
             accessed_at: now,
             expires_at: Some(now + 25),
+            etag: None,
         };
         assert_eq!(entry.remaining_policy(now).max_age_seconds, Some(25));
         // Never negative: an already-expired parent yields an immediately-stale child.
@@ -1598,5 +1650,122 @@ mod tests {
         // Re-opening runs init_schema again; the ADD COLUMNs must not double-apply.
         let mut reopened = TileCache::open(dir.path(), 10, 30).unwrap();
         assert!(reopened.get("esri", 1, 2, 3).is_some());
+    }
+
+    // === Conditional revalidation (Esri answers If-None-Match with a 304) ===
+
+    #[test]
+    fn the_validator_is_stored_and_readable_for_a_conditional_refetch() {
+        let mut cache = TileCache::in_memory(10, 30).unwrap();
+        cache
+            .put(
+                "esri",
+                1,
+                2,
+                3,
+                b"tile",
+                "image/jpeg",
+                CachePolicy {
+                    max_age_seconds: Some(60),
+                    no_store: false,
+                },
+                Some("\"sjii0vvv1sqvf\""),
+            )
+            .unwrap();
+        let entry = cache.get("esri", 1, 2, 3).unwrap();
+        assert_eq!(entry.etag.as_deref(), Some("\"sjii0vvv1sqvf\""));
+    }
+
+    #[test]
+    fn a_validator_survives_into_the_stale_window_where_it_is_actually_needed() {
+        // Revalidation only happens once a tile is PAST max-age, so the etag has
+        // to still be readable from the stale path - that is what supplies
+        // If-None-Match.
+        let mut cache = TileCache::in_memory(10, 30).unwrap();
+        cache
+            .put(
+                "esri",
+                1,
+                2,
+                3,
+                b"tile",
+                "image/jpeg",
+                CachePolicy {
+                    max_age_seconds: Some(60),
+                    no_store: false,
+                },
+                Some("\"abc\""),
+            )
+            .unwrap();
+        cache
+            .conn
+            .execute(
+                "UPDATE tiles SET expires_at = ?1",
+                params![TileCache::now() - 1],
+            )
+            .unwrap();
+
+        assert!(cache.get("esri", 1, 2, 3).is_none());
+        let stale = cache.get_stale("esri", 1, 2, 3).unwrap();
+        assert_eq!(stale.etag.as_deref(), Some("\"abc\""));
+    }
+
+    #[test]
+    fn revalidation_makes_a_stale_tile_fresh_again_without_new_bytes() {
+        let mut cache = TileCache::in_memory(10, 30).unwrap();
+        cache
+            .put(
+                "esri",
+                1,
+                2,
+                3,
+                b"original bytes",
+                "image/jpeg",
+                CachePolicy {
+                    max_age_seconds: Some(60),
+                    no_store: false,
+                },
+                Some("\"abc\""),
+            )
+            .unwrap();
+        cache
+            .conn
+            .execute(
+                "UPDATE tiles SET expires_at = ?1",
+                params![TileCache::now() - 1],
+            )
+            .unwrap();
+        assert!(cache.get("esri", 1, 2, 3).is_none(), "precondition: stale");
+
+        let refreshed = cache
+            .refresh_validated(
+                "esri",
+                1,
+                2,
+                3,
+                CachePolicy {
+                    max_age_seconds: Some(86_400),
+                    no_store: false,
+                },
+            )
+            .unwrap();
+        assert!(refreshed);
+
+        let entry = cache
+            .get("esri", 1, 2, 3)
+            .expect("a 304 puts the tile back in the fresh window");
+        // The bytes are untouched - that is the entire saving.
+        assert_eq!(entry.data, b"original bytes");
+        assert!(entry.expires_at.unwrap() > TileCache::now());
+    }
+
+    #[test]
+    fn revalidating_a_tile_we_do_not_have_reports_it_rather_than_inventing_a_row() {
+        let mut cache = TileCache::in_memory(10, 30).unwrap();
+        let refreshed = cache
+            .refresh_validated("esri", 9, 9, 9, CachePolicy::default())
+            .unwrap();
+        assert!(!refreshed);
+        assert!(cache.get_stale("esri", 9, 9, 9).is_none());
     }
 }
