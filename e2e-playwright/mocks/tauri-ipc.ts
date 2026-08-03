@@ -2287,6 +2287,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
 
             const createdSectionIds: number[] = [];
             let backendSectionIndex = 0;
+            let gpxShotCount = 0;
 
             const appendSection = (
               name: string,
@@ -2319,6 +2320,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               };
               currentProject?.sections.push(section);
               createdSectionIds.push(sectionId);
+              gpxShotCount += encodedShots.length;
               if (datum) {
                 (currentProject?.zero_datums as Array<{
                   station_ref: { section_id: number; station_index: number };
@@ -2423,10 +2425,6 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               currentProject.modified_at = new Date().toISOString();
             }
 
-            const gpxShotCount = createdSectionIds.reduce((sum, sectionId) => {
-              const section = currentProject?.sections.find((s) => s.id === sectionId);
-              return sum + (section ? (section.shots as unknown[]).length : 0);
-            }, 0);
             const gpxFileName = (filePath ?? '').split('/').pop() ?? filePath ?? '';
             return {
               success: true,
