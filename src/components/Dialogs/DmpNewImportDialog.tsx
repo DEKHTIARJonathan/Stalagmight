@@ -10,6 +10,11 @@ import type { ImportSectionConfig as BackendImportSectionConfig, ImportPlacement
 import type { ZeroDatumConfigResult } from './ZeroDatumConfigDialog';
 import type { DmpSection } from '../../types/commands';
 import type { OverlapMode } from '../../types/config';
+import {
+  WizardMapPanel,
+  MAP_PANEL_DEFAULT_WIDTH,
+  MAP_PANEL_MAX_WIDTH,
+} from './WizardMapPanel';
 import SectionPreview, { type MergePreviewConfig, type DmpMergePreviewConfig, type ContextSectionGeometry, computeStationsFromDmpShots, computeStationsFromShots } from './SectionPreview';
 import { Select, type SelectOption } from '../common/Select';
 import { DialogWrapper } from './DialogWrapper';
@@ -1175,8 +1180,10 @@ function usePreviewSquareSize(
   const measure = useCallback(() => {
     const el = elRef.current;
     if (!el) return;
-    // Preview panel adds p-4 (1rem top + bottom = 32px) around the square.
-    const available = el.clientHeight - 32;
+    // Preview panel adds p-4 (1rem on every side = 32px per axis) around the
+    // square. Fit BOTH axes: sizing off height alone left the map letterboxed
+    // in its column, and made widening the column do nothing.
+    const available = Math.min(el.clientHeight - 32, el.clientWidth - 32);
     setSize(Math.max(min, Math.min(max, Math.floor(available))));
   }, [max, min]);
 
@@ -1218,8 +1225,14 @@ export default function DmpNewImportDialog({
 
   // Responsive preview square - fits the available column height so it never
   // overflows the fullscreen dialog on short windows (#93 review). One per flow.
-  const [suggestionPreviewRef, suggestionPreviewSize] = usePreviewSquareSize();
-  const [manualPreviewRef, manualPreviewSize] = usePreviewSquareSize();
+  // The map column's width, dragged by the divider between it and the settings.
+  // One value for both side-by-side blocks (suggestion and manual placing), so
+  // the wizard does not change shape as it steps between them.
+  const [mapPanelWidth, setMapPanelWidth] = useState(MAP_PANEL_DEFAULT_WIDTH);
+  const suggestionBodyRef = useRef<HTMLDivElement | null>(null);
+  const manualBodyRef = useRef<HTMLDivElement | null>(null);
+  const [suggestionPreviewRef, suggestionPreviewSize] = usePreviewSquareSize(MAP_PANEL_MAX_WIDTH);
+  const [manualPreviewRef, manualPreviewSize] = usePreviewSquareSize(MAP_PANEL_MAX_WIDTH);
 
   // Store selectors
   const importSections = useProjectStore((s) => s.importSections);
@@ -3633,12 +3646,12 @@ export default function DmpNewImportDialog({
 
         {/* Body: side-by-side when showing suggestion, centered otherwise */}
         {showSideBySide ? (
-          <div ref={suggestionPreviewRef} className="flex-1 flex min-h-0 overflow-hidden relative">
-            {/* Left column: SectionPreview */}
-            <div
-              className="shrink-0 flex flex-col items-center p-4 border-r border-border"
-              style={{ width: 480 }}
-              data-testid="segment-preview-panel"
+          <div ref={suggestionBodyRef} className="flex-1 flex min-h-0 overflow-hidden relative">
+            <WizardMapPanel
+              width={mapPanelWidth}
+              onWidthChange={setMapPanelWidth}
+              bodyRef={suggestionBodyRef}
+              panelRef={suggestionPreviewRef}
             >
               <SectionPreview
                 section={importPreviewSection}
@@ -3649,7 +3662,7 @@ export default function DmpNewImportDialog({
                 focusStationIndex={selectedMergePair?.importStation ?? currentSuggestion!.importStationIndex}
                 contextSections={mergedContextSections}
               />
-            </div>
+            </WizardMapPanel>
 
             {/* Right column: connection details */}
             <div className="flex-1 min-w-0 overflow-y-auto p-5 space-y-4" data-testid="wizard-suggestion">
@@ -3865,12 +3878,12 @@ export default function DmpNewImportDialog({
             </div>
           </div>
         ) : showManualPlacing ? (
-          <div ref={manualPreviewRef} className="flex-1 flex min-h-0 overflow-hidden relative">
-            {/* Left column: Segment Preview */}
-            <div
-              className="shrink-0 flex flex-col items-center p-4 border-r border-border"
-              style={{ width: 480 }}
-              data-testid="segment-preview-panel"
+          <div ref={manualBodyRef} className="flex-1 flex min-h-0 overflow-hidden relative">
+            <WizardMapPanel
+              width={mapPanelWidth}
+              onWidthChange={setMapPanelWidth}
+              bodyRef={manualBodyRef}
+              panelRef={manualPreviewRef}
             >
               <SectionPreview
                 segmentSections={segmentPreviewSections}
@@ -3880,7 +3893,7 @@ export default function DmpNewImportDialog({
                 selectedStationIndex={previewAnchor?.stationIndex ?? null}
                 selectedSectionIndex={previewAnchor?.sectionIndex ?? null}
               />
-            </div>
+            </WizardMapPanel>
 
             {/* Right column: Placement configuration */}
             <div className="flex-1 min-w-0 overflow-y-auto p-5 space-y-4" data-testid="wizard-manual-placing">
