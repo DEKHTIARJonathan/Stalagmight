@@ -252,10 +252,22 @@ impl TileCache {
 
         // Added after the table shipped, so existing caches need the columns
         // bolted on. SQLite has no `ADD COLUMN IF NOT EXISTS`, hence the probe.
-        // Both are nullable with no default: NULL means "this row predates the
-        // column", which for `expires_at` reads as "the provider said nothing"
-        // and leaves those tiles governed by the configured TTL alone - the
-        // behaviour they were cached under.
+        //
+        // Both are nullable with no default, so every pre-upgrade row carries
+        // NULL - which `get` reads as "no recorded grant" and therefore never
+        // serves as fresh (`expires_at IS NOT NULL AND expires_at > ?`). Those
+        // rows are reachable only through `get_stale`, i.e. after a network
+        // attempt has already failed. In practice that means a one-time
+        // re-fetch of whatever was on disk, in full, since a legacy row has no
+        // `etag` to revalidate with either.
+        //
+        // That is deliberate rather than an oversight: a row cached before this
+        // column existed has no record of what the provider actually permitted,
+        // and the module's rule is that silence is not consent. Backfilling a
+        // grant we never received would be inventing one.
+        //
+        // The blast radius is small: Esri shipped with caching OFF, so an
+        // upgrading install almost certainly has no legacy rows at all.
         let existing: Vec<String> = {
             let mut stmt = self.conn.prepare("PRAGMA table_info(tiles)")?;
             let names = stmt

@@ -80,10 +80,16 @@ export const MAP_MIN_HEIGHT = 200;
  * Shared with the on-map imagery attribution bar: the bar runs along the map's
  * bottom edge and ends flush against this tab's left edge, so the two read as
  * one row and neither obstructs the other (Esri requires the source names stay
- * unobstructed, and the tab drew straight over them before). The bar's own inset
- * is `DATA_DOCK_TAB_INSET + <measured tab width>` - the Dock reports that width
- * through `onTabExtentChange`, because it changes when the panel opens (label ->
- * pin + close icons) and again under the webview text-zoom.
+ * unobstructed, and the tab drew straight over them before).
+ *
+ * The bar's own inset is NOT derived from this constant. It is measured: the
+ * Dock reports its tab's viewport rect through `onTabBoundsChange`, and
+ * `SingleSystemView` subtracts that from the map column's own rect. Arithmetic
+ * on `DATA_DOCK_TAB_INSET + <tab width>` was tried and left a visible gap - the
+ * Data overlay is portalled to Main with its own offsets, so this inset is
+ * measured from a different box than the column the bar sits in, and the tab's
+ * width moves with its contents (label when closed, pin + close icons when
+ * open) and with the webview text-zoom.
  */
 export const DATA_DOCK_TAB_INSET = 40;
 
