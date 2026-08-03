@@ -2014,7 +2014,7 @@
       "fromStation": "from {{id}}",
       "computing": "Gas reach: computing…",
       "key": {
-        "turnPoint": "Turn / end point",
+        "beyondRange": "Beyond gas range",
         "stageDrop": "Stage drop",
         "finalTurn": "Final turn",
         "route": "Planned route",
@@ -2351,8 +2351,6 @@
       "dropAria": "Stage {{n}} drop point: drag or use arrow keys to move it along the route, Delete to reset",
       "finalTurnTooltip": "Turn around here",
       "scooterDropTooltip": "Scooters parked here - the passage beyond is swum",
-      "turnMarkerTooltip": "Click to set as endpoint",
-      "turnMarkerAria": "Candidate route endpoint - activate to set as endpoint",
       "waypointTooltip": "Way point {{n}} - click to remove, right-click for route options",
       "waypointAria": "Way point {{n}} - activate to remove it from the route",
       "markedTooltip": "Marked point - click to remove, right-click for route options",

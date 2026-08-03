@@ -206,13 +206,6 @@ function MapCanvas() {
   const mapInteractionSequenceRef = useRef(0);
   const originMarkerRef = useRef<maplibregl.Marker | null>(null);
   const gasOriginMarkerRef = useRef<maplibregl.Marker | null>(null);
-  const gasTurnMarkersRef = useRef<maplibregl.Marker[]>([]);
-  // Keyboard-picking a turn marker nulls reachField (setEndpoint), which tears down
-  // every turn marker incl. the focused one; when the recomputed field rebuilds them,
-  // focus would be stranded on <body>. Remember the picked ref so the rebuild can
-  // restore focus to its new marker element - the a11y feature would otherwise lose
-  // the AT user's place on every pick (#243).
-  const pendingTurnFocusRef = useRef<StationRef | null>(null);
   const scaleControlRef = useRef<maplibregl.ScaleControl | null>(null);
   const scaleControlAddedRef = useRef<boolean>(false);
   const [boxSelect, setBoxSelect] = useState<BoxSelectState>({ start: null, end: null });
@@ -2185,85 +2178,6 @@ function MapCanvas() {
       gasOriginMarkerRef.current = null;
     };
   }, [showGasPlan, gasOrigin, activeStations, gpsOrigin, mapLoaded]);
-
-  // Gas turn-frontier markers (#38): a red dot on each reachable station that
-  // borders an unreachable one - "this is where you turn", and the candidate end points.
-  // Right-click one to open the Plan menu (Set as endpoint / origin) - these stay visible
-  // even when survey stations are hidden, so they're the reliable route-pick target.
-  // Rebuilt whenever the field changes; bounded by the frontier size (a handful of leads).
-  useEffect(() => {
-    for (const m of gasTurnMarkersRef.current) m.remove();
-    gasTurnMarkersRef.current = [];
-    if (!map.current || !mapLoaded || !showGasPlan || !gasReachField) return undefined;
-    const mapInst = map.current;
-    for (const ref of gasReachField.turn_frontier) {
-      const st = activeStations.find(
-        (s) =>
-          s.station_ref.section_id === ref.section_id &&
-          s.station_ref.station_index === ref.station_index
-      );
-      if (!st) continue;
-      const lngLat = metersToMapCoords(
-        st.coordinates.x,
-        st.coordinates.y,
-        gpsOrigin
-      ) as [number, number];
-      const el = document.createElement('div');
-      el.setAttribute('data-testid', 'gas-turn-marker');
-      el.setAttribute('role', 'button');
-      // Keyboard-operable like the zero-datum star: focusable + Enter/Space, so
-      // keyboard / AT users can pick a route endpoint too (#243).
-      el.setAttribute('tabindex', '0');
-      el.setAttribute('aria-label', t('gasPanel.map.turnMarkerAria'));
-      el.title = t('gasPanel.map.turnMarkerTooltip');
-      el.style.cssText =
-        'width:14px;height:14px;border-radius:50%;border:2px solid #ffffff;' +
-        'background:#c0392b;box-shadow:0 0 3px rgba(0,0,0,0.7);cursor:pointer;';
-      // Left-click a candidate end point → select it as the route endpoint (#243).
-      const pick = () => useGasPlanStore.getState().setEndpoint(ref);
-      el.addEventListener('click', (e) => {
-        e.stopPropagation();
-        pick();
-      });
-      el.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter' || e.key === ' ') {
-          e.preventDefault();
-          // Keyboard pick: setEndpoint will rebuild every marker, so record which
-          // one to re-focus once the recomputed field lands (see restore below).
-          pendingTurnFocusRef.current = ref;
-          pick();
-        }
-      });
-      // Right-click a candidate end point → the Plan context menu for that station.
-      el.addEventListener('contextmenu', (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        useUIStore.getState().openDialog('context-menu', {
-          target: { type: 'station', ref },
-          position: { x: e.clientX, y: e.clientY },
-        });
-      });
-      gasTurnMarkersRef.current.push(
-        new maplibregl.Marker({ element: el }).setLngLat(lngLat).addTo(mapInst)
-      );
-      // Restore keyboard focus to the marker the AT user just activated: after the
-      // pick's recompute rebuilt the frontier, the picked ref is still a turn
-      // candidate (reachability is independent of the chosen endpoint), so its new
-      // element gets focus and the user keeps their place.
-      if (
-        pendingTurnFocusRef.current &&
-        pendingTurnFocusRef.current.section_id === ref.section_id &&
-        pendingTurnFocusRef.current.station_index === ref.station_index
-      ) {
-        el.focus();
-        pendingTurnFocusRef.current = null;
-      }
-    }
-    return () => {
-      for (const m of gasTurnMarkersRef.current) m.remove();
-      gasTurnMarkersRef.current = [];
-    };
-  }, [showGasPlan, gasReachField, activeStations, gpsOrigin, mapLoaded, t]);
 
   // Plan point markers (#38 datum stars, #298 way points + marked points) - simple place/click
   // pins, extracted to their own hook. The turn-frontier dots and stage drops stay here because

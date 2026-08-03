@@ -6,6 +6,7 @@ import { useUIStore } from '../../store/uiStore';
 import { useGasPlanStore } from '../../store/gasPlanStore';
 import { formatVolume } from '../../utils/formatGas';
 import { GAS_NEAR, GAS_FAR } from '../../utils/gasReach';
+import { GAS_DIM_ALPHA } from './surveyLayer/customRender/shaders';
 import { segmentColor } from '../../utils/segmentColors';
 import type { GasReachField, GasUnits } from '../../types/ipc.generated';
 
@@ -101,7 +102,7 @@ export function GasLegend({ field, units, visible }: GasLegendProps) {
       </div>
 
       {/* Symbol key - what the map markers mean. Drop / final-turn rows appear only for a staged
-          strategy (when the backend returns them). The turn point is always present in Plan. */}
+          strategy (when the backend returns them). The beyond-range dim swatch is always present. */}
       <div
         data-testid="gas-legend-key"
         style={{ display: 'flex', flexDirection: 'column', gap: 3, marginTop: 2, color: textColor }}
@@ -121,15 +122,18 @@ export function GasLegend({ field, units, visible }: GasLegendProps) {
             )}
           </>
         )}
-        <KeyRow label={t('map.gasLegend.key.turnPoint')}>
+        {/* Beyond gas range (#395): a short line sample at the same dimmed opacity
+            the renderer paints beyond-budget geometry with, in the survey's default
+            section color - explains why some legs look faded but still colored
+            (vs. the fully grey unconnected parts, which need no key of their own). */}
+        <KeyRow label={t('map.gasLegend.key.beyondRange')}>
           <span
             style={{
-              width: 10,
-              height: 10,
-              borderRadius: '50%',
-              background: '#c0392b',
-              border: '1.5px solid #ffffff',
-              boxShadow: '0 0 2px rgba(0,0,0,0.6)',
+              width: 14,
+              height: 3,
+              borderRadius: 2,
+              background: getThemeColor('--cc-station-default'),
+              opacity: GAS_DIM_ALPHA,
               flexShrink: 0,
             }}
           />
