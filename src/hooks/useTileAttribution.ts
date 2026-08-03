@@ -51,14 +51,24 @@ export function loadTileAttribution(provider: string): Promise<ResolvedTileAttri
     { provider },
     { purpose: 'display map imagery attribution' },
   )
-    .then((result) => ({
-      // An empty live string would leave required attribution blank, so treat
-      // it the same as a failure and keep the compiled-in names.
-      text: result.text || fallbackAttribution(provider).text,
-      notice: result.notice,
-      noticeUrl: result.notice_url,
-      live: result.live && !!result.text,
-    }))
+    .then((result) => {
+      const resolved = {
+        // An empty live string would leave required attribution blank, so treat
+        // it the same as a failure and keep the compiled-in names.
+        text: result.text || fallbackAttribution(provider).text,
+        notice: result.notice,
+        noticeUrl: result.notice_url,
+        live: result.live && !!result.text,
+      };
+      // Only a LIVE answer is worth memoizing. The backend answers `live: false`
+      // when its own fetch failed - offline at startup, or the metadata
+      // endpoint timing out - and that is a resolved promise, so keeping it
+      // would pin the compiled-in names for the rest of the session and put the
+      // backend's 5-minute backoff and daily refresh permanently out of reach.
+      // Same treatment the `catch` below gives a failed IPC.
+      if (!resolved.live) inFlight.delete(provider);
+      return resolved;
+    })
     .catch(() => {
       // Never surfaced to the user: the fallback is a correct attribution, and
       // a toast about a copyright string is noise. Drop the memo so a later

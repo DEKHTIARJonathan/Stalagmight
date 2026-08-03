@@ -221,6 +221,39 @@ regenerates the exact `speleodb-api.*` set from `Endpoint::ALL x Outcome::ALL x
 LATENCY_BUCKETS` and fails until the new kind's ten names are in `EVENT_NAMES`
 (and it flags any orphan `speleodb-api.*` name that no longer maps to a kind).
 
+### Map-tile consumption - `tile.<source>.<provider>` (#31)
+
+One event per **served** tile, tagged by provider and by where its bytes came
+from. Emitted from the custom tile protocol handler in `lib.rs`. Errors (nothing
+served) are not counted, so the three buckets are disjoint and sum to the tiles a
+session used for that provider.
+
+```
+tile.fetch.<provider>       - imagery bytes pulled from the provider
+tile.revalidate.<provider>  - served from cache after a 304: a round trip, but
+                              no imagery crossed the wire
+tile.cache.<provider>       - served from cache with no network call at all,
+                              including a stale copy under stale-if-error
+```
+
+**Why revalidations are their own bucket.** The cache stores a tile for as long
+as the provider's `Cache-Control` grants (Esri: a day) and then revalidates with
+`If-None-Match` rather than re-downloading. Past that first day nearly every
+request is a `304`, so folding revalidations into `tile.fetch` would report
+near-total provider consumption for a session that downloaded almost nothing -
+and consumption is the one thing this metric exists to size. The split also makes
+the bandwidth saving visible directly: `revalidate` against `fetch` is how much
+imagery the conditional request avoided pulling.
+
+The classification is per request (`TileServeSource`), deliberately not the
+shared `TileFetchStats` diff, which concurrent tile requests would
+cross-contaminate. It is also **not** what drives the offline indicator: that
+runs off the stats snapshot, where a `304` correctly counts as the network having
+been reached.
+
+Adding a provider is CI-gated: `every_tile_provider_has_consumption_events`
+walks the registry and fails until all three names for it are in `EVENT_NAMES`.
+
 ## Key Files
 
 | File | Role |
@@ -323,7 +356,7 @@ name (or an event name with no corresponding feature).
 | `no_duplicate_event_names` | No duplicate strings in `EVENT_NAMES` |
 | `event_count` / `source_count` | Array lengths match expected totals |
 | `active_dwell_mirrors_dwell` | Every `dwell.<state>` has a matching `active-dwell.<state>` |
-| `every_tile_provider_has_consumption_events` | Every tile provider has `tile.fetch.*` / `tile.cache.*` |
+| `every_tile_provider_has_consumption_events` | Every tile provider has `tile.fetch.*` / `tile.revalidate.*` / `tile.cache.*` |
 | `every_speleodb_endpoint_has_traffic_events` | Every `speleodb::metrics::Endpoint` has its `speleodb-api.<kind>.*` outcome + latency events (and no orphans) |
 | `registry_covers_all_tools` | `ToolType` union ↔ `action.tool.*` / `dwell.tool.*` |
 | `registry_covers_all_undoable_commands` | `UNDOABLE_COMMANDS` ↔ `undo-after.*` |

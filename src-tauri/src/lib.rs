@@ -24,7 +24,7 @@ use image::imageops::FilterType;
 use image::{DynamicImage, GenericImageView, ImageFormat};
 use std::collections::HashMap as StdHashMap;
 use std::io::Cursor;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tauri::{Emitter, Manager};
@@ -745,6 +745,68 @@ enum TileFetchOutcome {
     Missing { error: String },
 }
 
+/// Where the bytes we served actually came from, for the per-provider
+/// consumption telemetry (#31).
+///
+/// The three are disjoint, and the middle one is why this is not a bool. A `304`
+/// is a network round trip that transfers NO imagery: the pixels come off our
+/// own disk. Counting it as a fetch would report near-total provider
+/// consumption for a session that downloaded nothing, since past the first day
+/// nearly every request revalidates - and consumption is precisely what the
+/// metric exists to measure.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TileServeSource {
+    /// No network call at all - a fresh cache hit, or a stale copy under
+    /// stale-if-error.
+    Cache,
+    /// Revalidated with `If-None-Match`; the provider answered `304` and the
+    /// body came from cache.
+    Revalidated,
+    /// Imagery bytes pulled from the provider.
+    Network,
+}
+
+impl TileServeSource {
+    /// The `tile.<kind>.<provider>` event name this maps to. Every variant must
+    /// stay registered in `telemetry::registry` - a test enforces the trio per
+    /// provider.
+    fn telemetry_kind(self) -> &'static str {
+        match self {
+            Self::Cache => "cache",
+            Self::Revalidated => "revalidate",
+            Self::Network => "fetch",
+        }
+    }
+
+    /// What a completed network call means for provenance, or `None` when it
+    /// tells us nothing (an error leaves whatever the cache path decides).
+    fn from_fetch(result: &Result<TileFetchResponse, TileFetchError>) -> Option<Self> {
+        match result {
+            Ok(TileFetchResponse::Fetched(_)) => Some(Self::Network),
+            // A round trip, but no imagery. Recorded separately so `tile.fetch`
+            // keeps meaning "consumed from the provider".
+            Ok(TileFetchResponse::NotModified { .. }) => Some(Self::Revalidated),
+            Err(_) => None,
+        }
+    }
+
+    fn from_u8(raw: u8) -> Self {
+        match raw {
+            1 => Self::Revalidated,
+            2 => Self::Network,
+            _ => Self::Cache,
+        }
+    }
+
+    fn as_u8(self) -> u8 {
+        match self {
+            Self::Cache => 0,
+            Self::Revalidated => 1,
+            Self::Network => 2,
+        }
+    }
+}
+
 fn cache_put_best_effort(
     tile_cache: &Arc<Mutex<Option<TileCache>>>,
     provider: &str,
@@ -1217,12 +1279,15 @@ fn handle_tile_request(
     tilemap_cache: &Arc<Mutex<TilemapCache>>,
     stats: &Arc<TileFetchStats>,
     cache_config: &config::CacheConfig,
-) -> (http::Response<Vec<u8>>, bool) {
+) -> (http::Response<Vec<u8>>, TileServeSource) {
     let stats_ref = Arc::clone(stats);
-    // Per-request network-hit flag, set when fetch_fn (the real network fetch) returns
-    // Ok for this request. A cache hit / stale fallback never sets it.
-    let network_hit = Arc::new(AtomicBool::new(false));
-    let network_hit_setter = Arc::clone(&network_hit);
+    // Per-request provenance for the consumption telemetry, recorded by
+    // `fetch_fn` (the real network call) and left at `Cache` when it is never
+    // reached. NOT what drives the offline indicator - that runs off the shared
+    // `TileFetchStats` snapshot diff below, which a 304 does move, because the
+    // network genuinely was reached.
+    let serve_source = Arc::new(AtomicU8::new(TileServeSource::Cache.as_u8()));
+    let source_setter = Arc::clone(&serve_source);
     let fetch_fn = move |p: &str,
                          z: u32,
                          y: u32,
@@ -1230,10 +1295,8 @@ fn handle_tile_request(
                          validator: Option<&str>|
           -> Result<TileFetchResponse, TileFetchError> {
         let result = fetch_tile_from_network(p, z, y, x, Some(&stats_ref), validator);
-        if result.is_ok() {
-            // A 304 counts: the network was reached and answered, which is what
-            // this flag drives (the offline indicator), not whether bytes moved.
-            network_hit_setter.store(true, Ordering::Relaxed);
+        if let Some(source) = TileServeSource::from_fetch(&result) {
+            source_setter.store(source.as_u8(), Ordering::Relaxed);
         }
         result
     };
@@ -1248,7 +1311,10 @@ fn handle_tile_request(
         fetch_fn,
         cache_enabled,
     );
-    (response, network_hit.load(Ordering::Relaxed))
+    (
+        response,
+        TileServeSource::from_u8(serve_source.load(Ordering::Relaxed)),
+    )
 }
 
 /// Internal implementation that accepts a fetch function for testability.
@@ -1417,7 +1483,7 @@ pub fn run() {
                     // exact tile-consumption telemetry below.
                     let result = tauri::async_runtime::spawn_blocking(move || {
                         let snap_before = tile_fetch_stats.snapshot();
-                        let (response, network_hit) = handle_tile_request(
+                        let (response, serve_source) = handle_tile_request(
                             &provider,
                             z,
                             y,
@@ -1435,12 +1501,12 @@ pub fn run() {
                             response,
                             had_network_success,
                             had_network_error,
-                            network_hit,
+                            serve_source,
                         )
                     })
                     .await;
 
-                    let (response, had_network_success, had_network_error, network_hit) = result
+                    let (response, had_network_success, had_network_error, serve_source) = result
                         .unwrap_or_else(|e| {
                             tracing::error!(
                                 error = %e,
@@ -1454,7 +1520,7 @@ pub fn run() {
                                 ),
                                 false,
                                 false,
-                                false,
+                                TileServeSource::Cache,
                             )
                         });
 
@@ -1466,19 +1532,19 @@ pub fn run() {
                     }
 
                     // Tile-consumption telemetry (#31): one event per SERVED tile, tagged by
-                    // provider - `tile.fetch.<provider>` for a fresh network pull (provider
-                    // consumption) vs `tile.cache.<provider>` for one served from the local
-                    // cache (incl. a stale copy served under stale-if-error). Uses the PER-REQUEST
-                    // `network_hit` (not the shared stats diff, which concurrent requests
-                    // would cross-contaminate). Errors (no tile served) aren't counted;
-                    // "tiles used by a session for provider P" = fetch + cache. No-op unless
-                    // telemetry is compiled in and enabled.
+                    // provider and by where its bytes came from - `tile.fetch.<p>` for
+                    // imagery pulled from the provider, `tile.revalidate.<p>` for a 304
+                    // (a round trip, but the bytes came off our disk), `tile.cache.<p>`
+                    // for no network call at all, stale-if-error included. Uses the
+                    // PER-REQUEST source (not the shared stats diff, which concurrent
+                    // requests would cross-contaminate). Errors (no tile served) aren't
+                    // counted; "tiles used by a session for provider P" is the sum of the
+                    // three. No-op unless telemetry is compiled in and enabled.
                     if response.status().is_success() {
-                        let event = if network_hit {
-                            format!("tile.fetch.{provider_for_telemetry}")
-                        } else {
-                            format!("tile.cache.{provider_for_telemetry}")
-                        };
+                        let event = format!(
+                            "tile.{}.{provider_for_telemetry}",
+                            serve_source.telemetry_kind()
+                        );
                         app_handle
                             .state::<telemetry::TelemetryCollector>()
                             .track(&event);
@@ -2335,6 +2401,55 @@ mod tests {
     }
 
     #[test]
+    fn a_revalidation_is_not_counted_as_imagery_pulled_from_the_provider() {
+        // #31 measures how much imagery a session consumes from the provider. A
+        // 304 transfers none: the pixels came off our own disk. Past the first
+        // day nearly every request revalidates, so folding those into
+        // `tile.fetch` would report near-total consumption for a session that
+        // downloaded nothing at all.
+        let fetched = Ok(TileFetchResponse::Fetched(FetchedTile {
+            data: b"bytes".to_vec(),
+            content_type: "image/jpeg".to_string(),
+            policy: CachePolicy::default(),
+            etag: None,
+        }));
+        assert_eq!(
+            TileServeSource::from_fetch(&fetched),
+            Some(TileServeSource::Network)
+        );
+        assert_eq!(TileServeSource::Network.telemetry_kind(), "fetch");
+
+        let not_modified = Ok(TileFetchResponse::NotModified {
+            policy: CachePolicy::default(),
+        });
+        assert_eq!(
+            TileServeSource::from_fetch(&not_modified),
+            Some(TileServeSource::Revalidated)
+        );
+        assert_eq!(TileServeSource::Revalidated.telemetry_kind(), "revalidate");
+
+        // A failed call says nothing about provenance: whatever the cache path
+        // then serves (a stale copy, or nothing) decides it.
+        let failed: Result<TileFetchResponse, TileFetchError> =
+            Err(TileFetchError::transport("down".to_string()));
+        assert_eq!(TileServeSource::from_fetch(&failed), None);
+        assert_eq!(TileServeSource::Cache.telemetry_kind(), "cache");
+    }
+
+    #[test]
+    fn the_serve_source_survives_the_round_trip_through_the_atomic() {
+        // It crosses a thread boundary as a u8; a bad mapping would silently
+        // retag every tile.
+        for source in [
+            TileServeSource::Cache,
+            TileServeSource::Revalidated,
+            TileServeSource::Network,
+        ] {
+            assert_eq!(TileServeSource::from_u8(source.as_u8()), source);
+        }
+    }
+
+    #[test]
     fn test_handle_tile_request_cache_hit_returns_200() {
         let cache = make_test_cache();
         let tilemap_cache = make_test_tilemap_cache();
@@ -2381,7 +2496,7 @@ mod tests {
                 .unwrap();
         }
 
-        let (response, _) = handle_tile_request(
+        let (response, source) = handle_tile_request(
             "esri",
             10,
             500,
@@ -2393,6 +2508,9 @@ mod tests {
         );
         assert_eq!(response.status(), http::StatusCode::OK);
         assert_eq!(response.headers().get("content-type").unwrap(), "image/png");
+        // No network call was made at all, so this is provider consumption of
+        // exactly nothing.
+        assert_eq!(source, TileServeSource::Cache);
         assert_cors_header(&response);
     }
 
