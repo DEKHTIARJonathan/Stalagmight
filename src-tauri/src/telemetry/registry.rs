@@ -1079,7 +1079,12 @@ mod tests {
         //       they would report near-total provider consumption for a session
         //       that downloaded nothing, which is the one thing #31 measures:
         //       tile.revalidate.esri = 719.
-        assert_eq!(EVENT_NAMES.len(), 719);
+        //   + 1 new-section grid view write. Its own command rather than more
+        //       arguments on update_data_table_view, so the rate answers a question
+        //       the data table's cannot: whether anyone reshapes the columns while
+        //       ENTERING a survey, as opposed to while reviewing one already typed:
+        //       command.update_new_section_view = 710.
+        assert_eq!(EVENT_NAMES.len(), 720);
     }
 
     /// Active-dwell mirrors every dwell state 1:1 (#31): for each `dwell.<key>` there
