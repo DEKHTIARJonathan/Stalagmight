@@ -238,6 +238,7 @@ impl AppState {
         }
 
         if sections.is_empty() {
+            // No receipt: nothing was imported, so there is nothing to report.
             return CommandResult::success();
         }
 
@@ -913,6 +914,8 @@ impl AppState {
         // closure-graph invariants once instead of rebuilding the whole graph per
         // closure - the dominant cost on a large import.
         let mut closure_pairs: Vec<(StationRef, StationRef)> = Vec::with_capacity(closures.len());
+        let mut closures_skipped: u32 = 0;
+        let mut closures_failed: u32 = 0;
         for closure in &closures {
             let Some(&from_section_id) = created_ids.get(&closure.from_section_index) else {
                 tracing::warn!(
@@ -920,6 +923,7 @@ impl AppState {
                     purpose = "import loop closures",
                     "Closure source section not found in created sections, skipping"
                 );
+                closures_skipped += 1;
                 continue;
             };
             let Some(&to_section_id) = created_ids.get(&closure.to_section_index) else {
@@ -928,6 +932,7 @@ impl AppState {
                     purpose = "import loop closures",
                     "Closure target section not found in created sections, skipping"
                 );
+                closures_skipped += 1;
                 continue;
             };
             closure_pairs.push((
@@ -955,13 +960,16 @@ impl AppState {
                         purpose = "import loop closures",
                         "Created loop closure from TML import"
                     ),
-                    Err(e) => tracing::warn!(
-                        ?station_a,
-                        ?station_b,
-                        error = %e,
-                        purpose = "import loop closures",
-                        "Failed to create loop closure from TML import, skipping"
-                    ),
+                    Err(e) => {
+                        tracing::warn!(
+                            ?station_a,
+                            ?station_b,
+                            error = %e,
+                            purpose = "import loop closures",
+                            "Failed to create loop closure from TML import, skipping"
+                        );
+                        closures_failed += 1;
+                    }
                 }
             }
         }
@@ -1069,7 +1077,35 @@ impl AppState {
         // project. Set-only; no-op for local-only.
         self.mark_remote_forward_edit();
 
-        let result = CommandResult::success().with_section_ids(all_section_ids);
+        let shot_count: u32 = sections.iter().map(|s| s.shots.len() as u32).sum();
+        let closures_requested = closures.len() as u32;
+        let closures_created = closures_requested
+            .saturating_sub(closures_skipped)
+            .saturating_sub(closures_failed);
+        let mut receipt_warnings = Vec::new();
+        let closures_dropped = closures_skipped + closures_failed;
+        if closures_dropped > 0 {
+            receipt_warnings.push(format!(
+                "{closures_dropped} loop closure{} could not be created and {} skipped",
+                if closures_dropped == 1 { "" } else { "s" },
+                if closures_dropped == 1 { "was" } else { "were" }
+            ));
+        }
+        let receipt = crate::core::command::ImportReceipt {
+            source_format: String::new(),
+            file_name: String::new(),
+            sections_found: 0,
+            sections_imported: all_section_ids.len() as u32,
+            shot_count,
+            closures_requested,
+            closures_created,
+            unit_conversion: None,
+            warnings: receipt_warnings,
+        };
+
+        let result = CommandResult::success()
+            .with_section_ids(all_section_ids)
+            .with_import_receipt(receipt);
         if all_warnings.is_empty() {
             result
         } else {

@@ -1481,6 +1481,13 @@ fn test_import_sections_persists_deferred_new_project() {
             !state(&app).initial_save_deferred(),
             "project should no longer be deferred after the import-triggered save"
         );
+
+        let receipt = result
+            .import_receipt
+            .as_ref()
+            .expect("import must attach an import receipt");
+        assert_eq!(receipt.sections_imported, 1);
+        assert_eq!(receipt.shot_count, 1);
     });
 }
 
@@ -1572,6 +1579,25 @@ fn test_import_sections_deferred_save_failure_warns_no_phantom() {
             project_state.sections.len(),
             1,
             "the imported section must survive in memory after a failed deferred save"
+        );
+
+        // The import receipt is orthogonal to the deferred-save-failure warning: the
+        // receipt still reports the import went through, and its warnings list stays
+        // empty (the deferred-save failure is a "SYSTEM" CommandResult warning, never
+        // an ImportReceipt warning - see ImportReceipt's doc comment).
+        assert!(
+            result.import_receipt.is_some(),
+            "a failed deferred save must not suppress the import receipt"
+        );
+        assert_eq!(
+            result
+                .warnings
+                .iter()
+                .filter(|w| w.code == "SYSTEM")
+                .count(),
+            1,
+            "exactly one SYSTEM warning for the deferred-save failure: {:?}",
+            result.warnings
         );
     });
 }

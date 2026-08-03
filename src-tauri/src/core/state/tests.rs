@@ -16193,6 +16193,69 @@ fn test_execute_import_sections_origin_placement() {
     );
 }
 
+/// A closure referencing a section index that never resolves (out of range of
+/// the sections in this import) must be counted as skipped on the receipt, not
+/// silently dropped: `closures_requested` still reflects what was asked for,
+/// `closures_created` reflects what actually landed, and the gap is surfaced as
+/// a receipt warning (never a `CommandResult` "SYSTEM" warning - see
+/// `ImportReceipt`'s doc comment).
+#[test]
+fn test_execute_import_sections_unresolvable_closure_is_skipped_on_receipt() {
+    use crate::models::{ImportClosure, ImportPlacement, ImportSectionConfig};
+
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Test".to_string(),
+        location: None,
+    });
+
+    let sections = vec![ImportSectionConfig {
+        reverse: false,
+        section_index: 0,
+        name: Some("Import1".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#ff0000".to_string(),
+        direction: None,
+        quality: 1.0,
+        shots: vec![test_shot_data(5.0)],
+        station_comments: Vec::new(),
+        placement: ImportPlacement::Origin,
+    }];
+
+    // section_index 99 never appears in `sections`, so `created_ids` never
+    // resolves it.
+    let closures = vec![ImportClosure {
+        from_section_index: 0,
+        from_station_index: 0,
+        to_section_index: 99,
+        to_station_index: 0,
+    }];
+
+    let result = state.execute_import_sections(
+        sections,
+        closures,
+        None,
+        Vec::new(),
+        Vec::new(),
+        VirtualShotMode::Auto,
+    );
+    assert!(result.success, "import failed: {:?}", result.error);
+
+    let receipt = result
+        .import_receipt
+        .as_ref()
+        .expect("import must attach an import receipt");
+    assert_eq!(receipt.closures_requested, 1);
+    assert_eq!(receipt.closures_created, 0);
+    assert_eq!(
+        receipt.warnings.len(),
+        1,
+        "unresolvable closure must surface exactly one receipt warning: {:?}",
+        receipt.warnings
+    );
+}
+
 /// #27: the Jump/Reference pass has to run INSIDE the import command, before
 /// the `after` snapshot. When it ran afterwards, redo restored a snapshot that
 /// predated it and every virtual shot silently reverted to the parser's
