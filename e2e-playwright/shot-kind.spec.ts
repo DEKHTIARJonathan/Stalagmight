@@ -95,6 +95,44 @@ test.describe('shot kind cell (#27)', () => {
     await expect.poll(() => storedKind(page, 0)).toBe('Jump');
   });
 
+  test('never opens a cell editor - the cell is a button, not a text field', async ({ page }) => {
+    await openDataTable(page);
+    const cell = page.getByTestId('grid-cell-0-kind').getByTestId('shot-kind-cell');
+
+    // Double-click cycles once (the click lands) and opens no editor. A text box
+    // over a one-glyph cell was a second, worse way to do what a click does.
+    await cell.dblclick();
+    await expect(page.getByTestId('grid-cell-editor')).toHaveCount(0);
+    await expect.poll(() => storedKind(page, 0)).not.toBe('Normal');
+
+    // Nor F2, nor type-to-edit, once the cell is merely selected.
+    await page.getByTestId('grid-cell-0-kind').click();
+    await page.keyboard.press('F2');
+    await expect(page.getByTestId('grid-cell-editor')).toHaveCount(0);
+    await page.keyboard.press('R');
+    await expect(page.getByTestId('grid-cell-editor')).toHaveCount(0);
+  });
+
+  test('still takes a fill-down, which is the bulk reclassify path', async ({ page }) => {
+    await openDataTable(page);
+
+    // Closing the editor must not close the BULK paths: stamping one kind down a
+    // run is why the column is writable at all.
+    //
+    // The range is extended with the keyboard rather than shift-click, because
+    // every click in a kind cell cycles it - that is the point of the column, so
+    // clicking to select would move the very value being stamped.
+    await page.getByTestId('grid-cell-0-kind').getByTestId('shot-kind-cell').click();
+    await expect.poll(() => storedKind(page, 0)).toBe('Jump');
+
+    await page.keyboard.press('Shift+ArrowDown');
+    await page.keyboard.press('Shift+ArrowDown');
+    await page.keyboard.press('Control+d');
+
+    await expect.poll(() => storedKind(page, 1)).toBe('Jump');
+    await expect.poll(() => storedKind(page, 2)).toBe('Jump');
+  });
+
   test('cycling one cell leaves its neighbours alone', async ({ page }) => {
     await openDataTable(page);
 
