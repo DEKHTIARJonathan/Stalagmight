@@ -15,7 +15,7 @@ import type { TFunction } from 'i18next';
 import type { GridColumn } from './SpreadsheetGrid/types';
 import { AlertCircleIcon, AlertTriangleIcon, CloseIcon, LockIcon } from './icons';
 import { formatFixed } from '../../i18n/format';
-import { getAzimuthAverage } from '../../utils/shotTable';
+import { circularMeanDegrees } from '../../utils/angles';
 import {
   SHOT_KIND_CLASS,
   SHOT_KIND_LABEL_KEY,
@@ -174,9 +174,12 @@ export function buildEditableShotColumns(
       width: 70,
       align: 'right',
       kind: 'number',
-      // The editor has always shown ONE azimuth: the average of the two legs,
-      // with a commit fanning back out to both (applyAzimuthEdit).
-      getValue: (r) => getAzimuthAverage(r.azimuth_in, r.azimuth_out),
+      // One displayed azimuth: the average of the two legs, with a commit
+      // fanning back out to both (applyAzimuthEdit). Deliberately NOT
+      // `getAzimuthAverage`, which coerces a non-finite leg to 0 - that made an
+      // unset azimuth render as a confident "0.0" the user never typed. Blank
+      // means blank, as in the data table.
+      getValue: (r) => circularMeanDegrees(r.azimuth_in, r.azimuth_out),
       format: fixed(precision.azimuth),
       editable: true,
       isEditable: editableUnlessFrozen(EDITABLE_AZIMUTH_AVG_KEY),
