@@ -5,6 +5,7 @@ import { AZIMUTH_AVG_KEY, PITCH_AVG_KEY } from '../../SingleSystemView/dataTable
 import {
   applyEditToData,
   applyEdits,
+  collectShots,
   blankRow,
   canSubmit,
   deleteRows,
@@ -112,27 +113,35 @@ describe('moveRows', () => {
   // has to be shifted back by however much of the block sat in front of it.
   it('moves a single row down', () => {
     const rows = [row(1), row(2), row(3), row(4)];
-    expect(moveRows(rows, 1, 1, 3).map((r) => r.key)).toEqual([1, 3, 2, 4]);
+    expect(moveRows(rows, 1, 1, 3, allocator()).map((r) => r.key)).toEqual([1, 3, 2, 4]);
   });
 
   it('moves a single row to the top', () => {
     const rows = [row(1), row(2), row(3)];
-    expect(moveRows(rows, 2, 2, 0).map((r) => r.key)).toEqual([3, 1, 2]);
+    expect(moveRows(rows, 2, 2, 0, allocator()).map((r) => r.key)).toEqual([3, 1, 2]);
   });
 
   it('moves a block to the end', () => {
     const rows = [row(1), row(2), row(3), row(4)];
-    expect(moveRows(rows, 0, 1, 4).map((r) => r.key)).toEqual([3, 4, 1, 2]);
+    expect(moveRows(rows, 0, 1, 4, allocator()).map((r) => r.key)).toEqual([3, 4, 1, 2]);
   });
 
   it('moves a block upwards', () => {
     const rows = [row(1), row(2), row(3), row(4)];
-    expect(moveRows(rows, 2, 3, 1).map((r) => r.key)).toEqual([1, 3, 4, 2]);
+    expect(moveRows(rows, 2, 3, 1, allocator()).map((r) => r.key)).toEqual([1, 3, 4, 2]);
   });
 
   it('is a no-op when the block lands where it started', () => {
     const rows = [row(1), row(2), row(3)];
-    expect(moveRows(rows, 1, 1, 1).map((r) => r.key)).toEqual([1, 2, 3]);
+    expect(moveRows(rows, 1, 1, 1, allocator()).map((r) => r.key)).toEqual([1, 2, 3]);
+  });
+
+  it('re-establishes the trailing blank when the drag moves it away from the end', () => {
+    // Dragging the bottom blank row above a filled one left the last row
+    // occupied, so there was nowhere to type the next shot.
+    const next = moveRows([filled(1), blankRow(2)], 1, 1, 0, allocator());
+    expect(next.map((r) => r.key)).toEqual([2, 1, 100]);
+    expect(isBlankRow(next[2]!)).toBe(true);
   });
 });
 
@@ -207,7 +216,7 @@ describe('applyEditToData', () => {
 
 describe('applyEdits', () => {
   it('applies several cells on one row and appends a trailing blank', () => {
-    const next = applyEdits(
+    const { rows: next } = applyEdits(
       [blankRow(1)],
       [
         { row: 0, colKey: 'length', value: 10 },
@@ -223,7 +232,7 @@ describe('applyEdits', () => {
   it('grows the row list for edits landing past the end (a pasted block)', () => {
     // The grid is given `pasteGrowsRows`, so a block pasted into the single
     // blank row the dialog opens with must land in full, not clip to one row.
-    const next = applyEdits(
+    const { rows: next } = applyEdits(
       [blankRow(1)],
       [
         { row: 0, colKey: 'length', value: 10 },
@@ -236,23 +245,83 @@ describe('applyEdits', () => {
     expect(isBlankRow(next[3]!)).toBe(true);
   });
 
-  it('refuses to conjure unbounded rows from a stray clipboard', () => {
-    const next = applyEdits(
+  it('refuses to conjure unbounded rows from a stray clipboard, and says so', () => {
+    const { rows: next, droppedPastCap } = applyEdits(
       [blankRow(1)],
       [{ row: MAX_PASTE_ROWS + 10, colKey: 'length', value: 10 }],
       allocator()
     );
     expect(next).toHaveLength(1);
+    expect(droppedPastCap).toBe(1);
+  });
+
+  it('still edits rows that already exist past the cap', () => {
+    // The cap bounds GROWTH, not editing: bounding by raw row index meant that
+    // once the list legitimately passed it, typing into those rows was dropped.
+    const big = Array.from({ length: MAX_PASTE_ROWS + 5 }, (_, i) => row(i, { length: 1 }));
+    const { rows: next, droppedPastCap } = applyEdits(
+      big,
+      [{ row: MAX_PASTE_ROWS + 2, colKey: 'length', value: 42 }],
+      allocator()
+    );
+    expect(next[MAX_PASTE_ROWS + 2]!.data.length).toBe(42);
+    expect(droppedPastCap).toBe(0);
   });
 
   it('returns the same array when there is nothing to apply', () => {
     const rows = [blankRow(1)];
-    expect(applyEdits(rows, [], allocator())).toBe(rows);
+    expect(applyEdits(rows, [], allocator()).rows).toBe(rows);
+  });
+
+  it('seeds Depth In from the row above when a blank row is first typed into', () => {
+    // What the old dialog's "+ Add Row" did: depth in IS the previous shot's
+    // depth out on a continuous survey.
+    const { rows: next } = applyEdits(
+      [filled(1, { depth_out: -7 }), blankRow(2)],
+      [{ row: 1, colKey: 'length', value: 12 }],
+      allocator()
+    );
+    expect(next[1]!.data).toEqual({ length: 12, depth_in: -7 });
+  });
+
+  it('does not override a Depth In the edit itself supplies', () => {
+    const { rows: next } = applyEdits(
+      [filled(1, { depth_out: -7 }), blankRow(2)],
+      [
+        { row: 1, colKey: 'length', value: 12 },
+        { row: 1, colKey: 'depth_in', value: -3 },
+      ],
+      allocator()
+    );
+    expect(next[1]!.data.depth_in).toBe(-3);
+  });
+
+  it('does not seed when the row above is being written in the same batch', () => {
+    // A pasted block carries its own depths; seeding from a row that is itself
+    // mid-write would race the paste.
+    const { rows: next } = applyEdits(
+      [blankRow(1)],
+      [
+        { row: 0, colKey: 'depth_out', value: -1 },
+        { row: 1, colKey: 'length', value: 12 },
+      ],
+      allocator()
+    );
+    expect(next[1]!.data).toEqual({ length: 12 });
+  });
+
+  it('does not seed a row that already held data', () => {
+    const { rows: next } = applyEdits(
+      [filled(1, { depth_out: -7 }), row(2, { length: 3 })],
+      [{ row: 1, colKey: 'azimuth_in', value: 10 }],
+      allocator()
+    );
+    expect(next[1]!.data.depth_in).toBeUndefined();
   });
 
   it('leaves untouched rows referentially identical', () => {
     const rows = [filled(1), blankRow(2)];
-    const next = applyEdits(rows, [{ row: 1, colKey: 'length', value: 4 }], allocator());
+    const { rows: next } = applyEdits(rows, [{ row: 1, colKey: 'length', value: 4 }], allocator());
     expect(next[0]).toBe(rows[0]);
   });
 });
@@ -273,52 +342,48 @@ describe('deriveAzimuthMode', () => {
 
 describe('summarizeSubmit', () => {
   it('drops blank rows and reports nothing missing', () => {
-    const { shots, incompleteRows } = summarizeSubmit([filled(1), blankRow(2)]);
-    expect(shots).toHaveLength(1);
+    const { completeCount, incompleteRows } = summarizeSubmit([filled(1), blankRow(2)]);
+    expect(completeCount).toBe(1);
     expect(incompleteRows).toEqual([]);
   });
 
   it('reports a partially-filled row by its 1-based display number', () => {
-    const { shots, incompleteRows } = summarizeSubmit([
+    const { completeCount, incompleteRows } = summarizeSubmit([
       filled(1),
       row(2, { length: 5 }), // no depths, no azimuth
       blankRow(3),
     ]);
-    expect(shots).toHaveLength(1);
+    expect(completeCount).toBe(1);
     expect(incompleteRows).toEqual([2]);
   });
 
   it('treats a non-positive length as incomplete rather than silently dropping it', () => {
-    const { shots, incompleteRows } = summarizeSubmit([filled(1, { length: 0 }), blankRow(2)]);
-    expect(shots).toEqual([]);
+    const { completeCount, incompleteRows } = summarizeSubmit([filled(1, { length: 0 }), blankRow(2)]);
+    expect(completeCount).toBe(0);
     expect(incompleteRows).toEqual([1]);
   });
 
   it('duplicates the present azimuth leg onto the missing one', () => {
-    const { shots } = summarizeSubmit([
-      row(1, { length: 10, azimuth_in: 90, depth_in: 0, depth_out: 1 }),
-    ]);
+    const shots = collectShots([row(1, { length: 10, azimuth_in: 90, depth_in: 0, depth_out: 1 })]);
     expect(shots[0]).toMatchObject({ azimuth_in: 90, azimuth_out: 90 });
   });
 
   it('carries the optional fields through', () => {
-    const { shots } = summarizeSubmit([
-      filled(1, { left: 2, comment: 'sump', kind: 'Reference' }),
-    ]);
+    const shots = collectShots([filled(1, { left: 2, comment: 'sump', kind: 'Reference' })]);
     expect(shots[0]).toMatchObject({ left: 2, comment: 'sump', kind: 'Reference' });
   });
 });
 
 describe('canSubmit', () => {
   it('is false while any row is incomplete', () => {
-    expect(canSubmit({ shots: [{} as ShotData], incompleteRows: [2] })).toBe(false);
+    expect(canSubmit({ completeCount: 1, incompleteRows: [2] })).toBe(false);
   });
 
   it('is false with nothing to write', () => {
-    expect(canSubmit({ shots: [], incompleteRows: [] })).toBe(false);
+    expect(canSubmit({ completeCount: 0, incompleteRows: [] })).toBe(false);
   });
 
   it('is true with at least one complete row and no incomplete ones', () => {
-    expect(canSubmit({ shots: [{} as ShotData], incompleteRows: [] })).toBe(true);
+    expect(canSubmit({ completeCount: 1, incompleteRows: [] })).toBe(true);
   });
 });

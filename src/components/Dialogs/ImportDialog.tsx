@@ -16,6 +16,7 @@ import {
   applyEdits,
   blankRow,
   canSubmit,
+  collectShots,
   deleteRows,
   deriveAzimuthMode,
   insertBlankRows,
@@ -25,6 +26,7 @@ import {
 import {
   buildNewSectionShotColumns,
   DEFAULT_NEW_SECTION_HIDDEN_COLUMNS,
+  MISSING_PROBLEM_COLUMNS,
 } from './newSectionShotColumns';
 import { useNewSectionViewPersistence } from './useNewSectionViewPersistence';
 import { getNextSectionColor } from '../../utils/colors';
@@ -57,7 +59,8 @@ interface SavedFormState {
 
 export default function ImportDialog() {
   const { t } = useTranslation();
-  const { closeDialog, openDialog, startPlacementMode, dialogData, resolvedTheme } = useUIStore();
+  const { closeDialog, openDialog, startPlacementMode, dialogData, resolvedTheme, showToast } =
+    useUIStore();
   const { createSection, createSectionAndMerge, moveSection, project } = useProjectStore();
   const precision = useDecimalPrecision();
   const editingBlocked = useEditingBlocked();
@@ -153,30 +156,57 @@ export default function ImportDialog() {
     [t, precision, editingBlocked, onCycleShotKind]
   );
 
-  const onEdit = useCallback(
-    (rowIndex: number, colKey: string, value: unknown) => {
-      if (editingBlocked) return;
-      setDrafts((prev) => applyEdits(prev, [{ row: rowIndex, colKey, value }], nextKey));
-    },
-    [editingBlocked, nextKey]
-  );
-
-  const onBatchEdit = useCallback(
+  // One funnel for every edit path, so the row cap has a single place to report
+  // from: `applyEdits` refuses edits that would grow the list past MAX_PASTE_ROWS
+  // and says how many, which would otherwise vanish without a word.
+  // Deliberately reads `drafts` rather than using the functional setState form:
+  // the toast is a side effect, and a state updater can be invoked more than
+  // once (StrictMode), which would double it. The grid emits at most one edit
+  // call per interaction, so there is no batching hazard in reading state here.
+  const applyGridEdits = useCallback(
     (edits: CellEdit[]) => {
       if (editingBlocked) return;
-      setDrafts((prev) => applyEdits(prev, edits, nextKey));
+      const { rows: next, droppedPastCap } = applyEdits(drafts, edits, nextKey);
+      setDrafts(next);
+      if (droppedPastCap > 0) {
+        showToast(
+          t('newSection.pasteCapped', { count: droppedPastCap }),
+          'new-section-paste-cap',
+          'error'
+        );
+      }
     },
-    [editingBlocked, nextKey]
+    [editingBlocked, drafts, nextKey, showToast, t]
   );
+
+  const onEdit = useCallback(
+    (rowIndex: number, colKey: string, value: unknown) =>
+      applyGridEdits([{ row: rowIndex, colKey, value }]),
+    [applyGridEdits]
+  );
+
+  const onBatchEdit = applyGridEdits;
 
   // A required cell cleared back to "missing": drop the field so it reads as
   // absent to draftMissing/completeDraftData rather than keeping a stale value.
   const onClearMissing = useCallback(
-    (rowIndex: number, colKey: string) => {
-      if (editingBlocked) return;
-      setDrafts((prev) => applyEdits(prev, [{ row: rowIndex, colKey, value: undefined }], nextKey));
+    (rowIndex: number, colKey: string) =>
+      applyGridEdits([{ row: rowIndex, colKey, value: undefined }]),
+    [applyGridEdits]
+  );
+
+  // What the grid could not fully apply (columns clipped past the last one,
+  // cells rejected as read-only or out of range) - the same report the data
+  // table surfaces, rather than a paste that silently lands short.
+  const onPasteReport = useCallback(
+    ({ written, clipped, skipped }: { written: number; clipped: number; skipped: number }) => {
+      const parts: string[] = [];
+      if (written > 0) parts.push(t('dataTable.pasteReport.written', { count: written }));
+      if (clipped > 0) parts.push(t('dataTable.pasteReport.clipped', { count: clipped }));
+      if (skipped > 0) parts.push(t('dataTable.pasteReport.skipped', { count: skipped }));
+      if (parts.length > 0) showToast(parts.join(' \u00b7 '), 'new-section-paste');
     },
-    [editingBlocked, nextKey]
+    [t, showToast]
   );
 
   const onInsertRows = useCallback(
@@ -198,9 +228,9 @@ export default function ImportDialog() {
   const onMoveRows = useCallback(
     (fromStart: number, fromEnd: number, toIndex: number) => {
       if (editingBlocked) return;
-      setDrafts((prev) => moveRows(prev, fromStart, fromEnd, toIndex));
+      setDrafts((prev) => moveRows(prev, fromStart, fromEnd, toIndex, nextKey));
     },
-    [editingBlocked]
+    [editingBlocked, nextKey]
   );
 
   // --- Missing-cell marking and the Create gate -----------------------------
@@ -215,6 +245,37 @@ export default function ImportDialog() {
     [missingByRow]
   );
 
+  // A required field whose column is hidden would block Create with nothing on
+  // screen to point at: the blocker names the row, but the cell that would go
+  // red is off-screen and there is no way to find it. `draftMissing` reports
+  // those separately from the visible ones precisely so a host can act, so pull
+  // the column back into view. This is a real unhide and persists like any
+  // other - a temporary one would be undone by the layout restore on reopen,
+  // putting the user straight back into the dead end.
+  useEffect(() => {
+    const reveal = new Set<string>();
+    for (const { hiddenProblems } of missingByRow) {
+      for (const problem of hiddenProblems) {
+        for (const key of MISSING_PROBLEM_COLUMNS[problem] ?? []) {
+          if (hiddenColumns.has(key)) reveal.add(key);
+        }
+      }
+    }
+    if (reveal.size === 0) return;
+    setHiddenColumns((prev) => {
+      const next = new Set(prev);
+      for (const key of reveal) next.delete(key);
+      return next;
+    });
+  }, [missingByRow, hiddenColumns]);
+
+  // One blank row for the grid to parse and validate pasted-in rows against,
+  // before this host has created them. Only read, never written.
+  const growRows = useMemo(
+    () => ({ growRowTemplate: () => materializeDraft(blankRow(-1)) }),
+    []
+  );
+
   const submit = useMemo(() => summarizeSubmit(drafts), [drafts]);
   const submitAllowed = canSubmit(submit) && !editingBlocked;
 
@@ -227,7 +288,7 @@ export default function ImportDialog() {
       color,
       direction: null,
       quality: 1.0,
-      shots: submit.shots,
+      shots: collectShots(drafts),
     };
 
     // Save form state so we can restore on cancel
@@ -353,8 +414,7 @@ export default function ImportDialog() {
             onEdit={onEdit}
             onBatchEdit={onBatchEdit}
             onClearMissing={onClearMissing}
-            onMoveRows={onMoveRows}
-            onDeleteRows={onDeleteRows}
+            onPasteReport={onPasteReport}
             cellClassName={cellClassName}
             labels={gridLabels}
             toolbarTestIdPrefix="new-section"
@@ -367,22 +427,32 @@ export default function ImportDialog() {
             // Every row here is provisional, so a paste may run past the last
             // one: applyEdits grows the list to fit rather than clipping a
             // spreadsheet block to the single blank row the dialog opens with.
-            pasteGrowsRows={!editingBlocked}
-            {...(editingBlocked ? {} : { onInsertRows })}
+            // The template is what those not-yet-created rows are parsed and
+            // validated against, so a pasted block obeys the same column rules
+            // wherever in it a given line happens to fall.
+            //
+            // All the row affordances are withheld together when editing is
+            // blocked: offering a Delete entry or a gutter drag that silently
+            // does nothing is worse than not offering it at all.
+            {...(editingBlocked
+              ? {}
+              : { pasteGrowsRows: growRows, onInsertRows, onDeleteRows, onMoveRows })}
           />
         </div>
 
         {/* Actions */}
         <div className="flex shrink-0 items-center justify-between gap-4 border-t border-border pt-4">
           <p className="text-sm text-error" data-testid="import-section-blocker">
-            {submit.incompleteRows.length > 0
-              ? t('newSection.incomplete', {
-                  count: submit.incompleteRows.length,
-                  rows: submit.incompleteRows.join(', '),
-                })
-              : submit.shots.length === 0
-                ? t('newSection.empty')
-                : ''}
+            {editingBlocked
+              ? t('newSection.readOnly')
+              : submit.incompleteRows.length > 0
+                ? t('newSection.incomplete', {
+                    count: submit.incompleteRows.length,
+                    rows: submit.incompleteRows.join(', '),
+                  })
+                : submit.completeCount === 0
+                  ? t('newSection.empty')
+                  : ''}
           </p>
           <div className="flex gap-2">
             <Button onClick={closeDialog} data-testid="import-section-cancel">

@@ -191,13 +191,30 @@ export function draftMissing(
   return { cells, hiddenProblems };
 }
 
-/** The full ShotData to commit, or `null` while required fields are missing
- *  (length > 0, both depths, at least one azimuth - the missing azimuth leg
- *  duplicates the other; inclination/LRUD/comment stay optional). */
-export function completeDraftData(draft: ShotDraft): ShotData | null {
+/** Whether a draft has everything it needs to commit: length > 0, both depths,
+ *  and at least one azimuth (inclination/LRUD/comment stay optional).
+ *
+ *  Split out of {@link completeDraftData} so a caller that only needs the answer
+ *  does not pay for the ShotData it would otherwise allocate and discard - the
+ *  new-section dialog asks this for every row on every keystroke to decide
+ *  whether Create is available. The rule itself still lives in ONE place; the
+ *  builder below delegates to it. */
+export function isDraftComplete(draft: ShotDraft): boolean {
   const d = draft.data;
   const azimuth = fin(d.azimuth_in) ? d.azimuth_in : d.azimuth_out;
-  if (!(fin(d.length) && d.length > 0 && fin(d.depth_in) && fin(d.depth_out) && fin(azimuth))) {
+  return fin(d.length) && d.length > 0 && fin(d.depth_in) && fin(d.depth_out) && fin(azimuth);
+}
+
+/** The full ShotData to commit, or `null` while required fields are missing
+ *  (see {@link isDraftComplete}; the missing azimuth leg duplicates the other). */
+export function completeDraftData(draft: ShotDraft): ShotData | null {
+  const d = draft.data;
+  if (!isDraftComplete(draft)) return null;
+  const azimuth = fin(d.azimuth_in) ? d.azimuth_in : d.azimuth_out;
+  // Unreachable: `isDraftComplete` above is the rule and has already established
+  // all four. This exists solely so TypeScript narrows them to `number` - a type
+  // predicate on `draft` cannot reach through to its individual `data` fields.
+  if (!fin(d.length) || !fin(d.depth_in) || !fin(d.depth_out) || !fin(azimuth)) {
     return null;
   }
   return {

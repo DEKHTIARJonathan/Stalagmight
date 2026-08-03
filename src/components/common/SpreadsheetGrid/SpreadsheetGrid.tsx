@@ -112,8 +112,13 @@ export interface SpreadsheetGridProps<Row> {
    *  edits for rows that do not exist yet. Only for a host whose row set is
    *  provisional and grows to fit (it must extend `rows` when an edit lands
    *  beyond the end); the default clips, because a host backing committed rows
-   *  has nowhere to put them. Columns are clipped either way. */
-  pasteGrowsRows?: boolean;
+   *  has nowhere to put them. Columns are clipped either way.
+   *
+   *  Requires {@link growRowTemplate}: a column's `parse` and `validate` both
+   *  take the row they are writing to, so without a stand-in they would be
+   *  skipped for every row the paste creates - and the same block would then
+   *  land under DIFFERENT rules depending on how far down each line fell. */
+  pasteGrowsRows?: { growRowTemplate: () => Row };
   /** Delete the contiguous data rows [fromRow..toRow] (host owns the row set).
    *  Enables "Delete N rows" in the context menu. */
   onDeleteRows?: (fromRow: number, toRow: number) => void;
@@ -217,7 +222,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
     columnWidths,
     onColumnWidthsChange,
     onMoveRows,
-    onInsertRows, pasteGrowsRows = false,
+    onInsertRows, pasteGrowsRows,
     onDeleteRows,
     onPasteReport,
     onRowHover,
@@ -419,15 +424,25 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
   // --- Helpers --------------------------------------------------------------
   const colAt = useCallback((idx: number) => visibleColumns[idx], [visibleColumns]);
 
+  // One reusable stand-in row for indexes a growing paste is about to create.
+  // Only read (never mutated) by parse/validate/isEditable, so a single instance
+  // is enough. `undefined` when the host has not opted into growing, which makes
+  // `rowAt` below identical to a plain `rows[i]` lookup for every other host.
+  const growTemplate = useMemo(() => pasteGrowsRows?.growRowTemplate(), [pasteGrowsRows]);
+  const rowAt = useCallback(
+    (rowIdx: number): Row | undefined => rows[rowIdx] ?? growTemplate,
+    [rows, growTemplate],
+  );
+
   const cellEditable = useCallback(
     (rowIdx: number, col: GridColumn<Row> | undefined): boolean => {
       if (!col) return false;
-      const row = rows[rowIdx];
+      const row = rowAt(rowIdx);
       if (row === undefined) return false;
       if (col.isEditable) return col.isEditable(row, rowIdx);
       return !!col.editable;
     },
-    [rows],
+    [rowAt],
   );
 
   // Cells whose REQUIRED value (kind 'number') the user cleared: the model
@@ -471,7 +486,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
 
   const parseForColumn = useCallback(
     (col: GridColumn<Row>, raw: string, rowIdx: number): unknown => {
-      const row = rows[rowIdx];
+      const row = rowAt(rowIdx);
       if (row !== undefined && col.parse) return col.parse(raw, row);
       // Default coercion by kind.
       if (col.kind === 'number' || col.kind === 'number-nullable') {
@@ -480,7 +495,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
       }
       return raw;
     },
-    [rows, locale],
+    [rowAt, locale],
   );
 
   // Parse + validate for bulk paths (paste/fill/move): a rejected value is
@@ -489,11 +504,11 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
     (col: GridColumn<Row>, raw: string, rowIdx: number): unknown => {
       const value = parseForColumn(col, raw, rowIdx);
       if (value === undefined) return undefined;
-      const row = rows[rowIdx];
+      const row = rowAt(rowIdx);
       if (row !== undefined && col.validate && col.validate(value, row)) return undefined;
       return value;
     },
-    [parseForColumn, rows],
+    [parseForColumn, rowAt],
   );
 
   // Move a RAW value between cells (fill/move/internal paste): same column key
@@ -817,12 +832,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
     (text: string, fromStash = false) => {
       if (!text) return;
       const clip = parseTSV(text);
-      const { targets, clipped } = placePaste(clip, rect, rowCount, colCount, pasteGrowsRows);
-      // A target past the last row exists only because `pasteGrowsRows` let it
-      // through: there is no row object to ask about per-cell editability, so
-      // fall back to the column default and let the host create the row.
-      const pasteEditable = (r: number, col: GridColumn<Row>) =>
-        r >= rowCount ? !!col.editable : cellEditable(r, col);
+      const { targets, clipped } = placePaste(clip, rect, rowCount, colCount, !!pasteGrowsRows);
       // Treat the paste as INTERNAL (use stashed RAW values for full fidelity,
       // and complete a pending cut) only when the source is our own stash:
       // either the caller read it directly (`fromStash`, the WebKitGTK fallback),
@@ -845,7 +855,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
       const landed = new Set<string>();
       for (const t of targets) {
         const col = colAt(t.colIdx);
-        if (!col || !pasteEditable(t.row, col)) continue;
+        if (!col || !cellEditable(t.row, col)) continue;
         let value: unknown;
         let stashCell: string | null = null;
         if (internal) {
