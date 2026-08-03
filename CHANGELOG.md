@@ -19,6 +19,8 @@ Update this file every time a new version is tagged.
 
 ### Fixed
 
+- **Satellite imagery was displayed without its attribution.** Wherever Esri imagery is drawn - the survey map with Satellite view on, Global View, and the section preview - the map now shows the imagery's source names, as Esri's terms require. On a narrow map, and always in the small section preview, they collapse to an **i** button that shows them on hover, click or keyboard focus. The names are read from Esri's own service so they stay current, falling back to a built-in list when you are offline; the previous built-in list was out of date. The separate "Powered by Esri" credit, which Esri allows to live behind a button rather than on the map, is now in **Settings -> About** alongside a **Map imagery** section listing the sources
+
 #### SpeleoDB
 
 - **Adopting a project could report the wrong outcome** - three cases where adoption described itself inaccurately. It flipped the SpeleoDB project type a second time after the upload had already done it, so a transient failure on that redundant request warned that the type could not be changed when it had been. If the upload succeeded but handing the write lock back failed, it reported the conversion as "on this machine only" - about a survey that was already safely on the server - and marked the project as having unsaved work; that case now says the upload landed and that the write lock is the thing left outstanding. And taking the lock is now serialised against sign-out - the span covers the account read, the holder probe and the acquire together - so signing out during an adoption can no longer leave the project locked on the server with nothing recording it.

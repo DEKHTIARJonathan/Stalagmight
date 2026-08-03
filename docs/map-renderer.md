@@ -220,6 +220,50 @@ it is dev-only. For E2E, `src/dev/mapE2eHooks.ts` exposes
 draws from - a spec reaching for `queryRenderedFeatures` on survey geometry is
 querying something that no longer exists.
 
+## Imagery attribution
+
+The satellite basemap is Esri World Imagery, and Esri asks for two different
+things that this app deliberately puts in two different places
+([the rules](https://developers.arcgis.com/documentation/esri-and-data-attribution/interactive-maps/)):
+
+| What | Where Esri allows it | Where it lives here |
+|---|---|---|
+| **Data attribution** - the source names (`Source: Esri, Vantor, ...`) | on or at the bottom of the map, always visible; may collapse behind an expandable affordance when it does not fit | `Map/MapAttribution.tsx`, over the map |
+| **Esri attribution** - `Powered by Esri` | on the map, *or* "in a window that is accessible from a menu or button" | `Dialogs/AboutMapImagery.tsx`, in About (Settings -> About) |
+
+Only the first is required over the map, so only the first is there. A survey map
+spends its pixels on survey data.
+
+`MapAttribution` is mounted on all three surfaces that can draw imagery, each
+passing its own visibility because the obligation follows the *layer*, not the
+map:
+
+| Surface | Mounted in | Visible when |
+|---|---|---|
+| Survey map | `SingleSystemView.tsx` (beside `OfflineIndicator`, not inside `MapCanvas`) | `showSatellite` |
+| Global View | `GlobalViewMap.tsx` | always - imagery is its base layer |
+| Section Preview | `SectionPreview.tsx`, `variant="compact"` | the section has a GPS origin |
+
+It collapses to the `i` affordance automatically below 460px, and always in the
+Section Preview. The expanded panel is portalled through `common/Tooltip.tsx`,
+which is what keeps it clear of that preview's `overflow-hidden`. The chip uses
+Esri's specified colours (`#323232` on white at 65%) rather than theme tokens: it
+sits on photography, where a themed panel colour legible against one basemap
+disappears against the next.
+
+**The string is fetched, not hard-coded.** `src-tauri/src/tile_attribution.rs`
+reads `copyrightText` from the provider's `service_info_url`, caches it for a day,
+and falls back to the registry's own `attribution` when the fetch fails - which is
+the normal case offline. Both copies of the fallback (`tile_providers.rs` and
+`utils/tileConfig.ts`) assert the exact same string in their tests, because two
+different attributions for one basemap is its own bug. Esri's list does change:
+it said "Maxar" for as long as that was the only copy and nobody noticed the
+rename to Vantor.
+
+Note that `attributionControl: false` on the MapLibre instances is intentional and
+should stay: MapLibre offers no way to update a live source's `attribution` after
+the source is created, which the live fetch requires.
+
 ## Relationship to `performance.md`
 
 The frontend section of [`performance.md`](performance.md) predates this renderer.
@@ -247,6 +291,7 @@ the Zustand write.
 | Label text or placement wrong | `labelLayout.ts` (shaping, em offsets), `labelStyle.ts` (per-kind style) |
 | Sizes wrong after dragging the window to another monitor | the DPR watcher in `SurveyLayer` - device-pixel sizes are baked into the buffers |
 | Global View wrong but the survey map fine | `GlobalView/customRender/` - a separate implementation |
+| Imagery drawn with no source names, or the wrong ones | `MapAttribution.tsx` visibility prop at the mount site, then `tile_attribution.rs` (a failed fetch backs off for 5 min and serves the fallback) |
 
 Tests live in `surveyLayer/customRender/__tests__/` and `surveyLayer/__tests__/`.
 Almost every module here is deliberately pure - no GL, no DOM - so tessellation,
