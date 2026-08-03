@@ -2118,10 +2118,12 @@
       "name": "Section Name",
       "surveyor": "Surveyor"
     },
+    "pasteCapped_one": "{{count}} pasted cell was dropped: the table cannot grow any further.",
+    "pasteCapped_other": "{{count}} pasted cells were dropped: the table cannot grow any further.",
     "placeholders": {
       "name": "e.g., Main Line"
     },
-    "shots": "Shots",
+    "readOnly": "Editing is disabled in this mode, so a section cannot be created.",
     "title": "Import / Create Section"
   },
   "sectionMetadata": {

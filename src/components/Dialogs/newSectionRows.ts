@@ -21,6 +21,7 @@ import {
   endDraft,
   materializeDraft,
   completeDraftData,
+  isDraftComplete,
 } from '../SingleSystemView/dataTableDrafts';
 
 /** Which azimuth column family is on screen, in the shape `draftMissing` wants. */
@@ -87,7 +88,8 @@ export function moveRows(
   rows: ShotDraft[],
   fromStart: number,
   fromEnd: number,
-  toIndex: number
+  toIndex: number,
+  nextKey: () => number
 ): ShotDraft[] {
   const from = Math.max(0, Math.min(fromStart, rows.length - 1));
   const to = Math.max(from, Math.min(fromEnd, rows.length - 1));
@@ -96,7 +98,10 @@ export function moveRows(
   const rest = [...rows.slice(0, from), ...rows.slice(to + 1)];
   const removedBefore = toIndex > from ? Math.min(toIndex, to + 1) - from : 0;
   const at = Math.max(0, Math.min(toIndex - removedBefore, rest.length));
-  return [...rest.slice(0, at), ...block, ...rest.slice(at)];
+  // Normalized like every other mutator: dragging the trailing blank row up
+  // would otherwise leave the last row occupied, and with it nowhere to type
+  // the next shot except the context menu.
+  return normalizeRows([...rest.slice(0, at), ...block, ...rest.slice(at)], nextKey);
 }
 
 /**
@@ -162,29 +167,62 @@ export function applyEditToData(
  */
 export const MAX_PASTE_ROWS = 5000;
 
-export function applyEdits(rows: ShotDraft[], edits: CellEdit[], nextKey: () => number): ShotDraft[] {
+/** How many edits `applyEdits` refused because they would have grown the list
+ *  past the cap, so the host can say so rather than dropping them in silence. */
+export interface ApplyEditsResult {
+  rows: ShotDraft[];
+  droppedPastCap: number;
+}
+
+export function applyEdits(
+  rows: ShotDraft[],
+  edits: CellEdit[],
+  nextKey: () => number
+): ApplyEditsResult {
   const byRow = new Map<number, CellEdit[]>();
   let maxRow = -1;
+  let droppedPastCap = 0;
+  // The cap bounds GROWTH, never editing: a row that already exists is always
+  // editable, however far down it is. Bounding by the raw index instead meant
+  // that once the list legitimately passed the cap (two big pastes), typing
+  // into those rows was discarded and the cell silently reverted.
+  const limit = Math.max(rows.length, MAX_PASTE_ROWS);
   for (const e of edits) {
-    if (e.row >= MAX_PASTE_ROWS) continue;
+    if (e.row >= limit) {
+      droppedPastCap++;
+      continue;
+    }
     if (e.row > maxRow) maxRow = e.row;
     const arr = byRow.get(e.row);
     if (arr) arr.push(e);
     else byRow.set(e.row, [e]);
   }
-  if (byRow.size === 0) return rows;
+  if (byRow.size === 0) return { rows, droppedPastCap };
   const grown =
     maxRow < rows.length
       ? rows
       : [...rows, ...Array.from({ length: maxRow + 1 - rows.length }, () => blankRow(nextKey()))];
+  const touched = new Set(byRow.keys());
   const next = grown.map((draft, i) => {
     const rowEdits = byRow.get(i);
     if (!rowEdits) return draft;
+    // A row being typed into for the first time inherits Depth In from the row
+    // above, the way the old dialog's "+ Add Row" seeded it - depth in IS the
+    // previous shot's depth out on a continuous survey. Done on first touch
+    // rather than at row creation so the trailing row stays genuinely blank
+    // (a seeded value would make it count as touched and block Create), and
+    // skipped when the edit supplies its own depth or the row above is itself
+    // being written in the same batch (a paste already carries its depths).
+    const wasBlank = isBlankRow(draft);
     let data = draft.data;
     for (const { colKey, value } of rowEdits) data = applyEditToData(data, colKey, value);
+    if (wasBlank && data.depth_in === undefined && !touched.has(i - 1)) {
+      const above = grown[i - 1]?.data.depth_out;
+      if (typeof above === 'number' && Number.isFinite(above)) data = { ...data, depth_in: above };
+    }
     return { ...draft, data };
   });
-  return normalizeRows(next, nextKey);
+  return { rows: normalizeRows(next, nextKey), droppedPastCap };
 }
 
 /** Which azimuth family `draftMissing` should tint, derived from what is
@@ -195,26 +233,47 @@ export function deriveAzimuthMode(hiddenColumns: ReadonlySet<string>): AzimuthMo
   return 'off';
 }
 
-/** What Create would submit, and what is standing in its way. `incompleteRows`
- *  holds 1-based display row numbers, matching the grid's row gutter. */
+/**
+ * What is standing between the rows and a Create, without building anything.
+ *
+ * `incompleteRows` holds 1-based display row numbers, matching the grid's row
+ * gutter. Deliberately does NOT return the ShotData: this runs for every row on
+ * every keystroke to decide whether Create is available, and materializing a
+ * 15-field shot per complete row only to discard it is pure waste on a grid that
+ * can hold thousands of pasted rows. {@link collectShots} builds them once, when
+ * the user actually presses Create.
+ */
 export interface SubmitSummary {
-  shots: ShotData[];
+  /** 1-based row numbers that hold data but are missing a required field. */
   incompleteRows: number[];
+  /** How many rows would be written. */
+  completeCount: number;
 }
 
 export function summarizeSubmit(rows: ShotDraft[]): SubmitSummary {
-  const shots: ShotData[] = [];
   const incompleteRows: number[] = [];
+  let completeCount = 0;
   rows.forEach((draft, i) => {
     if (isBlankRow(draft)) return; // the trailing blank, and any blank inserted row
-    const data = completeDraftData(draft);
-    if (data) shots.push(data);
+    if (isDraftComplete(draft)) completeCount++;
     else incompleteRows.push(i + 1);
   });
-  return { shots, incompleteRows };
+  return { incompleteRows, completeCount };
+}
+
+/** The payload for Create. Blank rows are dropped; callers gate on
+ *  {@link canSubmit} first, so an incomplete row cannot reach here. */
+export function collectShots(rows: ShotDraft[]): ShotData[] {
+  const shots: ShotData[] = [];
+  for (const draft of rows) {
+    if (isBlankRow(draft)) continue;
+    const data = completeDraftData(draft);
+    if (data) shots.push(data);
+  }
+  return shots;
 }
 
 /** Create is available only once every touched row is complete and at least one
  *  shot would be written. */
 export const canSubmit = (summary: SubmitSummary): boolean =>
-  summary.incompleteRows.length === 0 && summary.shots.length > 0;
+  summary.incompleteRows.length === 0 && summary.completeCount > 0;

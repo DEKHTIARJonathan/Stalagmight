@@ -44,6 +44,22 @@ export const DEFAULT_NEW_SECTION_HIDDEN_COLUMNS: readonly string[] = [
   'down',
 ];
 
+/**
+ * Which column to reveal for each problem `draftMissing` reports as hidden.
+ *
+ * Its `hiddenProblems` set speaks in menu keys (`depthIn`), not column keys
+ * (`depth_in`), because the data table uses them to label a menu row. The dialog
+ * uses them to un-hide the column instead, so it needs the mapping back. Azimuth
+ * resolves to the average column: it is the one visible by default, and setting
+ * it fills both legs.
+ */
+export const MISSING_PROBLEM_COLUMNS: Readonly<Record<string, readonly string[]>> = {
+  length: ['length'],
+  depthIn: ['depth_in'],
+  depthOut: ['depth_out'],
+  azimuth: [AZIMUTH_AVG_KEY],
+};
+
 export interface NewSectionColumnContext {
   t: TFunction;
   precision: { length: number; azimuth: number; depth: number; inclination: number };

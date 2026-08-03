@@ -77,7 +77,7 @@ export function useNewSectionViewPersistence(
     // compared verbatim - the default hidden list is not already sorted, so
     // without this merely OPENING the dialog would schedule a save.
     lastSavedRef.current = JSON.stringify([order, [...hidden].sort(), stableWidths(widths)]);
-  }, [panelsConfig, setColumnOrder, setHiddenColumns, setColumnWidths]);
+  }, [panelsConfig, setColumnOrder, setHiddenColumns, setColumnWidths, fallbackHidden]);
 
   const pendingSaveRef = useRef<(() => void) | null>(null);
   useEffect(() => {
