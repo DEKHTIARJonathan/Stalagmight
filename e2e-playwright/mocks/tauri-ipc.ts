@@ -1653,12 +1653,22 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               | null;
             const stations = state?.stations ?? [];
             const budget_litres = 1500;
-            const gas_to_reach = stations.map((s) => Math.abs(s.coordinates.x) * 20);
-            const reachable = gas_to_reach.map((g) => g <= budget_litres);
+            const gas_to_reach: (number | null)[] = stations.map((s) => Math.abs(s.coordinates.x) * 20);
+            const reachable = gas_to_reach.map((g) => g !== null && g <= budget_litres);
+            // #395: keep the LAST station genuinely UNCONNECTED (gas_to_reach null,
+            // not merely over budget) - mirrors the real backend invariant
+            // (topologically unreachable vs connected-but-past-budget) so specs can
+            // assert the three-way split: grey (unconnected) vs dimmed-but-colored
+            // (beyond gas range). It was already over budget, so `reachable` is
+            // unaffected; only its numeric value changes.
+            if (gas_to_reach.length > 0) {
+              gas_to_reach[gas_to_reach.length - 1] = null;
+            }
             let max_reachable_gas = 0;
             for (let i = 0; i < gas_to_reach.length; i += 1) {
-              if (reachable[i] && gas_to_reach[i] > max_reachable_gas) {
-                max_reachable_gas = gas_to_reach[i];
+              const g = gas_to_reach[i];
+              if (reachable[i] && g !== null && g !== undefined && g > max_reachable_gas) {
+                max_reachable_gas = g;
               }
             }
             // Turn frontier: a reachable station whose next (by array order) is not
@@ -1705,8 +1715,9 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             let deepestIdx = -1;
             let deepestGas = -1;
             for (let i = 0; i < gas_to_reach.length; i += 1) {
-              if (reachable[i] && gas_to_reach[i] > deepestGas) {
-                deepestGas = gas_to_reach[i];
+              const g = gas_to_reach[i];
+              if (reachable[i] && g !== null && g !== undefined && g > deepestGas) {
+                deepestGas = g;
                 deepestIdx = i;
               }
             }
@@ -1761,7 +1772,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                   s.station_ref.section_id === r.section_id &&
                   s.station_ref.station_index === r.station_index,
               );
-              return idx >= 0 ? gas_to_reach[idx] : 0;
+              return idx >= 0 ? (gas_to_reach[idx] ?? 0) : 0;
             };
             const stage_drop_over_reserve = stage_drop_refs.map((defRef, i) => {
               const ov = stageOverrides[i];

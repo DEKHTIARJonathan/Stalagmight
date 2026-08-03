@@ -73,10 +73,15 @@ const sectionSeeds: SectionSeed[] = [
  * Station indices the pixel probes use, from the mock's synthetic field: it puts
  * station `i` at `x = i * 10` and charges `|x| * 20` litres against a fixed
  * 1500 L budget, so stations 0..7 are reachable (7 -> 1400 L, the last one inside
- * the budget) and 8..10 are over budget and render grey.
+ * the budget) and 8..10 are over budget. Of those, 8 stays CONNECTED-but-over-budget
+ * (finite `gas_to_reach`, `reachable: false`) - beyond gas range: dimmed, still its
+ * own section/base color, never grey (#395). The mock's LAST station (10) is
+ * additionally patched to a null `gas_to_reach` - genuinely topologically
+ * UNCONNECTED - the only case that still renders grey.
  */
 const LAST_REACHABLE = 7;
-const OVER_BUDGET = 10;
+const BEYOND_RANGE = 8;
+const UNCONNECTED = 10;
 
 /**
  * Zoom bump for the pixel probes. +3 spreads the 11 stations to ~37 px apart (so a
@@ -144,15 +149,6 @@ async function appMode(page: Page): Promise<string> {
 async function gasEndpoint(page: Page): Promise<StationRefLite | null> {
   return page.evaluate(
     () => (window as unknown as E2EWindow).__E2E_TEST__?.gasPlanStore.getState().endpoint ?? null,
-  );
-}
-
-/** The reachable turn-frontier refs, in the order the map markers are built from. */
-async function turnFrontier(page: Page): Promise<StationRefLite[]> {
-  return page.evaluate(
-    () =>
-      (window as unknown as E2EWindow).__E2E_TEST__?.gasPlanStore.getState().reachField
-        ?.turn_frontier ?? [],
   );
 }
 
@@ -377,7 +373,7 @@ test.describe('Gas planning', () => {
     const sectionKey = (await stationCenter(page, LAST_REACHABLE)).join(',');
     expect(await stationPaints(page, LAST_REACHABLE, sectionKey)).toBe(true);
     expect(await stationPaints(page, 0, GAS_NEAR_KEY)).toBe(false);
-    expect(await stationPaints(page, OVER_BUDGET, grey)).toBe(false);
+    expect(await stationPaints(page, UNCONNECTED, grey)).toBe(false);
 
     await enterMode(page, 'plan');
     expect(await appMode(page)).toBe('plan');
@@ -387,8 +383,9 @@ test.describe('Gas planning', () => {
     // Legend appears with the entrance origin.
     await expect(page.locator('[data-testid="gas-legend"]')).toBeVisible({ timeout: 3000 });
     await expect(page.locator('[data-testid="gas-legend-origin"]')).toContainText('entrance');
-    // The symbol key explains the markers (turn/end point always present in Plan).
-    await expect(page.locator('[data-testid="gas-legend-key"]')).toContainText('Turn / end point');
+    // The symbol key explains the dim (#395: beyond-range geometry is dimmed, not
+    // marked with a turn-point dot anymore).
+    await expect(page.locator('[data-testid="gas-legend-key"]')).toContainText('Beyond gas range');
 
     // The reachable ramp is populated, not an all-grey field: the origin station sits
     // at gas cost 0, the exact gold near end of the ramp. Polled (the field is
@@ -403,10 +400,17 @@ test.describe('Gas planning', () => {
     expect(lastReachable.has(sectionKey)).toBe(false);
     expect(lastReachable.has(GAS_NEAR_KEY)).toBe(false);
     expect(lastReachable.has(grey)).toBe(false);
-    // ...and the over-budget station goes grey (the conservative direction).
-    const overBudget = await stationColors(page, OVER_BUDGET);
-    expect(overBudget.has(grey)).toBe(true);
-    expect(overBudget.has(sectionKey)).toBe(false);
+    // The beyond-range station (connected, but past the budget) is DIMMED, not
+    // greyed: neither the ramp, the plain (undimmed) section color, nor grey (#395).
+    const beyondRange = await stationColors(page, BEYOND_RANGE);
+    expect(beyondRange.has(grey)).toBe(false);
+    expect(beyondRange.has(GAS_NEAR_KEY)).toBe(false);
+    expect(beyondRange.has(sectionKey)).toBe(false);
+    // ...while the genuinely UNCONNECTED station still goes grey (the conservative
+    // direction the renderer reserves for "not part of this cave section at all").
+    const unconnected = await stationColors(page, UNCONNECTED);
+    expect(unconnected.has(grey)).toBe(true);
+    expect(unconnected.has(sectionKey)).toBe(false);
 
     // Back to Survey → panel + legend gone, section colors restored (the overlay is
     // appMode-gated; the gas store itself persists across mode switches, #244).
@@ -419,7 +423,7 @@ test.describe('Gas planning', () => {
       .poll(() => stationPaints(page, LAST_REACHABLE, sectionKey), { timeout: 3000 })
       .toBe(true);
     expect(await stationPaints(page, 0, GAS_NEAR_KEY)).toBe(false);
-    expect(await stationPaints(page, OVER_BUDGET, grey)).toBe(false);
+    expect(await stationPaints(page, UNCONNECTED, grey)).toBe(false);
   });
 
   test('Plan gates the staged reserve presets to a stage-carrying rig; readout reads as gas @smoke', async ({
@@ -1068,65 +1072,6 @@ test.describe('Gas planning', () => {
     await expect(key.getByText('Way point')).toBeVisible();
   });
 
-  test('right-clicking a turn-frontier dot opens the Plan menu and sets the endpoint @smoke', async ({
-    page,
-  }) => {
-    await enterMode(page, 'plan');
-    // The red turn-frontier dots are the candidate end points; they render even with survey
-    // stations hidden, so they are the route-pick target (a station right-click needs stations on).
-    await expect
-      .poll(() => page.locator('[data-testid="gas-turn-marker"]').count(), { timeout: 3000 })
-      .toBeGreaterThan(0);
-    await page.locator('[data-testid="gas-turn-marker"]').first().click({ button: 'right' });
-    await expect(planMenuItem(page, 'Set as endpoint')).toBeVisible();
-    await planMenuItem(page, 'Set as endpoint').click();
-    expect(await gasEndpoint(page)).not.toBeNull();
-  });
-
-  test('left-clicking a turn-frontier dot selects THAT station as the route endpoint @smoke', async ({
-    page,
-  }) => {
-    await enterMode(page, 'plan');
-    await expect
-      .poll(() => page.locator('[data-testid="gas-turn-marker"]').count(), { timeout: 3000 })
-      .toBeGreaterThan(0);
-    // Capture which station the first marker represents (markers are built in
-    // turn_frontier order), so we assert the pick set THAT ref - a wrong-ref bug
-    // (all markers picking the same station, or an off-by-one) would slip past a
-    // mere "endpoint is non-null" check.
-    const expected = (await turnFrontier(page))[0];
-    expect(expected).toBeTruthy();
-    // A single left click sets the endpoint directly - no menu round-trip (#243).
-    await page.locator('[data-testid="gas-turn-marker"]').first().click();
-    await expect.poll(() => gasEndpoint(page), { timeout: 2000 }).toEqual(expected);
-    // And it must not have opened the context menu.
-    await expect(planMenuItem(page, 'Set as endpoint')).toHaveCount(0);
-  });
-
-  test('keyboard-activating a turn-frontier dot (Enter) selects it and preserves focus (#243 a11y)', async ({
-    page,
-  }) => {
-    await enterMode(page, 'plan');
-    await expect
-      .poll(() => page.locator('[data-testid="gas-turn-marker"]').count(), { timeout: 3000 })
-      .toBeGreaterThan(0);
-    await page.locator('[data-testid="gas-turn-marker"]').first().focus();
-    await page.keyboard.press('Enter');
-    // Enter picks the endpoint (keyboard parity with the left click)…
-    await expect.poll(() => gasEndpoint(page), { timeout: 2000 }).not.toBeNull();
-    // …and focus is NOT stranded on <body>: setEndpoint tears down every marker, so
-    // the rebuild must re-focus the picked marker or the AT user loses their place.
-    await expect
-      .poll(
-        () =>
-          page.evaluate(
-            () => document.activeElement?.getAttribute('data-testid') ?? document.body.tagName,
-          ),
-        { timeout: 2000 },
-      )
-      .toBe('gas-turn-marker');
-  });
-
   test('undo/redo shortcuts are inert in Plan AND Export (read-only guard parity with the hidden buttons) @smoke', async ({
     page,
   }) => {
@@ -1417,7 +1362,9 @@ test.describe('Gas planning', () => {
     await expect(readout).not.toHaveText('Entrance');
   });
 
-  test('the gas ramp survives a feature rebuild, and a turn marker renders', async ({ page }) => {
+  test('the gas ramp (and the beyond-range dim / unconnected grey) survives a feature rebuild', async ({
+    page,
+  }) => {
     await waitForDrawnStations(page, 1);
     const zoom = (await mapZoom(page)) + PROBE_ZOOM_DELTA;
     await setMapZoom(page, zoom);
@@ -1428,23 +1375,22 @@ test.describe('Gas planning', () => {
     await setMapZoom(page, zoom);
     await expect.poll(() => stationPaints(page, 0, GAS_NEAR_KEY), { timeout: 3000 }).toBe(true);
     // The last station inside the budget is painted an interior ramp color, the
-    // over-budget one grey. Snapshot the reachable one's whole footprint so "still
-    // ramp-painted after the rebuild" can be asserted byte-for-byte.
+    // beyond-range one dimmed (not grey), the unconnected one grey. Snapshot the
+    // reachable one's whole footprint so "still ramp-painted after the rebuild" can
+    // be asserted byte-for-byte.
     const reachableBefore = await stationBlock(page, LAST_REACHABLE);
     const reachableColors = await stationColors(page, LAST_REACHABLE);
     expect(reachableColors.has(sectionKey)).toBe(false);
     expect(reachableColors.has(GAS_NEAR_KEY)).toBe(false);
     expect(reachableColors.has(grey)).toBe(false);
-    expect(await stationPaints(page, OVER_BUDGET, grey)).toBe(true);
-    // The mock's fixed budget leaves the far stations unreachable, so the turn
-    // frontier is non-empty → at least one turn marker renders.
-    await expect
-      .poll(() => page.locator('[data-testid="gas-turn-marker"]').count(), { timeout: 3000 })
-      .toBeGreaterThan(0);
+    const beyondRangeBefore = await stationColors(page, BEYOND_RANGE);
+    expect(beyondRangeBefore.has(grey)).toBe(false);
+    expect(beyondRangeBefore.has(sectionKey)).toBe(false);
+    expect(await stationPaints(page, UNCONNECTED, grey)).toBe(true);
 
     // A survey edit rebuilds every feature (the custom renderer rebuilds its vertex
     // buffers from scratch; the stock path had setData wipe the feature-state). The
-    // overlay must re-apply its ramp afterward, the key correctness risk.
+    // overlay must re-apply its ramp AND the dim afterward, the key correctness risk.
     await seedProjectWithSections(page, [
       {
         name: 'Gas B',
@@ -1462,9 +1408,12 @@ test.describe('Gas planning', () => {
     // `modified_at` on create_section, the field's refetch key, so the new section's
     // stations paint grey where they land on top of the first two of this one.)
     await expect.poll(() => stationBlock(page, LAST_REACHABLE), { timeout: 3000 }).toEqual(reachableBefore);
-    const overBudget = await stationColors(page, OVER_BUDGET);
-    expect(overBudget.has(grey)).toBe(true);
-    expect(overBudget.has(sectionKey)).toBe(false);
+    const beyondRangeAfter = await stationColors(page, BEYOND_RANGE);
+    expect(beyondRangeAfter.has(grey)).toBe(false);
+    expect(beyondRangeAfter.has(sectionKey)).toBe(false);
+    const unconnected = await stationColors(page, UNCONNECTED);
+    expect(unconnected.has(grey)).toBe(true);
+    expect(unconnected.has(sectionKey)).toBe(false);
     await expect(page.locator('[data-testid="gas-legend"]')).toBeVisible();
   });
 
