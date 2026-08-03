@@ -209,6 +209,13 @@ fn finalize_deferred_import(state: &AppState, import_result: CommandResult) -> C
 
 /// Import multiple sections as a single atomic undo/redo unit.
 /// Includes file hash tracking so undo also reverts the duplicate-detection state.
+///
+/// `source_label` / `source_file_name` / `sections_found` are additive
+/// provenance for the import receipt - today only the mNemo DMP wizard passes
+/// them (a later shard). All three are optional and `serde`-defaulted, so
+/// existing callers (and the Playwright IPC mock) are unaffected, and the
+/// base receipt `execute_import_sections` already attached is left at its
+/// defaults when none are provided.
 #[tauri::command]
 pub fn import_sections(
     state: State<'_, AppState>,
@@ -217,6 +224,9 @@ pub fn import_sections(
     section_hashes: Option<Vec<String>>,
     existing_shot_updates: Option<Vec<crate::models::ExistingShotUpdate>>,
     virtual_shot_mode: Option<VirtualShotMode>,
+    source_label: Option<String>,
+    source_file_name: Option<String>,
+    sections_found: Option<u32>,
 ) -> CommandResult {
     let updates = existing_shot_updates.unwrap_or_default();
     tracing::info!(
@@ -225,7 +235,7 @@ pub fn import_sections(
         purpose = "batch import with overlap updates",
         "import_sections called",
     );
-    let result = state.execute_import_sections(
+    let mut result = state.execute_import_sections(
         sections,
         Vec::new(),
         file_hash,
@@ -233,6 +243,15 @@ pub fn import_sections(
         updates,
         virtual_shot_mode.unwrap_or_default(),
     );
+
+    if source_label.is_some() || source_file_name.is_some() || sections_found.is_some() {
+        if let Some(receipt) = result.import_receipt.as_mut() {
+            receipt.source_format = source_label.unwrap_or_else(|| "mNemo DMP".to_string());
+            receipt.file_name = source_file_name.unwrap_or_default();
+            receipt.sections_found = sections_found.unwrap_or(0);
+        }
+    }
+
     finalize_deferred_import(state.inner(), result)
 }
 
@@ -555,23 +574,26 @@ pub fn execute_gpx_import(
         "Converted GPX to import configs, executing import"
     );
 
-    finalize_deferred_import(
-        state.inner(),
-        // Auto, not a per-file override: the GPX dialog has no mode control, so
-        // there is nothing to pass through - but the chain rule still has to run.
-        // `parsers::gpx` seeds every leg as Reference on the promise that the
-        // classifier can promote it, and skipping the pass here (this path used
-        // to call `finalize_deferred_import` directly) left a GPS surface track
-        // tying two sumps together permanently excluded from the survey graph.
-        state.execute_import_sections(
-            sections,
-            Vec::new(),
-            file_hash,
-            Vec::new(),
-            Vec::new(),
-            VirtualShotMode::Auto,
-        ),
-    )
+    let sections_found = sections.len() as u32;
+
+    // Auto, not a per-file override: the GPX dialog has no mode control, so
+    // there is nothing to pass through - but the chain rule still has to run.
+    // `parsers::gpx` seeds every leg as Reference on the promise that the
+    // classifier can promote it, and skipping the pass here (this path used
+    // to call `finalize_deferred_import` directly) left a GPS surface track
+    // tying two sumps together permanently excluded from the survey graph.
+    let mut result = state.execute_import_sections(
+        sections,
+        Vec::new(),
+        file_hash,
+        Vec::new(),
+        Vec::new(),
+        VirtualShotMode::Auto,
+    );
+
+    decorate_receipt(&mut result, "GPX", &path, sections_found, None, Vec::new());
+
+    finalize_deferred_import(state.inner(), result)
 }
 
 /// Suggest placement positions for an import section by detecting reference shot overlap.

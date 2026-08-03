@@ -1467,7 +1467,17 @@ fn test_import_sections_persists_deferred_new_project() {
             station_comments: Vec::new(),
             placement: crate::models::ImportPlacement::Origin,
         }];
-        let result = import::import_sections(state(&app), sections, None, None, None, None);
+        let result = import::import_sections(
+            state(&app),
+            sections,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        );
         assert_success(&result);
 
         // The command resolved the deferred save: file on disk + in Recent Projects.
@@ -1488,6 +1498,149 @@ fn test_import_sections_persists_deferred_new_project() {
             .expect("import must attach an import receipt");
         assert_eq!(receipt.sections_imported, 1);
         assert_eq!(receipt.shot_count, 1);
+    });
+}
+
+/// #391: `import_sections`' additive provenance params (used by the mNemo DMP
+/// wizard) decorate the base receipt when passed, and leave it at its
+/// (empty-provenance) defaults when omitted - the shape every other caller
+/// still uses.
+#[test]
+fn test_import_sections_provenance_params_decorate_receipt() {
+    with_config_lock(|| {
+        let app = app_with_state();
+        state(&app).execute(Command::CreateProject {
+            name: "Test".to_string(),
+            location: None,
+        });
+
+        let sections = vec![crate::models::ImportSectionConfig {
+            reverse: false,
+            section_index: 0,
+            name: Some("Imported".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#ff0000".to_string(),
+            direction: None,
+            quality: 1.0,
+            shots: vec![shot_data(5.0)],
+            station_comments: Vec::new(),
+            placement: crate::models::ImportPlacement::Origin,
+        }];
+
+        let result = import::import_sections(
+            state(&app),
+            sections,
+            None,
+            None,
+            None,
+            None,
+            Some("mNemo DMP".to_string()),
+            Some("dive.dmp".to_string()),
+            Some(1),
+        );
+        assert_success(&result);
+        let receipt = result
+            .import_receipt
+            .as_ref()
+            .expect("import must attach an import receipt");
+        assert_eq!(receipt.source_format, "mNemo DMP");
+        assert_eq!(receipt.file_name, "dive.dmp");
+        assert_eq!(receipt.sections_found, 1);
+    });
+}
+
+#[test]
+fn test_import_sections_without_provenance_params_leaves_receipt_defaults() {
+    with_config_lock(|| {
+        let app = app_with_state();
+        state(&app).execute(Command::CreateProject {
+            name: "Test".to_string(),
+            location: None,
+        });
+
+        let sections = vec![crate::models::ImportSectionConfig {
+            reverse: false,
+            section_index: 0,
+            name: Some("Imported".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#ff0000".to_string(),
+            direction: None,
+            quality: 1.0,
+            shots: vec![shot_data(5.0)],
+            station_comments: Vec::new(),
+            placement: crate::models::ImportPlacement::Origin,
+        }];
+
+        let result = import::import_sections(
+            state(&app),
+            sections,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        );
+        assert_success(&result);
+        let receipt = result
+            .import_receipt
+            .as_ref()
+            .expect("import must attach an import receipt");
+        assert_eq!(receipt.sections_imported, 1);
+        assert_eq!(receipt.source_format, "");
+        assert_eq!(receipt.file_name, "");
+        assert_eq!(receipt.sections_found, 0);
+    });
+}
+
+/// #391: `execute_gpx_import` decorates the import receipt with source format
+/// "GPX", no unit conversion, and `sections_found` counting the tracks/routes/
+/// waypoints actually selected for import.
+#[test]
+fn test_execute_gpx_import_decorates_receipt() {
+    with_config_lock(|| {
+        let app = app_with_state();
+        state(&app).execute(Command::CreateProject {
+            name: "Test".to_string(),
+            location: None,
+        });
+
+        let gpx_xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<gpx version="1.1" creator="test" xmlns="http://www.topografix.com/GPX/1/1">
+  <trk>
+    <name>Surface Path</name>
+    <trkseg>
+      <trkpt lat="45.5" lon="-90.5"><ele>350.2</ele></trkpt>
+      <trkpt lat="45.5005" lon="-90.4995"><ele>351.0</ele></trkpt>
+      <trkpt lat="45.501" lon="-90.499"><ele>348.0</ele></trkpt>
+    </trkseg>
+  </trk>
+</gpx>"#;
+        let mut file = NamedTempFile::with_suffix(".gpx").unwrap();
+        use std::io::Write;
+        file.write_all(gpx_xml.as_bytes()).unwrap();
+
+        let result = import::execute_gpx_import(
+            state(&app),
+            file.path().to_path_buf(),
+            None,
+            false,
+            true,
+            false,
+            Vec::new(),
+            false,
+        );
+        assert_success(&result);
+        let receipt = result
+            .import_receipt
+            .as_ref()
+            .expect("import must attach an import receipt");
+        assert_eq!(receipt.source_format, "GPX");
+        assert_eq!(receipt.sections_found, 1);
+        assert_eq!(receipt.unit_conversion, None);
     });
 }
 
@@ -1543,7 +1696,17 @@ fn test_import_sections_deferred_save_failure_warns_no_phantom() {
             station_comments: Vec::new(),
             placement: crate::models::ImportPlacement::Origin,
         }];
-        let result = import::import_sections(state(&app), sections, None, None, None, None);
+        let result = import::import_sections(
+            state(&app),
+            sections,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        );
 
         // Partial success: the import itself still succeeds, but a warning flags the
         // failed save instead of reporting a phantom "saved".
@@ -1653,7 +1816,17 @@ fn test_import_sections_deferred_save_permission_denied_humanizes_no_marker_leak
             station_comments: Vec::new(),
             placement: crate::models::ImportPlacement::Origin,
         }];
-        let result = import::import_sections(state(&app), sections, None, None, None, None);
+        let result = import::import_sections(
+            state(&app),
+            sections,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        );
 
         // Partial success carrying a HUMANIZED permission warning...
         assert_success(&result);
