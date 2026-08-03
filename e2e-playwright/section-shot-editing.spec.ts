@@ -17,10 +17,20 @@ async function addShotByTypingInBlankRow(dialog: Locator): Promise<void> {
     '[data-testid^="shot-editor-cell-"][data-testid$="-length"]'
   );
   const blankIndex = (await lengthCells.count()) - 1;
-  await dialog.getByTestId(`shot-editor-cell-${blankIndex}-length`).dblclick();
-  const editor = dialog.getByTestId('shot-editor-cell-editor');
-  await editor.fill('5');
-  await editor.press('Enter');
+  // Fill every required field: a row with only a length is incomplete, and Save
+  // refuses while any row is - the same gate the new-section dialog puts in
+  // front of Create.
+  for (const [col, value] of [
+    ['length', '5'],
+    ['_azimuth_avg', '90'],
+    ['depth_in', '0'],
+    ['depth_out', '-1'],
+  ] as const) {
+    await dialog.getByTestId(`shot-editor-cell-${blankIndex}-${col}`).dblclick();
+    const editor = dialog.getByTestId('shot-editor-cell-editor');
+    await editor.fill(value);
+    await editor.press('Enter');
+  }
 }
 
 /** Edit one cell of the shot-table grid: open the overlay editor, replace the

@@ -7,6 +7,7 @@ import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import { getThemeColor } from '../../utils/themeColors';
 import { ShotTableEditor, type EditableShot } from '../common/ShotTableEditor';
+import { validateEditableShot } from '../../utils/validation';
 import { SectionMetadataForm } from '../common/SectionMetadataForm';
 import type { Shot, ShotData } from '../../types/project';
 import type { DeleteShotImpact } from '../../types/commands';
@@ -92,11 +93,16 @@ export default function EditSectionDialog() {
     const newShot: EditableShot = {
       id: nextTempId,
       tempId: nextTempId,
-      azimuth_in: 0,
-      azimuth_out: 180,
-      length: 1,
-      depth_in: 0,
-      depth_out: 0,
+      // Empty, not invented. A new row materializes from the trailing blank on
+      // the first keystroke, and prefilling the rest with a plausible-looking
+      // length of 1 and an azimuth of 0/180 put numbers into the survey that
+      // nobody measured. Non-finite renders blank in the grid and reads as
+      // missing to the validation that gates Save.
+      azimuth_in: NaN,
+      azimuth_out: NaN,
+      length: NaN,
+      depth_in: NaN,
+      depth_out: NaN,
       pitch_in: null,
       pitch_out: null,
       left: null,
@@ -110,6 +116,40 @@ export default function EditSectionDialog() {
     setShots(prev => [...prev, newShot]);
     setNextTempId(prev => prev - 1);
   }, [nextTempId]);
+
+  // Rows that cannot be written: a new row starts blank, so Save has to refuse
+  // until it is filled in - otherwise a NaN length would reach the backend. The
+  // same gate the new-section dialog puts in front of Create.
+  const incompleteRows = useMemo(() => {
+    const rows: number[] = [];
+    let visible = 0;
+    for (const shot of shots) {
+      if (shot.isDeleted) continue;
+      visible += 1;
+      const errors = validateEditableShot(
+        {
+          length: shot.length,
+          azimuth_in: shot.azimuth_in,
+          azimuth_out: shot.azimuth_out,
+          isDeleted: false,
+        },
+        visible - 1,
+        0
+      );
+      // `validateEditableShot` checks RANGES, and every comparison against NaN
+      // is false - so a blank row sails through it. Completeness is the separate
+      // question, and it is the same rule the new-section dialog gates Create
+      // on: a positive length, both depths, and at least one azimuth.
+      const fin = (v: number) => Number.isFinite(v);
+      const incomplete =
+        !(fin(shot.length) && shot.length > 0) ||
+        !fin(shot.depth_in) ||
+        !fin(shot.depth_out) ||
+        !(fin(shot.azimuth_in) || fin(shot.azimuth_out));
+      if (errors.length > 0 || incomplete) rows.push(visible);
+    }
+    return rows;
+  }, [shots]);
 
   const getShotKey = useCallback((shot: EditableShot): string => {
     if (shot.tempId !== undefined) return `t:${shot.tempId}`;
@@ -217,11 +257,16 @@ export default function EditSectionDialog() {
     const newShot: EditableShot = {
       id: nextTempId,
       tempId: nextTempId,
-      azimuth_in: 0,
-      azimuth_out: 180,
-      length: 1,
-      depth_in: 0,
-      depth_out: 0,
+      // Empty, not invented. A new row materializes from the trailing blank on
+      // the first keystroke, and prefilling the rest with a plausible-looking
+      // length of 1 and an azimuth of 0/180 put numbers into the survey that
+      // nobody measured. Non-finite renders blank in the grid and reads as
+      // missing to the validation that gates Save.
+      azimuth_in: NaN,
+      azimuth_out: NaN,
+      length: NaN,
+      depth_in: NaN,
+      depth_out: NaN,
       pitch_in: null,
       pitch_out: null,
       left: null,
@@ -244,11 +289,16 @@ export default function EditSectionDialog() {
     const newShot: EditableShot = {
       id: nextTempId,
       tempId: nextTempId,
-      azimuth_in: 0,
-      azimuth_out: 180,
-      length: 1,
-      depth_in: 0,
-      depth_out: 0,
+      // Empty, not invented. A new row materializes from the trailing blank on
+      // the first keystroke, and prefilling the rest with a plausible-looking
+      // length of 1 and an azimuth of 0/180 put numbers into the survey that
+      // nobody measured. Non-finite renders blank in the grid and reads as
+      // missing to the validation that gates Save.
+      azimuth_in: NaN,
+      azimuth_out: NaN,
+      length: NaN,
+      depth_in: NaN,
+      depth_out: NaN,
       pitch_in: null,
       pitch_out: null,
       left: null,
@@ -532,11 +582,23 @@ export default function EditSectionDialog() {
           >
             Reverse Section
           </Button>
+          {incompleteRows.length > 0 && (
+            <p className="text-sm text-error" data-testid="edit-section-blocker">
+              {incompleteRows.length === 1
+                ? `Row ${incompleteRows[0]} is missing required values.`
+                : `Rows ${incompleteRows.join(', ')} are missing required values.`}
+            </p>
+          )}
           <div className="flex-1" />
           <Button onClick={closeDialog} disabled={isLoading} data-testid="edit-section-cancel">
             Cancel
           </Button>
-          <Button variant="primary" onClick={handleSave} disabled={isLoading || pendingMidDelete !== null} data-testid="edit-section-save">
+          <Button
+            variant="primary"
+            onClick={handleSave}
+            disabled={isLoading || pendingMidDelete !== null || incompleteRows.length > 0}
+            data-testid="edit-section-save"
+          >
             {isLoading ? 'Saving...' : 'Save'}
           </Button>
         </div>
