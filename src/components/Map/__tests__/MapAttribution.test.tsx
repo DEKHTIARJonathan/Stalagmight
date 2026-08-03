@@ -203,6 +203,32 @@ describe('MapAttribution', () => {
       expect(toggle).toHaveAttribute('aria-expanded', 'true');
 
       await user.click(toggle);
+      expect(toggle).toHaveAttribute('aria-expanded', 'false');
+      // Unhover before asserting the panel is gone: the pointer is still parked
+      // on the toggle after a click, and hover opens it again on a 350ms REAL
+      // timer. Asserting absence without this races that timer on a loaded box.
+      await user.unhover(toggle);
+      expect(screen.queryByTestId('map-attribution-panel')).not.toBeInTheDocument();
+    });
+
+    it('closes a pinned panel when the pointer goes elsewhere', async () => {
+      // Dropping the button's `onFocus` (which broke click-to-open) took its
+      // `onBlur` with it, and that was the only outside-dismiss path - a pinned
+      // panel then sat over the map until someone found Escape.
+      const user = userEvent.setup();
+      render(
+        <div>
+          <MapAttribution visible variant="compact" />
+          <button type="button" data-testid="elsewhere">elsewhere</button>
+        </div>,
+      );
+      const toggle = await screen.findByTestId('map-attribution-toggle');
+
+      await user.click(toggle);
+      expect(toggle).toHaveAttribute('aria-expanded', 'true');
+
+      await user.click(screen.getByTestId('elsewhere'));
+      expect(toggle).toHaveAttribute('aria-expanded', 'false');
       expect(screen.queryByTestId('map-attribution-panel')).not.toBeInTheDocument();
     });
 
@@ -232,6 +258,8 @@ describe('MapAttribution', () => {
       expect(screen.getByTestId('map-attribution-panel')).toBeInTheDocument();
 
       fireEvent.keyDown(window, { key: 'Escape' });
+      expect(toggle).toHaveAttribute('aria-expanded', 'false');
+      await user.unhover(toggle);
       expect(screen.queryByTestId('map-attribution-panel')).not.toBeInTheDocument();
     });
 

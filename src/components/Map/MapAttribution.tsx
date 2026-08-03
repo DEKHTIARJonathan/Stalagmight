@@ -2,6 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProp
 import { useTranslation } from 'react-i18next';
 import { Tooltip } from '../common/Tooltip';
 import { useTileAttribution } from '../../hooks/useTileAttribution';
+import { useDismissableLayer } from '../../hooks/useDismissableLayer';
 
 /**
  * Below this host width the source names cannot fit on the bottom edge, so the
@@ -136,6 +137,17 @@ export function MapAttribution({
     // lands the observer is never installed and the bar stays wide on a host
     // too narrow for it - the obstruction COMPACT_BELOW_PX exists to prevent.
   }, [visible, variant, text]);
+
+  // Clicking away closes a pinned panel. Dropping the button's `onBlur` along
+  // with its `onFocus` (which was breaking click-to-open) took the only
+  // outside-dismiss path with it, leaving a pinned panel sitting over the map
+  // until someone found Escape - in a component whose whole job is to keep the
+  // map's source names UNobstructed.
+  useDismissableLayer({
+    open: pinned,
+    onDismiss: () => setPinned(false),
+    contains: [wrapperRef],
+  });
 
   // Escape closes a pinned panel, matching every other dismissible layer.
   useEffect(() => {

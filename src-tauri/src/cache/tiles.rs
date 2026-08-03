@@ -73,12 +73,14 @@ impl CachePolicy {
     /// checked `no_store`, so a provider revoking permission on a 304 had its
     /// tile kept AND its retention extended.
     pub fn granted_seconds(&self) -> Option<i64> {
-        self.max_age_seconds.filter(|_| !self.no_store)
-    }
-
-    /// Whether the provider granted permission to write this response to disk.
-    pub fn permits_storage(&self) -> bool {
-        self.granted_seconds().is_some()
+        // Clamped HERE rather than only at the parser: `TileEntry::
+        // remaining_policy` also mints a max-age (for an overzoomed crop) and it
+        // reaches `put` through the same door. Enforcing the ceiling on the gate
+        // makes MAX_GRANT_SECONDS a real invariant of everything written to
+        // disk, instead of a property of one producer.
+        self.max_age_seconds
+            .filter(|_| !self.no_store)
+            .map(|seconds| seconds.min(MAX_GRANT_SECONDS))
     }
 }
 
@@ -124,6 +126,31 @@ impl TileEntry {
 /// everything else (`public`, `must-revalidate`, ...) is inert here. `no-cache`
 /// maps to `max_age_seconds: Some(0)` - store it, never serve it as fresh, which
 /// is exactly the stale-if-error shape the rest of the module is built around.
+/// Split a `Cache-Control` value on the commas that actually separate
+/// directives, ignoring those inside a quoted field list.
+///
+/// `no-cache="Set-Cookie,X-Foo"` is ONE directive. A naive `split(',')` cuts it
+/// in two, which loses the `no-cache` half - and, in the other direction, hands
+/// back a bare `max-age=999` lifted out of `private="x,max-age=999,y"`, i.e. a
+/// storage grant the provider never issued.
+fn split_directives(header: &str) -> Vec<&str> {
+    let mut parts = Vec::new();
+    let mut start = 0;
+    let mut in_quotes = false;
+    for (idx, ch) in header.char_indices() {
+        match ch {
+            '"' => in_quotes = !in_quotes,
+            ',' if !in_quotes => {
+                parts.push(&header[start..idx]);
+                start = idx + 1;
+            }
+            _ => {}
+        }
+    }
+    parts.push(&header[start..]);
+    parts
+}
+
 pub fn parse_cache_control(header: &str) -> CachePolicy {
     let mut policy = CachePolicy::default();
     // Tracked separately and applied last: `no-cache` means "always revalidate"
@@ -131,12 +158,8 @@ pub fn parse_cache_control(header: &str) -> CachePolicy {
     // an order. Setting max_age directly from the `no-cache` arm let a later
     // `max-age=86400` in the same header silently overwrite it.
     let mut no_cache = false;
-    for token in header.split(',') {
+    for token in split_directives(header) {
         let token = token.trim().to_ascii_lowercase();
-        // Match the directive NAME, not the whole token. `no-cache` and
-        // `no-store` take an optional quoted field list - `no-cache="Set-Cookie,
-        // X-Foo"` - whose comma splits the token in two, so comparing the whole
-        // thing silently ignored the directive.
         let (name, value) = match token.split_once('=') {
             Some((name, value)) => (name.trim(), Some(value.trim())),
             None => (token.as_str(), None),
@@ -151,8 +174,9 @@ pub fn parse_cache_control(header: &str) -> CachePolicy {
                 // provider.
                 if let Some(Ok(seconds)) = value.map(str::parse::<i64>) {
                     if seconds >= 0 {
-                        // Clamped: this number is remote input and gets added to
-                        // the clock below. See MAX_GRANT_SECONDS.
+                        // Clamped here as well as in `granted_seconds`: the gate
+                        // is the invariant, this just stops an absurd value
+                        // travelling any further than it has to.
                         policy.max_age_seconds = Some(seconds.min(MAX_GRANT_SECONDS));
                     }
                 }
@@ -265,6 +289,11 @@ impl TileCache {
                 UNIQUE(provider, z, y, x)
             );
             CREATE INDEX IF NOT EXISTS idx_tiles_accessed ON tiles(accessed_at);
+            -- Retention runs `WHERE provider = ? AND fetched_at <= ?` on every
+            -- put; without this it is a full scan of a cache up to 500 MB of
+            -- BLOBs. Cheap next to the rows it covers.
+            CREATE INDEX IF NOT EXISTS idx_tiles_provider_fetched
+                ON tiles(provider, fetched_at);
             ",
         )?;
 
@@ -333,21 +362,26 @@ impl TileCache {
     /// would either evict a provider's tiles early or keep another's past its
     /// configured life. Retention only - `expires_at` is not consulted, so tiles
     /// past the provider's max-age survive here to serve `get_stale`.
-    fn delete_retired(&self) -> Result<u64> {
+    fn delete_retired(&self, measure: bool) -> Result<u64> {
         let now = Self::now();
         let mut freed_bytes = 0u64;
 
         for (provider, ttl) in &self.provider_ttl_seconds {
             let cutoff = now - ttl;
-            // SUM scoped to the same predicate as the DELETE below. The caller
-            // used to diff two whole-table `get_stats()` calls instead, which is
-            // two full scans of a cache up to 500 MB, on the put path.
-            let bytes: i64 = self.conn.query_row(
-                "SELECT COALESCE(SUM(size_bytes), 0) FROM tiles
-                 WHERE provider = ?1 AND fetched_at <= ?2",
-                params![provider, cutoff],
-                |row| row.get(0),
-            )?;
+            // SUM scoped to the same predicate as the DELETE below, and skipped
+            // entirely when the caller does not want the figure - `put` calls
+            // this on every tile write and discards the result, so computing it
+            // there was a scan for nobody.
+            let bytes: i64 = if measure {
+                self.conn.query_row(
+                    "SELECT COALESCE(SUM(size_bytes), 0) FROM tiles
+                     WHERE provider = ?1 AND fetched_at <= ?2",
+                    params![provider, cutoff],
+                    |row| row.get(0),
+                )?
+            } else {
+                0
+            };
             self.conn.execute(
                 "DELETE FROM tiles WHERE provider = ?1 AND fetched_at <= ?2",
                 params![provider, cutoff],
@@ -360,11 +394,15 @@ impl TileCache {
         let overridden: Vec<&String> = self.provider_ttl_seconds.keys().collect();
         let cutoff = now - self.ttl_seconds;
         if overridden.is_empty() {
-            let bytes: i64 = self.conn.query_row(
-                "SELECT COALESCE(SUM(size_bytes), 0) FROM tiles WHERE fetched_at <= ?1",
-                params![cutoff],
-                |row| row.get(0),
-            )?;
+            let bytes: i64 = if measure {
+                self.conn.query_row(
+                    "SELECT COALESCE(SUM(size_bytes), 0) FROM tiles WHERE fetched_at <= ?1",
+                    params![cutoff],
+                    |row| row.get(0),
+                )?
+            } else {
+                0
+            };
             self.conn
                 .execute("DELETE FROM tiles WHERE fetched_at <= ?1", params![cutoff])?;
             freed_bytes += bytes as u64;
@@ -376,11 +414,15 @@ impl TileCache {
             for provider in &overridden {
                 args.push(provider);
             }
-            let bytes: i64 = self.conn.query_row(
-                &format!("SELECT COALESCE(SUM(size_bytes), 0) FROM tiles WHERE {where_clause}"),
-                args.as_slice(),
-                |row| row.get(0),
-            )?;
+            let bytes: i64 = if measure {
+                self.conn.query_row(
+                    &format!("SELECT COALESCE(SUM(size_bytes), 0) FROM tiles WHERE {where_clause}"),
+                    args.as_slice(),
+                    |row| row.get(0),
+                )?
+            } else {
+                0
+            };
             self.conn.execute(
                 &format!("DELETE FROM tiles WHERE {where_clause}"),
                 args.as_slice(),
@@ -564,7 +606,7 @@ impl TileCache {
 
         // First, clear expired tiles to free space before checking existing size
         // This ensures we don't count an expired tile that's about to be deleted
-        self.delete_retired()?;
+        self.delete_retired(false)?;
 
         // Check if we're replacing an existing (non-expired) tile
         let existing_size: i64 = match self.conn.query_row(
@@ -620,15 +662,36 @@ impl TileCache {
     ) -> Result<bool> {
         let now = Self::now();
 
-        // Same gate as `put`. A revalidation is still a grant decision: if the
-        // provider answered the 304 without permission (or with `no-store`),
-        // the copy goes rather than having its life extended.
-        let Some(max_age) = policy.granted_seconds() else {
+        // `no-store` on a revalidation is an explicit revocation: drop the copy
+        // rather than extend a grant the provider just withdrew.
+        if policy.no_store {
             self.conn.execute(
                 "DELETE FROM tiles WHERE provider = ?1 AND z = ?2 AND y = ?3 AND x = ?4",
                 params![provider, z, y, x],
             )?;
             return Ok(false);
+        }
+
+        // A 304 that carries NO directives is a different case, and deleting on
+        // it was a bug: RFC 9111 4.3.4 makes a 304 an UPDATE of the stored
+        // headers, so silence leaves the grant we already recorded standing.
+        // Deleting threw away the bytes we had just spent a conditional request
+        // to avoid re-fetching - along with the etag, forcing a full download
+        // next time and leaving nothing for the offline fallback in between.
+        //
+        // Retention is re-stamped because the content WAS confirmed current;
+        // freshness is not, because no new grant arrived. The tile stays
+        // stale-but-retained and revalidates again next request. Rows with no
+        // recorded grant at all (pre-migration) are left alone, so silence can
+        // never keep a grantless row alive indefinitely.
+        let Some(max_age) = policy.granted_seconds() else {
+            let updated = self.conn.execute(
+                "UPDATE tiles SET fetched_at = ?1, accessed_at = ?1
+                 WHERE provider = ?2 AND z = ?3 AND y = ?4 AND x = ?5
+                   AND expires_at IS NOT NULL",
+                params![now, provider, z, y, x],
+            )?;
+            return Ok(updated > 0);
         };
 
         let expires_at = now.saturating_add(max_age);
@@ -723,7 +786,7 @@ impl TileCache {
         // `delete_retired` sums each cutoff against the same predicate it then
         // deletes with, so the figure cannot drift from the deletion without
         // costing a whole-table scan per call to find out.
-        freed_bytes += self.delete_retired()?;
+        freed_bytes += self.delete_retired(true)?;
 
         // Then, if still over capacity, delete LRU tiles using batch approach
         let stats = self.get_stats();
@@ -1735,12 +1798,17 @@ mod tests {
     }
 
     #[test]
-    fn permits_storage_is_the_gate_the_cache_actually_applies() {
-        assert!(parse_cache_control("max-age=86400").permits_storage());
-        assert!(parse_cache_control("no-cache").permits_storage());
-        assert!(!parse_cache_control("no-store").permits_storage());
-        assert!(!parse_cache_control("public").permits_storage());
-        assert!(!CachePolicy::default().permits_storage());
+    fn a_directive_that_grants_nothing_is_not_a_grant() {
+        // `granted_seconds` is the live gate; there was a second `permits_storage`
+        // helper saying the same thing that no production path called, which is
+        // how the two copies of this rule drifted the first time.
+        assert!(parse_cache_control("max-age=86400")
+            .granted_seconds()
+            .is_some());
+        assert_eq!(parse_cache_control("no-cache").granted_seconds(), Some(0));
+        assert_eq!(parse_cache_control("no-store").granted_seconds(), None);
+        assert_eq!(parse_cache_control("public").granted_seconds(), None);
+        assert_eq!(CachePolicy::default().granted_seconds(), None);
     }
 
     #[test]
@@ -2030,11 +2098,17 @@ mod tests {
             expires_at: Some(i64::MAX),
             etag: None,
         };
+        // Saturating rather than wrapping...
         assert_eq!(entry.remaining_policy(0).max_age_seconds, Some(i64::MAX));
         assert_eq!(
             entry.remaining_policy(i64::MIN).max_age_seconds,
-            Some(i64::MAX),
-            "saturating, not wrapping"
+            Some(i64::MAX)
+        );
+        // ...and bounded by the time it reaches a write path, which is what the
+        // ceiling has to mean if it is an invariant rather than a parser quirk.
+        assert_eq!(
+            entry.remaining_policy(0).granted_seconds(),
+            Some(MAX_GRANT_SECONDS)
         );
     }
 
@@ -2065,22 +2139,6 @@ mod tests {
             .unwrap();
 
         assert!(!refreshed, "nothing was refreshed - the row is gone");
-        assert_eq!(cache.get_stats().tile_count, 0);
-    }
-
-    #[test]
-    fn a_304_carrying_no_grant_at_all_also_drops_the_copy() {
-        // Silence on a revalidation is silence, same as on a fetch.
-        let mut cache = TileCache::in_memory(10, 30).unwrap();
-        cache
-            .put_granted("esri", 1, 2, 3, b"tile", "image/jpeg")
-            .unwrap();
-
-        let refreshed = cache
-            .refresh_validated("esri", 1, 2, 3, CachePolicy::default())
-            .unwrap();
-
-        assert!(!refreshed);
         assert_eq!(cache.get_stats().tile_count, 0);
     }
 
@@ -2171,5 +2229,89 @@ mod tests {
 
         assert_eq!(cache.evict_lru().unwrap(), 1024, "only esri's row retired");
         assert!(cache.get("other", 1, 0, 0).is_some());
+    }
+
+    #[test]
+    fn a_quoted_list_cannot_mint_a_grant_the_provider_never_issued() {
+        // The inverse of the directive-hiding bug. `private="x,max-age=999,y"`
+        // is ONE directive named `private`; splitting on its inner commas lifted
+        // out a bare `max-age=999` and treated it as permission to store.
+        let policy = parse_cache_control(r#"private="x,max-age=999,y""#);
+        assert_eq!(policy.max_age_seconds, None);
+        assert_eq!(policy.granted_seconds(), None);
+
+        // And a quoted list must not smuggle a no-store either.
+        let smuggled = parse_cache_control(r#"private="x,no-store,y", max-age=86400"#);
+        assert!(!smuggled.no_store);
+        assert_eq!(smuggled.granted_seconds(), Some(86_400));
+    }
+
+    #[test]
+    fn the_ceiling_binds_every_write_path_not_just_the_parser() {
+        // remaining_policy mints a max-age for overzoomed crops and it reaches
+        // `put` through the same gate, so the clamp has to live on the gate.
+        let hand_built = CachePolicy {
+            max_age_seconds: Some(i64::MAX),
+            no_store: false,
+        };
+        assert_eq!(hand_built.granted_seconds(), Some(MAX_GRANT_SECONDS));
+    }
+
+    #[test]
+    fn a_304_with_no_directives_keeps_the_tile_it_just_confirmed() {
+        // RFC 9111 4.3.4: a 304 UPDATES the stored headers, so silence is not
+        // revocation. Deleting here threw away bytes we had just spent a
+        // conditional request to avoid re-fetching, along with the etag needed
+        // to ask again cheaply.
+        let mut cache = TileCache::in_memory(10, 30).unwrap();
+        cache
+            .put(
+                "esri",
+                1,
+                2,
+                3,
+                b"tile",
+                "image/jpeg",
+                CachePolicy {
+                    max_age_seconds: Some(60),
+                    no_store: false,
+                },
+                Some("\"abc\""),
+            )
+            .unwrap();
+        cache.expire_max_age_for_test("esri", 1, 2, 3).unwrap();
+
+        let refreshed = cache
+            .refresh_validated("esri", 1, 2, 3, CachePolicy::default())
+            .unwrap();
+
+        assert!(refreshed, "the row was updated, not dropped");
+        let entry = cache
+            .get_stale("esri", 1, 2, 3)
+            .expect("still retained, still revalidatable");
+        assert_eq!(entry.data, b"tile");
+        assert_eq!(entry.etag.as_deref(), Some("\"abc\""), "etag survives");
+        // Retention re-stamped (content confirmed), freshness NOT extended
+        // (no new grant arrived), so it revalidates again next request.
+        assert!(cache.get("esri", 1, 2, 3).is_none());
+    }
+
+    #[test]
+    fn a_304_without_directives_does_not_resurrect_a_grantless_row() {
+        // Pre-migration rows have no recorded grant; silence must not keep them
+        // alive forever by re-stamping retention on every revalidation.
+        let mut cache = TileCache::in_memory(10, 30).unwrap();
+        cache
+            .put_granted("esri", 1, 2, 3, b"tile", "image/jpeg")
+            .unwrap();
+        cache
+            .conn
+            .execute("UPDATE tiles SET expires_at = NULL", [])
+            .unwrap();
+
+        let refreshed = cache
+            .refresh_validated("esri", 1, 2, 3, CachePolicy::default())
+            .unwrap();
+        assert!(!refreshed, "no grant on record, nothing to keep alive");
     }
 }

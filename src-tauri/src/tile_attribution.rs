@@ -47,6 +47,24 @@ const ATTRIBUTION_TTL: Duration = Duration::from_hours(24);
 /// there is nothing to gain from retrying tightly.
 const ATTRIBUTION_FAILURE_BACKOFF: Duration = Duration::from_mins(5);
 
+/// Characters removed from a remote attribution before it is displayed.
+///
+/// `char::is_control` alone is Unicode category Cc only, which leaves the
+/// format and separator characters that matter most for a credit line: U+202E
+/// RIGHT-TO-LEFT OVERRIDE can reverse the rendered source names, and U+2028
+/// breaks the layout. Neither is an injection - React escapes the string - but
+/// both defeat the display integrity this module exists to provide.
+fn is_display_hostile(c: char) -> bool {
+    c.is_control()
+        || matches!(c,
+            '\u{200B}'..='\u{200F}'   // zero-width + LRM/RLM
+            | '\u{202A}'..='\u{202E}' // bidi embedding/override
+            | '\u{2060}'..='\u{206F}' // word joiner, invisible ops, bidi isolates
+            | '\u{2028}' | '\u{2029}' // line / paragraph separator
+            | '\u{FEFF}'               // BOM / zero-width no-break space
+        )
+}
+
 /// Ceiling on the attribution string, in characters.
 ///
 /// `copyrightText` is remote text that ends up in a DOM node and a `title=`
@@ -123,16 +141,32 @@ fn parse_copyright_text(body: &[u8]) -> Result<String, String> {
     let info: ServiceInfo = serde_json::from_slice(body)
         .map_err(|e| format!("Failed to parse attribution JSON: {e}"))?;
 
-    // Control characters stripped and length capped before the string goes
-    // anywhere near the UI: this is untrusted remote text.
-    let text: String = info
+    // Hostile characters are REPLACED with a space, not deleted. Deleting them
+    // merges the names either side: a plausible multi-line `copyrightText` of
+    // "Source: Esri\nVantor" became "Source: EsriVantor", i.e. a fabricated
+    // source name in a credit that is supposed to be exact - and it is the name
+    // `primarySourceName` then puts on the collapsed chip.
+    let cleaned: String = info
         .copyright_text
         .unwrap_or_default()
         .chars()
-        .filter(|c| !c.is_control())
-        .take(MAX_ATTRIBUTION_CHARS)
+        .map(|c| if is_display_hostile(c) { ' ' } else { c })
         .collect();
-    let text = text.trim().to_string();
+
+    // Collapse the runs that replacement can create, then bound the length.
+    let mut text: String = cleaned.split_whitespace().collect::<Vec<_>>().join(" ");
+
+    if text.chars().count() > MAX_ATTRIBUTION_CHARS {
+        // Marked, not silently clipped: a truncated credit displayed as though
+        // complete is worse than one that says it was cut.
+        text = text
+            .chars()
+            .take(MAX_ATTRIBUTION_CHARS - 1)
+            .collect::<String>()
+            .trim_end()
+            .to_string();
+        text.push('\u{2026}');
+    }
 
     if text.is_empty() {
         // An empty copyright line is not an attribution - fall back rather than
@@ -325,12 +359,13 @@ mod tests {
     }
 
     #[test]
-    fn control_characters_are_stripped_from_the_attribution() {
-        let body = "{\"copyrightText\":\"Source: Esri\\u0000\\u0007, Vantor\"}";
-        assert_eq!(
-            parse_copyright_text(body.as_bytes()).unwrap(),
-            "Source: Esri, Vantor"
-        );
+    fn control_characters_are_neutralised_without_fusing_the_names() {
+        let body = "{\"copyrightText\":\"Source: Esri\\u0000\\u0007Vantor\"}";
+        let text = parse_copyright_text(body.as_bytes()).unwrap();
+        assert!(!text.chars().any(char::is_control));
+        // Replaced with a separator, not deleted - deleting would have produced
+        // the single fabricated source name "EsriVantor".
+        assert_eq!(text, "Source: Esri Vantor");
     }
 
     #[test]
@@ -338,5 +373,38 @@ mod tests {
         // Stripping must not turn junk into an empty string we then display.
         let body = "{\"copyrightText\":\"\\u0000\\u0001\\u0002\"}";
         assert!(parse_copyright_text(body.as_bytes()).is_err());
+    }
+
+    #[test]
+    fn a_bidi_override_cannot_reverse_the_rendered_source_names() {
+        // U+202E survives `char::is_control` (category Cc only) and would flip
+        // the display order of a legally required credit.
+        let body = "{\"copyrightText\":\"Source: Esri\\u202E rotnaV\"}";
+        let text = parse_copyright_text(body.as_bytes()).unwrap();
+        assert!(!text.contains('\u{202E}'), "got: {text:?}");
+        assert!(text.contains("Esri"));
+    }
+
+    #[test]
+    fn a_multi_line_credit_does_not_fuse_two_source_names() {
+        // Deleting control characters merged the names either side of them:
+        // "Source: Esri\nVantor" became "EsriVantor", inventing a source.
+        let body = "{\"copyrightText\":\"Source: Esri\\nVantor\\tEarthstar\"}";
+        assert_eq!(
+            parse_copyright_text(body.as_bytes()).unwrap(),
+            "Source: Esri Vantor Earthstar"
+        );
+    }
+
+    #[test]
+    fn an_over_long_credit_says_it_was_cut_rather_than_reading_as_complete() {
+        let huge = format!("Source: {}", "Somebody, ".repeat(2_000));
+        let body = format!(r#"{{"copyrightText":"{huge}"}}"#);
+        let text = parse_copyright_text(body.as_bytes()).unwrap();
+        assert_eq!(text.chars().count(), MAX_ATTRIBUTION_CHARS);
+        assert!(
+            text.ends_with('\u{2026}'),
+            "a clipped credit must not present itself as the whole list"
+        );
     }
 }
