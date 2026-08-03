@@ -232,8 +232,10 @@ session used for that provider.
 tile.fetch.<provider>       - imagery bytes pulled from the provider
 tile.revalidate.<provider>  - served from cache after a 304: a round trip, but
                               no imagery crossed the wire
-tile.cache.<provider>       - served from cache with no network call at all,
-                              including a stale copy under stale-if-error
+tile.cache.<provider>       - bytes came from cache without a successful
+                              network response: a clean cache hit, a stale copy
+                              under stale-if-error, or an overzoomed crop of a
+                              cached parent
 ```
 
 **Why revalidations are their own bucket.** The cache stores a tile for as long
@@ -245,17 +247,33 @@ and consumption is the one thing this metric exists to size. The split also make
 the bandwidth saving visible directly: `revalidate` against `fetch` is how much
 imagery the conditional request avoided pulling.
 
-"no network call at all" is literal, and it takes some care to keep it that
-way: the tilemap availability probe is itself a network request when its
-in-memory cache is cold, so the fresh tile cache is consulted **before** every
-probe. Probing first meant a request answered entirely from disk could still
-reach the provider while reporting as `tile.cache`.
+**These buckets measure where the BYTES came from, not whether the network was
+touched.** `tile.cache` covers a failed attempt too: stale-if-error tries a
+revalidation first and only serves the stored copy when that fails, and the
+overzoom fallback reaches a cached parent after the child fetch failed. Both are
+right for consumption - no imagery was pulled - but neither means "we did not
+contact the provider". For that question use `TileFetchStats`
+(`total_fetched` / `total_errors`), which counts attempts and is what drives the
+offline indicator.
+
+One thing that IS enforced: a clean cache hit makes no network call, which takes
+care to keep true. The tilemap availability probe is itself a network request
+when its in-memory cache is cold, so the fresh tile cache is consulted **before**
+every probe - at the requested zoom and at each parent level of the overzoom
+walk. Probing first meant a request answered entirely from disk could still reach
+the provider.
 
 The classification is per request (`TileServeSource`), deliberately not the
 shared `TileFetchStats` diff, which concurrent tile requests would
 cross-contaminate. It is also **not** what drives the offline indicator: that
 runs off the stats snapshot, where a `304` correctly counts as the network having
 been reached.
+
+Emitted from **both** tile paths, which are platform-split: desktop serves tiles
+through Tauri's native URI-scheme handler, while Android bypasses that (it
+serialises every request onto one WebView IO thread) and calls the `fetch_tile`
+IPC command instead. Both classify with the same `TileServeSource`, so the two
+platforms' numbers are directly comparable.
 
 Adding a provider is CI-gated: `every_tile_provider_has_consumption_events`
 walks the registry and fails until all three names for it are in `EVENT_NAMES`.

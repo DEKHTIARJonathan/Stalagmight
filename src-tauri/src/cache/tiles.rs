@@ -222,18 +222,31 @@ pub fn parse_cache_control(header: &str) -> CachePolicy {
 /// Parse an `Age` header value: seconds the response has already spent in
 /// intermediary caches.
 ///
-/// RFC 9111 defines it as a non-negative integer. Anything else - a negative
-/// number, a float, junk - is treated as absent rather than as zero: guessing
-/// would be inventing freshness, and the conservative reading of a malformed
-/// header is "we do not know how old this is". Clamped to the same ceiling as a
-/// grant so a hostile `Age` cannot underflow anything downstream.
+/// Note the polarity, because it is the reverse of `max-age` and that is the
+/// trap. For a grant, "unreadable" means NO grant, so the tile is not stored -
+/// the safe direction. For `Age`, "unreadable" means NOT AGED, i.e. maximum
+/// freshness - the unsafe one. So the two cannot share a rule:
+///
+/// - A number too large for us is still a number, and a huge one means the
+///   response is very old. RFC 9111 1.2.2 is explicit that an over-large
+///   `delta-seconds` MUST be clamped to the largest value the cache can
+///   conveniently represent, not ignored. Clamping to `MAX_GRANT_SECONDS`
+///   spends any real grant outright, so the tile is stored but never served as
+///   current - which is what "we cannot tell how stale this is" should mean.
+/// - Genuine junk (`soon`, `12.5`, a negative) says nothing about age at all,
+///   and is treated as absent. Reading it as maximally stale would let one
+///   malformed header from a proxy force a revalidation on every single
+///   request for that provider, forever.
 pub fn parse_age(header: &str) -> Option<i64> {
-    header
-        .trim()
-        .parse::<i64>()
-        .ok()
-        .filter(|seconds| *seconds >= 0)
-        .map(|seconds| seconds.min(MAX_GRANT_SECONDS))
+    let raw = header.trim();
+    match raw.parse::<i64>() {
+        Ok(seconds) if seconds >= 0 => Some(seconds.min(MAX_GRANT_SECONDS)),
+        // Overflowed `i64` while being all digits: too old to represent.
+        Err(_) if !raw.is_empty() && raw.bytes().all(|b| b.is_ascii_digit()) => {
+            Some(MAX_GRANT_SECONDS)
+        }
+        _ => None,
+    }
 }
 
 /// Current Unix timestamp, on the same clock the cache stamps entries with.
@@ -2376,6 +2389,32 @@ mod tests {
             Some(MAX_GRANT_SECONDS),
             "clamped like a grant, so it cannot underflow anything downstream"
         );
+    }
+
+    #[test]
+    fn an_age_too_large_to_parse_means_ancient_not_brand_new() {
+        // The polarity trap. For `max-age`, unreadable means NO grant - safe.
+        // For `Age`, "absent" means NOT AGED, i.e. full freshness, so the same
+        // rule would let a hostile or broken intermediary hand back the whole
+        // grant again. RFC 9111 1.2.2 says an over-large delta-seconds MUST be
+        // clamped, not ignored.
+        let huge = "99999999999999999999999";
+        assert_eq!(parse_age(huge), Some(MAX_GRANT_SECONDS));
+
+        let mut policy = parse_cache_control("max-age=86400");
+        policy.age_seconds = parse_age(huge);
+        assert_eq!(
+            policy.granted_seconds(),
+            Some(0),
+            "an unrepresentably old response has no freshness left"
+        );
+
+        // Genuine junk still says nothing about age. Reading it as maximally
+        // stale would let one malformed proxy header force a revalidation on
+        // every request for that provider, forever.
+        assert_eq!(parse_age("soon"), None);
+        assert_eq!(parse_age("-99999999999999999999999"), None);
+        assert_eq!(parse_age("12.5"), None);
     }
 
     #[test]

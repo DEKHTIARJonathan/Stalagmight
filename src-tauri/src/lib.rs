@@ -216,6 +216,42 @@ const TILE_FETCH_RETRY_DELAYS: [Duration; 2] =
 
 /// Returns true if the error is a transient transport error worth retrying.
 /// HTTP 4xx/5xx are NOT retried since the server understood the request.
+/// Read EVERY `Cache-Control` field line, joined the way RFC 9110 5.3 defines
+/// repeated fields: sending them on separate lines means exactly the same thing
+/// as one comma-joined value.
+///
+/// `HeaderMap::get` returns only the first, so
+///
+/// ```text
+/// Cache-Control: max-age=86400
+/// Cache-Control: no-store
+/// ```
+///
+/// read as a plain grant and the `no-store` was never seen - the app would store
+/// imagery it had been told not to keep, which is the one failure this cache is
+/// built to avoid. Realistic rather than theoretical: it is what an origin and
+/// an intermediary each appending a directive produces, and Esri sits behind
+/// CloudFront. `parse_cache_control` already splits quote-aware, so the joined
+/// form needs no parser change.
+fn read_cache_policy(headers: &http::HeaderMap) -> CachePolicy {
+    let joined = headers
+        .get_all("cache-control")
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .collect::<Vec<_>>()
+        .join(", ");
+    if joined.is_empty() {
+        return CachePolicy::default();
+    }
+    let mut policy = cache::tiles::parse_cache_control(&joined);
+    // `Age` is single-valued; a repeat is malformed, so the first wins.
+    policy.age_seconds = headers
+        .get("age")
+        .and_then(|value| value.to_str().ok())
+        .and_then(cache::tiles::parse_age);
+    policy
+}
+
 /// Split a `ureq` failure into "the provider answered" and "we could not reach
 /// it", preserving the status code in the first case.
 ///
@@ -311,20 +347,10 @@ fn fetch_tile_from_network(
                 // 4xx/5xx into errors, and its redirect handling leaves a
                 // body-less 3xx alone (verified against the live service).
                 if response.status() == 304 {
-                    let mut policy = response
-                        .headers()
-                        .get("cache-control")
-                        .and_then(|v| v.to_str().ok())
-                        .map(cache::tiles::parse_cache_control)
-                        .unwrap_or_default();
-                    // A 304 carries `Age` too, and it is the response that runs
-                    // every day after the first - so skipping it here would
-                    // leave the hole open on the path taken most often.
-                    policy.age_seconds = response
-                        .headers()
-                        .get("age")
-                        .and_then(|v| v.to_str().ok())
-                        .and_then(cache::tiles::parse_age);
+                    // A 304 carries `Cache-Control` and `Age` too, and it is the
+                    // response that runs every day after the first - so both the
+                    // multi-value read and the age subtraction matter most here.
+                    let policy = read_cache_policy(response.headers());
                     if let Some(s) = stats {
                         s.record_success(latency_ms);
                     }
@@ -346,20 +372,7 @@ fn fetch_tile_from_network(
                 let content_type = sanitize_content_type(raw_content_type);
 
                 // Read before `into_body` consumes the response.
-                let mut policy = response
-                    .headers()
-                    .get("cache-control")
-                    .and_then(|v| v.to_str().ok())
-                    .map(cache::tiles::parse_cache_control)
-                    .unwrap_or_default();
-                // `max-age` counts from when the ORIGIN made the response, so a
-                // copy handed to us by a CDN has already spent `Age` of it.
-                // Esri is behind CloudFront and does send this on an edge hit.
-                policy.age_seconds = response
-                    .headers()
-                    .get("age")
-                    .and_then(|v| v.to_str().ok())
-                    .and_then(cache::tiles::parse_age);
+                let policy = read_cache_policy(response.headers());
                 let etag = response
                     .headers()
                     .get("etag")
@@ -754,10 +767,19 @@ enum TileFetchOutcome {
 /// consumption for a session that downloaded nothing, since past the first day
 /// nearly every request revalidates - and consumption is precisely what the
 /// metric exists to measure.
+///
+/// This tracks BYTES, not network contact. `Cache` also covers a failed attempt:
+/// stale-if-error tries a revalidation first, and the overzoom fallback reaches
+/// a cached parent only after the child fetch failed. Both are right for
+/// consumption - no imagery was pulled - but neither means the provider went
+/// untouched. `TileFetchStats` counts attempts, and is what the offline
+/// indicator reads.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TileServeSource {
-    /// No network call at all - a fresh cache hit, or a stale copy under
-    /// stale-if-error.
+    /// Bytes came from cache with no successful network response: a clean cache
+    /// hit (which really does make no network call - see `cache_has_fresh`), a
+    /// stale copy under stale-if-error, or an overzoomed crop of a cached
+    /// parent.
     Cache,
     /// Revalidated with `If-None-Match`; the provider answered `304` and the
     /// body came from cache.
@@ -770,7 +792,7 @@ impl TileServeSource {
     /// The `tile.<kind>.<provider>` event name this maps to. Every variant must
     /// stay registered in `telemetry::registry` - a test enforces the trio per
     /// provider.
-    fn telemetry_kind(self) -> &'static str {
+    pub(crate) fn telemetry_kind(self) -> &'static str {
         match self {
             Self::Cache => "cache",
             Self::Revalidated => "revalidate",
@@ -1417,7 +1439,7 @@ pub fn tile_fetch_impl(
     tilemap_cache: &Arc<Mutex<TilemapCache>>,
     stats: &Arc<TileFetchStats>,
     cache_config: &config::CacheConfig,
-) -> Result<Vec<u8>, String> {
+) -> Result<(Vec<u8>, TileServeSource), String> {
     // Validate provider against registry
     if tile_providers::get_provider(provider).is_none() {
         return Err(format!("Unknown provider: {provider}"));
@@ -1425,13 +1447,25 @@ pub fn tile_fetch_impl(
 
     let cache_enabled = cache_config.tile_cache_enabled;
     let stats_ref = Arc::clone(stats);
+    // Same provenance recording as the desktop protocol handler. Android does
+    // not use that handler at all - MapLibre there calls the `fetch_tile` IPC
+    // command, which lands here - so without this the #31 consumption events
+    // were simply absent on that platform rather than wrong. Returned to the
+    // caller, since only the command layer has the `AppHandle` the collector
+    // hangs off.
+    let serve_source = Arc::new(AtomicU8::new(TileServeSource::Cache.as_u8()));
+    let source_setter = Arc::clone(&serve_source);
     let fetch_fn = move |p: &str,
                          z: u32,
                          y: u32,
                          x: u32,
                          validator: Option<&str>|
           -> Result<TileFetchResponse, TileFetchError> {
-        fetch_tile_from_network(p, z, y, x, Some(&stats_ref), validator)
+        let result = fetch_tile_from_network(p, z, y, x, Some(&stats_ref), validator);
+        if let Some(source) = TileServeSource::from_fetch(&result) {
+            source_setter.store(source.as_u8(), Ordering::Relaxed);
+        }
+        result
     };
     fetch_best_available_with_fetcher(
         provider,
@@ -1443,7 +1477,12 @@ pub fn tile_fetch_impl(
         &fetch_fn,
         cache_enabled,
     )
-    .map(|tile| tile.data)
+    .map(|tile| {
+        (
+            tile.data,
+            TileServeSource::from_u8(serve_source.load(Ordering::Relaxed)),
+        )
+    })
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -2865,7 +2904,9 @@ mod tests {
             &make_test_cache_config(),
         )
         .unwrap();
-        assert_eq!(data, b"tile_bytes");
+        assert_eq!(data.0, b"tile_bytes");
+        // Served entirely from cache, so nothing was consumed from the provider.
+        assert_eq!(data.1, TileServeSource::Cache);
     }
 
     // === Per-provider cache toggle tests ===
@@ -2921,6 +2962,50 @@ mod tests {
             cached.is_none(),
             "Tile should not be cached when provider caching is disabled"
         );
+    }
+
+    #[test]
+    fn every_cache_control_field_line_is_read_not_just_the_first() {
+        // RFC 9110 5.3: repeating a field is identical to comma-joining it. An
+        // origin and an intermediary each adding a directive produces exactly
+        // this, and `HeaderMap::get` returns only the first - so a `no-store`
+        // sent on its own line was invisible while an earlier `max-age` still
+        // let the tile be stored. The one failure this cache must not have.
+        let mut headers = http::HeaderMap::new();
+        headers.append("cache-control", "max-age=86400".parse().unwrap());
+        headers.append("cache-control", "no-store".parse().unwrap());
+
+        let policy = read_cache_policy(&headers);
+        assert!(policy.no_store, "the second field line must be seen");
+        assert_eq!(
+            policy.granted_seconds(),
+            None,
+            "and no-store must beat the max-age that arrived first"
+        );
+
+        // The joined form is unchanged, and quote-aware splitting still holds
+        // across the join.
+        let mut joined = http::HeaderMap::new();
+        joined.append(
+            "cache-control",
+            "private=\"x,max-age=999\"".parse().unwrap(),
+        );
+        joined.append("cache-control", "max-age=600".parse().unwrap());
+        assert_eq!(read_cache_policy(&joined).granted_seconds(), Some(600));
+
+        // No header at all is still "no grant", not a default one.
+        assert_eq!(
+            read_cache_policy(&http::HeaderMap::new()).granted_seconds(),
+            None
+        );
+    }
+
+    #[test]
+    fn age_is_read_alongside_the_joined_directives() {
+        let mut headers = http::HeaderMap::new();
+        headers.append("cache-control", "max-age=86400".parse().unwrap());
+        headers.append("age", "80000".parse().unwrap());
+        assert_eq!(read_cache_policy(&headers).granted_seconds(), Some(6_400));
     }
 
     #[test]

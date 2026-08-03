@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use serde::Serialize;
-use tauri::State;
+use tauri::{Manager, State};
 use ts_rs::TS;
 
 use crate::core::AppState;
@@ -126,16 +126,23 @@ pub(crate) fn clear_tile_cache_impl(
 /// Returns the raw tile bytes on success.
 #[tauri::command]
 pub async fn fetch_tile(
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
     provider: String,
     z: u32,
     y: u32,
     x: u32,
 ) -> Result<Vec<u8>, String> {
-    fetch_tile_impl(state.inner(), provider, z, y, x).await
+    fetch_tile_impl(Some(&app), state.inner(), provider, z, y, x).await
 }
 
+/// `app` carries the telemetry collector, and is `None` only where there is no
+/// app to carry it (tests). Android reaches tiles exclusively through this
+/// command - MapLibre's native protocol handler is bypassed there because it
+/// serialises every request onto one WebView IO thread - so this is the only
+/// place the #31 consumption events can be emitted for that platform.
 pub(crate) async fn fetch_tile_impl(
+    app: Option<&tauri::AppHandle>,
     state: &AppState,
     provider: String,
     z: u32,
@@ -148,6 +155,8 @@ pub(crate) async fn fetch_tile_impl(
     let tilemap_cache = state.tilemap_cache();
     let tile_fetch_stats = state.tile_fetch_stats();
     let cache_config = state.get_config().cache;
+
+    let provider_for_telemetry = provider.clone();
 
     // Run blocking I/O in a separate thread
     let result = tauri::async_runtime::spawn_blocking(move || {
@@ -165,7 +174,21 @@ pub(crate) async fn fetch_tile_impl(
     .await
     .map_err(|e| format!("Tile fetch task failed: {e}"))?;
 
-    result
+    let (data, serve_source) = result?;
+
+    // One event per SERVED tile, tagged by where its bytes came from - the same
+    // three buckets the desktop protocol handler emits. Errors are not counted,
+    // so the two paths stay directly comparable.
+    if let Some(app) = app {
+        let event = format!(
+            "tile.{}.{provider_for_telemetry}",
+            serve_source.telemetry_kind()
+        );
+        app.state::<crate::telemetry::TelemetryCollector>()
+            .track(&event);
+    }
+
+    Ok(data)
 }
 
 /// Get list of all registered tile providers with availability info.
