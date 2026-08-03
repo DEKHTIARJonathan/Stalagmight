@@ -244,12 +244,24 @@ map:
 | Global View | `GlobalViewMap.tsx` | always - imagery is its base layer |
 | Section Preview | `SectionPreview.tsx`, `variant="compact"` | the section has a GPS origin |
 
-It collapses to the `i` affordance automatically below 460px, and always in the
-Section Preview. The expanded panel is portalled through `common/Tooltip.tsx`,
-which is what keeps it clear of that preview's `overflow-hidden`. The chip uses
-Esri's specified colours (`#323232` on white at 65%) rather than theme tokens: it
-sits on photography, where a themed panel colour legible against one basemap
-disappears against the next.
+On the survey map it is a bottom-flush bar ending where the Data dock's tab
+begins, so the two read as one row of chrome and neither obstructs the other -
+`MAP_ATTRIBUTION_RIGHT_INSET` in `layoutConstants.ts` derives that inset from the
+tab's own, so they move together. Only its top-right corner is rounded; the other
+three meet the map edge and the tab.
+
+It collapses to the `i` affordance automatically below a 580px host width, and
+always in the Section Preview. That threshold is a budget for everything on the
+bottom edge (names + tab inset + ScaleControl) - undershooting it slides the names
+under the scale bar, which is the obstruction the terms forbid. The expanded panel
+is portalled through `common/Tooltip.tsx`, which is what keeps it clear of the
+Section Preview's `overflow-hidden`.
+
+Colours come from the app's theme tokens (`bg-panel-90 text-text-secondary`), the
+same ones `PanelOpenerTab` uses, so a dark theme gets a dark bar. Esri's
+recommended design (`#323232` on white at 65%, 12px or larger) is guidance rather
+than a term of use; what the terms require is legible, unobstructed names, and the
+bar renders at 11px against a themed backing.
 
 **The string is fetched, not hard-coded.** `src-tauri/src/tile_attribution.rs`
 reads `copyrightText` from the provider's `service_info_url`, caches it for a day,

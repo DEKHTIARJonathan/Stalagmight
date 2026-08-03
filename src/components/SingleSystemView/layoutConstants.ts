@@ -74,6 +74,22 @@ export const MAP_MIN_WIDTH = 360;
 export const MAP_MIN_HEIGHT = 200;
 
 /**
+ * Right inset (px) for the on-map imagery attribution bar, and the Data dock
+ * tab's own inset it is derived from.
+ *
+ * The attribution is a bottom-flush bar on the map's bottom edge, ending where
+ * the Data dock's tab begins so the tab sits to its right. Esri requires the
+ * source names not be obstructed by other UI, and the tab is drawn over the map
+ * on that same edge - so the bar has to stop clear of it rather than share the
+ * corner. The tab box is `min-h-7 px-2` around a chevron (plus a pin icon once
+ * the panel is open), which measures ~45-48px; 56 leaves headroom for the pin
+ * variant and for the webview text-zoom that grows the box.
+ */
+export const DATA_DOCK_TAB_INSET = 40;
+const DATA_DOCK_TAB_MAX_WIDTH = 56;
+export const MAP_ATTRIBUTION_RIGHT_INSET = DATA_DOCK_TAB_INSET + DATA_DOCK_TAB_MAX_WIDTH;
+
+/**
  * Panel reveal/close timing budget (ms). Centralized so the interacting graces are
  * tuned together (a short transit grace vs a generous post-resize grace - usePanelReveal's
  * scheduleClose has explicit "don't shorten a longer grace" logic precisely because

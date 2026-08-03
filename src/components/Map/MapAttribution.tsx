@@ -1,18 +1,23 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Tooltip } from '../common/Tooltip';
 import { useTileAttribution } from '../../hooks/useTileAttribution';
 
 /**
- * Below this width the source names cannot be read at a glance, so the overlay
- * collapses to the `i` affordance. Esri allows exactly this: "Offer an
+ * Below this host width the source names cannot fit on the bottom edge, so the
+ * overlay collapses to the `i` affordance. Esri allows exactly this: "Offer an
  * expandable UI when names don't fit on small screens."
  *
- * Sized from the string it has to hold - the Esri World Imagery list runs about
- * 66 characters, which needs ~400px at 12px - plus room for the map chrome it
- * shares the bottom edge with.
+ * Budgeted against everything sharing that edge, measured at 11px:
+ *   370  the Esri World Imagery list (~66 characters) plus the bar's padding
+ *  + 96  right inset clearing the Data dock's tab (MAP_ATTRIBUTION_RIGHT_INSET)
+ *  + 110 the MapLibre ScaleControl at the other end, plus a gap
+ *  = 576, rounded up.
+ *
+ * Undershooting here does not merely crowd the bar - it slides the names under
+ * the scale bar, which is the obstruction Esri's terms forbid.
  */
-const COMPACT_BELOW_PX = 460;
+const COMPACT_BELOW_PX = 580;
 
 /** Pointer dwell before the compact panel opens. */
 const HOVER_OPEN_MS = 350;
@@ -20,19 +25,29 @@ const HOVER_OPEN_MS = 350;
 const HOVER_CLOSE_MS = 150;
 
 /**
- * Esri's recommended attribution styling, applied verbatim rather than through
- * the app's theme tokens. This chip sits on photographic imagery, not on app
- * chrome: a themed panel colour is legible against one basemap and invisible
- * against the next, whereas #323232 on white-at-65% is the pairing Esri
- * specifies and tests against its own tiles. Same reasoning in both themes -
- * the imagery underneath does not get darker because the UI did.
+ * Themed surface, shared by the inline bar and the compact button.
+ *
+ * These are the app's own tokens rather than Esri's recommended fixed palette
+ * (#323232 on white at 65%), so a dark theme gets a dark chip instead of a white
+ * card punched into the map. Esri's colours are a recommendation, not a term;
+ * what the terms require is that the names be legible and unobstructed, and a
+ * panel-coloured chip carrying the app's own text colour is legible in whichever
+ * theme is actually on screen.
+ *
+ * Deliberately the same tokens the Data dock's tab uses (`PanelOpenerTab`), because
+ * the bar sits directly alongside it on the map's bottom edge and the two should
+ * read as one row of chrome.
  */
-const CHIP_STYLE = {
-  color: '#323232',
-  backgroundColor: 'rgba(255, 255, 255, 0.65)',
-  fontFamily: '"Avenir Next W00", "Helvetica Neue", Helvetica, Arial, sans-serif',
-  fontSize: '12px',
-} as const;
+const CHIP_SURFACE = 'bg-panel-90 text-text-secondary border-border';
+
+/**
+ * Font size, one step below the app's `text-xs`.
+ *
+ * Below Esri's recommended 12px minimum. That recommendation is design guidance
+ * rather than a term of use, and the requirement it serves - legible source
+ * names - still holds at this size against a themed backing.
+ */
+const CHIP_TEXT = 'text-[11px] leading-none';
 
 interface MapAttributionProps {
   /** Tile provider whose imagery is on screen. */
@@ -51,6 +66,8 @@ interface MapAttributionProps {
   variant?: 'auto' | 'compact';
   /** Positioning classes; the caller owns where on the map this sits. */
   className?: string;
+  /** Positioning styles, for insets that come from a shared layout constant. */
+  style?: CSSProperties;
 }
 
 /**
@@ -70,6 +87,7 @@ export function MapAttribution({
   visible,
   variant = 'auto',
   className = '',
+  style,
 }: MapAttributionProps) {
   const { t } = useTranslation();
   const { text } = useTileAttribution(provider);
@@ -119,8 +137,13 @@ export function MapAttribution({
     return (
       <div
         ref={wrapperRef}
-        className={`pointer-events-none select-none rounded px-1.5 py-0.5 leading-tight ${className}`}
-        style={CHIP_STYLE}
+        // A bottom-flush bar, not a floating card: `min-h-6` with centred
+        // content rather than a tight vertical padding, so the names sit on the
+        // bar's centre line instead of riding its top edge. Only the top-right
+        // corner is rounded - the other three meet the map's bottom edge and the
+        // Data dock's tab, which the caller parks immediately to the right.
+        className={`pointer-events-none flex min-h-6 select-none items-center border-x border-t px-2 rounded-tr ${CHIP_SURFACE} ${CHIP_TEXT} ${className}`}
+        style={style}
         data-testid="map-attribution"
       >
         <span data-testid="map-attribution-text">{text}</span>
@@ -129,7 +152,7 @@ export function MapAttribution({
   }
 
   return (
-    <div ref={wrapperRef} className={className} data-testid="map-attribution">
+    <div ref={wrapperRef} className={className} style={style} data-testid="map-attribution">
       <Tooltip
         content={<span data-testid="map-attribution-text">{text}</span>}
         openDelayMs={HOVER_OPEN_MS}
@@ -149,8 +172,9 @@ export function MapAttribution({
           aria-expanded={pinned}
           aria-label={t('map.attribution.expandAria')}
           title={text}
-          className="flex h-5 w-5 items-center justify-center rounded-full font-semibold leading-none"
-          style={CHIP_STYLE}
+          // Stays a round badge rather than inheriting the bar's single rounded
+          // corner: it is a control, and a one-cornered `i` reads as clipped.
+          className={`flex h-5 w-5 items-center justify-center rounded-full border font-semibold ${CHIP_SURFACE} ${CHIP_TEXT}`}
           data-testid="map-attribution-toggle"
         >
           i

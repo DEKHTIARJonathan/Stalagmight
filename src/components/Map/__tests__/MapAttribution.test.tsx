@@ -113,6 +113,30 @@ describe('MapAttribution', () => {
     expect(screen.queryByText(/Powered by Esri/)).not.toBeInTheDocument();
   });
 
+  describe('chrome', () => {
+    it('takes its colours from the theme rather than a fixed palette', async () => {
+      render(<MapAttribution visible />);
+      const chip = await screen.findByTestId('map-attribution');
+      // This shipped with Esri's recommended #323232-on-white applied inline,
+      // which punched a white card into the dark theme. The durable guard is
+      // that no colour is hard-coded at all: the tokens resolve per theme.
+      expect(chip.style.color).toBe('');
+      expect(chip.style.backgroundColor).toBe('');
+      expect(chip.className).toContain('bg-panel-90');
+      expect(chip.className).toContain('text-text-secondary');
+    });
+
+    it('rounds only its top-right corner', async () => {
+      // It is a bottom-flush bar butted against the map edge and the Data dock
+      // tab, not a floating card - a fully rounded chip reads as detached.
+      render(<MapAttribution visible />);
+      const chip = await screen.findByTestId('map-attribution');
+      // Token-wise, not substring: `rounded-tr` contains `rounded`.
+      const rounding = [...chip.classList].filter((c) => c.startsWith('rounded'));
+      expect(rounding).toEqual(['rounded-tr']);
+    });
+  });
+
   describe('compact affordance', () => {
     it('collapses when the map is too narrow for the names', async () => {
       setHostWidth(300);

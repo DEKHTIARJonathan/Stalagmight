@@ -26,6 +26,8 @@ import {
   DETAIL_REVEAL_AUTOCLOSE_MS,
   MAP_MIN_WIDTH,
   MAP_MIN_HEIGHT,
+  DATA_DOCK_TAB_INSET,
+  MAP_ATTRIBUTION_RIGHT_INSET,
 } from './layoutConstants';
 import { useSidePanelSqueeze, useDataPanelSqueeze, resolveResize } from './sidePanelSqueeze';
 import { ChevronDownIcon, ChevronLeftIcon, ChevronRightIcon, ChevronUpIcon } from '../common/icons';
@@ -738,15 +740,15 @@ export default function SingleSystemView() {
                 which is map chrome's usual home in this view - see the
                 OfflineIndicator above.
 
-                Bottom-right per Esri's recommendation, and the only free corner:
-                NavigationControl holds top-right and the ScaleControl
-                bottom-left (MapCanvas). Lifted a row off the bottom edge because
-                the Data dock's opener tab overlaps the map there (see
-                layoutConstants) and drew straight over the last few source
-                names - which Esri's terms specifically forbid. */}
+                Sits on the map's bottom edge, ending where the Data dock's tab
+                begins so the tab is to its right and neither obstructs the other
+                (Esri's terms forbid covering the names, and the tab drew over
+                them before this inset existed). The ScaleControl holds the other
+                end of the same edge, bottom-left. */}
             <MapAttribution
               visible={showSatellite}
-              className="absolute bottom-9 right-2 z-10"
+              className="absolute bottom-0 z-10"
+              style={{ right: MAP_ATTRIBUTION_RIGHT_INSET }}
             />
             {/* Export mode: large WYSIWYG preview of the image export, overlaid
                 on the (still-mounted) map. Only for the image export type -
@@ -781,8 +783,9 @@ export default function SingleSystemView() {
             testId="data"
             tabLabels={panelLabels.data}
             // Keep the Data tab clear of the Details tab on the right (it can
-            // ride up to the same height when the Data panel is tall).
-            tabInset={40}
+            // ride up to the same height when the Data panel is tall). Shared
+            // with the imagery attribution bar, which stops short of this tab.
+            tabInset={DATA_DOCK_TAB_INSET}
             fullscreen={dataTableFullScreen}
             // Portal the overlay to Main so it can span the full width (the
             // reflow spacer stays in the center column to push the map up).
