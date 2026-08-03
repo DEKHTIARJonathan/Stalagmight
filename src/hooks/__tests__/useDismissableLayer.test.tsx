@@ -4,11 +4,16 @@ import type { RefObject } from 'react';
 import { useDismissableLayer } from '../useDismissableLayer';
 
 /**
- * Contract this pins (relied on by Select's fix for #268): a scroll whose target is a
- * `scrollSafe` element does NOT dismiss, while an external/page scroll (window, or an
- * element outside the safe set) DOES. Select marks the trigger's own scroll container
- * scroll-safe so the focus-into-view scroll that opening triggers can't self-dismiss the
- * dropdown, without weakening dismissal on a genuine outside scroll.
+ * Contract this pins, in two layers.
+ *
+ * 1. (Relied on by Select's fix for #268) a scroll whose target is a `scrollSafe`
+ *    element does NOT dismiss. Select marks the trigger's own scroll container
+ *    scroll-safe so the focus-into-view scroll that opening triggers can't
+ *    self-dismiss the dropdown.
+ * 2. Of the rest, only scrolls that can actually MOVE the layer dismiss it: the page
+ *    itself, and ancestors of the layer or its trigger. A scroll in an unrelated
+ *    subtree is ignored - a map right-click used to close its own context menu
+ *    because selecting the station scrolled the data table and the sections panel.
  */
 
 const ref = <T extends HTMLElement>(el: T | null): RefObject<T | null> => ({ current: el });
@@ -43,10 +48,21 @@ describe('useDismissableLayer', () => {
       }),
     );
 
-  it('dismisses on a scroll outside the safe set', () => {
+  it('dismisses on a scroll of an ancestor outside the safe set', () => {
     mount([dropdown]);
-    document.body.dispatchEvent(new Event('scroll'));
+    document.body.dispatchEvent(new Event('scroll')); // body is an ancestor of both refs
     expect(onDismiss).toHaveBeenCalledTimes(1);
+  });
+
+  it('does NOT dismiss when an unrelated subtree scrolls', () => {
+    // The map context-menu bug: right-clicking a station scrolls the data table
+    // and the sections panel, neither of which can move a menu portaled elsewhere.
+    const elsewhere = document.createElement('div');
+    document.body.appendChild(elsewhere);
+    mount([dropdown]);
+    elsewhere.dispatchEvent(new Event('scroll'));
+    expect(onDismiss).not.toHaveBeenCalled();
+    elsewhere.remove();
   });
 
   it('does NOT dismiss when the trigger container is scroll-safe and it scrolls', () => {
