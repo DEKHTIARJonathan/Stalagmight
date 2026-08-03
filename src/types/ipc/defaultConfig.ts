@@ -254,7 +254,7 @@ export const defaultConfig: Config = {
     "tile_ttl_days": 30,
     "providers": {
       "esri": {
-        "offline_caching": false
+        "offline_caching": true
       }
     }
   },

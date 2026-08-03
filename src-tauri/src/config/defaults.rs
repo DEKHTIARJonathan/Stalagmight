@@ -293,10 +293,16 @@ impl Default for CacheConfig {
             providers: std::collections::HashMap::from([(
                 "esri".to_string(),
                 ProviderCacheConfig {
-                    offline_caching: false,
-                    // Unset: the global tile_ttl_days applies. Esri's own
-                    // Cache-Control caps how long a tile counts as fresh
-                    // regardless, so this only sizes the offline fallback.
+                    // On, but the cache itself only writes a tile whose response
+                    // carried an explicit `Cache-Control` grant. Esri sends
+                    // `max-age=86400` on every tile, so its imagery caches for
+                    // the day it grants and is then revalidated with an ETag
+                    // rather than re-downloaded. A provider that grants nothing
+                    // still gets no disk.
+                    offline_caching: true,
+                    // Unset: the global tile_ttl_days bounds RETENTION (how long
+                    // a tile survives to answer offline). Freshness is capped by
+                    // the provider's own max-age regardless.
                     ttl_days: None,
                 },
             )]),

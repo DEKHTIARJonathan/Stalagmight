@@ -3798,7 +3798,7 @@ fn test_get_cache_stats_counts_provider() {
         let mut guard = cache.lock().unwrap();
         *guard = Some(crate::cache::TileCache::in_memory(1, 30).unwrap());
         let c = guard.as_mut().unwrap();
-        c.put_without_directives("esri", 1, 2, 3, b"data", "image/png")
+        c.put_granted("esri", 1, 2, 3, b"data", "image/png")
             .unwrap();
     }
     let stats = cache::get_cache_stats(state(&app)).unwrap();
@@ -3825,7 +3825,7 @@ fn test_clear_tile_cache_all_clears() {
         let mut guard = cache.lock().unwrap();
         *guard = Some(crate::cache::TileCache::in_memory(1, 30).unwrap());
         let c = guard.as_mut().unwrap();
-        c.put_without_directives("esri", 1, 2, 3, b"data", "image/png")
+        c.put_granted("esri", 1, 2, 3, b"data", "image/png")
             .unwrap();
     }
     cache::clear_tile_cache(state(&app), None).unwrap();
@@ -3841,9 +3841,9 @@ fn test_clear_tile_cache_provider_only_clears() {
         let mut guard = cache.lock().unwrap();
         *guard = Some(crate::cache::TileCache::in_memory(1, 30).unwrap());
         let c = guard.as_mut().unwrap();
-        c.put_without_directives("esri", 1, 2, 3, b"data", "image/png")
+        c.put_granted("esri", 1, 2, 3, b"data", "image/png")
             .unwrap();
-        c.put_without_directives("other", 1, 2, 3, b"data", "image/png")
+        c.put_granted("other", 1, 2, 3, b"data", "image/png")
             .unwrap();
     }
     cache::clear_tile_cache(state(&app), Some("esri".to_string())).unwrap();
@@ -3868,7 +3868,7 @@ fn test_fetch_tile_cache_hit_returns_data() {
         let mut guard = cache.lock().unwrap();
         *guard = Some(crate::cache::TileCache::in_memory(1, 30).unwrap());
         let c = guard.as_mut().unwrap();
-        c.put_without_directives("esri", 1, 2, 3, b"data", "image/png")
+        c.put_granted("esri", 1, 2, 3, b"data", "image/png")
             .unwrap();
     }
     let bytes =

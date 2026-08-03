@@ -829,12 +829,12 @@ where
                 );
                 return TileFetchOutcome::Tile {
                     tile: TileFetchResult {
-                        // Already past its max-age: anything derived from it must
-                        // be immediately stale too, never freshly cached.
-                        policy: CachePolicy {
-                            max_age_seconds: Some(0),
-                            no_store: false,
-                        },
+                        // No grant travels with an unvalidated stale tile, so a
+                        // crop of it is not written to disk. The grant we had
+                        // has run out and the network could not renew it -
+                        // minting a fresh one locally is exactly the thing the
+                        // explicit-grant rule exists to prevent.
+                        policy: CachePolicy::default(),
                         data: entry.data,
                         content_type: entry.content_type,
                     },
@@ -2231,7 +2231,7 @@ mod tests {
         {
             let mut guard = cache.lock().unwrap();
             let c = guard.as_mut().unwrap();
-            c.put_without_directives("esri", 10, 500, 250, b"fake_tile_data", "image/jpeg")
+            c.put_granted("esri", 10, 500, 250, b"fake_tile_data", "image/jpeg")
                 .unwrap();
         }
 
@@ -2264,7 +2264,7 @@ mod tests {
         {
             let mut guard = cache.lock().unwrap();
             let c = guard.as_mut().unwrap();
-            c.put_without_directives("esri", 10, 500, 250, b"png_data", "image/png")
+            c.put_granted("esri", 10, 500, 250, b"png_data", "image/png")
                 .unwrap();
         }
 
@@ -2362,7 +2362,9 @@ mod tests {
 
     #[test]
     fn test_handle_tile_request_fetched_tile_is_cached() {
-        // Verify that a successfully fetched tile is stored in cache
+        // Verify that a successfully fetched tile is stored in cache. The mock
+        // grants storage explicitly, because the cache stores nothing without a
+        // `Cache-Control` that says it may - see the no-grant test below.
         let cache = make_test_cache();
         let tilemap_cache = make_test_tilemap_cache();
 
@@ -2384,7 +2386,10 @@ mod tests {
             Ok(TileFetchResponse::Fetched(FetchedTile {
                 data: b"fetched_tile".to_vec(),
                 content_type: "image/jpeg".to_string(),
-                policy: CachePolicy::default(),
+                policy: CachePolicy {
+                    max_age_seconds: Some(86_400),
+                    no_store: false,
+                },
                 etag: None,
             }))
         };
@@ -2502,7 +2507,7 @@ mod tests {
             guard
                 .as_mut()
                 .unwrap()
-                .put_without_directives("esri", 1, 2, 3, b"stale_tile", "image/png")
+                .put_granted("esri", 1, 2, 3, b"stale_tile", "image/png")
                 .unwrap();
         }
 
@@ -2559,7 +2564,7 @@ mod tests {
         {
             let mut guard = cache.lock().unwrap();
             let c = guard.as_mut().unwrap();
-            c.put_without_directives("esri", 1, 2, 3, b"tile_bytes", "image/png")
+            c.put_granted("esri", 1, 2, 3, b"tile_bytes", "image/png")
                 .unwrap();
         }
         let data = tile_fetch_impl(
@@ -2656,7 +2661,7 @@ mod tests {
             guard
                 .as_mut()
                 .unwrap()
-                .put_without_directives("esri", 1, 2, 3, b"stale_tile", "image/png")
+                .put_granted("esri", 1, 2, 3, b"stale_tile", "image/png")
                 .unwrap();
         }
 
@@ -2702,8 +2707,12 @@ mod tests {
     #[test]
     fn test_is_provider_cache_enabled_defaults() {
         let config = config::CacheConfig::default();
-        // ESRI defaults to disabled
-        assert!(!config.is_provider_cache_enabled("esri"));
+        // ESRI caching is on by default. Note what this flag does and does not
+        // decide: it permits the cache to be CONSULTED for a provider. Whether
+        // any given tile is actually written is a separate gate in
+        // `TileCache::put`, which stores only on an explicit `Cache-Control`
+        // grant - so "enabled" here never means "store whatever comes back".
+        assert!(config.is_provider_cache_enabled("esri"));
         // Unlisted provider defaults to enabled
         assert!(config.is_provider_cache_enabled("anything"));
     }

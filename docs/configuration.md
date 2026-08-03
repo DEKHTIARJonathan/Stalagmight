@@ -126,15 +126,20 @@ enabled_merge = true                # Enable snap-to-station in merge tool
 enabled_measure = true              # Enable snap-to-station in measure tool
 
 [cache]
-tile_cache_enabled = true           # Master switch; the default esri provider still opts out below
+tile_cache_enabled = true           # Master switch for all providers
 tile_cache_max_mb = 500             # Maximum cache size in MB
 tile_ttl_days = 30                  # Default retention: days a tile stays on disk
-# Per-provider override. Note: the default config ships esri (the default
-# provider) with offline_caching = false, so satellite tiles are NOT cached
-# out of the box - flip this to opt in.
+# Per-provider override; every provider defaults to enabled.
 # [cache.providers.esri]
-# offline_caching = false
+# offline_caching = true
 # ttl_days = 7                      # Retention for this provider; omit to use tile_ttl_days
+#
+# `offline_caching` permits the cache to be CONSULTED for a provider. It does
+# not decide what gets written: a tile is stored ONLY if its response carried a
+# `Cache-Control` granting it (a `max-age`, or `no-cache` for "keep but always
+# revalidate"). A response with no directive is served and dropped - silence is
+# not read as consent, so the app holds third-party imagery only where the
+# provider's own headers say it may, and only for as long as they say.
 #
 # TTL is RETENTION - how long a tile stays on disk to answer offline. It is not
 # how long a tile may be served as current: that is separately capped by the
