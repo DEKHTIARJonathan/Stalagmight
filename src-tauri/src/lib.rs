@@ -753,8 +753,8 @@ where
     }
 
     // Not servable as fresh. Any RETAINED copy still earns its keep twice over:
-    // its ETag makes the network call conditional, and its bytes are the offline
-    // fallback if that call fails. Read once, used for both - a second lookup in
+    // its ETag makes the network call conditional, and its bytes answer the
+    // request if that call fails. Read once, used for both - a second lookup in
     // the error arm would be a wasted query on the path where the network is
     // already unhappy.
     let retained = if cache_enabled {
@@ -817,15 +817,15 @@ where
         Err(e) => {
             tracing::warn!(error = %e, provider = %provider, z = z, y = y, x = x, "Network fetch failed");
 
-            // The retained copy read above is the offline fallback.
+            // The retained copy read above answers the failed request.
             if let Some(entry) = retained {
                 tracing::info!(
                     provider = %provider,
                     z = z,
                     y = y,
                     x = x,
-                    purpose = "keep map usable offline",
-                    "Serving stale cached tile as offline fallback"
+                    purpose = "answer a request the provider could not",
+                    "Provider unreachable; serving the stored copy (stale-if-error)"
                 );
                 return TileFetchOutcome::Tile {
                     tile: TileFetchResult {
@@ -1355,7 +1355,7 @@ pub fn run() {
                     // Tile-consumption telemetry (#31): one event per SERVED tile, tagged by
                     // provider - `tile.fetch.<provider>` for a fresh network pull (provider
                     // consumption) vs `tile.cache.<provider>` for one served from the local
-                    // cache (incl. the stale offline fallback). Uses the PER-REQUEST
+                    // cache (incl. a stale copy served under stale-if-error). Uses the PER-REQUEST
                     // `network_hit` (not the shared stats diff, which concurrent requests
                     // would cross-contaminate). Errors (no tile served) aren't counted;
                     // "tiles used by a session for provider P" = fetch + cache. No-op unless

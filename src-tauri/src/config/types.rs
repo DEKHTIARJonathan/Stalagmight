@@ -483,15 +483,22 @@ pub struct ProviderCacheConfig {
     /// This bounds how long a tile stays on disk. It does NOT extend how long
     /// one may be served as current: that is additionally capped by the
     /// provider's own `Cache-Control: max-age` (see `crate::cache::tiles`), so
-    /// raising this buys a longer offline fallback, never staler "fresh" tiles.
+    /// raising this only lengthens how long a stored copy remains available to
+    /// answer a request the network could not - never staler "fresh" tiles.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ttl_days: Option<u32>,
 }
 
-/// Tile cache configuration for offline satellite imagery
+/// HTTP cache configuration for map tiles.
+///
+/// Imagery is never stored for offline use, or for any purpose of our own. It is
+/// cached strictly under the provider's own `Cache-Control`: stored only where
+/// the response grants it, for no longer than it grants, and revalidated with
+/// the provider's own validator after that.
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct CacheConfig {
-    /// Enable tile caching for offline access
+    /// Whether the tile cache may be used at all. Whether any individual tile
+    /// is stored remains the provider's decision, via its `Cache-Control`.
     #[serde(default = "default_tile_cache_enabled")]
     pub tile_cache_enabled: bool,
     /// Maximum cache size in megabytes

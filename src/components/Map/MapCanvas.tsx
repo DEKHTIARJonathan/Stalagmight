@@ -1838,7 +1838,8 @@ function MapCanvas() {
     };
   }, []);
 
-  // Register custom tile protocol for offline caching
+  // Register the custom tile protocol; the backend caches responses under the
+  // provider's own Cache-Control (see src-tauri/src/cache/tiles.rs)
   // Uses ref-counted registration to safely handle multiple map instances
   useEffect(() => {
     registerTileProtocol();
@@ -3037,7 +3038,8 @@ function MapCanvas() {
   }, [activeTool, zoomStep, zoomMin, placementMode, zoomBox.start]);
 
   // Get satellite tile URL based on provider config
-  // Uses custom stalagmight-tiles:// protocol for offline caching
+  // Uses the custom stalagmight-tiles:// protocol; the backend caches under the
+  // provider's own Cache-Control
   const getSatelliteTileConfig = useCallback(() => {
     return getTileConfig();
   }, []);
@@ -3084,11 +3086,11 @@ function MapCanvas() {
           },
         }, firstSurveyLayer);
 
-        // Add error handler for offline fallback
+        // Add error handler for tile fetch failures
         const sourceId = 'satellite-tiles';
         errorHandler = (e: { error?: { status?: number }; sourceId?: string }) => {
           if (e.sourceId === sourceId) {
-            console.warn('[MapCanvas] Satellite tile load failed - tiles may be unavailable offline');
+            console.warn('[MapCanvas] Satellite tile load failed - the imagery provider could not be reached');
             // The map will gracefully show the background color where tiles fail to load
           }
         };

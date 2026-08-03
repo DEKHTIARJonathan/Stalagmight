@@ -1,6 +1,9 @@
-//! SQLite-based tile cache for offline satellite imagery.
+//! SQLite-backed HTTP cache for map tiles, with LRU eviction.
 //!
-//! Provides persistent storage for map tiles with LRU eviction and TTL-based expiration.
+//! This is an ordinary caching client, not a tile store: it holds what the
+//! provider's own `Cache-Control` permits, for as long as it permits, and asks
+//! again with the validator the provider supplied. It never bulk-downloads a
+//! region, and nothing here calls an export API.
 //!
 //! # Nothing is stored without an explicit grant
 //!
@@ -17,7 +20,8 @@
 //! # Two clocks, two jobs
 //!
 //! A cached tile is governed by two independent deadlines, and conflating them
-//! would break either the terms we cache under or the offline story:
+//! would break either the directives we cache under or the ability to answer a
+//! failed request:
 //!
 //! - **Freshness** (`get`) - may this tile be served *instead of* asking the
 //!   provider? Bounded by BOTH the configured TTL and the provider's own
@@ -27,11 +31,11 @@
 //! - **Retention** (`get_stale`, eviction) - may this tile stay on disk at all?
 //!   Bounded by the configured TTL alone.
 //!
-//! The gap between them is deliberate: past `max-age` a tile stops being served
-//! as fresh, so every request goes to the network first, but the copy survives to
-//! answer if that request fails. That is `stale-if-error` (RFC 5861), and it is
-//! what keeps a map usable in a cave with no signal without ever presenting
-//! expired imagery as current.
+//! The gap between them is deliberate and is standard HTTP: past `max-age` a
+//! tile stops being served as fresh, so every request goes to the network and
+//! revalidates, but the stored copy survives to answer if that request fails.
+//! That is `stale-if-error` (RFC 5861). Expired imagery is never presented as
+//! current - it is only ever a last resort when the provider cannot be reached.
 
 use anyhow::{Context, Result};
 use rusqlite::{params, Connection};
@@ -120,12 +124,6 @@ impl TileEntry {
     }
 }
 
-/// Parse the freshness directives out of a `Cache-Control` header value.
-///
-/// Only the two directives that change what this cache may do are read;
-/// everything else (`public`, `must-revalidate`, ...) is inert here. `no-cache`
-/// maps to `max_age_seconds: Some(0)` - store it, never serve it as fresh, which
-/// is exactly the stale-if-error shape the rest of the module is built around.
 /// Split a `Cache-Control` value on the commas that actually separate
 /// directives, ignoring those inside a quoted field list.
 ///
@@ -151,6 +149,12 @@ fn split_directives(header: &str) -> Vec<&str> {
     parts
 }
 
+/// Parse the freshness directives out of a `Cache-Control` header value.
+///
+/// Only the directives that change what this cache may do are read; everything
+/// else (`public`, `must-revalidate`, ...) is inert here. `no-cache` maps to
+/// `max_age_seconds: Some(0)` - store it, never serve it as fresh, which is
+/// exactly the stale-if-error shape the rest of the module is built around.
 pub fn parse_cache_control(header: &str) -> CachePolicy {
     let mut policy = CachePolicy::default();
     // Tracked separately and applied last: `no-cache` means "always revalidate"
@@ -501,7 +505,7 @@ impl TileCache {
 
     /// Get a stale tile from the cache - one `get` declined to serve.
     ///
-    /// This is the offline fallback, reached only after a network fetch has
+    /// This answers a request the provider could not, reached only after a fetch has
     /// already failed. "Stale" is the exact complement of `get`'s freshness, so
     /// it covers BOTH ways a tile can stop being current: past the configured
     /// retention TTL, or past the provider's own `max-age`. Covering only the
@@ -677,7 +681,7 @@ impl TileCache {
         // headers, so silence leaves the grant we already recorded standing.
         // Deleting threw away the bytes we had just spent a conditional request
         // to avoid re-fetching - along with the etag, forcing a full download
-        // next time and leaving nothing for the offline fallback in between.
+        // next time and leaving nothing to answer a failed fetch in between.
         //
         // Retention is re-stamped because the content WAS confirmed current;
         // freshness is not, because no new grant arrived. The tile stays
@@ -1654,8 +1658,8 @@ mod tests {
 
     #[test]
     fn treats_no_cache_as_store_but_never_fresh() {
-        // Keeping it is what lets it answer offline; serving it as current is
-        // what the directive forbids.
+        // Keeping it is what lets it answer a failed fetch; serving it as
+        // current is what the directive forbids.
         let policy = parse_cache_control("no-cache");
         assert_eq!(policy.max_age_seconds, Some(0));
         assert!(!policy.no_store);
@@ -1713,7 +1717,7 @@ mod tests {
         );
         assert!(
             cache.get_stale("esri", 1, 2, 3).is_some(),
-            "but it must survive to answer offline (stale-if-error)"
+            "but it must survive to answer a failed fetch (stale-if-error)"
         );
         assert!(!cache.has_fresh_tile("esri", 1, 2, 3));
         assert!(cache.has_stale_tile("esri", 1, 2, 3));

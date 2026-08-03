@@ -24,7 +24,7 @@ pub struct TileProvider {
     /// Data-source attribution: the names of every source behind the imagery.
     /// Esri requires these to be visible on (or directly beneath) the map for as
     /// long as the imagery is drawn, so this is what the map overlay renders.
-    /// Used as the offline fallback for the live value read from
+    /// Used when the live value cannot be read from
     /// `service_info_url` - see `crate::tile_attribution`.
     #[serde(default)]
     pub attribution: String,
@@ -115,7 +115,7 @@ fn init_registry() -> HashMap<String, TileProvider> {
             url_template:
                 "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
                     .to_string(),
-            // Offline fallback only. The live value is read from
+            // Fallback only. The live value is read from
             // `service_info_url`'s `copyrightText` at runtime, because Esri's
             // source list changes (this string said "Maxar" until that company
             // was renamed Vantor, and it drifted unnoticed for exactly as long
@@ -270,7 +270,7 @@ mod tests {
         assert!(json.get("service_info_url").is_some());
     }
 
-    /// The registry string is what renders offline, so it has to name the
+    /// The registry string is what renders when the live fetch fails, so it has to name the
     /// sources on its own. It also has to stay in step with the frontend's own
     /// fallback in `src/utils/tileConfig.ts` - a divergence there shows up as
     /// two different attributions for the same imagery.

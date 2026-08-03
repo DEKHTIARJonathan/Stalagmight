@@ -124,7 +124,8 @@ pub struct AppState {
     /// Held for the entire duration of execute(), undo(), and redo() to prevent
     /// concurrent commands from interleaving (especially with batch sub-commands).
     pub(super) command_lock: Mutex<()>,
-    /// Tile cache for offline satellite imagery.
+    /// HTTP cache for map tiles, held strictly under the provider's own
+    /// `Cache-Control` - imagery is never stored for offline use.
     ///
     /// Note: Uses Arc<Mutex<...>> rather than plain Mutex<...> because the protocol handler
     /// runs in a separate async task/thread that outlives the closure scope, requiring
@@ -201,8 +202,8 @@ impl AppState {
                 Err(e) => {
                     tracing::warn!(
                         error = %e,
-                        purpose = "enable offline tiles at startup",
-                        "Failed to initialize tile cache; offline tile access will be unavailable"
+                        purpose = "enable tile caching at startup",
+                        "Failed to initialize tile cache; every tile will be re-fetched"
                     );
                     None
                 }

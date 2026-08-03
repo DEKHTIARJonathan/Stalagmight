@@ -274,6 +274,15 @@ recommended design (`#323232` on white at 65%, 12px or larger) is guidance rathe
 than a term of use; what the terms require is legible, unobstructed names, and the
 bar renders at 10px in a 20px-tall strip against a themed backing.
 
+**Imagery is never stored for offline use.** The tile cache is an ordinary HTTP
+cache: a tile is written only where the provider's own `Cache-Control` grants it,
+kept no longer than it grants, and revalidated with the provider's `ETag` once
+that runs out. Nothing bulk-downloads a region and nothing calls an export API
+(the service disables that anyway - `exportTilesAllowed: false`). A stored copy is
+served only as a last resort when the provider cannot be reached at all
+(`stale-if-error`, RFC 5861); it is never presented as current. See
+`src-tauri/src/cache/tiles.rs`.
+
 **The string is fetched, not hard-coded.** `src-tauri/src/tile_attribution.rs`
 reads `copyrightText` from the provider's `service_info_url`, caches it for a day,
 and falls back to the registry's own `attribution` when the fetch fails - which is
