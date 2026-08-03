@@ -33,12 +33,19 @@ export function fallbackAttribution(provider: string): ResolvedTileAttribution {
 }
 
 /**
- * One in-flight (then settled) request per provider, shared process-wide.
+ * The one IN-FLIGHT request per provider, so concurrent mounts share a call.
  *
- * Three surfaces can display Esri imagery at once - the survey map, Global View
- * and a Section Preview - and mounting all three must not mean three round
- * trips. The backend caches for a day anyway; this just stops the duplicate
- * calls before they are made.
+ * Deliberately not a cache. Three surfaces can display Esri imagery at once -
+ * the survey map, Global View and a Section Preview - and mounting them
+ * together must not mean three round trips. But that is the whole job: the
+ * entry is dropped the moment the request settles, whatever it resolved to.
+ *
+ * Caching belongs to the backend, which is the only side that knows what it
+ * has: a live string good for 24h, or a failed attempt it will not retry for 5
+ * minutes (`tile_attribution.rs`). Keeping settled answers here as well put
+ * both of those out of reach - a fallback pinned the compiled-in names for the
+ * session, and a live one pinned a day-old string in any session outliving the
+ * backend's TTL. One cache, in the place that owns the clocks.
  */
 const inFlight = new Map<string, Promise<ResolvedTileAttribution>>();
 
@@ -46,42 +53,37 @@ export function loadTileAttribution(provider: string): Promise<ResolvedTileAttri
   const cached = inFlight.get(provider);
   if (cached) return cached;
 
+  const settle = <T>(value: T): T => {
+    inFlight.delete(provider);
+    return value;
+  };
+
   const request = invokeIpc<TileAttribution>(
     'get_tile_attribution',
     { provider },
     { purpose: 'display map imagery attribution' },
   )
-    .then((result) => {
-      const resolved = {
+    .then((result) =>
+      settle({
         // An empty live string would leave required attribution blank, so treat
         // it the same as a failure and keep the compiled-in names.
         text: result.text || fallbackAttribution(provider).text,
         notice: result.notice,
         noticeUrl: result.notice_url,
         live: result.live && !!result.text,
-      };
-      // Only a LIVE answer is worth memoizing. The backend answers `live: false`
-      // when its own fetch failed - offline at startup, or the metadata
-      // endpoint timing out - and that is a resolved promise, so keeping it
-      // would pin the compiled-in names for the rest of the session and put the
-      // backend's 5-minute backoff and daily refresh permanently out of reach.
-      // Same treatment the `catch` below gives a failed IPC.
-      if (!resolved.live) inFlight.delete(provider);
-      return resolved;
-    })
-    .catch(() => {
+      }),
+    )
+    .catch(() =>
       // Never surfaced to the user: the fallback is a correct attribution, and
-      // a toast about a copyright string is noise. Drop the memo so a later
-      // mount (by which time the app may be online) can try again.
-      inFlight.delete(provider);
-      return fallbackAttribution(provider);
-    });
+      // a toast about a copyright string is noise.
+      settle(fallbackAttribution(provider)),
+    );
 
   inFlight.set(provider, request);
   return request;
 }
 
-/** Test seam: forget every memoized request. */
+/** Test seam: forget any in-flight request. */
 export function resetTileAttributionCache(): void {
   inFlight.clear();
 }

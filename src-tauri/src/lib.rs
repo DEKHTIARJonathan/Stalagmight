@@ -959,6 +959,32 @@ where
                 }
             }
 
+            // `no-store` on the 304 revokes the grant this copy was held under,
+            // and `refresh_validated` has just deleted the row. Serving those
+            // bytes anyway would mean handing out a copy we were told to drop,
+            // in the same breath as dropping it. Ask again without a validator
+            // and serve what comes back - the gate refuses to store that too,
+            // so nothing is retained either way. Tested against `policy`
+            // directly rather than `refresh_validated`'s bool, which also
+            // returns false for a legacy row that simply had nothing to update.
+            if policy.no_store {
+                tracing::debug!(
+                    provider = %provider,
+                    z = z, y = y, x = x,
+                    "304 revoked the storage grant (no-store); refetching rather than \
+                     serving the copy just dropped"
+                );
+                return match fetch_fn(provider, z, y, x, None) {
+                    Ok(TileFetchResponse::Fetched(fetched)) => {
+                        store_and_serve(tile_cache, provider, z, y, x, fetched, cache_enabled)
+                    }
+                    _ => TileFetchOutcome::Missing {
+                        error: "Tile not available: provider revoked storage on revalidation"
+                            .to_string(),
+                    },
+                };
+            }
+
             TileFetchOutcome::Tile {
                 tile: TileFetchResult {
                     policy,
@@ -1151,27 +1177,51 @@ where
     #[expect(unused_assignments)]
     let mut last_error = None;
 
+    // Can the cache answer for this exact tile without asking anyone?
+    //
+    // Consulted BEFORE every tilemap probe, because the probe is itself a
+    // NETWORK call whenever the in-memory tilemap cache is cold. Probing first
+    // meant a request served entirely from disk could still reach the provider -
+    // wasted traffic, and it made `tile.cache.<provider>` (documented as no
+    // network call at all) a claim the code did not keep. Non-mutating, so it
+    // cannot disturb the LRU ordering that `get` maintains.
+    let cache_has_fresh = |cz: u32, cy: u32, cx: u32| -> bool {
+        cache_enabled
+            && tile_cache
+                .lock()
+                .ok()
+                .and_then(|guard| {
+                    guard
+                        .as_ref()
+                        .map(|cache| cache.has_fresh_tile(provider, cz, cy, cx))
+                })
+                .unwrap_or(false)
+    };
+
     // Check tilemap for tile availability before entering the fetch loop.
     // If tilemap says tile is unavailable, skip directly to parent.
-    if let Some(false) = check_tile_availability(tilemap_cache, provider_info, z, y, x) {
-        tracing::debug!(
-            provider = %provider,
-            z = z,
-            y = y,
-            x = x,
-            "Tilemap indicates no data, skipping to parent"
-        );
-        // Start from parent zoom level
-        if z > min_target {
-            current_z = z - 1;
-            current_x = x / 2;
-            current_y = y / 2;
+    if !cache_has_fresh(z, y, x) {
+        if let Some(false) = check_tile_availability(tilemap_cache, provider_info, z, y, x) {
+            tracing::debug!(
+                provider = %provider,
+                z = z,
+                y = y,
+                x = x,
+                "Tilemap indicates no data, skipping to parent"
+            );
+            // Start from parent zoom level
+            if z > min_target {
+                current_z = z - 1;
+                current_x = x / 2;
+                current_y = y / 2;
+            }
         }
     }
 
     loop {
-        // For tiles at current_z < z, we can also check tilemap before fetching
-        if current_z < z {
+        // For tiles at current_z < z, we can also check tilemap before fetching -
+        // again only when the cache cannot already answer at that level.
+        if current_z < z && !cache_has_fresh(current_z, current_y, current_x) {
             if let Some(false) = check_tile_availability(
                 tilemap_cache,
                 provider_info,
@@ -2870,6 +2920,147 @@ mod tests {
         assert!(
             cached.is_none(),
             "Tile should not be cached when provider caching is disabled"
+        );
+    }
+
+    #[test]
+    fn a_no_store_revalidation_does_not_serve_the_copy_it_just_deleted() {
+        // A 304 carrying `no-store` revokes the grant the copy was held under.
+        // `refresh_validated` deletes the row; serving those bytes anyway would
+        // hand out a copy in the same breath as dropping it. We ask again
+        // without a validator and serve what comes back - which the gate also
+        // refuses to store, so nothing is retained either way.
+        let cache = Arc::new(Mutex::new(Some(TileCache::in_memory(10, 30).unwrap())));
+        let tilemap_cache = make_test_tilemap_cache();
+        {
+            let mut guard = cache.lock().unwrap();
+            let c = guard.as_mut().unwrap();
+            // An ETag is what makes the next request conditional, which is the
+            // only way to reach a 304 at all.
+            c.put(
+                "esri",
+                1,
+                2,
+                3,
+                b"revoked",
+                "image/png",
+                cache::tiles::parse_cache_control("max-age=86400"),
+                Some("\"v1\""),
+            )
+            .unwrap();
+            c.expire_for_test("esri", 1, 2, 3).unwrap();
+        }
+
+        let calls = Arc::new(AtomicU64::new(0));
+        let calls_seen = Arc::clone(&calls);
+        let mock_fetch = move |_: &str,
+                               _: u32,
+                               _: u32,
+                               _: u32,
+                               validator: Option<&str>|
+              -> Result<TileFetchResponse, TileFetchError> {
+            calls_seen.fetch_add(1, Ordering::Relaxed);
+            if validator.is_some() {
+                // The conditional request: still current, but stop storing it.
+                Ok(TileFetchResponse::NotModified {
+                    policy: cache::tiles::parse_cache_control("no-store"),
+                })
+            } else {
+                // The unconditional re-ask.
+                Ok(TileFetchResponse::Fetched(FetchedTile {
+                    data: b"refetched".to_vec(),
+                    content_type: "image/png".to_string(),
+                    policy: cache::tiles::parse_cache_control("no-store"),
+                    etag: None,
+                }))
+            }
+        };
+
+        let response = handle_tile_request_with_fetcher(
+            "esri",
+            1,
+            2,
+            3,
+            &cache,
+            &tilemap_cache,
+            mock_fetch,
+            true,
+        );
+        assert_eq!(response.status(), http::StatusCode::OK);
+        assert_eq!(
+            response.body(),
+            b"refetched",
+            "must not be the bytes the 304 just revoked"
+        );
+        assert_eq!(
+            calls.load(Ordering::Relaxed),
+            2,
+            "conditional, then a re-ask"
+        );
+
+        // And nothing was kept: `no-store` is refused by the storage gate.
+        let guard = cache.lock().unwrap();
+        let c = guard.as_ref().unwrap();
+        assert!(c.get_stale("esri", 1, 2, 3).is_none());
+    }
+
+    #[test]
+    fn a_fresh_cache_hit_does_not_probe_the_tilemap_endpoint() {
+        // The probe is a NETWORK call when the tilemap cache is cold, and it ran
+        // before anything looked at the tile cache - so a request answered
+        // entirely from disk could still reach the provider, while being
+        // recorded as `tile.cache.<provider>` ("no network call at all").
+        //
+        // `make_test_tilemap_cache` is empty, and esri HAS a tilemap template,
+        // so reaching `check_tile_availability` here means a real fetch attempt.
+        // The assertion that matters is the source: a probe would be network
+        // traffic on a request that must report as pure cache.
+        let cache = Arc::new(Mutex::new(Some(TileCache::in_memory(10, 30).unwrap())));
+        let tilemap_cache = make_test_tilemap_cache();
+        {
+            let mut guard = cache.lock().unwrap();
+            guard
+                .as_mut()
+                .unwrap()
+                .put_granted("esri", 10, 500, 250, b"cached", "image/png")
+                .unwrap();
+        }
+        assert!(
+            tilemap_cache
+                .lock()
+                .unwrap()
+                .is_tile_available("esri", 10, 500, 250)
+                .is_none(),
+            "precondition: the tilemap cache is cold, so a probe would hit the network"
+        );
+
+        let stats = Arc::new(TileFetchStats::default());
+        let before = stats.snapshot();
+        let (response, source) = handle_tile_request(
+            "esri",
+            10,
+            500,
+            250,
+            &cache,
+            &tilemap_cache,
+            &stats,
+            &make_test_cache_config(),
+        );
+
+        assert_eq!(response.status(), http::StatusCode::OK);
+        assert_eq!(response.body(), b"cached");
+        assert_eq!(source, TileServeSource::Cache);
+        // The tilemap cache is still cold: nothing went looking for it.
+        assert!(tilemap_cache
+            .lock()
+            .unwrap()
+            .is_tile_available("esri", 10, 500, 250)
+            .is_none());
+        let after = stats.snapshot();
+        assert_eq!(
+            (after.total_fetched, after.total_errors),
+            (before.total_fetched, before.total_errors),
+            "a pure cache hit must not move the network counters"
         );
     }
 

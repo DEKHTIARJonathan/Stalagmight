@@ -1061,10 +1061,15 @@ mod tests {
         //       {action.dialog,dialog-cancel,dwell.dialog,active-dwell.dialog}
         //       .import-as-new-project = 717.
         //   + 1 get_tile_attribution. Reads the imagery provider's live source names,
-        //       which the map is required to display. The count is how often the app
-        //       had to ask - a rate far above one-per-provider-per-day would mean the
-        //       cache or its failure backoff is not holding, and every miss is a
-        //       blocking fetch behind a map that is already drawing:
+        //       which the map is required to display. Counts how often a surface
+        //       ASKED, not how often we fetched: the renderer shares only the
+        //       in-flight request, so every mount of an imagery surface calls in
+        //       and the backend answers from its own 24h cache (or a 5-minute
+        //       failure backoff). So the shape to watch is the ratio to sessions
+        //       and to satellite toggles, not an absolute rate - a count far
+        //       above the number of imagery surfaces opened would mean the
+        //       in-flight sharing is broken, and each true miss is a blocking
+        //       fetch behind a map that is already drawing:
         //       command.get_tile_attribution = 718.
         //   + 1 tile.revalidate.esri. Splits a 304 out of `tile.fetch.<p>`: the
         //       network was reached, but no imagery crossed the wire, and past

@@ -79,13 +79,43 @@ describe('MapAttribution', () => {
     expect(invokeIpc).not.toHaveBeenCalled();
   });
 
-  it('asks again after a fallback, so the names can become current', async () => {
-    // The backend answers `live: false` when its own fetch failed - offline at
-    // startup, or the metadata endpoint timing out. That is a RESOLVED promise,
-    // so memoizing it would pin the compiled-in names for the whole session and
-    // put the backend's own backoff and daily refresh out of reach. Which is
-    // the same drift this feature exists to prevent (the list said "Maxar" long
-    // after that company was renamed).
+  it('shares one call between surfaces mounted together', async () => {
+    // The only thing the in-flight map is for: the survey map, Global View and
+    // a Section Preview opening at once must not each pay for the same string.
+    render(
+      <>
+        <MapAttribution visible />
+        <MapAttribution visible />
+        <MapAttribution visible />
+      </>,
+    );
+    await waitFor(() => expect(screen.getAllByTestId('map-attribution-text')).toHaveLength(3));
+    expect(invokeIpc).toHaveBeenCalledTimes(1);
+  });
+
+  it('asks again on a later mount, so the backend stays in charge of caching', async () => {
+    // Nothing settled is held here. The backend is the only side that knows
+    // whether asking costs a network call - it holds a live string for 24h and
+    // will not retry a failure for 5 minutes. Keeping settled answers in the
+    // renderer put both clocks out of reach: a fallback pinned the compiled-in
+    // names for the session, and a live one pinned a day-old string in any
+    // session outliving the backend's TTL. Which is the drift this feature
+    // exists to prevent - the built-in list said "Maxar" long after that
+    // company was renamed.
+    const first = render(<MapAttribution visible />);
+    expect(await screen.findByTestId('map-attribution-text')).toHaveTextContent(LIVE);
+    expect(invokeIpc).toHaveBeenCalledTimes(1);
+    first.unmount();
+
+    render(<MapAttribution visible />);
+    expect(await screen.findByTestId('map-attribution-text')).toHaveTextContent(LIVE);
+    expect(invokeIpc).toHaveBeenCalledTimes(2);
+  });
+
+  it('asks again after a fallback too', async () => {
+    // The same rule, on the branch that used to be special-cased. `live: false`
+    // is what the backend answers when its OWN fetch failed, and that is a
+    // RESOLVED promise - so this is the case a naive memo would have pinned.
     invokeIpc.mockResolvedValueOnce({
       provider: 'esri',
       text: FALLBACK,
@@ -98,26 +128,9 @@ describe('MapAttribution', () => {
     await waitFor(() => expect(invokeIpc).toHaveBeenCalledTimes(1));
     first.unmount();
 
-    // Second mount: connectivity is back, and the live names arrive.
     render(<MapAttribution visible />);
     expect(await screen.findByTestId('map-attribution-text')).toHaveTextContent(LIVE);
     expect(invokeIpc).toHaveBeenCalledTimes(2);
-  });
-
-  it('memoizes a live answer, so a later surface reuses it', async () => {
-    // The other half: once the answer IS live there is nothing to retry, and a
-    // Section Preview opened later must not pay for it again. This has to mount
-    // AFTER the first request settles - three surfaces mounting in the same
-    // tick share the in-flight promise no matter what `.then` does, so a
-    // same-tick assertion would pass even with the memo removed entirely.
-    const first = render(<MapAttribution visible />);
-    expect(await screen.findByTestId('map-attribution-text')).toHaveTextContent(LIVE);
-    expect(invokeIpc).toHaveBeenCalledTimes(1);
-    first.unmount();
-
-    render(<MapAttribution visible />);
-    expect(await screen.findByTestId('map-attribution-text')).toHaveTextContent(LIVE);
-    expect(invokeIpc).toHaveBeenCalledTimes(1);
   });
 
   it('contacts the provider once the imagery is switched on', async () => {

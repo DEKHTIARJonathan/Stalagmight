@@ -245,6 +245,12 @@ and consumption is the one thing this metric exists to size. The split also make
 the bandwidth saving visible directly: `revalidate` against `fetch` is how much
 imagery the conditional request avoided pulling.
 
+"no network call at all" is literal, and it takes some care to keep it that
+way: the tilemap availability probe is itself a network request when its
+in-memory cache is cold, so the fresh tile cache is consulted **before** every
+probe. Probing first meant a request answered entirely from disk could still
+reach the provider while reporting as `tile.cache`.
+
 The classification is per request (`TileServeSource`), deliberately not the
 shared `TileFetchStats` diff, which concurrent tile requests would
 cross-contaminate. It is also **not** what drives the offline indicator: that
