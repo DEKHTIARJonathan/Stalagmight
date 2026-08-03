@@ -556,6 +556,19 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           | undefined) ?? {}),
       };
 
+      // The new-section dialog's grid layout, persisted via
+      // update_new_section_view. Its own store rather than more keys in
+      // mockDataTableView, mirroring the Rust side where the two are separate
+      // commands writing disjoint `panels` fields - a shared object would let one
+      // view's partial write appear to carry the other's keys. Overlaid onto
+      // get_config / reload_config alongside it, and seedable the same way via
+      // `window.__E2E_SEED_NEW_SECTION_VIEW__`.
+      const mockNewSectionView: Record<string, unknown> = {
+        ...(((window as unknown as Record<string, unknown>).__E2E_SEED_NEW_SECTION_VIEW__ as
+          | Record<string, unknown>
+          | undefined) ?? {}),
+      };
+
       // The `[gas]` block persisted via update_gas_config, overlaid onto
       // get_config the same way. Null until something writes it, so an untouched
       // run keeps whatever gas config get_config would otherwise return.
@@ -3305,6 +3318,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 panels: {
                   ...((savedConfig.panels as Record<string, unknown> | undefined) ?? {}),
                   ...mockDataTableView,
+                  ...mockNewSectionView,
                 },
                 ...(mockGasConfig ? { gas: mockGasConfig } : {}),
               };
@@ -3488,6 +3502,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 data_table_open: false,
                 data_table_mode: 'pin',
                 ...mockDataTableView,
+                ...mockNewSectionView,
               },
               cache: {
                 tile_cache_enabled: true,
@@ -3588,6 +3603,29 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             return null; // Tauri serializes () as null
           }
 
+          case 'update_new_section_view': {
+            console.log('[Mock IPC] update_new_section_view called with:', args);
+            // Record calls for assertions, same shape as the data-table one.
+            const win = window as unknown as Record<string, unknown>;
+            const existing = win.__MOCK_NEW_SECTION_VIEW_CALLS__ as unknown[] | undefined;
+            const calls = Array.isArray(existing) ? existing : [];
+            calls.push(args ?? null);
+            win.__MOCK_NEW_SECTION_VIEW_CALLS__ = calls;
+            // Partial-update semantics, mirroring update_new_section_view_impl:
+            // only provided fields overwrite the stored layout.
+            const columnOrder = (args?.columnOrder ?? args?.column_order) as string[] | undefined;
+            if (columnOrder != null) mockNewSectionView.new_section_column_order = columnOrder;
+            const hiddenColumns = (args?.hiddenColumns ?? args?.hidden_columns) as
+              | string[]
+              | undefined;
+            if (hiddenColumns != null) mockNewSectionView.new_section_hidden_columns = hiddenColumns;
+            const columnWidths = (args?.columnWidths ?? args?.column_widths) as
+              | Record<string, number>
+              | undefined;
+            if (columnWidths != null) mockNewSectionView.new_section_column_widths = columnWidths;
+            return null; // Tauri serializes () as null
+          }
+
           case 'reload_config': {
             // Return saved config if available (for testing persistence),
             // overlaying the same two stores get_config does. Without the
@@ -3603,6 +3641,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 panels: {
                   ...((savedConfig.panels as Record<string, unknown> | undefined) ?? {}),
                   ...mockDataTableView,
+                  ...mockNewSectionView,
                 },
                 ...(mockGasConfig ? { gas: mockGasConfig } : {}),
               };
@@ -3788,6 +3827,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 data_table_open: false,
                 data_table_mode: 'pin',
                 ...mockDataTableView,
+                ...mockNewSectionView,
               },
               cache: {
                 tile_cache_enabled: true,

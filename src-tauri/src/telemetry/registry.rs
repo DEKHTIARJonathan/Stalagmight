@@ -498,6 +498,8 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     // Data-table spreadsheet editing: persisted view config + raw-table browsing
     // (fullscreen data table).
     "command.update_data_table_view",
+    // Same, for the new-section dialog's grid (its own column layout).
+    "command.update_new_section_view",
     "command.update_gas_config",
     "command.get_raw_table_names",
     "command.get_raw_table",
