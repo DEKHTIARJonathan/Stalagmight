@@ -467,13 +467,28 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
     [],
   );
 
+  const columnByKey = useMemo(() => new Map(columns.map((c) => [c.key, c])), [columns]);
+
   const isMissing = useCallback(
     (rowIdx: number, colKey: string): boolean => {
       if (missingCells.size === 0) return false;
       const k = missKey(rowIdx, colKey);
-      return k !== null && missingCells.has(k);
+      if (k === null || !missingCells.has(k)) return false;
+      // A mark means "the model still holds a value that the cell is hiding" -
+      // that is the whole reason to draw it, since the cell itself looks empty.
+      // A PROVISIONAL host told to drop the field (onClearMissing) has nothing
+      // left to hide, so the mark is stale: the cell is blank on its own merits
+      // and a red one on an otherwise-empty row reads as an error that is not
+      // there. Hosts backing committed rows keep their value, so they keep the
+      // mark, which is what the data table's clear-toggle depends on.
+      const row = rows[rowIdx];
+      const col = columnByKey.get(colKey);
+      if (row === undefined || !col) return true;
+      const value = col.getValue(row, rowIdx);
+      if (value === undefined || value === null || value === '') return false;
+      return !(typeof value === 'number' && !Number.isFinite(value));
     },
-    [missingCells, missKey],
+    [missingCells, missKey, rows, columnByKey],
   );
 
   const displayAt = useCallback(
