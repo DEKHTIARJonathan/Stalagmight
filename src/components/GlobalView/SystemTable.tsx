@@ -9,7 +9,12 @@ import { ElidedPath, Tooltip, ChevronUpIcon, ChevronDownIcon } from '../common';
 import { useProjectStatFormatters } from './useProjectStatFormatters';
 import type { RecentListItem } from './recentListItems';
 import type { RecentSortField, RecentSortDirection } from './useRecentSort';
-import { SpeleoRecentInfo, resolveSpeleoLock, unpushedAccentStyle } from './SpeleoLockBadge';
+import {
+  SpeleoRecentInfo,
+  resolveSpeleoLock,
+  recentAccent,
+  recentAccentStyle,
+} from './SpeleoLockBadge';
 import type { SpeleoProjectSummary } from '../../types/ipc.generated';
 import type { SpeleoLocalStateMap } from '../../utils/speleoLocalState';
 import { missingSystemRowTestId, systemRowTestId, testIdPart } from '../../utils/testId';
@@ -207,6 +212,7 @@ export function SystemTable({
                 data-testid={`system-row-remote-${item.projectId}`}
                 data-remote="true"
                 data-local-edits={remoteLock.hasLocalEdits ? 'true' : 'false'}
+                data-recent-accent={recentAccent(remoteLock)}
                 role="button"
                 aria-disabled={busy || undefined}
                 tabIndex={0}
@@ -220,12 +226,13 @@ export function SystemTable({
                   }
                 }}
               >
-                {/* #270: the yellow leading-edge accent from the card grid. It sits on
-                    the first CELL, not the row: under border-collapse a <tr> generates no
-                    box, so neither its border nor its box-shadow paints. */}
+                {/* The leading-edge accent from the card grid (#270 yellow, or the
+                    lock neutrals). It sits on the first CELL, not the row: under
+                    border-collapse a <tr> generates no box, so neither its border nor
+                    its box-shadow paints. */}
                 <td
                   className={`${cellClass} font-medium`}
-                  style={unpushedAccentStyle(remoteLock.hasLocalEdits)}
+                  style={recentAccentStyle(remoteLock)}
                 >
                   {item.summary.name}
                 </td>
@@ -272,6 +279,7 @@ export function SystemTable({
               }`}
               data-testid={systemRowTestId(item.filePath)}
               data-local-edits={lock.hasLocalEdits ? 'true' : 'false'}
+              data-recent-accent={recentAccent(lock)}
               role="button"
               tabIndex={0}
               aria-pressed={isSelected}
@@ -285,10 +293,7 @@ export function SystemTable({
                 }
               }}
             >
-              <td
-                className={`${cellClass} font-medium`}
-                style={unpushedAccentStyle(lock.hasLocalEdits)}
-              >
+              <td className={`${cellClass} font-medium`} style={recentAccentStyle(lock)}>
                 <span>{project.name}</span>
                 {project.location && (
                   <span className="text-text-secondary"> · {project.location}</span>
