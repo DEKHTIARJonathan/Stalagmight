@@ -1,0 +1,129 @@
+/**
+ * #391: the post-import receipt shown after a foreign-format import so the
+ * user sees what landed without having to open the data table.
+ */
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { render, screen, fireEvent } from '@testing-library/react';
+import type { ImportReceipt } from '../../../types/ipc/ImportReceipt';
+
+const closeDialog = vi.fn();
+
+vi.mock('react-i18next', () => ({
+  useTranslation: () => ({
+    t: (key: string, opts?: Record<string, unknown>) => {
+      if (!opts) return key;
+      return `${key}:${JSON.stringify(opts)}`;
+    },
+  }),
+}));
+
+const dialogData: { receipt?: ImportReceipt | undefined } = {};
+
+vi.mock('../../../store/uiStore', () => ({
+  useUIStore: (sel: (s: unknown) => unknown) => sel({ closeDialog, dialogData }),
+}));
+
+vi.mock('../../../utils/telemetry', () => ({ trackDialogComplete: vi.fn() }));
+
+vi.mock('../DialogWrapper', () => ({
+  DialogWrapper: ({ children, title }: { children: React.ReactNode; title: string }) => (
+    <div>
+      <div data-testid="dialog-title">{title}</div>
+      {children}
+    </div>
+  ),
+}));
+
+vi.mock('../../common/Button', () => ({
+  Button: ({ children, ...rest }: React.ComponentProps<'button'>) => (
+    <button {...rest}>{children}</button>
+  ),
+}));
+
+import { trackDialogComplete } from '../../../utils/telemetry';
+import ImportReceiptDialog from '../ImportReceiptDialog';
+
+const baseReceipt = (overrides: Partial<ImportReceipt> = {}): ImportReceipt => ({
+  source_format: 'Ariane',
+  file_name: 'cave.tml',
+  sections_found: 3,
+  sections_imported: 3,
+  shot_count: 42,
+  closures_requested: 0,
+  closures_created: 0,
+  unit_conversion: null,
+  warnings: [],
+  ...overrides,
+});
+
+describe('ImportReceiptDialog', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    dialogData.receipt = undefined;
+  });
+
+  it('renders nothing when there is no receipt', () => {
+    const { container } = render(<ImportReceiptDialog />);
+    expect(container).toBeEmptyDOMElement();
+  });
+
+  it('shows the section/shot counts', () => {
+    dialogData.receipt = baseReceipt();
+    render(<ImportReceiptDialog />);
+    const summary = screen.getByTestId('import-receipt-summary').textContent ?? '';
+    expect(summary).toContain('"count":3');
+    expect(summary).toContain('"count":42');
+  });
+
+  it('shows the loops segment only when closures were requested', () => {
+    dialogData.receipt = baseReceipt();
+    const { rerender } = render(<ImportReceiptDialog />);
+    expect(screen.getByTestId('import-receipt-summary').textContent).not.toContain('loops');
+
+    dialogData.receipt = baseReceipt({ closures_requested: 2, closures_created: 2 });
+    rerender(<ImportReceiptDialog />);
+    expect(screen.getByTestId('import-receipt-summary').textContent).toContain(
+      'dialogs.importReceipt.loops',
+    );
+  });
+
+  it('shows the unit conversion line only when present', () => {
+    dialogData.receipt = baseReceipt();
+    const { rerender } = render(<ImportReceiptDialog />);
+    expect(screen.queryByTestId('import-receipt-unit-conversion')).not.toBeInTheDocument();
+
+    dialogData.receipt = baseReceipt({ unit_conversion: 'feet to meters' });
+    rerender(<ImportReceiptDialog />);
+    expect(screen.getByTestId('import-receipt-unit-conversion')).toBeInTheDocument();
+  });
+
+  it('folds a not-fully-imported count into the warnings', () => {
+    dialogData.receipt = baseReceipt({ sections_found: 5, sections_imported: 3 });
+    render(<ImportReceiptDialog />);
+    expect(screen.getByTestId('import-receipt-warnings').textContent).toContain('"count":2');
+  });
+
+  it('hides "View details" when there are no extra warnings to expand', () => {
+    dialogData.receipt = baseReceipt({ warnings: ['one'] });
+    render(<ImportReceiptDialog />);
+    expect(screen.queryByTestId('import-receipt-details')).not.toBeInTheDocument();
+  });
+
+  it('toggles the rest of the warnings behind "View details"', () => {
+    dialogData.receipt = baseReceipt({
+      warnings: ['w1', 'w2', 'w3', 'w4', 'w5'],
+    });
+    render(<ImportReceiptDialog />);
+    expect(screen.queryByTestId('import-receipt-warnings-more')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('import-receipt-details'));
+    expect(screen.getByTestId('import-receipt-warnings-more').textContent).toContain('w5');
+  });
+
+  it('continuing tracks completion and closes', () => {
+    dialogData.receipt = baseReceipt();
+    render(<ImportReceiptDialog />);
+    fireEvent.click(screen.getByTestId('import-receipt-continue'));
+    expect(trackDialogComplete).toHaveBeenCalledWith('import-receipt');
+    expect(closeDialog).toHaveBeenCalled();
+  });
+});

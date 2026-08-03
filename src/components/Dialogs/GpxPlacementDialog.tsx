@@ -139,7 +139,11 @@ export default function GpxPlacementDialog() {
         depthInverted
       );
 
-      completeImportToSingleView('gpx-placement', { closeDialog, setView, triggerFitToBounds, openDialog });
+      completeImportToSingleView(
+        'gpx-placement',
+        { closeDialog, setView, triggerFitToBounds, openDialog },
+        result.import_receipt,
+      );
 
       if (!result.success) {
         openDialog('error', {

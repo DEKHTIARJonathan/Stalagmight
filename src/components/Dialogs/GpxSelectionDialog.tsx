@@ -95,7 +95,11 @@ export default function GpxSelectionDialog({ gpxFile, filePath }: GpxSelectionDi
         depthInverted
       );
 
-      completeImportToSingleView('gpx-selection', { closeDialog, setView, triggerFitToBounds, openDialog });
+      completeImportToSingleView(
+        'gpx-selection',
+        { closeDialog, setView, triggerFitToBounds, openDialog },
+        result.import_receipt,
+      );
 
       if (!result.success) {
         openDialog('error', {

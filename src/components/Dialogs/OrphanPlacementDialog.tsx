@@ -6,6 +6,7 @@ import type { MergePreviewConfig } from './SectionPreview';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
 import type { OrphanPlacementSuggestion } from '../../types/commands';
+import type { ImportReceipt } from '../../types/ipc/ImportReceipt';
 import type { Section } from '../../types/project';
 import type { DmpSection } from '../../types/ipc/DmpSection';
 import type { OverlapMode } from '../../types/ipc/OverlapMode';
@@ -22,6 +23,8 @@ import {
 
 interface OrphanPlacementDialogProps {
   suggestions: OrphanPlacementSuggestion[];
+  /** Import receipt (#391) to surface once orphan placement finishes, if any. */
+  receipt?: ImportReceipt | undefined;
 }
 
 /** Group key for an orphan end: sectionId + stationIndex. */
@@ -86,9 +89,9 @@ function sectionToDmpSection(section: Section): DmpSection {
   };
 }
 
-export default function OrphanPlacementDialog({ suggestions }: OrphanPlacementDialogProps) {
+export default function OrphanPlacementDialog({ suggestions, receipt }: OrphanPlacementDialogProps) {
   const { mergeStations, updateShot, setShotKind, refreshProjectState, project } = useProjectStore();
-  const { closeDialog, setView, triggerFitToBounds } = useUIStore();
+  const { closeDialog, setView, triggerFitToBounds, openDialog } = useUIStore();
 
   const [processing, setProcessing] = useState(false);
   const [currentEndIndex, setCurrentEndIndex] = useState(0);
@@ -301,7 +304,10 @@ export default function OrphanPlacementDialog({ suggestions }: OrphanPlacementDi
     closeDialog();
     setView('single');
     triggerFitToBounds();
-  }, [refreshProjectState, closeDialog, setView, triggerFitToBounds]);
+    if (receipt) {
+      openDialog('import-receipt', { receipt });
+    }
+  }, [refreshProjectState, closeDialog, setView, triggerFitToBounds, receipt, openDialog]);
 
   // Auto-close when all suggestions have been processed
   useEffect(() => {

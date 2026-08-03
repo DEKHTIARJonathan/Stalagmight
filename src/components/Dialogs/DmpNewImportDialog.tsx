@@ -57,6 +57,9 @@ import {
   distanceMapFromField,
   rerankSuggestionsByTemporalPlan,
 } from '../../utils/dmpTemporalRerank';
+import { extractFilename } from '../../utils/path';
+import { aggregateImportReceipts } from '../../utils/importReceipt';
+import type { ImportReceipt } from '../../types/ipc/ImportReceipt';
 
 interface DmpNewImportDialogProps {
   dmpFile: DmpFile;
@@ -66,7 +69,7 @@ interface DmpNewImportDialogProps {
   zeroDatumConfig?: ZeroDatumConfigResult | undefined;
   onCancel: () => void;
   onBack: () => void;
-  onComplete: (newSectionIds?: number[]) => void;
+  onComplete: (newSectionIds?: number[], receipt?: ImportReceipt) => void;
   /** Saved state to restore after returning from manual map placement. */
   savedManualPlacingState?: SavedManualPlacingState | undefined;
   /** If true, immediately start map placement when the dialog opens in manual placing phase. */
@@ -1377,6 +1380,17 @@ export default function DmpNewImportDialog({
 
   // Accumulate all section IDs created during import for post-import orphan detection
   const importedSectionIdsRef = useRef<number[]>([]);
+  // Accumulate the import_receipt from each import_sections call (early/segment/
+  // late/pending) into one #391 summary for the whole wizard run, keyed by
+  // constant file-level provenance (source label/name/total sections) spread
+  // into every call below.
+  const importedReceiptsRef = useRef<ImportReceipt[]>([]);
+  const dmpFilePath = (useUIStore.getState().dialogData as Record<string, unknown>).filePath as string | undefined;
+  const dmpProvenance = {
+    sourceLabel: 'mNemo DMP',
+    sourceFileName: extractFilename(dmpFilePath ?? ''),
+    sectionsFound: dmpFile.sections.length,
+  };
 
   // Refs to avoid stale closures
   const connectionsRef = useRef(connections);
@@ -2195,6 +2209,7 @@ export default function DmpNewImportDialog({
             sectionHashes: selectionConfig.sectionHashes ?? null,
             existingShotUpdates: earlyExistingShotUpdates.length > 0 ? earlyExistingShotUpdates : null,
             virtualShotMode: 'AllReferences',
+            ...dmpProvenance,
           }, { purpose: 'import reachable sections (early import)' });
 
           if (!result.success) {
@@ -2205,6 +2220,7 @@ export default function DmpNewImportDialog({
           if (result.section_ids.length > 0) {
             importedSectionIdsRef.current.push(...result.section_ids);
           }
+          if (result.import_receipt) importedReceiptsRef.current.push(result.import_receipt);
 
           await refreshProjectState();
           // Imports bypass executeCommand, so mark dirty ourselves - the sections
@@ -2253,7 +2269,7 @@ export default function DmpNewImportDialog({
 
       // No unreachable - all done
       trackDialogComplete('dmp-import-new');
-      onComplete(importedSectionIdsRef.current);
+      onComplete(importedSectionIdsRef.current, aggregateImportReceipts(importedReceiptsRef.current));
     } finally {
       transitionToPlacingInFlightRef.current = false;
       suggestionActionInFlightRef.current = false;
@@ -2279,7 +2295,9 @@ export default function DmpNewImportDialog({
         // bounded ones to Jump, putting the duplicated geometry back into gas
         // and penetration, which is the double-count keep-both exists to avoid.
         // AllReferences leaves Normal shots untouched and preserves the choice.
-        const result = await importSections([config], selectionConfig.fileHash, selectionConfig.sectionHashes, 'AllReferences');
+        const result = await importSections(
+          [config], selectionConfig.fileHash, selectionConfig.sectionHashes, 'AllReferences', dmpProvenance,
+        );
         setIsImporting(false);
 
         if (!result.success) {
@@ -2290,6 +2308,7 @@ export default function DmpNewImportDialog({
         if (result.section_ids.length > 0) {
           importedSectionIdsRef.current.push(...result.section_ids);
         }
+        if (result.import_receipt) importedReceiptsRef.current.push(result.import_receipt);
 
         // Snap-fit to the newly placed zero datum section
         useUIStore.getState().triggerFitToBounds({ snap: true });
@@ -2426,12 +2445,14 @@ export default function DmpNewImportDialog({
             sectionHashes: selectionConfig.sectionHashes ?? null,
             existingShotUpdates: pendingExistingShotUpdates.length > 0 ? pendingExistingShotUpdates : null,
             virtualShotMode: 'AllReferences',
+            ...dmpProvenance,
           }, { purpose: 'import segment sections' });
 
           if (result.success) {
             if (result.section_ids.length > 0) {
               importedSectionIdsRef.current.push(...result.section_ids);
             }
+            if (result.import_receipt) importedReceiptsRef.current.push(result.import_receipt);
 
             await refreshProjectState();
             markSuccessfulDmpImportDirty();
@@ -2459,7 +2480,7 @@ export default function DmpNewImportDialog({
       // placing phase which would race with isImporting state.
       if (segmentQueue.length === 0) {
         trackDialogComplete('dmp-import-new');
-        onComplete(importedSectionIdsRef.current);
+        onComplete(importedSectionIdsRef.current, aggregateImportReceipts(importedReceiptsRef.current));
       }
     };
 
@@ -2515,6 +2536,7 @@ export default function DmpNewImportDialog({
             sectionHashes: selectionConfig.sectionHashes ?? null,
             existingShotUpdates: lateExistingShotUpdates.length > 0 ? lateExistingShotUpdates : null,
             virtualShotMode: 'AllReferences',
+            ...dmpProvenance,
           }, { purpose: 'import remaining sections (late import)' });
 
           if (!result.success) {
@@ -2525,6 +2547,7 @@ export default function DmpNewImportDialog({
           if (result.section_ids.length > 0) {
             importedSectionIdsRef.current.push(...result.section_ids);
           }
+          if (result.import_receipt) importedReceiptsRef.current.push(result.import_receipt);
 
           await refreshProjectState();
           markSuccessfulDmpImportDirty();
@@ -2563,7 +2586,7 @@ export default function DmpNewImportDialog({
       }
 
       trackDialogComplete('dmp-import-new');
-      onComplete(importedSectionIdsRef.current);
+      onComplete(importedSectionIdsRef.current, aggregateImportReceipts(importedReceiptsRef.current));
     };
 
     doLateImport();
@@ -3318,6 +3341,7 @@ export default function DmpNewImportDialog({
         sectionHashes: selectionConfig.sectionHashes ?? null,
         existingShotUpdates: segmentExistingShotUpdates.length > 0 ? segmentExistingShotUpdates : null,
         virtualShotMode: 'AllReferences',
+        ...dmpProvenance,
       }, { purpose: 'import placed segment sections' });
 
       if (!result.success) {
@@ -3328,6 +3352,7 @@ export default function DmpNewImportDialog({
       if (result.section_ids.length > 0) {
         importedSectionIdsRef.current.push(...result.section_ids);
       }
+      if (result.import_receipt) importedReceiptsRef.current.push(result.import_receipt);
 
       await refreshProjectState();
       markSuccessfulDmpImportDirty();

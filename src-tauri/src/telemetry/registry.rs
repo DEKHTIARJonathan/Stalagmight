@@ -799,6 +799,13 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "speleodb-api.autocomplete.latency.le-5000",
     "speleodb-api.autocomplete.latency.le-15000",
     "speleodb-api.autocomplete.latency.gt-15000",
+    // Post-import receipt dialog (#391): summarises a foreign-format import
+    // (source, sections/shots/loops, unit conversion, warnings) so the user
+    // sees what landed without having to open the data table.
+    "action.dialog.import-receipt",
+    "dialog-cancel.import-receipt",
+    "dwell.dialog.import-receipt",
+    "active-dwell.dialog.import-receipt",
 ];
 
 #[cfg(test)]
@@ -1029,7 +1036,11 @@ mod tests {
         //       wanted, which is the bug that produced them:
         //       {action.dialog,dialog-cancel,dwell.dialog,active-dwell.dialog}
         //       .speleodb-{unwound-push,discard-changes} = 709.
-        assert_eq!(EVENT_NAMES.len(), 709);
+        //   + 4 post-import receipt dialog events (#391), the (source, counts, unit
+        //       conversion, warnings) summary shown after a foreign-format import:
+        //       {action.dialog,dialog-cancel,dwell.dialog,active-dwell.dialog}
+        //       .import-receipt = 713.
+        assert_eq!(EVENT_NAMES.len(), 713);
     }
 
     /// Active-dwell mirrors every dwell state 1:1 (#31): for each `dwell.<key>` there
