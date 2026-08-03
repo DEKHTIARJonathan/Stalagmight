@@ -256,6 +256,11 @@ impl AppState {
             config.cache.tile_ttl_days,
         )?;
         cache.set_provider_ttls(&config.cache.provider_ttl_days());
+        // After the overrides, never before - see `purge_retired`. A failure
+        // here is housekeeping, not a reason to run without a cache.
+        if let Err(e) = cache.purge_retired() {
+            tracing::warn!(error = %e, "Failed to drop tiles past retention at startup");
+        }
         Ok(cache)
     }
 

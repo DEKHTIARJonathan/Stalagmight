@@ -79,8 +79,16 @@ export function resetTileAttributionCache(): void {
 /**
  * Resolve a provider's attribution, starting from the compiled-in value so the
  * map never renders imagery with a blank credit while the IPC is in flight.
+ *
+ * `enabled` gates the network call, and defaults to true. Pass the same
+ * condition that decides whether the imagery is drawn: the attribution is only
+ * owed where the imagery is, and the fetch reaches the provider's servers, so
+ * running it for a hidden credit contacts a third party on behalf of a user who
+ * turned that imagery off. Gated here rather than at each call site so a surface
+ * added later cannot forget - and because a caller cannot fix it itself, hooks
+ * being unconditional by rule.
  */
-export function useTileAttribution(provider: string): ResolvedTileAttribution {
+export function useTileAttribution(provider: string, enabled = true): ResolvedTileAttribution {
   const [attribution, setAttribution] = useState<ResolvedTileAttribution>(() =>
     fallbackAttribution(provider),
   );
@@ -90,13 +98,14 @@ export function useTileAttribution(provider: string): ResolvedTileAttribution {
     // Re-seed synchronously: switching providers must not leave the previous
     // provider's names under the new provider's imagery, even for a frame.
     setAttribution(fallbackAttribution(provider));
+    if (!enabled) return;
     loadTileAttribution(provider).then((resolved) => {
       if (active) setAttribution(resolved);
     });
     return () => {
       active = false;
     };
-  }, [provider]);
+  }, [provider, enabled]);
 
   return attribution;
 }

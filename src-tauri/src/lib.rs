@@ -216,6 +216,21 @@ const TILE_FETCH_RETRY_DELAYS: [Duration; 2] =
 
 /// Returns true if the error is a transient transport error worth retrying.
 /// HTTP 4xx/5xx are NOT retried since the server understood the request.
+/// Split a `ureq` failure into "the provider answered" and "we could not reach
+/// it", preserving the status code in the first case.
+///
+/// This is the same distinction `is_retryable_error` already drew; the result
+/// used to be thrown away at the `Result<_, String>` boundary, which is what let
+/// a 403/404 be served off the stale path as though the provider were down.
+fn classify_fetch_error(err: &ureq::Error) -> TileFetchError {
+    match err {
+        ureq::Error::StatusCode(code) => {
+            TileFetchError::status(*code, format!("Network error: {err}"))
+        }
+        _ => TileFetchError::transport(format!("Network error: {err}")),
+    }
+}
+
 fn is_retryable_error(err: &ureq::Error) -> bool {
     match err {
         ureq::Error::StatusCode(_) => false, // Server responded - don't retry
@@ -241,10 +256,14 @@ fn fetch_tile_from_network(
     x: u32,
     stats: Option<&TileFetchStats>,
     if_none_match: Option<&str>,
-) -> Result<TileFetchResponse, String> {
+) -> Result<TileFetchResponse, TileFetchError> {
     // Look up provider in registry
-    let tile_provider = tile_providers::get_provider(provider)
-        .ok_or_else(|| format!("Unknown provider: {provider}"))?;
+    let tile_provider = tile_providers::get_provider(provider).ok_or_else(|| {
+        // Not a network condition, but not something a stored copy should paper
+        // over either - a request for an unknown provider is a bug, not an
+        // outage. Reported as a status so it cannot reach the stale path.
+        TileFetchError::status(0, format!("Unknown provider: {provider}"))
+    })?;
     let url = tile_providers::expand_url(tile_provider, z, y, x);
 
     tracing::debug!(url = %url, provider = %provider, "Fetching tile from network");
@@ -254,7 +273,7 @@ fn fetch_tile_from_network(
     }
 
     let start = std::time::Instant::now();
-    let mut last_err: Option<String> = None;
+    let mut last_err: Option<TileFetchError> = None;
 
     for attempt in 0..=TILE_FETCH_MAX_RETRIES {
         if attempt > 0 {
@@ -292,12 +311,20 @@ fn fetch_tile_from_network(
                 // 4xx/5xx into errors, and its redirect handling leaves a
                 // body-less 3xx alone (verified against the live service).
                 if response.status() == 304 {
-                    let policy = response
+                    let mut policy = response
                         .headers()
                         .get("cache-control")
                         .and_then(|v| v.to_str().ok())
                         .map(cache::tiles::parse_cache_control)
                         .unwrap_or_default();
+                    // A 304 carries `Age` too, and it is the response that runs
+                    // every day after the first - so skipping it here would
+                    // leave the hole open on the path taken most often.
+                    policy.age_seconds = response
+                        .headers()
+                        .get("age")
+                        .and_then(|v| v.to_str().ok())
+                        .and_then(cache::tiles::parse_age);
                     if let Some(s) = stats {
                         s.record_success(latency_ms);
                     }
@@ -319,12 +346,20 @@ fn fetch_tile_from_network(
                 let content_type = sanitize_content_type(raw_content_type);
 
                 // Read before `into_body` consumes the response.
-                let policy = response
+                let mut policy = response
                     .headers()
                     .get("cache-control")
                     .and_then(|v| v.to_str().ok())
                     .map(cache::tiles::parse_cache_control)
                     .unwrap_or_default();
+                // `max-age` counts from when the ORIGIN made the response, so a
+                // copy handed to us by a CDN has already spent `Age` of it.
+                // Esri is behind CloudFront and does send this on an edge hit.
+                policy.age_seconds = response
+                    .headers()
+                    .get("age")
+                    .and_then(|v| v.to_str().ok())
+                    .and_then(cache::tiles::parse_age);
                 let etag = response
                     .headers()
                     .get("etag")
@@ -335,7 +370,10 @@ fn fetch_tile_from_network(
                     if let Some(s) = stats {
                         s.record_error();
                     }
-                    format!("Failed to read response body: {e}")
+                    // The provider answered; the body just did not arrive
+                    // intact. Treated as transport, because a truncated read is
+                    // a connection problem rather than a decision by the origin.
+                    TileFetchError::transport(format!("Failed to read response body: {e}"))
                 })?;
 
                 if let Some(s) = stats {
@@ -357,7 +395,7 @@ fn fetch_tile_from_network(
                         provider = %provider,
                         "Tile fetch failed, will retry"
                     );
-                    last_err = Some(format!("Network error: {e}"));
+                    last_err = Some(classify_fetch_error(&e));
                     continue;
                 }
 
@@ -365,7 +403,7 @@ fn fetch_tile_from_network(
                 if let Some(s) = stats {
                     s.record_error();
                 }
-                return Err(format!("Network error: {e}"));
+                return Err(classify_fetch_error(&e));
             }
         }
     }
@@ -374,7 +412,7 @@ fn fetch_tile_from_network(
     if let Some(s) = stats {
         s.record_error();
     }
-    Err(last_err.unwrap_or_else(|| "Tile fetch failed".to_string()))
+    Err(last_err.unwrap_or_else(|| TileFetchError::transport("Tile fetch failed".to_string())))
 }
 
 /// Response from the ArcGIS tilemap API.
@@ -646,6 +684,62 @@ enum TileFetchResponse {
     },
 }
 
+/// Why a tile fetch failed, in the only distinction the caller acts on.
+///
+/// `stale-if-error` (RFC 5861) applies to a cache that "cannot reach" the
+/// origin: a transport failure, or a `500`/`502`/`503`/`504`. It does NOT apply
+/// to a `403` or `404` - those are the provider answering, and answering that
+/// this tile is not to be served. Flattening both into one string made them
+/// indistinguishable, so a tile Esri had removed kept being displayed off the
+/// stored copy until retention ran out.
+#[derive(Debug, Clone)]
+pub(crate) struct TileFetchError {
+    /// Human-readable text, unchanged from what callers already surface.
+    message: String,
+    /// `Some(code)` when the provider answered with an HTTP status; `None` for a
+    /// transport failure (DNS, timeout, connection reset, TLS).
+    status: Option<u16>,
+}
+
+impl TileFetchError {
+    fn transport(message: String) -> Self {
+        Self {
+            message,
+            status: None,
+        }
+    }
+
+    fn status(code: u16, message: String) -> Self {
+        Self {
+            message,
+            status: Some(code),
+        }
+    }
+
+    /// Whether a retained copy may answer this failure.
+    ///
+    /// True for transport failures and 5xx. False for everything else the
+    /// provider says deliberately - notably 403 and 404.
+    fn allows_stale_fallback(&self) -> bool {
+        match self.status {
+            None => true,
+            Some(code) => (500..600).contains(&code),
+        }
+    }
+}
+
+impl std::fmt::Display for TileFetchError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl From<TileFetchError> for String {
+    fn from(err: TileFetchError) -> Self {
+        err.message
+    }
+}
+
 enum TileFetchOutcome {
     Tile { tile: TileFetchResult },
     Missing { error: String },
@@ -724,7 +818,7 @@ fn fetch_tile_candidate<F>(
     cache_enabled: bool,
 ) -> TileFetchOutcome
 where
-    F: Fn(&str, u32, u32, u32, Option<&str>) -> Result<TileFetchResponse, String>,
+    F: Fn(&str, u32, u32, u32, Option<&str>) -> Result<TileFetchResponse, TileFetchError>,
 {
     // Fresh cache first (skip if per-provider caching disabled)
     let cached_tile = if cache_enabled {
@@ -817,7 +911,26 @@ where
         Err(e) => {
             tracing::warn!(error = %e, provider = %provider, z = z, y = y, x = x, "Network fetch failed");
 
-            // The retained copy read above answers the failed request.
+            // The retained copy read above answers the failed request - but only
+            // where stale-if-error actually applies. A 403 or 404 is the
+            // provider answering, and answering that this tile is not to be
+            // served; papering over that with a stored copy would keep showing
+            // imagery the provider has withdrawn until retention ran out.
+            if !e.allows_stale_fallback() {
+                tracing::debug!(
+                    provider = %provider,
+                    z = z,
+                    y = y,
+                    x = x,
+                    status = e.status.unwrap_or_default(),
+                    had_retained = retained.is_some(),
+                    "Provider answered with a non-5xx status; not serving a stored copy"
+                );
+                return TileFetchOutcome::Missing {
+                    error: format!("Tile not available: {e}"),
+                };
+            }
+
             if let Some(entry) = retained {
                 tracing::info!(
                     provider = %provider,
@@ -961,7 +1074,7 @@ fn fetch_best_available_with_fetcher<F>(
     cache_enabled: bool,
 ) -> Result<TileFetchResult, String>
 where
-    F: Fn(&str, u32, u32, u32, Option<&str>) -> Result<TileFetchResponse, String>,
+    F: Fn(&str, u32, u32, u32, Option<&str>) -> Result<TileFetchResponse, TileFetchError>,
 {
     let provider_info = tile_providers::get_provider(provider)
         .ok_or_else(|| format!("Unknown provider: {provider}"))?;
@@ -1115,7 +1228,7 @@ fn handle_tile_request(
                          y: u32,
                          x: u32,
                          validator: Option<&str>|
-          -> Result<TileFetchResponse, String> {
+          -> Result<TileFetchResponse, TileFetchError> {
         let result = fetch_tile_from_network(p, z, y, x, Some(&stats_ref), validator);
         if result.is_ok() {
             // A 304 counts: the network was reached and answered, which is what
@@ -1151,7 +1264,7 @@ fn handle_tile_request_with_fetcher<F>(
     cache_enabled: bool,
 ) -> http::Response<Vec<u8>>
 where
-    F: Fn(&str, u32, u32, u32, Option<&str>) -> Result<TileFetchResponse, String>,
+    F: Fn(&str, u32, u32, u32, Option<&str>) -> Result<TileFetchResponse, TileFetchError>,
 {
     // Validate provider against registry
     if tile_providers::get_provider(provider).is_none() {
@@ -1201,7 +1314,7 @@ pub fn tile_fetch_impl(
                          y: u32,
                          x: u32,
                          validator: Option<&str>|
-          -> Result<TileFetchResponse, String> {
+          -> Result<TileFetchResponse, TileFetchError> {
         fetch_tile_from_network(p, z, y, x, Some(&stats_ref), validator)
     };
     fetch_best_available_with_fetcher(
@@ -2295,8 +2408,8 @@ mod tests {
                           _: u32,
                           _: u32,
                           _: Option<&str>|
-         -> Result<TileFetchResponse, String> {
-            Err("Network unavailable".to_string())
+         -> Result<TileFetchResponse, TileFetchError> {
+            Err(TileFetchError::transport("Network unavailable".to_string()))
         };
 
         let response = handle_tile_request_with_fetcher(
@@ -2332,7 +2445,7 @@ mod tests {
                           _: u32,
                           _: u32,
                           _: Option<&str>|
-         -> Result<TileFetchResponse, String> {
+         -> Result<TileFetchResponse, TileFetchError> {
             Ok(TileFetchResponse::Fetched(FetchedTile {
                 data: b"fetched_tile_data".to_vec(),
                 content_type: "image/jpeg".to_string(),
@@ -2382,13 +2495,14 @@ mod tests {
                           _: u32,
                           _: u32,
                           _: Option<&str>|
-         -> Result<TileFetchResponse, String> {
+         -> Result<TileFetchResponse, TileFetchError> {
             Ok(TileFetchResponse::Fetched(FetchedTile {
                 data: b"fetched_tile".to_vec(),
                 content_type: "image/jpeg".to_string(),
                 policy: CachePolicy {
                     max_age_seconds: Some(86_400),
                     no_store: false,
+                    age_seconds: None,
                 },
                 etag: None,
             }))
@@ -2433,7 +2547,7 @@ mod tests {
                           _: u32,
                           _: u32,
                           _: Option<&str>|
-         -> Result<TileFetchResponse, String> {
+         -> Result<TileFetchResponse, TileFetchError> {
             Ok(TileFetchResponse::Fetched(FetchedTile {
                 data: b"tile_data".to_vec(),
                 content_type: "image/jpeg".to_string(),
@@ -2472,8 +2586,8 @@ mod tests {
                           _: u32,
                           _: u32,
                           _: Option<&str>|
-         -> Result<TileFetchResponse, String> {
-            Err("Connection refused".to_string())
+         -> Result<TileFetchResponse, TileFetchError> {
+            Err(TileFetchError::transport("Connection refused".to_string()))
         };
 
         let response = handle_tile_request_with_fetcher(
@@ -2499,25 +2613,30 @@ mod tests {
 
     #[test]
     fn test_handle_tile_request_cache_miss_network_fails_uses_stale_tile() {
-        let cache = Arc::new(Mutex::new(Some(TileCache::in_memory(1, 0).unwrap())));
+        // A real retention TTL, with the tile pushed past its max-age. Zeroing
+        // ttl_days used to produce the same "not fresh" state, but retention 0
+        // now means nothing is retained at all - which is a different case, and
+        // one where no copy should be served. See
+        // `a_tile_past_retention_is_not_served_even_as_a_last_resort`.
+        let cache = Arc::new(Mutex::new(Some(TileCache::in_memory(1, 30).unwrap())));
         let tilemap_cache = make_test_tilemap_cache();
 
         {
             let mut guard = cache.lock().unwrap();
-            guard
-                .as_mut()
-                .unwrap()
-                .put_granted("esri", 1, 2, 3, b"stale_tile", "image/png")
+            let c = guard.as_mut().unwrap();
+            c.put_granted("esri", 1, 2, 3, b"stale_tile", "image/png")
                 .unwrap();
+            c.expire_for_test("esri", 1, 2, 3).unwrap();
         }
 
-        let mock_fetch =
-            |_: &str,
-             _: u32,
-             _: u32,
-             _: u32,
-             _: Option<&str>|
-             -> Result<TileFetchResponse, String> { Err("Network down".to_string()) };
+        let mock_fetch = |_: &str,
+                          _: u32,
+                          _: u32,
+                          _: u32,
+                          _: Option<&str>|
+         -> Result<TileFetchResponse, TileFetchError> {
+            Err(TileFetchError::transport("Network down".to_string()))
+        };
 
         let response = handle_tile_request_with_fetcher(
             "esri",
@@ -2602,7 +2721,7 @@ mod tests {
                           _: u32,
                           _: u32,
                           _: Option<&str>|
-         -> Result<TileFetchResponse, String> {
+         -> Result<TileFetchResponse, TileFetchError> {
             Ok(TileFetchResponse::Fetched(FetchedTile {
                 data: b"network_tile".to_vec(),
                 content_type: "image/jpeg".to_string(),
@@ -2637,6 +2756,107 @@ mod tests {
     }
 
     #[test]
+    fn a_forbidden_or_missing_tile_does_not_fall_back_to_the_stored_copy() {
+        // stale-if-error (RFC 5861) is for a provider we cannot REACH. A 403 or
+        // 404 is the provider answering, and answering that this tile is not to
+        // be served - so serving it anyway would keep withdrawn imagery on
+        // screen until retention ran out.
+        for status in [403u16, 404, 410] {
+            let cache = Arc::new(Mutex::new(Some(TileCache::in_memory(10, 30).unwrap())));
+            let tilemap_cache = make_test_tilemap_cache();
+            {
+                let mut guard = cache.lock().unwrap();
+                guard
+                    .as_mut()
+                    .unwrap()
+                    .put_granted("esri", 1, 2, 3, b"withdrawn", "image/png")
+                    .unwrap();
+                // Past max-age, so the request reaches the network at all.
+                guard
+                    .as_mut()
+                    .unwrap()
+                    .expire_for_test("esri", 1, 2, 3)
+                    .unwrap();
+            }
+
+            let mock_fetch = move |_: &str,
+                                   _: u32,
+                                   _: u32,
+                                   _: u32,
+                                   _: Option<&str>|
+                  -> Result<TileFetchResponse, TileFetchError> {
+                Err(TileFetchError::status(status, format!("HTTP {status}")))
+            };
+
+            let response = handle_tile_request_with_fetcher(
+                "esri",
+                1,
+                2,
+                3,
+                &cache,
+                &tilemap_cache,
+                mock_fetch,
+                true,
+            );
+            assert_eq!(
+                response.status(),
+                http::StatusCode::NOT_FOUND,
+                "a {status} must not be answered off the cache"
+            );
+        }
+    }
+
+    #[test]
+    fn a_provider_outage_still_falls_back_to_the_stored_copy() {
+        // The other side of the same gate: 5xx and transport failures are
+        // exactly what stale-if-error exists for, so a maintenance window must
+        // not blank the map.
+        for outage in [
+            TileFetchError::status(503, "HTTP 503".to_string()),
+            TileFetchError::status(500, "HTTP 500".to_string()),
+            TileFetchError::transport("Connection reset".to_string()),
+        ] {
+            let cache = Arc::new(Mutex::new(Some(TileCache::in_memory(10, 30).unwrap())));
+            let tilemap_cache = make_test_tilemap_cache();
+            {
+                let mut guard = cache.lock().unwrap();
+                guard
+                    .as_mut()
+                    .unwrap()
+                    .put_granted("esri", 1, 2, 3, b"stored", "image/png")
+                    .unwrap();
+                guard
+                    .as_mut()
+                    .unwrap()
+                    .expire_for_test("esri", 1, 2, 3)
+                    .unwrap();
+            }
+
+            let mock_fetch = move |_: &str,
+                                   _: u32,
+                                   _: u32,
+                                   _: u32,
+                                   _: Option<&str>|
+                  -> Result<TileFetchResponse, TileFetchError> {
+                Err(outage.clone())
+            };
+
+            let response = handle_tile_request_with_fetcher(
+                "esri",
+                1,
+                2,
+                3,
+                &cache,
+                &tilemap_cache,
+                mock_fetch,
+                true,
+            );
+            assert_eq!(response.status(), http::StatusCode::OK);
+            assert_eq!(response.body(), b"stored");
+        }
+    }
+
+    #[test]
     fn test_cache_disabled_no_stale_fallback() {
         // Use a cache with 0 TTL so tiles are immediately stale
         let cache = Arc::new(Mutex::new(Some(TileCache::in_memory(10, 0).unwrap())));
@@ -2660,13 +2880,14 @@ mod tests {
         let cache_enabled = cache_config.tile_cache_enabled;
 
         // Network fails
-        let mock_fetch =
-            |_: &str,
-             _: u32,
-             _: u32,
-             _: u32,
-             _: Option<&str>|
-             -> Result<TileFetchResponse, String> { Err("Network down".to_string()) };
+        let mock_fetch = |_: &str,
+                          _: u32,
+                          _: u32,
+                          _: u32,
+                          _: Option<&str>|
+         -> Result<TileFetchResponse, TileFetchError> {
+            Err(TileFetchError::transport("Network down".to_string()))
+        };
 
         // Should NOT fall back to stale cache
         let response = handle_tile_request_with_fetcher(
@@ -2728,7 +2949,7 @@ mod tests {
     fn test_fetch_tile_from_network_unknown_provider_errors() {
         let result = fetch_tile_from_network("unknown", 0, 0, 0, None, None);
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("Unknown provider"));
+        assert!(result.unwrap_err().to_string().contains("Unknown provider"));
     }
 
     // === Registry-based fetch tests ===
@@ -2771,7 +2992,7 @@ mod tests {
                           _: u32,
                           _: u32,
                           _: Option<&str>|
-         -> Result<TileFetchResponse, String> {
+         -> Result<TileFetchResponse, TileFetchError> {
             Ok(TileFetchResponse::Fetched(FetchedTile {
                 data: b"tile_data".to_vec(),
                 content_type: "image/jpeg".to_string(),
@@ -2874,6 +3095,7 @@ mod tests {
                 CachePolicy {
                     max_age_seconds: Some(60),
                     no_store: false,
+                    age_seconds: None,
                 },
                 Some("\"abc\""),
             )
@@ -2889,12 +3111,13 @@ mod tests {
                          _: u32,
                          _: u32,
                          validator: Option<&str>|
-              -> Result<TileFetchResponse, String> {
+              -> Result<TileFetchResponse, TileFetchError> {
             *recorder.lock().unwrap() = Some(validator.map(str::to_string));
             Ok(TileFetchResponse::NotModified {
                 policy: CachePolicy {
                     max_age_seconds: Some(86_400),
                     no_store: false,
+                    age_seconds: None,
                 },
             })
         };
@@ -2931,7 +3154,7 @@ mod tests {
                          _: u32,
                          _: u32,
                          validator: Option<&str>|
-              -> Result<TileFetchResponse, String> {
+              -> Result<TileFetchResponse, TileFetchError> {
             *recorder.lock().unwrap() = Some(validator.map(str::to_string));
             Ok(TileFetchResponse::Fetched(FetchedTile {
                 data: b"fresh".to_vec(),
@@ -2964,7 +3187,7 @@ mod tests {
                          _: u32,
                          _: u32,
                          _: Option<&str>|
-              -> Result<TileFetchResponse, String> {
+              -> Result<TileFetchResponse, TileFetchError> {
             if counter.fetch_add(1, Ordering::Relaxed) == 0 {
                 Ok(TileFetchResponse::NotModified {
                     policy: CachePolicy::default(),

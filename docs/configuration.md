@@ -158,7 +158,21 @@ tile_ttl_days = 30                  # Default retention: days a tile stays on di
 # A 304 re-stamps the tile as current, so a slow-changing basemap costs one
 # body-less round trip per tile per day rather than a full re-fetch. The stored
 # copy is only served without asking when the network call fails outright -
-# `stale-if-error`.
+# `stale-if-error`, and only where that actually applies: a transport failure or
+# a 5xx. A 403 or 404 is the provider answering, so the tile is reported missing
+# rather than answered off the stored copy.
+#
+# `max-age` is counted from when the ORIGIN made the response, not from when we
+# received it, so any `Age` the response carries is subtracted before the
+# deadline is recorded. Esri is behind CloudFront and does send it; without this
+# a tile with an hour of its grant left would be treated as fresh for a further
+# day.
+#
+# Retention is enforced at the point of use as well as by eviction. Eviction runs
+# on a tile write, so an offline session - which never writes one - could
+# otherwise be served a copy past `ttl_days` for as long as it lasted. Retired
+# rows are also dropped when the cache opens, so the setting bounds what is kept
+# on disk and not merely what is shown.
 
 [global_view]
 fps_threshold = 30                  # FPS below which auto-throttle activates

@@ -66,6 +66,15 @@ pub struct CachePolicy {
     pub max_age_seconds: Option<i64>,
     /// The provider forbade storing this response at all (`no-store`).
     pub no_store: bool,
+    /// Seconds this response had already spent in an intermediary cache when it
+    /// reached us, from the `Age` header.
+    ///
+    /// `max-age` counts from when the ORIGIN generated the response, not from
+    /// when we received it. Esri is behind CloudFront and does send `Age` on an
+    /// edge hit, so ignoring it would let a tile that has 1 hour of its grant
+    /// left be recorded as fresh for a further 24 - serving imagery as current
+    /// past the window the provider actually gave.
+    pub age_seconds: Option<i64>,
 }
 
 impl CachePolicy {
@@ -76,6 +85,14 @@ impl CachePolicy {
     /// carry the rule separately and drifted: the revalidation path never
     /// checked `no_store`, so a provider revoking permission on a 304 had its
     /// tile kept AND its retention extended.
+    ///
+    /// `Age` is subtracted here for the same reason the ceiling is: this is the
+    /// one place every write path passes through, so making it the gate's job
+    /// means a producer cannot forget it. A grant fully spent in a CDN comes
+    /// back as `Some(0)` rather than `None` - the provider DID permit storage,
+    /// the freshness is just used up, so the tile is kept (with its ETag, for a
+    /// cheap revalidation) and never served as current. That is exactly the
+    /// shape `no-cache` already maps to.
     pub fn granted_seconds(&self) -> Option<i64> {
         // Clamped HERE rather than only at the parser: `TileEntry::
         // remaining_policy` also mints a max-age (for an overzoomed crop) and it
@@ -85,6 +102,11 @@ impl CachePolicy {
         self.max_age_seconds
             .filter(|_| !self.no_store)
             .map(|seconds| seconds.min(MAX_GRANT_SECONDS))
+            .map(|seconds| {
+                seconds
+                    .saturating_sub(self.age_seconds.unwrap_or(0).max(0))
+                    .max(0)
+            })
     }
 }
 
@@ -120,6 +142,9 @@ impl TileEntry {
         CachePolicy {
             max_age_seconds: self.expires_at.map(|at| at.saturating_sub(now).max(0)),
             no_store: false,
+            // Already accounted for: `expires_at` was stamped net of the
+            // parent's `Age`, so subtracting it again would age the crop twice.
+            age_seconds: None,
         }
     }
 }
@@ -192,6 +217,23 @@ pub fn parse_cache_control(header: &str) -> CachePolicy {
         policy.max_age_seconds = Some(0);
     }
     policy
+}
+
+/// Parse an `Age` header value: seconds the response has already spent in
+/// intermediary caches.
+///
+/// RFC 9111 defines it as a non-negative integer. Anything else - a negative
+/// number, a float, junk - is treated as absent rather than as zero: guessing
+/// would be inventing freshness, and the conservative reading of a malformed
+/// header is "we do not know how old this is". Clamped to the same ceiling as a
+/// grant so a hostile `Age` cannot underflow anything downstream.
+pub fn parse_age(header: &str) -> Option<i64> {
+    header
+        .trim()
+        .parse::<i64>()
+        .ok()
+        .filter(|seconds| *seconds >= 0)
+        .map(|seconds| seconds.min(MAX_GRANT_SECONDS))
 }
 
 /// Current Unix timestamp, on the same clock the cache stamps entries with.
@@ -358,6 +400,28 @@ impl TileCache {
             .unwrap_or(self.ttl_seconds)
     }
 
+    /// Drop everything past retention, now, rather than waiting for a write.
+    ///
+    /// Eviction otherwise only runs on `put`, so a session that never caches a
+    /// tile - offline, or imagery switched off - leaves retired rows on disk for
+    /// as long as it lasts. `get_stale` already refuses to serve them, but
+    /// "kept for `ttl_days`" should mean the bytes are gone too, not merely
+    /// unreachable.
+    ///
+    /// Call AFTER `set_provider_ttls`: with the overrides unset every provider
+    /// would be swept against the default TTL, retiring tiles early for any
+    /// provider configured to keep them longer.
+    pub fn purge_retired(&self) -> Result<u64> {
+        let freed = self.delete_retired(true)?;
+        if freed > 0 {
+            tracing::debug!(
+                freed_bytes = freed,
+                "Dropped tiles past their retention TTL at startup"
+            );
+        }
+        Ok(freed)
+    }
+
     /// Delete every tile past its own provider's retention TTL, returning the
     /// bytes freed.
     ///
@@ -505,12 +569,18 @@ impl TileCache {
 
     /// Get a stale tile from the cache - one `get` declined to serve.
     ///
-    /// This answers a request the provider could not, reached only after a fetch has
-    /// already failed. "Stale" is the exact complement of `get`'s freshness, so
-    /// it covers BOTH ways a tile can stop being current: past the configured
-    /// retention TTL, or past the provider's own `max-age`. Covering only the
-    /// first left tiles inside the TTL but beyond `max-age` reachable by neither
-    /// path - cached, retained, and permanently invisible.
+    /// This answers a request the provider could not, reached only after a fetch
+    /// has already failed. It is bounded by BOTH clocks, in opposite directions:
+    /// the tile must still be within retention (or it should not be on disk at
+    /// all), and must NOT be fresh (or `get` would have served it).
+    ///
+    /// Retention has to be enforced here and not left to eviction. Retired rows
+    /// are swept on `put`, but a fully offline session never writes a tile, and
+    /// offline is precisely when this lookup runs - so without this bound a
+    /// stored copy could outlive `ttl_days` by however long the session lasts.
+    /// The `expires_at IS NULL` arm covers rows cached before the column
+    /// existed: never servable as fresh, still usable as a last resort while
+    /// they are inside retention.
     ///
     /// Does NOT update `accessed_at` since we're serving stale data.
     ///
@@ -519,11 +589,12 @@ impl TileCache {
         let now = Self::now();
         let min_fetched_at = now - self.ttl_for(provider);
 
-        // The complement of `get`'s predicate: too old, OR past its max-age.
+        // Inside retention, and not fresh.
         let result: Result<TileEntry, rusqlite::Error> = self.conn.query_row(
             "SELECT data, content_type, size_bytes, fetched_at, accessed_at, expires_at, etag FROM tiles
              WHERE provider = ?1 AND z = ?2 AND y = ?3 AND x = ?4
-               AND (fetched_at <= ?5 OR expires_at IS NULL OR expires_at <= ?6)",
+               AND fetched_at > ?5
+               AND (expires_at IS NULL OR expires_at <= ?6)",
             params![provider, z, y, x, min_fetched_at, now],
             |row| {
                 Ok(TileEntry {
@@ -725,6 +796,22 @@ impl TileCache {
         Ok(())
     }
 
+    /// Push a stored tile past its `max-age` without touching retention.
+    ///
+    /// The state every stale-if-error test needs: not servable as fresh, still
+    /// retained. Winding `fetched_at` back instead would cross the retention
+    /// bound as well, which is a different case entirely (and, since
+    /// `get_stale` began enforcing retention, one where nothing is served).
+    #[cfg(test)]
+    pub fn expire_for_test(&self, provider: &str, z: u32, y: u32, x: u32) -> Result<()> {
+        self.conn.execute(
+            "UPDATE tiles SET expires_at = ?1
+             WHERE provider = ?2 AND z = ?3 AND y = ?4 AND x = ?5",
+            params![Self::now() - 1, provider, z, y, x],
+        )?;
+        Ok(())
+    }
+
     /// `put` with a generous grant already supplied, for the tests that predate
     /// provider cache directives.
     ///
@@ -752,6 +839,7 @@ impl TileCache {
             CachePolicy {
                 max_age_seconds: Some(30 * 24 * 60 * 60),
                 no_store: false,
+                age_seconds: None,
             },
             None,
         )
@@ -952,11 +1040,12 @@ impl TileCache {
         let now = Self::now();
         let min_fetched_at = now - self.ttl_for(provider);
 
-        // Mirrors `get_stale` exactly - both are "present but not fresh".
+        // Mirrors `get_stale` exactly - both are "retained, and not fresh".
         match self.conn.query_row(
             "SELECT COUNT(*) FROM tiles
              WHERE provider = ?1 AND z = ?2 AND y = ?3 AND x = ?4
-               AND (fetched_at <= ?5 OR expires_at IS NULL OR expires_at <= ?6)",
+               AND fetched_at > ?5
+               AND (expires_at IS NULL OR expires_at <= ?6)",
             params![provider, z, y, x, min_fetched_at, now],
             |row| row.get::<_, i64>(0),
         ) {
@@ -1149,11 +1238,16 @@ mod tests {
             "Stale tile should not be returned by get()"
         );
 
-        // But has_stale_tile should return true
+        // And past RETENTION it is not reachable as a last resort either: that
+        // is the difference between the two clocks. A tile past max-age but
+        // inside retention still answers a failed fetch - see
+        // `a_tile_inside_retention_but_past_max_age_still_answers` - but this
+        // one is past the TTL that says it may be on disk at all.
         assert!(
-            cache.has_stale_tile("esri", 10, 500, 250),
-            "Should detect stale tile"
+            !cache.has_stale_tile("esri", 10, 500, 250),
+            "past ttl_days, so not servable by any path"
         );
+        assert!(cache.get_stale("esri", 10, 500, 250).is_none());
     }
 
     // === Test 5: clear_all removes all tiles ===
@@ -1685,6 +1779,7 @@ mod tests {
         let policy = CachePolicy {
             max_age_seconds: Some(60),
             no_store: false,
+            age_seconds: None,
         };
         cache
             .put(
@@ -1834,6 +1929,7 @@ mod tests {
                 CachePolicy {
                     max_age_seconds: None,
                     no_store: true,
+                    age_seconds: None,
                 },
                 None,
             )
@@ -1943,6 +2039,7 @@ mod tests {
                 CachePolicy {
                     max_age_seconds: Some(60),
                     no_store: false,
+                    age_seconds: None,
                 },
                 Some("\"sjii0vvv1sqvf\""),
             )
@@ -1968,6 +2065,7 @@ mod tests {
                 CachePolicy {
                     max_age_seconds: Some(60),
                     no_store: false,
+                    age_seconds: None,
                 },
                 Some("\"abc\""),
             )
@@ -1999,6 +2097,7 @@ mod tests {
                 CachePolicy {
                     max_age_seconds: Some(60),
                     no_store: false,
+                    age_seconds: None,
                 },
                 Some("\"abc\""),
             )
@@ -2021,6 +2120,7 @@ mod tests {
                 CachePolicy {
                     max_age_seconds: Some(86_400),
                     no_store: false,
+                    age_seconds: None,
                 },
             )
             .unwrap();
@@ -2079,6 +2179,7 @@ mod tests {
                 CachePolicy {
                     max_age_seconds: Some(i64::MAX),
                     no_store: false,
+                    age_seconds: None,
                 },
                 None,
             )
@@ -2138,6 +2239,7 @@ mod tests {
                 CachePolicy {
                     max_age_seconds: Some(86_400),
                     no_store: true,
+                    age_seconds: None,
                 },
             )
             .unwrap();
@@ -2160,6 +2262,191 @@ mod tests {
             "no-store beats a max-age sent alongside it"
         );
         assert_eq!(CachePolicy::default().granted_seconds(), None);
+    }
+
+    // === Retention bounds `get_stale`, not just eviction ===
+
+    #[test]
+    fn a_tile_past_retention_is_not_served_even_as_a_last_resort() {
+        // Eviction only runs on `put`. A session that never caches anything -
+        // offline, which is exactly when `get_stale` is reached - leaves retired
+        // rows sitting there, so the bound has to be enforced at the lookup too.
+        let mut cache = TileCache::in_memory(10, 1).unwrap();
+        cache
+            .put_granted("esri", 1, 2, 3, b"tile", "image/jpeg")
+            .unwrap();
+
+        // Two days old against a one-day retention, and no `put` in between.
+        set_fetched_at(&cache, "esri", 1, 2, 3, TileCache::now() - 2 * 24 * 60 * 60);
+
+        assert!(cache.get("esri", 1, 2, 3).is_none(), "not fresh either");
+        assert!(
+            cache.get_stale("esri", 1, 2, 3).is_none(),
+            "past ttl_days means past ttl_days - a stored copy cannot outlive it"
+        );
+        assert!(!cache.has_stale_tile("esri", 1, 2, 3), "and reports so");
+    }
+
+    #[test]
+    fn a_tile_inside_retention_but_past_max_age_still_answers() {
+        // The other half of the same predicate, and the reason it is not simply
+        // "delete anything not fresh": this is the whole stale-if-error case.
+        let mut cache = TileCache::in_memory(10, 30).unwrap();
+        cache
+            .put(
+                "esri",
+                1,
+                2,
+                3,
+                b"tile",
+                "image/jpeg",
+                parse_cache_control("max-age=1"),
+                Some("\"v1\""),
+            )
+            .unwrap();
+        cache.expire_for_test("esri", 1, 2, 3).unwrap();
+
+        assert!(cache.get("esri", 1, 2, 3).is_none(), "past its max-age");
+        assert!(
+            cache.get_stale("esri", 1, 2, 3).is_some(),
+            "but well inside retention, so it can answer a failed fetch"
+        );
+        assert!(cache.has_stale_tile("esri", 1, 2, 3));
+    }
+
+    #[test]
+    fn purge_retired_drops_the_bytes_not_just_the_visibility() {
+        let mut cache = TileCache::in_memory(10, 1).unwrap();
+        cache
+            .put_granted("esri", 1, 2, 3, b"retired", "image/jpeg")
+            .unwrap();
+        cache
+            .put_granted("esri", 4, 5, 6, b"current", "image/jpeg")
+            .unwrap();
+        set_fetched_at(&cache, "esri", 1, 2, 3, TileCache::now() - 2 * 24 * 60 * 60);
+
+        let freed = cache.purge_retired().unwrap();
+        assert_eq!(freed, b"retired".len() as u64);
+        assert_eq!(
+            cache.get_stats().tile_count,
+            1,
+            "the retired row is gone from disk, not merely unreachable"
+        );
+        assert!(
+            cache.get("esri", 4, 5, 6).is_some(),
+            "and the rest survives"
+        );
+    }
+
+    #[test]
+    fn purge_retired_honours_a_provider_override() {
+        // Why `purge_retired` must be called AFTER `set_provider_ttls`: swept
+        // against the default alone, a provider configured to keep tiles LONGER
+        // would have them retired early.
+        let mut cache = TileCache::in_memory(10, 1).unwrap();
+        cache.set_provider_ttls(&HashMap::from([("esri".to_string(), 30u32)]));
+        cache
+            .put_granted("esri", 1, 2, 3, b"tile", "image/jpeg")
+            .unwrap();
+        set_fetched_at(&cache, "esri", 1, 2, 3, TileCache::now() - 2 * 24 * 60 * 60);
+        cache.expire_for_test("esri", 1, 2, 3).unwrap();
+
+        assert_eq!(cache.purge_retired().unwrap(), 0);
+        assert!(
+            cache.get_stale("esri", 1, 2, 3).is_some(),
+            "two days old, but this provider is configured for thirty"
+        );
+    }
+
+    // === `Age`: max-age counts from the origin, not from our clock ===
+
+    #[test]
+    fn parses_an_age_header_and_rejects_nonsense() {
+        assert_eq!(parse_age("0"), Some(0));
+        assert_eq!(parse_age("80000"), Some(80_000));
+        assert_eq!(parse_age("  42  "), Some(42), "surrounding space is legal");
+        // Absent rather than zero: guessing "brand new" from a malformed header
+        // would invent freshness the provider never granted.
+        assert_eq!(parse_age("-5"), None);
+        assert_eq!(parse_age("12.5"), None);
+        assert_eq!(parse_age("soon"), None);
+        assert_eq!(parse_age(""), None);
+        assert_eq!(
+            parse_age(&format!("{}", i64::MAX)),
+            Some(MAX_GRANT_SECONDS),
+            "clamped like a grant, so it cannot underflow anything downstream"
+        );
+    }
+
+    #[test]
+    fn age_is_subtracted_from_the_grant() {
+        // The live shape: Esri sends max-age=86400 through CloudFront, which
+        // adds Age once its edge has been holding the response.
+        let mut policy = parse_cache_control("max-age=86400");
+        policy.age_seconds = Some(80_000);
+        assert_eq!(
+            policy.granted_seconds(),
+            Some(6_400),
+            "only what is LEFT of the origin's window may be treated as fresh"
+        );
+
+        // No Age header at all: nothing to subtract.
+        let untouched = parse_cache_control("max-age=86400");
+        assert_eq!(untouched.granted_seconds(), Some(86_400));
+    }
+
+    #[test]
+    fn a_fully_spent_grant_is_kept_but_never_fresh() {
+        // Age >= max-age. The provider DID permit storage, so the tile is still
+        // stored - with its ETag, which is what makes the next request a cheap
+        // 304 rather than a full download. It is simply never servable as
+        // current, the same shape `no-cache` maps to.
+        let mut policy = parse_cache_control("max-age=86400");
+        policy.age_seconds = Some(90_000);
+        assert_eq!(
+            policy.granted_seconds(),
+            Some(0),
+            "spent, not revoked - Some(0) stores; None would drop the bytes"
+        );
+
+        let mut cache = TileCache::in_memory(10, 30).unwrap();
+        cache
+            .put("esri", 1, 2, 3, b"tile", "image/jpeg", policy, None)
+            .unwrap();
+        assert!(
+            cache.get("esri", 1, 2, 3).is_none(),
+            "a spent grant is not freshness"
+        );
+        assert!(
+            cache.get_stale("esri", 1, 2, 3).is_some(),
+            "but the bytes are kept to revalidate against"
+        );
+    }
+
+    #[test]
+    fn no_store_still_beats_a_zero_age() {
+        let mut policy = parse_cache_control("no-store, max-age=86400");
+        policy.age_seconds = Some(0);
+        assert_eq!(policy.granted_seconds(), None);
+    }
+
+    #[test]
+    fn a_derived_crop_is_not_aged_twice() {
+        // `expires_at` was already stamped net of the parent's Age, so the
+        // remaining seconds are the whole truth. Re-subtracting would shorten
+        // every crop by the parent's CDN residency a second time.
+        let entry = TileEntry {
+            data: vec![1],
+            content_type: "image/jpeg".to_string(),
+            size_bytes: 1,
+            fetched_at: 0,
+            accessed_at: 0,
+            expires_at: Some(6_400),
+            etag: None,
+        };
+        let derived = entry.remaining_policy(0);
+        assert_eq!(derived.age_seconds, None);
+        assert_eq!(derived.granted_seconds(), Some(6_400));
     }
 
     #[test]
@@ -2257,6 +2544,7 @@ mod tests {
         let hand_built = CachePolicy {
             max_age_seconds: Some(i64::MAX),
             no_store: false,
+            age_seconds: None,
         };
         assert_eq!(hand_built.granted_seconds(), Some(MAX_GRANT_SECONDS));
     }
@@ -2279,6 +2567,7 @@ mod tests {
                 CachePolicy {
                     max_age_seconds: Some(60),
                     no_store: false,
+                    age_seconds: None,
                 },
                 Some("\"abc\""),
             )

@@ -280,7 +280,11 @@ kept no longer than it grants, and revalidated with the provider's `ETag` once
 that runs out. Nothing bulk-downloads a region and nothing calls an export API
 (the service disables that anyway - `exportTilesAllowed: false`). A stored copy is
 served only as a last resort when the provider cannot be reached at all
-(`stale-if-error`, RFC 5861); it is never presented as current. See
+(`stale-if-error`, RFC 5861) - a transport failure or a 5xx, never a 403 or 404,
+which are the provider answering rather than absent. It is never presented as
+current, and any `Age` on the response is subtracted from the grant first, since
+`max-age` runs from when the origin made the response and not from when we got
+it. See
 `src-tauri/src/cache/tiles.rs`.
 
 **The string is fetched, not hard-coded.** `src-tauri/src/tile_attribution.rs`

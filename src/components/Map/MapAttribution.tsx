@@ -112,7 +112,10 @@ export function MapAttribution({
   style,
 }: MapAttributionProps) {
   const { t } = useTranslation();
-  const { text } = useTileAttribution(provider);
+  // Gated on `visible`: this component is mounted unconditionally by every
+  // surface and hidden by the prop, so an ungated fetch contacted the imagery
+  // provider even for a project opened with satellite off.
+  const { text } = useTileAttribution(provider, visible);
   const wrapperRef = useRef<HTMLDivElement>(null);
   const [narrow, setNarrow] = useState(false);
   const [pinned, setPinned] = useState(false);

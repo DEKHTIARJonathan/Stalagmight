@@ -71,6 +71,27 @@ describe('MapAttribution', () => {
     expect(screen.queryByTestId('map-attribution')).not.toBeInTheDocument();
   });
 
+  it('does not contact the provider when the imagery is not drawn', () => {
+    // The fetch reaches Esri's servers. Opening a project with satellite off
+    // must not phone a third party for a credit that will never be shown - this
+    // app tells its users it does not touch the network unasked.
+    render(<MapAttribution visible={false} />);
+    expect(invokeIpc).not.toHaveBeenCalled();
+  });
+
+  it('contacts the provider once the imagery is switched on', async () => {
+    const { rerender } = render(<MapAttribution visible={false} />);
+    expect(invokeIpc).not.toHaveBeenCalled();
+
+    rerender(<MapAttribution visible />);
+    expect(await screen.findByTestId('map-attribution-text')).toHaveTextContent(LIVE);
+    expect(invokeIpc).toHaveBeenCalledWith(
+      'get_tile_attribution',
+      { provider: 'esri' },
+      expect.anything(),
+    );
+  });
+
   it('shows the compiled-in names before the live value arrives', () => {
     let resolve!: (v: unknown) => void;
     invokeIpc.mockReturnValue(new Promise((r) => { resolve = r; }));
