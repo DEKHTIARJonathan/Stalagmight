@@ -8,6 +8,21 @@ import {
   waitForNoDialogs,
   type SectionSeed,
 } from './helpers/app';
+import type { Locator } from '@playwright/test';
+
+/** Edit one cell of the shot-table grid: open the overlay editor, replace the
+ *  value, commit. Replaces the per-cell `<input>` the old table rendered. */
+async function editCell(
+  dialog: Locator,
+  row: number,
+  colKey: string,
+  value: string
+): Promise<void> {
+  await dialog.getByTestId(`shot-editor-cell-${row}-${colKey}`).dblclick();
+  const editor = dialog.getByTestId('shot-editor-cell-editor');
+  await editor.fill(value);
+  await editor.press('Enter');
+}
 
 const sectionSeeds: SectionSeed[] = [
   {
@@ -185,13 +200,13 @@ test.describe('Section and Shot Editing', () => {
     const dialog = page.getByTestId('edit-section-dialog');
     await expect(dialog).toBeVisible();
 
-    const lengthInput = dialog.getByTestId('shot-length-0');
-    await lengthInput.fill('12.3');
-    await expect(lengthInput).toHaveValue('12.3');
+    // The shot table is a SpreadsheetGrid: one editor overlays the active cell
+    // rather than an input per cell, so edits are open-type-commit.
+    await editCell(dialog, 0, 'length', '12.3');
+    await expect(dialog.getByTestId('shot-editor-cell-0-length')).toHaveText('12.3');
 
-    const commentInput = dialog.getByTestId('shot-comment-0');
-    await commentInput.fill('Updated comment');
-    await expect(commentInput).toHaveValue('Updated comment');
+    await editCell(dialog, 0, 'comment', 'Updated comment');
+    await expect(dialog.getByTestId('shot-editor-cell-0-comment')).toHaveText('Updated comment');
 
     await dialog.getByRole('button', { name: 'Cancel' }).click();
     await expect(dialog).not.toBeVisible({ timeout: 3000 });
@@ -203,31 +218,15 @@ test.describe('Section and Shot Editing', () => {
     const dialog = page.getByTestId('edit-section-dialog');
     await expect(dialog).toBeVisible();
 
-    const leftInput = dialog.getByTestId('shot-left-0');
-    const rightInput = dialog.getByTestId('shot-right-0');
-    const upInput = dialog.getByTestId('shot-up-0');
-    const downInput = dialog.getByTestId('shot-down-0');
+    await editCell(dialog, 0, 'left', '2.2');
+    await editCell(dialog, 0, 'right', '3.1');
+    await editCell(dialog, 0, 'up', '4.4');
+    await editCell(dialog, 0, 'down', '1.7');
 
-    await leftInput.click();
-    await leftInput.press('ControlOrMeta+a');
-    await leftInput.type('2.2');
-
-    await rightInput.click();
-    await rightInput.press('ControlOrMeta+a');
-    await rightInput.type('3.1');
-
-    await upInput.click();
-    await upInput.press('ControlOrMeta+a');
-    await upInput.type('4.4');
-
-    await downInput.click();
-    await downInput.press('ControlOrMeta+a');
-    await downInput.type('1.7');
-
-    await expect(leftInput).toHaveValue('2.2');
-    await expect(rightInput).toHaveValue('3.1');
-    await expect(upInput).toHaveValue('4.4');
-    await expect(downInput).toHaveValue('1.7');
+    await expect(dialog.getByTestId('shot-editor-cell-0-left')).toHaveText('2.2');
+    await expect(dialog.getByTestId('shot-editor-cell-0-right')).toHaveText('3.1');
+    await expect(dialog.getByTestId('shot-editor-cell-0-up')).toHaveText('4.4');
+    await expect(dialog.getByTestId('shot-editor-cell-0-down')).toHaveText('1.7');
 
     await dialog.getByRole('button', { name: 'Cancel' }).click();
     await expect(dialog).not.toBeVisible({ timeout: 3000 });

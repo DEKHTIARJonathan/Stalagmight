@@ -1,52 +1,56 @@
-import { useState, useRef, useCallback, type KeyboardEvent as ReactKeyboardEvent } from 'react';
+import { useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
-import { formatFixed, formatNumber } from '../../i18n/format';
-import type { Shot } from '../../types/project';
+import { formatFixed, getNumberFormatLocale } from '../../i18n/format';
 import { defaultConfig } from '../../types/config';
 import { useProjectStore } from '../../store/projectStore';
 import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
-import { hasAzimuthDiscrepancy, hasPitchDiscrepancy, validateEditableShot } from '../../utils/validation';
-import { applyAzimuthEdit, getAzimuthAverage } from '../../utils/shotTable';
-import { HelpTooltip } from './HelpTooltip';
-import { useLongPress } from '../../hooks';
+import { useGridLabels } from '../../hooks/useGridLabels';
+import {
+  hasAzimuthDiscrepancy,
+  hasPitchDiscrepancy,
+  validateEditableShot,
+} from '../../utils/validation';
+import { applyAzimuthEdit } from '../../utils/shotTable';
+import { SpreadsheetGrid } from './SpreadsheetGrid';
+import type { CellEdit } from './SpreadsheetGrid/types';
+import {
+  buildEditableShotColumns,
+  EDITABLE_AZIMUTH_AVG_KEY,
+} from './editableShotColumns';
+import type { EditableShot } from './editableShot';
+
+export type { EditableShot };
 
 /**
- * Editable shot type - extends Shot with editing state flags.
+ * The shared editable shot table, on the app's spreadsheet grid.
+ *
+ * Rendered by EditSectionDialog, ZeroDatumConfigDialog and (twice) the mNemo
+ * import wizard. It used to be a hand-rolled `<table>` of `<input>`s with its
+ * own draft/blur/Escape bookkeeping; that predated `SpreadsheetGrid` and carried
+ * the defects that came with it - locale-naive `parseFloat` (a comma decimal
+ * truncated), a controlled value re-formatted at display precision on every
+ * keystroke, no clipboard, no keyboard cell navigation, no virtualization.
+ *
+ * The props are UNCHANGED, so its hosts did not have to move: it still takes
+ * `shots`, hands `onShotChange` an index into the FULL array (soft-deleted rows
+ * included), and keeps the add/insert/delete callbacks. Only the internals and
+ * the per-cell test IDs differ.
  */
-export interface EditableShot extends Omit<Shot, 'marker_index' | 'temperature'> {
-  isNew?: boolean;
-  isDeleted?: boolean;
-  tempId?: number;
-}
-
-/**
- * Validation configuration for shot data.
- * Uses the same field names as the main config for consistency.
- */
-export interface ValidationConfig {
-  /** Threshold for azimuth in/out difference warning (degrees). Default: 10 */
+interface ValidationConfig {
   azimuth_diff_threshold: number;
-  /** Threshold for pitch in/out difference warning (degrees). Default: 5 */
   pitch_diff_threshold: number;
 }
 
-/**
- * Warning type for shot validation issues.
- */
-interface ShotWarning {
-  type: 'azimuth' | 'pitch';
-  message: string;
-}
-
-/**
- * Props for the ShotTableEditor component.
- */
 export interface ShotTableEditorProps {
   /** Array of editable shots to display */
   shots: EditableShot[];
   /** Callback when a shot field changes */
-  onShotChange: (index: number, field: keyof EditableShot, value: number | string | boolean | null) => void;
+  onShotChange: (
+    index: number,
+    field: keyof EditableShot,
+    value: number | string | boolean | null
+  ) => void;
   /** Callback to add a new shot at the end */
   onAddShot: () => void;
   /** Callback to delete a shot at the given index */
@@ -63,112 +67,51 @@ export interface ShotTableEditorProps {
   showAddButton?: boolean;
   /** Maximum height for the table container (CSS value) */
   maxHeight?: string;
-  /** Currently selected row index */
+  /** Currently selected row index (into the FULL shots array) */
   selectedRowIndex?: number | null;
-  /** Callback when a row is selected */
+  /** Callback when a row is selected (index into the FULL shots array) */
   onRowSelect?: (index: number) => void;
   /** Set of shot indices whose geometry fields should be disabled (frozen shots) */
   frozenShotIndices?: Set<number>;
 }
 
-/**
- * Default validation thresholds from config.
- */
 const DEFAULT_VALIDATION_CONFIG: ValidationConfig = {
   azimuth_diff_threshold: defaultConfig.validation.azimuth_diff_threshold,
   pitch_diff_threshold: defaultConfig.validation.pitch_diff_threshold,
 };
 
-/**
- * Check for azimuth warning using the shared validation function.
- * Returns true if the difference between azimuth_in and azimuth_out exceeds the threshold.
- */
-function hasAzimuthWarning(shot: EditableShot, threshold: number): boolean {
-  return hasAzimuthDiscrepancy(shot.azimuth_in, shot.azimuth_out, threshold);
+/** Fallback grid height when the host gives no `maxHeight`. */
+const DEFAULT_GRID_HEIGHT = 260;
+
+/** Parse a CSS length like "16rem" / "320px" into px for the grid, which needs
+ *  a number (virtualization cannot work from an indefinite height). */
+function cssHeightToPx(value: string | undefined): number {
+  if (!value) return DEFAULT_GRID_HEIGHT;
+  const n = parseFloat(value);
+  if (!Number.isFinite(n)) return DEFAULT_GRID_HEIGHT;
+  if (value.endsWith('rem')) return Math.round(n * 16);
+  return Math.round(n);
 }
 
-/**
- * Check for pitch warning using the shared validation function.
- * Returns true if the absolute difference exceeds the threshold.
- */
-function hasPitchWarning(shot: EditableShot, threshold: number): boolean {
-  return hasPitchDiscrepancy(shot.pitch_in, shot.pitch_out, threshold);
-}
-
-/**
- * Get warnings for a shot based on validation config.
- */
-function getShotWarnings(
-  shot: EditableShot,
-  config: ValidationConfig,
-  t: TFunction
-): ShotWarning[] {
-  const warnings: ShotWarning[] = [];
-
-  if (hasAzimuthWarning(shot, config.azimuth_diff_threshold)) {
-    warnings.push({
-      type: 'azimuth',
-      message: t('shotTable.warnings.azimuthDiff', {
+function warningsFor(shot: EditableShot, config: ValidationConfig, t: TFunction): string[] {
+  const out: string[] = [];
+  if (hasAzimuthDiscrepancy(shot.azimuth_in, shot.azimuth_out, config.azimuth_diff_threshold)) {
+    out.push(
+      t('shotTable.warnings.azimuthDiff', {
         threshold: `${formatFixed(config.azimuth_diff_threshold, undefined, 0)}°`,
-      }),
-    });
+      })
+    );
   }
-
-  if (hasPitchWarning(shot, config.pitch_diff_threshold)) {
-    warnings.push({
-      type: 'pitch',
-      message: t('shotTable.warnings.pitchDiff', {
+  if (hasPitchDiscrepancy(shot.pitch_in, shot.pitch_out, config.pitch_diff_threshold)) {
+    out.push(
+      t('shotTable.warnings.pitchDiff', {
         threshold: `${formatFixed(config.pitch_diff_threshold, undefined, 0)}°`,
-      }),
-    });
+      })
+    );
   }
-
-  return warnings;
+  return out;
 }
 
-/**
- * Get blocking errors for a shot (length/azimuth validity).
- */
-function getShotErrors(shot: EditableShot, shotIndex: number): string[] {
-  return validateEditableShot(
-    {
-      length: shot.length,
-      azimuth_in: shot.azimuth_in,
-      azimuth_out: shot.azimuth_out,
-      isDeleted: shot.isDeleted ?? false,
-    },
-    shotIndex,
-    0
-  ).map((e) => e.message);
-}
-
-/**
- * Format a number for display, showing '-' for null/undefined.
- */
-function formatValue(value: number | null | undefined): string {
-  if (value === null || value === undefined) return '';
-  return value.toString();
-}
-
-/**
- * Context menu state.
- */
-interface ContextMenuState {
-  visible: boolean;
-  x: number;
-  y: number;
-  rowIndex: number;
-}
-
-/**
- * ShotTableEditor - A reusable component for editing shot data in a table format.
- *
- * Features:
- * - Azimuth column shows average of in/out, editing sets both values
- * - Warnings column shows icons for azimuth/pitch discrepancies
- * - Right-click context menu for insert before/after/delete
- * - Keyboard navigation (Tab between cells, Enter to confirm, Escape to cancel)
- */
 export function ShotTableEditor({
   shots,
   onShotChange,
@@ -179,752 +122,225 @@ export function ShotTableEditor({
   validationConfig,
   readOnly = false,
   showAddButton = true,
-  maxHeight = '16rem',
+  maxHeight,
   selectedRowIndex,
   onRowSelect,
   frozenShotIndices,
 }: ShotTableEditorProps) {
   const { t } = useTranslation();
   const precision = useDecimalPrecision();
-  // When no explicit thresholds are passed, prefer the OPEN project's per-project
-  // validation thresholds (#57) so the inline preview matches the Warnings panel
-  // (which the backend computes from project.validation). Fall back to the user's
-  // GLOBAL config - the "defaults for new projects" - only when no project is open
-  // (e.g. a new-project import preview), then to the hardcoded built-ins. Callers
-  // editing an existing project (EditSectionDialog) pass thresholds explicitly.
-  const projectValidation = useProjectStore((s) => s.project?.validation);
-  const globalValidation = useProjectStore((s) => s.config?.validation);
-  const fallback = projectValidation ?? globalValidation;
-  const effectiveValidation: ValidationConfig = validationConfig ?? {
+  const gridLabels = useGridLabels('dataTable.shotNoun');
+  const configValidation = useProjectStore((s) => s.config?.validation);
+
+  const effectiveValidation: ValidationConfig = {
     azimuth_diff_threshold:
-      fallback?.azimuth_diff_threshold ?? DEFAULT_VALIDATION_CONFIG.azimuth_diff_threshold,
+      validationConfig?.azimuth_diff_threshold ??
+      configValidation?.azimuth_diff_threshold ??
+      DEFAULT_VALIDATION_CONFIG.azimuth_diff_threshold,
     pitch_diff_threshold:
-      fallback?.pitch_diff_threshold ?? DEFAULT_VALIDATION_CONFIG.pitch_diff_threshold,
+      validationConfig?.pitch_diff_threshold ??
+      configValidation?.pitch_diff_threshold ??
+      DEFAULT_VALIDATION_CONFIG.pitch_diff_threshold,
   };
-  const [contextMenu, setContextMenu] = useState<ContextMenuState>({
-    visible: false,
-    x: 0,
-    y: 0,
-    rowIndex: -1,
-  });
 
-  const [drafts, setDrafts] = useState<Record<string, string>>({});
-  const skipBlurCommitRef = useRef<Set<string>>(new Set());
-
-  const tableRef = useRef<HTMLTableElement>(null);
-
-  // Filter out deleted shots for display
-  const visibleShots = shots.filter((s) => !s.isDeleted);
-
-  const getRowKey = useCallback((shot: EditableShot): string => {
-    if (shot.tempId !== undefined) return `t:${shot.tempId}`;
-    return `i:${shot.id}`;
-  }, []);
-
-  const getDraftKey = useCallback((shot: EditableShot, field: string): string => {
-    return `${getRowKey(shot)}:${field}`;
-  }, [getRowKey]);
-
-  const startDraft = useCallback((draftKey: string, value: string) => {
-    setDrafts((prev) => (draftKey in prev ? prev : { ...prev, [draftKey]: value }));
-  }, []);
-
-  const updateDraft = useCallback((draftKey: string, value: string) => {
-    setDrafts((prev) => ({ ...prev, [draftKey]: value }));
-  }, []);
-
-  const clearDraft = useCallback((draftKey: string) => {
-    setDrafts((prev) => {
-      if (!(draftKey in prev)) return prev;
-      const next = { ...prev };
-      delete next[draftKey];
-      return next;
+  // Soft-deleted rows stay in `shots` so the host's indices never shift, but are
+  // not shown. Everything below works in VISIBLE indices and translates on the
+  // way out, because the callbacks are documented in full-array indices.
+  const { visibleShots, actualIndexes } = useMemo(() => {
+    const rows: EditableShot[] = [];
+    const map: number[] = [];
+    shots.forEach((shot, i) => {
+      if (shot.isDeleted) return;
+      rows.push(shot);
+      map.push(i);
     });
-  }, []);
+    return { visibleShots: rows, actualIndexes: map };
+  }, [shots]);
 
-  const shouldSkipBlurCommit = useCallback((draftKey: string) => {
-    if (skipBlurCommitRef.current.has(draftKey)) {
-      skipBlurCommitRef.current.delete(draftKey);
-      return true;
-    }
-    return false;
-  }, []);
-
-  const handleDraftKeyDown = useCallback(
-    (e: ReactKeyboardEvent<HTMLInputElement>, onCommit: () => void, draftKey: string) => {
-      if (e.key === 'Enter') {
-        e.preventDefault();
-        skipBlurCommitRef.current.add(draftKey);
-        onCommit();
-        clearDraft(draftKey);
-        (e.currentTarget as HTMLInputElement).blur();
-      } else if (e.key === 'Escape') {
-        e.preventDefault();
-        skipBlurCommitRef.current.add(draftKey);
-        clearDraft(draftKey);
-        (e.currentTarget as HTMLInputElement).blur();
-      }
-    },
-    [clearDraft]
+  const actualIndex = useCallback(
+    (visibleIndex: number): number => actualIndexes[visibleIndex] ?? -1,
+    [actualIndexes]
   );
 
-  const commitNumberValue = useCallback(
-    (
-      index: number,
-      field: keyof EditableShot,
-      rawValue: string,
-      emptyValue: number | null
-    ) => {
-      const trimmed = rawValue.trim();
-      if (trimmed === '') {
-        onShotChange(index, field, emptyValue);
-        return;
-      }
-      const parsed = parseFloat(trimmed);
-      if (!Number.isFinite(parsed)) {
-        return;
-      }
-      onShotChange(index, field, parsed);
+  const errorsAt = useCallback(
+    (visibleIndex: number): string[] => {
+      const shot = visibleShots[visibleIndex];
+      if (!shot) return [];
+      return validateEditableShot(
+        {
+          length: shot.length,
+          azimuth_in: shot.azimuth_in,
+          azimuth_out: shot.azimuth_out,
+          isDeleted: shot.isDeleted ?? false,
+        },
+        actualIndex(visibleIndex),
+        0
+      ).map((e) => e.message);
     },
-    [onShotChange]
+    [visibleShots, actualIndex]
   );
 
-  const commitAzimuthValue = useCallback(
-    (index: number, rawValue: string) => {
-      const trimmed = rawValue.trim();
-      const parsed = trimmed === '' ? 0 : parseFloat(trimmed);
-      if (!Number.isFinite(parsed)) {
-        return;
-      }
-      const { azimuth_in, azimuth_out } = applyAzimuthEdit(parsed, { normalize: false });
-      onShotChange(index, 'azimuth_in', azimuth_in);
-      onShotChange(index, 'azimuth_out', azimuth_out);
+  const warningsAt = useCallback(
+    (visibleIndex: number): string[] => {
+      const shot = visibleShots[visibleIndex];
+      return shot ? warningsFor(shot, effectiveValidation, t) : [];
     },
-    [onShotChange]
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- thresholds are primitives
+    [visibleShots, effectiveValidation.azimuth_diff_threshold, effectiveValidation.pitch_diff_threshold, t]
   );
 
-  /**
-   * Handle context menu right-click.
-   */
-  const handleContextMenu = useCallback(
-    (e: React.MouseEvent, rowIndex: number) => {
+  const isFrozenAt = useCallback(
+    (visibleIndex: number): boolean => frozenShotIndices?.has(actualIndex(visibleIndex)) ?? false,
+    [frozenShotIndices, actualIndex]
+  );
+
+  const onDeleteAt = useCallback(
+    (visibleIndex: number) => {
+      const index = actualIndex(visibleIndex);
+      if (index >= 0) onDeleteShot(index);
+    },
+    [actualIndex, onDeleteShot]
+  );
+
+  const columns = useMemo(
+    () =>
+      buildEditableShotColumns({
+        t,
+        precision,
+        readOnly,
+        errorsAt,
+        warningsAt,
+        isFrozenAt,
+        onDeleteAt,
+      }),
+    [t, precision, readOnly, errorsAt, warningsAt, isFrozenAt, onDeleteAt]
+  );
+
+  /** One coerced cell value -> the host's field callback(s). */
+  const applyEdit = useCallback(
+    (visibleRow: number, colKey: string, value: unknown) => {
       if (readOnly) return;
-      e.preventDefault();
-      setContextMenu({
-        visible: true,
-        x: e.clientX,
-        y: e.clientY,
-        rowIndex,
-      });
+      const index = actualIndex(visibleRow);
+      if (index < 0) return;
+      if (colKey === EDITABLE_AZIMUTH_AVG_KEY) {
+        // One displayed azimuth fans back out to both legs, unnormalized -
+        // exactly what the hand-rolled editor committed.
+        const typed = typeof value === 'number' ? value : Number(value);
+        if (!Number.isFinite(typed)) return;
+        const { azimuth_in, azimuth_out } = applyAzimuthEdit(typed, { normalize: false });
+        onShotChange(index, 'azimuth_in', azimuth_in);
+        onShotChange(index, 'azimuth_out', azimuth_out);
+        return;
+      }
+      onShotChange(index, colKey as keyof EditableShot, value as number | string | null);
     },
-    [readOnly]
+    [readOnly, actualIndex, onShotChange]
   );
 
-  /**
-   * Long-press handler for touch context menu on tbody.
-   */
-  const handleLongPress = useCallback(
-    (pos: { x: number; y: number }, target: HTMLElement) => {
+  const onEdit = useCallback(
+    (rowIndex: number, colKey: string, value: unknown) => applyEdit(rowIndex, colKey, value),
+    [applyEdit]
+  );
+
+  const onBatchEdit = useCallback(
+    (edits: CellEdit[]) => {
+      for (const e of edits) applyEdit(e.row, e.colKey, e.value);
+    },
+    [applyEdit]
+  );
+
+  // Insert: the grid reports an insertion BOUNDARY, which is "after the last
+  // row" at the end and "before this row" everywhere else.
+  const onInsertRows = useCallback(
+    (beforeIndex: number) => {
       if (readOnly) return;
-      const row = target.closest('tr');
-      const rowIndexStr = row?.dataset.rowIndex;
-      if (rowIndexStr === undefined) return;
-      const rowIndex = parseInt(rowIndexStr, 10);
-      if (Number.isNaN(rowIndex)) return;
-      setContextMenu({
-        visible: true,
-        x: pos.x,
-        y: pos.y,
-        rowIndex,
-      });
-    },
-    [readOnly],
-  );
-
-  const longPressHandlers = useLongPress(handleLongPress, { enabled: !readOnly });
-
-  /**
-   * Close context menu.
-   */
-  const closeContextMenu = useCallback(() => {
-    setContextMenu((prev) => ({ ...prev, visible: false }));
-  }, []);
-
-  /**
-   * Handle context menu action.
-   */
-  const handleContextMenuAction = useCallback(
-    (action: 'insert-before' | 'insert-after' | 'delete') => {
-      const actualIndex = shots.findIndex(
-        (s) => s === visibleShots[contextMenu.rowIndex] ||
-               (s.id === visibleShots[contextMenu.rowIndex]?.id &&
-                s.tempId === visibleShots[contextMenu.rowIndex]?.tempId)
-      );
-
-      switch (action) {
-        case 'insert-before':
-          if (onInsertBefore) {
-            onInsertBefore(actualIndex);
-          }
-          break;
-        case 'insert-after':
-          if (onInsertAfter) {
-            onInsertAfter(actualIndex);
-          }
-          break;
-        case 'delete':
-          onDeleteShot(actualIndex);
-          break;
+      if (beforeIndex >= visibleShots.length) {
+        const last = visibleShots.length - 1;
+        if (last >= 0 && onInsertAfter) onInsertAfter(actualIndex(last));
+        else onAddShot();
+        return;
       }
-      closeContextMenu();
+      onInsertBefore?.(actualIndex(beforeIndex));
     },
-    [shots, visibleShots, contextMenu.rowIndex, onInsertBefore, onInsertAfter, onDeleteShot, closeContextMenu]
+    [readOnly, visibleShots.length, onInsertAfter, onInsertBefore, onAddShot, actualIndex]
   );
 
-  /**
-   * Handle row click for selection.
-   */
-  const handleRowClick = useCallback(
-    (index: number) => {
-      if (onRowSelect) {
-        const actualIndex = shots.findIndex(
-          (s) => s === visibleShots[index] ||
-                 (s.id === visibleShots[index]?.id &&
-                  s.tempId === visibleShots[index]?.tempId)
-        );
-        onRowSelect(actualIndex);
+  // Delete high-to-low so each removal cannot shift the indices still to come.
+  const onDeleteRows = useCallback(
+    (fromRow: number, toRow: number) => {
+      if (readOnly) return;
+      const indices: number[] = [];
+      for (let r = fromRow; r <= toRow; r++) {
+        const i = actualIndex(r);
+        if (i >= 0) indices.push(i);
       }
+      for (const i of indices.sort((a, b) => b - a)) onDeleteShot(i);
     },
-    [shots, visibleShots, onRowSelect]
+    [readOnly, actualIndex, onDeleteShot]
   );
 
-  /**
-   * Handle keyboard navigation.
-   */
-  const handleKeyDown = useCallback(
-    (e: React.KeyboardEvent, rowIndex: number) => {
-      if (e.key === 'Enter') {
-        // Move to next row
-        const nextInput = tableRef.current?.querySelector(
-          `tr:nth-child(${rowIndex + 2}) input`
-        ) as HTMLInputElement | null;
-        nextInput?.focus();
-      }
+  const rowClassName = useCallback(
+    (shot: EditableShot, rowIndex: number): string | undefined => {
+      const classes: string[] = [];
+      if (errorsAt(rowIndex).length > 0) classes.push('bg-error-5');
+      else if (shot.isNew) classes.push('bg-success-5');
+      // Virtual shots (jumps/references) read as secondary, same as before.
+      if (shot.kind && shot.kind !== 'Normal') classes.push('opacity-50');
+      return classes.length > 0 ? classes.join(' ') : undefined;
     },
-    []
+    [errorsAt]
   );
 
-  /**
-   * Get the actual index in the shots array for a visible row.
-   */
-  const getActualIndex = (visibleIndex: number): number => {
-    const shot = visibleShots[visibleIndex];
-    return shots.findIndex(
-      (s) => s === shot || (s.id === shot?.id && s.tempId === shot?.tempId)
-    );
-  };
+  // The host tracks selection in FULL-array indices; the grid works in visible
+  // ones, so translate in both directions.
+  const selectedVisibleRow = useMemo(() => {
+    if (selectedRowIndex === null || selectedRowIndex === undefined) return null;
+    const found = actualIndexes.indexOf(selectedRowIndex);
+    return found === -1 ? null : found;
+  }, [selectedRowIndex, actualIndexes]);
+
+  const onActiveCellChange = useCallback(
+    (rowIndex: number) => {
+      const index = actualIndex(rowIndex);
+      if (index >= 0) onRowSelect?.(index);
+    },
+    [actualIndex, onRowSelect]
+  );
 
   return (
-    <div className="relative">
-      {/* Header with count and add button */}
-      <div className="flex items-center justify-between mb-2">
-        <span className="text-sm text-text-secondary">
-          {t('shotTable.header', {
-            count: visibleShots.length,
-            countFormatted: formatNumber(visibleShots.length),
-          })}
-        </span>
-        {showAddButton && !readOnly && (
+    <div data-testid="shot-table-container" className="flex flex-col gap-2">
+      {showAddButton && !readOnly && (
+        <div className="flex justify-end">
           <button
             type="button"
             onClick={onAddShot}
-            className="text-sm px-2 py-1 bg-accent text-accent-on rounded hover:bg-accent-80 transition-colors"
+            className="text-accent text-sm"
             data-testid="add-shot-button"
           >
             {t('shotTable.add')}
           </button>
-        )}
-      </div>
-
-      {/* Table container with scrolling */}
-      <div
-        className="overflow-auto pb-1"
-        style={{ maxHeight }}
-        data-testid="shot-table-container"
-      >
-        <table ref={tableRef} className="w-full" data-testid="shot-table">
-          <thead>
-            <tr>
-              <th className="text-center" style={{ width: '40px' }}>{t('shotTable.columns.idShort')}</th>
-              <th className="text-right" style={{ width: '100px' }}>{t('shotTable.columns.length')}</th>
-              <th className="text-right" style={{ width: '70px' }}>{t('shotTable.columns.azimuth')}</th>
-              <th className="text-right" style={{ width: '80px' }}>{t('shotTable.columns.depthIn')}</th>
-              <th className="text-right" style={{ width: '95px' }}>{t('shotTable.columns.depthOut')}</th>
-              <th className="text-right" style={{ width: '50px' }}>{t('shotTable.columns.leftShort')}</th>
-              <th className="text-right" style={{ width: '50px' }}>{t('shotTable.columns.rightShort')}</th>
-              <th className="text-right" style={{ width: '50px' }}>{t('shotTable.columns.upShort')}</th>
-              <th className="text-right" style={{ width: '50px' }}>{t('shotTable.columns.downShort')}</th>
-              <th className="text-left" style={{ width: '100px' }}>{t('shotTable.columns.comment')}</th>
-              <th className="text-center" style={{ width: '30px' }} title={t('shotTable.columns.warnings')}></th>
-              <th style={{ width: '30px' }}></th>
-            </tr>
-          </thead>
-          <tbody {...longPressHandlers}>
-            {visibleShots.map((shot, visibleIdx) => {
-              const actualIndex = getActualIndex(visibleIdx);
-              const warnings = getShotWarnings(shot, effectiveValidation, t);
-              const errors = getShotErrors(shot, actualIndex);
-              const hasErrors = errors.length > 0;
-              const warningMessages = warnings.map((w) => w.message);
-              const tooltipText = [...errors, ...warningMessages].join('\n');
-              const isSelected = selectedRowIndex === actualIndex;
-              const avgAzimuth = getAzimuthAverage(shot.azimuth_in, shot.azimuth_out);
-              const geoDisabled = readOnly || (frozenShotIndices?.has(actualIndex) ?? false);
-              const rowClassName = `hover:bg-background-50 ${
-                isSelected ? 'bg-accent-10' : hasErrors ? 'bg-error-5' : ''
-              } ${shot.isNew && !hasErrors ? 'bg-success-5' : ''} ${shot.kind && shot.kind !== 'Normal' ? 'opacity-50' : ''}`;
-
-              return (
-                <tr
-                  key={shot.tempId ?? shot.id}
-                  className={rowClassName}
-                  onClick={() => handleRowClick(visibleIdx)}
-                  onContextMenu={(e) => handleContextMenu(e, visibleIdx)}
-                  onKeyDown={(e) => handleKeyDown(e, visibleIdx)}
-                  data-row-index={visibleIdx}
-                  data-testid={`shot-row-${visibleIdx}`}
-                >
-                  {/* Row number */}
-                  <td className="p-0 text-center">
-                    <span className="px-2 py-1 inline-block text-text-secondary">{visibleIdx + 1}</span>
-                  </td>
-
-                  {/* Length */}
-                  <td className="p-0 text-right">
-                    {(() => {
-                      const draftKey = getDraftKey(shot, 'length');
-                      const draftValue = drafts[draftKey];
-                      const rawValue = Number.isFinite(shot.length) ? String(shot.length) : '';
-                      const displayValue = draftValue ?? (Number.isFinite(shot.length) ? shot.length.toFixed(precision.length) : '');
-                      const isInvalid = draftValue !== undefined && draftValue.trim() !== '' && !Number.isFinite(parseFloat(draftValue));
-                      return (
-                    <input
-                      type="number" inputMode="decimal"
-                      value={displayValue}
-                      onFocus={() => startDraft(draftKey, rawValue)}
-                      onChange={(e) =>
-                        updateDraft(draftKey, e.target.value)
-                      }
-                      onBlur={(e) => {
-                        if (shouldSkipBlurCommit(draftKey)) return;
-                        commitNumberValue(actualIndex, 'length', e.target.value, 0);
-                        clearDraft(draftKey);
-                      }}
-                      onKeyDown={(e) => handleDraftKeyDown(
-                        e,
-                        () => commitNumberValue(actualIndex, 'length', e.currentTarget.value, 0),
-                        draftKey
-                      )}
-                      className={`w-full px-2 py-1 bg-transparent border-none focus:bg-panel text-right tabular-nums ${isInvalid ? 'ring-2 ring-error' : ''}`}
-                      step="0.1"
-                      disabled={geoDisabled}
-                      data-testid={`shot-length-${visibleIdx}`}
-                    />
-                      );
-                    })()}
-                  </td>
-
-                  {/* Azimuth (average of in/out, editing sets both) */}
-                  <td className="p-0 text-right">
-                    {(() => {
-                      const draftKey = getDraftKey(shot, 'azimuth');
-                      const draftValue = drafts[draftKey];
-                      const rawValue = String(avgAzimuth);
-                      const displayValue = draftValue ?? avgAzimuth.toFixed(precision.azimuth);
-                      const parsed = draftValue !== undefined && draftValue.trim() !== ''
-                        ? parseFloat(draftValue)
-                        : null;
-                      const isInvalid =
-                        draftValue !== undefined &&
-                        draftValue.trim() !== '' &&
-                        (!Number.isFinite(parsed) || (parsed !== null && (parsed < 0 || parsed >= 360)));
-                      return (
-                    <input
-                      type="number" inputMode="decimal"
-                      value={displayValue}
-                      onFocus={() => startDraft(draftKey, rawValue)}
-                      onChange={(e) => updateDraft(draftKey, e.target.value)}
-                      onBlur={(e) => {
-                        if (shouldSkipBlurCommit(draftKey)) return;
-                        commitAzimuthValue(actualIndex, e.target.value);
-                        clearDraft(draftKey);
-                      }}
-                      onKeyDown={(e) => handleDraftKeyDown(
-                        e,
-                        () => commitAzimuthValue(actualIndex, e.currentTarget.value),
-                        draftKey
-                      )}
-                      className={`w-full px-2 py-1 bg-transparent border-none focus:bg-panel text-right tabular-nums ${isInvalid ? 'ring-2 ring-error' : ''}`}
-                      step="0.1"
-                      min="0"
-                      max="360"
-                      disabled={geoDisabled}
-                      data-testid={`shot-azimuth-${visibleIdx}`}
-                      title={t('shotTable.azimuthTitle', {
-                        inValue: `${formatFixed(shot.azimuth_in, undefined, precision.azimuth)}°`,
-                        outValue: `${formatFixed(shot.azimuth_out, undefined, precision.azimuth)}°`,
-                      })}
-                    />
-                      );
-                    })()}
-                  </td>
-
-                  {/* Depth In */}
-                  <td className="p-0 text-right">
-                    {(() => {
-                      const draftKey = getDraftKey(shot, 'depth_in');
-                      const draftValue = drafts[draftKey];
-                      const rawValue = Number.isFinite(shot.depth_in) ? String(shot.depth_in) : '';
-                      const displayValue = draftValue ?? (Number.isFinite(shot.depth_in) ? shot.depth_in.toFixed(precision.depth) : '');
-                      const isInvalid = draftValue !== undefined && draftValue.trim() !== '' && !Number.isFinite(parseFloat(draftValue));
-                      return (
-                    <input
-                      type="number" inputMode="decimal"
-                      value={displayValue}
-                      onFocus={() => startDraft(draftKey, rawValue)}
-                      onChange={(e) =>
-                        updateDraft(draftKey, e.target.value)
-                      }
-                      onBlur={(e) => {
-                        if (shouldSkipBlurCommit(draftKey)) return;
-                        commitNumberValue(actualIndex, 'depth_in', e.target.value, 0);
-                        clearDraft(draftKey);
-                      }}
-                      onKeyDown={(e) => handleDraftKeyDown(
-                        e,
-                        () => commitNumberValue(actualIndex, 'depth_in', e.currentTarget.value, 0),
-                        draftKey
-                      )}
-                      className={`w-full px-2 py-1 bg-transparent border-none focus:bg-panel text-right tabular-nums ${isInvalid ? 'ring-2 ring-error' : ''}`}
-                      step="0.1"
-                      disabled={geoDisabled}
-                      data-testid={`shot-depth-in-${visibleIdx}`}
-                    />
-                      );
-                    })()}
-                  </td>
-
-                  {/* Depth Out */}
-                  <td className="p-0 text-right">
-                    {(() => {
-                      const draftKey = getDraftKey(shot, 'depth_out');
-                      const draftValue = drafts[draftKey];
-                      const rawValue = Number.isFinite(shot.depth_out) ? String(shot.depth_out) : '';
-                      const displayValue = draftValue ?? (Number.isFinite(shot.depth_out) ? shot.depth_out.toFixed(precision.depth) : '');
-                      const isInvalid = draftValue !== undefined && draftValue.trim() !== '' && !Number.isFinite(parseFloat(draftValue));
-                      return (
-                    <input
-                      type="number" inputMode="decimal"
-                      value={displayValue}
-                      onFocus={() => startDraft(draftKey, rawValue)}
-                      onChange={(e) =>
-                        updateDraft(draftKey, e.target.value)
-                      }
-                      onBlur={(e) => {
-                        if (shouldSkipBlurCommit(draftKey)) return;
-                        commitNumberValue(actualIndex, 'depth_out', e.target.value, 0);
-                        clearDraft(draftKey);
-                      }}
-                      onKeyDown={(e) => handleDraftKeyDown(
-                        e,
-                        () => commitNumberValue(actualIndex, 'depth_out', e.currentTarget.value, 0),
-                        draftKey
-                      )}
-                      className={`w-full px-2 py-1 bg-transparent border-none focus:bg-panel text-right tabular-nums ${isInvalid ? 'ring-2 ring-error' : ''}`}
-                      step="0.1"
-                      disabled={geoDisabled}
-                      data-testid={`shot-depth-out-${visibleIdx}`}
-                    />
-                      );
-                    })()}
-                  </td>
-
-                  {/* LRUD: Left */}
-                  <td className="p-0 text-right">
-                    {(() => {
-                      const draftKey = getDraftKey(shot, 'left');
-                      const draftValue = drafts[draftKey];
-                      const rawValue = formatValue(shot.left);
-                      const displayValue = draftValue ?? (shot.left !== null && shot.left !== undefined ? shot.left.toFixed(precision.length) : '');
-                      const isInvalid = draftValue !== undefined && draftValue.trim() !== '' && !Number.isFinite(parseFloat(draftValue));
-                      return (
-                    <input
-                      type="number" inputMode="decimal"
-                      value={displayValue}
-                      onFocus={() => startDraft(draftKey, rawValue)}
-                      onChange={(e) =>
-                        updateDraft(draftKey, e.target.value)
-                      }
-                      onBlur={(e) => {
-                        if (shouldSkipBlurCommit(draftKey)) return;
-                        commitNumberValue(actualIndex, 'left', e.target.value, null);
-                        clearDraft(draftKey);
-                      }}
-                      onKeyDown={(e) => handleDraftKeyDown(
-                        e,
-                        () => commitNumberValue(actualIndex, 'left', e.currentTarget.value, null),
-                        draftKey
-                      )}
-                      className={`w-full px-2 py-1 bg-transparent border-none focus:bg-panel text-right tabular-nums ${isInvalid ? 'ring-2 ring-error' : ''}`}
-                      step="0.1"
-                      placeholder="-"
-                      disabled={readOnly}
-                      data-testid={`shot-left-${visibleIdx}`}
-                    />
-                      );
-                    })()}
-                  </td>
-
-                  {/* LRUD: Right */}
-                  <td className="p-0 text-right">
-                    {(() => {
-                      const draftKey = getDraftKey(shot, 'right');
-                      const draftValue = drafts[draftKey];
-                      const rawValue = formatValue(shot.right);
-                      const displayValue = draftValue ?? (shot.right !== null && shot.right !== undefined ? shot.right.toFixed(precision.length) : '');
-                      const isInvalid = draftValue !== undefined && draftValue.trim() !== '' && !Number.isFinite(parseFloat(draftValue));
-                      return (
-                    <input
-                      type="number" inputMode="decimal"
-                      value={displayValue}
-                      onFocus={() => startDraft(draftKey, rawValue)}
-                      onChange={(e) =>
-                        updateDraft(draftKey, e.target.value)
-                      }
-                      onBlur={(e) => {
-                        if (shouldSkipBlurCommit(draftKey)) return;
-                        commitNumberValue(actualIndex, 'right', e.target.value, null);
-                        clearDraft(draftKey);
-                      }}
-                      onKeyDown={(e) => handleDraftKeyDown(
-                        e,
-                        () => commitNumberValue(actualIndex, 'right', e.currentTarget.value, null),
-                        draftKey
-                      )}
-                      className={`w-full px-2 py-1 bg-transparent border-none focus:bg-panel text-right tabular-nums ${isInvalid ? 'ring-2 ring-error' : ''}`}
-                      step="0.1"
-                      placeholder="-"
-                      disabled={readOnly}
-                      data-testid={`shot-right-${visibleIdx}`}
-                    />
-                      );
-                    })()}
-                  </td>
-
-                  {/* LRUD: Up */}
-                  <td className="p-0 text-right">
-                    {(() => {
-                      const draftKey = getDraftKey(shot, 'up');
-                      const draftValue = drafts[draftKey];
-                      const rawValue = formatValue(shot.up);
-                      const displayValue = draftValue ?? (shot.up !== null && shot.up !== undefined ? shot.up.toFixed(precision.length) : '');
-                      const isInvalid = draftValue !== undefined && draftValue.trim() !== '' && !Number.isFinite(parseFloat(draftValue));
-                      return (
-                    <input
-                      type="number" inputMode="decimal"
-                      value={displayValue}
-                      onFocus={() => startDraft(draftKey, rawValue)}
-                      onChange={(e) =>
-                        updateDraft(draftKey, e.target.value)
-                      }
-                      onBlur={(e) => {
-                        if (shouldSkipBlurCommit(draftKey)) return;
-                        commitNumberValue(actualIndex, 'up', e.target.value, null);
-                        clearDraft(draftKey);
-                      }}
-                      onKeyDown={(e) => handleDraftKeyDown(
-                        e,
-                        () => commitNumberValue(actualIndex, 'up', e.currentTarget.value, null),
-                        draftKey
-                      )}
-                      className={`w-full px-2 py-1 bg-transparent border-none focus:bg-panel text-right tabular-nums ${isInvalid ? 'ring-2 ring-error' : ''}`}
-                      step="0.1"
-                      placeholder="-"
-                      disabled={readOnly}
-                      data-testid={`shot-up-${visibleIdx}`}
-                    />
-                      );
-                    })()}
-                  </td>
-
-                  {/* LRUD: Down */}
-                  <td className="p-0 text-right">
-                    {(() => {
-                      const draftKey = getDraftKey(shot, 'down');
-                      const draftValue = drafts[draftKey];
-                      const rawValue = formatValue(shot.down);
-                      const displayValue = draftValue ?? (shot.down !== null && shot.down !== undefined ? shot.down.toFixed(precision.length) : '');
-                      const isInvalid = draftValue !== undefined && draftValue.trim() !== '' && !Number.isFinite(parseFloat(draftValue));
-                      return (
-                    <input
-                      type="number" inputMode="decimal"
-                      value={displayValue}
-                      onFocus={() => startDraft(draftKey, rawValue)}
-                      onChange={(e) =>
-                        updateDraft(draftKey, e.target.value)
-                      }
-                      onBlur={(e) => {
-                        if (shouldSkipBlurCommit(draftKey)) return;
-                        commitNumberValue(actualIndex, 'down', e.target.value, null);
-                        clearDraft(draftKey);
-                      }}
-                      onKeyDown={(e) => handleDraftKeyDown(
-                        e,
-                        () => commitNumberValue(actualIndex, 'down', e.currentTarget.value, null),
-                        draftKey
-                      )}
-                      className={`w-full px-2 py-1 bg-transparent border-none focus:bg-panel text-right tabular-nums ${isInvalid ? 'ring-2 ring-error' : ''}`}
-                      step="0.1"
-                      placeholder="-"
-                      disabled={readOnly}
-                      data-testid={`shot-down-${visibleIdx}`}
-                    />
-                      );
-                    })()}
-                  </td>
-
-                  {/* Comment */}
-                  <td className="p-0">
-                    <input
-                      type="text"
-                      value={shot.comment ?? ''}
-                      onChange={(e) =>
-                        onShotChange(actualIndex, 'comment', e.target.value || null)
-                      }
-                      className="w-full px-2 py-1 bg-transparent border-none focus:bg-panel"
-                      placeholder="-"
-                      disabled={readOnly}
-                      data-testid={`shot-comment-${visibleIdx}`}
-                    />
-                  </td>
-
-                  {/* Warnings */}
-                  <td className="p-0 text-center">
-                    {(hasErrors || warnings.length > 0) && (
-                      <HelpTooltip
-                        text={tooltipText}
-                        icon="!"
-                        ariaLabel={hasErrors ? t('shotTable.warnings.error') : t('shotTable.warnings.warning')}
-                        className="justify-center"
-                        iconClassName={`w-5 h-5 text-xs border-transparent ${
-                          hasErrors ? 'bg-error-20 text-error' : 'bg-warning-20 text-warning'
-                        }`}
-                        iconTestId={`shot-warning-${visibleIdx}`}
-                        tooltipTestId={`shot-warning-tooltip-${visibleIdx}`}
-                      />
-                    )}
-                  </td>
-
-                  {/* Actions (delete) */}
-                  <td className="p-0 text-center">
-                    {!readOnly && !frozenShotIndices?.has(actualIndex) && (
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          onDeleteShot(actualIndex);
-                        }}
-                        className="text-error hover:text-error-80 text-xs px-1"
-                        title={t('shotTable.actions.delete')}
-                        data-testid={`shot-delete-${visibleIdx}`}
-                      >
-                        x
-                      </button>
-                    )}
-                  </td>
-                </tr>
-              );
-            })}
-            {visibleShots.length === 0 && (
-              <tr>
-                <td colSpan={12} className="p-0 text-center text-text-secondary">
-                  <span className="px-2 py-4 inline-block">
-                    {readOnly ? t('shotTable.empty') : t('shotTable.emptyWithAction')}
-                  </span>
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
-
-      {/* Context Menu */}
-      {contextMenu.visible && (
-        <div
-          className="fixed inset-0 z-50"
-          onClick={closeContextMenu}
-          data-testid="shot-context-menu-backdrop"
-          onContextMenu={(e) => {
-            e.preventDefault();
-            closeContextMenu();
-          }}
-        >
-          <div
-            className="absolute bg-panel border border-border rounded-lg shadow-xl py-1 min-w-[160px]"
-            style={{ left: contextMenu.x, top: contextMenu.y }}
-            onClick={(e) => e.stopPropagation()}
-            data-testid="shot-context-menu"
-          >
-            {onInsertBefore && (
-              <button
-                type="button"
-                onClick={() => handleContextMenuAction('insert-before')}
-                className="w-full px-3 py-2 text-left text-sm hover:bg-accent-10"
-                data-testid="context-menu-insert-before"
-              >
-                {t('shotTable.contextMenu.insertBefore')}
-              </button>
-            )}
-            {onInsertAfter && (
-              <button
-                type="button"
-                onClick={() => handleContextMenuAction('insert-after')}
-                className="w-full px-3 py-2 text-left text-sm hover:bg-accent-10"
-                data-testid="context-menu-insert-after"
-              >
-                {t('shotTable.contextMenu.insertAfter')}
-              </button>
-            )}
-            {(onInsertBefore || onInsertAfter) && (
-              <div className="border-t border-border my-1" />
-            )}
-            {(() => {
-              const ctxShot = visibleShots[contextMenu.rowIndex];
-              const ctxActualIndex = ctxShot ? shots.findIndex(
-                (s) => s === ctxShot || (s.id === ctxShot.id && s.tempId === ctxShot.tempId)
-              ) : -1;
-              const isFrozen = frozenShotIndices?.has(ctxActualIndex) ?? false;
-              return (
-                <button
-                  type="button"
-                  onClick={() => !isFrozen && handleContextMenuAction('delete')}
-                  className={`w-full px-3 py-2 text-left text-sm ${
-                    isFrozen
-                      ? 'text-text-secondary opacity-50 cursor-not-allowed'
-                      : 'text-error hover:bg-error-10'
-                  }`}
-                  disabled={isFrozen}
-                  data-testid="context-menu-delete"
-                >
-                  {t('shotTable.contextMenu.delete')}
-                </button>
-              );
-            })()}
-          </div>
         </div>
       )}
+      <div className="overflow-hidden rounded border border-border" data-testid="shot-table">
+        <SpreadsheetGrid<EditableShot>
+          columns={columns}
+          rows={visibleShots}
+          rowKey={(s, i) => s.tempId ?? s.id ?? i}
+          rowTestId={(_s, i) => `shot-row-${i}`}
+          cellTestId={(_s, i, colKey) => `shot-cell-${i}-${colKey}`}
+          testIdPrefix="shot-editor"
+          locale={getNumberFormatLocale()}
+          height={cssHeightToPx(maxHeight)}
+          onEdit={onEdit}
+          onBatchEdit={onBatchEdit}
+          rowClassName={rowClassName}
+          labels={gridLabels}
+          showToolbar={false}
+          selectedRow={selectedVisibleRow}
+          onActiveCellChange={onActiveCellChange}
+          {...(readOnly ? {} : { onInsertRows, onDeleteRows })}
+        />
+      </div>
     </div>
   );
 }
-
-export default ShotTableEditor;
