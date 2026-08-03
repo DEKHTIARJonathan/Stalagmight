@@ -241,6 +241,19 @@ export const defaultConfig: Config = {
       "_long"
     ],
     "data_table_station_column_widths": {},
+    "new_section_column_order": [],
+    "new_section_hidden_columns": [
+      "azimuth_in",
+      "azimuth_out",
+      "_pitch_avg",
+      "pitch_in",
+      "pitch_out",
+      "left",
+      "right",
+      "up",
+      "down"
+    ],
+    "new_section_column_widths": {},
     "sections_panel_open": true,
     "sections_panel_mode": "pin",
     "detail_panel_open": true,
