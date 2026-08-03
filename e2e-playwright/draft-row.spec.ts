@@ -236,10 +236,14 @@ test.describe('Draft shot rows', () => {
     await fillCell(page, 3, 'length', '5');
     await expect(page.getByTestId('grid-cell-3-length')).toHaveText('5.0');
 
-    // Clear length (select + Delete): the cell goes missing immediately.
+    // Clear length (select + Delete): the field is DROPPED from the draft, not
+    // hidden behind a stale value. Length was the only thing this draft held, so
+    // it is back to being an untouched trailing draft - and an untouched draft
+    // carries no missing marks, the same as before anything was typed.
     await page.getByTestId('grid-cell-3-length').click();
     await page.keyboard.press('Delete');
-    await expect(page.getByTestId('grid-cell-3-length')).toHaveClass(/sg-cell-missing/);
+    await expect(page.getByTestId('grid-cell-3-length')).toHaveText('');
+    await expect(page.getByTestId('grid-cell-3-length')).not.toHaveClass(/sg-cell-missing/);
 
     // Fill the remaining required cells. The draft must stay incomplete - without
     // the fix the stale 5 completes it and commits a shot here.
