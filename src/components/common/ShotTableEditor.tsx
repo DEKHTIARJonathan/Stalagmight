@@ -441,12 +441,15 @@ export function ShotTableEditor({
       // a row that is perfectly editable.
       if (isPhantomAt(rowIndex)) return 'sg-row-draft';
       if (errorsAt(rowIndex).length > 0) return 'bg-error-5';
+      // The data table's amber frozen tint, so a row whose geometry cells are
+      // locked says WHY rather than just looking greyed out.
+      if (isFrozenAt(rowIndex)) return 'sg-row-frozen';
       // Not-yet-saved rows borrow the grid's own uncommitted-row tint rather
       // than inventing a second one.
       if (shot.isNew) return 'sg-row-draft';
       return undefined;
     },
-    [errorsAt, isPhantomAt]
+    [errorsAt, isPhantomAt, isFrozenAt]
   );
 
   // The host tracks selection in FULL-array indices; the grid works in visible

@@ -13,7 +13,7 @@
 import type { ReactNode } from 'react';
 import type { TFunction } from 'i18next';
 import type { GridColumn } from './SpreadsheetGrid/types';
-import { AlertCircleIcon, AlertTriangleIcon, CloseIcon } from './icons';
+import { AlertCircleIcon, AlertTriangleIcon, CloseIcon, LockIcon } from './icons';
 import { formatFixed } from '../../i18n/format';
 import { getAzimuthAverage } from '../../utils/shotTable';
 import {
@@ -131,21 +131,38 @@ export function buildEditableShotColumns(
       align: 'center',
       getValue: () => '',
       render: (_shot, index): ReactNode => {
+        if (isPhantomAt(index)) return null;
         const errors = errorsAt(index);
         const warnings = warningsAt(index);
-        if (errors.length === 0 && warnings.length === 0) return null;
+        const frozen = isFrozenAt(index);
+        if (errors.length === 0 && warnings.length === 0 && !frozen) return null;
         const hasErrors = errors.length > 0;
-        // The data table's indicator, icon for icon: a triangle for a warning, a
-        // filled circle for an error, tinted by severity, with the messages in
-        // the tooltip. The old table's "!" badge was its own idiom.
+        const quiet = frozen && errors.length === 0 && warnings.length === 0;
+        // The data table's indicator, icon for icon and precedence for
+        // precedence: a lock on a frozen shot with nothing else to say, a filled
+        // circle for an error, a triangle for a warning, with everything in the
+        // tooltip. A frozen row's geometry cells are locked, so without this the
+        // greying had no explanation.
         return (
           <span
-            data-testid={`shot-warning-${index}`}
-            className={hasErrors ? 'text-error' : 'text-warning'}
-            title={[...errors, ...warnings].join('\n')}
-            aria-label={hasErrors ? t('shotTable.warnings.error') : t('shotTable.warnings.warning')}
+            data-testid={quiet ? `shot-frozen-${index}` : `shot-warning-${index}`}
+            className={hasErrors ? 'text-error' : quiet ? 'text-text-secondary' : 'text-warning'}
+            title={[...(frozen ? [t('dataTable.frozen')] : []), ...errors, ...warnings].join('\n')}
+            aria-label={
+              quiet
+                ? t('dataTable.frozen')
+                : hasErrors
+                  ? t('shotTable.warnings.error')
+                  : t('shotTable.warnings.warning')
+            }
           >
-            {hasErrors ? <AlertCircleIcon size={14} /> : <AlertTriangleIcon size={14} />}
+            {quiet ? (
+              <LockIcon size={13} />
+            ) : hasErrors ? (
+              <AlertCircleIcon size={14} />
+            ) : (
+              <AlertTriangleIcon size={14} />
+            )}
           </span>
         );
       },
