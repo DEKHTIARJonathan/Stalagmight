@@ -255,7 +255,10 @@ async function enterMode(page: Page, mode: 'survey' | 'plan' | 'export'): Promis
  * since `originChosen` persists across mode switches (#244).
  */
 async function chooseEntrance(page: Page): Promise<void> {
-  await page.locator('[data-testid="gas-start-entrance"]').click();
+  const entranceButton = page.locator('[data-testid="gas-start-entrance"]');
+  if (await entranceButton.isVisible().catch(() => false)) {
+    await entranceButton.click();
+  }
 }
 
 /** Enter Plan mode AND answer the entry question, for the (overwhelming majority of) tests that
