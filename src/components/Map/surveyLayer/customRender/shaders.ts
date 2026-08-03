@@ -57,6 +57,14 @@ export const SHOT_ALPHA_REFERENCE = 0.28;
 export const SHOT_ALPHA_JUMP = 0.5;
 export const SHOT_ALPHA_NORMAL = 1;
 
+/** Gas-reach "beyond budget" dim factor (#395): a lighter dim than the
+ *  anchored/immovable `SHOT_ALPHA_DIMMED`, so a beyond-range shot/station keeps
+ *  its base color visibly readable while clearly receding vs. in-reach geometry.
+ *  Encoded in the shared `a_dim` / `v_dim` channel at level 0.5 (see
+ *  `GAS_DIM_LEVEL` in controller.ts); the shader maps > 0.75 to the full dim and
+ *  > 0.25 to this one. */
+export const GAS_DIM_ALPHA = 0.45;
+
 /** Base line alpha for a shot of each kind, so the interact/hover overlay and
  *  the shader cannot drift apart. Does not include the dimmed case, which wins
  *  over the kind. */
@@ -195,7 +203,7 @@ void main() {
   // (immovable 0.25, anchored 0.25, virtual, else 1). A jump keeps the 0.5 it
   // has always had so existing surveys look unchanged; a reference is fainter
   // still, because it is not a leg anyone swims (#27).
-  v_alpha_mul = (a_dim > 0.5) ? ${glslFloat(SHOT_ALPHA_DIMMED)} : (isRef ? ${glslFloat(SHOT_ALPHA_REFERENCE)} : (isJump ? ${glslFloat(SHOT_ALPHA_JUMP)} : ${glslFloat(SHOT_ALPHA_NORMAL)}));
+  v_alpha_mul = (a_dim > 0.75) ? ${glslFloat(SHOT_ALPHA_DIMMED)} : ((a_dim > 0.25) ? ${glslFloat(GAS_DIM_ALPHA)} : (isRef ? ${glslFloat(SHOT_ALPHA_REFERENCE)} : (isJump ? ${glslFloat(SHOT_ALPHA_JUMP)} : ${glslFloat(SHOT_ALPHA_NORMAL)})));
   // Signed perpendicular px, along-axis px (from endpoint A; the cap extension
   // shifts each base vert by capSign*outset), and segment length px. The fragment
   // rebuilds the capsule distance and the clamped color fraction from these.
@@ -342,7 +350,7 @@ void main() {
   vec4 col = mix(v_stroke, v_fill, fillT);
   // Dimmed stations (anchored / immovable) draw at 0.25 (stock circle-opacity +
   // circle-stroke-opacity anchored case); applies uniformly to fill + stroke.
-  float dimF = (v_dim > 0.5) ? 0.25 : 1.0;
+  float dimF = (v_dim > 0.75) ? 0.25 : ((v_dim > 0.25) ? ${glslFloat(GAS_DIM_ALPHA)} : 1.0);
   float a = col.a * outerAlpha * dimF;
   fragColor = vec4(col.rgb * a, a);
 }`;

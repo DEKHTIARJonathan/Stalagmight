@@ -39,7 +39,7 @@ import type { GhostRenderData } from './surveyLayer/customRender/surveyGhostLaye
 import { buildGhostRenderData } from './surveyLayer/dragGhostData';
 import { padProbeBox, type ProbeGeometry } from './surveyLayer/hitProbe';
 import { computeIssueSeverity, type IssueSeverity } from './surveyLayer/severity';
-import { SurveyCustomController, type CustomRenderExclusion } from './surveyLayer/customRender/controller';
+import { SurveyCustomController, buildCustomDimState, type CustomRenderExclusion } from './surveyLayer/customRender/controller';
 import { SurveyLabelController } from './surveyLayer/customRender/labelController';
 import { overlayInputFrom } from './surveyLayer/customRender/overlayColor';
 import { MeasurePathController } from './surveyLayer/customRender/measurePathController';
@@ -1741,6 +1741,9 @@ export default class SurveyLayer {
     // survey geometry with the new overlay colors.
     this.applyOverlayPaint();
     this.resyncCustomRenderFromStore();
+    // Beyond-gas-range dimming (#395) follows the same mode/state - toggling
+    // Plan mode (or a budget change) applies/clears the gas-dim set.
+    this.syncCustomDimming();
   }
 
   /**
@@ -2461,18 +2464,14 @@ export default class SurveyLayer {
     this.applyDimChangeToOverlay(before);
   }
 
-  /** Push the current anchored + immovable dim set to the custom-render layers so
-   *  they dim the same features the stock paint expressions do (#customRender).
-   *  Both geometry AND labels take the same {@link CustomDimState}; the label
-   *  controller reproduces the stock LABEL dim rules (anchored dims shot/station/
-   *  section labels, immovable dims individual shot/station labels; comments and
-   *  section-name immovable are left bright, matching stock). */
+  /** Push the current anchored + immovable + gas-dim (#395) set to the custom-render
+   *  layers so they dim the same features the stock paint expressions do
+   *  (#customRender). Both geometry AND labels take the same {@link CustomDimState};
+   *  the label controller reproduces the stock LABEL dim rules (anchored dims shot/
+   *  station/section labels, immovable + gas-dim dim individual shot/station labels;
+   *  comments and section-name immovable/gas-dim are left bright, matching stock). */
   private syncCustomDimming(): void {
-    const dim = {
-      anchoredSectionIds: this.anchoredSectionIds,
-      immovableStationFeatureIds: this.immovableStationFeatureIds,
-      immovableShotFeatureIds: this.immovableShotFeatureIds,
-    };
+    const dim = buildCustomDimState(this.anchoredSectionIds, this.immovableStationFeatureIds, this.immovableShotFeatureIds, this.gasReachMode, this.gasReachState);
     this.customRender?.setDimming(dim);
     this.customLabels?.setDimming(dim);
   }

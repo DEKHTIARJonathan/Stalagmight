@@ -655,17 +655,19 @@ describe('anchored/immovable dim flag (stock opacity parity)', () => {
   });
 
   it('the shaders dim by 0.25 and let dim WIN over the virtual cases', () => {
-    // Line vertex opacity multiplier: the dim 0.25 case must PRECEDE the virtual
-    // cases in the ternary so a shot that is both dimmed and virtual resolves to
-    // 0.25 (stock case order). The fragment applies v_alpha_mul to the color.
-    // #27 splits the single 0.5 virtual case: a jump keeps 0.5 so existing
-    // surveys look unchanged, a reference is fainter because it is not swum.
+    // Line vertex opacity multiplier: the full dim 0.25 case must PRECEDE the
+    // gas-dim (0.45) and virtual cases in the ternary so a shot that is both
+    // dimmed and virtual resolves to 0.25 (stock case order). The fragment
+    // applies v_alpha_mul to the color. #27 splits the single 0.5 virtual case: a
+    // jump keeps 0.5 so existing surveys look unchanged, a reference is fainter
+    // because it is not swum. #395 adds a third a_dim level (0.5 = beyond gas
+    // range) mapping to 0.45, between full-dim (1.0) and none (0).
     expect(LINE_VERTEX_SRC).toContain(
-      'v_alpha_mul = (a_dim > 0.5) ? 0.25 : (isRef ? 0.28 : (isJump ? 0.5 : 1.0));',
+      'v_alpha_mul = (a_dim > 0.75) ? 0.25 : ((a_dim > 0.25) ? 0.45 : (isRef ? 0.28 : (isJump ? 0.5 : 1.0)));',
     );
     expect(LINE_FRAGMENT_SRC).toContain('col.a * v_alpha_mul * alpha');
-    // Circle fragment folds the dim factor into the final alpha.
-    expect(CIRCLE_FRAGMENT_SRC).toContain('(v_dim > 0.5) ? 0.25 : 1.0');
+    // Circle fragment folds the dim factor into the final alpha (same 3-level map).
+    expect(CIRCLE_FRAGMENT_SRC).toContain('(v_dim > 0.75) ? 0.25 : ((v_dim > 0.25) ? 0.45 : 1.0)');
   });
 });
 
