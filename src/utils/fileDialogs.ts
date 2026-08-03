@@ -106,6 +106,50 @@ export const IMPORTABLE_EXTENSIONS: readonly string[] = [
 ];
 
 /**
+ * `IMPORTABLE_EXTENSIONS` plus `PROJECT_EXTENSION`, for surfaces (drag-drop)
+ * that accept both an import and a native project open and let `routeOpenedFile`
+ * decide which. Extensions have no leading dot, matching `IMPORTABLE_EXTENSIONS`.
+ */
+export const DROPPABLE_EXTENSIONS: readonly string[] = [...IMPORTABLE_EXTENSIONS, PROJECT_EXTENSION];
+
+/**
+ * Whether `path` ends in one of `extensions` (no leading dot), matched
+ * case-insensitively. Defaults to `DROPPABLE_EXTENSIONS`.
+ */
+export function isDroppableFilePath(path: string, extensions: readonly string[] = DROPPABLE_EXTENSIONS): boolean {
+  const lowerPath = path.toLowerCase();
+  return extensions.some((ext) => lowerPath.endsWith(`.${ext}`));
+}
+
+export function tmlOpenFilters() {
+  return [
+    { name: 'Ariane Survey', extensions: TML_EXTENSIONS },
+    { name: 'All Files', extensions: ['*'] },
+  ];
+}
+
+export function compassOpenFilters() {
+  return [
+    { name: 'Compass Survey', extensions: COMPASS_EXTENSIONS },
+    { name: 'All Files', extensions: ['*'] },
+  ];
+}
+
+export function wallsOpenFilters() {
+  return [
+    { name: 'Walls Survey', extensions: WALLS_EXTENSIONS },
+    { name: 'All Files', extensions: ['*'] },
+  ];
+}
+
+export function gpxOpenFilters() {
+  return [
+    { name: 'GPX Files', extensions: [GPX_EXTENSION] },
+    { name: 'All Files', extensions: ['*'] },
+  ];
+}
+
+/**
  * Filters for the unified "Open / Import" picker: every file the app can open
  * (native `.stalx` projects) or import (DMP / Ariane / Compass / Walls / GPX).
  * The first entry is the combined "everything" filter so a single selection
