@@ -191,6 +191,35 @@ describe('routeOpenedFile - read-only-map import guard (#243)', () => {
   });
 });
 
+describe('routeOpenedFile - the read-only guard is scoped to DMP only (#392)', () => {
+  beforeEach(() => {
+    useProjectStore.setState({ project: { name: 'X' } as never, isDirty: false });
+    useUIStore.setState({ appMode: 'plan', geometryMode: 'measured' });
+  });
+  afterEach(() => {
+    useUIStore.setState({ appMode: 'survey', geometryMode: 'measured' });
+    useSpeleoStore.setState({ link: null, projectLinkKind: 'local' });
+  });
+
+  it('still offers "import as new project?" for a TML while editing is blocked (close-and-import does not mutate)', async () => {
+    await routeOpenedFile('/cave/track.tml');
+    expect(useUIStore.getState().activeDialog).toBe('import-as-new-project');
+    expect(useUIStore.getState().dialogData).toMatchObject({
+      path: '/cave/track.tml',
+      fileName: 'track.tml',
+    });
+    // Handed off to the dialog, not cleared as a reject.
+    expect(peekProjectActionSource()).toBe('keyboard');
+  });
+
+  it('still blocks a DMP import while editing is blocked, with the existing tailored message', async () => {
+    await routeOpenedFile('/cave/survey.dmp');
+    expect(importDmp).not.toHaveBeenCalled();
+    expect(useUIStore.getState().activeDialog).toBe('error');
+    expect(String(useUIStore.getState().dialogData.message)).toContain('Survey mode');
+  });
+});
+
 describe('pickAndRoute', () => {
   it('clears the source when the picker is cancelled (null result)', async () => {
     openMock.mockResolvedValue(null);
