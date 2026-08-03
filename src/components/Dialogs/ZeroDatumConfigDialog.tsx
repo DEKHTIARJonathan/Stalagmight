@@ -131,6 +131,9 @@ export default function ZeroDatumConfigDialog({
 
   // Station selection: stationIndex is the committed value, previewStationIndex
   // tracks what the map highlights (follows hover, reverts on dropdown close).
+  // Expand grows the DIALOG, same as the other two shot-entry surfaces; the
+  // editor only asks, the host owns its size.
+  const [expanded, setExpanded] = useState(false);
   const [stationIndex, setStationIndex] = useState(0);
   const [previewStationIndex, setPreviewStationIndex] = useState(0);
   const stationIndexRef = useRef(0);
@@ -309,9 +312,11 @@ export default function ZeroDatumConfigDialog({
     <DialogWrapper
       title={t('dialogs.zeroDatumConfig.title')}
       onClose={onCancel}
-      size="5xl"
+      size={expanded ? 'fullscreen' : '5xl'}
       overflow="hidden"
-      fixedSize={{ width: 'min(1100px, 95vw)', height: 'min(800px, 90vh)' }}
+      {...(expanded
+        ? {}
+        : { fixedSize: { width: 'min(1100px, 95vw)', height: 'min(800px, 90vh)' } })}
       bodyClassName="flex-1 flex flex-col p-0 min-h-0"
       closeOnBackdropClick={false}
       data-testid="zero-datum-config-dialog"
@@ -337,7 +342,11 @@ export default function ZeroDatumConfigDialog({
 
         {/* Right column: Configuration (scrollable) */}
         <div
-          className="flex-1 min-w-0 overflow-y-auto p-4 space-y-5"
+          className={`flex-1 min-w-0 p-4 space-y-5 ${
+            // Expanded, the column stops scrolling as a whole so the shot table
+            // can own the leftover height; collapsed it scrolls as before.
+            expanded ? 'flex min-h-0 flex-col overflow-hidden' : 'overflow-y-auto'
+          }`}
           data-testid="zero-datum-config-right-pane"
         >
           {/* Zero Datum Location - prominent card */}
@@ -419,7 +428,10 @@ export default function ZeroDatumConfigDialog({
             />
           </div>
 
-          <div className="space-y-5" data-testid="zero-datum-editable-rest">
+          <div
+            className={`space-y-5 ${expanded ? 'flex min-h-0 flex-1 flex-col' : ''}`}
+            data-testid="zero-datum-editable-rest"
+          >
             <SectionMetadataForm
               name={name}
               surveyor={surveyor}
@@ -439,7 +451,7 @@ export default function ZeroDatumConfigDialog({
             />
 
             {/* Shot table */}
-            <div>
+            <div className={expanded ? 'flex min-h-0 flex-1 flex-col' : undefined}>
               <h3 className="text-sm font-medium text-text-primary mb-2">
                 {t('dialogs.zeroDatumConfig.shotsHeading')}
               </h3>
@@ -450,6 +462,8 @@ export default function ZeroDatumConfigDialog({
                 onDeleteShot={handleDeleteShot}
                 onInsertBefore={handleInsertBefore}
                 onInsertAfter={handleInsertAfter}
+                expanded={expanded}
+                onToggleExpand={() => setExpanded((v) => !v)}
               />
             </div>
           </div>
