@@ -625,7 +625,9 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
   const beginEdit = useCallback(
     (rowIdx: number, colIdx: number, seed: string | null) => {
       const col = colAt(colIdx);
-      if (!col || !cellEditable(rowIdx, col)) return;
+      // `noInlineEdit` blocks every way in (double-click, F2, type-to-edit)
+      // without touching cellEditable, so paste/fill/clear still write it.
+      if (!col || col.noInlineEdit || !cellEditable(rowIdx, col)) return;
       const row = rows[rowIdx];
       // Seed with the FULL-PRECISION value (not the rounded display string), so
       // open+commit can never silently rewrite stored data at display precision.

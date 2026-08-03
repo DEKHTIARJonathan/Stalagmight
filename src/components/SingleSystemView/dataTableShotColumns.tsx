@@ -288,6 +288,11 @@ export function buildShotColumns(ctx: ShotColumnContext): GridColumn<Shot>[] {
       // bulk-reclassify path now that classification never re-runs.
       editable: true,
       isEditable: editableUnlessFrozenGeometry('kind'), // not locked on frozen
+      // ...but no cell EDITOR. The cell is a three-state button, so a click is
+      // the whole interaction; a text box opening over one glyph on double-click
+      // was a second, worse way to do the same thing. The bulk paths above are
+      // unaffected - this only closes the inline editor.
+      noInlineEdit: true,
       parse: (raw) => {
         const v = raw.trim().toLowerCase();
         // Accept the rendered glyphs, the full words, and the legacy booleans
@@ -308,9 +313,11 @@ export function buildShotColumns(ctx: ShotColumnContext): GridColumn<Shot>[] {
             role={geometryReadOnly ? undefined : 'button'}
             tabIndex={geometryReadOnly ? undefined : -1}
             aria-label={t(SHOT_KIND_LABEL_KEY[shot.kind])}
-            className={`flex items-center justify-center font-semibold ${SHOT_KIND_CLASS[shot.kind]} ${
-              geometryReadOnly ? 'cursor-default opacity-60' : 'cursor-pointer'
-            }`}
+            // Fills the cell so ANY click in it cycles, not just one that lands
+            // on the glyph - which on a Normal shot is an invisible target.
+            className={`group flex h-full w-full items-center justify-center font-semibold ${
+              SHOT_KIND_CLASS[shot.kind]
+            } ${geometryReadOnly ? 'cursor-default opacity-60' : 'cursor-pointer'}`}
             onClick={(e) => {
               e.stopPropagation();
               // Shift-click walks the ring backwards, so overshooting a
@@ -324,8 +331,10 @@ export function buildShotColumns(ctx: ShotColumnContext): GridColumn<Shot>[] {
           >
             {glyph === '' ? (
               // Keep the hover affordance the old dot had: an empty cell still
-              // has to advertise that it is clickable.
-              <span className="opacity-0 hover:opacity-40">J</span>
+              // has to advertise that it is clickable. group-hover, not hover,
+              // so it appears from anywhere in the cell rather than only over
+              // the hidden glyph itself.
+              <span className="opacity-0 group-hover:opacity-40">J</span>
             ) : (
               glyph
             )}

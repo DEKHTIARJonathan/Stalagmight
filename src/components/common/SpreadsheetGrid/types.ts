@@ -59,6 +59,16 @@ export interface GridColumn<Row> {
   /** Open a larger multi-line editor (comments etc.) instead of the
    *  cell-sized one. */
   multiline?: boolean;
+  /** Suppress the inline cell editor - no double-click, F2 or type-to-edit -
+   *  while leaving the column WRITABLE by paste, fill and clear.
+   *
+   *  For a column whose {@link render} is itself the control (a cycling badge, a
+   *  toggle): typing a value into it is a second, worse way to do what a click
+   *  already does, and opening a text box over a one-glyph cell reads as a bug.
+   *  Distinct from clearing {@link editable}, which would also cut off the bulk
+   *  paths - stamping one value down a run with the fill handle stays the point
+   *  of having the column in the grid at all. */
+  noInlineEdit?: boolean;
   /** Parse a raw typed/pasted string into the value to commit. Return
    *  `undefined` to SKIP the write (e.g. a non-finite number, or an empty string
    *  into a non-nullable numeric - never silently write 0). Defaults to a
