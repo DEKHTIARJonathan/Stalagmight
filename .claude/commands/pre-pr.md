@@ -378,11 +378,10 @@ its summarizer (its MANDATORY set): promoting C to always-on, or adding or retir
 reviewer, means updating both alongside this file - otherwise the log will confidently
 recommend deleting its own gates.
 
-⚠ The Claude and Codex definitions now share the same A/B/C reviewer shape, active
-ids, time budget, and pre-flight lens. The OpenCode definition
-(`.opencode/command/pre-pr.md`) still runs the old ten-lens shape, so cross-path log
-comparisons must exclude OpenCode until it is updated (#358). Codex logs only when a
-writer is configured in its local instructions and otherwise reports the skip.
+⚠ Only this definition logs at all, and the sibling definitions
+(`.agents/skills/pre-pr/SKILL.md` for Codex, `.opencode/command/pre-pr.md`) still run
+the old ten-lens shape - the log is a 1-of-3 sample and the three paths are not
+measuring the same thing (#358). Treat cross-path comparisons accordingly.
 
 Record shape:
 
