@@ -111,12 +111,15 @@ export default function DrawShotDialog() {
 
     try {
       // Everything typed here is in ONE frame: the direction the leg was
-      // measured in. Storing it is verbatim - no mode reciprocates a bearing
-      // behind the user's back. Turning the leg around is the checkbox's job,
-      // and it routes through `reverseTargetShot` because that is the repo's
-      // one direction-flip rule (swap + 180 with the antipodal tie-break the
-      // backend resolves `average_azimuth` with); a second copy here is exactly
-      // the divergence that helper's comment documents.
+      // measured in, stored verbatim - no mode reciprocates a bearing behind
+      // the user's back, which is also what `completeDraftData` does for a
+      // data-table insert. Turning the leg around is the checkbox's job, and it
+      // routes through `reverseTargetShot` rather than a local flip: that
+      // helper carries the antipodal tie-break matching the backend's
+      // `average_azimuth`, and a second copy here is exactly the divergence its
+      // comment documents. It is NOT identical to `reverse_shots` - that gates
+      // the left/right swap behind the Reverse Section dialog's LRUD opt-in,
+      // where this always swaps them.
       const rawAzimuthIn = parseFloat(azimuthIn);
       const rawAzimuthOut = azimuthOut ? parseFloat(azimuthOut) : rawAzimuthIn;
       const enteredDepthIn = depthIn ? parseFloat(depthIn) : currentStationDepth;
