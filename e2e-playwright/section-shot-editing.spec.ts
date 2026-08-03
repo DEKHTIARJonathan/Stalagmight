@@ -269,6 +269,45 @@ test.describe('Section and Shot Editing', () => {
     ).toHaveCount(0);
   });
 
+  test('an incomplete row reds its missing cells; emptying it stops blocking Save', async ({
+    page,
+  }) => {
+    await openEditSectionDialog(page, 'Main Passage');
+    const dialog = page.getByTestId('edit-section-dialog');
+    const save = dialog.getByTestId('edit-section-save');
+    await expect(save).toBeEnabled();
+
+    // The trailing blank row materializes on the first keystroke. With only a
+    // length it is incomplete, so the cells it still needs go red and Save
+    // refuses - the same treatment the data table gives a missing required cell.
+    const lengthCells = dialog.locator(
+      '[data-testid^="shot-editor-cell-"][data-testid$="-length"]'
+    );
+    const blank = (await lengthCells.count()) - 1;
+    await dialog.getByTestId(`shot-editor-cell-${blank}-length`).dblclick();
+    const editor = dialog.getByTestId('shot-editor-cell-editor');
+    await editor.fill('7');
+    await editor.press('Enter');
+
+    for (const col of ['_azimuth_avg', 'depth_in', 'depth_out']) {
+      await expect(dialog.getByTestId(`shot-editor-cell-${blank}-${col}`)).toHaveClass(
+        /sg-cell-missing/
+      );
+    }
+    await expect(dialog.getByTestId(`shot-editor-cell-${blank}-length`)).not.toHaveClass(
+      /sg-cell-missing/
+    );
+    await expect(save).toBeDisabled();
+    await expect(dialog.getByTestId('edit-section-blocker')).toContainText('missing required');
+
+    // Clearing the one value it holds makes it nothing again: an added row left
+    // empty is an invitation, not an obligation, so it blocks nothing.
+    await dialog.getByTestId(`shot-editor-cell-${blank}-length`).click();
+    await page.keyboard.press('Delete');
+    await expect(save).toBeEnabled();
+    await expect(dialog.getByTestId('edit-section-blocker')).toHaveCount(0);
+  });
+
   test('Expand enlarges the shot table and Shrink puts it back', async ({ page }) => {
     // A tall viewport, because the collapsed dialog is already 90vh: on a short
     // window fullscreen frees almost nothing and the assertion below would be
