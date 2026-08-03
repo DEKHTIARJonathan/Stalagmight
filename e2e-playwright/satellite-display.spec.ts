@@ -18,6 +18,33 @@ function getSatelliteToggle(page: Page) {
   return { button, checkbox };
 }
 
+/** Open the Display menu unless it is already open (the button toggles it). */
+async function ensureDisplayMenuOpen(page: Page): Promise<void> {
+  const toggle = page.locator('[data-testid="display-toggle-showSatellite"]');
+  if (await toggle.isVisible().catch(() => false)) return;
+  await openDisplayMenu(page);
+}
+
+/**
+ * Drive the Satellite toggle to a known state.
+ *
+ * Reads the current state rather than assuming one. Satellite is ON by default,
+ * so a bare "click to enable" turns it OFF - which is how every one of these
+ * tests broke when the default flipped. Asserting the destination instead of the
+ * number of clicks keeps them honest whichever way the default goes next.
+ */
+async function setSatellite(page: Page, on: boolean): Promise<void> {
+  await ensureDisplayMenuOpen(page);
+  const { button, checkbox } = getSatelliteToggle(page);
+  const isOn = await checkbox.evaluate((el) => el.className.includes('bg-accent'));
+  if (isOn !== on) await button.click();
+  if (on) {
+    await expect(checkbox).toHaveClass(/bg-accent/);
+  } else {
+    await expect(checkbox).not.toHaveClass(/bg-accent/);
+  }
+}
+
 /**
  * Helper to wait for map layer to exist using polling
  */
@@ -62,42 +89,39 @@ test.describe('Satellite Display', () => {
   });
 
   test.describe('Toggle Behavior', () => {
-    test('should toggle satellite ON via display menu', async ({ page }) => {
+    test('satellite is on by default', async ({ page }) => {
       await openDisplayMenu(page);
-      const { button, checkbox } = getSatelliteToggle(page);
-
-      // Verify initially off
-      await expect(checkbox).not.toHaveClass(/bg-accent/);
-
-      // Toggle on
-      await button.click();
-
-      // Verify now on
+      const { checkbox } = getSatelliteToggle(page);
       await expect(checkbox).toHaveClass(/bg-accent/);
+      expect(await waitForMapLayer(page, 'satellite-tiles')).toBe(true);
     });
 
     test('should toggle satellite OFF via display menu', async ({ page }) => {
       await openDisplayMenu(page);
       const { button, checkbox } = getSatelliteToggle(page);
 
-      // Toggle on first
-      await button.click();
+      // On by default, so one click takes it off.
       await expect(checkbox).toHaveClass(/bg-accent/);
-
-      // Toggle off
       await button.click();
-
-      // Verify now off
       await expect(checkbox).not.toHaveClass(/bg-accent/);
     });
 
-    test('should persist toggle state across menu interactions', async ({ page }) => {
-      await openDisplayMenu(page);
+    test('should toggle satellite ON via display menu', async ({ page }) => {
       const { button, checkbox } = getSatelliteToggle(page);
 
-      // Toggle on
+      await setSatellite(page, false);
+
       await button.click();
       await expect(checkbox).toHaveClass(/bg-accent/);
+    });
+
+    test('should persist toggle state across menu interactions', async ({ page }) => {
+      const { checkbox } = getSatelliteToggle(page);
+
+      // Drive it AWAY from the default, so reopening proves the state was kept
+      // rather than merely re-defaulted.
+      await setSatellite(page, false);
+      await expect(checkbox).not.toHaveClass(/bg-accent/);
 
       // Close menu (click outside or press Escape)
       await page.keyboard.press('Escape');
@@ -107,23 +131,24 @@ test.describe('Satellite Display', () => {
       // Reopen menu
       await openDisplayMenu(page);
 
-      // Satellite should still be on
+      // Satellite should still be off
       const { checkbox: checkbox2 } = getSatelliteToggle(page);
-      await expect(checkbox2).toHaveClass(/bg-accent/);
+      await expect(checkbox2).not.toHaveClass(/bg-accent/);
     });
 
     test('should handle rapid toggle stress test (10x without crash)', async ({ page }) => {
       await openDisplayMenu(page);
       const { button, checkbox } = getSatelliteToggle(page);
 
-      // Rapid toggle 10 times, verifying state after each click
+      // Rapid toggle 10 times, verifying state after each click. Starts ON, so
+      // the first click takes it off and the parity is the reverse of what it
+      // was when satellite defaulted to off.
       for (let i = 0; i < 10; i++) {
         await button.click();
-        // Verify state changed (odd clicks = on, even clicks = off)
         if (i % 2 === 0) {
-          await expect(checkbox).toHaveClass(/bg-accent/);
-        } else {
           await expect(checkbox).not.toHaveClass(/bg-accent/);
+        } else {
+          await expect(checkbox).toHaveClass(/bg-accent/);
         }
       }
 
@@ -137,11 +162,7 @@ test.describe('Satellite Display', () => {
 
   test.describe('Layer Properties', () => {
     test('should add satellite layer to map when enabled', async ({ page }) => {
-      await openDisplayMenu(page);
-      const { button } = getSatelliteToggle(page);
-
-      // Toggle on
-      await button.click();
+      await setSatellite(page, true);
 
       // Wait for layer using polling
       const hasLayer = await waitForMapLayer(page, 'satellite-tiles');
@@ -149,11 +170,7 @@ test.describe('Satellite Display', () => {
     });
 
     test('should have correct layer opacity (0.7)', async ({ page }) => {
-      await openDisplayMenu(page);
-      const { button } = getSatelliteToggle(page);
-
-      // Toggle on
-      await button.click();
+      await setSatellite(page, true);
 
       // Wait for layer first
       await waitForMapLayer(page, 'satellite-tiles');
@@ -168,11 +185,7 @@ test.describe('Satellite Display', () => {
     });
 
     test('should have satellite layer ID as satellite-tiles', async ({ page }) => {
-      await openDisplayMenu(page);
-      const { button } = getSatelliteToggle(page);
-
-      // Toggle on
-      await button.click();
+      await setSatellite(page, true);
 
       // Verify layer ID using polling
       const hasLayer = await waitForMapLayer(page, 'satellite-tiles');
@@ -180,11 +193,7 @@ test.describe('Satellite Display', () => {
     });
 
     test('should use the custom tile protocol', async ({ page }) => {
-      await openDisplayMenu(page);
-      const { button } = getSatelliteToggle(page);
-
-      // Toggle on
-      await button.click();
+      await setSatellite(page, true);
 
       // Wait for layer first
       await waitForMapLayer(page, 'satellite-tiles');
@@ -202,11 +211,7 @@ test.describe('Satellite Display', () => {
     });
 
     test('should have source attribution present', async ({ page }) => {
-      await openDisplayMenu(page);
-      const { button } = getSatelliteToggle(page);
-
-      // Toggle on
-      await button.click();
+      await setSatellite(page, true);
 
       // Wait for layer first
       await waitForMapLayer(page, 'satellite-tiles');
@@ -240,9 +245,7 @@ test.describe('Satellite Display', () => {
      * button instead: https://developers.arcgis.com/documentation/esri-and-data-attribution/interactive-maps/
      */
     test('shows the imagery source names on the map while satellite is on', async ({ page }) => {
-      await openDisplayMenu(page);
-      const { button } = getSatelliteToggle(page);
-      await button.click();
+      await setSatellite(page, true);
       await waitForMapLayer(page, 'satellite-tiles');
 
       await expect(page.getByTestId('map-attribution-text')).toBeVisible({ timeout: 5000 });
@@ -256,24 +259,17 @@ test.describe('Satellite Display', () => {
     });
 
     test('removes the attribution when the imagery is switched off', async ({ page }) => {
-      await openDisplayMenu(page);
-      const { button } = getSatelliteToggle(page);
-
-      await button.click();
+      await setSatellite(page, true);
       await expect(page.getByTestId('map-attribution')).toBeVisible({ timeout: 5000 });
 
-      // The display menu stays open across toggles (see the rapid-toggle test),
-      // so re-opening it here would close it instead.
-      await button.click();
+      await setSatellite(page, false);
       await waitForNoMapLayer(page, 'satellite-tiles');
       // Nothing to attribute once nothing is drawn.
       await expect(page.getByTestId('map-attribution')).toBeHidden();
     });
 
     test('keeps the "Powered by Esri" notice off the map and in About', async ({ page }) => {
-      await openDisplayMenu(page);
-      const { button } = getSatelliteToggle(page);
-      await button.click();
+      await setSatellite(page, true);
       await expect(page.getByTestId('map-attribution')).toBeVisible({ timeout: 5000 });
       await expect(page.getByTestId('map-attribution')).not.toContainText('Powered by');
 
@@ -289,11 +285,7 @@ test.describe('Satellite Display', () => {
     });
 
     test('should render satellite layer below survey data (z-order)', async ({ page }) => {
-      await openDisplayMenu(page);
-      const { button } = getSatelliteToggle(page);
-
-      // Toggle on
-      await button.click();
+      await setSatellite(page, true);
 
       // Wait for layer first
       await waitForMapLayer(page, 'satellite-tiles');
@@ -457,11 +449,7 @@ test.describe('Satellite Display', () => {
     });
 
     test('should handle tile load failures gracefully (no crash)', async ({ page, context }) => {
-      await openDisplayMenu(page);
-      const { button } = getSatelliteToggle(page);
-
-      // Toggle satellite on
-      await button.click();
+      await setSatellite(page, true);
 
       // Wait for layer to be added
       await waitForMapLayer(page, 'satellite-tiles');
@@ -484,9 +472,7 @@ test.describe('Satellite Display', () => {
 
     test('should serve cached tiles when offline (mock scenario)', async ({ page, context }) => {
       // Enable satellite first while online
-      await openDisplayMenu(page);
-      const { button } = getSatelliteToggle(page);
-      await button.click();
+      await setSatellite(page, true);
 
       // Wait for layer to be added
       await waitForMapLayer(page, 'satellite-tiles');
@@ -517,20 +503,13 @@ test.describe('Satellite Display', () => {
       // Wait for offline state
       await expect(page.locator('[data-testid="offline-indicator"]')).toBeVisible({ timeout: 5000 });
 
-      // Open display menu and toggle satellite
-      await openDisplayMenu(page);
-      const { button, checkbox } = getSatelliteToggle(page);
-
-      // Toggle on while offline
-      await button.click();
-      await expect(checkbox).toHaveClass(/bg-accent/);
+      // Toggle satellite both ways while offline
+      await setSatellite(page, false);
 
       // App should remain functional
       await expect(page.getByTestId('map-canvas')).toBeVisible();
 
-      // Toggle off while offline
-      await button.click();
-      await expect(checkbox).not.toHaveClass(/bg-accent/);
+      await setSatellite(page, true);
 
       // App should still be functional
       await expect(page.getByTestId('map-canvas')).toBeVisible();

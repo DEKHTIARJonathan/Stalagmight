@@ -27,6 +27,31 @@ function getSatelliteToggle(page: Page) {
   return { button };
 }
 
+/** Open the Display menu unless it is already open (the button toggles it). */
+async function ensureDisplayMenuOpen(page: Page): Promise<void> {
+  const toggle = page.locator('[data-testid="display-toggle-showSatellite"]');
+  if (await toggle.isVisible().catch(() => false)) return;
+  await openDisplayMenu(page);
+}
+
+/**
+ * Drive the Satellite toggle to a known state.
+ *
+ * Satellite is ON by default, so a bare "click to enable" turns it OFF. These
+ * tests then raced their own click: `waitForMapLayer` could still catch the
+ * layer that was already there, passing for the wrong reason. Asserting the
+ * destination removes the race.
+ */
+async function setSatellite(page: Page, on: boolean): Promise<void> {
+  await ensureDisplayMenuOpen(page);
+  const { button } = getSatelliteToggle(page);
+  const isOn = await button.evaluate((el) => el.className.includes('bg-accent'));
+  if (isOn !== on) await button.click();
+  await expect
+    .poll(() => button.evaluate((el) => el.className.includes('bg-accent')), { timeout: 2000 })
+    .toBe(on);
+}
+
 /**
  * Helper to wait for map layer to exist using polling
  */
@@ -117,10 +142,8 @@ test.describe('Satellite Bug Regressions', () => {
 
       await createProject(page, 'Layer Order Test');
       await openDisplayMenu(page);
-      const { button } = getSatelliteToggle(page);
-
-      // Toggle satellite on
-      await button.click();
+      // Satellite ships on; make that explicit rather than assumed.
+      await setSatellite(page, true);
 
       // Wait for satellite layer
       await waitForMapLayer(page, 'satellite-tiles');
@@ -150,10 +173,8 @@ test.describe('Satellite Bug Regressions', () => {
 
       await createProject(page, 'Layer Stack Test');
       await openDisplayMenu(page);
-      const { button } = getSatelliteToggle(page);
-
-      // Toggle satellite on
-      await button.click();
+      // Satellite ships on; make that explicit rather than assumed.
+      await setSatellite(page, true);
 
       // Wait for satellite layer
       await waitForMapLayer(page, 'satellite-tiles');
@@ -232,10 +253,8 @@ test.describe('Satellite Bug Regressions', () => {
       // Map should be loaded
 
       await openDisplayMenu(page);
-      const { button } = getSatelliteToggle(page);
-
-      // Toggle satellite on
-      await button.click();
+      // Satellite ships on; make that explicit rather than assumed.
+      await setSatellite(page, true);
 
       // Satellite layer should be added (map is loaded)
       const hasLayer = await waitForMapLayer(page, 'satellite-tiles');
@@ -257,10 +276,8 @@ test.describe('Satellite Bug Regressions', () => {
 
       await createProject(page, 'Protocol Test');
       await openDisplayMenu(page);
-      const { button } = getSatelliteToggle(page);
-
-      // Toggle satellite on
-      await button.click();
+      // Satellite ships on; make that explicit rather than assumed.
+      await setSatellite(page, true);
 
       // Wait for layer
       await waitForMapLayer(page, 'satellite-tiles');
@@ -279,10 +296,8 @@ test.describe('Satellite Bug Regressions', () => {
 
       await createProject(page, 'Provider Test');
       await openDisplayMenu(page);
-      const { button } = getSatelliteToggle(page);
-
-      // Toggle satellite on
-      await button.click();
+      // Satellite ships on; make that explicit rather than assumed.
+      await setSatellite(page, true);
 
       // Wait for layer
       await waitForMapLayer(page, 'satellite-tiles');
@@ -319,10 +334,7 @@ test.describe('Satellite Bug Regressions', () => {
       });
       expect(configCheck).toBe(true);
 
-      // Toggle satellite
-      await openDisplayMenu(page);
-      const { button } = getSatelliteToggle(page);
-      await button.click();
+      await setSatellite(page, true);
 
       // Wait for layer to be added
       const layerAdded = await waitForMapLayer(page, 'satellite-tiles');
@@ -350,16 +362,14 @@ test.describe('Satellite Bug Regressions', () => {
 
     test('should toggle satellite on and off without issues', async ({ page }) => {
       await createProject(page, 'Toggle Stability Test');
-      await openDisplayMenu(page);
-      const { button } = getSatelliteToggle(page);
 
-      // Toggle on
-      await button.click();
+      // On (already, by default) -> off -> on again. What this guards is that
+      // the layer survives a full round trip, so it has to actually make one.
+      await setSatellite(page, true);
       let hasLayer = await waitForMapLayer(page, 'satellite-tiles');
       expect(hasLayer).toBe(true);
 
-      // Toggle off
-      await button.click();
+      await setSatellite(page, false);
       await expect.poll(async () => {
         return await page.evaluate(() => {
           const map = (window as unknown as { __stalagmight_map__?: { getLayer: (id: string) => unknown } }).__stalagmight_map__;
@@ -367,8 +377,7 @@ test.describe('Satellite Bug Regressions', () => {
         });
       }, { timeout: 3000 }).toBe(false);
 
-      // Toggle on again
-      await button.click();
+      await setSatellite(page, true);
       hasLayer = await waitForMapLayer(page, 'satellite-tiles');
       expect(hasLayer).toBe(true);
 

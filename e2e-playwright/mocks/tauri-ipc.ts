@@ -104,7 +104,28 @@ function createMockSection(overrides?: Partial<MockSection>): MockSection {
  * Set up Tauri IPC mocks before the page loads.
  * This intercepts all Tauri API calls and returns mock data.
  */
+/** 1x1 transparent PNG, enough for MapLibre to treat a tile as loaded. */
+const STUB_TILE_PNG = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==',
+  'base64',
+);
+
 export async function setupTauriMocks(page: Page): Promise<void> {
+  // Serve the custom tile protocol. In the real app Tauri registers
+  // `stalagmight-tiles` and answers these; a plain browser has no such handler,
+  // so every tile 404s through CORS and floods the console. That was invisible
+  // while satellite defaulted off - now that it ships on, the map requests tiles
+  // in every spec, and the ones asserting a clean console would fail on noise
+  // that says nothing about the app.
+  await page.route(/stalagmight-tiles(\.localhost)?/, (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'image/png',
+      headers: { 'Access-Control-Allow-Origin': '*', 'Cache-Control': 'max-age=86400' },
+      body: STUB_TILE_PNG,
+    }),
+  );
+
   // Inject the msgpack UMD bundle first so the load_project_full_binary
   // mock can encode its result the same way the real backend does.
   // Exposes `window.MessagePack` synchronously before any app JS runs.
@@ -763,7 +784,9 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 showZeroDatum: true,
                 showGrid: false,
                 showScaleBar: true,
-                showSatellite: false,
+                // Mirrors the backend's DisplaySettings default (loading.rs);
+                // satellite ships on.
+                showSatellite: true,
                 showDepthGradient: false,
                 gridSpacing: 10,
               },
@@ -1014,7 +1037,9 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 showZeroDatum: true,
                 showGrid: false,
                 showScaleBar: true,
-                showSatellite: false,
+                // Mirrors the backend's DisplaySettings default (loading.rs);
+                // satellite ships on.
+                showSatellite: true,
                 showDepthGradient: false,
                 gridSpacing: 10,
               },

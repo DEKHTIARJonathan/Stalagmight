@@ -273,7 +273,7 @@ impl Default for DisplaySettings {
             show_jumps: true,
             show_zero_datum: true,
             show_grid: false,
-            show_satellite: false,
+            show_satellite: true,
             show_depth_gradient: false,
             show_station_comments: false,
             show_shot_comments: false,
@@ -308,7 +308,7 @@ impl DisplaySettings {
                 .is_none_or(|s| s == "true"),
             show_zero_datum: map.get("showZeroDatum").is_none_or(|s| s == "true"),
             show_grid: map.get("showGrid").is_some_and(|s| s == "true"),
-            show_satellite: map.get("showSatellite").is_some_and(|s| s == "true"),
+            show_satellite: map.get("showSatellite").is_none_or(|s| s == "true"),
             show_depth_gradient: map.get("showDepthGradient").is_some_and(|s| s == "true"),
             show_station_comments: map.get("showStationComments").is_some_and(|s| s == "true"),
             show_shot_comments: map.get("showShotComments").is_some_and(|s| s == "true"),
@@ -869,7 +869,7 @@ mod tests {
         assert!(defaults.show_reference_shots); // true
         assert!(defaults.show_zero_datum); // true
         assert!(!defaults.show_grid); // false
-        assert!(!defaults.show_satellite); // false
+        assert!(defaults.show_satellite); // true
         assert!(!defaults.show_depth_gradient); // false
         assert!((defaults.grid_spacing - 10.0).abs() < 0.001); // 10.0
     }
@@ -889,7 +889,7 @@ mod tests {
         assert!(settings.show_reference_shots); // true
         assert!(settings.show_zero_datum); // true
         assert!(!settings.show_grid); // false
-        assert!(!settings.show_satellite); // false
+        assert!(settings.show_satellite); // true - absent key reads as on
         assert!(!settings.show_depth_gradient); // false
         assert!((settings.grid_spacing - 10.0).abs() < 0.001); // 10.0
     }

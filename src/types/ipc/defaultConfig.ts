@@ -61,7 +61,7 @@ export const defaultConfig: Config = {
   },
   "map": {
     "satellite_provider": "esri",
-    "satellite_enabled": false,
+    "satellite_enabled": true,
     "satellite_gps_origin": {
       "latitude": 24.55,
       "longitude": -81.78

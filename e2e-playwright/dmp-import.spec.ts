@@ -398,13 +398,18 @@ test.describe('DMP Import Dialog - Zero Datum + Wizard Flow', () => {
     await page.getByTestId('zero-datum-section-card-0').click();
     await expect(page.getByTestId('zero-datum-config-dialog')).toBeVisible({ timeout: 5000 });
 
+    // Scoped to the preview: the survey map behind this dialog draws satellite
+    // by default and carries its own attribution, so an unscoped locator would
+    // match two elements and assert against the wrong one.
+    const preview = page.getByTestId('section-preview');
+
     // No imagery before there is a GPS origin, so nothing is owed yet.
-    await expect(page.getByTestId('map-attribution')).toBeHidden();
+    await expect(preview.getByTestId('map-attribution')).toBeHidden();
 
     await page.getByTestId('zero-datum-gps-input').fill('24.550123, -81.780456');
     await expect(page.getByTestId('zero-datum-gps-parsed')).toBeVisible({ timeout: 5000 });
 
-    const toggle = page.getByTestId('map-attribution-toggle');
+    const toggle = preview.getByTestId('map-attribution-toggle');
     await expect(toggle).toBeVisible({ timeout: 5000 });
     // Reachable without hovering at all: the names are on the button itself.
     await expect(toggle).toHaveAttribute('title', /Esri/);

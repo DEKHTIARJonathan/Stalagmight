@@ -457,7 +457,7 @@ test.describe('Depth Gradient', () => {
     // Verify other toggles remain unchanged
     expect(await isToggleOn(page, 'showStations')).toBe(true);
     expect(await isToggleOn(page, 'showShots')).toBe(true);
-    expect(await isToggleOn(page, 'showSatellite')).toBe(false);
+    expect(await isToggleOn(page, 'showSatellite')).toBe(true);
     expect(await isToggleOn(page, 'showGrid')).toBe(false);
 
     // Toggle stations off

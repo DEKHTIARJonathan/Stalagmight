@@ -131,7 +131,7 @@ impl Default for MapConfig {
     fn default() -> Self {
         Self {
             satellite_provider: "esri".to_string(),
-            satellite_enabled: false,
+            satellite_enabled: true,
             satellite_gps_origin: GpsOrigin {
                 latitude: 24.55,
                 longitude: -81.78,

@@ -19,6 +19,7 @@ Update this file every time a new version is tagged.
 
 ### Changed
 
+- **Satellite view is on by default.** New projects open with the imagery layer showing; turn it off from the Display menu and the choice is remembered per project as before
 - **Satellite imagery is now cached for offline use**, within what the imagery provider's own terms allow. A tile is only ever stored if the provider's response explicitly says it may be and for how long - Esri grants a day - and it is then kept to fall back on when you have no signal. Past that day the app asks whether the tile has changed rather than downloading it again, so revisiting a site costs almost no data. Nothing is stored for a provider that does not grant it. Cache size and retention are configurable per provider (see [docs/configuration.md](docs/configuration.md))
 
 ### Fixed
