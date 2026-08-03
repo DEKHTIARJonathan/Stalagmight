@@ -2,7 +2,12 @@ import { type MouseEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { SpeleoProjectSummary } from '../../types/ipc.generated';
 import { Button } from '../common/Button';
-import { SpeleoRecentInfo, unpushedAccentStyle, type SpeleoLockInfo } from './SpeleoLockBadge';
+import {
+  SpeleoRecentInfo,
+  recentAccent,
+  recentAccentStyle,
+  type SpeleoLockInfo,
+} from './SpeleoLockBadge';
 
 interface RemoteSystemCardProps {
   summary: SpeleoProjectSummary;
@@ -42,11 +47,14 @@ export default function RemoteSystemCard({
         busy ? 'opacity-60 cursor-default' : 'cursor-pointer hover:border-accent'
       }`}
       // #270: a purely-remote row can still have a local cached copy carrying
-      // un-pushed work (pulled, edited, then closed) - accent it the same way.
-      style={unpushedAccentStyle(lock.hasLocalEdits)}
+      // un-pushed work (pulled, edited, then closed) - accent it the same way. It
+      // also carries the lock accents; a project you hold the lock on but have not
+      // pulled to this machine is exactly the row worth marking.
+      style={recentAccentStyle(lock)}
       data-testid={testId}
       data-remote="true"
       data-local-edits={lock.hasLocalEdits ? 'true' : 'false'}
+      data-recent-accent={recentAccent(lock)}
       role="button"
       aria-disabled={busy || undefined}
       tabIndex={0}

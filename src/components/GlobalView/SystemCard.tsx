@@ -9,7 +9,12 @@ import {
 import { ElidedPath, Tooltip } from '../common';
 import { setProjectActionSource } from '../../utils/telemetry';
 import { useProjectStatFormatters } from './useProjectStatFormatters';
-import { SpeleoRecentInfo, unpushedAccentStyle, type SpeleoLockInfo } from './SpeleoLockBadge';
+import {
+  SpeleoRecentInfo,
+  recentAccent,
+  recentAccentStyle,
+  type SpeleoLockInfo,
+} from './SpeleoLockBadge';
 import { systemCardTestId } from '../../utils/testId';
 
 interface SystemCardProps {
@@ -104,15 +109,17 @@ export default function SystemCard({
           : 'border-border hover:border-accent'
         }
       `}
-      // #270: a yellow bar down the leading edge when this project holds work that
-      // is only on this computer. Accent only - no badge here (the recents list is a
+      // A bar down the leading edge: yellow for work that is only on this computer
+      // (#270), bright neutral when you hold the SpeleoDB write lock, dim neutral
+      // when someone else does. Accent only - no badge here (the recents list is a
       // chooser; the actionable "!" lives on the status button).
-      style={unpushedAccentStyle(speleoLock?.hasLocalEdits === true)}
+      style={recentAccentStyle(speleoLock)}
       onClick={handleClick}
       onDoubleClick={handleDoubleClick}
       onContextMenu={handleContextMenu}
       data-testid={testId}
       data-local-edits={speleoLock?.hasLocalEdits === true ? 'true' : 'false'}
+      data-recent-accent={recentAccent(speleoLock)}
       role="button"
       tabIndex={0}
       aria-pressed={isSelected}

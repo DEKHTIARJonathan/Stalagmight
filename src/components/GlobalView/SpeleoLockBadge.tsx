@@ -57,14 +57,72 @@ export function resolveSpeleoLock(
 }
 
 /**
- * The list accent for "this project has changes only on this computer" (#270): a
- * yellow bar down the leading edge of the card / row. Deliberately an ACCENT and
- * nothing more - the recents list is a chooser, not a place to shout, so the "!"
- * badge stays on the status button where an action is available. Returns `undefined`
- * (no styling at all) for a project with no local edits.
+ * "You hold the SpeleoDB write lock": the brightest neutral the theme has, i.e.
+ * white on every dark theme and near-black on the four light ones (`light` and
+ * `kaleido_eink` are `--cc-panel: #ffffff`, where a literal white bar would not
+ * exist). Reusing `--cc-text-primary` rather than a hex keeps the bar visible on all
+ * nine themes without adding nine colour values for a human to sign off on.
  */
-export function unpushedAccentStyle(hasLocalEdits: boolean): { boxShadow: string } | undefined {
-  return hasLocalEdits ? { boxShadow: `inset 3px 0 0 0 ${UNPUSHED_ACCENT}` } : undefined;
+export const LOCK_MINE_ACCENT = 'var(--cc-text-primary)';
+
+/**
+ * "Someone else holds the write lock": the same neutral one step dimmer. The pair is
+ * a pure LIGHTNESS axis - bright = yours to edit, dim = not yours - which survives
+ * at 3px and does not depend on hue, so it reads for colour-blind users and stays
+ * clear of the yellow below. Deliberately not red: another surveyor holding the lock
+ * is the normal state of a shared project, not an error.
+ *
+ * Note `--cc-text-secondary`, not the `text-text-tertiary` class used elsewhere in
+ * this list: no `--cc-text-tertiary` token or Tailwind entry exists, so that class
+ * emits nothing - as a colour here it would yield an invalid `box-shadow` and the
+ * browser would drop the whole declaration.
+ */
+export const LOCK_OTHER_ACCENT = 'var(--cc-text-secondary)';
+
+/** Which leading-edge accent an entry earns, highest precedence first. */
+export type RecentAccent = 'unpushed' | 'lock-mine' | 'lock-other' | 'none';
+
+/**
+ * Pick the ONE accent for a recents entry's leading edge.
+ *
+ * The edge holds a single 3px bar, so the three states have to be ordered rather
+ * than stacked, and un-pushed edits outrank lock state: the lock is recoverable
+ * (ask, or wait) while work that exists only on this computer is the thing that can
+ * actually be lost. Lock state stays legible on a row that loses the bar - the badge
+ * and "Write-locked by you / by {email}" in `SpeleoRecentInfo` say it in words.
+ *
+ * Lock accents are gated on `isRemote` so a local project can never pick one up from
+ * a stale holder field.
+ */
+export function recentAccent(info: SpeleoLockInfo | undefined): RecentAccent {
+  if (!info) return 'none';
+  if (info.hasLocalEdits) return 'unpushed';
+  if (!info.isRemote) return 'none';
+  if (info.lockedByMe) return 'lock-mine';
+  if (info.lockHolder) return 'lock-other';
+  return 'none';
+}
+
+const ACCENT_COLOR: Record<Exclude<RecentAccent, 'none'>, string> = {
+  unpushed: UNPUSHED_ACCENT,
+  'lock-mine': LOCK_MINE_ACCENT,
+  'lock-other': LOCK_OTHER_ACCENT,
+};
+
+/**
+ * The list accent bar down the leading edge of a card / row: yellow for "changes
+ * only on this computer" (#270), bright neutral for "you hold the write lock", dim
+ * neutral for "someone else does". Deliberately an ACCENT and nothing more - the
+ * recents list is a chooser, not a place to shout, so the "!" badge stays on the
+ * status button where an action is available. Returns `undefined` (no styling at
+ * all) when the entry earns no accent.
+ */
+export function recentAccentStyle(
+  info: SpeleoLockInfo | undefined,
+): { boxShadow: string } | undefined {
+  const accent = recentAccent(info);
+  if (accent === 'none') return undefined;
+  return { boxShadow: `inset 3px 0 0 0 ${ACCENT_COLOR[accent]}` };
 }
 
 /**
