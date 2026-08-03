@@ -256,7 +256,7 @@ portalled to Main with its own left/right offsets, so `tabInset` is not relative
 the map column; and the tab's width changes when the panel opens (label to pin +
 close icons) and again under webview text-zoom. A static offset left a 9px gap.
 
-It collapses to the `i` affordance automatically below a 540px host width, and
+It collapses to the `i` affordance automatically below a 520px host width, and
 always in the Section Preview. That threshold is a budget for everything on the
 bottom edge (names + tab inset + ScaleControl) - undershooting it slides the names
 under the scale bar, which is the obstruction the terms forbid. The expanded panel
@@ -267,7 +267,7 @@ Colours come from the app's theme tokens (`bg-panel-90 text-text-secondary`), th
 same ones `PanelOpenerTab` uses, so a dark theme gets a dark bar. Esri's
 recommended design (`#323232` on white at 65%, 12px or larger) is guidance rather
 than a term of use; what the terms require is legible, unobstructed names, and the
-bar renders at 10px against a themed backing.
+bar renders at 9px in a 20px-tall strip against a themed backing.
 
 **The string is fetched, not hard-coded.** `src-tauri/src/tile_attribution.rs`
 reads `copyrightText` from the provider's `service_info_url`, caches it for a day,

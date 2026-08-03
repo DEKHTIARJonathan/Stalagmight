@@ -8,16 +8,16 @@ import { useTileAttribution } from '../../hooks/useTileAttribution';
  * overlay collapses to the `i` affordance. Esri allows exactly this: "Offer an
  * expandable UI when names don't fit on small screens."
  *
- * Budgeted against everything sharing that edge, measured at 10px:
- *   340  the Esri World Imagery list (~66 characters) plus the bar's padding
- *  + 85  right inset: the Data dock's tab (~45px) at its own 40px inset
+ * Budgeted against everything sharing that edge, measured at 9px:
+ *   305  the Esri World Imagery list (~66 characters) plus the bar's padding
+ *  + 95  right inset: the Data dock's tab box, measured from the map column
  *  + 110 the MapLibre ScaleControl at the other end, plus a gap
- *  = 535, rounded up.
+ *  = 510, rounded up.
  *
  * Undershooting here does not merely crowd the bar - it slides the names under
  * the scale bar, which is the obstruction Esri's terms forbid.
  */
-const COMPACT_BELOW_PX = 540;
+const COMPACT_BELOW_PX = 520;
 
 /** Pointer dwell before the compact panel opens. */
 const HOVER_OPEN_MS = 350;
@@ -46,7 +46,7 @@ const CHIP_SURFACE = 'bg-panel-90 text-text-secondary border-border';
  * still holds at this size against a themed backing. Attribution is a credit the
  * map has to carry, not something it should compete with.
  */
-const CHIP_TEXT = 'text-[10px] leading-none';
+const CHIP_TEXT = 'text-[9px] leading-none';
 
 interface MapAttributionProps {
   /** Tile provider whose imagery is on screen. */
@@ -136,14 +136,16 @@ export function MapAttribution({
     return (
       <div
         ref={wrapperRef}
-        // A bottom-flush bar, not a floating card: `min-h-6` with centred
-        // content rather than a tight vertical padding, so the names sit on the
-        // bar's centre line instead of riding its top edge. Top-left is the only
+        // A bottom-flush bar, not a floating card: `min-h-5` with centred
+        // content rather than a vertical padding, so the names sit on the bar's
+        // centre line instead of riding an edge. The height is the only thing
+        // setting the space above and below - keep it a `min-`, so a text-zoom
+        // that outgrows it pushes the bar taller instead of clipping. Top-left is the only
         // rounded corner, because it is the only exposed one - the bottom meets
         // the map's edge and the right butts the Data dock's tab. `border-r` is
         // dropped for the same reason: the tab brings its own left border, and
         // two abutting borders read as a double rule.
-        className={`pointer-events-none flex min-h-6 select-none items-center border-l border-t px-2 rounded-tl ${CHIP_SURFACE} ${CHIP_TEXT} ${className}`}
+        className={`pointer-events-none flex min-h-5 select-none items-center border-l border-t px-2 rounded-tl ${CHIP_SURFACE} ${CHIP_TEXT} ${className}`}
         style={style}
         data-testid="map-attribution"
       >
