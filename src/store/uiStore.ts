@@ -1096,7 +1096,7 @@ export const useUIStore = create<UIStore>((set) => ({
   detailPanelMode: 'pin',
   detailPanelWidth: 300,
   detailPanelTab: 'details',
-  dataTableOpen: false,
+  dataTableOpen: true,
   dataTableMode: 'pin',
   dataTableHeight: 200,
   detailRevealNonce: 0,
@@ -1190,7 +1190,7 @@ export const useUIStore = create<UIStore>((set) => ({
       sectionsPanelMode: asMode(panels.sections_panel_mode),
       detailPanelOpen: panels.detail_panel_open ?? true,
       detailPanelMode: asMode(panels.detail_panel_mode),
-      dataTableOpen: panels.data_table_open ?? false,
+      dataTableOpen: panels.data_table_open ?? true,
       dataTableMode: asMode(panels.data_table_mode),
     });
   },

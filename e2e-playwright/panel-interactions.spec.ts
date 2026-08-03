@@ -105,7 +105,9 @@ test.describe('Panel Interactions', () => {
     // Create a project to access the SingleSystemView with panels
     await createProjectWithSections(page);
 
-    // The data table is closed by default (dataTableOpen: false in uiStore)
+    // Closed here because the IPC mock's config says `data_table_open: false`,
+    // which is what applyPanelsConfig loads. A fresh install defaults to OPEN;
+    // this spec is about the toggle, so it starts from the closed side.
     // Verify the data table is NOT visible initially
     const dataTable = page.getByTestId('data-table');
     await expect(dataTable).toBeHidden({ timeout: 2000 });
