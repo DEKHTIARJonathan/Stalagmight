@@ -112,7 +112,7 @@ export default function SingleSystemView() {
   // instead of the old close-first dead end.
   const handleImportDmp = useCallback(async () => {
     setProjectActionSource('toolbar');
-    await pickAndRoute(importFiltersForContext(), 'Import Failed');
+    await pickAndRoute(importFiltersForContext(true), 'Import Failed');
   }, []);
 
   // Hamburger menu items (file/project actions). Built here so it can use the

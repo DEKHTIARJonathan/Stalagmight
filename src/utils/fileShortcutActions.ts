@@ -50,7 +50,7 @@ export function runFileShortcutAction(action: FileShortcutAction): void {
       // still routes additively into an open project, others now open the
       // "import as new project?" confirm dialog. pickAndRoute dispatches by
       // extension.
-      void pickAndRoute(importFiltersForContext(), 'Import Failed');
+      void pickAndRoute(importFiltersForContext(hasProject), 'Import Failed');
       break;
     }
     case 'quit':

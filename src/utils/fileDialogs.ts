@@ -161,17 +161,18 @@ export function dmpImportFilters() {
 }
 
 /**
- * Import picker filters. Every importable survey format is offered regardless
- * of whether a project is already open (#391): `.dmp` still routes additively
- * into the open project, while every other format now opens the
- * "import as new project?" confirm dialog instead of the old close-first dead
- * end, so there is no reason left to hide them from the in-project picker.
+ * Every importable survey format (DMP/Ariane/Compass/Walls/GPX), with NO
+ * project extension and NO "All Files" entry. Every importable survey format is
+ * offered regardless of whether a project is already open (#391): `.dmp` still
+ * routes additively into the open project, while every other format now opens
+ * the "import as new project?" confirm dialog instead of the old close-first
+ * dead end. But the in-project picker must still exclude `.stalx` and "All
+ * Files" - either would let the user pick a native project through an entry
+ * point labeled Import, which `routeOpenedFile` treats as a plain OPEN and
+ * silently replaces the current project (the bug this filter set exists to
+ * prevent).
  */
-export function importFiltersForContext() {
-  return importOpenFilters();
-}
-
-export function importOpenFilters() {
+export function inProjectImportFilters() {
   return [
     // Combined "everything importable" entry - derived from IMPORTABLE_EXTENSIONS
     // (the single source of truth) so it can't drift from the per-format rows
@@ -182,8 +183,26 @@ export function importOpenFilters() {
     { name: 'Compass Survey', extensions: [...IMPORT_EXTENSIONS.compass] },
     { name: 'Walls Survey', extensions: [...IMPORT_EXTENSIONS.walls] },
     { name: 'GPX Files', extensions: [...IMPORT_EXTENSIONS.gpx] },
-    { name: 'All Files', extensions: ['*'] },
   ];
+}
+
+/**
+ * Import picker filters, scoped to whether a project is currently open.
+ *
+ * With a project open, the picker must offer only survey-import formats (see
+ * `inProjectImportFilters`) - a `.stalx` (or any file via "All Files") picked
+ * through an in-project "Import" entry point would be mis-routed by
+ * `routeOpenedFile` into a native project OPEN, silently replacing the one
+ * that's already open. With no project open there's nothing to accidentally
+ * replace, so the unified picker (every importable format plus "All Files")
+ * is unchanged.
+ */
+export function importFiltersForContext(hasProject: boolean) {
+  return hasProject ? inProjectImportFilters() : importOpenFilters();
+}
+
+export function importOpenFilters() {
+  return [...inProjectImportFilters(), { name: 'All Files', extensions: ['*'] }];
 }
 
 /**

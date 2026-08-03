@@ -173,7 +173,7 @@ export function useProjectMenuItems({ onSave, saveFailed = false }: UseProjectMe
           // "import as new project?" confirm dialog instead of the old
           // close-first dead end - so there is no reason left to restrict the
           // in-project picker to DMP only.
-          importMenuItem('global-import-dmp-button', t('globalView.actions.importSurveyData'), importFiltersForContext, 'hamburger', 'import_dmp'),
+          importMenuItem('global-import-dmp-button', t('globalView.actions.importSurveyData'), () => importFiltersForContext(true), 'hamburger', 'import_dmp'),
         ],
       },
       {
