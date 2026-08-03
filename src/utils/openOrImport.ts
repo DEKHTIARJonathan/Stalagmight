@@ -12,9 +12,13 @@
  * - `.dmp`              -> DMP import (add to current project, or new project)
  * - anything else       -> unsupported-file error (NOT silently treated as DMP)
  *
- * Importing into an open project while editing is blocked (the closure-adjusted
+ * Importing INTO an open project while editing is blocked (the closure-adjusted
  * view, the Plan/Export workspaces, or a SpeleoDB project held without the
  * write lock) is rejected here, so every import entry point shares that guard.
+ * This only applies to `.dmp` (the sole additive in-project import, #391) - the
+ * other formats always close the current project first (via handleCloseProject,
+ * which carries its own SpeleoDB hand-back and unsaved-changes guards) rather
+ * than mutating it, so the read-only guard doesn't apply to them.
  *
  * The routing is intentionally shared between the toolbar "Open / Import"
  * button, the "open it from file" hint link, and the Ctrl+I keyboard shortcut
@@ -27,19 +31,21 @@ import { useSpeleoStore, selectSpeleoReadOnly } from '../store/speleoStore';
 import { isEditingBlockedNow } from '../hooks/useEditingBlocked';
 import { getErrorMessage } from './ipc';
 import { extractFilename } from './path';
-import { openDialog, openOrImportFilters, IMPORTABLE_EXTENSIONS } from './fileDialogs';
+import { openDialog, openOrImportFilters, DMP_EXTENSION } from './fileDialogs';
 import { clearProjectActionSource } from './telemetry';
 import { needsSpeleoHandBackPrompt } from './quit';
 
 /**
- * Error shown when a new-project-only import (GPX / Ariane / Compass) is
- * attempted while a project is already open. The single source of truth shared
- * by the open/import router and the useProject import handlers.
+ * Open the "import as new project?" confirm dialog (#391) for a new-project-only
+ * format (GPX / Ariane / Compass / Walls) picked while a project is already
+ * open. Replaces the old close-first dead end (`IMPORT_SURVEY_CLOSE_FIRST`):
+ * confirming closes the current project (honoring its own unsaved-changes
+ * guard) and then re-routes the same path, which - with no project open - falls
+ * through to the normal new-project import chain.
  */
-export const IMPORT_SURVEY_CLOSE_FIRST = {
-  title: 'Import survey',
-  message: 'Close the current project before importing a new survey.',
-} as const;
+function openImportAsNewProject(ui: ReturnType<typeof useUIStore.getState>, path: string): void {
+  ui.openDialog('import-as-new-project', { path, fileName: extractFilename(path) });
+}
 
 /**
  * Dispatch an already-chosen path to the matching open/import flow.
@@ -52,13 +58,6 @@ export async function routeOpenedFile(path: string, errorTitle = 'Open Failed'):
   const store = useProjectStore.getState();
   const ui = useUIStore.getState();
   const hasProject = !!store.project;
-  // Recognized importable survey formats (everything routed below except .stalx).
-  // Derived from the single source of truth in fileDialogs so this guard and the
-  // file-dialog filters can't drift. Used to scope the read-only guard so an
-  // UNSUPPORTED file still gets the "Unsupported file type" error rather than the
-  // misleading "switch view" one. IMPORTABLE_EXTENSIONS has no leading dots, so
-  // prefix one to keep the original `.gpx`/`.dmp` endsWith semantics.
-  const isImportable = IMPORTABLE_EXTENSIONS.some((ext) => lowerPath.endsWith(`.${ext}`));
 
   // A dialog (or the terminal command it triggers) now owns the pending entry-
   // point source's lifetime - leave it set so that flow can apply it on
@@ -69,14 +68,17 @@ export async function routeOpenedFile(path: string, errorTitle = 'Open Failed'):
   let handedOff = false;
 
   try {
-    // Importing into an open project adds sections (a mutation). The read-only map
-    // (#70 closure-adjusted view, #243 Plan/Export, or a locked remote SpeleoDB
-    // project) rejects an import while active. Centralized here so every caller
-    // (toolbar, Ctrl+I, drag-drop) shares it. Scoped to recognized importable
-    // files so an unsupported/unknown extension still falls through to the
-    // accurate "Unsupported file type" error below (opening a native .stalx
-    // project is not an import, so it's exempt too).
-    if (isImportable && hasProject && isEditingBlockedNow()) {
+    // Importing into an open project adds sections (a mutation) - but only DMP
+    // does that; every other importable format instead CLOSES the current
+    // project and imports as a new one (openImportAsNewProject below), which
+    // doesn't mutate it and carries its own guards via handleCloseProject. So
+    // this read-only guard is scoped to `.dmp` only, not every importable
+    // extension - the read-only map (#70 closure-adjusted view, #243
+    // Plan/Export, or a locked remote SpeleoDB project) rejects only the
+    // additive DMP-into-open-project path. Centralized here so every caller
+    // (toolbar, Ctrl+I, drag-drop) shares it.
+    const isDmp = lowerPath.endsWith(`.${DMP_EXTENSION}`);
+    if (isDmp && hasProject && isEditingBlockedNow()) {
       // Tailor the fix-it advice to the active read-only cause(s) - read the
       // individual flags separately (isEditingBlockedNow() reports only the
       // combined boolean, and isMapReadOnly folds the closure-adjusted and
@@ -136,7 +138,8 @@ export async function routeOpenedFile(path: string, errorTitle = 'Open Failed'):
       // guard so a GPX opened/dropped while a project is open is rejected, not
       // silently added to the current project.
       if (store.project) {
-        ui.openDialog('error', IMPORT_SURVEY_CLOSE_FIRST);
+        openImportAsNewProject(ui, path);
+        handedOff = true;
         return;
       }
       const gpxFile = await store.parseGpx(path);
@@ -151,7 +154,8 @@ export async function routeOpenedFile(path: string, errorTitle = 'Open Failed'):
     } else if (lowerPath.endsWith('.tml') || lowerPath.endsWith('.tmlu')) {
       // TML/TMLU import always creates a new project.
       if (store.project) {
-        ui.openDialog('error', IMPORT_SURVEY_CLOSE_FIRST);
+        openImportAsNewProject(ui, path);
+        handedOff = true;
         return;
       }
       const tmlFile = await store.parseTml(path);
@@ -166,7 +170,8 @@ export async function routeOpenedFile(path: string, errorTitle = 'Open Failed'):
     } else if (lowerPath.endsWith('.mak') || lowerPath.endsWith('.dat')) {
       // Compass import always creates a new project.
       if (store.project) {
-        ui.openDialog('error', IMPORT_SURVEY_CLOSE_FIRST);
+        openImportAsNewProject(ui, path);
+        handedOff = true;
         return;
       }
       const compassFile = await store.parseCompass(path);
@@ -181,7 +186,8 @@ export async function routeOpenedFile(path: string, errorTitle = 'Open Failed'):
     } else if (lowerPath.endsWith('.wpj') || lowerPath.endsWith('.srv')) {
       // Walls import always creates a new project.
       if (store.project) {
-        ui.openDialog('error', IMPORT_SURVEY_CLOSE_FIRST);
+        openImportAsNewProject(ui, path);
+        handedOff = true;
         return;
       }
       const wallsFile = await store.parseWalls(path);

@@ -30,7 +30,7 @@ import { useSidePanelSqueeze, useDataPanelSqueeze, resolveResize } from './sideP
 import { ChevronDownIcon, ChevronLeftIcon, ChevronRightIcon, ChevronUpIcon } from '../common/icons';
 import { usePanelReveal } from './usePanelReveal';
 import { Dock, BAR } from './Dock';
-import { dmpImportFilters } from '../../utils/fileDialogs';
+import { importFiltersForContext } from '../../utils/fileDialogs';
 import { pickAndRoute } from '../../utils/openOrImport';
 import { useProjectMenuItems } from './useProjectMenuItems';
 import { setSource, withTrackingSuppressed, withPersistSuppressed, setProjectActionSource } from '../../utils/telemetry';
@@ -106,14 +106,13 @@ export default function SingleSystemView() {
     return rawSave(opts);
   }, [cancelPending, rawSave]);
 
-  // Toolbar "Import" button: DMP-only picker (the only format importable into an
-  // open project; no "All Files" so non-importable types - notably a `.stalx`
-  // project - can't be chosen and mis-routed), routed through the shared
-  // open/import router. GPX/Ariane/Compass start new projects, so they aren't
-  // offered here.
+  // Toolbar "Import" button: every importable format (#391), routed through the
+  // shared open/import router. `.dmp` still routes additively into this project;
+  // every other format now opens the "import as new project?" confirm dialog
+  // instead of the old close-first dead end.
   const handleImportDmp = useCallback(async () => {
     setProjectActionSource('toolbar');
-    await pickAndRoute(dmpImportFilters(), 'Import Failed');
+    await pickAndRoute(importFiltersForContext(true), 'Import Failed');
   }, []);
 
   // Hamburger menu items (file/project actions). Built here so it can use the

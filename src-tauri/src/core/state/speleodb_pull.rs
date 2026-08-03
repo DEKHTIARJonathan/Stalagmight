@@ -1881,7 +1881,7 @@ impl AppState {
 
         let tml = crate::parsers::tml::parse_tml(tml_path)
             .map_err(|e| local_dto(SpeleoDbError::Parse(e.to_string())))?;
-        let (sections, closures) =
+        let (sections, closures, _converter_warnings) =
             crate::parsers::tml::convert_tml_to_import_configs(&tml, false, true)
                 .map_err(|e| local_dto(SpeleoDbError::Parse(e.to_string())))?;
         // Auto: adoption is an ordinary Ariane import with no dialog to carry a

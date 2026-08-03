@@ -84,7 +84,7 @@ export default function CompassImportDialog({ compassFile, filePath }: CompassIm
           );
           if (suggestions.length > 0) {
             setSource('dialog');
-            openDialog('orphan-placement', { suggestions });
+            openDialog('orphan-placement', { suggestions, receipt: result.import_receipt });
             return;
           }
         } catch {
@@ -92,7 +92,7 @@ export default function CompassImportDialog({ compassFile, filePath }: CompassIm
         }
       }
 
-      completeImportToSingleView('compass-import', importUi);
+      completeImportToSingleView('compass-import', importUi, result.import_receipt);
     } catch (e) {
       resetLoading();
       setIsImporting(false);

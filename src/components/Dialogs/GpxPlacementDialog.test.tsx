@@ -21,6 +21,7 @@ import GpxPlacementDialog from './GpxPlacementDialog';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
 import type { CommandResult, GpxFile, ValidationWarning } from '../../types/commands';
+import type { ImportReceipt } from '../../types/ipc/ImportReceipt';
 
 const SAVE_WARNING: ValidationWarning = {
   code: 'SYSTEM',
@@ -37,8 +38,20 @@ const VALIDATION_WARNING: ValidationWarning = {
 
 const emptyGpx: GpxFile = { name: 'cave.gpx', waypoints: [], tracks: [], routes: [] };
 
-const ok = (warnings: ValidationWarning[]): CommandResult =>
-  ({ success: true, error: null, warnings, section_ids: [] } as CommandResult);
+const RECEIPT: ImportReceipt = {
+  source_format: 'GPX',
+  file_name: 'cave.gpx',
+  sections_found: 2,
+  sections_imported: 2,
+  shot_count: 0,
+  closures_requested: 0,
+  closures_created: 0,
+  unit_conversion: null,
+  warnings: [],
+};
+
+const ok = (warnings: ValidationWarning[], import_receipt?: ImportReceipt): CommandResult =>
+  ({ success: true, error: null, warnings, section_ids: [], import_receipt } as CommandResult);
 
 let executeGpxImport: ReturnType<typeof vi.fn>;
 let openDialog: ReturnType<typeof vi.fn>;
@@ -95,5 +108,28 @@ describe('GpxPlacementDialog warning surfacing (#110)', () => {
 
     await waitFor(() => expect(closeDialog).toHaveBeenCalled());
     expect(openDialog).not.toHaveBeenCalled();
+  });
+
+  it('shows the save-failure dialog (not the receipt) on a deferred-save partial success (#92)', async () => {
+    executeGpxImport.mockResolvedValue(ok([SAVE_WARNING], RECEIPT));
+
+    render(<GpxPlacementDialog />);
+    await userEvent.click(await screen.findByTestId('gpx-import-confirm'));
+
+    await waitFor(() =>
+      expect(openDialog).toHaveBeenCalledWith('error', expect.objectContaining({ title: 'Import Warning' })),
+    );
+    expect(openDialog).not.toHaveBeenCalledWith('import-receipt', expect.anything());
+  });
+
+  it('shows the receipt when the import fully succeeds with a receipt', async () => {
+    executeGpxImport.mockResolvedValue(ok([], RECEIPT));
+
+    render(<GpxPlacementDialog />);
+    await userEvent.click(await screen.findByTestId('gpx-import-confirm'));
+
+    await waitFor(() =>
+      expect(openDialog).toHaveBeenCalledWith('import-receipt', { receipt: RECEIPT }),
+    );
   });
 });

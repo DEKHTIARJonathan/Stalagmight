@@ -2,6 +2,7 @@ import { useProjectStore } from '../store/projectStore';
 import { isPermissionError } from './saveErrors';
 import { trackDialogComplete } from './telemetry';
 import type { ValidationWarning } from '../types/ipc/ValidationWarning';
+import type { ImportReceipt } from '../types/ipc/ImportReceipt';
 
 /**
  * Surface a failed (non-throwing) save to the user.
@@ -84,14 +85,25 @@ export interface ImportDialogUi {
 
 /**
  * Close the import dialog and return to the fitted single-system view, stamping
- * the dialog-complete telemetry event first. Shared exit sequence for the TML and
- * Compass new-project import dialogs.
+ * the dialog-complete telemetry event first. Shared exit sequence for the TML,
+ * Compass, Walls and GPX new-project import dialogs.
+ *
+ * When `receipt` is present (a successful import that produced one), opens the
+ * post-import receipt dialog (#391) right after so the user sees what landed
+ * without having to open the data table.
  */
-export function completeImportToSingleView(dialogName: string, ui: ImportDialogUi): void {
+export function completeImportToSingleView(
+  dialogName: string,
+  ui: ImportDialogUi,
+  receipt?: ImportReceipt,
+): void {
   trackDialogComplete(dialogName);
   ui.closeDialog();
   ui.setView('single');
   ui.triggerFitToBounds();
+  if (receipt) {
+    ui.openDialog('import-receipt', { receipt });
+  }
 }
 
 /**

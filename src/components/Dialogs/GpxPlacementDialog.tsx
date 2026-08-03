@@ -2,7 +2,7 @@ import { useState, useMemo, useCallback } from 'react';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
 import { getErrorMessage } from '../../utils/ipc';
-import { completeImportToSingleView, deferredSaveWarnings, surfaceImportWarnings } from '../../utils/saveFeedback';
+import { completeImportToSingleView, finalizeDeferredSaveWarnings } from '../../utils/saveFeedback';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import type { GpxFile, GpxSectionPlacement } from '../../types/commands';
@@ -139,19 +139,25 @@ export default function GpxPlacementDialog() {
         depthInverted
       );
 
-      completeImportToSingleView('gpx-placement', { closeDialog, setView, triggerFitToBounds, openDialog });
+      const importUi = { closeDialog, setView, triggerFitToBounds, openDialog };
 
       if (!result.success) {
+        completeImportToSingleView('gpx-placement', importUi);
         openDialog('error', {
           title: 'Import Errors',
           message: result.error ?? 'Unknown error during import',
         });
-      } else {
-        // Partial-success import (deferred save failed) - surface ONLY the
-        // "SYSTEM" save-failure warning so the user knows their import is unsaved;
-        // routine validation warnings are surfaced elsewhere (#110).
-        surfaceImportWarnings(deferredSaveWarnings(result.warnings), openDialog);
+        return;
       }
+
+      // A partial-success import (new-project deferred save failed) returns
+      // success WITH a "SYSTEM" save-failure warning. Surface ONLY that instead
+      // of the receipt, so "unsaved - save manually" isn't buried (#110).
+      if (finalizeDeferredSaveWarnings(result.warnings, 'gpx-placement', importUi)) {
+        return;
+      }
+
+      completeImportToSingleView('gpx-placement', importUi, result.import_receipt);
     } catch (e) {
       setIsImporting(false);
       openDialog('error', {

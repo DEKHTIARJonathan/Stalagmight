@@ -1,4 +1,5 @@
 import { useEffect, useCallback, useState, useMemo, useRef } from 'react';
+import { useTranslation } from 'react-i18next';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { getCurrentWebview, type DragDropEvent } from '@tauri-apps/api/webview';
 import { useProjectStore } from './store/projectStore';
@@ -19,7 +20,7 @@ import GlobalView from './components/GlobalView/GlobalView';
 import SingleSystemView from './components/SingleSystemView/SingleSystemView';
 import SplashScreen from './components/SplashScreen/SplashScreen';
 import OnboardingOverlay from './components/Onboarding/OnboardingOverlay';
-import { ImportDialog, ExportDialog, NewProjectDialog, NewProjectForImportDialog, DmpSelectionDialog, DmpNewImportDialog, ZeroDatumSelectionDialog, ZeroDatumConfigDialog, TmlImportDialog, CompassImportDialog, WallsImportDialog, GpxSelectionDialog, GpxPlacementDialog, ConfirmDialog, ReverseSectionDialog, DeleteShotChoiceDialog, BulkDeleteDialog, MergeDialog, ClosureDialog, MergeProjectsDialog, DrawShotDialog, EditSectionDialog, EditShotDialog, EditStationDialog, UnmergeStationsDialog, RemoveClosureDialog, UnsavedChangesDialog, ErrorDialog, SavePermissionDialog, OverwriteConfirmDialog, DeleteProjectDialog, SectionAdjustDialog, SettingsDialog, ProjectSettingsDialog, SplitSectionDialog, InsertStationDialog, CorruptionRecoveryDialog, DebugDialog, SwapCommentsDialog, OrphanPlacementDialog, KeyboardShortcutsDialog, TelemetryOptInDialog, OpenFromSpeleoDbDialog, PublishToSpeleoDbDialog, SpeleoDoneDialog, SpeleoDivergenceDialog, SpeleoForceEditDialog, SpeleoRestoreDialog, SpeleoUnwindDialog, SpeleoUnwoundPushDialog, SpeleoDiscardChangesDialog, SpeleoRevertDialog, SpeleoCloseDialog, SpeleoQuitDialog, SpeleoNoPermissionDialog, HeldLockResumeDialog, UnrecognisedShotKindDialog, SpeleoUnpushedLocalDialog, SpeleoManagedFileDialog, SpeleoDbProjectDialog, SpeleoStorageChoiceDialog, SpeleoDumpPickerDialog } from './components/Dialogs';
+import { ImportDialog, ExportDialog, NewProjectDialog, NewProjectForImportDialog, DmpSelectionDialog, DmpNewImportDialog, ZeroDatumSelectionDialog, ZeroDatumConfigDialog, TmlImportDialog, CompassImportDialog, WallsImportDialog, GpxSelectionDialog, GpxPlacementDialog, ConfirmDialog, ReverseSectionDialog, DeleteShotChoiceDialog, BulkDeleteDialog, MergeDialog, ClosureDialog, MergeProjectsDialog, DrawShotDialog, EditSectionDialog, EditShotDialog, EditStationDialog, UnmergeStationsDialog, RemoveClosureDialog, UnsavedChangesDialog, ErrorDialog, SavePermissionDialog, OverwriteConfirmDialog, DeleteProjectDialog, SectionAdjustDialog, SettingsDialog, ProjectSettingsDialog, SplitSectionDialog, InsertStationDialog, CorruptionRecoveryDialog, DebugDialog, SwapCommentsDialog, OrphanPlacementDialog, KeyboardShortcutsDialog, TelemetryOptInDialog, OpenFromSpeleoDbDialog, PublishToSpeleoDbDialog, SpeleoDoneDialog, SpeleoDivergenceDialog, SpeleoForceEditDialog, SpeleoRestoreDialog, SpeleoUnwindDialog, SpeleoUnwoundPushDialog, SpeleoDiscardChangesDialog, SpeleoRevertDialog, SpeleoCloseDialog, SpeleoQuitDialog, SpeleoNoPermissionDialog, HeldLockResumeDialog, UnrecognisedShotKindDialog, SpeleoUnpushedLocalDialog, SpeleoManagedFileDialog, SpeleoDbProjectDialog, SpeleoStorageChoiceDialog, SpeleoDumpPickerDialog, ImportReceiptDialog, ImportAsNewProjectDialog } from './components/Dialogs';
 import { initTelemetry, flushTelemetry, setProjectActionSource } from './utils/telemetry';
 import { ContextMenu, ToastStack } from './components/common';
 import { MemoryProbe } from './components/MemoryProbe/MemoryProbe';
@@ -28,6 +29,7 @@ import type { ZeroDatumConfigResult } from './components/Dialogs/ZeroDatumConfig
 import type { OrphanPlacementSuggestion } from './types/commands';
 
 function App() {
+  const { t } = useTranslation();
   const { project, stations, recentProjects, loading, loadConfig, config, isDirty, setConfig } = useProjectStore();
   const integrityIssues = useProjectStore((s) => s.integrityIssues);
   const integrityDismissed = useProjectStore((s) => s.integrityDismissed);
@@ -568,9 +570,9 @@ function App() {
         >
           <div className="bg-panel p-6 rounded-lg shadow-xl text-center">
             <div className="text-4xl mb-2">📥</div>
-            <div className="text-lg font-semibold">Drop file to import</div>
+            <div className="text-lg font-semibold">{t('app.dropOverlay.title')}</div>
             <div className="text-sm text-text-secondary mt-1">
-              {project ? 'Add sections to current project' : 'Create new project'}
+              {project ? t('app.dropOverlay.existingProject') : t('app.dropOverlay.newProject')}
             </div>
           </div>
         </div>
@@ -649,7 +651,7 @@ function App() {
               });
             }
           }}
-          onComplete={async (newSectionIds?: number[]) => {
+          onComplete={async (newSectionIds?: number[], receipt?: import('./types/ipc/ImportReceipt').ImportReceipt) => {
             // Persist the freshly-imported project before anything else (#92) -
             // including before handing off to orphan placement - so the import
             // can never be lost. If the save failed, an error/permission dialog is
@@ -665,7 +667,7 @@ function App() {
                   { purpose: 'suggest orphan placements after DMP import' }
                 );
                 if (suggestions.length > 0) {
-                  openDialog('orphan-placement', { suggestions });
+                  openDialog('orphan-placement', { suggestions, receipt });
                   return;
                 }
               } catch {
@@ -675,6 +677,9 @@ function App() {
             closeDialog();
             setView('single');
             triggerFitToBounds();
+            if (receipt) {
+              openDialog('import-receipt', { receipt });
+            }
           }}
         />
       ) : null}
@@ -789,9 +794,12 @@ function App() {
       {activeDialog === 'orphan-placement' && (
         <OrphanPlacementDialog
           suggestions={(dialogData.suggestions ?? []) as OrphanPlacementSuggestion[]}
+          receipt={dialogData.receipt as import('./types/ipc/ImportReceipt').ImportReceipt | undefined}
         />
       )}
       {activeDialog === 'keyboard-shortcuts' && <KeyboardShortcutsDialog />}
+      {activeDialog === 'import-receipt' && <ImportReceiptDialog />}
+      {activeDialog === 'import-as-new-project' && <ImportAsNewProjectDialog />}
 
       {onboarding.activeStep && (
         <OnboardingOverlay

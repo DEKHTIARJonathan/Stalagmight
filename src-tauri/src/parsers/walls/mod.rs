@@ -93,6 +93,11 @@ pub struct WallsFile {
     pub missing_file_count: u32,
     /// `.WPJ` entries skipped because they are non-survey attachments.
     pub skipped_attachment_count: u32,
+    /// Whether any survey in this project had a shot measured in feet. Drives
+    /// the import receipt's unit-conversion note - Walls carries no
+    /// project-wide unit label the way Compass does, so this is derived from
+    /// the per-shot units actually parsed (#391).
+    pub any_feet_units: bool,
     pub surveys: Vec<WallsSurveySummary>,
     pub warnings: Vec<String>,
 }
@@ -445,6 +450,8 @@ pub(crate) struct ParsedSurvey {
     /// convergence + auto-declination for its shots.
     pub(crate) georef: Option<WallsRef>,
     pub(crate) resolved: bool,
+    /// Whether any shot in this survey was measured in feet (#391).
+    pub(crate) used_feet: bool,
 }
 
 /// Fully parsed Walls project.

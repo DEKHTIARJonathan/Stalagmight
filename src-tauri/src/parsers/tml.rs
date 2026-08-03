@@ -1159,10 +1159,12 @@ pub fn convert_tml_to_import_configs(
     tml: &TmlFile,
     include_excluded: bool,
     comments_on_stations: bool,
-) -> Result<(Vec<ImportSectionConfig>, Vec<ImportClosure>)> {
+) -> Result<(Vec<ImportSectionConfig>, Vec<ImportClosure>, Vec<String>)> {
     if tml.sections.is_empty() {
-        return Ok((Vec::new(), Vec::new()));
+        return Ok((Vec::new(), Vec::new(), Vec::new()));
     }
+
+    let mut warnings: Vec<String> = Vec::new();
 
     // Build a mapping from Ariane shot ID → (section_index, station_index)
     // to resolve topology connections between sections.
@@ -1190,6 +1192,7 @@ pub fn convert_tml_to_import_configs(
     }
 
     let mut configs: Vec<ImportSectionConfig> = Vec::new();
+    let mut zero_shot_sections_dropped: u32 = 0;
 
     for (si, section) in tml.sections.iter().enumerate() {
         let section_index = si as u32;
@@ -1200,6 +1203,11 @@ pub fn convert_tml_to_import_configs(
 
         // Skip sections that end up with zero shots after filtering
         if shot_data.is_empty() {
+            tracing::warn!(
+                section = ?section.name,
+                "Section has no shots after filtering, dropping from import"
+            );
+            zero_shot_sections_dropped += 1;
             continue;
         }
 
@@ -1222,7 +1230,7 @@ pub fn convert_tml_to_import_configs(
         // Determine placement: try start_ariane_id first (preserves original
         // topology), then effective_start_id as fallback when the original
         // from_id was excluded and can't be resolved.
-        let placement = determine_placement(
+        let (placement, placement_warning) = determine_placement(
             section,
             section_index,
             section.start_ariane_id,
@@ -1230,6 +1238,9 @@ pub fn convert_tml_to_import_configs(
             &id_to_import_loc,
             tml.geo_coding.as_ref(),
         );
+        if let Some(w) = placement_warning {
+            warnings.push(w);
+        }
 
         // When comments_on_stations is true, peel station-portion lines out
         // of each shot's Comment field via the ZWSP marker convention
@@ -1288,6 +1299,7 @@ pub fn convert_tml_to_import_configs(
     // closure_to_id (the target station). Both must resolve to import-space
     // coordinates; closures where either endpoint was filtered out are skipped.
     let mut import_closures = Vec::new();
+    let mut closures_with_excluded_endpoints: u32 = 0;
     for section in &tml.sections {
         for shot in &section.shots {
             if shot.shot_type != TmlShotType::Closure || shot.closure_to_id < 0 {
@@ -1302,11 +1314,49 @@ pub fn convert_tml_to_import_configs(
                     to_section_index: to_si,
                     to_station_index: to_st,
                 });
+            } else {
+                tracing::warn!(
+                    section = ?section.name,
+                    "Loop closure referenced an excluded station and was skipped"
+                );
+                closures_with_excluded_endpoints += 1;
             }
         }
     }
 
-    Ok((configs, import_closures))
+    if zero_shot_sections_dropped > 0 {
+        warnings.push(format!(
+            "{zero_shot_sections_dropped} section{} had no shots after filtering and {} dropped",
+            if zero_shot_sections_dropped == 1 {
+                ""
+            } else {
+                "s"
+            },
+            if zero_shot_sections_dropped == 1 {
+                "was"
+            } else {
+                "were"
+            }
+        ));
+    }
+    if closures_with_excluded_endpoints > 0 {
+        warnings.push(format!(
+            "{closures_with_excluded_endpoints} loop closure{} referenced excluded stations and \
+             {} skipped",
+            if closures_with_excluded_endpoints == 1 {
+                ""
+            } else {
+                "s"
+            },
+            if closures_with_excluded_endpoints == 1 {
+                "was"
+            } else {
+                "were"
+            }
+        ));
+    }
+
+    Ok((configs, import_closures, warnings))
 }
 
 /// Simplify branch-suffixed names when only one branch of a group survives.
@@ -1590,24 +1640,27 @@ fn determine_placement(
     effective_start_id: Option<i64>,
     id_to_import_loc: &HashMap<i64, (u32, u32)>,
     _geo_coding: Option<&TmlGeoCoding>,
-) -> ImportPlacement {
+) -> (ImportPlacement, Option<String>) {
     // First section → Origin
     if section_index == 0 {
         // Check if first shot has GPS data
         if let Some(first_shot) = section.shots.first() {
             if first_shot.latitude.abs() > f64::EPSILON || first_shot.longitude.abs() > f64::EPSILON
             {
-                return ImportPlacement::ZeroDatum {
-                    coordinates: crate::models::GpsCoordinates {
-                        latitude: first_shot.latitude,
-                        longitude: first_shot.longitude,
-                        depth_reference: 0.0,
+                return (
+                    ImportPlacement::ZeroDatum {
+                        coordinates: crate::models::GpsCoordinates {
+                            latitude: first_shot.latitude,
+                            longitude: first_shot.longitude,
+                            depth_reference: 0.0,
+                        },
+                        station_index: 0,
                     },
-                    station_index: 0,
-                };
+                    None,
+                );
             }
         }
-        return ImportPlacement::Origin;
+        return (ImportPlacement::Origin, None);
     }
 
     // Try to connect to an already-imported section. First try the original
@@ -1623,11 +1676,14 @@ fn determine_placement(
             // Allow forward references - configs will be topologically sorted
             // afterward so that the target section is created first.
             if target_section != section_index {
-                return ImportPlacement::FromImporting {
-                    import_station: 0, // First station of this section
-                    target_section_index: target_section,
-                    target_station_index: target_station,
-                };
+                return (
+                    ImportPlacement::FromImporting {
+                        import_station: 0, // First station of this section
+                        target_section_index: target_section,
+                        target_station_index: target_station,
+                    },
+                    None,
+                );
             }
         }
     }
@@ -1635,14 +1691,17 @@ fn determine_placement(
     // Check for GPS data on first shot
     if let Some(first_shot) = section.shots.first() {
         if first_shot.latitude.abs() > f64::EPSILON || first_shot.longitude.abs() > f64::EPSILON {
-            return ImportPlacement::ZeroDatum {
-                coordinates: crate::models::GpsCoordinates {
-                    latitude: first_shot.latitude,
-                    longitude: first_shot.longitude,
-                    depth_reference: 0.0,
+            return (
+                ImportPlacement::ZeroDatum {
+                    coordinates: crate::models::GpsCoordinates {
+                        latitude: first_shot.latitude,
+                        longitude: first_shot.longitude,
+                        depth_reference: 0.0,
+                    },
+                    station_index: 0,
                 },
-                station_index: 0,
-            };
+                None,
+            );
         }
     }
 
@@ -1651,7 +1710,13 @@ fn determine_placement(
         section = %section.name,
         "Section has no topology link or GPS data, placing at origin"
     );
-    ImportPlacement::Origin
+    (
+        ImportPlacement::Origin,
+        Some(format!(
+            "Section \"{}\" was disconnected from the rest of the survey and was placed at the origin",
+            section.name
+        )),
+    )
 }
 
 // ============================================================================
@@ -2059,8 +2124,8 @@ mod tests {
             closures,
         };
 
-        let (configs, _) = convert_tml_to_import_configs(&tml, false, false)
-            .unwrap_or_else(|_| (Vec::new(), Vec::new()));
+        let (configs, _, _) = convert_tml_to_import_configs(&tml, false, false)
+            .unwrap_or_else(|_| (Vec::new(), Vec::new(), Vec::new()));
         assert_eq!(configs.len(), 1);
         match &configs[0].placement {
             ImportPlacement::ZeroDatum {
@@ -2612,8 +2677,8 @@ mod tests {
             closures,
         };
 
-        let (configs, _) = convert_tml_to_import_configs(&tml, false, false)
-            .unwrap_or_else(|_| (Vec::new(), Vec::new()));
+        let (configs, _, _) = convert_tml_to_import_configs(&tml, false, false)
+            .unwrap_or_else(|_| (Vec::new(), Vec::new(), Vec::new()));
         assert_eq!(configs.len(), 2);
 
         // First section → Origin (no GPS)
@@ -2956,13 +3021,105 @@ mod tests {
         };
 
         // With excluded filtered out, section "AllExcluded" has 0 shots → dropped
-        let (configs, _closures) = convert_tml_to_import_configs(&tml, false, false).unwrap();
+        let (configs, _closures, _) = convert_tml_to_import_configs(&tml, false, false).unwrap();
         assert_eq!(configs.len(), 1);
         assert_eq!(configs[0].name.as_deref(), Some("Good"));
 
         // With excluded included, both sections present
-        let (configs, _closures) = convert_tml_to_import_configs(&tml, true, false).unwrap();
+        let (configs, _closures, _) = convert_tml_to_import_configs(&tml, true, false).unwrap();
         assert_eq!(configs.len(), 2);
+    }
+
+    #[test]
+    fn test_zero_shot_section_and_filtered_closure_surface_receipt_warnings() {
+        // Same all-excluded-section shape as the test above, plus a CLOSURE shot
+        // whose target station was excluded (and so never made it into
+        // `id_to_import_loc`), exercising both converter-level warnings at once.
+        let make_shot = |id, from_id, shot_type, excluded, closure_to_id| TmlShot {
+            id,
+            from_id,
+            shot_type,
+            azimuth: 90.0,
+            length: 10.0,
+            depth: 0.0,
+            depth_in: -1.0,
+            inclination: 0.0,
+            left: 0.0,
+            right: 0.0,
+            up: 0.0,
+            down: 0.0,
+            comment: None,
+            explorer: None,
+            date: None,
+            color: "#000000".to_string(),
+            excluded,
+            latitude: 0.0,
+            longitude: 0.0,
+            closure_to_id,
+            section: "S".to_string(),
+        };
+
+        let tml = TmlFile {
+            cave_name: "Test".to_string(),
+            unit: TmlUnit::Metric,
+            use_magnetic_azimuth: false,
+            first_start_absolute_elevation: 0.0,
+            geo_coding: None,
+            sections: vec![
+                TmlSection {
+                    name: "Good".to_string(),
+                    shots: vec![
+                        make_shot(1, 0, TmlShotType::Real, false, -1),
+                        make_shot(2, 1, TmlShotType::Real, false, -1),
+                        // Closure from Good's station 2 to shot 4, which is
+                        // excluded and filtered out of `id_to_import_loc`.
+                        make_shot(5, 2, TmlShotType::Closure, false, 4),
+                    ],
+                    surveyor: None,
+                    date: None,
+                    color: "#ff0000".to_string(),
+                    is_branch_split: false,
+                    start_ariane_id: 0,
+                    end_ariane_id: 2,
+                    start_depth: 0.0,
+                },
+                TmlSection {
+                    name: "AllExcluded".to_string(),
+                    shots: vec![
+                        make_shot(3, 2, TmlShotType::Real, true, -1),
+                        make_shot(4, 3, TmlShotType::Real, true, -1),
+                    ],
+                    surveyor: None,
+                    date: None,
+                    color: "#00ff00".to_string(),
+                    is_branch_split: false,
+                    start_ariane_id: 2,
+                    end_ariane_id: 4,
+                    start_depth: 0.0,
+                },
+            ],
+            closures: Vec::new(),
+        };
+
+        let (configs, closures, warnings) =
+            convert_tml_to_import_configs(&tml, false, false).unwrap();
+        assert_eq!(configs.len(), 1, "the all-excluded section must be dropped");
+        assert!(
+            closures.is_empty(),
+            "the closure whose endpoint was excluded must be skipped"
+        );
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("had no shots after filtering")),
+            "expected a zero-shot-section warning, got: {warnings:?}"
+        );
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("referenced excluded stations")),
+            "expected a filtered-closure warning, got: {warnings:?}"
+        );
     }
 
     #[test]
@@ -3027,12 +3184,12 @@ mod tests {
         };
 
         // Excluded filtered: branch 2 dropped, branch 1 renamed to "Gallery"
-        let (configs, _closures) = convert_tml_to_import_configs(&tml, false, false).unwrap();
+        let (configs, _closures, _) = convert_tml_to_import_configs(&tml, false, false).unwrap();
         assert_eq!(configs.len(), 1);
         assert_eq!(configs[0].name.as_deref(), Some("Gallery"));
 
         // Both included: both branches keep their suffixes
-        let (configs, _closures) = convert_tml_to_import_configs(&tml, true, false).unwrap();
+        let (configs, _closures, _) = convert_tml_to_import_configs(&tml, true, false).unwrap();
         assert_eq!(configs.len(), 2);
         assert_eq!(configs[0].name.as_deref(), Some("Gallery (branch 1)"));
         assert_eq!(configs[1].name.as_deref(), Some("Gallery (branch 2)"));
@@ -3125,7 +3282,7 @@ mod tests {
             closures: Vec::new(),
         };
 
-        let (configs, _closures) = convert_tml_to_import_configs(&tml, false, false).unwrap();
+        let (configs, _closures, _) = convert_tml_to_import_configs(&tml, false, false).unwrap();
         assert_eq!(configs.len(), 3);
 
         // After topological sort: C must come before B because B depends on C.
@@ -3251,7 +3408,7 @@ mod tests {
             closures,
         };
 
-        let (configs, _closures) = convert_tml_to_import_configs(&tml, false, false).unwrap();
+        let (configs, _closures, _) = convert_tml_to_import_configs(&tml, false, false).unwrap();
         assert_eq!(configs.len(), 2, "Should have 2 sections");
 
         // Section A: 4 shots → 5 stations (0, 1, 2, 3, 4)
@@ -3302,7 +3459,7 @@ mod tests {
         assert_eq!(tml.unit, TmlUnit::Metric);
 
         // 2. Convert to import configs (exclude excluded shots)
-        let (configs, closures) = convert_tml_to_import_configs(&tml, false, false).unwrap();
+        let (configs, closures, _) = convert_tml_to_import_configs(&tml, false, false).unwrap();
         assert!(!configs.is_empty(), "Should produce import configs");
 
         // 3. Create a project and import all sections

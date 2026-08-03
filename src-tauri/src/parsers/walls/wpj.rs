@@ -197,6 +197,7 @@ pub(crate) fn parse_wpj(path: &Path) -> Result<ParsedWalls> {
                                     fixes: Vec::new(),
                                     georef: ctx.reference.clone(),
                                     resolved: false,
+                                    used_feet: false,
                                 });
                             }
                         }

@@ -238,6 +238,60 @@ pub struct ReversedSection {
     pub shot_count: u32,
 }
 
+/// Backend-authoritative summary of what an import command actually did, so the
+/// frontend can show a receipt without re-deriving counts the backend already
+/// computed (and, for the converter-level warnings below, cannot derive at all).
+///
+/// These warnings are DISTINCT from [`CommandResult::warnings`] and must never be
+/// pushed through [`CommandResult::with_warning`]: that path stamps `code:
+/// "SYSTEM"`, which the frontend's deferred-save-failure handling
+/// (`saveFeedback.ts`) keys on exactly - mixing receipt warnings into it would
+/// make an unrelated import-quality note look like the deferred-save failure the
+/// #92/#104 contract exists to surface.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+pub struct ImportReceipt {
+    pub source_format: String,
+    pub file_name: String,
+    pub sections_found: u32,
+    pub sections_imported: u32,
+    pub shot_count: u32,
+    pub closures_requested: u32,
+    pub closures_created: u32,
+    pub unit_conversion: Option<String>,
+    pub warnings: Vec<String>,
+}
+
+impl ImportReceipt {
+    /// Keep at most this many individual warnings before folding the rest
+    /// into a single summary entry.
+    const MAX_WARNINGS: usize = 50;
+    /// Clamp each warning string to this many characters.
+    const MAX_WARNING_LEN: usize = 300;
+
+    /// Cap and clamp `warnings` so a hostile or malformed import file (this
+    /// app is open-source, so an untrusted file is a real input, not a
+    /// hypothetical) can't inflate the receipt into an unbounded allocation
+    /// shipped back over IPC: at most [`Self::MAX_WARNINGS`] entries (the rest
+    /// folded into one "... and N more warnings" summary), each clamped to
+    /// [`Self::MAX_WARNING_LEN`] chars on a char boundary (never a raw byte
+    /// slice - a warning can embed arbitrary user-controlled text).
+    pub fn cap_warnings(&mut self) {
+        if self.warnings.len() > Self::MAX_WARNINGS {
+            let overflow = self.warnings.len() - Self::MAX_WARNINGS;
+            self.warnings.truncate(Self::MAX_WARNINGS);
+            self.warnings.push(format!(
+                "... and {overflow} more warning{}",
+                if overflow == 1 { "" } else { "s" }
+            ));
+        }
+        for warning in &mut self.warnings {
+            if let Some((cut, _)) = warning.char_indices().nth(Self::MAX_WARNING_LEN) {
+                warning.truncate(cut);
+            }
+        }
+    }
+}
+
 /// Result of command execution
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct CommandResult {
@@ -347,6 +401,13 @@ pub struct CommandResult {
     /// existing `CommandResult` literal on the frontend.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub reversed_sections: Option<Vec<ReversedSection>>,
+    /// Backend-authoritative summary of an import command's outcome (see
+    /// [`ImportReceipt`]'s doc comment for why its warnings must stay separate
+    /// from the field above). Same wire contract as `reversed_sections`:
+    /// `skip_serializing_if` + `default` keeps the key absent for every
+    /// non-import command.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub import_receipt: Option<ImportReceipt>,
 }
 
 /// Result of an explicit "repair project integrity" action. `fixed` and
@@ -412,6 +473,7 @@ impl CommandResult {
             session_closed: None,
             unlinked_copy_path: None,
             reversed_sections: None,
+            import_receipt: None,
         }
     }
 
@@ -427,6 +489,7 @@ impl CommandResult {
             session_closed: None,
             unlinked_copy_path: None,
             reversed_sections: None,
+            import_receipt: None,
         }
     }
 
@@ -485,6 +548,12 @@ impl CommandResult {
     /// Attach the sections whose station numbering this operation reversed.
     pub fn with_reversed_sections(mut self, sections: Vec<ReversedSection>) -> Self {
         self.reversed_sections = Some(sections);
+        self
+    }
+
+    /// Attach an import receipt to this result.
+    pub fn with_import_receipt(mut self, receipt: ImportReceipt) -> Self {
+        self.import_receipt = Some(receipt);
         self
     }
 
@@ -1381,5 +1450,59 @@ mod tests {
         for (command, expected) in cases {
             assert_eq!(command.description(), expected);
         }
+    }
+
+    fn blank_receipt() -> ImportReceipt {
+        ImportReceipt {
+            source_format: String::new(),
+            file_name: String::new(),
+            sections_found: 0,
+            sections_imported: 0,
+            shot_count: 0,
+            closures_requested: 0,
+            closures_created: 0,
+            unit_conversion: None,
+            warnings: Vec::new(),
+        }
+    }
+
+    /// A hostile/malformed import file can produce an unbounded number of
+    /// warnings; `cap_warnings` must fold anything past the cap into one
+    /// summary entry rather than shipping all of it back over IPC.
+    #[test]
+    fn cap_warnings_caps_a_huge_warning_count() {
+        let mut receipt = blank_receipt();
+        receipt.warnings = (0..10_000).map(|i| format!("warning {i}")).collect();
+        receipt.cap_warnings();
+
+        assert_eq!(receipt.warnings.len(), 51);
+        for warning in &receipt.warnings[..50] {
+            assert!(warning.chars().count() <= 300);
+        }
+        assert_eq!(receipt.warnings[50], "... and 9950 more warnings");
+    }
+
+    /// Each individual warning is clamped to 300 chars, truncating on a char
+    /// boundary (never a raw byte slice) since a warning can embed arbitrary
+    /// user-controlled text, including multi-byte characters.
+    #[test]
+    fn cap_warnings_clamps_an_overlong_warning_on_a_char_boundary() {
+        let mut receipt = blank_receipt();
+        // Multi-byte char (3 bytes each in UTF-8) so a byte-slice truncation
+        // at 300 would panic; a char-boundary truncation must not.
+        receipt.warnings = vec!["\u{2603}".repeat(500)];
+        receipt.cap_warnings();
+
+        assert_eq!(receipt.warnings.len(), 1);
+        assert_eq!(receipt.warnings[0].chars().count(), 300);
+    }
+
+    #[test]
+    fn cap_warnings_is_a_no_op_under_the_cap() {
+        let mut receipt = blank_receipt();
+        receipt.warnings = vec!["short warning".to_string()];
+        receipt.cap_warnings();
+
+        assert_eq!(receipt.warnings, vec!["short warning".to_string()]);
     }
 }

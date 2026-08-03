@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { getErrorMessage } from '../../utils/ipc';
@@ -16,6 +17,7 @@ import { setSource, trackDialogComplete, peekProjectActionSource, setProjectActi
  * to continue the import flow.
  */
 export default function NewProjectForImportDialog() {
+  const { t } = useTranslation();
   const { closeDialog, dialogData, openDialog, setImportContext } = useUIStore();
   const { createProject } = useProjectStore();
 
@@ -25,6 +27,10 @@ export default function NewProjectForImportDialog() {
   const compassFile = dialogData.compassFile as CompassFile | undefined;
   const wallsFile = dialogData.wallsFile as WallsFile | undefined;
   const filePath = dialogData.filePath as string | undefined;
+  const fileName = useMemo(
+    () => (filePath ? filePath.split(/[/\\]/).pop() || filePath : ''),
+    [filePath]
+  );
   const importType = dialogData.importType as string | undefined;
   const defaultName = (dialogData.defaultName as string) || '';
   const isTml = importType === 'tml' || !!tmlFile;
@@ -112,18 +118,18 @@ export default function NewProjectForImportDialog() {
         setSavePath(ensureExtension(selected, PROJECT_EXTENSION));
       }
     } catch (e) {
-      setError(getErrorMessage(e, 'Failed to open save dialog'));
+      setError(getErrorMessage(e, t('dialogs.newProjectForImport.errors.saveDialogFailed')));
     }
   };
 
   const handleCreate = async () => {
     if (!name.trim()) {
-      setError('Project name is required');
+      setError(t('dialogs.newProjectForImport.errors.nameRequired'));
       return;
     }
 
     if (!filePath || (!dmpFile && !tmlFile && !gpxFile && !compassFile && !wallsFile)) {
-      setError('Import file data is missing');
+      setError(t('dialogs.newProjectForImport.errors.missingImportData'));
       return;
     }
 
@@ -169,10 +175,10 @@ export default function NewProjectForImportDialog() {
           openDialog('dmp-selection', { dmpFile, filePath });
         }
       } else {
-        setError(result.error ?? 'Failed to create project');
+        setError(result.error ?? t('dialogs.newProjectForImport.errors.createFailed'));
       }
     } catch (e) {
-      setError(getErrorMessage(e, 'An error occurred'));
+      setError(getErrorMessage(e, t('dialogs.newProjectForImport.errors.unknown')));
     } finally {
       setIsCreating(false);
     }
@@ -192,7 +198,7 @@ export default function NewProjectForImportDialog() {
 
   return (
     <DialogWrapper
-      title="Create Project for Import"
+      title={t('dialogs.newProjectForImport.title')}
       onClose={handleCancel}
       size="md"
       isDirty={isDirty}
@@ -202,56 +208,74 @@ export default function NewProjectForImportDialog() {
         {/* Show info about the file being imported */}
         {dmpFile && (
           <div className="p-3 bg-accent-10 border border-accent-20 rounded text-sm">
-            <div className="font-medium mb-1">Importing from DMP file:</div>
+            <div className="font-medium mb-1">{t('dialogs.newProjectForImport.importingFrom.dmp')}</div>
             <div className="text-text-secondary">
-              {dmpFile.sections.length} sections •{' '}
-              {dmpFile.sections.reduce(
-                (acc, s) => acc + s.shots.filter((sh) => sh.shot_type === 'Standard').length,
-                0
-              )}{' '}
-              shots
+              {t('dialogs.newProjectForImport.summary.dmp', {
+                sections: dmpFile.sections.length,
+                shots: dmpFile.sections.reduce(
+                  (acc, s) => acc + s.shots.filter((sh) => sh.shot_type === 'Standard').length,
+                  0
+                ),
+              })}
             </div>
           </div>
         )}
         {tmlFile && (
           <div className="p-3 bg-accent-10 border border-accent-20 rounded text-sm">
-            <div className="font-medium mb-1">Importing from Ariane survey:</div>
+            <div className="font-medium mb-1">{t('dialogs.newProjectForImport.importingFrom.tml')}</div>
             <div className="text-text-secondary">
-              {tmlFile.sections.length} sections •{' '}
-              {tmlFile.sections.reduce((acc, s) => acc + s.shots.length, 0)} shots
-              {tmlFile.cave_name ? ` • ${tmlFile.cave_name}` : ''}
+              {t('dialogs.newProjectForImport.summary.tml', {
+                sections: tmlFile.sections.length,
+                shots: tmlFile.sections.reduce((acc, s) => acc + s.shots.length, 0),
+                caveName: tmlFile.cave_name ? ` - ${tmlFile.cave_name}` : '',
+              })}
             </div>
           </div>
         )}
         {gpxFile && (
           <div className="p-3 bg-accent-10 border border-accent-20 rounded text-sm">
-            <div className="font-medium mb-1">Importing from GPX file:</div>
+            <div className="font-medium mb-1">{t('dialogs.newProjectForImport.importingFrom.gpx')}</div>
             <div className="text-text-secondary">
-              {gpxFile.waypoints.length} waypoints •{' '}
-              {gpxFile.tracks.length} tracks •{' '}
-              {gpxFile.routes.length} routes
-              {gpxFile.name ? ` • ${gpxFile.name}` : ''}
+              {t('dialogs.newProjectForImport.summary.gpx', {
+                waypoints: gpxFile.waypoints.length,
+                tracks: gpxFile.tracks.length,
+                routes: gpxFile.routes.length,
+                name: gpxFile.name ? ` - ${gpxFile.name}` : '',
+              })}
             </div>
           </div>
         )}
         {compassFile && (
           <div className="p-3 bg-accent-10 border border-accent-20 rounded text-sm">
-            <div className="font-medium mb-1">Importing from Compass survey:</div>
+            <div className="font-medium mb-1">{t('dialogs.newProjectForImport.importingFrom.compass')}</div>
             <div className="text-text-secondary">
-              {compassFile.survey_count} surveys •{' '}
-              {compassFile.shot_count} shots
-              {compassFile.cave_name ? ` • ${compassFile.cave_name}` : ''}
+              {t('dialogs.newProjectForImport.summary.compass', {
+                surveys: compassFile.survey_count,
+                shots: compassFile.shot_count,
+                caveName: compassFile.cave_name ? ` - ${compassFile.cave_name}` : '',
+              })}
             </div>
           </div>
         )}
         {wallsFile && (
           <div className="p-3 bg-accent-10 border border-accent-20 rounded text-sm">
-            <div className="font-medium mb-1">Importing from Walls survey:</div>
+            <div className="font-medium mb-1">{t('dialogs.newProjectForImport.importingFrom.walls')}</div>
             <div className="text-text-secondary">
-              {wallsFile.resolved_survey_count} surveys •{' '}
-              {wallsFile.shot_count} shots
-              {wallsFile.project_name ? ` • ${wallsFile.project_name}` : ''}
+              {t('dialogs.newProjectForImport.summary.walls', {
+                surveys: wallsFile.resolved_survey_count,
+                shots: wallsFile.shot_count,
+                projectName: wallsFile.project_name ? ` - ${wallsFile.project_name}` : '',
+              })}
             </div>
+          </div>
+        )}
+
+        {fileName && (
+          <div
+            className="p-3 bg-accent-10 border border-accent rounded text-sm text-text-secondary"
+            data-testid="new-project-for-import-one-way-promise"
+          >
+            {t('dialogs.newProjectForImport.oneWayPromise', { fileName })}
           </div>
         )}
 
@@ -263,21 +287,21 @@ export default function NewProjectForImportDialog() {
 
         <div>
           <label className="block text-sm text-text-secondary mb-1">
-            Project Name *
+            {t('dialogs.newProjectForImport.nameLabel')}
           </label>
           <input
             type="text"
             value={name}
             onChange={(e) => setName(e.target.value)}
             className="w-full"
-            placeholder="e.g., Lechuguilla Cave"
+            placeholder={t('dialogs.newProjectForImport.namePlaceholder')}
             data-testid="project-name-input"
           />
         </div>
 
         <div>
           <label className="block text-sm text-text-secondary mb-1">
-            Project File Path (optional)
+            {t('dialogs.newProjectForImport.savePathLabel')}
           </label>
           <div className="flex gap-2" data-testid="project-save-path-controls">
             <input
@@ -293,28 +317,28 @@ export default function NewProjectForImportDialog() {
               disabled={isCreating}
               data-testid="project-save-path-browse-button"
             >
-              Browse...
+              {t('dialogs.newProjectForImport.browse')}
             </Button>
           </div>
         </div>
 
         <div>
           <label className="block text-sm text-text-secondary mb-1">
-            Cave Location (optional)
+            {t('dialogs.newProjectForImport.locationLabel')}
           </label>
           <input
             type="text"
             value={projectLocation}
             onChange={(e) => setProjectLocation(e.target.value)}
             className="w-full"
-            placeholder="e.g., Carlsbad Caverns National Park, NM"
+            placeholder={t('dialogs.newProjectForImport.locationPlaceholder')}
             data-testid="project-location-input"
           />
         </div>
 
         <div className="flex justify-end gap-2 pt-4 border-t border-border">
           <Button onClick={handleCancel} disabled={isCreating} data-testid="new-project-for-import-cancel">
-            Cancel
+            {t('dialogs.newProjectForImport.cancel')}
           </Button>
           <Button
             variant="primary"
@@ -322,7 +346,7 @@ export default function NewProjectForImportDialog() {
             disabled={isCreating || !name.trim()}
             data-testid="create-and-continue-button"
           >
-            {isCreating ? 'Creating...' : 'Create & Continue'}
+            {isCreating ? t('dialogs.newProjectForImport.creating') : t('dialogs.newProjectForImport.create')}
           </Button>
         </div>
       </div>

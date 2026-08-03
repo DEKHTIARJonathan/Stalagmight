@@ -3050,7 +3050,7 @@ mod tests {
             return;
         };
         let tml = crate::parsers::tml::parse_tml(Path::new(&input)).unwrap();
-        let (sections, _closures) =
+        let (sections, _closures, _warnings) =
             crate::parsers::tml::convert_tml_to_import_configs(&tml, false, true).unwrap();
 
         // Straight into `SectionData` rather than through the import command: the

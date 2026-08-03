@@ -16,7 +16,7 @@ import { useEditingBlocked } from '../../hooks/useEditingBlocked';
 import { useSpeleoMenuItems } from './useSpeleoMenuItems';
 import { SpeleoDbLogo } from '../common/SpeleoDbLogo';
 import { SpeleoBadgedIcon } from '../common/SpeleoBadgedIcon';
-import { dmpImportFilters } from '../../utils/fileDialogs';
+import { importFiltersForContext } from '../../utils/fileDialogs';
 import { setSource } from '../../utils/telemetry';
 import { MENU_ICON_COLORS } from '../common/menuColors';
 import { leadingMenuItems, serviceMenuItems, quitMenuItem, importMenuItem, openFromSpeleoDbMenuItem } from '../common/appMenuItems';
@@ -168,13 +168,12 @@ export function useProjectMenuItems({ onSave, saveFailed = false }: UseProjectMe
         iconColor: MENU_ICON_COLORS.import,
         disabled: editingBlocked,
         submenu: [
-          // DMP-only filter (dmpImportFilters, no "All Files"): with a project
-          // open, an unrelated file - notably a `.stalx` - must NOT be pickable
-          // here, or the shared router would open it and replace the current
-          // project. DMP is the only additive in-project import; GPX/Ariane/
-          // Compass start new projects (the router rejects those if dropped/
-          // opened while a project is open).
-          importMenuItem('global-import-dmp-button', t('globalView.actions.importDmp'), dmpImportFilters, 'hamburger', 'import_dmp'),
+          // Every importable format, not just DMP (#391): `.dmp` still routes
+          // additively into this project, and every other format now opens the
+          // "import as new project?" confirm dialog instead of the old
+          // close-first dead end - so there is no reason left to restrict the
+          // in-project picker to DMP only.
+          importMenuItem('global-import-dmp-button', t('globalView.actions.importSurveyData'), () => importFiltersForContext(true), 'hamburger', 'import_dmp'),
         ],
       },
       {

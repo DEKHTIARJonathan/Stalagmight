@@ -191,14 +191,14 @@ export default function WallsImportDialog({ wallsFile, filePath }: WallsImportDi
         );
         if (suggestions.length > 0) {
           setSource('dialog');
-          openDialog('orphan-placement', { suggestions });
+          openDialog('orphan-placement', { suggestions, receipt: result.import_receipt });
           return;
         }
       } catch {
         // Non-fatal: proceed without orphan detection
       }
 
-      completeImportToSingleView('walls-import', importUi);
+      completeImportToSingleView('walls-import', importUi, result.import_receipt);
     } catch (e) {
       resetLoading();
       setIsImporting(false);

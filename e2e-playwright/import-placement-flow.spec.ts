@@ -243,6 +243,10 @@ test.describe('Import Placement Flow', () => {
     await placeButton.click();
 
     await expect(page.getByTestId('dmp-new-import-dialog')).toBeHidden({ timeout: 10000 });
+
+    // Every segment was discarded, so nothing was imported and no receipt is
+    // produced - the wizard closes straight back to the map.
+    await expect(page.getByTestId('import-receipt-dialog')).toBeHidden();
   });
 
   test('from-existing mode requires selecting target section before place is enabled', async ({ page }) => {

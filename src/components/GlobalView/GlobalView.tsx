@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useState, useCallback, useMemo, useRef, type MouseEvent, type ChangeEvent, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
+import { useEffect, useLayoutEffect, useState, useCallback, useMemo, useRef, type MouseEvent, type ChangeEvent, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import { revealItemInDir } from '@tauri-apps/plugin-opener';
@@ -11,13 +11,21 @@ import { useGlobalViewStore } from '../../store/globalViewStore';
 import { useSpeleoStore } from '../../store/speleoStore';
 import { Button } from '../common/Button';
 import { AppMenu, type AppMenuItem } from '../common/AppMenu';
-import { leadingMenuItems, serviceMenuItems, quitMenuItem, importMenuItem, runImport, openFromSpeleoDbMenuItem } from '../common/appMenuItems';
+import { leadingMenuItems, serviceMenuItems, quitMenuItem, importMenuItem, openFromSpeleoDbMenuItem } from '../common/appMenuItems';
 import { CloseIcon, DownloadIcon, FilePlusIcon, FolderOpenIcon, ListIcon, MapIcon } from '../common/icons';
 import { SpeleoBadgedIcon, RefreshGlyph } from '../common/SpeleoBadgedIcon';
 import { syntacticLevelAtLeast } from '../../theme/syntacticPalette';
 import { MENU_ICON_COLORS } from '../common/menuColors';
 import { setProjectActionSource } from '../../utils/telemetry';
-import { dmpOpenFilters, tmlOpenFilters, compassOpenFilters, wallsOpenFilters, gpxOpenFilters } from '../../utils/fileDialogs';
+import {
+  dmpOpenFilters,
+  tmlOpenFilters,
+  compassOpenFilters,
+  wallsOpenFilters,
+  gpxOpenFilters,
+  PROJECT_EXTENSION,
+  IMPORT_EXTENSIONS,
+} from '../../utils/fileDialogs';
 import { LoadingProgress } from '../LoadingProgress';
 import SystemCard from './SystemCard';
 import { resolveSpeleoLock } from './SpeleoLockBadge';
@@ -888,9 +896,8 @@ export default function GlobalView() {
           {!hasRecentItems ? (
             <div className="h-full overflow-auto p-6">
               <EmptyState
-                onImport={() => { runImport(dmpOpenFilters(), 'empty-state'); }}
+                onOpenOrImport={() => { setProjectActionSource('empty-state'); handleOpenOrImport(); }}
                 onNew={() => { setProjectActionSource('empty-state'); handleNewProject(); }}
-                onOpen={() => { setProjectActionSource('empty-state'); handleOpenProject(); }}
               />
             </div>
           ) : activeTab === 'map' ? (
@@ -1249,78 +1256,74 @@ export default function GlobalView() {
 }
 
 interface EmptyStateProps {
-  onImport: () => void;
+  onOpenOrImport: () => void;
   onNew: () => void;
-  onOpen: () => void;
 }
 
-function EmptyState({ onImport, onNew, onOpen }: EmptyStateProps) {
+/**
+ * Every format chip's label is derived from the canonical extension lists in
+ * `fileDialogs.ts` (`PROJECT_EXTENSION` / `IMPORT_EXTENSIONS`), never a
+ * hand-typed string, so a new extension added to one of those groups shows up
+ * here automatically instead of silently missing from the welcome screen. The
+ * per-group arrays are reversed only for the display order the approved mock
+ * asks for (".dat / .mak", ".srv / .wpj") - the underlying extension set is
+ * untouched.
+ */
+const FORMAT_CHIPS: { id: string; label: string; native?: boolean }[] = [
+  { id: 'stalx', label: `.${PROJECT_EXTENSION}`, native: true },
+  ...IMPORT_EXTENSIONS.tml.map((ext) => ({ id: ext, label: `.${ext}` })),
+  ...IMPORT_EXTENSIONS.dmp.map((ext) => ({ id: ext, label: `.${ext}` })),
+  { id: 'compass', label: [...IMPORT_EXTENSIONS.compass].reverse().map((ext) => `.${ext}`).join(' / ') },
+  { id: 'walls', label: [...IMPORT_EXTENSIONS.walls].reverse().map((ext) => `.${ext}`).join(' / ') },
+  ...IMPORT_EXTENSIONS.gpx.map((ext) => ({ id: ext, label: `.${ext}` })),
+];
+
+function EmptyState({ onOpenOrImport, onNew }: EmptyStateProps) {
   const { t } = useTranslation();
   return (
-    <div className="flex flex-col items-center justify-center h-full gap-8">
-      <div className="text-center">
-        <div className="text-6xl mb-4 flex items-center justify-center">
-          <MapIcon size={48} />
-        </div>
+    <div className="flex flex-col items-center justify-center h-full gap-6">
+      <div className="text-center max-w-lg">
         <h2 className="text-2xl font-bold mb-2">{t('globalView.empty.title')}</h2>
-        <p className="text-text-secondary max-w-md">
-          {t('globalView.empty.description')}
+        <p className="text-text-secondary">{t('globalView.empty.description')}</p>
+      </div>
+
+      <button
+        type="button"
+        onClick={onOpenOrImport}
+        data-testid="empty-state-open-project"
+        className="w-full max-w-xl flex flex-col items-center gap-4 rounded-lg border-2 border-dashed border-border p-10 text-center transition-colors hover:border-accent hover:bg-accent-10"
+      >
+        <DownloadIcon size={40} />
+        <span className="text-lg font-semibold">{t('globalView.empty.dropZone.cta')}</span>
+        <div className="flex flex-wrap items-center justify-center gap-2">
+          {FORMAT_CHIPS.map((chip) => (
+            <span
+              key={chip.id}
+              data-testid={`empty-state-format-chip-${chip.id}`}
+              className={`rounded-full border px-2.5 py-1 text-xs font-medium ${
+                chip.native
+                  ? 'border-accent bg-accent-10 text-accent'
+                  : 'border-border bg-panel text-text-secondary'
+              }`}
+            >
+              {chip.label}
+            </span>
+          ))}
+        </div>
+        <p className="max-w-md text-xs text-text-secondary">
+          {t('globalView.empty.dropZone.promise')}
         </p>
-      </div>
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6 max-w-2xl">
-        <EmptyStateCard
-          icon={<DownloadIcon size={28} />}
-          title={t('globalView.empty.cards.import.title')}
-          description={t('globalView.empty.cards.import.description')}
-          onClick={() => onImport()}
-          primary
-          testId="empty-state-import-dmp"
-        />
-        <EmptyStateCard
-          icon={<FilePlusIcon size={28} />}
-          title={t('globalView.empty.cards.newProject.title')}
-          description={t('globalView.empty.cards.newProject.description')}
-          onClick={() => onNew()}
-          testId="empty-state-new-project"
-        />
-        <EmptyStateCard
-          icon={<FolderOpenIcon size={28} />}
-          title={t('globalView.empty.cards.open.title')}
-          description={t('globalView.empty.cards.open.description')}
-          onClick={() => onOpen()}
-          testId="empty-state-open-project"
-        />
-      </div>
+      </button>
+
+      <button
+        type="button"
+        onClick={onNew}
+        data-testid="empty-state-new-project"
+        className="flex items-center gap-2 text-sm font-medium text-text-secondary transition-colors hover:text-text"
+      >
+        <FilePlusIcon size={16} />
+        {t('globalView.empty.newProject')}
+      </button>
     </div>
-  );
-}
-
-interface EmptyStateCardProps {
-  icon: ReactNode;
-  title: string;
-  description: string;
-  onClick: () => void;
-  primary?: boolean;
-  testId?: string;
-}
-
-function EmptyStateCard({ icon, title, description, onClick, primary, testId }: EmptyStateCardProps) {
-  return (
-    <button
-      onClick={onClick}
-      className={`
-        p-6 rounded-lg border text-left transition-all
-        hover:scale-105 hover:shadow-lg
-        ${primary
-          ? 'bg-accent-10 border-accent hover:bg-accent-20'
-          : 'bg-panel border-border hover:bg-background-50'
-        }
-      `}
-      data-testid={testId}
-    >
-      <div className="text-4xl mb-3 flex items-center justify-center">{icon}</div>
-      <h3 className="font-semibold mb-1">{title}</h3>
-      <p className="text-sm text-text-secondary">{description}</p>
-    </button>
   );
 }

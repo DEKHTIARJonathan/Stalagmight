@@ -41,6 +41,13 @@ import type { ReversedSection } from '../types/ipc/ReversedSection';
 import type { SpeleoManagedFile } from '../types/ipc/SpeleoManagedFile';
 import type { Config } from '../types/config';
 import type { CommandResult, CommentHolder, ConnectivityResult, DmpFile, TmlFile, CompassFile, WallsFile, GpxFile, GpxSectionPlacement, ExportImageOptions, ProjectWarning, BatchCommand, UndoHistoryItem, ImportSectionConfig, PlacementSuggestion, IntegrityRepairResult, IntegrityCheckResult } from '../types/commands';
+
+/** Additive import-receipt provenance (#391) - see `import_sections` (Rust) for the fields' meaning. */
+export interface ImportReceiptProvenance {
+  sourceLabel?: string;
+  sourceFileName?: string;
+  sectionsFound?: number;
+}
 import type { CreateProjectFullResult } from '../types/loading';
 import type { UnrecognisedShotKind } from '../types/ipc/UnrecognisedShotKind';
 import type { SurveyData } from '../types/survey-data';
@@ -431,7 +438,13 @@ export interface ProjectStore extends ProjectConfigActions {
   checkDuplicateImport: (hash: string) => Promise<boolean>;
   trackImportedFile: (hash: string) => Promise<void>;
   checkSectionHashes: (hashes: string[]) => Promise<boolean[]>;
-  importSections: (sections: ImportSectionConfig[], fileHash?: string | null, sectionHashes?: string[] | null, virtualShotMode?: VirtualShotMode) => Promise<CommandResult>;
+  importSections: (
+    sections: ImportSectionConfig[],
+    fileHash?: string | null,
+    sectionHashes?: string[] | null,
+    virtualShotMode?: VirtualShotMode,
+    provenance?: ImportReceiptProvenance,
+  ) => Promise<CommandResult>;
   suggestImportPlacement: (shots: ShotData[]) => Promise<PlacementSuggestion[]>;
   exportCsv: (path: string) => Promise<void>;
   exportJson: (path: string) => Promise<void>;
@@ -2268,7 +2281,13 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     });
   },
 
-  importSections: async (sections: ImportSectionConfig[], fileHash?: string | null, sectionHashes?: string[] | null, virtualShotMode?: VirtualShotMode) => {
+  importSections: async (
+    sections: ImportSectionConfig[],
+    fileHash?: string | null,
+    sectionHashes?: string[] | null,
+    virtualShotMode?: VirtualShotMode,
+    provenance?: ImportReceiptProvenance,
+  ) => {
     const s = peekProjectActionSource();
     if (s) setSource(s);
     try {
@@ -2279,6 +2298,9 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
           fileHash: fileHash ?? null,
           sectionHashes: sectionHashes ?? null,
           virtualShotMode: virtualShotMode ?? null,
+          sourceLabel: provenance?.sourceLabel ?? null,
+          sourceFileName: provenance?.sourceFileName ?? null,
+          sectionsFound: provenance?.sectionsFound ?? null,
         },
         { purpose: 'apply imported sections', fields: { section_count: sections.length } }
       );

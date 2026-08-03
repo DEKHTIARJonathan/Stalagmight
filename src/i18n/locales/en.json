@@ -58,6 +58,13 @@
     },
     "offline": "Offline"
   },
+  "app": {
+    "dropOverlay": {
+      "title": "Drop to open or import",
+      "existingProject": "Add sections to current project",
+      "newProject": "Create new project"
+    }
+  },
   "settings": {
     "loading": "Loading configuration...",
     "categoryHeader": "{{category}} Settings",
@@ -1196,6 +1203,58 @@
       "message": "Reset all {{category}} settings to their default values?",
       "note": "This will only affect the current category. Changes are not saved until you click {{action}}."
     },
+    "importReceipt": {
+      "title": "Imported from {{source}}: {{fileName}}",
+      "sections_one": "{{count}} section",
+      "sections_other": "{{count}} sections",
+      "shots_one": "{{count}} shot",
+      "shots_other": "{{count}} shots",
+      "loops_one": "{{count}} loop reconstructed",
+      "loops_other": "{{count}} loops reconstructed",
+      "viewDetails": "View details",
+      "hideDetails": "Hide details",
+      "continue": "Continue to map"
+    },
+    "importAsNewProject": {
+      "title": "Import as new project?",
+      "body": "{{fileName}} will be converted into a new Stalagmight project. Your original file is never modified.",
+      "closeNotice": "{{projectName}} will be closed.",
+      "confirm": "Close and import"
+    },
+    "newProjectForImport": {
+      "title": "Create Project for Import",
+      "importingFrom": {
+        "dmp": "Importing from DMP file:",
+        "tml": "Importing from Ariane survey:",
+        "gpx": "Importing from GPX file:",
+        "compass": "Importing from Compass survey:",
+        "walls": "Importing from Walls survey:"
+      },
+      "summary": {
+        "dmp": "{{sections}} sections - {{shots}} shots",
+        "tml": "{{sections}} sections - {{shots}} shots{{caveName}}",
+        "gpx": "{{waypoints}} waypoints - {{tracks}} tracks - {{routes}} routes{{name}}",
+        "compass": "{{surveys}} surveys - {{shots}} shots{{caveName}}",
+        "walls": "{{surveys}} surveys - {{shots}} shots{{projectName}}"
+      },
+      "oneWayPromise": "This converts {{fileName}} into a new Stalagmight project - your original file is never modified.",
+      "nameLabel": "Project Name *",
+      "namePlaceholder": "e.g., Lechuguilla Cave",
+      "savePathLabel": "Project File Path (optional)",
+      "browse": "Browse...",
+      "locationLabel": "Cave Location (optional)",
+      "locationPlaceholder": "e.g., Carlsbad Caverns National Park, NM",
+      "errors": {
+        "nameRequired": "Project name is required",
+        "missingImportData": "Import file data is missing",
+        "createFailed": "Failed to create project",
+        "saveDialogFailed": "Failed to open save dialog",
+        "unknown": "An error occurred"
+      },
+      "cancel": "Cancel",
+      "create": "Create & Continue",
+      "creating": "Creating..."
+    },
     "dmpNewImport": {
       "title": "Connection Wizard",
       "progress": "{{placed}} of {{total}} sections placed",
@@ -1711,6 +1770,7 @@
   "globalView": {
     "actions": {
       "import": "Import",
+      "importSurveyData": "Import survey data...",
       "importDmp": "Import DMP",
       "importTml": "Import Ariane",
       "importCompass": "Import Compass",
@@ -1802,22 +1862,13 @@
       "deleteLocalCopy": "Delete local copy…"
     },
     "empty": {
-      "title": "No projects yet",
-      "description": "Create a new project or import a DMP file to get started.",
-      "cards": {
-        "import": {
-          "title": "Import DMP",
-          "description": "Bring in survey data from a DMP file."
-        },
-        "newProject": {
-          "title": "New project",
-          "description": "Start a blank project from scratch."
-        },
-        "open": {
-          "title": "Open project",
-          "description": "Open an existing Stalagmight project."
-        }
-      }
+      "title": "Open or drop any survey file",
+      "description": "Bring in surveys from Ariane, Compass, Walls, GPX or mNemo, or open an existing Stalagmight project.",
+      "dropZone": {
+        "cta": "Open or drop a file",
+        "promise": "Foreign formats import as a new Stalagmight project - your original file is never modified."
+      },
+      "newProject": "Start a new project instead"
     },
     "loading": {
       "failedTitle": "Loading failed",

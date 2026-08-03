@@ -39,6 +39,14 @@ test.describe('GPX Import Workflow', () => {
     await page.getByTestId('gpx-import-confirm').click();
 
     await expect(page.getByTestId('gpx-placement-dialog')).toBeHidden({ timeout: 15000 });
+
+    const receiptDialog = page.getByTestId('import-receipt-dialog');
+    await expect(receiptDialog).toBeVisible({ timeout: 10000 });
+    await expect(receiptDialog).toContainText('GPX');
+    await expect(page.getByTestId('import-receipt-summary')).toContainText('section');
+    await page.getByTestId('import-receipt-continue').click();
+    await expect(receiptDialog).toBeHidden();
+
     await expect(page.getByTestId('single-system-view')).toBeVisible();
 
     const projectSummary = await page.evaluate(() => {
@@ -62,22 +70,26 @@ test.describe('GPX Import Workflow', () => {
     expect(projectSummary.datumCount).toBeGreaterThan(0);
   });
 
-  test('rejects importing GPX into an existing project (new-project only)', async ({ page }) => {
-    // GPX import is new-project-only: with a project open it's rejected (like
-    // Ariane/Compass), not added to the current project. DMP is the only additive
-    // in-project import.
+  test('offers to close the current project before importing GPX (new-project only)', async ({ page }) => {
+    // GPX import is new-project-only: with a project open, #391 offers to close
+    // and re-route rather than the old dead-end error - and Cancel leaves the
+    // current project open, untouched.
     await createProject(page, 'Existing GPX Project');
     await setImportPath(page, '/mock/waypoints-only.gpx');
 
     await page.keyboard.press('Control+i');
 
-    const errorDialog = page.getByTestId('error-dialog');
-    await expect(errorDialog).toBeVisible({ timeout: 10000 });
-    await expect(errorDialog).toContainText('Close the current project before importing');
+    const confirmDialog = page.getByTestId('import-as-new-project-dialog');
+    await expect(confirmDialog).toBeVisible({ timeout: 10000 });
+    await expect(confirmDialog).toContainText('Existing GPX Project');
     // The in-project GPX selection flow must NOT open.
     await expect(page.getByTestId('gpx-selection-dialog')).toBeHidden();
 
-    // The current project is unchanged (nothing was imported into it).
+    await page.getByTestId('import-as-new-project-cancel').click();
+    await expect(confirmDialog).toBeHidden();
+
+    // The current project is unchanged (nothing was imported into it, and the
+    // project was not closed).
     const sectionCount = await page.evaluate(() => {
       const state = (window as unknown as {
         __E2E_TEST__?: {

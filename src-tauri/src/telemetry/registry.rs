@@ -799,6 +799,19 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "speleodb-api.autocomplete.latency.le-5000",
     "speleodb-api.autocomplete.latency.le-15000",
     "speleodb-api.autocomplete.latency.gt-15000",
+    // Post-import receipt dialog (#391): summarises a foreign-format import
+    // (source, sections/shots/loops, unit conversion, warnings) so the user
+    // sees what landed without having to open the data table.
+    "action.dialog.import-receipt",
+    "dialog-cancel.import-receipt",
+    "dwell.dialog.import-receipt",
+    "active-dwell.dialog.import-receipt",
+    // Import-as-new-project confirm dialog (#391): replaces the old close-first
+    // dead end when a new-project-only format is picked while a project is open.
+    "action.dialog.import-as-new-project",
+    "dialog-cancel.import-as-new-project",
+    "dwell.dialog.import-as-new-project",
+    "active-dwell.dialog.import-as-new-project",
 ];
 
 #[cfg(test)]
@@ -1029,7 +1042,16 @@ mod tests {
         //       wanted, which is the bug that produced them:
         //       {action.dialog,dialog-cancel,dwell.dialog,active-dwell.dialog}
         //       .speleodb-{unwound-push,discard-changes} = 709.
-        assert_eq!(EVENT_NAMES.len(), 709);
+        //   + 4 post-import receipt dialog events (#391), the (source, counts, unit
+        //       conversion, warnings) summary shown after a foreign-format import:
+        //       {action.dialog,dialog-cancel,dwell.dialog,active-dwell.dialog}
+        //       .import-receipt = 713.
+        //   + 4 import-as-new-project confirm dialog events (#391), replacing the
+        //       old close-first dead end for a new-project-only format picked while
+        //       a project is open:
+        //       {action.dialog,dialog-cancel,dwell.dialog,active-dwell.dialog}
+        //       .import-as-new-project = 717.
+        assert_eq!(EVENT_NAMES.len(), 717);
     }
 
     /// Active-dwell mirrors every dwell state 1:1 (#31): for each `dwell.<key>` there

@@ -119,6 +119,55 @@ pub fn check_section_hashes(
         .map_err(|e| e.to_string())
 }
 
+/// Fill in the importer-specific fields of the base `ImportReceipt` that
+/// `execute_import_sections` already attached (source/section counts, unit
+/// conversion), and extend its warnings with the converter-phase warnings
+/// collected while turning the parsed file into `ImportSectionConfig`s.
+///
+/// No-op when `result` carries no receipt (e.g. the `sections.is_empty()`
+/// early return in `execute_import_sections`), so a call site never has to
+/// special-case that path.
+fn decorate_receipt(
+    result: &mut CommandResult,
+    source_format: &str,
+    path: &std::path::Path,
+    sections_found: u32,
+    unit_conversion: Option<String>,
+    converter_warnings: Vec<String>,
+) {
+    let Some(receipt) = result.import_receipt.as_mut() else {
+        return;
+    };
+    receipt.source_format = source_format.to_string();
+    receipt.file_name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_default();
+    receipt.sections_found = sections_found;
+    receipt.unit_conversion = unit_conversion;
+    receipt.warnings.extend(converter_warnings);
+    receipt.cap_warnings();
+}
+
+/// The import receipt's unit-conversion note for a Compass file, derived from
+/// `CompassFile::length_unit` (`build_preview`'s "feet"/"meters"/"mixed" label -
+/// see its doc comment for how a multi-survey file collapses to one label).
+fn compass_unit_conversion_note(length_unit: Option<&str>) -> Option<String> {
+    match length_unit {
+        Some("feet") => Some("Lengths converted from feet to meters".to_string()),
+        Some("mixed") => Some("Some surveys measured in feet; converted to meters".to_string()),
+        _ => None,
+    }
+}
+
+/// The import receipt's unit-conversion note for a Walls project. Walls has no
+/// single project-wide unit label the way Compass does (`#Units` can flip
+/// per-survey or mid-file), so this is derived from `WallsFile::any_feet_units`
+/// - true when ANY shot anywhere in the project was measured in feet.
+fn walls_unit_conversion_note(any_feet_units: bool) -> Option<String> {
+    any_feet_units.then(|| "Some surveys measured in feet; converted to meters".to_string())
+}
+
 /// #92: durably persist a newly-imported project. A project whose initial save is
 /// still deferred (created with no save path, never written) has no `.stalx` and no
 /// Recent Projects entry, so importing into it would otherwise be invisible and
@@ -161,6 +210,13 @@ fn finalize_deferred_import(state: &AppState, import_result: CommandResult) -> C
 
 /// Import multiple sections as a single atomic undo/redo unit.
 /// Includes file hash tracking so undo also reverts the duplicate-detection state.
+///
+/// `source_label` / `source_file_name` / `sections_found` are additive
+/// provenance for the import receipt - today only the mNemo DMP wizard passes
+/// them (a later shard). All three are optional and `serde`-defaulted, so
+/// existing callers (and the Playwright IPC mock) are unaffected, and the
+/// base receipt `execute_import_sections` already attached is left at its
+/// defaults when none are provided.
 #[tauri::command]
 pub fn import_sections(
     state: State<'_, AppState>,
@@ -169,6 +225,9 @@ pub fn import_sections(
     section_hashes: Option<Vec<String>>,
     existing_shot_updates: Option<Vec<crate::models::ExistingShotUpdate>>,
     virtual_shot_mode: Option<VirtualShotMode>,
+    source_label: Option<String>,
+    source_file_name: Option<String>,
+    sections_found: Option<u32>,
 ) -> CommandResult {
     let updates = existing_shot_updates.unwrap_or_default();
     tracing::info!(
@@ -177,7 +236,7 @@ pub fn import_sections(
         purpose = "batch import with overlap updates",
         "import_sections called",
     );
-    let result = state.execute_import_sections(
+    let mut result = state.execute_import_sections(
         sections,
         Vec::new(),
         file_hash,
@@ -185,6 +244,15 @@ pub fn import_sections(
         updates,
         virtual_shot_mode.unwrap_or_default(),
     );
+
+    if source_label.is_some() || source_file_name.is_some() || sections_found.is_some() {
+        if let Some(receipt) = result.import_receipt.as_mut() {
+            receipt.source_format = source_label.unwrap_or_else(|| "mNemo DMP".to_string());
+            receipt.file_name = source_file_name.unwrap_or_default();
+            receipt.sections_found = sections_found.unwrap_or(0);
+        }
+    }
+
     finalize_deferred_import(state.inner(), result)
 }
 
@@ -243,22 +311,23 @@ pub fn execute_tml_import(
     emitter.complete_phase(LoadingPhase::ImportParsing);
 
     emitter.start_phase(LoadingPhase::ImportConverting);
-    let (sections, closures) = match crate::parsers::tml::convert_tml_to_import_configs(
-        &tml,
-        include_excluded,
-        comments_on_stations,
-    ) {
-        Ok(result) => result,
-        Err(e) => {
-            tracing::error!(
-                path = ?path,
-                purpose = "import Ariane TML/TMLU",
-                reason = %e,
-                "Failed to convert TML data to import configs"
-            );
-            return CommandResult::failure(format!("Failed to convert TML data: {e}"));
-        }
-    };
+    let (sections, closures, converter_warnings) =
+        match crate::parsers::tml::convert_tml_to_import_configs(
+            &tml,
+            include_excluded,
+            comments_on_stations,
+        ) {
+            Ok(result) => result,
+            Err(e) => {
+                tracing::error!(
+                    path = ?path,
+                    purpose = "import Ariane TML/TMLU",
+                    reason = %e,
+                    "Failed to convert TML data to import configs"
+                );
+                return CommandResult::failure(format!("Failed to convert TML data: {e}"));
+            }
+        };
     emitter.complete_phase(LoadingPhase::ImportConverting);
 
     tracing::info!(
@@ -269,8 +338,16 @@ pub fn execute_tml_import(
         "Converted TML to import configs, executing import"
     );
 
+    let sections_found = tml.sections.len() as u32;
+    let unit_conversion = match tml.unit {
+        crate::parsers::tml::TmlUnit::Imperial => {
+            Some("Lengths converted from feet to meters".to_string())
+        }
+        crate::parsers::tml::TmlUnit::Metric => None,
+    };
+
     emitter.start_phase(LoadingPhase::ImportApplyingChanges);
-    let result = state.execute_import_sections(
+    let mut result = state.execute_import_sections(
         sections,
         closures,
         file_hash,
@@ -279,6 +356,15 @@ pub fn execute_tml_import(
         virtual_shot_mode.unwrap_or_default(),
     );
     emitter.complete_phase(LoadingPhase::ImportApplyingChanges);
+
+    decorate_receipt(
+        &mut result,
+        "Ariane TML",
+        &path,
+        sections_found,
+        unit_conversion,
+        converter_warnings,
+    );
 
     emitter.start_phase(LoadingPhase::ImportFinalizing);
     emitter.complete_phase(LoadingPhase::ImportFinalizing);
@@ -374,8 +460,12 @@ pub fn execute_compass_import(
         "Converted Compass to import configs, executing import"
     );
 
+    let preview = crate::parsers::compass::build_preview(&parsed);
+    let sections_found = preview.survey_count;
+    let unit_conversion = compass_unit_conversion_note(preview.length_unit.as_deref());
+
     emitter.start_phase(LoadingPhase::ImportApplyingChanges);
-    let result = state.execute_import_sections(
+    let mut result = state.execute_import_sections(
         sections,
         closures,
         file_hash,
@@ -388,6 +478,15 @@ pub fn execute_compass_import(
         VirtualShotMode::Auto,
     );
     emitter.complete_phase(LoadingPhase::ImportApplyingChanges);
+
+    decorate_receipt(
+        &mut result,
+        "Compass",
+        &path,
+        sections_found,
+        unit_conversion,
+        warnings,
+    );
 
     emitter.start_phase(LoadingPhase::ImportFinalizing);
     emitter.complete_phase(LoadingPhase::ImportFinalizing);
@@ -476,23 +575,26 @@ pub fn execute_gpx_import(
         "Converted GPX to import configs, executing import"
     );
 
-    finalize_deferred_import(
-        state.inner(),
-        // Auto, not a per-file override: the GPX dialog has no mode control, so
-        // there is nothing to pass through - but the chain rule still has to run.
-        // `parsers::gpx` seeds every leg as Reference on the promise that the
-        // classifier can promote it, and skipping the pass here (this path used
-        // to call `finalize_deferred_import` directly) left a GPS surface track
-        // tying two sumps together permanently excluded from the survey graph.
-        state.execute_import_sections(
-            sections,
-            Vec::new(),
-            file_hash,
-            Vec::new(),
-            Vec::new(),
-            VirtualShotMode::Auto,
-        ),
-    )
+    let sections_found = sections.len() as u32;
+
+    // Auto, not a per-file override: the GPX dialog has no mode control, so
+    // there is nothing to pass through - but the chain rule still has to run.
+    // `parsers::gpx` seeds every leg as Reference on the promise that the
+    // classifier can promote it, and skipping the pass here (this path used
+    // to call `finalize_deferred_import` directly) left a GPS surface track
+    // tying two sumps together permanently excluded from the survey graph.
+    let mut result = state.execute_import_sections(
+        sections,
+        Vec::new(),
+        file_hash,
+        Vec::new(),
+        Vec::new(),
+        VirtualShotMode::Auto,
+    );
+
+    decorate_receipt(&mut result, "GPX", &path, sections_found, None, Vec::new());
+
+    finalize_deferred_import(state.inner(), result)
 }
 
 /// Suggest placement positions for an import section by detecting reference shot overlap.
@@ -661,8 +763,12 @@ pub fn execute_walls_import(
         "Converted Walls to import configs, executing import"
     );
 
+    let preview = crate::parsers::walls::build_preview(&parsed);
+    let sections_found = preview.survey_count;
+    let unit_conversion = walls_unit_conversion_note(preview.any_feet_units);
+
     emitter.start_phase(LoadingPhase::ImportApplyingChanges);
-    let result = state.execute_import_sections(
+    let mut result = state.execute_import_sections(
         sections,
         closures,
         file_hash,
@@ -676,8 +782,106 @@ pub fn execute_walls_import(
     );
     emitter.complete_phase(LoadingPhase::ImportApplyingChanges);
 
+    decorate_receipt(
+        &mut result,
+        "Walls",
+        &path,
+        sections_found,
+        unit_conversion,
+        warnings,
+    );
+
     emitter.start_phase(LoadingPhase::ImportFinalizing);
     emitter.complete_phase(LoadingPhase::ImportFinalizing);
 
     finalize_deferred_import(state.inner(), result)
+}
+
+#[cfg(test)]
+#[expect(
+    clippy::expect_used,
+    reason = "unit test fixtures fail loudly on setup errors"
+)]
+mod receipt_tests {
+    use super::*;
+    use crate::core::command::ImportReceipt;
+    use std::path::Path;
+
+    fn base_result() -> CommandResult {
+        CommandResult::success().with_import_receipt(ImportReceipt {
+            source_format: String::new(),
+            file_name: String::new(),
+            sections_found: 0,
+            sections_imported: 3,
+            shot_count: 12,
+            closures_requested: 1,
+            closures_created: 1,
+            unit_conversion: None,
+            warnings: Vec::new(),
+        })
+    }
+
+    #[test]
+    fn decorate_receipt_fills_placeholder_fields_and_extends_warnings() {
+        let mut result = base_result();
+        decorate_receipt(
+            &mut result,
+            "Ariane TML",
+            Path::new("/tmp/cave.tml"),
+            5,
+            Some("Lengths converted from feet to meters".to_string()),
+            vec!["1 section had no shots after filtering and was dropped".to_string()],
+        );
+        let receipt = result
+            .import_receipt
+            .expect("receipt must survive decoration");
+        assert_eq!(receipt.source_format, "Ariane TML");
+        assert_eq!(receipt.file_name, "cave.tml");
+        assert_eq!(receipt.sections_found, 5);
+        assert_eq!(
+            receipt.unit_conversion.as_deref(),
+            Some("Lengths converted from feet to meters")
+        );
+        // Base counts from execute_import_sections are untouched.
+        assert_eq!(receipt.sections_imported, 3);
+        assert_eq!(receipt.shot_count, 12);
+        assert_eq!(receipt.warnings.len(), 1);
+    }
+
+    #[test]
+    fn decorate_receipt_is_a_no_op_without_a_receipt() {
+        let mut result = CommandResult::success();
+        decorate_receipt(
+            &mut result,
+            "Compass",
+            Path::new("/tmp/cave.dat"),
+            1,
+            None,
+            vec!["should be dropped".to_string()],
+        );
+        assert!(result.import_receipt.is_none());
+    }
+
+    #[test]
+    fn compass_unit_conversion_note_covers_feet_mixed_and_metric() {
+        assert_eq!(
+            compass_unit_conversion_note(Some("feet")).as_deref(),
+            Some("Lengths converted from feet to meters")
+        );
+        assert_eq!(
+            compass_unit_conversion_note(Some("mixed")).as_deref(),
+            Some("Some surveys measured in feet; converted to meters")
+        );
+        assert_eq!(compass_unit_conversion_note(Some("meters")), None);
+        assert_eq!(compass_unit_conversion_note(None), None);
+    }
+
+    #[test]
+    fn walls_unit_conversion_note_covers_feet_and_metric() {
+        assert_eq!(
+            walls_unit_conversion_note(true).as_deref(),
+            Some("Some surveys measured in feet; converted to meters")
+        );
+        assert_eq!(walls_unit_conversion_note(false), None);
+    }
 }

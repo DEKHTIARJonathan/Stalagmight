@@ -7,6 +7,8 @@ import {
   dmpImportFilters,
   compassOpenFilters,
   importOpenFilters,
+  inProjectImportFilters,
+  importFiltersForContext,
   exportSaveFilters,
   PROJECT_EXTENSION,
   DMP_EXTENSION,
@@ -113,6 +115,29 @@ describe('filter functions', () => {
     expect(allSurvey).toContain('mak');
     expect(allSurvey).toContain('dat');
     expect(filters.some((f) => f.name === 'Compass Survey')).toBe(true);
+  });
+
+  it('inProjectImportFilters offers every survey import format, with NO project extension and NO "All Files"', () => {
+    // The in-project picker (hamburger "Import survey data...", Ctrl+I with a
+    // project open) must never let a .stalx (or any file via "All Files") be
+    // picked - routeOpenedFile treats a .stalx as a plain OPEN, silently
+    // replacing the current project from an entry point labeled Import (#392).
+    const filters = inProjectImportFilters();
+    const allSurvey = filters[0]!.extensions;
+    for (const ext of ['dmp', 'tml', 'tmlu', 'gpx', 'mak', 'dat', 'wpj', 'srv']) {
+      expect(allSurvey).toContain(ext);
+    }
+    expect(filters.some((f) => f.extensions.includes(PROJECT_EXTENSION))).toBe(false);
+    expect(filters.some((f) => f.extensions.includes('*'))).toBe(false);
+  });
+
+  it('importFiltersForContext(true) returns the in-project (survey-only) filter set', () => {
+    expect(importFiltersForContext(true)).toEqual(inProjectImportFilters());
+  });
+
+  it('importFiltersForContext(false) returns the unified picker (includes "All Files")', () => {
+    expect(importFiltersForContext(false)).toEqual(importOpenFilters());
+    expect(importFiltersForContext(false).some((f) => f.extensions.includes('*'))).toBe(true);
   });
 
   it('exportSaveFilters creates filter with label and normalized extension', () => {

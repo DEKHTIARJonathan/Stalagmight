@@ -123,7 +123,7 @@ export default function TmlImportDialog({ tmlFile, filePath }: TmlImportDialogPr
           );
           if (suggestions.length > 0) {
             setSource('dialog');
-            openDialog('orphan-placement', { suggestions });
+            openDialog('orphan-placement', { suggestions, receipt: result.import_receipt });
             return;
           }
         } catch {
@@ -131,7 +131,7 @@ export default function TmlImportDialog({ tmlFile, filePath }: TmlImportDialogPr
         }
       }
 
-      completeImportToSingleView('tml-import', importUi);
+      completeImportToSingleView('tml-import', importUi, result.import_receipt);
     } catch (e) {
       resetLoading();
       setIsImporting(false);

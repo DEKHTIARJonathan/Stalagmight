@@ -172,6 +172,7 @@ pub fn build_preview(parsed: &ParsedWalls) -> WallsFile {
         fixed_station_count,
         missing_file_count: parsed.missing_files.len() as u32,
         skipped_attachment_count: parsed.skipped_attachments,
+        any_feet_units: parsed.surveys.iter().any(|s| s.used_feet),
         surveys,
         warnings: parsed.warnings.clone(),
     }
