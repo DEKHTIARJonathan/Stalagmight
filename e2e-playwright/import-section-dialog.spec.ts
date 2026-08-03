@@ -43,6 +43,30 @@ async function fillShotRow(page: Page, row: number, length: string): Promise<voi
   await fillCell(page, row, 'depth_out', '-1');
 }
 
+/** The `update_new_section_view` payloads the mock recorded so far. */
+async function getViewCalls(page: Page): Promise<Record<string, unknown>[]> {
+  return page.evaluate(
+    () =>
+      (((window as unknown as Record<string, unknown>).__MOCK_NEW_SECTION_VIEW_CALLS__ ??
+        []) as Record<string, unknown>[])
+  );
+}
+
+/** Wait for the debounced layout save to settle, then return the last payload.
+ *  Asserts the SETTLED state rather than sampling mid-debounce, which races the
+ *  500ms timer under parallel load. */
+async function waitForViewSave(page: Page): Promise<Record<string, unknown>> {
+  await page.waitForFunction(
+    () =>
+      (((window as unknown as Record<string, unknown>).__MOCK_NEW_SECTION_VIEW_CALLS__ ??
+        []) as unknown[]).length >= 1,
+    undefined,
+    { timeout: 5000 }
+  );
+  const calls = await getViewCalls(page);
+  return calls[calls.length - 1]!;
+}
+
 test.describe('Import / Create Section dialog', () => {
   test.beforeEach(async ({ page }) => {
     await setupMockedPage(page);
@@ -164,6 +188,61 @@ test.describe('Import / Create Section dialog', () => {
     // Refilling it re-opens the gate.
     await fillCell(page, 1, 'length', '20');
     await expect(page.getByTestId('import-section-create')).toBeEnabled();
+  });
+
+  test('the column layout survives closing and reopening the dialog', async ({ page }) => {
+    // The round trip this change built a config field, an IPC command and a
+    // persistence hook for. Nothing else covers it.
+    await openImportSectionDialog(page);
+
+    await page.getByTestId('new-section-columns-menu').click();
+    await page.getByTestId('new-section-col-toggle-input-left').click();
+    await page.getByTestId('new-section-col-toggle-input-comment').click();
+    await page.keyboard.press('Escape');
+
+    // The grid follows at once; the save is debounced behind it.
+    await expect(page.getByTestId('new-section-header-left')).toBeVisible();
+    await expect(page.getByTestId('new-section-header-comment')).toHaveCount(0);
+
+    const call = await waitForViewSave(page);
+    expect(call.hiddenColumns).toContain('comment');
+    expect(call.hiddenColumns).not.toContain('left');
+
+    // It reaches the stored config, which is what a reopen seeds from.
+    await page.waitForFunction(
+      () => {
+        const hidden = ((window as unknown as Record<string, unknown>).__E2E_TEST__ as
+          | { projectStore: { getState: () => { config?: { panels?: Record<string, string[]> } } } }
+          | undefined
+        )?.projectStore.getState().config?.panels?.new_section_hidden_columns ?? [];
+        return hidden.includes('comment') && !hidden.includes('left');
+      },
+      undefined,
+      { timeout: 5000 }
+    );
+
+    // Close and reopen: the layout comes back rather than resetting to defaults.
+    await page.getByTestId('import-section-cancel').click();
+    await expect(page.getByTestId('import-section-dialog')).toBeHidden({ timeout: 5000 });
+    await openImportSectionDialog(page);
+    await expect(page.getByTestId('new-section-header-left')).toBeVisible();
+    await expect(page.getByTestId('new-section-header-comment')).toHaveCount(0);
+  });
+
+  test('reveals a hidden column that is holding up Create', async ({ page }) => {
+    // A required field whose column is hidden would otherwise block Create with
+    // the offending cell off-screen and no way to find it.
+    await openImportSectionDialog(page);
+
+    await page.getByTestId('new-section-columns-menu').click();
+    await page.getByTestId('new-section-col-toggle-input-depth_in').click();
+    await page.keyboard.press('Escape');
+    await expect(page.getByTestId('new-section-header-depth_in')).toHaveCount(0);
+
+    // Touching the row makes its missing Depth In matter; the column comes back.
+    await fillCell(page, 0, 'length', '10');
+    await expect(page.getByTestId('new-section-header-depth_in')).toBeVisible();
+    await expect(page.getByTestId('import-section-create')).toBeDisabled();
   });
 
   test('Create hands off to map placement mode', async ({ page }) => {
