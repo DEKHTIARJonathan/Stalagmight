@@ -8,6 +8,7 @@ import { formatVolume } from '../../utils/formatGas';
 import { GAS_NEAR, GAS_FAR } from '../../utils/gasReach';
 import { GAS_DIM_ALPHA } from './surveyLayer/customRender/shaders';
 import { segmentColor } from '../../utils/segmentColors';
+import { U_TURN_ARROW_PATH } from '../common/icons';
 import type { GasReachField, GasUnits } from '../../types/ipc.generated';
 
 interface GasLegendProps {
@@ -188,13 +189,27 @@ export function GasLegend({ field, units, visible }: GasLegendProps) {
               style={{
                 width: 11,
                 height: 11,
-                borderRadius: '50%',
+                borderRadius: 3,
                 background: '#7b2fbf',
                 border: '2px solid #ffffff',
                 boxShadow: '0 0 2px rgba(0,0,0,0.6)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
                 flexShrink: 0,
               }}
-            />
+            >
+              <svg width="7" height="7" viewBox="0 0 24 24" aria-hidden="true">
+                <path
+                  d={U_TURN_ARROW_PATH}
+                  fill="none"
+                  stroke="#ffffff"
+                  strokeWidth={3}
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+            </span>
           </KeyRow>
         )}
       </div>

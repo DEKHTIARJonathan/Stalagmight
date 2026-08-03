@@ -632,6 +632,13 @@ export function DashedLineIcon(props: IconProps) {
 /* --- Plan-mode route picks (#298). One glyph per right-click entry, so the menu reads at a
    glance rather than showing four identical fallback arrows. --- */
 
+/** U-turn arrow: up one side, over the top, down the other side into an arrowhead pointing
+ *  back the way it came - "turn around here". 24x24 space, stroke-based so it stays legible
+ *  as a tiny white-stroke glyph on a dark chip (map marker) as well as `currentColor` in the
+ *  React icon. Shared (not duplicated) between {@link UTurnIcon}, the final-turn map marker
+ *  (`useGasPlanDropMarkers.ts`) and the gas legend swatch (`GasLegend.tsx`) - #395. */
+export const U_TURN_ARROW_PATH = 'M7 18V9A5 5 0 0 1 17 9V15M13 15L17 19L21 15';
+
 /** Start point: a flag on a pole - "the dive begins here". */
 export function FlagIcon(props: IconProps) {
   return (
@@ -658,6 +665,15 @@ export function StageDropIcon(props: IconProps) {
     <BaseIcon {...props}>
       <path d="M3 6h14l-7 11z" fill="currentColor" stroke="none" />
     </BaseIcon>
+  );
+}
+
+/** Turnaround (final turn, #395): a U-turn arrow - "the back-gas leg runs out here". */
+export function UTurnIcon(props: IconProps) {
+  return (
+    <BaseIcon24 {...props}>
+      <path d={U_TURN_ARROW_PATH} />
+    </BaseIcon24>
   );
 }
 
