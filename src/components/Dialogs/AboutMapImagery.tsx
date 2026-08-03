@@ -51,8 +51,11 @@ export function AboutMapImagery({ provider = 'esri' }: { provider?: string }) {
         </p>
       )}
       {text && (
+        // Rendered bare. The provider's own string already opens with "Source:",
+        // so framing it ("Sources shown on the map: Source: Esri, ...") only
+        // stutters, and it is not ours to reword.
         <p className="text-xs text-text-secondary" data-testid="about-imagery-sources">
-          {t('dialogs.about.mapImagery.sources', { sources: text })}
+          {text}
         </p>
       )}
     </div>

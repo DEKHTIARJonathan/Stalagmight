@@ -156,7 +156,12 @@ export function Tooltip({
       ? createPortal(
           <span
             ref={tooltipRef}
-            className={`pointer-events-none fixed z-[10000] max-w-96 rounded border border-border bg-panel-90 px-3 py-2 text-sm leading-snug text-text-primary shadow-lg whitespace-pre-line break-all ${tooltipClassName}`}
+            // `break-words`, not `break-all`: break a long unbreakable token
+            // (the lock-holder email this was originally sized for) only when it
+            // genuinely does not fit, rather than chopping ordinary prose
+            // mid-word. Attribution read "the GIS Us / er Community" under
+            // `break-all`, and source names have to be legible.
+            className={`pointer-events-none fixed z-[10000] max-w-96 rounded border border-border bg-panel-90 px-3 py-2 text-sm leading-snug text-text-primary shadow-lg whitespace-pre-line break-words ${tooltipClassName}`}
             style={{
               left: `${position.left}px`,
               top: `${position.top}px`,

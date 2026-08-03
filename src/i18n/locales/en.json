@@ -1343,8 +1343,7 @@
       "website": "stalagmight.com",
       "close": "Close",
       "mapImagery": {
-        "title": "Map imagery",
-        "sources": "Sources shown on the map: {{sources}}"
+        "title": "Map imagery"
       }
     }
   },

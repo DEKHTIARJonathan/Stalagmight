@@ -734,14 +734,19 @@ export default function SingleSystemView() {
             <OfflineIndicator className="absolute top-2 right-14 z-10" />
             {/* Esri requires the imagery's source names to stay visible for as
                 long as the imagery is drawn, so this tracks the satellite layer
-                rather than the map. Bottom-right per Esri's recommendation, and
-                the only free corner: NavigationControl holds top-right and the
-                ScaleControl bottom-left (MapCanvas). Mounted here rather than
-                inside MapCanvas, which is map chrome's usual home in this view -
-                see the OfflineIndicator above. */}
+                rather than the map. Mounted here rather than inside MapCanvas,
+                which is map chrome's usual home in this view - see the
+                OfflineIndicator above.
+
+                Bottom-right per Esri's recommendation, and the only free corner:
+                NavigationControl holds top-right and the ScaleControl
+                bottom-left (MapCanvas). Lifted a row off the bottom edge because
+                the Data dock's opener tab overlaps the map there (see
+                layoutConstants) and drew straight over the last few source
+                names - which Esri's terms specifically forbid. */}
             <MapAttribution
               visible={showSatellite}
-              className="absolute bottom-2 right-2 z-10"
+              className="absolute bottom-9 right-2 z-10"
             />
             {/* Export mode: large WYSIWYG preview of the image export, overlaid
                 on the (still-mounted) map. Only for the image export type -

@@ -56,6 +56,7 @@ describe('AboutMapImagery', () => {
 
   it('repeats the source names so they are discoverable off the map', async () => {
     render(<AboutMapImagery />);
+    // Verbatim: the provider's string is not ours to reword or reframe.
     expect(await screen.findByTestId('about-imagery-sources')).toHaveTextContent(SOURCES);
   });
 
