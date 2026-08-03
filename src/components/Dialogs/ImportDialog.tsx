@@ -407,8 +407,6 @@ export default function ImportDialog() {
             columns={columns}
             rows={rows}
             rowKey={(r) => r.id}
-            rowTestId={(_r, index) => `new-section-row-${index}`}
-            cellTestId={(_r, index, colKey) => `new-section-cell-${index}-${colKey}`}
             locale={numberLocale}
             height={gridHeight}
             onEdit={onEdit}
@@ -417,7 +415,7 @@ export default function ImportDialog() {
             onPasteReport={onPasteReport}
             cellClassName={cellClassName}
             labels={gridLabels}
-            toolbarTestIdPrefix="new-section"
+            testIdPrefix="new-section"
             hiddenColumns={hiddenColumnList}
             columnOrder={columnOrder}
             onColumnOrderChange={setColumnOrder}

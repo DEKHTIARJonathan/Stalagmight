@@ -17,7 +17,6 @@ import {
   type GridSelection,
   type CellCoord,
   type CellEdit,
-  DEFAULT_COL_WIDTH,
   ROW_HEIGHT,
 } from './types';
 import { parseLocaleNumber, parseTSV, serializeRangeToTSV } from './gridClipboard';
@@ -29,6 +28,9 @@ import {
   AUTOFIT_MAX_COL_WIDTH,
 } from './useColumnWidths';
 import { DEFAULT_GRID_LABELS, type GridLabels } from './gridLabels';
+import { GridToolbar } from './GridToolbar';
+import { GridContextMenu } from './GridContextMenu';
+import { GridHeaderRow } from './GridHeaderRow';
 import {
   arrowTarget,
   clamp,
@@ -154,11 +156,12 @@ export interface SpreadsheetGridProps<Row> {
    *  true; hosts that fold the grid into their own chrome turn it off and
    *  track {@link onSelectionChange} instead. */
   showToolbar?: boolean;
-  /** Namespace for the built-in toolbar's test IDs (`<prefix>-columns-menu`,
-   *  `<prefix>-maximize`). Defaults to `data-table` for the original host; a
-   *  SECOND grid with the toolbar shown must override it, or both grids answer
-   *  to the same selector whenever they are mounted together. */
-  toolbarTestIdPrefix?: string;
+  /** Namespace for EVERY test ID the grid emits: cells (`<prefix>-cell-2-len`),
+   *  headers, the editor, the context menu and the toolbar. Defaults to `grid`,
+   *  which is what the existing selectors already say. A second grid mounted
+   *  alongside the first must override it, or both answer to the same selectors
+   *  and any query for one of them is ambiguous. */
+  testIdPrefix?: string;
   /** Right-click on a column header - let the host show its own menu (hide
    *  column, switch column families, ...). The grid only prevents the native
    *  menu when this is set. */
@@ -233,7 +236,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
     cellClassName,
     rowLabel,
     gutterWidth = GUTTER_WIDTH,
-    showToolbar = true, toolbarTestIdPrefix = 'data-table',
+    showToolbar = true, testIdPrefix = 'grid',
     labels: labelOverrides,
     onHeaderContextMenu,
     onSelectionChange,
@@ -2002,56 +2005,25 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
     <div
       className={`sg-grid relative flex flex-col ${grabbing ? 'sg-grabbing' : ''} ${maximized ? 'fixed inset-0 z-50 bg-panel' : ''} ${className}`}
       data-testid="spreadsheet-grid"
+      // The root marker stays unprefixed ("a grid is here"), since callers scope
+      // their lookups inside a panel rather than by grid identity. This makes it
+      // addressable anyway, for a caller that has two mounted at once.
+      data-grid-id={testIdPrefix}
     >
       {showToolbar && (
-      <div className="sg-toolbar flex items-center justify-between gap-2 px-2 py-0.5">
-        <span className="sg-namebox" data-testid="grid-namebox">{nameBox}</span>
-        <div className="flex items-center gap-1">
-          {onHiddenColumnsChange && (
-            <div className="relative">
-              <button
-                type="button"
-                className="text-xs px-2 py-0.5 rounded hover:bg-accent-10"
-                data-testid={`${toolbarTestIdPrefix}-columns-menu`}
-                onClick={() => setMenuOpen((v) => !v)}
-              >
-                {labels.columnsButton}
-              </button>
-              {menuOpen && (
-                <div
-                  data-dropdown-open
-                  className="sg-colmenu absolute right-0 top-full z-50 mt-0.5 max-h-64 overflow-auto rounded border p-1 shadow-lg"
-                >
-                  {columns.map((c) => (
-                    <label
-                      key={c.key}
-                      className="flex items-center gap-2 px-2 py-0.5 text-xs whitespace-nowrap hover:bg-accent-10"
-                      data-testid={`col-toggle-${c.key}`}
-                    >
-                      <input type="checkbox"
-                        checked={!(hiddenColumns ?? []).includes(c.key)}
-                        data-testid={`col-toggle-input-${c.key}`}
-                        onChange={() => toggleHidden(c.key)}
-                      />
-                      {c.header || c.key}
-                    </label>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
-          {onToggleMaximize && (
-            <button
-              type="button"
-              className="text-xs px-2 py-0.5 rounded hover:bg-accent-10"
-              data-testid={`${toolbarTestIdPrefix}-maximize`}
-              onClick={onToggleMaximize}
-            >
-              {maximized ? labels.restore : labels.maximize}
-            </button>
-          )}
-        </div>
-      </div>
+        <GridToolbar
+          columns={columns}
+          hiddenColumns={hiddenColumns ?? []}
+          labels={labels}
+          nameBox={nameBox}
+          testIdPrefix={testIdPrefix}
+          menuOpen={menuOpen}
+          setMenuOpen={setMenuOpen}
+          onToggleHidden={toggleHidden}
+          {...(onHiddenColumnsChange ? { onHiddenColumnsChange } : {})}
+          maximized={maximized}
+          {...(onToggleMaximize ? { onToggleMaximize } : {})}
+        />
       )}
 
       <div
@@ -2088,59 +2060,23 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
         <div style={{ width: totalWidth, position: 'relative' }}>
           {/* Sticky header. z-30 beats the gutter cells' z-20 - rows scrolling
               under the header must pass beneath the corner, not bleed over it. */}
-          <div
-            role="row"
-            aria-rowindex={1}
-            className={`sg-header-bar sticky top-0 z-30 flex bg-panel ${scrolled ? 'sg-scrolled' : ''}`}
-            style={{ height: HEADER_HEIGHT }}
-          >
-            {/* Frozen top-left corner above the row-number gutter. */}
-            <div
-              className="sg-corner sticky left-0 z-30 flex items-center justify-center border-b border-r border-white/10 bg-panel"
-              style={{ width: gutterWidth, minWidth: gutterWidth }}
-            />
-            {visibleColumns.map((c, i) => {
-              const fullColSel = rect.r0 === 0 && rect.r1 === rowCount - 1;
-              const colSelected = fullColSel && i >= rect.c0 && i <= rect.c1;
-              return (
-              <div
-                key={c.key}
-                role="columnheader"
-                aria-colindex={i + 1}
-                className={`sg-header relative flex items-center border-b border-r border-white/10 px-2 text-xs font-medium text-text-secondary ${
-                  i >= rect.c0 && i <= rect.c1 ? 'sg-header-selected text-text-primary' : ''
-                } ${i === activeColIdx ? 'sg-header-active' : ''}`}
-                style={{
-                  width: widths[i],
-                  minWidth: widths[i],
-                  cursor: colSelected && onColumnOrderChange ? 'grab' : 'pointer',
-                }}
-                onMouseDown={(e) => onHeaderMouseDown(i, e)}
-                onMouseEnter={() => onHeaderMouseEnter(i)}
-                onContextMenu={(e) => {
-                  if (!onHeaderContextMenu) return;
-                  e.preventDefault();
-                  onHeaderContextMenu(c.key, { x: e.clientX, y: e.clientY });
-                }}
-                data-testid={`grid-header-${c.key}`}
-              >
-                <span className="flex-1 overflow-hidden text-ellipsis whitespace-nowrap">{c.header}</span>
-                {/* Drag this edge to resize the column. The handle normally
-                    straddles the boundary (right: -2px); on the last column that
-                    boundary is the content's right edge, so keep it inside the
-                    cell to avoid a few-px phantom horizontal scrollbar. */}
-                <div
-                  className={`sg-col-resize${i === visibleColumns.length - 1 ? ' sg-col-resize-end' : ''}`}
-                  data-testid={`grid-col-resize-${c.key}`}
-                  onMouseDown={(e) => startResize(e, c.key, widths[i] ?? DEFAULT_COL_WIDTH)}
-                  onClick={(e) => e.stopPropagation()}
-                  onDoubleClick={(e) => { e.stopPropagation(); autoFitColumn(c.key); }}
-                  onDragStart={(e) => e.preventDefault()}
-                />
-              </div>
-              );
-            })}
-          </div>
+          <GridHeaderRow
+            columns={visibleColumns}
+            widths={widths}
+            rect={rect}
+            activeColIdx={activeColIdx}
+            rowCount={rowCount}
+            gutterWidth={gutterWidth}
+            headerHeight={HEADER_HEIGHT}
+            scrolled={scrolled}
+            testIdPrefix={testIdPrefix}
+            reorderable={!!onColumnOrderChange}
+            onHeaderMouseDown={onHeaderMouseDown}
+            onHeaderMouseEnter={onHeaderMouseEnter}
+            {...(onHeaderContextMenu ? { onHeaderContextMenu } : {})}
+            onStartResize={startResize}
+            onAutoFitColumn={autoFitColumn}
+          />
 
           {/* Rows area */}
           <div role="rowgroup" style={{ height: totalHeight, position: 'relative' }}>
@@ -2158,7 +2094,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
                     extraRowClass ? ` ${extraRowClass}` : ''
                   }`}
                   style={{ top: vr.start - HEADER_HEIGHT, height: ROW_HEIGHT, width: totalWidth }}
-                  data-testid={`grid-row-${rowIdx}`}
+                  data-testid={`${testIdPrefix}-row-${rowIdx}`}
                   data-active={rowIdx === selection.active.row ? 'true' : undefined}
                 >
                   {/* Frozen row-number gutter; click to select, drag a selected
@@ -2176,7 +2112,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
                           ? 'grab'
                           : 'pointer',
                     }}
-                    data-testid={`grid-gutter-${rowIdx}`}
+                    data-testid={`${testIdPrefix}-gutter-${rowIdx}`}
                     onMouseDown={(e) => onGutterMouseDown(rowIdx, e)}
                     onMouseEnter={() => onGutterMouseEnter(rowIdx)}
                     onContextMenu={(e) => onGutterContextMenu(rowIdx, e)}
@@ -2219,7 +2155,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
                           // Thin ring on the active cell inside a multi-cell range.
                           boxShadow: isActive && multiCell ? 'inset 0 0 0 1px var(--sg-blue)' : undefined,
                         }}
-                        data-testid={`grid-cell-${rowIdx}-${col.key}`}
+                        data-testid={`${testIdPrefix}-cell-${rowIdx}-${col.key}`}
                         data-in-selection={inSel ? 'true' : undefined}
                         data-active-cell={isActive ? 'true' : undefined}
                         onMouseDown={(e) => onCellMouseDown(rowIdx, c, e)}
@@ -2252,14 +2188,14 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
             {copiedRect && !cutRect && (
               <div
                 className="sg-marching-ants"
-                data-testid="grid-copy-marquee"
+                data-testid={`${testIdPrefix}-copy-marquee`}
                 style={{ ...rectOverlay(copiedRect), zIndex: 3 }}
               />
             )}
             {cutRect && (
               <div
                 className="sg-cut-marquee"
-                data-testid="grid-cut-marquee"
+                data-testid={`${testIdPrefix}-cut-marquee`}
                 style={{ ...rectOverlay(cutRect), zIndex: 3 }}
               />
             )}
@@ -2283,7 +2219,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
               <div
                 className={`sg-selection-overlay ${interacting ? 'sg-no-anim' : ''}`}
                 style={overlayStyle}
-                data-testid="grid-selection-overlay"
+                data-testid={`${testIdPrefix}-selection-overlay`}
                 data-rect={`${rect.r0},${rect.c0},${rect.r1},${rect.c1}`}
               >
                 {/* Grab any edge (not the interior) to move the cells. */}
@@ -2298,7 +2234,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
                 {!editing && (
                   <div
                     className="sg-fill-handle"
-                    data-testid="grid-fill-handle"
+                    data-testid={`${testIdPrefix}-fill-handle`}
                     onMouseDown={onFillHandleDown}
                     onDoubleClick={onFillHandleDoubleClick}
                   />
@@ -2311,7 +2247,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
             {editing && colIndexOf(editing.colKey) >= 0 && (
               <textarea
                 ref={editorRef}
-                data-testid="grid-cell-editor"
+                data-testid={`${testIdPrefix}-cell-editor`}
                 aria-label={labels.editCellAria(
                   columns.find((c) => c.key === editing.colKey)?.header ?? editing.colKey,
                   editing.row + 1,
@@ -2366,7 +2302,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
             {invalidCell && colIndexOf(invalidCell.colKey) >= 0 && (
               <div
                 className="sg-invalid-flash"
-                data-testid="grid-invalid-flash"
+                data-testid={`${testIdPrefix}-invalid-flash`}
                 style={{
                   ...rectOverlay({
                     r0: invalidCell.row,
@@ -2426,43 +2362,25 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
       )}
 
       {ctxMenu && (
-        <div
-          ref={ctxMenuRef}
-          data-dropdown-open
-          className="sg-context-menu"
-          data-testid="grid-context-menu"
-          style={{ position: 'fixed', top: ctxMenu.y, left: ctxMenu.x, zIndex: 60 }}
-          onMouseDown={(e) => e.stopPropagation()}
-        >
-          <button type="button" data-testid="grid-context-copy" onClick={() => { void doCopy(); setCtxMenu(null); }}>{labels.copy(ctxShapeSuffix)}<span className="sg-shortcut">{labels.shortcutCopy}</span></button>
-          <button type="button" data-testid="grid-context-cut" onClick={() => { void doCut(); setCtxMenu(null); }}>{labels.cut(ctxShapeSuffix)}<span className="sg-shortcut">{labels.shortcutCut}</span></button>
-          <button type="button" data-testid="grid-context-paste" onClick={() => { void doPaste(); setCtxMenu(null); }}>{labels.paste}<span className="sg-shortcut">{labels.shortcutPaste}</span></button>
-          {(onInsertRows || onDeleteRows) && <div className="sg-context-sep" />}
-          {onInsertRows && (
-            <button type="button" data-testid="grid-context-insert-above" onClick={() => { onInsertRows(rect.r0, rect.r1 - rect.r0 + 1); setCtxMenu(null); }}>
-              {labels.insertAbove(ctxRowsLabel)}
-            </button>
-          )}
-          {onInsertRows && (
-            <button type="button" data-testid="grid-context-insert-below" onClick={() => { onInsertRows(rect.r1 + 1, rect.r1 - rect.r0 + 1); setCtxMenu(null); }}>
-              {labels.insertBelow(ctxRowsLabel)}
-            </button>
-          )}
-          {onDeleteRows && (
-            <button type="button" data-testid="grid-context-delete-rows" onClick={() => { onDeleteRows(rect.r0, rect.r1); setCtxMenu(null); }}>
-              {labels.deleteRows(ctxRowsLabel)}
-            </button>
-          )}
-          <div className="sg-context-sep" />
-          <button type="button" data-testid="grid-context-clear" onClick={() => { doClear(); setCtxMenu(null); }}>{labels.clear(ctxShapeSuffix)}<span className="sg-shortcut">{labels.shortcutClear}</span></button>
-          <button type="button" data-testid="grid-context-fill-down" onClick={() => { doFill(true); setCtxMenu(null); }}>{labels.fillDown}<span className="sg-shortcut">{labels.shortcutFillDown}</span></button>
-          {ctxExtraItems.length > 0 && <div className="sg-context-sep" />}
-          {ctxExtraItems.map((item, index) => (
-            <button key={item.label} type="button" data-testid={`grid-context-extra-${index}`} onClick={() => { item.onClick(); setCtxMenu(null); }}>
-              {item.label}
-            </button>
-          ))}
-        </div>
+        <GridContextMenu
+          pos={ctxMenu}
+          menuRef={ctxMenuRef}
+          labels={labels}
+          shapeSuffix={ctxShapeSuffix}
+          rowsLabel={ctxRowsLabel}
+          fromRow={rect.r0}
+          toRow={rect.r1}
+          testIdPrefix={testIdPrefix}
+          onCopy={() => void doCopy()}
+          onCut={() => void doCut()}
+          onPaste={() => void doPaste()}
+          onClear={doClear}
+          onFillDown={() => doFill(true)}
+          {...(onInsertRows ? { onInsertRows } : {})}
+          {...(onDeleteRows ? { onDeleteRows } : {})}
+          extraItems={ctxExtraItems}
+          onClose={() => setCtxMenu(null)}
+        />
       )}
     </div>
   );
