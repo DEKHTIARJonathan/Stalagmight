@@ -14,8 +14,13 @@ type AngleMode = 'avg' | 'inout' | 'off';
  * backend as an alphabetically-sorted `BTreeMap`. Comparing those two directly
  * reports a change that isn't one, costing a redundant save-and-resync cycle. The
  * sibling hidden-column lists are `.sort()`ed just above for the same reason.
+ *
+ * Exported for `useNewSectionViewPersistence`, which persists the new-section
+ * dialog's grid layout through the same seed/snapshot/debounce machinery and so
+ * needs the identical normalization - two copies would be free to drift into
+ * exactly the spurious-save bug this exists to prevent.
  */
-function stableWidths(widths: Record<string, number>): Array<[string, number]> {
+export function stableWidths(widths: Record<string, number>): Array<[string, number]> {
   return Object.entries(widths).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
 }
 

@@ -1,56 +1,68 @@
-import { useState, useRef, useCallback } from 'react';
+import { useState, useRef, useCallback, useMemo, useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useUIStore, type PlacementResult } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
-import { Button, IconButton } from '../common/Button';
-import { Panel } from '../common/Panel';
-import { CloseIcon } from '../common/icons';
+import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
-import type { ShotData, SectionData } from '../../types/project';
+import type { Shot, SectionData } from '../../types/project';
+import { SpreadsheetGrid } from '../common/SpreadsheetGrid';
+import type { CellEdit } from '../common/SpreadsheetGrid/types';
+import {
+  type ShotDraft,
+  materializeDraft,
+  draftMissing,
+} from '../SingleSystemView/dataTableDrafts';
+import {
+  applyEdits,
+  blankRow,
+  canSubmit,
+  deleteRows,
+  deriveAzimuthMode,
+  insertBlankRows,
+  moveRows,
+  summarizeSubmit,
+} from './newSectionRows';
+import {
+  buildNewSectionShotColumns,
+  DEFAULT_NEW_SECTION_HIDDEN_COLUMNS,
+} from './newSectionShotColumns';
+import { useNewSectionViewPersistence } from './useNewSectionViewPersistence';
 import { getNextSectionColor } from '../../utils/colors';
 import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
+import { useEditingBlocked } from '../../hooks/useEditingBlocked';
+import { useGridLabels } from '../../hooks/useGridLabels';
+import { getNumberFormatLocale } from '../../i18n/format';
+import { nextShotKind } from '../../utils/shotKind';
 import { trackDialogComplete } from '../../utils/telemetry';
 
-/** Editable column keys in display order (without LRUD). */
-const BASE_COLS: EditableField[] = ['length', 'azimuth', 'depth_in', 'depth_out'];
-const LRUD_COLS: EditableField[] = ['left', 'right', 'up', 'down'];
-
-type EditableField =
-  | 'length'
-  | 'azimuth'
-  | 'depth_in'
-  | 'depth_out'
-  | 'left'
-  | 'right'
-  | 'up'
-  | 'down';
+/** Grid height to assume before the first measurement, and under jsdom (which
+ *  has no ResizeObserver). Tall enough that virtualization renders rows. */
+const FALLBACK_GRID_HEIGHT = 360;
+/** Never size the row area below this, so the grid stays usable on a short
+ *  window rather than collapsing to the header. */
+const ROW_AREA_MIN = 120;
 
 interface SavedFormState {
   name: string;
   surveyor: string;
   date: string;
   color: string;
-  shots: ShotData[];
-  showLrud: boolean;
-}
-
-function validateField(field: EditableField, raw: string): string | null {
-  if (field === 'left' || field === 'right' || field === 'up' || field === 'down') {
-    if (raw.trim() === '') return null; // empty is valid (→ null)
-    const v = parseFloat(raw);
-    if (!Number.isFinite(v) || v < 0) return 'Must be ≥ 0 or empty';
-    return null;
-  }
-  const v = parseFloat(raw);
-  if (!Number.isFinite(v)) return 'Must be a number';
-  if (field === 'length' && v <= 0) return 'Must be > 0';
-  if (field === 'azimuth' && (v < 0 || v >= 360)) return 'Must be [0, 360)';
-  return null;
+  /** The full grid contents, including partially-filled rows, so a cancelled
+   *  placement restores exactly what was on screen. */
+  drafts: ShotDraft[];
+  /** Continues the monotonic key counter, so restored rows can never collide
+   *  with rows added afterwards. */
+  nextKey: number;
 }
 
 export default function ImportDialog() {
+  const { t } = useTranslation();
   const { closeDialog, openDialog, startPlacementMode, dialogData, resolvedTheme } = useUIStore();
   const { createSection, createSectionAndMerge, moveSection, project } = useProjectStore();
   const precision = useDecimalPrecision();
+  const editingBlocked = useEditingBlocked();
+  const gridLabels = useGridLabels('dataTable.shotNoun');
+  const numberLocale = getNumberFormatLocale();
 
   // Restore form state when reopening after placement cancel
   const saved = dialogData as { savedFormState?: SavedFormState } | undefined;
@@ -60,15 +72,15 @@ export default function ImportDialog() {
   const [name, setName] = useState<string>(restored?.name ?? '');
   const [surveyor, setSurveyor] = useState<string>(restored?.surveyor ?? '');
   const [date, setDate] = useState<string>(restored?.date ?? '');
-  const [shots, setShots] = useState<ShotData[]>(restored?.shots ?? [createEmptyShot()]);
-  const [showLrud, setShowLrud] = useState(restored?.showLrud ?? false);
 
-  // Validation state
-  const [cellErrors, setCellErrors] = useState<Record<string, string>>({});
-  const previousValues = useRef<Record<string, string>>({});
-
-  // Input refs: inputRefs.current[rowIndex][colIndex]
-  const inputRefs = useRef<(HTMLInputElement | null)[][]>([]);
+  // Row keys are handed out from a monotonic counter and NEVER reused: the grid
+  // keys per-cell state (missing-cell marks) by row identity, so a recycled key
+  // would leak one row's red cells onto a later one.
+  const keyCounterRef = useRef<number>(restored?.nextKey ?? 0);
+  const nextKey = useCallback(() => keyCounterRef.current++, []);
+  const [drafts, setDrafts] = useState<ShotDraft[]>(
+    () => restored?.drafts ?? [blankRow(keyCounterRef.current++)]
+  );
 
   // Get next available color
   const usedColors = project?.sections.map((s) => s.color) ?? [];
@@ -76,191 +88,134 @@ export default function ImportDialog() {
     restored?.color ?? getNextSectionColor(usedColors, resolvedTheme)
   );
 
-  const editableCols = showLrud ? [...BASE_COLS, ...LRUD_COLS] : BASE_COLS;
-
-  const cellKey = (row: number, field: string) => `${row}-${field}`;
-
-  const setRef = useCallback(
-    (rowIndex: number, colIndex: number, el: HTMLInputElement | null) => {
-      if (!inputRefs.current[rowIndex]) {
-        inputRefs.current[rowIndex] = [];
-      }
-      inputRefs.current[rowIndex]![colIndex] = el;
-    },
-    [],
+  // --- Grid layout (persisted under its own config keys) --------------------
+  const [columnOrder, setColumnOrder] = useState<string[]>([]);
+  const [hiddenColumns, setHiddenColumns] = useState<ReadonlySet<string>>(
+    () => new Set(DEFAULT_NEW_SECTION_HIDDEN_COLUMNS)
   );
+  const [columnWidths, setColumnWidths] = useState<Record<string, number>>({});
+  const viewSetters = useMemo(
+    () => ({ setColumnOrder, setHiddenColumns, setColumnWidths }),
+    []
+  );
+  useNewSectionViewPersistence({ columnOrder, hiddenColumns, columnWidths }, viewSetters);
+  const hiddenColumnList = useMemo(() => [...hiddenColumns], [hiddenColumns]);
 
-  const handleAddShot = useCallback(() => {
-    setShots((prev) => {
-      const last = prev[prev.length - 1];
-      const shot = createEmptyShot();
-      if (last) {
-        shot.depth_in = last.depth_out;
-      }
-      return [...prev, shot];
-    });
+  // --- Grid height ----------------------------------------------------------
+  // Virtualization needs an explicit pixel height, and the fullscreen dialog
+  // sizes itself to the window, so the row area has to be measured. The grid's
+  // own toolbar sits inside the same box, so subtract its live height rather
+  // than a constant (it wraps on a narrow window).
+  const gridBoxRef = useRef<HTMLDivElement | null>(null);
+  const [gridHeight, setGridHeight] = useState(FALLBACK_GRID_HEIGHT);
+  useEffect(() => {
+    const el = gridBoxRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return undefined;
+    const measure = () => {
+      const toolbar = el.querySelector('.sg-toolbar');
+      const chrome = toolbar instanceof HTMLElement ? toolbar.offsetHeight : 0;
+      const h = Math.max(ROW_AREA_MIN, el.clientHeight - chrome);
+      setGridHeight((prev) => (Math.abs(prev - h) > 1 ? h : prev));
+    };
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    measure();
+    return () => ro.disconnect();
   }, []);
 
-  const handleRemoveShot = (index: number) => {
-    setShots(shots.filter((_, i) => i !== index));
-    // Clean up errors for removed row and re-key rows after it
-    setCellErrors((prev) => {
-      const next: Record<string, string> = {};
-      for (const [key, val] of Object.entries(prev)) {
-        const dashIdx = key.indexOf('-');
-        const rowStr = key.slice(0, dashIdx);
-        const field = key.slice(dashIdx + 1);
-        const row = parseInt(rowStr, 10);
-        if (row === index) continue;
-        const newRow = row > index ? row - 1 : row;
-        next[`${newRow}-${field}`] = val;
-      }
-      return next;
-    });
-  };
+  // --- Rows -----------------------------------------------------------------
+  const rows = useMemo<Shot[]>(() => drafts.map(materializeDraft), [drafts]);
 
-  const handleShotChange = (index: number, field: keyof ShotData, value: unknown) => {
-    const newShots = [...shots];
-    const shot = newShots[index];
-    if (shot) {
-      (shot as unknown as Record<string, unknown>)[field] = value;
-      setShots(newShots);
-    }
-  };
+  const onCycleShotKind = useCallback(
+    (shot: Shot, direction: 1 | -1) => {
+      if (editingBlocked) return;
+      setDrafts((prev) =>
+        prev.map((d) =>
+          d.key === shot.id ? { ...d, data: { ...d.data, kind: nextShotKind(shot.kind, direction) } } : d
+        )
+      );
+    },
+    [editingBlocked]
+  );
 
-  /** Handle change for an editable field, including azimuth → both azi fields. */
-  const handleFieldChange = (rowIndex: number, field: EditableField, raw: string) => {
-    if (field === 'azimuth') {
-      const v = parseFloat(raw) || 0;
-      handleShotChange(rowIndex, 'azimuth_in', v);
-      handleShotChange(rowIndex, 'azimuth_out', v);
-    } else if (field === 'left' || field === 'right' || field === 'up' || field === 'down') {
-      const v = raw.trim() === '' ? null : parseFloat(raw) || 0;
-      handleShotChange(rowIndex, field, v);
-    } else {
-      handleShotChange(rowIndex, field, parseFloat(raw) || 0);
-    }
-  };
+  const columns = useMemo(
+    () =>
+      buildNewSectionShotColumns({
+        t,
+        precision,
+        readOnly: editingBlocked,
+        onCycleShotKind,
+      }),
+    [t, precision, editingBlocked, onCycleShotKind]
+  );
 
-  const getFieldValue = (shot: ShotData, field: EditableField): string => {
-    if (field === 'azimuth') {
-      return shot.azimuth_in.toFixed(precision.azimuth);
-    }
-    if (field === 'left' || field === 'right' || field === 'up' || field === 'down') {
-      const v = shot[field];
-      if (v === null || v === undefined) return '';
-      return v.toFixed(precision.length);
-    }
-    if (field === 'length') {
-      return shot.length.toFixed(precision.length);
-    }
-    if (field === 'depth_in' || field === 'depth_out') {
-      return shot[field].toFixed(precision.depth);
-    }
-    return String(shot[field]);
-  };
+  const onEdit = useCallback(
+    (rowIndex: number, colKey: string, value: unknown) => {
+      if (editingBlocked) return;
+      setDrafts((prev) => applyEdits(prev, [{ row: rowIndex, colKey, value }], nextKey));
+    },
+    [editingBlocked, nextKey]
+  );
 
-  // --- Focus / validation helpers ---
+  const onBatchEdit = useCallback(
+    (edits: CellEdit[]) => {
+      if (editingBlocked) return;
+      setDrafts((prev) => applyEdits(prev, edits, nextKey));
+    },
+    [editingBlocked, nextKey]
+  );
 
-  const handleFocus = (rowIndex: number, field: EditableField, input: HTMLInputElement) => {
-    const key = cellKey(rowIndex, field);
-    previousValues.current[key] = input.value;
-  };
+  // A required cell cleared back to "missing": drop the field so it reads as
+  // absent to draftMissing/completeDraftData rather than keeping a stale value.
+  const onClearMissing = useCallback(
+    (rowIndex: number, colKey: string) => {
+      if (editingBlocked) return;
+      setDrafts((prev) => applyEdits(prev, [{ row: rowIndex, colKey, value: undefined }], nextKey));
+    },
+    [editingBlocked, nextKey]
+  );
 
-  const doValidate = (
-    rowIndex: number,
-    field: EditableField,
-    input: HTMLInputElement,
-  ): boolean => {
-    const raw = input.value;
-    const error = validateField(field, raw);
-    const key = cellKey(rowIndex, field);
-    if (error) {
-      setCellErrors((prev) => ({ ...prev, [key]: error }));
-      setTimeout(() => input.focus(), 0);
-      return false;
-    }
-    setCellErrors((prev) => {
-      const next = { ...prev };
-      delete next[key];
-      return next;
-    });
-    handleFieldChange(rowIndex, field, raw);
-    return true;
-  };
+  const onInsertRows = useCallback(
+    (beforeIndex: number, count: number) => {
+      if (editingBlocked) return;
+      setDrafts((prev) => insertBlankRows(prev, beforeIndex, count, nextKey));
+    },
+    [editingBlocked, nextKey]
+  );
 
-  const handleBlur = (rowIndex: number, field: EditableField, input: HTMLInputElement) => {
-    doValidate(rowIndex, field, input);
-  };
+  const onDeleteRows = useCallback(
+    (fromRow: number, toRow: number) => {
+      if (editingBlocked) return;
+      setDrafts((prev) => deleteRows(prev, fromRow, toRow, nextKey));
+    },
+    [editingBlocked, nextKey]
+  );
 
-  const focusCell = (rowIndex: number, colIndex: number) => {
-    const row = inputRefs.current[rowIndex];
-    const el = row?.[colIndex];
-    if (el) {
-      el.focus();
-    }
-  };
+  const onMoveRows = useCallback(
+    (fromStart: number, fromEnd: number, toIndex: number) => {
+      if (editingBlocked) return;
+      setDrafts((prev) => moveRows(prev, fromStart, fromEnd, toIndex));
+    },
+    [editingBlocked]
+  );
 
-  const handleKeyDown = (
-    e: React.KeyboardEvent<HTMLInputElement>,
-    rowIndex: number,
-    colIndex: number,
-    field: EditableField,
-  ) => {
-    const input = e.currentTarget;
-    const key = cellKey(rowIndex, field);
+  // --- Missing-cell marking and the Create gate -----------------------------
+  const azimuthMode = useMemo(() => deriveAzimuthMode(hiddenColumns), [hiddenColumns]);
+  const missingByRow = useMemo(
+    () => drafts.map((d) => draftMissing(d, hiddenColumns, azimuthMode)),
+    [drafts, hiddenColumns, azimuthMode]
+  );
+  const cellClassName = useCallback(
+    (_row: Shot, rowIndex: number, colKey: string) =>
+      missingByRow[rowIndex]?.cells.has(colKey) ? 'sg-cell-missing' : undefined,
+    [missingByRow]
+  );
 
-    if (e.key === 'Escape') {
-      // Restore previous value if cell is in error
-      if (cellErrors[key]) {
-        const prev = previousValues.current[key];
-        if (prev !== undefined) {
-          input.value = prev;
-          handleFieldChange(rowIndex, field, prev);
-        }
-        setCellErrors((prevErrors) => {
-          const next = { ...prevErrors };
-          delete next[key];
-          return next;
-        });
-        input.blur();
-      }
-      return;
-    }
-
-    if (e.key === 'Enter') {
-      e.preventDefault();
-      // Validate first - if invalid, block
-      if (!doValidate(rowIndex, field, input)) return;
-
-      const isLastRow = rowIndex === shots.length - 1;
-
-      if (isLastRow) {
-        // Create new row and focus Length (first column)
-        handleAddShot();
-        setTimeout(() => focusCell(rowIndex + 1, 0), 0);
-      } else {
-        // Move down to same column in next row
-        focusCell(rowIndex + 1, colIndex);
-      }
-    }
-  };
-
-  /** Enter on non-editable cells (Reference, ✕) creates a new row or moves down. */
-  const handleRowKeyDown = (e: React.KeyboardEvent, rowIndex: number) => {
-    if (e.key === 'Enter') {
-      e.preventDefault();
-      const isLastRow = rowIndex === shots.length - 1;
-      if (isLastRow) {
-        handleAddShot();
-        setTimeout(() => focusCell(rowIndex + 1, 0), 0);
-      } else {
-        focusCell(rowIndex + 1, 0);
-      }
-    }
-  };
+  const submit = useMemo(() => summarizeSubmit(drafts), [drafts]);
+  const submitAllowed = canSubmit(submit) && !editingBlocked;
 
   const handleSubmit = () => {
+    if (!submitAllowed) return;
     const sectionData: SectionData = {
       name: name || null,
       surveyor: surveyor || null,
@@ -268,11 +223,18 @@ export default function ImportDialog() {
       color,
       direction: null,
       quality: 1.0,
-      shots: shots.filter((s) => s.length > 0),
+      shots: submit.shots,
     };
 
     // Save form state so we can restore on cancel
-    const formState: SavedFormState = { name, surveyor, date, color, shots, showLrud };
+    const formState: SavedFormState = {
+      name,
+      surveyor,
+      date,
+      color,
+      drafts,
+      nextKey: keyCounterRef.current,
+    };
 
     // Close dialog and enter placement mode
     trackDialogComplete('import');
@@ -298,34 +260,43 @@ export default function ImportDialog() {
     );
   };
 
-  // Track if form has been modified
+  // Track if form has been modified. Any row carrying data counts, including an
+  // incomplete one - discarding it still loses typing.
   const isDirty =
-    name !== '' || surveyor !== '' || date !== '' || shots.some((s) => s.length > 0);
+    name !== '' ||
+    surveyor !== '' ||
+    date !== '' ||
+    drafts.some((d) => Object.keys(d.data).length > 0);
 
   return (
     <DialogWrapper
-      title="Import / Create Section"
+      title={t('newSection.title')}
       onClose={closeDialog}
-      size="2xl"
+      size="fullscreen"
+      overflow="hidden"
       isDirty={isDirty}
       data-testid="import-section-dialog"
     >
-      <div className="space-y-4">
+      <div className="flex h-full flex-col gap-4">
         {/* Metadata */}
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid shrink-0 grid-cols-2 gap-4">
           <div>
-            <label className="block text-sm text-text-secondary mb-1">Section Name</label>
+            <label className="block text-sm text-text-secondary mb-1">
+              {t('newSection.labels.name')}
+            </label>
             <input
               type="text"
               value={name}
               onChange={(e) => setName(e.target.value)}
               className="w-full"
-              placeholder="e.g., Main Line"
+              placeholder={t('newSection.placeholders.name')}
               data-testid="section-name-input"
             />
           </div>
           <div>
-            <label className="block text-sm text-text-secondary mb-1">Surveyor</label>
+            <label className="block text-sm text-text-secondary mb-1">
+              {t('newSection.labels.surveyor')}
+            </label>
             <input
               type="text"
               value={surveyor}
@@ -335,7 +306,9 @@ export default function ImportDialog() {
             />
           </div>
           <div>
-            <label className="block text-sm text-text-secondary mb-1">Date</label>
+            <label className="block text-sm text-text-secondary mb-1">
+              {t('newSection.labels.date')}
+            </label>
             <input
               type="date"
               value={date}
@@ -345,7 +318,9 @@ export default function ImportDialog() {
             />
           </div>
           <div>
-            <label className="block text-sm text-text-secondary mb-1">Color</label>
+            <label className="block text-sm text-text-secondary mb-1">
+              {t('newSection.labels.color')}
+            </label>
             <input
               type="color"
               value={color}
@@ -356,154 +331,66 @@ export default function ImportDialog() {
           </div>
         </div>
 
-        {/* Shots table */}
-        <Panel
-          title="Shots"
-          headerActions={
-            <button onClick={handleAddShot} className="text-accent text-sm" data-testid="import-section-add-shot">
-              + Add Row
-            </button>
-          }
+        {/* Shots grid. The box is what gets measured, so the grid must be its
+            only child - the toolbar the grid draws inside it is subtracted. */}
+        <div
+          ref={gridBoxRef}
+          className="min-h-0 flex-1 overflow-hidden rounded border border-border"
+          data-testid="import-section-grid"
         >
-          {/* LRUD toggle */}
-          <div className="px-3 py-2 border-b border-border">
-            <label className="flex items-center gap-2 text-sm text-text-secondary cursor-pointer">
-              <input
-                type="checkbox"
-                checked={showLrud}
-                onChange={(e) => setShowLrud(e.target.checked)}
-                data-testid="import-section-lrud-toggle"
-              />
-              Include LRUD
-            </label>
-          </div>
-
-          <div className="overflow-auto max-h-64 pb-1">
-            <table className="w-full">
-              <thead>
-                <tr>
-                  <th className="text-center" style={{ width: '40px' }}>#</th>
-                  <th className="text-right" style={{ width: '100px' }}>Length</th>
-                  <th className="text-right" style={{ width: '70px' }}>Azimuth</th>
-                  <th className="text-right" style={{ width: '80px' }}>Depth In</th>
-                  <th className="text-right" style={{ width: '95px' }}>Depth Out</th>
-                  {showLrud && (
-                    <>
-                      <th className="text-right" style={{ width: '50px' }}>L</th>
-                      <th className="text-right" style={{ width: '50px' }}>R</th>
-                      <th className="text-right" style={{ width: '50px' }}>U</th>
-                      <th className="text-right" style={{ width: '50px' }}>D</th>
-                    </>
-                  )}
-                  <th className="text-center" style={{ width: '40px' }}>Ref</th>
-                  <th style={{ width: '30px' }}></th>
-                </tr>
-              </thead>
-              <tbody>
-                {shots.map((shot, rowIndex) => (
-                  <tr key={rowIndex}>
-                    <td className="p-0 text-center">
-                      <span className="px-2 py-1 inline-block">{rowIndex + 1}</span>
-                    </td>
-                    {editableCols.map((field, colIndex) => {
-                      const key = cellKey(rowIndex, field);
-                      const hasError = !!cellErrors[key];
-                      const isLrud =
-                        field === 'left' ||
-                        field === 'right' ||
-                        field === 'up' ||
-                        field === 'down';
-                      return (
-                        <td key={field} className="p-0 text-right">
-                          <input
-                            ref={(el) => setRef(rowIndex, colIndex, el)}
-                            type="number" inputMode="decimal"
-                            value={getFieldValue(shot, field)}
-                            onChange={(e) => handleFieldChange(rowIndex, field, e.target.value)}
-                            onFocus={(e) => handleFocus(rowIndex, field, e.currentTarget)}
-                            onBlur={(e) => handleBlur(rowIndex, field, e.currentTarget)}
-                            onKeyDown={(e) => handleKeyDown(e, rowIndex, colIndex, field)}
-                            className={`w-full px-2 py-1 bg-transparent border-none focus:bg-panel text-right tabular-nums ${hasError ? 'relative z-10 ring-2 ring-error' : ''}`}
-                            step="0.1"
-                            title={cellErrors[key] ?? undefined}
-                            placeholder={isLrud ? '-' : undefined}
-                            data-testid={`import-shot-${rowIndex}-${field}-input`}
-                          />
-                        </td>
-                      );
-                    })}
-                    <td className="p-0 text-center">
-                      <span className="px-2 py-1 flex items-center justify-center">
-                        <input
-                          type="checkbox"
-                          // Still a virtual-vs-not checkbox, and on THIS path the
-                          // Reference it writes is final: the dialog submits via
-                          // createSection / createSectionAndMerge, not
-                          // execute_import_sections, so the #27 chain classifier
-                          // never sees these shots. Ticking it means "exclude
-                          // from gas, penetration and the ruler"; the J/R cell in
-                          // the data table is where it can be changed afterwards.
-                          checked={(shot.kind ?? 'Normal') !== 'Normal'}
-                          onChange={(e) =>
-                            handleShotChange(rowIndex, 'kind', e.target.checked ? 'Reference' : 'Normal')
-                          }
-                          onKeyDown={(e) => handleRowKeyDown(e, rowIndex)}
-                          data-testid={`import-shot-${rowIndex}-reference-input`}
-                        />
-                      </span>
-                    </td>
-                    <td className="p-0 text-center">
-                      <IconButton
-                        onClick={() => handleRemoveShot(rowIndex)}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter') {
-                            e.preventDefault();
-                            handleRowKeyDown(e, rowIndex);
-                          }
-                        }}
-                        icon={<CloseIcon size={12} />}
-                        size="sm"
-                        variant="ghost"
-                        aria-label="Remove shot"
-                        data-testid={`import-shot-${rowIndex}-remove`}
-                        className="text-error hover:text-error-80"
-                      />
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </Panel>
+          <SpreadsheetGrid<Shot>
+            columns={columns}
+            rows={rows}
+            rowKey={(r) => r.id}
+            rowTestId={(_r, index) => `new-section-row-${index}`}
+            cellTestId={(_r, index, colKey) => `new-section-cell-${index}-${colKey}`}
+            locale={numberLocale}
+            height={gridHeight}
+            onEdit={onEdit}
+            onBatchEdit={onBatchEdit}
+            onClearMissing={onClearMissing}
+            onMoveRows={onMoveRows}
+            onDeleteRows={onDeleteRows}
+            cellClassName={cellClassName}
+            labels={gridLabels}
+            toolbarTestIdPrefix="new-section"
+            hiddenColumns={hiddenColumnList}
+            columnOrder={columnOrder}
+            onColumnOrderChange={setColumnOrder}
+            onHiddenColumnsChange={(hidden) => setHiddenColumns(new Set(hidden))}
+            columnWidths={columnWidths}
+            onColumnWidthsChange={setColumnWidths}
+            {...(editingBlocked ? {} : { onInsertRows })}
+          />
+        </div>
 
         {/* Actions */}
-        <div className="flex justify-end gap-2 pt-4 border-t border-border">
-          <Button onClick={closeDialog} data-testid="import-section-cancel">Cancel</Button>
-          <Button variant="primary" onClick={handleSubmit} data-testid="import-section-create">
-            Create Section
-          </Button>
+        <div className="flex shrink-0 items-center justify-between gap-4 border-t border-border pt-4">
+          <p className="text-sm text-error" data-testid="import-section-blocker">
+            {submit.incompleteRows.length > 0
+              ? t('newSection.incomplete', {
+                  count: submit.incompleteRows.length,
+                  rows: submit.incompleteRows.join(', '),
+                })
+              : submit.shots.length === 0
+                ? t('newSection.empty')
+                : ''}
+          </p>
+          <div className="flex gap-2">
+            <Button onClick={closeDialog} data-testid="import-section-cancel">
+              {t('common.actions.cancel')}
+            </Button>
+            <Button
+              variant="primary"
+              onClick={handleSubmit}
+              disabled={!submitAllowed}
+              data-testid="import-section-create"
+            >
+              {t('newSection.create')}
+            </Button>
+          </div>
         </div>
       </div>
     </DialogWrapper>
   );
-}
-
-function createEmptyShot(): ShotData {
-  return {
-    azimuth_in: 0,
-    azimuth_out: 0,
-    length: 0,
-    depth_in: 0,
-    depth_out: 0,
-    pitch_in: null,
-    pitch_out: null,
-    left: null,
-    right: null,
-    up: null,
-    down: null,
-    comment: null,
-    kind: 'Normal' as const,
-    marker_index: null,
-    temperature: null,
-  };
 }

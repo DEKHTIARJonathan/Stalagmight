@@ -2107,6 +2107,23 @@
       "zooming": "Zooming"
     }
   },
+  "newSection": {
+    "create": "Create Section",
+    "empty": "Enter at least one shot to create a section.",
+    "incomplete_one": "Row {{rows}} is missing required values. Fill it in or delete the row to continue.",
+    "incomplete_other": "Rows {{rows}} are missing required values. Fill them in or delete the rows to continue.",
+    "labels": {
+      "color": "Color",
+      "date": "Date",
+      "name": "Section Name",
+      "surveyor": "Surveyor"
+    },
+    "placeholders": {
+      "name": "e.g., Main Line"
+    },
+    "shots": "Shots",
+    "title": "Import / Create Section"
+  },
   "sectionMetadata": {
     "direction": {
       "in": "In",

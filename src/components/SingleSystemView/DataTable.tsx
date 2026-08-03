@@ -6,7 +6,7 @@ import { useActiveStations } from '../../hooks/useActiveStations';
 import { useUIStore, type Selection } from '../../store/uiStore';
 import { useEditingBlocked } from '../../hooks/useEditingBlocked';
 import { useShallow } from 'zustand/react/shallow';
-import { SpreadsheetGrid, type GridLabels } from '../common/SpreadsheetGrid';
+import { SpreadsheetGrid } from '../common/SpreadsheetGrid';
 import { EntityBlob } from '../common/EntityBlob';
 import { ChevronDownIcon, ExpandIcon, EyeIcon } from '../common/icons';
 import type { ProjectWarning } from '../../types/commands';
@@ -14,6 +14,7 @@ import { formatShotId, formatStationId } from '../../utils/formatters';
 import { getDeleteShotDialog, deriveRangeDeleteParams } from '../../utils/contextMenuHelpers';
 import { getNumberFormatLocale } from '../../i18n/format';
 import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
+import { useGridLabels } from '../../hooks/useGridLabels';
 import { useDismissableLayer } from '../../hooks/useDismissableLayer';
 import { useAnchoredFixedMenu } from '../../hooks/useAnchoredFixedMenu';
 import { setSource } from '../../utils/telemetry';
@@ -1130,32 +1131,8 @@ export default function DataTable({ sections }: DataTableProps) {
 
   // Localized grid chrome; rowNoun makes the context menus speak in shots
   // (or stations), not rows.
-  const makeGridLabels = useCallback(
-    (rowNounKey: 'dataTable.shotNoun' | 'dataTable.stationNoun'): GridLabels => ({
-      copy: (suffix) => t('grid.contextMenu.copy', { suffix }),
-      cut: (suffix) => t('grid.contextMenu.cut', { suffix }),
-      clear: (suffix) => t('grid.contextMenu.clear', { suffix }),
-      paste: t('grid.contextMenu.paste'),
-      fillDown: t('grid.contextMenu.fillDown'),
-      insertAbove: (rows) => t('grid.contextMenu.insertAbove', { rows }),
-      insertBelow: (rows) => t('grid.contextMenu.insertBelow', { rows }),
-      deleteRows: (rows) => t('grid.contextMenu.deleteRows', { rows }),
-      rowNoun: (count) => t(rowNounKey, { count }),
-      columnNoun: (count) => t('grid.columnNoun', { count }),
-      columnsButton: t('grid.columnsButton'),
-      maximize: t('grid.maximize'),
-      restore: t('grid.restore'),
-      editCellAria: (column, row) => t('grid.editCellAria', { column, row }),
-      shortcutCopy: t('grid.shortcuts.copy'),
-      shortcutCut: t('grid.shortcuts.cut'),
-      shortcutPaste: t('grid.shortcuts.paste'),
-      shortcutClear: t('grid.shortcuts.clear'),
-      shortcutFillDown: t('grid.shortcuts.fillDown'),
-    }),
-    [t]
-  );
-  const gridLabels = useMemo(() => makeGridLabels('dataTable.shotNoun'), [makeGridLabels]);
-  const stationGridLabels = useMemo(() => makeGridLabels('dataTable.stationNoun'), [makeGridLabels]);
+  const gridLabels = useGridLabels('dataTable.shotNoun');
+  const stationGridLabels = useGridLabels('dataTable.stationNoun');
 
   // Rows handed to the grid, materializing each draft as a Shot-shaped row
   // whose id is the (negative) draft key.
