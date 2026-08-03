@@ -7,8 +7,8 @@ use crate::parsers::geo::non_empty;
 use super::{
     apply_segment, apply_units_options, datum_recognized, is_anonymous, is_omitted, parse_angle,
     parse_depth, parse_dms, parse_length, set_prefix, split_first_token, strip_inline_comment,
-    utm_to_wgs84, AngleUnit, Case, LrudType, OrderElem, ParsedSurvey, VectorType, WallsFix,
-    WallsRef, WallsUnits, WallsVector,
+    utm_to_wgs84, AngleUnit, Case, LengthUnit, LrudType, OrderElem, ParsedSurvey, VectorType,
+    WallsFix, WallsRef, WallsUnits, WallsVector,
 };
 
 // ---------------------------------------------------------------------------
@@ -40,6 +40,11 @@ pub(crate) fn parse_srv_contents(
 
     let mut vectors: Vec<WallsVector> = Vec::new();
     let mut fixes: Vec<WallsFix> = Vec::new();
+    // Whether any shot in this survey was measured in feet (LengthUnit::Feet at
+    // the point it was recorded, not merely mentioned in a `#Units` directive
+    // that was later overridden) - surfaces on the import receipt so a
+    // feet-to-meters conversion is never silent (#391).
+    let mut used_feet = false;
 
     for (line_no, raw) in contents.lines().enumerate() {
         let line = raw.trim_end_matches(['\r', '\n']);
@@ -105,6 +110,9 @@ pub(crate) fn parse_srv_contents(
             }
         };
         if let Some(vec) = parse_vector_line(&expanded, &units, date, grid_relative, derive_decl) {
+            if units.d_unit == LengthUnit::Feet || units.s_unit == LengthUnit::Feet {
+                used_feet = true;
+            }
             vectors.push(vec);
         }
     }
@@ -138,6 +146,7 @@ pub(crate) fn parse_srv_contents(
         // A parsed survey is resolved by construction; the unresolved
         // placeholder is built directly in `parse_wpj`.
         resolved: true,
+        used_feet,
     }
 }
 

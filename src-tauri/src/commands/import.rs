@@ -148,6 +148,25 @@ fn decorate_receipt(
     receipt.warnings.extend(converter_warnings);
 }
 
+/// The import receipt's unit-conversion note for a Compass file, derived from
+/// `CompassFile::length_unit` (`build_preview`'s "feet"/"meters"/"mixed" label -
+/// see its doc comment for how a multi-survey file collapses to one label).
+fn compass_unit_conversion_note(length_unit: Option<&str>) -> Option<String> {
+    match length_unit {
+        Some("feet") => Some("Lengths converted from feet to meters".to_string()),
+        Some("mixed") => Some("Some surveys measured in feet; converted to meters".to_string()),
+        _ => None,
+    }
+}
+
+/// The import receipt's unit-conversion note for a Walls project. Walls has no
+/// single project-wide unit label the way Compass does (`#Units` can flip
+/// per-survey or mid-file), so this is derived from `WallsFile::any_feet_units`
+/// - true when ANY shot anywhere in the project was measured in feet.
+fn walls_unit_conversion_note(any_feet_units: bool) -> Option<String> {
+    any_feet_units.then(|| "Some surveys measured in feet; converted to meters".to_string())
+}
+
 /// #92: durably persist a newly-imported project. A project whose initial save is
 /// still deferred (created with no save path, never written) has no `.stalx` and no
 /// Recent Projects entry, so importing into it would otherwise be invisible and
@@ -421,8 +440,12 @@ pub fn execute_compass_import(
         "Converted Compass to import configs, executing import"
     );
 
+    let preview = crate::parsers::compass::build_preview(&parsed);
+    let sections_found = preview.survey_count;
+    let unit_conversion = compass_unit_conversion_note(preview.length_unit.as_deref());
+
     emitter.start_phase(LoadingPhase::ImportApplyingChanges);
-    let result = state.execute_import_sections(
+    let mut result = state.execute_import_sections(
         sections,
         closures,
         file_hash,
@@ -435,6 +458,15 @@ pub fn execute_compass_import(
         VirtualShotMode::Auto,
     );
     emitter.complete_phase(LoadingPhase::ImportApplyingChanges);
+
+    decorate_receipt(
+        &mut result,
+        "Compass",
+        &path,
+        sections_found,
+        unit_conversion,
+        warnings,
+    );
 
     emitter.start_phase(LoadingPhase::ImportFinalizing);
     emitter.complete_phase(LoadingPhase::ImportFinalizing);
@@ -708,8 +740,12 @@ pub fn execute_walls_import(
         "Converted Walls to import configs, executing import"
     );
 
+    let preview = crate::parsers::walls::build_preview(&parsed);
+    let sections_found = preview.survey_count;
+    let unit_conversion = walls_unit_conversion_note(preview.any_feet_units);
+
     emitter.start_phase(LoadingPhase::ImportApplyingChanges);
-    let result = state.execute_import_sections(
+    let mut result = state.execute_import_sections(
         sections,
         closures,
         file_hash,
@@ -723,8 +759,106 @@ pub fn execute_walls_import(
     );
     emitter.complete_phase(LoadingPhase::ImportApplyingChanges);
 
+    decorate_receipt(
+        &mut result,
+        "Walls",
+        &path,
+        sections_found,
+        unit_conversion,
+        warnings,
+    );
+
     emitter.start_phase(LoadingPhase::ImportFinalizing);
     emitter.complete_phase(LoadingPhase::ImportFinalizing);
 
     finalize_deferred_import(state.inner(), result)
+}
+
+#[cfg(test)]
+#[expect(
+    clippy::expect_used,
+    reason = "unit test fixtures fail loudly on setup errors"
+)]
+mod receipt_tests {
+    use super::*;
+    use crate::core::command::ImportReceipt;
+    use std::path::Path;
+
+    fn base_result() -> CommandResult {
+        CommandResult::success().with_import_receipt(ImportReceipt {
+            source_format: String::new(),
+            file_name: String::new(),
+            sections_found: 0,
+            sections_imported: 3,
+            shot_count: 12,
+            closures_requested: 1,
+            closures_created: 1,
+            unit_conversion: None,
+            warnings: Vec::new(),
+        })
+    }
+
+    #[test]
+    fn decorate_receipt_fills_placeholder_fields_and_extends_warnings() {
+        let mut result = base_result();
+        decorate_receipt(
+            &mut result,
+            "Ariane TML",
+            Path::new("/tmp/cave.tml"),
+            5,
+            Some("Lengths converted from feet to meters".to_string()),
+            vec!["1 section had no shots after filtering and was dropped".to_string()],
+        );
+        let receipt = result
+            .import_receipt
+            .expect("receipt must survive decoration");
+        assert_eq!(receipt.source_format, "Ariane TML");
+        assert_eq!(receipt.file_name, "cave.tml");
+        assert_eq!(receipt.sections_found, 5);
+        assert_eq!(
+            receipt.unit_conversion.as_deref(),
+            Some("Lengths converted from feet to meters")
+        );
+        // Base counts from execute_import_sections are untouched.
+        assert_eq!(receipt.sections_imported, 3);
+        assert_eq!(receipt.shot_count, 12);
+        assert_eq!(receipt.warnings.len(), 1);
+    }
+
+    #[test]
+    fn decorate_receipt_is_a_no_op_without_a_receipt() {
+        let mut result = CommandResult::success();
+        decorate_receipt(
+            &mut result,
+            "Compass",
+            Path::new("/tmp/cave.dat"),
+            1,
+            None,
+            vec!["should be dropped".to_string()],
+        );
+        assert!(result.import_receipt.is_none());
+    }
+
+    #[test]
+    fn compass_unit_conversion_note_covers_feet_mixed_and_metric() {
+        assert_eq!(
+            compass_unit_conversion_note(Some("feet")).as_deref(),
+            Some("Lengths converted from feet to meters")
+        );
+        assert_eq!(
+            compass_unit_conversion_note(Some("mixed")).as_deref(),
+            Some("Some surveys measured in feet; converted to meters")
+        );
+        assert_eq!(compass_unit_conversion_note(Some("meters")), None);
+        assert_eq!(compass_unit_conversion_note(None), None);
+    }
+
+    #[test]
+    fn walls_unit_conversion_note_covers_feet_and_metric() {
+        assert_eq!(
+            walls_unit_conversion_note(true).as_deref(),
+            Some("Some surveys measured in feet; converted to meters")
+        );
+        assert_eq!(walls_unit_conversion_note(false), None);
+    }
 }
