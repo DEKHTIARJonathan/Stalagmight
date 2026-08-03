@@ -15,6 +15,7 @@ Update this file every time a new version is tagged.
 
 - Undo history for a SpeleoDB project is no longer capped at a fixed number of steps; it is bounded by total size instead, so ordinary editing keeps hundreds of steps while whole-survey operations (deleting a section, an import) keep as many as fit ([#303](https://github.com/Stalagmight/Stalagmight/issues/303))
 - Taking the write lock on a project that matches the server clears the undo history from the previous editor's session, so Ctrl+Z can never replay somebody else's operation. Locking a copy that still holds your own un-pushed edits keeps your history ([#303](https://github.com/Stalagmight/Stalagmight/issues/303))
+- **Add Shot Before** no longer reciprocates the azimuth. It used to prefill the copied bearing turned by 180 degrees and turn whatever you typed by another 180 before storing it, so the number in the dialog was never the number that got saved. The entered bearing is now stored as-is, exactly like **Add Shot After**, and the prefill shows the source shot's own bearing
 
 ### Fixed
 

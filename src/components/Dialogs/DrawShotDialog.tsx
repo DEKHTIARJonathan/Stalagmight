@@ -31,19 +31,10 @@ export default function DrawShotDialog() {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const initialAzimuthIn = useMemo(() => {
-    if (!sourceGeometry) return '';
-    const base = sourceGeometry.azimuth_in;
-    const reversed = prependMode ? normalizeAzimuth(base + 180) : base;
-    return String(reversed);
-  }, [sourceGeometry, prependMode]);
-
-  const initialAzimuthOut = useMemo(() => {
-    if (!sourceGeometry) return '';
-    const base = sourceGeometry.azimuth_out;
-    const reversed = prependMode ? normalizeAzimuth(base + 180) : base;
-    return String(reversed);
-  }, [sourceGeometry, prependMode]);
+  // Prefill the source shot's bearings verbatim: prepending does not
+  // reciprocate, so what is shown is what will be stored.
+  const initialAzimuthIn = sourceGeometry ? String(sourceGeometry.azimuth_in) : '';
+  const initialAzimuthOut = sourceGeometry ? String(sourceGeometry.azimuth_out) : '';
 
   // Form state - prefill from source geometry if provided
   const [azimuthIn, setAzimuthIn] = useState(initialAzimuthIn);
@@ -117,14 +108,12 @@ export default function DrawShotDialog() {
     setError(null);
 
     try {
-      // Build shot data with normalized azimuths
-      // In prepend mode with existing shots, reverse the azimuth by 180° (user enters forward direction, shot stores backward)
-      // For empty sections (no reference shot), skip reversal - the first shot added is just a normal shot
+      // Build shot data with normalized azimuths. Prepend stores the entered
+      // bearing as-is, exactly like append does - no reciprocal flip.
       const rawAzimuthIn = parseFloat(azimuthIn);
       const rawAzimuthOut = azimuthOut ? parseFloat(azimuthOut) : rawAzimuthIn;
-      const shouldReverse = prependMode && section.shots.length > 0;
-      const normalizedAzimuthIn = normalizeAzimuth(shouldReverse ? rawAzimuthIn + 180 : rawAzimuthIn);
-      const normalizedAzimuthOut = normalizeAzimuth(shouldReverse ? rawAzimuthOut + 180 : rawAzimuthOut);
+      const normalizedAzimuthIn = normalizeAzimuth(rawAzimuthIn);
+      const normalizedAzimuthOut = normalizeAzimuth(rawAzimuthOut);
       const shotData: ShotData = {
         azimuth_in: normalizedAzimuthIn,
         azimuth_out: normalizedAzimuthOut,

@@ -348,9 +348,8 @@ export default function ContextMenu() {
         });
       }
 
-      // "Add Shot Before" - only for station 0 (first station)
-      // For empty sections, prependMode is set but azimuth reversal will be skipped
-      // in DrawShotDialog since there's no reference shot (section.shots.length === 0)
+      // "Add Shot Before" - only for station 0 (first station). prependMode only
+      // controls where the shot is inserted; the entered azimuth is stored as-is.
       if (isFirstStation) {
         items.push({
           label: 'Add Shot Before',
