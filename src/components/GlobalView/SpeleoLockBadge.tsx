@@ -57,11 +57,13 @@ export function resolveSpeleoLock(
 }
 
 /**
- * "You hold the SpeleoDB write lock": the brightest neutral the theme has, i.e.
- * white on every dark theme and near-black on the four light ones (`light` and
- * `kaleido_eink` are `--cc-panel: #ffffff`, where a literal white bar would not
- * exist). Reusing `--cc-text-primary` rather than a hex keeps the bar visible on all
- * ten themes without adding ten colour values for a human to sign off on.
+ * "You hold the SpeleoDB write lock": each theme's primary text colour, which is the
+ * highest-contrast neutral it defines. That reads as white on most dark themes and
+ * near-black on most light ones, but not uniformly - `one_dark` is grey `#abb2bf` and
+ * `solarized_light` slate `#586e75`. What holds everywhere is the contrast, 4.39:1
+ * (solarized_light, the worst) to 21:1 against the panel - which a literal white
+ * would not: `light` and `kaleido_eink` are both `--cc-panel: #ffffff`. Reusing
+ * `--cc-text-primary` also keeps this to zero new colour values.
  */
 export const LOCK_MINE_ACCENT = 'var(--cc-text-primary)';
 
@@ -74,9 +76,15 @@ export const LOCK_MINE_ACCENT = 'var(--cc-text-primary)';
  *
  * Its own token rather than `--cc-accent`, because the accent is only blue on six of
  * the ten themes - it is teal on `dark` (the default) and `light`, gold on `cave`,
- * violet on `dracula`. Each value is picked against that theme's own panel, border
- * and accent; `dark` needs a bright azure because its panel is navy `#16213e` over a
- * blue `#0f3460` border.
+ * violet on `dracula`. Values are drawn from each theme's own palette and checked
+ * against its panel and background; `dark` needs a bright azure because its panel is
+ * navy `#16213e` over a blue `#0f3460` border.
+ *
+ * ONE deliberate exception: `catppuccin_latte`'s `#7287fd` measures 2.62:1 on panel
+ * and 2.81:1 on background, under the 3:1 WCAG 1.4.11 floor for non-text objects. It
+ * is catppuccin's own lavender and was kept for palette fidelity with that trade-off
+ * understood - do not "fix" it without asking. Every other theme clears 3:1 (next
+ * closest: `nord` 3.23, `one_dark` 3.81).
  *
  * On the six themes whose accent IS blue this bar sits near the selection colour.
  * That is inherent - blue is those themes' primary - and is carried by SHAPE: a 3px
@@ -121,11 +129,14 @@ const ACCENT_COLOR: Record<Exclude<RecentAccent, 'none'>, string> = {
 
 /**
  * The list accent bar down the leading edge of a card / row: yellow for "changes
- * only on this computer" (#270), bright neutral for "you hold the write lock", dim
- * neutral for "someone else does". Deliberately an ACCENT and nothing more - the
- * recents list is a chooser, not a place to shout, so the "!" badge stays on the
- * status button where an action is available. Returns `undefined` (no styling at
- * all) when the entry earns no accent.
+ * only on this computer" (#270), bright neutral for "you hold the write lock", blue
+ * for "someone else does". Deliberately an ACCENT and nothing more - the recents
+ * list is a chooser, not a place to shout, so the "!" badge stays on the status
+ * button where an action is available. Returns `undefined` (no styling at all) when
+ * the entry earns no accent.
+ *
+ * On an element that also carries Tailwind's `ring-*`, use `recentCardStyle` instead
+ * - see the trap documented there.
  */
 export function recentAccentStyle(
   info: SpeleoLockInfo | undefined,
@@ -133,6 +144,39 @@ export function recentAccentStyle(
   const accent = recentAccent(info);
   if (accent === 'none') return undefined;
   return { boxShadow: `inset 3px 0 0 0 ${ACCENT_COLOR[accent]}` };
+}
+
+/**
+ * The selection ring, hand-written to match what `ring-1 ring-accent` compiles to
+ * (`--tw-ring-offset-width` is 0 unless a card opts in, which none here do).
+ */
+const SELECTION_RING = '0 0 0 1px var(--cc-accent)';
+
+/**
+ * A CARD's full box-shadow: the accent bar, plus the selection ring when the card is
+ * both selected and accented.
+ *
+ * The trap: Tailwind implements `ring-1` AS a box-shadow
+ * (`.ring-1{...box-shadow:var(--tw-ring-offset-shadow),var(--tw-ring-shadow),...}`),
+ * so an inline `box-shadow` on the same element replaces it outright - inline beats
+ * the class rule. A selected card carrying an accent silently lost its ring and fell
+ * back to the border colour alone. That predates the lock accents (#270's yellow bar
+ * had it) but was rare enough to go unnoticed until lock state put a bar on most
+ * remote rows.
+ *
+ * Composing only when BOTH apply keeps the untouched cases untouched: no accent
+ * returns `undefined`, so `ring-1` paints exactly as before.
+ *
+ * Table rows do not need this - selection there is `bg-accent-10` on the `<tr>` while
+ * the bar sits on the first `<td>`, so the two never share an element.
+ */
+export function recentCardStyle(
+  info: SpeleoLockInfo | undefined,
+  isSelected: boolean,
+): { boxShadow: string } | undefined {
+  const accent = recentAccentStyle(info);
+  if (!accent || !isSelected) return accent;
+  return { boxShadow: `${accent.boxShadow}, ${SELECTION_RING}` };
 }
 
 /**
