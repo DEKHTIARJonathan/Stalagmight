@@ -400,7 +400,7 @@ pub struct PanelsConfig {
     #[serde(default = "default_panel_mode")]
     pub detail_panel_mode: String,
     /// Data table open (pinned) at startup
-    #[serde(default)]
+    #[serde(default = "default_true")]
     pub data_table_open: bool,
     /// Data table reveal mode: "pin" | "hover"
     #[serde(default = "default_panel_mode")]

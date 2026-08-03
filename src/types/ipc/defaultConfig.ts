@@ -261,7 +261,7 @@ export const defaultConfig: Config = {
     "sections_panel_mode": "pin",
     "detail_panel_open": true,
     "detail_panel_mode": "pin",
-    "data_table_open": false,
+    "data_table_open": true,
     "data_table_mode": "pin"
   },
   "cache": {

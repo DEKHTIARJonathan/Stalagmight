@@ -2873,7 +2873,9 @@ fn test_panels_config_deserializes_legacy_table_without_reveal_fields() {
     let p: PanelsConfig = toml::from_str(toml).expect("legacy panels table should deserialize");
     assert!(p.sections_panel_open);
     assert!(p.detail_panel_open);
-    assert!(!p.data_table_open);
+    // Open, same as a fresh install: the serde default and `Default` agree, so
+    // "the default" is one thing rather than two that can drift apart.
+    assert!(p.data_table_open);
     assert_eq!(p.sections_panel_mode, "pin");
     assert_eq!(p.detail_panel_mode, "pin");
     assert_eq!(p.data_table_mode, "pin");

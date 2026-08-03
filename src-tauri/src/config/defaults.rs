@@ -293,7 +293,7 @@ impl Default for PanelsConfig {
             sections_panel_mode: "pin".to_string(),
             detail_panel_open: true,
             detail_panel_mode: "pin".to_string(),
-            data_table_open: false,
+            data_table_open: true,
             data_table_mode: "pin".to_string(),
         }
     }

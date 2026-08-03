@@ -75,7 +75,9 @@ test.describe('Panel reveal (hover/pin)', () => {
     await waitForMapReady(page);
   });
 
-  test('defaults: side panels pinned open, data closed @smoke', async ({ page }) => {
+  // "Fixture" not "defaults": the mock config pins this layout deliberately. A
+  // fresh install opens the data table too (uiStore.initPanels.test.ts).
+  test('fixture layout: side panels pinned open, data closed @smoke', async ({ page }) => {
     const s = await panelState(page);
     expect(s.sectionsPanelMode).toBe('pin');
     expect(s.sectionsPanelOpen).toBe(true);

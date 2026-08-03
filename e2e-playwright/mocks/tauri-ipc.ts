@@ -3523,9 +3523,12 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 edit_section_column_order: [],
                 edit_section_hidden_columns: [],
                 edit_section_column_widths: {},
-                // Mirror the Rust serde defaults for the reveal state so initPanels
-                // reads concrete values (side panels pinned open, data closed),
-                // matching the real config shape get_config returns.
+                // Concrete reveal state so initPanels never falls back to its
+                // defaults. Deliberately NOT the shipped default any more: a fresh
+                // install opens the data table, but most specs want the map
+                // unobstructed, so the fixture keeps it closed and the specs that
+                // care about it open it themselves. The shipped default is pinned
+                // in Rust (config::tests) and in uiStore.initPanels.test.ts.
                 sections_panel_open: true,
                 sections_panel_mode: 'pin',
                 detail_panel_open: true,
@@ -3893,9 +3896,12 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 edit_section_column_order: [],
                 edit_section_hidden_columns: [],
                 edit_section_column_widths: {},
-                // Mirror the Rust serde defaults for the reveal state so initPanels
-                // reads concrete values (side panels pinned open, data closed),
-                // matching the real config shape get_config returns.
+                // Concrete reveal state so initPanels never falls back to its
+                // defaults. Deliberately NOT the shipped default any more: a fresh
+                // install opens the data table, but most specs want the map
+                // unobstructed, so the fixture keeps it closed and the specs that
+                // care about it open it themselves. The shipped default is pinned
+                // in Rust (config::tests) and in uiStore.initPanels.test.ts.
                 sections_panel_open: true,
                 sections_panel_mode: 'pin',
                 detail_panel_open: true,
