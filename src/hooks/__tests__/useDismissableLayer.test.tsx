@@ -54,6 +54,30 @@ describe('useDismissableLayer', () => {
     expect(onDismiss).toHaveBeenCalledTimes(1);
   });
 
+  it('dismisses when the scroll is inside anchorScope, even though the layer is not', () => {
+    // The DataTable header/connection menus: pinned to cursor coordinates and
+    // rendered as a `position:fixed` SIBLING of the grid, so the grid scroll that
+    // strands them contains neither the menu nor the page. Without anchorScope
+    // the ancestor test cannot see this, and the menu floats over a header that
+    // scrolled away.
+    const panel = document.createElement('div');
+    const scroller = document.createElement('div');
+    panel.appendChild(scroller); // the grid, inside the panel
+    panel.appendChild(dropdown); // the fixed menu, a sibling of the grid
+    document.body.appendChild(panel);
+    renderHook(() =>
+      useDismissableLayer({
+        open: true,
+        onDismiss: onDismiss as unknown as () => void,
+        contains: [ref(dropdown)],
+        anchorScope: ref(panel),
+      }),
+    );
+    scroller.dispatchEvent(new Event('scroll'));
+    expect(onDismiss).toHaveBeenCalledTimes(1);
+    panel.remove();
+  });
+
   it('does NOT dismiss when an unrelated subtree scrolls', () => {
     // The map context-menu bug: right-clicking a station scrolls the data table
     // and the sections panel, neither of which can move a menu portaled elsewhere.
