@@ -374,6 +374,19 @@ pub struct PanelsConfig {
     /// tolerant deserializer.
     #[serde(default, deserialize_with = "lenient_column_widths")]
     pub new_section_column_widths: BTreeMap<String, u32>,
+    /// Edit-section dialog's shot grid: column order (grid column keys; empty =
+    /// declaration order). Its own set again, for the same reason as
+    /// `new_section_*`: the grids share column definitions but not a column SET.
+    #[serde(default)]
+    pub edit_section_column_order: Vec<String>,
+    /// Edit-section dialog's shot grid: hidden column keys.
+    #[serde(default = "default_edit_section_hidden_columns")]
+    pub edit_section_hidden_columns: Vec<String>,
+    /// Edit-section dialog's shot grid: column widths in pixels, keyed by grid
+    /// column key. See `data_table_shot_column_widths` for the BTreeMap and the
+    /// tolerant deserializer.
+    #[serde(default, deserialize_with = "lenient_column_widths")]
+    pub edit_section_column_widths: BTreeMap<String, u32>,
     /// Sections panel open (pinned) at startup
     #[serde(default = "default_true")]
     pub sections_panel_open: bool,
@@ -419,7 +432,8 @@ impl PanelsConfig {
         normalize_column_widths(&mut self.data_table_shot_column_widths);
         normalize_column_widths(&mut self.data_table_station_column_widths);
         normalize_column_widths(&mut self.new_section_column_widths);
-        // The six column-key LISTS need the same ceiling as the width maps
+        normalize_column_widths(&mut self.edit_section_column_widths);
+        // The eight column-key LISTS need the same ceiling as the width maps
         // beside them, and for the same reason - see `normalize_column_names`.
         // Doing it here rather than in `update_data_table_view_impl` is what
         // makes it hold on BOTH doors: the partial IPC command and the
@@ -432,6 +446,8 @@ impl PanelsConfig {
         normalize_column_names(&mut self.data_table_station_hidden_columns);
         normalize_column_names(&mut self.new_section_column_order);
         normalize_column_names(&mut self.new_section_hidden_columns);
+        normalize_column_names(&mut self.edit_section_column_order);
+        normalize_column_names(&mut self.edit_section_hidden_columns);
         // Same both-doors argument for the angle display modes. The PARTIAL
         // command validates them and rejects an unknown string, but
         // `update_config` takes a whole `Config` and used to write one through
@@ -488,6 +504,13 @@ fn default_data_table_hidden_columns() -> Vec<String> {
 /// The new-section dialog opens on the columns the old hand-rolled table showed
 /// (length, average azimuth, both depths) plus kind and comment; the in/out
 /// legs, pitch and LRUD are one click away in the grid's Columns menu.
+/// The edit-section grid opens on everything it has: it is editing a survey that
+/// already exists, so there is no "start simple" case the way there is when
+/// entering a brand-new section.
+fn default_edit_section_hidden_columns() -> Vec<String> {
+    Vec::new()
+}
+
 fn default_new_section_hidden_columns() -> Vec<String> {
     vec![
         "azimuth_in".to_string(),

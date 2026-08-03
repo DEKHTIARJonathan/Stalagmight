@@ -221,6 +221,10 @@ fn test_get_config_defaults_panels() {
         ]
     );
     assert!(cfg.panels.new_section_column_widths.is_empty());
+    // The edit-section grid edits an existing survey, so it opens on everything.
+    assert!(cfg.panels.edit_section_column_order.is_empty());
+    assert!(cfg.panels.edit_section_hidden_columns.is_empty());
+    assert!(cfg.panels.edit_section_column_widths.is_empty());
 }
 
 #[test]
@@ -344,6 +348,49 @@ fn test_update_new_section_view_roundtrip() {
             cfg.panels.new_section_column_order,
             vec!["length", "_azimuth_avg"],
             "an omitted field keeps its stored value"
+        );
+    });
+}
+
+#[test]
+fn test_update_edit_section_view_roundtrip() {
+    with_config_lock(|| {
+        let app = app_with_state();
+        config::update_edit_section_view_impl(
+            state(&app).inner(),
+            Some(vec!["length".to_string()]),
+            Some(vec!["comment".to_string()]),
+            Some(BTreeMap::from([("length".to_string(), 190)])),
+        )
+        .expect("update edit-section view");
+        let cfg = config::get_config(state(&app));
+        assert_eq!(cfg.panels.edit_section_column_order, vec!["length"]);
+        assert_eq!(cfg.panels.edit_section_hidden_columns, vec!["comment"]);
+        assert_eq!(
+            cfg.panels.edit_section_column_widths,
+            BTreeMap::from([("length".to_string(), 190)])
+        );
+
+        // Three grids, three disjoint field sets: writing one leaves the others.
+        assert!(cfg.panels.new_section_column_order.is_empty());
+        assert!(cfg.panels.data_table_shot_column_order.is_empty());
+
+        // Degenerate widths are clamped on the way in, as everywhere else.
+        config::update_edit_section_view_impl(
+            state(&app).inner(),
+            None,
+            None,
+            Some(BTreeMap::from([
+                ("collapsed".to_string(), 0),
+                ("runaway".to_string(), 100_000),
+            ])),
+        )
+        .expect("update edit-section view");
+        assert_eq!(
+            config::get_config(state(&app))
+                .panels
+                .edit_section_column_widths,
+            BTreeMap::from([("collapsed".to_string(), 40), ("runaway".to_string(), 2000),])
         );
     });
 }
@@ -528,6 +575,23 @@ fn test_column_name_lists_are_bounded_on_both_write_paths() {
             "new_section_hidden_columns",
         );
 
+        config::update_edit_section_view_impl(
+            state(&app).inner(),
+            Some(hostile_order()),
+            Some(hostile_hidden()),
+            None,
+        )
+        .expect("update edit-section view");
+        let panels = config::get_config(state(&app)).panels;
+        assert_bounded(
+            &panels.edit_section_column_order,
+            "edit_section_column_order",
+        );
+        assert_bounded(
+            &panels.edit_section_hidden_columns,
+            "edit_section_hidden_columns",
+        );
+
         // Door 2: the whole-`Config` write, which does no per-field validation of
         // its own and so relies entirely on the normalize pass.
         with_restored_config(&app, || {
@@ -538,6 +602,8 @@ fn test_column_name_lists_are_bounded_on_both_write_paths() {
             cfg.panels.data_table_station_hidden_columns = hostile_hidden();
             cfg.panels.new_section_column_order = hostile_order();
             cfg.panels.new_section_hidden_columns = hostile_hidden();
+            cfg.panels.edit_section_column_order = hostile_order();
+            cfg.panels.edit_section_hidden_columns = hostile_hidden();
             config::update_config(state(&app), cfg).expect("update config");
 
             let panels = config::get_config(state(&app)).panels;
@@ -558,6 +624,14 @@ fn test_column_name_lists_are_bounded_on_both_write_paths() {
             assert_bounded(
                 &panels.new_section_hidden_columns,
                 "new_section_hidden_columns",
+            );
+            assert_bounded(
+                &panels.edit_section_column_order,
+                "edit_section_column_order",
+            );
+            assert_bounded(
+                &panels.edit_section_hidden_columns,
+                "edit_section_hidden_columns",
             );
         });
     });
