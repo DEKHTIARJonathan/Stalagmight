@@ -43,7 +43,8 @@ const FREE = 'cccccccc-3333-3333-3333-333333333333';
 const ME = 'me@example.com';
 const THEM = 'buddy@example.com';
 
-const project = (id: string | null, name: string): ProjectMetadata => ({
+/** `speleodb_project_id` is optional, not nullable - a local project OMITS it. */
+const project = (id: string | undefined, name: string): ProjectMetadata => ({
   name,
   location: null,
   file_path: `/p/${name}.stalx`,
@@ -53,14 +54,14 @@ const project = (id: string | null, name: string): ProjectMetadata => ({
   station_count: 2,
   gps_center: null,
   gps_bounds: null,
-  is_remote: id !== null,
-  speleodb_project_id: id,
+  is_remote: id !== undefined,
+  ...(id !== undefined ? { speleodb_project_id: id } : {}),
 });
 
 const MINE_PROJECT = project(MINE, 'Mine');
 const THEIRS_PROJECT = project(THEIRS, 'Theirs');
 const FREE_PROJECT = project(FREE, 'Free');
-const LOCAL_PROJECT = project(null, 'Local');
+const LOCAL_PROJECT = project(undefined, 'Local');
 
 const REMOTE_LOCKS = { [MINE]: ME, [THEIRS]: THEM, [FREE]: null };
 
