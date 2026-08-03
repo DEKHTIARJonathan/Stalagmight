@@ -1052,7 +1052,13 @@ mod tests {
         //       a project is open:
         //       {action.dialog,dialog-cancel,dwell.dialog,active-dwell.dialog}
         //       .import-as-new-project = 717.
-        assert_eq!(EVENT_NAMES.len(), 717);
+        //   + 1 get_tile_attribution. Reads the imagery provider's live source names,
+        //       which the map is required to display. The count is how often the app
+        //       had to ask - a rate far above one-per-provider-per-day would mean the
+        //       cache or its failure backoff is not holding, and every miss is a
+        //       blocking fetch behind a map that is already drawing:
+        //       command.get_tile_attribution = 718.
+        assert_eq!(EVENT_NAMES.len(), 718);
     }
 
     /// Active-dwell mirrors every dwell state 1:1 (#31): for each `dwell.<key>` there
