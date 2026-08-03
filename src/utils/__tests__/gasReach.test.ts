@@ -117,11 +117,20 @@ describe('gasReachColorExpression', () => {
     expect(s).toContain('#888888'); // grey branch for the unconnected sentinel
   });
 
-  it('falls through to the base color expression for the beyond-range sentinel', () => {
+  it('falls through to the base color expression for the beyond-range sentinel, matched BEFORE the generic grey case', () => {
+    // Structural, not string-substring: pins the actual ['case', ...] branch
+    // shape and ORDER, so reordering the branches (grey first) fails this test
+    // even though it would still contain both substrings.
     const expr = gasReachColorExpression('#aaaaaa', '#bbbbbb', 1000, '#888888');
-    const s = JSON.stringify(expr);
-    expect(s).toContain(String(BEYOND_GAS_RANGE));
-    expect(s).toContain('color'); // default baseColorInput is ['get', 'color']
+    // expr = ['let', 'g', ['coalesce', ...], caseExpr] - the case lives at index 3.
+    const caseExpr = expr[3] as unknown[];
+    expect(caseExpr[0]).toBe('case');
+    // First branch: BEYOND_GAS_RANGE -> the base color input (['get', 'color']).
+    expect(caseExpr[1]).toEqual(['==', ['var', 'g'], BEYOND_GAS_RANGE]);
+    expect(caseExpr[2]).toEqual(['get', 'color']);
+    // Second branch: any other negative value (the unconnected sentinel) -> grey.
+    expect(caseExpr[3]).toEqual(['<', ['var', 'g'], 0]);
+    expect(caseExpr[4]).toBe('#888888');
   });
 
   it('guards a non-positive budget so the interpolate stops never collide', () => {

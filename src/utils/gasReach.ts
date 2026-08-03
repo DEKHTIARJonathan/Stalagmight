@@ -10,15 +10,18 @@ import { encodeFeatureId } from './ids';
  * gas it costs to reach them from the origin, using MapLibre `feature-state`
  * (`gasReach`) + a swapped paint `interpolate`. Stations **within the turn
  * budget** carry a colorable value (gold near the origin -> purple at the
- * budget); stations connected to the survey but beyond the budget keep their
- * BASE color (dimmed, not greyed - see `GAS_DIM_ALPHA`); only topologically
- * UNCONNECTED stations read grey. This three-way split lets a diver tell "past
- * my turn point" (dimmed, colored) apart from "not part of this cave section at
- * all" (grey) at a glance. These pure helpers keep the transform
- * unit-testable in isolation.
+ * budget); stations connected to the survey but beyond reach - the gas budget
+ * OR the scooter rig's usable range (the backend ANDs both, `gas.rs`
+ * `budget_view`'s `in_range`) - keep their BASE color (dimmed, not greyed -
+ * see `GAS_DIM_ALPHA`); only topologically UNCONNECTED stations read grey.
+ * This three-way split lets a diver tell "past my turn point or scooter range"
+ * (dimmed, colored) apart from "not part of this cave section at all" (grey)
+ * at a glance. These pure helpers keep the transform unit-testable in
+ * isolation.
  */
 
-/** Sentinel `gasReach` for "topologically unconnected" (renders grey). */
+/** Sentinel `gasReach` for "no path cost solved" - unconnected or a stalled
+ *  walk (renders grey). */
 export const UNREACHABLE_GAS = -1;
 
 /** Sentinel `gasReach` for "connected to the survey, but beyond the gas/turn
@@ -63,9 +66,12 @@ export interface GasReachFeatureState {
 }
 
 /** Classify one station's backend fact into the carried `gasReach` value:
- *  `gas_to_reach === null` means topologically unconnected (never solved a
- *  path at all); a finite cost with `reachable === false` means connected but
- *  past the turn/gas budget; otherwise the litres-to-reach are the value. */
+ *  `gas_to_reach === null` means no path cost was solved at all - either the
+ *  station is topologically unconnected, or the walk STALLED before reaching
+ *  it (e.g. zero swim speed/RMV; backend `gas.rs` sets `reach_gas` to
+ *  infinity, which serializes as null); a finite cost with `reachable ===
+ *  false` means connected but past the turn/gas budget OR the scooter rig's
+ *  usable range; otherwise the litres-to-reach are the value. */
 function classifyStation(gasToReach: number | null | undefined, reachable: boolean): number {
   if (gasToReach == null) return UNREACHABLE_GAS;
   return reachable ? gasToReach : BEYOND_GAS_RANGE;

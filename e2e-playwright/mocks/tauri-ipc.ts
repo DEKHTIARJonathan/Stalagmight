@@ -1654,16 +1654,17 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             const stations = state?.stations ?? [];
             const budget_litres = 1500;
             const gas_to_reach: (number | null)[] = stations.map((s) => Math.abs(s.coordinates.x) * 20);
-            const reachable = gas_to_reach.map((g) => g !== null && g <= budget_litres);
-            // #395: keep the LAST station genuinely UNCONNECTED (gas_to_reach null,
-            // not merely over budget) - mirrors the real backend invariant
-            // (topologically unreachable vs connected-but-past-budget) so specs can
-            // assert the three-way split: grey (unconnected) vs dimmed-but-colored
-            // (beyond gas range). It was already over budget, so `reachable` is
-            // unaffected; only its numeric value changes.
+            // #395: keep the LAST station genuinely UNCONNECTED (gas_to_reach null)
+            // BEFORE computing `reachable` - mirrors the real backend invariant
+            // (src-tauri/src/models/project/gas.rs: reachable requires g.is_finite())
+            // so a null gas_to_reach can never pair with reachable:true. Specs can
+            // then assert the three-way split: grey (unconnected, reachable:false,
+            // gas_to_reach:null) vs dimmed-but-colored (beyond gas range,
+            // reachable:false, gas_to_reach:non-null) vs reachable.
             if (gas_to_reach.length > 0) {
               gas_to_reach[gas_to_reach.length - 1] = null;
             }
+            const reachable = gas_to_reach.map((g) => g !== null && g <= budget_litres);
             let max_reachable_gas = 0;
             for (let i = 0; i < gas_to_reach.length; i += 1) {
               const g = gas_to_reach[i];
