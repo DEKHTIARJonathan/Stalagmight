@@ -155,12 +155,17 @@ export interface CustomDimState {
   gasDimShotFeatureIds: ReadonlySet<number>;
 }
 
+/** Shared empty-set sentinel for every "nothing dimmed/emphasized" case below -
+ *  declared before its first use so callers don't rely on `const` hoisting
+ *  behavior specific to function bodies. */
+const EMPTY_FEATURE_SET: ReadonlySet<number> = new Set<number>();
+
 const EMPTY_DIM: CustomDimState = {
-  anchoredSectionIds: new Set<number>(),
-  immovableStationFeatureIds: new Set<number>(),
-  immovableShotFeatureIds: new Set<number>(),
-  gasDimStationFeatureIds: new Set<number>(),
-  gasDimShotFeatureIds: new Set<number>(),
+  anchoredSectionIds: EMPTY_FEATURE_SET,
+  immovableStationFeatureIds: EMPTY_FEATURE_SET,
+  immovableShotFeatureIds: EMPTY_FEATURE_SET,
+  gasDimStationFeatureIds: EMPTY_FEATURE_SET,
+  gasDimShotFeatureIds: EMPTY_FEATURE_SET,
 };
 
 /** The per-vertex `a_dim` / `v_dim` level for "beyond gas range" (#395): between
@@ -181,8 +186,8 @@ export function buildCustomDimState(
 ): CustomDimState {
   return {
     anchoredSectionIds, immovableStationFeatureIds, immovableShotFeatureIds,
-    gasDimStationFeatureIds: gasReachMode ? gasBeyondReachFeatureIds(gasReachState?.stations) : EMPTY_HIGHLIGHT,
-    gasDimShotFeatureIds: gasReachMode ? gasBeyondReachFeatureIds(gasReachState?.shots) : EMPTY_HIGHLIGHT,
+    gasDimStationFeatureIds: gasReachMode ? gasBeyondReachFeatureIds(gasReachState?.stations) : EMPTY_FEATURE_SET,
+    gasDimShotFeatureIds: gasReachMode ? gasBeyondReachFeatureIds(gasReachState?.shots) : EMPTY_FEATURE_SET,
   };
 }
 
