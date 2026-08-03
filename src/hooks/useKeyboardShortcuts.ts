@@ -1,6 +1,7 @@
 import { useEffect, useCallback, useRef } from 'react';
 import { useUIStore } from '../store/uiStore';
 import { useProjectStore } from '../store/projectStore';
+import { useGasPlanStore } from '../store/gasPlanStore';
 import { isEditingBlockedNow } from './useEditingBlocked';
 import { isNonInteractiveTool } from '../utils/toolUtils';
 import { normalizeShortcut, parseKeyEvent } from '../utils/shortcuts';
@@ -360,6 +361,13 @@ export function useKeyboardShortcuts() {
 
       // Handle Escape FIRST - works even when focus is in an input
       if (event.key === 'Escape') {
+        // #395: the one-shot "Pick on map" origin picker disarms on Escape, the same as any
+        // other one-shot map-click mode, and takes it over the same way placement mode does.
+        if (useGasPlanStore.getState().originPickArmed) {
+          useGasPlanStore.getState().setOriginPickArmed(false);
+          return;
+        }
+
         // Placement mode owns Escape behavior (handled in MapCanvas).
         if (placementModeActive) {
           return;

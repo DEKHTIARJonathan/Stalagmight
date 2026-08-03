@@ -466,6 +466,7 @@ function MapCanvas() {
   // Gas & route-planning sub-mode inputs (#38) - a separate store so editing the
   // diver/cylinders/config doesn't re-render via the big uiStore subscription.
   const {
+    originChosen: gasOriginChosen,
     origin: gasOrigin,
     waypoints: gasWaypoints,
     segments: gasSegments,
@@ -479,6 +480,7 @@ function MapCanvas() {
     setStageDropOverride: setGasStageDropOverride,
   } = useGasPlanStore(
     useShallow((s) => ({
+      originChosen: s.originChosen,
       origin: s.origin,
       waypoints: s.waypoints,
       segments: s.segments,
@@ -2000,6 +2002,14 @@ function MapCanvas() {
   // returns null when no project is open (Ok(None)) or throws on invalid input.
   useEffect(() => {
     if (!showGasPlan) return undefined;
+    // R9/R10 (#395): before the diver has answered "Where does this dive start?" there is
+    // nothing to shade - no shading, no markers, no legend (the legend is already gated on
+    // `gasReachField`). Clear any stale field left from a previous session/project so the entry
+    // card never resurrects a leftover ramp.
+    if (!gasOriginChosen) {
+      setGasReachField(null);
+      return undefined;
+    }
     if (gasComputeGate.skip) {
       // A stalled plan (#310) runs NO compute at all, and the store has already nulled the
       // field - flag it like a failed fetch, or `overlayApplyAction` reads the null field as
@@ -2038,7 +2048,7 @@ function MapCanvas() {
         if (!cancelled) { setGasReachField(null); setGasFieldFailed(true); }
       });
     return () => { cancelled = true; };
-  }, [showGasPlan, gasComputeGate, gasWaypoints, gasSegments, gasDiver, gasCylinders, gasPlanConfig, project?.modified_at, setGasReachField]);
+  }, [showGasPlan, gasOriginChosen, gasComputeGate, gasWaypoints, gasSegments, gasDiver, gasCylinders, gasPlanConfig, project?.modified_at, setGasReachField]);
 
   // Apply the fetched field to the layer (feature-state + paint swap). Separate
   // from the rebuild path so re-rooting never triggers a feature rebuild.
@@ -3827,7 +3837,7 @@ function MapCanvas() {
       {showGasPlan && gasReachField && (
         <GasLegend field={gasReachField} units={gasPlanConfig.units} visible={showGasPlan} />
       )}
-      {showGasPlan && !gasReachField && (
+      {showGasPlan && gasOriginChosen && !gasReachField && (
         <div
           data-testid="gas-legend-loading"
           style={{

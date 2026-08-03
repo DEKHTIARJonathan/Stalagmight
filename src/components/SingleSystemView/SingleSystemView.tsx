@@ -4,6 +4,7 @@ import { useOnboardingStep } from '../../hooks/useOnboardingStep';
 import { useProject } from '../../hooks/useProject';
 import { useAutoSave, type AutoSaveStatus } from '../../hooks/useAutoSave';
 import { useProjectStore } from '../../store/projectStore';
+import { useGasPlanStore } from '../../store/gasPlanStore';
 import { PANEL_FIELDS, useUIStore, type PanelId, type PanelMode } from '../../store/uiStore';
 import type { SectionId } from '../../types/project';
 import { useShallow } from 'zustand/react/shallow';
@@ -93,6 +94,9 @@ export default function SingleSystemView() {
   // stub and hides the bottom table. The carousel owns enter/exit; setView()/setColorMode
   // reset it. The left Sections Dock is survey-only (Plan/Export are read-only).
   const appMode = useUIStore((s) => s.appMode);
+  // R9/R10 (#395): the bottom Equipment/Segments/Profile panel belongs to the full rig, which
+  // only exists once the diver has answered "Where does this dive start?".
+  const gasOriginChosen = useGasPlanStore((s) => s.originChosen);
   // Drives the imagery attribution overlay below; MapCanvas adds and removes the
   // satellite source off this same flag.
   const showSatellite = useUIStore((s) => s.showSatellite);
@@ -652,11 +656,13 @@ export default function SingleSystemView() {
   const dataInner = useMemo(
     () =>
       appMode === 'plan' ? (
-        <div className="h-full">
-          <ErrorBoundary panelName="Plan Tables">
-            <PlanTablesPanel />
-          </ErrorBoundary>
-        </div>
+        gasOriginChosen ? (
+          <div className="h-full">
+            <ErrorBoundary panelName="Plan Tables">
+              <PlanTablesPanel />
+            </ErrorBoundary>
+          </div>
+        ) : null
       ) : sections ? (
         <div className={`h-full ${dimCls}`}>
           <ErrorBoundary panelName="Data Table">
@@ -664,7 +670,7 @@ export default function SingleSystemView() {
           </ErrorBoundary>
         </div>
       ) : null,
-    [appMode, sections, dimCls],
+    [appMode, gasOriginChosen, sections, dimCls],
   );
 
   // Memoized on `t` (changes only on locale switch): each Dock's `label` and

@@ -15,6 +15,24 @@ import { setSource } from '../utils/telemetry';
 import type { SurveyLayerCallbacks } from '../components/Map/SurveyLayer';
 import { projectParamOnSegment } from '../components/Map/surveyLayer/hitTest';
 
+/**
+ * #395: what a plain Plan-mode select-click does to the gas plan pins.
+ *
+ * Three states, checked in order: the one-shot "Pick on map" origin picker (armed from the
+ * Origin section's button) always wins and disarms itself via `setOrigin`; before an origin is
+ * chosen at all, the FIRST click sets the origin (answering "Where does this dive start?") so
+ * the entry card can resolve before any endpoint exists to plan toward; only once an origin is
+ * chosen does a plain click resume its ordinary job of setting the ENDPOINT.
+ */
+function applyGasPlanClick(ref: StationRef): void {
+  const gas = useGasPlanStore.getState();
+  if (gas.originPickArmed || !gas.originChosen) {
+    gas.setOrigin(ref);
+    return;
+  }
+  gas.setEndpoint(ref);
+}
+
 /** A measure endpoint's 3D coords (meters). For a raw `point` the fields are inline. */
 function endpointCoords(ep: MeasureEndpoint): Coordinates {
   return ep.kind === 'point' ? { x: ep.x, y: ep.y, z: ep.z } : ep.coords;
@@ -403,13 +421,13 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
           if (showDistanceGradient && !mouseEvent.shiftKey && !mouseEvent.ctrlKey && !mouseEvent.metaKey) {
             setDistanceGradientOrigin(ref);
           }
-          // Gas planning (#298): a plain select-click sets the route ENDPOINT - the point you are
-          // planning to reach - not the origin. Picking a destination is the frequent action;
-          // the origin is usually the entrance, and is still one click away via the ★ datum star
-          // or "Set as start point" in the right-click menu. Additive: selection still happens.
-          // Mutually exclusive with the distance overlay, which keeps re-rooting on click.
+          // Gas planning (#298, #395): a plain select-click sets the route ENDPOINT once an
+          // origin exists (or the "Pick on map" picker is armed, which always sets the origin),
+          // and sets the ORIGIN itself before one is chosen - see `applyGasPlanClick`. Additive:
+          // selection still happens. Mutually exclusive with the distance overlay, which keeps
+          // re-rooting on click.
           if (showGasPlan && !mouseEvent.shiftKey && !mouseEvent.ctrlKey && !mouseEvent.metaKey) {
-            useGasPlanStore.getState().setEndpoint(ref);
+            applyGasPlanClick(ref);
           }
           break;
         }
@@ -591,10 +609,10 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
             const shotIndex = section?.shots.findIndex((s) => s.id === shotId) ?? -1;
             if (shotIndex !== -1) {
               const ref = { section_id: sectionId, station_index: shotIndex };
-              // Mutually exclusive overlays: the distance gradient re-roots, Plan sets the route
-              // endpoint (#298) - same split as the station click above.
+              // Mutually exclusive overlays: the distance gradient re-roots, Plan applies the
+              // same origin/endpoint split as the station click above (#298, #395).
               if (showDistanceGradient) setDistanceGradientOrigin(ref);
-              if (showGasPlan) useGasPlanStore.getState().setEndpoint(ref);
+              if (showGasPlan) applyGasPlanClick(ref);
             }
           }
           break;
