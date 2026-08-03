@@ -108,12 +108,12 @@ test.describe('Import / Create Section dialog', () => {
     // The warning/id columns have nothing to say about an uncommitted row and
     // are dropped entirely - not merely hidden, so they are absent from the menu.
     await page.getByTestId('new-section-columns-menu').click();
-    await expect(page.getByTestId('new-section-col-toggle-left')).toBeVisible();
-    await expect(page.getByTestId('new-section-col-toggle-_warnings')).toHaveCount(0);
-    await expect(page.getByTestId('new-section-col-toggle-shot_id')).toHaveCount(0);
+    await expect(page.getByTestId('new-section-col-vis-left')).toBeVisible();
+    await expect(page.getByTestId('new-section-col-vis-_warnings')).toHaveCount(0);
+    await expect(page.getByTestId('new-section-col-vis-shot_id')).toHaveCount(0);
 
     // Revealing LRUD replaces the old "Include LRUD" checkbox.
-    await page.getByTestId('new-section-col-toggle-input-left').click();
+    await page.getByTestId('new-section-col-vis-left').click();
     await expect(page.getByTestId('new-section-header-left')).toBeVisible();
   });
 
@@ -196,8 +196,8 @@ test.describe('Import / Create Section dialog', () => {
     await openImportSectionDialog(page);
 
     await page.getByTestId('new-section-columns-menu').click();
-    await page.getByTestId('new-section-col-toggle-input-left').click();
-    await page.getByTestId('new-section-col-toggle-input-comment').click();
+    await page.getByTestId('new-section-col-vis-left').click();
+    await page.getByTestId('new-section-col-vis-comment').click();
     await page.keyboard.press('Escape');
 
     // The grid follows at once; the save is debounced behind it.
@@ -229,13 +229,32 @@ test.describe('Import / Create Section dialog', () => {
     await expect(page.getByTestId('new-section-header-comment')).toHaveCount(0);
   });
 
+  test('Expand enlarges the table and Shrink puts it back', async ({ page }) => {
+    await openImportSectionDialog(page);
+    const box = page.getByTestId('import-section-grid');
+    const collapsed = (await box.boundingBox())!.height;
+
+    await page.getByTestId('import-section-expand').click();
+    await expect
+      .poll(async () => (await box.boundingBox())!.height)
+      .toBeGreaterThan(collapsed);
+
+    // The metadata and the actions stay reachable while expanded - the point of
+    // growing the dialog rather than letting the grid take over the window.
+    await expect(page.getByTestId('section-name-input')).toBeVisible();
+    await expect(page.getByTestId('import-section-create')).toBeVisible();
+
+    await page.getByTestId('import-section-expand').click();
+    await expect.poll(async () => (await box.boundingBox())!.height).toBe(collapsed);
+  });
+
   test('reveals a hidden column that is holding up Create', async ({ page }) => {
     // A required field whose column is hidden would otherwise block Create with
     // the offending cell off-screen and no way to find it.
     await openImportSectionDialog(page);
 
     await page.getByTestId('new-section-columns-menu').click();
-    await page.getByTestId('new-section-col-toggle-input-depth_in').click();
+    await page.getByTestId('new-section-col-vis-depth_in').click();
     await page.keyboard.press('Escape');
     await expect(page.getByTestId('new-section-header-depth_in')).toHaveCount(0);
 
