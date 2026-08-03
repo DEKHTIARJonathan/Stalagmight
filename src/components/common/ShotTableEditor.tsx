@@ -1,4 +1,4 @@
-import { useCallback, useMemo } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import { formatFixed, getNumberFormatLocale } from '../../i18n/format';
@@ -14,6 +14,10 @@ import {
 import { applyAzimuthEdit } from '../../utils/shotTable';
 import { nextShotKind } from '../../utils/shotKind';
 import { SpreadsheetGrid } from './SpreadsheetGrid';
+import { ExpandIcon, EyeIcon, ShrinkIcon } from './icons';
+import { useDismissableLayer } from '../../hooks/useDismissableLayer';
+import { useAnchoredFixedMenu } from '../../hooks/useAnchoredFixedMenu';
+import { useEditSectionViewPersistence } from '../Dialogs/useEditSectionViewPersistence';
 import type { CellEdit } from './SpreadsheetGrid/types';
 import {
   buildEditableShotColumns,
@@ -74,6 +78,12 @@ export interface ShotTableEditorProps {
   onRowSelect?: (index: number) => void;
   /** Set of shot indices whose geometry fields should be disabled (frozen shots) */
   frozenShotIndices?: Set<number>;
+  /** Whether the host dialog is currently enlarged. Supply this together with
+   *  {@link onToggleExpand} to get the Expand control; the HOST owns the size,
+   *  because this editor is a child of three different dialogs and cannot
+   *  resize any of them itself. */
+  expanded?: boolean;
+  onToggleExpand?: () => void;
 }
 
 const DEFAULT_VALIDATION_CONFIG: ValidationConfig = {
@@ -81,8 +91,10 @@ const DEFAULT_VALIDATION_CONFIG: ValidationConfig = {
   pitch_diff_threshold: defaultConfig.validation.pitch_diff_threshold,
 };
 
-/** Fallback grid height when the host gives no `maxHeight`. */
+/** Fallback grid height before the first measurement, and under jsdom. */
 const DEFAULT_GRID_HEIGHT = 260;
+/** Never size the row area below this on a short window. */
+const MIN_GRID_HEIGHT = 120;
 
 /** Parse a CSS length like "16rem" / "320px" into px for the grid, which needs
  *  a number (virtualization cannot work from an indefinite height). */
@@ -113,6 +125,10 @@ function warningsFor(shot: EditableShot, config: ValidationConfig, t: TFunction)
   return out;
 }
 
+/** Nothing hidden by default: this grid edits a survey that already exists, so
+ *  there is no "start simple" case the way there is for a brand-new section. */
+const DEFAULT_EDIT_SECTION_HIDDEN_COLUMNS: readonly string[] = [];
+
 export function ShotTableEditor({
   shots,
   onShotChange,
@@ -127,6 +143,8 @@ export function ShotTableEditor({
   selectedRowIndex,
   onRowSelect,
   frozenShotIndices,
+  expanded = false,
+  onToggleExpand,
 }: ShotTableEditorProps) {
   const { t } = useTranslation();
   const precision = useDecimalPrecision();
@@ -212,6 +230,61 @@ export function ShotTableEditor({
       if (index >= 0) onDeleteShot(index);
     },
     [actualIndex, onDeleteShot]
+  );
+
+  // --- Column layout, persisted under the dialog's own `edit_section_*` keys --
+  const [columnOrder, setColumnOrder] = useState<string[]>([]);
+  const [hiddenColumns, setHiddenColumns] = useState<ReadonlySet<string>>(() => new Set());
+  const [columnWidths, setColumnWidths] = useState<Record<string, number>>({});
+  const viewSetters = useMemo(() => ({ setColumnOrder, setHiddenColumns, setColumnWidths }), []);
+  useEditSectionViewPersistence(
+    { columnOrder, hiddenColumns, columnWidths },
+    viewSetters,
+    DEFAULT_EDIT_SECTION_HIDDEN_COLUMNS
+  );
+  const hiddenColumnList = useMemo(() => [...hiddenColumns], [hiddenColumns]);
+
+  const [colMenuOpen, setColMenuOpen] = useState(false);
+  const colMenuWrapRef = useRef<HTMLDivElement | null>(null);
+  const colMenuBtnRef = useRef<HTMLButtonElement | null>(null);
+  const colMenuListRef = useRef<HTMLDivElement | null>(null);
+  useDismissableLayer({
+    open: colMenuOpen,
+    onDismiss: () => setColMenuOpen(false),
+    contains: [colMenuWrapRef],
+  });
+  const colMenuStyle = useAnchoredFixedMenu(colMenuOpen, colMenuBtnRef, colMenuListRef, {
+    align: 'right',
+    gap: 4,
+    width: 224,
+  });
+
+  /** Show/hide a group of columns together (LRUD is one row, four keys). */
+  const toggleCols = useCallback((keys: string[]) => {
+    setHiddenColumns((prev) => {
+      const next = new Set(prev);
+      const allVisible = keys.every((k) => !next.has(k));
+      for (const k of keys) {
+        if (allVisible) next.add(k);
+        else next.delete(k);
+      }
+      return next;
+    });
+  }, []);
+
+  const colCheckRow = (keys: string[], label: string, className = '') => (
+    <label
+      key={keys[0]}
+      className={`flex cursor-pointer items-center gap-2 rounded px-2 py-0.5 hover:bg-accent-10 ${className}`}
+    >
+      <input
+        type="checkbox"
+        checked={keys.every((k) => !hiddenColumns.has(k))}
+        onChange={() => toggleCols(keys)}
+        data-testid={`shot-editor-col-vis-${keys[0]}`}
+      />
+      {label}
+    </label>
   );
 
   const columns = useMemo(
@@ -315,6 +388,25 @@ export function ShotTableEditor({
     return found === -1 ? null : found;
   }, [selectedRowIndex, actualIndexes]);
 
+  // With an explicit `maxHeight` the host is dictating the size. Without one
+  // (the expanded case) the box grows with the dialog, so it has to be measured
+  // - virtualization needs a number, not an indefinite height. Guarded for
+  // jsdom, which has no ResizeObserver, per the convention in ProfileChart/Dock.
+  const gridBoxRef = useRef<HTMLDivElement | null>(null);
+  const [measuredHeight, setMeasuredHeight] = useState(DEFAULT_GRID_HEIGHT);
+  useEffect(() => {
+    const el = gridBoxRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return undefined;
+    const measure = () => {
+      const h = Math.max(MIN_GRID_HEIGHT, el.clientHeight);
+      setMeasuredHeight((prev) => (Math.abs(prev - h) > 1 ? h : prev));
+    };
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    measure();
+    return () => ro.disconnect();
+  }, []);
+
   const onActiveCellChange = useCallback(
     (rowIndex: number) => {
       const index = actualIndex(rowIndex);
@@ -324,9 +416,9 @@ export function ShotTableEditor({
   );
 
   return (
-    <div data-testid="shot-table-container" className="flex flex-col gap-2">
-      {showAddButton && !readOnly && (
-        <div className="flex justify-end">
+    <div data-testid="shot-table-container" className="flex min-h-0 flex-1 flex-col gap-2">
+      <div className="flex shrink-0 items-center justify-end gap-3">
+        {showAddButton && !readOnly && (
           <button
             type="button"
             onClick={onAddShot}
@@ -335,9 +427,56 @@ export function ShotTableEditor({
           >
             {t('shotTable.add')}
           </button>
+        )}
+        <div ref={colMenuWrapRef} className="relative" onMouseDown={(e) => e.stopPropagation()}>
+          <button
+            ref={colMenuBtnRef}
+            type="button"
+            onClick={() => setColMenuOpen((v) => !v)}
+            className={colMenuOpen ? 'text-text' : 'text-text-secondary hover:text-text'}
+            title={t('dataTable.columnsMenu.button')}
+            data-testid="shot-editor-columns-menu"
+          >
+            <EyeIcon size={14} />
+          </button>
+          {colMenuOpen && (
+            <div
+              ref={colMenuListRef}
+              className="overflow-auto rounded border border-border bg-panel p-1 text-xs shadow-lg"
+              style={colMenuStyle}
+              data-dropdown-open
+              data-testid="shot-editor-columns-dropdown"
+            >
+              {colCheckRow(['length'], t('dataTable.columnsMenu.length'))}
+              {colCheckRow([EDITABLE_AZIMUTH_AVG_KEY], t('dataTable.columnsMenu.azimuth'))}
+              <div className="flex">
+                {colCheckRow(['depth_in'], t('dataTable.columnsMenu.depthIn'), 'flex-1')}
+                {colCheckRow(['depth_out'], t('dataTable.columnsMenu.depthOut'), 'flex-1')}
+              </div>
+              {colCheckRow(['left', 'right', 'up', 'down'], t('dataTable.columnsMenu.lrud'))}
+              {colCheckRow(['kind'], t('dataTable.columnsMenu.reference'))}
+              {colCheckRow(['comment'], t('dataTable.columnsMenu.comment'))}
+            </div>
+          )}
         </div>
-      )}
-      <div className="overflow-hidden rounded border border-border" data-testid="shot-table">
+        {onToggleExpand && (
+          <button
+            type="button"
+            onClick={onToggleExpand}
+            className="text-text-secondary hover:text-text"
+            title={expanded ? t('newSection.collapse') : t('newSection.expand')}
+            aria-label={expanded ? t('newSection.collapse') : t('newSection.expand')}
+            data-testid="shot-editor-expand"
+          >
+            {expanded ? <ShrinkIcon size={14} /> : <ExpandIcon size={14} />}
+          </button>
+        )}
+      </div>
+      <div
+        ref={gridBoxRef}
+        className="min-h-0 flex-1 overflow-hidden rounded border border-border"
+        data-testid="shot-table"
+      >
         <SpreadsheetGrid<EditableShot>
           columns={columns}
           rows={visibleShots}
@@ -346,7 +485,7 @@ export function ShotTableEditor({
           cellTestId={(_s, i, colKey) => `shot-cell-${i}-${colKey}`}
           testIdPrefix="shot-editor"
           locale={getNumberFormatLocale()}
-          height={cssHeightToPx(maxHeight)}
+          height={maxHeight === undefined ? measuredHeight : cssHeightToPx(maxHeight)}
           onEdit={onEdit}
           onBatchEdit={onBatchEdit}
           rowClassName={rowClassName}
@@ -354,6 +493,12 @@ export function ShotTableEditor({
           showToolbar={false}
           selectedRow={selectedVisibleRow}
           onActiveCellChange={onActiveCellChange}
+          hiddenColumns={hiddenColumnList}
+          columnOrder={columnOrder}
+          onColumnOrderChange={setColumnOrder}
+          onHiddenColumnsChange={(hidden) => setHiddenColumns(new Set(hidden))}
+          columnWidths={columnWidths}
+          onColumnWidthsChange={setColumnWidths}
           {...(readOnly ? {} : { onInsertRows, onDeleteRows })}
         />
       </div>

@@ -254,6 +254,9 @@ export const defaultConfig: Config = {
       "down"
     ],
     "new_section_column_widths": {},
+    "edit_section_column_order": [],
+    "edit_section_hidden_columns": [],
+    "edit_section_column_widths": {},
     "sections_panel_open": true,
     "sections_panel_mode": "pin",
     "detail_panel_open": true,

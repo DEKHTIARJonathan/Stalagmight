@@ -39,6 +39,9 @@ export default function EditSectionDialog() {
   const editingBlocked = useEditingBlocked();
 
   const [isLoading, setIsLoading] = useState(false);
+  // Expand grows the DIALOG, not just the grid - same as the new-section dialog,
+  // so the metadata fields and Save stay reachable while it is open.
+  const [expanded, setExpanded] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   // Form state
@@ -397,15 +400,26 @@ export default function EditSectionDialog() {
   }
 
   return (
-    <DialogWrapper title="Edit Section" onClose={closeDialog} size="5xl" isDirty={isDirty} data-testid="edit-section-dialog">
-      <div className="space-y-4">
+    <DialogWrapper
+      title="Edit Section"
+      onClose={closeDialog}
+      size={expanded ? 'fullscreen' : '5xl'}
+      {...(expanded ? { overflow: 'hidden' as const } : {})}
+      isDirty={isDirty}
+      data-testid="edit-section-dialog"
+    >
+      <div className={`space-y-4 ${expanded ? 'flex h-full flex-col' : ''}`}>
         {error && (
           <div className="p-3 bg-error-10 border border-error-20 rounded text-error text-sm">
             {error}
           </div>
         )}
 
-        {/* Section metadata */}
+        {/* Section metadata. Expanded, it may scroll: the point of expanding is
+            to give the SHOT TABLE room, and on a short window the metadata would
+            otherwise eat the whole gain and leave the table smaller than it was
+            at its fixed collapsed height. */}
+        <div className={expanded ? 'min-h-0 shrink overflow-y-auto' : undefined}>
         <SectionMetadataForm
           name={name}
           surveyor={surveyor}
@@ -423,9 +437,11 @@ export default function EditSectionDialog() {
           showQuality={true}
           disabled={isLoading}
         />
+        </div>
 
-        {/* Shots table using ShotTableEditor */}
-        <div className="border-t border-border pt-4">
+        {/* Shots table using ShotTableEditor. Expanded, it takes the room the
+            fullscreen dialog frees up; otherwise it keeps its fixed height. */}
+        <div className={`border-t border-border pt-4 ${expanded ? 'flex min-h-0 flex-1 flex-col' : ''}`}>
           <ShotTableEditor
             shots={shots}
             onShotChange={handleShotChange}
@@ -444,7 +460,9 @@ export default function EditSectionDialog() {
               setSelectedShotKey(getShotKey(shot));
             }}
             {...(frozenShotIndices ? { frozenShotIndices } : {})}
-            maxHeight="16rem"
+            expanded={expanded}
+            onToggleExpand={() => setExpanded((v) => !v)}
+            {...(expanded ? {} : { maxHeight: '16rem' })}
           />
         </div>
 

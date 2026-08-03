@@ -201,6 +201,46 @@ pub(crate) fn update_new_section_view_impl(
         .map_err(|e| e.to_string())
 }
 
+/// Update the edit-section dialog's shot-grid view state (column order,
+/// visibility and widths) in configuration (efficient partial update).
+///
+/// Its own command for the same reason `update_new_section_view` is: three
+/// separate grids, three disjoint `panels` field sets, and a partial write to
+/// one must never carry another's keys.
+#[tauri::command]
+pub fn update_edit_section_view(
+    state: State<AppState>,
+    column_order: Option<Vec<String>>,
+    hidden_columns: Option<Vec<String>>,
+    column_widths: Option<BTreeMap<String, u32>>,
+) -> Result<(), String> {
+    update_edit_section_view_impl(state.inner(), column_order, hidden_columns, column_widths)
+}
+
+pub(crate) fn update_edit_section_view_impl(
+    state: &AppState,
+    column_order: Option<Vec<String>>,
+    hidden_columns: Option<Vec<String>>,
+    column_widths: Option<BTreeMap<String, u32>>,
+) -> Result<(), String> {
+    state
+        .modify_config(|config| {
+            if let Some(order) = column_order {
+                config.panels.edit_section_column_order = order;
+            }
+            if let Some(hidden) = hidden_columns {
+                config.panels.edit_section_hidden_columns = hidden;
+            }
+            if let Some(mut widths) = column_widths {
+                normalize_column_widths(&mut widths);
+                config.panels.edit_section_column_widths = widths;
+            }
+            Ok(())
+        })
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
 pub(crate) fn update_panel_sizes_impl(
     state: &AppState,
     sections_panel_width: Option<u32>,

@@ -569,6 +569,15 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           | undefined) ?? {}),
       };
 
+      // The edit-section dialog's shot grid, persisted via
+      // update_edit_section_view. Third store for the third grid, matching the
+      // Rust side's three disjoint `panels` field sets.
+      const mockEditSectionView: Record<string, unknown> = {
+        ...(((window as unknown as Record<string, unknown>).__E2E_SEED_EDIT_SECTION_VIEW__ as
+          | Record<string, unknown>
+          | undefined) ?? {}),
+      };
+
       // The `[gas]` block persisted via update_gas_config, overlaid onto
       // get_config the same way. Null until something writes it, so an untouched
       // run keeps whatever gas config get_config would otherwise return.
@@ -3319,6 +3328,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                   ...((savedConfig.panels as Record<string, unknown> | undefined) ?? {}),
                   ...mockDataTableView,
                   ...mockNewSectionView,
+                  ...mockEditSectionView,
                 },
                 ...(mockGasConfig ? { gas: mockGasConfig } : {}),
               };
@@ -3510,6 +3520,9 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                   'down',
                 ],
                 new_section_column_widths: {},
+                edit_section_column_order: [],
+                edit_section_hidden_columns: [],
+                edit_section_column_widths: {},
                 // Mirror the Rust serde defaults for the reveal state so initPanels
                 // reads concrete values (side panels pinned open, data closed),
                 // matching the real config shape get_config returns.
@@ -3521,6 +3534,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 data_table_mode: 'pin',
                 ...mockDataTableView,
                 ...mockNewSectionView,
+                ...mockEditSectionView,
               },
               cache: {
                 tile_cache_enabled: true,
@@ -3644,6 +3658,28 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             return null; // Tauri serializes () as null
           }
 
+          case 'update_edit_section_view': {
+            console.log('[Mock IPC] update_edit_section_view called with:', args);
+            const win = window as unknown as Record<string, unknown>;
+            const existing = win.__MOCK_EDIT_SECTION_VIEW_CALLS__ as unknown[] | undefined;
+            const calls = Array.isArray(existing) ? existing : [];
+            calls.push(args ?? null);
+            win.__MOCK_EDIT_SECTION_VIEW_CALLS__ = calls;
+            const columnOrder = (args?.columnOrder ?? args?.column_order) as string[] | undefined;
+            if (columnOrder != null) mockEditSectionView.edit_section_column_order = columnOrder;
+            const hiddenColumns = (args?.hiddenColumns ?? args?.hidden_columns) as
+              | string[]
+              | undefined;
+            if (hiddenColumns != null) {
+              mockEditSectionView.edit_section_hidden_columns = hiddenColumns;
+            }
+            const columnWidths = (args?.columnWidths ?? args?.column_widths) as
+              | Record<string, number>
+              | undefined;
+            if (columnWidths != null) mockEditSectionView.edit_section_column_widths = columnWidths;
+            return null; // Tauri serializes () as null
+          }
+
           case 'reload_config': {
             // Return saved config if available (for testing persistence),
             // overlaying the same two stores get_config does. Without the
@@ -3660,6 +3696,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                   ...((savedConfig.panels as Record<string, unknown> | undefined) ?? {}),
                   ...mockDataTableView,
                   ...mockNewSectionView,
+                  ...mockEditSectionView,
                 },
                 ...(mockGasConfig ? { gas: mockGasConfig } : {}),
               };
@@ -3853,6 +3890,9 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                   'down',
                 ],
                 new_section_column_widths: {},
+                edit_section_column_order: [],
+                edit_section_hidden_columns: [],
+                edit_section_column_widths: {},
                 // Mirror the Rust serde defaults for the reveal state so initPanels
                 // reads concrete values (side panels pinned open, data closed),
                 // matching the real config shape get_config returns.
@@ -3864,6 +3904,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 data_table_mode: 'pin',
                 ...mockDataTableView,
                 ...mockNewSectionView,
+                ...mockEditSectionView,
               },
               cache: {
                 tile_cache_enabled: true,

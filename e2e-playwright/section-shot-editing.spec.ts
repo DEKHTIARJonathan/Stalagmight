@@ -212,6 +212,60 @@ test.describe('Section and Shot Editing', () => {
     await expect(dialog).not.toBeVisible({ timeout: 3000 });
   });
 
+  test('the eye menu hides a column, and the layout persists across reopen', async ({ page }) => {
+    await openEditSectionDialog(page, 'Main Passage');
+    const dialog = page.getByTestId('edit-section-dialog');
+
+    // Everything is visible by default - this grid edits a survey that exists.
+    await expect(dialog.getByTestId('shot-editor-header-comment')).toBeVisible();
+
+    await dialog.getByTestId('shot-editor-columns-menu').click();
+    await dialog.getByTestId('shot-editor-col-vis-comment').click();
+    await page.keyboard.press('Escape');
+    await expect(dialog.getByTestId('shot-editor-header-comment')).toHaveCount(0);
+
+    // The debounced save reaches update_edit_section_view, and the stored config.
+    await page.waitForFunction(
+      () => {
+        const hidden = ((window as unknown as Record<string, unknown>).__E2E_TEST__ as
+          | { projectStore: { getState: () => { config?: { panels?: Record<string, string[]> } } } }
+          | undefined
+        )?.projectStore.getState().config?.panels?.edit_section_hidden_columns ?? [];
+        return hidden.includes('comment');
+      },
+      undefined,
+      { timeout: 5000 }
+    );
+
+    // Reopen: the layout comes back rather than resetting.
+    await dialog.getByRole('button', { name: 'Cancel' }).click();
+    await expect(dialog).not.toBeVisible({ timeout: 3000 });
+    await openEditSectionDialog(page, 'Main Passage');
+    await expect(
+      page.getByTestId('edit-section-dialog').getByTestId('shot-editor-header-comment')
+    ).toHaveCount(0);
+  });
+
+  test('Expand enlarges the shot table and Shrink puts it back', async ({ page }) => {
+    // A tall viewport, because the collapsed dialog is already 90vh: on a short
+    // window fullscreen frees almost nothing and the assertion below would be
+    // measuring the window rather than the feature.
+    await page.setViewportSize({ width: 1280, height: 1200 });
+    await openEditSectionDialog(page, 'Main Passage');
+    const dialog = page.getByTestId('edit-section-dialog');
+    const table = dialog.getByTestId('shot-table');
+    const collapsed = (await table.boundingBox())!.height;
+
+    await dialog.getByTestId('shot-editor-expand').click();
+    await expect.poll(async () => (await table.boundingBox())!.height).toBeGreaterThan(collapsed);
+    // Save stays reachable while expanded - the point of growing the dialog
+    // rather than letting the grid take over the window.
+    await expect(dialog.getByRole('button', { name: 'Save' })).toBeVisible();
+
+    await dialog.getByTestId('shot-editor-expand').click();
+    await expect.poll(async () => (await table.boundingBox())!.height).toBe(collapsed);
+  });
+
   test('should edit LRUD values', async ({ page }) => {
     await openEditSectionDialog(page, 'Main Passage');
 

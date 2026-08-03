@@ -500,6 +500,8 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "command.update_data_table_view",
     // Same, for the new-section dialog's grid (its own column layout).
     "command.update_new_section_view",
+    // Same again for the edit-section dialog's shot grid.
+    "command.update_edit_section_view",
     "command.update_gas_config",
     "command.get_raw_table_names",
     "command.get_raw_table",
@@ -1084,7 +1086,13 @@ mod tests {
         //       the data table's cannot: whether anyone reshapes the columns while
         //       ENTERING a survey, as opposed to while reviewing one already typed:
         //       command.update_new_section_view = 710.
-        assert_eq!(EVENT_NAMES.len(), 720);
+
+        //   + 1 the same write for the EDIT-section dialog's shot grid. Kept
+        //       apart from the one above on purpose: comparing the two rates is
+        //       how we learn whether column shaping is something people do while
+        //       entering a survey, while correcting one, or both:
+        //       command.update_edit_section_view = 711.
+        assert_eq!(EVENT_NAMES.len(), 721);
     }
 
     /// Active-dwell mirrors every dwell state 1:1 (#31): for each `dwell.<key>` there
