@@ -68,8 +68,6 @@ export interface ShotTableEditorProps {
   validationConfig?: ValidationConfig;
   /** Whether the table is read-only */
   readOnly?: boolean;
-  /** Whether to show the Add Shot button */
-  showAddButton?: boolean;
   /** Maximum height for the table container (CSS value) */
   maxHeight?: string;
   /** Currently selected row index (into the FULL shots array) */
@@ -125,6 +123,25 @@ function warningsFor(shot: EditableShot, config: ValidationConfig, t: TFunction)
   return out;
 }
 
+/** The blank trailing row. Rendered, never stored: `onAddShot` turns it into a
+ *  real shot the first time a value lands in it. */
+const PHANTOM_ROW: EditableShot = {
+  id: Number.NEGATIVE_INFINITY,
+  azimuth_in: NaN,
+  azimuth_out: NaN,
+  length: NaN,
+  depth_in: NaN,
+  depth_out: NaN,
+  pitch_in: null,
+  pitch_out: null,
+  left: null,
+  right: null,
+  up: null,
+  down: null,
+  comment: null,
+  kind: 'Normal',
+};
+
 /** Nothing hidden by default: this grid edits a survey that already exists, so
  *  there is no "start simple" case the way there is for a brand-new section. */
 const DEFAULT_EDIT_SECTION_HIDDEN_COLUMNS: readonly string[] = [];
@@ -138,7 +155,6 @@ export function ShotTableEditor({
   onInsertAfter,
   validationConfig,
   readOnly = false,
-  showAddButton = true,
   maxHeight,
   selectedRowIndex,
   onRowSelect,
@@ -181,10 +197,23 @@ export function ShotTableEditor({
     [actualIndexes]
   );
 
+  /** The always-present empty row at the end. Typing in it is what adds a shot -
+   *  the same affordance the data table and the new-section dialog use, instead
+   *  of a separate Add button. It is a render-only phantom: it becomes real via
+   *  `onAddShot` the moment a value lands in it. */
+  const isPhantomAt = useCallback(
+    (visibleIndex: number): boolean => visibleIndex === visibleShots.length,
+    [visibleShots.length]
+  );
+  const gridRows = useMemo<EditableShot[]>(
+    () => [...visibleShots, { ...PHANTOM_ROW }],
+    [visibleShots]
+  );
+
   const errorsAt = useCallback(
     (visibleIndex: number): string[] => {
       const shot = visibleShots[visibleIndex];
-      if (!shot) return [];
+      if (!shot) return []; // the trailing blank is an invitation, not an error
       return validateEditableShot(
         {
           length: shot.length,
@@ -298,16 +327,25 @@ export function ShotTableEditor({
         isFrozenAt,
         onDeleteAt,
         onCycleKindAt,
+        isPhantomAt,
       }),
-    [t, precision, readOnly, errorsAt, warningsAt, isFrozenAt, onDeleteAt, onCycleKindAt]
+    [
+      t,
+      precision,
+      readOnly,
+      errorsAt,
+      warningsAt,
+      isFrozenAt,
+      onDeleteAt,
+      onCycleKindAt,
+      isPhantomAt,
+    ]
   );
 
-  /** One coerced cell value -> the host's field callback(s). */
-  const applyEdit = useCallback(
-    (visibleRow: number, colKey: string, value: unknown) => {
-      if (readOnly) return;
-      const index = actualIndex(visibleRow);
-      if (index < 0) return;
+  /** One coerced cell value -> the host's field callback(s), at a resolved
+   *  full-array index. */
+  const applyEditAt = useCallback(
+    (index: number, colKey: string, value: unknown) => {
       if (colKey === EDITABLE_AZIMUTH_AVG_KEY) {
         // One displayed azimuth fans back out to both legs, unnormalized -
         // exactly what the hand-rolled editor committed.
@@ -320,19 +358,49 @@ export function ShotTableEditor({
       }
       onShotChange(index, colKey as keyof EditableShot, value as number | string | null);
     },
-    [readOnly, actualIndex, onShotChange]
+    [onShotChange]
+  );
+
+  /** Resolve a grid row to a full-array index, materializing the trailing blank
+   *  on the way if that is where the edit landed. `onAddShot` appends, so the
+   *  new shot's index is the pre-append length - both hosts update `shots`
+   *  functionally, so the append and the edit apply in order within one tick. */
+  const resolveRowForEdit = useCallback(
+    (visibleRow: number): number => {
+      if (!isPhantomAt(visibleRow)) return actualIndex(visibleRow);
+      onAddShot();
+      return shots.length;
+    },
+    [isPhantomAt, actualIndex, onAddShot, shots.length]
   );
 
   const onEdit = useCallback(
-    (rowIndex: number, colKey: string, value: unknown) => applyEdit(rowIndex, colKey, value),
-    [applyEdit]
+    (rowIndex: number, colKey: string, value: unknown) => {
+      if (readOnly) return;
+      const index = resolveRowForEdit(rowIndex);
+      if (index >= 0) applyEditAt(index, colKey, value);
+    },
+    [readOnly, resolveRowForEdit, applyEditAt]
   );
 
   const onBatchEdit = useCallback(
     (edits: CellEdit[]) => {
-      for (const e of edits) applyEdit(e.row, e.colKey, e.value);
+      if (readOnly) return;
+      // Group by row so the trailing blank is materialized ONCE however many of
+      // its cells a paste fills.
+      const byRow = new Map<number, CellEdit[]>();
+      for (const e of edits) {
+        const arr = byRow.get(e.row);
+        if (arr) arr.push(e);
+        else byRow.set(e.row, [e]);
+      }
+      for (const [row, rowEdits] of byRow) {
+        const index = resolveRowForEdit(row);
+        if (index < 0) continue;
+        for (const e of rowEdits) applyEditAt(index, e.colKey, e.value);
+      }
     },
-    [applyEdit]
+    [readOnly, resolveRowForEdit, applyEditAt]
   );
 
   // Insert: the grid reports an insertion BOUNDARY, which is "after the last
@@ -356,13 +424,13 @@ export function ShotTableEditor({
     (fromRow: number, toRow: number) => {
       if (readOnly) return;
       const indices: number[] = [];
-      for (let r = fromRow; r <= toRow; r++) {
+      for (let r = fromRow; r <= Math.min(toRow, visibleShots.length - 1); r++) {
         const i = actualIndex(r);
         if (i >= 0) indices.push(i);
       }
       for (const i of indices.sort((a, b) => b - a)) onDeleteShot(i);
     },
-    [readOnly, actualIndex, onDeleteShot]
+    [readOnly, actualIndex, onDeleteShot, visibleShots.length]
   );
 
   const rowClassName = useCallback(
@@ -371,13 +439,14 @@ export function ShotTableEditor({
       // as in the data table and the new-section dialog. It is deliberately NOT
       // dimmed: the old table faded the whole row, which read as "disabled" on
       // a row that is perfectly editable.
+      if (isPhantomAt(rowIndex)) return 'sg-row-draft';
       if (errorsAt(rowIndex).length > 0) return 'bg-error-5';
       // Not-yet-saved rows borrow the grid's own uncommitted-row tint rather
       // than inventing a second one.
       if (shot.isNew) return 'sg-row-draft';
       return undefined;
     },
-    [errorsAt]
+    [errorsAt, isPhantomAt]
   );
 
   // The host tracks selection in FULL-array indices; the grid works in visible
@@ -418,16 +487,6 @@ export function ShotTableEditor({
   return (
     <div data-testid="shot-table-container" className="flex min-h-0 flex-1 flex-col gap-2">
       <div className="flex shrink-0 items-center justify-end gap-3">
-        {showAddButton && !readOnly && (
-          <button
-            type="button"
-            onClick={onAddShot}
-            className="text-accent text-sm"
-            data-testid="add-shot-button"
-          >
-            {t('shotTable.add')}
-          </button>
-        )}
         <div ref={colMenuWrapRef} className="relative" onMouseDown={(e) => e.stopPropagation()}>
           <button
             ref={colMenuBtnRef}
@@ -479,7 +538,7 @@ export function ShotTableEditor({
       >
         <SpreadsheetGrid<EditableShot>
           columns={columns}
-          rows={visibleShots}
+          rows={readOnly ? visibleShots : gridRows}
           rowKey={(s, i) => s.tempId ?? s.id ?? i}
           rowTestId={(_s, i) => `shot-row-${i}`}
           cellTestId={(_s, i, colKey) => `shot-cell-${i}-${colKey}`}

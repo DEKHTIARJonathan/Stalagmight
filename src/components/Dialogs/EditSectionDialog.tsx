@@ -434,7 +434,9 @@ export default function EditSectionDialog() {
           onQualityChange={setQuality}
           onDirectionChange={setDirection}
           showDirection={true}
-          showQuality={true}
+          // Closure-adjustment weight is not settable here for now. The stored
+          // value is preserved on save; it is just not exposed.
+          showQuality={false}
           disabled={isLoading}
         />
         </div>

@@ -7,6 +7,20 @@ import {
   waitForNoDialogs,
   openSettingsFromMenu,
 } from './helpers/app';
+import type { Locator } from '@playwright/test';
+
+/** Add a shot the way the app does everywhere: type into the trailing blank
+ *  row, which materializes it. There is no Add button. */
+async function addShotByTypingInBlankRow(dialog: Locator): Promise<void> {
+  const lengthCells = dialog.locator(
+    '[data-testid^="shot-editor-cell-"][data-testid$="-length"]'
+  );
+  const blankIndex = (await lengthCells.count()) - 1;
+  await dialog.getByTestId(`shot-editor-cell-${blankIndex}-length`).dblclick();
+  const editor = dialog.getByTestId('shot-editor-cell-editor');
+  await editor.fill('5');
+  await editor.press('Enter');
+}
 
 type StationRef = { section_id: number; station_index: number };
 
@@ -201,25 +215,6 @@ test.describe('Dialog Coverage - Draw Shot', () => {
 });
 
 test.describe('Dialog Coverage - Edit Section', () => {
-  test('shows themed help tooltip for closure adjustment quality', async ({ page }) => {
-    const { sectionId } = await setupProjectWithShots(page, 2);
-
-    await openDialog(page, 'edit-section', { sectionId });
-
-    const dialog = page.getByTestId('edit-section-dialog');
-    await expect(dialog).toBeVisible();
-
-    const helpIcon = dialog.getByTestId('section-quality-help-icon');
-    const tooltip = page.getByTestId('section-quality-help-tooltip');
-
-    await expect(helpIcon).toBeVisible();
-    await expect(tooltip).not.toBeVisible();
-
-    await helpIcon.hover();
-    await expect(tooltip).toBeVisible();
-    await expect(tooltip).toContainText('Higher values apply more closure adjustment');
-  });
-
   test('shows themed tooltip for shot discrepancy warnings', async ({ page }) => {
     const { sectionId } = await setupProjectWithShots(page, 2);
 
@@ -228,16 +223,15 @@ test.describe('Dialog Coverage - Edit Section', () => {
     const dialog = page.getByTestId('edit-section-dialog');
     await expect(dialog).toBeVisible();
 
+    // The data table's indicator: a severity-tinted icon carrying its messages
+    // in the tooltip, rather than the old table's themed "!" badge.
     const warningIcon = dialog.getByTestId('shot-warning-0');
-    const tooltip = page.getByTestId('shot-warning-tooltip-0');
-
     await expect(warningIcon).toBeVisible();
-    expect(await warningIcon.getAttribute('title')).toBeNull();
-    await expect(tooltip).not.toBeVisible();
-
-    await warningIcon.hover();
-    await expect(tooltip).toBeVisible();
-    await expect(tooltip).toContainText('Azimuth in/out differs by more than');
+    await expect(warningIcon).toHaveAttribute(
+      'title',
+      /Azimuth in\/out differs by more than/
+    );
+    await expect(warningIcon.locator('svg')).toBeVisible();
   });
 
   test('updates metadata, edits shots, adds and deletes rows', async ({ page }) => {
@@ -250,13 +244,11 @@ test.describe('Dialog Coverage - Edit Section', () => {
 
     const nameInput = dialog.getByTestId('section-name-input');
     const surveyorInput = dialog.getByTestId('section-surveyor-input');
-    const qualityInput = dialog.getByTestId('section-quality-input');
     const colorHexInput = dialog.getByTestId('section-color-hex-input');
     const dateInput = dialog.getByTestId('section-date-input');
 
     await nameInput.fill('Updated Section');
     await surveyorInput.fill('New Surveyor');
-    await qualityInput.fill('2.5');
     await colorHexInput.fill('#123456');
     await dateInput.fill('2026-02-01');
     await page.keyboard.press('Escape');
@@ -267,7 +259,9 @@ test.describe('Dialog Coverage - Edit Section', () => {
     await lengthEditor.fill('9.5');
     await lengthEditor.press('Enter');
 
-    await dialog.getByTestId('add-shot-button').click();
+    // A shot is added by typing into the trailing blank row - the app-wide
+    // convention; there is no Add button.
+    await addShotByTypingInBlankRow(dialog);
 
     const deleteButton = dialog.getByTestId('shot-delete-1');
     await deleteButton.click();
@@ -282,7 +276,9 @@ test.describe('Dialog Coverage - Edit Section', () => {
 
     expect(updatedSection.name).toBe('Updated Section');
     expect(updatedSection.surveyor).toBe('New Surveyor');
-    expect(updatedSection.quality).toBe(2.5);
+    // Closure-adjustment weight is no longer exposed in this dialog; the stored
+    // value must survive a save untouched.
+    expect(updatedSection.quality).toBe(1);
     expect(updatedSection.color).toBe('#123456');
     expect(updatedSection.date).toBe('2026-02-01');
     expect(updatedSection.shots[0]?.length).toBe(9.5);
