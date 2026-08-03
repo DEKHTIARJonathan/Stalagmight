@@ -3664,12 +3664,11 @@ export default function DmpNewImportDialog({
             }
           >
             {(bandHeight) => (
-            <div className="flex overflow-hidden" style={{ height: bandHeight }}>
+            <div className="flex" style={{ minHeight: bandHeight }}>
             <WizardMapPanel
               width={mapPanelWidth}
               onWidthChange={setMapPanelWidth}
-              bodyRef={suggestionBodyRef}
-              panelRef={suggestionPreviewRef}
+              bodyRef={suggestionBodyRef} panelRef={suggestionPreviewRef} height={bandHeight}
             >
               <SectionPreview
                 section={importPreviewSection}
@@ -3683,7 +3682,7 @@ export default function DmpNewImportDialog({
             </WizardMapPanel>
 
             {/* Right column: connection details */}
-            <div className="flex-1 min-w-0 overflow-y-auto p-5 space-y-4" data-testid="wizard-suggestion">
+            <div className="flex-1 min-w-0 p-5 space-y-4" data-testid="wizard-suggestion">
               {/* Suggested connection - prominent card */}
               <div className="rounded-lg border border-accent/30 bg-accent/5 p-4 space-y-3">
                 <div>
@@ -3904,12 +3903,11 @@ export default function DmpNewImportDialog({
             }
           >
             {(bandHeight) => (
-            <div className="flex overflow-hidden" style={{ height: bandHeight }}>
+            <div className="flex" style={{ minHeight: bandHeight }}>
             <WizardMapPanel
               width={mapPanelWidth}
               onWidthChange={setMapPanelWidth}
-              bodyRef={manualBodyRef}
-              panelRef={manualPreviewRef}
+              bodyRef={manualBodyRef} panelRef={manualPreviewRef} height={bandHeight}
             >
               <SectionPreview
                 segmentSections={segmentPreviewSections}
@@ -3922,7 +3920,7 @@ export default function DmpNewImportDialog({
             </WizardMapPanel>
 
             {/* Right column: Placement configuration */}
-            <div className="flex-1 min-w-0 overflow-y-auto p-5 space-y-4" data-testid="wizard-manual-placing">
+            <div className="flex-1 min-w-0 p-5 space-y-4" data-testid="wizard-manual-placing">
               {/* Segment header */}
               <div>
                 <div className="text-sm font-medium">

@@ -6,10 +6,16 @@
  * way, leaving the table the whole dialog - which it could not get while it was
  * a child of the right-hand column, boxed into that column's width.
  *
- * The band and the table are each sized to the scroller's own height, measured
- * rather than assumed: one scroll of the wheel moves cleanly from one to the
- * other whatever the window size, and the table's grid needs a definite pixel
- * height for virtualization regardless.
+ * There is ONE scrollbar: the band is a MINIMUM of one viewport rather than
+ * exactly one, so tall settings make it grow instead of scrolling inside
+ * themselves. The map is pinned to the top of the band while that happens, so it
+ * stays useful while the settings are read, and scrolls away with the band once
+ * the table arrives.
+ *
+ * The measurement is still needed: the band's minimum and the table's height
+ * both come from the scroller's own height, so one wheel-scroll moves cleanly
+ * from one to the other at any window size, and the table's grid needs a
+ * definite pixel height for virtualization regardless.
  *
  * Its own component (like `WizardMapPanel`) because the wizard renders this
  * shape twice and sits far past the file-size ratchet's hard budget - it may

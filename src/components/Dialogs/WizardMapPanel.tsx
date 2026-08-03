@@ -22,6 +22,9 @@ export const MAP_PANEL_MAX_WIDTH = 900;
 
 export interface WizardMapPanelProps {
   width: number;
+  /** One viewport. The column is pinned at this height so it stays visible
+   *  while long settings scroll past it, then leaves with the band. */
+  height: number;
   onWidthChange: (width: number) => void;
   /** The side-by-side body, which the drag measures against. */
   bodyRef: RefObject<HTMLDivElement | null>;
@@ -32,6 +35,7 @@ export interface WizardMapPanelProps {
 
 export function WizardMapPanel({
   width,
+  height,
   onWidthChange,
   bodyRef,
   panelRef,
@@ -49,8 +53,8 @@ export function WizardMapPanel({
   return (
     <div
       ref={panelRef}
-      className="relative shrink-0 flex flex-col items-center justify-center p-4 border-r border-border"
-      style={{ width }}
+      className="sticky top-0 self-start relative shrink-0 flex flex-col items-center justify-center p-4 border-r border-border"
+      style={{ width, height }}
       data-testid="segment-preview-panel"
     >
       {children}
