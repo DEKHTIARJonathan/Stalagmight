@@ -146,6 +146,7 @@ fn decorate_receipt(
     receipt.sections_found = sections_found;
     receipt.unit_conversion = unit_conversion;
     receipt.warnings.extend(converter_warnings);
+    receipt.cap_warnings();
 }
 
 /// The import receipt's unit-conversion note for a Compass file, derived from

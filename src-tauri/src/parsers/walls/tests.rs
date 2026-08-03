@@ -308,6 +308,24 @@ fn dive_depth_columns_scale_by_s_unit() {
     assert!(v.to_depth.unwrap() < 7.0);
 }
 
+/// `ParsedSurvey.used_feet` (surfaced on the import receipt, #391) must be set
+/// when a shot was actually measured in feet, not merely defaulted. Only the
+/// downstream note formatter (`any_feet_units`) had coverage before; this pins
+/// the producer.
+#[test]
+fn used_feet_is_true_when_a_shot_was_measured_in_feet() {
+    let srv = "#UNITS Feet Order=DA\nA B 10 90\n";
+    let survey = parse_srv(srv);
+    assert!(survey.used_feet);
+}
+
+#[test]
+fn used_feet_is_false_when_every_shot_was_measured_in_meters() {
+    let srv = "#UNITS Meters Order=DA\nA B 10 90\n";
+    let survey = parse_srv(srv);
+    assert!(!survey.used_feet);
+}
+
 // ----- foresight / backsight ------------------------------------------
 
 #[test]

@@ -26,6 +26,51 @@ pub enum VirtualShotMode {
 }
 use std::sync::Mutex;
 
+/// Tally closure-creation results from a `create_loop_closures_batch` call,
+/// counting successes (and failures) directly from `results` rather than
+/// deriving `created` by subtracting `failed` from the requested count.
+///
+/// That distinction matters for one specific case: when the project lock is
+/// unavailable at the point `create_loop_closures_batch` would run, the
+/// caller passes an empty `results` (it never ran the batch), so
+/// `closure_pairs.iter().zip(results)` yields nothing at all - not one
+/// success, not one failure. A subtraction-based count (`requested - skipped
+/// - failed`) would then silently report every one of those pairs as
+/// created, when in fact none were. Counting `Ok` arms directly reports the
+/// correct zero.
+fn tally_closure_results(
+    closure_pairs: &[(StationRef, StationRef)],
+    results: Vec<Result<crate::models::LoopClosure, String>>,
+) -> (u32, u32) {
+    let mut created = 0u32;
+    let mut failed = 0u32;
+    for ((station_a, station_b), result) in closure_pairs.iter().zip(results) {
+        match result {
+            Ok(lc) => {
+                created += 1;
+                tracing::debug!(
+                    closure_id = lc.id,
+                    ?station_a,
+                    ?station_b,
+                    purpose = "import loop closures",
+                    "Created loop closure from TML import"
+                );
+            }
+            Err(e) => {
+                failed += 1;
+                tracing::warn!(
+                    ?station_a,
+                    ?station_b,
+                    error = %e,
+                    purpose = "import loop closures",
+                    "Failed to create loop closure from TML import, skipping"
+                );
+            }
+        }
+    }
+    (created, failed)
+}
+
 /// RAII guard for [`Project::cascade_deferred`].
 ///
 /// `execute_import_sections` flips the flag on so each per-section
@@ -916,6 +961,13 @@ impl AppState {
         let mut closure_pairs: Vec<(StationRef, StationRef)> = Vec::with_capacity(closures.len());
         let mut closures_skipped: u32 = 0;
         let mut closures_failed: u32 = 0;
+        // Counted directly from the batch results (Ok arms), never derived by
+        // subtracting `closures_failed` from the requested count: when the
+        // project lock is unavailable, `create_loop_closures_batch` never runs,
+        // `results` is empty, and `closure_pairs.iter().zip(results)` yields
+        // nothing - so `closures_failed` would silently stay 0 and a
+        // subtraction-based count would over-report every pair as created.
+        let mut closures_created: u32 = 0;
         for closure in &closures {
             let Some(&from_section_id) = created_ids.get(&closure.from_section_index) else {
                 tracing::warn!(
@@ -951,27 +1003,9 @@ impl AppState {
                     None => Vec::new(),
                 }
             };
-            for ((station_a, station_b), result) in closure_pairs.iter().zip(results) {
-                match result {
-                    Ok(lc) => tracing::debug!(
-                        closure_id = lc.id,
-                        ?station_a,
-                        ?station_b,
-                        purpose = "import loop closures",
-                        "Created loop closure from TML import"
-                    ),
-                    Err(e) => {
-                        tracing::warn!(
-                            ?station_a,
-                            ?station_b,
-                            error = %e,
-                            purpose = "import loop closures",
-                            "Failed to create loop closure from TML import, skipping"
-                        );
-                        closures_failed += 1;
-                    }
-                }
-            }
+            let (created, failed) = tally_closure_results(&closure_pairs, results);
+            closures_created += created;
+            closures_failed += failed;
         }
 
         // Track file hash if provided (before after-snapshot so it's part of the undo)
@@ -1079,9 +1113,6 @@ impl AppState {
 
         let shot_count: u32 = sections.iter().map(|s| s.shots.len() as u32).sum();
         let closures_requested = closures.len() as u32;
-        let closures_created = closures_requested
-            .saturating_sub(closures_skipped)
-            .saturating_sub(closures_failed);
         let mut receipt_warnings = Vec::new();
         let closures_dropped = closures_skipped + closures_failed;
         if closures_dropped > 0 {
@@ -1091,7 +1122,7 @@ impl AppState {
                 if closures_dropped == 1 { "was" } else { "were" }
             ));
         }
-        let receipt = crate::core::command::ImportReceipt {
+        let mut receipt = crate::core::command::ImportReceipt {
             source_format: String::new(),
             file_name: String::new(),
             sections_found: 0,
@@ -1102,6 +1133,7 @@ impl AppState {
             unit_conversion: None,
             warnings: receipt_warnings,
         };
+        receipt.cap_warnings();
 
         let result = CommandResult::success()
             .with_section_ids(all_section_ids)
@@ -1111,5 +1143,26 @@ impl AppState {
         } else {
             result.with_warnings(all_warnings)
         }
+    }
+}
+
+#[cfg(test)]
+mod tally_closure_results_tests {
+    use super::tally_closure_results;
+    use crate::models::StationRef;
+
+    /// The empty-`results` branch: `create_loop_closures_batch` never ran (the
+    /// project-lock-unavailable arm returns `Vec::new()`), so `results` is
+    /// empty even though `closure_pairs` is not. Must report zero created and
+    /// zero failed, never derive "all created" from a stale subtraction.
+    #[test]
+    fn empty_results_reports_zero_created_and_zero_failed() {
+        let pairs = vec![
+            (StationRef::new(1, 0), StationRef::new(2, 0)),
+            (StationRef::new(3, 0), StationRef::new(4, 0)),
+        ];
+        let (created, failed) = tally_closure_results(&pairs, Vec::new());
+        assert_eq!(created, 0);
+        assert_eq!(failed, 0);
     }
 }

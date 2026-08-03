@@ -1204,7 +1204,7 @@ pub fn convert_tml_to_import_configs(
         // Skip sections that end up with zero shots after filtering
         if shot_data.is_empty() {
             tracing::warn!(
-                section = %section.name,
+                section = ?section.name,
                 "Section has no shots after filtering, dropping from import"
             );
             zero_shot_sections_dropped += 1;
@@ -1316,7 +1316,7 @@ pub fn convert_tml_to_import_configs(
                 });
             } else {
                 tracing::warn!(
-                    section = %section.name,
+                    section = ?section.name,
                     "Loop closure referenced an excluded station and was skipped"
                 );
                 closures_with_excluded_endpoints += 1;

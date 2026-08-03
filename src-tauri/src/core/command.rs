@@ -261,6 +261,37 @@ pub struct ImportReceipt {
     pub warnings: Vec<String>,
 }
 
+impl ImportReceipt {
+    /// Keep at most this many individual warnings before folding the rest
+    /// into a single summary entry.
+    const MAX_WARNINGS: usize = 50;
+    /// Clamp each warning string to this many characters.
+    const MAX_WARNING_LEN: usize = 300;
+
+    /// Cap and clamp `warnings` so a hostile or malformed import file (this
+    /// app is open-source, so an untrusted file is a real input, not a
+    /// hypothetical) can't inflate the receipt into an unbounded allocation
+    /// shipped back over IPC: at most [`Self::MAX_WARNINGS`] entries (the rest
+    /// folded into one "... and N more warnings" summary), each clamped to
+    /// [`Self::MAX_WARNING_LEN`] chars on a char boundary (never a raw byte
+    /// slice - a warning can embed arbitrary user-controlled text).
+    pub fn cap_warnings(&mut self) {
+        if self.warnings.len() > Self::MAX_WARNINGS {
+            let overflow = self.warnings.len() - Self::MAX_WARNINGS;
+            self.warnings.truncate(Self::MAX_WARNINGS);
+            self.warnings.push(format!(
+                "... and {overflow} more warning{}",
+                if overflow == 1 { "" } else { "s" }
+            ));
+        }
+        for warning in &mut self.warnings {
+            if let Some((cut, _)) = warning.char_indices().nth(Self::MAX_WARNING_LEN) {
+                warning.truncate(cut);
+            }
+        }
+    }
+}
+
 /// Result of command execution
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct CommandResult {
@@ -1419,5 +1450,59 @@ mod tests {
         for (command, expected) in cases {
             assert_eq!(command.description(), expected);
         }
+    }
+
+    fn blank_receipt() -> ImportReceipt {
+        ImportReceipt {
+            source_format: String::new(),
+            file_name: String::new(),
+            sections_found: 0,
+            sections_imported: 0,
+            shot_count: 0,
+            closures_requested: 0,
+            closures_created: 0,
+            unit_conversion: None,
+            warnings: Vec::new(),
+        }
+    }
+
+    /// A hostile/malformed import file can produce an unbounded number of
+    /// warnings; `cap_warnings` must fold anything past the cap into one
+    /// summary entry rather than shipping all of it back over IPC.
+    #[test]
+    fn cap_warnings_caps_a_huge_warning_count() {
+        let mut receipt = blank_receipt();
+        receipt.warnings = (0..10_000).map(|i| format!("warning {i}")).collect();
+        receipt.cap_warnings();
+
+        assert_eq!(receipt.warnings.len(), 51);
+        for warning in &receipt.warnings[..50] {
+            assert!(warning.chars().count() <= 300);
+        }
+        assert_eq!(receipt.warnings[50], "... and 9950 more warnings");
+    }
+
+    /// Each individual warning is clamped to 300 chars, truncating on a char
+    /// boundary (never a raw byte slice) since a warning can embed arbitrary
+    /// user-controlled text, including multi-byte characters.
+    #[test]
+    fn cap_warnings_clamps_an_overlong_warning_on_a_char_boundary() {
+        let mut receipt = blank_receipt();
+        // Multi-byte char (3 bytes each in UTF-8) so a byte-slice truncation
+        // at 300 would panic; a char-boundary truncation must not.
+        receipt.warnings = vec!["\u{2603}".repeat(500)];
+        receipt.cap_warnings();
+
+        assert_eq!(receipt.warnings.len(), 1);
+        assert_eq!(receipt.warnings[0].chars().count(), 300);
+    }
+
+    #[test]
+    fn cap_warnings_is_a_no_op_under_the_cap() {
+        let mut receipt = blank_receipt();
+        receipt.warnings = vec!["short warning".to_string()];
+        receipt.cap_warnings();
+
+        assert_eq!(receipt.warnings, vec!["short warning".to_string()]);
     }
 }
