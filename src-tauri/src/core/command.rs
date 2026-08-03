@@ -238,6 +238,29 @@ pub struct ReversedSection {
     pub shot_count: u32,
 }
 
+/// Backend-authoritative summary of what an import command actually did, so the
+/// frontend can show a receipt without re-deriving counts the backend already
+/// computed (and, for the converter-level warnings below, cannot derive at all).
+///
+/// These warnings are DISTINCT from [`CommandResult::warnings`] and must never be
+/// pushed through [`CommandResult::with_warning`]: that path stamps `code:
+/// "SYSTEM"`, which the frontend's deferred-save-failure handling
+/// (`saveFeedback.ts`) keys on exactly - mixing receipt warnings into it would
+/// make an unrelated import-quality note look like the deferred-save failure the
+/// #92/#104 contract exists to surface.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+pub struct ImportReceipt {
+    pub source_format: String,
+    pub file_name: String,
+    pub sections_found: u32,
+    pub sections_imported: u32,
+    pub shot_count: u32,
+    pub closures_requested: u32,
+    pub closures_created: u32,
+    pub unit_conversion: Option<String>,
+    pub warnings: Vec<String>,
+}
+
 /// Result of command execution
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct CommandResult {
@@ -347,6 +370,13 @@ pub struct CommandResult {
     /// existing `CommandResult` literal on the frontend.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub reversed_sections: Option<Vec<ReversedSection>>,
+    /// Backend-authoritative summary of an import command's outcome (see
+    /// [`ImportReceipt`]'s doc comment for why its warnings must stay separate
+    /// from the field above). Same wire contract as `reversed_sections`:
+    /// `skip_serializing_if` + `default` keeps the key absent for every
+    /// non-import command.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub import_receipt: Option<ImportReceipt>,
 }
 
 /// Result of an explicit "repair project integrity" action. `fixed` and
@@ -412,6 +442,7 @@ impl CommandResult {
             session_closed: None,
             unlinked_copy_path: None,
             reversed_sections: None,
+            import_receipt: None,
         }
     }
 
@@ -427,6 +458,7 @@ impl CommandResult {
             session_closed: None,
             unlinked_copy_path: None,
             reversed_sections: None,
+            import_receipt: None,
         }
     }
 
@@ -485,6 +517,12 @@ impl CommandResult {
     /// Attach the sections whose station numbering this operation reversed.
     pub fn with_reversed_sections(mut self, sections: Vec<ReversedSection>) -> Self {
         self.reversed_sections = Some(sections);
+        self
+    }
+
+    /// Attach an import receipt to this result.
+    pub fn with_import_receipt(mut self, receipt: ImportReceipt) -> Self {
+        self.import_receipt = Some(receipt);
         self
     }
 
