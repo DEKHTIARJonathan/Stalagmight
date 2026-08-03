@@ -179,6 +179,24 @@ pub fn get_tile_providers() -> Vec<crate::tile_providers::TileProviderInfo> {
     crate::tile_providers::get_all_provider_info()
 }
 
+/// Get the attribution a tile provider's imagery must be displayed with.
+///
+/// Reads the provider's live `copyrightText` (cached, see
+/// `crate::tile_attribution`) so the source names stay current, and falls back
+/// to the compiled-in list offline. Returns `Ok` in every reachable case: a
+/// caller that cannot render attribution must not be the reason imagery is drawn
+/// without any, so there is no error path for the UI to fumble.
+#[tauri::command]
+pub async fn get_tile_attribution(
+    provider: String,
+) -> Result<crate::tile_attribution::TileAttribution, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::tile_attribution::get_attribution(&provider)
+    })
+    .await
+    .map_err(|e| format!("Attribution task failed: {e}"))
+}
+
 /// Tile fetch statistics returned by the get_tile_fetch_stats command.
 #[derive(Debug, Clone, Serialize, TS)]
 pub struct TileFetchStatsResponse {

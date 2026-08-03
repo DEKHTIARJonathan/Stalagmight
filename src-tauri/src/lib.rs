@@ -12,6 +12,7 @@ pub mod speleodb;
 pub mod telemetry;
 #[cfg(test)]
 pub mod test_helpers;
+pub mod tile_attribution;
 pub mod tile_providers;
 pub mod tilemap_cache;
 /// Linux-only WebKit memory-pressure wiring (see the module docs and the
@@ -1266,6 +1267,7 @@ pub fn run() {
             commands::cache::get_tile_fetch_stats,
             commands::cache::fetch_tile,
             commands::cache::get_tile_providers,
+            commands::cache::get_tile_attribution,
             // Gas planning (#38)
             commands::gas::compute_gas_reach_field,
             // Dive-plan persistence (#244, .plnx sibling)

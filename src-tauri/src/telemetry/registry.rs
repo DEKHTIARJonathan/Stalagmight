@@ -83,6 +83,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "command.get_section_relationships",
     "command.get_segment_geometry",
     "command.get_survey_geometry_for_file",
+    "command.get_tile_attribution",
     "command.get_tile_fetch_stats",
     "command.get_tile_providers",
     "command.get_undo_stack",

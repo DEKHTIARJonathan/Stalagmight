@@ -73,6 +73,7 @@ use stalagmight_lib::speleodb::{
     SpeleoUserSuggestion, StartEditingResult, TokenStorage, TransportCause, UnpushedLocalEdits,
     UpdateResult, Visibility,
 };
+use stalagmight_lib::tile_attribution::TileAttribution;
 use stalagmight_lib::tile_providers::TileProviderInfo;
 
 fn export<T: TS + 'static>(out_dir: &Path) {
@@ -228,6 +229,7 @@ fn main() {
     export::<CacheStats>(&out_dir);
     export::<TileFetchStatsResponse>(&out_dir);
     export::<TileProviderInfo>(&out_dir);
+    export::<TileAttribution>(&out_dir);
 
     // Segment geometry (for import preview)
     export::<SegmentGeometry>(&out_dir);
@@ -471,6 +473,7 @@ fn main() {
         "CacheStats",
         "TileFetchStatsResponse",
         "TileProviderInfo",
+        "TileAttribution",
         "SegmentGeometry",
         "SegmentSectionGeometry",
         "GeometryShot",
