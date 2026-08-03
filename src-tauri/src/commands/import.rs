@@ -119,6 +119,35 @@ pub fn check_section_hashes(
         .map_err(|e| e.to_string())
 }
 
+/// Fill in the importer-specific fields of the base `ImportReceipt` that
+/// `execute_import_sections` already attached (source/section counts, unit
+/// conversion), and extend its warnings with the converter-phase warnings
+/// collected while turning the parsed file into `ImportSectionConfig`s.
+///
+/// No-op when `result` carries no receipt (e.g. the `sections.is_empty()`
+/// early return in `execute_import_sections`), so a call site never has to
+/// special-case that path.
+fn decorate_receipt(
+    result: &mut CommandResult,
+    source_format: &str,
+    path: &std::path::Path,
+    sections_found: u32,
+    unit_conversion: Option<String>,
+    converter_warnings: Vec<String>,
+) {
+    let Some(receipt) = result.import_receipt.as_mut() else {
+        return;
+    };
+    receipt.source_format = source_format.to_string();
+    receipt.file_name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_default();
+    receipt.sections_found = sections_found;
+    receipt.unit_conversion = unit_conversion;
+    receipt.warnings.extend(converter_warnings);
+}
+
 /// #92: durably persist a newly-imported project. A project whose initial save is
 /// still deferred (created with no save path, never written) has no `.stalx` and no
 /// Recent Projects entry, so importing into it would otherwise be invisible and
@@ -243,22 +272,23 @@ pub fn execute_tml_import(
     emitter.complete_phase(LoadingPhase::ImportParsing);
 
     emitter.start_phase(LoadingPhase::ImportConverting);
-    let (sections, closures) = match crate::parsers::tml::convert_tml_to_import_configs(
-        &tml,
-        include_excluded,
-        comments_on_stations,
-    ) {
-        Ok(result) => result,
-        Err(e) => {
-            tracing::error!(
-                path = ?path,
-                purpose = "import Ariane TML/TMLU",
-                reason = %e,
-                "Failed to convert TML data to import configs"
-            );
-            return CommandResult::failure(format!("Failed to convert TML data: {e}"));
-        }
-    };
+    let (sections, closures, converter_warnings) =
+        match crate::parsers::tml::convert_tml_to_import_configs(
+            &tml,
+            include_excluded,
+            comments_on_stations,
+        ) {
+            Ok(result) => result,
+            Err(e) => {
+                tracing::error!(
+                    path = ?path,
+                    purpose = "import Ariane TML/TMLU",
+                    reason = %e,
+                    "Failed to convert TML data to import configs"
+                );
+                return CommandResult::failure(format!("Failed to convert TML data: {e}"));
+            }
+        };
     emitter.complete_phase(LoadingPhase::ImportConverting);
 
     tracing::info!(
@@ -269,8 +299,16 @@ pub fn execute_tml_import(
         "Converted TML to import configs, executing import"
     );
 
+    let sections_found = tml.sections.len() as u32;
+    let unit_conversion = match tml.unit {
+        crate::parsers::tml::TmlUnit::Imperial => {
+            Some("Lengths converted from feet to meters".to_string())
+        }
+        crate::parsers::tml::TmlUnit::Metric => None,
+    };
+
     emitter.start_phase(LoadingPhase::ImportApplyingChanges);
-    let result = state.execute_import_sections(
+    let mut result = state.execute_import_sections(
         sections,
         closures,
         file_hash,
@@ -279,6 +317,15 @@ pub fn execute_tml_import(
         virtual_shot_mode.unwrap_or_default(),
     );
     emitter.complete_phase(LoadingPhase::ImportApplyingChanges);
+
+    decorate_receipt(
+        &mut result,
+        "Ariane TML",
+        &path,
+        sections_found,
+        unit_conversion,
+        converter_warnings,
+    );
 
     emitter.start_phase(LoadingPhase::ImportFinalizing);
     emitter.complete_phase(LoadingPhase::ImportFinalizing);

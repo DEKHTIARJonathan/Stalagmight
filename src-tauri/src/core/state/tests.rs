@@ -18996,7 +18996,7 @@ fn test_tml_roundtrip_preserves_shot_data() {
 
     crate::export::export_tml(&project, &tml_path).unwrap();
     let parsed = crate::parsers::tml::parse_tml(&tml_path).unwrap();
-    let (configs, _closures) =
+    let (configs, _closures, _warnings) =
         crate::parsers::tml::convert_tml_to_import_configs(&parsed, true, false).unwrap();
 
     assert!(!configs.is_empty(), "should have at least one section");
@@ -19070,7 +19070,7 @@ fn test_tml_roundtrip_preserves_multiple_sections() {
 
     crate::export::export_tml(&project, &tml_path).unwrap();
     let parsed = crate::parsers::tml::parse_tml(&tml_path).unwrap();
-    let (configs, _) =
+    let (configs, _, _) =
         crate::parsers::tml::convert_tml_to_import_configs(&parsed, true, false).unwrap();
 
     assert_eq!(configs.len(), 2, "should have 2 sections");
@@ -20475,7 +20475,7 @@ fn profile_tml_import_full() {
     let t0 = Instant::now();
     let tml = tml_parser::parse_tml(std::path::Path::new(&path)).expect("parse_tml");
     let t1 = Instant::now();
-    let (sections, closures) =
+    let (sections, closures, _warnings) =
         tml_parser::convert_tml_to_import_configs(&tml, false, false).expect("convert");
     let t2 = Instant::now();
 
