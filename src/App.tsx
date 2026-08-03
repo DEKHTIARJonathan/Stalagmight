@@ -1,4 +1,5 @@
 import { useEffect, useCallback, useState, useMemo, useRef } from 'react';
+import { useTranslation } from 'react-i18next';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { getCurrentWebview, type DragDropEvent } from '@tauri-apps/api/webview';
 import { useProjectStore } from './store/projectStore';
@@ -28,6 +29,7 @@ import type { ZeroDatumConfigResult } from './components/Dialogs/ZeroDatumConfig
 import type { OrphanPlacementSuggestion } from './types/commands';
 
 function App() {
+  const { t } = useTranslation();
   const { project, stations, recentProjects, loading, loadConfig, config, isDirty, setConfig } = useProjectStore();
   const integrityIssues = useProjectStore((s) => s.integrityIssues);
   const integrityDismissed = useProjectStore((s) => s.integrityDismissed);
@@ -568,9 +570,9 @@ function App() {
         >
           <div className="bg-panel p-6 rounded-lg shadow-xl text-center">
             <div className="text-4xl mb-2">📥</div>
-            <div className="text-lg font-semibold">Drop file to import</div>
+            <div className="text-lg font-semibold">{t('app.dropOverlay.title')}</div>
             <div className="text-sm text-text-secondary mt-1">
-              {project ? 'Add sections to current project' : 'Create new project'}
+              {project ? t('app.dropOverlay.existingProject') : t('app.dropOverlay.newProject')}
             </div>
           </div>
         </div>

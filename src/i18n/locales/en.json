@@ -58,6 +58,13 @@
     },
     "offline": "Offline"
   },
+  "app": {
+    "dropOverlay": {
+      "title": "Drop to open or import",
+      "existingProject": "Add sections to current project",
+      "newProject": "Create new project"
+    }
+  },
   "settings": {
     "loading": "Loading configuration...",
     "categoryHeader": "{{category}} Settings",
@@ -1215,6 +1222,40 @@
       "body": "{{fileName}} will be converted into a new Stalagmight project. Your original file is never modified.",
       "closeNotice": "{{projectName}} will be closed.",
       "confirm": "Close and import"
+    },
+    "newProjectForImport": {
+      "title": "Create Project for Import",
+      "importingFrom": {
+        "dmp": "Importing from DMP file:",
+        "tml": "Importing from Ariane survey:",
+        "gpx": "Importing from GPX file:",
+        "compass": "Importing from Compass survey:",
+        "walls": "Importing from Walls survey:"
+      },
+      "summary": {
+        "dmp": "{{sections}} sections - {{shots}} shots",
+        "tml": "{{sections}} sections - {{shots}} shots{{caveName}}",
+        "gpx": "{{waypoints}} waypoints - {{tracks}} tracks - {{routes}} routes{{name}}",
+        "compass": "{{surveys}} surveys - {{shots}} shots{{caveName}}",
+        "walls": "{{surveys}} surveys - {{shots}} shots{{projectName}}"
+      },
+      "oneWayPromise": "This converts {{fileName}} into a new Stalagmight project - your original file is never modified.",
+      "nameLabel": "Project Name *",
+      "namePlaceholder": "e.g., Lechuguilla Cave",
+      "savePathLabel": "Project File Path (optional)",
+      "browse": "Browse...",
+      "locationLabel": "Cave Location (optional)",
+      "locationPlaceholder": "e.g., Carlsbad Caverns National Park, NM",
+      "errors": {
+        "nameRequired": "Project name is required",
+        "missingImportData": "Import file data is missing",
+        "createFailed": "Failed to create project",
+        "saveDialogFailed": "Failed to open save dialog",
+        "unknown": "An error occurred"
+      },
+      "cancel": "Cancel",
+      "create": "Create & Continue",
+      "creating": "Creating..."
     },
     "dmpNewImport": {
       "title": "Connection Wizard",
