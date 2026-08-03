@@ -79,7 +79,10 @@ export function makeColorResolvers(
   const colorForShot = (shotGlobalIdx: number, sectionId: number): Rgba8 => {
     if (overlay && overlayColor) {
       const fid = encodeFeatureId(sectionId, surveyData.shotIds[shotGlobalIdx]!);
-      return overlayColor(overlay.shots.get(fid) ?? -1);
+      // null = beyond gas range: fall through to the shot's own base color
+      // instead of grey/ramp (#395).
+      const c = overlayColor(overlay.shots.get(fid) ?? -1);
+      if (c) return c;
     }
     if (commentTint && surveyData.shotComments.get(shotGlobalIdx)) {
       return pack(commentColorForKey(`${sectionId}:s${surveyData.shotIds[shotGlobalIdx]!}`));
@@ -105,7 +108,10 @@ export function makeColorResolvers(
     const sectionId = surveyData.stationSectionIds[g]!;
     if (overlay && overlayColor) {
       const fid = encodeFeatureId(sectionId, surveyData.stationIndices[g]!);
-      return overlayColor(overlay.stations.get(fid) ?? -1);
+      // null = beyond gas range: fall through to the station's own base color
+      // instead of grey/ramp (#395).
+      const c = overlayColor(overlay.stations.get(fid) ?? -1);
+      if (c) return c;
     }
     if (commentTint && surveyData.stationComments.get(g)) {
       return pack(commentColorForKey(`${sectionId}:st${surveyData.stationIndices[g]!}`));

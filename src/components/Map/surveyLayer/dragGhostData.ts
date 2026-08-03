@@ -49,7 +49,12 @@ export function buildGhostRenderData(set: DragPreviewSet, ctx: GhostRenderContex
   const colorFromProps = (props: Record<string, unknown>): Rgba8 => {
     if (ramp && overlay) {
       const v = props[overlay.mode === 'distance' ? 'dist' : 'gasReach'];
-      if (typeof v === 'number') return ramp(v);
+      if (typeof v === 'number') {
+        // null = beyond gas range: fall through to the feature's own base
+        // color (below) instead of grey/ramp (#395).
+        const c = ramp(v);
+        if (c) return c;
+      }
     }
     return packCssColor(String(props.color ?? '#ffffff'));
   };

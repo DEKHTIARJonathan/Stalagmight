@@ -2,8 +2,10 @@ import { describe, it, expect } from 'vitest';
 import {
   buildGasReachFeatureState,
   gasReachColorExpression,
+  gasBeyondReachFeatureIds,
   reachableStationKeySet,
   UNREACHABLE_GAS,
+  BEYOND_GAS_RANGE,
 } from '../gasReach';
 import { encodeFeatureId } from '../ids';
 import type { SurveyData } from '../../types/survey-data';
@@ -66,10 +68,11 @@ describe('buildGasReachFeatureState', () => {
     expect(stations.get(encodeFeatureId(2, 0))).toBe(200);
   });
 
-  it('greys a finite-but-OVER-budget station (the conservative direction - never paint it reachable)', () => {
-    // gas_to_reach is Some(1500) but reachable=false; it must NOT leak the 1500 value.
+  it('marks a finite-but-OVER-budget station BEYOND_GAS_RANGE (connected but past budget, not grey)', () => {
+    // gas_to_reach is Some(1500) but reachable=false; it must NOT leak the 1500
+    // value, AND must be distinguishable from a topologically unconnected station.
     const { stations } = buildGasReachFeatureState(data, field);
-    expect(stations.get(encodeFeatureId(1, 2))).toBe(UNREACHABLE_GAS);
+    expect(stations.get(encodeFeatureId(1, 2))).toBe(BEYOND_GAS_RANGE);
   });
 
   it('greys a disconnected station (null gas_to_reach)', () => {
@@ -83,12 +86,19 @@ describe('buildGasReachFeatureState', () => {
     expect(shots.get(encodeFeatureId(1, 10))).toBe(150);
   });
 
-  it('greys a shot when either endpoint is unreachable (over-budget OR disconnected)', () => {
+  it('takes the WORSE class when a shot spans a beyond-range and an unconnected endpoint', () => {
     const { shots } = buildGasReachFeatureState(data, field);
-    // id11: st1=300 reachable, st2 over-budget → grey
-    expect(shots.get(encodeFeatureId(1, 11))).toBe(UNREACHABLE_GAS);
-    // id20: st0=200 reachable, st1 disconnected → grey
+    // id11: st1=300 reachable, st2 beyond-range → beyond-range (not grey)
+    expect(shots.get(encodeFeatureId(1, 11))).toBe(BEYOND_GAS_RANGE);
+    // id20: st0=200 reachable, st1 disconnected → unconnected dominates
     expect(shots.get(encodeFeatureId(2, 20))).toBe(UNREACHABLE_GAS);
+  });
+
+  it('gasBeyondReachFeatureIds picks out only the beyond-range features', () => {
+    const { stations, shots } = buildGasReachFeatureState(data, field);
+    expect(gasBeyondReachFeatureIds(stations)).toEqual(new Set([encodeFeatureId(1, 2)]));
+    expect(gasBeyondReachFeatureIds(shots)).toEqual(new Set([encodeFeatureId(1, 11)]));
+    expect(gasBeyondReachFeatureIds(undefined).size).toBe(0);
   });
 
   it('uses the turn budget (not max_reachable_gas) as the interpolate scale max', () => {
@@ -99,12 +109,19 @@ describe('buildGasReachFeatureState', () => {
 });
 
 describe('gasReachColorExpression', () => {
-  it('greys negative (unreachable) gasReach and interpolates near→far over 0→budget', () => {
+  it('greys unconnected gasReach and interpolates near→far over 0→budget', () => {
     const s = JSON.stringify(gasReachColorExpression('#aaaaaa', '#bbbbbb', 1000, '#888888'));
     expect(s).toContain('interpolate');
     expect(s).toContain('coalesce');
     expect(s).toContain('gasReach'); // reads the dedicated feature-state key
-    expect(s).toContain('#888888'); // grey branch for the unreachable sentinel
+    expect(s).toContain('#888888'); // grey branch for the unconnected sentinel
+  });
+
+  it('falls through to the base color expression for the beyond-range sentinel', () => {
+    const expr = gasReachColorExpression('#aaaaaa', '#bbbbbb', 1000, '#888888');
+    const s = JSON.stringify(expr);
+    expect(s).toContain(String(BEYOND_GAS_RANGE));
+    expect(s).toContain('color'); // default baseColorInput is ['get', 'color']
   });
 
   it('guards a non-positive budget so the interpolate stops never collide', () => {
