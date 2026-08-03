@@ -36,6 +36,10 @@ import type { RecentListItem } from '../recentListItems';
 import type { ProjectMetadata } from '../../../types/project';
 import { UNPUSHED_ACCENT, type SpeleoLocalStateMap } from '../../../utils/speleoLocalState';
 import { themeTokens } from '../../../theme/tokens';
+// Test IDs are built by these helpers, which URL-encode the path - do not hand-
+// assemble `system-card-${path}`, it silently stops matching for any path with a
+// character encodeURIComponent touches.
+import { systemCardTestId, systemRowTestId } from '../../../utils/testId';
 
 const MINE = 'aaaaaaaa-1111-1111-1111-111111111111';
 const THEIRS = 'bbbbbbbb-2222-2222-2222-222222222222';
@@ -138,7 +142,7 @@ describe('recents write-lock accent', () => {
 
   it('accents table rows by lock holder', () => {
     renderTable();
-    const row = (p: ProjectMetadata) => screen.getByTestId(`system-row-${p.file_path}`);
+    const row = (p: ProjectMetadata) => screen.getByTestId(systemRowTestId(p.file_path));
 
     expect(row(MINE_PROJECT)).toHaveAttribute('data-recent-accent', 'lock-mine');
     expect(accentOf(row(MINE_PROJECT))).toContain(LOCK_MINE_ACCENT);
@@ -163,11 +167,53 @@ describe('recents write-lock accent', () => {
         state_unknown: false,
       },
     });
-    const row = screen.getByTestId(`system-row-${MINE_PROJECT.file_path}`);
+    const row = screen.getByTestId(systemRowTestId(MINE_PROJECT.file_path));
     expect(row).toHaveAttribute('data-recent-accent', 'unpushed');
     expect(row).toHaveAttribute('data-local-edits', 'true');
     expect(accentOf(row)).toContain(UNPUSHED_ACCENT);
     expect(accentOf(row)).not.toContain(LOCK_MINE_ACCENT);
+  });
+
+  it('keeps the selection ring on a card that is both selected and accented', () => {
+    // Tailwind compiles `ring-1` to a box-shadow, so the inline accent shadow used to
+    // replace it and a selected accented card lost its ring, leaving only the border
+    // colour. Rare while only un-pushed rows had a bar; common once lock state does.
+    render(
+      <SystemCard
+        name={MINE_PROJECT.name}
+        location={null}
+        filePath={MINE_PROJECT.file_path}
+        modifiedAt={MINE_PROJECT.modified_at}
+        sectionCount={1}
+        totalLength={10}
+        isSelected
+        speleoLock={resolveSpeleoLock(MINE_PROJECT, REMOTE_LOCKS, ME)}
+      />,
+    );
+    const style = screen.getByTestId(systemCardTestId(MINE_PROJECT.file_path)).getAttribute('style');
+    expect(style).toContain(LOCK_MINE_ACCENT);
+    // The ring is the non-inset half; without composition only the inset bar survives.
+    expect(style).toContain('0 0 0 1px var(--cc-accent)');
+  });
+
+  it('leaves the ring class alone on a selected card with no accent', () => {
+    // The untouched case must stay untouched: no inline box-shadow at all, so the
+    // `ring-1` class paints exactly as it did before this composition existed.
+    render(
+      <SystemCard
+        name={FREE_PROJECT.name}
+        location={null}
+        filePath={FREE_PROJECT.file_path}
+        modifiedAt={FREE_PROJECT.modified_at}
+        sectionCount={1}
+        totalLength={10}
+        isSelected
+        speleoLock={resolveSpeleoLock(FREE_PROJECT, REMOTE_LOCKS, ME)}
+      />,
+    );
+    const card = screen.getByTestId(systemCardTestId(FREE_PROJECT.file_path));
+    expect(card).toHaveAttribute('data-recent-accent', 'none');
+    expect(card.getAttribute('style') ?? '').not.toContain('box-shadow');
   });
 
   it('accents the card grid on the same signal', () => {
@@ -182,7 +228,7 @@ describe('recents write-lock accent', () => {
         speleoLock={resolveSpeleoLock(THEIRS_PROJECT, REMOTE_LOCKS, ME)}
       />,
     );
-    const card = screen.getByTestId(`system-card-${THEIRS_PROJECT.file_path}`);
+    const card = screen.getByTestId(systemCardTestId(THEIRS_PROJECT.file_path));
     expect(card).toHaveAttribute('data-recent-accent', 'lock-other');
     expect(card.getAttribute('style')).toContain(LOCK_OTHER_ACCENT);
   });
@@ -199,8 +245,9 @@ describe('recents write-lock accent', () => {
     expect(mine).toBeDefined();
     expect(other).toBeDefined();
 
+    // Exact, not a floor: a floor would let a whole theme be dropped and still pass.
     const themes = Object.entries(themeTokens);
-    expect(themes.length).toBeGreaterThanOrEqual(9);
+    expect(themes.length).toBe(10);
     for (const [theme, tokens] of themes) {
       const defined = tokens as Record<string, string | undefined>;
       expect(defined[mine!], `${mine} missing on ${theme}`).toBeTruthy();
