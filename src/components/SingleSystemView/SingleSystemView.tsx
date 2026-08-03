@@ -9,6 +9,7 @@ import type { SectionId } from '../../types/project';
 import { useShallow } from 'zustand/react/shallow';
 import { ErrorBoundary } from '../common/ErrorBoundary';
 import { OfflineIndicator } from '../common/OfflineIndicator';
+import { MapAttribution } from '../Map/MapAttribution';
 import Toolbar from './Toolbar';
 import { SpeleoBanner } from './SpeleoBanner';
 import SectionsPanel from './SectionsPanel';
@@ -90,6 +91,9 @@ export default function SingleSystemView() {
   // stub and hides the bottom table. The carousel owns enter/exit; setView()/setColorMode
   // reset it. The left Sections Dock is survey-only (Plan/Export are read-only).
   const appMode = useUIStore((s) => s.appMode);
+  // Drives the imagery attribution overlay below; MapCanvas adds and removes the
+  // satellite source off this same flag.
+  const showSatellite = useUIStore((s) => s.showSatellite);
 
   // Export mode shows a large WYSIWYG export preview over the map area; it
   // mirrors the inline ExportControls options via the shared export store.
@@ -728,6 +732,17 @@ export default function SingleSystemView() {
             </ErrorBoundary>
             {/* Offline indicator - positioned in top-right of map area */}
             <OfflineIndicator className="absolute top-2 right-14 z-10" />
+            {/* Esri requires the imagery's source names to stay visible for as
+                long as the imagery is drawn, so this tracks the satellite layer
+                rather than the map. Bottom-right per Esri's recommendation, and
+                the only free corner: NavigationControl holds top-right and the
+                ScaleControl bottom-left (MapCanvas). Mounted here rather than
+                inside MapCanvas, which is map chrome's usual home in this view -
+                see the OfflineIndicator above. */}
+            <MapAttribution
+              visible={showSatellite}
+              className="absolute bottom-2 right-2 z-10"
+            />
             {/* Export mode: large WYSIWYG preview of the image export, overlaid
                 on the (still-mounted) map. Only for the image export type -
                 data exports keep the map visible. */}

@@ -1,3 +1,3 @@
 // Tile provider IPC types generated from Rust.
 
-export type { TileProviderInfo } from './ipc.generated';
+export type { TileProviderInfo, TileAttribution } from './ipc.generated';
