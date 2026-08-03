@@ -1,5 +1,5 @@
 import { test, expect, Page } from './fixtures/coverage';
-import { setupMockedPage, createProject, waitForMapReady, openAppMenu, CUSTOM_TILE_URL_RE } from './helpers/app';
+import { setupMockedPage, createProject, waitForMapReady, openAppMenu, openSettingsFromMenu, CUSTOM_TILE_URL_RE } from './helpers/app';
 
 /**
  * Helper to open the Display menu
@@ -229,6 +229,63 @@ test.describe('Satellite Display', () => {
       });
 
       expect(attributionText).toContain('Esri');
+    });
+
+    /**
+     * The requirement these cover is display, not data. Every map in the app was
+     * built with `attributionControl: false`, so the source string above was
+     * present on the raster source and rendered nowhere - imagery drawn with no
+     * attribution at all. Esri requires the source names to be visible for as
+     * long as the imagery is, and permits "Powered by Esri" to live behind a
+     * button instead: https://developers.arcgis.com/documentation/esri-and-data-attribution/interactive-maps/
+     */
+    test('shows the imagery source names on the map while satellite is on', async ({ page }) => {
+      await openDisplayMenu(page);
+      const { button } = getSatelliteToggle(page);
+      await button.click();
+      await waitForMapLayer(page, 'satellite-tiles');
+
+      await expect(page.getByTestId('map-attribution-text')).toBeVisible({ timeout: 5000 });
+      // The mocked backend answers as an offline one would, so this is the
+      // compiled-in fallback - which is exactly the string that has to hold up
+      // in the field.
+      await expect(page.getByTestId('map-attribution-text')).toContainText('Esri');
+      await expect(page.getByTestId('map-attribution-text')).toContainText(
+        'and the GIS User Community',
+      );
+    });
+
+    test('removes the attribution when the imagery is switched off', async ({ page }) => {
+      await openDisplayMenu(page);
+      const { button } = getSatelliteToggle(page);
+
+      await button.click();
+      await expect(page.getByTestId('map-attribution')).toBeVisible({ timeout: 5000 });
+
+      // The display menu stays open across toggles (see the rapid-toggle test),
+      // so re-opening it here would close it instead.
+      await button.click();
+      await waitForNoMapLayer(page, 'satellite-tiles');
+      // Nothing to attribute once nothing is drawn.
+      await expect(page.getByTestId('map-attribution')).toBeHidden();
+    });
+
+    test('keeps the "Powered by Esri" notice off the map and in About', async ({ page }) => {
+      await openDisplayMenu(page);
+      const { button } = getSatelliteToggle(page);
+      await button.click();
+      await expect(page.getByTestId('map-attribution')).toBeVisible({ timeout: 5000 });
+      await expect(page.getByTestId('map-attribution')).not.toContainText('Powered by');
+
+      await openSettingsFromMenu(page);
+      await page.getByTestId('settings-about-button').click();
+      await expect(page.getByTestId('about-dialog')).toBeVisible({ timeout: 5000 });
+
+      const notice = page.getByTestId('about-imagery-notice-link');
+      await expect(notice).toBeVisible();
+      await expect(notice).toHaveText('Powered by Esri');
+      await expect(notice).toHaveAttribute('href', 'https://www.esri.com');
+      await expect(page.getByTestId('about-imagery-sources')).toContainText('Esri');
     });
 
     test('should render satellite layer below survey data (z-order)', async ({ page }) => {

@@ -4672,7 +4672,11 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 name: 'esri',
                 display_label: 'ESRI World Imagery',
                 url_template: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
-                attribution: '© Esri, Maxar, Earthstar Geographics',
+                attribution: 'Source: Esri, Vantor, Earthstar Geographics, and the GIS User Community',
+                attribution_notice: 'Powered by Esri',
+                attribution_url: 'https://www.esri.com',
+                service_info_url:
+                  'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer?f=json',
                 tile_size: 256,
                 min_zoom: 1,
                 max_zoom: 22,
@@ -4682,6 +4686,20 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 available: true,
               },
             ];
+
+          case 'get_tile_attribution':
+            // Mirrors the offline path of the real command: specs run with no
+            // network, so the backend would answer with its compiled-in source
+            // names and live: false. Asserting on THAT is the point - the map
+            // must still be attributed when the fetch cannot happen.
+            console.log('[Mock IPC] get_tile_attribution called');
+            return {
+              provider: (args?.provider as string) ?? 'esri',
+              text: 'Source: Esri, Vantor, Earthstar Geographics, and the GIS User Community',
+              notice: 'Powered by Esri',
+              notice_url: 'https://www.esri.com',
+              live: false,
+            };
 
           // Plugin: event system handlers for @tauri-apps/api/event
           case 'plugin:event|listen': {
