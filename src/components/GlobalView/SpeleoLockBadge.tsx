@@ -61,23 +61,33 @@ export function resolveSpeleoLock(
  * white on every dark theme and near-black on the four light ones (`light` and
  * `kaleido_eink` are `--cc-panel: #ffffff`, where a literal white bar would not
  * exist). Reusing `--cc-text-primary` rather than a hex keeps the bar visible on all
- * nine themes without adding nine colour values for a human to sign off on.
+ * ten themes without adding ten colour values for a human to sign off on.
  */
 export const LOCK_MINE_ACCENT = 'var(--cc-text-primary)';
 
 /**
- * "Someone else holds the write lock": the same neutral one step dimmer. The pair is
- * a pure LIGHTNESS axis - bright = yours to edit, dim = not yours - which survives
- * at 3px and does not depend on hue, so it reads for colour-blind users and stays
- * clear of the yellow below. Deliberately not red: another surveyor holding the lock
- * is the normal state of a shared project, not an error.
+ * "Someone else holds the write lock": blue, the informational register - this is
+ * someone else working, not a fault. Deliberately not red (another surveyor holding
+ * the lock is the normal state of a shared project, not an error) and not the amber
+ * that the hourglass badge uses, which would put two near-identical yellows on this
+ * one edge next to `UNPUSHED_ACCENT`.
  *
- * Note `--cc-text-secondary`, not the `text-text-tertiary` class used elsewhere in
- * this list: no `--cc-text-tertiary` token or Tailwind entry exists, so that class
- * emits nothing - as a colour here it would yield an invalid `box-shadow` and the
- * browser would drop the whole declaration.
+ * Its own token rather than `--cc-accent`, because the accent is only blue on six of
+ * the ten themes - it is teal on `dark` (the default) and `light`, gold on `cave`,
+ * violet on `dracula`. Each value is picked against that theme's own panel, border
+ * and accent; `dark` needs a bright azure because its panel is navy `#16213e` over a
+ * blue `#0f3460` border.
+ *
+ * On the six themes whose accent IS blue this bar sits near the selection colour.
+ * That is inherent - blue is those themes' primary - and is carried by SHAPE: a 3px
+ * leading stripe, where selection is a row-wide wash (`bg-accent-10`) or a full card
+ * outline (`border-accent ring-accent`).
+ *
+ * Not the `text-text-tertiary` class used elsewhere in this list: no
+ * `--cc-text-tertiary` token or Tailwind entry exists, so that class emits nothing -
+ * as a colour it would yield an invalid `box-shadow` the browser drops whole.
  */
-export const LOCK_OTHER_ACCENT = 'var(--cc-text-secondary)';
+export const LOCK_OTHER_ACCENT = 'var(--cc-lock-other)';
 
 /** Which leading-edge accent an entry earns, highest precedence first. */
 export type RecentAccent = 'unpushed' | 'lock-mine' | 'lock-other' | 'none';

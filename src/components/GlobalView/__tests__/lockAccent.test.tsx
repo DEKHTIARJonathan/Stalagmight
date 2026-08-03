@@ -126,7 +126,7 @@ describe('recents write-lock accent', () => {
     expect(recentAccent(resolveSpeleoLock(LOCAL_PROJECT, REMOTE_LOCKS, ME))).toBe('none');
   });
 
-  it('paints the bright neutral for your lock and the dim one for another holder', () => {
+  it('paints the bright neutral for your lock and blue for another holder', () => {
     expect(recentAccentStyle(lock({ lockedByMe: true }))?.boxShadow).toBe(
       `inset 3px 0 0 0 ${LOCK_MINE_ACCENT}`,
     );
@@ -205,7 +205,7 @@ describe('recents write-lock accent', () => {
       const defined = tokens as Record<string, string | undefined>;
       expect(defined[mine!], `${mine} missing on ${theme}`).toBeTruthy();
       expect(defined[other!], `${other} missing on ${theme}`).toBeTruthy();
-      // The pair is a lightness axis, so the two must not be the same value.
+      // Bright neutral vs blue: on no theme may the two collapse to one bar.
       expect(defined[mine!], `${theme} accents are identical`).not.toBe(defined[other!]);
     }
   });
