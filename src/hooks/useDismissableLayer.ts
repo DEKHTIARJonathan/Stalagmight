@@ -9,14 +9,15 @@ interface UseDismissableLayerOptions {
    *  outside click. Typically the trigger plus the portaled surface(s). */
   contains: Array<RefObject<HTMLElement | null>>;
   /** Subset whose own scrolling must NOT dismiss (the portaled, scrollable surface).
-   *  Scrolling anything else - the page behind a `position:fixed` portal - dismisses
-   *  so the portal's captured position can't go stale. Defaults to `contains`. */
+   *  Beyond those, only the page and the layer's own ancestors dismiss, so the
+   *  portal's captured position can't go stale; an unrelated scroller elsewhere in
+   *  the app is ignored. Defaults to `contains`. */
   scrollSafe?: Array<RefObject<HTMLElement | null>>;
 }
 
 /**
  * Shared "dismiss a portaled popover/menu on outside interaction" behavior:
- * close on a mousedown outside the layer, on external scroll (the portal uses a
+ * close on a mousedown outside the layer, on a scroll that could move it (the portal uses a
  * captured `position:fixed` rect that scrolling would invalidate), and on resize.
  *
  * Extracted from Select and AppMenu, which each had their own near-identical copy
@@ -49,7 +50,31 @@ export function useDismissableLayer({
       if (!isInside(containsRef.current, e.target as Node)) onDismissRef.current();
     };
     const onScroll = (e: Event) => {
-      if (e.target instanceof Node && isInside(scrollSafeRef.current, e.target)) return;
+      const target = e.target;
+      if (target instanceof Node && isInside(scrollSafeRef.current, target)) return;
+      // Only a scroll that can MOVE this layer should close it. These layers are
+      // fixed-position portals pinned to coordinates captured when they opened,
+      // so the scrolls that invalidate that position are the page itself and any
+      // ANCESTOR of the layer (or of its trigger, which is what callers put in
+      // `contains`). A scroll in a sibling subtree cannot shift it by a pixel.
+      //
+      // It used to dismiss on ANY scroll in the document, which made a map
+      // right-click close its own menu: selecting the station scrolls the data
+      // table's row and the sections panel's section into view, and that scroll
+      // arrived while the menu was opening. The menu flashed and vanished, and
+      // only a second right-click - by which point the row was already in view,
+      // so nothing scrolled - would stay open.
+      // Only an Element can be the "unrelated scroller" this guard is about; a
+      // non-Element target is the page itself (window or document), which moves
+      // everything. Tested by shape rather than `target === window` because
+      // jsdom hands the listener a different Window object than the global.
+      const movesLayer =
+        !(target instanceof Element) ||
+        containsRef.current.some((r) => {
+          const el = r.current;
+          return el !== null && el !== target && target.contains(el);
+        });
+      if (!movesLayer) return;
       onDismissRef.current();
     };
     const onResize = () => onDismissRef.current();
