@@ -8,6 +8,8 @@ import { DialogWrapper } from './DialogWrapper';
 import { getThemeColor } from '../../utils/themeColors';
 import { ShotTableEditor, type EditableShot } from '../common/ShotTableEditor';
 import { validateEditableShot } from '../../utils/validation';
+import { isBlankNewShot, isShotComplete } from '../common/editableShotStatus';
+import { EDITABLE_AZIMUTH_AVG_KEY } from '../common/editableShotColumns';
 import { SectionMetadataForm } from '../common/SectionMetadataForm';
 import type { Shot, ShotData } from '../../types/project';
 import type { DeleteShotImpact } from '../../types/commands';
@@ -126,6 +128,10 @@ export default function EditSectionDialog() {
     for (const shot of shots) {
       if (shot.isDeleted) continue;
       visible += 1;
+      // A row added and then left empty is nothing at all: it blocks nothing and
+      // is dropped from the save below. Only a row holding SOMETHING can be
+      // incomplete.
+      if (isBlankNewShot(shot)) continue;
       const errors = validateEditableShot(
         {
           length: shot.length,
@@ -138,15 +144,10 @@ export default function EditSectionDialog() {
       );
       // `validateEditableShot` checks RANGES, and every comparison against NaN
       // is false - so a blank row sails through it. Completeness is the separate
-      // question, and it is the same rule the new-section dialog gates Create
-      // on: a positive length, both depths, and at least one azimuth.
-      const fin = (v: number) => Number.isFinite(v);
-      const incomplete =
-        !(fin(shot.length) && shot.length > 0) ||
-        !fin(shot.depth_in) ||
-        !fin(shot.depth_out) ||
-        !(fin(shot.azimuth_in) || fin(shot.azimuth_out));
-      if (errors.length > 0 || incomplete) rows.push(visible);
+      // question, and the same rule the grid tints its cells by.
+      if (errors.length > 0 || !isShotComplete(shot, EDITABLE_AZIMUTH_AVG_KEY)) {
+        rows.push(visible);
+      }
     }
     return rows;
   }, [shots]);
@@ -381,7 +382,8 @@ export default function EditSectionDialog() {
       }
 
       // Create new shots
-      const newShots = shots.filter(s => s.isNew && !s.isDeleted);
+      // Rows added and left empty are not shots; they never reach the backend.
+      const newShots = shots.filter(s => s.isNew && !s.isDeleted && !isBlankNewShot(s));
       for (const shot of newShots) {
         const shotData: ShotData = {
           azimuth_in: shot.azimuth_in,

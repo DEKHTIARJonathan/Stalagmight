@@ -24,6 +24,7 @@ import {
   EDITABLE_AZIMUTH_AVG_KEY,
 } from './editableShotColumns';
 import type { EditableShot } from './editableShot';
+import { missingRequiredCells } from './editableShotStatus';
 
 export type { EditableShot };
 
@@ -383,6 +384,27 @@ export function ShotTableEditor({
     [readOnly, resolveRowForEdit, applyEditAt]
   );
 
+  /**
+   * A required cell cleared back to empty. The grid marks it missing and writes
+   * NOTHING (it will never put a 0 in a survey), so without this the host's shot
+   * keeps its old value and a row emptied by the user still looks filled - and
+   * still blocks Save. Writing NaN is how "no measurement" is spelled here.
+   */
+  const onClearMissing = useCallback(
+    (rowIndex: number, colKey: string) => {
+      if (readOnly || isPhantomAt(rowIndex)) return;
+      const index = actualIndex(rowIndex);
+      if (index < 0) return;
+      if (colKey === EDITABLE_AZIMUTH_AVG_KEY) {
+        onShotChange(index, 'azimuth_in', NaN);
+        onShotChange(index, 'azimuth_out', NaN);
+        return;
+      }
+      onShotChange(index, colKey as keyof EditableShot, NaN);
+    },
+    [readOnly, isPhantomAt, actualIndex, onShotChange]
+  );
+
   const onBatchEdit = useCallback(
     (edits: CellEdit[]) => {
       if (readOnly) return;
@@ -431,6 +453,18 @@ export function ShotTableEditor({
       for (const i of indices.sort((a, b) => b - a)) onDeleteShot(i);
     },
     [readOnly, actualIndex, onDeleteShot, visibleShots.length]
+  );
+
+  // Required-but-empty cells get the grid's red missing tint, so an incomplete
+  // row points at the cells to fill rather than only naming the row.
+  const cellClassName = useCallback(
+    (shot: EditableShot, rowIndex: number, colKey: string): string | undefined => {
+      if (isPhantomAt(rowIndex)) return undefined;
+      return missingRequiredCells(shot, EDITABLE_AZIMUTH_AVG_KEY).has(colKey)
+        ? 'sg-cell-missing'
+        : undefined;
+    },
+    [isPhantomAt]
   );
 
   const rowClassName = useCallback(
@@ -550,7 +584,9 @@ export function ShotTableEditor({
           height={maxHeight === undefined ? measuredHeight : cssHeightToPx(maxHeight)}
           onEdit={onEdit}
           onBatchEdit={onBatchEdit}
+          onClearMissing={onClearMissing}
           rowClassName={rowClassName}
+          cellClassName={cellClassName}
           labels={gridLabels}
           showToolbar={false}
           selectedRow={selectedVisibleRow}
