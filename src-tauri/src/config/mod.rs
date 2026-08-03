@@ -3,6 +3,7 @@ mod column_widths;
 pub mod defaults;
 mod gas;
 mod general;
+mod panels;
 mod speleodb;
 mod types;
 mod webkit;
@@ -13,6 +14,7 @@ mod tests;
 
 pub(crate) use column_widths::normalize_column_widths;
 pub use gas::*;
+pub use panels::*;
 pub use speleodb::*;
 pub use types::*;
 pub use webkit::*;
