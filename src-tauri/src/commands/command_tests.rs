@@ -204,6 +204,23 @@ fn test_get_config_defaults_panels() {
         cfg.panels.data_table_station_hidden_columns,
         vec!["_x", "_y", "_lat", "_long"]
     );
+    // The new-section dialog opens on what the old hand-rolled table showed.
+    assert!(cfg.panels.new_section_column_order.is_empty());
+    assert_eq!(
+        cfg.panels.new_section_hidden_columns,
+        vec![
+            "azimuth_in",
+            "azimuth_out",
+            "_pitch_avg",
+            "pitch_in",
+            "pitch_out",
+            "left",
+            "right",
+            "up",
+            "down"
+        ]
+    );
+    assert!(cfg.panels.new_section_column_widths.is_empty());
 }
 
 #[test]
@@ -279,6 +296,83 @@ fn test_update_data_table_view_roundtrip() {
                 .panels
                 .data_table_azimuth_mode,
             "inout"
+        );
+    });
+}
+
+#[test]
+fn test_update_new_section_view_roundtrip() {
+    with_config_lock(|| {
+        let app = app_with_state();
+        config::update_new_section_view_impl(
+            state(&app).inner(),
+            Some(vec!["length".to_string(), "_azimuth_avg".to_string()]),
+            Some(vec!["comment".to_string()]),
+            Some(BTreeMap::from([("length".to_string(), 180)])),
+        )
+        .expect("update new-section view");
+        let cfg = config::get_config(state(&app));
+        assert_eq!(
+            cfg.panels.new_section_column_order,
+            vec!["length", "_azimuth_avg"]
+        );
+        assert_eq!(cfg.panels.new_section_hidden_columns, vec!["comment"]);
+        assert_eq!(
+            cfg.panels.new_section_column_widths,
+            BTreeMap::from([("length".to_string(), 180)])
+        );
+
+        // The dialog's layout is its OWN: writing it must not disturb the data
+        // table's, which the two commands keep in separate fields.
+        assert!(cfg.panels.data_table_shot_column_order.is_empty());
+        assert_eq!(
+            cfg.panels.data_table_shot_hidden_columns,
+            vec!["section_id", "shot_id"]
+        );
+
+        // A partial update leaves the fields it omits alone.
+        config::update_new_section_view_impl(
+            state(&app).inner(),
+            None,
+            Some(vec!["left".to_string()]),
+            None,
+        )
+        .expect("update new-section view");
+        let cfg = config::get_config(state(&app));
+        assert_eq!(cfg.panels.new_section_hidden_columns, vec!["left"]);
+        assert_eq!(
+            cfg.panels.new_section_column_order,
+            vec!["length", "_azimuth_avg"],
+            "an omitted field keeps its stored value"
+        );
+    });
+}
+
+#[test]
+fn test_update_new_section_view_clamps_degenerate_widths() {
+    with_config_lock(|| {
+        let app = app_with_state();
+        config::update_new_section_view_impl(
+            state(&app).inner(),
+            None,
+            None,
+            Some(BTreeMap::from([
+                ("collapsed".to_string(), 0),
+                ("runaway".to_string(), 100_000),
+                ("sane".to_string(), 150),
+            ])),
+        )
+        .expect("update new-section view");
+        assert_eq!(
+            config::get_config(state(&app))
+                .panels
+                .new_section_column_widths,
+            BTreeMap::from([
+                ("collapsed".to_string(), 40),
+                ("runaway".to_string(), 2000),
+                ("sane".to_string(), 150),
+            ]),
+            "degenerate widths clamp to the renderable range, sane ones pass through"
         );
     });
 }
@@ -419,6 +513,21 @@ fn test_column_name_lists_are_bounded_on_both_write_paths() {
         );
         assert_eq!(panels.data_table_shot_hidden_columns, vec!["left"]);
 
+        // Same door, the new-section dialog's own lists.
+        config::update_new_section_view_impl(
+            state(&app).inner(),
+            Some(hostile_order()),
+            Some(hostile_hidden()),
+            None,
+        )
+        .expect("update new-section view");
+        let panels = config::get_config(state(&app)).panels;
+        assert_bounded(&panels.new_section_column_order, "new_section_column_order");
+        assert_bounded(
+            &panels.new_section_hidden_columns,
+            "new_section_hidden_columns",
+        );
+
         // Door 2: the whole-`Config` write, which does no per-field validation of
         // its own and so relies entirely on the normalize pass.
         with_restored_config(&app, || {
@@ -427,6 +536,8 @@ fn test_column_name_lists_are_bounded_on_both_write_paths() {
             cfg.panels.data_table_shot_hidden_columns = hostile_hidden();
             cfg.panels.data_table_station_column_order = hostile_order();
             cfg.panels.data_table_station_hidden_columns = hostile_hidden();
+            cfg.panels.new_section_column_order = hostile_order();
+            cfg.panels.new_section_hidden_columns = hostile_hidden();
             config::update_config(state(&app), cfg).expect("update config");
 
             let panels = config::get_config(state(&app)).panels;
@@ -442,6 +553,11 @@ fn test_column_name_lists_are_bounded_on_both_write_paths() {
             assert_bounded(
                 &panels.data_table_station_hidden_columns,
                 "station_hidden_columns",
+            );
+            assert_bounded(&panels.new_section_column_order, "new_section_column_order");
+            assert_bounded(
+                &panels.new_section_hidden_columns,
+                "new_section_hidden_columns",
             );
         });
     });

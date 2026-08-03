@@ -125,6 +125,28 @@ describe('placePaste', () => {
     expect(targets).toEqual([{ row: 9, colIdx: 3, raw: 'a' }]);
     expect(clipped).toBe(3);
   });
+
+  it('emits rows past the end under growRows, still clipping columns', () => {
+    // A host whose rows are provisional (the new-section dialog) grows to fit,
+    // so a block pasted into a one-row grid must not be truncated to that row.
+    const clip = [['a', 'b'], ['c', 'd']];
+    const { targets, clipped } = placePaste(clip, rectAt(0, 0), 1, 2, true);
+    expect(targets).toEqual([
+      { row: 0, colIdx: 0, raw: 'a' },
+      { row: 0, colIdx: 1, raw: 'b' },
+      { row: 1, colIdx: 0, raw: 'c' },
+      { row: 1, colIdx: 1, raw: 'd' },
+    ]);
+    expect(clipped).toBe(0);
+
+    // The column set is fixed either way, so an overhanging column still clips.
+    const narrow = placePaste(clip, rectAt(0, 1), 1, 2, true);
+    expect(narrow.targets).toEqual([
+      { row: 0, colIdx: 1, raw: 'a' },
+      { row: 1, colIdx: 1, raw: 'c' },
+    ]);
+    expect(narrow.clipped).toBe(2);
+  });
 });
 
 describe('fillTargets', () => {

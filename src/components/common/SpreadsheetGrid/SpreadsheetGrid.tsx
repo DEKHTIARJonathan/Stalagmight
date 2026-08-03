@@ -108,6 +108,12 @@ export interface SpreadsheetGridProps<Row> {
   /** Insert `count` blank rows before `beforeIndex` (host owns the row set).
    *  Enables "Insert N rows above/below" in the context menu. */
   onInsertRows?: (beforeIndex: number, count: number) => void;
+  /** Let a paste run PAST the last row instead of clipping there, emitting
+   *  edits for rows that do not exist yet. Only for a host whose row set is
+   *  provisional and grows to fit (it must extend `rows` when an edit lands
+   *  beyond the end); the default clips, because a host backing committed rows
+   *  has nowhere to put them. Columns are clipped either way. */
+  pasteGrowsRows?: boolean;
   /** Delete the contiguous data rows [fromRow..toRow] (host owns the row set).
    *  Enables "Delete N rows" in the context menu. */
   onDeleteRows?: (fromRow: number, toRow: number) => void;
@@ -211,7 +217,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
     columnWidths,
     onColumnWidthsChange,
     onMoveRows,
-    onInsertRows,
+    onInsertRows, pasteGrowsRows = false,
     onDeleteRows,
     onPasteReport,
     onRowHover,
@@ -811,7 +817,12 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
     (text: string, fromStash = false) => {
       if (!text) return;
       const clip = parseTSV(text);
-      const { targets, clipped } = placePaste(clip, rect, rowCount, colCount);
+      const { targets, clipped } = placePaste(clip, rect, rowCount, colCount, pasteGrowsRows);
+      // A target past the last row exists only because `pasteGrowsRows` let it
+      // through: there is no row object to ask about per-cell editability, so
+      // fall back to the column default and let the host create the row.
+      const pasteEditable = (r: number, col: GridColumn<Row>) =>
+        r >= rowCount ? !!col.editable : cellEditable(r, col);
       // Treat the paste as INTERNAL (use stashed RAW values for full fidelity,
       // and complete a pending cut) only when the source is our own stash:
       // either the caller read it directly (`fromStash`, the WebKitGTK fallback),
@@ -834,7 +845,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
       const landed = new Set<string>();
       for (const t of targets) {
         const col = colAt(t.colIdx);
-        if (!col || !cellEditable(t.row, col)) continue;
+        if (!col || !pasteEditable(t.row, col)) continue;
         let value: unknown;
         let stashCell: string | null = null;
         if (internal) {
@@ -908,7 +919,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
         onPasteReport?.({ written, clipped, skipped: targets.length - written });
       }
     },
-    [rect, rowCount, colCount, colAt, cellEditable, coerce, transferValue, parseForColumn, cutRect, applyEdits, onPasteReport, markMissing, missKey, onClearMissing],
+    [rect, rowCount, colCount, colAt, cellEditable, coerce, transferValue, parseForColumn, cutRect, applyEdits, onPasteReport, markMissing, missKey, onClearMissing, pasteGrowsRows],
   );
 
   // Context-menu paste: a synthetic (untrusted) `paste` event can't carry

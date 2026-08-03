@@ -3492,6 +3492,24 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 data_table_station_column_order: [],
                 data_table_station_hidden_columns: ['_x', '_y', '_lat', '_long'],
                 data_table_station_column_widths: {},
+                // The new-section dialog's grid layout. Present (not omitted) for
+                // the same reason as the reveal state below: get_config on a real
+                // backend always serializes these, and the dialog treats an ABSENT
+                // hidden list as "never stored, use the built-in defaults" but a
+                // present empty one as "the user unhid everything".
+                new_section_column_order: [],
+                new_section_hidden_columns: [
+                  'azimuth_in',
+                  'azimuth_out',
+                  '_pitch_avg',
+                  'pitch_in',
+                  'pitch_out',
+                  'left',
+                  'right',
+                  'up',
+                  'down',
+                ],
+                new_section_column_widths: {},
                 // Mirror the Rust serde defaults for the reveal state so initPanels
                 // reads concrete values (side panels pinned open, data closed),
                 // matching the real config shape get_config returns.
@@ -3817,6 +3835,24 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 data_table_station_column_order: [],
                 data_table_station_hidden_columns: ['_x', '_y', '_lat', '_long'],
                 data_table_station_column_widths: {},
+                // The new-section dialog's grid layout. Present (not omitted) for
+                // the same reason as the reveal state below: get_config on a real
+                // backend always serializes these, and the dialog treats an ABSENT
+                // hidden list as "never stored, use the built-in defaults" but a
+                // present empty one as "the user unhid everything".
+                new_section_column_order: [],
+                new_section_hidden_columns: [
+                  'azimuth_in',
+                  'azimuth_out',
+                  '_pitch_avg',
+                  'pitch_in',
+                  'pitch_out',
+                  'left',
+                  'right',
+                  'up',
+                  'down',
+                ],
+                new_section_column_widths: {},
                 // Mirror the Rust serde defaults for the reveal state so initPanels
                 // reads concrete values (side panels pinned open, data closed),
                 // matching the real config shape get_config returns.

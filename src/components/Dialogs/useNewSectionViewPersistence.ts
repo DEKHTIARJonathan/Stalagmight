@@ -40,7 +40,10 @@ export interface NewSectionViewSetters {
 
 export function useNewSectionViewPersistence(
   view: NewSectionViewState,
-  setters: NewSectionViewSetters
+  setters: NewSectionViewSetters,
+  /** Hidden set for a config that has never stored one. Only used when the
+   *  field is ABSENT - see the seed effect. */
+  fallbackHidden: readonly string[]
 ): void {
   const { t } = useTranslation();
   const showToast = useUIStore((s) => s.showToast);
@@ -52,15 +55,20 @@ export function useNewSectionViewPersistence(
   const lastSavedRef = useRef<string | null>(null);
   useEffect(() => {
     if (lastSavedRef.current !== null || !panelsConfig) return;
-    // `?? []` / `?? {}` because panelsConfig comes straight from get_config with
-    // no defaultConfig merge: the only guarantee is the Rust #[serde(default)],
-    // so a frontend running against a backend that predates these fields would
-    // otherwise take the dialog down on open. The persisted list is
-    // authoritative once present - an EMPTY hidden array genuinely means the
-    // user unhid every column, and must not be re-defaulted or that preference
-    // could never persist.
+    // panelsConfig comes straight from get_config with no defaultConfig merge:
+    // the only guarantee is the Rust #[serde(default)], so a frontend running
+    // against a backend that predates these fields would otherwise take the
+    // dialog down on open.
+    //
+    // ABSENT and EMPTY are deliberately NOT the same for the hidden list. Once
+    // the field is present the persisted list is authoritative, and `[]`
+    // genuinely means the user unhid every column - re-defaulting it would make
+    // that preference impossible to keep. But `undefined` means the backend
+    // never wrote one, and defaulting THAT to `[]` opened the dialog with every
+    // column shown, including the in/out legs and LRUD it is supposed to start
+    // without.
     const order = panelsConfig.new_section_column_order ?? [];
-    const hidden = panelsConfig.new_section_hidden_columns ?? [];
+    const hidden = panelsConfig.new_section_hidden_columns ?? [...fallbackHidden];
     const widths = panelsConfig.new_section_column_widths ?? {};
     setColumnOrder(order);
     setHiddenColumns(new Set(hidden));

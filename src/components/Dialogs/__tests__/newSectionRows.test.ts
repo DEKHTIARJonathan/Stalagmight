@@ -1,0 +1,324 @@
+import { describe, it, expect } from 'vitest';
+import type { ShotData } from '../../../types/project';
+import type { ShotDraft } from '../../SingleSystemView/dataTableDrafts';
+import { AZIMUTH_AVG_KEY, PITCH_AVG_KEY } from '../../SingleSystemView/dataTableEdits';
+import {
+  applyEditToData,
+  applyEdits,
+  blankRow,
+  canSubmit,
+  deleteRows,
+  deriveAzimuthMode,
+  insertBlankRows,
+  isBlankRow,
+  MAX_PASTE_ROWS,
+  moveRows,
+  normalizeRows,
+  summarizeSubmit,
+} from '../newSectionRows';
+
+/** A row carrying `data`, keyed so assertions can follow identity across ops. */
+const row = (key: number, data: Partial<ShotData> = {}): ShotDraft => ({
+  key,
+  anchor: 'end',
+  data,
+});
+
+/** A complete row: length > 0, both depths, at least one azimuth. */
+const filled = (key: number, over: Partial<ShotData> = {}): ShotDraft =>
+  row(key, { length: 10, azimuth_in: 90, azimuth_out: 90, depth_in: 0, depth_out: 1, ...over });
+
+/** Key allocator matching the dialog's: monotonic, never reused. */
+const allocator = (start = 100) => {
+  let n = start;
+  return () => n++;
+};
+
+describe('isBlankRow', () => {
+  it('is true only for a row with no fields at all', () => {
+    expect(isBlankRow(blankRow(1))).toBe(true);
+    expect(isBlankRow(row(1, { comment: 'x' }))).toBe(false);
+    // An explicit clear is still a touched row - the user typed there.
+    expect(isBlankRow(row(1, { pitch_in: null }))).toBe(false);
+  });
+});
+
+describe('normalizeRows', () => {
+  it('appends a blank row when the last one holds data', () => {
+    const next = normalizeRows([filled(1)], allocator());
+    expect(next).toHaveLength(2);
+    expect(isBlankRow(next[1]!)).toBe(true);
+    expect(next[1]!.key).toBe(100);
+  });
+
+  it('returns the same array when the last row is already blank', () => {
+    const rows = [filled(1), blankRow(2)];
+    expect(normalizeRows(rows, allocator())).toBe(rows);
+  });
+
+  it('appends to an empty list', () => {
+    expect(normalizeRows([], allocator())).toHaveLength(1);
+  });
+});
+
+describe('insertBlankRows', () => {
+  it('inserts at the boundary and keeps a trailing blank', () => {
+    const next = insertBlankRows([filled(1), filled(2), blankRow(3)], 1, 2, allocator());
+    expect(next.map((r) => r.key)).toEqual([1, 100, 101, 2, 3]);
+  });
+
+  it('inserts at the top', () => {
+    const next = insertBlankRows([filled(1), blankRow(2)], 0, 1, allocator());
+    expect(next.map((r) => r.key)).toEqual([100, 1, 2]);
+  });
+
+  it('clamps a boundary past the end and re-establishes the trailing blank', () => {
+    const next = insertBlankRows([filled(1)], 99, 1, allocator());
+    expect(next.map((r) => r.key)).toEqual([1, 100]);
+  });
+
+  it('is a no-op for a non-positive count', () => {
+    const rows = [filled(1), blankRow(2)];
+    expect(insertBlankRows(rows, 1, 0, allocator())).toBe(rows);
+  });
+});
+
+describe('deleteRows', () => {
+  it('removes an inclusive range', () => {
+    const next = deleteRows([filled(1), filled(2), filled(3), blankRow(4)], 1, 2, allocator());
+    expect(next.map((r) => r.key)).toEqual([1, 4]);
+  });
+
+  it('accepts a reversed range (drag upwards)', () => {
+    const next = deleteRows([filled(1), filled(2), blankRow(3)], 1, 0, allocator());
+    expect(next.map((r) => r.key)).toEqual([3]);
+  });
+
+  it('leaves one fresh blank row rather than an empty grid', () => {
+    const next = deleteRows([filled(1), filled(2)], 0, 1, allocator());
+    expect(next).toHaveLength(1);
+    expect(isBlankRow(next[0]!)).toBe(true);
+    expect(next[0]!.key).toBe(100);
+  });
+
+  it('re-adds the trailing blank when it was the one deleted', () => {
+    const next = deleteRows([filled(1), blankRow(2)], 1, 1, allocator());
+    expect(next.map((r) => r.key)).toEqual([1, 100]);
+  });
+});
+
+describe('moveRows', () => {
+  // toIndex is an insertion boundary in the ORIGINAL indexing, so the boundary
+  // has to be shifted back by however much of the block sat in front of it.
+  it('moves a single row down', () => {
+    const rows = [row(1), row(2), row(3), row(4)];
+    expect(moveRows(rows, 1, 1, 3).map((r) => r.key)).toEqual([1, 3, 2, 4]);
+  });
+
+  it('moves a single row to the top', () => {
+    const rows = [row(1), row(2), row(3)];
+    expect(moveRows(rows, 2, 2, 0).map((r) => r.key)).toEqual([3, 1, 2]);
+  });
+
+  it('moves a block to the end', () => {
+    const rows = [row(1), row(2), row(3), row(4)];
+    expect(moveRows(rows, 0, 1, 4).map((r) => r.key)).toEqual([3, 4, 1, 2]);
+  });
+
+  it('moves a block upwards', () => {
+    const rows = [row(1), row(2), row(3), row(4)];
+    expect(moveRows(rows, 2, 3, 1).map((r) => r.key)).toEqual([1, 3, 4, 2]);
+  });
+
+  it('is a no-op when the block lands where it started', () => {
+    const rows = [row(1), row(2), row(3)];
+    expect(moveRows(rows, 1, 1, 1).map((r) => r.key)).toEqual([1, 2, 3]);
+  });
+});
+
+describe('applyEditToData', () => {
+  it('assigns a plain column', () => {
+    expect(applyEditToData({}, 'length', 12)).toEqual({ length: 12 });
+  });
+
+  it('deletes the field when the value is undefined (cleared to missing)', () => {
+    expect(applyEditToData({ length: 12, depth_in: 3 }, 'length', undefined)).toEqual({
+      depth_in: 3,
+    });
+  });
+
+  it('keeps an explicit null (a cleared optional) rather than dropping it', () => {
+    expect(applyEditToData({ left: 2 }, 'left', null)).toEqual({ left: null });
+  });
+
+  it('writes the typed mean to BOTH azimuth legs while they are unset', () => {
+    // buildShotUpdates would rotate by a delta against NaN here; on an unset row
+    // the mean simply is both legs.
+    expect(applyEditToData({}, AZIMUTH_AVG_KEY, 45)).toEqual({
+      azimuth_in: 45,
+      azimuth_out: 45,
+    });
+  });
+
+  it('rotates both azimuth legs by the delta once both are set', () => {
+    const out = applyEditToData({ azimuth_in: 10, azimuth_out: 20 }, AZIMUTH_AVG_KEY, 25);
+    // mean was 15, so the delta is +10 and the 10-degree split is preserved.
+    expect(out).toEqual({ azimuth_in: 20, azimuth_out: 30 });
+  });
+
+  it('normalizes a rotation that wraps past 360', () => {
+    // Circular mean of 350/358 is 354, so a target of 2 rotates by +8 forward
+    // through north; the 8-degree split survives the wrap.
+    const out = applyEditToData({ azimuth_in: 350, azimuth_out: 358 }, AZIMUTH_AVG_KEY, 2);
+    expect(out.azimuth_in).toBeCloseTo(358, 6);
+    expect(out.azimuth_out).toBeCloseTo(6, 6);
+  });
+
+  it('clears both azimuth legs when the average cell is cleared', () => {
+    expect(applyEditToData({ azimuth_in: 10, azimuth_out: 20, length: 5 }, AZIMUTH_AVG_KEY, undefined)).toEqual({
+      length: 5,
+    });
+  });
+
+  it('sets both pitch legs from the average while they are unset', () => {
+    expect(applyEditToData({}, PITCH_AVG_KEY, -5)).toEqual({ pitch_in: -5, pitch_out: -5 });
+  });
+
+  it('shifts both pitch legs by the delta once both are set', () => {
+    expect(applyEditToData({ pitch_in: -10, pitch_out: 0 }, PITCH_AVG_KEY, 0)).toEqual({
+      pitch_in: -5,
+      pitch_out: 5,
+    });
+  });
+
+  it('clears both pitch legs when the average cell is nulled', () => {
+    expect(applyEditToData({ pitch_in: -10, pitch_out: 0 }, PITCH_AVG_KEY, null)).toEqual({
+      pitch_in: null,
+      pitch_out: null,
+    });
+  });
+
+  it('does not mutate the input', () => {
+    const data: Partial<ShotData> = { length: 3 };
+    applyEditToData(data, 'length', 9);
+    expect(data).toEqual({ length: 3 });
+  });
+});
+
+describe('applyEdits', () => {
+  it('applies several cells on one row and appends a trailing blank', () => {
+    const next = applyEdits(
+      [blankRow(1)],
+      [
+        { row: 0, colKey: 'length', value: 10 },
+        { row: 0, colKey: 'depth_in', value: 0 },
+      ],
+      allocator()
+    );
+    expect(next[0]!.data).toEqual({ length: 10, depth_in: 0 });
+    expect(next).toHaveLength(2);
+    expect(isBlankRow(next[1]!)).toBe(true);
+  });
+
+  it('grows the row list for edits landing past the end (a pasted block)', () => {
+    // The grid is given `pasteGrowsRows`, so a block pasted into the single
+    // blank row the dialog opens with must land in full, not clip to one row.
+    const next = applyEdits(
+      [blankRow(1)],
+      [
+        { row: 0, colKey: 'length', value: 10 },
+        { row: 1, colKey: 'length', value: 20 },
+        { row: 2, colKey: 'length', value: 30 },
+      ],
+      allocator()
+    );
+    expect(next.map((r) => r.data.length)).toEqual([10, 20, 30, undefined]);
+    expect(isBlankRow(next[3]!)).toBe(true);
+  });
+
+  it('refuses to conjure unbounded rows from a stray clipboard', () => {
+    const next = applyEdits(
+      [blankRow(1)],
+      [{ row: MAX_PASTE_ROWS + 10, colKey: 'length', value: 10 }],
+      allocator()
+    );
+    expect(next).toHaveLength(1);
+  });
+
+  it('returns the same array when there is nothing to apply', () => {
+    const rows = [blankRow(1)];
+    expect(applyEdits(rows, [], allocator())).toBe(rows);
+  });
+
+  it('leaves untouched rows referentially identical', () => {
+    const rows = [filled(1), blankRow(2)];
+    const next = applyEdits(rows, [{ row: 1, colKey: 'length', value: 4 }], allocator());
+    expect(next[0]).toBe(rows[0]);
+  });
+});
+
+describe('deriveAzimuthMode', () => {
+  it('is avg while the average column is visible', () => {
+    expect(deriveAzimuthMode(new Set(['azimuth_in', 'azimuth_out']))).toBe('avg');
+  });
+
+  it('is inout when the average is hidden but a leg is visible', () => {
+    expect(deriveAzimuthMode(new Set([AZIMUTH_AVG_KEY, 'azimuth_out']))).toBe('inout');
+  });
+
+  it('is off when every azimuth column is hidden', () => {
+    expect(deriveAzimuthMode(new Set([AZIMUTH_AVG_KEY, 'azimuth_in', 'azimuth_out']))).toBe('off');
+  });
+});
+
+describe('summarizeSubmit', () => {
+  it('drops blank rows and reports nothing missing', () => {
+    const { shots, incompleteRows } = summarizeSubmit([filled(1), blankRow(2)]);
+    expect(shots).toHaveLength(1);
+    expect(incompleteRows).toEqual([]);
+  });
+
+  it('reports a partially-filled row by its 1-based display number', () => {
+    const { shots, incompleteRows } = summarizeSubmit([
+      filled(1),
+      row(2, { length: 5 }), // no depths, no azimuth
+      blankRow(3),
+    ]);
+    expect(shots).toHaveLength(1);
+    expect(incompleteRows).toEqual([2]);
+  });
+
+  it('treats a non-positive length as incomplete rather than silently dropping it', () => {
+    const { shots, incompleteRows } = summarizeSubmit([filled(1, { length: 0 }), blankRow(2)]);
+    expect(shots).toEqual([]);
+    expect(incompleteRows).toEqual([1]);
+  });
+
+  it('duplicates the present azimuth leg onto the missing one', () => {
+    const { shots } = summarizeSubmit([
+      row(1, { length: 10, azimuth_in: 90, depth_in: 0, depth_out: 1 }),
+    ]);
+    expect(shots[0]).toMatchObject({ azimuth_in: 90, azimuth_out: 90 });
+  });
+
+  it('carries the optional fields through', () => {
+    const { shots } = summarizeSubmit([
+      filled(1, { left: 2, comment: 'sump', kind: 'Reference' }),
+    ]);
+    expect(shots[0]).toMatchObject({ left: 2, comment: 'sump', kind: 'Reference' });
+  });
+});
+
+describe('canSubmit', () => {
+  it('is false while any row is incomplete', () => {
+    expect(canSubmit({ shots: [{} as ShotData], incompleteRows: [2] })).toBe(false);
+  });
+
+  it('is false with nothing to write', () => {
+    expect(canSubmit({ shots: [], incompleteRows: [] })).toBe(false);
+  });
+
+  it('is true with at least one complete row and no incomplete ones', () => {
+    expect(canSubmit({ shots: [{} as ShotData], incompleteRows: [] })).toBe(true);
+  });
+});

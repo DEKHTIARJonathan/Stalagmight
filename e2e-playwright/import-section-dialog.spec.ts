@@ -2,12 +2,18 @@ import { test, expect, Page } from './fixtures/coverage';
 import { setupMockedPage, createProject } from './helpers/app';
 
 /**
- * Coverage ported from the retired WDIO `import-section-dialog` spec (#120).
+ * Coverage ported from the retired WDIO `import-section-dialog` spec (#120),
+ * extended when the dialog's hand-rolled shot table became a SpreadsheetGrid.
  *
  * The manual "Import / Create Section" dialog (`ImportDialog`, rendered for the
  * `import` dialog type - see App.tsx) has no other Playwright twin, so this is
- * its only mocked-tier coverage: it opens with the section-name field and the
- * Create / Cancel actions, the name field is wired, and Cancel closes it.
+ * its only mocked-tier coverage: the metadata fields and Create / Cancel
+ * actions, plus the grid behaviours the old table could not do (paste a block
+ * out of a spreadsheet, fill down) and the Create gate that replaced its silent
+ * row-dropping.
+ *
+ * The dialog's rows are LOCAL until Create - there is no project state to
+ * assert against, so the model is read off the rendered cells.
  */
 async function openImportSectionDialog(page: Page): Promise<void> {
   await page.evaluate(() => {
@@ -18,6 +24,23 @@ async function openImportSectionDialog(page: Page): Promise<void> {
     e2e.uiStore.getState().openDialog('import');
   });
   await expect(page.getByTestId('import-section-dialog')).toBeVisible({ timeout: 5000 });
+  // The grid always carries a trailing blank row, so row 0 exists from the off.
+  await expect(page.getByTestId('grid-cell-0-length')).toBeVisible({ timeout: 5000 });
+}
+
+/** Type a value into a grid cell and commit it. */
+async function fillCell(page: Page, row: number, colKey: string, value: string): Promise<void> {
+  await page.getByTestId(`grid-cell-${row}-${colKey}`).dblclick();
+  await page.getByTestId('grid-cell-editor').fill(value);
+  await page.keyboard.press('Enter');
+}
+
+/** Fill one complete shot: length, azimuth and both depths. */
+async function fillShotRow(page: Page, row: number, length: string): Promise<void> {
+  await fillCell(page, row, 'length', length);
+  await fillCell(page, row, '_azimuth_avg', '90');
+  await fillCell(page, row, 'depth_in', '0');
+  await fillCell(page, row, 'depth_out', '-1');
 }
 
 test.describe('Import / Create Section dialog', () => {
@@ -45,5 +68,123 @@ test.describe('Import / Create Section dialog', () => {
     const nameInput = page.getByTestId('import-section-dialog').getByTestId('section-name-input');
     await nameInput.fill('Main Line');
     await expect(nameInput).toHaveValue('Main Line');
+  });
+
+  test('opens on the columns the old table showed, with the rest one menu away', async ({ page }) => {
+    await openImportSectionDialog(page);
+
+    // Visible by default.
+    for (const col of ['length', '_azimuth_avg', 'depth_in', 'depth_out', 'kind', 'comment']) {
+      await expect(page.getByTestId(`grid-header-${col}`)).toBeVisible();
+    }
+    // Hidden by default: the in/out legs, pitch and LRUD.
+    for (const col of ['azimuth_in', 'azimuth_out', '_pitch_avg', 'left', 'up']) {
+      await expect(page.getByTestId(`grid-header-${col}`)).toHaveCount(0);
+    }
+    // The warning/id columns have nothing to say about an uncommitted row and
+    // are dropped entirely - not merely hidden, so they are absent from the menu.
+    await page.getByTestId('new-section-columns-menu').click();
+    await expect(page.getByTestId('col-toggle-left')).toBeVisible();
+    await expect(page.getByTestId('col-toggle-_warnings')).toHaveCount(0);
+    await expect(page.getByTestId('col-toggle-shot_id')).toHaveCount(0);
+
+    // Revealing LRUD replaces the old "Include LRUD" checkbox.
+    await page.getByTestId('col-toggle-input-left').click();
+    await expect(page.getByTestId('grid-header-left')).toBeVisible();
+  });
+
+  test('typing a complete row enables Create and appends a fresh blank row', async ({ page }) => {
+    await openImportSectionDialog(page);
+    const create = page.getByTestId('import-section-create');
+
+    // Nothing typed: Create is closed and says why.
+    await expect(create).toBeDisabled();
+    await expect(page.getByTestId('import-section-blocker')).toHaveText(
+      /Enter at least one shot/i
+    );
+
+    // A half-filled row keeps Create closed and names the row.
+    await fillCell(page, 0, 'length', '10');
+    await expect(create).toBeDisabled();
+    await expect(page.getByTestId('import-section-blocker')).toHaveText(
+      /Row 1 is missing required values/i
+    );
+
+    // Completing it opens the gate, and a new trailing blank row appears.
+    await fillCell(page, 0, '_azimuth_avg', '90');
+    await fillCell(page, 0, 'depth_in', '0');
+    await fillCell(page, 0, 'depth_out', '-1');
+    await expect(create).toBeEnabled();
+    await expect(page.getByTestId('import-section-blocker')).toHaveText('');
+    await expect(page.getByTestId('grid-cell-1-length')).toBeVisible();
+  });
+
+  test('pastes a block of shots out of a spreadsheet', async ({ context, page }) => {
+    await context.grantPermissions(['clipboard-read', 'clipboard-write']);
+    await openImportSectionDialog(page);
+
+    // Three shots x (length, azimuth, depth in, depth out) - the four visible
+    // numeric columns, in order. The old hand-rolled table had no paste at all.
+    await page.evaluate(() =>
+      navigator.clipboard.writeText('10\t90\t0\t-1\n20\t95\t-1\t-2\n30\t100\t-2\t-3')
+    );
+    await page.getByTestId('grid-cell-0-length').click();
+    await page.keyboard.press('Control+v');
+
+    await expect(page.getByTestId('grid-cell-2-length')).toHaveText('30.0');
+    await expect(page.getByTestId('grid-cell-1-_azimuth_avg')).toHaveText('95.0');
+    await expect(page.getByTestId('grid-cell-2-depth_out')).toHaveText('-3.0');
+    // Three filled rows plus the trailing blank the grid keeps.
+    await expect(page.getByTestId('grid-cell-3-length')).toHaveText('');
+    await expect(page.getByTestId('import-section-create')).toBeEnabled();
+  });
+
+  test('Ctrl+D fills down and clearing a required cell re-closes the gate', async ({ page }) => {
+    await openImportSectionDialog(page);
+    await fillShotRow(page, 0, '10');
+    await fillShotRow(page, 1, '20');
+
+    // Fill the row-0 azimuth down over row 1.
+    await page.getByTestId('grid-cell-0-_azimuth_avg').click();
+    await page.getByTestId('grid-cell-1-_azimuth_avg').click({ modifiers: ['Shift'] });
+    await page.keyboard.press('Control+d');
+    await expect(page.getByTestId('grid-cell-1-_azimuth_avg')).toHaveText('90.0');
+
+    // Clearing a required cell marks it and blocks Create - the old dialog let
+    // a flagged cell through and silently dropped rows instead.
+    const cell = page.getByTestId('grid-cell-1-length');
+    await cell.click();
+    await page.keyboard.press('Delete');
+    await expect(cell).toHaveClass(/sg-cell-missing/);
+    await expect(page.getByTestId('import-section-create')).toBeDisabled();
+    await expect(page.getByTestId('import-section-blocker')).toHaveText(
+      /Row 2 is missing required values/i
+    );
+
+    // Refilling it re-opens the gate.
+    await fillCell(page, 1, 'length', '20');
+    await expect(page.getByTestId('import-section-create')).toBeEnabled();
+  });
+
+  test('Create hands off to map placement mode', async ({ page }) => {
+    await openImportSectionDialog(page);
+    await page.getByTestId('section-name-input').fill('Placement Line');
+    await fillShotRow(page, 0, '10');
+
+    await page.getByTestId('import-section-create').click();
+
+    // The dialog closes and the section preview follows the cursor until the
+    // user clicks the map (placement is confirmed in MapCanvas, not here).
+    await expect(page.getByTestId('import-section-dialog')).toBeHidden({ timeout: 5000 });
+    await expect
+      .poll(() =>
+        page.evaluate(() => {
+          const e2e = (window as unknown as {
+            __E2E_TEST__?: { uiStore: { getState: () => { placementMode: unknown } } };
+          }).__E2E_TEST__;
+          return e2e?.uiStore.getState().placementMode !== null;
+        })
+      )
+      .toBe(true);
   });
 });

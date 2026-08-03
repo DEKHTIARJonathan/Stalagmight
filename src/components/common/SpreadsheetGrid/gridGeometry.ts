@@ -145,6 +145,10 @@ export function placePaste(
   rect: Rect,
   rowCount: number,
   colCount: number,
+  /** Emit targets PAST the last row instead of clipping them, for a host that
+   *  grows its row set to fit a paste (provisional/draft rows). Columns are
+   *  clipped either way - the column set is fixed. */
+  growRows = false,
 ): { targets: PasteTarget[]; clipped: number } {
   const ch = clip.length;
   const cw = clip.reduce((m, r) => Math.max(m, r.length), 0);
@@ -169,7 +173,7 @@ export function placePaste(
       const r = rect.r0 + i;
       const c = rect.c0 + j;
       const raw = single ? (clip[0]?.[0] ?? '') : (clip[i % ch]?.[j % cw] ?? '');
-      if (r >= rowCount || c >= colCount) {
+      if ((r >= rowCount && !growRows) || c >= colCount) {
         clipped++;
         continue;
       }

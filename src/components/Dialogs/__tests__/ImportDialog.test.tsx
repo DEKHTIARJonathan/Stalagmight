@@ -19,10 +19,14 @@ vi.mock('../../../utils/telemetry', async (importOriginal) => ({
   setSource: vi.fn(),
 }));
 
+import '../../../i18n';
 import ImportDialog from '../ImportDialog';
 import { useUIStore } from '../../../store/uiStore';
 import { useProjectStore } from '../../../store/projectStore';
+import { useSpeleoStore } from '../../../store/speleoStore';
 import { SECTION_COLORS, LIGHT_SECTION_COLORS } from '../../../utils/colors';
+import type { ShotData } from '../../../types/project';
+import type { ShotDraft } from '../../SingleSystemView/dataTableDrafts';
 
 // DialogWrapper renders via a portal, so the input lives on document.body
 // rather than under the RTL container.
@@ -32,12 +36,45 @@ function getColorInputValue(): string {
   return input.value;
 }
 
+function byTestId(id: string): HTMLElement {
+  const el = document.body.querySelector(`[data-testid="${id}"]`);
+  if (!el) throw new Error(`${id} not found`);
+  return el as HTMLElement;
+}
+
+const draft = (key: number, data: Partial<ShotData>): ShotDraft => ({ key, anchor: 'end', data });
+
+/** Open the dialog with a given set of grid rows, via the placement-cancel
+ *  restore path (the only way to seed rows without driving the grid). */
+function renderWithDrafts(drafts: ShotDraft[]) {
+  useUIStore.setState({
+    dialogData: {
+      savedFormState: {
+        name: '',
+        surveyor: '',
+        date: '',
+        color: SECTION_COLORS[0]!,
+        drafts,
+        nextKey: drafts.length + 1,
+      },
+    },
+    resolvedTheme: 'dark',
+  });
+  render(<ImportDialog />);
+}
+
 beforeEach(() => {
   useUIStore.setState({
     dialogData: {},
     resolvedTheme: 'dark',
+    appMode: 'survey',
+    geometryMode: 'measured',
   });
   useProjectStore.setState({ project: null, config: null });
+  // useEditingBlocked() fails CLOSED on an unestablished project (#270), and the
+  // store's default `projectLinkKind` is 'unknown' - so without this the grid
+  // and the Create button render read-only.
+  useSpeleoStore.setState({ link: null, projectLinkKind: 'local' });
 });
 
 describe('ImportDialog color seeding (#357 item 9)', () => {
@@ -53,7 +90,16 @@ describe('ImportDialog color seeding (#357 item 9)', () => {
     // dark-palette color, restored while `resolvedTheme` is now 'light'.
     const persistedColor = SECTION_COLORS[0]!;
     useUIStore.setState({
-      dialogData: { savedFormState: { name: '', surveyor: '', date: '', color: persistedColor, shots: [], showLrud: false } },
+      dialogData: {
+        savedFormState: {
+          name: '',
+          surveyor: '',
+          date: '',
+          color: persistedColor,
+          drafts: [],
+          nextKey: 0,
+        },
+      },
       resolvedTheme: 'light',
     });
     render(<ImportDialog />);
@@ -62,5 +108,40 @@ describe('ImportDialog color seeding (#357 item 9)', () => {
     // The important negative: it must NOT have been reseeded from the light
     // canvas palette just because the theme is now light.
     expect(LIGHT_SECTION_COLORS.map((c) => c.toLowerCase())).not.toContain(value);
+  });
+});
+
+describe('ImportDialog create gate', () => {
+  const complete = { length: 10, azimuth_in: 90, azimuth_out: 90, depth_in: 0, depth_out: 1 };
+
+  it('disables Create on a fresh dialog with nothing typed', () => {
+    useUIStore.setState({ dialogData: {}, resolvedTheme: 'dark' });
+    render(<ImportDialog />);
+    expect(byTestId('import-section-create')).toBeDisabled();
+    expect(byTestId('import-section-blocker')).toHaveTextContent(
+      'Enter at least one shot to create a section.'
+    );
+  });
+
+  it('disables Create while a row is partially filled, naming the row', () => {
+    // Row 2 has a length but no depths or azimuth. The old dialog would have
+    // created the section anyway and silently dropped nothing (length > 0), so
+    // this is the regression that gate exists for.
+    renderWithDrafts([draft(1, complete), draft(2, { length: 5 })]);
+    expect(byTestId('import-section-create')).toBeDisabled();
+    expect(byTestId('import-section-blocker')).toHaveTextContent(/Row 2 is missing required values/);
+  });
+
+  it('ignores a wholly blank row and enables Create', () => {
+    renderWithDrafts([draft(1, complete), draft(2, {})]);
+    expect(byTestId('import-section-create')).toBeEnabled();
+    expect(byTestId('import-section-blocker')).toHaveTextContent('');
+  });
+
+  it('pluralizes when several rows are incomplete', () => {
+    renderWithDrafts([draft(1, { length: 5 }), draft(2, complete), draft(3, { depth_in: 2 })]);
+    expect(byTestId('import-section-blocker')).toHaveTextContent(
+      /Rows 1, 3 are missing required values/
+    );
   });
 });
