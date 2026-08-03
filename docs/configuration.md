@@ -128,12 +128,21 @@ enabled_measure = true              # Enable snap-to-station in measure tool
 [cache]
 tile_cache_enabled = true           # Master switch; the default esri provider still opts out below
 tile_cache_max_mb = 500             # Maximum cache size in MB
-tile_ttl_days = 30                  # Days before tiles are stale
+tile_ttl_days = 30                  # Default retention: days a tile stays on disk
 # Per-provider override. Note: the default config ships esri (the default
 # provider) with offline_caching = false, so satellite tiles are NOT cached
 # out of the box - flip this to opt in.
 # [cache.providers.esri]
 # offline_caching = false
+# ttl_days = 7                      # Retention for this provider; omit to use tile_ttl_days
+#
+# TTL is RETENTION - how long a tile stays on disk to answer offline. It is not
+# how long a tile may be served as current: that is separately capped by the
+# provider's own `Cache-Control: max-age` (Esri sends `max-age=86400`), recorded
+# per tile when it is cached. Past that the tile is re-fetched on every request
+# and the stored copy is only used if the fetch fails - `stale-if-error`. So
+# raising ttl_days lengthens the offline window; it can never make the app show
+# stale imagery as though it were fresh.
 
 [global_view]
 fps_threshold = 30                  # FPS below which auto-throttle activates

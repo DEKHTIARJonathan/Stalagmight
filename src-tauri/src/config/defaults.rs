@@ -294,6 +294,10 @@ impl Default for CacheConfig {
                 "esri".to_string(),
                 ProviderCacheConfig {
                     offline_caching: false,
+                    // Unset: the global tile_ttl_days applies. Esri's own
+                    // Cache-Control caps how long a tile counts as fresh
+                    // regardless, so this only sizes the offline fallback.
+                    ttl_days: None,
                 },
             )]),
         }

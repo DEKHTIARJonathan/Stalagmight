@@ -1,11 +1,41 @@
 //! SQLite-based tile cache for offline satellite imagery.
 //!
 //! Provides persistent storage for map tiles with LRU eviction and TTL-based expiration.
+//!
+//! # Two clocks, two jobs
+//!
+//! A cached tile is governed by two independent deadlines, and conflating them
+//! would break either the terms we cache under or the offline story:
+//!
+//! - **Freshness** (`get`) - may this tile be served *instead of* asking the
+//!   provider? Bounded by BOTH the configured TTL and the provider's own
+//!   `Cache-Control: max-age` (`expires_at`), whichever expires first. Esri's
+//!   tiles come back with `max-age=86400`, so a 30-day configured TTL cannot
+//!   make us treat a two-day-old tile as current.
+//! - **Retention** (`get_stale`, eviction) - may this tile stay on disk at all?
+//!   Bounded by the configured TTL alone.
+//!
+//! The gap between them is deliberate: past `max-age` a tile stops being served
+//! as fresh, so every request goes to the network first, but the copy survives to
+//! answer if that request fails. That is `stale-if-error` (RFC 5861), and it is
+//! what keeps a map usable in a cave with no signal without ever presenting
+//! expired imagery as current.
 
 use anyhow::{Context, Result};
 use rusqlite::{params, Connection};
+use std::collections::HashMap;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
+
+/// Freshness directives read off a tile response.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct CachePolicy {
+    /// Seconds the provider says the tile may be served without revalidating,
+    /// from `Cache-Control: max-age`. `None` when the provider said nothing.
+    pub max_age_seconds: Option<i64>,
+    /// The provider forbade storing this response at all (`no-store`).
+    pub no_store: bool,
+}
 
 /// Entry returned from the cache
 #[derive(Debug, Clone)]
@@ -20,6 +50,56 @@ pub struct TileEntry {
     pub fetched_at: i64,
     /// Unix timestamp when tile was last accessed
     pub accessed_at: i64,
+    /// Unix timestamp the provider's `max-age` runs out, if it sent one.
+    /// `None` = the provider said nothing, so only the configured TTL applies.
+    pub expires_at: Option<i64>,
+}
+
+impl TileEntry {
+    /// The freshness this entry has LEFT, as a policy a derived tile can inherit.
+    ///
+    /// Overzoomed tiles are crops of a parent, and re-deriving one must not hand
+    /// it a longer life than the imagery it came from - so the remaining seconds
+    /// travel with it rather than the original `max-age`.
+    pub fn remaining_policy(&self, now: i64) -> CachePolicy {
+        CachePolicy {
+            max_age_seconds: self.expires_at.map(|at| (at - now).max(0)),
+            no_store: false,
+        }
+    }
+}
+
+/// Parse the freshness directives out of a `Cache-Control` header value.
+///
+/// Only the two directives that change what this cache may do are read;
+/// everything else (`public`, `must-revalidate`, ...) is inert here. `no-cache`
+/// maps to `max_age_seconds: Some(0)` - store it, never serve it as fresh, which
+/// is exactly the stale-if-error shape the rest of the module is built around.
+pub fn parse_cache_control(header: &str) -> CachePolicy {
+    let mut policy = CachePolicy::default();
+    for directive in header.split(',') {
+        let directive = directive.trim().to_ascii_lowercase();
+        if directive == "no-store" {
+            policy.no_store = true;
+        } else if directive == "no-cache" {
+            policy.max_age_seconds = Some(0);
+        } else if let Some(value) = directive.strip_prefix("max-age=") {
+            // A negative or unparseable max-age is treated as "said nothing"
+            // rather than as zero: guessing "immediately stale" from a malformed
+            // header would silently disable caching for a whole provider.
+            if let Ok(seconds) = value.trim().parse::<i64>() {
+                if seconds >= 0 {
+                    policy.max_age_seconds = Some(seconds);
+                }
+            }
+        }
+    }
+    policy
+}
+
+/// Current Unix timestamp, on the same clock the cache stamps entries with.
+pub fn now() -> i64 {
+    TileCache::now()
 }
 
 /// Cache statistics
@@ -38,8 +118,10 @@ pub struct TileCache {
     conn: Connection,
     /// Maximum cache size in bytes
     max_bytes: u64,
-    /// Time-to-live in seconds
+    /// Default time-to-live in seconds, for providers with no override
     ttl_seconds: i64,
+    /// Per-provider TTL overrides, in seconds
+    provider_ttl_seconds: HashMap<String, i64>,
 }
 
 impl TileCache {
@@ -75,6 +157,7 @@ impl TileCache {
             conn,
             max_bytes: u64::from(max_mb) * 1024 * 1024,
             ttl_seconds: i64::from(ttl_days) * 24 * 60 * 60,
+            provider_ttl_seconds: HashMap::new(),
         };
 
         cache.init_schema()?;
@@ -89,6 +172,7 @@ impl TileCache {
             conn,
             max_bytes: u64::from(max_mb) * 1024 * 1024,
             ttl_seconds: i64::from(ttl_days) * 24 * 60 * 60,
+            provider_ttl_seconds: HashMap::new(),
         };
         cache.init_schema()?;
         Ok(cache)
@@ -114,20 +198,112 @@ impl TileCache {
             CREATE INDEX IF NOT EXISTS idx_tiles_accessed ON tiles(accessed_at);
             ",
         )?;
+
+        // Added after the table shipped, so existing caches need the columns
+        // bolted on. SQLite has no `ADD COLUMN IF NOT EXISTS`, hence the probe.
+        // Both are nullable with no default: NULL means "this row predates the
+        // column", which for `expires_at` reads as "the provider said nothing"
+        // and leaves those tiles governed by the configured TTL alone - the
+        // behaviour they were cached under.
+        let existing: Vec<String> = {
+            let mut stmt = self.conn.prepare("PRAGMA table_info(tiles)")?;
+            let names = stmt
+                .query_map([], |row| row.get::<_, String>(1))?
+                .collect::<Result<Vec<_>, _>>()?;
+            names
+        };
+        if !existing.iter().any(|c| c == "expires_at") {
+            self.conn
+                .execute("ALTER TABLE tiles ADD COLUMN expires_at INTEGER", [])?;
+        }
+        if !existing.iter().any(|c| c == "etag") {
+            self.conn
+                .execute("ALTER TABLE tiles ADD COLUMN etag TEXT", [])?;
+        }
+
         Ok(())
     }
 
+    /// Replace the per-provider TTL overrides.
+    ///
+    /// Separate from the constructor so the existing `open`/`in_memory`
+    /// signatures (and their call sites) stay put, and so a config reload can
+    /// re-apply them without rebuilding the cache.
+    pub fn set_provider_ttls(&mut self, ttl_days_by_provider: &HashMap<String, u32>) {
+        self.provider_ttl_seconds = ttl_days_by_provider
+            .iter()
+            .map(|(provider, days)| (provider.clone(), i64::from(*days) * 24 * 60 * 60))
+            .collect();
+    }
+
+    /// Retention TTL for a provider, in seconds - its override, else the default.
+    fn ttl_for(&self, provider: &str) -> i64 {
+        self.provider_ttl_seconds
+            .get(provider)
+            .copied()
+            .unwrap_or(self.ttl_seconds)
+    }
+
+    /// Delete every tile past its own provider's retention TTL.
+    ///
+    /// One statement per overridden provider plus one for everything else,
+    /// rather than a single global cutoff: with per-provider TTLs a single cutoff
+    /// would either evict a provider's tiles early or keep another's past its
+    /// configured life. Retention only - `expires_at` is not consulted, so tiles
+    /// past the provider's max-age survive here to serve `get_stale`.
+    fn delete_retired(&self) -> Result<u64> {
+        let now = Self::now();
+        let mut deleted = 0u64;
+
+        for (provider, ttl) in &self.provider_ttl_seconds {
+            deleted += self.conn.execute(
+                "DELETE FROM tiles WHERE provider = ?1 AND fetched_at <= ?2",
+                params![provider, now - ttl],
+            )? as u64;
+        }
+
+        // Everything with no override, against the default TTL. Building the
+        // NOT IN list from the same map keeps the two branches disjoint.
+        let overridden: Vec<&String> = self.provider_ttl_seconds.keys().collect();
+        if overridden.is_empty() {
+            deleted += self.conn.execute(
+                "DELETE FROM tiles WHERE fetched_at <= ?1",
+                params![now - self.ttl_seconds],
+            )? as u64;
+        } else {
+            let placeholders = vec!["?"; overridden.len()].join(",");
+            let sql = format!(
+                "DELETE FROM tiles WHERE fetched_at <= ?1 AND provider NOT IN ({placeholders})"
+            );
+            let mut args: Vec<&dyn rusqlite::ToSql> = Vec::with_capacity(overridden.len() + 1);
+            let cutoff = now - self.ttl_seconds;
+            args.push(&cutoff);
+            for provider in &overridden {
+                args.push(provider);
+            }
+            deleted += self.conn.execute(&sql, args.as_slice())? as u64;
+        }
+
+        Ok(deleted)
+    }
+
     /// Get the current Unix timestamp
-    fn now() -> i64 {
+    pub(crate) fn now() -> i64 {
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_secs() as i64)
             .unwrap_or(0)
     }
 
-    /// Get a tile from the cache.
+    /// Get a tile from the cache, if it may still be served *without* asking the
+    /// provider.
     ///
-    /// Returns `None` if the tile is not cached or has expired (TTL exceeded).
+    /// Fresh means inside BOTH deadlines (see the module docs): the configured
+    /// retention TTL, and the provider's own `Cache-Control: max-age` recorded in
+    /// `expires_at`. A tile past `max-age` is not returned here even though it is
+    /// still on disk - `get_stale` is the path that reaches it, and only when the
+    /// network has already failed.
+    ///
     /// Updates the `accessed_at` timestamp on cache hit.
     ///
     /// Note: Returns `None` on DB errors (logged at warn level).
@@ -135,7 +311,7 @@ impl TileCache {
         let now = Self::now();
         // A tile is fresh if it was fetched within the last ttl_seconds
         // Use strict < for staleness: tile is stale when fetched_at <= now - ttl_seconds
-        let min_fetched_at = now - self.ttl_seconds;
+        let min_fetched_at = now - self.ttl_for(provider);
 
         // Update accessed_at first and return tile data in one query
         // This ensures the returned accessed_at is current
@@ -143,7 +319,8 @@ impl TileCache {
             "UPDATE tiles SET accessed_at = ?1
              WHERE provider = ?2 AND z = ?3 AND y = ?4 AND x = ?5
                AND fetched_at > ?6
-             RETURNING data, content_type, size_bytes, fetched_at, accessed_at",
+               AND (expires_at IS NULL OR expires_at > ?1)
+             RETURNING data, content_type, size_bytes, fetched_at, accessed_at, expires_at",
             params![now, provider, z, y, x, min_fetched_at],
             |row| {
                 Ok(TileEntry {
@@ -152,6 +329,7 @@ impl TileCache {
                     size_bytes: row.get::<_, i64>(2)? as u64,
                     fetched_at: row.get(3)?,
                     accessed_at: row.get(4)?,
+                    expires_at: row.get(5)?,
                 })
             },
         );
@@ -174,23 +352,28 @@ impl TileCache {
         }
     }
 
-    /// Get a stale tile from the cache (TTL expired but still present).
+    /// Get a stale tile from the cache - one `get` declined to serve.
     ///
-    /// This is useful for serving offline fallbacks when network requests fail.
-    /// Unlike `get()`, this returns tiles that have expired TTL but are still in cache.
+    /// This is the offline fallback, reached only after a network fetch has
+    /// already failed. "Stale" is the exact complement of `get`'s freshness, so
+    /// it covers BOTH ways a tile can stop being current: past the configured
+    /// retention TTL, or past the provider's own `max-age`. Covering only the
+    /// first left tiles inside the TTL but beyond `max-age` reachable by neither
+    /// path - cached, retained, and permanently invisible.
+    ///
     /// Does NOT update `accessed_at` since we're serving stale data.
     ///
     /// Returns `None` if the tile is not cached at all (fresh or stale).
     pub fn get_stale(&self, provider: &str, z: u32, y: u32, x: u32) -> Option<TileEntry> {
         let now = Self::now();
-        let min_fetched_at = now - self.ttl_seconds;
+        let min_fetched_at = now - self.ttl_for(provider);
 
-        // Get tiles that ARE stale (fetched_at <= min_fetched_at)
+        // The complement of `get`'s predicate: too old, OR past its max-age.
         let result: Result<TileEntry, rusqlite::Error> = self.conn.query_row(
-            "SELECT data, content_type, size_bytes, fetched_at, accessed_at FROM tiles
+            "SELECT data, content_type, size_bytes, fetched_at, accessed_at, expires_at FROM tiles
              WHERE provider = ?1 AND z = ?2 AND y = ?3 AND x = ?4
-               AND fetched_at <= ?5",
-            params![provider, z, y, x, min_fetched_at],
+               AND (fetched_at <= ?5 OR (expires_at IS NOT NULL AND expires_at <= ?6))",
+            params![provider, z, y, x, min_fetched_at, now],
             |row| {
                 Ok(TileEntry {
                     data: row.get(0)?,
@@ -198,6 +381,7 @@ impl TileCache {
                     size_bytes: row.get::<_, i64>(2)? as u64,
                     fetched_at: row.get(3)?,
                     accessed_at: row.get(4)?,
+                    expires_at: row.get(5)?,
                 })
             },
         );
@@ -232,9 +416,25 @@ impl TileCache {
         x: u32,
         data: &[u8],
         content_type: &str,
+        policy: CachePolicy,
+        etag: Option<&str>,
     ) -> Result<()> {
         let now = Self::now();
         let new_size = data.len() as u64;
+
+        // `no-store` is the one directive that is not advisory: the provider
+        // said do not keep this, so nothing is written and any prior copy goes.
+        if policy.no_store {
+            self.conn.execute(
+                "DELETE FROM tiles WHERE provider = ?1 AND z = ?2 AND y = ?3 AND x = ?4",
+                params![provider, z, y, x],
+            )?;
+            return Ok(());
+        }
+
+        // NULL when the provider sent no max-age, which reads downstream as
+        // "governed by the configured TTL alone".
+        let expires_at = policy.max_age_seconds.map(|max_age| now + max_age);
 
         // Reject tiles larger than the entire cache
         if new_size > self.max_bytes {
@@ -247,11 +447,7 @@ impl TileCache {
 
         // First, clear expired tiles to free space before checking existing size
         // This ensures we don't count an expired tile that's about to be deleted
-        let min_fetched_at = now - self.ttl_seconds;
-        self.conn.execute(
-            "DELETE FROM tiles WHERE fetched_at <= ?1",
-            params![min_fetched_at],
-        )?;
+        self.delete_retired()?;
 
         // Check if we're replacing an existing (non-expired) tile
         let existing_size: i64 = match self.conn.query_row(
@@ -280,12 +476,39 @@ impl TileCache {
 
         // Insert or replace the tile
         self.conn.execute(
-            "INSERT OR REPLACE INTO tiles (provider, z, y, x, data, content_type, size_bytes, fetched_at, accessed_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-            params![provider, z, y, x, data, content_type, new_size as i64, now, now],
+            "INSERT OR REPLACE INTO tiles (provider, z, y, x, data, content_type, size_bytes, fetched_at, accessed_at, expires_at, etag)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            params![provider, z, y, x, data, content_type, new_size as i64, now, now, expires_at, etag],
         )?;
 
         Ok(())
+    }
+
+    /// `put` for tests that predate provider cache directives.
+    ///
+    /// They exercise LRU, sizing and TTL, none of which the directives touch, so
+    /// they store with "the provider said nothing" - which is also the behaviour
+    /// every tile cached before this column existed inherits.
+    #[cfg(test)]
+    pub fn put_without_directives(
+        &mut self,
+        provider: &str,
+        z: u32,
+        y: u32,
+        x: u32,
+        data: &[u8],
+        content_type: &str,
+    ) -> Result<()> {
+        self.put(
+            provider,
+            z,
+            y,
+            x,
+            data,
+            content_type,
+            CachePolicy::default(),
+            None,
+        )
     }
 
     /// Evict a single least-recently-used tile.
@@ -317,23 +540,13 @@ impl TileCache {
     pub fn evict_lru(&mut self) -> Result<u64> {
         let mut freed_bytes: u64 = 0;
 
-        // First, always delete expired tiles (batch delete for efficiency)
-        // A tile is stale when fetched_at <= now - ttl_seconds
-        let min_fetched_at = Self::now() - self.ttl_seconds;
-        let expired_bytes: i64 = self
-            .conn
-            .query_row(
-                "SELECT COALESCE(SUM(size_bytes), 0) FROM tiles WHERE fetched_at <= ?1",
-                params![min_fetched_at],
-                |row| row.get(0),
-            )
-            .unwrap_or(0);
-
-        self.conn.execute(
-            "DELETE FROM tiles WHERE fetched_at <= ?1",
-            params![min_fetched_at],
-        )?;
-        freed_bytes += expired_bytes as u64;
+        // First, always delete tiles past their provider's retention TTL.
+        // Measured as a before/after delta rather than a pre-computed SUM: with
+        // per-provider cutoffs the deleting statement is no longer a single
+        // predicate a SUM could mirror, and the delta cannot drift from it.
+        let bytes_before = self.get_stats().total_bytes;
+        self.delete_retired()?;
+        freed_bytes += bytes_before.saturating_sub(self.get_stats().total_bytes);
 
         // Then, if still over capacity, delete LRU tiles using batch approach
         let stats = self.get_stats();
@@ -431,8 +644,8 @@ impl TileCache {
     /// Get per-provider statistics.
     ///
     /// Returns a map of provider name to (tile_count, total_bytes).
-    pub fn get_provider_stats(&self) -> std::collections::HashMap<String, (u64, u64)> {
-        let mut result = std::collections::HashMap::new();
+    pub fn get_provider_stats(&self) -> HashMap<String, (u64, u64)> {
+        let mut result = HashMap::new();
 
         let query_result: Result<(), rusqlite::Error> = (|| {
             let mut stmt = self.conn.prepare(
@@ -461,13 +674,16 @@ impl TileCache {
     /// Returns `false` on DB errors (logs at warn level).
     pub fn has_fresh_tile(&self, provider: &str, z: u32, y: u32, x: u32) -> bool {
         let now = Self::now();
-        let min_fetched_at = now - self.ttl_seconds;
+        let min_fetched_at = now - self.ttl_for(provider);
 
+        // Mirrors `get`'s predicate exactly - a divergence here would report a
+        // tile as servable that `get` then declines to serve.
         match self.conn.query_row(
             "SELECT COUNT(*) FROM tiles
              WHERE provider = ?1 AND z = ?2 AND y = ?3 AND x = ?4
-               AND fetched_at > ?5",
-            params![provider, z, y, x, min_fetched_at],
+               AND fetched_at > ?5
+               AND (expires_at IS NULL OR expires_at > ?6)",
+            params![provider, z, y, x, min_fetched_at, now],
             |row| row.get::<_, i64>(0),
         ) {
             Ok(count) => count > 0,
@@ -490,13 +706,14 @@ impl TileCache {
     /// Returns `false` on DB errors (logs at warn level).
     pub fn has_stale_tile(&self, provider: &str, z: u32, y: u32, x: u32) -> bool {
         let now = Self::now();
-        let min_fetched_at = now - self.ttl_seconds;
+        let min_fetched_at = now - self.ttl_for(provider);
 
+        // Mirrors `get_stale` exactly - both are "present but not fresh".
         match self.conn.query_row(
             "SELECT COUNT(*) FROM tiles
              WHERE provider = ?1 AND z = ?2 AND y = ?3 AND x = ?4
-               AND fetched_at <= ?5",
-            params![provider, z, y, x, min_fetched_at],
+               AND (fetched_at <= ?5 OR (expires_at IS NOT NULL AND expires_at <= ?6))",
+            params![provider, z, y, x, min_fetched_at, now],
             |row| row.get::<_, i64>(0),
         ) {
             Ok(count) => count > 0,
@@ -577,7 +794,7 @@ mod tests {
 
         let tile_data = b"fake jpeg data here";
         cache
-            .put("esri", 10, 500, 250, tile_data, "image/jpeg")
+            .put_without_directives("esri", 10, 500, 250, tile_data, "image/jpeg")
             .unwrap();
 
         let entry = cache
@@ -599,7 +816,7 @@ mod tests {
 
         // Add a different tile and confirm the original is still missing
         cache
-            .put("esri", 10, 500, 251, b"other tile", "image/png")
+            .put_without_directives("esri", 10, 500, 251, b"other tile", "image/png")
             .unwrap();
         let result = cache.get("esri", 10, 500, 250);
         assert!(result.is_none());
@@ -618,9 +835,15 @@ mod tests {
         let tile2 = make_tile_data(400);
         let tile3 = make_tile_data(400);
 
-        cache.put("esri", 1, 0, 0, &tile1, "image/jpeg").unwrap();
-        cache.put("esri", 1, 0, 1, &tile2, "image/jpeg").unwrap();
-        cache.put("esri", 1, 0, 2, &tile3, "image/jpeg").unwrap();
+        cache
+            .put_without_directives("esri", 1, 0, 0, &tile1, "image/jpeg")
+            .unwrap();
+        cache
+            .put_without_directives("esri", 1, 0, 1, &tile2, "image/jpeg")
+            .unwrap();
+        cache
+            .put_without_directives("esri", 1, 0, 2, &tile3, "image/jpeg")
+            .unwrap();
 
         // Set explicit timestamps to make LRU deterministic
         // tile1 is oldest, tile2 is middle, tile3 is newest
@@ -664,7 +887,7 @@ mod tests {
         cache.ttl_seconds = 2; // 2 second TTL
 
         cache
-            .put("esri", 10, 500, 250, b"tile data", "image/jpeg")
+            .put_without_directives("esri", 10, 500, 250, b"tile data", "image/jpeg")
             .unwrap();
 
         // Tile should be fresh immediately after put
@@ -694,10 +917,14 @@ mod tests {
     fn test_clear_all() {
         let mut cache = TileCache::in_memory(100, 30).unwrap();
 
-        cache.put("esri", 1, 0, 0, b"tile1", "image/jpeg").unwrap();
-        cache.put("osm", 2, 1, 1, b"tile2", "image/png").unwrap();
         cache
-            .put("mapbox", 3, 2, 2, b"tile3", "image/jpeg")
+            .put_without_directives("esri", 1, 0, 0, b"tile1", "image/jpeg")
+            .unwrap();
+        cache
+            .put_without_directives("osm", 2, 1, 1, b"tile2", "image/png")
+            .unwrap();
+        cache
+            .put_without_directives("mapbox", 3, 2, 2, b"tile3", "image/jpeg")
             .unwrap();
 
         let stats_before = cache.get_stats();
@@ -715,9 +942,15 @@ mod tests {
     fn test_clear_provider() {
         let mut cache = TileCache::in_memory(100, 30).unwrap();
 
-        cache.put("esri", 1, 0, 0, b"esri1", "image/jpeg").unwrap();
-        cache.put("esri", 1, 0, 1, b"esri2", "image/jpeg").unwrap();
-        cache.put("osm", 1, 0, 0, b"osm1", "image/png").unwrap();
+        cache
+            .put_without_directives("esri", 1, 0, 0, b"esri1", "image/jpeg")
+            .unwrap();
+        cache
+            .put_without_directives("esri", 1, 0, 1, b"esri2", "image/jpeg")
+            .unwrap();
+        cache
+            .put_without_directives("osm", 1, 0, 0, b"osm1", "image/png")
+            .unwrap();
 
         cache.clear_provider("esri").unwrap();
 
@@ -745,9 +978,15 @@ mod tests {
         let tile2 = make_tile_data(200);
         let tile3 = make_tile_data(150);
 
-        cache.put("esri", 1, 0, 0, &tile1, "image/jpeg").unwrap();
-        cache.put("esri", 1, 0, 1, &tile2, "image/jpeg").unwrap();
-        cache.put("osm", 1, 0, 0, &tile3, "image/png").unwrap();
+        cache
+            .put_without_directives("esri", 1, 0, 0, &tile1, "image/jpeg")
+            .unwrap();
+        cache
+            .put_without_directives("esri", 1, 0, 1, &tile2, "image/jpeg")
+            .unwrap();
+        cache
+            .put_without_directives("osm", 1, 0, 0, &tile3, "image/png")
+            .unwrap();
 
         let stats = cache.get_stats();
         assert_eq!(stats.tile_count, 3);
@@ -830,7 +1069,7 @@ mod tests {
                 let tile_data = make_tile_data(50);
                 let mut cache = cache_clone.lock().unwrap();
                 cache
-                    .put("esri", 10, i, 0, &tile_data, "image/jpeg")
+                    .put_without_directives("esri", 10, i, 0, &tile_data, "image/jpeg")
                     .unwrap();
             });
             handles.push(handle);
@@ -854,13 +1093,13 @@ mod tests {
 
         // Same z/y/x but different providers
         cache
-            .put("esri", 10, 500, 250, b"esri data", "image/jpeg")
+            .put_without_directives("esri", 10, 500, 250, b"esri data", "image/jpeg")
             .unwrap();
         cache
-            .put("osm", 10, 500, 250, b"osm data", "image/png")
+            .put_without_directives("osm", 10, 500, 250, b"osm data", "image/png")
             .unwrap();
         cache
-            .put("mapbox", 10, 500, 250, b"mapbox data", "image/webp")
+            .put_without_directives("mapbox", 10, 500, 250, b"mapbox data", "image/webp")
             .unwrap();
 
         let esri = cache.get("esri", 10, 500, 250).unwrap();
@@ -882,7 +1121,9 @@ mod tests {
         let mut cache = TileCache::in_memory(100, 30).unwrap();
 
         // Store an empty tile (valid "no data" marker)
-        cache.put("esri", 10, 500, 250, &[], "image/jpeg").unwrap();
+        cache
+            .put_without_directives("esri", 10, 500, 250, &[], "image/jpeg")
+            .unwrap();
 
         let entry = cache.get("esri", 10, 500, 250).unwrap();
         assert!(entry.data.is_empty());
@@ -903,7 +1144,9 @@ mod tests {
         ];
 
         for (i, ct) in content_types.iter().enumerate() {
-            cache.put("test", 10, 0, i as u32, b"data", ct).unwrap();
+            cache
+                .put_without_directives("test", 10, 0, i as u32, b"data", ct)
+                .unwrap();
         }
 
         for (i, ct) in content_types.iter().enumerate() {
@@ -918,7 +1161,7 @@ mod tests {
         let mut cache = TileCache::in_memory(100, 30).unwrap();
 
         cache
-            .put("esri", 10, 500, 250, b"tile data", "image/jpeg")
+            .put_without_directives("esri", 10, 500, 250, b"tile data", "image/jpeg")
             .unwrap();
 
         // Force accessed_at to an older value without sleeping
@@ -951,10 +1194,10 @@ mod tests {
         let mut cache = TileCache::in_memory(100, 30).unwrap();
 
         cache
-            .put("esri", 10, 500, 250, b"original data", "image/jpeg")
+            .put_without_directives("esri", 10, 500, 250, b"original data", "image/jpeg")
             .unwrap();
         cache
-            .put("esri", 10, 500, 250, b"updated data!!!", "image/png")
+            .put_without_directives("esri", 10, 500, 250, b"updated data!!!", "image/png")
             .unwrap();
 
         let entry = cache.get("esri", 10, 500, 250).unwrap();
@@ -972,7 +1215,9 @@ mod tests {
         let mut cache = TileCache::in_memory(100, 30).unwrap();
 
         // Fresh tile with long TTL
-        cache.put("esri", 10, 0, 0, b"fresh", "image/jpeg").unwrap();
+        cache
+            .put_without_directives("esri", 10, 0, 0, b"fresh", "image/jpeg")
+            .unwrap();
         assert!(cache.has_fresh_tile("esri", 10, 0, 0));
         assert!(!cache.has_stale_tile("esri", 10, 0, 0));
 
@@ -987,8 +1232,12 @@ mod tests {
         let mut cache = TileCache::in_memory(100, 30).unwrap();
         cache.ttl_seconds = 2; // 2 second TTL
 
-        cache.put("esri", 10, 0, 0, b"tile1", "image/jpeg").unwrap();
-        cache.put("esri", 10, 0, 1, b"tile2", "image/jpeg").unwrap();
+        cache
+            .put_without_directives("esri", 10, 0, 0, b"tile1", "image/jpeg")
+            .unwrap();
+        cache
+            .put_without_directives("esri", 10, 0, 1, b"tile2", "image/jpeg")
+            .unwrap();
 
         // Verify tiles are present
         let stats_before = cache.get_stats();
@@ -1018,15 +1267,21 @@ mod tests {
         let tile2 = make_tile_data(200);
         let tile3 = make_tile_data(200);
 
-        cache.put("esri", 1, 0, 0, &tile1, "image/jpeg").unwrap();
-        cache.put("esri", 1, 0, 1, &tile2, "image/jpeg").unwrap();
+        cache
+            .put_without_directives("esri", 1, 0, 0, &tile1, "image/jpeg")
+            .unwrap();
+        cache
+            .put_without_directives("esri", 1, 0, 1, &tile2, "image/jpeg")
+            .unwrap();
 
         // Set explicit timestamps
         set_accessed_at(&cache, "esri", 1, 0, 0, TileCache::now() - 100);
         set_accessed_at(&cache, "esri", 1, 0, 1, TileCache::now());
 
         // This put should trigger eviction to make space
-        cache.put("esri", 1, 0, 2, &tile3, "image/jpeg").unwrap();
+        cache
+            .put_without_directives("esri", 1, 0, 2, &tile3, "image/jpeg")
+            .unwrap();
 
         let stats = cache.get_stats();
         assert!(
@@ -1048,7 +1303,7 @@ mod tests {
         cache.max_bytes = 100; // 100 bytes max
 
         let oversized = make_tile_data(200); // Larger than cache
-        let result = cache.put("esri", 1, 0, 0, &oversized, "image/jpeg");
+        let result = cache.put_without_directives("esri", 1, 0, 0, &oversized, "image/jpeg");
 
         assert!(result.is_err(), "Oversized tile should be rejected");
     }
@@ -1061,9 +1316,15 @@ mod tests {
 
         // Add tiles with same timestamp - 3 * 200 = 600 bytes exceeds 500
         let tile = make_tile_data(200);
-        cache.put("esri", 1, 0, 0, &tile, "image/jpeg").unwrap();
-        cache.put("esri", 1, 0, 1, &tile, "image/jpeg").unwrap();
-        cache.put("esri", 1, 0, 2, &tile, "image/jpeg").unwrap();
+        cache
+            .put_without_directives("esri", 1, 0, 0, &tile, "image/jpeg")
+            .unwrap();
+        cache
+            .put_without_directives("esri", 1, 0, 1, &tile, "image/jpeg")
+            .unwrap();
+        cache
+            .put_without_directives("esri", 1, 0, 2, &tile, "image/jpeg")
+            .unwrap();
 
         // Set all to same timestamp
         let same_time = TileCache::now();
@@ -1100,9 +1361,15 @@ mod tests {
         let tile200 = make_tile_data(200);
         let tile150 = make_tile_data(150);
 
-        cache.put("esri", 1, 0, 0, &tile100, "image/jpeg").unwrap();
-        cache.put("esri", 1, 0, 1, &tile200, "image/jpeg").unwrap();
-        cache.put("osm", 1, 0, 0, &tile150, "image/png").unwrap();
+        cache
+            .put_without_directives("esri", 1, 0, 0, &tile100, "image/jpeg")
+            .unwrap();
+        cache
+            .put_without_directives("esri", 1, 0, 1, &tile200, "image/jpeg")
+            .unwrap();
+        cache
+            .put_without_directives("osm", 1, 0, 0, &tile150, "image/png")
+            .unwrap();
 
         let provider_stats = cache.get_provider_stats();
 
@@ -1127,5 +1394,209 @@ mod tests {
 
         let provider_stats = cache.get_provider_stats();
         assert!(provider_stats.is_empty());
+    }
+
+    // === Cache-Control (Esri sends `max-age=86400` on every tile) ===
+
+    #[test]
+    fn parses_the_header_esri_actually_sends() {
+        let policy = parse_cache_control("max-age=86400");
+        assert_eq!(policy.max_age_seconds, Some(86_400));
+        assert!(!policy.no_store);
+    }
+
+    #[test]
+    fn parses_directives_case_insensitively_and_among_others() {
+        let policy = parse_cache_control("Public, MAX-AGE=600, must-revalidate");
+        assert_eq!(policy.max_age_seconds, Some(600));
+        assert!(!policy.no_store);
+    }
+
+    #[test]
+    fn treats_no_cache_as_store_but_never_fresh() {
+        // Keeping it is what lets it answer offline; serving it as current is
+        // what the directive forbids.
+        let policy = parse_cache_control("no-cache");
+        assert_eq!(policy.max_age_seconds, Some(0));
+        assert!(!policy.no_store);
+    }
+
+    #[test]
+    fn reads_no_store() {
+        assert!(parse_cache_control("no-store").no_store);
+    }
+
+    #[test]
+    fn ignores_a_malformed_max_age_rather_than_reading_it_as_zero() {
+        // Reading garbage as "immediately stale" would silently kill caching for
+        // a whole provider; "said nothing" leaves the configured TTL in charge.
+        assert_eq!(parse_cache_control("max-age=banana").max_age_seconds, None);
+        assert_eq!(parse_cache_control("max-age=-5").max_age_seconds, None);
+        assert_eq!(parse_cache_control("").max_age_seconds, None);
+    }
+
+    #[test]
+    fn max_age_expiry_stops_a_tile_being_served_as_fresh() {
+        let mut cache = TileCache::in_memory(10, 30).unwrap();
+        let policy = CachePolicy {
+            max_age_seconds: Some(60),
+            no_store: false,
+        };
+        cache
+            .put(
+                "esri",
+                1,
+                2,
+                3,
+                b"tile",
+                "image/jpeg",
+                policy,
+                Some("W/\"abc\""),
+            )
+            .unwrap();
+
+        assert!(cache.get("esri", 1, 2, 3).is_some());
+
+        // Walk the stored expiry into the past - the configured 30-day TTL is
+        // untouched, so only the provider's max-age can be doing the work here.
+        cache
+            .conn
+            .execute(
+                "UPDATE tiles SET expires_at = ?1",
+                params![TileCache::now() - 1],
+            )
+            .unwrap();
+
+        assert!(
+            cache.get("esri", 1, 2, 3).is_none(),
+            "past max-age the tile must not be served as current"
+        );
+        assert!(
+            cache.get_stale("esri", 1, 2, 3).is_some(),
+            "but it must survive to answer offline (stale-if-error)"
+        );
+        assert!(!cache.has_fresh_tile("esri", 1, 2, 3));
+        assert!(cache.has_stale_tile("esri", 1, 2, 3));
+    }
+
+    #[test]
+    fn a_provider_that_sends_nothing_is_governed_by_the_configured_ttl_alone() {
+        let mut cache = TileCache::in_memory(10, 30).unwrap();
+        cache
+            .put_without_directives("other", 1, 2, 3, b"tile", "image/jpeg")
+            .unwrap();
+        let entry = cache.get("other", 1, 2, 3).expect("fresh under config TTL");
+        assert_eq!(entry.expires_at, None);
+    }
+
+    #[test]
+    fn no_store_is_not_written_and_drops_any_prior_copy() {
+        let mut cache = TileCache::in_memory(10, 30).unwrap();
+        cache
+            .put_without_directives("esri", 1, 2, 3, b"first", "image/jpeg")
+            .unwrap();
+        assert!(cache.get("esri", 1, 2, 3).is_some());
+
+        cache
+            .put(
+                "esri",
+                1,
+                2,
+                3,
+                b"second",
+                "image/jpeg",
+                CachePolicy {
+                    max_age_seconds: None,
+                    no_store: true,
+                },
+                None,
+            )
+            .unwrap();
+
+        assert!(cache.get("esri", 1, 2, 3).is_none());
+        assert!(cache.get_stale("esri", 1, 2, 3).is_none());
+    }
+
+    #[test]
+    fn remaining_policy_carries_what_is_left_never_the_original_grant() {
+        // An overzoomed crop inherits this; handing it the full max-age would
+        // let a derived tile outlive the imagery it was cut from.
+        let now = 1_000;
+        let entry = TileEntry {
+            data: vec![],
+            content_type: "image/jpeg".to_string(),
+            size_bytes: 0,
+            fetched_at: now - 100,
+            accessed_at: now,
+            expires_at: Some(now + 25),
+        };
+        assert_eq!(entry.remaining_policy(now).max_age_seconds, Some(25));
+        // Never negative: an already-expired parent yields an immediately-stale child.
+        assert_eq!(entry.remaining_policy(now + 100).max_age_seconds, Some(0));
+    }
+
+    // === Per-provider TTL ===
+
+    #[test]
+    fn a_provider_override_shortens_retention_without_touching_others() {
+        let mut cache = TileCache::in_memory(10, 30).unwrap();
+        cache.set_provider_ttls(&HashMap::from([("esri".to_string(), 1u32)]));
+
+        cache
+            .put_without_directives("esri", 1, 0, 0, b"a", "image/jpeg")
+            .unwrap();
+        cache
+            .put_without_directives("other", 1, 0, 0, b"b", "image/jpeg")
+            .unwrap();
+
+        // Age both by two days: past esri's 1-day override, inside the 30-day default.
+        let two_days_ago = TileCache::now() - 2 * 24 * 60 * 60;
+        cache
+            .conn
+            .execute("UPDATE tiles SET fetched_at = ?1", params![two_days_ago])
+            .unwrap();
+
+        assert!(cache.get("esri", 1, 0, 0).is_none(), "past its own TTL");
+        assert!(
+            cache.get("other", 1, 0, 0).is_some(),
+            "still inside the default"
+        );
+    }
+
+    #[test]
+    fn eviction_retires_each_provider_on_its_own_clock() {
+        let mut cache = TileCache::in_memory(10, 30).unwrap();
+        cache.set_provider_ttls(&HashMap::from([("esri".to_string(), 1u32)]));
+        cache
+            .put_without_directives("esri", 1, 0, 0, b"a", "image/jpeg")
+            .unwrap();
+        cache
+            .put_without_directives("other", 1, 0, 0, b"b", "image/jpeg")
+            .unwrap();
+        let two_days_ago = TileCache::now() - 2 * 24 * 60 * 60;
+        cache
+            .conn
+            .execute("UPDATE tiles SET fetched_at = ?1", params![two_days_ago])
+            .unwrap();
+
+        cache.evict_lru().unwrap();
+
+        // A single global cutoff would have taken both, or neither.
+        assert!(!cache.has_stale_tile("esri", 1, 0, 0));
+        assert!(cache.get("other", 1, 0, 0).is_some());
+    }
+
+    #[test]
+    fn schema_migration_is_idempotent_on_an_existing_cache() {
+        let dir = tempfile::tempdir().unwrap();
+        {
+            let mut cache = TileCache::open(dir.path(), 10, 30).unwrap();
+            cache
+                .put_without_directives("esri", 1, 2, 3, b"tile", "image/jpeg")
+                .unwrap();
+        }
+        // Re-opening runs init_schema again; the ADD COLUMNs must not double-apply.
+        let mut reopened = TileCache::open(dir.path(), 10, 30).unwrap();
+        assert!(reopened.get("esri", 1, 2, 3).is_some());
     }
 }

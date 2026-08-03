@@ -249,11 +249,13 @@ impl AppState {
     pub(super) fn init_tile_cache(config: &Config) -> Result<TileCache> {
         let cache_dir = crate::app_dirs::cache_dir()
             .ok_or_else(|| anyhow::anyhow!("Could not determine app cache directory"))?;
-        TileCache::open(
+        let mut cache = TileCache::open(
             cache_dir,
             config.cache.tile_cache_max_mb,
             config.cache.tile_ttl_days,
-        )
+        )?;
+        cache.set_provider_ttls(&config.cache.provider_ttl_days());
+        Ok(cache)
     }
 
     /// Get a clone of the tile cache Arc for sharing across threads

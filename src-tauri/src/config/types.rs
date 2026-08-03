@@ -480,6 +480,15 @@ pub struct ProviderCacheConfig {
     /// Whether offline caching is enabled for this provider
     #[serde(default = "default_true")]
     pub offline_caching: bool,
+    /// Retention TTL for this provider's tiles, in days. Falls back to the
+    /// global `tile_ttl_days` when unset.
+    ///
+    /// This bounds how long a tile stays on disk. It does NOT extend how long
+    /// one may be served as current: that is additionally capped by the
+    /// provider's own `Cache-Control: max-age` (see `crate::cache::tiles`), so
+    /// raising this buys a longer offline fallback, never staler "fresh" tiles.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ttl_days: Option<u32>,
 }
 
 /// Tile cache configuration for offline satellite imagery
@@ -510,6 +519,15 @@ impl CacheConfig {
         self.providers
             .get(provider)
             .map_or(true, |p| p.offline_caching)
+    }
+
+    /// Per-provider retention TTLs in days, for every provider that overrides
+    /// the global one. Providers absent from the map use `tile_ttl_days`.
+    pub fn provider_ttl_days(&self) -> HashMap<String, u32> {
+        self.providers
+            .iter()
+            .filter_map(|(name, cfg)| cfg.ttl_days.map(|days| (name.clone(), days)))
+            .collect()
     }
 }
 

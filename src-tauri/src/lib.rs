@@ -29,6 +29,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tauri::{Emitter, Manager};
 
+use cache::tiles::CachePolicy;
 use cache::TileCache;
 use tilemap_cache::TilemapCache;
 
@@ -284,6 +285,19 @@ fn fetch_tile_from_network(
 
                 let content_type = sanitize_content_type(raw_content_type);
 
+                // Read before `into_body` consumes the response.
+                let policy = response
+                    .headers()
+                    .get("cache-control")
+                    .and_then(|v| v.to_str().ok())
+                    .map(cache::tiles::parse_cache_control)
+                    .unwrap_or_default();
+                let etag = response
+                    .headers()
+                    .get("etag")
+                    .and_then(|v| v.to_str().ok())
+                    .map(str::to_string);
+
                 let body = response.into_body().read_to_vec().map_err(|e| {
                     if let Some(s) = stats {
                         s.record_error();
@@ -298,6 +312,8 @@ fn fetch_tile_from_network(
                 return Ok(FetchedTile {
                     data: body,
                     content_type,
+                    policy,
+                    etag,
                 });
             }
             Err(e) => {
@@ -565,12 +581,20 @@ fn build_error_response(status: http::StatusCode, message: &str) -> http::Respon
 struct TileFetchResult {
     data: Vec<u8>,
     content_type: String,
+    /// Freshness left on this tile, so an overzoomed crop of it cannot be cached
+    /// for longer than the imagery it was cut from.
+    policy: CachePolicy,
 }
 
 #[derive(Debug)]
 struct FetchedTile {
     data: Vec<u8>,
     content_type: String,
+    /// Freshness directives the provider sent with this tile. Esri answers
+    /// `max-age=86400`, which is what bounds how long we may serve it as current.
+    policy: CachePolicy,
+    /// Validator for a future conditional re-fetch, stored alongside the tile.
+    etag: Option<String>,
 }
 
 enum TileFetchOutcome {
@@ -586,6 +610,8 @@ fn cache_put_best_effort(
     x: u32,
     data: &[u8],
     content_type: &str,
+    policy: CachePolicy,
+    etag: Option<&str>,
     cache_enabled: bool,
 ) {
     if !cache_enabled {
@@ -593,7 +619,7 @@ fn cache_put_best_effort(
     }
     if let Ok(mut cache_guard) = tile_cache.lock() {
         if let Some(cache) = cache_guard.as_mut() {
-            if let Err(e) = cache.put(provider, z, y, x, data, content_type) {
+            if let Err(e) = cache.put(provider, z, y, x, data, content_type, policy, etag) {
                 tracing::warn!(error = %e, "Failed to cache tile");
             }
         }
@@ -632,6 +658,7 @@ where
         tracing::debug!(provider = %provider, z = z, y = y, x = x, "Cache hit (fresh)");
         return TileFetchOutcome::Tile {
             tile: TileFetchResult {
+                policy: entry.remaining_policy(cache::tiles::now()),
                 data: entry.data,
                 content_type: entry.content_type,
             },
@@ -641,7 +668,12 @@ where
     // Cache miss - fetch from network
     match fetch_fn(provider, z, y, x) {
         Ok(fetched) => {
-            let FetchedTile { data, content_type } = fetched;
+            let FetchedTile {
+                data,
+                content_type,
+                policy,
+                etag,
+            } = fetched;
             cache_put_best_effort(
                 tile_cache,
                 provider,
@@ -650,10 +682,16 @@ where
                 x,
                 &data,
                 &content_type,
+                policy,
+                etag.as_deref(),
                 cache_enabled,
             );
             TileFetchOutcome::Tile {
-                tile: TileFetchResult { data, content_type },
+                tile: TileFetchResult {
+                    data,
+                    content_type,
+                    policy,
+                },
             }
         }
         Err(e) => {
@@ -685,6 +723,12 @@ where
                 );
                 return TileFetchOutcome::Tile {
                     tile: TileFetchResult {
+                        // Already past its max-age: anything derived from it must
+                        // be immediately stale too, never freshly cached.
+                        policy: CachePolicy {
+                            max_age_seconds: Some(0),
+                            no_store: false,
+                        },
                         data: entry.data,
                         content_type: entry.content_type,
                     },
@@ -713,6 +757,7 @@ fn derive_tile_from_parent(
         return Ok(TileFetchResult {
             data: parent_tile.data.clone(),
             content_type: parent_tile.content_type.clone(),
+            policy: parent_tile.policy,
         });
     }
 
@@ -794,6 +839,8 @@ fn derive_tile_from_parent(
     Ok(TileFetchResult {
         data: buffer,
         content_type: output_content_type_for_format(format).to_string(),
+        // Inherited, not reset: a crop is only as fresh as what it was cut from.
+        policy: parent_tile.policy,
     })
 }
 
@@ -901,6 +948,12 @@ where
                     x,
                     &derived.data,
                     &derived.content_type,
+                    // A derived tile is a crop of the parent, so it lives under
+                    // the parent's remaining grant - overzooming cannot mint a
+                    // longer life than the imagery it came from. No etag: this
+                    // bytes never came off the wire, so it has no validator.
+                    tile.policy,
+                    None,
                     cache_enabled,
                 );
                 tracing::info!(
@@ -2060,7 +2113,7 @@ mod tests {
         {
             let mut guard = cache.lock().unwrap();
             let c = guard.as_mut().unwrap();
-            c.put("esri", 10, 500, 250, b"fake_tile_data", "image/jpeg")
+            c.put_without_directives("esri", 10, 500, 250, b"fake_tile_data", "image/jpeg")
                 .unwrap();
         }
 
@@ -2093,7 +2146,7 @@ mod tests {
         {
             let mut guard = cache.lock().unwrap();
             let c = guard.as_mut().unwrap();
-            c.put("esri", 10, 500, 250, b"png_data", "image/png")
+            c.put_without_directives("esri", 10, 500, 250, b"png_data", "image/png")
                 .unwrap();
         }
 
@@ -2155,6 +2208,8 @@ mod tests {
             Ok(FetchedTile {
                 data: b"fetched_tile_data".to_vec(),
                 content_type: "image/jpeg".to_string(),
+                policy: CachePolicy::default(),
+                etag: None,
             })
         };
 
@@ -2196,6 +2251,8 @@ mod tests {
             Ok(FetchedTile {
                 data: b"fetched_tile".to_vec(),
                 content_type: "image/jpeg".to_string(),
+                policy: CachePolicy::default(),
+                etag: None,
             })
         };
 
@@ -2237,6 +2294,8 @@ mod tests {
             Ok(FetchedTile {
                 data: b"tile_data".to_vec(),
                 content_type: "image/jpeg".to_string(),
+                policy: CachePolicy::default(),
+                etag: None,
             })
         };
 
@@ -2300,7 +2359,7 @@ mod tests {
             guard
                 .as_mut()
                 .unwrap()
-                .put("esri", 1, 2, 3, b"stale_tile", "image/png")
+                .put_without_directives("esri", 1, 2, 3, b"stale_tile", "image/png")
                 .unwrap();
         }
 
@@ -2353,7 +2412,8 @@ mod tests {
         {
             let mut guard = cache.lock().unwrap();
             let c = guard.as_mut().unwrap();
-            c.put("esri", 1, 2, 3, b"tile_bytes", "image/png").unwrap();
+            c.put_without_directives("esri", 1, 2, 3, b"tile_bytes", "image/png")
+                .unwrap();
         }
         let data = tile_fetch_impl(
             "esri",
@@ -2384,6 +2444,7 @@ mod tests {
             "esri".to_string(),
             config::ProviderCacheConfig {
                 offline_caching: false,
+                ttl_days: None,
             },
         );
         let cache_config = config::CacheConfig {
@@ -2399,6 +2460,8 @@ mod tests {
             Ok(FetchedTile {
                 data: b"network_tile".to_vec(),
                 content_type: "image/jpeg".to_string(),
+                policy: CachePolicy::default(),
+                etag: None,
             })
         };
 
@@ -2441,7 +2504,7 @@ mod tests {
             guard
                 .as_mut()
                 .unwrap()
-                .put("esri", 1, 2, 3, b"stale_tile", "image/png")
+                .put_without_directives("esri", 1, 2, 3, b"stale_tile", "image/png")
                 .unwrap();
         }
 
@@ -2451,6 +2514,7 @@ mod tests {
             "esri".to_string(),
             config::ProviderCacheConfig {
                 offline_caching: false,
+                ttl_days: None,
             },
         );
         let cache_config = config::CacheConfig {
@@ -2571,6 +2635,8 @@ mod tests {
             Ok(FetchedTile {
                 data: b"tile_data".to_vec(),
                 content_type: "image/jpeg".to_string(),
+                policy: CachePolicy::default(),
+                etag: None,
             })
         };
         let response = handle_tile_request_with_fetcher(
