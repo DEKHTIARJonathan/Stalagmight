@@ -261,11 +261,11 @@ test.describe('Dialog Coverage - Edit Section', () => {
     await dateInput.fill('2026-02-01');
     await page.keyboard.press('Escape');
 
-    const lengthInput = dialog.getByTestId('shot-length-0');
-    await lengthInput.focus();
-    await lengthInput.press('ControlOrMeta+a');
-    await lengthInput.type('9.5');
-    await lengthInput.press('Enter');
+    // The shot table is a SpreadsheetGrid: one editor overlays the active cell.
+    await dialog.getByTestId('shot-editor-cell-0-length').dblclick();
+    const lengthEditor = dialog.getByTestId('shot-editor-cell-editor');
+    await lengthEditor.fill('9.5');
+    await lengthEditor.press('Enter');
 
     await dialog.getByTestId('add-shot-button').click();
 

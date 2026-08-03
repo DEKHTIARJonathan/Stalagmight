@@ -85,105 +85,62 @@ test.describe('Table Numeric Column Alignment', () => {
     await createProjectWithSections(page);
   });
 
-  test('numeric column headers should be right-aligned in ShotTableEditor', async ({ page }) => {
+  test('numeric columns render in the shot-table grid', async ({ page }) => {
     await openEditSectionDialog(page);
 
-    const table = page.getByTestId('shot-table');
-    await expect(table).toBeVisible();
-
-    const headers = table.locator('thead th');
-    const headerCount = await headers.count();
-
-    // Collect header texts and their alignment
-    const headerInfo: Array<{ text: string; align: string }> = [];
-    for (let i = 0; i < headerCount; i++) {
-      const th = headers.nth(i);
-      const text = (await th.textContent())?.trim() ?? '';
-      const align = await th.evaluate((el) => getComputedStyle(el).textAlign);
-      headerInfo.push({ text, align });
-    }
-
-    // Numeric columns should be right-aligned
-    const numericHeaders = ['Len', 'Az', 'Depth In', 'Depth Out', 'L', 'R', 'U', 'D'];
-    for (const name of numericHeaders) {
-      const header = headerInfo.find((h) => h.text === name);
-      expect(header, `Header "${name}" should exist`).toBeDefined();
-      expect(header!.align).toBe('right');
-    }
-
-    // ID header is intentionally centered
-    const centeredHeaders = ['ID'];
-    for (const name of centeredHeaders) {
-      const header = headerInfo.find((h) => h.text === name);
-      expect(header, `Header "${name}" should exist`).toBeDefined();
-      expect(header!.align).toBe('center');
-    }
-
-    // Text columns should be left-aligned (browsers may report 'start' or 'left')
-    const textHeaders = ['Comment'];
-    for (const name of textHeaders) {
-      const header = headerInfo.find((h) => h.text === name);
-      expect(header, `Header "${name}" should exist`).toBeDefined();
-      expect(['left', 'start']).toContain(header!.align);
+    // The shot table is a SpreadsheetGrid now, so headers are divs keyed by
+    // column rather than <th>s, and (as everywhere else in the app) they are
+    // left-aligned regardless of the column's data alignment.
+    for (const key of ['length', '_azimuth_avg', 'depth_in', 'depth_out', 'left', 'right', 'up', 'down']) {
+      await expect(page.getByTestId(`shot-editor-header-${key}`)).toBeVisible();
     }
   });
 
-  test('numeric input cells should be right-aligned in ShotTableEditor', async ({ page }) => {
+  test('numeric cells are right-aligned, the comment cell is not', async ({ page }) => {
     await openEditSectionDialog(page);
 
     const dialog = page.getByTestId('edit-section-dialog');
     await expect(dialog).toBeVisible();
 
-    // Numeric inputs should have text-align: right
-    const numericInputIds = [
-      'shot-length-0',
-      'shot-azimuth-0',
-      'shot-depth-in-0',
-      'shot-depth-out-0',
-      'shot-left-0',
-      'shot-right-0',
-      'shot-up-0',
-      'shot-down-0',
-    ];
-
-    for (const testId of numericInputIds) {
-      const input = dialog.getByTestId(testId);
-      await expect(input).toBeVisible();
-      await expect(input).toHaveCSS('text-align', 'right');
+    // The grid aligns with flex rather than `text-align`: the cell content
+    // wrapper (which carries the cell test ID) is justified to the end.
+    for (const key of ['length', '_azimuth_avg', 'depth_in', 'depth_out', 'left', 'right', 'up', 'down']) {
+      const cell = dialog.getByTestId(`shot-editor-cell-0-${key}`);
+      await expect(cell).toBeVisible();
+      await expect(cell).toHaveCSS('justify-content', 'flex-end');
     }
 
-    // Comment input should be left-aligned (default); browsers may report 'start' or 'left'
-    const commentInput = dialog.getByTestId('shot-comment-0');
-    await expect(commentInput).toBeVisible();
-    const commentAlign = await commentInput.evaluate((el) => getComputedStyle(el).textAlign);
-    expect(['left', 'start']).toContain(commentAlign);
+    const comment = dialog.getByTestId('shot-editor-cell-0-comment');
+    await expect(comment).toBeVisible();
+    await expect(comment).not.toHaveCSS('justify-content', 'flex-end');
   });
 
-  test('numeric inputs should use tabular-nums font variant', async ({ page }) => {
+  test('numeric cells use the tabular-nums font variant', async ({ page }) => {
     await openEditSectionDialog(page);
 
     const dialog = page.getByTestId('edit-section-dialog');
     await expect(dialog).toBeVisible();
 
-    // Check font-variant-numeric on a representative numeric input
-    const lengthInput = dialog.getByTestId('shot-length-0');
-    await expect(lengthInput).toBeVisible();
-    await expect(lengthInput).toHaveCSS('font-variant-numeric', 'tabular-nums');
-
-    const azimuthInput = dialog.getByTestId('shot-azimuth-0');
-    await expect(azimuthInput).toHaveCSS('font-variant-numeric', 'tabular-nums');
+    // Fixed-width digits so a column of numbers lines up. The old table set this
+    // per input; the grid sets it on .sg-cell, which covers the data table too.
+    await expect(dialog.getByTestId('shot-editor-cell-0-length')).toHaveCSS(
+      'font-variant-numeric',
+      'tabular-nums'
+    );
+    await expect(dialog.getByTestId('shot-editor-cell-0-_azimuth_avg')).toHaveCSS(
+      'font-variant-numeric',
+      'tabular-nums'
+    );
   });
 
-  test('warnings column header should be center-aligned', async ({ page }) => {
+  test('the warnings column is centered', async ({ page }) => {
     await openEditSectionDialog(page);
 
-    const table = page.getByTestId('shot-table');
-    await expect(table).toBeVisible();
-
-    // The warnings column has no text content but should be center-aligned
-    // It's the second-to-last th with title="Warnings"
-    const warningsHeader = table.locator('thead th[title="Warnings"]');
-    await expect(warningsHeader).toHaveCSS('text-align', 'center');
+    const dialog = page.getByTestId('edit-section-dialog');
+    await expect(dialog.getByTestId('shot-editor-cell-0-_warnings')).toHaveCSS(
+      'justify-content',
+      'center'
+    );
   });
 });
 

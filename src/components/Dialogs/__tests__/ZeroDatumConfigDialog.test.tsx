@@ -18,8 +18,27 @@
  * index, so an anchor one shot down the passage imports silently.
  *
  * `.tsx` so vitest runs it under jsdom.
+ *
+ * The shot table is a virtualized SpreadsheetGrid, and jsdom gives the
+ * virtualizer no layout to measure - so without this mock it renders zero rows
+ * and every row-level query below fails. Same shim the grid's own component
+ * tests use.
  */
 import { describe, it, expect, vi, beforeAll, beforeEach } from 'vitest';
+
+vi.mock('@tanstack/react-virtual', () => ({
+  useVirtualizer: ({ count }: { count: number }) => ({
+    getVirtualItems: () =>
+      Array.from({ length: count }, (_, index) => ({
+        index,
+        key: index,
+        start: 33 + index * 33,
+        size: 33,
+      })),
+    getTotalSize: () => count * 33,
+    scrollToIndex: () => {},
+  }),
+}));
 import { render, screen, fireEvent } from '@testing-library/react';
 
 // Partial mock: `src/i18n/index.ts` (pulled in by the number formatters) needs
@@ -128,8 +147,9 @@ function deleteRow(visibleIndex: number) {
 }
 
 function insertBeforeRow(visibleIndex: number) {
-  fireEvent.contextMenu(screen.getByTestId(`shot-row-${visibleIndex}`));
-  fireEvent.click(screen.getByTestId('context-menu-insert-before'));
+  // Insert now goes through the grid's own context menu ("above" = before).
+  fireEvent.contextMenu(screen.getByTestId(`shot-editor-cell-${visibleIndex}-length`));
+  fireEvent.click(screen.getByTestId('shot-editor-context-insert-above'));
 }
 
 /** Confirm the dialog and return the config the backend would receive. */
@@ -218,9 +238,12 @@ describe('ZeroDatumConfigDialog station pick', () => {
     // input was focused, so a blur-commit lands immediately before the delete;
     // pin that the commit survives it.
     renderDialog();
-    const lengthInput = screen.getByTestId('shot-length-2');
-    fireEvent.change(lengthInput, { target: { value: '42' } });
-    fireEvent.blur(lengthInput);
+    // The grid has one editor overlaying the active cell rather than an input
+    // per cell: open it on row 2's length, type, and let the blur commit it.
+    fireEvent.doubleClick(screen.getByTestId('shot-editor-cell-2-length'));
+    const editor = screen.getByTestId('shot-editor-cell-editor');
+    fireEvent.change(editor, { target: { value: '42' } });
+    fireEvent.blur(editor);
     deleteRow(0);
 
     const shots = confirmedConfig().shots;

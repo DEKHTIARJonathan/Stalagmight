@@ -64,6 +64,11 @@
 .sg-cell {
   cursor: cell;
   transition: background-color 90ms ease-out;
+  /* Fixed-width digits, so a column of numbers lines up column-by-column rather
+     than drifting on the width of a 1 versus a 0. The hand-rolled shot table set
+     this on each numeric input; when that moved onto the grid it would otherwise
+     have been lost here and in the data table, which never had it. */
+  font-variant-numeric: tabular-nums;
 }
 /* Plain-text cell content clips with an ellipsis (tooltip carries the full value). */
 .sg-cell-text {
