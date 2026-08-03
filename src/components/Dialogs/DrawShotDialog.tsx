@@ -10,6 +10,7 @@ import { formatStationId } from '../../utils/formatters';
 import { DialogWrapper } from './DialogWrapper';
 import type { StationRef, ShotData, ShotKind } from '../../types/project';
 import { SHOT_KIND_CYCLE, SHOT_KIND_MENU_LABEL } from '../../utils/shotKind';
+import { reverseTargetShot, type TargetShotLike } from '../../utils/overlapHelpers';
 
 export default function DrawShotDialog() {
   const { closeDialog, dialogData, setSelection } = useUIStore();
@@ -43,6 +44,7 @@ export default function DrawShotDialog() {
   const [depthIn, setDepthIn] = useState(sourceGeometry ? String(sourceGeometry.depth_in) : '');
   const [depthOut, setDepthOut] = useState(sourceGeometry ? String(sourceGeometry.depth_out) : '');
   const [shotKind, setShotKind] = useState<ShotKind>('Normal');
+  const [reverseDirection, setReverseDirection] = useState(false);
   const [left, setLeft] = useState('');
   const [right, setRight] = useState('');
   const [up, setUp] = useState('');
@@ -108,24 +110,31 @@ export default function DrawShotDialog() {
     setError(null);
 
     try {
-      // Build shot data with normalized azimuths. Prepend stores the entered
-      // bearing as-is, exactly like append does - no reciprocal flip.
+      // Everything typed here is in ONE frame: the direction the leg was
+      // measured in. Storing it is verbatim - no mode reciprocates a bearing
+      // behind the user's back. Turning the leg around is the checkbox's job,
+      // and it routes through `reverseTargetShot` because that is the repo's
+      // one direction-flip rule (swap + 180 with the antipodal tie-break the
+      // backend resolves `average_azimuth` with); a second copy here is exactly
+      // the divergence that helper's comment documents.
       const rawAzimuthIn = parseFloat(azimuthIn);
       const rawAzimuthOut = azimuthOut ? parseFloat(azimuthOut) : rawAzimuthIn;
-      const normalizedAzimuthIn = normalizeAzimuth(rawAzimuthIn);
-      const normalizedAzimuthOut = normalizeAzimuth(rawAzimuthOut);
-      const shotData: ShotData = {
-        azimuth_in: normalizedAzimuthIn,
-        azimuth_out: normalizedAzimuthOut,
+      const enteredDepthIn = depthIn ? parseFloat(depthIn) : currentStationDepth;
+      const entered: TargetShotLike = {
+        azimuth_in: normalizeAzimuth(rawAzimuthIn),
+        azimuth_out: normalizeAzimuth(rawAzimuthOut),
         length: parseFloat(length),
-        depth_in: depthIn ? parseFloat(depthIn) : currentStationDepth,
-        depth_out: depthOut ? parseFloat(depthOut) : (depthIn ? parseFloat(depthIn) : currentStationDepth),
+        depth_in: enteredDepthIn,
+        depth_out: depthOut ? parseFloat(depthOut) : enteredDepthIn,
         pitch_in: sourceGeometry?.pitch_in ?? null,
         pitch_out: sourceGeometry?.pitch_out ?? null,
         left: left ? parseFloat(left) : null,
         right: right ? parseFloat(right) : null,
         up: up ? parseFloat(up) : null,
         down: down ? parseFloat(down) : null,
+      };
+      const shotData: ShotData = {
+        ...(reverseDirection ? reverseTargetShot(entered) : entered),
         comment: null,
         kind: shotKind,
         marker_index: null,
@@ -185,7 +194,7 @@ export default function DrawShotDialog() {
   // Track if form has been modified (exclude auto-initialized depth/length from making dirty)
   const userModifiedDepth = depthIn !== '' && !depthAutoInitialized.current;
   const userModifiedLength = length !== '' && !lengthAutoInitialized.current;
-  const isDirty = azimuthIn !== '' || userModifiedLength || userModifiedDepth || shotKind !== 'Normal' || left !== '' || right !== '' || up !== '' || down !== '';
+  const isDirty = azimuthIn !== '' || userModifiedLength || userModifiedDepth || shotKind !== 'Normal' || reverseDirection || left !== '' || right !== '' || up !== '' || down !== '';
 
   if (!fromStation) {
     return null;
@@ -240,6 +249,25 @@ export default function DrawShotDialog() {
             />
           </div>
         </div>
+
+        {/* Both azimuth fields are readings of the same FORWARD line, not a
+            fore/back pair (`src-tauri/src/models/shot.rs`), so a leg measured
+            the other way needs the whole shot turned around rather than just
+            its bearings: the depths swap ends, pitch negates and swaps, and
+            left/right trade places. Off by default - the entered bearing is
+            the shot's own direction, which is how the section reads. */}
+        <label className="flex items-center gap-2">
+          <input
+            type="checkbox"
+            checked={reverseDirection}
+            onChange={(e) => setReverseDirection(e.target.checked)}
+            data-testid="draw-shot-reverse-direction"
+          />
+          <span>Reverse shot direction</span>
+          <span className="text-text-secondary text-sm">
+            (you measured this leg from the far end: swaps both ends of the shot)
+          </span>
+        </label>
 
         <div>
           <label className="block text-sm text-text-secondary mb-1">
