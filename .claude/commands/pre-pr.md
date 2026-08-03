@@ -378,10 +378,11 @@ its summarizer (its MANDATORY set): promoting C to always-on, or adding or retir
 reviewer, means updating both alongside this file - otherwise the log will confidently
 recommend deleting its own gates.
 
-⚠ Only this definition logs at all, and the sibling definitions
-(`.agents/skills/pre-pr/SKILL.md` for Codex, `.opencode/command/pre-pr.md`) still run
-the old ten-lens shape - the log is a 1-of-3 sample and the three paths are not
-measuring the same thing (#358). Treat cross-path comparisons accordingly.
+⚠ Only this definition logs at all, so the log is a 1-of-3 sample. The Codex
+definition (`.agents/skills/pre-pr/SKILL.md`) has since moved onto this same A/B/C
+reviewer shape, but `.opencode/command/pre-pr.md` still runs the old ten-lens one -
+so that third path is not measuring the same thing (#358). Treat cross-path
+comparisons with it accordingly.
 
 Record shape:
 

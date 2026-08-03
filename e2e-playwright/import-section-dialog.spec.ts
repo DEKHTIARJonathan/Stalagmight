@@ -25,13 +25,13 @@ async function openImportSectionDialog(page: Page): Promise<void> {
   });
   await expect(page.getByTestId('import-section-dialog')).toBeVisible({ timeout: 5000 });
   // The grid always carries a trailing blank row, so row 0 exists from the off.
-  await expect(page.getByTestId('grid-cell-0-length')).toBeVisible({ timeout: 5000 });
+  await expect(page.getByTestId('new-section-cell-0-length')).toBeVisible({ timeout: 5000 });
 }
 
 /** Type a value into a grid cell and commit it. */
 async function fillCell(page: Page, row: number, colKey: string, value: string): Promise<void> {
-  await page.getByTestId(`grid-cell-${row}-${colKey}`).dblclick();
-  await page.getByTestId('grid-cell-editor').fill(value);
+  await page.getByTestId(`new-section-cell-${row}-${colKey}`).dblclick();
+  await page.getByTestId('new-section-cell-editor').fill(value);
   await page.keyboard.press('Enter');
 }
 
@@ -75,22 +75,22 @@ test.describe('Import / Create Section dialog', () => {
 
     // Visible by default.
     for (const col of ['length', '_azimuth_avg', 'depth_in', 'depth_out', 'kind', 'comment']) {
-      await expect(page.getByTestId(`grid-header-${col}`)).toBeVisible();
+      await expect(page.getByTestId(`new-section-header-${col}`)).toBeVisible();
     }
     // Hidden by default: the in/out legs, pitch and LRUD.
     for (const col of ['azimuth_in', 'azimuth_out', '_pitch_avg', 'left', 'up']) {
-      await expect(page.getByTestId(`grid-header-${col}`)).toHaveCount(0);
+      await expect(page.getByTestId(`new-section-header-${col}`)).toHaveCount(0);
     }
     // The warning/id columns have nothing to say about an uncommitted row and
     // are dropped entirely - not merely hidden, so they are absent from the menu.
     await page.getByTestId('new-section-columns-menu').click();
-    await expect(page.getByTestId('col-toggle-left')).toBeVisible();
-    await expect(page.getByTestId('col-toggle-_warnings')).toHaveCount(0);
-    await expect(page.getByTestId('col-toggle-shot_id')).toHaveCount(0);
+    await expect(page.getByTestId('new-section-col-toggle-left')).toBeVisible();
+    await expect(page.getByTestId('new-section-col-toggle-_warnings')).toHaveCount(0);
+    await expect(page.getByTestId('new-section-col-toggle-shot_id')).toHaveCount(0);
 
     // Revealing LRUD replaces the old "Include LRUD" checkbox.
-    await page.getByTestId('col-toggle-input-left').click();
-    await expect(page.getByTestId('grid-header-left')).toBeVisible();
+    await page.getByTestId('new-section-col-toggle-input-left').click();
+    await expect(page.getByTestId('new-section-header-left')).toBeVisible();
   });
 
   test('typing a complete row enables Create and appends a fresh blank row', async ({ page }) => {
@@ -116,7 +116,7 @@ test.describe('Import / Create Section dialog', () => {
     await fillCell(page, 0, 'depth_out', '-1');
     await expect(create).toBeEnabled();
     await expect(page.getByTestId('import-section-blocker')).toHaveText('');
-    await expect(page.getByTestId('grid-cell-1-length')).toBeVisible();
+    await expect(page.getByTestId('new-section-cell-1-length')).toBeVisible();
   });
 
   test('pastes a block of shots out of a spreadsheet', async ({ context, page }) => {
@@ -128,14 +128,14 @@ test.describe('Import / Create Section dialog', () => {
     await page.evaluate(() =>
       navigator.clipboard.writeText('10\t90\t0\t-1\n20\t95\t-1\t-2\n30\t100\t-2\t-3')
     );
-    await page.getByTestId('grid-cell-0-length').click();
+    await page.getByTestId('new-section-cell-0-length').click();
     await page.keyboard.press('Control+v');
 
-    await expect(page.getByTestId('grid-cell-2-length')).toHaveText('30.0');
-    await expect(page.getByTestId('grid-cell-1-_azimuth_avg')).toHaveText('95.0');
-    await expect(page.getByTestId('grid-cell-2-depth_out')).toHaveText('-3.0');
+    await expect(page.getByTestId('new-section-cell-2-length')).toHaveText('30.0');
+    await expect(page.getByTestId('new-section-cell-1-_azimuth_avg')).toHaveText('95.0');
+    await expect(page.getByTestId('new-section-cell-2-depth_out')).toHaveText('-3.0');
     // Three filled rows plus the trailing blank the grid keeps.
-    await expect(page.getByTestId('grid-cell-3-length')).toHaveText('');
+    await expect(page.getByTestId('new-section-cell-3-length')).toHaveText('');
     await expect(page.getByTestId('import-section-create')).toBeEnabled();
   });
 
@@ -145,14 +145,14 @@ test.describe('Import / Create Section dialog', () => {
     await fillShotRow(page, 1, '20');
 
     // Fill the row-0 azimuth down over row 1.
-    await page.getByTestId('grid-cell-0-_azimuth_avg').click();
-    await page.getByTestId('grid-cell-1-_azimuth_avg').click({ modifiers: ['Shift'] });
+    await page.getByTestId('new-section-cell-0-_azimuth_avg').click();
+    await page.getByTestId('new-section-cell-1-_azimuth_avg').click({ modifiers: ['Shift'] });
     await page.keyboard.press('Control+d');
-    await expect(page.getByTestId('grid-cell-1-_azimuth_avg')).toHaveText('90.0');
+    await expect(page.getByTestId('new-section-cell-1-_azimuth_avg')).toHaveText('90.0');
 
     // Clearing a required cell marks it and blocks Create - the old dialog let
     // a flagged cell through and silently dropped rows instead.
-    const cell = page.getByTestId('grid-cell-1-length');
+    const cell = page.getByTestId('new-section-cell-1-length');
     await cell.click();
     await page.keyboard.press('Delete');
     await expect(cell).toHaveClass(/sg-cell-missing/);
