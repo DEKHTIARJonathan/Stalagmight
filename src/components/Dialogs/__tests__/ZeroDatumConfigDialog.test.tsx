@@ -142,6 +142,15 @@ function pickStation(index: number) {
   fireEvent.click(screen.getByText(`Station ${index}`));
 }
 
+/** Materialize the trailing blank row, which is how a shot gets added. */
+function appendShot() {
+  const blank = screen.getByTestId(`shot-editor-cell-${SHOT_COUNT}-length`);
+  fireEvent.doubleClick(blank);
+  const editor = screen.getByTestId('shot-editor-cell-editor');
+  fireEvent.change(editor, { target: { value: '5' } });
+  fireEvent.keyDown(editor, { key: 'Enter' });
+}
+
 function deleteRow(visibleIndex: number) {
   fireEvent.click(screen.getByTestId(`shot-delete-${visibleIndex}`));
 }
@@ -225,7 +234,9 @@ describe('ZeroDatumConfigDialog station pick', () => {
   it('keeps a pick at the far end pinned to the far end when a shot is appended', () => {
     renderDialog();
     pickStation(SHOT_COUNT);
-    fireEvent.click(screen.getByTestId('add-shot-button'));
+    // A shot is added by typing into the trailing blank row, which is the
+    // convention across the app's grids - there is no Add button any more.
+    appendShot();
     // Appending extends the section; the old last station keeps its number and
     // the new far end is one beyond it.
     expect(confirmedStationIndex()).toBe(SHOT_COUNT);

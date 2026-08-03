@@ -13,8 +13,7 @@
 import type { ReactNode } from 'react';
 import type { TFunction } from 'i18next';
 import type { GridColumn } from './SpreadsheetGrid/types';
-import { CloseIcon } from './icons';
-import { HelpTooltip } from './HelpTooltip';
+import { AlertCircleIcon, AlertTriangleIcon, CloseIcon } from './icons';
 import { formatFixed } from '../../i18n/format';
 import { getAzimuthAverage } from '../../utils/shotTable';
 import {
@@ -58,6 +57,9 @@ export interface EditableShotColumnContext {
   /** Advance the shot's kind around Normal -> Jump -> Reference; `-1` walks it
    *  backwards (shift-click). */
   onCycleKindAt: (visibleIndex: number, direction: 1 | -1) => void;
+  /** The trailing blank row, which is an invitation rather than a shot: it gets
+   *  no delete control and no kind glyph until something is typed into it. */
+  isPhantomAt: (visibleIndex: number) => boolean;
 }
 
 const fixed = (precision: number) => (value: unknown): string =>
@@ -68,8 +70,17 @@ const fixed = (precision: number) => (value: unknown): string =>
 export function buildEditableShotColumns(
   ctx: EditableShotColumnContext
 ): GridColumn<EditableShot>[] {
-  const { t, precision, readOnly, errorsAt, warningsAt, isFrozenAt, onDeleteAt, onCycleKindAt } =
-    ctx;
+  const {
+    t,
+    precision,
+    readOnly,
+    errorsAt,
+    warningsAt,
+    isFrozenAt,
+    onDeleteAt,
+    onCycleKindAt,
+    isPhantomAt,
+  } = ctx;
 
   const editableUnlessFrozen =
     (key: string) =>
@@ -124,21 +135,18 @@ export function buildEditableShotColumns(
         const warnings = warningsAt(index);
         if (errors.length === 0 && warnings.length === 0) return null;
         const hasErrors = errors.length > 0;
-        // The THEMED tooltip, not a native `title`: the old table used this one
-        // deliberately (a native tooltip is unstyled and slow to appear), and
-        // the dialog specs assert both halves of that choice.
+        // The data table's indicator, icon for icon: a triangle for a warning, a
+        // filled circle for an error, tinted by severity, with the messages in
+        // the tooltip. The old table's "!" badge was its own idiom.
         return (
-          <HelpTooltip
-            text={[...errors, ...warnings].join('\n')}
-            icon="!"
-            ariaLabel={hasErrors ? t('shotTable.warnings.error') : t('shotTable.warnings.warning')}
-            className="justify-center"
-            iconClassName={`w-5 h-5 text-xs border-transparent ${
-              hasErrors ? 'bg-error-20 text-error' : 'bg-warning-20 text-warning'
-            }`}
-            iconTestId={`shot-warning-${index}`}
-            tooltipTestId={`shot-warning-tooltip-${index}`}
-          />
+          <span
+            data-testid={`shot-warning-${index}`}
+            className={hasErrors ? 'text-error' : 'text-warning'}
+            title={[...errors, ...warnings].join('\n')}
+            aria-label={hasErrors ? t('shotTable.warnings.error') : t('shotTable.warnings.warning')}
+          >
+            {hasErrors ? <AlertCircleIcon size={14} /> : <AlertTriangleIcon size={14} />}
+          </span>
         );
       },
     },
@@ -186,6 +194,7 @@ export function buildEditableShotColumns(
         return undefined;
       },
       render: (shot, index): ReactNode => {
+        if (isPhantomAt(index)) return null;
         const glyph = shotKindGlyph(shot.kind);
         return (
           <span
@@ -231,7 +240,8 @@ export function buildEditableShotColumns(
             width: 30,
             align: 'center' as const,
             getValue: () => '',
-            render: (_shot: EditableShot, index: number): ReactNode => (
+            render: (_shot: EditableShot, index: number): ReactNode =>
+              isPhantomAt(index) ? null : (
               <button
                 type="button"
                 data-testid={`shot-delete-${index}`}

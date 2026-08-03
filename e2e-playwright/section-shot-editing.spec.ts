@@ -10,6 +10,19 @@ import {
 } from './helpers/app';
 import type { Locator } from '@playwright/test';
 
+/** Add a shot the way the app does everywhere: type into the trailing blank
+ *  row, which materializes it. There is no Add button. */
+async function addShotByTypingInBlankRow(dialog: Locator): Promise<void> {
+  const lengthCells = dialog.locator(
+    '[data-testid^="shot-editor-cell-"][data-testid$="-length"]'
+  );
+  const blankIndex = (await lengthCells.count()) - 1;
+  await dialog.getByTestId(`shot-editor-cell-${blankIndex}-length`).dblclick();
+  const editor = dialog.getByTestId('shot-editor-cell-editor');
+  await editor.fill('5');
+  await editor.press('Enter');
+}
+
 /** Edit one cell of the shot-table grid: open the overlay editor, replace the
  *  value, commit. Replaces the per-cell `<input>` the old table rendered. */
 async function editCell(
@@ -357,7 +370,9 @@ test.describe('Section and Shot Editing', () => {
     const shotRows = dialog.locator('[data-testid^="shot-row-"]');
     const initialCount = await shotRows.count();
 
-    await dialog.getByTestId('add-shot-button').click();
+    // A shot is added by typing into the trailing blank row - the app-wide
+    // convention; there is no Add button.
+    await addShotByTypingInBlankRow(dialog);
 
     await expect(shotRows).toHaveCount(initialCount + 1);
 
