@@ -13,6 +13,9 @@ import {
   PROJECT_EXTENSION,
   DMP_EXTENSION,
   COMPASS_EXTENSIONS,
+  IMPORTABLE_EXTENSIONS,
+  DROPPABLE_EXTENSIONS,
+  isDroppableFilePath,
   openDialog,
   saveDialog,
   takeTestFileDialogAnswer,
@@ -260,5 +263,34 @@ describe('E2E file dialog answers', () => {
     expect(() => takeTestFileDialogAnswer('save', 'recovery-export-salvage')).toThrow(
       'cannot be consumed by recovery-export-salvage',
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// isDroppableFilePath (#392/#394 F11 - dropping a .stalx must not be swallowed)
+// ---------------------------------------------------------------------------
+
+describe('isDroppableFilePath', () => {
+  it('includes PROJECT_EXTENSION in DROPPABLE_EXTENSIONS alongside every importable extension', () => {
+    expect(DROPPABLE_EXTENSIONS).toContain(PROJECT_EXTENSION);
+    for (const ext of IMPORTABLE_EXTENSIONS) {
+      expect(DROPPABLE_EXTENSIONS).toContain(ext);
+    }
+  });
+
+  it('accepts a dropped .stalx path', () => {
+    expect(isDroppableFilePath('/cave/project.stalx')).toBe(true);
+  });
+
+  it('accepts a dropped importable path (case-insensitive)', () => {
+    expect(isDroppableFilePath('/cave/survey.DMP')).toBe(true);
+  });
+
+  it('rejects an unrecognized extension', () => {
+    expect(isDroppableFilePath('/cave/notes.xyz')).toBe(false);
+  });
+
+  it('respects a narrower extension list when provided', () => {
+    expect(isDroppableFilePath('/cave/project.stalx', [DMP_EXTENSION])).toBe(false);
   });
 });

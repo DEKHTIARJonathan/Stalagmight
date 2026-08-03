@@ -10,7 +10,7 @@ import { invokeIpc } from './utils/ipc';
 import { extractFilename } from './utils/path';
 import { routeOpenedFile } from './utils/openOrImport';
 import { guardQuit } from './utils/quit';
-import { IMPORTABLE_EXTENSIONS } from './utils/fileDialogs';
+import { isDroppableFilePath } from './utils/fileDialogs';
 import { useBeforeUnload, useLoadingProgress, useTheme, useSyntacticHighlighting, useNetworkStatus, useUiScale } from './hooks';
 import { useOnboarding } from './hooks/useOnboarding';
 import { ORIENTATION_FLOW_ID } from './onboarding/flows';
@@ -252,14 +252,15 @@ function App() {
   }, [project, project?.file_path, project?.name, isDirty]);
 
   /**
-   * Handle file drop events for importable files (DMP/TML/TMLU/Compass/GPX).
-   * Delegates to the shared open/import router (same as the toolbar Import button
-   * and the Ctrl+I shortcut), which dispatches by extension and applies the
-   * read-only/closure-adjusted and "close the current project first" guards.
-   * The drag listener only forwards importable extensions (never `.stalx`), so
-   * a drop never opens/replaces a project.
+   * Handle file drop events for importable files (DMP/TML/TMLU/Compass/GPX)
+   * and `.stalx` projects. Delegates to the shared open/import router (same as
+   * the toolbar Import button, Ctrl+I, and native file-open), which dispatches
+   * by extension: a `.stalx` is routed as a plain OPEN (with its own
+   * unsaved-changes/SpeleoDB guards), everything else as an import, applying
+   * the read-only/closure-adjusted and "close the current project first"
+   * guards.
    */
-  const handleImportFileDrop = useCallback(async (filePath: string) => {
+  const handleDroppedFile = useCallback(async (filePath: string) => {
     // Tag the entry point so the routed import command (import_sections /
     // create_project_full / execute*Import) is attributed to drag-drop, like the
     // toolbar / menu / keyboard paths all set their source. routeOpenedFile clears
@@ -269,12 +270,9 @@ function App() {
   }, []);
 
   // Set up drag-drop event listener for importable files (DMP/TML/TMLU/Compass/GPX)
+  // and `.stalx` projects.
   useEffect(() => {
     let unlisten: (() => void) | undefined;
-    // Derived from the single source of truth so the drag-drop file detection
-    // can't drift from the router's `isImportable` guard / the picker filters.
-    // IMPORTABLE_EXTENSIONS has no leading dot; the path match expects one.
-    const importExts = IMPORTABLE_EXTENSIONS.map((ext) => `.${ext}`);
 
     const setupDragDrop = async () => {
       try {
@@ -283,17 +281,13 @@ function App() {
           const payload = event.payload as DragDropEvent;
 
           if (payload.type === 'enter') {
-            const hasImportFile = payload.paths?.some((path: string) =>
-              importExts.some((ext) => path.toLowerCase().endsWith(ext))
-            );
-            setIsDraggingImport(hasImportFile ?? false);
+            const hasDroppableFile = payload.paths?.some((path: string) => isDroppableFilePath(path));
+            setIsDraggingImport(hasDroppableFile ?? false);
           } else if (payload.type === 'drop') {
             setIsDraggingImport(false);
-            const importPath = payload.paths?.find((path: string) =>
-              importExts.some((ext) => path.toLowerCase().endsWith(ext))
-            );
-            if (importPath) {
-              handleImportFileDrop(importPath);
+            const droppedPath = payload.paths?.find((path: string) => isDroppableFilePath(path));
+            if (droppedPath) {
+              handleDroppedFile(droppedPath);
             }
           } else if (payload.type === 'leave') {
             setIsDraggingImport(false);
@@ -311,7 +305,7 @@ function App() {
         unlisten();
       }
     };
-  }, [handleImportFileDrop]);
+  }, [handleDroppedFile]);
 
   const persistCompletedOnboardingFlows = useCallback((flowIds: string[]) => {
     const normalized = Array.from(

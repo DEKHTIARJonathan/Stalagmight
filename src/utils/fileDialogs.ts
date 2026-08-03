@@ -119,6 +119,22 @@ export const IMPORTABLE_EXTENSIONS: readonly string[] = [
   ...IMPORT_EXTENSIONS.dmp,
 ];
 
+/**
+ * `IMPORTABLE_EXTENSIONS` plus `PROJECT_EXTENSION`, for surfaces (drag-drop)
+ * that accept both an import and a native project open and let `routeOpenedFile`
+ * decide which. Extensions have no leading dot, matching `IMPORTABLE_EXTENSIONS`.
+ */
+export const DROPPABLE_EXTENSIONS: readonly string[] = [...IMPORTABLE_EXTENSIONS, PROJECT_EXTENSION];
+
+/**
+ * Whether `path` ends in one of `extensions` (no leading dot), matched
+ * case-insensitively. Defaults to `DROPPABLE_EXTENSIONS`.
+ */
+export function isDroppableFilePath(path: string, extensions: readonly string[] = DROPPABLE_EXTENSIONS): boolean {
+  const lowerPath = path.toLowerCase();
+  return extensions.some((ext) => lowerPath.endsWith(`.${ext}`));
+}
+
 export function tmlOpenFilters() {
   return [
     { name: 'Ariane Survey', extensions: TML_EXTENSIONS },
