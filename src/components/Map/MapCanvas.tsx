@@ -2007,7 +2007,12 @@ function MapCanvas() {
     // `gasReachField`). Clear any stale field left from a previous session/project so the entry
     // card never resurrects a leftover ramp.
     if (!gasOriginChosen) {
+      // Not merely "field not yet fetched" - flag it like a failed fetch, or
+      // `overlayApplyAction` reads the null field as "recompute in flight" and
+      // HOLDS the previous project's ramp under the entry card (#395). The next
+      // origin choice + successful fetch clears the flag.
       setGasReachField(null);
+      setGasFieldFailed(true);
       return undefined;
     }
     if (gasComputeGate.skip) {
