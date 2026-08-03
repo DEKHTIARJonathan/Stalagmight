@@ -74,20 +74,27 @@ export const MAP_MIN_WIDTH = 360;
 export const MAP_MIN_HEIGHT = 200;
 
 /**
- * Right inset (px) for the on-map imagery attribution bar, and the Data dock
- * tab's own inset it is derived from.
+ * Right inset (px) of the Data dock's opener tab, which pins that tab's RIGHT
+ * edge (its width then follows its own contents).
  *
- * The attribution is a bottom-flush bar on the map's bottom edge, ending where
- * the Data dock's tab begins so the tab sits to its right. Esri requires the
- * source names not be obstructed by other UI, and the tab is drawn over the map
- * on that same edge - so the bar has to stop clear of it rather than share the
- * corner. The tab box is `min-h-7 px-2` around a chevron (plus a pin icon once
- * the panel is open), which measures ~45-48px; 56 leaves headroom for the pin
- * variant and for the webview text-zoom that grows the box.
+ * Shared with the on-map imagery attribution bar: the bar runs along the map's
+ * bottom edge and ends flush against this tab's left edge, so the two read as
+ * one row and neither obstructs the other (Esri requires the source names stay
+ * unobstructed, and the tab drew straight over them before). The bar's own inset
+ * is `DATA_DOCK_TAB_INSET + <measured tab width>` - the Dock reports that width
+ * through `onTabExtentChange`, because it changes when the panel opens (label ->
+ * pin + close icons) and again under the webview text-zoom.
  */
 export const DATA_DOCK_TAB_INSET = 40;
-const DATA_DOCK_TAB_MAX_WIDTH = 56;
-export const MAP_ATTRIBUTION_RIGHT_INSET = DATA_DOCK_TAB_INSET + DATA_DOCK_TAB_MAX_WIDTH;
+
+/**
+ * Attribution-bar inset assumed until the Dock's first tab measurement lands
+ * (one frame), and in a zero-layout test environment. Sized from the closed tab
+ * as it measures in practice - `DATA_DOCK_TAB_INSET` plus a ~45px tab plus the
+ * Data overlay's own right offset - so the bar's first paint does not visibly
+ * jump into place.
+ */
+export const DATA_DOCK_TAB_FALLBACK_INSET = 94;
 
 /**
  * Panel reveal/close timing budget (ms). Centralized so the interacting graces are

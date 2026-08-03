@@ -27,7 +27,7 @@ import {
   MAP_MIN_WIDTH,
   MAP_MIN_HEIGHT,
   DATA_DOCK_TAB_INSET,
-  MAP_ATTRIBUTION_RIGHT_INSET,
+  DATA_DOCK_TAB_FALLBACK_INSET,
 } from './layoutConstants';
 import { useSidePanelSqueeze, useDataPanelSqueeze, resolveResize } from './sidePanelSqueeze';
 import { ChevronDownIcon, ChevronLeftIcon, ChevronRightIcon, ChevronUpIcon } from '../common/icons';
@@ -96,6 +96,40 @@ export default function SingleSystemView() {
   // Drives the imagery attribution overlay below; MapCanvas adds and removes the
   // satellite source off this same flag.
   const showSatellite = useUIStore((s) => s.showSatellite);
+  // Right inset (px) putting the imagery attribution bar flush against the left
+  // edge of the Data dock's tab.
+  //
+  // Measured rather than computed. The tab's own `tabInset` is relative to the
+  // Data overlay, which is portaled to Main with its own left/right offsets, so
+  // it does not line up with this column's right edge; and the tab's width moves
+  // with its contents (label when closed, pin + close icons when open) and with
+  // webview text-zoom. Arithmetic on either left a visible gap.
+  const mapAreaRef = useRef<HTMLDivElement>(null);
+  const dataTabLeftRef = useRef<number | null>(null);
+  const [attributionRight, setAttributionRight] = useState(DATA_DOCK_TAB_FALLBACK_INSET);
+
+  const syncAttributionInset = useCallback(() => {
+    const host = mapAreaRef.current;
+    const tabLeft = dataTabLeftRef.current;
+    if (!host || tabLeft === null) return;
+    // Both edges in viewport coordinates, so the overlay's own offsets cancel.
+    setAttributionRight(Math.max(0, Math.round(host.getBoundingClientRect().right - tabLeft)));
+  }, []);
+
+  const handleDataTabBounds = useCallback((rect: DOMRect) => {
+    dataTabLeftRef.current = rect.left;
+    syncAttributionInset();
+  }, [syncAttributionInset]);
+
+  // The tab observer above fires when the TAB changes; this covers the other
+  // half - the map column itself resizing as side panels open or drag.
+  useEffect(() => {
+    const host = mapAreaRef.current;
+    if (!host || typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(syncAttributionInset);
+    observer.observe(host);
+    return () => observer.disconnect();
+  }, [syncAttributionInset]);
 
   // Export mode shows a large WYSIWYG export preview over the map area; it
   // mirrors the inline ExportControls options via the shared export store.
@@ -728,7 +762,7 @@ export default function SingleSystemView() {
         {/* Map + data table. `min-w-0` lets this column shrink when both side
             panels dock (otherwise flex refuses and push behavior breaks). */}
         <div className="relative flex-1 flex flex-col min-w-0 overflow-hidden">
-          <div className="flex-1 relative">
+          <div ref={mapAreaRef} className="flex-1 relative">
             <ErrorBoundary panelName="Map">
               <MapCanvas />
             </ErrorBoundary>
@@ -740,15 +774,15 @@ export default function SingleSystemView() {
                 which is map chrome's usual home in this view - see the
                 OfflineIndicator above.
 
-                Sits on the map's bottom edge, ending where the Data dock's tab
-                begins so the tab is to its right and neither obstructs the other
-                (Esri's terms forbid covering the names, and the tab drew over
-                them before this inset existed). The ScaleControl holds the other
-                end of the same edge, bottom-left. */}
+                Sits on the map's bottom edge, flush against the left edge of the
+                Data dock's tab, so the tab is to its right and neither obstructs
+                the other (Esri's terms forbid covering the names, and the tab
+                drew over them before this inset existed). The ScaleControl holds
+                the other end of the same edge, bottom-left. */}
             <MapAttribution
               visible={showSatellite}
               className="absolute bottom-0 z-10"
-              style={{ right: MAP_ATTRIBUTION_RIGHT_INSET }}
+              style={{ right: attributionRight }}
             />
             {/* Export mode: large WYSIWYG preview of the image export, overlaid
                 on the (still-mounted) map. Only for the image export type -
@@ -784,8 +818,9 @@ export default function SingleSystemView() {
             tabLabels={panelLabels.data}
             // Keep the Data tab clear of the Details tab on the right (it can
             // ride up to the same height when the Data panel is tall). Shared
-            // with the imagery attribution bar, which stops short of this tab.
+            // with the imagery attribution bar, which butts against this tab.
             tabInset={DATA_DOCK_TAB_INSET}
+            onTabBoundsChange={handleDataTabBounds}
             fullscreen={dataTableFullScreen}
             // Portal the overlay to Main so it can span the full width (the
             // reflow spacer stays in the center column to push the map up).

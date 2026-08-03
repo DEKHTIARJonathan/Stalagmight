@@ -126,14 +126,15 @@ describe('MapAttribution', () => {
       expect(chip.className).toContain('text-text-secondary');
     });
 
-    it('rounds only its top-right corner', async () => {
+    it('rounds only its top-left corner', async () => {
       // It is a bottom-flush bar butted against the map edge and the Data dock
-      // tab, not a floating card - a fully rounded chip reads as detached.
+      // tab, not a floating card - a fully rounded chip reads as detached, and
+      // top-left is the sole corner not meeting something.
       render(<MapAttribution visible />);
       const chip = await screen.findByTestId('map-attribution');
-      // Token-wise, not substring: `rounded-tr` contains `rounded`.
+      // Token-wise, not substring: `rounded-tl` contains `rounded`.
       const rounding = [...chip.classList].filter((c) => c.startsWith('rounded'));
-      expect(rounding).toEqual(['rounded-tr']);
+      expect(rounding).toEqual(['rounded-tl']);
     });
   });
 

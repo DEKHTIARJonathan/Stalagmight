@@ -244,13 +244,19 @@ map:
 | Global View | `GlobalViewMap.tsx` | always - imagery is its base layer |
 | Section Preview | `SectionPreview.tsx`, `variant="compact"` | the section has a GPS origin |
 
-On the survey map it is a bottom-flush bar ending where the Data dock's tab
-begins, so the two read as one row of chrome and neither obstructs the other -
-`MAP_ATTRIBUTION_RIGHT_INSET` in `layoutConstants.ts` derives that inset from the
-tab's own, so they move together. Only its top-right corner is rounded; the other
-three meet the map edge and the tab.
+On the survey map it is a bottom-flush bar butted against the left edge of the
+Data dock's tab, so the two read as one continuous strip and neither obstructs the
+other. Only its top-left corner is rounded - the bottom meets the map edge and the
+right meets the tab.
 
-It collapses to the `i` affordance automatically below a 580px host width, and
+**That inset is measured, not computed.** The Dock reports its tab's viewport rect
+through `onTabBoundsChange`, and `SingleSystemView` subtracts it from the map
+column's own rect. Two things defeat the arithmetic version: the Data overlay is
+portalled to Main with its own left/right offsets, so `tabInset` is not relative to
+the map column; and the tab's width changes when the panel opens (label to pin +
+close icons) and again under webview text-zoom. A static offset left a 9px gap.
+
+It collapses to the `i` affordance automatically below a 540px host width, and
 always in the Section Preview. That threshold is a budget for everything on the
 bottom edge (names + tab inset + ScaleControl) - undershooting it slides the names
 under the scale bar, which is the obstruction the terms forbid. The expanded panel
@@ -261,7 +267,7 @@ Colours come from the app's theme tokens (`bg-panel-90 text-text-secondary`), th
 same ones `PanelOpenerTab` uses, so a dark theme gets a dark bar. Esri's
 recommended design (`#323232` on white at 65%, 12px or larger) is guidance rather
 than a term of use; what the terms require is legible, unobstructed names, and the
-bar renders at 11px against a themed backing.
+bar renders at 10px against a themed backing.
 
 **The string is fetched, not hard-coded.** `src-tauri/src/tile_attribution.rs`
 reads `copyrightText` from the provider's `service_info_url`, caches it for a day,
