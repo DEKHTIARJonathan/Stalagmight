@@ -4,7 +4,7 @@ import { useProjectStore } from '../../store/projectStore';
 import { useProject } from '../../hooks/useProject';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
-import { trackDialogComplete } from '../../utils/telemetry';
+import { trackDialogComplete, clearProjectActionSource } from '../../utils/telemetry';
 import { routeOpenedFile } from '../../utils/openOrImport';
 
 /**
@@ -31,10 +31,22 @@ export default function ImportAsNewProjectDialog() {
   const fileName = dialogData.fileName as string | undefined;
   if (!path || !fileName) return null;
 
+  // Cancel / backdrop-close / a non-continuing exit all abandon this import
+  // outright, so the pending entry-point source (handed off by openOrImport's
+  // `handedOff = true`) must be cleared here - otherwise it survives to
+  // mis-attribute a later, unrelated project command.
+  const handleAbandon = () => {
+    clearProjectActionSource();
+    closeDialog();
+  };
+
   const handleConfirm = async () => {
     trackDialogComplete('import-as-new-project');
     const result = await handleCloseProject();
-    if (!result.success) return;
+    if (!result.success) {
+      clearProjectActionSource();
+      return;
+    }
     closeDialog();
     await routeOpenedFile(path);
   };
@@ -42,7 +54,7 @@ export default function ImportAsNewProjectDialog() {
   return (
     <DialogWrapper
       title={t('dialogs.importAsNewProject.title')}
-      onClose={closeDialog}
+      onClose={handleAbandon}
       size="sm"
       data-testid="import-as-new-project-dialog"
     >
@@ -56,7 +68,7 @@ export default function ImportAsNewProjectDialog() {
           </p>
         )}
         <div className="flex justify-end gap-2 pt-2 border-t border-border">
-          <Button onClick={closeDialog} data-testid="import-as-new-project-cancel">
+          <Button onClick={handleAbandon} data-testid="import-as-new-project-cancel">
             {t('common.actions.cancel')}
           </Button>
           <Button

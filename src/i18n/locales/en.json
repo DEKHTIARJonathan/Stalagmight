@@ -1211,10 +1211,8 @@
       "shots_other": "{{count}} shots",
       "loops_one": "{{count}} loop reconstructed",
       "loops_other": "{{count}} loops reconstructed",
-      "unitConversion": "Converted {{conversion}}",
-      "notImported_one": "{{count}} section from the file was not imported",
-      "notImported_other": "{{count}} sections from the file were not imported",
       "viewDetails": "View details",
+      "hideDetails": "Hide details",
       "continue": "Continue to map"
     },
     "importAsNewProject": {

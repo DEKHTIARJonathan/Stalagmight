@@ -84,7 +84,6 @@ describe('routeOpenedFile', () => {
     expect(useUIStore.getState().activeDialog).toBe('import-as-new-project');
     expect(useUIStore.getState().dialogData).toMatchObject({
       path: '/cave/track.gpx',
-      formatLabel: 'GPX',
       fileName: 'track.gpx',
     });
     expect(parseGpx).not.toHaveBeenCalled();

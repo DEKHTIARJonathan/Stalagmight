@@ -15,9 +15,12 @@ const MAX_VISIBLE_WARNINGS = 3;
  * the import (everything it describes already happened), it just tells the
  * user what to expect before they go looking in the data table.
  *
- * "N sections not imported" (when `sections_found > sections_imported`) is
- * folded into the warnings list rather than the summary line, since it is bad
- * news the summary's celebratory phrasing shouldn't bury.
+ * `sections_found` is the whole-file section count, not a promise every
+ * section was imported - DMP/Compass/Walls wizards let the user deliberately
+ * deselect surveys, so a frontend-derived "N sections not imported" warning
+ * from `sections_found - sections_imported` would false-alarm on every
+ * partial selection. Every genuine silent-drop class (e.g. TML zero-shot
+ * sections) is instead named explicitly in `receipt.warnings` by the backend.
  */
 export default function ImportReceiptDialog() {
   const { t } = useTranslation();
@@ -28,13 +31,7 @@ export default function ImportReceiptDialog() {
   const receipt = dialogData.receipt as ImportReceipt | undefined;
   if (!receipt) return null;
 
-  const notImportedCount = Math.max(0, receipt.sections_found - receipt.sections_imported);
-  const allWarnings = [
-    ...(notImportedCount > 0
-      ? [t('dialogs.importReceipt.notImported', { count: notImportedCount })]
-      : []),
-    ...receipt.warnings,
-  ];
+  const allWarnings = receipt.warnings;
   const visibleWarnings = allWarnings.slice(0, MAX_VISIBLE_WARNINGS);
   const hiddenWarnings = allWarnings.slice(MAX_VISIBLE_WARNINGS);
   const hasHiddenWarnings = hiddenWarnings.length > 0;
@@ -66,9 +63,7 @@ export default function ImportReceiptDialog() {
         <ul className="space-y-1 text-sm text-text-primary">
           <li data-testid="import-receipt-summary">{summaryParts.join(' - ')}</li>
           {receipt.unit_conversion != null && (
-            <li data-testid="import-receipt-unit-conversion">
-              {t('dialogs.importReceipt.unitConversion', { conversion: receipt.unit_conversion })}
-            </li>
+            <li data-testid="import-receipt-unit-conversion">{receipt.unit_conversion}</li>
           )}
         </ul>
 
@@ -94,7 +89,7 @@ export default function ImportReceiptDialog() {
               onClick={() => setExpanded((v) => !v)}
               data-testid="import-receipt-details"
             >
-              {t('dialogs.importReceipt.viewDetails')}
+              {expanded ? t('dialogs.importReceipt.hideDetails') : t('dialogs.importReceipt.viewDetails')}
             </Button>
           )}
           <Button variant="primary" onClick={handleContinue} data-testid="import-receipt-continue">

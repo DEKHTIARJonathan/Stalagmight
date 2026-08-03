@@ -87,20 +87,22 @@ describe('ImportReceiptDialog', () => {
     );
   });
 
-  it('shows the unit conversion line only when present', () => {
+  it('shows the unit conversion line only when present, as the exact backend sentence', () => {
     dialogData.receipt = baseReceipt();
     const { rerender } = render(<ImportReceiptDialog />);
     expect(screen.queryByTestId('import-receipt-unit-conversion')).not.toBeInTheDocument();
 
-    dialogData.receipt = baseReceipt({ unit_conversion: 'feet to meters' });
+    dialogData.receipt = baseReceipt({ unit_conversion: 'Lengths converted from feet to meters' });
     rerender(<ImportReceiptDialog />);
-    expect(screen.getByTestId('import-receipt-unit-conversion')).toBeInTheDocument();
+    expect(screen.getByTestId('import-receipt-unit-conversion').textContent).toBe(
+      'Lengths converted from feet to meters',
+    );
   });
 
-  it('folds a not-fully-imported count into the warnings', () => {
-    dialogData.receipt = baseReceipt({ sections_found: 5, sections_imported: 3 });
+  it('does NOT derive a "not imported" warning from sections_found/sections_imported', () => {
+    dialogData.receipt = baseReceipt({ sections_found: 5, sections_imported: 3, warnings: [] });
     render(<ImportReceiptDialog />);
-    expect(screen.getByTestId('import-receipt-warnings').textContent).toContain('"count":2');
+    expect(screen.queryByTestId('import-receipt-warnings')).not.toBeInTheDocument();
   });
 
   it('hides "View details" when there are no extra warnings to expand', () => {
@@ -109,14 +111,20 @@ describe('ImportReceiptDialog', () => {
     expect(screen.queryByTestId('import-receipt-details')).not.toBeInTheDocument();
   });
 
-  it('toggles the rest of the warnings behind "View details"', () => {
+  it('toggles the rest of the warnings behind "View details", and its label flips to "Hide details"', () => {
     dialogData.receipt = baseReceipt({
       warnings: ['w1', 'w2', 'w3', 'w4', 'w5'],
     });
     render(<ImportReceiptDialog />);
     expect(screen.queryByTestId('import-receipt-warnings-more')).not.toBeInTheDocument();
-    fireEvent.click(screen.getByTestId('import-receipt-details'));
+    const detailsButton = screen.getByTestId('import-receipt-details');
+    expect(detailsButton.textContent).toBe('dialogs.importReceipt.viewDetails');
+    fireEvent.click(detailsButton);
     expect(screen.getByTestId('import-receipt-warnings-more').textContent).toContain('w5');
+    expect(detailsButton.textContent).toBe('dialogs.importReceipt.hideDetails');
+    fireEvent.click(detailsButton);
+    expect(screen.queryByTestId('import-receipt-warnings-more')).not.toBeInTheDocument();
+    expect(detailsButton.textContent).toBe('dialogs.importReceipt.viewDetails');
   });
 
   it('continuing tracks completion and closes', () => {

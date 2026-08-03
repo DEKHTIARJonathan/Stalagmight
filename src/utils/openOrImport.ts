@@ -39,8 +39,8 @@ import { needsSpeleoHandBackPrompt } from './quit';
  * guard) and then re-routes the same path, which - with no project open - falls
  * through to the normal new-project import chain.
  */
-function openImportAsNewProject(ui: ReturnType<typeof useUIStore.getState>, path: string, formatLabel: string): void {
-  ui.openDialog('import-as-new-project', { path, formatLabel, fileName: extractFilename(path) });
+function openImportAsNewProject(ui: ReturnType<typeof useUIStore.getState>, path: string): void {
+  ui.openDialog('import-as-new-project', { path, fileName: extractFilename(path) });
 }
 
 /**
@@ -138,7 +138,7 @@ export async function routeOpenedFile(path: string, errorTitle = 'Open Failed'):
       // guard so a GPX opened/dropped while a project is open is rejected, not
       // silently added to the current project.
       if (store.project) {
-        openImportAsNewProject(ui, path, 'GPX');
+        openImportAsNewProject(ui, path);
         handedOff = true;
         return;
       }
@@ -154,7 +154,7 @@ export async function routeOpenedFile(path: string, errorTitle = 'Open Failed'):
     } else if (lowerPath.endsWith('.tml') || lowerPath.endsWith('.tmlu')) {
       // TML/TMLU import always creates a new project.
       if (store.project) {
-        openImportAsNewProject(ui, path, 'Ariane TML');
+        openImportAsNewProject(ui, path);
         handedOff = true;
         return;
       }
@@ -170,7 +170,7 @@ export async function routeOpenedFile(path: string, errorTitle = 'Open Failed'):
     } else if (lowerPath.endsWith('.mak') || lowerPath.endsWith('.dat')) {
       // Compass import always creates a new project.
       if (store.project) {
-        openImportAsNewProject(ui, path, 'Compass');
+        openImportAsNewProject(ui, path);
         handedOff = true;
         return;
       }
@@ -186,7 +186,7 @@ export async function routeOpenedFile(path: string, errorTitle = 'Open Failed'):
     } else if (lowerPath.endsWith('.wpj') || lowerPath.endsWith('.srv')) {
       // Walls import always creates a new project.
       if (store.project) {
-        openImportAsNewProject(ui, path, 'Walls');
+        openImportAsNewProject(ui, path);
         handedOff = true;
         return;
       }

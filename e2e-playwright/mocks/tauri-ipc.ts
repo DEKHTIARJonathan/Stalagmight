@@ -2117,6 +2117,12 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           case 'import_sections': {
             console.log('[Mock IPC] import_sections called with:', args);
             const rawSections = Array.isArray(args?.sections) ? (args?.sections as Array<Record<string, unknown>>) : [];
+            if (rawSections.length === 0) {
+              // Mirrors the real backend's `sections.is_empty()` early return
+              // (execute_import_sections, command_import.rs): no receipt when
+              // nothing was imported.
+              return { success: true, warnings: [], error: null, section_ids: [] };
+            }
             if (!currentProject) {
               const now = new Date().toISOString();
               sectionCounter = 0;

@@ -1,0 +1,97 @@
+/**
+ * Component test (#110/#391) - GPX waypoints-only import must apply the same
+ * deferred-save gate as the TML/Compass/Walls dialogs: a "SYSTEM" save-failure
+ * warning means the import is unsaved, so the save-failure dialog is shown and
+ * the receipt is NOT (the receipt describes a persisted import).
+ */
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+
+vi.mock('../../utils/telemetry', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../utils/telemetry')>()),
+  trackDialogComplete: vi.fn(),
+  setSource: vi.fn(),
+}));
+
+import GpxSelectionDialog from './GpxSelectionDialog';
+import { useProjectStore } from '../../store/projectStore';
+import { useUIStore } from '../../store/uiStore';
+import type { CommandResult, GpxFile, ValidationWarning } from '../../types/commands';
+import type { ImportReceipt } from '../../types/ipc/ImportReceipt';
+
+const SAVE_WARNING: ValidationWarning = {
+  code: 'SYSTEM',
+  message:
+    'Imported, but could not save the new project to disk: disk full. ' +
+    'Your changes are unsaved - please save manually.',
+  severity: 'warning',
+};
+
+const RECEIPT: ImportReceipt = {
+  source_format: 'GPX',
+  file_name: 'waypoints.gpx',
+  sections_found: 0,
+  sections_imported: 0,
+  shot_count: 0,
+  closures_requested: 0,
+  closures_created: 0,
+  unit_conversion: null,
+  warnings: [],
+};
+
+const waypointsOnlyGpx: GpxFile = {
+  name: 'waypoints.gpx',
+  waypoints: [{ latitude: 1, longitude: 2, elevation: null, name: 'wpt-1', comment: null, time: null }],
+  tracks: [],
+  routes: [],
+};
+
+const ok = (warnings: ValidationWarning[], import_receipt?: ImportReceipt): CommandResult =>
+  ({ success: true, error: null, warnings, section_ids: [], import_receipt } as CommandResult);
+
+let executeGpxImport: ReturnType<typeof vi.fn>;
+let calculateFileHash: ReturnType<typeof vi.fn>;
+let checkDuplicateImport: ReturnType<typeof vi.fn>;
+let openDialog: ReturnType<typeof vi.fn>;
+let closeDialog: ReturnType<typeof vi.fn>;
+
+beforeEach(() => {
+  openDialog = vi.fn();
+  closeDialog = vi.fn();
+  executeGpxImport = vi.fn();
+  calculateFileHash = vi.fn().mockResolvedValue('hash');
+  checkDuplicateImport = vi.fn().mockResolvedValue(false);
+  useProjectStore.setState({ executeGpxImport, calculateFileHash, checkDuplicateImport });
+  useUIStore.setState({
+    openDialog,
+    closeDialog,
+    setView: vi.fn(),
+    triggerFitToBounds: vi.fn(),
+  });
+});
+
+describe('GpxSelectionDialog waypoints-only import (#110/#391)', () => {
+  it('shows the save-failure dialog (not the receipt) on a deferred-save partial success', async () => {
+    executeGpxImport.mockResolvedValue(ok([SAVE_WARNING], RECEIPT));
+
+    render(<GpxSelectionDialog gpxFile={waypointsOnlyGpx} filePath="/tmp/waypoints.gpx" />);
+    await userEvent.click(await screen.findByTestId('gpx-import-confirm'));
+
+    await waitFor(() =>
+      expect(openDialog).toHaveBeenCalledWith('error', expect.objectContaining({ title: 'Import Warning' })),
+    );
+    expect(openDialog).not.toHaveBeenCalledWith('import-receipt', expect.anything());
+  });
+
+  it('shows the receipt when the import fully succeeds with a receipt', async () => {
+    executeGpxImport.mockResolvedValue(ok([], RECEIPT));
+
+    render(<GpxSelectionDialog gpxFile={waypointsOnlyGpx} filePath="/tmp/waypoints.gpx" />);
+    await userEvent.click(await screen.findByTestId('gpx-import-confirm'));
+
+    await waitFor(() =>
+      expect(openDialog).toHaveBeenCalledWith('import-receipt', { receipt: RECEIPT }),
+    );
+  });
+});

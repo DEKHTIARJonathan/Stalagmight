@@ -7,7 +7,7 @@ import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import type { GpxFile } from '../../types/commands';
 import { setSource } from '../../utils/telemetry';
-import { completeImportToSingleView } from '../../utils/saveFeedback';
+import { completeImportToSingleView, finalizeDeferredSaveWarnings } from '../../utils/saveFeedback';
 
 interface GpxSelectionDialogProps {
   gpxFile: GpxFile;
@@ -95,18 +95,25 @@ export default function GpxSelectionDialog({ gpxFile, filePath }: GpxSelectionDi
         depthInverted
       );
 
-      completeImportToSingleView(
-        'gpx-selection',
-        { closeDialog, setView, triggerFitToBounds, openDialog },
-        result.import_receipt,
-      );
+      const importUi = { closeDialog, setView, triggerFitToBounds, openDialog };
 
       if (!result.success) {
+        completeImportToSingleView('gpx-selection', importUi);
         openDialog('error', {
           title: 'Import Errors',
           message: result.error ?? 'Unknown error during import',
         });
+        return;
       }
+
+      // A partial-success import (new-project deferred save failed) returns
+      // success WITH a "SYSTEM" save-failure warning. Surface ONLY that instead
+      // of the receipt, so "unsaved - save manually" isn't buried (#110).
+      if (finalizeDeferredSaveWarnings(result.warnings, 'gpx-selection', importUi)) {
+        return;
+      }
+
+      completeImportToSingleView('gpx-selection', importUi, result.import_receipt);
     } catch (e) {
       setIsImporting(false);
       openDialog('error', {

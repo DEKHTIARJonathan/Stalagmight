@@ -53,9 +53,16 @@ test.describe('Import receipt dialog', () => {
 
     await expect(page.getByTestId('import-receipt-summary')).toContainText('5');
     await expect(page.getByTestId('import-receipt-summary')).toContainText('42');
-    await expect(page.getByTestId('import-receipt-unit-conversion')).toContainText('feet to meters');
+    // Exact text, not a substring: the rendered line must be exactly the
+    // backend's already-complete sentence, never doubled up with frontend
+    // prose (e.g. "Converted Lengths converted from feet to meters").
+    await expect(page.getByTestId('import-receipt-unit-conversion')).toHaveText(
+      'Lengths converted from feet to meters',
+    );
 
-    // 1 not-imported note + 2 real warnings = 3 visible, none hidden yet.
+    // 2 real warnings, no frontend-derived "not imported" note (sections_found >
+    // sections_imported is not a warning - the wizards let users deliberately
+    // deselect surveys) = 2 visible, none hidden yet.
     await expect(page.getByTestId('import-receipt-warnings')).toBeVisible();
     await expect(page.getByTestId('import-receipt-details')).toBeHidden();
 
@@ -73,7 +80,12 @@ test.describe('Import receipt dialog', () => {
           closures_requested: 0,
           closures_created: 0,
           unit_conversion: null,
-          warnings: ['Survey A had 2 unresolved stations', 'Survey B date is missing', 'Survey C was empty'],
+          warnings: [
+            'Survey A had 2 unresolved stations',
+            'Survey B date is missing',
+            'Survey C was empty',
+            'Survey D had a zero-shot section',
+          ],
         },
       });
     });

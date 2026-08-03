@@ -15,7 +15,7 @@ vi.mock('react-i18next', () => ({
   }),
 }));
 
-const dialogData: { path?: string; formatLabel?: string; fileName?: string } = {};
+const dialogData: { path?: string; fileName?: string } = {};
 
 vi.mock('../../../store/uiStore', () => ({
   useUIStore: (sel: (s: unknown) => unknown) => sel({ closeDialog, dialogData }),
@@ -32,7 +32,10 @@ vi.mock('../../../hooks/useProject', () => ({
 
 vi.mock('../../../utils/openOrImport', () => ({ routeOpenedFile: vi.fn() }));
 
-vi.mock('../../../utils/telemetry', () => ({ trackDialogComplete: vi.fn() }));
+vi.mock('../../../utils/telemetry', () => ({
+  trackDialogComplete: vi.fn(),
+  clearProjectActionSource: vi.fn(),
+}));
 
 vi.mock('../DialogWrapper', () => ({
   DialogWrapper: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
@@ -45,14 +48,13 @@ vi.mock('../../common/Button', () => ({
 }));
 
 import { routeOpenedFile } from '../../../utils/openOrImport';
-import { trackDialogComplete } from '../../../utils/telemetry';
+import { trackDialogComplete, clearProjectActionSource } from '../../../utils/telemetry';
 import ImportAsNewProjectDialog from '../ImportAsNewProjectDialog';
 
 describe('ImportAsNewProjectDialog', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     dialogData.path = '/cave/track.gpx';
-    dialogData.formatLabel = 'GPX';
     dialogData.fileName = 'track.gpx';
     projectName = 'My Cave';
     handleCloseProject.mockResolvedValue({ success: true });
@@ -74,7 +76,7 @@ describe('ImportAsNewProjectDialog', () => {
     expect(closeDialog).toHaveBeenCalled();
   });
 
-  it('aborts gracefully when the close is deferred to a guard dialog (unsaved changes)', async () => {
+  it('aborts gracefully when the close is deferred to a guard dialog (unsaved changes), clearing the pending source', async () => {
     handleCloseProject.mockResolvedValue({ success: false, error: 'Showing dialog' });
     render(<ImportAsNewProjectDialog />);
     fireEvent.click(screen.getByTestId('import-as-new-project-confirm'));
@@ -84,13 +86,17 @@ describe('ImportAsNewProjectDialog', () => {
     // The guard dialog (unsaved-changes / speleodb-close) now owns the flow -
     // this dialog must not force itself closed on top of it.
     expect(closeDialog).not.toHaveBeenCalled();
+    // But the import itself is abandoned here, so the pending entry-point
+    // source must not survive to mis-attribute a later, unrelated command.
+    expect(clearProjectActionSource).toHaveBeenCalled();
   });
 
-  it('cancelling closes without touching the project or the picked file', () => {
+  it('cancelling closes without touching the project or the picked file, clearing the pending source', () => {
     render(<ImportAsNewProjectDialog />);
     fireEvent.click(screen.getByTestId('import-as-new-project-cancel'));
     expect(handleCloseProject).not.toHaveBeenCalled();
     expect(routeOpenedFile).not.toHaveBeenCalled();
     expect(closeDialog).toHaveBeenCalled();
+    expect(clearProjectActionSource).toHaveBeenCalled();
   });
 });
