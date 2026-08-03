@@ -136,6 +136,10 @@ export interface SavedManualPlacingState {
   confirmedOverlaps?: Array<[number, ConfirmedOverlapInfo]>;
   existingShotUpdates?: ExistingShotUpdateLocal[];
   earlyImported?: Array<[number, number]>;
+  /** Section IDs accumulated across all import_sections calls so far this wizard run. */
+  importedSectionIds?: number[];
+  /** import_receipt from each import_sections call so far this wizard run. */
+  importedReceipts?: ImportReceipt[];
   /** DMP indices of a segment just placed that needs immediate import on dialog restore. */
   pendingSegmentImport?: number[];
   /** DMP indices of segments the user chose to discard ("Do not place"). */
@@ -1379,12 +1383,12 @@ export default function DmpNewImportDialog({
   const transitionToPlacingInFlightRef = useRef(false);
 
   // Accumulate all section IDs created during import for post-import orphan detection
-  const importedSectionIdsRef = useRef<number[]>([]);
+  const importedSectionIdsRef = useRef<number[]>(saved?.importedSectionIds ?? []);
   // Accumulate the import_receipt from each import_sections call (early/segment/
   // late/pending) into one #391 summary for the whole wizard run, keyed by
   // constant file-level provenance (source label/name/total sections) spread
   // into every call below.
-  const importedReceiptsRef = useRef<ImportReceipt[]>([]);
+  const importedReceiptsRef = useRef<ImportReceipt[]>(saved?.importedReceipts ?? []);
   const dmpFilePath = (useUIStore.getState().dialogData as Record<string, unknown>).filePath as string | undefined;
   const dmpProvenance = {
     sourceLabel: 'mNemo DMP',
@@ -2622,7 +2626,7 @@ export default function DmpNewImportDialog({
     }
 
     trackDialogComplete('dmp-import-new');
-    onComplete(importedSectionIdsRef.current);
+    onComplete(importedSectionIdsRef.current, aggregateImportReceipts(importedReceiptsRef.current));
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase, isImporting, isCalculating]);
 
@@ -3403,6 +3407,8 @@ export default function DmpNewImportDialog({
       existingShotUpdates: [...existingShotUpdatesRef.current],
       earlyImported: Array.from(earlyImportedRef.current.entries()),
       discardedIndices: Array.from(discardedIndicesRef.current),
+      importedSectionIds: [...importedSectionIdsRef.current],
+      importedReceipts: [...importedReceiptsRef.current],
     });
 
     const openPlacementDialog = (

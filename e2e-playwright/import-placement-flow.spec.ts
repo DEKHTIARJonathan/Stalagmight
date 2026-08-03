@@ -244,9 +244,17 @@ test.describe('Import Placement Flow', () => {
 
     await expect(page.getByTestId('dmp-new-import-dialog')).toBeHidden({ timeout: 10000 });
 
-    // Every segment was discarded, so nothing was imported and no receipt is
-    // produced - the wizard closes straight back to the map.
-    await expect(page.getByTestId('import-receipt-dialog')).toBeHidden();
+    // Only the "Unanchored Segment" (manual-placing segment) was discarded -
+    // "Anchor Candidate" was already imported via the confirmed suggestion
+    // (openManualPlacing's confirm-button click), so a receipt covering that
+    // one section must still appear. Regression for #394 F4: the wizard
+    // auto-starts manual placement (closing itself) as soon as confirm
+    // resolves, and openManualPlacing's Escape fallback restores it via the
+    // same savedManualPlacingState remount that used to drop the receipt
+    // accumulated before it.
+    const receiptDialog = page.getByTestId('import-receipt-dialog');
+    await expect(receiptDialog).toBeVisible({ timeout: 10000 });
+    await expect(page.getByTestId('import-receipt-summary')).toContainText('1');
   });
 
   test('from-existing mode requires selecting target section before place is enabled', async ({ page }) => {

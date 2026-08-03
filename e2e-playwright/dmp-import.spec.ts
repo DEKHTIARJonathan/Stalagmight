@@ -389,6 +389,34 @@ test.describe('DMP Import Dialog - Zero Datum + Wizard Flow', () => {
     await expect(page.getByTestId('dmp-new-import-dialog')).toBeVisible({ timeout: 10000 });
     await expect(page.getByTestId('wizard-manual-placing')).toBeVisible({ timeout: 10000 });
   });
+
+  /**
+   * Regression for #394 F3: the canonical minimal DMP run - one section
+   * selected, zero datum on that same section - finishes the wizard
+   * immediately (no map placement) and must still open the import receipt.
+   * `import-receipt.spec.ts` only opens the receipt dialog by store
+   * injection, so it can't catch a wizard completion path that forgets to
+   * pass the receipt to `onComplete`.
+   */
+  test('shows the import receipt for the canonical zero-datum-only run @smoke', async ({ page }) => {
+    await createProject(page, 'Zero Datum Receipt Test');
+    await openDmpSelectionDialog(page);
+
+    await page.getByTestId('select-none-button').click();
+    await page.getByTestId('section-checkbox-0').click();
+    await expect(page.getByTestId('section-checkbox-0')).toBeChecked();
+
+    await page.getByTestId('continue-button').click();
+    await expect(page.getByTestId('zero-datum-selection-dialog')).toBeVisible({ timeout: 5000 });
+
+    await page.getByTestId('zero-datum-section-card-0').click();
+    await expect(page.getByTestId('zero-datum-config-dialog')).toBeVisible({ timeout: 5000 });
+    await page.getByTestId('zero-datum-gps-input').fill('24.550123, -81.780456');
+    await expect(page.getByTestId('zero-datum-gps-parsed')).toBeVisible({ timeout: 5000 });
+    await page.getByTestId('zero-datum-config-confirm').click();
+
+    await expect(page.getByTestId('import-receipt-dialog')).toBeVisible({ timeout: 10000 });
+  });
 });
 
 test.describe('DMP Import Dialog - Hash Tracking', () => {
