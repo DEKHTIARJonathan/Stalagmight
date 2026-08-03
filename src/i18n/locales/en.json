@@ -613,7 +613,7 @@
       },
       "ttl": {
         "label": "Cache TTL",
-        "help": "How long to keep cached tiles before refreshing (1-365 days)",
+        "help": "How long to keep cached tiles for offline use (1-365 days). An upper limit only: tiles are refreshed sooner if the imagery provider's own policy says so, and are not cached at all unless it allows it.",
         "aria": "Cache TTL in days",
         "unit": "days"
       },
