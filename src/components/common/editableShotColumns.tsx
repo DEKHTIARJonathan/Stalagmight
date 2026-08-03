@@ -17,6 +17,13 @@ import { CloseIcon } from './icons';
 import { HelpTooltip } from './HelpTooltip';
 import { formatFixed } from '../../i18n/format';
 import { getAzimuthAverage } from '../../utils/shotTable';
+import {
+  SHOT_KIND_CLASS,
+  SHOT_KIND_LABEL_KEY,
+  nextShotKind,
+  shotKindGlyph,
+} from '../../utils/shotKind';
+import type { ShotKind } from '../../types/ipc/ShotKind';
 import type { EditableShot } from './editableShot';
 
 /** Virtual column key for the displayed average azimuth (not a real field). */
@@ -48,6 +55,9 @@ export interface EditableShotColumnContext {
    *  that a visible per-row control beats making the context menu the only way
    *  out - and the hosts' tests have always driven deletion through it. */
   onDeleteAt: (visibleIndex: number) => void;
+  /** Advance the shot's kind around Normal -> Jump -> Reference; `-1` walks it
+   *  backwards (shift-click). */
+  onCycleKindAt: (visibleIndex: number, direction: 1 | -1) => void;
 }
 
 const fixed = (precision: number) => (value: unknown): string =>
@@ -58,7 +68,8 @@ const fixed = (precision: number) => (value: unknown): string =>
 export function buildEditableShotColumns(
   ctx: EditableShotColumnContext
 ): GridColumn<EditableShot>[] {
-  const { t, precision, readOnly, errorsAt, warningsAt, isFrozenAt, onDeleteAt } = ctx;
+  const { t, precision, readOnly, errorsAt, warningsAt, isFrozenAt, onDeleteAt, onCycleKindAt } =
+    ctx;
 
   const editableUnlessFrozen =
     (key: string) =>
@@ -155,6 +166,51 @@ export function buildEditableShotColumns(
     lrudCol('right', t('shotTable.columns.rightShort')),
     lrudCol('up', t('shotTable.columns.upShort')),
     lrudCol('down', t('shotTable.columns.downShort')),
+    {
+      key: 'kind',
+      header: t('dataTable.columns.referenceShort'),
+      width: 40,
+      align: 'center',
+      kind: 'text',
+      getValue: (r) => r.kind,
+      format: (v) => shotKindGlyph(v as ShotKind),
+      editable: true,
+      isEditable: () => !readOnly,
+      // A three-state button, so no cell editor - same as the other two grids.
+      noInlineEdit: true,
+      parse: (raw) => {
+        const v = raw.trim().toLowerCase();
+        if (v === '' || v === 'n' || v === 'normal' || v === 'permanent') return 'Normal';
+        if (v === 'j' || v === 'jump') return 'Jump';
+        if (v === 'r' || v === 'ref' || v === 'reference') return 'Reference';
+        return undefined;
+      },
+      render: (shot, index): ReactNode => {
+        const glyph = shotKindGlyph(shot.kind);
+        return (
+          <span
+            data-testid="shot-kind-cell"
+            data-kind={shot.kind}
+            role={readOnly ? undefined : 'button'}
+            tabIndex={readOnly ? undefined : -1}
+            aria-label={t(SHOT_KIND_LABEL_KEY[shot.kind])}
+            className={`group flex h-full w-full items-center justify-center font-semibold ${
+              SHOT_KIND_CLASS[shot.kind]
+            } ${readOnly ? 'cursor-default' : 'cursor-pointer'}`}
+            onClick={(e) => {
+              e.stopPropagation();
+              if (!readOnly) onCycleKindAt(index, e.shiftKey ? -1 : 1);
+            }}
+            title={t('dataTable.columns.kindCycleHint', {
+              current: t(SHOT_KIND_LABEL_KEY[shot.kind]),
+              next: t(SHOT_KIND_LABEL_KEY[nextShotKind(shot.kind, 1)]),
+            })}
+          >
+            {glyph === '' ? <span className="opacity-0 group-hover:opacity-40">J</span> : glyph}
+          </span>
+        );
+      },
+    },
     {
       key: 'comment',
       header: t('shotTable.columns.comment'),

@@ -12,6 +12,7 @@ import {
   validateEditableShot,
 } from '../../utils/validation';
 import { applyAzimuthEdit } from '../../utils/shotTable';
+import { nextShotKind } from '../../utils/shotKind';
 import { SpreadsheetGrid } from './SpreadsheetGrid';
 import type { CellEdit } from './SpreadsheetGrid/types';
 import {
@@ -194,6 +195,17 @@ export function ShotTableEditor({
     [frozenShotIndices, actualIndex]
   );
 
+  const onCycleKindAt = useCallback(
+    (visibleIndex: number, direction: 1 | -1) => {
+      if (readOnly) return;
+      const index = actualIndex(visibleIndex);
+      const shot = visibleShots[visibleIndex];
+      if (index < 0 || !shot) return;
+      onShotChange(index, 'kind', nextShotKind(shot.kind, direction));
+    },
+    [readOnly, actualIndex, visibleShots, onShotChange]
+  );
+
   const onDeleteAt = useCallback(
     (visibleIndex: number) => {
       const index = actualIndex(visibleIndex);
@@ -212,8 +224,9 @@ export function ShotTableEditor({
         warningsAt,
         isFrozenAt,
         onDeleteAt,
+        onCycleKindAt,
       }),
-    [t, precision, readOnly, errorsAt, warningsAt, isFrozenAt, onDeleteAt]
+    [t, precision, readOnly, errorsAt, warningsAt, isFrozenAt, onDeleteAt, onCycleKindAt]
   );
 
   /** One coerced cell value -> the host's field callback(s). */
@@ -281,12 +294,15 @@ export function ShotTableEditor({
 
   const rowClassName = useCallback(
     (shot: EditableShot, rowIndex: number): string | undefined => {
-      const classes: string[] = [];
-      if (errorsAt(rowIndex).length > 0) classes.push('bg-error-5');
-      else if (shot.isNew) classes.push('bg-success-5');
-      // Virtual shots (jumps/references) read as secondary, same as before.
-      if (shot.kind && shot.kind !== 'Normal') classes.push('opacity-50');
-      return classes.length > 0 ? classes.join(' ') : undefined;
+      // A virtual shot (jump/reference) is indicated by the J/R column, exactly
+      // as in the data table and the new-section dialog. It is deliberately NOT
+      // dimmed: the old table faded the whole row, which read as "disabled" on
+      // a row that is perfectly editable.
+      if (errorsAt(rowIndex).length > 0) return 'bg-error-5';
+      // Not-yet-saved rows borrow the grid's own uncommitted-row tint rather
+      // than inventing a second one.
+      if (shot.isNew) return 'sg-row-draft';
+      return undefined;
     },
     [errorsAt]
   );
