@@ -15,6 +15,7 @@ import {
   MAP_PANEL_DEFAULT_WIDTH,
   MAP_PANEL_MAX_WIDTH,
 } from './WizardMapPanel';
+import { WizardScrollBody } from './WizardScrollBody';
 import SectionPreview, { type MergePreviewConfig, type DmpMergePreviewConfig, type ContextSectionGeometry, computeStationsFromDmpShots, computeStationsFromShots } from './SectionPreview';
 import { Select, type SelectOption } from '../common/Select';
 import { DialogWrapper } from './DialogWrapper';
@@ -3646,7 +3647,24 @@ export default function DmpNewImportDialog({
 
         {/* Body: side-by-side when showing suggestion, centered otherwise */}
         {showSideBySide ? (
-          <div ref={suggestionBodyRef} className="flex-1 flex min-h-0 overflow-hidden relative">
+          <WizardScrollBody
+            bodyRef={suggestionBodyRef}
+            table={
+              editState ? (
+                <ShotTableEditor
+                  shots={effectiveShots}
+                  onShotChange={handleShotChange}
+                  onAddShot={handleAddShot}
+                  onDeleteShot={handleDeleteShot}
+                  onInsertBefore={handleInsertBefore}
+                  onInsertAfter={handleInsertAfter}
+                  frozenShotIndices={frozenShotIndices}
+                />
+              ) : null
+            }
+          >
+            {(bandHeight) => (
+            <div className="flex overflow-hidden" style={{ height: bandHeight }}>
             <WizardMapPanel
               width={mapPanelWidth}
               onWidthChange={setMapPanelWidth}
@@ -3861,24 +3879,32 @@ export default function DmpNewImportDialog({
                       showDirection
                       showReverse
                     />
-                    <div className="border-t border-border" />
-                    <ShotTableEditor
-                      shots={effectiveShots}
-                      onShotChange={handleShotChange}
-                      onAddShot={handleAddShot}
-                      onDeleteShot={handleDeleteShot}
-                      onInsertBefore={handleInsertBefore}
-                      onInsertAfter={handleInsertAfter}
-                      frozenShotIndices={frozenShotIndices}
-                      maxHeight="24rem"
-                    />
                   </div>
                 </>
               )}
             </div>
-          </div>
+            </div>
+            )}
+          </WizardScrollBody>
         ) : showManualPlacing ? (
-          <div ref={manualBodyRef} className="flex-1 flex min-h-0 overflow-hidden relative">
+          <WizardScrollBody
+            bodyRef={manualBodyRef}
+            table={
+              editState ? (
+                <ShotTableEditor
+                  shots={effectiveShots}
+                  onShotChange={handleShotChange}
+                  onAddShot={handleAddShot}
+                  onDeleteShot={handleDeleteShot}
+                  onInsertBefore={handleInsertBefore}
+                  onInsertAfter={handleInsertAfter}
+                  frozenShotIndices={frozenShotIndices}
+                />
+              ) : null
+            }
+          >
+            {(bandHeight) => (
+            <div className="flex overflow-hidden" style={{ height: bandHeight }}>
             <WizardMapPanel
               width={mapPanelWidth}
               onWidthChange={setMapPanelWidth}
@@ -4192,17 +4218,6 @@ export default function DmpNewImportDialog({
                       showDirection
                       showReverse
                     />
-                    <div className="border-t border-border" />
-                    <ShotTableEditor
-                      shots={effectiveShots}
-                      onShotChange={handleShotChange}
-                      onAddShot={handleAddShot}
-                      onDeleteShot={handleDeleteShot}
-                      onInsertBefore={handleInsertBefore}
-                      onInsertAfter={handleInsertAfter}
-                      frozenShotIndices={frozenShotIndices}
-                      maxHeight="24rem"
-                    />
                   </div>
                 </>
               )}
@@ -4214,7 +4229,9 @@ export default function DmpNewImportDialog({
                 </div>
               )}
             </div>
-          </div>
+            </div>
+            )}
+          </WizardScrollBody>
         ) : (
           <div className="flex-1 flex flex-col items-center justify-center p-6 min-h-0 overflow-auto">
             {/* Init/Importing zero datum */}
