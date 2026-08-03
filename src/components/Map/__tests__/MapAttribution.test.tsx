@@ -20,7 +20,7 @@ vi.mock('../../../utils/ipc', () => ({
 }));
 
 import '../../../i18n';
-import { MapAttribution } from '../MapAttribution';
+import { MapAttribution, primarySourceName } from '../MapAttribution';
 import { resetTileAttributionCache } from '../../../hooks/useTileAttribution';
 
 const FALLBACK = 'Source: Esri, Vantor, Earthstar Geographics, and the GIS User Community';
@@ -201,11 +201,53 @@ describe('MapAttribution', () => {
       expect(screen.queryByTestId('map-attribution-panel')).not.toBeInTheDocument();
     });
 
+    it('names the primary source rather than showing a bare i', async () => {
+      // A lone `i` credits nobody. The collapsed chip stays an attribution by
+      // naming the first source, with the rest of the list in the panel.
+      render(<MapAttribution visible variant="compact" />);
+      expect(await screen.findByTestId('map-attribution-label')).toHaveTextContent('by Esri');
+    });
+
+    it('falls back to the bare i when no source name can be read', async () => {
+      invokeIpc.mockResolvedValue({
+        provider: 'esri',
+        text: 'Sources:',
+        notice: null,
+        notice_url: null,
+        live: true,
+      });
+      render(<MapAttribution visible variant="compact" />);
+      // "Sources:" parses to nothing; inventing a name would be worse than the
+      // fallback list, which is what actually renders here.
+      const toggle = await screen.findByTestId('map-attribution-toggle');
+      expect(toggle).toBeInTheDocument();
+    });
+
     it('carries the names on the button itself, so they survive a missed hover', async () => {
       render(<MapAttribution visible variant="compact" />);
       const toggle = await screen.findByTestId('map-attribution-toggle');
       expect(toggle).toHaveAttribute('title', LIVE);
       expect(toggle).toHaveAccessibleName();
+    });
+  });
+
+  describe('primarySourceName', () => {
+    it('reads the first source out of the live Esri string', () => {
+      expect(primarySourceName(LIVE)).toBe('Esri');
+      expect(primarySourceName(FALLBACK)).toBe('Esri');
+    });
+
+    it('tolerates either prefix spelling and none at all', () => {
+      // Both appear across ArcGIS services, and a service may use neither.
+      expect(primarySourceName('Sources: Esri, TomTom, Garmin')).toBe('Esri');
+      expect(primarySourceName('source:Esri, TomTom')).toBe('Esri');
+      expect(primarySourceName('Esri, TomTom')).toBe('Esri');
+    });
+
+    it('yields nothing rather than a stray fragment', () => {
+      expect(primarySourceName('')).toBe('');
+      expect(primarySourceName('Source:')).toBe('');
+      expect(primarySourceName('   ')).toBe('');
     });
   });
 

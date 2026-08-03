@@ -1987,7 +1987,8 @@
   "map": {
     "fitToViewTitle": "Fit to view",
     "attribution": {
-      "expandAria": "Show map imagery sources"
+      "expandAria": "Show map imagery sources",
+      "collapsed": "by {{source}}"
     },
     "geometry": {
       "adjustedBadge": "Closure-adjusted · read-only",
