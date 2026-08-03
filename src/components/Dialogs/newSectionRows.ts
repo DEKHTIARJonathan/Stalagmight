@@ -225,12 +225,57 @@ export function applyEdits(
   return { rows: normalizeRows(next, nextKey), droppedPastCap };
 }
 
-/** Which azimuth family `draftMissing` should tint, derived from what is
- *  actually on screen rather than tracked as separate mode state. */
-export function deriveAzimuthMode(hiddenColumns: ReadonlySet<string>): AzimuthMode {
-  if (!hiddenColumns.has(AZIMUTH_AVG_KEY)) return 'avg';
-  if (!hiddenColumns.has('azimuth_in') || !hiddenColumns.has('azimuth_out')) return 'inout';
+/**
+ * Which of an angle family's columns are on screen, in the three-way shape the
+ * data table's column menu uses.
+ *
+ * Derived from the hidden set rather than tracked as separate mode state: the
+ * dialog has exactly one source of truth for its layout, and that is what gets
+ * persisted. `draftMissing` wants this for azimuth, and the column menu wants it
+ * for both families.
+ */
+export function deriveAngleMode(
+  hiddenColumns: ReadonlySet<string>,
+  avgKey: string,
+  legIn: string,
+  legOut: string
+): AzimuthMode {
+  if (!hiddenColumns.has(avgKey)) return 'avg';
+  if (!hiddenColumns.has(legIn) || !hiddenColumns.has(legOut)) return 'inout';
   return 'off';
+}
+
+export function deriveAzimuthMode(hiddenColumns: ReadonlySet<string>): AzimuthMode {
+  return deriveAngleMode(hiddenColumns, AZIMUTH_AVG_KEY, 'azimuth_in', 'azimuth_out');
+}
+
+/** The hidden set after switching an angle family to `mode` - the inverse of
+ *  {@link deriveAngleMode}, so the menu's three-way control writes back into the
+ *  same single source of truth it reads from. */
+export function applyAngleMode(
+  hiddenColumns: ReadonlySet<string>,
+  mode: AzimuthMode,
+  avgKey: string,
+  legIn: string,
+  legOut: string
+): Set<string> {
+  const next = new Set(hiddenColumns);
+  const show = (k: string) => next.delete(k);
+  const hide = (k: string) => next.add(k);
+  if (mode === 'avg') {
+    show(avgKey);
+    hide(legIn);
+    hide(legOut);
+  } else if (mode === 'inout') {
+    hide(avgKey);
+    show(legIn);
+    show(legOut);
+  } else {
+    hide(avgKey);
+    hide(legIn);
+    hide(legOut);
+  }
+  return next;
 }
 
 /**

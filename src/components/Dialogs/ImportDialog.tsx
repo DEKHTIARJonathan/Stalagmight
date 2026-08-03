@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { useUIStore, type PlacementResult } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { Button } from '../common/Button';
+import { ExpandIcon, EyeIcon, ShrinkIcon } from '../common/icons';
 import { DialogWrapper } from './DialogWrapper';
 import type { Shot, SectionData } from '../../types/project';
 import { SpreadsheetGrid } from '../common/SpreadsheetGrid';
@@ -13,25 +14,32 @@ import {
   draftMissing,
 } from '../SingleSystemView/dataTableDrafts';
 import {
+  applyAngleMode,
   applyEdits,
+  type AzimuthMode,
   blankRow,
   canSubmit,
   collectShots,
   deleteRows,
+  deriveAngleMode,
   deriveAzimuthMode,
   insertBlankRows,
   moveRows,
   summarizeSubmit,
 } from './newSectionRows';
 import {
+  AZIMUTH_AVG_KEY,
   buildNewSectionShotColumns,
   DEFAULT_NEW_SECTION_HIDDEN_COLUMNS,
   MISSING_PROBLEM_COLUMNS,
+  PITCH_AVG_KEY,
 } from './newSectionShotColumns';
 import { useNewSectionViewPersistence } from './useNewSectionViewPersistence';
 import { getNextSectionColor } from '../../utils/colors';
 import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
 import { useEditingBlocked } from '../../hooks/useEditingBlocked';
+import { useDismissableLayer } from '../../hooks/useDismissableLayer';
+import { useAnchoredFixedMenu } from '../../hooks/useAnchoredFixedMenu';
 import { useGridLabels } from '../../hooks/useGridLabels';
 import { getNumberFormatLocale } from '../../i18n/format';
 import { nextShotKind } from '../../utils/shotKind';
@@ -108,20 +116,100 @@ export default function ImportDialog() {
   );
   const hiddenColumnList = useMemo(() => [...hiddenColumns], [hiddenColumns]);
 
+  // --- Chrome: column-visibility menu + expand ------------------------------
+  // The dialog draws these itself (the grid's built-in toolbar is off), so the
+  // column control is the same eye menu the data table uses rather than a second
+  // idiom for the same job.
+  const [expanded, setExpanded] = useState(false);
+  const [colMenuOpen, setColMenuOpen] = useState(false);
+  const colMenuWrapRef = useRef<HTMLDivElement | null>(null);
+  const colMenuBtnRef = useRef<HTMLButtonElement | null>(null);
+  const colMenuListRef = useRef<HTMLDivElement | null>(null);
+  useDismissableLayer({
+    open: colMenuOpen,
+    onDismiss: () => setColMenuOpen(false),
+    contains: [colMenuWrapRef],
+  });
+  // position:fixed at a captured rect so the dropdown escapes the grid box's
+  // overflow-hidden clip, and flips up near the bottom of the window.
+  const colMenuStyle = useAnchoredFixedMenu(colMenuOpen, colMenuBtnRef, colMenuListRef, {
+    align: 'right',
+    gap: 4,
+    width: 224,
+  });
+
+  /** Show/hide a group of columns together (LRUD is one row, four keys). */
+  const toggleCols = useCallback((keys: string[]) => {
+    setHiddenColumns((prev) => {
+      const next = new Set(prev);
+      const allVisible = keys.every((k) => !next.has(k));
+      for (const k of keys) {
+        if (allVisible) next.add(k);
+        else next.delete(k);
+      }
+      return next;
+    });
+  }, []);
+
+  const setAngleMode = useCallback((family: 'azimuth' | 'pitch', mode: AzimuthMode) => {
+    const avgKey = family === 'azimuth' ? AZIMUTH_AVG_KEY : PITCH_AVG_KEY;
+    setHiddenColumns((prev) =>
+      applyAngleMode(prev, mode, avgKey, `${family}_in`, `${family}_out`)
+    );
+  }, []);
+
+  const colCheckRow = (keys: string[], label: string, className = '') => (
+    <label
+      key={keys[0]}
+      className={`flex cursor-pointer items-center gap-2 rounded px-2 py-0.5 hover:bg-accent-10 ${className}`}
+    >
+      <input
+        type="checkbox"
+        checked={keys.every((k) => !hiddenColumns.has(k))}
+        onChange={() => toggleCols(keys)}
+        data-testid={`new-section-col-vis-${keys[0]}`}
+      />
+      {label}
+    </label>
+  );
+
+  const angleModeRow = (
+    label: string,
+    mode: AzimuthMode,
+    onPick: (m: AzimuthMode) => void,
+    testId: string
+  ) => (
+    <div className="flex items-center justify-between gap-2 px-2 py-0.5">
+      <span>{label}</span>
+      <span className="flex overflow-hidden rounded border border-border">
+        {(['avg', 'inout', 'off'] as const).map((m) => (
+          <button
+            key={m}
+            type="button"
+            className={`px-1.5 py-0.5 ${
+              mode === m ? 'bg-accent-20 text-text' : 'text-text-secondary hover:bg-accent-10'
+            }`}
+            onClick={() => onPick(m)}
+            data-testid={`new-section-${testId}-${m}`}
+          >
+            {t(`dataTable.columnsMenu.${m === 'inout' ? 'inOut' : m}`)}
+          </button>
+        ))}
+      </span>
+    </div>
+  );
+
   // --- Grid height ----------------------------------------------------------
-  // Virtualization needs an explicit pixel height, and the fullscreen dialog
-  // sizes itself to the window, so the row area has to be measured. The grid's
-  // own toolbar sits inside the same box, so subtract its live height rather
-  // than a constant (it wraps on a narrow window).
+  // Virtualization needs an explicit pixel height, and the box is either a fixed
+  // 300px or (expanded) whatever the window leaves, so it has to be measured.
+  // The box holds nothing but the grid - the chrome row is its sibling.
   const gridBoxRef = useRef<HTMLDivElement | null>(null);
   const [gridHeight, setGridHeight] = useState(FALLBACK_GRID_HEIGHT);
   useEffect(() => {
     const el = gridBoxRef.current;
     if (!el || typeof ResizeObserver === 'undefined') return undefined;
     const measure = () => {
-      const toolbar = el.querySelector('.sg-toolbar');
-      const chrome = toolbar instanceof HTMLElement ? toolbar.offsetHeight : 0;
-      const h = Math.max(ROW_AREA_MIN, el.clientHeight - chrome);
+      const h = Math.max(ROW_AREA_MIN, el.clientHeight);
       setGridHeight((prev) => (Math.abs(prev - h) > 1 ? h : prev));
     };
     const ro = new ResizeObserver(measure);
@@ -235,6 +323,10 @@ export default function ImportDialog() {
 
   // --- Missing-cell marking and the Create gate -----------------------------
   const azimuthMode = useMemo(() => deriveAzimuthMode(hiddenColumns), [hiddenColumns]);
+  const inclinationMode = useMemo(
+    () => deriveAngleMode(hiddenColumns, PITCH_AVG_KEY, 'pitch_in', 'pitch_out'),
+    [hiddenColumns]
+  );
   const missingByRow = useMemo(
     () => drafts.map((d) => draftMissing(d, hiddenColumns, azimuthMode)),
     [drafts, hiddenColumns, azimuthMode]
@@ -337,12 +429,12 @@ export default function ImportDialog() {
     <DialogWrapper
       title={t('newSection.title')}
       onClose={closeDialog}
-      size="fullscreen"
-      overflow="hidden"
+      size={expanded ? 'fullscreen' : '2xl'}
+      overflow={expanded ? 'hidden' : 'auto'}
       isDirty={isDirty}
       data-testid="import-section-dialog"
     >
-      <div className="flex h-full flex-col gap-4">
+      <div className={`flex flex-col gap-4 ${expanded ? 'h-full' : ''}`}>
         {/* Metadata */}
         <div className="grid shrink-0 grid-cols-2 gap-4">
           <div>
@@ -396,13 +488,80 @@ export default function ImportDialog() {
           </div>
         </div>
 
-        {/* Shots grid. The box is what gets measured, so the grid must be its
-            only child - the toolbar the grid draws inside it is subtracted. */}
+        {/* Shots grid, under the dialog's own chrome rather than the grid's
+            built-in toolbar - so the column control matches the data table's eye
+            menu, and Expand can sit beside it. */}
         <div
-          ref={gridBoxRef}
-          className="min-h-0 flex-1 overflow-hidden rounded border border-border"
+          className={`flex flex-col overflow-hidden rounded border border-border ${
+            expanded ? 'min-h-0 flex-1' : ''
+          }`}
           data-testid="import-section-grid"
         >
+          <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border px-2 py-1">
+            <span className="text-sm font-medium">{t('newSection.shots')}</span>
+            <div className="flex items-center gap-2">
+              <div
+                ref={colMenuWrapRef}
+                className="relative"
+                onMouseDown={(e) => e.stopPropagation()}
+              >
+                <button
+                  ref={colMenuBtnRef}
+                  type="button"
+                  onClick={() => setColMenuOpen((v) => !v)}
+                  className={colMenuOpen ? 'text-text' : 'text-text-secondary hover:text-text'}
+                  title={t('dataTable.columnsMenu.button')}
+                  data-testid="new-section-columns-menu"
+                >
+                  <EyeIcon size={14} />
+                </button>
+                {colMenuOpen && (
+                  <div
+                    ref={colMenuListRef}
+                    className="overflow-auto rounded border border-border bg-panel p-1 text-xs shadow-lg"
+                    style={colMenuStyle}
+                    data-dropdown-open
+                    data-testid="new-section-columns-dropdown"
+                  >
+                    {colCheckRow(['length'], t('dataTable.columnsMenu.length'))}
+                    {angleModeRow(
+                      t('dataTable.columnsMenu.azimuth'),
+                      azimuthMode,
+                      (m) => setAngleMode('azimuth', m),
+                      'col-azimuth'
+                    )}
+                    {angleModeRow(
+                      t('dataTable.columnsMenu.inclination'),
+                      inclinationMode,
+                      (m) => setAngleMode('pitch', m),
+                      'col-inclination'
+                    )}
+                    <div className="flex">
+                      {colCheckRow(['depth_in'], t('dataTable.columnsMenu.depthIn'), 'flex-1')}
+                      {colCheckRow(['depth_out'], t('dataTable.columnsMenu.depthOut'), 'flex-1')}
+                    </div>
+                    {colCheckRow(['left', 'right', 'up', 'down'], t('dataTable.columnsMenu.lrud'))}
+                    {colCheckRow(['kind'], t('dataTable.columnsMenu.reference'))}
+                    {colCheckRow(['comment'], t('dataTable.columnsMenu.comment'))}
+                  </div>
+                )}
+              </div>
+              <button
+                type="button"
+                onClick={() => setExpanded((v) => !v)}
+                className="text-text-secondary hover:text-text"
+                title={expanded ? t('newSection.collapse') : t('newSection.expand')}
+                aria-label={expanded ? t('newSection.collapse') : t('newSection.expand')}
+                data-testid="import-section-expand"
+              >
+                {expanded ? <ShrinkIcon size={14} /> : <ExpandIcon size={14} />}
+              </button>
+            </div>
+          </div>
+          <div
+            ref={gridBoxRef}
+            className={expanded ? 'min-h-0 flex-1 overflow-hidden' : 'h-[300px] overflow-hidden'}
+          >
           <SpreadsheetGrid<Shot>
             columns={columns}
             rows={rows}
@@ -416,6 +575,7 @@ export default function ImportDialog() {
             cellClassName={cellClassName}
             labels={gridLabels}
             testIdPrefix="new-section"
+            showToolbar={false}
             hiddenColumns={hiddenColumnList}
             columnOrder={columnOrder}
             onColumnOrderChange={setColumnOrder}
@@ -436,6 +596,7 @@ export default function ImportDialog() {
               ? {}
               : { pasteGrowsRows: growRows, onInsertRows, onDeleteRows, onMoveRows })}
           />
+          </div>
         </div>
 
         {/* Actions */}

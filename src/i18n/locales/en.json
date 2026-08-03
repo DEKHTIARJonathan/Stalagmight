@@ -2108,8 +2108,10 @@
     }
   },
   "newSection": {
+    "collapse": "Shrink the table",
     "create": "Create Section",
     "empty": "Enter at least one shot to create a section.",
+    "expand": "Enlarge the table",
     "incomplete_one": "Row {{rows}} is missing required values. Fill it in or delete the row to continue.",
     "incomplete_other": "Rows {{rows}} are missing required values. Fill them in or delete the rows to continue.",
     "labels": {
@@ -2124,6 +2126,7 @@
       "name": "e.g., Main Line"
     },
     "readOnly": "Editing is disabled in this mode, so a section cannot be created.",
+    "shots": "Shots",
     "title": "Import / Create Section"
   },
   "sectionMetadata": {
