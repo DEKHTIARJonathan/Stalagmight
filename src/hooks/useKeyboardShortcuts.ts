@@ -362,8 +362,10 @@ export function useKeyboardShortcuts() {
       // Handle Escape FIRST - works even when focus is in an input
       if (event.key === 'Escape') {
         // #395: the one-shot "Pick on map" origin picker disarms on Escape, the same as any
-        // other one-shot map-click mode, and takes it over the same way placement mode does.
-        if (useGasPlanStore.getState().originPickArmed) {
+        // other one-shot map-click mode, and takes it over the same way placement mode does -
+        // but only when no dialog is open, or it would swallow the dialog's own Escape (an
+        // open dialog's close button wins; the picker stays armed underneath it).
+        if (!useUIStore.getState().activeDialog && useGasPlanStore.getState().originPickArmed) {
           useGasPlanStore.getState().setOriginPickArmed(false);
           return;
         }
