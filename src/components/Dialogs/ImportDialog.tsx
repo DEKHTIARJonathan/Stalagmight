@@ -98,7 +98,11 @@ export default function ImportDialog() {
     () => ({ setColumnOrder, setHiddenColumns, setColumnWidths }),
     []
   );
-  useNewSectionViewPersistence({ columnOrder, hiddenColumns, columnWidths }, viewSetters);
+  useNewSectionViewPersistence(
+    { columnOrder, hiddenColumns, columnWidths },
+    viewSetters,
+    DEFAULT_NEW_SECTION_HIDDEN_COLUMNS
+  );
   const hiddenColumnList = useMemo(() => [...hiddenColumns], [hiddenColumns]);
 
   // --- Grid height ----------------------------------------------------------
@@ -360,6 +364,10 @@ export default function ImportDialog() {
             onHiddenColumnsChange={(hidden) => setHiddenColumns(new Set(hidden))}
             columnWidths={columnWidths}
             onColumnWidthsChange={setColumnWidths}
+            // Every row here is provisional, so a paste may run past the last
+            // one: applyEdits grows the list to fit rather than clipping a
+            // spreadsheet block to the single blank row the dialog opens with.
+            pasteGrowsRows={!editingBlocked}
             {...(editingBlocked ? {} : { onInsertRows })}
           />
         </div>

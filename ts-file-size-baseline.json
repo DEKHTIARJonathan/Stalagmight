@@ -241,7 +241,7 @@
     "src/components/common/SpeleoBadgedIcon.tsx": 129,
     "src/components/common/SpeleoDbLogo.tsx": 46,
     "src/components/common/SpeleoUserAutocomplete.tsx": 105,
-    "src/components/common/SpreadsheetGrid/SpreadsheetGrid.tsx": 1988,
+    "src/components/common/SpreadsheetGrid/SpreadsheetGrid.tsx": 1991,
     "src/components/common/SpreadsheetGrid/gridClipboard.ts": 99,
     "src/components/common/SpreadsheetGrid/gridGeometry.ts": 147,
     "src/components/common/SpreadsheetGrid/gridLabels.ts": 42,

@@ -150,17 +150,34 @@ export function applyEditToData(
   return d as Partial<ShotData>;
 }
 
-/** Apply a batch of grid edits, grouped so several cells on one row cost one
- *  pass. Edits pointing past the row list are dropped. */
+/**
+ * Apply a batch of grid edits, grouped so several cells on one row cost one
+ * pass.
+ *
+ * Edits landing PAST the last row grow the list rather than being dropped: the
+ * grid is given `pasteGrowsRows`, so pasting a block of shots out of a
+ * spreadsheet into a dialog that starts with a single blank row lands in full
+ * instead of clipping to that one row. {@link MAX_PASTE_ROWS} bounds what a
+ * stray clipboard can conjure.
+ */
+export const MAX_PASTE_ROWS = 5000;
+
 export function applyEdits(rows: ShotDraft[], edits: CellEdit[], nextKey: () => number): ShotDraft[] {
   const byRow = new Map<number, CellEdit[]>();
+  let maxRow = -1;
   for (const e of edits) {
+    if (e.row >= MAX_PASTE_ROWS) continue;
+    if (e.row > maxRow) maxRow = e.row;
     const arr = byRow.get(e.row);
     if (arr) arr.push(e);
     else byRow.set(e.row, [e]);
   }
   if (byRow.size === 0) return rows;
-  const next = rows.map((draft, i) => {
+  const grown =
+    maxRow < rows.length
+      ? rows
+      : [...rows, ...Array.from({ length: maxRow + 1 - rows.length }, () => blankRow(nextKey()))];
+  const next = grown.map((draft, i) => {
     const rowEdits = byRow.get(i);
     if (!rowEdits) return draft;
     let data = draft.data;
