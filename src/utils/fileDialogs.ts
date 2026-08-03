@@ -161,14 +161,14 @@ export function dmpImportFilters() {
 }
 
 /**
- * Import picker filters scoped to context. With a project open, only DMP imports
- * into it (DMP-only, no "All Files" - so an unrelated file or a `.stalx` project
- * can't be picked and mis-routed). With no project open, any importable survey
- * format is offered plus "All Files" (so the unified router can also open a
- * native `.stalx` project picked through it - there is nothing to replace).
+ * Import picker filters. Every importable survey format is offered regardless
+ * of whether a project is already open (#391): `.dmp` still routes additively
+ * into the open project, while every other format now opens the
+ * "import as new project?" confirm dialog instead of the old close-first dead
+ * end, so there is no reason left to hide them from the in-project picker.
  */
-export function importFiltersForContext(hasProject: boolean) {
-  return hasProject ? dmpImportFilters() : importOpenFilters();
+export function importFiltersForContext() {
+  return importOpenFilters();
 }
 
 export function importOpenFilters() {

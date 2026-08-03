@@ -61,3 +61,4 @@ export { default as HeldLockResumeDialog } from './HeldLockResumeDialog';
 export { default as SpeleoStorageChoiceDialog } from './SpeleoStorageChoiceDialog';
 export { default as SpeleoDumpPickerDialog } from './SpeleoDumpPickerDialog';
 export { default as ImportReceiptDialog } from './ImportReceiptDialog';
+export { default as ImportAsNewProjectDialog } from './ImportAsNewProjectDialog';

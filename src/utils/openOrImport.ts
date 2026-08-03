@@ -32,14 +32,16 @@ import { clearProjectActionSource } from './telemetry';
 import { needsSpeleoHandBackPrompt } from './quit';
 
 /**
- * Error shown when a new-project-only import (GPX / Ariane / Compass) is
- * attempted while a project is already open. The single source of truth shared
- * by the open/import router and the useProject import handlers.
+ * Open the "import as new project?" confirm dialog (#391) for a new-project-only
+ * format (GPX / Ariane / Compass / Walls) picked while a project is already
+ * open. Replaces the old close-first dead end (`IMPORT_SURVEY_CLOSE_FIRST`):
+ * confirming closes the current project (honoring its own unsaved-changes
+ * guard) and then re-routes the same path, which - with no project open - falls
+ * through to the normal new-project import chain.
  */
-export const IMPORT_SURVEY_CLOSE_FIRST = {
-  title: 'Import survey',
-  message: 'Close the current project before importing a new survey.',
-} as const;
+function openImportAsNewProject(ui: ReturnType<typeof useUIStore.getState>, path: string, formatLabel: string): void {
+  ui.openDialog('import-as-new-project', { path, formatLabel, fileName: extractFilename(path) });
+}
 
 /**
  * Dispatch an already-chosen path to the matching open/import flow.
@@ -136,7 +138,8 @@ export async function routeOpenedFile(path: string, errorTitle = 'Open Failed'):
       // guard so a GPX opened/dropped while a project is open is rejected, not
       // silently added to the current project.
       if (store.project) {
-        ui.openDialog('error', IMPORT_SURVEY_CLOSE_FIRST);
+        openImportAsNewProject(ui, path, 'GPX');
+        handedOff = true;
         return;
       }
       const gpxFile = await store.parseGpx(path);
@@ -151,7 +154,8 @@ export async function routeOpenedFile(path: string, errorTitle = 'Open Failed'):
     } else if (lowerPath.endsWith('.tml') || lowerPath.endsWith('.tmlu')) {
       // TML/TMLU import always creates a new project.
       if (store.project) {
-        ui.openDialog('error', IMPORT_SURVEY_CLOSE_FIRST);
+        openImportAsNewProject(ui, path, 'Ariane TML');
+        handedOff = true;
         return;
       }
       const tmlFile = await store.parseTml(path);
@@ -166,7 +170,8 @@ export async function routeOpenedFile(path: string, errorTitle = 'Open Failed'):
     } else if (lowerPath.endsWith('.mak') || lowerPath.endsWith('.dat')) {
       // Compass import always creates a new project.
       if (store.project) {
-        ui.openDialog('error', IMPORT_SURVEY_CLOSE_FIRST);
+        openImportAsNewProject(ui, path, 'Compass');
+        handedOff = true;
         return;
       }
       const compassFile = await store.parseCompass(path);
@@ -181,7 +186,8 @@ export async function routeOpenedFile(path: string, errorTitle = 'Open Failed'):
     } else if (lowerPath.endsWith('.wpj') || lowerPath.endsWith('.srv')) {
       // Walls import always creates a new project.
       if (store.project) {
-        ui.openDialog('error', IMPORT_SURVEY_CLOSE_FIRST);
+        openImportAsNewProject(ui, path, 'Walls');
+        handedOff = true;
         return;
       }
       const wallsFile = await store.parseWalls(path);

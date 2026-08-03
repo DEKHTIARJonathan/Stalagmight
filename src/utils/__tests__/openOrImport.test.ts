@@ -17,7 +17,7 @@ vi.mock('@tauri-apps/plugin-dialog', () => ({
   open: (...args: unknown[]) => openMock(...args),
 }));
 
-import { routeOpenedFile, pickAndRoute, IMPORT_SURVEY_CLOSE_FIRST } from '../openOrImport';
+import { routeOpenedFile, pickAndRoute } from '../openOrImport';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { useSpeleoStore, type SpeleoLinkState } from '../../store/speleoStore';
@@ -78,16 +78,18 @@ describe('routeOpenedFile', () => {
     expect(useUIStore.getState().activeDialog).not.toBe('unsaved-changes');
   });
 
-  it('rejects a GPX import while a project is open (new-project-only) and clears the source', async () => {
+  it('offers "import as new project?" for a GPX import while a project is open, handing off the source', async () => {
     useProjectStore.setState({ project: { name: 'X' } as never, isDirty: false });
     await routeOpenedFile('/cave/track.gpx');
-    expect(useUIStore.getState().activeDialog).toBe('error');
+    expect(useUIStore.getState().activeDialog).toBe('import-as-new-project');
     expect(useUIStore.getState().dialogData).toMatchObject({
-      title: IMPORT_SURVEY_CLOSE_FIRST.title,
-      message: IMPORT_SURVEY_CLOSE_FIRST.message,
+      path: '/cave/track.gpx',
+      formatLabel: 'GPX',
+      fileName: 'track.gpx',
     });
     expect(parseGpx).not.toHaveBeenCalled();
-    expect(peekProjectActionSource()).toBeUndefined();
+    // Handed off to the dialog - the source must survive until it resolves.
+    expect(peekProjectActionSource()).toBe('keyboard');
   });
 
   it('shows an unsupported-file error for an unknown extension and clears the source', async () => {

@@ -1210,6 +1210,12 @@
       "viewDetails": "View details",
       "continue": "Continue to map"
     },
+    "importAsNewProject": {
+      "title": "Import as new project?",
+      "body": "{{fileName}} will be converted into a new Stalagmight project. Your original file is never modified.",
+      "closeNotice": "{{projectName}} will be closed.",
+      "confirm": "Close and import"
+    },
     "dmpNewImport": {
       "title": "Connection Wizard",
       "progress": "{{placed}} of {{total}} sections placed",
@@ -1725,6 +1731,7 @@
   "globalView": {
     "actions": {
       "import": "Import",
+      "importSurveyData": "Import survey data...",
       "importDmp": "Import DMP",
       "importTml": "Import Ariane",
       "importCompass": "Import Compass",

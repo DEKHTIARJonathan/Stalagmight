@@ -46,10 +46,11 @@ export function runFileShortcutAction(action: FileShortcutAction): void {
       // with a project open; GlobalView has none.
       if (hasProject && isEditingBlockedNow()) return;
       setProjectActionSource('keyboard');
-      // With a project open the picker is scoped to DMP only (the sole additive
-      // in-project import); with none, every importable format is offered plus a
-      // native .stalx open. pickAndRoute dispatches by extension.
-      void pickAndRoute(importFiltersForContext(hasProject), 'Import Failed');
+      // Every importable format is offered regardless of context (#391): .dmp
+      // still routes additively into an open project, others now open the
+      // "import as new project?" confirm dialog. pickAndRoute dispatches by
+      // extension.
+      void pickAndRoute(importFiltersForContext(), 'Import Failed');
       break;
     }
     case 'quit':
