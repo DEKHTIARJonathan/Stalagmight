@@ -1823,22 +1823,13 @@
       "deleteLocalCopy": "Delete local copy…"
     },
     "empty": {
-      "title": "No projects yet",
-      "description": "Create a new project or import a DMP file to get started.",
-      "cards": {
-        "import": {
-          "title": "Import DMP",
-          "description": "Bring in survey data from a DMP file."
-        },
-        "newProject": {
-          "title": "New project",
-          "description": "Start a blank project from scratch."
-        },
-        "open": {
-          "title": "Open project",
-          "description": "Open an existing Stalagmight project."
-        }
-      }
+      "title": "Open or drop any survey file",
+      "description": "Bring in surveys from Ariane, Compass, Walls, GPX or mNemo, or open an existing Stalagmight project.",
+      "dropZone": {
+        "cta": "Open or drop a file",
+        "promise": "Foreign formats import as a new Stalagmight project - your original file is never modified."
+      },
+      "newProject": "Start a new project instead"
     },
     "loading": {
       "failedTitle": "Loading failed",
