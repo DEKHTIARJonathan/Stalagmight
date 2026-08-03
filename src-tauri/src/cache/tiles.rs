@@ -126,24 +126,42 @@ impl TileEntry {
 /// is exactly the stale-if-error shape the rest of the module is built around.
 pub fn parse_cache_control(header: &str) -> CachePolicy {
     let mut policy = CachePolicy::default();
-    for directive in header.split(',') {
-        let directive = directive.trim().to_ascii_lowercase();
-        if directive == "no-store" {
-            policy.no_store = true;
-        } else if directive == "no-cache" {
-            policy.max_age_seconds = Some(0);
-        } else if let Some(value) = directive.strip_prefix("max-age=") {
-            // A negative or unparseable max-age is treated as "said nothing"
-            // rather than as zero: guessing "immediately stale" from a malformed
-            // header would silently disable caching for a whole provider.
-            if let Ok(seconds) = value.trim().parse::<i64>() {
-                if seconds >= 0 {
-                    // Clamped: this number is remote input and gets added to the
-                    // clock below. See MAX_GRANT_SECONDS.
-                    policy.max_age_seconds = Some(seconds.min(MAX_GRANT_SECONDS));
+    // Tracked separately and applied last: `no-cache` means "always revalidate"
+    // regardless of any `max-age` sent alongside it, and headers do not promise
+    // an order. Setting max_age directly from the `no-cache` arm let a later
+    // `max-age=86400` in the same header silently overwrite it.
+    let mut no_cache = false;
+    for token in header.split(',') {
+        let token = token.trim().to_ascii_lowercase();
+        // Match the directive NAME, not the whole token. `no-cache` and
+        // `no-store` take an optional quoted field list - `no-cache="Set-Cookie,
+        // X-Foo"` - whose comma splits the token in two, so comparing the whole
+        // thing silently ignored the directive.
+        let (name, value) = match token.split_once('=') {
+            Some((name, value)) => (name.trim(), Some(value.trim())),
+            None => (token.as_str(), None),
+        };
+        match name {
+            "no-store" => policy.no_store = true,
+            "no-cache" => no_cache = true,
+            "max-age" => {
+                // A negative or unparseable max-age is treated as "said nothing"
+                // rather than as zero: guessing "immediately stale" from a
+                // malformed header would silently disable caching for a whole
+                // provider.
+                if let Some(Ok(seconds)) = value.map(str::parse::<i64>) {
+                    if seconds >= 0 {
+                        // Clamped: this number is remote input and gets added to
+                        // the clock below. See MAX_GRANT_SECONDS.
+                        policy.max_age_seconds = Some(seconds.min(MAX_GRANT_SECONDS));
+                    }
                 }
             }
+            _ => {}
         }
+    }
+    if no_cache {
+        policy.max_age_seconds = Some(0);
     }
     policy
 }
@@ -307,7 +325,8 @@ impl TileCache {
             .unwrap_or(self.ttl_seconds)
     }
 
-    /// Delete every tile past its own provider's retention TTL.
+    /// Delete every tile past its own provider's retention TTL, returning the
+    /// bytes freed.
     ///
     /// One statement per overridden provider plus one for everything else,
     /// rather than a single global cutoff: with per-provider TTLs a single cutoff
@@ -316,38 +335,60 @@ impl TileCache {
     /// past the provider's max-age survive here to serve `get_stale`.
     fn delete_retired(&self) -> Result<u64> {
         let now = Self::now();
-        let mut deleted = 0u64;
+        let mut freed_bytes = 0u64;
 
         for (provider, ttl) in &self.provider_ttl_seconds {
-            deleted += self.conn.execute(
+            let cutoff = now - ttl;
+            // SUM scoped to the same predicate as the DELETE below. The caller
+            // used to diff two whole-table `get_stats()` calls instead, which is
+            // two full scans of a cache up to 500 MB, on the put path.
+            let bytes: i64 = self.conn.query_row(
+                "SELECT COALESCE(SUM(size_bytes), 0) FROM tiles
+                 WHERE provider = ?1 AND fetched_at <= ?2",
+                params![provider, cutoff],
+                |row| row.get(0),
+            )?;
+            self.conn.execute(
                 "DELETE FROM tiles WHERE provider = ?1 AND fetched_at <= ?2",
-                params![provider, now - ttl],
-            )? as u64;
+                params![provider, cutoff],
+            )?;
+            freed_bytes += bytes as u64;
         }
 
         // Everything with no override, against the default TTL. Building the
         // NOT IN list from the same map keeps the two branches disjoint.
         let overridden: Vec<&String> = self.provider_ttl_seconds.keys().collect();
+        let cutoff = now - self.ttl_seconds;
         if overridden.is_empty() {
-            deleted += self.conn.execute(
-                "DELETE FROM tiles WHERE fetched_at <= ?1",
-                params![now - self.ttl_seconds],
-            )? as u64;
+            let bytes: i64 = self.conn.query_row(
+                "SELECT COALESCE(SUM(size_bytes), 0) FROM tiles WHERE fetched_at <= ?1",
+                params![cutoff],
+                |row| row.get(0),
+            )?;
+            self.conn
+                .execute("DELETE FROM tiles WHERE fetched_at <= ?1", params![cutoff])?;
+            freed_bytes += bytes as u64;
         } else {
             let placeholders = vec!["?"; overridden.len()].join(",");
-            let sql = format!(
-                "DELETE FROM tiles WHERE fetched_at <= ?1 AND provider NOT IN ({placeholders})"
-            );
+            let where_clause = format!("fetched_at <= ?1 AND provider NOT IN ({placeholders})");
             let mut args: Vec<&dyn rusqlite::ToSql> = Vec::with_capacity(overridden.len() + 1);
-            let cutoff = now - self.ttl_seconds;
             args.push(&cutoff);
             for provider in &overridden {
                 args.push(provider);
             }
-            deleted += self.conn.execute(&sql, args.as_slice())? as u64;
+            let bytes: i64 = self.conn.query_row(
+                &format!("SELECT COALESCE(SUM(size_bytes), 0) FROM tiles WHERE {where_clause}"),
+                args.as_slice(),
+                |row| row.get(0),
+            )?;
+            self.conn.execute(
+                &format!("DELETE FROM tiles WHERE {where_clause}"),
+                args.as_slice(),
+            )?;
+            freed_bytes += bytes as u64;
         }
 
-        Ok(deleted)
+        Ok(freed_bytes)
     }
 
     /// Get the current Unix timestamp
@@ -492,10 +533,21 @@ impl TileCache {
         // consent. Either way any copy we already hold goes with it - a provider
         // that stops granting should not leave us holding yesterday's grant.
         let Some(max_age) = policy.granted_seconds() else {
-            self.conn.execute(
+            let dropped = self.conn.execute(
                 "DELETE FROM tiles WHERE provider = ?1 AND z = ?2 AND y = ?3 AND x = ?4",
                 params![provider, z, y, x],
             )?;
+            // Worth a line: if a provider stops sending Cache-Control (a CDN
+            // change, a proxy stripping headers) caching turns off AND the
+            // existing cache drains, and the caller only logs on Err.
+            tracing::debug!(
+                provider,
+                z,
+                y,
+                x,
+                dropped,
+                "No storage grant on this response; not cached"
+            );
             return Ok(());
         };
 
@@ -668,12 +720,10 @@ impl TileCache {
         let mut freed_bytes: u64 = 0;
 
         // First, always delete tiles past their provider's retention TTL.
-        // Measured as a before/after delta rather than a pre-computed SUM: with
-        // per-provider cutoffs the deleting statement is no longer a single
-        // predicate a SUM could mirror, and the delta cannot drift from it.
-        let bytes_before = self.get_stats().total_bytes;
-        self.delete_retired()?;
-        freed_bytes += bytes_before.saturating_sub(self.get_stats().total_bytes);
+        // `delete_retired` sums each cutoff against the same predicate it then
+        // deletes with, so the figure cannot drift from the deletion without
+        // costing a whole-table scan per call to find out.
+        freed_bytes += self.delete_retired()?;
 
         // Then, if still over capacity, delete LRU tiles using batch approach
         let stats = self.get_stats();
@@ -2048,5 +2098,78 @@ mod tests {
             "no-store beats a max-age sent alongside it"
         );
         assert_eq!(CachePolicy::default().granted_seconds(), None);
+    }
+
+    #[test]
+    fn a_quoted_field_list_does_not_hide_the_directive() {
+        // `no-cache="Set-Cookie,X-Foo"` embeds a comma, so splitting the header
+        // on commas cuts the directive in half. Matching the whole token missed
+        // it entirely and served the tile as fresh under the max-age alongside.
+        let policy = parse_cache_control("no-cache=\"Set-Cookie,X-Foo\", max-age=86400");
+        assert_eq!(
+            policy.max_age_seconds,
+            Some(0),
+            "no-cache must win over the max-age beside it"
+        );
+
+        let store = parse_cache_control("no-store=\"Set-Cookie,X-Foo\"");
+        assert!(store.no_store);
+    }
+
+    #[test]
+    fn directives_with_spaces_around_the_equals_still_parse() {
+        assert_eq!(
+            parse_cache_control("max-age = 600").max_age_seconds,
+            Some(600)
+        );
+    }
+
+    #[test]
+    fn eviction_reports_the_bytes_it_actually_freed() {
+        // The figure used to be a diff of two whole-table SUMs - two full scans
+        // of a cache up to 500 MB, on the put path. It is now summed against the
+        // same predicate the DELETE uses, so it must still be exact.
+        let mut cache = TileCache::in_memory(10, 30).unwrap();
+        cache
+            .put_granted("esri", 1, 0, 0, &vec![0u8; 4096], "image/jpeg")
+            .unwrap();
+        cache
+            .put_granted("other", 1, 0, 0, &vec![0u8; 2048], "image/jpeg")
+            .unwrap();
+
+        // Age everything past the default 30-day retention.
+        let long_ago = TileCache::now() - 31 * 24 * 60 * 60;
+        cache
+            .conn
+            .execute("UPDATE tiles SET fetched_at = ?1", params![long_ago])
+            .unwrap();
+
+        let freed = cache.evict_lru().unwrap();
+        assert_eq!(freed, 4096 + 2048);
+        assert_eq!(cache.get_stats().tile_count, 0);
+    }
+
+    #[test]
+    fn eviction_reports_freed_bytes_per_provider_clock() {
+        // With a per-provider override the two branches free different rows;
+        // the total must still add up.
+        let mut cache = TileCache::in_memory(10, 30).unwrap();
+        cache.set_provider_ttls(&HashMap::from([("esri".to_string(), 1u32)]));
+        cache
+            .put_granted("esri", 1, 0, 0, &vec![0u8; 1024], "image/jpeg")
+            .unwrap();
+        cache
+            .put_granted("other", 1, 0, 0, &vec![0u8; 512], "image/jpeg")
+            .unwrap();
+
+        // Two days old: past esri's 1-day override, inside the 30-day default.
+        let two_days_ago = TileCache::now() - 2 * 24 * 60 * 60;
+        cache
+            .conn
+            .execute("UPDATE tiles SET fetched_at = ?1", params![two_days_ago])
+            .unwrap();
+
+        assert_eq!(cache.evict_lru().unwrap(), 1024, "only esri's row retired");
+        assert!(cache.get("other", 1, 0, 0).is_some());
     }
 }

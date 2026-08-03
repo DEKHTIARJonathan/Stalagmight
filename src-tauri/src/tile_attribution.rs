@@ -47,6 +47,15 @@ const ATTRIBUTION_TTL: Duration = Duration::from_hours(24);
 /// there is nothing to gain from retrying tightly.
 const ATTRIBUTION_FAILURE_BACKOFF: Duration = Duration::from_mins(5);
 
+/// Ceiling on the attribution string, in characters.
+///
+/// `copyrightText` is remote text that ends up in a DOM node and a `title=`
+/// tooltip. React escapes it, so this is not an injection guard - it is a size
+/// guard: a compromised or misconfigured endpoint should not be able to put
+/// megabytes into the layout, or into the `split(',')` the collapsed chip runs
+/// over it. Esri's own line is ~66 characters, so the cap is ~8x the real thing.
+const MAX_ATTRIBUTION_CHARS: usize = 512;
+
 /// Attribution for one tile provider, as handed to the frontend.
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct TileAttribution {
@@ -114,7 +123,16 @@ fn parse_copyright_text(body: &[u8]) -> Result<String, String> {
     let info: ServiceInfo = serde_json::from_slice(body)
         .map_err(|e| format!("Failed to parse attribution JSON: {e}"))?;
 
-    let text = info.copyright_text.unwrap_or_default().trim().to_string();
+    // Control characters stripped and length capped before the string goes
+    // anywhere near the UI: this is untrusted remote text.
+    let text: String = info
+        .copyright_text
+        .unwrap_or_default()
+        .chars()
+        .filter(|c| !c.is_control())
+        .take(MAX_ATTRIBUTION_CHARS)
+        .collect();
+    let text = text.trim().to_string();
 
     if text.is_empty() {
         // An empty copyright line is not an attribution - fall back rather than
@@ -294,5 +312,31 @@ mod tests {
         assert_eq!(json["notice"], "Powered by Esri");
         assert_eq!(json["notice_url"], "https://www.esri.com");
         assert_eq!(json["live"], true);
+    }
+
+    #[test]
+    fn a_huge_copyright_line_is_capped_before_it_reaches_the_ui() {
+        // Remote text that ends up in a DOM node and a title tooltip. React
+        // escapes it, so this is a size guard, not an injection one.
+        let huge = "A".repeat(100_000);
+        let body = format!(r#"{{"copyrightText":"{huge}"}}"#);
+        let text = parse_copyright_text(body.as_bytes()).unwrap();
+        assert_eq!(text.chars().count(), MAX_ATTRIBUTION_CHARS);
+    }
+
+    #[test]
+    fn control_characters_are_stripped_from_the_attribution() {
+        let body = "{\"copyrightText\":\"Source: Esri\\u0000\\u0007, Vantor\"}";
+        assert_eq!(
+            parse_copyright_text(body.as_bytes()).unwrap(),
+            "Source: Esri, Vantor"
+        );
+    }
+
+    #[test]
+    fn a_line_of_only_control_characters_is_not_an_attribution() {
+        // Stripping must not turn junk into an empty string we then display.
+        let body = "{\"copyrightText\":\"\\u0000\\u0001\\u0002\"}";
+        assert!(parse_copyright_text(body.as_bytes()).is_err());
     }
 }

@@ -147,6 +147,26 @@ describe('MapAttribution', () => {
       expect(screen.queryByTestId('map-attribution-text')).not.toBeInTheDocument();
     });
 
+    it('collapses for a provider with no compiled-in fallback, once its names arrive', async () => {
+      // Only `esri` is in the compiled-in table, so any other provider renders
+      // nothing until the IPC answers. The sizing observer is installed by an
+      // effect that early-returns while there is no element to measure, so it
+      // has to re-run when the names land - otherwise the wide bar renders on a
+      // host far too narrow for it.
+      setHostWidth(300);
+      invokeIpc.mockResolvedValue({
+        provider: 'other',
+        text: 'Source: Somebody Else',
+        notice: null,
+        notice_url: null,
+        live: true,
+      });
+      render(<MapAttribution visible provider="other" />);
+
+      expect(await screen.findByTestId('map-attribution-toggle')).toBeInTheDocument();
+      expect(screen.queryByTestId('map-attribution-text')).not.toBeInTheDocument();
+    });
+
     it('is forced regardless of width for small surfaces', async () => {
       // The Section Preview passes variant="compact": it is a few hundred pixels
       // square and exists to show the geometry underneath.

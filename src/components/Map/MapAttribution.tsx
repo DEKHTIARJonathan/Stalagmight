@@ -130,7 +130,12 @@ export function MapAttribution({
     const observer = new ResizeObserver(measure);
     observer.observe(host);
     return () => observer.disconnect();
-  }, [visible, variant]);
+    // `text` is a dependency because the component renders null until it has
+    // one. For a provider absent from the compiled-in fallback table that first
+    // render has no ref to measure, so without re-running when the live value
+    // lands the observer is never installed and the bar stays wide on a host
+    // too narrow for it - the obstruction COMPACT_BELOW_PX exists to prevent.
+  }, [visible, variant, text]);
 
   // Escape closes a pinned panel, matching every other dismissible layer.
   useEffect(() => {
