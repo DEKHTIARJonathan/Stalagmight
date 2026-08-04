@@ -1,8 +1,13 @@
 /**
- * Import item read-only gating for useProjectMenuItems (#275): the "Import"
- * hamburger row's `disabled` flag must toggle with the composed editing-blocked
- * predicate (isMapReadOnly || speleoReadOnly via useEditingBlocked()), not just
- * the closure-adjusted geometry check.
+ * Import item gating for useProjectMenuItems - one door (#407): the "Import"
+ * hamburger row is NEVER disabled, in any read-only state. The pre-#407
+ * `disabled: editingBlocked` gate (#275) was picker-side and over-broad once
+ * the row offers the unified filter set: a `.stalx` open and an
+ * import-as-new-project are legal while editing is blocked, and the one case
+ * that is not - additive DMP into the open project - is rejected by
+ * routeOpenedFile's read-only guard with a cause-specific message (pinned in
+ * openOrImport.test.ts). These pins keep a picker-side disable from quietly
+ * coming back.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { renderHook } from '@testing-library/react';
@@ -31,12 +36,13 @@ const READ_ONLY_LINK: SpeleoLinkState = {
   serverError: null,
 };
 
-function importItemDisabled(): boolean | undefined {
+function importItem(): { disabled?: boolean; submenu?: unknown[] } | undefined {
   const { result } = renderHook(() =>
     useProjectMenuItems({ onSave: async () => ({ success: true }) }),
   );
-  const item = result.current.find((it) => (it as { id?: string }).id === 'global-import-menu-button');
-  return (item as { disabled?: boolean } | undefined)?.disabled;
+  return result.current.find(
+    (it) => (it as { id?: string }).id === 'global-import-menu-button',
+  ) as { disabled?: boolean; submenu?: unknown[] } | undefined;
 }
 
 beforeEach(() => {
@@ -45,28 +51,30 @@ beforeEach(() => {
   useSpeleoStore.setState({ link: null, projectLinkKind: 'local', session: null });
 });
 
-describe('useProjectMenuItems Import item - composed read-only gate (#275)', () => {
-  it('is enabled in the fully-editable baseline', () => {
-    expect(importItemDisabled()).toBe(false);
+describe('useProjectMenuItems Import item - never picker-disabled (#407)', () => {
+  it('is present with its row in the fully-editable baseline', () => {
+    const item = importItem();
+    expect(item?.disabled).toBeUndefined();
+    expect(item?.submenu).toHaveLength(1);
   });
 
-  it('is disabled in the closure-adjusted view', () => {
+  it('stays enabled in the closure-adjusted view (router guards the DMP case)', () => {
     useUIStore.setState({ geometryMode: 'closureAdjusted' });
-    expect(importItemDisabled()).toBe(true);
+    expect(importItem()?.disabled).toBeUndefined();
   });
 
-  it('is disabled in Plan mode even when geometryMode falls back to measured', () => {
+  it('stays enabled in Plan mode even when geometryMode falls back to measured', () => {
     useUIStore.setState({ appMode: 'plan', geometryMode: 'measured' });
-    expect(importItemDisabled()).toBe(true);
+    expect(importItem()?.disabled).toBeUndefined();
   });
 
-  it('is disabled on a locked remote SpeleoDB project (otherwise-editable baseline)', () => {
+  it('stays enabled on a locked remote SpeleoDB project', () => {
     useSpeleoStore.setState({ link: READ_ONLY_LINK });
-    expect(importItemDisabled()).toBe(true);
+    expect(importItem()?.disabled).toBeUndefined();
   });
 
-  it('is enabled once the SpeleoDB write lock is held', () => {
+  it('stays enabled with the SpeleoDB write lock held', () => {
     useSpeleoStore.setState({ link: { ...READ_ONLY_LINK, editState: 'editing', lockedByOther: false } });
-    expect(importItemDisabled()).toBe(false);
+    expect(importItem()?.disabled).toBeUndefined();
   });
 });
