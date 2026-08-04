@@ -1655,6 +1655,71 @@ fn parallel_torn_bridges_are_all_demoted() {
 }
 
 #[test]
+fn demotion_softens_an_existing_aligned_closure_over_the_same_pair() {
+    // The pair can already carry a loop closure, in which case the demotion
+    // invents no second one. But an `is_aligned: true` closure is a RIGID edge to
+    // the offset solver, so leaving it as-is would re-impose exactly the
+    // over-constraint the demotion just removed, and its stored metrics were
+    // measured while the merge welded the pair together. Both must be corrected in
+    // place, under the closure's existing id.
+    let (mut project, _a, b, c) = double_anchored_bridge_project();
+    project.loop_closures.push(LoopClosure {
+        id: 7,
+        station_a: StationRef::new(b, 2).into(),
+        station_b: StationRef::new(c, 0).into(),
+        // Junk: what a measurement taken across the merge recorded.
+        path_length: 123.0,
+        misclosure_distance: 0.0,
+        error_percentage: 0.0,
+        horizontal_misclosure: 0.0,
+        vertical_misclosure: 0.0,
+        strategy: ClosureStrategy::Batch,
+        is_aligned: true,
+    });
+
+    assert_eq!(project.demote_double_anchoring_merges(), 1);
+
+    assert_eq!(
+        project.station_merges.len(),
+        1,
+        "only the legitimate A-B merge survives"
+    );
+    assert!(!project.are_stations_merged(StationRef::new(b, 2), StationRef::new(c, 0)));
+    assert_eq!(
+        project.loop_closures.len(),
+        1,
+        "the existing closure is corrected, not duplicated"
+    );
+    let closure = &project.loop_closures[0];
+    assert_eq!(closure.id, 7, "it keeps its id - same closure, corrected");
+    assert!(
+        !closure.is_aligned,
+        "an aligned closure would re-impose the constraint just removed"
+    );
+    assert!(
+        closure.misclosure_distance > 0.0,
+        "the metrics are restamped from the merge-free measurement (got {})",
+        closure.misclosure_distance
+    );
+    assert!(closure.horizontal_misclosure > 0.0);
+    // path_length is restamped too, and the honest merge-free answer here is 0:
+    // the surviving closure is itself a zero-cost edge between exactly this pair,
+    // so there is no path for the metric to walk. The junk 123.0 not surviving is
+    // what proves the restamp reached this field.
+    assert_eq!(closure.path_length, 0.0);
+
+    assert!(
+        project.check_closure_alignment().is_empty(),
+        "and the softened closure is no longer a stale aligned one"
+    );
+    project.resolve_offsets();
+    assert!(
+        project.over_anchored_merge_components().is_empty(),
+        "each datum is back in its own merge component"
+    );
+}
+
+#[test]
 fn unmeasurable_geometry_is_never_demoted_or_flagged() {
     // Non-finite (NaN/inf) shot geometry makes every distance derived from it
     // NaN, and `NaN < TOL` and `NaN >= TOL` are BOTH false. Left unguarded, the

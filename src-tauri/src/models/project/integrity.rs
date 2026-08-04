@@ -453,7 +453,45 @@ impl Project {
                 purpose = "remove an unsatisfiable rigid constraint",
                 "Demoted a merge bridging two zero-datum-anchored groups back to a loop closure"
             );
-            if !already_closed {
+            if already_closed {
+                // A closure over this pair already exists, so no new one is
+                // invented - but the existing one is not automatically the soft
+                // edge the demotion needs. If it is `is_aligned: true` the offset
+                // solver treats it as a RIGID edge, which re-imposes the exact
+                // over-constraint just removed and leaves the project torn as
+                // before. Its stored metrics are stale too: they were measured
+                // while the merge welded the pair together, so they describe a
+                // zero-cost path that no longer exists. Soften it and restamp it
+                // from the merge-free measurement above.
+                //
+                // `key_is_ref` borrows `&self`, so collect the matching indices in
+                // an immutable pass first, then mutate by index. Normalizes EVERY
+                // match: one un-softened duplicate would re-impose the constraint
+                // on its own. Endpoint order is compared both ways, matching
+                // `are_stations_in_closure`, which is what decided this branch.
+                let matches: Vec<usize> = self
+                    .loop_closures
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, lc)| {
+                        (self.key_is_ref(&lc.station_a, a) && self.key_is_ref(&lc.station_b, b))
+                            || (self.key_is_ref(&lc.station_a, b)
+                                && self.key_is_ref(&lc.station_b, a))
+                    })
+                    .map(|(i, _)| i)
+                    .collect();
+                for i in matches {
+                    let closure = &mut self.loop_closures[i];
+                    // Keep the existing id: this is the same user-visible closure,
+                    // corrected, not a replacement.
+                    closure.is_aligned = false;
+                    closure.path_length = metrics.path_length;
+                    closure.misclosure_distance = metrics.misclosure_distance;
+                    closure.error_percentage = metrics.error_percentage;
+                    closure.horizontal_misclosure = metrics.horizontal_misclosure;
+                    closure.vertical_misclosure = metrics.vertical_misclosure;
+                }
+            } else {
                 let id = self.next_closure_id;
                 self.next_closure_id += 1;
                 self.loop_closures.push(LoopClosure {
