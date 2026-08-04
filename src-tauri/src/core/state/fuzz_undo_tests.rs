@@ -460,8 +460,6 @@ struct MoveCtx<'a> {
     entry: Option<&'a EntryMeta>,
     /// Has this run crossed a save?
     after_save: bool,
-    /// Has this run reopened a saved project?
-    after_reload: bool,
     /// The run's current epoch; an entry with a lower one predates the last save.
     epoch: u32,
     /// Has finding 1 or finding 11 ALREADY reverted the save's gauge capture in
@@ -896,7 +894,12 @@ fn attributable_to_save(diff: &Diff) -> bool {
 /// persisted derivable offset"), so `section_offsets` and the station offsets
 /// derived from them are RECOMPUTED rather than restored.
 fn attributable_to_reload(diff: &Diff) -> bool {
-    path_is(diff, "section_offsets.#") || diff.path.starts_with("station_offsets")
+    // BOTH spellings of an offset difference: the whole key when it is present
+    // on one side only, and the element when it exists on both and the differ
+    // recurses into the pair. The re-solve recomputes the whole map, so the two
+    // are the same fact - and matching only the first left every value change
+    // across a reload reading as unexplained.
+    offset_key_of(&diff.path).is_some() || diff.path.starts_with("station_offsets")
 }
 
 /// Per-section shot uuids, in order, from a canonical snapshot.
@@ -1177,35 +1180,156 @@ fn uuid_occurrences(snapshot: &str, section_id: SectionId, uuid: &str) -> usize 
         .unwrap_or(0)
 }
 
-/// FINDING 4's structural signature: `loop_closures` holds the same members in a
-/// different order and the snapshots are otherwise identical. Undo of
-/// `RemoveLoopClosure` pushes instead of re-inserting at the removed index.
-fn is_closure_reorder(expected: &str, actual: &str) -> bool {
+/// FINDING 10's structural signature: one loop closure is gone and one station
+/// merge with the SAME endpoints has appeared, and nothing else moved.
+///
+/// That is exactly what `convert_orphan_closures_to_merges` does
+/// (models/project/offsets.rs): it removes the closure and records a
+/// `StationMerge` carrying its two `StationKey`s verbatim. The finding is that
+/// two of the four delete entry points never run it, so the orphan is saved as a
+/// closure and the LOADER converts it - a save+reopen that is not
+/// state-preserving.
+///
+/// Matched on the endpoints rather than on the counts alone: a closure vanishing
+/// and an unrelated merge appearing is not this.
+fn diffs_without_orphan_conversion(expected: &str, actual: &str) -> Option<Vec<Diff>> {
     let (Ok(mut left), Ok(mut right)) = (
         serde_json::from_str::<serde_json::Value>(expected),
         serde_json::from_str::<serde_json::Value>(actual),
     ) else {
-        return false;
+        return None;
     };
-    let sort_closures = |value: &mut serde_json::Value| -> bool {
-        let Some(list) = value
-            .get_mut("loop_closures")
-            .and_then(|c| c.as_array_mut())
-        else {
-            return false;
+    // EITHER direction. The conversion happens once, on the reload, and the
+    // model resyncs to it - so a later redo back UP to a depth recorded before
+    // the reload re-measures the same swap with the sides exchanged.
+    let (closure, merge, closure_on_left) =
+        match (converted_pair(&left, &right), converted_pair(&right, &left)) {
+            (Some((closure, merge)), None) => (closure, merge, true),
+            (None, Some((closure, merge))) => (closure, merge, false),
+            _ => return None,
         };
-        if list.len() < 2 {
-            return false;
+    let drop_matching = |value: &mut serde_json::Value, key: &str, wanted: &serde_json::Value| {
+        if let Some(items) = value.get_mut(key).and_then(serde_json::Value::as_array_mut) {
+            if let Some(index) = items.iter().position(|item| item == wanted) {
+                items.remove(index);
+            }
         }
-        list.sort_by_key(ToString::to_string);
-        true
     };
-    if !sort_closures(&mut left) || !sort_closures(&mut right) {
-        return false;
+    if closure_on_left {
+        drop_matching(&mut left, "loop_closures", &closure);
+        drop_matching(&mut right, "station_merges", &merge);
+    } else {
+        drop_matching(&mut right, "loop_closures", &closure);
+        drop_matching(&mut left, "station_merges", &merge);
+    }
+    // What is left goes through the ordinary classification and the ordinary
+    // save/reload attribution - a reload also re-solves `section_offsets`, and
+    // requiring byte equality here would mean the signature only ever matched a
+    // conversion with no geometry attached.
+    let mut diffs = Vec::new();
+    diff_values(&left, &right, "", &mut diffs);
+    Some(diffs)
+}
+
+/// Exactly one closure present in `with_closure` and absent from `with_merge`,
+/// against exactly one merge present in `with_merge` and absent from
+/// `with_closure`, carrying the SAME two station keys.
+fn converted_pair(
+    with_closure: &serde_json::Value,
+    with_merge: &serde_json::Value,
+) -> Option<(serde_json::Value, serde_json::Value)> {
+    let list = |value: &serde_json::Value, key: &str| -> Vec<serde_json::Value> {
+        value
+            .get(key)
+            .and_then(|items| items.as_array())
+            .cloned()
+            .unwrap_or_default()
+    };
+    let ends = |item: &serde_json::Value| -> Option<(serde_json::Value, serde_json::Value)> {
+        Some((
+            item.get("station_a")?.clone(),
+            item.get("station_b")?.clone(),
+        ))
+    };
+    let closures_after = list(with_merge, "loop_closures");
+    let lost: Vec<serde_json::Value> = list(with_closure, "loop_closures")
+        .into_iter()
+        .filter(|closure| {
+            !closures_after
+                .iter()
+                .any(|other| other.get("id") == closure.get("id"))
+        })
+        .collect();
+    let merges_before = list(with_closure, "station_merges");
+    let gained: Vec<serde_json::Value> = list(with_merge, "station_merges")
+        .into_iter()
+        .filter(|merge| !merges_before.iter().any(|other| ends(other) == ends(merge)))
+        .collect();
+    let ([closure], [merge]) = (lost.as_slice(), gained.as_slice()) else {
+        return None;
+    };
+    (ends(closure) == ends(merge)).then(|| (closure.clone(), merge.clone()))
+}
+
+/// FINDING 4's structural signature: `loop_closures` holds the same members in a
+/// different order. Undo of `RemoveLoopClosure` pushes instead of re-inserting at
+/// the removed index (core/state/undo.rs), and that order is persisted, indexed
+/// by the frontend, and the order `resolve_offsets` builds its adjacency in.
+fn diffs_without_closure_reorder(expected: &str, actual: &str) -> Option<Vec<Diff>> {
+    diffs_without_list_reorder(expected, actual, "loop_closures")
+}
+
+/// A NEW FINDING's structural signature (issue #413, finding 17), and finding
+/// 4's twin one collection over: `zero_datums` holds the same members in a
+/// different order.
+///
+/// `UndoData::ZeroDatumInfo`'s restore arm ends in
+/// `project.zero_datums.push(ZeroDatum { .. })` (core/state/undo.rs) where the
+/// forward path took the datum out in place, so a datum that was not last comes
+/// back last. Invisible until a run has two datums to reorder, which is why the
+/// closure-shapes prologue - which builds a second anchored component - is what
+/// surfaced it.
+fn diffs_without_datum_reorder(expected: &str, actual: &str) -> Option<Vec<Diff>> {
+    diffs_without_list_reorder(expected, actual, "zero_datums")
+}
+
+/// `key` holds the same members in a different order on the two sides.
+///
+/// Returns what is still different once both are sorted, so a reorder that comes
+/// with other classified differences (a uuid re-mint, an offset heal) is still
+/// recognised and anything unexplained still fails. `None` when the two are not
+/// permutations of each other, or already agree.
+fn diffs_without_list_reorder(expected: &str, actual: &str, key: &str) -> Option<Vec<Diff>> {
+    let (Ok(mut left), Ok(mut right)) = (
+        serde_json::from_str::<serde_json::Value>(expected),
+        serde_json::from_str::<serde_json::Value>(actual),
+    ) else {
+        return None;
+    };
+    let sorted = |value: &mut serde_json::Value| -> Option<Vec<String>> {
+        let list = value.get_mut(key)?.as_array_mut()?;
+        if list.len() < 2 {
+            return None;
+        }
+        let before: Vec<String> = list.iter().map(ToString::to_string).collect();
+        list.sort_by_key(ToString::to_string);
+        let after: Vec<String> = list.iter().map(ToString::to_string).collect();
+        Some(if before == after { Vec::new() } else { after })
+    };
+    let (Some(left_order), Some(right_order)) = (sorted(&mut left), sorted(&mut right)) else {
+        return None;
+    };
+    // At least one side has to have been out of order, and the two have to be
+    // the same members - a list that GAINED or LOST an entry is not a reorder.
+    if left_order.is_empty() && right_order.is_empty() {
+        return None;
+    }
+    if !left_order.is_empty() && !right_order.is_empty() && left_order != right_order {
+        return None;
     }
     let mut diffs = Vec::new();
     diff_values(&left, &right, "", &mut diffs);
-    diffs.is_empty()
+    Some(diffs)
 }
 
 // ===========================================================================
@@ -1464,6 +1588,9 @@ struct Outcome {
     attributed: usize,
     /// True when a known wedge stopped the walk early (finding 6 or 13).
     wedged: bool,
+    /// True when the app's own `#[cfg(test)]` merge-alignment assert fired
+    /// (finding 14) and the run stopped there.
+    alignment_panic: bool,
 }
 
 struct Fuzzer {
@@ -1488,6 +1615,9 @@ struct Fuzzer {
     temp: Option<TempDir>,
     /// May the generators create loop closures? See `Plan::closures`.
     closures: bool,
+    /// Build finding 10's orphan-closure shape on the next boundary crossing.
+    /// See `expose_orphan_closure` for why it cannot be built up front.
+    orphan_pending: bool,
     /// Set once findings 1 or 11 have reverted the save's gauge capture. From then
     /// on the live project no longer HAS the anchors, so every later depth
     /// recorded with them disagrees - the same defect, re-measured. See the
@@ -1536,6 +1666,7 @@ impl Fuzzer {
             outcome: Outcome::default(),
             temp: None,
             closures,
+            orphan_pending: false,
             heal_reverted: false,
             displaced: BTreeMap::new(),
             ref_dropped: BTreeSet::new(),
@@ -1660,7 +1791,6 @@ impl Fuzzer {
         let ctx = MoveCtx {
             entry: ctx_entry.as_ref(),
             after_save: self.outcome.saves > 0,
-            after_reload: self.outcome.reloads > 0,
             epoch: self.epoch,
             heal_reverted: self.heal_reverted,
             displaced: &displaced,
@@ -1686,15 +1816,39 @@ impl Fuzzer {
         // consumed entry is the empty-section append the finding needs, and only
         // when refs to that section's station 0 were really lost.
         let mut ref_drop = None;
-        if let Some(section_id) = ctx.appended_into_empty() {
-            if let Some(remaining) =
-                diffs_without_station_zero_refs(&expected, &actual, section_id, true)
-            {
-                ref_drop = Some((
-                    "finding-3-undo-of-the-first-shot-drops-station-zero-refs",
-                    Some(section_id),
-                ));
+        // FINDING 10, subtracted first: a closure reclassified as a merge moves
+        // one entry between two lists, which re-indexes both and buries every
+        // other difference the same move produced.
+        if let Some(remaining) = diffs_without_orphan_conversion(&expected, &actual) {
+            ref_drop = Some((
+                "finding-10-reload-converts-an-orphan-closure-to-a-merge",
+                None,
+            ));
+            diffs = remaining;
+        }
+        if ref_drop.is_none() {
+            if let Some(remaining) = diffs_without_closure_reorder(&expected, &actual) {
+                ref_drop = Some(("finding-4-closure-reordered-on-undo", None));
                 diffs = remaining;
+            }
+        }
+        if ref_drop.is_none() {
+            if let Some(remaining) = diffs_without_datum_reorder(&expected, &actual) {
+                ref_drop = Some(("finding-17-zero-datum-reordered-on-undo", None));
+                diffs = remaining;
+            }
+        }
+        if ref_drop.is_none() {
+            if let Some(section_id) = ctx.appended_into_empty() {
+                if let Some(remaining) =
+                    diffs_without_station_zero_refs(&expected, &actual, section_id, true)
+                {
+                    ref_drop = Some((
+                        "finding-3-undo-of-the-first-shot-drops-station-zero-refs",
+                        Some(section_id),
+                    ));
+                    diffs = remaining;
+                }
             }
         }
         // A NEW FINDING, subtracted for the same reason: a shot that came back in
@@ -1814,15 +1968,6 @@ impl Fuzzer {
         // explain. Order matters: a whole-section uuid re-mint (finding 1) also
         // reads as "different shots are present", so the path classifiers get
         // first refusal.
-        if is_closure_reorder(&expected, &actual) {
-            *self
-                .outcome
-                .hits
-                .entry("finding-4-closure-reordered-on-undo")
-                .or_insert(0) += 1;
-            self.resync(depth, actual);
-            return;
-        }
         // A NEW FINDING (issue #413, finding 16), and the worst shape reached so
         // far: after a reload, the REDO of a `CreateShot` re-inserts a shot that
         // is STILL THERE, because the undo before it deleted a different one
@@ -2687,7 +2832,7 @@ impl Fuzzer {
     fn step_mutate(&mut self) {
         let before_undo = self.undo_len();
         let before_redo = self.redo_len();
-        let Some(drawn) = self.draw_mutation() else {
+        let Some(Some(drawn)) = self.catching_alignment(Self::draw_mutation) else {
             return;
         };
         self.record_mutation(drawn, before_undo, before_redo);
@@ -2937,6 +3082,192 @@ impl Fuzzer {
         }
     }
 
+    /// Build the two closure shapes findings 4 and 10 need.
+    ///
+    /// Both are reachable in principle from the generators and neither is
+    /// reachable in practice: a 30-seed x 60-move sweep with `closures` on
+    /// produced no `RemoveLoopClosure` of a non-last closure at all, because a
+    /// second closure needs a second independent path between the same two
+    /// sections and `create_loop_closure` refuses everything else. So the shapes
+    /// are constructed, and then left to the ordinary walk to exercise.
+    ///
+    /// GROUP 1, finding 4: two sections joined by a merge, two closures between
+    /// them, and the FIRST one removed. Its undo is `loop_closures.push()`
+    /// (core/state/undo.rs) rather than an insert at the recorded index, so the
+    /// order the walk restores is not the order it recorded - and that order is
+    /// persisted, indexed by the frontend and traversed by `resolve_offsets`.
+    ///
+    /// GROUP 2, finding 10: A - bridge - B chained by two merges plus a closure
+    /// straight from A to B, with the bridge then deleted through
+    /// `execute_delete_last_shot_and_section` - one of the two delete entry
+    /// points that never calls `convert_orphan_closures_to_merges`. The closure
+    /// is now the sole connection, so it is "really" a merge; memory keeps it as
+    /// a closure, the save persists that, and the LOADER converts it.
+    fn expose_closure_shapes(&mut self) {
+        let group_one = self.build_merged_pair("closure-order-a", "closure-order-b", 2);
+        if let Some((a, b)) = group_one {
+            let mut ids = Vec::new();
+            for (station_a, station_b) in [((a, 0), (b, 1)), ((a, 1), (b, 1))] {
+                let before = self.stacks();
+                let created = self.state.execute(Command::CreateLoopClosure {
+                    station_a: StationRef::new(station_a.0, station_a.1),
+                    station_b: StationRef::new(station_b.0, station_b.1),
+                    closure_strategy: ClosureStrategy::Move,
+                });
+                if let Some(closure) = self
+                    .state
+                    .get_project_state()
+                    .and_then(|project| project.loop_closures.last().map(|c| c.id))
+                {
+                    if created.success {
+                        ids.push(closure);
+                    }
+                }
+                self.forced(
+                    Drawn::new(
+                        format!(
+                            "closures:createLoopClosure({}/{})",
+                            station_a.0, station_b.0
+                        ),
+                        created,
+                    ),
+                    before,
+                );
+            }
+            // The FIRST of two, so the undo's `push` lands it in the wrong place.
+            // Removing the last one would restore correctly and prove nothing.
+            if ids.len() == 2 {
+                let before = self.stacks();
+                let removed = self
+                    .state
+                    .execute(Command::RemoveLoopClosure { closure_id: ids[0] });
+                self.forced(
+                    Drawn::new(format!("closures:removeLoopClosure({})", ids[0]), removed),
+                    before,
+                );
+            }
+        }
+    }
+
+    /// GROUP 2, finding 10, built immediately before the save rather than at the
+    /// start of the run.
+    ///
+    /// The orphan has to still BE an orphan when the file is written: any later
+    /// command flagged `can_orphan_closures` runs the conversion from
+    /// `execute()`'s epilogue and heals it, which is what made this fire in 1
+    /// seed out of 10 when it was built up front.
+    fn expose_orphan_closure(&mut self) {
+        let a = self.forced_section("orphan-a", 1);
+        let bridge = self.forced_section("orphan-bridge", 1);
+        let b = self.forced_section("orphan-b", 1);
+        let (Some(a), Some(bridge), Some(b)) = (a, bridge, b) else {
+            return;
+        };
+        let before = self.stacks();
+        let datum = self.state.execute(Command::SetZeroDatum {
+            station_ref: StationRef::new(a, 0),
+            coordinates: GpsCoordinates::new(21.1, -86.9, 0.0).unwrap(),
+        });
+        self.forced(
+            Drawn::new(format!("closures:setZeroDatum({a}/0)"), datum),
+            before,
+        );
+        for (left, right) in [((a, 1), (bridge, 0)), ((bridge, 1), (b, 0))] {
+            let before = self.stacks();
+            let merged = self.state.execute(Command::MergeStations {
+                station_a: StationRef::new(left.0, left.1),
+                station_b: StationRef::new(right.0, right.1),
+            });
+            self.forced(
+                Drawn::new(format!("closures:merge({}/{})", left.0, right.0), merged),
+                before,
+            );
+        }
+        let before = self.stacks();
+        let closure = self.state.execute(Command::CreateLoopClosure {
+            station_a: StationRef::new(a, 0),
+            station_b: StationRef::new(b, 1),
+            closure_strategy: ClosureStrategy::Move,
+        });
+        let closed = closure.success;
+        self.forced(
+            Drawn::new(format!("closures:createLoopClosure({a}/{b})"), closure),
+            before,
+        );
+        if !closed {
+            return;
+        }
+        // The delete path that does NOT convert. `execute_delete_last_shot_and_section`
+        // is an `AppState` entry point rather than a `Command`, so it never sees
+        // `execute()`'s `can_orphan_closures` epilogue either.
+        let Some(&bridge_shot) = self.live_shot_ids(bridge).first() else {
+            return;
+        };
+        let before = self.stacks();
+        let deleted = self
+            .state
+            .execute_delete_last_shot_and_section(bridge, bridge_shot);
+        self.forced(
+            Drawn::new(
+                format!("closures:deleteLastShotAndSection(s={bridge})"),
+                deleted,
+            ),
+            before,
+        );
+    }
+
+    /// A section with `shots` random shots, run through the model. Returns its id.
+    fn forced_section(&mut self, name: &str, shots: usize) -> Option<SectionId> {
+        let shots: Vec<ShotData> = (0..shots).map(|_| random_shot(&mut self.rng)).collect();
+        let before = self.stacks();
+        let created = self.state.execute(Command::CreateSection {
+            name: Some(name.to_string()),
+            surveyor: None,
+            date: None,
+            color: (*self.rng.pick(COLORS)).to_string(),
+            direction: None,
+            shots,
+        });
+        let section_id = created.section_id;
+        self.forced(
+            Drawn::new(format!("closures:createSection({name})"), created),
+            before,
+        );
+        section_id
+    }
+
+    /// Two sections joined by a merge, with a zero datum on the first so a loop
+    /// closure between them is legal. Returns `(a, b)`.
+    fn build_merged_pair(
+        &mut self,
+        name_a: &str,
+        name_b: &str,
+        shots_a: usize,
+    ) -> Option<(SectionId, SectionId)> {
+        let a = self.forced_section(name_a, shots_a)?;
+        let b = self.forced_section(name_b, 1)?;
+        let before = self.stacks();
+        let datum = self.state.execute(Command::SetZeroDatum {
+            station_ref: StationRef::new(a, 0),
+            coordinates: GpsCoordinates::new(20.9, -87.1, 0.0).unwrap(),
+        });
+        self.forced(
+            Drawn::new(format!("closures:setZeroDatum({a}/0)"), datum),
+            before,
+        );
+        let before = self.stacks();
+        let merged = self.state.execute(Command::MergeStations {
+            station_a: StationRef::new(a, shots_a as u32),
+            station_b: StationRef::new(b, 0),
+        });
+        let ok = merged.success;
+        self.forced(
+            Drawn::new(format!("closures:merge({a}/{b})"), merged),
+            before,
+        );
+        ok.then_some((a, b))
+    }
+
     /// Live shot ids of one section, in positional order.
     fn live_shot_ids(&self, section_id: SectionId) -> Vec<ShotId> {
         self.state
@@ -2973,13 +3304,76 @@ impl Fuzzer {
             .collect()
     }
 
+    /// Run `body`, turning the app's OWN merge-alignment assert into a
+    /// classified, TERMINAL finding-14 hit instead of an unattributable process
+    /// panic.
+    ///
+    /// `Project::debug_assert_merge_alignment` (models/project/offsets.rs) has a
+    /// `#[cfg(test)]` assert arm, so it exists in this tier and in no other. It
+    /// fires at the END of `insert_shot_after` - after the mutation it is
+    /// checking - which is why this cannot be pre-empted by checking alignment
+    /// before the move: the command that breaks the invariant is the command
+    /// that asserts it. `expect_merges_aligned` proves the state was clean
+    /// immediately before.
+    ///
+    /// Three things keep this from being a blanket catch:
+    ///
+    /// * the payload is READ, and anything whose message is not that assert is
+    ///   re-raised verbatim with `resume_unwind` - no other panic is absorbed;
+    /// * the context string has to be one of the INSERT sites finding 14 names,
+    ///   so the same assert firing after `merge_stations` or `set_zero_datum`
+    ///   is still an unexplained failure;
+    /// * the run STOPS. The assert unwinds through `AppState`'s project mutex,
+    ///   which poisons it, and several call sites treat a poisoned lock as "no
+    ///   project" - so everything after it would be measuring a crippled
+    ///   `AppState` rather than the app.
+    ///
+    /// The assert itself is untouched. Disabling it would delete this tier's
+    /// only view of the defect.
+    fn catching_alignment<T>(&mut self, body: impl FnOnce(&mut Self) -> T) -> Option<T> {
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| body(self)));
+        match outcome {
+            Ok(value) => Some(value),
+            Err(payload) => {
+                let message = payload
+                    .downcast_ref::<String>()
+                    .cloned()
+                    .or_else(|| payload.downcast_ref::<&str>().map(|s| (*s).to_string()))
+                    .unwrap_or_default();
+                if !message.contains("Merge alignment violated after insert_shot_") {
+                    std::panic::resume_unwind(payload);
+                }
+                *self
+                    .outcome
+                    .hits
+                    .entry("finding-14-insert-leaves-a-merge-metres-out-of-alignment")
+                    .or_insert(0) += 1;
+                self.outcome.alignment_panic = true;
+                self.note(format!(
+                    "  ^ the app's own merge-alignment assert fired: {}",
+                    message.lines().next().unwrap_or_default()
+                ));
+                None
+            }
+        }
+    }
+
     /// Did a failed history move fail for a KNOWN, documented reason?
     ///
     /// Both of these leave the entry on its stack (`undo_inner`'s epilogue pushes
     /// it back), so the history is WEDGED and the walk cannot continue - which is
     /// why the caller stops rather than retrying.
     fn classify_move_failure(&mut self, error: &str) -> Option<&'static str> {
-        if error.contains("part of a loop") || error.contains("zero datum") {
+        // FINDING 6 is "the user-facing `delete_shot` refuses the undo of a
+        // permitted `CreateShot`", and `delete_shot` has THREE guards that can
+        // do it, not the one the write-up quotes: the loop/datum pair, and a
+        // frozen-shot check that runs before them (core/state/command_shot.rs,
+        // "Defense-in-depth: refuse to delete a frozen shot"). All three leave
+        // the entry pushed back and the history wedged, which is the finding.
+        if error.contains("part of a loop")
+            || error.contains("zero datum")
+            || error.contains("Cannot delete a frozen shot")
+        {
             return Some("finding-6-undo-refused-by-a-delete-guard");
         }
         // Two spellings, one defect. Finding 13 names all three arms a stale shot
@@ -3076,16 +3470,20 @@ impl Fuzzer {
             }
             self.stale_corruption = true;
         }
-        let result = if back {
-            if jumped {
-                self.state.undo_to(steps - 1)
+        let Some(result) = self.catching_alignment(|fuzzer| {
+            if back {
+                if jumped {
+                    fuzzer.state.undo_to(steps - 1)
+                } else {
+                    fuzzer.state.undo()
+                }
+            } else if jumped {
+                fuzzer.state.redo_to(steps - 1)
             } else {
-                self.state.undo()
+                fuzzer.state.redo()
             }
-        } else if jumped {
-            self.state.redo_to(steps - 1)
-        } else {
-            self.state.redo()
+        }) else {
+            return false;
         };
         let label = format!(
             "{}{} x{steps}",
@@ -3132,6 +3530,10 @@ impl Fuzzer {
     /// point is exercised until a run crosses this boundary. Findings 8, 12 and 13
     /// all live on the other side of it.
     fn cross_boundary(&mut self) -> bool {
+        if self.orphan_pending {
+            self.orphan_pending = false;
+            self.expose_orphan_closure();
+        }
         if self.top == 0 || self.top > UNDO_PERSIST_LIMIT {
             return false;
         }
@@ -3247,16 +3649,27 @@ struct Plan {
     /// whether the model has acquired a NEW way to be wrong, which is the only
     /// thing the gate is for.
     divergence: bool,
+    /// Build the two closure shapes findings 4 and 10 need before fuzzing. See
+    /// `Fuzzer::expose_closure_shapes`. Implies `closures`.
+    ///
+    /// OFF for the gate, for the same reason as `divergence` and for
+    /// `closures`'s reason too: the shapes are built to reach known defects, so
+    /// the hit counts say nothing about new ones.
+    closure_shapes: bool,
 }
 
 fn run_fuzz(seed: u32, plan: Plan) -> Outcome {
-    let mut fuzzer = Fuzzer::new(seed, plan.closures);
+    let mut fuzzer = Fuzzer::new(seed, plan.closures || plan.closure_shapes);
     // The exposure prologue runs FIRST and crosses the boundary itself, so the
     // block of id-bearing entries it builds is the newest thing on the stack
     // when the reload lands and the closing unwind starts on it.
     if plan.divergence {
         fuzzer.expose_stale_ids();
         fuzzer.cross_boundary();
+    }
+    if plan.closure_shapes {
+        fuzzer.expose_closure_shapes();
+        fuzzer.orphan_pending = plan.persistence;
     }
     // Crossing at a third of the way in leaves entries both below and above the
     // boundary, so the closing walk covers restored UNDO entries and restored
@@ -3268,6 +3681,12 @@ fn run_fuzz(seed: u32, plan: Plan) -> Outcome {
     };
 
     for iteration in 0..plan.iterations {
+        // Nothing after the app's own assert measures the app: it unwound
+        // through the project mutex, so the lock is poisoned and half the call
+        // sites now read "no project open".
+        if fuzzer.outcome.alignment_panic {
+            break;
+        }
         if iteration == boundary_at {
             fuzzer.cross_boundary();
         }
@@ -3291,6 +3710,9 @@ fn run_fuzz(seed: u32, plan: Plan) -> Outcome {
                 continue;
             }
             fuzzer.step_mutate();
+            if fuzzer.outcome.alignment_panic {
+                break;
+            }
             continue;
         }
         // About one history move in ten is taken as a multi-step jump.
@@ -3307,9 +3729,12 @@ fn run_fuzz(seed: u32, plan: Plan) -> Outcome {
         if !fuzzer.step_history(back, steps) {
             break;
         }
+        if fuzzer.outcome.alignment_panic {
+            break;
+        }
     }
 
-    if !fuzzer.outcome.wedged {
+    if !fuzzer.outcome.wedged && !fuzzer.outcome.alignment_panic {
         // Cross the boundary at least once per persistence run, so the closing
         // walk below runs against a RESTORED stack rather than an in-memory one.
         if plan.persistence && fuzzer.outcome.reloads == 0 {
@@ -3403,7 +3828,13 @@ fn summarize(label: &str, seed: u32, outcome: &Outcome) -> String {
         outcome.max_depth,
         outcome.float_noise,
         outcome.attributed,
-        if outcome.wedged { " WEDGED" } else { "" },
+        if outcome.wedged {
+            " WEDGED"
+        } else if outcome.alignment_panic {
+            " ALIGNMENT-PANIC"
+        } else {
+            ""
+        },
         if hits.is_empty() {
             String::new()
         } else {
@@ -3435,6 +3866,7 @@ fn undo_redo_fuzz_gate() {
                 jumps: false,
                 closures: false,
                 divergence: false,
+                closure_shapes: false,
             },
         );
         println!("{}", summarize("in-memory", seed, &outcome));
@@ -3475,6 +3907,7 @@ fn undo_redo_fuzz_gate_persistence() {
                 jumps: false,
                 closures: false,
                 divergence: false,
+                closure_shapes: false,
             },
         );
         println!("{}", summarize("persistence", seed, &outcome));
@@ -3505,6 +3938,7 @@ fn the_fuzzer_is_deterministic() {
             jumps: false,
             closures: false,
             divergence: false,
+            closure_shapes: false,
         };
         let first = run_fuzz(seed, plan);
         let second = run_fuzz(seed, plan);
@@ -3554,6 +3988,7 @@ fn fuzz_seed_survey() {
     let jumps = std::env::var("STALAGMIGHT_RUST_FUZZ_JUMPS").is_ok();
     let closures = std::env::var("STALAGMIGHT_RUST_FUZZ_CLOSURES").is_ok();
     let divergence = std::env::var("STALAGMIGHT_RUST_FUZZ_DIVERGENCE").is_ok();
+    let closure_shapes = std::env::var("STALAGMIGHT_RUST_FUZZ_CLOSURE_SHAPES").is_ok();
     let verbose = std::env::var("STALAGMIGHT_RUST_FUZZ_VERBOSE").is_ok();
     let mut clean = Vec::new();
     let mut failures: BTreeMap<String, Vec<u32>> = BTreeMap::new();
@@ -3565,6 +4000,7 @@ fn fuzz_seed_survey() {
                 jumps,
                 closures,
                 divergence,
+                closure_shapes,
             };
             let outcome =
                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run_fuzz(seed, plan)));
@@ -3651,6 +4087,7 @@ fn undo_redo_fuzz_soak() {
                     jumps: true,
                     closures: true,
                     divergence: persistence,
+                    closure_shapes: true,
                 },
             );
             if outcome.wedged {
