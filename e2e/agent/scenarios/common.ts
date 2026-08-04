@@ -5,7 +5,7 @@
  */
 import type { ScenarioContext } from './framework';
 export { DEFAULT_FIXTURE } from '../lib/fixtures';
-import { DEFAULT_FIXTURE } from '../lib/fixtures';
+import { DEFAULT_FIXTURE, stripUndoHistory, type StripUndoHistoryResult } from '../lib/fixtures';
 
 export async function hasProject(ctx: ScenarioContext): Promise<boolean> {
   return ctx.eval<boolean>('return !!window.__E2E_TEST__.projectStore.getState().project;');
@@ -24,6 +24,42 @@ export async function ensureProjectLoaded(ctx: ScenarioContext, fixture = DEFAUL
     throw new Error(`loadProject failed: ${res.result?.error ?? res.error ?? 'unknown'}`);
   }
   if (!(await hasProject(ctx))) throw new Error('project still null after loadProject');
+}
+
+/**
+ * Open a fixture with NO inherited undo history, closing whatever is already
+ * open first.
+ *
+ * `ensureProjectLoaded` is materialize+load in one step and is deliberately
+ * lenient (it keeps any project that happens to be open). A scenario that models
+ * undo DEPTH cannot use it: it needs a known baseline, and it needs the
+ * fixture's persisted undo stack gone. So the three steps are split here -
+ * materialize the temp copy, strip its history, then load - with the strip
+ * landing on the COPY, never on the tracked fixture.
+ */
+export async function loadFixtureWithoutUndoHistory(
+  ctx: ScenarioContext,
+  fixture = DEFAULT_FIXTURE,
+): Promise<{ path: string; stripped: StripUndoHistoryResult }> {
+  const materialized = ctx.fixturePath(fixture);
+  const stripped = stripUndoHistory(materialized);
+
+  // Same close the scenario smoke runner does between scenarios; best-effort so
+  // a project that refuses to close still surfaces as the load failing.
+  if (await hasProject(ctx)) {
+    await ctx.callAction('project', 'closeProject', []).catch(() => undefined);
+  }
+
+  const res = (await ctx.callAction('project', 'loadProject', [materialized])) as {
+    ok: boolean;
+    error?: string;
+    result?: { success?: boolean; error?: string };
+  };
+  if (!res.ok || res.result?.success === false) {
+    throw new Error(`loadProject(${fixture}) failed: ${res.result?.error ?? res.error ?? 'unknown'}`);
+  }
+  if (!(await hasProject(ctx))) throw new Error(`project still null after loading ${fixture}`);
+  return { path: materialized, stripped };
 }
 
 /**

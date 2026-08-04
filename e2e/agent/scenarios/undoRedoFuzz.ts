@@ -7,6 +7,20 @@
  * asserts after every single move that the project state is EXACTLY the state
  * previously recorded at that undo-stack depth.
  *
+ * ## The starting point
+ *
+ * `STALAGMIGHT_FUZZ_FIXTURE` picks any `.stalx` in `e2e/fixtures/` (basename
+ * only), defaulting to `DEFAULT_FIXTURE`. Whatever project is open is closed
+ * first: the model measures depth from a known floor, so the scenario always
+ * opens its own copy.
+ *
+ * That copy has its persisted undo history DELETED before the load
+ * (`loadFixtureWithoutUndoHistory` -> `stripUndoHistory`), because tracked
+ * fixtures ship with one - 20 rows in the fractal fixture, 2 in naharon - and
+ * fuzzing on top of somebody else's entries both burns headroom below the
+ * 100-entry limit and puts un-modelled state under `snapshots[0]`. The scenario
+ * then asserts both stacks are empty as a HARD expectation.
+ *
  * ## The model
  *
  * `snapshots[d]` is the expected normalized `get_project_state` at undo depth
@@ -79,7 +93,7 @@
  * `run_scenario("undo-redo-fuzz", seed, iterations)` replays byte-for-byte.
  */
 import type { Scenario, ScenarioContext } from './framework';
-import { DEFAULT_FIXTURE, disableAutoSave, ensureProjectLoaded } from './common';
+import { DEFAULT_FIXTURE, disableAutoSave, loadFixtureWithoutUndoHistory } from './common';
 import {
   classifyDiffs,
   describeDiffs,
@@ -91,6 +105,13 @@ import { drawAction, type RawProjectState } from './undoRedoFuzzActions';
 
 /** Opt in to surviving a mismatch that is entirely a documented open app bug. */
 const ALLOW_KNOWN_BUGS = process.env.STALAGMIGHT_FUZZ_ALLOW_KNOWN_BUGS === '1';
+
+/**
+ * Which `.stalx` under `e2e/fixtures/` to fuzz. Basename only - anything else is
+ * flattened by `fixtureSourcePath`'s `path.basename`, which is the containment
+ * guard and stays the only one.
+ */
+const FIXTURE = process.env.STALAGMIGHT_FUZZ_FIXTURE || DEFAULT_FIXTURE;
 
 /** Move mix. Undo/redo are re-rolled when the stack they need is empty. */
 const P_MUTATE = 0.6;
@@ -186,7 +207,11 @@ export const undoRedoFuzz: Scenario = {
     'normalized state roundtrip at every history depth.',
   defaultIterations: 40,
   async run(ctx, { iterations }) {
-    await ensureProjectLoaded(ctx, DEFAULT_FIXTURE);
+    const { stripped } = await loadFixtureWithoutUndoHistory(ctx, FIXTURE);
+    const strippedRows = Object.values(stripped.cleared).reduce((sum, n) => sum + n, 0);
+    ctx.setMetric(`fixture:${FIXTURE}`, 1);
+    ctx.setMetric('strippedUndoRows', strippedRows);
+
     if (!(await disableAutoSave(ctx))) {
       throw new Error(
         'could not disable auto-save; a save mutates live state with no undo entry and would ' +
@@ -202,16 +227,24 @@ export const undoRedoFuzz: Scenario = {
     `);
 
     let observed = await readObserved(ctx);
+    // Hard expectation, not a tolerance: the fixture's persisted history was
+    // deleted from the temp copy before the load, so the app must come up with
+    // both stacks empty. Anything else means the strip did not take (a table
+    // this build persists that `UNDO_HISTORY_TABLES` does not list, say), and
+    // every depth in the model would be measured from the wrong floor.
     const baseUndo = observed.undoLen;
-    if (observed.redoLen !== 0) {
+    if (baseUndo !== 0 || observed.redoLen !== 0) {
       throw new Error(
-        `fixture opened with a non-empty redo stack (${observed.redoLen}); the model can only ` +
-          'redo entries it created',
+        `${FIXTURE} opened with inherited history after stripping ` +
+          `${strippedRows} row(s): undoLen=${baseUndo} redoLen=${observed.redoLen} ` +
+          `(cleared ${JSON.stringify(stripped.cleared)}, absent ${JSON.stringify(stripped.missing)})`,
       );
     }
 
     // Never push so many entries that the stack's FIFO trimming fires - that
-    // would silently invalidate snapshots[0] and every depth above it.
+    // would silently invalidate snapshots[0] and every depth above it. baseUndo
+    // is 0 by the assertion above; it stays in the arithmetic so the bound still
+    // reads as "headroom from wherever the stack actually starts".
     const maxDepth = Math.max(1, Math.min(iterations, historyLimit - baseUndo - DEPTH_HEADROOM));
 
     const snapshots: string[] = [observed.json];
@@ -230,8 +263,9 @@ export const undoRedoFuzz: Scenario = {
         [
           headline,
           `  reproduce: run_scenario("undo-redo-fuzz", seed=${ctx.seed}, iterations=${iterations})` +
+            `${FIXTURE === DEFAULT_FIXTURE ? '' : ` with STALAGMIGHT_FUZZ_FIXTURE=${FIXTURE}`}` +
             `${ALLOW_KNOWN_BUGS ? ' with STALAGMIGHT_FUZZ_ALLOW_KNOWN_BUGS=1' : ''}`,
-          `  depth=${cursor} modelTop=${snapshots.length - 1} baseUndo=${baseUndo}`,
+          `  fixture=${FIXTURE} depth=${cursor} modelTop=${snapshots.length - 1} baseUndo=${baseUndo}`,
           ...(detail ? [detail] : []),
           `  last ${tail.length} action(s):`,
           ...tail,
@@ -410,7 +444,8 @@ export const undoRedoFuzz: Scenario = {
     ctx.setMetric('snapshotBytesMax', maxBytes);
     ctx.setMetric('historyLimit', historyLimit);
     ctx.log(
-      `seed=${ctx.seed}: ${ctx.metrics.mutations ?? 0} mutations, ${ctx.metrics.undos ?? 0} undos, ` +
+      `fixture=${FIXTURE} (stripped ${strippedRows} inherited undo row(s)) seed=${ctx.seed}: ` +
+        `${ctx.metrics.mutations ?? 0} mutations, ${ctx.metrics.undos ?? 0} undos, ` +
         `${ctx.metrics.redos ?? 0} redos, ${ctx.metrics.rejected ?? 0} rejected, ` +
         `${ctx.metrics.noops ?? 0} no-ops; max depth ${deepest}; snapshot <=${maxBytes}B`,
     );
