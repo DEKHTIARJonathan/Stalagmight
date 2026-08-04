@@ -1529,3 +1529,142 @@ fn a_shot_edit_does_not_arm_an_alignment_assert_for_a_later_command() {
         message.lines().next().unwrap_or_default()
     );
 }
+
+// ===========================================================================
+// Finding 21: the ADJUSTED geometry is not a function of the project's value
+// ===========================================================================
+
+/// Every adjusted station's coordinates as RAW BITS, keyed by station.
+///
+/// Bits rather than a tolerance on purpose: the claim under test is that a
+/// solve over one unchanging input is a FUNCTION, and a function that returns
+/// two different answers is not one at any tolerance. The magnitude is reported
+/// separately, so the failure says both "not a function" and "by this much".
+fn adjusted_bits(state: &AppState) -> Vec<(String, [u64; 3])> {
+    let mut rows: Vec<(String, [u64; 3])> = state
+        .get_adjusted_stations()
+        .expect("no adjusted stations")
+        .iter()
+        .map(|station| {
+            (
+                format!(
+                    "{}:{}",
+                    station.station_ref.section_id, station.station_ref.station_index
+                ),
+                [
+                    station.coordinates.x.to_bits(),
+                    station.coordinates.y.to_bits(),
+                    station.coordinates.z.to_bits(),
+                ],
+            )
+        })
+        .collect();
+    rows.sort();
+    rows
+}
+
+/// FINDING 21: re-solving the SAME project gives a different answer almost every
+/// time, because the least-squares adjustment numbers its unknowns in `HashMap`
+/// iteration order.
+///
+/// `Project::adjust_least_squares` (`models/project/lsq.rs`) builds the solver's
+/// node numbering with
+///
+/// ```text
+/// let mut unknown_index: HashMap<StationRef, usize> = HashMap::new();
+/// for root in groups.keys() { ... unknown_index.insert(*root, next); }
+/// ```
+///
+/// (`lsq.rs:403-409`), where `groups` is a `HashMap` built fresh inside the
+/// call - so its `RandomState` differs on every invocation and the numbering is
+/// a fresh random permutation each time. The numbering is not cosmetic: the
+/// reduction peels nodes in ascending index order (`lsq.rs:72`), the
+/// neighbour sets it sums over are themselves `HashMap`s (`lsq.rs:84-85`,
+/// `lsq.rs:148-155`, `lsq.rs:200-208`), and floating-point addition is not
+/// associative. The conjugate-gradient stop is RELATIVE (`lsq.rs:253`), so a
+/// different summation order can also change the iteration count.
+///
+/// Why it matters beyond the last bit: the adjusted stations are what the map
+/// draws, what every export writes, and what the undo fuzzer's fourth oracle
+/// compares per undo depth. A derived view that is not a function of the state
+/// cannot be compared against a recorded one without a tolerance, and a
+/// tolerance is exactly what hides a real regression.
+///
+/// The magnitude here is small (femtometres on this five-shot loop) because the
+/// system is tiny and well conditioned. It is NOT bounded by anything: the
+/// amplification is the condition number of the network, and the fuzzer's own
+/// adjusted-geometry oracle recorded a station 2.2 km out moving 28 microns
+/// between two solves of a state whose stored project roundtripped byte for
+/// byte.
+///
+/// The input is proven not to move: the canonical project snapshot is captured
+/// before and after the whole loop and asserted equal, so "the same project"
+/// is a measurement here rather than an assumption.
+#[test]
+#[ignore = "open finding 21: adjust_least_squares numbers its unknowns in HashMap order, so the adjusted solve is not a function of the project - see src-tauri/src/core/state/fuzz_undo_tests.rs"]
+fn the_adjusted_solve_is_a_function_of_the_project() {
+    let state = state_with_project();
+    let a = create_section(
+        &state,
+        "A",
+        vec![shot(0.0, 5.0), shot(0.0, 5.0), shot(10.0, 4.0)],
+    );
+    let b = create_section(&state, "B", vec![shot(90.0, 5.0), shot(95.0, 6.0)]);
+    let datum = state.execute(Command::SetZeroDatum {
+        station_ref: StationRef::new(a, 0),
+        coordinates: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
+    });
+    assert!(datum.success, "SetZeroDatum failed: {:?}", datum.error);
+    let merged = state.execute(Command::MergeStations {
+        station_a: StationRef::new(a, 3),
+        station_b: StationRef::new(b, 0),
+    });
+    assert!(merged.success, "MergeStations failed: {:?}", merged.error);
+    // A least-squares closure is the precondition: without one,
+    // `plan_adjustment_anchors` never enters `adjust_least_squares` at all and
+    // the solve reduces to a deterministic coordinate walk.
+    let closure = state.execute(Command::CreateLoopClosure {
+        station_a: StationRef::new(a, 0),
+        station_b: StationRef::new(b, 2),
+        closure_strategy: ClosureStrategy::LeastSquaresWeighted,
+    });
+    assert!(
+        closure.success,
+        "CreateLoopClosure failed: {:?}",
+        closure.error
+    );
+
+    let project_before = state
+        .capture_project_snapshot()
+        .expect("capture_project_snapshot failed");
+    let base = adjusted_bits(&state);
+    let mut differing = 0;
+    let mut worst = 0.0_f64;
+    for _ in 0..64 {
+        state.invalidate_adjusted_cache();
+        let again = adjusted_bits(&state);
+        if again == base {
+            continue;
+        }
+        differing += 1;
+        for ((_, left), (_, right)) in base.iter().zip(again.iter()) {
+            for axis in 0..3 {
+                worst = worst.max((f64::from_bits(left[axis]) - f64::from_bits(right[axis])).abs());
+            }
+        }
+    }
+    let project_after = state
+        .capture_project_snapshot()
+        .expect("capture_project_snapshot failed");
+    assert_eq!(
+        project_before, project_after,
+        "the project itself changed during the measurement, so the re-solves did not share an input"
+    );
+
+    assert_eq!(
+        differing, 0,
+        "{differing} of 64 re-solves of the SAME project returned different coordinates \
+         (worst {worst:e} m): the adjusted geometry the map draws and every export writes \
+         depends on HashMap iteration order, not only on the project"
+    );
+}

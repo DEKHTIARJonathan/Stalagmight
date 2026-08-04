@@ -227,12 +227,12 @@ use crate::models::{
 /// `u32` with explicit wrapping. No float is used to MAKE a decision anywhere in
 /// this module - `f64` values are generated as data, never used to branch - which
 /// keeps a run bit-identical across platforms and optimization levels.
-struct Rng {
+pub(super) struct Rng {
     state: u32,
 }
 
 impl Rng {
-    const fn new(seed: u32) -> Self {
+    pub(super) const fn new(seed: u32) -> Self {
         Self { state: seed }
     }
 
@@ -249,7 +249,7 @@ impl Rng {
     /// costs nothing to keep: the alternative (rejection sampling) makes the draw
     /// count depend on the values drawn, which makes a seed's trajectory harder
     /// to reason about when a generator changes.
-    fn below(&mut self, bound: usize) -> usize {
+    pub(super) fn below(&mut self, bound: usize) -> usize {
         if bound == 0 {
             return 0;
         }
@@ -257,7 +257,7 @@ impl Rng {
     }
 
     /// Inclusive integer range.
-    fn range(&mut self, min: i64, max: i64) -> i64 {
+    pub(super) fn range(&mut self, min: i64, max: i64) -> i64 {
         if max <= min {
             return min;
         }
@@ -266,19 +266,19 @@ impl Rng {
     }
 
     /// True with probability `percent`/100.
-    fn chance(&mut self, percent: u32) -> bool {
+    pub(super) fn chance(&mut self, percent: u32) -> bool {
         (self.next_u32() % 100) < percent
     }
 
     /// A float in `[min, max]`, quantized to 1/1000 so the value is a function of
     /// an INTEGER draw. Generating it from the raw u32 as a fraction would make
     /// the produced value depend on f64 rounding; this cannot.
-    fn float(&mut self, min: f64, max: f64) -> f64 {
+    pub(super) fn float(&mut self, min: f64, max: f64) -> f64 {
         let steps = self.range(0, 1000) as f64;
         min + (max - min) * (steps / 1000.0)
     }
 
-    fn pick<'a, T>(&mut self, items: &'a [T]) -> &'a T {
+    pub(super) fn pick<'a, T>(&mut self, items: &'a [T]) -> &'a T {
         &items[self.below(items.len())]
     }
 }
@@ -293,7 +293,7 @@ impl Rng {
 /// roundtrip failure when it is really the injected input. The bound goes on the
 /// INPUT rather than on the oracle, which would have blinded it to real
 /// sub-centimetre drift.
-const GEOMETRY_EXTREME: f64 = 1e3;
+pub(super) const GEOMETRY_EXTREME: f64 = 1e3;
 
 // ===========================================================================
 // The snapshot oracle
@@ -408,10 +408,10 @@ fn canonicalize(value: &serde_json::Value, path: &str, id_agnostic: bool) -> ser
 
 /// One differing path between two canonical snapshots.
 #[derive(Debug, Clone)]
-struct Diff {
-    path: String,
-    expected: String,
-    actual: String,
+pub(super) struct Diff {
+    pub(super) path: String,
+    pub(super) expected: String,
+    pub(super) actual: String,
 }
 
 const ABSENT: &str = "<absent>";
@@ -573,7 +573,7 @@ fn collect_drift(
     }
 }
 
-fn diff_snapshots(expected: &str, actual: &str) -> Vec<Diff> {
+pub(super) fn diff_snapshots(expected: &str, actual: &str) -> Vec<Diff> {
     let (Ok(left), Ok(right)) = (
         serde_json::from_str::<serde_json::Value>(expected),
         serde_json::from_str::<serde_json::Value>(actual),
@@ -589,7 +589,7 @@ fn diff_snapshots(expected: &str, actual: &str) -> Vec<Diff> {
     out
 }
 
-fn describe_diffs(diffs: &[Diff]) -> String {
+pub(super) fn describe_diffs(diffs: &[Diff]) -> String {
     // Eight is enough to recognise a shape and short enough to read; a triage
     // run that needs the whole list sets `STALAGMIGHT_RUST_FUZZ_VERBOSE=1`
     // rather than editing this number, which is how the eight got chosen twice.
@@ -630,7 +630,7 @@ fn describe_diffs(diffs: &[Diff]) -> String {
 /// the state a history move is supposed to restore, and it is derived through a
 /// different path than the snapshot - so it sees what the snapshot cannot.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-struct Verdict {
+pub(super) struct Verdict {
     save_blocked: bool,
     /// Violation messages, SORTED.
     ///
@@ -652,7 +652,7 @@ struct Verdict {
 }
 
 impl Verdict {
-    fn describe(&self) -> String {
+    pub(super) fn describe(&self) -> String {
         format!(
             "save_blocked={} messages={:?}",
             self.save_blocked, self.messages
@@ -697,20 +697,36 @@ const ADJUSTED_TOLERANCE_M: f64 = 1e-6;
 ///
 /// The horizon run found a state whose stored project roundtripped BYTE FOR BYTE
 /// while a station 2.2 km from the origin solved 28 microns (1.3e-8 relative)
-/// from where the same depth had it. The solve was then measured to be
-/// deterministic for a fixed project - 8 forced re-solves, zero spread
-/// (`measure_adjusted_solve_determinism`) - so the input differed in something
-/// the canonical comparison does not compare, and the candidate is the ORDER of
-/// `station_offsets` / `station_comments`: they serialize from a `HashMap`, the
-/// comparison SORTS them for exactly that reason, and `resolve_offsets` sums in
-/// stored order. A rebuilt map after a restore iterates differently, and
-/// floating-point addition is not associative.
+/// from where the same depth had it. The solve IS order-dependent - FINDING 21,
+/// proven, see below - so a derived view that is not a function of its input has
+/// to be compared with a tolerance or not at all, and this is that tolerance.
 ///
-/// That is a finding in its own right - derived geometry that depends on hash
-/// iteration order is not a function of the project's value - and it is written
-/// up as such rather than absorbed. This constant only stops the oracle
-/// reporting the same measured quantity on every long run: 1e-7 relative is 8x
-/// the observed spread and four orders below the millimetre anything real moves.
+/// The mechanism took two goes to name and the first answer is recorded here
+/// because it was WRONG in a way worth not repeating. The original candidate was
+/// the iteration order of `station_offsets` / `station_comments`, on the grounds
+/// that both serialize from a `HashMap`, the comparison SORTS them, and
+/// `resolve_offsets` sums in stored order. Every clause of that is false:
+/// `station_comments` never feeds geometry at all, `station_offsets` is EMPTY in
+/// every run this module makes (the summary line's `peak.station_offsets` is 0 -
+/// `move_station` folds its offset into the shot and removes the entry), and
+/// `resolve_offsets` is not on `get_adjusted_stations`' path and sorts its
+/// cascade seeds anyway (models/project/connectivity.rs).
+///
+/// What is really going on is one level down, in the least-squares adjustment:
+/// `Project::adjust_least_squares` numbers its unknowns by iterating
+/// `groups.keys()` (models/project/lsq.rs:403-409) over a `HashMap` built fresh
+/// inside the call, so the numbering is a new random permutation on EVERY
+/// invocation; the reduction then peels in index order (lsq.rs:72), sums over
+/// `HashMap` neighbour sets (lsq.rs:84-85, 148-155, 200-208), and stops on a
+/// RELATIVE residual (lsq.rs:253). Measured directly:
+/// `the_adjusted_solve_is_a_function_of_the_project` in `open_undo_bugs_tests.rs`
+/// re-solves one unchanging project 64 times and gets a different answer 58
+/// times.
+///
+/// So this constant is a MEASUREMENT of a defect rather than a knob turned until
+/// a failure went away: 1e-7 relative is 8x the largest spread observed and four
+/// orders below the millimetre anything real moves. Delete it when finding 21 is
+/// fixed - the comparison can then be exact, which is what it wants to be.
 const ADJUSTED_TOLERANCE_REL: f64 = 1e-7;
 
 /// The app's OWN merge-alignment tolerance, taken from the app rather than
@@ -1661,10 +1677,10 @@ fn diffs_without_list_reorder(expected: &str, actual: &str, key: &str) -> Option
 // Synthetic starting project
 // ===========================================================================
 
-const COLORS: &[&str] = &["#3388FF", "#FF8833", "#33CC66", "#CC33AA", "#FFCC00"];
+pub(super) const COLORS: &[&str] = &["#3388FF", "#FF8833", "#33CC66", "#CC33AA", "#FFCC00"];
 
 /// A valid, unremarkable shot. Every value comes from an integer draw.
-fn random_shot(rng: &mut Rng) -> ShotData {
+pub(super) fn random_shot(rng: &mut Rng) -> ShotData {
     let azimuth = rng.float(0.0, 359.9);
     let depth_in = rng.float(0.0, 30.0);
     ShotData {
@@ -1701,7 +1717,7 @@ fn random_shot(rng: &mut Rng) -> ShotData {
 /// Built rather than loaded. The repo forbids committing fixtures and CI has
 /// none, so the shapes that matter are constructed explicitly - which also means
 /// each one is here on purpose and can be pointed at when a finding needs it.
-fn build_project(state: &AppState, rng: &mut Rng, closures: bool) -> Vec<SectionId> {
+pub(super) fn build_project(state: &AppState, rng: &mut Rng, closures: bool) -> Vec<SectionId> {
     let created = state.execute(Command::CreateProject {
         name: "RustFuzz".to_string(),
         location: None,
@@ -1803,20 +1819,20 @@ fn build_project(state: &AppState, rng: &mut Rng, closures: bool) -> Vec<Section
 /// and SORTED. Sorting is what keeps a seed's trajectory stable: `HashMap`
 /// iteration order is not, and neither is `Vec` order once a command reorders a
 /// collection.
-struct Targets {
+pub(super) struct Targets {
     /// `(section_id, [shot_id, ...])`, ascending.
-    sections: Vec<(SectionId, Vec<ShotId>)>,
+    pub(super) sections: Vec<(SectionId, Vec<ShotId>)>,
     /// `(section_id, station_index)`, ascending.
-    stations: Vec<(SectionId, u32)>,
+    pub(super) stations: Vec<(SectionId, u32)>,
     /// Merged pairs, as resolved positional refs, ascending.
-    merges: Vec<((SectionId, u32), (SectionId, u32))>,
+    pub(super) merges: Vec<((SectionId, u32), (SectionId, u32))>,
     /// Zero-datum stations, ascending.
-    datums: Vec<(SectionId, u32)>,
+    pub(super) datums: Vec<(SectionId, u32)>,
     /// Loop closure ids, ascending.
-    closures: Vec<u64>,
+    pub(super) closures: Vec<u64>,
 }
 
-fn read_targets(state: &AppState) -> Targets {
+pub(super) fn read_targets(state: &AppState) -> Targets {
     let project = state.get_project_state().expect("no project open");
     let mut sections: Vec<(SectionId, Vec<ShotId>)> = project
         .sections
@@ -1876,7 +1892,7 @@ fn read_targets(state: &AppState) -> Targets {
     }
 }
 
-fn random_offset(rng: &mut Rng) -> Coordinates {
+pub(super) fn random_offset(rng: &mut Rng) -> Coordinates {
     let extreme = |rng: &mut Rng| *rng.pick(&[0.0, GEOMETRY_EXTREME, -GEOMETRY_EXTREME, 1e-9]);
     if rng.chance(15) {
         Coordinates::new(extreme(rng), extreme(rng), extreme(rng))
@@ -1945,6 +1961,104 @@ struct Peak {
     station_comments: usize,
     merges: usize,
     closures: usize,
+}
+
+/// Every difference between two adjusted-geometry states, outside
+/// `ADJUSTED_TOLERANCE_M`.
+pub(super) fn adjusted_diffs(expected: &str, actual: &str) -> Vec<String> {
+    let parse = |text: &str| -> BTreeMap<String, [f64; 3]> {
+        text.lines()
+            .filter_map(|line| {
+                let mut parts = line.split('|');
+                let key = parts.next()?.to_string();
+                let x = parts.next()?.parse().ok()?;
+                let y = parts.next()?.parse().ok()?;
+                let z = parts.next()?.parse().ok()?;
+                Some((key, [x, y, z]))
+            })
+            .collect()
+    };
+    let (before, after) = (parse(expected), parse(actual));
+    let mut out = Vec::new();
+    for (key, left) in &before {
+        match after.get(key) {
+            None => out.push(format!("station {key} is GONE from the adjusted solve")),
+            Some(right) => {
+                let worst = (0..3)
+                    .map(|axis| (left[axis] - right[axis]).abs())
+                    .fold(0.0_f64, f64::max);
+                let magnitude = (0..3)
+                    .map(|axis| left[axis].abs().max(right[axis].abs()))
+                    .fold(0.0_f64, f64::max);
+                if worst > ADJUSTED_TOLERANCE_M + ADJUSTED_TOLERANCE_REL * magnitude {
+                    out.push(format!(
+                        "station {key} moved {worst:.6} m: {left:?} -> {right:?}"
+                    ));
+                }
+            }
+        }
+    }
+    for key in after.keys() {
+        if !before.contains_key(key) {
+            out.push(format!("station {key} APPEARED in the adjusted solve"));
+        }
+    }
+    out.truncate(8);
+    out
+}
+
+/// The three per-state oracles as FREE functions, so a driver that is not the
+/// `Fuzzer` - the metamorphic twins in `metamorphic_undo_tests.rs` - measures a
+/// state exactly as the fuzzer does rather than with a second implementation
+/// that can drift from it.
+///
+/// The `Fuzzer` methods are thin wrappers that add the per-run timing the
+/// summary line reports.
+///
+/// Canonical, comparison-ready snapshot of the live project.
+pub(super) fn canonical_snapshot(state: &AppState, id_agnostic: bool) -> String {
+    let raw = state
+        .capture_project_snapshot()
+        .expect("capture_project_snapshot failed");
+    let parsed: serde_json::Value = serde_json::from_str(&raw).expect("snapshot is not JSON");
+    canonicalize(&parsed, "", id_agnostic).to_string()
+}
+
+/// The app's own integrity verdict, normalized. See `Verdict`.
+pub(super) fn integrity_verdict(state: &AppState) -> Verdict {
+    let result = state.integrity_check();
+    let mut messages = result.messages;
+    messages.sort();
+    Verdict {
+        save_blocked: result.save_blocked,
+        messages,
+    }
+}
+
+/// The ADJUSTED station geometry - what the map draws and every export writes -
+/// canonicalized to a comparable string.
+pub(super) fn adjusted_geometry_of(state: &AppState) -> String {
+    let Some(stations) = state.get_adjusted_stations() else {
+        return String::new();
+    };
+    let mut rows: Vec<String> = stations
+        .iter()
+        .map(|station| {
+            format!(
+                "{}:{}|{}|{}|{}",
+                station.station_ref.section_id,
+                station.station_ref.station_index,
+                round_significant(station.coordinates.x),
+                round_significant(station.coordinates.y),
+                round_significant(station.coordinates.z),
+            )
+        })
+        .collect();
+    // Sorted: `get_adjusted_stations` builds its list by walking sections, and a
+    // command that reorders sections would otherwise read as every station
+    // having moved.
+    rows.sort();
+    rows.join("\n")
 }
 
 struct Fuzzer {
@@ -2090,12 +2204,7 @@ impl Fuzzer {
     /// Canonical snapshot of the live project.
     fn snapshot(&mut self) -> String {
         let started = std::time::Instant::now();
-        let raw = self
-            .state
-            .capture_project_snapshot()
-            .expect("capture_project_snapshot failed");
-        let parsed: serde_json::Value = serde_json::from_str(&raw).expect("snapshot is not JSON");
-        let out = canonicalize(&parsed, "", self.id_agnostic).to_string();
+        let out = canonical_snapshot(&self.state, self.id_agnostic);
         self.outcome.oracle_us.0 += started.elapsed().as_micros();
         out
     }
@@ -2103,14 +2212,9 @@ impl Fuzzer {
     /// The app's own integrity verdict, normalized. See `Verdict`.
     fn verdict(&mut self) -> Verdict {
         let started = std::time::Instant::now();
-        let result = self.state.integrity_check();
-        let mut messages = result.messages;
-        messages.sort();
+        let out = integrity_verdict(&self.state);
         self.outcome.oracle_us.1 += started.elapsed().as_micros();
-        Verdict {
-            save_blocked: result.save_blocked,
-            messages,
-        }
+        out
     }
 
     /// The ADJUSTED station geometry - `AppState::get_adjusted_stations`, which
@@ -2128,71 +2232,8 @@ impl Fuzzer {
     /// argument's test.
     fn adjusted_geometry(&mut self) -> String {
         let started = std::time::Instant::now();
-        let Some(stations) = self.state.get_adjusted_stations() else {
-            return String::new();
-        };
-        let mut rows: Vec<String> = stations
-            .iter()
-            .map(|station| {
-                format!(
-                    "{}:{}|{}|{}|{}",
-                    station.station_ref.section_id,
-                    station.station_ref.station_index,
-                    round_significant(station.coordinates.x),
-                    round_significant(station.coordinates.y),
-                    round_significant(station.coordinates.z),
-                )
-            })
-            .collect();
-        // Sorted: `get_adjusted_stations` builds its list by walking sections,
-        // and a command that reorders sections would otherwise read as every
-        // station having moved.
-        rows.sort();
+        let out = adjusted_geometry_of(&self.state);
         self.outcome.oracle_us.2 += started.elapsed().as_micros();
-        rows.join("\n")
-    }
-
-    /// Every difference between two adjusted-geometry states, outside
-    /// `ADJUSTED_TOLERANCE_M`.
-    fn adjusted_diffs(expected: &str, actual: &str) -> Vec<String> {
-        let parse = |text: &str| -> BTreeMap<String, [f64; 3]> {
-            text.lines()
-                .filter_map(|line| {
-                    let mut parts = line.split('|');
-                    let key = parts.next()?.to_string();
-                    let x = parts.next()?.parse().ok()?;
-                    let y = parts.next()?.parse().ok()?;
-                    let z = parts.next()?.parse().ok()?;
-                    Some((key, [x, y, z]))
-                })
-                .collect()
-        };
-        let (before, after) = (parse(expected), parse(actual));
-        let mut out = Vec::new();
-        for (key, left) in &before {
-            match after.get(key) {
-                None => out.push(format!("station {key} is GONE from the adjusted solve")),
-                Some(right) => {
-                    let worst = (0..3)
-                        .map(|axis| (left[axis] - right[axis]).abs())
-                        .fold(0.0_f64, f64::max);
-                    let magnitude = (0..3)
-                        .map(|axis| left[axis].abs().max(right[axis].abs()))
-                        .fold(0.0_f64, f64::max);
-                    if worst > ADJUSTED_TOLERANCE_M + ADJUSTED_TOLERANCE_REL * magnitude {
-                        out.push(format!(
-                            "station {key} moved {worst:.6} m: {left:?} -> {right:?}"
-                        ));
-                    }
-                }
-            }
-        }
-        for key in after.keys() {
-            if !before.contains_key(key) {
-                out.push(format!("station {key} APPEARED in the adjusted solve"));
-            }
-        }
-        out.truncate(8);
         out
     }
 
@@ -2792,7 +2833,7 @@ impl Fuzzer {
         }
         if let Some(expected) = self.adjusted.get(depth).cloned() {
             self.outcome.adjusted_compared += 1;
-            let diffs = Self::adjusted_diffs(&expected, &adjusted);
+            let diffs = adjusted_diffs(&expected, &adjusted);
             if !diffs.is_empty() {
                 self.fail(
                     &format!(
@@ -5362,12 +5403,22 @@ fn undo_redo_fuzz_soak() {
 /// same depth had it - at kilometre-scale coordinates, 3e-8 relative. Either the
 /// solve is not deterministic or something outside the compared state feeds it,
 /// and the difference between those two answers decides whether the oracle's
-/// tolerance is a measurement or an excuse. This measures it.
+/// tolerance is a measurement or an excuse.
+///
+/// This measures BOTH paths, and the split is the whole point. The first version
+/// of it measured only the first and reported "zero spread", which was used to
+/// argue the solve was deterministic and the input must have differed. That
+/// conclusion did not follow: a project with no eligible loop closure never
+/// enters `adjust_least_squares` at all (`plan_adjustment_anchors`,
+/// models/project/coordinates.rs), so the measurement had never touched the code
+/// that wanders. FINDING 21 is the second column.
 #[test]
 #[ignore = "measurement: prints the solve-to-solve spread, used to justify ADJUSTED_TOLERANCE_M"]
 fn measure_adjusted_solve_determinism() {
-    // No closures: the starting topology with one is finding 14's, and the
-    // app's own assert would stop this before it measured anything.
+    // PATH ONE: no closure, so the "solve" is a deterministic coordinate walk.
+    // Closures are also excluded because the starting topology with one is
+    // finding 14's and the app's own assert would stop this before it measured
+    // anything.
     let mut fuzzer = Fuzzer::new(1, false);
     for _ in 0..40 {
         if fuzzer.catching_alignment(Fuzzer::step_mutate).is_none() {
@@ -5376,12 +5427,16 @@ fn measure_adjusted_solve_determinism() {
     }
     let first = fuzzer.adjusted_geometry();
     let mut worst: f64 = 0.0;
+    let mut differing = 0;
     for _ in 0..8 {
         fuzzer.state.invalidate_adjusted_cache();
         let again = fuzzer.adjusted_geometry();
-        let diffs = Fuzzer::adjusted_diffs(&first, &again);
+        let diffs = adjusted_diffs(&first, &again);
         if !diffs.is_empty() {
             println!("solve differs: {diffs:?}");
+        }
+        if again != first {
+            differing += 1;
         }
         for (a, b) in first.lines().zip(again.lines()) {
             let (pa, pb): (Vec<&str>, Vec<&str>) = (a.split('|').collect(), b.split('|').collect());
@@ -5395,5 +5450,86 @@ fn measure_adjusted_solve_determinism() {
             }
         }
     }
-    println!("worst solve-to-solve difference over 8 re-solves: {worst:e} m");
+    println!("no closure: {differing} of 8 re-solves differ; worst difference {worst:e} m");
+
+    // PATH TWO: a least-squares closure, which is what
+    // `plan_adjustment_anchors` requires before it enters
+    // `adjust_least_squares` at all. `Move` is not enough - it is applied
+    // directly - so the strategy is named explicitly rather than drawn.
+    let state = AppState::new().unwrap();
+    assert!(
+        state
+            .execute(Command::CreateProject {
+                name: "SolveDeterminism".to_string(),
+                location: None,
+            })
+            .success
+    );
+    let mut rng = Rng::new(1);
+    let section = |name: &str, count: usize, rng: &mut Rng| -> SectionId {
+        let shots: Vec<ShotData> = (0..count).map(|_| random_shot(rng)).collect();
+        state
+            .execute(Command::CreateSection {
+                name: Some(name.to_string()),
+                surveyor: None,
+                date: None,
+                color: COLORS[0].to_string(),
+                direction: None,
+                shots,
+            })
+            .section_id
+            .expect("CreateSection returned no id")
+    };
+    let a = section("lsq-a", 3, &mut rng);
+    let b = section("lsq-b", 2, &mut rng);
+    assert!(
+        state
+            .execute(Command::SetZeroDatum {
+                station_ref: StationRef::new(a, 0),
+                coordinates: GpsCoordinates::new(20.4, -87.3, 0.0).unwrap(),
+            })
+            .success
+    );
+    assert!(
+        state
+            .execute(Command::MergeStations {
+                station_a: StationRef::new(a, 3),
+                station_b: StationRef::new(b, 0),
+            })
+            .success
+    );
+    let closed = state.execute(Command::CreateLoopClosure {
+        station_a: StationRef::new(a, 0),
+        station_b: StationRef::new(b, 2),
+        closure_strategy: ClosureStrategy::LeastSquaresWeighted,
+    });
+    assert!(closed.success, "CreateLoopClosure: {:?}", closed.error);
+
+    let base = adjusted_geometry_of(&state);
+    let mut lsq_worst: f64 = 0.0;
+    let mut lsq_differing = 0;
+    for _ in 0..64 {
+        state.invalidate_adjusted_cache();
+        let again = adjusted_geometry_of(&state);
+        if again == base {
+            continue;
+        }
+        lsq_differing += 1;
+        for (left, right) in base.lines().zip(again.lines()) {
+            let (pa, pb): (Vec<&str>, Vec<&str>) =
+                (left.split('|').collect(), right.split('|').collect());
+            for axis in 1..4 {
+                if let (Ok(x), Ok(y)) = (
+                    pa.get(axis).unwrap_or(&"0").parse::<f64>(),
+                    pb.get(axis).unwrap_or(&"0").parse::<f64>(),
+                ) {
+                    lsq_worst = lsq_worst.max((x - y).abs());
+                }
+            }
+        }
+    }
+    println!(
+        "least-squares closure: {lsq_differing} of 64 re-solves differ; worst difference \
+         {lsq_worst:e} m (FINDING 21)"
+    );
 }
