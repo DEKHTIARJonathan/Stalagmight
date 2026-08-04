@@ -1117,6 +1117,25 @@ describe('SurveyLabelController dim parity (DIM flag)', () => {
     expect(anyKindHasBit(layer, LABEL_KIND.SECTION_NAME, LABEL_FLAG.DIM)).toBe(false);
   });
 
+  it('plan-idle tint (#395 revision): EVERY label dims, including comments', () => {
+    const cam = zoomOnlyMap(18);
+    const c = cameraController(cam.map);
+    c.sync(commentParams());
+    const layer = h.layerState.last!;
+    c.setDimming({ ...EMPTY_DIM, planIdleDim: true });
+    expect(allKindHaveBit(layer, LABEL_KIND.SHOT_LABEL, LABEL_FLAG.DIM)).toBe(true);
+    expect(allKindHaveBit(layer, LABEL_KIND.STATION_LABEL, LABEL_FLAG.DIM)).toBe(true);
+    expect(allKindHaveBit(layer, LABEL_KIND.SECTION_NAME, LABEL_FLAG.DIM)).toBe(true);
+    // Unlike anchored dim, the idle tint reaches comments too - it mirrors the
+    // "whole survey tints" geometry behavior, so nothing stays full-bright.
+    expect(allKindHaveBit(layer, LABEL_KIND.STATION_COMMENT, LABEL_FLAG.DIM)).toBe(true);
+    expect(allKindHaveBit(layer, LABEL_KIND.SHOT_COMMENT, LABEL_FLAG.DIM)).toBe(true);
+    // Clearing the flag drops back to full-bright.
+    c.setDimming(EMPTY_DIM);
+    expect(anyKindHasBit(layer, LABEL_KIND.SHOT_LABEL, LABEL_FLAG.DIM)).toBe(false);
+    expect(anyKindHasBit(layer, LABEL_KIND.STATION_COMMENT, LABEL_FLAG.DIM)).toBe(false);
+  });
+
   it('clearing the dim set removes DIM (flags-only)', () => {
     const cam = zoomOnlyMap(18);
     const c = cameraController(cam.map);

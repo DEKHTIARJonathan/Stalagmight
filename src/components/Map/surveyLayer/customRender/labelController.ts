@@ -621,12 +621,17 @@ export class SurveyLabelController {
   /**
    * Whether a label dims (0.25), keyed on the SAME state the stock label paint
    * expressions use (updateLabelAnchoredOpacity / updateImmovableLabelOpacity):
+   *  - plan-idle tint (#395 revision): EVERY label dims, no exceptions - it
+   *    mirrors the geometry side's "every feature dims" (controller.ts
+   *    `dimForStation`/`dimForShot`), so labels don't stay full-bright while the
+   *    whole survey underneath them tints.
    *  - shot label:    anchored(section) OR immovable-shot(section·STRIDE+shotId)
    *                   OR gas-dim-shot(section·STRIDE+shotId) (#395)
    *  - station label: anchored(section) OR immovable-station(section·STRIDE+idx)
    *                   OR gas-dim-station(section·STRIDE+idx) (#395)
    *  - section name:  anchored(section) only (never immovable- or gas-dimmed)
-   *  - comments:      never (stock never dims comment layers).
+   *  - comments:      never (stock never dims comment layers), except under the
+   *                   plan-idle tint above.
    *
    *  Labels only ever dim/don't (this bit feeds {@link LABEL_FLAG}.DIM, a single
    *  flag) - unlike the geometry's graded `a_dim` level, there is no lighter
@@ -635,8 +640,9 @@ export class SurveyLabelController {
   private dimBitFor(desc: LabelDescriptor): boolean {
     const {
       anchoredSectionIds, immovableStationFeatureIds, immovableShotFeatureIds,
-      gasDimStationFeatureIds, gasDimShotFeatureIds,
+      gasDimStationFeatureIds, gasDimShotFeatureIds, planIdleDim,
     } = this.dimState;
+    if (planIdleDim) return true;
     const sid = desc.sectionId;
     if (sid === undefined) return false;
     const anchored = anchoredSectionIds.has(sid);
