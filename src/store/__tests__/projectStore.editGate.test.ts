@@ -36,8 +36,11 @@ describe('projectStore executeCommand failure handling (#191 read-only gate)', (
       checkProjectIntegrity: vi.fn().mockResolvedValue(undefined),
     } as Partial<ReturnType<typeof useProjectStore.getState>> as never);
     showToast = vi.fn();
+    // activeDialog reset explicitly: the catch-all cases below flip it, and a
+    // leaked 'edit-shot' would silently put later tests on the yield path.
     useUIStore.setState({
       showToast,
+      activeDialog: null,
     } as Partial<ReturnType<typeof useUIStore.getState>> as never);
   });
 

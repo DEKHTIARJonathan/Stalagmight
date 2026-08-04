@@ -74,10 +74,9 @@ regions). Read the comment blocks in those two files plus
     validation).
   - `success` - the action succeeded and its result is off-screen or non-obvious.
   - `info` - FYI with no outcome attached. Rare; question whether it belongs at all.
-- **Dedup `key`s come from one registry module, not ad-hoc literals.** One key per
-  event class; callsites reporting the same event share the same key so the dedup
-  window collapses them. (Registry lands with the cleanup pass; until then, grep for
-  an existing key before minting one.)
+- **Dedup `key`s come from `src/utils/toastKeys.ts`, never ad-hoc literals.** One
+  key per event class; callsites reporting the same event share the same key so the
+  dedup window collapses them. Register a new key there first.
 - **All toast strings go through i18n** (`t()` / `en.json`), like any other UI
   string. Hardcoded English in a `showToast` call is a defect.
 - **Nothing critical or must-act rides a toast.** Toasts auto-dismiss; a message the
@@ -93,10 +92,11 @@ regions). Read the comment blocks in those two files plus
 ## Dialog rules
 
 - **Outcome-reporting goes through the routers in `src/utils/saveFeedback.ts`**
-  (`surfaceSaveFailure`, `surfaceImportWarnings`, `completeImportToSingleView`) when
-  one owns the event class. A bespoke `openDialog('error', ...)` for save or import
-  outcomes is a defect - the router is where policy (integrity-blocked routing,
-  permission-denied suppression, receipt aggregation) lives.
+  (`surfaceSaveFailure`, `surfaceImportFailure`, `finalizeDeferredSaveWarnings`,
+  `completeImportToSingleView`) when one owns the event class. A bespoke
+  `openDialog('error', ...)` for save or import outcomes is a defect - the router
+  is where policy (integrity-blocked routing, permission-denied suppression,
+  receipt aggregation) lives.
 - **Modal means blocking.** Open a dialog only when the user must read or decide
   before continuing. Reporting a success that needs no decision is a receipt-style
   dialog only when there are multiple facts to review (import receipt); otherwise
@@ -109,7 +109,9 @@ regions). Read the comment blocks in those two files plus
   `src/utils/telemetry.ts`, including the `active-dwell.dialog.*` mirror for every
   `dwell.dialog.*` (the registry test enforces the count).
 - Autosave failure is banner-class, not modal: it must not interrupt, but it must
-  not be silent either (an unsaved-changes condition is ongoing).
+  not be silent either (an unsaved-changes condition is ongoing). Its Dismiss is a
+  deliberate override - the banner re-raises on the next failing autosave rather
+  than tracking the condition continuously; the close guard remains the backstop.
 
 ## Command-failure contract
 
@@ -117,10 +119,13 @@ regions). Read the comment blocks in those two files plus
   (read-only `EDIT_DISABLED` notice, divergence prompt, the save/import routers);
   when nothing specific claims the failure, `executeCommandInner`'s catch-all
   error toast (key `command-failed`) surfaces `result.error`. The catch-all
-  yields while a dialog is open - dialogs own their inline errors and are open
+  yields while ANY dialog is open - dialogs own their inline errors and are open
   when they issue commands - so a panel or map flow must NOT add its own
   failure toast for an `executeCommand`-backed action; the catch-all is the
-  surface. Undo/redo keep their own equivalent fallback.
+  surface. Known accepted loss: the gate is global, so a non-dialog command
+  failing while an unrelated dialog happens to be open is still silent - the
+  cost of never double-messaging a dialog. Undo/redo keep their own equivalent
+  fallback (same localized default).
 - **`CommandResult::with_warning` (code `"SYSTEM"`) is exclusive to the deferred-
   save contract** (#92/#104): "imported but could not save" keeps
   `success: true` + warning so data survives exit. Never route ordinary warnings

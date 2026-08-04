@@ -749,12 +749,12 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         } else if (isEditDisabledError(result.error)) {
           useUIStore.getState().showToast(READ_ONLY_EDIT_NOTICE(), TOAST_KEYS.EDIT_DISABLED, 'warning');
         } else {
-          useUIStore.getState().showToast(result.error ?? 'Unknown error', toastId, 'error');
+          useUIStore.getState().showToast(result.error ?? i18n.t('editGate.commandFailed'), toastId, 'error');
         }
       }
     } catch (e) {
       result = emptyCommandResult(false, String(e));
-      useUIStore.getState().showToast(result.error ?? 'Unknown error', toastId, 'error');
+      useUIStore.getState().showToast(result.error ?? i18n.t('editGate.commandFailed'), toastId, 'error');
     } finally {
       // #310: re-resolve the plan pins before the refetch (see executeCommandInner). In the
       // `finally` because a PARTIAL multi-step undo renumbered too, and its pins need it just

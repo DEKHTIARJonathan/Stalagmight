@@ -519,7 +519,7 @@ function App() {
           changes are not on disk" condition is banner-class, not modal and not a
           repeating toast). When saving is integrity-blocked the integrity banner
           above already owns the "saving is paused" story, so this one yields. */}
-      {autosaveFailure !== null && !integritySaveBlocked && project && !loading.isLoading && (
+      {autosaveFailure !== null && !(integritySaveBlocked && integrityIssues.length > 0) && project && !loading.isLoading && (
         <div
           className="bg-warning-10 border-b border-warning-20 px-4 py-2 flex items-center gap-3 text-sm"
           role="status"

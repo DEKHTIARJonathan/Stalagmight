@@ -146,10 +146,10 @@ const MetadataPanel: FC<MetadataPanelProps> = ({
     }
     setNameBusy(true);
     try {
+      // Failure surfacing is owned by executeCommand's catch-all toast
+      // (docs/notifications.md: one event, one surface).
       const result = await setProjectNameForPath(singleProject.file_path, next);
-      if (!result.success) {
-        showToast(result.error ?? t('globalView.metadata.rename.failed'), TOAST_KEYS.RENAME, 'error');
-      } else {
+      if (result.success) {
         setEditingName(false);
         await loadRecentProjects();
       }
