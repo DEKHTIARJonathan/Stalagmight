@@ -150,18 +150,41 @@ impl TileEntry {
 }
 
 /// Split a `Cache-Control` value on the commas that actually separate
-/// directives, ignoring those inside a quoted field list.
+/// directives, returning `None` if the quoting is malformed.
 ///
 /// `no-cache="Set-Cookie,X-Foo"` is ONE directive. A naive `split(',')` cuts it
 /// in two, which loses the `no-cache` half - and, in the other direction, hands
 /// back a bare `max-age=999` lifted out of `private="x,max-age=999,y"`, i.e. a
 /// storage grant the provider never issued.
-fn split_directives(header: &str) -> Vec<&str> {
+///
+/// Quoting has two further traps, and both let a grant through that was never
+/// given:
+///
+/// - **Quoted-pair escapes.** RFC 9110 5.6.4 lets a quoted-string contain `\"`.
+///   Toggling on every `"` ends the string early, so
+///   `private="x\", max-age=86400, y"` - one `private` directive - split into
+///   three, and the `max-age` inside it was read as a standalone grant.
+/// - **Unbalanced quotes.** A stray `"` swallows everything after it, so a
+///   `no-store` that arrived later simply vanished while an earlier `max-age`
+///   still stood. That is the same hole pointing the other way.
+///
+/// The first is parsed properly. The second cannot be - the header is malformed
+/// and there is no way to know what was meant - so it fails closed: `None` here
+/// becomes "the provider said nothing", and nothing is stored.
+fn split_directives(header: &str) -> Option<Vec<&str>> {
     let mut parts = Vec::new();
     let mut start = 0;
     let mut in_quotes = false;
+    let mut escaped = false;
     for (idx, ch) in header.char_indices() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
         match ch {
+            // A backslash is only an escape INSIDE a quoted-string; outside one
+            // it is an ordinary character.
+            '\\' if in_quotes => escaped = true,
             '"' => in_quotes = !in_quotes,
             ',' if !in_quotes => {
                 parts.push(&header[start..idx]);
@@ -170,8 +193,11 @@ fn split_directives(header: &str) -> Vec<&str> {
             _ => {}
         }
     }
+    if in_quotes || escaped {
+        return None;
+    }
     parts.push(&header[start..]);
-    parts
+    Some(parts)
 }
 
 /// Parse the freshness directives out of a `Cache-Control` header value.
@@ -187,7 +213,18 @@ pub fn parse_cache_control(header: &str) -> CachePolicy {
     // an order. Setting max_age directly from the `no-cache` arm let a later
     // `max-age=86400` in the same header silently overwrite it.
     let mut no_cache = false;
-    for token in split_directives(header) {
+    let Some(tokens) = split_directives(header) else {
+        // Malformed quoting. Treated as "said nothing", which is the same as any
+        // header we cannot read: no grant, so nothing is stored. Deliberately
+        // NOT `no_store`, which would also evict a copy already held under a
+        // grant that was valid when it was given.
+        tracing::debug!(
+            header,
+            "Unbalanced quoting in Cache-Control; treating as no grant"
+        );
+        return CachePolicy::default();
+    };
+    for token in tokens {
         let token = token.trim().to_ascii_lowercase();
         let (name, value) = match token.split_once('=') {
             Some((name, value)) => (name.trim(), Some(value.trim())),
@@ -2502,6 +2539,48 @@ mod tests {
 
         let store = parse_cache_control("no-store=\"Set-Cookie,X-Foo\"");
         assert!(store.no_store);
+    }
+
+    #[test]
+    fn an_escaped_quote_does_not_end_the_quoted_string() {
+        // RFC 9110 5.6.4 allows `\"` inside a quoted-string. Toggling on every
+        // quote ended it early, so this ONE `private` directive split into
+        // three and the `max-age` buried inside was read as a standalone grant -
+        // the exact hole quote-awareness was added to close, one level down.
+        let policy = parse_cache_control(r#"private="x\", max-age=86400, y""#);
+        assert_eq!(
+            policy.granted_seconds(),
+            None,
+            "the max-age is inside the quoted field list, not a grant"
+        );
+
+        // An escaped quote must not stop a REAL directive alongside it parsing.
+        let alongside = parse_cache_control(r#"private="x\", y", max-age=600"#);
+        assert_eq!(alongside.granted_seconds(), Some(600));
+    }
+
+    #[test]
+    fn unbalanced_quoting_grants_nothing() {
+        // A stray quote swallows everything after it, so a `no-store` arriving
+        // later vanished while an earlier `max-age` still stood - the same hole
+        // pointing the other way. The header is malformed and there is no way to
+        // know what was meant, so it fails closed.
+        let swallowed = parse_cache_control("max-age=86400, x=\"unterminated, no-store");
+        assert_eq!(
+            swallowed.granted_seconds(),
+            None,
+            "a max-age cannot survive a header we could not parse"
+        );
+
+        // A trailing escape is malformed the same way.
+        assert_eq!(
+            parse_cache_control("max-age=86400, x=\"y\\").granted_seconds(),
+            None
+        );
+
+        // Not `no_store` though: that would also evict a copy already held under
+        // a grant that was perfectly valid when it was given.
+        assert!(!swallowed.no_store);
     }
 
     #[test]
