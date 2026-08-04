@@ -6,6 +6,53 @@ conventions, and the traps that have cost real debugging time.
 For *which tier a test belongs in*, and the testability contract a component has
 to satisfy, see the [Testing Guide](TESTING.md).
 
+## The undo fuzz gate (Rust tier)
+
+`src-tauri/src/core/state/fuzz_undo_tests.rs` runs the undo/redo fuzzing model
+directly against `AppState`, as ordinary tests. It is the only tier that gates
+CI: the agent harness never runs there, and `open_undo_bugs_tests.rs` is
+`#[ignore]`d by design.
+
+```bash
+# The gate. Runs with the default suite; ~1.5 s for all three tests.
+TELEMETRY_ENDPOINT=http://localhost/dummy cargo test --manifest-path src-tauri/Cargo.toml \
+  --features telemetry --lib fuzz_undo
+
+# See the classified known-bug counts (they are printed, not asserted).
+TELEMETRY_ENDPOINT=http://localhost/dummy cargo test --manifest-path src-tauri/Cargo.toml \
+  --features telemetry --lib fuzz_undo -- --nocapture --test-threads=1
+```
+
+**Soak.** Same engine, no iteration budget, and with the two features the gate
+leaves off (multi-step `undo_to`/`redo_to` jumps, and loop closures) because both
+reach open findings:
+
+```bash
+STALAGMIGHT_RUST_FUZZ_SEEDS=200 STALAGMIGHT_RUST_FUZZ_ITERATIONS=1000 \
+  TELEMETRY_ENDPOINT=http://localhost/dummy cargo test --manifest-path src-tauri/Cargo.toml \
+  --features telemetry --lib undo_redo_fuzz_soak -- --ignored --nocapture
+```
+
+**Choosing gate seeds.** `fuzz_seed_survey` catches each run's panic instead of
+propagating it, so one bad seed does not hide the twenty after it, and prints
+which seeds are clean plus what the rest failed on. Re-run it as findings are
+fixed and widen `GATE_SEEDS`:
+
+```bash
+STALAGMIGHT_RUST_FUZZ_SEEDS=40 STALAGMIGHT_RUST_FUZZ_ITERATIONS=100 \
+  TELEMETRY_ENDPOINT=http://localhost/dummy cargo test --manifest-path src-tauri/Cargo.toml \
+  --features telemetry --lib fuzz_seed_survey -- --ignored --nocapture
+```
+
+**Debugging a failure.** `STALAGMIGHT_RUST_FUZZ_TRACE=1` streams every move as it
+happens. That matters because the app has assertions of its own -
+`debug_assert_merge_alignment` is `#[cfg(test)]`, so it exists ONLY in this tier -
+and when one of those panics it takes the process down before the fuzzer's own
+payload is built.
+
+Runs are deterministic: the same seed replays identically, forever, on every
+platform (integer-only PRNG, and no float is used to make a decision).
+
 ## Commands
 
 The authoritative pre-push list lives in the Pre-Push Checklist in

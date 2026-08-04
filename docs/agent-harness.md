@@ -484,6 +484,31 @@ Both are the same root cause as bug 8 and should get the same fix; the write-ups
 argue for addressing shots by `uuid` in the persisted entries, which is the route
 `StationKey` and `CreatedShotSnapshot { uuid }` already took.
 
+### Three tiers, and which one gates CI
+
+The harness is the middle tier of three, and it is worth being clear about what
+each one buys:
+
+| tier | drives | catches | runs |
+|---|---|---|---|
+| `src-tauri/src/core/state/fuzz_undo_tests.rs` | `AppState` directly | undo/redo model + persistence regressions | **every CI run** |
+| this harness | the real app over IPC | anything the frontend store or the IPC boundary breaks | on demand |
+| `open_undo_bugs_tests.rs` | `AppState` directly | the known open bugs, pinned red | `-- --ignored` |
+
+The Rust tier exists because neither of the other two GATES anything: the harness
+needs a built desktop app and a display, and the red tests are `#[ignore]`d by
+design. It runs the same model - a canonical snapshot per undo depth, asserted
+after every move - about a thousand times cheaper per sequence, which is what
+makes it affordable as a `#[test]`. See docs/testing-recipes.md for how to run it
+and its soak.
+
+It is not a replacement. It cannot see the projectStore actions or the IPC
+serialization, which is where the `updateSection` double-option bug (finding 5)
+was found and where the undo-fails-outright bug (finding 6) surfaced. Equally it
+sees two things the harness cannot: `station_offsets` / `station_comments`, which
+`ProjectIpc` omits entirely, and the app's own `#[cfg(test)]`
+`debug_assert_merge_alignment`. Findings 14 and 15 came from those.
+
 ### Record, replay, shrink
 
 Triage used to be the expensive human step: a failure gave you a seed and an
