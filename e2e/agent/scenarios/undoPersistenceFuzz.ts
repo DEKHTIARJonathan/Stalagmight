@@ -249,8 +249,17 @@ import {
   VARIANT_BY_COMMAND_TYPE,
   idsDivergeFromPosition,
   newCoverageMemo,
+  type CoverageAction,
   type UndoVariant,
 } from './undoPersistenceCoverage';
+import {
+  TraceRecorder,
+  defaultTracePath,
+  readTrace,
+  writeTrace,
+  type FuzzTrace,
+  type TraceStep,
+} from '../lib/fuzzTrace';
 import {
   bumpEpoch,
   enableIdAgnosticModel,
@@ -279,6 +288,26 @@ const DUMP_FULL_HISTORY = process.env.STALAGMIGHT_FUZZ_DUMP_HISTORY === '1';
 
 /** Most entries undone before the save, so the redo stack is non-empty there. */
 const MAX_PRE_SAVE_UNDOS = 4;
+
+/**
+ * Replay a recorded trace instead of running the coverage plan, and where to
+ * force-write the trace of a run that passed.
+ *
+ * Read at RUN time, not at import time: `pnpm agent:scenario --trace` parses its
+ * flags inside `main()`, after this module is imported, so a module-level const
+ * would capture the empty string and silently fall back to generating.
+ *
+ * Replay is a MODE of this scenario, never a separate one - the fused step, the
+ * three oracles, the classification and the contamination rules are all the same
+ * code on both paths.
+ */
+function replayTracePath(): string {
+  return process.env.STALAGMIGHT_FUZZ_REPLAY ?? '';
+}
+
+function traceOutPath(): string {
+  return process.env.STALAGMIGHT_FUZZ_TRACE ?? '';
+}
 
 /** The bug-8 signature, as a classifier so it can be named in a message. */
 const BUG_8_WRONG_SHOT: KnownAsymmetry = {
@@ -564,6 +593,47 @@ async function runIteration(
     history.push(line);
   };
 
+  /**
+   * The resolved move list for THIS cycle. Reset per iteration on purpose: the
+   * iterations are independent (each re-opens the fixture from a known floor), so
+   * a trace of the failing cycle is already minimal in that dimension and a
+   * replay reproduces it without replaying the ones before it.
+   *
+   * Observe-only - `record` runs after the decision, draws nothing and reads no
+   * app state.
+   */
+  const recorder = new TraceRecorder();
+  const replayPath = replayTracePath();
+  const traceOut = traceOutPath();
+  const replay: FuzzTrace | null = replayPath ? readTrace(replayPath) : null;
+  if (replay && replay.scenario !== 'undo-persistence-fuzz') {
+    throw new Error(
+      `trace ${replayPath} was recorded by ${replay.scenario}; run it with that scenario`,
+    );
+  }
+
+  const dumpTrace = (failure: { message: string } | null, explicitPath: string): string | null => {
+    const target =
+      explicitPath ||
+      (ctx.artifactsDir ? defaultTracePath(ctx.artifactsDir, 'undo-persistence-fuzz', ctx.seed) : '');
+    if (!target) return null;
+    try {
+      return writeTrace(
+        target,
+        recorder.build({
+          scenario: 'undo-persistence-fuzz',
+          seed: ctx.seed,
+          iterations,
+          fixture: FIXTURE,
+          stream: 'plan',
+          failure,
+        }),
+      );
+    } catch {
+      return null;
+    }
+  };
+
   const { stripped } = await loadFixtureWithoutUndoHistory(ctx, FIXTURE);
   if (!(await disableAutoSave(ctx))) {
     throw new Error(
@@ -621,20 +691,21 @@ async function runIteration(
   // const arrow does not).
   const fail: (headline: string, detail?: string) => never = (headline, detail = '') => {
     const tail = (DUMP_FULL_HISTORY ? history : history.slice(-HISTORY_TAIL)).map((line) => `    ${line}`);
-    throw new Error(
-      [
-        headline,
-        `  reproduce: pnpm agent:scenario undo-persistence-fuzz --seed ${ctx.seed} ` +
-          `--iterations ${iterations} --release` +
-          `${FIXTURE === DEFAULT_FIXTURE ? '' : ` (STALAGMIGHT_FUZZ_FIXTURE=${FIXTURE})`}` +
-          `${ALLOW_KNOWN_BUGS ? ' (STALAGMIGHT_FUZZ_ALLOW_KNOWN_BUGS=1)' : ''}`,
-        `  iteration=${iteration} fixture=${FIXTURE} depth=${cursor} top=${top} ` +
-          `saves=${savesDone} reloads=${reloadsDone}`,
-        ...(detail ? [detail] : []),
-        `  last ${tail.length} action(s) this iteration:`,
-        ...tail,
-      ].join('\n'),
-    );
+    const message = [
+      headline,
+      `  reproduce: pnpm agent:scenario undo-persistence-fuzz --seed ${ctx.seed} ` +
+        `--iterations ${iterations} --release` +
+        `${FIXTURE === DEFAULT_FIXTURE ? '' : ` (STALAGMIGHT_FUZZ_FIXTURE=${FIXTURE})`}` +
+        `${ALLOW_KNOWN_BUGS ? ' (STALAGMIGHT_FUZZ_ALLOW_KNOWN_BUGS=1)' : ''}` +
+        `${replayPath ? ` (REPLAY of ${replayPath})` : ''}`,
+      `  iteration=${iteration} fixture=${FIXTURE} depth=${cursor} top=${top} ` +
+        `saves=${savesDone} reloads=${reloadsDone}`,
+      ...(detail ? [detail] : []),
+      `  last ${tail.length} action(s) this iteration:`,
+      ...tail,
+    ].join('\n');
+    const written = dumpTrace({ message }, traceOut);
+    throw new Error(written ? `${message}\n  trace: ${written}` : message);
   };
 
   if (init.undoLen !== 0 || init.redoLen !== 0) {
@@ -798,39 +869,33 @@ async function runIteration(
     fail(headline, check.text);
   };
 
-  // -----------------------------------------------------------------------
-  // 1. Build the covering stack.
-  // -----------------------------------------------------------------------
-  const memo = newCoverageMemo();
-  for (const plan of COVERAGE_STEPS) {
-    const sectionIdsBefore = plan.remembers ? digest.s.map((entry) => entry[0]) : [];
-    const built = plan.build(ctx, digest, memo);
-    if (built === null) {
-      note(`${tag} ${plan.name} -> NOT BUILDABLE`);
-      ctx.metric(`unbuildable:${plan.name}`);
-      if (plan.guaranteed) {
-        fail(
-          `coverage step ${plan.name} could not be built, so the plan cannot promise ` +
-            `${plan.variant}`,
-          `  purpose: ${plan.purpose}`,
-        );
-      }
-      continue;
-    }
+  /**
+   * Apply ONE mutation and run the whole case analysis on what the stacks did.
+   * Lifted out of the plan loop unchanged so a REPLAY can drive it with a
+   * recorded action instead of a planned one; the plan path still hands it
+   * exactly what `CoverageStep.build` returned.
+   */
+  const applyMutation = async (built: CoverageAction, stepName: string): Promise<number> => {
+    recorder.record({
+      kind: 'mutate',
+      action: built.action,
+      args: built.args,
+      label: built.label,
+    });
     const beforeUndo = undoLen;
     const beforeRedo = redoLen;
     const res = await step('mutate', built.action, built.args);
     const accepted = res.actionOk && res.commandSuccess !== false;
     const pushed = res.undoLen - beforeUndo;
     note(
-      `${tag} ${plan.name}: ${built.label} -> ${accepted ? 'ok' : 'rejected'} ` +
+      `${tag} ${stepName}: ${built.label} -> ${accepted ? 'ok' : 'rejected'} ` +
         `(undo ${beforeUndo}->${res.undoLen}, redo ${beforeRedo}->${res.redoLen})` +
         `${accepted ? '' : ` [${res.commandError ?? res.actionError ?? 'unknown'}]`}`,
     );
     assertInvariants(res, built.label);
 
     if (!accepted) {
-      ctx.metric(`rejected:${plan.name}`);
+      ctx.metric(`rejected:${stepName}`);
       if (pushed !== 0 || res.redoLen !== beforeRedo) {
         fail(
           'a REJECTED command changed the history stacks',
@@ -848,24 +913,24 @@ async function runIteration(
         );
       }
       record(res);
-      continue;
+      return pushed;
     }
 
     if (pushed === 0) {
       // Succeeded without pushing an entry. Permitted (a no-op command), but it
       // means the plan did not deliver this variant; the coverage assertion is
       // what reports that.
-      ctx.metric(`noop:${plan.name}`);
+      ctx.metric(`noop:${stepName}`);
       if (res.redoLen === 0) top = cursor;
       assertModel(res, 'a no-op command moved the page model');
       if (res.verdict !== 'equal') {
         await resolveMismatch(`a no-op command (${built.action}) changed the project state`, res, null);
       }
       record(res);
-      continue;
+      return pushed;
     }
     if (pushed !== 1) {
-      fail(`${plan.name} pushed ${pushed} undo entries (expected 0 or 1)`, `  after ${built.label}`);
+      fail(`${stepName} pushed ${pushed} undo entries (expected 0 or 1)`, `  after ${built.label}`);
     }
     if (res.redoLen !== 0) {
       fail('a successful command did not clear the redo stack', `  after ${built.label}`);
@@ -878,9 +943,36 @@ async function runIteration(
       fail(`the page did not record a snapshot for a pushed entry (verdict=${res.verdict})`);
     }
     record(res);
-    ctx.metric(`step:${plan.name}`);
+    ctx.metric(`step:${stepName}`);
+    return pushed;
+  };
 
-    if (plan.remembers) {
+  // -----------------------------------------------------------------------
+  // 1. Build the covering stack.
+  // -----------------------------------------------------------------------
+  const memo = newCoverageMemo();
+  // Empty when replaying: the trace supplies every move, and running the plan as
+  // well would make the replay something other than the cycle it came from.
+  for (const plan of replay ? [] : COVERAGE_STEPS) {
+    const sectionIdsBefore = plan.remembers ? digest.s.map((entry) => entry[0]) : [];
+    const built = plan.build(ctx, digest, memo);
+    if (built === null) {
+      note(`${tag} ${plan.name} -> NOT BUILDABLE`);
+      ctx.metric(`unbuildable:${plan.name}`);
+      if (plan.guaranteed) {
+        fail(
+          `coverage step ${plan.name} could not be built, so the plan cannot promise ` +
+            `${plan.variant}`,
+          `  purpose: ${plan.purpose}`,
+        );
+      }
+      continue;
+    }
+    const pushed = await applyMutation(built, plan.name);
+
+    // Only after a step that actually pushed an entry - which is what the
+    // `continue`s in the extracted body used to guarantee positionally.
+    if (plan.remembers && pushed === 1) {
       const fresh = digest.s.map((entry) => entry[0]).filter((id) => !sectionIdsBefore.includes(id));
       const created = fresh[0];
       if (fresh.length !== 1 || created === undefined) {
@@ -895,8 +987,8 @@ async function runIteration(
     }
   }
 
-  if (top === 0) fail('the coverage plan pushed no undo entries at all');
-  if (top > persistLimit) {
+  if (!replay && top === 0) fail('the coverage plan pushed no undo entries at all');
+  if (!replay && top > persistLimit) {
     fail(
       `the coverage plan built ${top} entries but only the newest ${persistLimit} are persisted ` +
         `(undo_persist_limit), so the restored stack could not be modelled`,
@@ -906,10 +998,16 @@ async function runIteration(
   // -----------------------------------------------------------------------
   // 2. Prove the collision precondition: ids must no longer equal positions.
   // -----------------------------------------------------------------------
+  // Everything in this block asserts that the PLAN did its job. A replayed trace
+  // is by construction not the plan - a shrink is allowed to remove the very
+  // steps that produced the divergence - so these are skipped there. No app
+  // oracle is skipped: the roundtrip, invariant, integrity and stack-survival
+  // checks all run on both paths.
   const targetSection = memo.createdSectionId;
-  if (targetSection === null) fail('the plan never identified its target section');
-  const targetShots = digest.s.find((entry) => entry[0] === targetSection)?.[1] ?? [];
-  if (!idsDivergeFromPosition(targetSection, targetShots)) {
+  if (!replay && targetSection === null) fail('the plan never identified its target section');
+  const targetShots =
+    targetSection === null ? [] : digest.s.find((entry) => entry[0] === targetSection)?.[1] ?? [];
+  if (!replay && targetSection !== null && !idsDivergeFromPosition(targetSection, targetShots)) {
     fail(
       'the plan did not make shot ids diverge from positional order, so a stale persisted id ' +
         'would address the same shot after the reload and the whole precondition is absent',
@@ -917,7 +1015,7 @@ async function runIteration(
         `them to ${JSON.stringify(targetShots.map((_, i) => targetSection * FEATURE_ID_STRIDE + i))})`,
     );
   }
-  ctx.metric('divergedSections');
+  if (!replay) ctx.metric('divergedSections');
 
   // -----------------------------------------------------------------------
   // 3. Undo a few, so the REDO stack is non-empty when the save runs.
@@ -925,7 +1023,7 @@ async function runIteration(
   // Read the live stack first, so the pre-save undos can also name the entry they
   // consumed; the authoritative read is the one after the reload.
   fillEntryTypes(await readStack(ctx, 'getUndoStack'), []);
-  const wanted = ctx.randInt(1, Math.max(1, Math.min(MAX_PRE_SAVE_UNDOS, top - 1)));
+  const wanted = replay ? 0 : ctx.randInt(1, Math.max(1, Math.min(MAX_PRE_SAVE_UNDOS, top - 1)));
 
   /**
    * One history move, verified against the snapshot recorded at the depth it
@@ -992,78 +1090,137 @@ async function runIteration(
     return true;
   };
 
-  for (let i = 0; i < wanted; i++) await walk('undo', 'pre-save');
-  if (redoLen === 0) {
+  for (let i = 0; i < wanted; i++) {
+    recorder.record({ kind: 'undo' });
+    await walk('undo', 'pre-save');
+  }
+  if (!replay && redoLen === 0) {
     fail('the pre-save undos left the redo stack empty, so the reload could not restore one');
   }
   ctx.setMetric('preSaveRedoDepth', top - cursor);
 
+  /**
+   * Save to a temp path, close, reopen: the persistence boundary, as one
+   * indivisible move. Splitting it would let a shrink produce a candidate that
+   * saved without reopening, which is not a state the app can be in.
+   */
+  const crossBoundary = async (): Promise<void> => {
+    const savePath = path.join(saveDir, `cycle-${iteration}.stalx`);
+    await bumpEpoch(ctx);
+    const saveRes = await step('save', 'saveProject', [savePath]);
+    if (!saveRes.actionOk || saveRes.commandSuccess === false) {
+      fail('saveProject failed', `  error: ${saveRes.commandError ?? saveRes.actionError ?? 'unknown'}`);
+    }
+    note(`${tag} save -> ok (depth ${cursor}, undo ${saveRes.undoLen}, redo ${saveRes.redoLen})`);
+    assertInvariants(saveRes, 'save');
+    assertStacks('save changed the history stacks', saveRes);
+    savesDone += 1;
+    if (saveRes.verdict !== 'equal') {
+      await resolveMismatch(
+        'save mutated the project in a way SAVE_HEALING_MUTATIONS does not account for',
+        saveRes,
+        null,
+      );
+    }
+    record(saveRes);
+    ctx.metric('saves');
+
+    const closed = (await ctx.callAction('project', 'closeProject', [])) as {
+      ok: boolean;
+      error?: string;
+      result?: { success?: boolean; error?: string };
+    };
+    if (!closed.ok || closed.result?.success === false) {
+      fail('closeProject failed before reopen', `  error: ${closed.result?.error ?? closed.error ?? 'unknown'}`);
+    }
+    const opened = (await ctx.callAction('project', 'loadProject', [savePath])) as {
+      ok: boolean;
+      error?: string;
+      result?: { success?: boolean; error?: string };
+    };
+    if (!opened.ok || opened.result?.success === false) {
+      fail('reopening the saved project failed', `  error: ${opened.result?.error ?? opened.error ?? 'unknown'}`);
+    }
+
+    await enableIdAgnosticModel(ctx);
+    await bumpEpoch(ctx);
+    reloadsDone += 1;
+    const reloaded = await observeOnly(ctx, cursor);
+    note(`${tag} reload -> depth ${cursor} (undo ${reloaded.undoLen}, redo ${reloaded.redoLen})`);
+    assertInvariants(reloaded, 'reload');
+    assertStacks('the persisted history did not come back intact', reloaded);
+    if (reloaded.verdict !== 'equal') {
+      await resolveMismatch('reopening the saved project did not restore the state it was saved at', reloaded, null);
+    }
+    assertIntegrityDelta(reloaded, 'reload');
+    record(reloaded);
+    ctx.metric('reloads');
+  };
+
   // -----------------------------------------------------------------------
   // 4. Save, close, reopen.
   // -----------------------------------------------------------------------
-  const savePath = path.join(saveDir, `cycle-${iteration}.stalx`);
-  await bumpEpoch(ctx);
-  const saveRes = await step('save', 'saveProject', [savePath]);
-  if (!saveRes.actionOk || saveRes.commandSuccess === false) {
-    fail('saveProject failed', `  error: ${saveRes.commandError ?? saveRes.actionError ?? 'unknown'}`);
-  }
-  note(`${tag} save -> ok (depth ${cursor}, undo ${saveRes.undoLen}, redo ${saveRes.redoLen})`);
-  assertInvariants(saveRes, 'save');
-  assertStacks('save changed the history stacks', saveRes);
-  savesDone += 1;
-  if (saveRes.verdict !== 'equal') {
-    await resolveMismatch(
-      'save mutated the project in a way SAVE_HEALING_MUTATIONS does not account for',
-      saveRes,
-      null,
-    );
-  }
-  record(saveRes);
-  ctx.metric('saves');
-
-  const closed = (await ctx.callAction('project', 'closeProject', [])) as {
-    ok: boolean;
-    error?: string;
-    result?: { success?: boolean; error?: string };
+  /**
+   * Apply one recorded move. Same rule as `undo-redo-fuzz`: a history move whose
+   * precondition no longer holds is SKIPPED and a save with nothing to persist is
+   * skipped too, which is what makes an arbitrary subsequence of a trace runnable
+   * - the property the shrinker needs. Skipping asserts nothing, so it cannot
+   * turn a failing candidate green by hiding something.
+   */
+  const applyTraceStep = async (traceStep: TraceStep, label: string): Promise<void> => {
+    if (traceStep.kind === 'mutate') {
+      await applyMutation(
+        { action: traceStep.action, args: traceStep.args, label: traceStep.label },
+        `replay:${traceStep.action}`,
+      );
+      return;
+    }
+    if (traceStep.kind === 'save') {
+      if (top === 0 || top > persistLimit || savesDone > 0) {
+        ctx.metric('replaySkipped:save');
+        return;
+      }
+      recorder.record({ kind: 'save' });
+      await crossBoundary();
+      return;
+    }
+    if (traceStep.kind === 'repair') {
+      ctx.metric('replaySkipped:repair');
+      return;
+    }
+    const back = traceStep.kind === 'undo' || traceStep.kind === 'undoTo';
+    const reach = back ? cursor : top - cursor;
+    if (reach < 1) {
+      ctx.metric(`replaySkipped:${traceStep.kind}`);
+      return;
+    }
+    recorder.record(back ? { kind: 'undo' } : { kind: 'redo' });
+    await walk(back ? 'undo' : 'redo', label);
   };
-  if (!closed.ok || closed.result?.success === false) {
-    fail('closeProject failed before reopen', `  error: ${closed.result?.error ?? closed.error ?? 'unknown'}`);
-  }
-  const opened = (await ctx.callAction('project', 'loadProject', [savePath])) as {
-    ok: boolean;
-    error?: string;
-    result?: { success?: boolean; error?: string };
-  };
-  if (!opened.ok || opened.result?.success === false) {
-    fail('reopening the saved project failed', `  error: ${opened.result?.error ?? opened.error ?? 'unknown'}`);
-  }
 
-  await enableIdAgnosticModel(ctx);
-  await bumpEpoch(ctx);
-  reloadsDone += 1;
-  const reloaded = await observeOnly(ctx, cursor);
-  note(`${tag} reload -> depth ${cursor} (undo ${reloaded.undoLen}, redo ${reloaded.redoLen})`);
-  assertInvariants(reloaded, 'reload');
-  assertStacks('the persisted history did not come back intact', reloaded);
-  if (reloaded.verdict !== 'equal') {
-    await resolveMismatch('reopening the saved project did not restore the state it was saved at', reloaded, null);
+  if (replay) {
+    ctx.setMetric('replaySteps', replay.steps.length);
+    for (let index = 0; index < replay.steps.length; index++) {
+      await applyTraceStep(replay.steps[index] as TraceStep, `T${index + 1}`);
+    }
+  } else {
+    recorder.record({ kind: 'save' });
+    await crossBoundary();
   }
-  assertIntegrityDelta(reloaded, 'reload');
-  record(reloaded);
-  ctx.metric('reloads');
 
   // The renumbering is what makes a stale id collide rather than miss. Prove it
   // happened, so a build that stopped renumbering would fail here loudly instead
   // of quietly turning this scenario into a no-op.
-  const renumbered = digest.s.find((entry) => entry[0] === targetSection)?.[1] ?? [];
-  if (idsDivergeFromPosition(targetSection, renumbered)) {
+  const renumbered =
+    targetSection === null ? [] : digest.s.find((entry) => entry[0] === targetSection)?.[1] ?? [];
+  if (!replay && targetSection !== null && idsDivergeFromPosition(targetSection, renumbered)) {
     fail(
       'the reload did NOT renumber shot ids to section_id * FEATURE_ID_STRIDE + position, so the ' +
         'stale-id collision this scenario tests for cannot arise',
       `  section ${targetSection} ids after reload = ${JSON.stringify(renumbered)}`,
     );
   }
-  ctx.metric('renumberedSections');
+  if (!replay) ctx.metric('renumberedSections');
 
   // -----------------------------------------------------------------------
   // 5. Read the restored stacks: which entry sits at which depth.
@@ -1098,7 +1255,11 @@ async function runIteration(
       '  the map is transcribed from src-tauri/src/core/state/undo_capture.rs; re-check it',
     );
   }
-  const missingGuaranteed = GUARANTEED_VARIANTS.filter((variant) => !covered.has(variant));
+  // The COVERAGE oracle asserts the PLAN's promise, so it does not apply to a
+  // replayed subsequence - a shrink's whole job is to remove steps it can.
+  const missingGuaranteed = replay
+    ? []
+    : GUARANTEED_VARIANTS.filter((variant) => !covered.has(variant));
   if (missingGuaranteed.length > 0) {
     fail(
       `the restored stack is missing UndoData variant(s) the plan guarantees: ` +
@@ -1143,6 +1304,11 @@ async function runIteration(
   }
   ctx.metric('entriesUnwound', top - floor);
   ctx.metric('cycles');
+  ctx.setMetric('traceSteps', recorder.length);
+  // A cycle that PASSED only writes a trace when asked for by name. The path is
+  // shared across iterations on purpose: the last cycle wins, and a run whose
+  // cycles are independent has nothing useful in the earlier ones.
+  if (traceOut) dumpTrace(null, traceOut);
 
   return covered;
 }
