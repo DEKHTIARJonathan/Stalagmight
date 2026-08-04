@@ -456,8 +456,15 @@ struct Classifier {
 /// to the exact entry shape their bug needs instead of to a path alone.
 #[derive(Clone, Copy)]
 struct MoveCtx<'a> {
-    /// The entry the move consumed, when the move was an undo or a redo.
+    /// The entry the move consumed, when the move was an undo or a redo. For a
+    /// multi-step jump this is the FIRST of several - the one whose restore
+    /// produced the state being compared.
     entry: Option<&'a EntryMeta>,
+    /// EVERY entry the move consumed. A jump runs several restores in one move,
+    /// and any of them can be the one that carries a finding's precondition, so
+    /// a classifier that looked only at the first stopped recognising its own
+    /// bug as soon as jumps were switched on.
+    entries: &'a [EntryMeta],
     /// Has this run crossed a save?
     after_save: bool,
     /// The run's current epoch; an entry with a lower one predates the last save.
@@ -513,9 +520,28 @@ struct StaleTargets {
     anchor: Staleness,
 }
 
+impl StaleTargets {
+    /// The more broken of two measurements, per role. A jump consumes several
+    /// entries and one stale id among them is enough to explain the damage.
+    fn worst(self, other: Self) -> Self {
+        let pick = |a: Staleness, b: Staleness| match (a, b) {
+            (Staleness::Missing, _) | (_, Staleness::Missing) => Staleness::Missing,
+            (Staleness::Collides, _) | (_, Staleness::Collides) => Staleness::Collides,
+            (Staleness::Fresh, _) | (_, Staleness::Fresh) => Staleness::Fresh,
+            _ => Staleness::Absent,
+        };
+        Self {
+            target: pick(self.target, other.target),
+            anchor: pick(self.anchor, other.anchor),
+        }
+    }
+}
+
 impl MoveCtx<'_> {
+    /// Did the move consume an entry of this command type? ANY of them, because
+    /// a jump consumes several and every one of them was restored.
     fn command_is(&self, command: &str) -> bool {
-        self.entry.is_some_and(|entry| entry.command == command)
+        self.entries.iter().any(|entry| entry.command == command)
     }
 
     /// True when the consumed entry was recorded BEFORE the most recent save -
@@ -528,7 +554,9 @@ impl MoveCtx<'_> {
     /// The section a consumed `CreateShot` appended the FIRST shot into, when it
     /// did - finding 3's exact precondition.
     fn appended_into_empty(&self) -> Option<SectionId> {
-        self.entry.and_then(|entry| entry.appended_into_empty)
+        self.entries
+            .iter()
+            .find_map(|entry| entry.appended_into_empty)
     }
 
     /// Is `diff` inside a section finding 16 duplicated a shot uuid in?
@@ -1767,10 +1795,10 @@ impl Fuzzer {
         &mut self,
         depth: usize,
         what: &str,
-        consumed: Option<EntryMeta>,
+        consumed: Vec<EntryMeta>,
         stale: StaleTargets,
     ) {
-        let ctx_entry = consumed;
+        let ctx_entry = consumed.first().cloned();
         // FINDING 11's consequence, measured rather than inferred: the save
         // captured a gauge pair per section, and a restore of a pre-save
         // `ProjectSnapshotPair` puts the pre-heal project back. Once that has
@@ -1790,6 +1818,7 @@ impl Fuzzer {
         let section_ids = section_ids_of(&self.snapshots[depth]);
         let ctx = MoveCtx {
             entry: ctx_entry.as_ref(),
+            entries: &consumed,
             after_save: self.outcome.saves > 0,
             epoch: self.epoch,
             heal_reverted: self.heal_reverted,
@@ -2826,6 +2855,10 @@ const UNDO_PERSIST_LIMIT: usize = 20;
 /// Headroom kept below the in-memory history limit so FIFO trimming can never
 /// fire and silently invalidate `snapshots[0]`.
 const MAX_MODEL_DEPTH: usize = 40;
+/// How often a history move is taken as a multi-step `undo_to`/`redo_to` jump,
+/// when `Plan::jumps` is on. Raised from 10 while hunting finding 7, which only
+/// exists on that path: a jump is the only move that skips `reconcile_geometry`.
+const JUMP_PERCENT: u32 = 40;
 
 impl Fuzzer {
     /// One mutation, with the full case analysis on what the stacks did.
@@ -2868,7 +2901,7 @@ impl Fuzzer {
             self.expect_state(
                 self.cursor,
                 "a rejected command",
-                None,
+                Vec::new(),
                 StaleTargets::default(),
             );
             return;
@@ -2936,7 +2969,7 @@ impl Fuzzer {
         self.expect_state(
             self.cursor,
             "a no-op command",
-            None,
+            Vec::new(),
             StaleTargets::default(),
         );
     }
@@ -3340,14 +3373,21 @@ impl Fuzzer {
                     .cloned()
                     .or_else(|| payload.downcast_ref::<&str>().map(|s| (*s).to_string()))
                     .unwrap_or_default();
-                if !message.contains("Merge alignment violated after insert_shot_") {
+                // The CONTEXT decides which finding it is, and an assert from a
+                // site neither of them names is re-raised verbatim.
+                let id = if message.contains("Merge alignment violated after insert_shot_") {
+                    "finding-14-insert-leaves-a-merge-metres-out-of-alignment"
+                } else if message.contains("Merge alignment violated after remove_shot_with_rewire")
+                {
+                    // Finding 14's mirror image, and reached only through an
+                    // UNDO: `remove_shot_with_rewire` is what undo of CreateShot
+                    // routes into, and it has the same "compensate only when the
+                    // partner is independently anchored" shape as the insert.
+                    "finding-14-variant-a-shot-removal-leaves-a-merge-out-of-alignment"
+                } else {
                     std::panic::resume_unwind(payload);
-                }
-                *self
-                    .outcome
-                    .hits
-                    .entry("finding-14-insert-leaves-a-merge-metres-out-of-alignment")
-                    .or_insert(0) += 1;
+                };
+                *self.outcome.hits.entry(id).or_insert(0) += 1;
                 self.outcome.alignment_panic = true;
                 self.note(format!(
                     "  ^ the app's own merge-alignment assert fired: {}",
@@ -3444,15 +3484,30 @@ impl Fuzzer {
         // current depth; for a redo, the one just above it. A jump consumes
         // several - the FIRST one is what the classifiers key on, since it is the
         // one whose restore produced the state being compared.
-        let consumed = if back {
-            self.entry_meta.get(self.cursor).cloned()
+        // Every entry this move consumes, in restore order. For an undo those are
+        // the entries at the current depth downwards; for a redo, the ones just
+        // above it upwards.
+        let consumed: Vec<EntryMeta> = if back {
+            (0..steps)
+                .filter_map(|step| self.entry_meta.get(self.cursor - step).cloned())
+                .collect()
         } else {
-            self.entry_meta.get(self.cursor + 1).cloned()
+            (1..=steps)
+                .filter_map(|step| self.entry_meta.get(self.cursor + step).cloned())
+                .collect()
         };
         // Measured NOW, before the move: the ids the entry carries are about to
         // be resolved against THIS project, and the move itself changes which
         // shot each one addresses.
-        let stale = self.measure_staleness(consumed.as_ref());
+        // Over EVERY entry the move will consume, worst case per role. For the
+        // entries after the first this is measured against the pre-move project
+        // rather than against the intermediate state each restore will actually
+        // see - an approximation, and one that can only ever say "an id on this
+        // move is stale", which is exactly what the classifiers ask it.
+        let stale = consumed
+            .iter()
+            .map(|entry| self.measure_staleness(Some(entry)))
+            .fold(StaleTargets::default(), StaleTargets::worst);
         // A restore that is ABOUT to address the wrong shot is a measured fact,
         // not an inference from the damage afterwards - and it is what makes
         // every deeper comparison in this walk a re-measurement rather than a
@@ -3520,9 +3575,67 @@ impl Fuzzer {
             self.outcome.jumps += 1;
         }
         self.expect_stacks(&label);
+        if jumped {
+            self.probe_jump_equivalence(back, steps, self.cursor);
+        }
         self.expect_state(self.cursor, &label, consumed, stale);
         self.expect_merges_aligned(&label);
         true
+    }
+
+    /// FINDING 7, decided by PROVING the inequality rather than by recognising a
+    /// shape: run the same distance again one step at a time and see whether the
+    /// two paths agree.
+    ///
+    /// `undo()` and `redo()` end in `reconcile_geometry()`, which runs
+    /// `realign_merges()`; `undo_to()` and `redo_to()` validate the index and
+    /// then loop the `*_inner` variants, calling it NEITHER per step nor at the
+    /// end (core/state/undo.rs). The contract that breaks is exactly
+    /// "`undo_to(N)` == N x `undo()`", so this measures that contract directly:
+    /// the jump is replayed forwards, then walked back down in single steps, and
+    /// if the single-step path lands on the state the model recorded while the
+    /// jump did not, the two paths are not equal. That is the finding, proven on
+    /// the spot rather than inferred.
+    ///
+    /// Only ever entered for a jump that has ALREADY diverged, and it attributes
+    /// nothing unless the single-step walk succeeds AND lands exactly on the
+    /// recorded state; anything else is left to the ordinary classification,
+    /// with the log recording that the replay happened.
+    fn probe_jump_equivalence(&mut self, back: bool, steps: usize, depth: usize) {
+        if self.snapshot() == self.snapshots[depth] {
+            return;
+        }
+        // Undo what the jump did, one step at a time in the opposite direction,
+        // then redo it one step at a time. Both use the plain `undo`/`redo`
+        // entry points, which is the whole point - they carry the epilogue.
+        let (rewind, replay): (
+            fn(&AppState) -> CommandResult,
+            fn(&AppState) -> CommandResult,
+        ) = if back {
+            (AppState::redo, AppState::undo)
+        } else {
+            (AppState::undo, AppState::redo)
+        };
+        for _ in 0..steps {
+            if !rewind(&self.state).success {
+                return;
+            }
+        }
+        for _ in 0..steps {
+            if !replay(&self.state).success {
+                return;
+            }
+        }
+        self.note(format!(
+            "  ^ replayed the same {steps} step(s) singly to test undo_to == N x undo"
+        ));
+        if self.snapshot() == self.snapshots[depth] {
+            *self
+                .outcome
+                .hits
+                .entry("finding-7-a-jump-is-not-n-single-steps")
+                .or_insert(0) += 1;
+        }
     }
 
     /// Save to a temp path, close, reopen. Undo history is PERSISTED - both stacks
@@ -3554,7 +3667,7 @@ impl Fuzzer {
         self.record_saved_anchors();
         self.note(format!("save -> ok (depth {})", self.cursor));
         self.expect_stacks("save");
-        self.expect_state(self.cursor, "save", None, StaleTargets::default());
+        self.expect_state(self.cursor, "save", Vec::new(), StaleTargets::default());
 
         let closed = self.state.execute(Command::CloseProject);
         if !closed.success {
@@ -3577,7 +3690,7 @@ impl Fuzzer {
         self.outcome.reloads += 1;
         self.note(format!("reload -> depth {}", self.cursor));
         self.expect_stacks("reload");
-        self.expect_state(self.cursor, "reload", None, StaleTargets::default());
+        self.expect_state(self.cursor, "reload", Vec::new(), StaleTargets::default());
         true
     }
 
@@ -3721,7 +3834,10 @@ fn run_fuzz(seed: u32, plan: Plan) -> Outcome {
         } else {
             fuzzer.top - fuzzer.cursor
         };
-        let steps = if plan.jumps && reach > 1 && fuzzer.rng.chance(10) {
+        // One history move in ten is a jump by default. `plan.jumps` is checked
+        // FIRST so a run without jumps draws nothing here and its stream is
+        // unchanged by this knob - the gate's pinned seeds depend on that.
+        let steps = if plan.jumps && reach > 1 && fuzzer.rng.chance(JUMP_PERCENT) {
             1 + fuzzer.rng.below(reach)
         } else {
             1
