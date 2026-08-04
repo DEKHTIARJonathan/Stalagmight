@@ -23,21 +23,9 @@ characters in ASCII diagrams are fine.
 
 ### Pinned Toolchain - enable corepack
 
-The toolchain is pinned so every machine + CI runs the same versions:
-
-- **pnpm `11.18.0`** via `"packageManager"` in `package.json` (corepack and
-  `pnpm/action-setup` both read it - no per-workflow `version:`). `scripts/mac-setup.sh`
-  reads the same field and installs that exact version.
-  ⚠ **The pin carries a corepack integrity hash** (`pnpm@11.18.0+sha512.<hex>`), so
-  **bumping pnpm means regenerating it** - a stale hash makes corepack refuse to run
-  at all. The format is corepack's, **not** npm's: `+sha512.` + the tarball's sha512
-  as **hex**. npm's registry `integrity` field is `sha512-` + **base64** and corepack
-  rejects it as an "Invalid package manager specification". Regenerate with:
-  `curl -sL https://registry.npmjs.org/pnpm/-/pnpm-<v>.tgz | shasum -a 512`
-- **node `24.x`** via `.nvmrc` + advisory `engines` (a warning, not a hard block,
-  on newer node). One toolchain everywhere, the agent harness included.
-
-First-time setup on a clean clone:
+pnpm `11.18.0` (via `"packageManager"` in `package.json`) and node `24.x` (via
+`.nvmrc`) are pinned so every machine + CI runs the same versions. First-time
+setup on a clean clone:
 
 ```bash
 corepack enable      # makes `pnpm` honor packageManager (pins to 11.18.0)
@@ -45,29 +33,15 @@ pnpm install         # build scripts are pre-approved (pnpm-workspace.yaml)
 ./scripts/dev.sh
 ```
 
-Prefer `corepack enable`: it is the only path that **verifies** the integrity hash
-(a tampered tarball is refused outright). Any pnpm 10+ self-switches to the pin
-before it does anything else, so a fresh
-clone installs correctly even without `corepack enable`. A global pnpm 9 does not
-self-switch, and installs only because it predates build approvals and runs the
-scripts anyway - `corepack enable` is what puts it on the pin. Don't commit a
-lockfile-only drift.
+Rules that keep the pin working (full detail in [docs/toolchain.md](docs/toolchain.md)):
 
-**Build-script approvals live in `pnpm-workspace.yaml`, as `allowBuilds:` keyed by
-package** (`esbuild: true`), never a list. This shape is load-bearing: the older
-`pnpm.onlyBuiltDependencies` block in `package.json` is ignored from pnpm 11 on, a
-list under `allowBuilds` is rejected by both pnpm 10 and 11, and the list form of
-`onlyBuiltDependencies` works on 10 but not 11 - the keyed map is the only form
-valid on both majors (verified against the 10.34.5 and 11.18.0 release tarballs,
-one isolated store per case). On the pinned pnpm 11 getting it wrong is loud: it
-exits 1 with `ERR_PNPM_IGNORED_BUILDS` naming the packages, so it cannot merge
-green. Do not generalise that to pnpm 10, which **exits 0 and simply does not run
-the build scripts**. Nothing in CI asserts the approval shape, so on any pnpm
-other than the pin a wrong shape is silent - verify an install actually builds
-esbuild rather than reading the exit code.
-
-`pnpm-lock.yaml` stays at `lockfileVersion: '9.0'`; pnpm 11 accepts it under
-`--frozen-lockfile` and does not rewrite it.
+- Bumping pnpm means regenerating the corepack integrity hash in
+  `packageManager` - a stale or npm-format hash makes corepack refuse to run.
+- Build-script approvals live in `pnpm-workspace.yaml` as an `allowBuilds:` map
+  keyed by package (`esbuild: true`), never a list - other shapes fail on
+  pnpm 11 or are silently ignored on pnpm 10.
+- `pnpm-lock.yaml` stays at `lockfileVersion: '9.0'`; don't commit
+  lockfile-only drift.
 
 ### Never Use `cd` in Bash Commands
 
@@ -112,19 +86,12 @@ Running full `pnpm test:ui` is not recommended as it is heavy. You must select
 playwright tests relevant to the code and funcitonality changed/affected by the
 changes made and run those selectively.
 
-CI runs the Rust tests with `--features telemetry`, which gates the
-registry-coverage tests (`registry_covers_all_*`). A plain `cargo test` filters
-those out, so it can pass locally while CI fails; `build.rs` also requires
-`TELEMETRY_ENDPOINT` to be set under that feature.
-
-On **Windows**, run the Rust tests via `./scripts/test.ps1` (sets
-`STALAGMIGHT_TEST_MANIFEST=1`). Without that env var, every `cargo test` harness
-binary aborts at startup with `STATUS_ENTRYPOINT_NOT_FOUND` (`0xC0000139`)
-before any test runs: the loader binds to comctl32 v5 (System32), which lacks
-`TaskDialogIndirect` (statically imported via rfd / tauri-plugin-dialog). The
-env var makes `build.rs` delay-load comctl32 for test binaries so the symbol is
-never resolved at startup. The shipping app is unaffected (it gets a
-Common-Controls v6 manifest from `tauri_build`).
+Rust tests must run with `--features telemetry` and `TELEMETRY_ENDPOINT` set,
+exactly as above - a plain `cargo test` skips the registry-coverage tests and
+can pass locally while CI fails. On **Windows**, use `./scripts/test.ps1`
+instead (a bare `cargo test` aborts at startup with
+`STATUS_ENTRYPOINT_NOT_FOUND`). Both are explained in
+[docs/testing-recipes.md](docs/testing-recipes.md).
 
 ### Pre-PR Review - required before every PR
 
@@ -142,28 +109,12 @@ deliberately and manually. LLM-driven push/PR of these fixtures is not allowed.
 ### Rust lints + formatting are CI-gated
 
 The `check` job enforces **both** `cargo fmt --check` and `cargo clippy`
-(deny-level) on `src-tauri`. The full policy - the strict anti-AI-slop clippy
-config, the per-test-module `#[expect]` idiom (no `#[allow]`, no `clippy.toml`),
-and which lints were deliberately deferred - is in
+(deny-level) on `src-tauri`; run `cargo fmt` and fix clippy findings before
+pushing. The full policy - the strict anti-AI-slop clippy config, the
+per-test-module `#[expect]` idiom (no `#[allow]`, no `clippy.toml`), the
+rustfmt scope (the vendored `compass_data` and `scripts/lib/slice-rs` crates
+are not gated), and which lints were deliberately deferred - is in
 [docs/linting.md](docs/linting.md).
-
-`cargo fmt` is the formatter for the **`src-tauri` crate**, enforced in CI: the
-`check` job runs `cargo fmt --manifest-path src-tauri/Cargo.toml --check` and
-fails on any drift. Run `cargo fmt` to fix formatting before pushing; the
-`--check` in the Pre-Push Checklist then passes. Config is `src-tauri/rustfmt.toml`
-- stable rustfmt defaults, only `edition` pinned; do **not** add nightly-only keys
-(they'd diverge local vs CI).
-
-**Scope:** the gate formats only the `stalagmight` package. The separate
-first-party `scripts/lib/slice-rs` helper crate and the vendored, locally-patched
-`src-tauri/vendor/compass_data` path-dependency are **not** gated (vendored code is
-left as-is on purpose) - don't assume `cargo fmt` touched them.
-
-The crate was adopted into rustfmt in one mechanical commit (recorded in
-`.git-blame-ignore-revs`, so `git blame` skips it - wire it locally once with
-`git config blame.ignoreRevsFile .git-blame-ignore-revs`). If a `cargo fmt` diff
-ever looks large, that's normal re-wrapping; the gate keeps it from drifting
-again. (Idiomatic-Rust / clippy cleanup is tracked separately → #147.)
 
 ### Playwright Tests Require a Headless Environment
 
@@ -175,18 +126,13 @@ Always use `./scripts/dev.sh` to restart the dev server (handles process cleanup
 
 ### IPC Types Are Generated
 
-TypeScript IPC types are generated from Rust via `ts-rs`. Do **not** hand-edit or
-create files under `src/types/ipc/` or `src/types/ipc.generated.ts`; run
-`pnpm gen:ipc-types` and commit the regenerated output instead.
-
-`src-tauri/bindings/` is generated too, but by a *different* mechanism: it falls
-out of `cargo test` (ts-rs turns each `#[ts(export)]` into an `export_bindings_*`
-test), not out of `pnpm gen:ipc-types`, whose output directory is hardcoded to
-`src/types/ipc`. Nothing imports that tree - it exists only as ts-rs's default
-export target - but it *is* committed, so CI's `check` job fails if `cargo test`
-leaves it dirty. Never hand-edit it either; run the Rust tests and commit what
-they write. See [docs/ipc-typegen.md](docs/ipc-typegen.md) for the full picture,
-including the one drift shape the gate cannot see.
+TypeScript IPC types are generated from Rust via `ts-rs`. Do **not** hand-edit
+or create files under `src/types/ipc/`, `src/types/ipc.generated.ts`, or
+`src-tauri/bindings/`. The first two are regenerated by `pnpm gen:ipc-types`;
+`src-tauri/bindings/` falls out of `cargo test` and is committed, so CI fails
+if the tests leave it dirty - run the generator or the tests and commit what
+they write. See [docs/ipc-typegen.md](docs/ipc-typegen.md) for the full
+picture, including the one drift shape the gate cannot see.
 
 ### Commit Early, Commit Often
 
@@ -220,6 +166,7 @@ Update `CHANGELOG.md` every time a new version is tagged.
 | [Testing Guide](docs/TESTING.md) | Which tier a test belongs in, and the UI testability requirements |
 | [Testing Recipes](docs/testing-recipes.md) | Commands per tier, Playwright/WebdriverIO/Rust/vitest patterns, mock conventions, troubleshooting |
 | [Linting & Format Policy](docs/linting.md) | Rust clippy/rustfmt CI gates, the anti-AI-slop policy, the per-test-module `#[expect]` idiom, considered-but-deferred lints |
+| [Toolchain](docs/toolchain.md) | The pnpm/node pins: corepack integrity hash, `allowBuilds` build-script approvals, lockfile version policy |
 | [Architecture](docs/architecture.md) | State flow, command pattern, key files, Rust patterns |
 | [Project Structure](docs/project-structure.md) | Directory tree, tech stack |
 | [Configuration](docs/configuration.md) | Config file locations, options, logging |

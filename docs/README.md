@@ -76,6 +76,7 @@ in determines how you write it, and picking wrong is the most common rework.
 
 | Doc | Contents |
 |-----|----------|
+| [toolchain.md](toolchain.md) | The pnpm/node version pins: the corepack integrity hash, `allowBuilds` build-script approvals, and the lockfile version policy. |
 | [macos-build.md](macos-build.md) | The macOS setup and build scripts, and their known issues. |
 | [releasing.md](releasing.md) | Changelog to tag to release: `scripts/release.sh`, the CI workflows, and where version numbers live. |
 | [debugging-macos-pan-zoom.md](debugging-macos-pan-zoom.md) | Postmortem of the macOS UI lockup, and how to re-enable the pan/zoom debug toolkit if it returns. |

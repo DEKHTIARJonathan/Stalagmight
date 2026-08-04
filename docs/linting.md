@@ -12,6 +12,27 @@ CI `check` job and must be green to merge.
 Run `cargo fmt` and `cargo clippy` locally before pushing (they're in the
 [Pre-Push Checklist](../CLAUDE.md)).
 
+## Formatting: rustfmt scope and adoption
+
+`cargo fmt` is the formatter for the **`src-tauri` crate**, enforced in CI: the
+`check` job runs `cargo fmt --manifest-path src-tauri/Cargo.toml --check` and
+fails on any drift. Run `cargo fmt` to fix formatting before pushing; the
+`--check` in the Pre-Push Checklist then passes. Config is
+`src-tauri/rustfmt.toml` - stable rustfmt defaults, only `edition` pinned; do
+**not** add nightly-only keys (they'd diverge local vs CI).
+
+**Scope:** the gate formats only the `stalagmight` package. The separate
+first-party `scripts/lib/slice-rs` helper crate and the vendored,
+locally-patched `src-tauri/vendor/compass_data` path-dependency are **not**
+gated (vendored code is left as-is on purpose) - don't assume `cargo fmt`
+touched them.
+
+The crate was adopted into rustfmt in one mechanical commit (recorded in
+`.git-blame-ignore-revs`, so `git blame` skips it - wire it locally once with
+`git config blame.ignoreRevsFile .git-blame-ignore-revs`). If a `cargo fmt`
+diff ever looks large, that's normal re-wrapping; the gate keeps it from
+drifting again.
+
 ## Why this exists: the rot lesson
 
 The strict policy was added in **Feb 2026 (`17dc4feb`)**, explicitly to
