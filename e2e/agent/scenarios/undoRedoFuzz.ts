@@ -325,6 +325,13 @@ export const undoRedoFuzz: Scenario = {
       const started = Date.now();
       const res = await runStep(ctx, { kind, action, args: actionArgs, cursor, undo0: undoLen });
       ctx.metric('fusedStepMs', Date.now() - started);
+      // Attribution, so the next round of tuning aims at evidence: the store
+      // action's own work, the three read-only IPC calls, the in-page
+      // canonicalization, and (by subtraction from fusedStepMs) the bridge.
+      ctx.metric('actionMs', res.timing.actionMs);
+      ctx.metric('observeMs', res.timing.observeMs);
+      ctx.metric('canonicalMs', res.timing.canonicalMs);
+      ctx.metric('steps');
       return res;
     };
 

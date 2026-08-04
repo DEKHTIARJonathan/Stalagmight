@@ -77,6 +77,15 @@ export interface StepResponse {
   /** `snapshots.length - 1` after the step. */
   top: number;
   digest: TargetingDigest;
+  /**
+   * In-page attribution for the step, in ms. Not diagnostics for their own
+   * sake: they are what says whether the remaining cost is the bridge, the
+   * store action's own work (`flushPlanAnchors` + the IPC command +
+   * `refreshProjectState` + `checkProjectIntegrity`), the three read-only IPC
+   * calls, or the canonicalization - so the next optimization is aimed at
+   * evidence rather than at a guess.
+   */
+  timing: { actionMs: number; observeMs: number; canonicalMs: number };
 }
 
 /** The initial observation, taken before any action. */
@@ -99,14 +108,18 @@ const PREAMBLE = `
 
 /** Read state + both stack lengths, canonicalize, digest. Read-only. */
 const OBSERVE = `
+  const observeStarted = Date.now();
   const project = await core.invoke('get_project_state');
   if (project === null || project === undefined) {
     throw new Error('get_project_state returned null: the project closed mid-run');
   }
   const undoLen = (await core.invoke('get_undo_stack')).length;
   const redoLen = (await core.invoke('get_redo_stack')).length;
+  const observeMs = Date.now() - observeStarted;
+  const canonicalStarted = Date.now();
   const canonical = O.canonical(project);
   const digest = O.digest(project);
+  const canonicalMs = Date.now() - canonicalStarted;
 `;
 
 /** Install the oracle (and reset its model) for this run. */
@@ -144,6 +157,7 @@ export async function runStep(ctx: ScenarioContext, request: StepRequest): Promi
     let actionError = null;
     let commandSuccess = null;
     let commandError = null;
+    const actionStarted = Date.now();
     const action = store.getState()[req.action];
     if (typeof action !== 'function') {
       actionOk = false;
@@ -160,6 +174,7 @@ export async function runStep(ctx: ScenarioContext, request: StepRequest): Promi
         actionError = String(err);
       }
     }
+    const actionMs = Date.now() - actionStarted;
     const accepted = actionOk && commandSuccess !== false;
 
     ${OBSERVE}
@@ -212,6 +227,7 @@ export async function runStep(ctx: ScenarioContext, request: StepRequest): Promi
       cursorAfter: cursorAfter,
       top: O.snapshots.length - 1,
       digest: digest,
+      timing: { actionMs: actionMs, observeMs: observeMs, canonicalMs: canonicalMs },
     };
   `,
     [request],
