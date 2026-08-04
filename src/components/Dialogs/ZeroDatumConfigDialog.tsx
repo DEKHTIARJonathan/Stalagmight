@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { blockedByIncompleteShots, countIncompleteShots } from '../common/incompleteShots';
 import { blankEditableShot } from '../common/editableShot';
 import { isEmittedShot, emittedBefore } from '../common/emittedShots';
+import { reanchorAfterRunDelete, reanchorStation } from '../../utils/stationReanchor';
 import { DialogWrapper } from './DialogWrapper';
 import SectionPreview from './SectionPreview';
 import { Button } from '../common/Button';
@@ -37,9 +38,9 @@ export interface ZeroDatumConfigResult {
   shots: EditableShot[];
 }
 
-/** A blank row for the shot table, shared by the add and the two insert paths.
- *  The shared blank-row contract; `id` stays negative here as this dialog keys
- *  its rows by it. */
+/** A blank row for the shot table - one 'insert' action serves appending and
+ *  inserting alike. The shared blank-row contract; `id` stays negative here as
+ *  this dialog keys its rows by it. */
 function makeNewShot(tempId: number): EditableShot {
   return { ...blankEditableShot(-tempId), tempId };
 }
@@ -62,54 +63,6 @@ const isCounted = isEmittedShot;
  * the two spaces have to be bridged before a pick can be re-anchored.
  */
 const survivorsBefore = emittedBefore;
-
-/**
- * Keep a committed station pick on the same physical station across a shot edit.
- *
- * The pick addresses the POST-EDIT order (a section of `s` surviving shots has
- * stations `0..s`), so adding or removing a survivor renumbers every station
- * beyond it. `editPosition` is the survivor position the edit lands at:
- * deleting the shot there merges stations `editPosition` and `editPosition + 1`,
- * inserting there splits them. Stations at or before it keep their number.
- *
- * Re-anchoring on EDIT is what makes the pick correct in both orderings.
- * Translating on pick instead (the shape this dialog used to have) only moves
- * the breakage from delete-then-pick to pick-then-delete. This map is also
- * total, unlike an `EditableShot.id` lookup, so it can address a station that a
- * leading insert has only just created.
- */
-function reanchorStation(
-  pick: number,
-  editPosition: number,
-  /** Rows added (positive) or removed (negative) at `editPosition`. Was `1 | -1`
-   *  when every edit was a single row; a bulk insert shifts by its whole count,
-   *  and the arithmetic below never cared how big the step was. */
-  delta: number,
-  survivorsAfter: number,
-): number {
-  const shifted = pick > editPosition ? pick + delta : pick;
-  return Math.max(0, Math.min(survivorsAfter, shifted));
-}
-
-/**
- * A pick that sat INSIDE a removed run collapses to the run's start - the
- * boundary the deleted span closed up to, and the station that still physically
- * exists where the pick was.
- *
- * {@link reanchorStation} alone applies the whole run's delta to any pick past
- * the run's first station, which for a pick inside the run subtracts more
- * stations than precede it: deleting stations 2..7 with 5 picked gave 5 - 6,
- * clamped to 0, sending the GPS anchor to the head of the section.
- */
-function reanchorAfterRunDelete(
-  pick: number,
-  runStart: number,
-  countedGone: number,
-  survivorsAfter: number,
-): number {
-  if (pick > runStart && pick <= runStart + countedGone) return runStart;
-  return reanchorStation(pick, runStart, -countedGone, survivorsAfter);
-}
 
 /**
  * The shot rows and the station pick, as ONE state.
@@ -404,16 +357,6 @@ export default function ZeroDatumConfigDialog({
     []
   );
 
-  const handleInsertBefore = useCallback(
-    (index: number) => dispatch({ type: 'insert', at: index, count: 1 }),
-    []
-  );
-
-  const handleInsertAfter = useCallback(
-    (index: number) => dispatch({ type: 'insert', at: index + 1, count: 1 }),
-    []
-  );
-
   /** Soft-delete every selected index in ONE action, so the pick is judged
    *  against the whole run. The answer the grid needs is synchronous (a `false`
    *  leaves its selection alone), so whether anything is left to delete is read
@@ -612,8 +555,6 @@ export default function ZeroDatumConfigDialog({
                 onInsertShots={handleInsertShots}
                 onDeleteShot={handleDeleteShot}
                 onDeleteShots={handleDeleteShots}
-                onInsertBefore={handleInsertBefore}
-                onInsertAfter={handleInsertAfter}
                 expanded={expanded}
                 onToggleExpand={() => setExpanded((v) => !v)}
               />

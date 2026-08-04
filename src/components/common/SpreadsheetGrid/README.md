@@ -30,22 +30,21 @@ It backs the survey data table (`DataTable.tsx`) and the raw table view
   auto-series, deliberate for survey data).
 - **Delete/Backspace** clears the selection (never writes 0 into a required
   numeric column).
-- **Column hiding** (controlled `hiddenColumns`) and **reordering** (controlled
-  `columnOrder`, header drag).
-- **Full-screen / maximized** mode (controlled `maximized` + `onToggleMaximize`).
+- **Column hiding** (controlled `hiddenColumns`, read-only to the grid - hosts
+  own the Columns menu) and **reordering** (controlled `columnOrder`, header
+  drag).
 - **Host sync props**: `selectedRow` (moves the active cell to an externally
   selected row, e.g. from the map; never loops back through
   `onActiveCellChange`), `hoveredRow` (tints a row with `sg-row-hover`),
-  `rowClassName(row, i)` (extra per-row class, e.g. a frozen-row tint),
-  `scrollToRow`, and `onRowHover`. The active row carries `data-active="true"`.
+  `rowClassName(row, i)` (extra per-row class, e.g. a frozen-row tint), and
+  `onRowHover`. The active row carries `data-active="true"`.
 - **Gutter customization**: `rowLabel(row, i)` renders a custom gutter label
   (e.g. a domain-id pill) instead of the 1-based row number; pair with
   `gutterWidth` when the label needs more than the default 48px. The gutter
   participates in row hover/selection like any cell.
-- **Chrome embedding**: `showToolbar={false}` drops the built-in toolbar row
-  (name box / Columns / Maximize) for hosts that fold the grid into their own
-  header; subscribe to `onSelectionChange` (selection dims + active cell) to
-  render the name-box indicator there instead.
+- **Chrome embedding**: the grid renders no chrome of its own - every host folds
+  it into its own header. Subscribe to `onSelectionChange` (selection dims +
+  active cell) to render a name-box indicator there.
 
 All edits are **coerced** (locale-aware) and emitted via callbacks; the grid never
 mutates your data. Multi-cell paste/fill/clear go through `onBatchEdit` so the

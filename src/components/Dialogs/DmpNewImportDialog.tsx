@@ -1683,16 +1683,6 @@ export default function DmpNewImportDialog({
     return true;
   }, [applyShotEdit, currentShots, frozenShotIndices, refuseFrozenDelete]);
 
-  const handleInsertBefore = useCallback(
-    (index: number) => handleInsertShots(index, 1, 'before'),
-    [handleInsertShots]
-  );
-
-  const handleInsertAfter = useCallback(
-    (index: number) => handleInsertShots(index, 1, 'after'),
-    [handleInsertShots]
-  );
-
   // Persist overlap mode to config on change
   const handleOverlapModeChange = useCallback((value: OverlapMode) => {
     setOverlapMode(value);
@@ -3371,8 +3361,6 @@ export default function DmpNewImportDialog({
                   onInsertShots={handleInsertShots}
                   onDeleteShot={handleDeleteShot}
                   onDeleteShots={handleDeleteShots}
-                  onInsertBefore={handleInsertBefore}
-                  onInsertAfter={handleInsertAfter}
                   frozenShotIndices={frozenShotIndices}
                 />
               ) : null
@@ -3613,8 +3601,6 @@ export default function DmpNewImportDialog({
                   onInsertShots={handleInsertShots}
                   onDeleteShot={handleDeleteShot}
                   onDeleteShots={handleDeleteShots}
-                  onInsertBefore={handleInsertBefore}
-                  onInsertAfter={handleInsertAfter}
                   frozenShotIndices={frozenShotIndices}
                 />
               ) : null

@@ -344,70 +344,6 @@ export default function EditSectionDialog() {
     });
   }, [pendingMidDelete, sectionId, section, openDialog]);
 
-  const handleInsertBefore = useCallback((index: number) => {
-    const newShot: EditableShot = {
-      id: nextTempId,
-      tempId: nextTempId,
-      // Empty, not invented. A new row materializes from the trailing blank on
-      // the first keystroke, and prefilling the rest with a plausible-looking
-      // length of 1 and an azimuth of 0/180 put numbers into the survey that
-      // nobody measured. Non-finite renders blank in the grid and reads as
-      // missing to the validation that gates Save.
-      azimuth_in: NaN,
-      azimuth_out: NaN,
-      length: NaN,
-      depth_in: NaN,
-      depth_out: NaN,
-      pitch_in: null,
-      pitch_out: null,
-      left: null,
-      right: null,
-      up: null,
-      down: null,
-      comment: null,
-      kind: 'Normal' as const,
-      isNew: true,
-    };
-    setShots(prev => {
-      const updated = [...prev];
-      updated.splice(index, 0, newShot);
-      return updated;
-    });
-    setNextTempId(prev => prev - 1);
-  }, [nextTempId]);
-
-  const handleInsertAfter = useCallback((index: number) => {
-    const newShot: EditableShot = {
-      id: nextTempId,
-      tempId: nextTempId,
-      // Empty, not invented. A new row materializes from the trailing blank on
-      // the first keystroke, and prefilling the rest with a plausible-looking
-      // length of 1 and an azimuth of 0/180 put numbers into the survey that
-      // nobody measured. Non-finite renders blank in the grid and reads as
-      // missing to the validation that gates Save.
-      azimuth_in: NaN,
-      azimuth_out: NaN,
-      length: NaN,
-      depth_in: NaN,
-      depth_out: NaN,
-      pitch_in: null,
-      pitch_out: null,
-      left: null,
-      right: null,
-      up: null,
-      down: null,
-      comment: null,
-      kind: 'Normal' as const,
-      isNew: true,
-    };
-    setShots(prev => {
-      const updated = [...prev];
-      updated.splice(index + 1, 0, newShot);
-      return updated;
-    });
-    setNextTempId(prev => prev - 1);
-  }, [nextTempId]);
-
   const handleSave = async () => {
     if (sectionId === undefined) return;
 
@@ -595,8 +531,6 @@ export default function EditSectionDialog() {
             onDeleteShot={handleDeleteShot}
             onDeleteShots={handleDeleteShots}
             readOnly={editingBlocked}
-            onInsertBefore={handleInsertBefore}
-            onInsertAfter={handleInsertAfter}
             validationConfig={validationConfig}
             selectedRowIndex={selectedRowIndex}
             onRowSelect={(rowIndex) => {

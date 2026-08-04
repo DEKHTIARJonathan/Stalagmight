@@ -9,8 +9,8 @@ import type { ReactNode } from 'react';
  * The grid is **controlled**: it renders the `rows` you pass and emits edits via
  * callbacks. It never mutates your data. Selection/active-cell/edit-mode are
  * owned internally (transient, high-frequency state); persisted concerns
- * (hidden/ordered columns, maximized) are lifted to props so the host can store
- * them.
+ * (hidden/ordered columns, column widths) are lifted to props so the host can
+ * store them.
  *
  * Survey-specific behaviour (frozen rows, computed columns, azimuth deltas,
  * locale parsing) plugs in through `GridColumn` predicates and `parse`, so the

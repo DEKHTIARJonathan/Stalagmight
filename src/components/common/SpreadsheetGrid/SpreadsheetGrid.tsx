@@ -28,7 +28,6 @@ import {
   AUTOFIT_MAX_COL_WIDTH,
 } from './useColumnWidths';
 import { DEFAULT_GRID_LABELS, type GridLabels } from './gridLabels';
-import { GridToolbar } from './GridToolbar';
 import { GridContextMenu } from './GridContextMenu';
 import { GridHeaderRow } from './GridHeaderRow';
 import { activateCellIn, directTypedValue } from './gridActivate';
@@ -92,13 +91,14 @@ export interface SpreadsheetGridProps<Row> {
   height?: number;
 
   /** Column keys hidden from view (controlled). `id`-style columns can be kept
-   *  always-on by the host simply by never hiding them. */
+   *  always-on by the host simply by never hiding them. The grid never writes
+   *  this back: hiding is offered by host chrome (a Columns menu next to the
+   *  table), so the host is the only thing that changes it. */
   hiddenColumns?: string[];
   /** Visible column order as a list of keys (controlled). Unknown/missing keys
    *  fall back to declaration order. */
   columnOrder?: string[];
   onColumnOrderChange?: (order: string[]) => void;
-  onHiddenColumnsChange?: (hidden: string[]) => void;
   /** Manual column-width overrides in px, keyed by column key. A missing key
    *  means "no override", so the column keeps its declared `width`. Seeds the
    *  grid; live resizing is tracked internally for responsiveness. */
@@ -147,9 +147,6 @@ export interface SpreadsheetGridProps<Row> {
   /** Fired with the row index under the pointer (null on leave) - for host-level
    *  hover effects (e.g. highlighting the corresponding map feature). */
   onRowHover?: (rowIndex: number | null) => void;
-  /** When set, scroll this data-row index into view (e.g. an external selection
-   *  from the map). Re-scrolls whenever the value changes. */
-  scrollToRow?: number | null;
   /** External row selection: when this CHANGES to an in-range row index, the
    *  grid moves its selection/active cell to that row (keeping the active
    *  column). Internal navigation never writes back through this prop, so it
@@ -168,22 +165,18 @@ export interface SpreadsheetGridProps<Row> {
   /** Gutter width in px (default 48) - widen when rowLabel renders something
    *  larger than a plain row number. */
   gutterWidth?: number;
-  /** Render the built-in toolbar row (name box, Columns, Maximize). Default
-   *  true; hosts that fold the grid into their own chrome turn it off and
-   *  track {@link onSelectionChange} instead. */
-  showToolbar?: boolean;
   /** Namespace for EVERY test ID the grid emits: cells (`<prefix>-cell-2-len`),
-   *  headers, the editor, the context menu and the toolbar. Defaults to `grid`,
-   *  which is what the existing selectors already say. A second grid mounted
-   *  alongside the first must override it, or both answer to the same selectors
-   *  and any query for one of them is ambiguous. */
+   *  headers, the editor and the context menu. Defaults to `grid`, which is what
+   *  the existing selectors already say. A second grid mounted alongside the
+   *  first must override it, or both answer to the same selectors and any query
+   *  for one of them is ambiguous. */
   testIdPrefix?: string;
   /** Right-click on a column header - let the host show its own menu (hide
    *  column, switch column families, ...). The grid only prevents the native
    *  menu when this is set. */
   onHeaderContextMenu?: (colKey: string, pos: { x: number; y: number }) => void;
-  /** Chrome strings (context menu, shortcut hints, toolbar buttons, editor
-   *  aria-label) - partial, merged over the English {@link DEFAULT_GRID_LABELS}.
+  /** Chrome strings (context menu, shortcut hints, editor aria-label) - partial,
+   *  merged over the English {@link DEFAULT_GRID_LABELS}.
    *  The grid stays i18next-free; hosts pass `t()`-backed labels (including a
    *  domain `rowNoun` so menus say "Delete shot", "Copy 3 shots"). */
   labels?: Partial<GridLabels>;
@@ -194,9 +187,6 @@ export interface SpreadsheetGridProps<Row> {
    *  (e.g. "Remove draft row"). Called with the selection's row range when the
    *  menu opens; return [] to add nothing for that selection. */
   extraContextMenuItems?: (sel: { fromRow: number; toRow: number }) => { label: string; onClick: () => void }[];
-
-  maximized?: boolean;
-  onToggleMaximize?: () => void;
 
   className?: string;
   /** Notified when the user moves the focus (active cell) - wire to app
@@ -237,7 +227,6 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
     hiddenColumns,
     columnOrder,
     onColumnOrderChange,
-    onHiddenColumnsChange,
     columnWidths,
     onColumnWidthsChange,
     onMoveRows,
@@ -246,20 +235,17 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
     onDeleteRows,
     onPasteReport,
     onRowHover,
-    scrollToRow,
     selectedRow,
     hoveredRow,
     rowClassName,
     cellClassName,
     rowLabel,
     gutterWidth = GUTTER_WIDTH,
-    showToolbar = true, testIdPrefix = 'grid',
+    testIdPrefix = 'grid',
     labels: labelOverrides,
     onHeaderContextMenu,
     onSelectionChange,
     extraContextMenuItems,
-    maximized = false,
-    onToggleMaximize,
     className = '',
     onActiveCellChange,
   } = props;
@@ -1921,17 +1907,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
     };
   }, [ctxMenu]);
 
-  // --- Column hide / reorder ------------------------------------------------
-  const [menuOpen, setMenuOpen] = useState(false);
-  const toggleHidden = useCallback(
-    (key: string) => {
-      const cur = new Set(hiddenColumns ?? []);
-      if (cur.has(key)) cur.delete(key);
-      else cur.add(key);
-      onHiddenColumnsChange?.([...cur]);
-    },
-    [hiddenColumns, onHiddenColumnsChange],
-  );
+  // --- Column reorder --------------------------------------------------------
   // Move the selected column block [fromC0..fromC1] to insertion index `dropIdx`
   // (a boundary index among visible columns), preserving each hidden column's
   // slot in the full order and keeping the moved block selected.
@@ -1959,13 +1935,6 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
     },
     [colKeys, orderedKeys, onColumnOrderChange, rowCount],
   );
-
-  // Scroll an externally-requested row into view (e.g. a map selection).
-  useEffect(() => {
-    if (scrollToRow != null && scrollToRow >= 0 && scrollToRow < rowCount) {
-      virtualizer.scrollToIndex(scrollToRow, { align: 'auto' });
-    }
-  }, [scrollToRow, rowCount, virtualizer]);
 
   // External row selection: react only when the prop CHANGES (prev ref), so the
   // grid's own navigation isn't fought; deliberately does NOT fire
@@ -2018,11 +1987,6 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
   // Host entries for the selection the menu opened on (only while it's open).
   const ctxExtraItems = (ctxMenu && extraContextMenuItems?.({ fromRow: rect.r0, toRow: rect.r1 })) || [];
 
-  // Name box: active-cell reference, or selection size while a range is selected.
-  const nameBox = multiCell
-    ? `${rect.r1 - rect.r0 + 1}R × ${rect.c1 - rect.c0 + 1}C`
-    : `${columns.find((c) => c.key === selection.active.colKey)?.header ?? selection.active.colKey} ${selection.active.row + 1}`;
-
   const overlayStyle: CSSProperties = {
     position: 'absolute',
     // The overlay lives INSIDE the rows-area (which starts below the sticky
@@ -2048,36 +2012,20 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
 
   return (
     <div
-      className={`sg-grid relative flex flex-col ${grabbing ? 'sg-grabbing' : ''} ${maximized ? 'fixed inset-0 z-50 bg-panel' : ''} ${className}`}
+      className={`sg-grid relative flex flex-col ${grabbing ? 'sg-grabbing' : ''} ${className}`}
       data-testid="spreadsheet-grid"
       // The root marker stays unprefixed ("a grid is here"), since callers scope
       // their lookups inside a panel rather than by grid identity. This makes it
       // addressable anyway, for a caller that has two mounted at once.
       data-grid-id={testIdPrefix}
     >
-      {showToolbar && (
-        <GridToolbar
-          columns={columns}
-          hiddenColumns={hiddenColumns ?? []}
-          labels={labels}
-          nameBox={nameBox}
-          testIdPrefix={testIdPrefix}
-          menuOpen={menuOpen}
-          setMenuOpen={setMenuOpen}
-          onToggleHidden={toggleHidden}
-          {...(onHiddenColumnsChange ? { onHiddenColumnsChange } : {})}
-          maximized={maximized}
-          {...(onToggleMaximize ? { onToggleMaximize } : {})}
-        />
-      )}
-
       <div
         ref={scrollRef}
-        className="relative overflow-auto outline-none flex-1"
-        // flex-1 fills the viewport when maximized; otherwise it must NOT apply
-        // (flex-basis 0 beats the explicit height when the host gives the grid
-        // an indefinite height, which silently disables row virtualization).
-        style={maximized ? undefined : { height, flex: '0 0 auto' }}
+        className="relative overflow-auto outline-none"
+        // The explicit height must win: `flex-basis: 0` beats it when the host
+        // gives the grid an indefinite height, which silently disables row
+        // virtualization.
+        style={{ height, flex: '0 0 auto' }}
         tabIndex={0}
         onKeyDown={onKeyDown}
         onPaste={(e) => {

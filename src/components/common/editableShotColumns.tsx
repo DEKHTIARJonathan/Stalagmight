@@ -15,7 +15,7 @@ import type { TFunction } from 'i18next';
 import type { GridColumn } from './SpreadsheetGrid/types';
 import { AlertCircleIcon, AlertTriangleIcon, LockIcon } from './icons';
 import { formatFixed } from '../../i18n/format';
-import { circularMeanDegrees } from '../../utils/angles';
+import { meanOrLoneLeg } from '../../utils/angles';
 import {
   SHOT_KIND_CLASS,
   SHOT_KIND_LABEL_KEY,
@@ -32,22 +32,6 @@ export const EDITABLE_AZIMUTH_AVG_KEY = '_azimuth_avg';
  *  it, and both grids now route their averaged edits through that one function. */
 export const EDITABLE_PITCH_AVG_KEY = '_pitch_avg';
 
-/**
- * The displayed azimuth average. With both legs measured it is their circular
- * mean; with exactly one, that reading IS the mean - `circularMeanDegrees`
- * returns NaN against a NaN leg, which rendered a real, saveable bearing as an
- * empty cell. NaN only when neither leg was measured, where blank is right.
- *
- * The pitch average expresses the same rule inline: its legs are nullable, so
- * `a ?? b` says it directly, while azimuth legs use NaN as the unset sentinel.
- */
-function meanOrLoneLeg(a: number, b: number): number {
-  const aOk = Number.isFinite(a);
-  const bOk = Number.isFinite(b);
-  if (aOk && bOk) return circularMeanDegrees(a, b);
-  if (aOk) return a;
-  return bOk ? b : NaN;
-}
 /** Virtual column key for the per-row warning indicator. */
 export const EDITABLE_WARNINGS_KEY = '_warnings';
 

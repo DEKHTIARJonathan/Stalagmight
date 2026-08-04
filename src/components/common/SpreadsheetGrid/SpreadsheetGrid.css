@@ -343,30 +343,6 @@
   background: var(--cc-border);
 }
 
-/* Column show/hide dropdown. */
-.sg-grid .sg-colmenu {
-  background: var(--cc-panel);
-  color: var(--cc-text-primary);
-  border-color: var(--cc-border);
-}
-.sg-grid .sg-colmenu label:hover {
-  background-color: var(--cc-hover);
-}
-
-/* Toolbar buttons (Columns / Maximize). */
-.sg-grid .sg-toolbar button:hover {
-  background-color: var(--cc-hover);
-}
-
-/* Name box: active-cell reference / selection size (top-left, like GS). */
-.sg-grid .sg-namebox {
-  min-width: 96px;
-  padding-left: 4px;
-  font-size: 12px;
-  color: var(--sg-header-text);
-  white-space: nowrap;
-}
-
 /* Stronger tint on the ACTIVE cell's header / row-number than the rest of a
    range selection (Google-Sheets cross-highlight emphasis). */
 .sg-grid .sg-header-active {

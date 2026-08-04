@@ -1,5 +1,5 @@
 /**
- * User-facing chrome strings for SpreadsheetGrid (context menu, toolbar,
+ * User-facing chrome strings for SpreadsheetGrid (context menu, shortcut hints,
  * editor aria-label). The grid itself stays i18next-free: hosts localize by
  * passing a (partial) `labels` prop backed by their own `t()`; anything not
  * provided falls back to these English defaults.
@@ -21,10 +21,6 @@ export interface GridLabels {
    *  "Copy 3 shots"). */
   rowNoun: (count: number) => string;
   columnNoun: (count: number) => string;
-  /** Built-in toolbar buttons. */
-  columnsButton: string;
-  maximize: string;
-  restore: string;
   /** Cell-editor textarea aria-label ("Edit Length row 3"; 1-based row). */
   editCellAria: (columnHeader: string, rowNumber: number) => string;
   /** Shortcut hints rendered beside the context-menu entries. */
@@ -46,9 +42,6 @@ export const DEFAULT_GRID_LABELS: GridLabels = {
   deleteRows: (rowsLabel) => `Delete ${rowsLabel}`,
   rowNoun: (count) => (count === 1 ? 'row' : 'rows'),
   columnNoun: (count) => (count === 1 ? 'column' : 'columns'),
-  columnsButton: 'Columns',
-  maximize: 'Maximize',
-  restore: 'Restore',
   editCellAria: (columnHeader, rowNumber) => `Edit ${columnHeader} row ${rowNumber}`,
   shortcutCopy: 'Ctrl+C',
   shortcutCut: 'Ctrl+X',

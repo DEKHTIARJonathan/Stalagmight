@@ -169,7 +169,7 @@ describe('ZeroDatumConfigDialog per-cell fan-out', () => {
   it('shifts the pick once for a row filled five cells at a time', () => {
     renderDialog();
     pickStation(PICK);
-    act(() => editor().onInsertBefore?.(0));
+    act(() => editor().onInsertShots?.(0, 1, 'before'));
     writeRows([0], FILLED);
     // One row joined the payload upstream of the pick, so the pick's physical
     // station is now numbered one higher. Five cells used to mean five shifts.
@@ -179,7 +179,7 @@ describe('ZeroDatumConfigDialog per-cell fan-out', () => {
   it('gives the station back when the row is cleared in one event', () => {
     renderDialog();
     pickStation(PICK);
-    act(() => editor().onInsertBefore?.(0));
+    act(() => editor().onInsertShots?.(0, 1, 'before'));
     writeRows([0], FILLED);
     writeRows([0], CLEARED);
     // In and back out: the row is absent from the payload again, so the pick is

@@ -81,7 +81,8 @@ export interface ShotTableEditorProps {
   /** Insert `count` blank shots at a full-array index, in ONE update. Same reason
    *  as {@link onAddShots}: called N times in one event, a host that rebuilds from
    *  a captured array or a captured temp id loses rows or duplicates identities.
-   *  Falls back to N calls of the single-row insert callbacks when absent. */
+   *  It is how a host services an insert at all - without it only the empty-table
+   *  case, which is an append, has anywhere to go. */
   onInsertShots?: (index: number, count: number, position: 'before' | 'after') => void;
   /** Callback to delete a shot at the given index */
   onDeleteShot: (index: number) => void;
@@ -91,10 +92,6 @@ export interface ShotTableEditorProps {
    *  treat the others as still present. Falls back to a loop over
    *  {@link onDeleteShot} when absent. */
   onDeleteShots?: (indices: number[]) => boolean | void;
-  /** Optional callback to insert a shot before the given index */
-  onInsertBefore?: (index: number) => void;
-  /** Optional callback to insert a shot after the given index */
-  onInsertAfter?: (index: number) => void;
   /** Validation configuration for warnings */
   validationConfig?: ValidationConfig;
   /** Whether the table is read-only */
@@ -234,8 +231,6 @@ export function ShotTableEditor({
   onInsertShots,
   onDeleteShot,
   onDeleteShots,
-  onInsertBefore,
-  onInsertAfter,
   validationConfig,
   readOnly = false,
   maxHeight,
@@ -620,30 +615,23 @@ export function ShotTableEditor({
       // so the label was a promise the table did not keep; the data table and
       // the new-section dialog have always honoured it.
       const n = Math.max(1, count);
-      const atEnd = beforeIndex >= visibleShots.length;
       const last = visibleShots.length - 1;
-      if (onInsertShots) {
-        if (atEnd && last < 0) {
-          // `onAddShots?.(n) ?? onAddShot()` ran BOTH: a void return is
-          // `undefined`, which `??` reads as "nothing happened", so an empty
-          // table got n + 1 rows. Branch on whether the callback exists.
-          if (onAddShots) onAddShots(n);
-          else for (let i = 0; i < n; i++) onAddShot();
-        }
-        else if (atEnd) onInsertShots(actualIndex(last), n, 'after');
-        else onInsertShots(actualIndex(beforeIndex), n, 'before');
+      // An empty table has no row to insert relative to, so the only thing an
+      // insert can mean there is an append. `onAddShots?.(n) ?? onAddShot()` ran
+      // BOTH: a void return is `undefined`, which `??` reads as "nothing
+      // happened", so an empty table got n + 1 rows. Branch on existence.
+      if (last < 0) {
+        if (onAddShots) onAddShots(n);
+        else for (let i = 0; i < n; i++) onAddShot();
         return;
       }
-      for (let i = 0; i < n; i++) {
-        if (atEnd) {
-          if (last >= 0 && onInsertAfter) onInsertAfter(actualIndex(last));
-          else onAddShot();
-          continue;
-        }
-        onInsertBefore?.(actualIndex(beforeIndex));
-      }
+      // Every host that services inserts hands over the batch callback - there
+      // is no per-row path left to spend the request on.
+      if (!onInsertShots) return;
+      if (beforeIndex > last) onInsertShots(actualIndex(last), n, 'after');
+      else onInsertShots(actualIndex(beforeIndex), n, 'before');
     },
-    [readOnly, visibleShots.length, onInsertAfter, onInsertBefore, onAddShot, onAddShots, onInsertShots, actualIndex]
+    [readOnly, visibleShots.length, onAddShot, onAddShots, onInsertShots, actualIndex]
   );
 
   // Delete high-to-low so each removal cannot shift the indices still to come.
@@ -819,13 +807,11 @@ export function ShotTableEditor({
           rowClassName={rowClassName}
           cellClassName={cellClassName}
           labels={gridLabels}
-          showToolbar={false}
           selectedRow={selectedVisibleRow}
           onActiveCellChange={onActiveCellChange}
           hiddenColumns={hiddenColumnList}
           columnOrder={columnOrder}
           onColumnOrderChange={setColumnOrder}
-          onHiddenColumnsChange={(hidden) => setHiddenColumns(new Set(hidden))}
           columnWidths={columnWidths}
           onColumnWidthsChange={setColumnWidths}
           onPasteReport={onPasteReport}
