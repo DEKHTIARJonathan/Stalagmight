@@ -287,6 +287,68 @@ export const LOOP_CLOSURE_REORDER: KnownAsymmetry = {
     'resolve_offsets traverses - so this is a real, if quiet, non-inverse.',
 };
 
+/**
+ * FINDING 11, narrowly. A `ProjectSnapshotPair` captured BEFORE a save holds the
+ * PRE-HEAL project in both halves and neither is refreshed, so undoing or
+ * redoing that entry silently reverts the save's undo-less heals
+ * (`capture_missing_gauge_anchors`, `core/state/project_io.rs`). Tracked at
+ * <https://github.com/Stalagmight/Stalagmight/issues/413> and pinned red by
+ * `undo_of_a_pre_save_entry_keeps_the_saves_gauge_anchors`
+ * (src-tauri/src/core/state/open_undo_bugs_tests.rs).
+ *
+ * Used ONLY by `undo-persistence-fuzz`, where the shape fires by construction on
+ * every iteration (the run saves with a stack of pre-save entries below it and
+ * then walks all of them). It is deliberately NOT added to
+ * `KNOWN_UNDO_ASYMMETRIES`: `undo-redo-fuzz` reaches finding 11 by luck rather
+ * than by construction, and quietly making it tolerable there would change a
+ * documented repro.
+ *
+ * Value-narrowed to value -> null, i.e. the anchors being LOST. A gauge anchor
+ * changing from one value to a DIFFERENT one is not this bug and still fails.
+ *
+ * NOTE the overlap with `create-section-redo-drops-gauge-anchors`: the two are
+ * indistinguishable by path and value, and are told apart by WHICH entry the
+ * history move consumed (a `create_section` entry means bug 1). The caller picks
+ * the order accordingly.
+ */
+export const PRE_SAVE_SNAPSHOT_HEAL_REVERT: KnownAsymmetry = {
+  id: 'pre-save-snapshot-undo-reverts-save-heals',
+  pathPattern: /^project\.sections\[\d+\]\.gauge_(shot|neighbour)_uuid$/,
+  accepts: (diff) => diff.expected !== 'null' && diff.expected !== ABSENT && diff.actual === 'null',
+  description:
+    'Finding 11: a ProjectSnapshotPair recorded BEFORE a save holds the pre-heal project in ' +
+    'BOTH halves, so undoing or redoing it reverts the save-time gauge-anchor capture ' +
+    '(capture_missing_gauge_anchors, core/state/project_io.rs). The damage is not the lost ' +
+    'anchors (the next save re-captures them) but that the project at a given undo DEPTH now ' +
+    'depends on the ROUTE taken to reach it. Narrowed to value -> null: an anchor changing to a ' +
+    'DIFFERENT value is a separate, unclassified failure.',
+};
+
+/**
+ * True when two snapshots disagree about WHICH shots exist rather than how many:
+ * every section with a delta holds the same number of shots as expected, but
+ * some of them are different shots.
+ *
+ * This is bug 8's signature - "after a save/reload an undo deletes the WRONG
+ * shot" - and it is a classification tool, never a comparison one: the snapshots
+ * are still unequal. `undo-persistence-fuzz` uses it to walk PAST a known bug-8
+ * instance in tolerant mode, because bug 8 fires early on the unwind and would
+ * otherwise mask the sibling defects that scenario exists to find.
+ *
+ * Deliberately strict about the shape. A section that GAINED or LOST shots, a
+ * one-sided disappearance, and any difference that leaves the uuid sets equal
+ * all return false, so the only thing this can absorb is an even identity swap.
+ */
+export function isShotIdentitySwap(deltas: readonly ShotSetDelta[]): boolean {
+  if (deltas.length === 0) return false;
+  return deltas.every(
+    (delta) =>
+      delta.expectedCount === delta.actualCount &&
+      delta.missing.length > 0 &&
+      delta.missing.length === delta.extra.length,
+  );
+}
+
 /** Path segments to a list value inside a snapshot. */
 export type ListPath = readonly string[];
 
