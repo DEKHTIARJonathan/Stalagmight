@@ -32,7 +32,7 @@ use super::AppState;
 use crate::core::Command;
 use crate::models::{
     ClosureStrategy, Coordinates, GpsCoordinates, SectionId, SectionUpdates, ShotData, ShotId,
-    ShotUpdates, StationRef,
+    ShotKind, ShotUpdates, StationRef,
 };
 
 /// A shot with distinct, easily-recognised geometry.
@@ -846,5 +846,303 @@ fn undo_of_a_pre_save_entry_keeps_the_saves_gauge_anchors() {
         "undoing a command recorded BEFORE the save reverted the save's gauge capture: the \
          snapshot pair holds the pre-heal project in both halves, so the heal is lost and the \
          project at this depth now depends on the route taken to reach it"
+    );
+}
+
+/// The kind of every shot in `section_id`, in order.
+fn shot_kinds(state: &AppState, section_id: SectionId) -> Vec<ShotKind> {
+    let project = state.get_project_state().expect("no project open");
+    project
+        .sections
+        .iter()
+        .find(|section| section.id == section_id)
+        .expect("section missing")
+        .shots
+        .iter()
+        .map(|s| s.kind)
+        .collect()
+}
+
+/// The length of every shot in `section_id`, in order.
+fn shot_lengths(state: &AppState, section_id: SectionId) -> Vec<f64> {
+    let project = state.get_project_state().expect("no project open");
+    project
+        .sections
+        .iter()
+        .find(|section| section.id == section_id)
+        .expect("section missing")
+        .shots
+        .iter()
+        .map(|s| s.length)
+        .collect()
+}
+
+/// Build a section whose shot ids no longer match positional order, save it, and
+/// return the path plus the section id.
+///
+/// Three shots and one insert-BEFORE: the new shot takes position 0 while its id
+/// comes from the allocator, so after the save the loader's
+/// `section_id * FEATURE_ID_STRIDE + sequence_order` renumbering moves every id
+/// by one slot. No shot is DELETED, so the ids the allocator handed out are
+/// exactly the ids the loader renumbers into - which is what makes a stale id
+/// COLLIDE with a live shot rather than miss it (the miss case is its own test
+/// below).
+fn diverged_section(state: &AppState) -> SectionId {
+    let section_id = create_section(
+        state,
+        "Diverged",
+        vec![shot(0.0, 5.0), shot(90.0, 6.0), shot(180.0, 7.0)],
+    );
+    let first = shot_ids(state, section_id)[0];
+    let created = state.execute(Command::CreateShot {
+        section_id,
+        shot: shot(270.0, 8.0),
+        after_shot_id: None,
+        before_shot_id: Some(first),
+    });
+    assert!(created.success, "CreateShot failed: {:?}", created.error);
+    let ids = shot_ids(state, section_id);
+    assert_ne!(
+        ids,
+        (0..ids.len())
+            .map(|i| section_id * crate::models::FEATURE_ID_STRIDE + i as u32)
+            .collect::<Vec<_>>(),
+        "setup: the ids must no longer match positional order, or the reload changes nothing"
+    );
+    section_id
+}
+
+// ===========================================================================
+// Finding 12: bug 8's mechanism is NOT confined to CreateShot - after a
+// save/reload, undo of SetShotKind or UpdateShot writes to the WRONG SHOT
+// ===========================================================================
+
+/// `UndoData::InverseCommand(Command::SetShotKind { shot_id, .. })` names the
+/// shot by its IN-SESSION id (`undo_capture.rs`), and undo executes that command
+/// verbatim (`execute_without_undo`, core/state/undo.rs). The loader renumbers
+/// shots to `section_id * FEATURE_ID_STRIDE + sequence_order`
+/// (persistence/sqlite/read.rs) and nothing remaps the persisted entries, so
+/// after a reopen the id addresses whichever shot now occupies that slot.
+///
+/// Quieter than bug 8 and just as wrong: no shot is lost, no uuid changes and no
+/// count moves. One shot silently keeps an edit the undo was supposed to take
+/// away, and another silently gains one it never had.
+///
+/// Found by `undo-persistence-fuzz` (e2e/agent/scenarios/undoPersistenceFuzz.ts).
+#[test]
+#[ignore = "open finding 12: after save/reload, undo of SetShotKind hits the wrong shot - see e2e/agent/scenarios/undoPersistenceFuzz.ts header"]
+fn undo_of_set_shot_kind_after_reload_hits_the_shot_it_changed() {
+    let temp = TempDir::new().unwrap();
+    let save_path: PathBuf = temp.path().join("wrong-shot-kind.stalx");
+
+    let marked_uuid;
+    let section_id;
+    {
+        let state = state_with_project();
+        section_id = diverged_section(&state);
+
+        // Mark the shot at POSITION 0, whose id is the highest the allocator
+        // handed out - so the renumbering will move it to the lowest.
+        let target = shot_ids(&state, section_id)[0];
+        marked_uuid = shot_uuids(&state, section_id)[0]
+            .clone()
+            .expect("shot has no uuid");
+        let marked = state.execute(Command::SetShotKind {
+            section_id,
+            shot_id: target,
+            kind: ShotKind::Jump,
+        });
+        assert!(marked.success, "SetShotKind failed: {:?}", marked.error);
+        assert_eq!(
+            shot_kinds(&state, section_id)[0],
+            ShotKind::Jump,
+            "setup: the forward command should have marked position 0"
+        );
+
+        let saved = state.save_project(Some(save_path.clone()));
+        assert!(saved.success, "save failed: {:?}", saved.error);
+    }
+
+    let reopened = AppState::new().unwrap();
+    let opened = reopened.execute(Command::OpenProject { path: save_path });
+    assert!(opened.success, "reopen failed: {:?}", opened.error);
+
+    let undone = reopened.undo();
+    assert!(
+        undone.success,
+        "undo after reopen failed: {:?}",
+        undone.error
+    );
+
+    let project = reopened.get_project_state().expect("no project after undo");
+    let section = project
+        .sections
+        .iter()
+        .find(|s| s.id == section_id)
+        .expect("section missing");
+    let marked = section
+        .shots
+        .iter()
+        .find(|s| s.uuid.as_deref() == Some(marked_uuid.as_str()))
+        .expect("the marked shot vanished");
+    assert_eq!(
+        marked.kind,
+        ShotKind::Normal,
+        "undo of SetShotKind left the shot it changed as {:?} and reset a DIFFERENT shot instead: \
+         kinds are now {:?} (the entry named the in-session shot id, which the loaders \
+         renumbering has since reassigned)",
+        marked.kind,
+        shot_kinds(&reopened, section_id)
+    );
+}
+
+/// The same defect through `UndoData::PreviousValues { section_id, shot_id, .. }`,
+/// whose undo calls `update_shot(section_id, shot_id, prev)` with the stale id
+/// (core/state/undo.rs). `redo_inner`'s catch-all arm re-executes
+/// `entry.command` - `Command::UpdateShot { shot_id, .. }` - so the REDO half
+/// carries the same stale id, which is what makes an undo/redo cycle after a
+/// reload move a measurement onto a shot that never had it.
+#[test]
+#[ignore = "open finding 12: after save/reload, undo of UpdateShot hits the wrong shot - see e2e/agent/scenarios/undoPersistenceFuzz.ts header"]
+fn undo_of_update_shot_after_reload_restores_the_shot_it_changed() {
+    let temp = TempDir::new().unwrap();
+    let save_path: PathBuf = temp.path().join("wrong-shot-length.stalx");
+
+    let edited_uuid;
+    let original_length;
+    let section_id;
+    {
+        let state = state_with_project();
+        section_id = diverged_section(&state);
+
+        let target = shot_ids(&state, section_id)[0];
+        edited_uuid = shot_uuids(&state, section_id)[0]
+            .clone()
+            .expect("shot has no uuid");
+        original_length = shot_lengths(&state, section_id)[0];
+        let edited = state.execute(Command::UpdateShot {
+            section_id,
+            shot_id: target,
+            updates: ShotUpdates {
+                length: Some(42.5),
+                ..Default::default()
+            },
+        });
+        assert!(edited.success, "UpdateShot failed: {:?}", edited.error);
+
+        let saved = state.save_project(Some(save_path.clone()));
+        assert!(saved.success, "save failed: {:?}", saved.error);
+    }
+
+    let reopened = AppState::new().unwrap();
+    let opened = reopened.execute(Command::OpenProject { path: save_path });
+    assert!(opened.success, "reopen failed: {:?}", opened.error);
+
+    let undone = reopened.undo();
+    assert!(
+        undone.success,
+        "undo after reopen failed: {:?}",
+        undone.error
+    );
+
+    let project = reopened.get_project_state().expect("no project after undo");
+    let section = project
+        .sections
+        .iter()
+        .find(|s| s.id == section_id)
+        .expect("section missing");
+    let edited = section
+        .shots
+        .iter()
+        .find(|s| s.uuid.as_deref() == Some(edited_uuid.as_str()))
+        .expect("the edited shot vanished");
+    assert!(
+        (edited.length - original_length).abs() < 1e-9,
+        "undo of UpdateShot left the edited shot at {} m instead of restoring {} m, and wrote the \
+         old value onto a DIFFERENT shot: lengths are now {:?}",
+        edited.length,
+        original_length,
+        shot_lengths(&reopened, section_id)
+    );
+}
+
+// ===========================================================================
+// Finding 13: when the stale id is PAST the renumbered range, the undo does not
+// hit the wrong shot - it fails outright and WEDGES the history
+// ===========================================================================
+
+/// Bug 8's mechanism with the opposite outcome, and the reason it needs its own
+/// entry: a section that has had a shot DELETED has handed out more ids than it
+/// has shots, so the newest persisted id runs past
+/// `section_id * FEATURE_ID_STRIDE + (len - 1)`. `delete_shot` then finds
+/// nothing, the undo fails, and `undo_inner`'s epilogue pushes the entry back
+/// (core/state/undo.rs) - so it fails identically forever and EVERY entry
+/// beneath it is unreachable for the rest of the project's life.
+///
+/// A wedged history is worse than a wrong one: the user cannot even walk past it
+/// to reach the edits underneath. The same shape applies to `update_shot` and
+/// `set_shot_kind`, whose undo also returns `Shot ... not found in section ...`.
+///
+/// Found by `undo-persistence-fuzz` with
+/// `STALAGMIGHT_PERSIST_FUZZ_DELETE_IN_TARGET=1`.
+#[test]
+#[ignore = "open finding 13: after save/reload, an out-of-range stale shot id makes undo fail and wedges the history - see e2e/agent/scenarios/undoPersistenceFuzz.ts header"]
+fn undo_after_reload_is_not_wedged_by_an_out_of_range_shot_id() {
+    let temp = TempDir::new().unwrap();
+    let save_path: PathBuf = temp.path().join("wedged.stalx");
+
+    let section_id;
+    {
+        let state = state_with_project();
+        section_id = create_section(
+            &state,
+            "Wedged",
+            vec![shot(0.0, 5.0), shot(90.0, 6.0), shot(180.0, 7.0)],
+        );
+
+        // The delete is what makes the allocator run ahead of the shot count.
+        let middle = shot_ids(&state, section_id)[1];
+        let deleted = state.execute(Command::DeleteShot {
+            section_id,
+            shot_id: middle,
+        });
+        assert!(deleted.success, "DeleteShot failed: {:?}", deleted.error);
+
+        let first = shot_ids(&state, section_id)[0];
+        let created = state.execute(Command::CreateShot {
+            section_id,
+            shot: shot(270.0, 8.0),
+            after_shot_id: None,
+            before_shot_id: Some(first),
+        });
+        assert!(created.success, "CreateShot failed: {:?}", created.error);
+
+        let ids = shot_ids(&state, section_id);
+        let highest_renumbered =
+            section_id * crate::models::FEATURE_ID_STRIDE + ids.len() as u32 - 1;
+        assert!(
+            ids.iter().any(|id| *id > highest_renumbered),
+            "setup: at least one live id must be past the range the loader renumbers into, \
+             got {ids:?} against a ceiling of {highest_renumbered}"
+        );
+
+        let saved = state.save_project(Some(save_path.clone()));
+        assert!(saved.success, "save failed: {:?}", saved.error);
+    }
+
+    let reopened = AppState::new().unwrap();
+    let opened = reopened.execute(Command::OpenProject { path: save_path });
+    assert!(opened.success, "reopen failed: {:?}", opened.error);
+
+    let depth_before = reopened.get_undo_stack().len();
+    let undone = reopened.undo();
+    assert!(
+        undone.success,
+        "undo of a CreateShot failed after the reopen ({:?}); the entry is pushed back, so the \
+         history is WEDGED and the {} entr(y/ies) beneath it can never be undone. A second undo \
+         fails identically: {:?}",
+        undone.error,
+        depth_before.saturating_sub(1),
+        reopened.undo().error
     );
 }
