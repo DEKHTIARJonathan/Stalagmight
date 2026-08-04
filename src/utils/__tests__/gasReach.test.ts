@@ -4,12 +4,14 @@ import {
   gasReachColorExpression,
   gasBeyondReachFeatureIds,
   reachableStationKeySet,
+  nearestEntranceShotEndpoint,
   UNREACHABLE_GAS,
   BEYOND_GAS_RANGE,
 } from '../gasReach';
 import { encodeFeatureId } from '../ids';
 import type { SurveyData } from '../../types/survey-data';
 import type { GasReachField } from '../../types/ipc.generated';
+import type { StationRef } from '../../types/project';
 
 describe('buildGasReachFeatureState', () => {
   // Section 1: shots id10 (st0→st1), id11 (st1→st2). Section 2: shot id20 (st0→st1).
@@ -161,5 +163,64 @@ describe('reachableStationKeySet', () => {
   it('returns an empty set when nothing is reachable', () => {
     const none = { ...field, reachable: [false, false, false, false] } as unknown as GasReachField;
     expect(reachableStationKeySet(none).size).toBe(0);
+  });
+});
+
+describe('nearestEntranceShotEndpoint', () => {
+  const a: StationRef = { section_id: 1, station_index: 0 };
+  const b: StationRef = { section_id: 1, station_index: 1 };
+
+  const fieldWith = (aGas: number | null, bGas: number | null): GasReachField =>
+    ({
+      station_refs: [a, b],
+      gas_to_reach: [aGas, bGas],
+      reachable: [aGas != null, bGas != null],
+    }) as unknown as GasReachField;
+
+  it('picks the smaller gas_to_reach when a field is loaded', () => {
+    expect(nearestEntranceShotEndpoint(a, b, fieldWith(50, 200), [])).toBe(a);
+    expect(nearestEntranceShotEndpoint(a, b, fieldWith(200, 50), [])).toBe(b);
+  });
+
+  it('treats null gas_to_reach as infinitely far', () => {
+    expect(nearestEntranceShotEndpoint(a, b, fieldWith(null, 50), [])).toBe(b);
+    expect(nearestEntranceShotEndpoint(a, b, fieldWith(50, null), [])).toBe(a);
+  });
+
+  it('falls through to the euclidean rule when both endpoints are null', () => {
+    const stations = [
+      { station_ref: a, coordinates: { x: 0, y: 0, z: 0 }, is_zero_datum: false },
+      { station_ref: b, coordinates: { x: 10, y: 0, z: 0 }, is_zero_datum: false },
+      {
+        station_ref: { section_id: 9, station_index: 0 },
+        coordinates: { x: 1, y: 0, z: 0 },
+        is_zero_datum: true,
+      },
+    ];
+    // a is 1m from the zero datum, b is 9m - a wins even though the field claims neither is
+    // reachable.
+    expect(nearestEntranceShotEndpoint(a, b, fieldWith(null, null), stations)).toBe(a);
+  });
+
+  it('with no field loaded, picks the endpoint nearest a zero-datum station', () => {
+    const stations = [
+      { station_ref: a, coordinates: { x: 0, y: 0, z: 0 }, is_zero_datum: false },
+      { station_ref: b, coordinates: { x: 10, y: 0, z: 0 }, is_zero_datum: false },
+      {
+        station_ref: { section_id: 9, station_index: 0 },
+        coordinates: { x: 9, y: 0, z: 0 },
+        is_zero_datum: true,
+      },
+    ];
+    expect(nearestEntranceShotEndpoint(a, b, null, stations)).toBe(b);
+  });
+
+  it('with no zero datum on the project, deterministically keeps the first endpoint', () => {
+    const stations = [
+      { station_ref: a, coordinates: { x: 0, y: 0, z: 0 }, is_zero_datum: false },
+      { station_ref: b, coordinates: { x: 10, y: 0, z: 0 }, is_zero_datum: false },
+    ];
+    expect(nearestEntranceShotEndpoint(a, b, null, stations)).toBe(a);
+    expect(nearestEntranceShotEndpoint(b, a, null, stations)).toBe(b);
   });
 });

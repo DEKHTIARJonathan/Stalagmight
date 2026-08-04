@@ -10,7 +10,7 @@ import { getErrorMessage, invokeIpc } from '../utils/ipc';
 import type { SectionId, ShotId, StationRef, Coordinates, RulerEndpoint, AlongLineResult } from '../types/project';
 import type { GpsOrigin } from '../types/config';
 import { distance, mapCoordsToMeters } from '../utils/coordinates';
-import { reachableStationKeySet } from '../utils/gasReach';
+import { reachableStationKeySet, nearestEntranceShotEndpoint } from '../utils/gasReach';
 import { setSource } from '../utils/telemetry';
 import type { SurveyLayerCallbacks } from '../components/Map/SurveyLayer';
 import { projectParamOnSegment } from '../components/Map/surveyLayer/hitTest';
@@ -612,7 +612,18 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
               // Mutually exclusive overlays: the distance gradient re-roots, Plan applies the
               // same origin/endpoint split as the station click above (#298, #395).
               if (showDistanceGradient) setDistanceGradientOrigin(ref);
-              if (showGasPlan) applyGasPlanClick(ref);
+              if (showGasPlan) {
+                // A shot click anchors to whichever of its two endpoint stations is nearer the
+                // entrance, not always the lower-numbered one (#395 regression fix).
+                const other = { section_id: sectionId, station_index: shotIndex + 1 };
+                const nearer = nearestEntranceShotEndpoint(
+                  ref,
+                  other,
+                  useGasPlanStore.getState().reachField,
+                  activeStations
+                );
+                applyGasPlanClick(nearer);
+              }
             }
           }
           break;
@@ -739,7 +750,7 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
         }
       }
     },
-    [activeTool, addToSelection, applyMeasureClick, buildShotPointEndpoint, clickShotParam, openDialog, options, project?.sections, setSelection, showShots, showToast, toggleSelection, showDistanceGradient, setDistanceGradientOrigin, showGasPlan]
+    [activeTool, activeStations, addToSelection, applyMeasureClick, buildShotPointEndpoint, clickShotParam, openDialog, options, project?.sections, setSelection, showShots, showToast, toggleSelection, showDistanceGradient, setDistanceGradientOrigin, showGasPlan]
   );
 
   // Handle empty click (no feature) - but use snapped station if available

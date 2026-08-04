@@ -1,6 +1,7 @@
 import type { ExpressionSpecification } from 'maplibre-gl';
 import type { GasReachField } from '../types/ipc.generated';
 import type { SurveyData } from '../types/survey-data';
+import type { Coordinates, StationRef } from '../types/project';
 import { encodeFeatureId } from './ids';
 
 /**
@@ -52,6 +53,73 @@ export function reachableStationKeySet(field: GasReachField): Set<string> {
     }
   }
   return keys;
+}
+
+/**
+ * Pick which of a shot's two endpoint stations is "nearer the entrance" (#395/#397): every
+ * plan-mode point-set click that lands on a shot (not a station) anchors to whichever endpoint
+ * is closer to where the dive starts, so the resulting pin reads the same as clicking the nearer
+ * station directly.
+ *
+ * Two rules, in order:
+ * 1. A loaded {@link GasReachField} is engine truth: compare `gas_to_reach` (litres to reach each
+ *    endpoint from the current origin) and take the smaller. `null` (unconnected, or the walk
+ *    stalled) sorts as infinitely far; if BOTH are null there is no signal, so fall through.
+ * 2. No field yet (the pre-origin click, before an origin exists to solve from) - or both
+ *    endpoints tied under rule 1: approximate with straight-line distance to the nearest
+ *    zero-datum station, mirroring the engine's own multi-root "entrance" (`zero_datum_roots`,
+ *    every zero datum is a root, not just one) without running a graph search client-side. With
+ *    NO zero datum on the project the engine's own entrance concept is undefined (a project with
+ *    no zero datum resolves an empty root set, so nothing is reachable from "the entrance"
+ *    either) - in that unreachable edge case this deterministically keeps `a`, the same endpoint
+ *    the old lower-station-index rule always picked, rather than inventing a coordinate origin.
+ */
+export function nearestEntranceShotEndpoint(
+  a: StationRef,
+  b: StationRef,
+  reachField: GasReachField | null | undefined,
+  activeStations: ReadonlyArray<{
+    station_ref: StationRef;
+    coordinates: Coordinates;
+    is_zero_datum: boolean;
+  }>,
+): StationRef {
+  if (reachField) {
+    const byKey = new Map<string, number | null>();
+    for (let i = 0; i < reachField.station_refs.length; i++) {
+      const r = reachField.station_refs[i]!;
+      byKey.set(`${r.section_id}:${r.station_index}`, reachField.gas_to_reach[i] ?? null);
+    }
+    const aGas = byKey.get(`${a.section_id}:${a.station_index}`) ?? null;
+    const bGas = byKey.get(`${b.section_id}:${b.station_index}`) ?? null;
+    if (aGas != null || bGas != null) {
+      const aCost = aGas ?? Infinity;
+      const bCost = bGas ?? Infinity;
+      return aCost <= bCost ? a : b;
+    }
+  }
+
+  const zeroDatums = activeStations.filter((s) => s.is_zero_datum);
+  if (zeroDatums.length === 0) return a;
+
+  const coordsOf = new Map<string, Coordinates>();
+  for (const s of activeStations) {
+    coordsOf.set(`${s.station_ref.section_id}:${s.station_ref.station_index}`, s.coordinates);
+  }
+  const nearestDatumDistSq = (ref: StationRef): number => {
+    const c = coordsOf.get(`${ref.section_id}:${ref.station_index}`);
+    if (!c) return Infinity;
+    let best = Infinity;
+    for (const zd of zeroDatums) {
+      const dx = zd.coordinates.x - c.x;
+      const dy = zd.coordinates.y - c.y;
+      const dz = zd.coordinates.z - c.z;
+      const d = dx * dx + dy * dy + dz * dz;
+      if (d < best) best = d;
+    }
+    return best;
+  };
+  return nearestDatumDistSq(a) <= nearestDatumDistSq(b) ? a : b;
 }
 
 export interface GasReachFeatureState {
