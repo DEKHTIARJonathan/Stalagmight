@@ -2776,6 +2776,133 @@ fn split_converts_orphaned_bridge_closure_immediately() {
     assert!(p.check_orphan_closures().is_empty());
 }
 
+/// A level shot on a fixed heading. Keeps the split/merge topology regressions
+/// below easy to reason about: every section is a straight, flat run.
+fn heading_shot(azimuth: f64, length: f64) -> ShotData {
+    ShotData {
+        azimuth_in: azimuth,
+        azimuth_out: (azimuth + 180.0) % 360.0,
+        length,
+        depth_in: 10.0,
+        depth_out: 10.0,
+        ..Default::default()
+    }
+}
+
+#[test]
+fn split_section_does_not_promote_a_bridge_closure_across_two_anchored_components() {
+    // The split rewrites every cross-reference through `map_station_refs`, which
+    // can move a MERGE endpoint into the newly created section. The merge-only
+    // adjacency the double-anchor guard consults must reflect that immediately:
+    // answering from the pre-split shape reports the moved section as unanchored,
+    // and `convert_orphan_closures_to_merges` then promotes a legitimate bridge
+    // closure into a rigid merge - fusing two independently GPS-anchored
+    // components ("Merged stations X and Y are N m apart" + "Merge-connected group
+    // has 2 zero datums").
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Bridge".to_string(),
+        location: None,
+    });
+    let mk = |name: &str, color: &str, azimuth: f64| {
+        state
+            .execute(Command::CreateSection {
+                name: Some(name.to_string()),
+                surveyor: None,
+                date: None,
+                color: color.to_string(),
+                direction: Some(SurveyDirection::In),
+                shots: vec![
+                    heading_shot(azimuth, 5.0),
+                    heading_shot(azimuth, 5.0),
+                    heading_shot(azimuth, 5.0),
+                ],
+            })
+            .section_id
+            .unwrap()
+    };
+    // Three straight 3-shot runs (stations 0..3 each).
+    let a = mk("A", "#111111", 0.0);
+    let b = mk("B", "#222222", 90.0);
+    let c = mk("C", "#333333", 0.0);
+
+    // A is GPS-anchored.
+    let r = state.execute(Command::SetZeroDatum {
+        station_ref: StationRef::new(a, 0),
+        coordinates: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
+    });
+    assert!(r.success, "{:?}", r.error);
+
+    // B hangs rigidly off A by its LAST station, so the split below moves that
+    // merge endpoint into the new section.
+    let r = state.execute(Command::MergeStations {
+        station_a: StationRef::new(a, 3),
+        station_b: StationRef::new(b, 3),
+    });
+    assert!(r.success, "{:?}", r.error);
+
+    // C is a second, independently GPS-anchored survey.
+    let r = state.execute(Command::SetZeroDatum {
+        station_ref: StationRef::new(c, 0),
+        coordinates: GpsCoordinates::new(10.001, 20.0, 0.0).unwrap(),
+    });
+    assert!(r.success, "{:?}", r.error);
+
+    // The ONLY link between the two anchored components: a soft loop closure.
+    // Legitimate as a closure, illegal as a merge.
+    let r = state.execute(Command::CreateLoopClosure {
+        station_a: StationRef::new(b, 2),
+        station_b: StationRef::new(c, 0),
+        closure_strategy: ClosureStrategy::Batch,
+    });
+    assert!(r.success, "{:?}", r.error);
+
+    // Split B at its middle shot: stations 2 (closure endpoint) and 3 (merge
+    // endpoint) both move into the new section.
+    let mid = state
+        .get_project_state()
+        .unwrap()
+        .sections
+        .iter()
+        .find(|s| s.id == b)
+        .expect("section B")
+        .shots[1]
+        .id;
+    let r = state.execute_delete_shot_and_split(b, mid, "B-1".to_string(), "B-2".to_string());
+    assert!(r.success, "{:?}", r.error);
+
+    let p = state.get_project_state().unwrap();
+    assert_eq!(
+        p.loop_closures.len(),
+        1,
+        "the bridge closure must survive the split as a closure: {:?}",
+        p.loop_closures
+    );
+    assert_eq!(
+        p.station_merges.len(),
+        1,
+        "only the original A-B merge may exist; the split must not promote the bridge closure: {:?}",
+        p.station_merges
+    );
+    assert!(
+        p.station_merges
+            .iter()
+            .all(|m| m.station_a.section_id != c && m.station_b.section_id != c),
+        "no merge may bridge into the second anchored component: {:?}",
+        p.station_merges
+    );
+    assert!(
+        p.check_merge_alignment().is_empty(),
+        "a merge fusing two anchored components tears apart: {:?}",
+        p.check_merge_alignment()
+    );
+    assert!(
+        p.over_anchored_merge_components().is_empty(),
+        "the two datums must stay in separate merge components: {:?}",
+        p.over_anchored_merge_components()
+    );
+}
+
 #[test]
 fn create_section_rejects_non_finite_geometry() {
     let state = AppState::new().unwrap();
