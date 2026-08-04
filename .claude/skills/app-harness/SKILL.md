@@ -98,10 +98,27 @@ stress loop then a full sweep:
 - `import-repeatedly` - re-import a `.tml`, assert the undo stack stays <= 100
 - `rapid-project-cycle` - open/close a fixture, assert clean project transitions
 
+## Fuzz traces: record, replay, shrink
+
+Both undo fuzzers write a TRACE of their resolved moves to
+`<session>/traces/<scenario>-seed<N>-<stamp>.json` whenever they FAIL, and name the
+path in the failure message. `STALAGMIGHT_FUZZ_TRACE=path` also writes one on success.
+
+- Replay it: `pnpm agent:scenario <scenario> --trace <file> [--release]` - same bridge,
+  same oracles, same failure payload; only the source of the decisions changes.
+- Minimize it: `pnpm agent:fuzz-shrink <trace.json> [--release]` - ddmin down to a
+  1-minimal move list, then read `<trace>.min.json` and the printed action list. Measured
+  on the bug 1 repro: 43 steps -> 2, 52 s, ~1.8 s per replay.
+
+A shrunk action list is the body of a red Rust test almost line for line. Do this
+INSTEAD of bisecting a fuzz failure by hand. See docs/agent-harness.md for what the
+signature match does and does not distinguish.
+
 ## When you find a bug
 
 1. **Freeze** - stop exploring; do NOT keep acting (you will bury the repro).
-2. **Minimize** - find the shortest action prefix that still triggers it.
+2. **Minimize** - for a fuzz failure, run `pnpm agent:fuzz-shrink` on the trace it
+   left; otherwise find the shortest action prefix that still triggers it.
 3. **Generate the replay**:
    `node scripts/generate-replay.mjs <sessionDir> --assert-final`
 4. **Verify it reproduces**:

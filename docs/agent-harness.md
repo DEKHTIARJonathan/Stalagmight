@@ -484,6 +484,106 @@ Both are the same root cause as bug 8 and should get the same fix; the write-ups
 argue for addressing shots by `uuid` in the persisted entries, which is the route
 `StationKey` and `CreatedShotSnapshot { uuid }` already took.
 
+### Record, replay, shrink
+
+Triage used to be the expensive human step: a failure gave you a seed and an
+iteration count, and finding out which of the 37 mutations mattered meant seed
+sweeps and bisecting by eye. Both fuzzers now record a TRACE, replay one, and
+minimize one automatically.
+
+**Record.** Every fuzz run collects its RESOLVED move list - each generator draw
+already collapsed into a concrete `projectStore` action and its arguments - and
+writes it to `<session>/traces/<scenario>-seed<N>-<stamp>.json` whenever the run
+FAILS. The path is appended to the failure message. `STALAGMIGHT_FUZZ_TRACE=path`
+also writes the trace of a run that PASSED, which is how you capture a baseline
+to shrink against later. Recording is observe-only - it draws nothing, reads no
+app state and runs after the decision it records - so a seed's trajectory is
+identical with it on or off (re-verified against the bug 1 and bug 8 repro
+lines).
+
+The header carries scenario, seed, iterations, fixture, generator stream, the
+`STALAGMIGHT_*` knobs that were set, the git rev and the failure message with its
+parsed signature. `undo-persistence-fuzz` resets its recorder per iteration,
+because its cycles are independent: the trace is of the cycle that failed.
+
+**Replay.**
+
+```
+pnpm agent:scenario undo-redo-fuzz --trace <file> [--release]
+```
+
+Replay is a MODE of the scenario, never a separate one. Only the source of the
+decisions changes: the fused step, the three oracles, the model bookkeeping, the
+classification and the failure payload are the same code, so a replayed failure
+is the same failure rather than a lookalike. A replayed run says so in its
+`reproduce:` line.
+
+Two rules make replay work on a trace that has been CUT, which is what the
+shrinker needs:
+
+- a history move whose precondition no longer holds (undo at depth 0, redo at
+  the top) is SKIPPED, and a jump wider than the reach is CLAMPED to it. Skipping
+  asserts nothing, so it cannot turn a failing candidate green by hiding
+  something; it just declines to pretend a move was possible. Every skip is
+  counted.
+- the closing unwind/rewind is never recorded and always REGENERATED. A shrink
+  therefore cannot remove the walk that visits every depth in both directions,
+  which is where most failures are actually observed.
+
+`undo-persistence-fuzz` skips its PLAN's own preconditions on a replay - id
+divergence, the renumbering check, variant coverage - because a shrunk trace is
+by construction not the plan. No app oracle is skipped on either scenario.
+
+**Shrink.**
+
+```
+pnpm agent:fuzz-shrink <trace.json> [--release] [--max-tests N] [--out FILE]
+```
+
+Textbook ddmin (`e2e/agent/lib/fuzzShrink.ts`) over the recorded move list, with
+a candidate cache. It replays the whole trace first to establish the baseline
+signature, then repeatedly replays subsequences until no single step can be
+removed, and writes `<trace>.min.json` plus a numbered action list.
+
+A candidate "preserves" the failure only when its FailureSignature matches:
+headline, first differing path, the `error:` line of a move that failed outright,
+and every classifier id the message named. Digits and array indices are
+normalized out of those, because removing a mutation moves every depth and index
+while the defect stays the same; the sentence shape, the field at the end of the
+path and the classifier ids are NOT normalized, so a candidate that fails
+DIFFERENTLY is rejected exactly like one that passes. That is standard ddmin
+practice and it is what stops a shrink wandering onto one of the other ten open
+bugs; the count of rejected-as-divergent candidates is reported.
+
+Measured on the bug 1 repro (fractal seed 1 x40, 43 recorded steps): **43 -> 2
+steps, 1-minimal, 52.5 s wall clock, 28 replays at ~1.8 s each** plus 20 served
+from the cache, of which 7 preserved, 18 lost the failure and 3 failed
+differently and were rejected. The whole shrink runs against ONE app session -
+each scenario run already closes the project, materializes a fresh fixture copy,
+strips its history and asserts both stacks came up empty, so a replay inherits
+nothing from the one before it.
+
+**From a shrunk trace to a red Rust test.** The action list is already the test
+body: each `mutate` line is one `Command` with its arguments, in order, and the
+`save` line is `state.save_project(Some(path))` followed by a reopen if the trace
+crossed the boundary. Add the closing `undo()` / `redo()` walk the replayer
+regenerates, assert what the fuzzer's diff said should have been restored, and
+`#[ignore]` it per the convention in
+`src-tauri/src/core/state/open_undo_bugs_tests.rs`. Everything is synthetic by
+construction - a trace holds generated values, never fixture data.
+
+**One caveat, worth knowing before you trust a minimal trace.** ddmin finds the
+smallest input with the same SIGNATURE, and two defects that produce the same
+message are indistinguishable to it. The bug 1 shrink above lands on
+`executeBatch(...)` + `save`, whose failure is really finding 11 (a pre-save
+snapshot pair reverting the save's gauge capture) - `undo-redo-fuzz` has no
+classifier that separates the two, so both read as
+`create-section-redo-drops-gauge-anchors`. The shrinker did exactly what it
+promises; the ambiguity is in the message. Read the minimal action list before
+writing the test, and if it does not look like the bug you started from, that
+ambiguity is the reason. (`undo-persistence-fuzz` names the entry each move
+consumed, which is what resolves it there.)
+
 ## Oracles
 
 - **Cheap sweep** (auto after every mutating tool): crash-marker glob (fatal
