@@ -33,11 +33,14 @@ describe('uiStore panel defaults', () => {
     });
   });
 
-  it('starts every panel open before any config has loaded', () => {
+  it('starts with the side panels open and the data table closed', () => {
+    // The data table's fresh-install default is OPEN, but it is delivered by
+    // initPanels below, not here: starting open would mount the heaviest panel
+    // in the app on every launch for everyone whose config says closed.
     const initial = useUIStore.getInitialState();
     expect(initial.sectionsPanelOpen).toBe(true);
     expect(initial.detailPanelOpen).toBe(true);
-    expect(initial.dataTableOpen).toBe(true);
+    expect(initial.dataTableOpen).toBe(false);
   });
 
   it('opens all three when the config omits the open flags', () => {

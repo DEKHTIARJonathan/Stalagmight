@@ -2117,6 +2117,12 @@
     "splitSection": "Split Section",
     "shiftGeometry": "Shift Geometry",
     "reverseSection": "Reverse Section",
+    "saving": "Saving...",
+    "save": "Save",
+    "incompleteRow_one": "Row {{rows}} is missing required values.",
+    "incompleteRow_other": "Rows {{rows}} are missing required values.",
+    "editingDisabled": "Editing is disabled in the current view",
+    "saveOrDiscardFirst": "Save or discard your edits first",
     "midRunDelete": "Only shots at the start or end of a section can be deleted together. Delete a mid-section shot on its own to choose split or shift."
   },
   "newSection": {

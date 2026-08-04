@@ -59,3 +59,33 @@ describe('isEndRun', () => {
     expect(isEndRun('mid')).toBe(false);
   });
 });
+
+/**
+ * Two arrangements the rule has to be right about and nothing exercised.
+ *
+ * `order` is the SAVED shots only, because that is the topology the backend's
+ * split/shift preview answers for - a row added in the dialog is not in the
+ * section yet. These pin what that means at the boundaries.
+ */
+describe('classifyDeleteRun with rows added in the dialog', () => {
+  // Saved a,b,c,d with a new row between b and c. The caller passes only the
+  // saved keys, so the new row is invisible here by construction.
+  const SAVED = ['a', 'b', 'c', 'd'];
+
+  it('calls a trailing run of saved shots a suffix even with a new row before it', () => {
+    // c,d are last among the SAVED shots; the unsaved row sits earlier and will
+    // simply be appended on save, so this stays a truncation.
+    expect(classifyDeleteRun(SAVED, of('c', 'd'))).toBe('suffix');
+  });
+
+  it('still calls a saved run with saved shots on both sides mid', () => {
+    expect(classifyDeleteRun(SAVED, of('b', 'c'))).toBe('mid');
+  });
+
+  it('calls every saved shot all, however many unsaved rows exist', () => {
+    // The dialog can hold added rows the caller never passes; emptying the saved
+    // section is still `all`, which isEndRun lets through without a prompt.
+    expect(classifyDeleteRun(SAVED, of(...SAVED))).toBe('all');
+    expect(isEndRun('all')).toBe(true);
+  });
+});
