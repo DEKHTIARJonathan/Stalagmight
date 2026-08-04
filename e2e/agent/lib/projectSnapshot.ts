@@ -349,6 +349,93 @@ export function classifyDiffs(
   return { known: matched, unknown, asymmetries: [...seen.values()] };
 }
 
+/**
+ * Undo of `RemoveLoopClosure` restores the closure with `loop_closures.push()`
+ * (`src-tauri/src/core/state/undo.rs:244`) while the removal took it out with
+ * `Vec::remove(pos)`. Same closure, same id, same metrics - new position, and
+ * every closure after it shifted. Detected with `isListPermutationOnly` rather
+ * than a path pattern, because the signature is a property of the WHOLE
+ * snapshot: identical in every respect once the list is reordered.
+ */
+export const LOOP_CLOSURE_REORDER: KnownAsymmetry = {
+  id: 'undo-remove-loop-closure-appends-instead-of-reinserting',
+  // Never used: this one is recognised structurally, not by path.
+  pathPattern: /^(?!)/,
+  description:
+    'Undoing a loop-closure removal puts the closure back at the END of ' +
+    'project.loop_closures instead of its original index (undo.rs:244 pushes; the ' +
+    'removal used Vec::remove(pos)). The list is a Vec, and its order is persisted to the ' +
+    '.stalx, indexed by the frontend, and used to build the adjacency lists that ' +
+    'resolve_offsets traverses - so this is a real, if quiet, non-inverse.',
+};
+
+/** Path segments to a list value inside a snapshot. */
+export type ListPath = readonly string[];
+
+/** Where the closure list lives in a `get_project_state` payload. */
+export const LOOP_CLOSURES_PATH: ListPath = ['project', 'loop_closures'];
+
+function readPath(root: unknown, segments: ListPath): unknown {
+  let cursor = root;
+  for (const segment of segments) {
+    if (!isPlainObject(cursor)) return undefined;
+    cursor = cursor[segment];
+  }
+  return cursor;
+}
+
+function writePath(root: unknown, segments: ListPath, value: unknown): void {
+  let cursor = root;
+  for (const segment of segments.slice(0, -1)) {
+    if (!isPlainObject(cursor)) return;
+    cursor = cursor[segment];
+  }
+  const last = segments[segments.length - 1];
+  if (isPlainObject(cursor) && last !== undefined) cursor[last] = value;
+}
+
+/** Total, content-derived order - no assumption about which field is the key. */
+function sortedByCanonical(items: readonly unknown[]): unknown[] {
+  return items
+    .map((item) => [canonicalJson(item), item] as const)
+    .sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))
+    .map(([, item]) => item);
+}
+
+/**
+ * True when two snapshots hold the SAME list members at `listPath` in a
+ * DIFFERENT order and are otherwise identical.
+ *
+ * This is a classification tool, never a comparison one: the snapshots are still
+ * unequal and the fuzzer still fails. It exists so "undo reordered the closure
+ * list" can be reported as exactly that, instead of as 30 unrelated-looking
+ * value diffs at shifted indices.
+ */
+export function isListPermutationOnly(
+  expectedJson: string,
+  actualJson: string,
+  listPath: ListPath,
+): boolean {
+  let expected: unknown;
+  let actual: unknown;
+  try {
+    expected = JSON.parse(expectedJson);
+    actual = JSON.parse(actualJson);
+  } catch {
+    return false;
+  }
+  const expectedList = readPath(expected, listPath);
+  const actualList = readPath(actual, listPath);
+  if (!Array.isArray(expectedList) || !Array.isArray(actualList)) return false;
+  if (expectedList.length !== actualList.length) return false;
+  // Already in the same order: whatever differs, it is not a permutation.
+  if (canonicalJson(expectedList) === canonicalJson(actualList)) return false;
+
+  writePath(expected, listPath, sortedByCanonical(expectedList));
+  writePath(actual, listPath, sortedByCanonical(actualList));
+  return diffJson(expected, actual).length === 0;
+}
+
 /** Human-readable diff block for a failure message. */
 export function describeDiffs(diffs: readonly SnapshotDiff[]): string {
   if (diffs.length === 0) return '  (no structural difference found - the canonical strings differ only in encoding)';

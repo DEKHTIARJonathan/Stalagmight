@@ -95,9 +95,12 @@
 import type { Scenario, ScenarioContext } from './framework';
 import { DEFAULT_FIXTURE, disableAutoSave, loadFixtureWithoutUndoHistory } from './common';
 import {
+  LOOP_CLOSURES_PATH,
+  LOOP_CLOSURE_REORDER,
   classifyDiffs,
   describeDiffs,
   diffSnapshots,
+  isListPermutationOnly,
   snapshotProjectState,
   type KnownAsymmetry,
 } from '../lib/projectSnapshot';
@@ -185,9 +188,27 @@ function checkSnapshot(expected: string, actual: string): SnapshotCheck {
   // come back as different femtometre-scale dust.
   const diffs = diffSnapshots(expected, actual, 200);
   if (diffs.length === 0) return { ...EQUAL, floatNoise: true };
-  const classified = classifyDiffs(diffs);
+
   const lines = [describeDiffs(diffs.slice(0, SHOWN_DIFFS))];
   if (diffs.length > SHOWN_DIFFS) lines.push(`  ...and ${diffs.length - SHOWN_DIFFS} more differing path(s)`);
+
+  // A shifted list reads as dozens of unrelated value diffs at every index past
+  // the move. Prove that shape structurally before falling back to per-path
+  // classification, so it is reported as the one thing it is.
+  if (isListPermutationOnly(expected, actual, LOOP_CLOSURES_PATH)) {
+    lines.push('  (every difference above is explained by project.loop_closures being REORDERED:');
+    lines.push('   same closures, same ids, same metrics, different positions)');
+    lines.push(`  KNOWN OPEN APP BUG [${LOOP_CLOSURE_REORDER.id}]: ${LOOP_CLOSURE_REORDER.description}`);
+    return {
+      equal: false,
+      floatNoise: false,
+      text: lines.join('\n'),
+      onlyKnown: true,
+      asymmetries: [LOOP_CLOSURE_REORDER],
+    };
+  }
+
+  const classified = classifyDiffs(diffs);
   for (const asymmetry of classified.asymmetries) {
     lines.push(`  KNOWN OPEN APP BUG [${asymmetry.id}]: ${asymmetry.description}`);
   }
