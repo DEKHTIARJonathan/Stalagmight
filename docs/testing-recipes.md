@@ -60,6 +60,20 @@ STALAGMIGHT_RUST_FUZZ_SEEDS=200 STALAGMIGHT_RUST_FUZZ_ITERATIONS=1000 \
   --features telemetry --lib undo_redo_fuzz_soak -- --ignored --nocapture
 ```
 
+**The red tests.** Twenty of them, all `#[ignore]`d, all failing today on the
+bug named in each `#[ignore]` reason. Eighteen are reductions in
+`open_undo_bugs_tests.rs`; two are pinned to a fuzzer SEED in the fuzz module
+instead, because every reduction for those two was measured not to reproduce
+(finding 14, and bug 7 - which had no test anywhere before). Delete an
+`#[ignore]` when its bug is fixed and the test becomes the regression guard.
+
+```bash
+# libtest takes several filters and ORs them; a shell-regex filter matches
+# nothing, since cargo's own filter is a plain substring.
+TELEMETRY_ENDPOINT=http://localhost/dummy cargo test --manifest-path src-tauri/Cargo.toml \
+  --features telemetry --lib -- --ignored open_undo_bugs finding_14 bug_7
+```
+
 **Choosing gate seeds.** `fuzz_seed_survey` catches each run's panic instead of
 propagating it, so one bad seed does not hide the twenty after it, and prints
 which seeds are clean plus what the rest failed on. Re-run it as findings are

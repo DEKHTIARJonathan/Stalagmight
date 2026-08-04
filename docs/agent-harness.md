@@ -499,8 +499,10 @@ Both `#[ignore]`d red suites are worth running together, since two findings are
 pinned by a SEED in the fuzz module rather than by a reduction in the red one:
 
 ```bash
+# 20 red tests. libtest takes several filters and ORs them; a shell-regex
+# filter would match nothing, since cargo's filter is a plain substring.
 TELEMETRY_ENDPOINT=http://localhost/dummy cargo test --manifest-path src-tauri/Cargo.toml \
-  --features telemetry --lib "open_undo_bugs\|finding_14\|bug_7" -- --ignored
+  --features telemetry --lib -- --ignored open_undo_bugs finding_14 bug_7
 ```
 
 The Rust tier exists because neither of the other two GATES anything: the harness
