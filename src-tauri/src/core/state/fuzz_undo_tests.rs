@@ -25,6 +25,7 @@
 //! | `metamorphic_undo_tests.rs` | two `AppState`s from one file | two routes to the same edit disagreeing | EVERY CI run |
 //! | `format_property_tests.rs` | the `.stalx` on disk | a writer or reader that is not a function | EVERY CI run |
 //! | `adversarial_tests.rs` | `AppState` with hostile arguments | a refusal that mutates, and any panic | EVERY CI run |
+//! | `concurrency_tests.rs` | one `AppState` from several threads | a deadlock, a poisoned lock, a race | EVERY CI run |
 //! | agent harness | the real app over IPC | anything the frontend store or the IPC boundary breaks | on demand |
 //! | `open_undo_bugs_tests.rs` | `AppState` directly | the KNOWN open bugs, pinned | `-- --ignored` |
 //!
@@ -180,6 +181,7 @@
 //! | `CLOSURE_SHAPES=1` | the two closure shapes findings 4 and 10 need, built | deliberate, and implies `CLOSURES` |
 //! | `HORIZON=1` | thousands of moves, past the app's own history limit: the FIFO trim and its sliding window, accumulated float dust, allocator and growth sanity | minutes per seed |
 //! | `CROSSINGS=n` | n save/close/reopen boundaries per persistence run instead of one: heals stacking on heals, and a snapshot compared across two epochs | IS gated - see `undo_redo_fuzz_gate_multi_crossing` |
+//! | `Plan::prologue` | replay `(seed, moves)` as a corpus prologue, then continue with fresh randomness | measured NOT to widen coverage - see `fuzz_corpus_sweep` |
 //!
 //! A mode that CONSTRUCTS a known defect cannot also be a regression gate: its
 //! hit counts say nothing about whether the model acquired a new way to be

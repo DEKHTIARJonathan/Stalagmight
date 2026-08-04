@@ -204,6 +204,53 @@ Draws are weighted towards the hand-written `execute_*` entry points, which do
 their own argument checking after taking the project lock. Measured at 60 seeds
 x 300 moves: 10 696 calls, 9 331 rejected, zero no-op violations.
 
+## The concurrency gate (Rust tier)
+
+`src-tauri/src/core/state/concurrency_tests.rs` drives ONE `AppState` from
+several threads. `AppState`'s `command_lock` exists to serialize
+execute/undo/redo, and [Undo/Redo](undo-redo.md) documents a lock ordering
+discipline underneath it; nothing exercised either, because every other engine
+here is single-threaded.
+
+```bash
+TELEMETRY_ENDPOINT=http://localhost/dummy cargo test --manifest-path src-tauri/Cargo.toml \
+  --features telemetry --lib concurrency
+
+STALAGMIGHT_RUST_CONC_SEEDS=40 STALAGMIGHT_RUST_CONC_THREADS=8 \
+  STALAGMIGHT_RUST_CONC_OPS=2000 \
+  TELEMETRY_ENDPOINT=http://localhost/dummy cargo test --manifest-path src-tauri/Cargo.toml \
+  --features telemetry --lib concurrency_soak -- --ignored --nocapture
+```
+
+Inputs are seeded per thread so a failing run replays in what each thread
+ASKED for; the interleaving is not reproducible and no assertion depends on it.
+The four oracles are liveness (a whole-run deadline plus a no-progress window),
+no panic, no poisoned mutex, and a post-run consistency walk.
+
+The deadline is generous on purpose - Windows and macOS hand mutexes over
+differently from Linux and a tight bound turns a slow CI box into a bug report.
+A real deadlock never finishes; the gate finishes in about two seconds.
+
+One trap, recorded because it cost a flaky run: waiting on a progress COUNTER
+reads a worker that panicked as one that is stuck, so a known assert gets
+reported as a deadlock. Poll `JoinHandle::is_finished` instead, and cross-check
+that every unwound worker was seen by the panic hook.
+
+## Corpus guidance, and why it is not wired into anything
+
+`fuzz_corpus_sweep` (`#[ignore]`d) measures whether remembering the shapes a
+sweep reaches lets later runs reach more of them. `topology_signature` is a
+twelve-feature integer fingerprint of a project's shape, and a corpus entry is
+just `(seed, move-count)` - which is all it needs to be, since every run in
+that module is a pure function of its seed.
+
+**The answer is no.** At 80 runs x 60 moves each way: unguided reaches 78
+distinct signatures, guided 73, with identical classifier id sets. 78 of 80
+unguided runs are already distinct, so the corpus admits nearly everything and
+guidance just spends half the budget replaying. The mechanism is kept, and
+deliberately not wired into any gate; the test's own doc comment carries the
+numbers and the two changes that would make it pay.
+
 **Choosing gate seeds.** `fuzz_seed_survey` catches each run's panic instead of
 propagating it, so one bad seed does not hide the twenty after it, and prints
 which seeds are clean plus what the rest failed on. Re-run it as findings are
