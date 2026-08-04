@@ -639,11 +639,10 @@ export function WarningResolution({
       const toRemove = refs.filter((_, i) => i !== keepIdx);
       if (toRemove.length === 0) return 'failed';
       for (const ref of toRemove) {
+        // Failure surfacing is owned by executeCommand's catch-all toast
+        // (docs/notifications.md: one event, one surface).
         const result = await removeZeroDatum({ section_id: ref.section_id, station_index: ref.station_index });
-        if (!result.success) {
-          showToast(result.error ?? t('detailPanel.warnings.resolveFailed'), TOAST_KEYS.WARNING_RESOLVE, 'error');
-          return 'failed';
-        }
+        if (!result.success) return 'failed';
       }
       return 'resolved';
     }
@@ -656,9 +655,8 @@ export function WarningResolution({
         // "Selection not found" for the now-dangling shot selection.
         setSource('detail-panel');
         setSelection({ type: 'section', sectionId: warning.sectionId });
-      } else {
-        showToast(result.error ?? t('detailPanel.warnings.resolveFailed'), TOAST_KEYS.WARNING_RESOLVE, 'error');
       }
+      // (failure surfacing owned by executeCommand's catch-all toast)
       return result.success ? 'resolved' : 'failed';
     }
 
@@ -710,8 +708,8 @@ export function WarningResolution({
       return 'failed';
     }
 
+    // Failure surfacing is owned by executeCommand's catch-all toast.
     const result = await updateShot(warning.sectionId, warning.shotId, patch);
-    if (!result.success) showToast(result.error ?? t('detailPanel.warnings.resolveFailed'), TOAST_KEYS.WARNING_RESOLVE, 'error');
     return result.success ? 'resolved' : 'failed';
   };
 

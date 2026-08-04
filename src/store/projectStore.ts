@@ -656,6 +656,13 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
           useSpeleoStore.getState().notifyReverifyDivergence();
         } else if (isEditDisabledError(result.error)) {
           useUIStore.getState().showToast(READ_ONLY_EDIT_NOTICE(), TOAST_KEYS.EDIT_DISABLED, 'warning');
+        } else if (useUIStore.getState().activeDialog === null) {
+          // Catch-all (docs/notifications.md): a failure no specific handler
+          // claims must not die silently. Dialogs own their inline errors and
+          // are open when they issue commands, so the catch-all yields to them.
+          useUIStore
+            .getState()
+            .showToast(result.error ?? i18n.t('editGate.commandFailed'), TOAST_KEYS.COMMAND_FAILED, 'error');
         }
       }
       return result;

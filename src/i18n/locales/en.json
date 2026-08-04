@@ -2185,7 +2185,8 @@
     }
   },
   "editGate": {
-    "readOnlyNotice": "This project is open read-only - click Start editing to take the write lock."
+    "readOnlyNotice": "This project is open read-only - click Start editing to take the write lock.",
+    "commandFailed": "The change could not be applied."
   },
   "newSection": {
     "collapse": "Shrink the table",
