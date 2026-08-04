@@ -16,3 +16,35 @@ export interface EditableShot extends Omit<Shot, 'marker_index' | 'temperature'>
   /** Identity for a row that has no server id yet. */
   tempId?: number;
 }
+
+/**
+ * A row the user has added but not measured, for any host of `ShotTableEditor`.
+ *
+ * Non-finite, NOT zero: a 0 length with a 0 azimuth and 0 depths is a due-north,
+ * zero-depth shot nobody took, and every one of those values passes range
+ * validation on the way to the backend. Blank renders blank in the grid and reads
+ * as missing to the completeness gates.
+ *
+ * One factory because the three hosts each had their own copy and they drifted -
+ * two of them were still building zeroes after the third was fixed.
+ */
+export function blankEditableShot(tempId: number): EditableShot {
+  return {
+    id: tempId,
+    tempId,
+    azimuth_in: NaN,
+    azimuth_out: NaN,
+    length: NaN,
+    depth_in: NaN,
+    depth_out: NaN,
+    pitch_in: null,
+    pitch_out: null,
+    left: null,
+    right: null,
+    up: null,
+    down: null,
+    comment: null,
+    kind: 'Normal',
+    isNew: true,
+  };
+}

@@ -68,6 +68,13 @@ export interface ShotTableEditorProps {
   ) => void;
   /** Callback to add a new shot at the end */
   onAddShot: () => void;
+  /** Append `count` blank shots in ONE update. Supply this and a paste that runs
+   *  past the trailing blank arrives as a single call, which is the only way a
+   *  host can append safely: called N times in one React event, a host that
+   *  rebuilds its array from a closed-over snapshot overwrites its own earlier
+   *  appends, and one that stamps rows from a captured temp id gives them all the
+   *  same identity. Falls back to N calls of {@link onAddShot} when absent. */
+  onAddShots?: (count: number) => void;
   /** Callback to delete a shot at the given index */
   onDeleteShot: (index: number) => void;
   /** Delete several shots at once (full-array indices, descending). Supply this
@@ -210,6 +217,7 @@ export function ShotTableEditor({
   shots,
   onShotChange,
   onAddShot,
+  onAddShots,
   onDeleteShot,
   onDeleteShots,
   onInsertBefore,
@@ -538,22 +546,25 @@ export function ShotTableEditor({
       // index. `resolveRowForEdit` can only ever answer for the first of them -
       // it returns `shots.length`, which is the same index for every row in the
       // block - so a multi-row paste used to pile every row onto one shot.
+      const rows = [...byRow.keys()].sort((a, b) => a - b);
+      // Append ALL the new rows first, in one call where the host supports it -
+      // see `onAddShots`. Only then hand out indices, so every appended row gets
+      // its own slot and its own identity.
+      const newRows = rows.filter((r) => isPhantomAt(r) || r >= visibleShots.length);
+      if (newRows.length > 0) {
+        if (onAddShots) onAddShots(newRows.length);
+        else for (let n = 0; n < newRows.length; n++) onAddShot();
+      }
       let appended = 0;
-      for (const row of [...byRow.keys()].sort((a, b) => a - b)) {
+      for (const row of rows) {
         const rowEdits = byRow.get(row) ?? [];
-        let index: number;
-        if (isPhantomAt(row) || row >= visibleShots.length) {
-          onAddShot();
-          index = shots.length + appended;
-          appended += 1;
-        } else {
-          index = actualIndex(row);
-        }
+        const isNewRow = isPhantomAt(row) || row >= visibleShots.length;
+        const index = isNewRow ? shots.length + appended++ : actualIndex(row);
         if (index < 0) continue;
         for (const e of rowEdits) applyEditAt(index, e.colKey, e.value);
       }
     },
-    [readOnly, applyEditAt, isPhantomAt, visibleShots.length, onAddShot, shots.length, actualIndex]
+    [readOnly, applyEditAt, isPhantomAt, visibleShots.length, onAddShot, onAddShots, shots.length, actualIndex]
   );
 
   /** Report what a paste actually did, so an over-cap block cannot vanish

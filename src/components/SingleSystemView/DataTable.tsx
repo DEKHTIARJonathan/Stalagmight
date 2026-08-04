@@ -842,14 +842,40 @@ export default function DataTable({ sections }: DataTableProps) {
   );
 
   // Multi-cell paste/fill → one execute_batch (one undo).
+  /** Blank row the grid parses and validates pasted values against before this
+   *  host has created them. Read, never written. */
+  const shotGrowRows = useMemo(
+    () => ({ growRowTemplate: () => materializeDraft(endDraft(-1)) }),
+    []
+  );
+
   const onShotBatchEdit = useCallback(
     (edits: CellEdit[]) => {
       if (!selectedSection || editingBlocked) return;
       setSource('data-table');
       // Edits landing on draft rows (paste/fill into them) feed the drafts;
       // the rest are remapped to shots-array indices and commit as one batch.
+      // Rows past the end are a paste that ran off the single trailing draft.
+      // Give each one its OWN draft, appended in one update, before any edit is
+      // applied - otherwise the grid clips them and only the first new shot
+      // survives.
+      const overflowRows = [...new Set(edits.map((e) => e.row))]
+        .filter((row) => row >= rowEntries.length)
+        .sort((a, b) => a - b);
+      const overflowKeys = new Map<number, number>();
+      if (overflowRows.length > 0) {
+        const fresh = overflowRows.map(() => endDraft(draftKeyRef.current--));
+        overflowRows.forEach((row, i) => overflowKeys.set(row, fresh[i]!.key));
+        setDrafts((prev) => [...prev, ...fresh]);
+      }
+
       const shotEdits: CellEdit[] = [];
       for (const e of edits) {
+        const overflowKey = overflowKeys.get(e.row);
+        if (overflowKey !== undefined) {
+          applyDraftEdit(overflowKey, e.colKey, e.value);
+          continue;
+        }
         const entry = rowEntries[e.row];
         if (!entry) continue;
         if (entry.kind === 'draft') applyDraftEdit(entry.draft.key, e.colKey, e.value);
@@ -1672,6 +1698,7 @@ export default function DataTable({ sections }: DataTableProps) {
                 height={gridHeight}
                 onEdit={onShotEdit}
                 onBatchEdit={onShotBatchEdit}
+                {...(editingBlocked ? {} : { pasteGrowsRows: shotGrowRows })}
                 onClearMissing={onShotClearMissing}
                 onActiveCellChange={onShotActiveCellChange}
                 onRowHover={onShotRowHover}
