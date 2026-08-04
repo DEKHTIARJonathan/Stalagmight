@@ -1329,25 +1329,45 @@ fn metamorphic_gate() {
 
 /// Determinism, for the same reason the roundtrip fuzzer pins it: without it a
 /// failing seed is not a repro.
+///
+/// The shape includes the CLASSIFIED hits, not just the counts, so a
+/// classification that starts firing (or stops) is a replay difference rather
+/// than something only a reviewer would notice.
+///
+/// One pair is EXCLUDED from it, with its reason:
+/// `one-shot-range-split-is-delete-and-split` carries
+/// `observation-split-routes-disagree-on-station-comment-keys`, which is
+/// intermittent on identical inputs - that is the entire content of the
+/// observation. Including it would make this test fail for a non-determinism in
+/// the APP rather than in the engine, which is the only thing it is about. The
+/// exclusion goes away with the observation: when the two split routes agree
+/// deterministically, delete the filter and this covers all seven pairs again.
 #[test]
 fn the_metamorphic_engine_is_deterministic() {
     for &seed in &GATE_SEEDS[..3] {
         let first = run_pairs(seed, 2, false, GATE_PRELUDE);
         let second = run_pairs(seed, 2, false, GATE_PRELUDE);
-        let shape =
-            |outcomes: &BTreeMap<&'static str, PairOutcome>| -> Vec<(String, usize, usize, usize)> {
-                outcomes
-                    .iter()
-                    .map(|(id, outcome)| {
-                        (
-                            (*id).to_string(),
-                            outcome.built,
-                            outcome.skipped,
-                            outcome.problems.len(),
-                        )
-                    })
-                    .collect()
-            };
+        let shape = |outcomes: &BTreeMap<&'static str, PairOutcome>| -> Vec<(
+            String,
+            usize,
+            usize,
+            usize,
+            BTreeMap<&'static str, usize>,
+        )> {
+            outcomes
+                .iter()
+                .filter(|(id, _)| **id != "one-shot-range-split-is-delete-and-split")
+                .map(|(id, outcome)| {
+                    (
+                        (*id).to_string(),
+                        outcome.built,
+                        outcome.skipped,
+                        outcome.problems.len(),
+                        outcome.hits.clone(),
+                    )
+                })
+                .collect()
+        };
         assert_eq!(
             shape(&first),
             shape(&second),
