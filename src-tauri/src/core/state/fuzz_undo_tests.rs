@@ -95,6 +95,31 @@
 //! `unwinding_the_history_leaves_no_displaced_section_behind` in
 //! `open_undo_bugs_tests.rs` pins the consequence a user sees.
 //!
+//! ## Open observations from the HORIZON mode (not yet findings)
+//!
+//! Each is deterministic and reproduces twice; none has been root-caused, so
+//! none has a classifier - they FAIL the horizon run, which is the honest state
+//! for something not yet understood.
+//!
+//! * `HORIZON=1 SEEDS=1 ITERATIONS=2000`: `updateShot` leaves a merged pair
+//!   1.58 cm apart, raw AND resolved agreeing. That is past the app's own
+//!   `#[cfg(test)]` assert threshold (1 cm) and under the integrity checker's
+//!   reporting tolerance (5 cm), and `update_shot` is not one of the call sites
+//!   that asserts - so nothing in the app would say a word. Candidate finding:
+//!   a shot edit leaves a merge misaligned.
+//! * `HORIZON=1 SEEDS=8`: seeds 2, 7 and 8 fail on `section_offsets`
+//!   differences that are finding-3 SHAPED but whose value no longer matches the
+//!   leftover the cascade classifier recorded - the ratchet has moved it on. The
+//!   classifier was deliberately NOT loosened to cover them.
+//! * The adjusted-geometry oracle found a state whose stored project
+//!   roundtripped byte for byte while a station 2.2 km out solved 28 microns
+//!   away. The solve is deterministic for a fixed project (measured:
+//!   `measure_adjusted_solve_determinism`, 8 forced re-solves, zero spread), so
+//!   the input differed in something the comparison does not compare - the
+//!   candidate is `station_offsets` / `station_comments` iteration order, which
+//!   the comparison SORTS and `resolve_offsets` sums in stored order.
+//!   `ADJUSTED_TOLERANCE_REL` documents the measurement.
+//!
 //! ## Modes, and why the gate uses none of them
 //!
 //! | env | what it adds | why it is not in the gate |
@@ -103,6 +128,7 @@
 //! | `CLOSURES=1` | a real loop closure in the starting project | findings 6 and 14 |
 //! | `DIVERGENCE=1` | the id-vs-position divergence findings 8/12/13 need, built | deliberate corruption |
 //! | `CLOSURE_SHAPES=1` | the two closure shapes findings 4 and 10 need, built | deliberate, and implies `CLOSURES` |
+//! | `HORIZON=1` | thousands of moves, past the app's own history limit: the FIFO trim and its sliding window, accumulated float dust, allocator and growth sanity | minutes per seed |
 //!
 //! A mode that CONSTRUCTS a known defect cannot also be a regression gate: its
 //! hit counts say nothing about whether the model acquired a new way to be
