@@ -1085,13 +1085,12 @@ mod tests {
         //       arguments on update_data_table_view, so the rate answers a question
         //       the data table's cannot: whether anyone reshapes the columns while
         //       ENTERING a survey, as opposed to while reviewing one already typed:
-        //       command.update_new_section_view = 710.
-
+        //       command.update_new_section_view = 720.
         //   + 1 the same write for the EDIT-section dialog's shot grid. Kept
         //       apart from the one above on purpose: comparing the two rates is
         //       how we learn whether column shaping is something people do while
         //       entering a survey, while correcting one, or both:
-        //       command.update_edit_section_view = 711.
+        //       command.update_edit_section_view = 721.
         assert_eq!(EVENT_NAMES.len(), 721);
     }
 
