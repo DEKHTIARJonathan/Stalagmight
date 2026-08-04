@@ -65,17 +65,37 @@
  *
  * ## Open app bugs this reproduces
  *
+ * Tracked at https://github.com/Stalagmight/Stalagmight/issues/413, one comment
+ * per finding with mechanism and fix direction.
+ *
  * None of these are normalized away. The oracle fails on all of them; 1, 2 and 4
  * are classified (`KNOWN_UNDO_ASYMMETRIES` plus `LOOP_CLOSURE_REORDER`) so the
  * message names them rather than reading as a mystery.
+ *
+ * EVERY repro line below is executable against the CURRENT default (v2) stream.
+ * Where a finding was not re-found under v2 the line carries an explicit
+ * `STALAGMIGHT_FUZZ_STREAM=v1`, which reproduces the legacy draw stream byte for
+ * byte. Do not shorten these lines: dropping the stream selector, the fixture or
+ * the tolerance flag turns most of them green, which reads as "fixed".
+ *
+ * The template every line below plugs into (the `...` stands for the two env
+ * vars plus the command):
+ *
+ *     STALAGMIGHT_FUZZ_ALLOW_KNOWN_BUGS=1 \
+ *     STALAGMIGHT_FUZZ_FIXTURE=<fractal_plant_iter3|naharon>.stalx \
+ *     pnpm agent:scenario undo-redo-fuzz --seed N --iterations M --release
+ *
+ * `ALLOW_KNOWN_BUGS=1` is wanted on all of them EXCEPT 1, which is verified
+ * strict; it stops an earlier classified bug masking the one you are after.
  *
  * 4, 5 and 6 need `STALAGMIGHT_FUZZ_FIXTURE=naharon.stalx`: they need loop
  * closures, zero datums and null section metadata present AT LOAD, and the
  * fractal fixture has none of those (all 32 of its sections have a non-null
  * surveyor; naharon has 13 null ones). Fixture diversity is what found them.
  *
- * 1. `run_scenario("undo-redo-fuzz", seed=1, iterations=3)` - create a section,
- *    undo, redo: every shot uuid is re-minted. SECOND MANIFESTATION, only
+ * 1. `--seed 1 --iterations 40` on fractal, STRICT (no ALLOW_KNOWN_BUGS) - this
+ *    is what the `agent:scenarios` smoke entry hits. Create a section, undo,
+ *    redo: every shot uuid is re-minted. SECOND MANIFESTATION, only
  *    observable now that runs save (`naharon`, seed 23 x60): the same
  *    `restore_section` path also resets `reverse_parity` and BOTH gauge anchors
  *    (`Section::new`, models/section.rs:301-303), so a redo silently discards the
@@ -85,12 +105,14 @@
  *    `Shot::new` -> `Uuid::new_v4()`. The sibling `CreateShot` path was
  *    explicitly fixed for this exact reason (a fresh uuid dangles every
  *    `StationKey::AfterShot` anchor and the Ariane export identity).
- * 2. `... seed=11, iterations=150` - undoing a shot INSERT leaves
+ * 2. `STALAGMIGHT_FUZZ_STREAM=v1 ... --seed 11 --iterations 150` on fractal
+ *    (not re-found under v2) - undoing a shot INSERT leaves
  *    behind an all-zero `section_offsets` entry the section did not have.
  *    `adjust_section_offset` creates the key while compensating; the undo puts
  *    the value back to 0 but nothing removes the key. Geometrically inert, and
  *    it is serialized into the .stalx.
- * 3. `... seed=2, iterations=36` (fails at #36, depth 11) - appending the FIRST shot into an EMPTY
+ * 3. `STALAGMIGHT_FUZZ_STREAM=v1 ... --seed 2 --iterations 36` on fractal (not
+ *    re-found under v2; fails at #36, depth 11) - appending the FIRST shot into an EMPTY
  *    section and undoing displaces the whole section by that shot's horizontal
  *    vector (1.13 m in the repro), and the displacement RATCHETS on every
  *    further undo/redo cycle. `Project::add_shot` (the append path) is
@@ -99,12 +121,13 @@
  *    Deliberately NOT classified as tolerable: it is a geometry bug, and the
  *    same branch drops merges / zero datums / station comments keyed to that
  *    section's station 0.
- * 4. `... seed=4, iterations=19` on naharon - undoing a loop-closure removal
+ * 4. `STALAGMIGHT_FUZZ_STREAM=v1 ... --seed 4 --iterations 19` on naharon (not
+ *    re-found under v2) - undoing a loop-closure removal
  *    puts the closure back at the END of `project.loop_closures` instead of its
  *    original index (`core/state/undo.rs:244` pushes; the removal used
  *    `Vec::remove(pos)`). Order-only, but the order is persisted, indexed by the
  *    frontend, and feeds `resolve_offsets`' adjacency lists.
- * 5. `... seed=5, iterations=7` on naharon - undoing `updateSection` CANNOT
+ * 5. `--seed 16 --iterations 40` on naharon - undoing `updateSection` CANNOT
  *    restore a `name` / `surveyor` / `date` that was previously null; the new
  *    value silently survives the undo. The capture is right
  *    (`undo_capture.rs:144-146` builds `Some(None)`), but `SectionUpdates`
@@ -114,7 +137,7 @@
  *    has `deserialize_with = "double_option"` + `skip_serializing_if` on exactly
  *    these grounds; `SectionUpdates` was left out. Not classified: silent,
  *    persistable data loss.
- * 6. `... seed=21, iterations=60` on naharon - undo FAILS OUTRIGHT: "This shot is
+ * 6. `--seed 1 --iterations 40` on naharon - undo FAILS OUTRIGHT: "This shot is
  *    part of a loop ... Both sides are anchored to a zero datum. Use split
  *    instead." Undo of `CreateShot` runs the user-facing `delete_shot`, guards
  *    and all, so an insert into an anchored loop is an action that CANNOT be
@@ -131,10 +154,13 @@
  *    keyed on `modified_at`, which every undo bumps via `touch()`), so only the
  *    missing `reconcile_geometry()` is a real defect - and a fix only needs to
  *    add that one call.
- *    `... seed=12, iterations=16` with ALLOW_KNOWN_BUGS - `undoTo(7)` (an 8-step
- *    jump, the history dropdown's path) lands on a DIFFERENT state than the same
- *    depth reached by eight single undos: `section_offsets` for two sections are
- *    out by 1.55 m and 3.33 m, and the stations with them.
+ *    `--seed 12 --iterations 40` on fractal - a jump through the history
+ *    dropdown's path lands on a DIFFERENT state than the same depth reached by
+ *    single undos: `section_offsets` out by 2.4 m, and the stations with it.
+ *    `--seed 15 --iterations 40` on fractal is the same bug reached through the
+ *    INTEGRITY oracle instead - the state compared equal (the geometry paths
+ *    were absorbed as reload-resolved across a save boundary) while
+ *    `check_project_integrity` reported a merge 5.00 m apart.
  *
  *    `undo()`/`redo()` call `invalidate_adjusted_cache()` before and
  *    `reconcile_geometry()` after (src-tauri/src/core/state/undo.rs:23,37 and
@@ -148,12 +174,12 @@
  *    history dropdown. The fix is to give undo_to/redo_to the same epilogue
  *    undo/redo have (once, after the loop - not per step).
  *
- * 8. DATA CORRUPTION. `... seed=12, iterations=16` with ALLOW_KNOWN_BUGS on
- *    fractal - after a save/reload, an `undo` DELETES THE WRONG SHOT. At depth 7
- *    section 14 holds 4 shots before and 4 after, but uuid
- *    `782a9454-...` is gone and `3bb50693-...` is back: the undo destroyed a shot
- *    the user still had and resurrected one they had deleted. Silent, and it
- *    persists on the next save.
+ * 8. DATA CORRUPTION. `--seed 14 --iterations 6` on fractal - after a
+ *    save/reload, an `undo` DELETES THE WRONG SHOT. Six iterations: a
+ *    `createShot(before=)` into a one-shot section makes the ids diverge from
+ *    positional order, the save/reload renumbers, and the undo hits the wrong
+ *    slot. The shot the user still had is gone and one they deleted is back -
+ *    silent, and it persists on the next save.
  *
  *    The chain: shots are RENUMBERED on load to
  *    `section_id * FEATURE_ID_STRIDE + sequence_order` (read.rs:372); undo entries

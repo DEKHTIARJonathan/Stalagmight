@@ -399,6 +399,11 @@ and a v2 repro for bugs 1, 5, 6, 7 and 8; bugs 2, 3 and 4 were not re-found and
 keep their v1 lines, executable with `STALAGMIGHT_FUZZ_STREAM=v1`. The full table
 is in the scenario header.
 
+The findings are tracked at
+<https://github.com/Stalagmight/Stalagmight/issues/413>, one comment per finding
+with its mechanism, repro and fix direction; the scenario header is the
+authoritative copy of the repro commands.
+
 It currently reproduces eight open undo bugs plus one open reload finding, enumerated with per-fixture,
 per-seed repro commands in the scenario's header comment, so it is RED by
 default. The most serious is bug 8: after a save/reload an undo DELETES THE WRONG
