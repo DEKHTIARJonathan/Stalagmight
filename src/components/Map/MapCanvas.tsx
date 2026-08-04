@@ -1021,11 +1021,11 @@ function MapCanvas() {
       },
       onHiddenStationClick: () => {
         noteMapInteraction();
-        showToast("Enable 'Stations' in Display menu to interact with station markers", TOAST_KEYS.STATIONS_HIDDEN, 'warning');
+        showToast(t('map.toasts.stationsHidden'), TOAST_KEYS.STATIONS_HIDDEN, 'warning');
       },
       onHiddenShotClick: () => {
         noteMapInteraction();
-        showToast("Enable 'Shots' in Display menu to interact with shot lines", TOAST_KEYS.SHOTS_HIDDEN, 'warning');
+        showToast(t('map.toasts.shotsHidden'), TOAST_KEYS.SHOTS_HIDDEN, 'warning');
       },
       // No stock fallback: surface a subsystem-specific toast (renderFatalMessage).
       onRenderFatal: (reason: string) => showToast(renderFatalMessage(reason), TOAST_KEYS.RENDER_FATAL, 'error'),
@@ -1415,7 +1415,7 @@ function MapCanvas() {
       const { checkMergeConnectivity } = useProjectStore.getState();
       const { openDialog, showToast } = useUIStore.getState();
 
-      showToast('Checking merge compatibility...', TOAST_KEYS.MERGE_CHECK, 'info');
+      showToast(t('map.toasts.mergeChecking'), TOAST_KEYS.MERGE_CHECK, 'info');
       try {
         const result = await checkMergeConnectivity(originStation, targetStation);
         const extra = moveCallbacks
@@ -1432,7 +1432,7 @@ function MapCanvas() {
             ...extra,
           });
         } else {
-          showToast(result.reason ?? 'Merge not possible.', TOAST_KEYS.MERGE_BLOCKED, 'warning');
+          showToast(result.reason ?? t('map.toasts.mergeNotPossible'), TOAST_KEYS.MERGE_BLOCKED, 'warning');
           moveCallbacks?.onCancel?.();
         }
       } catch (e) {
@@ -2596,7 +2596,7 @@ function MapCanvas() {
         // Fail closed: keep anchoredIdsLoaded=false so segment drag remains blocked.
         // This prevents moving anchored segments when the IPC fails.
         setAnchoredSectionIds(new Set());
-        showToast('Failed to load anchored segments. Move Segment is temporarily blocked.', TOAST_KEYS.ANCHORED_IDS_ERROR, 'error');
+        showToast(t('map.toasts.anchoredSegmentsError'), TOAST_KEYS.ANCHORED_IDS_ERROR, 'error');
       });
     } else {
       setAnchoredSectionIds(new Set());

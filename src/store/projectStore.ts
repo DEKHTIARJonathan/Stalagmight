@@ -647,7 +647,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         if (isReverifyDivergedError(result.error)) {
           useSpeleoStore.getState().notifyReverifyDivergence();
         } else if (isEditDisabledError(result.error)) {
-          useUIStore.getState().showToast(READ_ONLY_EDIT_NOTICE, TOAST_KEYS.EDIT_DISABLED, 'warning');
+          useUIStore.getState().showToast(READ_ONLY_EDIT_NOTICE(), TOAST_KEYS.EDIT_DISABLED, 'warning');
         }
       }
       return result;
@@ -732,7 +732,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         if (isReverifyDivergedError(result.error)) {
           useSpeleoStore.getState().notifyReverifyDivergence();
         } else if (isEditDisabledError(result.error)) {
-          useUIStore.getState().showToast(READ_ONLY_EDIT_NOTICE, TOAST_KEYS.EDIT_DISABLED, 'warning');
+          useUIStore.getState().showToast(READ_ONLY_EDIT_NOTICE(), TOAST_KEYS.EDIT_DISABLED, 'warning');
         } else {
           useUIStore.getState().showToast(result.error ?? 'Unknown error', toastId, 'error');
         }

@@ -51,7 +51,8 @@ describe('projectStore.saveProject detached-copy result', () => {
     // The user is told where the copy went (the session visibly did not move).
     expect(showToast).toHaveBeenCalledWith(
       expect.stringContaining('/home/diver/copy.stalx'),
-      'speleodb-unlinked-copy'
+      'speleodb-unlinked-copy',
+      'warning'
     );
     // Nothing was flagged, so nothing could have been healed - no extra fetch.
     expect(useProjectStore.getState().refreshProjectState).not.toHaveBeenCalled();

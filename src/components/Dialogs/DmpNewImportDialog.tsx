@@ -1806,11 +1806,11 @@ export default function DmpNewImportDialog({
       (i) => sectionEditsRef.current.get(i)?.name ?? dmpFile.sections[i]?.name ?? `Section ${i}`,
     );
     useUIStore.getState().showToast(
-      `Not imported - no shots left to import: ${names.join(', ')}`,
+      t('dmpWizard.toasts.emptySections', { names: names.join(', ') }),
       TOAST_KEYS.DMP_WIZARD_EMPTY_SECTIONS,
       'warning',
     );
-  }, [dmpFile.sections]);
+  }, [dmpFile.sections, t]);
 
   // Transition from suggesting phase: import reachable sections immediately (early import),
   // then enter manual_placing for unreachable segments, or complete if none.
@@ -2437,7 +2437,7 @@ export default function DmpNewImportDialog({
     const blocking = findIncompleteSections(selectedIndices, live)[0];
     if (!blocking) return false;
     useUIStore.getState().showToast(
-      `"${blocking.name}": ${t('editSection.incompleteBlocked', { count: blocking.count })}`,
+      t('dmpWizard.toasts.sectionIncomplete', { name: blocking.name, count: blocking.count }),
       TOAST_KEYS.DMP_WIZARD_INCOMPLETE,
       'warning',
     );
@@ -3215,7 +3215,7 @@ export default function DmpNewImportDialog({
       );
 
       showToast(
-        'Placement: Click to place section. Esc for more placement options and metadata changes.',
+        t('dmpWizard.toasts.placementHint'),
         TOAST_KEYS.DMP_MANUAL_PLACEMENT_HINT,
         'info'
       );

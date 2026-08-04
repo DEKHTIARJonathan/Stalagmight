@@ -436,10 +436,16 @@ function App() {
     setRepairingIntegrity(true);
     try {
       const { fixed, remaining } = await repairProjectIntegrity();
+      const issueWord = t('integrityRepair.toasts.issue', { count: fixed });
       const message =
         remaining > 0
-          ? `Fixed ${fixed} issue${fixed === 1 ? '' : 's'}; ${remaining} need${remaining === 1 ? 's' : ''} manual attention (recompute or remove drifted loop closures, fix non-finite shots). Save to keep the fix.`
-          : `Repaired ${fixed} issue${fixed === 1 ? '' : 's'}. Save to keep the fix.`;
+          ? t('integrityRepair.toasts.partial', {
+              fixed,
+              remaining,
+              issueWord,
+              needWord: t('integrityRepair.toasts.needWord', { count: remaining }),
+            })
+          : t('integrityRepair.toasts.full', { fixed, issueWord });
       useUIStore
         .getState()
         .showToast(message, TOAST_KEYS.INTEGRITY_REPAIR, remaining > 0 ? 'warning' : 'success');
@@ -460,7 +466,7 @@ function App() {
       useUIStore
         .getState()
         .showToast(
-          'Repair failed - nothing was changed. Please try again.',
+          t('integrityRepair.toasts.failed'),
           TOAST_KEYS.INTEGRITY_REPAIR,
           'error',
         );

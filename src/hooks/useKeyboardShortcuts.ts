@@ -1,4 +1,5 @@
 import { useEffect, useCallback, useRef } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useUIStore } from '../store/uiStore';
 import { useProjectStore } from '../store/projectStore';
 import { useGasPlanStore } from '../store/gasPlanStore';
@@ -294,6 +295,7 @@ function handleZoomOut(zoomStep: number, zoomMin: number): void {
 }
 
 export function useKeyboardShortcuts() {
+  const { t } = useTranslation();
   const {
     setActiveTool,
     toggleSectionsPanel,
@@ -474,7 +476,7 @@ export function useKeyboardShortcuts() {
         if (isNonInteractiveTool(currentToolA)) return;
         // GUARD: Block select all when stations are hidden
         if (!showStations) {
-          showToast("Enable 'Stations' in Display menu to select all", TOAST_KEYS.STATIONS_HIDDEN, 'warning');
+          showToast(t('map.toasts.stationsHidden'), TOAST_KEYS.STATIONS_HIDDEN, 'warning');
           return;
         }
         if (stations.length > 0) {

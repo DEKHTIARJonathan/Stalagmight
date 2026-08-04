@@ -1,4 +1,5 @@
 import { useCallback, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import type { MapMouseEvent } from 'maplibre-gl';
 import { useUIStore, type Selection, type MeasureEndpoint } from '../store/uiStore';
 import { useProjectStore } from '../store/projectStore';
@@ -125,6 +126,7 @@ export function nearestReachableStationRef(
 }
 
 export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks {
+  const { t } = useTranslation();
   // Performance: exclude hover values from subscription - this hook is called
   // from MapCanvas and would cause full re-renders on every mousemove.
   const {
@@ -345,7 +347,7 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
 
       setIsCheckingConnectivity(true);
       setMergeStationB(stationB);
-      showToast('Checking connectivity...', TOAST_KEYS.MERGE_CHECK, 'info');
+      showToast(t('map.toasts.mergeChecking'), TOAST_KEYS.MERGE_CHECK, 'info');
       try {
         const result = await checkMergeConnectivity(stationA, stationB);
         // Discard result if a newer request was started or merge was cancelled
@@ -375,7 +377,7 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
           });
         } else {
           // Not connected and merge blocked (e.g. both sides have zero datums)
-          showToast(result.reason ?? 'Merge not allowed.', TOAST_KEYS.MERGE_BLOCKED, 'warning');
+          showToast(result.reason ?? t('map.toasts.mergeNotPossible'), TOAST_KEYS.MERGE_BLOCKED, 'warning');
           clearMergeStations();
         }
       } catch (e) {
@@ -400,7 +402,7 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
 
       // GUARD: Block all station interactions when hidden
       if (!showStations) {
-        showToast("Enable 'Stations' in Display menu to interact with station markers", TOAST_KEYS.STATIONS_HIDDEN, 'warning');
+        showToast(t('map.toasts.stationsHidden'), TOAST_KEYS.STATIONS_HIDDEN, 'warning');
         return;
       }
 
@@ -519,7 +521,7 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
           if (!moveCommentSource) {
             // First click: pick up source - just record it, don't mutate backend
             if (!mcStation?.comment) {
-              showToast('No comment to move', TOAST_KEYS.MOVE_COMMENT_EMPTY, 'warning');
+              showToast(t('map.toasts.noCommentToMove'), TOAST_KEYS.MOVE_COMMENT_EMPTY, 'warning');
               break;
             }
             setSelection({ type: 'station', stationRef: ref });
@@ -579,7 +581,7 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
 
       // GUARD: Block all shot interactions when hidden
       if (!showShots) {
-        showToast("Enable 'Shots' in Display menu to interact with shot lines", TOAST_KEYS.SHOTS_HIDDEN, 'warning');
+        showToast(t('map.toasts.shotsHidden'), TOAST_KEYS.SHOTS_HIDDEN, 'warning');
         return;
       }
 
@@ -699,7 +701,7 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
           if (!moveCommentSource) {
             // First click: pick up source - just record it, don't mutate backend
             if (!mcShot?.comment) {
-              showToast('No comment to move', TOAST_KEYS.MOVE_COMMENT_EMPTY, 'warning');
+              showToast(t('map.toasts.noCommentToMove'), TOAST_KEYS.MOVE_COMMENT_EMPTY, 'warning');
               break;
             }
             setSelection({ type: 'shot', sectionId, shotId });
@@ -794,7 +796,7 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
           case 'merge':
             // GUARD: Block merge snap when stations are hidden
             if (!showStations) {
-              showToast("Enable 'Stations' in Display menu to merge", TOAST_KEYS.STATIONS_HIDDEN, 'warning');
+              showToast(t('map.toasts.stationsHidden'), TOAST_KEYS.STATIONS_HIDDEN, 'warning');
               return;
             }
             if (isCheckingConnectivity) return;
