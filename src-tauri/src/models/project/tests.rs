@@ -1702,11 +1702,14 @@ fn demotion_softens_an_existing_aligned_closure_over_the_same_pair() {
         closure.misclosure_distance
     );
     assert!(closure.horizontal_misclosure > 0.0);
-    // path_length is restamped too, and the honest merge-free answer here is 0:
-    // the surviving closure is itself a zero-cost edge between exactly this pair,
-    // so there is no path for the metric to walk. The junk 123.0 not surviving is
-    // what proves the restamp reached this field.
-    assert_eq!(closure.path_length, 0.0);
+    // path_length is restamped too. The measurement excludes the surviving
+    // closure itself - left in, it is a zero-cost shortcut over exactly this
+    // pair and the answer would be 0. With it excluded the halves have no
+    // other link, so Dijkstra finds no path and the documented fallback (sum
+    // of the reachable sections' lengths: A + B = 40 m) kicks in. 123 -> 40
+    // therefore proves both the restamp and the exclusion; the detour variant
+    // below proves a real route is used when one exists.
+    assert_eq!(closure.path_length, 40.0);
 
     assert!(
         project.check_closure_alignment().is_empty(),
@@ -1716,6 +1719,75 @@ fn demotion_softens_an_existing_aligned_closure_over_the_same_pair() {
     assert!(
         project.over_anchored_merge_components().is_empty(),
         "each datum is back in its own merge component"
+    );
+}
+
+#[test]
+fn softened_closure_measures_the_closure_free_path() {
+    // Companion to `demoted_closure_measures_the_merge_free_path`, for the
+    // already-closed branch: the surviving closure is itself a zero-cost
+    // pathfinding edge over exactly the pair being measured, so measuring with
+    // it still in the list would stamp path_length = 0 / error 0% no matter how
+    // long the real detour is. The demotion must pull the direct closure out,
+    // measure, and restamp it - here the detour through section D is the only
+    // real path, so a nonzero path_length proves the exclusion happened.
+    let (mut project, _a, b, c) = double_anchored_bridge_project();
+    let d = project
+        .add_section(SectionData {
+            shots: vec![
+                shot(0.0, 0.0, 10.0, 0.0, 0.0),
+                shot(0.0, 0.0, 10.0, 0.0, 0.0),
+            ],
+            ..Default::default()
+        })
+        .id;
+    project.ensure_shot_uuids();
+    let detour = |id: u64, from: StationRef, to: StationRef| LoopClosure {
+        id,
+        station_a: from.into(),
+        station_b: to.into(),
+        path_length: 1.0,
+        misclosure_distance: 0.0,
+        error_percentage: 0.0,
+        horizontal_misclosure: 0.0,
+        vertical_misclosure: 0.0,
+        strategy: ClosureStrategy::default(),
+        is_aligned: false,
+    };
+    project
+        .loop_closures
+        .push(detour(1, StationRef::new(b, 1), StationRef::new(d, 0)));
+    project
+        .loop_closures
+        .push(detour(2, StationRef::new(d, 2), StationRef::new(c, 1)));
+    // The pre-existing closure on the demoted pair itself, with junk metrics a
+    // merge-era measurement would have recorded.
+    let mut direct = detour(7, StationRef::new(b, 2), StationRef::new(c, 0));
+    direct.is_aligned = true;
+    project.loop_closures.push(direct);
+
+    assert_eq!(project.demote_double_anchoring_merges(), 1);
+
+    assert_eq!(
+        project.loop_closures.len(),
+        3,
+        "the existing closure is corrected, not duplicated"
+    );
+    let closure = project
+        .loop_closures
+        .iter()
+        .find(|lc| lc.id == 7)
+        .expect("the direct closure survives under its own id");
+    assert!(!closure.is_aligned);
+    assert!(
+        closure.path_length > 0.0,
+        "the metric must not ride the closure being softened (got {})",
+        closure.path_length
+    );
+    assert!(
+        closure.error_percentage > 0.0,
+        "a metres-wide misclosure over a real path is a nonzero error (got {})",
+        closure.error_percentage
     );
 }
 

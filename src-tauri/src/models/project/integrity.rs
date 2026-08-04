@@ -441,11 +441,46 @@ impl Project {
                 self.station_merges.insert(index, merge);
                 break;
             };
-            let Ok(metrics) = self.compute_closure_metrics(a, b) else {
-                self.station_merges.insert(index, merge);
-                break;
+            // A closure already sitting directly on this pair is itself a
+            // zero-cost pathfinding edge between the very stations being
+            // measured - left in, it would zero `path_length` exactly like the
+            // merge did. Pull the direct matches out before measuring and
+            // re-insert them (restamped) after. Closures linking the pair only
+            // indirectly still shorten the walk, but normal closure creation
+            // measures under the same rule, so the numbers stay comparable.
+            //
+            // `key_is_ref` borrows `&self`, so the matching indices are
+            // collected in an immutable pass first. Endpoint order is compared
+            // both ways, mirroring `are_stations_in_closure`. Removal runs
+            // highest-index-first so the remaining indices stay valid;
+            // re-insertion runs lowest-first, restoring the original order.
+            let match_indices: Vec<usize> = self
+                .loop_closures
+                .iter()
+                .enumerate()
+                .filter(|(_, lc)| {
+                    (self.key_is_ref(&lc.station_a, a) && self.key_is_ref(&lc.station_b, b))
+                        || (self.key_is_ref(&lc.station_a, b) && self.key_is_ref(&lc.station_b, a))
+                })
+                .map(|(i, _)| i)
+                .collect();
+            let mut direct_closures: Vec<(usize, LoopClosure)> = match_indices
+                .iter()
+                .rev()
+                .map(|&i| (i, self.loop_closures.remove(i)))
+                .collect();
+            direct_closures.reverse();
+
+            let metrics = match self.compute_closure_metrics(a, b) {
+                Ok(metrics) => metrics,
+                Err(_) => {
+                    for (i, lc) in direct_closures {
+                        self.loop_closures.insert(i, lc);
+                    }
+                    self.station_merges.insert(index, merge);
+                    break;
+                }
             };
-            let already_closed = self.are_stations_in_closure(a, b);
             tracing::warn!(
                 station_a = %a,
                 station_b = %b,
@@ -453,35 +488,18 @@ impl Project {
                 purpose = "remove an unsatisfiable rigid constraint",
                 "Demoted a merge bridging two zero-datum-anchored groups back to a loop closure"
             );
-            if already_closed {
+            if !direct_closures.is_empty() {
                 // A closure over this pair already exists, so no new one is
                 // invented - but the existing one is not automatically the soft
                 // edge the demotion needs. If it is `is_aligned: true` the offset
                 // solver treats it as a RIGID edge, which re-imposes the exact
                 // over-constraint just removed and leaves the project torn as
                 // before. Its stored metrics are stale too: they were measured
-                // while the merge welded the pair together, so they describe a
-                // zero-cost path that no longer exists. Soften it and restamp it
-                // from the merge-free measurement above.
-                //
-                // `key_is_ref` borrows `&self`, so collect the matching indices in
-                // an immutable pass first, then mutate by index. Normalizes EVERY
-                // match: one un-softened duplicate would re-impose the constraint
-                // on its own. Endpoint order is compared both ways, matching
-                // `are_stations_in_closure`, which is what decided this branch.
-                let matches: Vec<usize> = self
-                    .loop_closures
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, lc)| {
-                        (self.key_is_ref(&lc.station_a, a) && self.key_is_ref(&lc.station_b, b))
-                            || (self.key_is_ref(&lc.station_a, b)
-                                && self.key_is_ref(&lc.station_b, a))
-                    })
-                    .map(|(i, _)| i)
-                    .collect();
-                for i in matches {
-                    let closure = &mut self.loop_closures[i];
+                // while the merge (and the closure itself) welded the pair
+                // together. Soften and restamp EVERY match from the measurement
+                // above: one un-softened duplicate would re-impose the
+                // constraint on its own.
+                for (i, mut closure) in direct_closures {
                     // Keep the existing id: this is the same user-visible closure,
                     // corrected, not a replacement.
                     closure.is_aligned = false;
@@ -490,6 +508,7 @@ impl Project {
                     closure.error_percentage = metrics.error_percentage;
                     closure.horizontal_misclosure = metrics.horizontal_misclosure;
                     closure.vertical_misclosure = metrics.vertical_misclosure;
+                    self.loop_closures.insert(i, closure);
                 }
             } else {
                 let id = self.next_closure_id;
