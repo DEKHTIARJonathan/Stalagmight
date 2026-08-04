@@ -2200,6 +2200,7 @@
       "sectionsName": "Sections",
       "detailName": "Details",
       "dataName": "Data",
+      "gearName": "Gear",
       "open": "Open {{name}}",
       "close": "Close {{name}}",
       "pin": "Pin open",

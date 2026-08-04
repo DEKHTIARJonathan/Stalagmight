@@ -135,6 +135,18 @@ export default function SingleSystemView() {
     return () => observer.disconnect();
   }, [syncAttributionInset]);
 
+  // Pin the bottom Dock open the moment the origin is chosen in Plan mode (it is
+  // hidden entirely before that - see the Dock render condition below). Inlined
+  // setState (not a toggle action) because a mode-forced open is not a user
+  // action: it must never persist via savePanelLayout, or the user's real
+  // closed-panel preference gets silently overwritten on disk. setAppMode used to
+  // do this unconditionally on Plan entry (#241); staged entry moved it here.
+  useEffect(() => {
+    if (appMode === 'plan' && gasOriginChosen) {
+      useUIStore.setState({ dataTableOpen: true, dataTableMode: 'pin' });
+    }
+  }, [appMode, gasOriginChosen]);
+
   // Export mode shows a large WYSIWYG export preview over the map area; it
   // mirrors the inline ExportControls options via the shared export store.
   const exportPreviewType = useExportStore((s) => s.exportType);
@@ -681,7 +693,9 @@ export default function SingleSystemView() {
     const name = {
       sections: t('singleView.panels.sectionsName'),
       detail: t('singleView.panels.detailName'),
-      data: t('singleView.panels.dataName'),
+      // In Plan mode the bottom Dock holds the Equipment/Segments/Profile tables,
+      // so its tab says "Gear" rather than "Data" (#395).
+      data: appMode === 'plan' ? t('singleView.panels.gearName') : t('singleView.panels.dataName'),
     };
     const labels = (n: string) => ({
       open: t('singleView.panels.open', { name: n }),
@@ -695,7 +709,7 @@ export default function SingleSystemView() {
       detail: labels(name.detail),
       data: labels(name.data),
     };
-  }, [t]);
+  }, [t, appMode]);
 
   if (!project) {
     return (
@@ -807,8 +821,11 @@ export default function SingleSystemView() {
 
           {/* Data (bottom) - inside the center column so docked side panels push
               it (and its tab) for free. Fullscreen renders without reparenting. In
-              Plan mode it holds the tabbed plan tables; Export hides it (map only). */}
-          {appMode !== 'export' && (
+              Plan mode it holds the tabbed plan tables ("Gear"); Export hides it
+              (map only), and Plan hides it too until an origin is chosen - the
+              staged entry screen is the question card plus the map, nothing else
+              (#395). */}
+          {appMode !== 'export' && !(appMode === 'plan' && !gasOriginChosen) && (
           <Dock
             reveal={dataReveal}
             edge="bottom"

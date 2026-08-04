@@ -8,12 +8,14 @@ vi.mock('../../utils/ipc', () => ({
 }));
 
 /**
- * Entering Plan/Export force-opens the right Dock (detail panel) and, for Plan,
- * pins the bottom Dock (data table) open too, so the setup/Cylinders panels
- * surface without hunting for a closed dock. #241: exiting back to Survey must
- * restore whatever dock state the user had BEFORE entering - mirroring the
- * existing prePlanGeometryMode/prePlanDisplay snapshot/restore pattern - rather
- * than leaving a dock the user had closed stranded open.
+ * Entering Plan/Export force-opens the right Dock (detail panel). #241: exiting
+ * back to Survey must restore whatever dock state the user had BEFORE entering -
+ * mirroring the existing prePlanGeometryMode/prePlanDisplay snapshot/restore
+ * pattern - rather than leaving a dock the user had closed stranded open.
+ * Since #395 (staged entry) Plan no longer pins the bottom Dock at entry time:
+ * SingleSystemView opens it when the origin is chosen (an inlined, unpersisted
+ * setState, exactly like the entry-time force-open). The snapshot/restore must
+ * cover that mid-Plan forced open the same way.
  */
 describe('Plan/Export dock snapshot/restore (#241)', () => {
   beforeEach(() => {
@@ -38,13 +40,23 @@ describe('Plan/Export dock snapshot/restore (#241)', () => {
     expect(useUIStore.getState().detailPanelOpen).toBe(false);
   });
 
-  it('restores a closed data table after leaving Plan', () => {
+  it('leaves the data table closed at Plan entry (staged entry, #395)', () => {
     expect(useUIStore.getState().dataTableOpen).toBe(false);
     useUIStore.getState().setAppMode('plan');
-    // Plan force-pins the data table open.
+    // No origin chosen yet: the bottom Dock stays closed (and is hidden by
+    // SingleSystemView) so the entry card is not paired with an empty drawer.
+    expect(useUIStore.getState().dataTableOpen).toBe(false);
+  });
+
+  it('restores a closed data table after leaving Plan, including the origin-chosen forced open', () => {
+    expect(useUIStore.getState().dataTableOpen).toBe(false);
+    useUIStore.getState().setAppMode('plan');
+    // SingleSystemView pins the Dock open when the origin is chosen - same
+    // inlined unpersisted setState it performs in its originChosen effect.
+    useUIStore.setState({ dataTableOpen: true, dataTableMode: 'pin' });
     expect(useUIStore.getState().dataTableOpen).toBe(true);
-    expect(useUIStore.getState().dataTableMode).toBe('pin');
     useUIStore.getState().setAppMode('survey');
+    // The pre-Plan snapshot (closed) wins over the mid-Plan forced open.
     expect(useUIStore.getState().dataTableOpen).toBe(false);
   });
 
