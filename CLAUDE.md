@@ -100,7 +100,7 @@ pnpm lint:pw-timing:test                                  # Playwright timing-re
 pnpm lint:rust-file-size                                  # Rust file-size ratchet (CI check-job gate)
 pnpm lint:ts-file-size                                     # TS file-size ratchet (CI check-job gate)
 pnpm lint:private-leaks                                   # no internal/personal refs in the public tree (CI leak-scan gate)
-pnpm lint:third-party:test && pnpm lint:third-party      # THIRD-PARTY-LICENSES.md matches the lockfiles (CI check-job gate; regen: pnpm gen:third-party)
+pnpm lint:third-party:test && pnpm lint:third-party      # THIRD-PARTY-LICENSES.md matches the lockfiles (CI leak-scan gate; regen: pnpm gen:third-party)
 pnpm lint:readonly-gates:test && pnpm lint:readonly-gates # read-only gating tripwire (CI check-job gate)
 pnpm lint:test-ids:test && pnpm lint:test-ids            # interactive UI test-ID contract (CI check-job gate)
 pnpm lint:no-em-dash:test && pnpm lint:no-em-dash        # Unicode-dash guard (CI leak-scan gate)

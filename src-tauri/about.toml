@@ -1,5 +1,13 @@
 # cargo-about config for the third-party license bundle.
 # Consumed by scripts/gen-third-party-licenses.mjs (pnpm gen:third-party).
+# Generated with cargo-about 0.9.1 (install the pinned version - harvested
+# texts can differ across cargo-about releases, which would churn the bundle):
+#   cargo install cargo-about --version 0.9.1 --locked --features cli
+#
+# Dev-dependencies never ship in the built app, so they are excluded from the
+# attribution set. Build-dependencies are kept: over-attribution is harmless,
+# and some build-time code (macros) does shape the shipped binary.
+ignore-dev-dependencies = true
 #
 # `accepted` is an allowlist: generation FAILS if any dependency carries a
 # license not listed here, so a future dependency with a copyleft or unknown

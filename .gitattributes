@@ -1,0 +1,7 @@
+# The third-party attribution gate (scripts/check-third-party-licenses.mjs)
+# hashes these files' working-tree bytes. Pin them to LF so a Windows checkout
+# with core.autocrlf=true hashes the same bytes CI does - otherwise a regen
+# done on Windows stamps CRLF-based hashes that CI's LF checkout rejects.
+pnpm-lock.yaml text eol=lf
+src-tauri/Cargo.lock text eol=lf
+THIRD-PARTY-LICENSES.md text eol=lf

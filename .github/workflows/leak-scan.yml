@@ -64,3 +64,13 @@ jobs:
         run: node scripts/check-no-em-dash.test.mjs
       - name: No-em-dash scan
         run: node scripts/check-no-em-dash.mjs
+      # Third-party attribution staleness gate (#226): a dependency change must
+      # come with a regenerated THIRD-PARTY-LICENSES.md (pnpm gen:third-party).
+      # It lives HERE, not in `check`, because `check` path-ignores `**/*.md` -
+      # a PR touching only the bundle would never run a gate placed there (the
+      # "gate consumes a path-ignored file" class). Pure-Node hash comparison;
+      # no cargo-about, no pnpm install.
+      - name: Third-party license bundle - fixture test
+        run: node scripts/check-third-party-licenses.test.mjs
+      - name: Third-party license bundle gate
+        run: node scripts/check-third-party-licenses.mjs

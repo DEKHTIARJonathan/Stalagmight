@@ -39,12 +39,38 @@ function makeTree({ cargo = 'cargo-lock-v1', pnpm = 'pnpm-lock-v1', bundle } = {
   return root;
 }
 
-const currentBundle = (cargo, pnpm) =>
-  `# Third-party licenses\n\n<!-- lockfile-hashes\nCargo.lock=${sha256(cargo)}\npnpm-lock.yaml=${sha256(pnpm)}\n-->\n`;
+// Mirrors the generator's layout: hashes comment, then the body it hashes
+// (every byte after the comment's closing `-->\n`).
+const currentBundle = (cargo, pnpm, body = '\n## npm packages\n\nfixture body\n') =>
+  `# Third-party licenses\n\n<!-- lockfile-hashes\nCargo.lock=${sha256(cargo)}\npnpm-lock.yaml=${sha256(pnpm)}\nbundle-body=${sha256(body)}\n-->\n${body}`;
 
 test('current bundle passes', () => {
   const root = makeTree({ bundle: currentBundle('cargo-lock-v1', 'pnpm-lock-v1') });
   assert.deepEqual(checkBundle(root), []);
+});
+
+test('hand-edited body fails and says so', () => {
+  const good = currentBundle('cargo-lock-v1', 'pnpm-lock-v1');
+  const root = makeTree({ bundle: good.replace('fixture body', 'edited body') });
+  const problems = checkBundle(root);
+  assert.equal(problems.length, 1);
+  assert.match(problems[0], /edited by hand/);
+});
+
+test('bundle without a bundle-body hash fails', () => {
+  const body = '\nbody\n';
+  const bundle = `# x\n\n<!-- lockfile-hashes\nCargo.lock=${sha256('cargo-lock-v1')}\npnpm-lock.yaml=${sha256('pnpm-lock-v1')}\n-->\n${body}`;
+  const root = makeTree({ bundle });
+  const problems = checkBundle(root);
+  assert.equal(problems.length, 1);
+  assert.match(problems[0], /records no bundle-body hash/);
+});
+
+test('oversized bundle fails with the cap message, not "missing"', () => {
+  const root = makeTree({ bundle: 'x'.repeat(33 * 1024 * 1024) });
+  const problems = checkBundle(root);
+  assert.equal(problems.length, 1);
+  assert.match(problems[0], /cap/);
 });
 
 test('missing bundle fails', () => {
@@ -80,9 +106,12 @@ test('both lockfiles stale reports both', () => {
 
 test('a hash entry missing from the comment fails', () => {
   const cargo = 'cargo-lock-v1';
-  const bundle = `# x\n\n<!-- lockfile-hashes\nCargo.lock=${sha256(cargo)}\n-->\n`;
+  const body = '\nbody\n';
+  const bundle = `# x\n\n<!-- lockfile-hashes\nCargo.lock=${sha256(cargo)}\nbundle-body=${sha256(body)}\n-->\n${body}`;
   const root = makeTree({ bundle });
-  assert.match(checkBundle(root)[0], /records no hash for pnpm-lock\.yaml/);
+  const problems = checkBundle(root);
+  assert.equal(problems.length, 1);
+  assert.match(problems[0], /records no hash for pnpm-lock\.yaml/);
 });
 
 // The gate must pass against the real repo right now - a committed stale
