@@ -126,6 +126,8 @@ async function readObserved(ctx: ScenarioContext): Promise<Observed> {
 
 interface SnapshotCheck {
   equal: boolean;
+  /** Equal only once floating-point tolerance was applied (see projectSnapshot.ts). */
+  floatNoise: boolean;
   /** Rendered diff block (empty when equal). */
   text: string;
   /** True when every differing path is explained by a known open app bug. */
@@ -133,9 +135,16 @@ interface SnapshotCheck {
   asymmetries: KnownAsymmetry[];
 }
 
+const EQUAL: SnapshotCheck = { equal: true, floatNoise: false, text: '', onlyKnown: false, asymmetries: [] };
+
 function checkSnapshot(expected: string, actual: string): SnapshotCheck {
-  if (expected === actual) return { equal: true, text: '', onlyKnown: false, asymmetries: [] };
+  // Fast path: the canonical strings match outright.
+  if (expected === actual) return EQUAL;
+  // Slow path: re-compare with numeric tolerance. Geometry is re-derived rather
+  // than copied on every undo/redo, so a coordinate whose true value is 0 can
+  // come back as different femtometre-scale dust.
   const diffs = diffSnapshots(expected, actual, 200);
+  if (diffs.length === 0) return { ...EQUAL, floatNoise: true };
   const classified = classifyDiffs(diffs);
   const lines = [describeDiffs(diffs.slice(0, SHOWN_DIFFS))];
   if (diffs.length > SHOWN_DIFFS) lines.push(`  ...and ${diffs.length - SHOWN_DIFFS} more differing path(s)`);
@@ -144,6 +153,7 @@ function checkSnapshot(expected: string, actual: string): SnapshotCheck {
   }
   return {
     equal: false,
+    floatNoise: false,
     text: lines.join('\n'),
     onlyKnown: classified.unknown.length === 0,
     asymmetries: classified.asymmetries,
@@ -216,7 +226,12 @@ export const undoRedoFuzz: Scenario = {
      */
     const assertSnapshot = (headline: string, actual: string): void => {
       const check = checkSnapshot(snapshots[cursor] ?? '', actual);
-      if (check.equal) return;
+      if (check.equal) {
+        // Counted, never resynced: keeping the ORIGINAL expectation means the
+        // tolerance can never ratchet, only ever absorb the same dust again.
+        if (check.floatNoise) ctx.metric('floatNoise');
+        return;
+      }
       if (ALLOW_KNOWN_BUGS && check.onlyKnown) {
         ctx.metric('knownAsymmetry');
         for (const asymmetry of check.asymmetries) ctx.metric(`known:${asymmetry.id}`);

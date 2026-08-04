@@ -49,6 +49,7 @@
     "test:mock-contract": "vitest run src/test/__tests__/mockContract.test.ts",
     "agent:smoke": "tsx e2e/agent/smoke.ts",
     "agent:scenarios": "tsx e2e/agent/scenarios-smoke.ts",
+    "agent:scenario": "tsx e2e/agent/scenario-run.ts",
     "agent:mcp": "tsx e2e/agent/mcp/server.ts",
     "agent:bridge": "tsx e2e/agent/mcp/bridge.ts",
     "agent:mcp:smoke": "tsx e2e/agent/mcp/smoke-client.ts",

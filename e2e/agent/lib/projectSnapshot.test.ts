@@ -151,6 +151,35 @@ describe('diffJson', () => {
     expect(diffJson({ a: [1, { b: null }] }, { a: [1, { b: null }] })).toEqual([]);
   });
 
+  it('absorbs re-derived-geometry dust around a true zero', () => {
+    // The exact pair the fuzzer hit: undo of a moveStation gave back a
+    // coordinate on the other side of zero, 3.6 femtometres away.
+    const expected = { stations: [{ coordinates: { x: -3.5527136788e-15 } }] };
+    const actual = { stations: [{ coordinates: { x: -7.1054273576e-15 } }] };
+
+    expect(diffJson(expected, actual)).toEqual([]);
+    expect(diffJson(expected, actual, 6, null)).toHaveLength(1);
+  });
+
+  it('still reports a difference a real geometry regression would produce', () => {
+    // A nanometre is the absolute floor; a micrometre is already a failure, and
+    // anything a bug could plausibly cause is millimetres or more.
+    expect(diffJson({ x: 12.5 }, { x: 12.5 + 1e-6 })).toHaveLength(1);
+    expect(diffJson({ x: 12.5 }, { x: 12.501 })).toHaveLength(1);
+    expect(diffJson({ x: 0 }, { x: 1e-9 })).toEqual([]);
+    expect(diffJson({ x: 0 }, { x: 1e-7 })).toHaveLength(1);
+  });
+
+  it('keeps the relative bound tight on large coordinates', () => {
+    expect(diffJson({ x: 1e6 }, { x: 1e6 + 1e-9 })).toEqual([]);
+    expect(diffJson({ x: 1e6 }, { x: 1e6 + 0.001 })).toHaveLength(1);
+  });
+
+  it('does not treat non-finite or non-numeric values as close', () => {
+    expect(diffJson({ x: 1 }, { x: '1' })).toHaveLength(1);
+    expect(diffJson({ x: 1 }, { x: null })).toHaveLength(1);
+  });
+
   it('diffs canonical snapshot strings', () => {
     const diffs = diffSnapshots('{"a":1}', '{"a":2}');
 

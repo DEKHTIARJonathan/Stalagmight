@@ -33,12 +33,22 @@
  *     order is not stable across a snapshot restore (a deserialized map gets a
  *     fresh `RandomState`). `normalizeProjectState` sorts every object's keys,
  *     which canonicalizes that (and anything like it) without hiding a value.
- *   - FLOAT NOISE. `reconcile_geometry()` runs after every undo/redo, so
- *     coordinates are re-derived rather than copied. In practice it is a no-op
- *     below the 5 cm merge-alignment tolerance and the geometry is bit-exact,
- *     but rounding to `DEFAULT_SIGNIFICANT_DIGITS` (12 significant digits, i.e.
- *     picometres on a 1 m coordinate) costs no real signal and makes the oracle
- *     immune to last-bit platform noise.
+ *   - FLOAT NOISE. Station coordinates and section offsets are RE-DERIVED after
+ *     an undo/redo (`reconcile_geometry()` -> `compute_station_coordinates`),
+ *     not copied, so a value whose true result is 0 can land on different
+ *     floating-point dust depending on the order the survey chain was summed in.
+ *     Observed in practice: `stations[].coordinates.x` coming back as
+ *     -3.55e-15 where the recorded snapshot had -7.11e-15 (femtometres, either
+ *     side of a true zero) after `undo` of a `moveStation`.
+ *
+ *     Two layers handle that. Values are rounded to
+ *     `DEFAULT_SIGNIFICANT_DIGITS` (12 significant digits) so the canonical
+ *     strings usually match outright, and when they do not, `diffJson` compares
+ *     numbers against `DEFAULT_TOLERANCE` - 1e-9 ABSOLUTE (a nanometre; this is
+ *     what catches the near-zero case, which no relative bound can) plus 1e-12
+ *     relative. A real geometry regression is millimetres at the very least, so
+ *     nothing a bug could produce is inside that envelope; a caller that wants
+ *     bit-exactness passes `tolerance: null`.
  */
 
 /** Significant digits every finite number is rounded to before comparison. */
@@ -157,6 +167,22 @@ export interface SnapshotDiff {
   actual: string;
 }
 
+/** Numeric closeness used by the diff: `|a-b| <= absolute + relative*max(|a|,|b|)`. */
+export interface NumericTolerance {
+  absolute: number;
+  relative: number;
+}
+
+/** See the module header: a nanometre absolute, 1e-12 relative. */
+export const DEFAULT_TOLERANCE: NumericTolerance = { absolute: 1e-9, relative: 1e-12 };
+
+function numbersEqual(a: number, b: number, tolerance: NumericTolerance | null): boolean {
+  if (a === b) return true;
+  if (!tolerance) return false;
+  if (!Number.isFinite(a) || !Number.isFinite(b)) return false;
+  return Math.abs(a - b) <= tolerance.absolute + tolerance.relative * Math.max(Math.abs(a), Math.abs(b));
+}
+
 const ABSENT = '<absent>';
 
 function show(value: unknown, maxChars = 160): string {
@@ -176,6 +202,7 @@ function walkDiff(
   path: string,
   out: SnapshotDiff[],
   limit: number,
+  tolerance: NumericTolerance | null,
 ): void {
   if (out.length >= limit) return;
   const label = path || '<root>';
@@ -187,7 +214,7 @@ function walkDiff(
     }
     const shared = Math.min(expected.length, actual.length);
     for (let i = 0; i < shared; i++) {
-      walkDiff(expected[i], actual[i], `${path}[${i}]`, out, limit);
+      walkDiff(expected[i], actual[i], `${path}[${i}]`, out, limit, tolerance);
       if (out.length >= limit) return;
     }
     return;
@@ -206,9 +233,16 @@ function walkDiff(
           actual: inActual ? show(actual[key]) : ABSENT,
         });
       } else {
-        walkDiff(expected[key], actual[key], childPath, out, limit);
+        walkDiff(expected[key], actual[key], childPath, out, limit, tolerance);
       }
       if (out.length >= limit) return;
+    }
+    return;
+  }
+
+  if (typeof expected === 'number' && typeof actual === 'number') {
+    if (!numbersEqual(expected, actual, tolerance)) {
+      out.push({ path: label, expected: show(expected), actual: show(actual) });
     }
     return;
   }
@@ -218,15 +252,28 @@ function walkDiff(
   }
 }
 
-/** First `limit` differences between two normalized snapshots, deepest path first-found. */
-export function diffJson(expected: unknown, actual: unknown, limit = 6): SnapshotDiff[] {
+/**
+ * First `limit` differences between two normalized snapshots. Numbers within
+ * `tolerance` are treated as equal; pass `null` for bit-exact comparison.
+ */
+export function diffJson(
+  expected: unknown,
+  actual: unknown,
+  limit = 6,
+  tolerance: NumericTolerance | null = DEFAULT_TOLERANCE,
+): SnapshotDiff[] {
   const out: SnapshotDiff[] = [];
-  walkDiff(expected, actual, '', out, limit);
+  walkDiff(expected, actual, '', out, limit, tolerance);
   return out;
 }
 
 /** Diff two canonical snapshot strings (parses them back first). */
-export function diffSnapshots(expectedJson: string, actualJson: string, limit = 6): SnapshotDiff[] {
+export function diffSnapshots(
+  expectedJson: string,
+  actualJson: string,
+  limit = 6,
+  tolerance: NumericTolerance | null = DEFAULT_TOLERANCE,
+): SnapshotDiff[] {
   const parse = (text: string): unknown => {
     try {
       return JSON.parse(text);
@@ -234,7 +281,7 @@ export function diffSnapshots(expectedJson: string, actualJson: string, limit = 
       return text;
     }
   };
-  return diffJson(parse(expectedJson), parse(actualJson), limit);
+  return diffJson(parse(expectedJson), parse(actualJson), limit, tolerance);
 }
 
 export interface DiffClassification {
