@@ -525,6 +525,7 @@ export default function EditSectionDialog() {
               setSelectedShotKey(getShotKey(shot));
             }}
             {...(frozenShotIndices ? { frozenShotIndices } : {})}
+            {...(sectionId !== undefined ? { sectionId } : {})}
             expanded={expanded}
             onToggleExpand={() => setExpanded((v) => !v)}
             {...(expanded ? {} : { maxHeight: '16rem' })}
