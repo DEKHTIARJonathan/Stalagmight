@@ -86,6 +86,7 @@ export function SpeleoBanner() {
     return (
       <div
         className="flex items-center justify-between gap-3 px-4 py-2 bg-error-20 text-error text-sm font-medium border-b border-border"
+        role="alert"
         data-testid="speleo-banner"
         data-kind="force_edit_active"
       >
@@ -161,6 +162,7 @@ export function SpeleoBanner() {
   return (
     <div
       className="flex items-center justify-between gap-3 px-4 py-2 bg-warning-20 text-warning text-sm border-b border-border"
+      role="status"
       data-testid="speleo-banner"
       data-kind={banner.kind}
     >

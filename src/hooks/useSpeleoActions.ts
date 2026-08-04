@@ -134,18 +134,28 @@ export function useSpeleoActions(): SpeleoActions {
     }
   }, []);
 
-  /** Toast the failure and return the humanized line, so a caller that also wants a
-      durable surface (#260's push-failure banner) reuses the exact same wording. */
+  /** Humanize the failure and apply its session side effect (a dead token
+      collapses the shell to read-only) WITHOUT toasting - for push/done, whose
+      failures get a durable surface instead (the push_failed banner, and the
+      inline notice inside the Speleo dialogs). One event, one surface
+      (docs/notifications.md); the toast-and-banner pair predates the banner. */
+  const humanizeError = useCallback(
+    (e: unknown, prefixKey: string): string => {
+      if (speleoErrorAction(e) === 'ReLogin') clearSession();
+      return humanizeSpeleoError(e, t(prefixKey));
+    },
+    [clearSession, t],
+  );
+
+  /** Toast the failure - for the transient verbs (start/update/force/take-remote)
+      that have no durable surface of their own. */
   const handleError = useCallback(
     (e: unknown, prefixKey: string): string => {
-      // A dead token collapses the shell to read-only (mirrors the backend gate
-      // drop); other errors are transient - surface and let the user retry.
-      if (speleoErrorAction(e) === 'ReLogin') clearSession();
-      const message = humanizeSpeleoError(e, t(prefixKey));
+      const message = humanizeError(e, prefixKey);
       showToast(message, TOAST_KEYS.SPELEODB_ACTION_ERROR, 'error');
       return message;
     },
-    [clearSession, showToast, t],
+    [humanizeError, showToast],
   );
 
   const routeStartEditingResult = useCallback(
@@ -360,9 +370,9 @@ export function useSpeleoActions(): SpeleoActions {
         // the returned kind lets the dialog stay open to resolve them.
         return result;
       } catch (e) {
-        // Toast (immediate) AND banner (durable): the toast auto-clears after 3 s, so
-        // without the banner a failed upload left no surface at all (#260).
-        const humanized = handleError(e, 'speleodb.editBar.toasts.pushFailed');
+        // Banner only (durable; inline notice inside the Speleo dialogs while
+        // one is open). The old extra toast was pre-#260 redundancy.
+        const humanized = humanizeError(e, 'speleodb.editBar.toasts.pushFailed');
         raisePushFailedBanner({
           message: humanized,
           origin: 'push',
@@ -378,7 +388,7 @@ export function useSpeleoActions(): SpeleoActions {
       applyPush,
       showToast,
       t,
-      handleError,
+      humanizeError,
       beginBusy,
       endBusy,
       bumpPoll,
@@ -474,7 +484,7 @@ export function useSpeleoActions(): SpeleoActions {
         }
         return result;
       } catch (e) {
-        const humanized = handleError(e, 'speleodb.editBar.toasts.doneFailed');
+        const humanized = humanizeError(e, 'speleodb.editBar.toasts.doneFailed');
         raisePushFailedBanner({
           message: humanized,
           origin: 'done',
@@ -490,7 +500,7 @@ export function useSpeleoActions(): SpeleoActions {
       applyDone,
       showToast,
       t,
-      handleError,
+      humanizeError,
       beginBusy,
       endBusy,
       bumpPoll,
