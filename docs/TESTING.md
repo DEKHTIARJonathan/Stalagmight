@@ -67,7 +67,7 @@ work:
 | Tier | What | When it runs |
 |------|------|--------------|
 | **Smoke** | tests tagged `@smoke` (count them with `--grep @smoke`) | `e2e-smoke.yml`, on every PR/push its `paths-ignore` does not skip |
-| **Full** | the entire Playwright suite | `nightly-e2e.yml`, 07:00 UTC daily, skipped when nothing merged in the last 2 days |
+| **Full** | the entire Playwright suite | `nightly-e2e.yml`, 07:00 UTC daily, skipped when nothing merged in the last 2 days; upstream repo only (it needs the self-hosted runner - on a fork, run `pnpm test:ui` locally) |
 
 - **Tag `@smoke` only if the test covers a critical path *and* is reliable.**
   Append the tag to the test title: `test('does X @smoke', ...)`. Selection is

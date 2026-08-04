@@ -84,7 +84,9 @@ jobs:
       # driving Finder over AppleScript and hanging headless (see mac-build.sh).
       # shell: bash so the `--` separating tauri args from cargo args is handled
       # identically everywhere. The Windows default is pwsh, which parses it.
-      # Telemetry is compiled in only when the TELEMETRY_ENDPOINT secret exists.
+      # Telemetry is compiled in only when the TELEMETRY_ENDPOINT secret is
+      # NON-EMPTY (an undefined secret expands to ""; a whitespace-only secret
+      # passes this probe and then fails loudly in build.rs - safe direction).
       # A fork has no such secret, and build.rs hard-fails on an empty endpoint
       # under --features telemetry, so the guard is what lets a fork release at
       # all: without the secret the build simply omits telemetry (which is also

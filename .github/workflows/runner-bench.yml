@@ -63,6 +63,11 @@ jobs:
 
   bench:
     needs: resolve
+    # Upstream-only, like nightly-e2e/agent-harness: the default target is a
+    # self-hosted label no fork has, so a fork dispatch would queue for 24h
+    # and vanish. (If the repo is ever renamed, this silently disables the
+    # job upstream too - update the literal.)
+    if: github.repository == 'Stalagmight/Stalagmight'
     # Default-guard exactly as ci.yml does: an unset output makes this
     # fromJSON("") and the run dies at startup validation, not at runtime.
     runs-on: ${{ fromJSON(needs.resolve.outputs.runs_on || '["ubuntu-latest"]') }}
