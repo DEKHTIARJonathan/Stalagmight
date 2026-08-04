@@ -32,7 +32,21 @@ export type {
 } from './sessionTypes';
 
 const BASE_PORT = Number.parseInt(process.env.STALAGMIGHT_AGENT_BASE_PORT ?? '4544', 10);
-const XVFB_DISPLAYS = [':89', ':88', ':87', ':86', ':85'];
+/**
+ * Displays `startXvfb` will try, in order, taking the first that comes up.
+ *
+ * `STALAGMIGHT_AGENT_DISPLAYS` (comma-separated, e.g. ":87") narrows the pool,
+ * which is what makes CONCURRENT sessions safe: the default first-that-starts
+ * walk relies on Xvfb losing the O_EXCL race on an already-locked display and
+ * exiting inside the 250 ms probe window, so two sessions launched together can
+ * both believe they own `:89`. A parallel runner gives each worker a pool of
+ * exactly one display, keyed off its index, and the collision cannot happen.
+ * Five is still the ceiling - that is how many displays the pool has.
+ */
+const XVFB_DISPLAYS = (process.env.STALAGMIGHT_AGENT_DISPLAYS ?? ':89,:88,:87,:86,:85')
+  .split(',')
+  .map((entry) => entry.trim())
+  .filter(Boolean);
 const REAP_COMM_NAMES = ['stalagmight', 'tauri-driver', 'WebKitWebDriver'];
 
 export class AppSession extends SessionCore {
