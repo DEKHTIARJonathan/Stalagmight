@@ -110,16 +110,23 @@ describe('GpxPlacementDialog warning surfacing (#110)', () => {
     expect(openDialog).not.toHaveBeenCalled();
   });
 
-  it('shows the save-failure dialog (not the receipt) on a deferred-save partial success (#92)', async () => {
+  it('threads the save warning into the receipt as its leading row on a deferred-save partial success (#92)', async () => {
     executeGpxImport.mockResolvedValue(ok([SAVE_WARNING], RECEIPT));
 
     render(<GpxPlacementDialog />);
     await userEvent.click(await screen.findByTestId('gpx-import-confirm'));
 
     await waitFor(() =>
-      expect(openDialog).toHaveBeenCalledWith('error', expect.objectContaining({ title: 'Import Warning' })),
+      expect(openDialog).toHaveBeenCalledWith(
+        'import-receipt',
+        expect.objectContaining({
+          receipt: expect.objectContaining({
+            warnings: [SAVE_WARNING.message, ...RECEIPT.warnings],
+          }),
+        }),
+      ),
     );
-    expect(openDialog).not.toHaveBeenCalledWith('import-receipt', expect.anything());
+    expect(openDialog).not.toHaveBeenCalledWith('error', expect.anything());
   });
 
   it('shows the receipt when the import fully succeeds with a receipt', async () => {

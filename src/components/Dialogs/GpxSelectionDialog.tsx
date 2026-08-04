@@ -1,13 +1,16 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
-import { getErrorMessage } from '../../utils/ipc';
 import { extractFilename } from '../../utils/path';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import type { GpxFile } from '../../types/commands';
 import { setSource } from '../../utils/telemetry';
-import { completeImportToSingleView, finalizeDeferredSaveWarnings } from '../../utils/saveFeedback';
+import {
+  completeImportToSingleView,
+  finalizeDeferredSaveWarnings,
+  surfaceImportFailure,
+} from '../../utils/saveFeedback';
 
 interface GpxSelectionDialogProps {
   gpxFile: GpxFile;
@@ -84,6 +87,7 @@ export default function GpxSelectionDialog({ gpxFile, filePath }: GpxSelectionDi
 
   const handleImportWaypointsOnly = async () => {
     setIsImporting(true);
+    const importUi = { closeDialog, setView, triggerFitToBounds, openDialog };
     try {
       const result = await executeGpxImport(
         filePath,
@@ -95,31 +99,22 @@ export default function GpxSelectionDialog({ gpxFile, filePath }: GpxSelectionDi
         depthInverted
       );
 
-      const importUi = { closeDialog, setView, triggerFitToBounds, openDialog };
-
       if (!result.success) {
-        completeImportToSingleView('gpx-selection', importUi);
-        openDialog('error', {
-          title: 'Import Errors',
-          message: result.error ?? 'Unknown error during import',
-        });
+        surfaceImportFailure('gpx-selection', importUi, { phase: 'command', error: result.error });
         return;
       }
 
       // A partial-success import (new-project deferred save failed) returns
       // success WITH a "SYSTEM" save-failure warning. Surface ONLY that instead
       // of the receipt, so "unsaved - save manually" isn't buried (#110).
-      if (finalizeDeferredSaveWarnings(result.warnings, 'gpx-selection', importUi)) {
+      if (finalizeDeferredSaveWarnings(result.warnings, 'gpx-selection', importUi, result.import_receipt)) {
         return;
       }
 
       completeImportToSingleView('gpx-selection', importUi, result.import_receipt);
     } catch (e) {
       setIsImporting(false);
-      openDialog('error', {
-        title: 'Import Failed',
-        message: getErrorMessage(e, 'Failed to import GPX file'),
-      });
+      surfaceImportFailure('gpx-selection', importUi, { phase: 'transport', error: e, format: 'GPX' });
     }
   };
 

@@ -1,8 +1,34 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-import { surfaceSaveFailure, surfaceImportWarnings, deferredSaveWarnings } from '../saveFeedback';
+import {
+  surfaceSaveFailure,
+  surfaceImportFailure,
+  finalizeDeferredSaveWarnings,
+  deferredSaveWarnings,
+  type ImportDialogUi,
+} from '../saveFeedback';
 import { useProjectStore } from '../../store/projectStore';
 import type { ValidationWarning } from '../../types/ipc/ValidationWarning';
+import type { ImportReceipt } from '../../types/ipc/ImportReceipt';
+
+const mockUi = (): ImportDialogUi & { [K in keyof ImportDialogUi]: ReturnType<typeof vi.fn> } => ({
+  closeDialog: vi.fn(),
+  setView: vi.fn(),
+  triggerFitToBounds: vi.fn(),
+  openDialog: vi.fn(),
+});
+
+const receiptFixture = (warnings: string[] = []): ImportReceipt => ({
+  source_format: 'Ariane TML',
+  file_name: 'cave.tml',
+  sections_found: 2,
+  sections_imported: 2,
+  shot_count: 40,
+  closures_requested: 0,
+  closures_created: 0,
+  unit_conversion: null,
+  warnings,
+});
 
 describe('surfaceSaveFailure', () => {
   beforeEach(() => {
@@ -68,41 +94,99 @@ describe('deferredSaveWarnings (#110)', () => {
   });
 });
 
-describe('surfaceImportWarnings (#110)', () => {
+describe('finalizeDeferredSaveWarnings (#110)', () => {
   const sys = (message: string): ValidationWarning => ({ code: 'SYSTEM', message, severity: 'warning' });
+  const val = (code: string): ValidationWarning => ({ code, message: code, severity: 'warning' });
 
-  it('is a no-op when given no warnings', () => {
-    const openDialog = vi.fn();
+  it('returns false and surfaces nothing for a fully-saved import with validation warnings', () => {
+    const ui = mockUi();
 
-    surfaceImportWarnings([], openDialog);
+    const handled = finalizeDeferredSaveWarnings([val('LONG_SHOT')], 'tml-import', ui, receiptFixture());
 
-    expect(openDialog).not.toHaveBeenCalled();
+    expect(handled).toBe(false);
+    expect(ui.closeDialog).not.toHaveBeenCalled();
+    expect(ui.openDialog).not.toHaveBeenCalled();
   });
 
-  it('opens the warning dialog and suppresses the "report as a bug" footer', () => {
-    const openDialog = vi.fn();
-    const message =
+  it('threads the save warning into the receipt as its LEADING row', () => {
+    // The "unsaved" warning must outrank format caveats: it goes first, so the
+    // receipt's 3-row visible window can never hide it behind converter notes.
+    const ui = mockUi();
+    const saveMsg =
       'Imported, but could not save the new project to disk: disk full. ' +
       'Your changes are unsaved - please save manually.';
 
-    surfaceImportWarnings([sys(message)], openDialog);
+    const handled = finalizeDeferredSaveWarnings(
+      [val('LONG_SHOT'), sys(saveMsg)],
+      'tml-import',
+      ui,
+      receiptFixture(['2 zero-shot sections were skipped']),
+    );
 
-    expect(openDialog).toHaveBeenCalledWith('error', {
-      title: 'Import Warning',
-      message,
-      hideReportHint: true,
+    expect(handled).toBe(true);
+    expect(ui.closeDialog).toHaveBeenCalled();
+    expect(ui.openDialog).toHaveBeenCalledWith('import-receipt', {
+      receipt: expect.objectContaining({
+        warnings: [saveMsg, '2 zero-shot sections were skipped'],
+      }),
     });
   });
 
-  it('joins multiple warnings into a single message', () => {
-    const openDialog = vi.fn();
+  it('falls back to a warning dialog when the result carried no receipt', () => {
+    const ui = mockUi();
 
-    surfaceImportWarnings([sys('first'), sys('second')], openDialog);
+    const handled = finalizeDeferredSaveWarnings([sys('first'), sys('second')], 'tml-import', ui);
 
-    expect(openDialog).toHaveBeenCalledWith('error', {
+    expect(handled).toBe(true);
+    expect(ui.openDialog).toHaveBeenCalledWith('error', {
       title: 'Import Warning',
       message: 'first\n\nsecond',
       hideReportHint: true,
+    });
+  });
+});
+
+describe('surfaceImportFailure', () => {
+  it('command failure: closes the dialog via the shared exit and opens the error dialog', () => {
+    const ui = mockUi();
+
+    surfaceImportFailure('tml-import', ui, { phase: 'command', error: 'Bad azimuth on shot 3' });
+
+    expect(ui.closeDialog).toHaveBeenCalled();
+    expect(ui.setView).toHaveBeenCalledWith('single');
+    expect(ui.openDialog).toHaveBeenCalledWith('error', {
+      title: 'Import Errors',
+      message: 'Bad azimuth on shot 3',
+    });
+  });
+
+  it('transport failure: keeps the dialog open so the user can retry', () => {
+    const ui = mockUi();
+
+    surfaceImportFailure('walls-import', ui, {
+      phase: 'transport',
+      error: new Error('ipc timeout'),
+      format: 'Walls',
+    });
+
+    expect(ui.closeDialog).not.toHaveBeenCalled();
+    expect(ui.setView).not.toHaveBeenCalled();
+    expect(ui.openDialog).toHaveBeenCalledWith('error', {
+      title: 'Import Failed',
+      message: 'ipc timeout',
+    });
+  });
+
+  it('empty import: closes the dialog and says why, without the fitted-view exit', () => {
+    const ui = mockUi();
+
+    surfaceImportFailure('walls-import', ui, { phase: 'empty', message: 'No survey shots were found to import.' });
+
+    expect(ui.closeDialog).toHaveBeenCalled();
+    expect(ui.setView).not.toHaveBeenCalled();
+    expect(ui.openDialog).toHaveBeenCalledWith('error', {
+      title: 'Nothing imported',
+      message: 'No survey shots were found to import.',
     });
   });
 });
