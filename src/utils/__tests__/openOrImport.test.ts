@@ -185,6 +185,18 @@ describe('routeOpenedFile - read-only-map import guard (#243)', () => {
     expect(message).toContain('Survey mode');
   });
 
+  // The switch-and-continue re-route from ImportBlockedDialog: a cause that
+  // SURVIVES the confirmed switch (restored closure-adjusted view) must inform
+  // via toast and get out of the way - the user already clicked once.
+  it('reports a residual read-only cause as a toast, not a second modal, when re-routed with residualReadOnlyToast', async () => {
+    useUIStore.setState({ appMode: 'survey', geometryMode: 'closureAdjusted' });
+    await routeOpenedFile('/cave/survey.dmp', 'Import Failed', { residualReadOnlyToast: true });
+    expect(importDmp).not.toHaveBeenCalled();
+    expect(useUIStore.getState().activeDialog).toBeNull();
+    const toasts = useUIStore.getState().toasts;
+    expect(JSON.stringify(toasts)).toContain('Measured view');
+  });
+
   it('allows a DMP import once the SpeleoDB write lock is held', async () => {
     useUIStore.setState({ appMode: 'survey', geometryMode: 'measured' });
     useSpeleoStore.setState({ link: { ...READ_ONLY_LINK, editState: 'editing', lockedByOther: false } });

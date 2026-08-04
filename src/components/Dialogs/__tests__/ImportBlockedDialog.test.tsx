@@ -56,7 +56,11 @@ describe('ImportBlockedDialog', () => {
     expect(trackDialogComplete).toHaveBeenCalledWith('import-blocked');
     expect(closeDialog).toHaveBeenCalled();
     expect(setAppMode).toHaveBeenCalledWith('survey');
-    expect(routeOpenedFile).toHaveBeenCalledWith('/cave/survey.dmp', 'Import Failed');
+    // residualReadOnlyToast: a cause that survives the switch (e.g. restored
+    // closure-adjusted view) must toast, not raise a second modal.
+    expect(routeOpenedFile).toHaveBeenCalledWith('/cave/survey.dmp', 'Import Failed', {
+      residualReadOnlyToast: true,
+    });
   });
 
   it('"Stay" closes without switching the mode or routing anything', () => {

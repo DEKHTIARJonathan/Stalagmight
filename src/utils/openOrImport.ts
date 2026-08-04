@@ -55,8 +55,18 @@ function openImportAsNewProject(ui: ReturnType<typeof useUIStore.getState>, path
  *
  * @param path       Absolute path to the selected file.
  * @param errorTitle Title for the error dialog if the flow throws.
+ * @param opts.residualReadOnlyToast  Set by ImportBlockedDialog's "Switch to
+ *   Survey" re-route: the user just confirmed intent there, so a read-only
+ *   cause that REMAINS after the switch (e.g. the restored survey view being
+ *   closure-adjusted) is reported as a non-blocking toast instead of a second
+ *   modal - informational, no click owed. Never set on first-touch routes,
+ *   where the modal (or the import-blocked choice) is the right interruption.
  */
-export async function routeOpenedFile(path: string, errorTitle = 'Open Failed'): Promise<void> {
+export async function routeOpenedFile(
+  path: string,
+  errorTitle = 'Open Failed',
+  opts?: { residualReadOnlyToast?: boolean },
+): Promise<void> {
   const lowerPath = path.toLowerCase();
   const store = useProjectStore.getState();
   const ui = useUIStore.getState();
@@ -113,7 +123,14 @@ export async function routeOpenedFile(path: string, errorTitle = 'Open Failed'):
       } else {
         message = 'Switch to the Measured view to import - the closure-adjusted view is read-only.';
       }
-      ui.openDialog('error', { title: 'Import', message });
+      if (opts?.residualReadOnlyToast) {
+        // The user just confirmed "Switch to Survey" on the import-blocked
+        // prompt - don't demand a second click for a cause that survived the
+        // switch; inform and get out of the way.
+        ui.showToast(message, 'import-read-only-residual', 'warning');
+      } else {
+        ui.openDialog('error', { title: 'Import', message });
+      }
       return;
     }
 

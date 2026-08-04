@@ -34,9 +34,10 @@ export default function ImportBlockedDialog() {
     closeDialog();
     setAppMode('survey');
     // Re-route the SAME picked file now that the mode allows it. The router
-    // re-checks every guard, so a remaining cause (e.g. the restored survey
-    // view being closure-adjusted) still surfaces instead of being bypassed.
-    if (path) void routeOpenedFile(path, 'Import Failed');
+    // re-checks every guard; a remaining cause (e.g. the restored survey view
+    // being closure-adjusted) surfaces as a TOAST, not a second modal - the
+    // user just confirmed intent here, so no further click is owed.
+    if (path) void routeOpenedFile(path, 'Import Failed', { residualReadOnlyToast: true });
   }, [closeDialog, setAppMode, path]);
 
   // Closing without switching abandons the import; closeDialog's cancel hook
