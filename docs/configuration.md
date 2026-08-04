@@ -160,14 +160,16 @@ tile_ttl_days = 30                  # Default retention: days a tile stays on di
 # copy is only served without asking when the network call fails outright -
 # `stale-if-error`, and only where that actually applies: a transport failure or
 # a 5xx. A 403 or 404 is the provider answering, so the tile is reported missing
-# rather than answered off the stored copy - and a 401/403 also stops the
+# rather than answered off the stored copy - and a 401/403/410 also stops the
 # overzoom fallback, so a denial cannot come back as an upscaled crop of a parent
 # tile. (A 404 still climbs: for most tile services that is how they say "no
-# imagery at this zoom here", which is what overzoom is for.)
+# imagery at this zoom here", which is what overzoom is for. 410 Gone gets no
+# such carve-out - it says the imagery was removed on purpose.)
 #
-# A `no-cache` response is stored but never served without revalidating first,
-# even when the network is down - RFC 9111 5.2.2.4 requires successful
-# validation before reuse, so it is excluded from the stale path outright. And a
+# A `no-cache` response is stored, and IS revalidated - keeping its ETag is the
+# whole reason to store it - but it is never served without a successful
+# validation first. RFC 9111 5.2.2.4 requires that before reuse, which makes a
+# failed revalidation the one case where a retained copy may not answer. And a
 # `Cache-Control` we cannot parse grants nothing but revokes nothing either: the
 # response is not cached, and a copy already held keeps the deadline it was
 # stored under rather than being dropped over a header a proxy mangled.

@@ -761,12 +761,15 @@ enum TileFetchOutcome {
         error: String,
         /// The provider refused this imagery outright, so climbing to a parent
         /// zoom must stop rather than serve an upscaled crop of the area it just
-        /// denied. `401`/`403` only: for most tile services a `404` is how they
-        /// say "no imagery at this zoom here", which is precisely the case
-        /// overzoom exists to handle, so treating that as terminal would disable
-        /// the feature. (Esri never 404s - it answers 200 with a blank tile and
-        /// lets the tilemap probe decide - so this distinction is for the
-        /// providers the registry is built to take, not the one it ships.)
+        /// denied. `401`/`403`/`410` only. A `404` still climbs: for most tile
+        /// services that is how they say "no imagery at this zoom here", which
+        /// is precisely the case overzoom exists to handle, so treating it as
+        /// terminal would disable the feature. `410 Gone` gets no such
+        /// carve-out - nobody uses it to mean "not at this zoom"; it says the
+        /// imagery was deliberately removed, which is a statement like `403`
+        /// rather than an absence. (Esri returns none of these - it answers 200
+        /// with a blank tile and lets the tilemap probe decide - so this is for
+        /// the providers the registry is built to take, not the one it ships.)
         denied: bool,
     },
 }
@@ -774,7 +777,7 @@ enum TileFetchOutcome {
 /// Whether a failure is the provider refusing the imagery, as opposed to it
 /// being absent or unreachable.
 fn is_provider_denial(err: &TileFetchError) -> bool {
-    matches!(err.status, Some(401 | 403))
+    matches!(err.status, Some(401 | 403 | 410))
 }
 
 /// Where the bytes we served actually came from, for the per-provider
@@ -1062,6 +1065,23 @@ where
                 return TileFetchOutcome::Missing {
                     error: format!("Tile not available: {e}"),
                     denied: is_provider_denial(&e),
+                };
+            }
+
+            // A `no-cache` row is retained and revalidatable - that is what its
+            // ETag above is for - but it may not answer a revalidation that
+            // FAILED. RFC 9111 5.2.2.4 requires a successful validation before
+            // reuse, so this is the one row type for which "the network is down"
+            // forbids serving rather than being the reason to.
+            if retained.as_ref().is_some_and(|entry| entry.no_cache) {
+                tracing::debug!(
+                    provider = %provider,
+                    z = z, y = y, x = x,
+                    "Held under no-cache and revalidation failed; not serving unvalidated"
+                );
+                return TileFetchOutcome::Missing {
+                    error: format!("Tile not available: {e}"),
+                    denied: false,
                 };
             }
 
@@ -3059,6 +3079,156 @@ mod tests {
         // `#[expect(clippy::unwrap_used)]` on it) and denies the latter.
         img.write_to(&mut buf, ImageFormat::Jpeg).unwrap();
         buf.into_inner()
+    }
+
+    #[test]
+    fn a_no_cache_tile_still_revalidates_conditionally() {
+        // The point of storing a `no-cache` tile at all: its ETag makes the next
+        // request a cheap 304 instead of a full download. Hiding those rows from
+        // the retained lookup removed the validator along with them, so every
+        // request re-downloaded the whole body - the opposite of the intent.
+        let cache = Arc::new(Mutex::new(Some(TileCache::in_memory(10, 30).unwrap())));
+        let tilemap_cache = make_test_tilemap_cache();
+        {
+            let mut guard = cache.lock().unwrap();
+            guard
+                .as_mut()
+                .unwrap()
+                .put(
+                    "esri",
+                    1,
+                    2,
+                    3,
+                    b"held",
+                    "image/png",
+                    cache::tiles::parse_cache_control("no-cache"),
+                    Some("\"v1\""),
+                )
+                .unwrap();
+        }
+
+        let seen = Arc::new(Mutex::new(Vec::<Option<String>>::new()));
+        let seen_ref = Arc::clone(&seen);
+        let mock_fetch = move |_: &str,
+                               _: u32,
+                               _: u32,
+                               _: u32,
+                               validator: Option<&str>|
+              -> Result<TileFetchResponse, TileFetchError> {
+            seen_ref.lock().unwrap().push(validator.map(str::to_string));
+            Ok(TileFetchResponse::NotModified {
+                policy: cache::tiles::parse_cache_control("no-cache"),
+            })
+        };
+
+        let response = handle_tile_request_with_fetcher(
+            "esri",
+            1,
+            2,
+            3,
+            &cache,
+            &tilemap_cache,
+            mock_fetch,
+            true,
+        );
+
+        assert_eq!(
+            seen.lock().unwrap().as_slice(),
+            &[Some("\"v1\"".to_string())],
+            "the stored validator must reach the request"
+        );
+        // Validation SUCCEEDED, so serving it is exactly what RFC 9111 permits.
+        assert_eq!(response.status(), http::StatusCode::OK);
+        assert_eq!(response.body(), b"held");
+    }
+
+    #[test]
+    fn a_no_cache_tile_is_not_served_when_revalidation_fails() {
+        // The other half. For every other retained row a failed fetch is the
+        // reason to serve the stored copy; for this one it is the reason not to,
+        // because RFC 9111 5.2.2.4 requires a SUCCESSFUL validation first.
+        let cache = Arc::new(Mutex::new(Some(TileCache::in_memory(10, 30).unwrap())));
+        let tilemap_cache = make_test_tilemap_cache();
+        {
+            let mut guard = cache.lock().unwrap();
+            guard
+                .as_mut()
+                .unwrap()
+                .put(
+                    "esri",
+                    1,
+                    2,
+                    3,
+                    b"held",
+                    "image/png",
+                    cache::tiles::parse_cache_control("no-cache"),
+                    Some("\"v1\""),
+                )
+                .unwrap();
+        }
+
+        let offline = move |_: &str,
+                            _: u32,
+                            _: u32,
+                            _: u32,
+                            _: Option<&str>|
+              -> Result<TileFetchResponse, TileFetchError> {
+            Err(TileFetchError::transport("Connection reset".to_string()))
+        };
+
+        let response = handle_tile_request_with_fetcher(
+            "esri",
+            1,
+            2,
+            3,
+            &cache,
+            &tilemap_cache,
+            offline,
+            true,
+        );
+        assert_eq!(
+            response.status(),
+            http::StatusCode::NOT_FOUND,
+            "a transport failure is exactly when a no-cache copy may NOT be used"
+        );
+    }
+
+    #[test]
+    fn a_gone_tile_is_not_served_as_an_overzoomed_parent() {
+        // `410 Gone` gets no 404 carve-out: nobody uses it to mean "not at this
+        // zoom", it says the imagery was deliberately removed. Serving a parent
+        // crop would hand back the withdrawn area at a coarser resolution.
+        let cache = Arc::new(Mutex::new(Some(TileCache::in_memory(10, 30).unwrap())));
+        let tilemap_cache = make_test_tilemap_cache();
+        {
+            let mut guard = cache.lock().unwrap();
+            guard
+                .as_mut()
+                .unwrap()
+                .put_granted("esri", 9, 250, 125, &make_jpeg_bytes(), "image/jpeg")
+                .unwrap();
+        }
+
+        let gone = move |_: &str,
+                         _: u32,
+                         _: u32,
+                         _: u32,
+                         _: Option<&str>|
+              -> Result<TileFetchResponse, TileFetchError> {
+            Err(TileFetchError::status(410, "HTTP 410".to_string()))
+        };
+
+        let response = handle_tile_request_with_fetcher(
+            "esri",
+            10,
+            500,
+            250,
+            &cache,
+            &tilemap_cache,
+            gone,
+            true,
+        );
+        assert_eq!(response.status(), http::StatusCode::NOT_FOUND);
     }
 
     #[test]

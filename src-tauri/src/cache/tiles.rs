@@ -151,6 +151,16 @@ pub struct TileEntry {
     /// re-fetch. `None` = no `ETag`, so revalidation is not possible and a
     /// re-fetch has to pull the whole body.
     pub etag: Option<String>,
+    /// This row was stored under `no-cache`: it may be revalidated, but never
+    /// served without a successful validation first (RFC 9111 5.2.2.4).
+    ///
+    /// Carried on the entry rather than filtered out of the lookup because the
+    /// two questions differ, and `no-cache` is exactly where they diverge:
+    /// "do we hold bytes to validate against?" (yes - that is why the ETag was
+    /// kept) versus "may we serve these unvalidated?" (no). Filtering hid the
+    /// validator too, so every request re-downloaded the whole body - the
+    /// opposite of why the row was stored.
+    pub no_cache: bool,
 }
 
 impl TileEntry {
@@ -634,6 +644,7 @@ impl TileCache {
                     accessed_at: row.get(4)?,
                     expires_at: row.get(5)?,
                     etag: row.get(6)?,
+                    no_cache: false,
                 })
             },
         );
@@ -671,11 +682,12 @@ impl TileCache {
     /// existed: never servable as fresh, still usable as a last resort while
     /// they are inside retention.
     ///
-    /// A `no-cache` row is excluded outright. RFC 9111 5.2.2.4 requires
-    /// successful validation on the origin BEFORE reuse, so "the network failed"
-    /// is exactly the condition under which such a tile may NOT be served -
-    /// which is the opposite of every other row here. On disk it is otherwise
-    /// identical to a grant that ran out, hence the dedicated column.
+    /// A `no-cache` row IS returned, with `TileEntry::no_cache` set. It may be
+    /// revalidated - that is what its ETag is for - and a successful `304` may
+    /// then serve it. What it may not do is answer a FAILED revalidation, so the
+    /// caller checks the flag before using it as a stale-if-error fallback.
+    /// Filtering it out here instead removed the validator along with it, which
+    /// turned every request for such a tile into a full download.
     ///
     /// Does NOT update `accessed_at` since we're serving stale data.
     ///
@@ -684,13 +696,13 @@ impl TileCache {
         let now = Self::now();
         let min_fetched_at = now - self.ttl_for(provider);
 
-        // Inside retention, not fresh, and not held under `no-cache`.
+        // Inside retention, and not fresh. `no-cache` rows are INCLUDED, with
+        // the flag carried out on the entry - see the note above.
         let result: Result<TileEntry, rusqlite::Error> = self.conn.query_row(
-            "SELECT data, content_type, size_bytes, fetched_at, accessed_at, expires_at, etag FROM tiles
+            "SELECT data, content_type, size_bytes, fetched_at, accessed_at, expires_at, etag, no_cache FROM tiles
              WHERE provider = ?1 AND z = ?2 AND y = ?3 AND x = ?4
                AND fetched_at > ?5
-               AND (expires_at IS NULL OR expires_at <= ?6)
-               AND no_cache = 0",
+               AND (expires_at IS NULL OR expires_at <= ?6)",
             params![provider, z, y, x, min_fetched_at, now],
             |row| {
                 Ok(TileEntry {
@@ -701,6 +713,7 @@ impl TileCache {
                     accessed_at: row.get(4)?,
                     expires_at: row.get(5)?,
                     etag: row.get(6)?,
+                    no_cache: row.get::<_, i64>(7)? != 0,
                 })
             },
         );
@@ -1169,8 +1182,10 @@ impl TileCache {
         let now = Self::now();
         let min_fetched_at = now - self.ttl_for(provider);
 
-        // Mirrors `get_stale` exactly - both are "retained, not fresh, and not
-        // held under `no-cache`".
+        // "May a stored copy answer a FAILED fetch?" - so unlike `get_stale`,
+        // which also feeds the validator lookup, this one does exclude
+        // `no-cache`. The pair is deliberately not symmetric; the asymmetry is
+        // the point.
         match self.conn.query_row(
             "SELECT COUNT(*) FROM tiles
              WHERE provider = ?1 AND z = ?2 AND y = ?3 AND x = ?4
@@ -2028,9 +2043,13 @@ mod tests {
             cache.get("esri", 1, 2, 3).is_none(),
             "never served as fresh"
         );
+        // The row IS reachable - that is what lets it be revalidated - but it
+        // carries the flag that stops it answering a FAILED revalidation.
+        let held = cache.get_stale("esri", 1, 2, 3).expect("retained");
+        assert!(held.no_cache);
         assert!(
-            cache.get_stale("esri", 1, 2, 3).is_none(),
-            "and never served unvalidated either"
+            !cache.has_stale_tile("esri", 1, 2, 3),
+            "and reports as not servable"
         );
     }
 
@@ -2092,6 +2111,7 @@ mod tests {
             accessed_at: now,
             expires_at: Some(now + 25),
             etag: None,
+            no_cache: false,
         };
         assert_eq!(entry.remaining_policy(now).max_age_seconds, Some(25));
         // Never negative: an already-expired parent yields an immediately-stale child.
@@ -2352,6 +2372,7 @@ mod tests {
             accessed_at: 0,
             expires_at: Some(i64::MAX),
             etag: None,
+            no_cache: false,
         };
         // Saturating rather than wrapping...
         assert_eq!(entry.remaining_policy(0).max_age_seconds, Some(i64::MAX));
@@ -2621,6 +2642,7 @@ mod tests {
             accessed_at: 0,
             expires_at: Some(6_400),
             etag: None,
+            no_cache: false,
         };
         let derived = entry.remaining_policy(0);
         assert_eq!(derived.age_seconds, None);
@@ -2664,14 +2686,24 @@ mod tests {
             )
             .unwrap();
 
-        // Stored - the bytes and the ETag are what make revalidation cheap.
+        // Stored - the bytes and the ETag are what make revalidation cheap, and
+        // the lookup must still reach them or the conditional request cannot be
+        // built at all. Excluding the row here instead hid the validator too,
+        // turning every request into a full download.
         assert_eq!(cache.get_stats().tile_count, 1);
         assert!(cache.get("esri", 1, 2, 3).is_none(), "never fresh");
+        let retained = cache
+            .get_stale("esri", 1, 2, 3)
+            .expect("reachable, so it can be revalidated");
+        assert_eq!(retained.etag.as_deref(), Some("\"v1\""));
         assert!(
-            cache.get_stale("esri", 1, 2, 3).is_none(),
-            "and never servable unvalidated, however the network is doing"
+            retained.no_cache,
+            "flagged, so the caller refuses to serve it unvalidated"
         );
-        assert!(!cache.has_stale_tile("esri", 1, 2, 3));
+        assert!(
+            !cache.has_stale_tile("esri", 1, 2, 3),
+            "which is the question has_stale_tile answers"
+        );
 
         // A plain expired grant, by contrast, is exactly what stale-if-error is
         // for. Same on-disk shape, different permission.
@@ -2688,7 +2720,9 @@ mod tests {
             )
             .unwrap();
         cache.expire_for_test("esri", 4, 5, 6).unwrap();
-        assert!(cache.get_stale("esri", 4, 5, 6).is_some());
+        let ordinary = cache.get_stale("esri", 4, 5, 6).expect("retained");
+        assert!(!ordinary.no_cache);
+        assert!(cache.has_stale_tile("esri", 4, 5, 6));
     }
 
     #[test]
@@ -2709,7 +2743,7 @@ mod tests {
                 Some("\"v1\""),
             )
             .unwrap();
-        assert!(cache.get_stale("esri", 1, 2, 3).is_none());
+        assert!(!cache.has_stale_tile("esri", 1, 2, 3));
 
         // Revalidated, and now under an ordinary grant.
         cache
@@ -2717,7 +2751,7 @@ mod tests {
             .unwrap();
         cache.expire_for_test("esri", 1, 2, 3).unwrap();
         assert!(
-            cache.get_stale("esri", 1, 2, 3).is_some(),
+            cache.has_stale_tile("esri", 1, 2, 3),
             "the no-cache exclusion must lift when the provider stops sending it"
         );
 
@@ -2725,7 +2759,7 @@ mod tests {
         cache
             .refresh_validated("esri", 1, 2, 3, parse_cache_control("no-cache"))
             .unwrap();
-        assert!(cache.get_stale("esri", 1, 2, 3).is_none());
+        assert!(!cache.has_stale_tile("esri", 1, 2, 3));
     }
 
     #[test]
