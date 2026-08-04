@@ -137,6 +137,16 @@
  *     the app itself corrupted - which is a harder input than any it would see
  *     otherwise.
  *
+ *     How much it actually gives up is measured, not guessed. Over 60 iterations
+ *     on the fractal fixture the roundtrip downgrade fired ZERO times
+ *     (`contaminatedMismatch` = 0): every one of the 1054 tolerated mismatches
+ *     was still explained by a NAMED classifier. The integrity downgrade fired
+ *     twice per iteration (`contaminatedIntegrityDelta` = 120), always on the
+ *     closure entries, because a wrongly-deleted shot dangles the merge anchored
+ *     to it and the checker rightly says so. Those two counters are the thing to
+ *     watch: if `contaminatedMismatch` ever climbs, the classifiers have stopped
+ *     covering what the walk is seeing and something new is hiding in it.
+ *
  * ## Findings
  *
  * Two, both new, both root-caused and pinned red in
