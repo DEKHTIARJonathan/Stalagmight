@@ -28,6 +28,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
 import { checkBuildFreshness } from './lib/build';
+import { agentBuildMode } from '../lib/env';
 import { fixtureSourcePath } from './lib/fixtures';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -53,13 +54,15 @@ const MAX_MERGED_METRICS = new Set(['snapshotBytesMax', 'maxDepth']);
 
 const USAGE =
   'usage: pnpm agent:fuzz-matrix [--fixtures a.stalx,b.stalx] [--seeds 1..8|1,3,7] ' +
-  '[--workers K] [--iterations M]';
+  '[--workers K] [--iterations M] [--release]';
 
 interface Options {
   fixtures: string[];
   seeds: number[];
   iterations: number;
   workers: number;
+  /** Drive the release binary (STALAGMIGHT_AGENT_RELEASE=1 in every child). */
+  release: boolean;
 }
 
 interface RunResult {
@@ -103,7 +106,7 @@ function positiveInt(flag: string, raw: string): number {
 }
 
 function parseArgs(argv: string[]): Options {
-  const known = new Set(['fixtures', 'seeds', 'workers', 'iterations']);
+  const known = new Set(['fixtures', 'seeds', 'workers', 'iterations', 'release']);
   const raw: Record<string, string> = {};
   for (let i = 0; i < argv.length; i++) {
     const token = argv[i];
@@ -111,6 +114,11 @@ function parseArgs(argv: string[]): Options {
     const eq = token.indexOf('=');
     const flag = eq >= 0 ? token.slice(2, eq) : token.slice(2);
     if (!known.has(flag)) bail(`unknown flag --${flag}`);
+    // `--release` is a boolean switch; every other flag takes a value.
+    if (flag === 'release' && eq < 0) {
+      raw[flag] = '1';
+      continue;
+    }
     const value = eq >= 0 ? token.slice(eq + 1) : argv[++i];
     if (value === undefined) bail(`--${flag} needs a value`);
     raw[flag] = value;
@@ -145,7 +153,7 @@ function parseArgs(argv: string[]): Options {
 
   const seeds = raw.seeds === undefined ? [1, 2, 3, 4] : parseSeeds(raw.seeds);
   const iterations = raw.iterations === undefined ? DEFAULT_ITERATIONS : positiveInt('iterations', raw.iterations);
-  return { fixtures, seeds, iterations, workers };
+  return { fixtures, seeds, iterations, workers, release: raw.release !== undefined };
 }
 
 /**
@@ -163,7 +171,7 @@ function parseArgs(argv: string[]): Options {
  * when Xvfb has not exited within 250 ms, so two sessions launched together can
  * both conclude they own :89. One display per slot removes the race.
  */
-function slotEnv(slot: number, fixture: string): NodeJS.ProcessEnv {
+function slotEnv(slot: number, fixture: string, release: boolean): NodeJS.ProcessEnv {
   return {
     // Inherited wholesale, so STALAGMIGHT_FUZZ_ALLOW_KNOWN_BUGS reaches the
     // child exactly as the caller set it.
@@ -171,6 +179,9 @@ function slotEnv(slot: number, fixture: string): NodeJS.ProcessEnv {
     STALAGMIGHT_FUZZ_FIXTURE: fixture,
     STALAGMIGHT_AGENT_BASE_PORT: String(BASE_PORT + slot * PORT_STRIDE),
     STALAGMIGHT_AGENT_DISPLAYS: `:${TOP_DISPLAY - slot}`,
+    // `--release` on the matrix sets it for every child; an inherited
+    // STALAGMIGHT_AGENT_RELEASE=1 already reaches them through the spread.
+    ...(release ? { STALAGMIGHT_AGENT_RELEASE: '1' } : {}),
   };
 }
 
@@ -218,7 +229,7 @@ function runOne(fixture: string, seed: number, slot: number, opts: Options, labe
     const child = spawn(
       TSX_BIN,
       [CHILD_SCRIPT, SCENARIO, '--seed', String(seed), '--iterations', String(opts.iterations)],
-      { cwd: repoRoot, detached: true, stdio: ['ignore', 'pipe', 'pipe'], env: slotEnv(slot, fixture) },
+      { cwd: repoRoot, detached: true, stdio: ['ignore', 'pipe', 'pipe'], env: slotEnv(slot, fixture, opts.release) },
     );
     live.add(child);
     const stdout: string[] = [];
@@ -334,7 +345,8 @@ async function main(): Promise<void> {
   const workers = Math.min(opts.workers, cells.length);
   process.stdout.write(
     `${SCENARIO}: ${cells.length} cell(s) = ${opts.fixtures.length} fixture(s) x ${opts.seeds.length} seed(s), ` +
-      `iterations=${opts.iterations}, workers=${workers}\n`,
+      `iterations=${opts.iterations}, workers=${workers}, ` +
+      `mode=${opts.release ? 'release' : agentBuildMode()}\n`,
   );
 
   process.on('SIGINT', () => {
@@ -354,7 +366,7 @@ async function main(): Promise<void> {
   // build; the pool then starts against a fresh binary. Skipped when the binary
   // is already fresh - there is nothing to pay for, and serializing a cell would
   // cost a whole app session.
-  const freshness = checkBuildFreshness();
+  const freshness = checkBuildFreshness({ mode: opts.release ? 'release' : agentBuildMode() });
   let next = 0;
   if (cells.length > 1 && workers > 1 && !freshness.fresh) {
     const first = cells[0];

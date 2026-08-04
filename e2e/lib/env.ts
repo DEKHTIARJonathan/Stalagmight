@@ -17,13 +17,41 @@ const repoRoot = path.resolve(__dirname, '..', '..');
 const isWindows = process.platform === 'win32';
 const isMacOS = process.platform === 'darwin';
 
-/** Name of the built debug binary for this platform. */
+/** Name of the built binary for this platform. */
 export const binaryName = isWindows ? 'stalagmight.exe' : 'stalagmight';
 /** Cargo target dir (the ~/.cargo_build default scripts/wdio.sh + mac-build.sh export). */
 export const cargoTargetDir =
   process.env.CARGO_TARGET_DIR || path.join(os.homedir(), '.cargo_build');
-/** Absolute path to the built debug binary. */
-export const binaryPath = path.join(cargoTargetDir, 'debug', binaryName);
+
+/** Cargo profile the agent harness drives. Doubles as the target subdirectory. */
+export type AgentBuildMode = 'debug' | 'release';
+
+/**
+ * Which build the AGENT harness drives. Debug unless
+ * `STALAGMIGHT_AGENT_RELEASE=1`, and deliberately opt-in: a debug build's
+ * `debug_assert!`s and its `debug_assertions`-gated self-checks are themselves
+ * oracles (see docs/agent-harness.md), so the default must keep them.
+ *
+ * Read at CALL time, never cached, so a runner can set the variable after its
+ * own module graph has loaded (which is what `--release` on `agent:scenario`
+ * does).
+ */
+export function agentBuildMode(): AgentBuildMode {
+  return process.env.STALAGMIGHT_AGENT_RELEASE === '1' ? 'release' : 'debug';
+}
+
+/** Absolute path to the built binary for `mode`. */
+export function binaryPathFor(mode: AgentBuildMode): string {
+  return path.join(cargoTargetDir, mode, binaryName);
+}
+
+/**
+ * Absolute path to the built DEBUG binary.
+ *
+ * Still a constant because the quarantined wdio runner imports it and has no
+ * release mode. The agent harness calls `binaryPathFor(agentBuildMode())`.
+ */
+export const binaryPath = binaryPathFor('debug');
 /**
  * macOS wrapper that delays the `[webdriver]` port announcement by 500ms so the
  * Tauri window exists before tauri-wd creates a session. Resolved against the

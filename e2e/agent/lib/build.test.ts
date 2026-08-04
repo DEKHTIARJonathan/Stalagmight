@@ -11,6 +11,8 @@ import * as os from 'os';
 import * as path from 'path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
+  FEATURES_FOR_MODE,
+  buildStampPathFor,
   isPluginAclChurn,
   needsE2eFeature,
   readBuildStamp,
@@ -20,6 +22,8 @@ import {
 
 const E2E_STAMP: E2EBuildStamp = {
   v: 2,
+  mode: 'debug',
+  features: '',
   viteE2E: true,
   e2eFeature: false,
   viteMode: 'production',
@@ -191,7 +195,7 @@ describe('readBuildStamp', () => {
     expect(readBuildStamp(write(JSON.stringify({ ...E2E_STAMP, v: 3 })))).toBeNull();
   });
 
-  it('returns null for a v1 stamp (predates e2eFeature - one forced rebuild)', () => {
+  it('returns null for a v1 stamp (predates e2eFeature AND the profile - one forced rebuild)', () => {
     const v1 = { ...E2E_STAMP, v: 1 } as Record<string, unknown>;
     delete v1['e2eFeature'];
     expect(readBuildStamp(write(JSON.stringify(v1)))).toBeNull();
@@ -211,5 +215,58 @@ describe('readBuildStamp', () => {
     const stamp = readBuildStamp(write(JSON.stringify(E2E_STAMP)));
     expect(stamp).not.toBeNull();
     expect(stampStaleReasons(stamp, wantMatching)).toEqual([]);
+  });
+});
+
+describe('build modes', () => {
+  it('keeps one stamp per profile, beside the binary it vouches for', () => {
+    const debugStamp = buildStampPathFor('debug');
+    const releaseStamp = buildStampPathFor('release');
+
+    expect(debugStamp).not.toBe(releaseStamp);
+    expect(path.dirname(debugStamp).endsWith('debug')).toBe(true);
+    expect(path.dirname(releaseStamp).endsWith('release')).toBe(true);
+  });
+
+  it('treats the other profile as stale rather than reusing its binary', () => {
+    const reasons = stampStaleReasons(E2E_STAMP, {
+      viteE2E: true,
+      binaryMtimeMs: E2E_STAMP.binaryMtimeMs,
+      mode: 'release',
+      features: 'e2e',
+    });
+
+    expect(reasons).toHaveLength(2);
+    expect(reasons[0]).toContain('for the debug profile but this start needs release');
+    expect(reasons[1]).toContain('features "(none)" but this start needs "e2e"');
+  });
+
+  it('accepts a release stamp for a release start', () => {
+    const releaseStamp: E2EBuildStamp = { ...E2E_STAMP, mode: 'release', features: 'e2e' };
+
+    expect(
+      stampStaleReasons(releaseStamp, {
+        viteE2E: true,
+        binaryMtimeMs: releaseStamp.binaryMtimeMs,
+        mode: 'release',
+        features: 'e2e',
+      }),
+    ).toEqual([]);
+  });
+
+  it('rejects a v1 stamp, which cannot say which profile it describes', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'stalagmight-stamp-'));
+    const file = path.join(dir, 'stamp.json');
+    fs.writeFileSync(file, JSON.stringify({ ...E2E_STAMP, v: 1 }));
+
+    expect(readBuildStamp(file)).toBeNull();
+  });
+
+  it('gives release the e2e feature and debug none', () => {
+    // debug_trigger_panic is #[cfg(any(debug_assertions, feature = "e2e"))], so
+    // release needs the feature to keep the crash-oracle self-test; debug must
+    // stay featureless so the DEFAULT build is unchanged.
+    expect(FEATURES_FOR_MODE.debug).toEqual([]);
+    expect(FEATURES_FOR_MODE.release).toEqual(['e2e']);
   });
 });

@@ -9,6 +9,11 @@
  *
  *   pnpm agent:scenario undo-redo-fuzz --seed 7 --iterations 60
  *
+ * `--release` (or `STALAGMIGHT_AGENT_RELEASE=1`) drives the release binary
+ * instead of the debug one. Opt-in on purpose: a debug build's `debug_assert!`s
+ * and `debug_assertions`-gated self-checks are oracles in their own right, so
+ * the default keeps them. See docs/agent-harness.md.
+ *
  * Exits non-zero when the scenario throws or the sweep reports a fatal finding,
  * so it works as a one-off gate too.
  */
@@ -20,18 +25,30 @@ interface Args {
   name: string;
   seed?: number;
   iterations?: number;
+  release: boolean;
 }
 
 function parseArgs(argv: string[]): Args {
   const [name, ...rest] = argv;
   if (!name) {
-    throw new Error(`usage: pnpm agent:scenario <name> [--seed N] [--iterations M]\nknown: ${listScenarios().join(', ')}`);
+    throw new Error(
+      `usage: pnpm agent:scenario <name> [--seed N] [--iterations M] [--release]\n` +
+        `known: ${listScenarios().join(', ')}`,
+    );
   }
-  const args: Args = { name };
-  for (let i = 0; i < rest.length; i += 2) {
+  const args: Args = { name, release: false };
+  for (let i = 0; i < rest.length; i += 1) {
     const flag = rest[i];
-    const value = Number(rest[i + 1]);
-    if (!Number.isFinite(value)) throw new Error(`flag ${flag} needs a numeric value`);
+    if (flag === '--release') {
+      args.release = true;
+      continue;
+    }
+    const raw = rest[i + 1];
+    const value = Number(raw);
+    if (raw === undefined || !Number.isFinite(value)) {
+      throw new Error(`flag ${flag} needs a numeric value`);
+    }
+    i += 1;
     if (flag === '--seed') args.seed = value;
     else if (flag === '--iterations') args.iterations = value;
     else throw new Error(`unknown flag ${flag}`);
@@ -45,9 +62,15 @@ async function main(): Promise<void> {
     throw new Error(`unknown scenario "${args.name}"; known: ${listScenarios().join(', ')}`);
   }
 
+  // Set BEFORE `session.start()`: `agentBuildMode()` is read at call time, which
+  // is what lets a flag parsed after this module's imports still take effect.
+  if (args.release) process.env.STALAGMIGHT_AGENT_RELEASE = '1';
+
   const session = new AppSession();
   const started = await session.start({ build: 'auto' });
-  process.stdout.write(`session ${started.state} (build ${started.buildAction})\n`);
+  process.stdout.write(
+    `session ${started.state} (${started.buildMode} build ${started.buildAction})\n`,
+  );
   let failed = false;
 
   try {
@@ -61,6 +84,7 @@ async function main(): Promise<void> {
     if (fatal.length) failed = true;
     process.stdout.write(
       `${fatal.length ? 'FAIL' : 'PASS'}: ${args.name} seed=${metrics.seed} iterations=${metrics.iterations} ` +
+        `mode=${started.buildMode} ` +
         `(${metrics.durationMs}ms) ${JSON.stringify(metrics.metrics)}` +
         `${sweep.findings.length ? ` findings=${JSON.stringify(sweep.findings)}` : ''}\n`,
     );

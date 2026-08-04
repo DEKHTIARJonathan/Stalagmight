@@ -15,7 +15,7 @@ import './lib/undici-dispatcher-pin';
 import { spawn, type ChildProcess } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
-import { binaryPath } from '../lib/env';
+import { agentBuildMode, binaryPathFor } from '../lib/env';
 import { checkDisplayAvailable, startXvfb, type XvfbHandle } from '../lib/display';
 import { checkBuildFreshness, buildApp } from './lib/build';
 import { findFreePort, isPidAlive, recordPid, reapPidsFromFile, waitForPortListening } from './lib/procs';
@@ -68,16 +68,19 @@ export class AppSession extends SessionCore {
     // Reap orphans from previous sessions (scoped to recorded pidfiles).
     this.reapPreviousSessions();
 
-    // 1. Build freshness.
+    // 1. Build freshness. The profile is resolved ONCE here and threaded
+    // through, so a mid-start env change cannot make the freshness check and
+    // the launch disagree about which binary they mean.
+    const buildMode = agentBuildMode();
     let buildAction: StartResult['buildAction'] = 'skipped';
     if (build !== 'skip') {
-      const freshness = checkBuildFreshness();
+      const freshness = checkBuildFreshness({ mode: buildMode });
       if (build === 'force' || !freshness.fresh) {
         this.state = 'building';
         if (build !== 'force' && freshness.reasons.length > 0) {
           process.stderr.write(`Rebuilding: ${freshness.reasons.join('; ')}\n`);
         }
-        buildApp((line) => process.stderr.write(`${line}\n`));
+        buildApp((line) => process.stderr.write(`${line}\n`), buildMode);
         buildAction = 'built';
       } else {
         buildAction = 'fresh';
@@ -185,7 +188,7 @@ export class AppSession extends SessionCore {
       this.browserInstance = await attachBrowser(this.driverPort, {
         platformName: 'linux',
         'wdio:enforceWebDriverClassic': true,
-        'tauri:options': { application: binaryPath },
+        'tauri:options': { application: binaryPathFor(buildMode) },
       });
     } catch (err) {
       await this.stop('attach-failed');
@@ -208,8 +211,8 @@ export class AppSession extends SessionCore {
       sessionId: this.sessionId,
       startedAt: new Date().toISOString(),
       gitHead: gitHead(),
-      binaryPath,
-      binaryMtime: safeMtime(binaryPath),
+      binaryPath: binaryPathFor(buildMode),
+      binaryMtime: safeMtime(binaryPathFor(buildMode)),
       display: this.display,
       headed: Boolean(opts.headed),
       profileDir: profileRoot,
@@ -224,6 +227,7 @@ export class AppSession extends SessionCore {
       display: this.display,
       profileDir: profileRoot,
       buildAction,
+      buildMode,
       sessionDir: this.recorder.dir,
     };
   }
