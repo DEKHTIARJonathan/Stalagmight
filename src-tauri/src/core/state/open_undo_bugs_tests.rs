@@ -1146,3 +1146,48 @@ fn undo_after_reload_is_not_wedged_by_an_out_of_range_shot_id() {
         reopened.undo().error
     );
 }
+
+// ===========================================================================
+// Finding 14: REAL, reproduced by the Rust-tier fuzzer, NOT reproducible
+// synthetically here (yet)
+// ===========================================================================
+//
+// `src-tauri/src/core/state/fuzz_undo_tests.rs` reproduces it deterministically:
+// with a datum on section A and a merge chain A -> B -> C, a mid-chain
+// `CreateShot` into A leaves the A/B merge 6.97 m apart and the app's own
+// `debug_assert_merge_alignment` (`models/project/offsets.rs`, whose assert arm is
+// `#[cfg(test)]` and therefore exists in NO other tier) panics inside
+// `insert_shot_after`. The fuzzer re-checks raw merge alignment after every move
+// with the same measure the assert uses, and that check is clean on the move
+// immediately before - so it is the insert that breaks it, not a leftover.
+//
+// The suspected mechanism is `Project::insert_shot_after`
+// (`models/project/shots.rs:185-227`), which back-shifts the section offset only
+// when the downstream side is INDEPENDENTLY datum-anchored:
+//
+//     on_tail(our) && their.section_id != section_id
+//         && self.has_datum_path_excluding(their.section_id, section_id)
+//
+// On a plain chain B's only datum path runs through A, so that guard is false, no
+// compensation runs, and `cascade_connection_offsets` is expected to move B
+// instead.
+//
+// MEASURED, and it does NOT reproduce: the obvious reduction - sections A(3
+// shots, datum at 0), B(1), C(1), merges A:3<->B:0 and B:1<->C:0, then
+// `CreateShot(after = A's first shot)` - leaves every merge aligned. So the
+// cascade DOES handle the plain chain, and the fuzzer's state carries a further
+// ingredient this reduction is missing (its runs reach the shape after dozens of
+// moves including moves, reverses and deletes). Recorded here rather than pinned
+// by a test that passes, which would claim the opposite of what is true.
+//
+// Reproduce with the fuzzer:
+//
+//     STALAGMIGHT_RUST_FUZZ_CLOSURES=1 STALAGMIGHT_RUST_FUZZ_SEEDS=4 \
+//       TELEMETRY_ENDPOINT=http://localhost/dummy cargo test \
+//       --manifest-path src-tauri/Cargo.toml --features telemetry \
+//       --lib fuzz_seed_survey -- --ignored --nocapture
+//
+// Also part of the finding: `check_merge_alignment`
+// (`models/project/integrity.rs`) measures through `resolved_station_offsets()`
+// and reports NOTHING about the same state the raw-coordinate assert panics on.
+// Whichever is authoritative, the two should not disagree.
