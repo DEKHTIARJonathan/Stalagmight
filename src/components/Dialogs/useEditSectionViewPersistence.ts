@@ -9,6 +9,11 @@
  * each other, so narrowing the entry form would narrow the review form too.
  *
  * Do not merge them on the grounds that the defaults have converged.
+ *
+ * The IMPORT-time grids get a third slice for the same reason again: the wizard
+ * and zero-datum edit shots that are not in the project yet, and sharing the
+ * edit-section fields meant reshaping columns mid-import silently rewrote the
+ * layout used to review a saved section.
  */
 import {
   useGridViewPersistence,
@@ -28,5 +33,21 @@ export function useEditSectionViewPersistence(
     command: 'update_edit_section_view',
     fallbackHidden,
     toastKey: 'edit-section-view-save',
+  });
+}
+
+/** The import-time shot grids (mNemo wizard, zero-datum config). */
+export function useImportShotsViewPersistence(
+  view: GridViewState,
+  setters: GridViewSetters,
+  fallbackHidden: readonly string[]
+): void {
+  useGridViewPersistence(view, setters, {
+    orderField: 'import_shots_column_order',
+    hiddenField: 'import_shots_hidden_columns',
+    widthsField: 'import_shots_column_widths',
+    command: 'update_import_shots_view',
+    fallbackHidden,
+    toastKey: 'import-shots-view-save',
   });
 }

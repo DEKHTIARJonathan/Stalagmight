@@ -95,6 +95,19 @@ pub struct PanelsConfig {
     /// tolerant deserializer.
     #[serde(default, deserialize_with = "lenient_column_widths")]
     pub edit_section_column_widths: BTreeMap<String, u32>,
+    /// The IMPORT-time shot grids (the mNemo wizard, both of its steps, and
+    /// zero-datum config): column order. Its own set because those dialogs edit
+    /// shots that are not in the project yet - reshaping columns while placing an
+    /// import is a different job from reviewing a saved section, and sharing one
+    /// set meant either overwrote the other's layout.
+    #[serde(default)]
+    pub import_shots_column_order: Vec<String>,
+    /// Import-time shot grids: hidden column keys.
+    #[serde(default = "default_edit_section_hidden_columns")]
+    pub import_shots_hidden_columns: Vec<String>,
+    /// Import-time shot grids: column widths in pixels, keyed by grid column key.
+    #[serde(default, deserialize_with = "lenient_column_widths")]
+    pub import_shots_column_widths: BTreeMap<String, u32>,
     /// Sections panel open (pinned) at startup
     #[serde(default = "default_true")]
     pub sections_panel_open: bool,
@@ -141,6 +154,7 @@ impl PanelsConfig {
         normalize_column_widths(&mut self.data_table_station_column_widths);
         normalize_column_widths(&mut self.new_section_column_widths);
         normalize_column_widths(&mut self.edit_section_column_widths);
+        normalize_column_widths(&mut self.import_shots_column_widths);
         // The eight column-key LISTS need the same ceiling as the width maps
         // beside them, and for the same reason - see `normalize_column_names`.
         // Doing it here rather than in `update_data_table_view_impl` is what
@@ -156,6 +170,8 @@ impl PanelsConfig {
         normalize_column_names(&mut self.new_section_hidden_columns);
         normalize_column_names(&mut self.edit_section_column_order);
         normalize_column_names(&mut self.edit_section_hidden_columns);
+        normalize_column_names(&mut self.import_shots_column_order);
+        normalize_column_names(&mut self.import_shots_hidden_columns);
         // Same both-doors argument for the angle display modes. The PARTIAL
         // command validates them and rejects an unknown string, but
         // `update_config` takes a whole `Config` and used to write one through
@@ -217,7 +233,7 @@ fn default_data_table_hidden_columns() -> Vec<String> {
 /// they did before. The averages are what they have always shown.
 ///
 /// Mirrored by `DEFAULT_EDIT_SECTION_HIDDEN_COLUMNS` in ShotTableEditor.tsx.
-fn default_edit_section_hidden_columns() -> Vec<String> {
+pub(super) fn default_edit_section_hidden_columns() -> Vec<String> {
     vec![
         "azimuth_in".to_string(),
         "azimuth_out".to_string(),

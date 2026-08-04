@@ -1930,6 +1930,7 @@ pub fn run() {
             commands::config::update_data_table_view,
             commands::config::update_new_section_view,
             commands::config::update_edit_section_view,
+            commands::config::update_import_shots_view,
             commands::config::update_gas_config,
             // Display settings (per-project)
             commands::config::load_display_settings,

@@ -577,6 +577,11 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           | Record<string, unknown>
           | undefined) ?? {}),
       };
+      const mockImportShotsView: Record<string, unknown> = {
+        ...(((window as unknown as Record<string, unknown>).__E2E_SEED_EDIT_SECTION_VIEW__ as
+          | Record<string, unknown>
+          | undefined) ?? {}),
+      };
 
       // The `[gas]` block persisted via update_gas_config, overlaid onto
       // get_config the same way. Null until something writes it, so an untouched
@@ -3329,6 +3334,8 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                   ...mockDataTableView,
                   ...mockNewSectionView,
                   ...mockEditSectionView,
+                  ...mockImportShotsView,
+                ...mockImportShotsView,
                 },
                 ...(mockGasConfig ? { gas: mockGasConfig } : {}),
               };
@@ -3528,6 +3535,15 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                   'pitch_in',
                   'pitch_out',
                 ],
+                import_shots_column_order: [],
+                import_shots_hidden_columns: [
+                  'azimuth_in',
+                  'azimuth_out',
+                  '_pitch_avg',
+                  'pitch_in',
+                  'pitch_out',
+                ],
+                import_shots_column_widths: {},
                 edit_section_column_widths: {},
                 // Concrete reveal state so initPanels never falls back to its
                 // defaults. Deliberately NOT the shipped default any more: a fresh
@@ -3544,6 +3560,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 ...mockDataTableView,
                 ...mockNewSectionView,
                 ...mockEditSectionView,
+                ...mockImportShotsView,
               },
               cache: {
                 tile_cache_enabled: true,
@@ -3688,6 +3705,27 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             if (columnWidths != null) mockEditSectionView.edit_section_column_widths = columnWidths;
             return null; // Tauri serializes () as null
           }
+          case 'update_import_shots_view': {
+            console.log('[Mock IPC] update_import_shots_view called with:', args);
+            const win = window as unknown as Record<string, unknown>;
+            const existing = win.__MOCK_EDIT_SECTION_VIEW_CALLS__ as unknown[] | undefined;
+            const calls = Array.isArray(existing) ? existing : [];
+            calls.push(args ?? null);
+            win.__MOCK_EDIT_SECTION_VIEW_CALLS__ = calls;
+            const columnOrder = (args?.columnOrder ?? args?.column_order) as string[] | undefined;
+            if (columnOrder != null) mockImportShotsView.import_shots_column_order = columnOrder;
+            const hiddenColumns = (args?.hiddenColumns ?? args?.hidden_columns) as
+              | string[]
+              | undefined;
+            if (hiddenColumns != null) {
+              mockImportShotsView.import_shots_hidden_columns = hiddenColumns;
+            }
+            const columnWidths = (args?.columnWidths ?? args?.column_widths) as
+              | Record<string, number>
+              | undefined;
+            if (columnWidths != null) mockImportShotsView.import_shots_column_widths = columnWidths;
+            return null; // Tauri serializes () as null
+          }
 
           case 'reload_config': {
             // Return saved config if available (for testing persistence),
@@ -3706,6 +3744,8 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                   ...mockDataTableView,
                   ...mockNewSectionView,
                   ...mockEditSectionView,
+                  ...mockImportShotsView,
+                ...mockImportShotsView,
                 },
                 ...(mockGasConfig ? { gas: mockGasConfig } : {}),
               };
@@ -3907,6 +3947,15 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                   'pitch_in',
                   'pitch_out',
                 ],
+                import_shots_column_order: [],
+                import_shots_hidden_columns: [
+                  'azimuth_in',
+                  'azimuth_out',
+                  '_pitch_avg',
+                  'pitch_in',
+                  'pitch_out',
+                ],
+                import_shots_column_widths: {},
                 edit_section_column_widths: {},
                 // Concrete reveal state so initPanels never falls back to its
                 // defaults. Deliberately NOT the shipped default any more: a fresh
@@ -3923,6 +3972,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 ...mockDataTableView,
                 ...mockNewSectionView,
                 ...mockEditSectionView,
+                ...mockImportShotsView,
               },
               cache: {
                 tile_cache_enabled: true,

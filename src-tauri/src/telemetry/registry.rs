@@ -502,6 +502,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "command.update_new_section_view",
     // Same again for the edit-section dialog's shot grid.
     "command.update_edit_section_view",
+    "command.update_import_shots_view",
     "command.update_gas_config",
     "command.get_raw_table_names",
     "command.get_raw_table",
@@ -1091,7 +1092,12 @@ mod tests {
         //       how we learn whether column shaping is something people do while
         //       entering a survey, while correcting one, or both:
         //       command.update_edit_section_view = 721.
-        assert_eq!(EVENT_NAMES.len(), 721);
+        //   + 1 the same write for the import-time shot grids (the mNemo wizard
+        //       and zero-datum config), kept apart from the edit-section one so
+        //       reshaping columns mid-import cannot overwrite the layout used to
+        //       review a saved section:
+        //       command.update_import_shots_view = 722.
+        assert_eq!(EVENT_NAMES.len(), 722);
     }
 
     /// Active-dwell mirrors every dwell state 1:1 (#31): for each `dwell.<key>` there
