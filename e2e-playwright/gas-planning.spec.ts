@@ -4,6 +4,7 @@ import {
   seedProjectWithSections,
   deleteShotAt,
   waitForDrawnStations,
+  waitForMapIdle,
   getStationScreenPositions,
   readCanvasPixel,
   readCanvasPixelBlock,
@@ -1055,6 +1056,112 @@ test.describe('Gas planning', () => {
     // Answering the question reveals the full rig.
     await expect(page.locator('[data-testid="gas-entry-card"]')).toBeHidden();
     await expect(page.locator('[data-testid="gas-origin-readout"]')).toBeVisible();
+  });
+
+  test('#397: before an origin is chosen, a plain left-click on a SHOT sets the origin at the endpoint nearer the entrance', async ({
+    page,
+  }) => {
+    // Zero-datum at the FAR end (station 10) reverses "nearer the entrance" from the trivial
+    // lower-index case, so a correct pick proves the entrance-distance rule ran, rather than the
+    // pre-#397 bug of always anchoring to the shot's lower-indexed (`from`) station.
+    await page.evaluate(async () => {
+      const e2e = (window as unknown as {
+        __E2E_TEST__?: {
+          projectStore: {
+            getState: () => {
+              project: { sections: Array<{ id: number }> } | null;
+              setZeroDatum: (
+                ref: { section_id: number; station_index: number },
+                gps: { latitude: number; longitude: number; depth_reference: number },
+              ) => Promise<unknown>;
+              refreshProjectState: () => Promise<void>;
+            };
+          };
+        };
+      }).__E2E_TEST__;
+      const ps = e2e!.projectStore.getState();
+      const secId = ps.project!.sections[0].id;
+      await ps.setZeroDatum(
+        { section_id: secId, station_index: 10 },
+        { latitude: 24.55, longitude: -81.78, depth_reference: 0 },
+      );
+      await ps.refreshProjectState();
+    });
+
+    // `setZeroDatum` triggers `triggerFitToBounds` (projectStore.ts), which re-fits the camera
+    // asynchronously - wait for that request to be consumed before applying the probe zoom, or
+    // the fit-to-bounds can land AFTER our zoom and silently zoom back out.
+    await expect
+      .poll(
+        () =>
+          page.evaluate(
+            () =>
+              (window as unknown as {
+                __E2E_TEST__?: { uiStore: { getState: () => { requestFitToBounds: unknown } } };
+              }).__E2E_TEST__?.uiStore.getState().requestFitToBounds ?? false,
+          ),
+        { timeout: 3000 },
+      )
+      .toBe(false);
+
+    await enterMode(page, 'plan');
+    await expect(page.locator('[data-testid="gas-entry-card"]')).toBeVisible({ timeout: 3000 });
+    await waitForDrawnStations(page);
+    // Let the datum-triggered fit-to-bounds fully settle BEFORE reading the zoom to bump - a
+    // mid-animation read would bake a transient value into `targetZoom`, and the later
+    // `waitForMapIdle` calls would then just settle onto that (wrong) target.
+    await waitForMapIdle(page);
+    const targetZoom = (await mapZoom(page)) + PROBE_ZOOM_DELTA;
+    await setMapZoom(page, targetZoom);
+    await waitForMapIdle(page);
+    await waitForDrawnStations(page);
+
+    // Stations near the CENTER of the survey (not the edges): a +3 zoom is centered on the
+    // bounds midpoint, so an edge station's screen position can end up off-canvas.
+    const a = await stationAt(page, 4);
+    const b = await stationAt(page, 5);
+    const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+    const canvasBox = await page.locator('canvas').first().boundingBox();
+    expect(canvasBox).not.toBeNull();
+    await page.mouse.click(canvasBox!.x + mid.x, canvasBox!.y + mid.y);
+
+    // Station 5 is nearer the (far-end, station-10) entrance than station 4, so the click
+    // anchors there - not the shot's lower-indexed endpoint.
+    await expect
+      .poll(
+        () =>
+          page.evaluate(
+            () =>
+              (window as unknown as E2EWindow).__E2E_TEST__?.gasPlanStore.getState().origin ?? null,
+          ),
+        { timeout: 2000 },
+      )
+      .toEqual({ section_id: 1, station_index: 5 });
+  });
+
+  test('#397: once an origin is chosen, a plain left-click on a SHOT sets the endpoint', async ({
+    page,
+  }) => {
+    await enterPlanMode(page);
+    await expect(page.locator('[data-testid="gas-panel"]')).toBeVisible({ timeout: 3000 });
+    await waitForDrawnStations(page);
+    await setMapZoom(page, (await mapZoom(page)) + PROBE_ZOOM_DELTA);
+    await waitForDrawnStations(page);
+
+    const a = await stationAt(page, 5);
+    const b = await stationAt(page, 6);
+    const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+    const canvasBox = await page.locator('canvas').first().boundingBox();
+    expect(canvasBox).not.toBeNull();
+    await page.mouse.click(canvasBox!.x + mid.x, canvasBox!.y + mid.y);
+
+    await expect.poll(() => gasEndpoint(page), { timeout: 2000 }).not.toBeNull();
+    // The origin must be untouched (still the entrance default), matching the station-click case.
+    expect(
+      await page.evaluate(
+        () => (window as unknown as E2EWindow).__E2E_TEST__?.gasPlanStore.getState().origin ?? null,
+      ),
+    ).toBeNull();
   });
 
   test('Set as start point sets the ORIGIN, not the endpoint (#298)', async ({ page }) => {
