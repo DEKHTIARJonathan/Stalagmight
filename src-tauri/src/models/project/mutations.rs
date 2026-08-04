@@ -202,6 +202,21 @@ impl Project {
         })
     }
 
+    /// Lift `next_closure_id` above every id already in use, so the next closure
+    /// minted from the counter gets a unique one.
+    ///
+    /// A legacy file can carry closures with id 0 and a counter that was never
+    /// advanced past them, so the counter alone is not trustworthy on a project
+    /// that came off disk. Every path that mints a closure id calls this first -
+    /// [`Self::create_loop_closure`], [`Self::create_loop_closures_batch`], and
+    /// the merge demotion - so they cannot disagree about the convention.
+    pub(crate) fn normalize_next_closure_id(&mut self) {
+        let max_existing = self.loop_closures.iter().map(|lc| lc.id).max().unwrap_or(0);
+        if self.next_closure_id <= max_existing {
+            self.next_closure_id = max_existing + 1;
+        }
+    }
+
     /// Create a loop closure between two connected stations
     /// Returns the created LoopClosure on success
     pub fn create_loop_closure(
@@ -258,11 +273,7 @@ impl Project {
             return Err("Closure distribution strategies are deferred. Use Batch.".to_string());
         }
 
-        // Normalize next_closure_id in case of legacy deserialization (default 0)
-        let max_existing = self.loop_closures.iter().map(|lc| lc.id).max().unwrap_or(0);
-        if self.next_closure_id <= max_existing {
-            self.next_closure_id = max_existing + 1;
-        }
+        self.normalize_next_closure_id();
         // Assign next closure ID from monotonic counter
         let next_id = self.next_closure_id;
         self.next_closure_id += 1;
@@ -406,10 +417,7 @@ impl Project {
         }
 
         // Normalize the id counter once (legacy id=0 projects).
-        let max_existing = self.loop_closures.iter().map(|lc| lc.id).max().unwrap_or(0);
-        if self.next_closure_id <= max_existing {
-            self.next_closure_id = max_existing + 1;
-        }
+        self.normalize_next_closure_id();
 
         let mut results = Vec::with_capacity(pairs.len());
         let mut created_any = false;

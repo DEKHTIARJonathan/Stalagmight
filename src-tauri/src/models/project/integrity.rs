@@ -368,10 +368,7 @@ impl Project {
         // Legacy files can carry closures with id 0 and a stale counter; normalize
         // once so the demoted closures get unique ids (same convention as
         // `create_loop_closure` / `create_loop_closures_batch`).
-        let max_existing = self.loop_closures.iter().map(|lc| lc.id).max().unwrap_or(0);
-        if self.next_closure_id <= max_existing {
-            self.next_closure_id = max_existing + 1;
-        }
+        self.normalize_next_closure_id();
 
         let mut demoted = 0;
         // Re-scan from scratch after each demotion rather than collecting indices

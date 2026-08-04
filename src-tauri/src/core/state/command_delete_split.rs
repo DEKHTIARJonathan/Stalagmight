@@ -738,7 +738,7 @@ impl AppState {
             // Step 3: Preserve merge/closure connectivity, then clean up section references
             project.preserve_connections_for_section_deletion(section_id);
 
-            project.retain_station_merges(|m| {
+            project.station_merges.retain(|m| {
                 m.station_a.section_id != section_id && m.station_b.section_id != section_id
             });
 
