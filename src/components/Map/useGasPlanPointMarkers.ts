@@ -102,6 +102,9 @@ function onContextMenu(el: HTMLElement, ref: StationRef): void {
     e.preventDefault();
     e.stopPropagation();
     useUIStore.getState().openDialog('context-menu', {
+      // Over the map canvas: no scroller can move this menu, and opening it
+      // scrolls the panels via the selection it sets.
+      survivesScroll: true,
       target: { type: 'station', ref },
       position: { x: e.clientX, y: e.clientY },
     });

@@ -67,6 +67,7 @@ import {
 import { extractFilename } from '../../utils/path';
 import { blockedByIncompleteShots, countIncompleteShots } from '../common/incompleteShots';
 import { isBlankNewShot } from '../common/editableShotStatus';
+import { isEmittedShot, toEmittedStationIndex } from '../common/emittedShots';
 import { blankEditableShot } from '../common/editableShot';
 import { aggregateImportReceipts } from '../../utils/importReceipt';
 import type { ImportReceipt } from '../../types/ipc/ImportReceipt';
@@ -905,7 +906,7 @@ export function buildBatchImport(
           // obligation), which is only safe if every payload path drops it. The
           // zero-datum and segment paths do; this one did not, so a row typed in
           // and then cleared arrived as NaN length, depths and azimuths.
-          .filter((s) => !s.isDeleted && !isBlankNewShot(s))
+          .filter(isEmittedShot)
           .map(editableShotToShotData);
         if (import.meta.env.DEV && deletedCount > 0) {
           console.warn(
@@ -3187,8 +3188,15 @@ export default function DmpNewImportDialog({
 
       const edits = sectionEditsRef.current.get(anchor.sectionIndex);
       const shots: ShotData[] = edits
-        ? edits.shots.filter((s) => !s.isDeleted && !isBlankNewShot(s)).map(editableShotToShotData)
+        ? edits.shots.filter(isEmittedShot).map(editableShotToShotData)
         : convertToEditableShots(anchorDmpSection.shots).map(editableShotToShotData);
+      // The user picked this station against the rows they can SEE, which include
+      // any blank row the filter above just dropped. Left untranslated, the
+      // placement aligned to a station one too far along - or past the end of the
+      // shortened section entirely.
+      const emittedStationIndex = edits
+        ? toEmittedStationIndex(edits.shots, anchor.stationIndex)
+        : anchor.stationIndex;
 
       const sectionData = {
         name: edits?.name ?? anchorDmpSection.name,
@@ -3247,7 +3255,7 @@ export default function DmpNewImportDialog({
         })
         .filter((value): value is NonNullable<typeof value> => value !== null);
 
-      return { sectionData, additionalSections };
+      return { sectionData, additionalSections, emittedStationIndex };
     },
     [dmpFile.sections, selectionConfig.defaultDate, selectionConfig.defaultSurveyor, selectedIndices, sectionPalette],
   );
@@ -3428,7 +3436,7 @@ export default function DmpNewImportDialog({
 
       startPlacementMode(
         payload.sectionData,
-        anchor.stationIndex,
+        payload.emittedStationIndex,
         (result: PlacementResult) => {
           const handlePlacementComplete = async () => {
             const placement: ImportPlacement = result.snappedToStation

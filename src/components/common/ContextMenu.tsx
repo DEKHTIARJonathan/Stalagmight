@@ -182,6 +182,12 @@ export default function ContextMenu() {
    *  A map right-click passes nothing and is therefore never dismissed by a
    *  panel scrolling elsewhere, which is the behaviour that matters there. */
   const scrollScope = dialogData.scrollScope as string | undefined;
+  // Opened over a canvas rather than a list: no scroller anywhere can move it,
+  // and the opening gesture itself scrolls the panels (selecting the station
+  // brings its data-table row and section into view). Without this the menu is
+  // dismissed by that scroll as it opens - the flash-and-vanish this whole
+  // guard exists to prevent.
+  const survivesScroll = dialogData.survivesScroll === true;
   const scrollScopeRef = useRef<HTMLElement | null>(null);
   scrollScopeRef.current = scrollScope ? document.querySelector<HTMLElement>(scrollScope) : null;
 
@@ -196,7 +202,8 @@ export default function ContextMenu() {
     // so any scroll can leave it over a different row while its actions still
     // target what was under the cursor - the GlobalView recent-projects menu
     // acting on the wrong project.
-    survivesUnrelatedScroll: scrollScope !== undefined,
+    // A caller that NAMED its scroller, or one that declared it has none.
+    survivesUnrelatedScroll: scrollScope !== undefined || survivesScroll,
   });
   useEffect(() => {
     const handleEscape = (e: KeyboardEvent) => {

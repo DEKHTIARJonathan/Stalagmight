@@ -226,11 +226,38 @@ describe('ZeroDatumConfigDialog station pick', () => {
     expect(confirmedStationIndex()).toBe(PICK);
   });
 
-  it('keeps the pick on its physical station when a shot is inserted before it', () => {
-    // The mirror of the delete case: a new leading shot pushes station 5 to 6.
+  /**
+   * An INSERTED row is blank, and a blank row is dropped from the payload, so it
+   * renumbers nothing yet - the pick must not move. This used to assert a shift
+   * of +1, from when every non-deleted row counted; keeping that would have put
+   * the picker one ahead of the section actually sent and anchored the datum to
+   * the wrong station.
+   */
+  it('leaves the pick alone when a BLANK shot is inserted before it', () => {
     renderDialog();
     pickStation(PICK);
     insertBeforeRow(0);
+    expect(confirmedStationIndex()).toBe(PICK);
+  });
+
+  it('shifts the pick once that inserted row is given data', () => {
+    // The shift is owed at the moment the row joins the payload, not before.
+    renderDialog();
+    pickStation(PICK);
+    insertBeforeRow(0);
+    // Fill it COMPLETELY - a half-filled row is blocked by the completeness
+    // gate, which is its own correct behaviour and would mask this assertion.
+    for (const [col, value] of [
+      ['length', '12'],
+      ['_azimuth_avg', '90'],
+      ['depth_in', '-1'],
+      ['depth_out', '-2'],
+    ] as const) {
+      fireEvent.doubleClick(screen.getByTestId(`shot-editor-cell-0-${col}`));
+      const editor = screen.getByTestId('shot-editor-cell-editor');
+      fireEvent.change(editor, { target: { value } });
+      fireEvent.keyDown(editor, { key: 'Enter' });
+    }
     expect(confirmedStationIndex()).toBe(PICK + 1);
   });
 
