@@ -51,7 +51,15 @@ jobs:
 
   full:
     needs: gate
-    if: needs.gate.outputs.run == 'true'
+    # The repository guard keeps forks out of this job: it hard-pins a
+    # self-hosted runner that only the upstream repo has, so on a fork a
+    # workflow_dispatch would otherwise queue until the 24h scheduler gives up.
+    # (Scheduled runs are disabled on forks by GitHub by default; the guard
+    # covers a fork that re-enables them. If the upstream repo is ever renamed,
+    # this silently disables the nightly - update the literal.) To run the full
+    # suite on a fork, run `pnpm test:ui` locally or point runs-on at a hosted
+    # runner in your fork's branch.
+    if: needs.gate.outputs.run == 'true' && github.repository == 'Stalagmight/Stalagmight'
     # Optional self-hosted runner - zero Actions minutes (#130).
     runs-on: [self-hosted, ubuntu-latest-local]
     # Slower box than hosted (~44m at 2 workers); generous headroom over 60.
