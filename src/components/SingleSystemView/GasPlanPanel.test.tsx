@@ -150,6 +150,16 @@ describe('GasPlanPanel swim-speed persist debounce (#241)', () => {
       expect.objectContaining({ swim_speed_m_per_min: 15 }),
     );
   });
+
+  it('disarms a stale origin pick on unmount, so leaving Plan mode never leaks it into the next click (#395 review)', () => {
+    const { unmount } = render(<GasPlanPanel />);
+    fireEvent.click(screen.getByTestId('gas-pick-origin'));
+    expect(useGasPlanStore.getState().originPickArmed).toBe(true);
+
+    unmount();
+
+    expect(useGasPlanStore.getState().originPickArmed).toBe(false);
+  });
 });
 
 describe('GasPlanPanel scooter (DPV) readout (#317)', () => {

@@ -144,6 +144,18 @@ export function GasPlanPanel() {
     },
     []
   );
+
+  // Disarm an origin pick on the way out of Plan mode (#395 review): this panel unmounts
+  // whenever `appMode` leaves `plan`, but the armed flag itself deliberately survives mode
+  // switches in the store, and Escape is the only other disarm path. Left armed and
+  // abandoned, it would consume the very next plain map click - in Survey mode, or in Plan
+  // mode again after a fresh remount - as an origin overwrite instead of a normal click.
+  useEffect(
+    () => () => {
+      useGasPlanStore.getState().setOriginPickArmed(false);
+    },
+    []
+  );
   const persistSwimSpeed = useCallback((v: number) => {
     queueGasConfigWrite({ swim_speed_m_per_min: v });
   }, []);

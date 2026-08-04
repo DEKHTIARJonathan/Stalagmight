@@ -1189,6 +1189,9 @@ export const useGasPlanStore = create<GasPlanState>((set, get) => ({
       // #395: a loaded plan answers the entry question outright, whether or not its own origin
       // ended up at the entrance default.
       originChosen: true,
+      // A stale arm from before the load (e.g. Escape never fired, or the panel unmounted mid-pick)
+      // must not consume the next plain map click as an origin overwrite on the just-loaded plan.
+      originPickArmed: false,
       origin: normalized.origin,
       endpoint: normalized.endpoint,
       waypoints: normalized.waypoints,
