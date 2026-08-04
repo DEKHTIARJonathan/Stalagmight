@@ -305,6 +305,22 @@
  *    the INPUT (`GEOMETRY_EXTREME`, undoRedoFuzzActions.ts) rather than by
  *    loosening the oracle, which would have blinded it to real sub-centimetre
  *    drift.
+ * 11. NEW, open, NOT root-caused. `--seed 4 --iterations 60` on fractal, STRICT,
+ *    on the plain v2 stream (no Repair move needed - it was found WITH the
+ *    Repair generator but reproduces without it, so the generator only
+ *    surfaced it) fails with `sections[0].gauge_shot_uuid` and `gauge_neighbour_uuid` going
+ *    from a captured value to `null` on an undo below the Repair entry - i.e.
+ *    undoing past a Repair discards gauge anchors a save had captured, on
+ *    fixture sections the run never created.
+ *
+ *    Ruled out so far: the fields serialize fine (plain `Option<String>` with
+ *    `#[serde(default)]`, so a snapshot pair round-trips them), and they ARE
+ *    persisted (`persistence/sqlite/read.rs:261-284` reads them with a
+ *    legacy-file fallback), so it is neither a serde nor a persistence loss.
+ *    `Section::new` (models/section.rs:302) is the only place that sets them to
+ *    `None`, which points at a rebuild path - but `restore_section` is bug 1's
+ *    mechanism and applies to sections the run CREATED, not fixture ones. Needs
+ *    the standard protocol: minimize, root-cause, red test, issue comment.
  * 10. NEW, open. A loop closure BECOMES a station merge across save/reload:
  *    naharon seed 26 x40 gives `loop_closures.length` 5 -> 4 with
  *    `station_merges.length` 34 -> 35. `redrive_offsets_after_load` calls
@@ -414,6 +430,29 @@ const MAX_SAVE_RELOADS = 3;
  * stream would have made "add saves" silently change which jumps a seed takes.
  */
 const SAVE_STREAM_SALT = 0x85ebca6b;
+
+/**
+ * Repair runs ONCE per run, after the main loop and before the boundary
+ * save/reload, never inside the loop.
+ *
+ * `repair_open_project_integrity` drops dangling refs, re-mints duplicate shot
+ * uuids, converts sole-bridge closures to merges and then does a zero-trust
+ * `resolve_offsets()`. Unlike a save it PUSHES AN UNDO ENTRY whenever the
+ * project actually changed - so firing it inside the loop would move the cursor
+ * and shift the trajectory, which is exactly what every documented repro line
+ * depends on not happening. After the loop it is still fully exercised: the
+ * final unwind/rewind walks its entry in both directions like any other.
+ *
+ * It is not a no-op in practice - bug 2's leaked all-zero offset keys and
+ * finding 10's orphan closures are both things repair heals.
+ *
+ * OFF BY DEFAULT behind `STALAGMIGHT_FUZZ_REPAIR=1`. On its first run it
+ * surfaced an unexplained failure (see finding 11 in the header) that makes
+ * fractal seed 4 x60 red, and every documented repro line has to keep working -
+ * so the move is opt-in until that finding is root-caused, at which point this
+ * gate should come off.
+ */
+const REPAIR_ENABLED = process.env.STALAGMIGHT_FUZZ_REPAIR === '1';
 
 /** Diffs shown in a failure message (more are counted, not printed). */
 const SHOWN_DIFFS = 6;
@@ -927,6 +966,60 @@ export const undoRedoFuzz: Scenario = {
       ctx.metric('reloads');
     };
 
+    /**
+     * Run Repair as an additive move. It is a normal mutation as far as the
+     * model is concerned - it either pushes one snapshot-pair entry or nothing -
+     * so the same case analysis the mutate branch uses applies here.
+     */
+    const runRepair = async (tag: string): Promise<void> => {
+      const beforeUndo = undoLen;
+      const beforeRedo = redoLen;
+      const res = await step('mutate', 'repairProjectIntegrity', []);
+      const accepted = res.actionOk && res.commandSuccess !== false;
+      const pushed = res.undoLen - beforeUndo;
+      note(
+        `${tag} repairProjectIntegrity -> ${accepted ? 'ok' : 'rejected'} ` +
+          `(undo ${beforeUndo}->${res.undoLen}, redo ${beforeRedo}->${res.redoLen})`,
+      );
+      assertInvariants(res, 'repairProjectIntegrity');
+      if (!accepted) {
+        ctx.metric('rejected');
+        ctx.metric('rejected:repairProjectIntegrity');
+        record(res);
+        return;
+      }
+      if (pushed === 1) {
+        // Repair changed the project: it becomes the new top of the branch.
+        snapshotsTopChanged(res);
+        ctx.metric('repairs');
+        record(res);
+        return;
+      }
+      if (pushed !== 0) {
+        fail(`repair pushed ${pushed} undo entries (expected 0 or 1)`);
+      }
+      // No-op repair: nothing changed, so nothing may have changed.
+      ctx.metric('repairNoops');
+      if (res.redoLen === 0) top = cursor;
+      if (res.verdict !== 'equal') {
+        await resolveMismatch('a no-op Repair changed the project state', res.integrity, res);
+      }
+      record(res);
+    };
+
+    /** Shared bookkeeping for a move that pushed exactly one undo entry. */
+    const snapshotsTopChanged = (res: StepResponse): void => {
+      if (res.redoLen !== 0) {
+        fail('a successful Repair did not clear the redo stack');
+      }
+      cursor += 1;
+      top = cursor;
+      assertModel(res, 'Repair recorded its snapshot at an unexpected depth');
+      if (res.verdict !== 'recorded') {
+        fail(`the page did not record a snapshot for Repair (verdict=${res.verdict})`);
+      }
+    };
+
     /** Should this iteration cross the save/reload boundary? */
     const wantSaveReload = (): boolean => {
       if (savesDone >= MAX_SAVE_RELOADS) return false;
@@ -1064,6 +1157,10 @@ export const undoRedoFuzz: Scenario = {
       assertIntegrityDelta(res, `a no-op ${action.action}`);
       record(res);
     }
+
+    // Repair once, before the boundary crossing, so its entry is both persisted
+    // and walked by the final roundtrip.
+    if (REPAIR_ENABLED) await runRepair('repair');
 
     // Cross the persistence boundary at least once per run, so the final
     // unwind/rewind below walks a RESTORED stack rather than an in-memory one.
