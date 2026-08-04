@@ -1429,8 +1429,9 @@ fn metamorphic_fuzz() {
              baseline-distance {distance}"
         );
     }
+    println!("classified totals: {classified:?}");
     println!(
-        "seeds with at least one divergence ({}): {dirty:?}",
+        "seeds with at least one UNEXPLAINED divergence ({}): {dirty:?}",
         dirty.len()
     );
 }

@@ -59,6 +59,22 @@
 //! | 15 | = finding 3, see below | (none) | 5 | 20 |
 //! | 16 | `finding-16-redo-of-a-create-shot-duplicates-a-shot-uuid` | (none), persistence half | 13 | 60 |
 //! | 17 | `finding-17-zero-datum-reordered-on-undo` | (none) | 1 | 60 |
+//! | 20 | `finding-20-an-unanchored-merge-group-is-never-realigned` | `HORIZON=1` | 1 | 2000 |
+//! | 21 | red test only - `the_adjusted_solve_is_a_function_of_the_project` | n/a | n/a | n/a |
+//! | 22 | `finding-22-a-range-shift-delete-is-not-its-single-deletes` | metamorphic gate | 3 | n/a |
+//!
+//! Findings 18 and 19 are ids this module's own classifiers already use and are
+//! NOT rows: 18 is the raw-versus-resolved alignment disagreement (issue #413's
+//! finding 14 write-up records the same fact) and 19 is tolerated float dust
+//! accumulating past the tolerance, which the horizon mode watches for and which
+//! has not fired. They are reserved so the numbering does not collide, which is
+//! why the new ones start at 20.
+//!
+//! Findings 21 and 22 are not roundtrip-oracle rows because neither is a
+//! roundtrip defect: 21 is measured by re-solving one project
+//! (`open_undo_bugs_tests.rs`) and 22 by the METAMORPHIC engine in
+//! `metamorphic_undo_tests.rs`, which compares two routes rather than two
+//! moments.
 //!
 //! Environment prefix for every row: `STALAGMIGHT_RUST_FUZZ_`. So the finding-7
 //! row is
@@ -95,30 +111,47 @@
 //! `unwinding_the_history_leaves_no_displaced_section_behind` in
 //! `open_undo_bugs_tests.rs` pins the consequence a user sees.
 //!
-//! ## Open observations from the HORIZON mode (not yet findings)
+//! ## Open observations from the HORIZON mode
 //!
-//! Each is deterministic and reproduces twice; none has been root-caused, so
-//! none has a classifier - they FAIL the horizon run, which is the honest state
-//! for something not yet understood.
+//! The three that were open here have all been resolved, two into findings and
+//! one into a model fix. What replaced them is one NEW observation, stated the
+//! same way: deterministic, reproducing twice, not root-caused, and therefore
+//! FAILING the horizon run rather than classified.
 //!
-//! * `HORIZON=1 SEEDS=1 ITERATIONS=2000`: `updateShot` leaves a merged pair
-//!   1.58 cm apart, raw AND resolved agreeing. That is past the app's own
-//!   `#[cfg(test)]` assert threshold (1 cm) and under the integrity checker's
-//!   reporting tolerance (5 cm), and `update_shot` is not one of the call sites
-//!   that asserts - so nothing in the app would say a word. Candidate finding:
-//!   a shot edit leaves a merge misaligned.
-//! * `HORIZON=1 SEEDS=8`: seeds 2, 7 and 8 fail on `section_offsets`
-//!   differences that are finding-3 SHAPED but whose value no longer matches the
-//!   leftover the cascade classifier recorded - the ratchet has moved it on. The
-//!   classifier was deliberately NOT loosened to cover them.
-//! * The adjusted-geometry oracle found a state whose stored project
-//!   roundtripped byte for byte while a station 2.2 km out solved 28 microns
-//!   away. The solve is deterministic for a fixed project (measured:
-//!   `measure_adjusted_solve_determinism`, 8 forced re-solves, zero spread), so
-//!   the input differed in something the comparison does not compare - the
-//!   candidate is `station_offsets` / `station_comments` iteration order, which
-//!   the comparison SORTS and `resolve_offsets` sums in stored order.
-//!   `ADJUSTED_TOLERANCE_REL` documents the measurement.
+//! * RESOLVED as FINDING 20. `HORIZON=1 SEEDS=1 ITERATIONS=2000` left a merged
+//!   pair 1.58 cm apart after an `updateShot`. Root cause:
+//!   `realign_after_shot_edit` (models/project/mutations.rs:923) returns at
+//!   line 941 when the edited section's merge group holds no zero datum, and
+//!   the epilogue's `realign_merges` (models/project/offsets.rs:280) only
+//!   re-solves past the app's own 5 cm reporting threshold - while the app's
+//!   `#[cfg(test)]` invariant for the same pair is 1 cm. Classified, terminally.
+//! * RESOLVED as a MODEL FIX. Seeds 2, 7 and 8 were described as failing on
+//!   finding-3-shaped `section_offsets` values the cascade classifier no longer
+//!   matched. Half of that was true and is fixed: the classifier froze one
+//!   value where finding 3 RATCHETS, so it stopped matching after the second
+//!   cycle. It now follows the trajectory and requires BOTH sides to be on it,
+//!   which is narrower per diff and took the survey from 35 to 39 clean seeds
+//!   of 40 at 100 moves.
+//! * RESOLVED as FINDING 21. The adjusted-geometry oracle's 28-micron
+//!   divergence over a byte-identical project is real and the recorded
+//!   hypothesis (`station_offsets` / `station_comments` hash order feeding
+//!   `resolve_offsets`) was wrong in every clause - see `ADJUSTED_TOLERANCE_REL`,
+//!   which records both the refutation and the mechanism that replaced it.
+//!
+//! * STILL OPEN, and NEW: at horizon depths - seeds 2, 3, 4 and 5 somewhere past
+//!   depth 1000 - an `undo` translates a whole CONNECTED COMPONENT by a constant
+//!   vector. The signature is sharp and is not finding 3's: every differing
+//!   `section_offsets` entry belongs to one component and every one of them
+//!   differs by the SAME vector, so the relative geometry is preserved exactly
+//!   and only the component's absolute position moves; and the post-undo state
+//!   places one section of the component at exactly `[0, 0]`, which is what a
+//!   re-seeded cascade looks like rather than a slide. Measured on seed 2 at
+//!   depth 1189: sections 65 and 81 both off by `(22230.0946076, -10480.744175)`,
+//!   with 81 landing on the origin. Four synthetic reductions were measured NOT
+//!   to reproduce it and are recorded in the commit history: move-then-edit with
+//!   and without a datum, a datum added AFTER the displacement, and a
+//!   >5 cm edit that trips the realign gate - all restore their offsets exactly.
+//!   No classifier, because nothing here is understood well enough to write one.
 //!
 //! ## Modes, and why the gate uses none of them
 //!

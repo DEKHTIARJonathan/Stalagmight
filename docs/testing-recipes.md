@@ -79,8 +79,8 @@ STALAGMIGHT_RUST_FUZZ_SEEDS=200 STALAGMIGHT_RUST_FUZZ_ITERATIONS=1000 \
   --features telemetry --lib undo_redo_fuzz_soak -- --ignored --nocapture
 ```
 
-**The red tests.** Twenty of them, all `#[ignore]`d, all failing today on the
-bug named in each `#[ignore]` reason. Eighteen are reductions in
+**The red tests.** Twenty-four of them, all `#[ignore]`d, all failing today on
+the bug named in each `#[ignore]` reason. Twenty-two are reductions in
 `open_undo_bugs_tests.rs`; two are pinned to a fuzzer SEED in the fuzz module
 instead, because every reduction for those two was measured not to reproduce
 (finding 14, and bug 7 - which had no test anywhere before). Delete an
@@ -92,6 +92,60 @@ instead, because every reduction for those two was measured not to reproduce
 TELEMETRY_ENDPOINT=http://localhost/dummy cargo test --manifest-path src-tauri/Cargo.toml \
   --features telemetry --lib -- --ignored open_undo_bugs finding_14 bug_7
 ```
+
+## The metamorphic gate (Rust tier)
+
+`src-tauri/src/core/state/metamorphic_undo_tests.rs` asks a question the
+roundtrip fuzzer structurally cannot: do two DIFFERENT ways of asking for the
+same edit agree? The roundtrip oracle compares a state against itself at an
+earlier moment, so a defect that is faithfully undone is invisible to it - and
+the delete/split family is full of places where that can happen, because each
+entry point is its own hand-written implementation of an operation another entry
+point also implements.
+
+It builds one project, saves it, loads it into TWO `AppState`s (which is what
+makes a strict comparison possible at all - `Shot::uuid` is a v4 uuid, so two
+independently-built projects share no identity), drives each down one route, and
+compares them on five oracles: the roundtrip fuzzer's four, re-used as free
+functions so the two engines cannot disagree about what a difference is, plus
+the id ALLOCATORS.
+
+```bash
+# The gate. Runs with the default suite; ~11 s.
+TELEMETRY_ENDPOINT=http://localhost/dummy cargo test --manifest-path src-tauri/Cargo.toml \
+  --features telemetry --lib metamorphic
+
+# The sweep, and the tool for re-choosing the metamorphic GATE_SEEDS.
+STALAGMIGHT_RUST_META_SEEDS=40 STALAGMIGHT_RUST_META_REPEATS=4 \
+  TELEMETRY_ENDPOINT=http://localhost/dummy cargo test --manifest-path src-tauri/Cargo.toml \
+  --features telemetry --lib metamorphic_fuzz -- --ignored --nocapture
+```
+
+| env | effect |
+|---|---|
+| `STALAGMIGHT_RUST_META_SEEDS` | seeds 1..=n (default 40) |
+| `STALAGMIGHT_RUST_META_REPEATS` | pair instances per seed, each on fresh twins (default 4) |
+| `STALAGMIGHT_RUST_META_PRELUDE` | random commands before the twins split (default 12) |
+| `STALAGMIGHT_RUST_META_CLOSURES` | put a real loop closure in the base project |
+| `STALAGMIGHT_RUST_META_VERBOSE` | print every divergence, not just the seed summary |
+
+Seven pairs, and every one of them is promised somewhere - two in the code's own
+doc comments, in the word "generalizes". `a-failed-batch-is-a-no-op` is the odd
+one out and asserts a DIFFERENCE: a failed batch must be a strict no-op while
+the same commands run singly apply up to the failure.
+
+Every pair is checked twice - on the states the two routes produce, and on the
+states they UNWIND to. The second is where undo's per-entry-point special cases
+live. It compares the two unwound twins to each other rather than to the
+baseline, because findings 1, 2, 3 and 5 are all "an unwind does not return to
+where it started"; the baseline distance is measured and printed instead of
+asserted, so a regression in it shows up in the summary diff without being a
+false failure today.
+
+It found finding 22 on its first run. The classified-hit ids it prints follow
+the same delete-when-fixed contract the roundtrip classifiers do, and one of
+them is deliberately named `observation-...` rather than `finding-...` because
+it is intermittent on identical inputs and has not been root-caused.
 
 **Choosing gate seeds.** `fuzz_seed_survey` catches each run's panic instead of
 propagating it, so one bad seed does not hide the twenty after it, and prints
