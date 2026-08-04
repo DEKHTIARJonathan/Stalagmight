@@ -329,6 +329,14 @@ asserts byte-identical output. Each step is then a single fused `executeAsync`
 compare, return a verdict plus the digest. Full canonical strings cross the
 bridge only after a comparison has already failed.
 
+A full run today (release, HEAD) costs about 135 ms/iteration on the fractal
+fixture and 217 ms/iteration on naharon, against 104 / 189 before the extra
+oracles - so the undoTo/redoTo equivalence check, the per-step invariant suite,
+the integrity delta and the save/reload boundary together add roughly 30% and 15%
+respectively. On naharon, `integrityMs` is ~4% of step time and `canonicalMs` ~7%;
+the rest is still the app. Save/close/reopen is charged outside the fused step,
+at roughly a second per round trip.
+
 That leaves the bridge at roughly 6% of a step. Measured on fractal seed 4 x60
 (90 steps, `actionMs`/`observeMs`/`canonicalMs` are reported as metrics): 4775 ms
 in the store action's own `flushPlanAnchors` + command + `refreshProjectState` +
