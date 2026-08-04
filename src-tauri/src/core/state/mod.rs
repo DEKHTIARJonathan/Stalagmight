@@ -39,6 +39,8 @@ mod undo_restore;
 mod warnings;
 
 #[cfg(test)]
+mod adversarial_tests;
+#[cfg(test)]
 mod format_property_tests;
 #[cfg(test)]
 mod fuzz_undo_tests;

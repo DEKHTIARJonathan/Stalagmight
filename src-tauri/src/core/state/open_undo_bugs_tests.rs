@@ -1789,3 +1789,67 @@ fn a_range_shift_delete_is_its_single_deletes() {
          which menu item the user reached for"
     );
 }
+
+// ===========================================================================
+// Finding 24: describing a command with an out-of-range shot id overflows
+// ===========================================================================
+
+/// FINDING 24: `Command::description()` panics on a shot id near `u32::MAX`,
+/// before any validation has had a chance to refuse it.
+///
+/// `shot_display_position` (`models/shot.rs:15-22`) converts a raw `ShotId` to
+/// a 1-indexed display position:
+///
+/// ```text
+/// let base = section_id.saturating_mul(FEATURE_ID_STRIDE);
+/// if shot_id >= base { shot_id - base + 1 } else { shot_id + 1 }
+/// ```
+///
+/// The multiply saturates; neither add does. `shot_id == u32::MAX` with a
+/// section whose base is 0 takes the first arm and computes `u32::MAX + 1`.
+///
+/// It is reached from `Command::description()` (`core/command.rs:702`, `:710`,
+/// `:717`), which `AppState::execute` calls on EVERY command to label the undo
+/// entry and to build the corruption guard's message - so the panic happens
+/// before the id is ever checked against the section. A debug or test build
+/// aborts; a release build wraps and shows the user a nonsense position.
+///
+/// Found by the adversarial engine (`adversarial_tests.rs`), seeds 4 and 7.
+#[test]
+#[ignore = "open finding 24: shot_display_position overflows on a shot id near u32::MAX, and Command::description() calls it before validation - see src-tauri/src/core/state/adversarial_tests.rs"]
+fn describing_a_command_with_an_out_of_range_shot_id_does_not_overflow() {
+    let state = state_with_project();
+    let section_id = create_section(&state, "A", vec![shot(0.0, 5.0)]);
+
+    // No section holds this shot. The command must be REFUSED, not fatal.
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        state.execute(Command::SetShotKind {
+            section_id,
+            shot_id: ShotId::MAX,
+            kind: ShotKind::Jump,
+        })
+    }));
+    let message = match outcome {
+        Ok(result) => {
+            assert!(
+                !result.success,
+                "SetShotKind with a shot id no section holds reported success"
+            );
+            String::new()
+        }
+        Err(payload) => payload
+            .downcast_ref::<String>()
+            .cloned()
+            .or_else(|| {
+                payload
+                    .downcast_ref::<&str>()
+                    .map(|text| (*text).to_string())
+            })
+            .unwrap_or_else(|| "<non-string panic>".to_string()),
+    };
+    assert!(
+        message.is_empty(),
+        "describing a command with an out-of-range shot id panicked before the id was validated: \
+         {message}"
+    );
+}
