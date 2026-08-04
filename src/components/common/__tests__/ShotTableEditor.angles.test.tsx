@@ -117,6 +117,47 @@ describe('ShotTableEditor averaged-angle edits', () => {
     expect(written.pitch_out).toBeCloseTo(16);
   });
 
+  it('writes the typed value to BOTH legs while they are unset, not 0', () => {
+    // A row added and not yet measured has NaN legs. Rotating by a delta against
+    // NaN yields NaN, which normalizeAngle folds to 0 - recording due north as a
+    // bearing nobody took, and one that then passes range validation and saves.
+    const onShotChange = vi.fn();
+    render(
+      <ShotTableEditor
+        shots={[shot({ azimuth_in: NaN, azimuth_out: NaN })]}
+        onShotChange={onShotChange}
+        onAddShot={vi.fn()}
+        onDeleteShot={vi.fn()}
+      />
+    );
+    editCell('shot-cell-0-_azimuth_avg', '45');
+    const written = Object.fromEntries(
+      onShotChange.mock.calls.map(([, field, value]) => [field, value])
+    );
+    expect(written.azimuth_in).toBeCloseTo(45);
+    expect(written.azimuth_out).toBeCloseTo(45);
+  });
+
+  it('lands an azimuth typed into the trailing blank row on the legs', () => {
+    // The blank row is materialized by onAddShot during the edit, so its index is
+    // one past the `shots` this render was given. Falling through here wrote the
+    // VIRTUAL key onto the shot and dropped the value - on the primary add path.
+    const onShotChange = vi.fn();
+    render(
+      <ShotTableEditor
+        shots={[]}
+        onShotChange={onShotChange}
+        onAddShot={vi.fn()}
+        onDeleteShot={vi.fn()}
+      />
+    );
+    editCell('shot-cell-0-_azimuth_avg', '30');
+    const fields = onShotChange.mock.calls.map(([, field]) => field);
+    expect(fields).toContain('azimuth_in');
+    expect(fields).toContain('azimuth_out');
+    expect(fields).not.toContain('_azimuth_avg');
+  });
+
   it('opens with the legs and the inclination family hidden', () => {
     render(
       <ShotTableEditor

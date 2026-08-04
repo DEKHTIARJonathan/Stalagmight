@@ -37,6 +37,18 @@ export function buildShotUpdates(
     if (colKey === AZIMUTH_AVG_KEY) {
       const newMean = typeof value === 'number' ? value : Number(value);
       if (!Number.isFinite(newMean)) continue;
+      // Both legs unset (a row added but not yet measured): there is no mean to
+      // rotate away from, so the typed value IS both legs. Without this the
+      // delta is NaN, `normalizeAngle` folds a non-finite angle to 0, and the
+      // shot silently records due north - a bearing nobody measured, which then
+      // passes the range validation and saves. The pitch branch below has always
+      // had this case; azimuth did not, and only got here when the shared shot
+      // editor stopped using its own averaging rule.
+      if (!Number.isFinite(shot.azimuth_in) && !Number.isFinite(shot.azimuth_out)) {
+        updates.azimuth_in = normalizeAngle(newMean);
+        updates.azimuth_out = normalizeAngle(newMean);
+        continue;
+      }
       const delta = newMean - circularMeanDegrees(shot.azimuth_in, shot.azimuth_out);
       updates.azimuth_in = normalizeAngle(shot.azimuth_in + delta);
       updates.azimuth_out = normalizeAngle(shot.azimuth_out + delta);
