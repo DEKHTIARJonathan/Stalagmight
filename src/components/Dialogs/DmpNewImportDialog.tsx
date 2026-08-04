@@ -66,7 +66,6 @@ import {
 } from '../../utils/dmpTemporalRerank';
 import { extractFilename } from '../../utils/path';
 import { blockedByIncompleteShots, countIncompleteShots } from '../common/incompleteShots';
-import { isBlankNewShot } from '../common/editableShotStatus';
 import { isEmittedShot, toEmittedStationIndex } from '../common/emittedShots';
 import { blankEditableShot } from '../common/editableShot';
 import { aggregateImportReceipts } from '../../utils/importReceipt';
@@ -446,7 +445,10 @@ function applyAllOverlapTreatments(
             } else if (targetType === 'importing' && targetImportIndex != null) {
               const targetEdits = sectionEdits.get(targetImportIndex);
               if (targetEdits) {
-                targetShotArray = targetEdits.shots.filter(s => !s.isDeleted);
+                // Station space: the target section reaches the backend without
+                // its blank rows, so an index into this array must be counted
+                // over the same set. (Audit of the emitted-vs-visible split.)
+                targetShotArray = targetEdits.shots.filter(isEmittedShot);
                 targetMapDiag = `importing section ${targetImportIndex} from edits (${targetEdits.shots.length} total, ${targetShotArray.length} alive)`;
               } else {
                 const targetDmpSection = dmpFile.sections[targetImportIndex];
@@ -1836,7 +1838,8 @@ export default function DmpNewImportDialog({
       } else if (targetType === 'importing' && targetImportIndex != null) {
         const targetEdits = sectionEditsRef.current.get(targetImportIndex);
         if (targetEdits) {
-          targetShots = targetEdits.shots.filter((s) => !s.isDeleted);
+          // Station space - see the note on the other target-shot build.
+          targetShots = targetEdits.shots.filter(isEmittedShot);
         } else {
           const targetDmpSection = dmpFile.sections[targetImportIndex];
           if (targetDmpSection) {
@@ -3236,7 +3239,7 @@ export default function DmpNewImportDialog({
             sectionPalette[(secSelectedPos >= 0 ? secSelectedPos : entry.sectionIndex) % sectionPalette.length] ??
             '#95a5a6';
           const secShots = secEdits
-            ? secEdits.shots.filter((s) => !s.isDeleted && !isBlankNewShot(s)).map(editableShotToShotData)
+            ? secEdits.shots.filter(isEmittedShot).map(editableShotToShotData)
             : convertToEditableShots(sec.shots).map(editableShotToShotData);
           return {
             sectionData: {
@@ -3439,21 +3442,26 @@ export default function DmpNewImportDialog({
         payload.emittedStationIndex,
         (result: PlacementResult) => {
           const handlePlacementComplete = async () => {
+            // The SAME station the overlay was aligned to. Storing the visible
+            // index here while placing against the emitted one meant the preview
+            // and the import disagreed, and the segment landed a station too far
+            // downstream whenever a blank row preceded the anchor.
+            const alignStation = payload.emittedStationIndex;
             const placement: ImportPlacement = result.snappedToStation
               ? {
                   type: 'manual_snap',
-                  align_station_index: anchor.stationIndex,
+                  align_station_index: alignStation,
                   snapped_to_station: result.snappedToStation,
                 }
               : {
                   type: 'manual',
-                  align_station_index: anchor.stationIndex,
+                  align_station_index: alignStation,
                   offset: result.position,
                 };
 
             const dp: DirectPlacement = {
               anchorSectionIndex: anchor.sectionIndex,
-              anchorStationIndex: anchor.stationIndex,
+              anchorStationIndex: alignStation,
               placement,
             };
 

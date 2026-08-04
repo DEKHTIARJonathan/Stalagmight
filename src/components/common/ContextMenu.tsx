@@ -182,12 +182,19 @@ export default function ContextMenu() {
    *  A map right-click passes nothing and is therefore never dismissed by a
    *  panel scrolling elsewhere, which is the behaviour that matters there. */
   const scrollScope = dialogData.scrollScope as string | undefined;
-  // Opened over a canvas rather than a list: no scroller anywhere can move it,
-  // and the opening gesture itself scrolls the panels (selecting the station
-  // brings its data-table row and section into view). Without this the menu is
-  // dismissed by that scroll as it opens - the flash-and-vanish this whole
-  // guard exists to prevent.
+  // Every caller must answer this, because BOTH defaults have now shipped a bug:
+  // inheriting "survive" let the GlobalView menu act on the wrong project after
+  // its list scrolled, and inheriting "close" brought back the map menu's
+  // flash-and-vanish. A menu either NAMES the scroller that moves it
+  // (`scrollScope`) or declares it has none (`survivesScroll`). Missing both is
+  // a caller that has not decided - warn loudly in dev rather than pick for it.
   const survivesScroll = dialogData.survivesScroll === true;
+  if (import.meta.env.DEV && scrollScope === undefined && !survivesScroll) {
+    console.warn(
+      '[ContextMenu] neither scrollScope nor survivesScroll given. A cursor-pinned ' +
+        'menu must say which scroll invalidates it; see useDismissableLayer.',
+    );
+  }
   const scrollScopeRef = useRef<HTMLElement | null>(null);
   scrollScopeRef.current = scrollScope ? document.querySelector<HTMLElement>(scrollScope) : null;
 

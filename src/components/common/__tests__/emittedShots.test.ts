@@ -103,3 +103,29 @@ describe('toEmittedStationIndex', () => {
     expect(toEmittedStationIndex(rows, 2)).toBe(1);
   });
 });
+
+/**
+ * The reverse mirror reflects a station about the midpoint of its section, so it
+ * has to count the same shots the payload sends. Counting non-deleted rows while
+ * emitting non-blank ones reflected about the wrong midpoint and attached the
+ * import to the wrong physical station.
+ */
+describe('mirroring across an emitted count', () => {
+  const mirror = (station: number, shotCount: number) => shotCount - station;
+
+  it('reflects about the emitted midpoint, not the visible one', () => {
+    const rows = [measured(0), blank(1), measured(2), measured(3)];
+    const emitted = rows.filter(isEmittedShot).length;
+    expect(emitted).toBe(3);
+    // Station 1 in emitted space mirrors to 2 of 3, not 3 of 4.
+    expect(mirror(1, emitted)).toBe(2);
+    expect(mirror(1, rows.filter((s) => s.isDeleted !== true).length)).toBe(3);
+  });
+
+  it('agrees with the visible count when nothing is blank', () => {
+    const rows = [measured(0), measured(1)];
+    expect(rows.filter(isEmittedShot).length).toBe(
+      rows.filter((s) => s.isDeleted !== true).length
+    );
+  });
+});

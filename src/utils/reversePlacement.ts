@@ -12,6 +12,7 @@
  * station they chose.
  */
 import type { ImportPlacement } from '../types/commands';
+import { isEmittedShot } from '../components/common/emittedShots';
 import type { SectionEditState } from './batchImportHelpers';
 
 /**
@@ -48,7 +49,10 @@ export function targetShotCountForMirror(
   if (targetType !== 'importing' || targetImportIndex == null) return null;
   const edits = sectionEdits?.get(targetImportIndex);
   if (!edits?.reverse) return null;
-  return edits.shots.filter((s) => !s.isDeleted).length;
+  // EMITTED, not merely non-deleted: the payload builders drop wholly blank new
+  // rows, so mirroring across the longer count reflected the station about the
+  // wrong midpoint and attached the import to the wrong physical station.
+  return edits.shots.filter(isEmittedShot).length;
 }
 
 /**

@@ -309,3 +309,66 @@ describe('ZeroDatumConfigDialog station pick', () => {
     expect(confirmedStationIndex()).toBe(0);
   });
 });
+
+/**
+ * The pick tracks the EMITTED station order, so every transition that moves a row
+ * in or out of the payload has to move it - and only those.
+ *
+ * The first version handled one: a blank row gaining data. Clearing it back to
+ * blank left the pick shifted while the row had left the payload, and deleting a
+ * range subtracted uncounted rows too. Both anchored the GPS datum to the wrong
+ * station on Confirm.
+ */
+describe('ZeroDatumConfigDialog station pick across blank transitions', () => {
+  beforeAll(() => {
+    Element.prototype.scrollIntoView = vi.fn();
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  /** Fill row 0 completely - a half-filled row is blocked by the gate. */
+  const fillRow0 = () => {
+    for (const [col, value] of [
+      ['length', '12'],
+      ['_azimuth_avg', '90'],
+      ['depth_in', '-1'],
+      ['depth_out', '-2'],
+    ] as const) {
+      fireEvent.doubleClick(screen.getByTestId(`shot-editor-cell-0-${col}`));
+      const editor = screen.getByTestId('shot-editor-cell-editor');
+      fireEvent.change(editor, { target: { value } });
+      fireEvent.keyDown(editor, { key: 'Enter' });
+    }
+  };
+
+  /** Clear one required cell back out, returning the row to blank. */
+  const clearRow0 = () => {
+    for (const col of ['length', '_azimuth_avg', 'depth_in', 'depth_out'] as const) {
+      fireEvent.doubleClick(screen.getByTestId(`shot-editor-cell-0-${col}`));
+      const editor = screen.getByTestId('shot-editor-cell-editor');
+      fireEvent.change(editor, { target: { value: '' } });
+      fireEvent.keyDown(editor, { key: 'Enter' });
+    }
+  };
+
+  it('returns the pick when a filled row is cleared back to blank', () => {
+    renderDialog();
+    pickStation(PICK);
+    insertBeforeRow(0);
+    fillRow0();
+    clearRow0();
+    // In and back out: the row is absent from the payload again, so the pick is
+    // where it started. Leaving it shifted anchored a station downstream.
+    expect(confirmedStationIndex()).toBe(PICK);
+  });
+
+  it('does not move the pick when a BLANK row is deleted before it', () => {
+    renderDialog();
+    pickStation(PICK);
+    insertBeforeRow(0);
+    deleteRow(0);
+    expect(confirmedStationIndex()).toBe(PICK);
+  });
+});
