@@ -61,7 +61,41 @@ export const overflowDraft = (key: number): ShotDraft => ({
 export const respawnsBlank = (d: ShotDraft): boolean =>
   d.anchor === 'end' && d.ephemeral !== true;
 
-const fin = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
+/** Finite-number guard. Exported because "this cell holds a measurement" is one
+ *  rule, shared by the draft checks here, the dialog's row helpers and the shot
+ *  editor's missing-cell marking - three copies of it would eventually drift. */
+export const isFiniteNumber = (v: unknown): v is number =>
+  typeof v === 'number' && Number.isFinite(v);
+
+/** Local shorthand: this module reads the guard on nearly every line. */
+const fin = isFiniteNumber;
+
+/**
+ * Whether a written cell is indistinguishable from never having been touched:
+ * `kind` defaults to Normal, everything else is empty when null, blank or NaN.
+ *
+ * Judged by VALUE, never by key presence. A cleared optional WRITES its key
+ * (`comment: null`, `pitch_in: null` out of `buildShotUpdates`) rather than
+ * deleting it, so an emptied row still carries keys - and counting them read
+ * that row as half-filled, which painted required cells red on a visibly empty
+ * row and disabled Create with nothing on screen to explain why.
+ */
+export function isDefaultCell(key: string, value: unknown): boolean {
+  if (value === null || value === undefined || value === '') return true;
+  if (typeof value === 'number' && !Number.isFinite(value)) return true;
+  if (key === 'kind') return value === 'Normal';
+  return false;
+}
+
+const isBlankData = (data: Partial<ShotData>): boolean =>
+  Object.entries(data).every(([key, value]) => isDefaultCell(key, value));
+
+/**
+ * A draft holding nothing: every cell it has ever been given is back at its
+ * default. THE blankness rule - the trailing invitation row stays quiet, submit
+ * drops it, and closing does not offer to discard it.
+ */
+export const isBlankDraft = (draft: ShotDraft): boolean => isBlankData(draft.data);
 
 /** Build the grid's row list: each draft adjacent to its anchor shot (after-
  *  anchored drafts right below it, before-anchored right above, same-anchor
@@ -183,7 +217,9 @@ export function materializeDraft(draft: ShotDraft): Shot {
  *  the cell red) and hidden ones (tint the columns button / menu row instead).
  *  Inserted drafts surface them immediately - the user asked for a row there,
  *  so it is incomplete by construction. The end draft is an invitation, not an
- *  obligation: it stays quiet until it holds ANY value. */
+ *  obligation: it stays quiet until it holds a real value ({@link isBlankDraft},
+ *  which reads the values rather than counting keys - clearing an optional field
+ *  on it leaves a key behind and must not turn the row red). */
 export function draftMissing(
   draft: ShotDraft,
   hiddenCols: ReadonlySet<string>,
@@ -192,7 +228,7 @@ export function draftMissing(
   const cells = new Set<string>();
   const hiddenProblems = new Set<string>();
   const d = draft.data;
-  if (draft.anchor === 'end' && Object.keys(d).length === 0) return { cells, hiddenProblems };
+  if (draft.anchor === 'end' && isBlankDraft(draft)) return { cells, hiddenProblems };
   const need = (colKey: string, menuKey: string) => {
     if (hiddenCols.has(colKey)) hiddenProblems.add(menuKey);
     else cells.add(colKey);

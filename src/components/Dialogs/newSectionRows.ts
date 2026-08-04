@@ -21,36 +21,21 @@ import {
   endDraft,
   materializeDraft,
   completeDraftData,
+  isBlankDraft,
+  isDefaultCell,
   isDraftComplete,
+  isFiniteNumber,
 } from '../SingleSystemView/dataTableDrafts';
+import { clamp } from '../../utils/clamp';
 
 /** Which azimuth column family is on screen, in the shape `draftMissing` wants. */
 export type AzimuthMode = 'avg' | 'inout' | 'off';
 
-const fin = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
-
-/**
- * A row with nothing in it. Blank rows are dropped at submit and never reported
- * as incomplete.
- *
- * Judged by VALUE, not by whether a key was written. Cycling the kind back to
- * Normal, or clearing a comment or pitch to null, records a key while leaving
- * the row visually empty - which used to make the invitation row read as
- * half-filled, so Create stayed disabled and closing offered to discard a row
- * holding nothing. A cell returned to its default is untouched, and this now
- * says so.
- */
-export const isBlankRow = (draft: ShotDraft): boolean =>
-  Object.entries(draft.data).every(([key, value]) => isDefaultCell(key, value));
-
-/** Whether a written cell is indistinguishable from never having been touched.
- *  `kind` defaults to Normal; everything else is empty when null/blank/NaN. */
-function isDefaultCell(key: string, value: unknown): boolean {
-  if (value === null || value === undefined || value === '') return true;
-  if (typeof value === 'number' && !Number.isFinite(value)) return true;
-  if (key === 'kind') return value === 'Normal';
-  return false;
-}
+/** Blankness ignoring the kind tag: whether the row holds any MEASUREMENT.
+ *  Tagging a row J/R touches it, but a label is not a reading - see the Depth In
+ *  seeding rule in {@link applyEdits}. */
+const isUnmeasured = (data: Partial<ShotData>): boolean =>
+  Object.entries(data).every(([key, value]) => key === 'kind' || isDefaultCell(key, value));
 
 /** A fresh blank row. Keys come from a monotonic counter and are NEVER reused:
  *  the grid keys per-cell state (missing-cell marks) by row identity, so a
@@ -64,7 +49,7 @@ export const blankRow = (key: number): ShotDraft => endDraft(key);
  */
 export function normalizeRows(rows: ShotDraft[], nextKey: () => number): ShotDraft[] {
   const last = rows[rows.length - 1];
-  if (last !== undefined && isBlankRow(last)) return rows;
+  if (last !== undefined && isBlankDraft(last)) return rows;
   return [...rows, blankRow(nextKey())];
 }
 
@@ -77,7 +62,7 @@ export function insertBlankRows(
   nextKey: () => number
 ): ShotDraft[] {
   if (count < 1) return rows;
-  const at = Math.max(0, Math.min(beforeIndex, rows.length));
+  const at = clamp(beforeIndex, 0, rows.length);
   const created = Array.from({ length: count }, () => blankRow(nextKey()));
   return normalizeRows([...rows.slice(0, at), ...created, ...rows.slice(at)], nextKey);
 }
@@ -90,8 +75,11 @@ export function deleteRows(
   toRow: number,
   nextKey: () => number
 ): ShotDraft[] {
-  const from = Math.max(0, Math.min(fromRow, toRow));
-  const to = Math.min(rows.length - 1, Math.max(fromRow, toRow));
+  // Asymmetric bounds on purpose: a range wholly outside the list clamps to
+  // from > to and falls out below as a no-op, rather than collapsing onto the
+  // first or last row and deleting one the caller never named.
+  const from = clamp(Math.min(fromRow, toRow), 0, rows.length);
+  const to = clamp(Math.max(fromRow, toRow), -1, rows.length - 1);
   if (from > to) return rows;
   const kept = [...rows.slice(0, from), ...rows.slice(to + 1)];
   return normalizeRows(kept.length === 0 ? [blankRow(nextKey())] : kept, nextKey);
@@ -110,13 +98,13 @@ export function moveRows(
   toIndex: number,
   nextKey: () => number
 ): ShotDraft[] {
-  const from = Math.max(0, Math.min(fromStart, rows.length - 1));
-  const to = Math.max(from, Math.min(fromEnd, rows.length - 1));
+  const from = clamp(fromStart, 0, rows.length - 1);
+  const to = clamp(fromEnd, from, rows.length - 1);
   const block = rows.slice(from, to + 1);
   if (block.length === 0) return rows;
   const rest = [...rows.slice(0, from), ...rows.slice(to + 1)];
   const removedBefore = toIndex > from ? Math.min(toIndex, to + 1) - from : 0;
-  const at = Math.max(0, Math.min(toIndex - removedBefore, rest.length));
+  const at = clamp(toIndex - removedBefore, 0, rest.length);
   // Normalized like every other mutator: dragging the trailing blank row up
   // would otherwise leave the last row occupied, and with it nowhere to type
   // the next shot except the context menu.
@@ -131,12 +119,8 @@ export function moveRows(
  * what keeps `completeDraftData` from resurrecting a value the user blanked.
  *
  * The virtual average columns fan out to both legs via `buildShotUpdates`, so
- * the delta-offset and cleared-Avg-clears-both rules have exactly one home. The
- * one case it cannot serve is an average azimuth typed into a row whose legs are
- * still unset: `materializeDraft` renders those as NaN, and `buildShotUpdates`
- * would rotate by a NaN delta. There the typed mean simply IS both legs. (The
- * pitch branch already handles its own unset case, because unset pitch
- * materializes as `null`, not NaN.)
+ * the delta-offset rule, the both-legs-unset rule (where the typed mean simply
+ * IS both legs) and the cleared-Avg-clears-both rule all have exactly one home.
  */
 export function applyEditToData(
   data: Partial<ShotData>,
@@ -155,11 +139,6 @@ export function applyEditToData(
     if (value === undefined) {
       put(legs[0], undefined);
       put(legs[1], undefined);
-      return d as Partial<ShotData>;
-    }
-    if (colKey === AZIMUTH_AVG_KEY && !(fin(data.azimuth_in) && fin(data.azimuth_out))) {
-      put('azimuth_in', value);
-      put('azimuth_out', value);
       return d as Partial<ShotData>;
     }
   } else if (value === undefined) {
@@ -225,19 +204,22 @@ export function applyEdits(
   const next = grown.map((draft, i) => {
     const rowEdits = byRow.get(i);
     if (!rowEdits) return draft;
-    // A row being typed into for the first time inherits Depth In from the row
-    // above, the way the old dialog's "+ Add Row" seeded it - depth in IS the
-    // previous shot's depth out on a continuous survey. Done on first touch
-    // rather than at row creation so the trailing row stays genuinely blank
-    // (a seeded value would make it count as touched and block Create), and
-    // skipped when the edit supplies its own depth or the row above is itself
-    // being written in the same batch (a paste already carries its depths).
-    const wasBlank = isBlankRow(draft);
+    // A row measured for the first time inherits Depth In from the row above,
+    // the way the old dialog's "+ Add Row" seeded it - depth in IS the previous
+    // shot's depth out on a continuous survey. Done on the first MEASUREMENT
+    // rather than at row creation or on any touch, because a seeded value counts
+    // as data and blocks Create: pressing Delete across the trailing blank row
+    // used to materialize a depth out of thin air on a row the user had just
+    // emptied, and a J/R tag alone would strand one on a row whose kind can be
+    // cycled straight back to Normal. Skipped when the edit supplies its own
+    // depth, or when the row above is being written in the same batch (a paste
+    // already carries its depths).
+    const wasUnmeasured = isUnmeasured(draft.data);
     let data = draft.data;
     for (const { colKey, value } of rowEdits) data = applyEditToData(data, colKey, value);
-    if (wasBlank && data.depth_in === undefined && !touched.has(i - 1)) {
+    if (wasUnmeasured && !isUnmeasured(data) && data.depth_in === undefined && !touched.has(i - 1)) {
       const above = grown[i - 1]?.data.depth_out;
-      if (typeof above === 'number' && Number.isFinite(above)) data = { ...data, depth_in: above };
+      if (isFiniteNumber(above)) data = { ...data, depth_in: above };
     }
     return { ...draft, data };
   });
@@ -385,7 +367,7 @@ export function summarizeSubmit(rows: ShotDraft[]): SubmitSummary {
   const incompleteRows: number[] = [];
   let completeCount = 0;
   rows.forEach((draft, i) => {
-    if (isBlankRow(draft)) return; // the trailing blank, and any blank inserted row
+    if (isBlankDraft(draft)) return; // the trailing blank, and any blank inserted row
     if (isDraftComplete(draft)) completeCount++;
     else incompleteRows.push(i + 1);
   });
@@ -397,7 +379,7 @@ export function summarizeSubmit(rows: ShotDraft[]): SubmitSummary {
 export function collectShots(rows: ShotDraft[]): ShotData[] {
   const shots: ShotData[] = [];
   for (const draft of rows) {
-    if (isBlankRow(draft)) continue;
+    if (isBlankDraft(draft)) continue;
     const data = completeDraftData(draft);
     if (data) shots.push(data);
   }

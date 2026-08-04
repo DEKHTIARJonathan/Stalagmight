@@ -45,3 +45,23 @@ export function circularMeanDegrees(a: number, b: number): number {
   if (result >= 360) result -= 360;
   return result;
 }
+
+/**
+ * The bearing a pair of azimuth legs displays: the circular mean of two measured
+ * legs, the lone leg when only one was measured, NaN when neither was.
+ *
+ * A shot with one leg is a real, saveable shot (the missing leg is duplicated at
+ * commit), but `circularMeanDegrees` against a NaN leg is NaN - which rendered
+ * that bearing as an empty cell in every average-azimuth column.
+ *
+ * @param a - First leg in degrees; non-finite means unmeasured
+ * @param b - Second leg in degrees; non-finite means unmeasured
+ * @returns The displayed average, or NaN when there is nothing to show
+ */
+export function meanOrLoneLeg(a: number, b: number): number {
+  const aOk = Number.isFinite(a);
+  const bOk = Number.isFinite(b);
+  if (aOk && bOk) return circularMeanDegrees(a, b);
+  if (aOk) return a;
+  return bOk ? b : NaN;
+}

@@ -12,8 +12,9 @@
  * azimuth; inclination, LRUD and comment stay optional.
  */
 import type { EditableShot } from './editableShot';
-
-const fin = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
+// The same guard the draft rules use, not a local copy of it - see the mirror
+// note above.
+import { isFiniteNumber as fin } from '../SingleSystemView/dataTableDrafts';
 
 /**
  * A row the user added and then left (or emptied) completely: no measurement, no

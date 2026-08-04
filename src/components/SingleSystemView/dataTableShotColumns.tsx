@@ -13,7 +13,7 @@ import type { TFunction } from 'i18next';
 import type { Shot } from '../../types/project';
 import type { GridColumn } from '../common/SpreadsheetGrid/types';
 import { AlertCircleIcon, AlertTriangleIcon, LockIcon } from '../common/icons';
-import { circularMeanDegrees } from '../../utils/angles';
+import { meanOrLoneLeg } from '../../utils/angles';
 import { formatFixed } from '../../i18n/format';
 import type { ProjectWarning } from '../../types/commands';
 import { AZIMUTH_AVG_KEY, PITCH_AVG_KEY } from './dataTableEdits';
@@ -50,8 +50,10 @@ export interface ShotColumnContext {
    *  for draft rows (grid rows interleave drafts with the real shots). */
   shotIndexAt: (gridRowIndex: number) => number | null;
   /** Advance a shot's kind around the Normal -> Jump -> Reference ring (the
-   *  inline J/R cell). `direction` of -1 walks it backwards (shift-click). */
-  onCycleShotKind: (shot: Shot, direction: 1 | -1) => void;
+   *  inline J/R cell). `direction` of -1 walks it backwards (shift-click);
+   *  `rowIndex` is the grid row, for a host whose edit funnel addresses rows by
+   *  position rather than by id. */
+  onCycleShotKind: (shot: Shot, direction: 1 | -1, rowIndex: number) => void;
   /** Open the Warnings tab and start resolving the given shot's issue (the
    *  warning indicator becomes a button when the shot has unresolved warnings). */
   onResolveWarning?: (shotId: number) => void;
@@ -224,7 +226,10 @@ export function buildShotColumns(ctx: ShotColumnContext): GridColumn<Shot>[] {
       width: 70,
       align: 'right',
       kind: 'number',
-      getValue: (r) => circularMeanDegrees(r.azimuth_in, r.azimuth_out),
+      // Mean of the measured legs; a single measured leg IS the mean, and a
+      // draft row accepts one leg - averaging it against the unset (NaN) leg
+      // rendered a real, saveable bearing as an empty cell.
+      getValue: (r) => meanOrLoneLeg(r.azimuth_in, r.azimuth_out),
       format: fixed(precision.azimuth),
       editable: true,
       isEditable: editableUnlessFrozenGeometry(AZIMUTH_AVG_KEY),
@@ -295,8 +300,8 @@ export function buildShotColumns(ctx: ShotColumnContext): GridColumn<Shot>[] {
       noInlineEdit: true,
       // The keyboard equivalent of that click (F2 / Space, Shift to walk the
       // ring backwards), so the cell is reachable without a mouse.
-      activate: (shot, _index, dir) => {
-        if (!geometryReadOnly) ctx.onCycleShotKind(shot, dir);
+      activate: (shot, index, dir) => {
+        if (!geometryReadOnly) ctx.onCycleShotKind(shot, dir, index);
       },
       parse: (raw) => {
         const v = raw.trim().toLowerCase();
@@ -309,7 +314,7 @@ export function buildShotColumns(ctx: ShotColumnContext): GridColumn<Shot>[] {
         if (v === 'true' || v === '1' || v === 'yes') return 'Jump';
         return undefined; // anything else is rejected
       },
-      render: (shot): ReactNode => {
+      render: (shot, rowIndex): ReactNode => {
         const glyph = shotKindGlyph(shot.kind);
         return (
           <span
@@ -327,7 +332,7 @@ export function buildShotColumns(ctx: ShotColumnContext): GridColumn<Shot>[] {
               e.stopPropagation();
               // Shift-click walks the ring backwards, so overshooting a
               // three-state cycle costs one click instead of two.
-              if (!geometryReadOnly) ctx.onCycleShotKind(shot, e.shiftKey ? -1 : 1);
+              if (!geometryReadOnly) ctx.onCycleShotKind(shot, e.shiftKey ? -1 : 1, rowIndex);
             }}
             title={t('dataTable.columns.kindCycleHint', {
               current: t(SHOT_KIND_LABEL_KEY[shot.kind]),

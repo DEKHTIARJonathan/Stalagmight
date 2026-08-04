@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { circularMeanDegrees, normalizeAngle } from '../angles';
+import { circularMeanDegrees, meanOrLoneLeg, normalizeAngle } from '../angles';
 
 describe('normalizeAngle', () => {
   it('returns angle unchanged when already in [0, 360)', () => {
@@ -109,5 +109,27 @@ describe('circularMeanDegrees', () => {
     // Even though inputs aren't normalized, the math still works
     const result = circularMeanDegrees(370, 380);
     expect(result).toBeCloseTo(15, 5); // 370=10, 380=20, mean=15
+  });
+});
+
+describe('meanOrLoneLeg', () => {
+  it('is the circular mean when both legs are measured', () => {
+    expect(meanOrLoneLeg(10, 20)).toBeCloseTo(15, 10);
+    expect(meanOrLoneLeg(350, 10)).toBeCloseTo(0, 5);
+  });
+
+  it('is the lone leg when only one was measured', () => {
+    // A shot with one azimuth is real and saveable (the other leg is duplicated
+    // at commit); averaging it against the unset NaN leg showed it as blank.
+    expect(meanOrLoneLeg(123, NaN)).toBe(123);
+    expect(meanOrLoneLeg(NaN, 123)).toBe(123);
+  });
+
+  it('is NaN only when neither leg was measured', () => {
+    expect(Number.isNaN(meanOrLoneLeg(NaN, NaN))).toBe(true);
+  });
+
+  it('treats an infinite leg as unmeasured', () => {
+    expect(meanOrLoneLeg(Infinity, 42)).toBe(42);
   });
 });
