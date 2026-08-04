@@ -4,6 +4,7 @@ import type { TFunction } from 'i18next';
 import { formatFixed, getNumberFormatLocale } from '../../i18n/format';
 import { defaultConfig } from '../../types/config';
 import { useProjectStore } from '../../store/projectStore';
+import { useUIStore } from '../../store/uiStore';
 import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
 import { useGridLabels } from '../../hooks/useGridLabels';
 import {
@@ -226,6 +227,7 @@ export function ShotTableEditor({
   const { t } = useTranslation();
   const precision = useDecimalPrecision();
   const gridLabels = useGridLabels('dataTable.shotNoun');
+  const showToast = useUIStore((st) => st.showToast);
   const configValidation = useProjectStore((s) => s.config?.validation);
   // Per-project thresholds (#57). Between the host's prop and the global config
   // on purpose: a host that passes nothing - the import wizard, zero-datum -
@@ -531,14 +533,47 @@ export function ShotTableEditor({
         if (arr) arr.push(e);
         else byRow.set(e.row, [e]);
       }
-      for (const [row, rowEdits] of byRow) {
-        const index = resolveRowForEdit(row);
+      // Ascending, and counting the rows we have appended so far: a paste that
+      // runs past the trailing blank needs ONE new shot per row, each at its own
+      // index. `resolveRowForEdit` can only ever answer for the first of them -
+      // it returns `shots.length`, which is the same index for every row in the
+      // block - so a multi-row paste used to pile every row onto one shot.
+      let appended = 0;
+      for (const row of [...byRow.keys()].sort((a, b) => a - b)) {
+        const rowEdits = byRow.get(row) ?? [];
+        let index: number;
+        if (isPhantomAt(row) || row >= visibleShots.length) {
+          onAddShot();
+          index = shots.length + appended;
+          appended += 1;
+        } else {
+          index = actualIndex(row);
+        }
         if (index < 0) continue;
         for (const e of rowEdits) applyEditAt(index, e.colKey, e.value);
       }
     },
-    [readOnly, resolveRowForEdit, applyEditAt]
+    [readOnly, applyEditAt, isPhantomAt, visibleShots.length, onAddShot, shots.length, actualIndex]
   );
+
+  /** Report what a paste actually did, so an over-cap block cannot vanish
+   *  quietly. Rows are grown to fit (below), so this normally only speaks when
+   *  the grid's own ceiling is hit. */
+  const onPasteReport = useCallback(
+    ({ written, clipped, skipped }: { written: number; clipped: number; skipped: number }) => {
+      const parts: string[] = [];
+      if (written > 0) parts.push(t('dataTable.pasteReport.written', { count: written }));
+      if (clipped > 0) parts.push(t('dataTable.pasteReport.clipped', { count: clipped }));
+      if (skipped > 0) parts.push(t('dataTable.pasteReport.skipped', { count: skipped }));
+      if (parts.length > 0) showToast(parts.join(' \u00b7 '), 'shot-editor-paste');
+    },
+    [t, showToast]
+  );
+
+  /** Let a paste grow the table past the single trailing blank. Without this the
+   *  grid clips every target at `rows.length`, so pasting a block of shots wrote
+   *  the first row and silently dropped the rest. */
+  const growRows = useMemo(() => ({ growRowTemplate: () => ({ ...PHANTOM_ROW }) }), []);
 
   // Insert: the grid reports an insertion BOUNDARY, which is "after the last
   // row" at the end and "before this row" everywhere else.
@@ -733,7 +768,8 @@ export function ShotTableEditor({
           onHiddenColumnsChange={(hidden) => setHiddenColumns(new Set(hidden))}
           columnWidths={columnWidths}
           onColumnWidthsChange={setColumnWidths}
-          {...(readOnly ? {} : { onInsertRows, onDeleteRows })}
+          onPasteReport={onPasteReport}
+          {...(readOnly ? {} : { onInsertRows, onDeleteRows, pasteGrowsRows: growRows })}
         />
       </div>
     </div>
