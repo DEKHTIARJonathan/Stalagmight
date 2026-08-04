@@ -77,6 +77,20 @@ export const KNOWN_UNDO_ASYMMETRIES: readonly KnownAsymmetry[] = [
       'dangles every `StationKey::AfterShot` anchor and the Ariane export identity.',
   },
   {
+    id: 'create-section-redo-drops-gauge-anchors',
+    pathPattern: /^project\.sections\[\d+\]\.(gauge_(shot|neighbour)_uuid|reverse_parity)$/,
+    accepts: (diff) => diff.actual === 'null' || diff.actual === 'false',
+    description:
+      'The SAME root cause as create-section-redo-remints-shot-uuids, in a second field. ' +
+      '`restore_section` rebuilds the section through `Section::new_with_id` -> `Section::new`, ' +
+      'which hardcodes `reverse_parity: false, gauge_shot_uuid: None, gauge_neighbour_uuid: None` ' +
+      '(models/section.rs:301-303), and `SectionData` carries none of them - so a redo of ' +
+      'CreateSection silently drops the least-squares gauge pair a save had captured. Only ' +
+      'observable once a run SAVES (capture_missing_gauge_anchors is a save-time heal), which is ' +
+      'why the fuzzer could not see this half until it crossed the persistence boundary. ' +
+      'Value-narrowed to value -> null/false: the anchors being LOST, not changed.',
+  },
+  {
     id: 'undo-leaks-orphan-zero-section-offset',
     pathPattern: /^project\.section_offsets\.\d+$/,
     accepts: (diff) => isAbsentOrZeroPair(diff.expected) && isAbsentOrZeroPair(diff.actual),

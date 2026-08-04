@@ -75,7 +75,11 @@
  * surveyor; naharon has 13 null ones). Fixture diversity is what found them.
  *
  * 1. `run_scenario("undo-redo-fuzz", seed=1, iterations=3)` - create a section,
- *    undo, redo: every shot uuid is re-minted.
+ *    undo, redo: every shot uuid is re-minted. SECOND MANIFESTATION, only
+ *    observable now that runs save (`naharon`, seed 23 x60): the same
+ *    `restore_section` path also resets `reverse_parity` and BOTH gauge anchors
+ *    (`Section::new`, models/section.rs:301-303), so a redo silently discards the
+ *    least-squares gauge pair a save had captured.
  *    `UndoData::CreatedSectionSnapshot` stores a `SectionData`, which has no
  *    uuid field, so redo goes `restore_section` -> `Section::new_with_id` ->
  *    `Shot::new` -> `Uuid::new_v4()`. The sibling `CreateShot` path was
@@ -138,12 +142,52 @@
  *    history dropdown. The fix is to give undo_to/redo_to the same epilogue
  *    undo/redo have (once, after the loop - not per step).
  *
+ * 8. OPEN LEAD, root cause NOT yet established:
+ *    `... seed=12, iterations=16` with ALLOW_KNOWN_BUGS on fractal - after a
+ *    save/reload, `undo` at depth 7 lands with all of `sections[14].shots[3..]`
+ *    holding DIFFERENT shots (76 differing paths, shot COUNT unchanged, so the
+ *    list is shifted rather than truncated). The suspicion is that a persisted
+ *    `CreatedShotSnapshot` addresses its shot by an id the reload has since
+ *    renumbered, so its undo removes the wrong slot - but that is not confirmed,
+ *    and an id-agnostic-comparison artefact has not been fully excluded either.
+ *    Left failing and unclassified deliberately: do not tolerate it until it is
+ *    understood.
+ *
  * Set `STALAGMIGHT_FUZZ_ALLOW_KNOWN_BUGS=1` to keep going past a mismatch that is
  * ENTIRELY a classified asymmetry (1, 2 and 4; it is logged, counted as the
  * `knownAsymmetry` metric, and the model resyncs). That exists so the rest of
  * the fuzzer can be exercised while those are open - it is deliberately NOT the
  * default, because a green default here would mean the oracle had been weakened.
  * 3, 5, 6 and 7 are never tolerated.
+ *
+ * ## The persistence boundary
+ *
+ * Undo history is PERSISTED - both stacks serialize into the .stalx and restore
+ * on open - so nothing below a save point is exercised until a run crosses it.
+ * Runs now save to a temp path, close and reopen, at least once and up to three
+ * times, drawn from a THIRD independent stream (`seed ^ 0x85ebca6b`) and taken
+ * IN ADDITION to each iteration's normal move so the primary numbers do not
+ * shift. Skipped while the history is deeper than `undo_persist_limit`, since
+ * only the newest entries survive the write.
+ *
+ * Two documented families of undo-less state change live here, and BOTH are
+ * subtracted only from comparisons that cross an epoch boundary (a save or a
+ * reload bumps the epoch); within an epoch the oracle stays strict, which is what
+ * keeps bugs 3 and 7 visible:
+ *
+ *   - `SAVE_HEALING_MUTATIONS` - `save_project` mints missing shot uuids, dedupes
+ *     within-section duplicates, captures missing gauge anchors, drops orphan
+ *     `section_offsets` and sanitizes non-finite values, all with no undo entry.
+ *   - `RELOAD_RESOLVED_GEOMETRY` - `redrive_offsets_after_load` ends in an
+ *     unconditional `resolve_offsets()` ("Zero-trust: never honor a persisted
+ *     derivable offset", offsets.rs:186-188), so a reload RECOMPUTES
+ *     `section_offsets` and the station coordinates derived from them rather than
+ *     restoring them.
+ *
+ * `Shot::id` is not persisted either - the loader renumbers to
+ * `section_id * FEATURE_ID_STRIDE + sequence_order` (read.rs:372) - so from the
+ * first reload the model compares id-agnostically (shot ids replaced by position,
+ * everything else still exact). Section ids ARE persisted and are compared.
  *
  * ## Three oracles, not one
  *
