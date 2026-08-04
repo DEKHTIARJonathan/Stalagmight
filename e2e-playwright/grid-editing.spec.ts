@@ -113,7 +113,7 @@ test.describe('Grid editing', () => {
     expect((await getShots(page)).map((s) => s.length)).toEqual([10, 42, 30]);
   });
 
-  test('unparseable input is rejected in place, and only an emptied cell goes missing-red', async ({ page }) => {
+  test('an unparseable draft is rejected in place instead of clearing the cell', async ({ page }) => {
     const cell = page.getByTestId('grid-cell-0-length');
     await cell.dblclick();
     const editor = page.getByTestId('grid-cell-editor');
@@ -154,26 +154,6 @@ test.describe('Grid editing', () => {
     await expect(cell).toHaveText('12.5');
     expect((await getShots(page))[0]!.length).toBe(12.5);
 
-    // An EMPTIED draft is still a real clear: the cell goes red-empty while the
-    // model keeps its value (a survey never stores 0 for "not measured").
-    await cell.dblclick();
-    await editor.fill('');
-    await page.keyboard.press('Enter');
-    await expect(editor).toHaveCount(0);
-    await expect(cell).toHaveClass(/sg-cell-missing/);
-    await expect(cell).toHaveText('');
-    expect((await getShots(page))[0]!.length).toBe(12.5);
-
-    // Re-edit: a missing cell seeds an EMPTY editor (not the hidden old value),
-    // and a valid commit clears the mark.
-    await cell.dblclick();
-    await expect(editor).toHaveValue('');
-    await editor.fill('7.5');
-    await page.keyboard.press('Enter');
-    await expect(cell).not.toHaveClass(/sg-cell-missing/);
-    await expect(cell).toHaveText('7.5');
-    expect((await getShots(page))[0]!.length).toBe(7.5);
-
     // Nullable columns take the same rule: garbage in an LRUD cell is rejected
     // in place, never silently discarded and never written as null.
     const lrud = page.getByTestId('grid-cell-0-left');
@@ -186,6 +166,33 @@ test.describe('Grid editing', () => {
 
     await page.keyboard.press('Escape');
     await expect(editor).toHaveCount(0);
+  });
+
+  // Kept separate from the rejection test above so a regression in one branch
+  // cannot mask the other: emptying is the ONE draft that still clears.
+  test('an emptied required cell goes missing-red and recovers on a valid commit', async ({ page }) => {
+    const cell = page.getByTestId('grid-cell-0-length');
+    const editor = page.getByTestId('grid-cell-editor');
+
+    // An EMPTIED draft is a real clear: the cell goes red-empty while the model
+    // keeps its value (a survey never stores 0 for "not measured").
+    await cell.dblclick();
+    await editor.fill('');
+    await page.keyboard.press('Enter');
+    await expect(editor).toHaveCount(0);
+    await expect(cell).toHaveClass(/sg-cell-missing/);
+    await expect(cell).toHaveText('');
+    expect((await getShots(page))[0]!.length).toBe(10);
+
+    // Re-edit: a missing cell seeds an EMPTY editor (not the hidden old value),
+    // and a valid commit clears the mark.
+    await cell.dblclick();
+    await expect(editor).toHaveValue('');
+    await editor.fill('7.5');
+    await page.keyboard.press('Enter');
+    await expect(cell).not.toHaveClass(/sg-cell-missing/);
+    await expect(cell).toHaveText('7.5');
+    expect((await getShots(page))[0]!.length).toBe(7.5);
   });
 
   test('Delete on a required cell toggles missing-red without touching the model', async ({ page }) => {
