@@ -27,7 +27,7 @@ export interface GridContextMenuProps {
   onClear: () => void;
   onFillDown: () => void;
   onInsertRows?: (beforeIndex: number, count: number) => void;
-  onDeleteRows?: (fromRow: number, toRow: number) => void;
+  onDeleteRows?: (fromRow: number, toRow: number) => boolean | void;
   /** Host entries appended after the built-in ones. */
   extraItems: { label: string; onClick: () => void }[];
   /** Close the menu; every entry calls this after acting. */

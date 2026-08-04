@@ -212,8 +212,9 @@ export function fillTargets(
 }
 
 /**
- * Where the cursor lands after deleting rows `fromRow..toRow`, as a collapsed
- * single-cell selection.
+ * Where the cursor lands after deleting a run starting at `fromRow`, as a
+ * collapsed single-cell selection. The run's END does not matter: the cursor
+ * goes above the run either way.
  *
  * The rows below a delete shift up, so a surviving row-range selection stops
  * meaning what it did: after a run at the END it lands on whatever is now last,

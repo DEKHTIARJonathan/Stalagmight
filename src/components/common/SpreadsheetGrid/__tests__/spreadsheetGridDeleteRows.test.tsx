@@ -65,6 +65,13 @@ function selectRowRun(from: number, to: number) {
 
 const selectedRowCount = () => document.querySelectorAll('.sg-gutter-selected').length;
 
+/** Which row the single active cell sits on, or -1. Stronger than counting the
+ *  selection: it also catches a collapse that lands on the wrong row. */
+const activeRow = () =>
+  [...document.querySelectorAll('.sg-gutter')].findIndex((g) =>
+    g.className.includes('sg-gutter-active')
+  );
+
 /** Open the row context menu over a cell in the selection and hit Delete rows. */
 function deleteViaContextMenu(row: number) {
   fireEvent.contextMenu(screen.getByTestId(`cell-${row}-value`));
@@ -86,8 +93,10 @@ describe('SpreadsheetGrid row deletion', () => {
 
     deleteViaContextMenu(4);
     expect(onDeleteRows).toHaveBeenCalledWith(3, 5);
-    // One cell stays active - the grid always has a cursor - but the run is gone.
+    // One cell stays active - the grid always has a cursor - and it sits just
+    // ABOVE the run, not on whatever slid up into it.
     expect(selectedRowCount()).toBeLessThanOrEqual(1);
+    expect(activeRow()).toBe(2);
   });
 
   it('collapses a leading run selection instead of sliding it onto the next rows', () => {
@@ -99,6 +108,8 @@ describe('SpreadsheetGrid row deletion', () => {
     deleteViaContextMenu(1);
     expect(onDeleteRows).toHaveBeenCalledWith(0, 2);
     expect(selectedRowCount()).toBeLessThanOrEqual(1);
+    // Nowhere above row 0 to go.
+    expect(activeRow()).toBe(0);
   });
 
   it('collapses after the keyboard Delete path too', () => {
@@ -117,5 +128,28 @@ describe('SpreadsheetGrid row deletion', () => {
     deleteViaContextMenu(6);
     expect(onDeleteRows).toHaveBeenCalledTimes(1);
     expect(onDeleteRows).toHaveBeenCalledWith(5, 7);
+  });
+});
+
+describe('SpreadsheetGrid row deletion the host refuses', () => {
+  it('keeps the selection when onDeleteRows returns false', () => {
+    // A host refuses (mid-section run) or defers behind a confirm. The rows are
+    // still there, so clearing the selection would strand the user - and for the
+    // confirm it would clear it before they answered.
+    const onDeleteRows = vi.fn(() => false);
+    renderGrid(6, onDeleteRows);
+    selectRowRun(3, 5);
+    deleteViaContextMenu(4);
+    expect(onDeleteRows).toHaveBeenCalledWith(3, 5);
+    expect(selectedRowCount()).toBe(3);
+  });
+
+  it('still collapses when the host returns nothing', () => {
+    // `void` is the common case - a host that cannot refuse.
+    const onDeleteRows = vi.fn();
+    renderGrid(6, onDeleteRows);
+    selectRowRun(3, 5);
+    deleteViaContextMenu(4);
+    expect(selectedRowCount()).toBeLessThanOrEqual(1);
   });
 });
