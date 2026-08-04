@@ -149,7 +149,11 @@ hazards over long runs.
   - `pnpm agent:smoke` - session-core smoke (build -> launch -> drive -> stop).
   - `pnpm agent:mcp:smoke` - MCP-layer smoke (spawns the server, round-trips
     every tool through the protocol, self-tests the crash oracle).
-  - `pnpm agent:scenarios` - runs all 8 stress scenarios once at small n.
+  - `pnpm agent:scenarios` - runs all 9 stress scenarios once at small n.
+  - `pnpm agent:scenario <name> [--seed N] [--iterations M]` - runs ONE scenario
+    at a chosen seed/n, then a full sweep. The one to reach for when a seeded
+    scenario needs re-running: a fuzzer repro, or a soak at a bigger n than the
+    gate would tolerate.
   - `pnpm agent:mcp` - run the server standalone (for an external MCP client).
   - `pnpm agent:bridge <dir>` - file-based access to the same server for plain
     shells and subagents without an MCP client: append JSON tool calls to
@@ -231,6 +235,41 @@ Oracles + scenarios:
 |---|---|
 | `check_problems` | Full oracle sweep (see below). |
 | `run_scenario(name, seed?, iterations?)` | Run a named stress scenario, then a full sweep. |
+
+## Stress scenarios
+
+Registered in `e2e/agent/scenarios/index.ts`; each is a seeded loop that FAILS by
+throwing. Small-n values for the `pnpm agent:scenarios` gate live in
+`e2e/agent/scenarios-smoke.ts`.
+
+| Scenario | What it asserts |
+|---|---|
+| `seed-large-project` | A fractal fixture opens cleanly into a multi-section single-system view. |
+| `undo-redo-churn` | Create N sections, undo N + redo N; the cheap state signature returns to baseline. |
+| `undo-redo-fuzz` | Seeded random mutations interleaved with random undo/redo walks; an EXACT normalized `get_project_state` roundtrip at every history depth (see below). |
+| `dialog-cycling` | Opening/closing dialogs leaves no residue and no DOM growth. |
+| `tool-switch-spam` | `activeTool` tracks every switch. |
+| `map-storm` | A seeded `jumpTo` barrage does not stall the main thread. |
+| `save-under-churn` | Mutate+save leaves `isDirty=false`, no `.tmp`, and reopens clean. |
+| `import-repeatedly` | Re-importing a `.tml` keeps the undo stack at or under 100. |
+| `rapid-project-cycle` | Open/close cycles leave clean project transitions. |
+
+### undo-redo-fuzz
+
+The oracle is a full normalized `get_project_state` snapshot per undo depth
+(`e2e/agent/lib/projectSnapshot.ts`, unit-tested under vitest): every field it
+drops is justified in that file's header, map key order is canonicalized rather
+than ignored, and floats compare with a 1e-9 absolute / 1e-12 relative tolerance
+because geometry is re-derived rather than copied after every undo/redo. Backend
+truth for the model is the app's own `get_undo_stack` / `get_redo_stack` lengths.
+
+It currently reproduces three open undo bugs, enumerated with per-seed repro
+commands in the scenario's header comment, so it is RED by default. Two of them
+are classified in `KNOWN_UNDO_ASYMMETRIES`, which makes the failure message name
+the bug; exporting `STALAGMIGHT_FUZZ_ALLOW_KNOWN_BUGS=1` tolerates exactly those
+two (logged, counted, model resynced) so the rest of the fuzzer can still be
+exercised. The third - undoing the first shot appended into an EMPTY section
+displaces the whole section - is deliberately left un-tolerated.
 
 ## Oracles
 

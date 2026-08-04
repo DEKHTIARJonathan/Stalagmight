@@ -291,13 +291,18 @@ export const ACTION_GENERATORS: readonly ActionGenerator[] = [
       if (!section) return null;
       const shot = randomShotData(ctx);
       const shotIds = section.shots.map((s) => s.id).sort((a, b) => a - b);
+      // The PRE-insert shot count is in every label: appending into a section
+      // that currently has none takes a different backend path from appending
+      // onto a populated one, and that distinction has already been the
+      // difference between a clean roundtrip and a displaced section.
+      const where = `s=${section.id},n=${shotIds.length}`;
       const mode = shotIds.length === 0 ? 'append' : ctx.pick(['append', 'after', 'before'] as const);
       if (mode === 'after') {
         const afterId = ctx.pick(shotIds);
         return {
           action: 'createShot',
           args: [section.id, shot, afterId],
-          label: `createShot(s=${section.id},after=${afterId})`,
+          label: `createShot(${where},after=${afterId})`,
         };
       }
       if (mode === 'before') {
@@ -305,10 +310,10 @@ export const ACTION_GENERATORS: readonly ActionGenerator[] = [
         return {
           action: 'createShot',
           args: [section.id, shot, null, beforeId],
-          label: `createShot(s=${section.id},before=${beforeId})`,
+          label: `createShot(${where},before=${beforeId})`,
         };
       }
-      return { action: 'createShot', args: [section.id, shot], label: `createShot(s=${section.id},append)` };
+      return { action: 'createShot', args: [section.id, shot], label: `createShot(${where},append)` };
     },
   },
   {

@@ -37,21 +37,40 @@
  * rounded to 12 significant digits. Shot uuids, `reverse_parity`, the gauge
  * anchors, `merged_at`, all closure metrics and all geometry ARE compared.
  *
- * ## Known open app bug this reproduces
+ * ## Open app bugs this reproduces
  *
- * Redo of `createSection` re-mints every shot uuid (`UndoData::
- * CreatedSectionSnapshot` stores a `SectionData`, which has no uuid field, so
- * redo goes `restore_section` -> `Section::new_with_id` -> `Shot::new` ->
- * `Uuid::new_v4()`). The sibling `CreateShot` path was explicitly fixed for this
- * exact reason. The oracle does NOT normalize it away: the fuzzer fails, and
- * `projectSnapshot.ts`'s `KNOWN_UNDO_ASYMMETRIES` makes the failure message name
- * the bug instead of reading as a mystery.
+ * None of these are normalized away. The oracle fails on all three; the first
+ * two are classified in `projectSnapshot.ts`'s `KNOWN_UNDO_ASYMMETRIES` so the
+ * message names them rather than reading as a mystery.
+ *
+ * 1. `run_scenario("undo-redo-fuzz", seed=1, iterations=3)` - create a section,
+ *    undo, redo: every shot uuid is re-minted.
+ *    `UndoData::CreatedSectionSnapshot` stores a `SectionData`, which has no
+ *    uuid field, so redo goes `restore_section` -> `Section::new_with_id` ->
+ *    `Shot::new` -> `Uuid::new_v4()`. The sibling `CreateShot` path was
+ *    explicitly fixed for this exact reason (a fresh uuid dangles every
+ *    `StationKey::AfterShot` anchor and the Ariane export identity).
+ * 2. `... seed=11, iterations=150` (and seed 12) - undoing a shot INSERT leaves
+ *    behind an all-zero `section_offsets` entry the section did not have.
+ *    `adjust_section_offset` creates the key while compensating; the undo puts
+ *    the value back to 0 but nothing removes the key. Geometrically inert, and
+ *    it is serialized into the .stalx.
+ * 3. `... seed=2, iterations=36` - appending the FIRST shot into an EMPTY
+ *    section and undoing displaces the whole section by that shot's horizontal
+ *    vector (1.13 m in the repro), and the displacement RATCHETS on every
+ *    further undo/redo cycle. `Project::add_shot` (the append path) is
+ *    offset-neutral, but the undo routes through `remove_shot_with_rewire`,
+ *    whose `pos == 0` branch unconditionally calls `adjust_section_offset`.
+ *    Deliberately NOT classified as tolerable: it is a geometry bug, and the
+ *    same branch drops merges / zero datums / station comments keyed to that
+ *    section's station 0.
  *
  * Set `STALAGMIGHT_FUZZ_ALLOW_KNOWN_BUGS=1` to keep going past a mismatch whose
- * every differing path is a known asymmetry (it is logged, counted as the
- * `knownAsymmetry` metric, and the model resyncs). That exists so the rest of
- * the fuzzer can be exercised while the bug is open - it is deliberately NOT the
- * default, because a green default here would mean the oracle had been weakened.
+ * every differing path is a CLASSIFIED asymmetry (1 and 2; it is logged, counted
+ * as the `knownAsymmetry` metric, and the model resyncs). That exists so the
+ * rest of the fuzzer can be exercised while those are open - it is deliberately
+ * NOT the default, because a green default here would mean the oracle had been
+ * weakened.
  *
  * ## Determinism
  *

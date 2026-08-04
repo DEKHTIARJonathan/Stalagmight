@@ -65,6 +65,11 @@ stress loop then a full sweep:
 
 - `seed-large-project` - load a fractal fixture, assert a clean multi-section open
 - `undo-redo-churn` - create N sections, undo N + redo N, assert snapshot equality
+- `undo-redo-fuzz` - seeded random mutations + random undo/redo walks, asserting an
+  EXACT normalized `get_project_state` roundtrip at every history depth. Currently
+  reproduces three open undo bugs (listed in the scenario's header comment), so it is
+  RED by default; `STALAGMIGHT_FUZZ_ALLOW_KNOWN_BUGS=1` tolerates the two classified
+  ones so the rest still runs
 - `dialog-cycling` - open/close dialogs, assert no residue / DOM growth
 - `tool-switch-spam` - cycle every tool, assert activeTool tracks each switch
 - `map-storm` - seeded jumpTo barrage + main-thread stall probe
