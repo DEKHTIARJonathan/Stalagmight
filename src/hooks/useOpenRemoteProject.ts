@@ -160,7 +160,7 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
          * adoption, whose hand-over can half-land - passes the one that matches, so
          * the colour is not saying "fine" over a result the user has to act on.
          */
-        successToast?: { message: string; key: string; kind?: ToastKind };
+        successToast?: { message: string; key: string; kind: ToastKind };
         /**
          * [#270] Seed the link's dirty bit as TRUE. The seed's default is a fresh
          * pull (nothing local the server has not seen); "keep the local copy" and

@@ -280,7 +280,7 @@ export function useSpeleoActions(): SpeleoActions {
       applyUpdate(result);
       switch (result.kind) {
         case 'up_to_date':
-          showToast(t('speleodb.editBar.toasts.upToDate'), TOAST_KEYS.SPELEODB_UP_TO_DATE);
+          showToast(t('speleodb.editBar.toasts.upToDate'), TOAST_KEYS.SPELEODB_UP_TO_DATE, 'info');
           break;
         case 'fast_forwarded':
           // See startEditing: the FF reload swapped the tree in the backend, but

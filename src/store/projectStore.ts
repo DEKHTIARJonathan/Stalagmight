@@ -1267,7 +1267,8 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
           .getState()
           .showToast(
             i18n.t('speleodb.managedFile.copySaved', { path: result.unlinked_copy_path }),
-            TOAST_KEYS.SPELEODB_UNLINKED_COPY
+            TOAST_KEYS.SPELEODB_UNLINKED_COPY,
+            'warning'
           );
         // The heals above ran on the LIVE project before the pipeline decided to
         // write a copy, so the frontend's mirror is stale here too - and the

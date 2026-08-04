@@ -345,7 +345,7 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
 
       setIsCheckingConnectivity(true);
       setMergeStationB(stationB);
-      showToast('Checking connectivity...', TOAST_KEYS.MERGE_CHECK);
+      showToast('Checking connectivity...', TOAST_KEYS.MERGE_CHECK, 'info');
       try {
         const result = await checkMergeConnectivity(stationA, stationB);
         // Discard result if a newer request was started or merge was cancelled

@@ -546,7 +546,7 @@ export function useKeyboardShortcuts() {
         if (shouldShowToast(actionName, shortcutFeedback)) {
           const label = ACTION_LABELS[actionName];
           const message = stateInfo ? `${label}: ${stateInfo}` : label;
-          showToast(message, shortcutToastKey(actionName));
+          showToast(message, shortcutToastKey(actionName), 'info');
         }
       };
 

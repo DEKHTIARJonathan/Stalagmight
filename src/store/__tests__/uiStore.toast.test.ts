@@ -21,17 +21,17 @@ beforeEach(() => {
 describe('toast stack - ordering', () => {
   it('appends newest last (the visual bottom of the stack)', () => {
     const { showToast } = useUIStore.getState();
-    showToast('first', 'a');
-    showToast('second', 'b');
-    showToast('third', 'c');
+    showToast('first', 'a', 'info');
+    showToast('second', 'b', 'info');
+    showToast('third', 'c', 'info');
 
     expect(messages()).toEqual(['first', 'second', 'third']);
   });
 
   it('gives every toast a distinct id', () => {
     const { showToast } = useUIStore.getState();
-    showToast('one', 'a');
-    showToast('two', 'b');
+    showToast('one', 'a', 'info');
+    showToast('two', 'b', 'info');
 
     const ids = useUIStore.getState().toasts.map((t) => t.id);
     expect(new Set(ids).size).toBe(2);
@@ -41,15 +41,15 @@ describe('toast stack - ordering', () => {
 describe('toast stack - the visible cap', () => {
   it(`keeps at most ${MAX_VISIBLE_TOASTS} live toasts`, () => {
     const { showToast } = useUIStore.getState();
-    for (let i = 0; i < MAX_VISIBLE_TOASTS; i += 1) showToast(`m${i}`, `k${i}`);
+    for (let i = 0; i < MAX_VISIBLE_TOASTS; i += 1) showToast(`m${i}`, `k${i}`, 'info');
 
     expect(live()).toHaveLength(MAX_VISIBLE_TOASTS);
   });
 
   it('evicts the OLDEST when one arrives past the cap', () => {
     const { showToast } = useUIStore.getState();
-    for (let i = 0; i < MAX_VISIBLE_TOASTS; i += 1) showToast(`m${i}`, `k${i}`);
-    showToast('overflow', 'k-overflow');
+    for (let i = 0; i < MAX_VISIBLE_TOASTS; i += 1) showToast(`m${i}`, `k${i}`, 'info');
+    showToast('overflow', 'k-overflow', 'info');
 
     expect(live().map((t) => t.message)).toEqual([
       ...Array.from({ length: MAX_VISIBLE_TOASTS - 1 }, (_, i) => `m${i + 1}`),
@@ -59,8 +59,8 @@ describe('toast stack - the visible cap', () => {
 
   it('marks the evicted one leaving rather than dropping it, so it can animate out', () => {
     const { showToast } = useUIStore.getState();
-    for (let i = 0; i < MAX_VISIBLE_TOASTS; i += 1) showToast(`m${i}`, `k${i}`);
-    showToast('overflow', 'k-overflow');
+    for (let i = 0; i < MAX_VISIBLE_TOASTS; i += 1) showToast(`m${i}`, `k${i}`, 'info');
+    showToast('overflow', 'k-overflow', 'info');
 
     const evicted = useUIStore.getState().toasts.find((t) => t.message === 'm0');
     expect(evicted).toBeDefined();
@@ -69,7 +69,7 @@ describe('toast stack - the visible cap', () => {
 
   it('never lets the array grow without bound when nothing reaps the leavers', () => {
     const { showToast } = useUIStore.getState();
-    for (let i = 0; i < 50; i += 1) showToast(`m${i}`, `k${i}`);
+    for (let i = 0; i < 50; i += 1) showToast(`m${i}`, `k${i}`, 'info');
 
     expect(useUIStore.getState().toasts.length).toBeLessThanOrEqual(MAX_VISIBLE_TOASTS + 4);
     expect(live()).toHaveLength(MAX_VISIBLE_TOASTS);
@@ -96,14 +96,14 @@ describe('toast stack - the fitted capacity', () => {
   it('honours the reported capacity on push', () => {
     const { showToast, setToastCapacity } = useUIStore.getState();
     setToastCapacity(2);
-    for (let i = 0; i < 4; i += 1) showToast(`m${i}`, `k${i}`);
+    for (let i = 0; i < 4; i += 1) showToast(`m${i}`, `k${i}`, 'info');
 
     expect(live().map((t) => t.message)).toEqual(['m2', 'm3']);
   });
 
   it('evicts immediately when the window shrinks, rather than hiding a live toast', () => {
     const { showToast, setToastCapacity } = useUIStore.getState();
-    for (let i = 0; i < 5; i += 1) showToast(`m${i}`, `k${i}`);
+    for (let i = 0; i < 5; i += 1) showToast(`m${i}`, `k${i}`, 'info');
     expect(live()).toHaveLength(5);
 
     setToastCapacity(2);
@@ -116,8 +116,8 @@ describe('toast stack - the fitted capacity', () => {
   it('does not evict when the window grows', () => {
     const { showToast, setToastCapacity } = useUIStore.getState();
     setToastCapacity(2);
-    showToast('a', 'a');
-    showToast('b', 'b');
+    showToast('a', 'a', 'info');
+    showToast('b', 'b', 'info');
 
     setToastCapacity(5);
 
@@ -126,7 +126,7 @@ describe('toast stack - the fitted capacity', () => {
 
   it('is a no-op when the number has not moved, so reporting it every frame is free', () => {
     const { showToast, setToastCapacity } = useUIStore.getState();
-    showToast('a', 'a');
+    showToast('a', 'a', 'info');
     const before = useUIStore.getState().toasts;
 
     setToastCapacity(MAX_VISIBLE_TOASTS);
@@ -138,17 +138,17 @@ describe('toast stack - the fitted capacity', () => {
 describe('toast stack - same-key de-duplication', () => {
   it('refreshes the existing toast instead of stacking a duplicate', () => {
     const { showToast } = useUIStore.getState();
-    showToast('first wording', 'dup');
-    showToast('second wording', 'dup');
+    showToast('first wording', 'dup', 'info');
+    showToast('second wording', 'dup', 'info');
 
     expect(messages()).toEqual(['second wording']);
   });
 
   it('keeps the same id (no remount) but bumps revision, which restarts the timer', () => {
     const { showToast } = useUIStore.getState();
-    showToast('first', 'dup');
+    showToast('first', 'dup', 'info');
     const before = useUIStore.getState().toasts[0];
-    showToast('second', 'dup');
+    showToast('second', 'dup', 'info');
     const after = useUIStore.getState().toasts[0];
 
     expect(after?.id).toBe(before?.id);
@@ -157,9 +157,9 @@ describe('toast stack - same-key de-duplication', () => {
 
   it('moves the refreshed toast to the newest slot', () => {
     const { showToast } = useUIStore.getState();
-    showToast('old', 'dup');
-    showToast('other', 'other');
-    showToast('refreshed', 'dup');
+    showToast('old', 'dup', 'info');
+    showToast('other', 'other', 'info');
+    showToast('refreshed', 'dup', 'info');
 
     expect(messages()).toEqual(['other', 'refreshed']);
   });
@@ -174,11 +174,11 @@ describe('toast stack - same-key de-duplication', () => {
 
   it('does NOT refresh a toast that is already leaving - that one is on its way out', () => {
     const { showToast, dismissToast } = useUIStore.getState();
-    showToast('first', 'dup');
+    showToast('first', 'dup', 'info');
     const id = useUIStore.getState().toasts[0]?.id ?? -1;
     dismissToast(id);
 
-    showToast('second', 'dup');
+    showToast('second', 'dup', 'info');
 
     expect(messages()).toEqual(['first', 'second']);
     expect(live().map((t) => t.message)).toEqual(['second']);
@@ -186,8 +186,8 @@ describe('toast stack - same-key de-duplication', () => {
 
   it('different keys never merge', () => {
     const { showToast } = useUIStore.getState();
-    showToast('same words', 'a');
-    showToast('same words', 'b');
+    showToast('same words', 'a', 'info');
+    showToast('same words', 'b', 'info');
 
     expect(useUIStore.getState().toasts).toHaveLength(2);
   });
@@ -303,7 +303,12 @@ describe('toast stack - the de-duplication WINDOW', () => {
 });
 
 describe('toast stack - kinds', () => {
-  it('defaults to info so pre-existing two-argument call sites are unchanged', () => {
+  it('defaults to info at runtime, even though `kind` is now type-mandatory', () => {
+    // `kind` is required in the type (docs/notifications.md: never rely on the
+    // default), but the runtime implementation still defaults defensively - a
+    // stray call that slips past the type system should not crash or render an
+    // undefined-kind toast.
+    // @ts-expect-error - intentionally calling without the now-required `kind`.
     useUIStore.getState().showToast('neutral', 'k');
     expect(useUIStore.getState().toasts[0]?.kind).toBe('info');
   });
@@ -317,8 +322,8 @@ describe('toast stack - kinds', () => {
 describe('toast stack - removal', () => {
   it('dismissToast starts the exit without removing the toast yet', () => {
     const { showToast, dismissToast } = useUIStore.getState();
-    showToast('a', 'a');
-    showToast('b', 'b');
+    showToast('a', 'a', 'info');
+    showToast('b', 'b', 'info');
     const id = useUIStore.getState().toasts[0]?.id ?? -1;
 
     dismissToast(id);
@@ -329,9 +334,9 @@ describe('toast stack - removal', () => {
 
   it('removeToast drops exactly one toast', () => {
     const { showToast, removeToast } = useUIStore.getState();
-    showToast('a', 'a');
-    showToast('b', 'b');
-    showToast('c', 'c');
+    showToast('a', 'a', 'info');
+    showToast('b', 'b', 'info');
+    showToast('c', 'c', 'info');
     const id = useUIStore.getState().toasts[1]?.id ?? -1;
 
     removeToast(id);
@@ -341,8 +346,8 @@ describe('toast stack - removal', () => {
 
   it('clearToast empties the stack', () => {
     const { showToast, clearToast } = useUIStore.getState();
-    showToast('a', 'a');
-    showToast('b', 'b');
+    showToast('a', 'a', 'info');
+    showToast('b', 'b', 'info');
 
     clearToast();
 

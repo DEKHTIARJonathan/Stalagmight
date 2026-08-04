@@ -1415,7 +1415,7 @@ function MapCanvas() {
       const { checkMergeConnectivity } = useProjectStore.getState();
       const { openDialog, showToast } = useUIStore.getState();
 
-      showToast('Checking merge compatibility...', TOAST_KEYS.MERGE_CHECK);
+      showToast('Checking merge compatibility...', TOAST_KEYS.MERGE_CHECK, 'info');
       try {
         const result = await checkMergeConnectivity(originStation, targetStation);
         const extra = moveCallbacks

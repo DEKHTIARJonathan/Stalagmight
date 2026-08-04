@@ -178,7 +178,11 @@ function ProfileExportControls({
     try {
       await fn();
     } catch (e) {
-      showToast(getErrorMessage(e, t('planTables.profile.export.failed')), TOAST_KEYS.PROFILE_EXPORT_FAILED);
+      showToast(
+        getErrorMessage(e, t('planTables.profile.export.failed')),
+        TOAST_KEYS.PROFILE_EXPORT_FAILED,
+        'error'
+      );
     } finally {
       setBusy(false);
     }
@@ -220,7 +224,7 @@ function ProfileExportControls({
         );
       }
       await exportDiveProfile(ensureExtension(path, '.xml'), 'subsurface-xml', currentRequest());
-      showToast(t('planTables.profile.export.written'), TOAST_KEYS.PROFILE_EXPORT_OK);
+      showToast(t('planTables.profile.export.written'), TOAST_KEYS.PROFILE_EXPORT_OK, 'success');
     });
 
   const onCopy = () =>

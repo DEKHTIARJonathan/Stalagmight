@@ -1006,7 +1006,10 @@ export default function DataTable({ sections }: DataTableProps) {
       if (written > 0) parts.push(t('dataTable.pasteReport.written', { count: written }));
       if (clipped > 0) parts.push(t('dataTable.pasteReport.clipped', { count: clipped }));
       if (skipped > 0) parts.push(t('dataTable.pasteReport.skipped', { count: skipped }));
-      if (parts.length > 0) showToast(parts.join(' · '), TOAST_KEYS.DATA_TABLE_PASTE);
+      if (parts.length > 0) {
+        const kind = clipped > 0 || skipped > 0 ? 'warning' : 'success';
+        showToast(parts.join(' · '), TOAST_KEYS.DATA_TABLE_PASTE, kind);
+      }
     },
     [t, showToast]
   );

@@ -3216,7 +3216,8 @@ export default function DmpNewImportDialog({
 
       showToast(
         'Placement: Click to place section. Esc for more placement options and metadata changes.',
-        TOAST_KEYS.DMP_MANUAL_PLACEMENT_HINT
+        TOAST_KEYS.DMP_MANUAL_PLACEMENT_HINT,
+        'info'
       );
     };
 

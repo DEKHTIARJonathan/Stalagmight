@@ -304,10 +304,11 @@ export function selectionsEqual(a: Selection, b: Selection): boolean {
 }
 
 /**
- * Toast severity. `info` is the historical neutral look and the default, so the
- * two-argument `showToast(message, key)` call sites keep rendering exactly as
- * they did. The other three carry an accent (green / yellow / red) drawn from the
- * `--cc-success` / `--cc-warning` / `--cc-error` theme tokens.
+ * Toast severity - `error` (failed, won't self-heal), `warning` (succeeded with
+ * caveats, or blocked), `success` (succeeded, result off-screen/non-obvious), or
+ * `info` (FYI, no outcome attached - rare). Mandatory at every callsite; see
+ * docs/notifications.md. The runtime `showToast` implementation still defaults
+ * to `'info'` for safety, but the type below forbids relying on it.
  */
 export type ToastKind = 'info' | 'success' | 'warning' | 'error';
 
@@ -638,7 +639,7 @@ interface UIStore {
    * and kind win, its timer restarts, and it moves to the newest slot - instead
    * of stacking a duplicate.
    */
-  showToast: (message: string, key: string, kind?: ToastKind) => void;
+  showToast: (message: string, key: string, kind: ToastKind) => void;
   /**
    * Set the live-toast cap from measured geometry. Clamped into
    * [MIN_VISIBLE_TOASTS, MAX_VISIBLE_TOASTS]; shrinking it evicts the oldest
