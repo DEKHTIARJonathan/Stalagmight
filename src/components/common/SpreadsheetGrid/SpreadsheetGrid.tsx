@@ -125,7 +125,12 @@ export interface SpreadsheetGridProps<Row> {
   pasteGrowsRows?: { growRowTemplate: () => Row };
   /** Delete the contiguous data rows [fromRow..toRow] (host owns the row set).
    *  Enables "Delete N rows" in the context menu. */
-  onDeleteRows?: (fromRow: number, toRow: number) => void;
+  /** Delete rows. Return `false` when the delete did NOT happen - refused, or
+   *  deferred behind a confirm - and the selection is left alone; anything else
+   *  (including `void`) counts as done. Without that the grid would clear a
+   *  selection the user still has rows for, and clear it BEFORE they answer a
+   *  confirm about those very rows. */
+  onDeleteRows?: (fromRow: number, toRow: number) => boolean | void;
   /** Called after a paste that couldn't be applied in full: `written` cells were
    *  committed, `clipped` fell past the grid's last row/column, `skipped` landed
    *  on read-only/unparseable cells. Let the host surface a notice. */
@@ -765,7 +770,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
   const deleteRowsCollapsing = useCallback(
     (fromRow: number, toRow: number) => {
       if (!onDeleteRows) return;
-      onDeleteRows(fromRow, toRow);
+      if (onDeleteRows(fromRow, toRow) === false) return;
       rowSelectIntent.current = false;
       setSelection((prev) => collapseAfterRowDelete(prev, fromRow));
     },

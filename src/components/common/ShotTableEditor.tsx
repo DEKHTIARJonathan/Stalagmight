@@ -74,7 +74,7 @@ export interface ShotTableEditorProps {
    *  judge the selection as a whole - asked one shot at a time, each answer would
    *  treat the others as still present. Falls back to a loop over
    *  {@link onDeleteShot} when absent. */
-  onDeleteShots?: (indices: number[]) => void;
+  onDeleteShots?: (indices: number[]) => boolean | void;
   /** Optional callback to insert a shot before the given index */
   onInsertBefore?: (index: number) => void;
   /** Optional callback to insert a shot after the given index */
@@ -184,11 +184,18 @@ const PHANTOM_ROW: EditableShot = {
   kind: 'Normal',
 };
 
-/** The azimuth legs and the whole inclination family start hidden, so the four
- *  dialogs that render this editor open looking exactly as they did before those
- *  columns existed - the averages are what they have always shown. Everything
- *  else this grid has stays visible: it edits a survey that already exists, so
- *  there is no "start simple" case the way there is for a brand-new section.
+/** The azimuth legs and the whole inclination family start hidden: the averages
+ *  are what this editor has always shown. Everything else stays visible - it
+ *  edits a survey that already exists, so there is no "start simple" case the
+ *  way there is for a brand-new section.
+ *
+ *  ONLY reaches a config that has never carried `edit_section_hidden_columns`.
+ *  That key shipped before these columns did, so an existing install has it
+ *  stored as `[]` and the stored value wins - such a user gets the inclination
+ *  AVERAGE column on upgrade (the legs are hidden anyway, by the repair in
+ *  `normalizeAngleFamilies`). Deliberate: one new column is a smaller cost than
+ *  a migration that cannot tell a stale setting from a deliberate choice.
+ *
  *  Mirrors `default_edit_section_hidden_columns` in src-tauri/src/config/panels.rs. */
 const DEFAULT_EDIT_SECTION_HIDDEN_COLUMNS: readonly string[] = [
   'azimuth_in',
@@ -355,13 +362,14 @@ export function ShotTableEditor({
     viewSetters,
     DEFAULT_EDIT_SECTION_HIDDEN_COLUMNS
   );
-  // Normalized on the way to the grid: a set stored before these columns existed
-  // can leave an average AND its legs visible at once. The stored value stays the
-  // user's; only what renders is repaired.
-  const hiddenColumnList = useMemo(
-    () => [...normalizeAngleFamilies(hiddenColumns)],
-    [hiddenColumns]
-  );
+  // What is ACTUALLY hidden on screen. A set stored before these columns existed
+  // can leave an average AND its legs visible at once, so it is repaired on the
+  // way out; the stored value stays the user's. Everything that asks "is this
+  // column showing?" - the grid, the missing-cell tint, the eye menu's problem
+  // marks - reads this one value, because two of them reading different sets is
+  // how the tint ended up pointing at a column the grid was not drawing.
+  const effectiveHidden = useMemo(() => normalizeAngleFamilies(hiddenColumns), [hiddenColumns]);
+  const hiddenColumnList = useMemo(() => [...effectiveHidden], [effectiveHidden]);
 
 
   /** Which of avg / in-out / off an angle family is currently showing, read back
@@ -543,16 +551,18 @@ export function ShotTableEditor({
 
   // Delete high-to-low so each removal cannot shift the indices still to come.
   const onDeleteRows = useCallback(
-    (fromRow: number, toRow: number) => {
-      if (readOnly) return;
+    (fromRow: number, toRow: number): boolean | void => {
+      if (readOnly) return false;
       const indices: number[] = [];
       for (let r = fromRow; r <= Math.min(toRow, visibleShots.length - 1); r++) {
         const i = actualIndex(r);
         if (i >= 0) indices.push(i);
       }
       const descending = indices.sort((a, b) => b - a);
-      if (onDeleteShots) onDeleteShots(descending);
-      else for (const i of descending) onDeleteShot(i);
+      // A host with the batch callback answers for the whole run; the one-at-a-
+      // time fallback has no way to refuse, so it always counts as done.
+      if (onDeleteShots) return onDeleteShots(descending);
+      for (const i of descending) onDeleteShot(i);
     },
     [readOnly, actualIndex, onDeleteShot, onDeleteShots, visibleShots.length]
   );
@@ -572,23 +582,23 @@ export function ShotTableEditor({
       azimuth_out: 'azimuth',
     };
     for (const shot of visibleShots) {
-      for (const key of missingRequiredCells(shot, EDITABLE_AZIMUTH_AVG_KEY, hiddenColumns)) {
-        if (hiddenColumns.has(key) && rowIdentity[key]) problems.add(rowIdentity[key]);
+      for (const key of missingRequiredCells(shot, EDITABLE_AZIMUTH_AVG_KEY, effectiveHidden)) {
+        if (effectiveHidden.has(key) && rowIdentity[key]) problems.add(rowIdentity[key]);
       }
     }
     return problems;
-  }, [visibleShots, hiddenColumns]);
+  }, [visibleShots, effectiveHidden]);
 
   // Required-but-empty cells get the grid's red missing tint, so an incomplete
   // row points at the cells to fill rather than only naming the row.
   const cellClassName = useCallback(
     (shot: EditableShot, rowIndex: number, colKey: string): string | undefined => {
       if (isPhantomAt(rowIndex)) return undefined;
-      return missingRequiredCells(shot, EDITABLE_AZIMUTH_AVG_KEY, hiddenColumns).has(colKey)
+      return missingRequiredCells(shot, EDITABLE_AZIMUTH_AVG_KEY, effectiveHidden).has(colKey)
         ? 'sg-cell-missing'
         : undefined;
     },
-    [isPhantomAt, hiddenColumns]
+    [isPhantomAt, effectiveHidden]
   );
 
   const rowClassName = useCallback(

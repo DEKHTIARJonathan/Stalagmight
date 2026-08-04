@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useUIStore } from '../../store/uiStore';
 import { classifyDeleteRun, isEndRun } from './editSectionDeletes';
 import { useProjectStore } from '../../store/projectStore';
@@ -19,6 +20,7 @@ import DeleteShotImpactDetails from './DeleteShotImpactDetails';
 import { setSource, trackDialogComplete } from '../../utils/telemetry';
 
 export default function EditSectionDialog() {
+  const { t } = useTranslation();
   const { closeDialog, dialogData, openDialog, showToast } = useUIStore();
   const { updateSection, createShot, updateShot, deleteShot, project, isShotFrozen } = useProjectStore();
 
@@ -197,11 +199,11 @@ export default function EditSectionDialog() {
    * is why deleting a multi-row selection used to be refused even at the very end
    * of the section.
    */
-  const handleDeleteShots = useCallback((indices: number[]) => {
+  const handleDeleteShots = useCallback((indices: number[]): boolean => {
     const targets = indices
       .map((i) => shots[i])
       .filter((s): s is EditableShot => s !== undefined && s.isDeleted !== true);
-    if (targets.length === 0) return;
+    if (targets.length === 0) return false;
 
     // Rows added in this dialog are not in the section yet, so they never make a
     // delete mid-section - they are simply dropped.
@@ -216,16 +218,18 @@ export default function EditSectionDialog() {
         if (existingTargets.length === 1) {
           const only = existingTargets[0]!;
           setPendingMidDelete({ index: shots.indexOf(only), shotId: only.id });
-          return;
+          // Deferred behind the split/shift confirm, so the rows are still there
+          // and the selection must survive until the user answers.
+          return false;
         }
         // The split/shift preview answers for one shot, so a mid-section run has
         // no path here yet. Say so rather than silently dropping the gesture.
         showToast(
-          'Only shots at the start or end of a section can be deleted together. Delete a mid-section shot on its own to choose split or shift.',
+          t('editSection.midRunDelete'),
           'edit-section-mid-run-delete',
           'warning'
         );
-        return;
+        return false;
       }
     }
 
@@ -238,6 +242,7 @@ export default function EditSectionDialog() {
         .map((s) => (targetKeys.has(getShotKey(s)) ? ({ ...s, isDeleted: true } as EditableShot) : s))
     );
     if (selectedShotKey !== null && targetKeys.has(selectedShotKey)) setSelectedShotKey(null);
+    return true;
   }, [getShotKey, section, selectedShotKey, shots, showToast]);
 
   const handleDeleteShot = useCallback(
@@ -485,15 +490,15 @@ export default function EditSectionDialog() {
 
   if (!section) {
     return (
-      <DialogWrapper title="Edit Section" onClose={closeDialog} size="5xl" data-testid="edit-section-dialog">
-        <div className="text-error">Section not found</div>
+      <DialogWrapper title={t('editSection.title')} onClose={closeDialog} size="5xl" data-testid="edit-section-dialog">
+        <div className="text-error">{t('editSection.notFound')}</div>
       </DialogWrapper>
     );
   }
 
   return (
     <DialogWrapper
-      title="Edit Section"
+      title={t('editSection.title')}
       onClose={closeDialog}
       size={expanded ? 'fullscreen' : '5xl'}
       {...(expanded ? { overflow: 'hidden' as const } : {})}
@@ -564,10 +569,8 @@ export default function EditSectionDialog() {
 
         {pendingMidDelete && (
           <div className="p-3 bg-warning-10 border border-warning-20 rounded text-sm space-y-3">
-            <p className="font-medium text-warning">This is a mid-section shot.</p>
-            <p className="text-text-secondary">
-              Split Section keeps geometry fixed but discards other unsaved edits. Shift Geometry deletes the shot and allows downstream stations to move.
-            </p>
+            <p className="font-medium text-warning">{t('editSection.midShot')}</p>
+            <p className="text-text-secondary">{t('editSection.midShotExplain')}</p>
 
             {pendingImpactError && (
               <div className="p-3 bg-warning-10 border border-warning-20 rounded text-warning text-sm">
@@ -577,7 +580,7 @@ export default function EditSectionDialog() {
 
             {shiftBlocked && (
               <div className="p-3 bg-warning-10 border border-warning-20 rounded text-warning text-sm">
-                <p className="font-medium">Shift Geometry is not available for this shot.</p>
+                <p className="font-medium">{t('editSection.shiftUnavailable')}</p>
                 {shiftBlockedReasons.length > 0 && (
                   <ul className="list-disc list-inside">
                     {shiftBlockedReasons.map((reason, index) => (
@@ -590,15 +593,15 @@ export default function EditSectionDialog() {
 
             <DeleteShotImpactDetails
               impact={pendingImpact}
-              title="If you choose Shift Geometry, these relationships will update:"
+              title={t('editSection.shiftImpactTitle')}
             />
 
             <div className="flex justify-end gap-2">
-              <Button onClick={() => setPendingMidDelete(null)} data-testid="edit-section-delete-cancel">Cancel</Button>
-              <Button onClick={confirmSplitMidDelete} data-testid="edit-section-delete-split">Split Section</Button>
+              <Button onClick={() => setPendingMidDelete(null)} data-testid="edit-section-delete-cancel">{t('common.actions.cancel')}</Button>
+              <Button onClick={confirmSplitMidDelete} data-testid="edit-section-delete-split">{t('editSection.splitSection')}</Button>
               <Button variant="danger" onClick={confirmShiftMidDelete} disabled={shiftBlocked} data-testid="edit-section-delete-shift">
-                Shift Geometry
-              </Button>
+                {t('editSection.shiftGeometry')}
+</Button>
             </div>
           </div>
         )}
@@ -624,8 +627,8 @@ export default function EditSectionDialog() {
             }
             data-testid="edit-section-reverse"
           >
-            Reverse Section
-          </Button>
+            {t('editSection.reverseSection')}
+</Button>
           {incompleteRows.length > 0 && (
             <p className="text-sm text-error" data-testid="edit-section-blocker">
               {incompleteRows.length === 1
@@ -635,8 +638,8 @@ export default function EditSectionDialog() {
           )}
           <div className="flex-1" />
           <Button onClick={closeDialog} disabled={isLoading} data-testid="edit-section-cancel">
-            Cancel
-          </Button>
+            {t('common.actions.cancel')}
+</Button>
           <Button
             variant="primary"
             onClick={handleSave}

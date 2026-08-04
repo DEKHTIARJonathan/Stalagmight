@@ -2107,6 +2107,18 @@
       "zooming": "Zooming"
     }
   },
+  "editSection": {
+    "title": "Edit Section",
+    "notFound": "Section not found",
+    "midShot": "This is a mid-section shot.",
+    "midShotExplain": "Split Section keeps geometry fixed but discards other unsaved edits. Shift Geometry deletes the shot and allows downstream stations to move.",
+    "shiftUnavailable": "Shift Geometry is not available for this shot.",
+    "shiftImpactTitle": "If you choose Shift Geometry, these relationships will update:",
+    "splitSection": "Split Section",
+    "shiftGeometry": "Shift Geometry",
+    "reverseSection": "Reverse Section",
+    "midRunDelete": "Only shots at the start or end of a section can be deleted together. Delete a mid-section shot on its own to choose split or shift."
+  },
   "newSection": {
     "collapse": "Shrink the table",
     "create": "Create Section",
