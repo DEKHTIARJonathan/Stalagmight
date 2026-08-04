@@ -3514,12 +3514,13 @@ impl Fuzzer {
     fn step_mutate(&mut self) {
         let before_undo = self.undo_len();
         let before_redo = self.redo_len();
+        let before_newest = self.newest_entry();
         let allocators = self.allocators();
         let Some(Some(drawn)) = self.catching_alignment(Self::draw_mutation) else {
             return;
         };
         let label = drawn.label.clone();
-        self.record_mutation(drawn, before_undo, before_redo);
+        self.record_mutation(drawn, before_undo, before_redo, before_newest);
         self.expect_allocators_advanced(&allocators, &label);
         self.record_growth();
     }
@@ -3527,9 +3528,32 @@ impl Fuzzer {
     /// The bookkeeping half of `step_mutate`, split out so the exposure prologue
     /// can push its own commands through the SAME model updates and the SAME
     /// per-move oracles rather than a parallel path.
-    fn record_mutation(&mut self, drawn: Drawn, before_undo: usize, before_redo: usize) {
+    fn record_mutation(
+        &mut self,
+        drawn: Drawn,
+        before_undo: usize,
+        before_redo: usize,
+        before_newest: Option<String>,
+    ) {
         let accepted = drawn.result.success;
-        let pushed = self.undo_len().saturating_sub(before_undo);
+        // Not a length delta. AT THE HISTORY LIMIT a push and its FIFO trim
+        // cancel out - the stack was 100 entries and is still 100 - so a length
+        // delta reads a real push as a no-op, which is how the horizon run first
+        // went wrong: the model stopped advancing, kept comparing against the
+        // wrong depth, and reported an app bug that was its own. The newest
+        // entry's identity is the signal that survives trimming.
+        let newest = self.newest_entry();
+        let pushed = if self.undo_len() > before_undo {
+            self.undo_len() - before_undo
+        } else if self.undo_len() == before_undo
+            && before_undo >= self.history_limit
+            && newest.is_some()
+            && newest != before_newest
+        {
+            1
+        } else {
+            0
+        };
         self.note(format!(
             "{} -> {} (undo {}->{}, redo {}->{})",
             drawn.label,
@@ -3644,13 +3668,29 @@ impl Fuzzer {
     /// has to capture: `record_mutation` tells a push from a no-op by the
     /// difference, and reading it here would make every forced command look like
     /// a no-op.
-    fn forced(&mut self, drawn: Drawn, before: (usize, usize)) {
-        self.record_mutation(drawn, before.0, before.1);
+    fn forced(&mut self, drawn: Drawn, before: (usize, usize, Option<String>)) {
+        self.record_mutation(drawn, before.0, before.1, before.2);
     }
 
-    /// The current `(undo, redo)` stack depths.
-    fn stacks(&self) -> (usize, usize) {
-        (self.undo_len(), self.redo_len())
+    /// The current `(undo, redo)` stack depths, and the newest entry's identity.
+    fn stacks(&self) -> (usize, usize, Option<String>) {
+        (self.undo_len(), self.redo_len(), self.newest_entry())
+    }
+
+    /// A fingerprint of the newest undo entry, or `None` when the stack is empty.
+    ///
+    /// `(timestamp, command_type, description)` - enough to tell a fresh push
+    /// from the same entry still sitting on top, which a stack LENGTH cannot do
+    /// once the FIFO trim is active.
+    fn newest_entry(&self) -> Option<String> {
+        self.state.get_undo_stack().first().map(|item| {
+            format!(
+                "{}|{}|{}",
+                item.timestamp.clone().unwrap_or_default(),
+                item.command_type,
+                item.description
+            )
+        })
     }
 
     /// Build the state findings 8, 12 and 13 need, instead of waiting for a seed
