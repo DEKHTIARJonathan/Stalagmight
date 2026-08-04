@@ -15,7 +15,10 @@ import {
 import { nextShotKind } from '../../utils/shotKind';
 import { SpreadsheetGrid } from './SpreadsheetGrid';
 import { ExpandIcon, ShrinkIcon } from './icons';
-import { useEditSectionViewPersistence } from '../Dialogs/useEditSectionViewPersistence';
+import {
+  useEditSectionViewPersistence,
+  useImportShotsViewPersistence,
+} from '../Dialogs/useEditSectionViewPersistence';
 import type { CellEdit } from './SpreadsheetGrid/types';
 import {
   buildEditableShotColumns,
@@ -116,6 +119,11 @@ export interface ShotTableEditorProps {
    *  resize any of them itself. */
   expanded?: boolean;
   onToggleExpand?: () => void;
+  /** Which persisted layout this instance reads and writes. `edit-section` is
+   *  the saved-survey review grid; `import` covers the wizard and zero-datum,
+   *  which edit shots that are not in the project yet. Separate because sharing
+   *  one slice meant reshaping columns mid-import rewrote the review layout. */
+  layoutScope?: 'edit-section' | 'import';
 }
 
 const DEFAULT_VALIDATION_CONFIG: ValidationConfig = {
@@ -235,6 +243,7 @@ export function ShotTableEditor({
   onRowSelect,
   frozenShotIndices,
   sectionId,
+  layoutScope = 'import',
   expanded = false,
   onToggleExpand,
 }: ShotTableEditorProps) {
@@ -380,7 +389,9 @@ export function ShotTableEditor({
   );
   const [columnWidths, setColumnWidths] = useState<Record<string, number>>({});
   const viewSetters = useMemo(() => ({ setColumnOrder, setHiddenColumns, setColumnWidths }), []);
-  useEditSectionViewPersistence(
+  const usePersistence =
+    layoutScope === 'edit-section' ? useEditSectionViewPersistence : useImportShotsViewPersistence;
+  usePersistence(
     { columnOrder, hiddenColumns, columnWidths },
     viewSetters,
     DEFAULT_EDIT_SECTION_HIDDEN_COLUMNS

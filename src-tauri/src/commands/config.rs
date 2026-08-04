@@ -202,7 +202,47 @@ pub(crate) fn update_new_section_view_impl(
 }
 
 /// Update the edit-section dialog's shot-grid view state (column order,
-/// visibility and widths) in configuration (efficient partial update).
+/// Update the IMPORT-time shot grids' view (the mNemo wizard and zero-datum
+/// config) in configuration.
+///
+/// Its own command for the same reason the other three are: separate `panels`
+/// field sets, and a partial write to one must never carry another's keys.
+#[tauri::command]
+pub fn update_import_shots_view(
+    state: State<AppState>,
+    column_order: Option<Vec<String>>,
+    hidden_columns: Option<Vec<String>>,
+    column_widths: Option<BTreeMap<String, u32>>,
+) -> Result<(), String> {
+    update_import_shots_view_impl(state.inner(), column_order, hidden_columns, column_widths)
+}
+
+pub(crate) fn update_import_shots_view_impl(
+    state: &AppState,
+    column_order: Option<Vec<String>>,
+    hidden_columns: Option<Vec<String>>,
+    column_widths: Option<BTreeMap<String, u32>>,
+) -> Result<(), String> {
+    state
+        .modify_config(|config| {
+            if let Some(order) = column_order {
+                config.panels.import_shots_column_order = order;
+            }
+            if let Some(hidden) = hidden_columns {
+                config.panels.import_shots_hidden_columns = hidden;
+            }
+            if let Some(mut widths) = column_widths {
+                normalize_column_widths(&mut widths);
+                config.panels.import_shots_column_widths = widths;
+            }
+            Ok(())
+        })
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
+/// Update the edit-section dialog's shot-grid view (column order, visibility and
+/// widths) in configuration (efficient partial update).
 ///
 /// Its own command for the same reason `update_new_section_view` is: three
 /// separate grids, three disjoint `panels` field sets, and a partial write to

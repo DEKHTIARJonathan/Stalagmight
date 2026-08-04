@@ -263,6 +263,15 @@ export const defaultConfig: Config = {
       "pitch_out"
     ],
     "edit_section_column_widths": {},
+    "import_shots_column_order": [],
+    "import_shots_hidden_columns": [
+      "azimuth_in",
+      "azimuth_out",
+      "_pitch_avg",
+      "pitch_in",
+      "pitch_out"
+    ],
+    "import_shots_column_widths": {},
     "sections_panel_open": true,
     "sections_panel_mode": "pin",
     "detail_panel_open": true,

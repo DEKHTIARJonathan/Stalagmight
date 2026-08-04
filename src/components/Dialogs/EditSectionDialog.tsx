@@ -568,6 +568,7 @@ export default function EditSectionDialog() {
             onAddShot={handleAddShot}
             onAddShots={handleAddShots}
             onInsertShots={handleInsertShots}
+            layoutScope="edit-section"
             onDeleteShot={handleDeleteShot}
             onDeleteShots={handleDeleteShots}
             readOnly={editingBlocked}
