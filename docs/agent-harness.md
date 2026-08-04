@@ -555,10 +555,31 @@ DIFFERENTLY is rejected exactly like one that passes. That is standard ddmin
 practice and it is what stops a shrink wandering onto one of the other ten open
 bugs; the count of rejected-as-divergent candidates is reported.
 
-Measured on the bug 1 repro (fractal seed 1 x40, 43 recorded steps): **43 -> 2
-steps, 1-minimal, 52.5 s wall clock, 28 replays at ~1.8 s each** plus 20 served
-from the cache, of which 7 preserved, 18 lost the failure and 3 failed
-differently and were rejected. The whole shrink runs against ONE app session -
+Measured, on the two current reds:
+
+| trace | before | after | replays | divergent, rejected | per replay | wall clock |
+|---|---|---|---|---|---|---|
+| bug 1 (`undo-redo-fuzz`, fractal seed 1 x40) | 43 | **2** | 28 (+20 cached) | 3 | 1.8 s | 52.5 s |
+| finding 12 (`undo-persistence-fuzz`, seed 1 x1, strict) | 20 | **4** | 58 (+41 cached) | 20 | 1.7 s | 97.6 s |
+
+Both results are 1-minimal, and both replay deterministically twice. The finding
+12 one is the better demonstration: its minimal list is
+
+```
+1. createSection(shots=3)
+2. createShot(s=32,before=3200000)
+3. setShotKind(s=32,shot=3200003,Jump)
+4. save
+```
+
+which is, step for step, the synthetic Rust test that was written for that
+finding by hand - create a section, insert before the first shot so the ids stop
+matching positional order, mark a shot whose id will land on a different slot,
+save. The shrinker got there from a 20-step cycle without being told what the bug
+was. Its 20 divergent rejections are the guard doing its job: subsets that still
+failed, but as bug 8 or as the stale-id wedge rather than as finding 12.
+
+The whole shrink runs against ONE app session -
 each scenario run already closes the project, materializes a fresh fixture copy,
 strips its history and asserts both stacks came up empty, so a replay inherits
 nothing from the one before it.
