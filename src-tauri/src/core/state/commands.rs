@@ -371,6 +371,7 @@ impl AppState {
         // all reversible by restoring this snapshot. (capture locks the project
         // internally, so take it with no guard held.)
         let before_snapshot = self.capture_project_snapshot().ok();
+        let demoted;
         {
             let mut guard = match self.project.lock() {
                 Ok(g) => g,
@@ -385,13 +386,19 @@ impl AppState {
             };
             // Drop dangling refs/orphans and re-mint duplicate shot UUIDs.
             project.repair_structural_integrity();
-            // Dropping refs may have cleared the adjacency cache; rebuild before
-            // the cascade walks the merge graph.
-            project.rebuild_merge_adjacency();
+            // Demote any merge that bridges two independently datum-anchored
+            // groups back to a loop closure. It must run BEFORE the conversion
+            // and the re-solve: it is the one repair `resolve_offsets` cannot do
+            // (an over-constrained merge can never be satisfied, only removed),
+            // and undoing the promotion first means the conversion below sees the
+            // healed topology. Explicit-repair only - never on load.
+            demoted = project.demote_double_anchoring_merges();
             // Turn any sole-bridge closure into a merge (a closure is only a
             // loop), then re-derive offsets. Repair is an explicit "fix my
             // project" action, so use the zero-trust re-solve that never honors a
-            // persisted offset.
+            // persisted offset. The closure just demoted is NOT re-promoted here:
+            // the converter's own double-anchor guard sees the same two anchored
+            // halves and leaves it alone.
             project.convert_orphan_closures_to_merges();
             project.resolve_offsets();
         } // release the guard before re-measuring (integrity_violation_messages re-locks)
@@ -421,7 +428,12 @@ impl AppState {
             }
         }
         IntegrityRepairResult {
-            fixed: before.saturating_sub(after) as u32,
+            // Demotions are already inside the before→after delta: each demoted
+            // merge was, by construction, a counted `merge_misaligned` violation
+            // that the demotion clears. The floor only guarantees that an explicit
+            // repair action can never be reported to the user as "0 fixed" if the
+            // rest of the violation set churns in the same pass.
+            fixed: before.saturating_sub(after).max(demoted) as u32,
             remaining: after as u32,
             changed,
         }

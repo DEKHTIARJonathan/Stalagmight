@@ -312,43 +312,23 @@ impl Project {
     /// Closures are NOT followed. Use this for rigid-group operations:
     /// datum propagation, offset application, zero-datum validation.
     pub fn get_merged_section_ids(&self, section_id: SectionId) -> HashSet<SectionId> {
+        // ONE path: BFS over the merge-only adjacency, which
+        // [`MergeTopology::adjacency`] builds on demand and every mutator
+        // invalidates. There is deliberately no linear-scan fallback - the old
+        // "empty cache means fall back" branch is what let a stale-but-non-empty
+        // map answer authoritatively after `map_station_refs` moved an endpoint.
+        // Each connected section is visited once with O(neighbours) work per
+        // step, so this is O(group size), not O(group × merges).
+        let adjacency = self.station_merges.adjacency();
         let mut connected = HashSet::new();
-        // Fast path: the adjacency cache is non-empty (or we have no
-        // merges at all). BFS visits each connected section once with
-        // O(neighbours) work per step → O(group size) total instead of
-        // the legacy O(group × N_merges).
-        if !self.merge_adjacency_cache.is_empty() || self.station_merges.is_empty() {
-            let mut queue = vec![section_id];
-            while let Some(current) = queue.pop() {
-                if connected.insert(current) {
-                    if let Some(neighbours) = self.merge_adjacency_cache.get(&current) {
-                        for &n in neighbours {
-                            if !connected.contains(&n) {
-                                queue.push(n);
-                            }
-                        }
-                    }
-                }
-            }
-            return connected;
-        }
-
-        // Cold path: cache was cleared (e.g. after deserialisation or a
-        // structural remove). Fall back to the legacy linear scan rather
-        // than mutating self here - callers that care about throughput
-        // call `rebuild_merge_adjacency` first.
         let mut queue = vec![section_id];
         while let Some(current) = queue.pop() {
             if connected.insert(current) {
-                for merge in &self.station_merges {
-                    if merge.station_a.section_id == current {
-                        if !connected.contains(&merge.station_b.section_id) {
-                            queue.push(merge.station_b.section_id);
+                if let Some(neighbours) = adjacency.get(&current) {
+                    for &n in neighbours {
+                        if !connected.contains(&n) {
+                            queue.push(n);
                         }
-                    } else if merge.station_b.section_id == current
-                        && !connected.contains(&merge.station_a.section_id)
-                    {
-                        queue.push(merge.station_a.section_id);
                     }
                 }
             }
@@ -454,6 +434,96 @@ impl Project {
             .collect()
     }
 
+    /// Label every section with its merge-only component in the HYPOTHETICAL
+    /// graph that drops the merges at the indices in `skip`, and record which of
+    /// those components an anchor still reaches.
+    ///
+    /// ONE O(V + E) pass answers both questions
+    /// [`Self::demote_double_anchoring_merges`] asks of every candidate - "are
+    /// these two halves still connected without the torn merges?" and "is each
+    /// half independently anchored?" - so the separation test and the anchoring
+    /// test can never be answered against different graphs, and neither costs a
+    /// BFS per candidate.
+    ///
+    /// Only datums that still RESOLVE anchor a component, mirroring
+    /// [`Self::component_datum_refs`]: a corrupt project can be opened with a
+    /// dangling zero datum (its anchoring shot was deleted) so the user can repair
+    /// it, and a dangling datum is not a real anchor - counting it would make a
+    /// half look anchored when nothing holds it in place.
+    ///
+    /// Walks `station_merges` into a throwaway local adjacency rather than going
+    /// through the memoized [`Self::get_merged_section_ids`]: the shared memo
+    /// describes the merges that actually exist, and answering a "what if these
+    /// merges were gone" question must never mutate the project or that memo.
+    pub(crate) fn merge_components_excluding(
+        &self,
+        skip: &HashSet<usize>,
+    ) -> ExcludedMergeComponents {
+        let mut adjacency: HashMap<SectionId, Vec<SectionId>> = HashMap::new();
+        for (i, m) in self.station_merges.iter().enumerate() {
+            if skip.contains(&i) {
+                continue;
+            }
+            adjacency
+                .entry(m.station_a.section_id)
+                .or_default()
+                .push(m.station_b.section_id);
+            adjacency
+                .entry(m.station_b.section_id)
+                .or_default()
+                .push(m.station_a.section_id);
+        }
+
+        // Roots: every section in the project, then any section a surviving merge
+        // names that the project does not hold (a dangling endpoint in a project
+        // opened for repair). Nothing is left unlabelled, so a section that
+        // participates in no surviving merge is its own singleton component and
+        // both accessors answer for it.
+        let mut component_of: HashMap<SectionId, usize> = HashMap::new();
+        let mut next_component = 0usize;
+        let roots: Vec<SectionId> = self
+            .sections
+            .iter()
+            .map(|s| s.id)
+            .chain(adjacency.keys().copied())
+            .collect();
+        for root in roots {
+            if component_of.contains_key(&root) {
+                continue;
+            }
+            let component = next_component;
+            next_component += 1;
+            let mut queue = vec![root];
+            while let Some(current) = queue.pop() {
+                if component_of.insert(current, component).is_some() {
+                    continue;
+                }
+                if let Some(neighbours) = adjacency.get(&current) {
+                    for &n in neighbours {
+                        if !component_of.contains_key(&n) {
+                            queue.push(n);
+                        }
+                    }
+                }
+            }
+        }
+
+        let mut anchored: HashSet<usize> = HashSet::new();
+        for zd in &self.zero_datums {
+            let Some(sr) = self.resolve_key(&zd.station_ref) else {
+                continue;
+            };
+            if let Some(&component) = component_of.get(&sr.section_id) {
+                anchored.insert(component);
+            }
+        }
+
+        ExcludedMergeComponents {
+            component_of,
+            anchored,
+        }
+    }
+
     /// Would adding a merge between sections `a` and `b` place two zero datums in
     /// one merge component? True only when `a` and `b` are in DIFFERENT merge
     /// components and EACH component is already anchored - i.e. the merge would
@@ -461,6 +531,9 @@ impl Project {
     /// [`Self::convert_orphan_closures_to_merges`] from silently creating the
     /// over-constraint (a closure between two anchored groups is legitimate; a
     /// rigid merge between them is not).
+    ///
+    /// Asked about a merge that does NOT yet exist, so it reads the real graph
+    /// through the memoized [`Self::get_merged_section_ids`].
     pub(crate) fn merge_would_double_anchor(&self, a: SectionId, b: SectionId) -> bool {
         let component_a = self.get_merged_section_ids(a);
         if component_a.contains(&b) {
@@ -474,5 +547,33 @@ impl Project {
                 .any(|sr| component.contains(&sr.section_id))
         };
         anchored(&component_a) && anchored(&self.get_merged_section_ids(b))
+    }
+}
+
+/// Merge-only connected components of every section in a project, computed as if
+/// some set of merges did not exist, plus which components hold at least one
+/// resolved zero datum. Built by [`Project::merge_components_excluding`].
+pub(crate) struct ExcludedMergeComponents {
+    /// section id -> the index of its component in the hypothetical graph.
+    component_of: HashMap<SectionId, usize>,
+    /// Component indices reached by at least one resolved zero datum.
+    anchored: HashSet<usize>,
+}
+
+impl ExcludedMergeComponents {
+    /// True when `a` and `b` are still merge-connected with the excluded merges
+    /// gone. A section this graph does not know is connected to nothing.
+    pub(crate) fn same_component(&self, a: SectionId, b: SectionId) -> bool {
+        match (self.component_of.get(&a), self.component_of.get(&b)) {
+            (Some(x), Some(y)) => x == y,
+            _ => false,
+        }
+    }
+
+    /// True when `section`'s component holds at least one resolved zero datum.
+    pub(crate) fn is_anchored(&self, section: SectionId) -> bool {
+        self.component_of
+            .get(&section)
+            .is_some_and(|c| self.anchored.contains(c))
     }
 }

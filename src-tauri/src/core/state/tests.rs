@@ -2268,10 +2268,11 @@ fn merge_allowed_across_inert_closure_but_rejected_across_aligned() {
 
 #[test]
 fn restore_snapshot_into_rebuilds_transient_caches() {
-    // The single restore chokepoint must rebuild the serde-skipped lookup caches
-    // (section_index_cache, merge_adjacency_cache), so no rollback/undo/redo path
-    // can install a project with an empty/stale cache that silently mis-resolves a
-    // section or merge group (catalog #14/#39).
+    // The single restore chokepoint must rebuild the serde-skipped section index,
+    // so no rollback/undo/redo path can install a project that silently
+    // mis-resolves a section (catalog #14/#39). The merge adjacency is not a
+    // field here - it is derived on demand - so the restored project must answer
+    // merge-group queries correctly with no rebuild call at all.
     let state = AppState::new().unwrap();
     state.execute(Command::CreateProject {
         name: "X".to_string(),
@@ -2322,9 +2323,12 @@ fn restore_snapshot_into_rebuilds_transient_caches() {
         !p.section_index_cache.is_empty(),
         "section index cache must be rebuilt"
     );
-    assert!(
-        !p.merge_adjacency_cache.is_empty(),
-        "merge adjacency cache must be rebuilt so get_merged_section_ids stays O(group)"
+    let merged = p.get_merged_section_ids(a);
+    assert_eq!(
+        merged,
+        HashSet::from([a, b]),
+        "a restored project must resolve the merge-connected component from its \
+         own merges, with no rebuild step: {merged:?}"
     );
     // Sanity: the rebuilt index resolves both sections.
     assert!(p.get_section(a).is_some() && p.get_section(b).is_some());
@@ -2774,6 +2778,133 @@ fn split_converts_orphaned_bridge_closure_immediately() {
         p.loop_closures
     );
     assert!(p.check_orphan_closures().is_empty());
+}
+
+/// A level shot on a fixed heading. Keeps the split/merge topology regressions
+/// below easy to reason about: every section is a straight, flat run.
+fn heading_shot(azimuth: f64, length: f64) -> ShotData {
+    ShotData {
+        azimuth_in: azimuth,
+        azimuth_out: (azimuth + 180.0) % 360.0,
+        length,
+        depth_in: 10.0,
+        depth_out: 10.0,
+        ..Default::default()
+    }
+}
+
+#[test]
+fn split_section_does_not_promote_a_bridge_closure_across_two_anchored_components() {
+    // The split rewrites every cross-reference through `map_station_refs`, which
+    // can move a MERGE endpoint into the newly created section. The merge-only
+    // adjacency the double-anchor guard consults must reflect that immediately:
+    // answering from the pre-split shape reports the moved section as unanchored,
+    // and `convert_orphan_closures_to_merges` then promotes a legitimate bridge
+    // closure into a rigid merge - fusing two independently GPS-anchored
+    // components ("Merged stations X and Y are N m apart" + "Merge-connected group
+    // has 2 zero datums").
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Bridge".to_string(),
+        location: None,
+    });
+    let mk = |name: &str, color: &str, azimuth: f64| {
+        state
+            .execute(Command::CreateSection {
+                name: Some(name.to_string()),
+                surveyor: None,
+                date: None,
+                color: color.to_string(),
+                direction: Some(SurveyDirection::In),
+                shots: vec![
+                    heading_shot(azimuth, 5.0),
+                    heading_shot(azimuth, 5.0),
+                    heading_shot(azimuth, 5.0),
+                ],
+            })
+            .section_id
+            .unwrap()
+    };
+    // Three straight 3-shot runs (stations 0..3 each).
+    let a = mk("A", "#111111", 0.0);
+    let b = mk("B", "#222222", 90.0);
+    let c = mk("C", "#333333", 0.0);
+
+    // A is GPS-anchored.
+    let r = state.execute(Command::SetZeroDatum {
+        station_ref: StationRef::new(a, 0),
+        coordinates: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
+    });
+    assert!(r.success, "{:?}", r.error);
+
+    // B hangs rigidly off A by its LAST station, so the split below moves that
+    // merge endpoint into the new section.
+    let r = state.execute(Command::MergeStations {
+        station_a: StationRef::new(a, 3),
+        station_b: StationRef::new(b, 3),
+    });
+    assert!(r.success, "{:?}", r.error);
+
+    // C is a second, independently GPS-anchored survey.
+    let r = state.execute(Command::SetZeroDatum {
+        station_ref: StationRef::new(c, 0),
+        coordinates: GpsCoordinates::new(10.001, 20.0, 0.0).unwrap(),
+    });
+    assert!(r.success, "{:?}", r.error);
+
+    // The ONLY link between the two anchored components: a soft loop closure.
+    // Legitimate as a closure, illegal as a merge.
+    let r = state.execute(Command::CreateLoopClosure {
+        station_a: StationRef::new(b, 2),
+        station_b: StationRef::new(c, 0),
+        closure_strategy: ClosureStrategy::Batch,
+    });
+    assert!(r.success, "{:?}", r.error);
+
+    // Split B at its middle shot: stations 2 (closure endpoint) and 3 (merge
+    // endpoint) both move into the new section.
+    let mid = state
+        .get_project_state()
+        .unwrap()
+        .sections
+        .iter()
+        .find(|s| s.id == b)
+        .expect("section B")
+        .shots[1]
+        .id;
+    let r = state.execute_delete_shot_and_split(b, mid, "B-1".to_string(), "B-2".to_string());
+    assert!(r.success, "{:?}", r.error);
+
+    let p = state.get_project_state().unwrap();
+    assert_eq!(
+        p.loop_closures.len(),
+        1,
+        "the bridge closure must survive the split as a closure: {:?}",
+        p.loop_closures
+    );
+    assert_eq!(
+        p.station_merges.len(),
+        1,
+        "only the original A-B merge may exist; the split must not promote the bridge closure: {:?}",
+        p.station_merges
+    );
+    assert!(
+        p.station_merges
+            .iter()
+            .all(|m| m.station_a.section_id != c && m.station_b.section_id != c),
+        "no merge may bridge into the second anchored component: {:?}",
+        p.station_merges
+    );
+    assert!(
+        p.check_merge_alignment().is_empty(),
+        "a merge fusing two anchored components tears apart: {:?}",
+        p.check_merge_alignment()
+    );
+    assert!(
+        p.over_anchored_merge_components().is_empty(),
+        "the two datums must stay in separate merge components: {:?}",
+        p.over_anchored_merge_components()
+    );
 }
 
 #[test]
@@ -3349,7 +3480,6 @@ fn test_delete_shot_rejects_frozen_shot() {
         station_ref: StationRef::new(sec_b, 0).into(),
         gps: GpsCoordinates::new(46.0, -74.0, 110.0).unwrap(),
     });
-    project.rebuild_merge_adjacency();
 
     // SELF-VERIFY the chosen shot is genuinely frozen before asserting the
     // rejection, so the test fails loudly if the setup didn't freeze it.
@@ -3459,7 +3589,6 @@ fn test_delete_shot_and_split_rejects_frozen_shot() {
         station_ref: StationRef::new(sec_b, 0).into(),
         gps: GpsCoordinates::new(46.0, -74.0, 110.0).unwrap(),
     });
-    project.rebuild_merge_adjacency();
 
     // SELF-VERIFY the interior split shot (index 1) is genuinely frozen.
     let frozen = project.compute_frozen_shots();
@@ -3677,7 +3806,6 @@ fn test_split_shot_at_distance_preserves_anchor_on_endpoint_station() {
     project
         .station_comments
         .insert(endpoint_key, "endpoint note".to_string());
-    project.rebuild_merge_adjacency();
 
     let state = AppState::new().unwrap();
     state.set_project_for_tests(project);
@@ -3822,7 +3950,6 @@ fn test_split_shot_at_distance_first_shot_keeps_section_start_anchor() {
         station_ref: start_key,
         gps: GpsCoordinates::new(45.0, -73.0, 100.0).unwrap(),
     });
-    project.rebuild_merge_adjacency();
 
     let state = AppState::new().unwrap();
     state.set_project_for_tests(project);
@@ -3955,7 +4082,6 @@ fn test_split_shot_at_distance_rejects_frozen_shot() {
         station_ref: StationRef::new(sec_b, 0).into(),
         gps: GpsCoordinates::new(46.0, -74.0, 110.0).unwrap(),
     });
-    project.rebuild_merge_adjacency();
 
     let frozen = project.compute_frozen_shots();
     assert!(
@@ -11840,7 +11966,6 @@ fn test_delete_range_shift_blocked_aborts() {
             station_b: StationRef::new(sec_b, 1).into(),
             merged_at: chrono::Utc::now(),
         });
-        proj.merge_adjacency_cache.clear();
     }
 
     let (s1, s2) = {
@@ -12314,7 +12439,6 @@ fn test_delete_range_prefix_shift_not_blocked_by_internal_loop() {
             station_b: StationRef::new(section_id, 2).into(),
             merged_at: chrono::Utc::now(),
         });
-        proj.merge_adjacency_cache.clear();
     }
     let (s0, s1) = {
         let proj = state.get_project_state().unwrap();
@@ -12544,8 +12668,7 @@ fn test_delete_range_interior_shift_not_blocked_by_closure_loop() {
     // User report: a range whose two sides are connected only through a LOOP
     // CLOSURE must NOT block the gap-close - a closure is a soft/redundant
     // constraint the delete removes/converts, so the result is still valid. (A
-    // merge-based loop still blocks; see
-    // test_delete_range_interior_shift_blocked_by_loop_via_replacement_merge.)
+    // merge-based loop still blocks; see test_delete_range_shift_blocked_aborts.)
     let state = AppState::new().unwrap();
     state.execute(Command::CreateProject {
         name: "Closure Loop".to_string(),
@@ -12821,7 +12944,6 @@ fn test_delete_range_interior_shift_not_blocked_via_removed_tail_boundary() {
             station_b: StationRef::new(sec_e, 1).into(),
             merged_at: chrono::Utc::now(),
         });
-        proj.merge_adjacency_cache.clear();
     }
     let (s2, s3) = {
         let proj = state.get_project_state().unwrap();
@@ -12838,15 +12960,25 @@ fn test_delete_range_interior_shift_not_blocked_via_removed_tail_boundary() {
 }
 
 #[test]
-fn test_delete_range_interior_shift_blocked_by_loop_via_replacement_merge() {
-    // Self-review (HIGH): two external sections P and Q are each merged ONLY to a
-    // removed interior station, so head and tail are NOT connected on the raw
-    // graph (the path runs through the removed station). The gap-close re-bridges
-    // P<->Q with a replacement merge, reconnecting head and tail into a loop. The
-    // blocker checks the POST-preservation graph, so it must catch this and block.
+fn test_delete_range_interior_shift_not_blocked_when_stitch_is_redundant() {
+    // Two external sections P and Q are each merged to a removed interior station
+    // AND to a surviving station of the same section A. The stitch the deletion
+    // would once have invented, A:2<->Q:0, is rigid-REDUNDANT: Q is already
+    // merged to A:5, so section A and section Q are rigidly connected without it
+    // (the merge would only close the cycle A:2-Q:0-A:5-shots-A:2, which
+    // merge_stations refuses interactively). `replacement_merge_allowed` skips it,
+    // so no head<->tail loop re-forms and the gap-close must be OFFERED.
+    //
+    // This test previously asserted the opposite. Blocking here was circular: the
+    // auto-stitch fabricated the very loop that then blocked the shift. With the
+    // merge gone the premise dissolves - after the gap-close A:2 and old A:5 are
+    // adjacent through the closed gap with P merged to one end and Q to the
+    // other, so the rigid graph is the tree P-A-Q and nothing is over-constrained.
+    // P and Q stay rigidly connected through A; only their merge-graph adjacency
+    // (which described a bridge station that no longer exists) is gone.
     let state = AppState::new().unwrap();
     state.execute(Command::CreateProject {
-        name: "Loop Via Replacement".to_string(),
+        name: "Redundant Stitch".to_string(),
         location: None,
     });
     let create_a = state.execute(Command::CreateSection {
@@ -12915,7 +13047,6 @@ fn test_delete_range_interior_shift_blocked_by_loop_via_replacement_merge() {
             station_b: StationRef::new(sec_a, 3).into(),
             merged_at: chrono::Utc::now(),
         });
-        proj.merge_adjacency_cache.clear();
     }
     let (s2, s3) = {
         let proj = state.get_project_state().unwrap();
@@ -12925,9 +13056,19 @@ fn test_delete_range_interior_shift_blocked_by_loop_via_replacement_merge() {
     let proj = state.get_project_state().unwrap();
     let impact = proj.preview_delete_shot_range(sec_a, s2, s3).unwrap();
     assert!(
-        impact.shift_blocked,
-        "the gap-close re-forms a head<->tail loop via a replacement merge; must block: {:?}",
+        !impact.shift_blocked,
+        "no loop re-forms once the redundant stitch is skipped, so the gap-close must be \
+         offered: {:?}",
         impact.shift_blocked_reasons
+    );
+    assert!(
+        !impact.replacement_merges.iter().any(|pair| {
+            (pair.station_a.section_id == sec_a && pair.station_b.section_id == sec_q)
+                || (pair.station_a.section_id == sec_q && pair.station_b.section_id == sec_a)
+        }),
+        "A and Q are already rigidly connected through Q:0<->A:5; the dialog must not promise \
+         a redundant stitch: {:?}",
+        impact.replacement_merges
     );
 }
 
@@ -20804,6 +20945,99 @@ fn repair_open_project_integrity_reports_fixed_and_remaining() {
         result.remaining as usize,
         state.integrity_violation_messages().len(),
         "remaining matches the true post-repair count"
+    );
+}
+
+#[test]
+fn repair_command_demotes_a_double_anchoring_bridge_merge() {
+    // End-to-end through the Repair action on the damage a past bug left in saved
+    // files: a RIGID merge bridging two independently GPS-anchored merge
+    // components. `resolve_offsets` cannot satisfy it (each half is pinned to its
+    // own datum), so before this repair the project reported `merge_misaligned` +
+    // `multiple_datums_per_merge_component` on every check and Repair could never
+    // clear them. Fully synthetic: three sections built by command, welded by hand.
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Damaged".to_string(),
+        location: None,
+    });
+    let section = |name: &str| {
+        state
+            .execute(Command::CreateSection {
+                name: Some(name.to_string()),
+                surveyor: None,
+                date: None,
+                color: "#111111".to_string(),
+                direction: Some(SurveyDirection::In),
+                shots: vec![test_shot_data(10.0), test_shot_data(10.0)],
+            })
+            .section_id
+            .unwrap()
+    };
+    let (a, b, c) = (section("A"), section("B"), section("C"));
+
+    {
+        let mut guard = state.project.lock().unwrap();
+        let project = guard.as_mut().unwrap();
+        // The legitimate merge inside the first component, made through the real
+        // API so it is correctly aligned.
+        project
+            .merge_stations(StationRef::new(a, 2), StationRef::new(b, 0))
+            .unwrap();
+        // One datum per component - individually legal, which is why the
+        // interactive guards never fired on the way in.
+        project.zero_datums.push(crate::models::ZeroDatum {
+            station_ref: StationRef::new(a, 0).into(),
+            gps: GpsCoordinates::new(45.0, -90.0, 0.0).unwrap(),
+        });
+        project.zero_datums.push(crate::models::ZeroDatum {
+            station_ref: StationRef::new(c, 0).into(),
+            gps: GpsCoordinates::new(45.001, -90.0, 0.0).unwrap(),
+        });
+        // Park C 500 m away, then weld it to B with the merge the promotion bug
+        // created out of what should have stayed a loop closure.
+        project.set_section_offset(c, (500.0, 0.0));
+        project.station_merges.push(StationMerge {
+            station_a: StationRef::new(b, 2).into(),
+            station_b: StationRef::new(c, 0).into(),
+            merged_at: chrono::Utc::now(),
+        });
+    }
+
+    let before = state.integrity_violation_messages().len();
+    assert!(
+        before >= 2,
+        "seeded a torn merge AND an over-anchored merge component, got {before}"
+    );
+
+    let result = state.repair_open_project_integrity();
+    assert!(
+        result.fixed >= 1,
+        "the demotion is reported as a fix, got {result:?}"
+    );
+    assert!(result.changed, "repair mutated the project");
+    assert_eq!(
+        result.remaining,
+        0,
+        "both symptoms clear: {:?}",
+        state.integrity_violation_messages()
+    );
+
+    let guard = state.project.lock().unwrap();
+    let project = guard.as_ref().unwrap();
+    assert_eq!(
+        project.station_merges.len(),
+        1,
+        "only the legitimate A-B merge survives"
+    );
+    assert!(
+        project.are_stations_in_closure(StationRef::new(b, 2), StationRef::new(c, 0)),
+        "the demoted pair is now a loop closure - and it is still one after \
+         convert_orphan_closures_to_merges ran later in the SAME repair pass"
+    );
+    assert!(
+        project.loop_closures.iter().all(|lc| !lc.is_aligned),
+        "an aligned closure would re-impose the constraint the demotion removed"
     );
 }
 

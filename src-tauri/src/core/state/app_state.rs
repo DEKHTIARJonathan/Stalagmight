@@ -685,11 +685,14 @@ impl AppState {
     }
 
     /// Deserialize a project snapshot and install it into `slot`, rebuilding the
-    /// transient lookup caches (`section_index_cache`, `merge_adjacency_cache`)
-    /// that serde skips. THE single place a restored project enters the live slot:
+    /// transient lookup caches (`section_index_cache`, `shot_uuid_index`) that
+    /// serde skips. THE single place a restored project enters the live slot:
     /// every rollback/undo/redo path routes through here so none can forget to
     /// rebuild a cache and leave a half-populated / stale map behind (which would
-    /// silently mis-resolve sections or merge groups) - see catalog #14/#39.
+    /// silently mis-resolve sections) - see catalog #14/#39. The merge adjacency
+    /// needs nothing here: [`MergeTopology`](crate::models::MergeTopology) builds
+    /// it on first use, so a freshly deserialized project is correct by
+    /// construction.
     /// Returns false and leaves `slot` untouched if the snapshot can't be parsed.
     #[must_use]
     pub(super) fn restore_snapshot_into(slot: &mut Option<Project>, snapshot: &str) -> bool {
@@ -719,7 +722,6 @@ impl AppState {
                 }
                 restored.file_path = current_file_path;
                 restored.rebuild_section_index();
-                restored.rebuild_merge_adjacency();
                 restored.rebuild_shot_uuid_index();
                 // A snapshot blob persisted by a PRE-ANCHOR build can carry
                 // transitional positional `Index` cross-reference anchors (undo/redo

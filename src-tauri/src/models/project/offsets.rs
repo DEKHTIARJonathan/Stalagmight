@@ -81,6 +81,10 @@ impl Project {
             if self.cascade_deferred {
                 return;
             }
+            // Same tripwire idea one level down: a merge-adjacency memo that no
+            // longer matches the merges is how a rewritten endpoint silently
+            // fools the double-anchor guard.
+            self.station_merges.debug_assert_memo_fresh(context);
             for merge in &self.station_merges {
                 // Skip same-section merges (physically meaningless, used only in tests)
                 if merge.station_a.section_id == merge.station_b.section_id {
@@ -167,7 +171,6 @@ impl Project {
     /// already consistent, the common case).
     pub fn redrive_offsets_after_load(&mut self) -> usize {
         self.rebuild_section_index();
-        self.rebuild_merge_adjacency();
         self.rebuild_shot_uuid_index();
         // Normalize any closure that is really a sole-bridge attachment into a
         // merge before solving, so a file persisted in that state (e.g. a section

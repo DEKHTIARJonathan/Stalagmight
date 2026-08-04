@@ -515,13 +515,25 @@ impl Project {
                     }
 
                     if let Some(pair) = found_pair {
-                        if !self.has_direct_merge(pair.station_a, pair.station_b)
-                            && !planned_pairs.iter().any(|p| {
-                                (p.station_a == pair.station_a && p.station_b == pair.station_b)
-                                    || (p.station_a == pair.station_b
-                                        && p.station_b == pair.station_a)
-                            })
-                        {
+                        // Same guard the section/range deletion paths apply, so
+                        // a single-shot delete cannot mint the merge those refuse
+                        // to. This list is BOTH the dialog's preview and the list
+                        // `remove_shot_with_rewire_excluding_anchors` replays, so
+                        // guarding here keeps promise and execution identical.
+                        let doomed = HashSet::from([removed_station]);
+                        let planned: Vec<(StationRef, StationRef)> = planned_pairs
+                            .iter()
+                            .map(|p| (p.station_a, p.station_b))
+                            .collect();
+                        if self.replacement_merge_allowed(
+                            pair.station_a,
+                            pair.station_b,
+                            &doomed,
+                            &planned,
+                        ) && !planned_pairs.iter().any(|p| {
+                            (p.station_a == pair.station_a && p.station_b == pair.station_b)
+                                || (p.station_a == pair.station_b && p.station_b == pair.station_a)
+                        }) {
                             planned_pairs.push(pair);
                         }
                     } else {
@@ -1096,7 +1108,6 @@ impl Project {
             self.station_merges
                 .retain(|m| m.station_a != rk && m.station_b != rk);
         }
-        self.merge_adjacency_cache.clear();
 
         // Pre-resolve replacement closure targets to keys (the drain below can't
         // borrow `self`).

@@ -186,16 +186,12 @@ impl AppState {
                                     project.key_for_ref(*station_a),
                                     project.key_for_ref(*station_b),
                                 ) {
-                                    project.station_merges.push(crate::models::StationMerge {
+                                    project.record_station_merge(crate::models::StationMerge {
                                         station_a: key_a,
                                         station_b: key_b,
                                         merged_at: chrono::Utc::now(),
                                     });
                                 }
-                                // Direct push bypassed Project::record_station_merge,
-                                // so the adjacency cache is stale. Drop it; the next
-                                // BFS will fall back to the linear scan until rebuilt.
-                                project.merge_adjacency_cache.clear();
                                 // Restore removed closures and bump next_closure_id
                                 for closure in removed_closures {
                                     project.next_closure_id =

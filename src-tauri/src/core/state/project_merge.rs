@@ -243,13 +243,11 @@ impl AppState {
                     ) else {
                         continue;
                     };
-                    merged_project
-                        .station_merges
-                        .push(crate::models::StationMerge {
-                            station_a: StationKey::positional(new_a_section, a_sr.station_index),
-                            station_b: StationKey::positional(new_b_section, b_sr.station_index),
-                            merged_at: merge.merged_at,
-                        });
+                    merged_project.record_station_merge(crate::models::StationMerge {
+                        station_a: StationKey::positional(new_a_section, a_sr.station_index),
+                        station_b: StationKey::positional(new_b_section, b_sr.station_index),
+                        merged_at: merge.merged_at,
+                    });
                 } else {
                     tracing::warn!(
                         project = %source_project.name,
@@ -313,13 +311,6 @@ impl AppState {
 
         // Reassign closure IDs to ensure uniqueness across merged sources
         merged_project.assign_closure_ids();
-
-        // Direct pushes to station_merges above (line ~685) bypassed
-        // Project::record_station_merge, so the adjacency cache is
-        // empty and out of step with the populated merges vec.
-        // Rebuild now so the next get_merged_section_ids on the freshly
-        // merged project takes the O(group) fast path.
-        merged_project.rebuild_merge_adjacency();
 
         // Re-derive section offsets from the (now combined) merge/datum
         // constraints so the merged output is geometrically consistent and any

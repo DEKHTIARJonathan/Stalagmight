@@ -12,6 +12,19 @@ fn shot(azimuth_in: f64, azimuth_out: f64, length: f64, depth_in: f64, depth_out
     }
 }
 
+/// Rewrite the first merge in place, for the integrity tests that need a forged
+/// (dangling) endpoint. `iter_mut` is the only mutable path into the merges -
+/// there is deliberately no `&mut Vec<StationMerge>` - and it invalidates the
+/// adjacency memo, exactly as `map_station_refs` does in production.
+fn forge_first_merge(project: &mut Project, f: impl FnOnce(&mut StationMerge)) {
+    let merge = project
+        .station_merges
+        .iter_mut()
+        .next()
+        .expect("fixture has at least one merge");
+    f(merge);
+}
+
 #[test]
 fn get_connected_section_ids_traverses_merges() {
     let mut project = Project::new("Merged".to_string(), None);
@@ -1222,7 +1235,6 @@ fn set_zero_datum_rejects_across_multi_hop_merge_chain() {
             merged_at: Utc::now(),
         });
     }
-    project.rebuild_merge_adjacency();
 
     let gps = GpsCoordinates::new(45.0, -90.0, 0.0).unwrap();
     project.set_zero_datum(StationRef::new(a, 0), gps).unwrap();
@@ -1345,7 +1357,6 @@ fn detects_two_datums_in_one_merge_component() {
         station_b: StationRef::new(b, 0).into(),
         merged_at: Utc::now(),
     });
-    project.rebuild_merge_adjacency();
 
     project.zero_datums.push(ZeroDatum {
         station_ref: StationRef::new(a, 0).into(),
@@ -1371,6 +1382,497 @@ fn detects_two_datums_in_one_merge_component() {
     // Removing one datum restores the invariant.
     assert!(project.remove_zero_datum(StationRef::new(b, 0)));
     assert!(project.over_anchored_merge_components().is_empty());
+}
+
+/// The damage a past bug left in saved files: two independently GPS-anchored
+/// merge components (A+B, and C) welded together by a RIGID merge whose two
+/// endpoints sit 40 m apart. `resolve_offsets` can never satisfy it - each half
+/// is pinned to its own datum - so it stays torn open forever.
+///
+/// Fully synthetic: three 2-shot sections running due north, placed by hand.
+///   A:0 (0,0)  A:1 (0,10)  A:2 (0,20)   <- datum on A:0
+///   B:0 (0,20) B:1 (0,30)  B:2 (0,40)   <- merged A:2 = B:0, correctly aligned
+///   C:0 (0,0)  C:1 (0,10)  C:2 (0,20)   <- datum on C:0
+/// plus the bogus merge B:2 <-> C:0, i.e. (0,40) welded to (0,0).
+fn double_anchored_bridge_project() -> (Project, SectionId, SectionId, SectionId) {
+    let mut project = Project::new("DoubleAnchoredBridge".to_string(), None);
+    let add = |p: &mut Project| {
+        p.add_section(SectionData {
+            shots: vec![
+                shot(0.0, 0.0, 10.0, 0.0, 0.0),
+                shot(0.0, 0.0, 10.0, 0.0, 0.0),
+            ],
+            ..Default::default()
+        })
+        .id
+    };
+    let (a, b, c) = (add(&mut project), add(&mut project), add(&mut project));
+    project.ensure_shot_uuids();
+
+    // The legitimate, correctly aligned merge inside the first component.
+    project.station_merges.push(StationMerge {
+        station_a: StationRef::new(a, 2).into(),
+        station_b: StationRef::new(b, 0).into(),
+        merged_at: Utc::now(),
+    });
+    project.set_section_offset(b, (0.0, 20.0));
+
+    // One datum per component - legal on its own, which is why the interactive
+    // guards never fired.
+    project.zero_datums.push(ZeroDatum {
+        station_ref: StationRef::new(a, 0).into(),
+        gps: GpsCoordinates::new(45.0, -90.0, 0.0).unwrap(),
+    });
+    project.zero_datums.push(ZeroDatum {
+        station_ref: StationRef::new(c, 0).into(),
+        gps: GpsCoordinates::new(45.001, -90.0, 0.0).unwrap(),
+    });
+
+    // The bogus promotion: what should have stayed a loop closure.
+    project.station_merges.push(StationMerge {
+        station_a: StationRef::new(b, 2).into(),
+        station_b: StationRef::new(c, 0).into(),
+        merged_at: Utc::now(),
+    });
+
+    (project, a, b, c)
+}
+
+#[test]
+fn repair_demotes_a_double_anchoring_bridge_merge() {
+    let (mut project, _a, b, c) = double_anchored_bridge_project();
+
+    // Precondition: this is exactly the pair of symptoms a damaged file shows,
+    // and re-solving offsets cannot clear either of them.
+    assert_eq!(project.resolve_offsets(), 0, "the tear is unsolvable");
+    assert_eq!(
+        project.check_merge_alignment().len(),
+        1,
+        "the bogus merge reports as misaligned"
+    );
+    assert_eq!(
+        project.over_anchored_merge_components().len(),
+        1,
+        "both datums sit in one merge component"
+    );
+
+    assert_eq!(project.demote_double_anchoring_merges(), 1);
+
+    assert_eq!(
+        project.station_merges.len(),
+        1,
+        "only the legitimate A-B merge survives"
+    );
+    assert!(
+        !project.are_stations_merged(StationRef::new(b, 2), StationRef::new(c, 0)),
+        "the over-constraining merge is gone"
+    );
+    assert!(
+        project.are_stations_in_closure(StationRef::new(b, 2), StationRef::new(c, 0)),
+        "an equivalent loop closure records the same coincidence"
+    );
+    let closure = project
+        .loop_closures
+        .last()
+        .expect("the demotion pushed a closure");
+    assert!(
+        !closure.is_aligned,
+        "an aligned closure would re-impose the constraint just removed"
+    );
+    assert!(closure.id > 0, "the closure gets a real monotonic id");
+
+    // Both symptoms clear, and the solve is now achievable.
+    project.resolve_offsets();
+    assert!(
+        project.check_merge_alignment().is_empty(),
+        "no merge is left torn open"
+    );
+    assert!(
+        project.over_anchored_merge_components().is_empty(),
+        "each datum is back in its own merge component"
+    );
+    assert!(
+        project
+            .check_structural_integrity()
+            .iter()
+            .all(|v| v.category != "multiple_datums_per_merge_component"),
+        "the over-anchoring warning is cleared"
+    );
+}
+
+#[test]
+fn demoted_closure_measures_the_merge_free_path() {
+    // The merge being demoted is itself a zero-cost pathfinding edge between
+    // the two stations being measured. Metrics taken while it still exists ride
+    // that edge and persist path_length = 0 / error_percentage = 0 on the
+    // replacement closure. Give the survey a real detour - soft closures
+    // through a fourth section - and the demoted closure must carry the
+    // detour's surveyed length instead.
+    let (mut project, _a, b, c) = double_anchored_bridge_project();
+    let d = project
+        .add_section(SectionData {
+            shots: vec![
+                shot(0.0, 0.0, 10.0, 0.0, 0.0),
+                shot(0.0, 0.0, 10.0, 0.0, 0.0),
+            ],
+            ..Default::default()
+        })
+        .id;
+    project.ensure_shot_uuids();
+    let detour = |id: u64, from: StationRef, to: StationRef| LoopClosure {
+        id,
+        station_a: from.into(),
+        station_b: to.into(),
+        path_length: 1.0,
+        misclosure_distance: 0.0,
+        error_percentage: 0.0,
+        horizontal_misclosure: 0.0,
+        vertical_misclosure: 0.0,
+        strategy: ClosureStrategy::default(),
+        is_aligned: false,
+    };
+    project
+        .loop_closures
+        .push(detour(1, StationRef::new(b, 1), StationRef::new(d, 0)));
+    project
+        .loop_closures
+        .push(detour(2, StationRef::new(d, 2), StationRef::new(c, 1)));
+
+    assert_eq!(project.demote_double_anchoring_merges(), 1);
+
+    let closure = project
+        .loop_closures
+        .last()
+        .expect("the demotion pushed a closure");
+    assert!(
+        closure.path_length > 0.0,
+        "the metric must not ride the merge being demoted (got {})",
+        closure.path_length
+    );
+    assert!(
+        closure.error_percentage > 0.0,
+        "a metres-wide misclosure over a real path is a nonzero error (got {})",
+        closure.error_percentage
+    );
+}
+
+#[test]
+fn repair_leaves_legitimate_merges_alone() {
+    // (a) A torn merge whose two halves stay connected through a HEALTHY merge.
+    // A:0 and C:0 both sit at world (0,0), so that parallel merge is aligned and
+    // is not going anywhere: it keeps A+B+C one rigid component whether or not
+    // the torn B:2 = C:0 bridge survives. Dropping the torn merge therefore heals
+    // nothing, and demotion (which exists to SEPARATE two anchored halves) must
+    // leave it alone. Note the contrast with two torn merges bridging the same
+    // halves - see `parallel_torn_bridges_are_all_demoted` - where neither is
+    // load-bearing and both have to go.
+    let (mut project, a, _b, c) = double_anchored_bridge_project();
+    project.station_merges.push(StationMerge {
+        station_a: StationRef::new(a, 0).into(),
+        station_b: StationRef::new(c, 0).into(),
+        merged_at: Utc::now(),
+    });
+    assert_eq!(
+        project.check_merge_alignment().len(),
+        1,
+        "only the bogus bridge is torn open; the parallel A:0 = C:0 merge measures 0 m"
+    );
+    assert_eq!(
+        project.demote_double_anchoring_merges(),
+        0,
+        "a torn merge with an intact parallel merge path is redundant, not over-constraining"
+    );
+    assert_eq!(project.station_merges.len(), 3, "every merge is intact");
+    assert!(project.loop_closures.is_empty(), "no closure was invented");
+
+    // (b) A sole bridge whose FAR half carries no datum. That is an ordinary
+    // single-anchor group with drift, which resolve_offsets can and does heal by
+    // moving the unanchored half - demoting it would destroy a real connection.
+    let (mut project, _a, _b, c) = double_anchored_bridge_project();
+    assert!(project.remove_zero_datum(StationRef::new(c, 0)));
+    assert_eq!(
+        project.demote_double_anchoring_merges(),
+        0,
+        "a bridge to an unanchored group is a legitimate merge"
+    );
+    assert_eq!(project.station_merges.len(), 2, "every merge is intact");
+    assert!(project.loop_closures.is_empty(), "no closure was invented");
+    project.resolve_offsets();
+    assert!(
+        project.check_merge_alignment().is_empty(),
+        "and the ordinary solver heals it, which is why demotion must not fire"
+    );
+}
+
+#[test]
+fn parallel_torn_bridges_are_all_demoted() {
+    // Two bogus merges welding the SAME two anchored halves together. Judging a
+    // candidate with only itself excluded makes them shield each other: each one
+    // looks redundant because the other still joins B to C, so neither is demoted
+    // and the project stays torn forever. Judging the whole torn set at once asks
+    // the question that matters - are these halves welded together only by merges
+    // the solver cannot satisfy? - and both go.
+    //
+    // B:1 is world (0,30) and C:1 is (0,10), so the second bridge is a 20 m tear
+    // needing no extra geometry.
+    let (mut project, _a, b, c) = double_anchored_bridge_project();
+    project.station_merges.push(StationMerge {
+        station_a: StationRef::new(b, 1).into(),
+        station_b: StationRef::new(c, 1).into(),
+        merged_at: Utc::now(),
+    });
+    assert_eq!(
+        project.check_merge_alignment().len(),
+        2,
+        "both cross-component merges are torn open"
+    );
+
+    assert_eq!(project.demote_double_anchoring_merges(), 2);
+
+    assert_eq!(
+        project.station_merges.len(),
+        1,
+        "only the legitimate A-B merge survives"
+    );
+    assert!(!project.are_stations_merged(StationRef::new(b, 2), StationRef::new(c, 0)));
+    assert!(!project.are_stations_merged(StationRef::new(b, 1), StationRef::new(c, 1)));
+    assert!(
+        project.are_stations_in_closure(StationRef::new(b, 2), StationRef::new(c, 0)),
+        "each demoted merge leaves an equivalent loop closure"
+    );
+    assert!(project.are_stations_in_closure(StationRef::new(b, 1), StationRef::new(c, 1)));
+    assert_eq!(project.loop_closures.len(), 2);
+
+    project.resolve_offsets();
+    assert!(
+        project.check_merge_alignment().is_empty(),
+        "no merge is left torn open"
+    );
+    assert!(
+        project.over_anchored_merge_components().is_empty(),
+        "each datum is back in its own merge component"
+    );
+}
+
+#[test]
+fn demotion_softens_an_existing_aligned_closure_over_the_same_pair() {
+    // The pair can already carry a loop closure, in which case the demotion
+    // invents no second one. But an `is_aligned: true` closure is a RIGID edge to
+    // the offset solver, so leaving it as-is would re-impose exactly the
+    // over-constraint the demotion just removed, and its stored metrics were
+    // measured while the merge welded the pair together. Both must be corrected in
+    // place, under the closure's existing id.
+    let (mut project, _a, b, c) = double_anchored_bridge_project();
+    project.loop_closures.push(LoopClosure {
+        id: 7,
+        station_a: StationRef::new(b, 2).into(),
+        station_b: StationRef::new(c, 0).into(),
+        // Junk: what a measurement taken across the merge recorded.
+        path_length: 123.0,
+        misclosure_distance: 0.0,
+        error_percentage: 0.0,
+        horizontal_misclosure: 0.0,
+        vertical_misclosure: 0.0,
+        strategy: ClosureStrategy::Batch,
+        is_aligned: true,
+    });
+
+    assert_eq!(project.demote_double_anchoring_merges(), 1);
+
+    assert_eq!(
+        project.station_merges.len(),
+        1,
+        "only the legitimate A-B merge survives"
+    );
+    assert!(!project.are_stations_merged(StationRef::new(b, 2), StationRef::new(c, 0)));
+    assert_eq!(
+        project.loop_closures.len(),
+        1,
+        "the existing closure is corrected, not duplicated"
+    );
+    let closure = &project.loop_closures[0];
+    assert_eq!(closure.id, 7, "it keeps its id - same closure, corrected");
+    assert!(
+        !closure.is_aligned,
+        "an aligned closure would re-impose the constraint just removed"
+    );
+    assert!(
+        closure.misclosure_distance > 0.0,
+        "the metrics are restamped from the merge-free measurement (got {})",
+        closure.misclosure_distance
+    );
+    assert!(closure.horizontal_misclosure > 0.0);
+    // path_length is restamped too. The measurement excludes the surviving
+    // closure itself - left in, it is a zero-cost shortcut over exactly this
+    // pair and the answer would be 0. With it excluded the halves have no
+    // other link, so Dijkstra finds no path and the documented fallback (sum
+    // of the reachable sections' lengths: A + B = 40 m) kicks in. 123 -> 40
+    // therefore proves both the restamp and the exclusion; the detour variant
+    // below proves a real route is used when one exists.
+    assert_eq!(closure.path_length, 40.0);
+
+    assert!(
+        project.check_closure_alignment().is_empty(),
+        "and the softened closure is no longer a stale aligned one"
+    );
+    project.resolve_offsets();
+    assert!(
+        project.over_anchored_merge_components().is_empty(),
+        "each datum is back in its own merge component"
+    );
+}
+
+#[test]
+fn softened_closure_measures_the_closure_free_path() {
+    // Companion to `demoted_closure_measures_the_merge_free_path`, for the
+    // already-closed branch: the surviving closure is itself a zero-cost
+    // pathfinding edge over exactly the pair being measured, so measuring with
+    // it still in the list would stamp path_length = 0 / error 0% no matter how
+    // long the real detour is. The demotion must pull the direct closure out,
+    // measure, and restamp it - here the detour through section D is the only
+    // real path, so a nonzero path_length proves the exclusion happened.
+    let (mut project, _a, b, c) = double_anchored_bridge_project();
+    let d = project
+        .add_section(SectionData {
+            shots: vec![
+                shot(0.0, 0.0, 10.0, 0.0, 0.0),
+                shot(0.0, 0.0, 10.0, 0.0, 0.0),
+            ],
+            ..Default::default()
+        })
+        .id;
+    project.ensure_shot_uuids();
+    let detour = |id: u64, from: StationRef, to: StationRef| LoopClosure {
+        id,
+        station_a: from.into(),
+        station_b: to.into(),
+        path_length: 1.0,
+        misclosure_distance: 0.0,
+        error_percentage: 0.0,
+        horizontal_misclosure: 0.0,
+        vertical_misclosure: 0.0,
+        strategy: ClosureStrategy::default(),
+        is_aligned: false,
+    };
+    project
+        .loop_closures
+        .push(detour(1, StationRef::new(b, 1), StationRef::new(d, 0)));
+    project
+        .loop_closures
+        .push(detour(2, StationRef::new(d, 2), StationRef::new(c, 1)));
+    // The pre-existing closure on the demoted pair itself, with junk metrics a
+    // merge-era measurement would have recorded.
+    let mut direct = detour(7, StationRef::new(b, 2), StationRef::new(c, 0));
+    direct.is_aligned = true;
+    project.loop_closures.push(direct);
+
+    assert_eq!(project.demote_double_anchoring_merges(), 1);
+
+    assert_eq!(
+        project.loop_closures.len(),
+        3,
+        "the existing closure is corrected, not duplicated"
+    );
+    let closure = project
+        .loop_closures
+        .iter()
+        .find(|lc| lc.id == 7)
+        .expect("the direct closure survives under its own id");
+    assert!(!closure.is_aligned);
+    assert!(
+        closure.path_length > 0.0,
+        "the metric must not ride the closure being softened (got {})",
+        closure.path_length
+    );
+    assert!(
+        closure.error_percentage > 0.0,
+        "a metres-wide misclosure over a real path is a nonzero error (got {})",
+        closure.error_percentage
+    );
+}
+
+#[test]
+fn unmeasurable_geometry_is_never_demoted_or_flagged() {
+    // Non-finite (NaN/inf) shot geometry makes every distance derived from it
+    // NaN, and `NaN < TOL` and `NaN >= TOL` are BOTH false. Left unguarded, the
+    // three consumers of `endpoint_gap` would each answer by accident: the two
+    // alignment checks would call the pair aligned, and the demotion would call
+    // it not-torn. `endpoint_gap` returning `None` makes that one deliberate
+    // decision - unmeasurable means hands off - so the poisoned project is
+    // described by the `non_finite_geometry` violation and by nothing else.
+    let (mut project, a, b, c) = double_anchored_bridge_project();
+    // Poison ONLY the far end of the bogus bridge: section B's second shot puts
+    // B:2 at NaN while B:0 and B:1 stay finite, so the legitimate A:2 = B:0 merge
+    // is still measurable and this is a test about the unmeasurable pair alone.
+    project.get_section_mut(b).unwrap().shots[1].length = f64::NAN;
+    // The third consumer needs an ALIGNED closure over a poisoned pair.
+    project.loop_closures.push(LoopClosure {
+        id: 1,
+        station_a: StationRef::new(b, 2).into(),
+        station_b: StationRef::new(c, 1).into(),
+        path_length: 10.0,
+        misclosure_distance: 0.0,
+        error_percentage: 0.0,
+        horizontal_misclosure: 0.0,
+        vertical_misclosure: 0.0,
+        strategy: ClosureStrategy::default(),
+        is_aligned: true,
+    });
+
+    assert!(
+        project
+            .check_structural_integrity()
+            .iter()
+            .any(|v| v.category == "non_finite_geometry"),
+        "the poison itself is what gets reported"
+    );
+    assert!(
+        project.check_merge_alignment().is_empty(),
+        "no merge is reported: A:2 = B:0 measures 0 m, and B:2 = C:0 cannot be measured at all"
+    );
+    assert!(
+        project.check_closure_alignment().is_empty(),
+        "broken geometry is not evidence that an aligned closure has drifted open"
+    );
+    assert_eq!(
+        project.demote_double_anchoring_merges(),
+        0,
+        "and no merge is deleted on the strength of a distance that does not exist"
+    );
+    assert_eq!(project.station_merges.len(), 2, "both merges are intact");
+    assert!(project.are_stations_merged(StationRef::new(a, 2), StationRef::new(b, 0)));
+    assert!(project.are_stations_merged(StationRef::new(b, 2), StationRef::new(c, 0)));
+}
+
+#[test]
+fn demoted_closure_is_not_re_promoted_by_orphan_conversion() {
+    // The demotion and `convert_orphan_closures_to_merges` run in the same Repair
+    // pass, and the converter's job is turning sole-bridge closures INTO merges -
+    // exactly what was just undone. Its double-anchor guard must see the same two
+    // anchored halves and leave the demoted closure alone, or Repair would
+    // ping-pong the same edge forever.
+    let (mut project, _a, _b, _c) = double_anchored_bridge_project();
+    assert_eq!(project.demote_double_anchoring_merges(), 1);
+
+    assert_eq!(
+        project.convert_orphan_closures_to_merges(),
+        0,
+        "the converter must not re-promote the closure it was just handed"
+    );
+    assert_eq!(project.loop_closures.len(), 1, "the closure survives");
+    assert_eq!(project.station_merges.len(), 1, "no merge was recreated");
+    assert!(
+        project
+            .check_orphan_closures()
+            .iter()
+            .all(|v| v.category != "orphan_closure"),
+        "and it is not flagged as an orphan Repair can never convert"
+    );
+
+    // Idempotent: a second Repair finds nothing left to demote.
+    assert_eq!(project.demote_double_anchoring_merges(), 0);
+    assert_eq!(project.loop_closures.len(), 1);
+    assert_eq!(project.station_merges.len(), 1);
 }
 
 #[test]
@@ -4409,8 +4911,9 @@ fn dangling_anchor_flagged_by_integrity() {
     );
 
     // Forge a merge endpoint onto a shot UUID that doesn't exist in the section.
-    project.station_merges[0].station_a =
-        StationKey::new(a, StationAnchor::AfterShot("does-not-exist".to_string()));
+    forge_first_merge(&mut project, |m| {
+        m.station_a = StationKey::new(a, StationAnchor::AfterShot("does-not-exist".to_string()));
+    });
     let v = project.check_structural_integrity();
     assert!(
         v.iter().any(|x| x.category == "dangling_merge_ref"),
@@ -9418,15 +9921,11 @@ fn lsq_spur_shots_are_not_modified() {
 }
 
 #[test]
-fn record_station_merge_rebuilds_cache_when_emptied_with_surviving_merges() {
-    // Reproduce the half-populated-cache trap Codex round-4 flagged:
-    // `delete_section` clears `merge_adjacency_cache` while keeping
-    // surviving merges in `station_merges`, leaving the cache empty
-    // and the merges intact.  Before the fix, the next
-    // `record_station_merge` only inserted ITS edge into the cache -
-    // and since `get_merged_section_ids` treats any non-empty cache as
-    // authoritative, every surviving merge from before the delete
-    // became invisible.
+fn record_station_merge_after_a_structural_removal_keeps_surviving_merges() {
+    // The half-populated-memo trap: a structural removal drops merges while
+    // others survive, and the NEXT recorded merge must land on a whole base, not
+    // on a map holding only its own edge (which `get_merged_section_ids` would
+    // then treat as the entire merge graph, hiding every surviving merge).
     let mut project = Project::new("Cache".to_string(), None);
     let a = project
         .add_section(SectionData {
@@ -9452,9 +9951,17 @@ fn record_station_merge_rebuilds_cache_when_emptied_with_surviving_merges() {
             ..Default::default()
         })
         .id;
+    // An extra, merge-free section: cleaning up ITS references is the structural
+    // removal that invalidates the adjacency below.
+    let e = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
 
-    // Establish two surviving merges A↔B and B↔C via the maintained
-    // helper so the cache is fully populated.
+    // Establish two surviving merges A↔B and B↔C, then read the group so the
+    // adjacency memo is warm.
     project.record_station_merge(StationMerge {
         station_a: StationRef::new(a, 0).into(),
         station_b: StationRef::new(b, 0).into(),
@@ -9467,15 +9974,11 @@ fn record_station_merge_rebuilds_cache_when_emptied_with_surviving_merges() {
     });
     assert_eq!(project.get_merged_section_ids(a).len(), 3);
 
-    // Simulate the `delete_section` cleanup: clear the cache while
-    // keeping `station_merges` populated.  The cache invariant is now
-    // "empty but merges exist".
-    project.merge_adjacency_cache.clear();
+    // The `delete_section` cleanup: a merge retain that keeps A↔B and B↔C.
+    project.cleanup_section_references(e);
 
-    // Now record a NEW merge (e.g. user merges D into the group).
-    // Without the rebuild-first guard this would leave the cache
-    // containing ONLY {C, D} edges; with the guard it must contain
-    // all three groups.
+    // Now record a NEW merge (e.g. the user merges D into the group). It must
+    // land on the whole surviving graph, not on a map holding only {C, D}.
     project.record_station_merge(StationMerge {
         station_a: StationRef::new(c, 0).into(),
         station_b: StationRef::new(d, 0).into(),
@@ -9484,10 +9987,57 @@ fn record_station_merge_rebuilds_cache_when_emptied_with_surviving_merges() {
     let merged = project.get_merged_section_ids(a);
     assert!(
         merged.contains(&a) && merged.contains(&b) && merged.contains(&c) && merged.contains(&d),
-        "expected the surviving A-B-C merges to still propagate after the cache was \
-         cleared + a new merge recorded; got {merged:?}"
+        "expected the surviving A-B-C merges to still propagate after a structural \
+         removal + a new merge recorded; got {merged:?}"
     );
     assert_eq!(merged.len(), 4);
+}
+
+#[test]
+fn map_station_refs_invalidates_the_merge_adjacency_memo() {
+    // `map_station_refs` can move a merge endpoint to a different SECTION - that
+    // is what the delete-shot split does - so it rewrites the very graph the
+    // merge-adjacency memo describes. Answering a later query from the pre-remap
+    // memo reports the wrong rigid group, which is how a bridge closure got
+    // promoted into a merge across two GPS-anchored components.
+    let mut project = Project::new("Remap".to_string(), None);
+    let mk = |project: &mut Project| {
+        project
+            .add_section(SectionData {
+                shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
+                ..Default::default()
+            })
+            .id
+    };
+    let (a, b, c) = (mk(&mut project), mk(&mut project), mk(&mut project));
+
+    project.record_station_merge(StationMerge {
+        station_a: StationRef::new(a, 1).into(),
+        station_b: StationRef::new(b, 0).into(),
+        merged_at: Utc::now(),
+    });
+    // Warm the memo on the pre-remap shape.
+    assert_eq!(project.get_merged_section_ids(a), HashSet::from([a, b]));
+
+    // The split's remap: the B endpoint now lives in section C.
+    project.map_station_refs(|key| {
+        if key.section_id == b {
+            StationRef::new(c, 0).into()
+        } else {
+            key
+        }
+    });
+
+    assert_eq!(
+        project.get_merged_section_ids(a),
+        HashSet::from([a, c]),
+        "the rigid group must follow the rewritten endpoint into section C"
+    );
+    assert_eq!(
+        project.get_merged_section_ids(b),
+        HashSet::from([b]),
+        "section B no longer carries a merge endpoint, so it stands alone"
+    );
 }
 
 #[test]
@@ -9499,7 +10049,6 @@ fn diagnose_naharon_section31_bridge_closure() {
     let db = Database::open_existing(path).unwrap();
     let mut project = db.load_project().unwrap();
     project.rebuild_section_index();
-    project.rebuild_merge_adjacency();
 
     let count31 = |p: &Project| {
         let merges = p
@@ -9541,7 +10090,6 @@ fn diagnose_naharon_merge_alignment() {
     let db = Database::open_existing(path).unwrap();
     let mut project = db.load_project().unwrap();
     project.rebuild_section_index();
-    project.rebuild_merge_adjacency();
 
     let before = project.check_merge_alignment();
     eprintln!("== misaligned merges BEFORE: {} ==", before.len());
@@ -9781,10 +10329,9 @@ fn redrive_offsets_after_load_heals_persisted_drift() {
     project
         .merge_stations(StationRef::new(a, 1), StationRef::new(b, 0))
         .unwrap();
-    // Persisted drift + stale caches.
+    // Persisted drift + an empty section index (as after deserialization).
     project.adjust_section_offset(b, 31.0, -9.0);
     project.section_index_cache.clear();
-    project.merge_adjacency_cache.clear();
     assert!(!project.check_merge_alignment().is_empty());
 
     let healed = project.redrive_offsets_after_load();
@@ -10457,7 +11004,9 @@ fn integrity_clean_project_has_no_violations() {
 fn integrity_flags_merge_to_missing_section() {
     let (mut project, a, _) = integrity_fixture();
     // Point the merge at a section id that doesn't exist.
-    project.station_merges[0].station_b = StationRef::new(9999, 0).into();
+    forge_first_merge(&mut project, |m| {
+        m.station_b = StationRef::new(9999, 0).into();
+    });
     let v = project.check_structural_integrity();
     assert_eq!(v.len(), 1, "{v:?}");
     assert_eq!(v[0].severity, ViolationSeverity::Critical);
@@ -10472,7 +11021,9 @@ fn integrity_flags_station_index_out_of_range() {
     let (mut project, a, _) = integrity_fixture();
     // Section a has 1 shot → stations 0..=1; index 5 is out of range, so the
     // transitional Index anchor no longer resolves → flagged as a dangling ref.
-    project.station_merges[0].station_a = StationRef::new(a, 5).into();
+    forge_first_merge(&mut project, |m| {
+        m.station_a = StationRef::new(a, 5).into();
+    });
     let v = project.check_structural_integrity();
     assert_eq!(v.len(), 1, "{v:?}");
     assert_eq!(v[0].severity, ViolationSeverity::Critical);
@@ -12124,4 +12675,349 @@ fn project_ipc_serializes_validation_field() {
         Some(2.5),
         "ProjectIpc must serialize the validation field"
     );
+}
+
+// === Replacement-merge guards (Project::replacement_merge_allowed) ===
+//
+// A deletion that tears a merge group apart stitches the surviving components
+// back together through an ARBITRARILY picked pair. These four cover the states
+// where that stitch must NOT happen, because it would mint exactly what the
+// integrity machinery elsewhere exists to undo.
+
+/// Build `a - middle - b`: two sections merged into ONE station of a middle
+/// section, each outer section carrying its own zero datum. Returns the ids.
+fn bridged_double_anchored_groups(project: &mut Project) -> (SectionId, SectionId, SectionId) {
+    let a = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    let middle = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    let b = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+
+    // Both outer sections hang off the SAME middle station, so the three are one
+    // station-level merge group and removing the middle splits it in two.
+    project.station_merges.push(StationMerge {
+        station_a: StationRef::new(a, 1).into(),
+        station_b: StationRef::new(middle, 0).into(),
+        merged_at: Utc::now(),
+    });
+    project.station_merges.push(StationMerge {
+        station_a: StationRef::new(b, 0).into(),
+        station_b: StationRef::new(middle, 0).into(),
+        merged_at: Utc::now(),
+    });
+
+    // One datum per outer group. Together they over-anchor the bridged group -
+    // the pre-existing invalid state the deletion is about to heal.
+    project.zero_datums.push(ZeroDatum {
+        station_ref: StationRef::new(a, 0).into(),
+        gps: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
+    });
+    project.zero_datums.push(ZeroDatum {
+        station_ref: StationRef::new(b, 1).into(),
+        gps: GpsCoordinates::new(11.0, 21.0, 0.0).unwrap(),
+    });
+
+    (a, middle, b)
+}
+
+fn merge_exists_between_sections(project: &Project, x: SectionId, y: SectionId) -> bool {
+    project.station_merges.iter().any(|m| {
+        let (Some(sa), Some(sb)) = (
+            project.resolve_key(&m.station_a),
+            project.resolve_key(&m.station_b),
+        ) else {
+            return false;
+        };
+        (sa.section_id == x && sb.section_id == y) || (sa.section_id == y && sb.section_id == x)
+    })
+}
+
+#[test]
+fn deleting_the_bridge_between_anchored_groups_does_not_reweld_them() {
+    let mut project = Project::new("BridgeDelete".to_string(), None);
+    let (a, middle, b) = bridged_double_anchored_groups(&mut project);
+
+    // Precondition: the bridge really does put both datums in one merge
+    // component, and both outer groups really are joined through it.
+    assert_eq!(
+        project.over_anchored_merge_components().len(),
+        1,
+        "fixture must start over-anchored, or the guard has nothing to prevent"
+    );
+
+    // The `delete_section` sequence (command_section.rs).
+    project.preserve_connections_for_section_deletion(middle);
+    project.cleanup_section_references(middle);
+    project.remove_section(middle);
+
+    assert!(
+        !merge_exists_between_sections(&project, a, b),
+        "the deletion must not weld two independently anchored components together: {:?}",
+        project.station_merges
+    );
+    assert!(
+        project.loop_closures.is_empty(),
+        "no soft closure may be invented for an arbitrarily picked pair either: {:?}",
+        project.loop_closures
+    );
+    assert!(
+        project.over_anchored_merge_components().is_empty(),
+        "each half now holds its own datum, so the deletion healed the over-anchoring: {:?}",
+        project.over_anchored_merge_components()
+    );
+
+    // Both halves survive, still anchored and structurally intact.
+    assert!(project.get_section(a).is_some() && project.get_section(b).is_some());
+    let datum_refs: Vec<StationRef> = project
+        .zero_datums
+        .iter()
+        .filter_map(|zd| project.resolve_key(&zd.station_ref))
+        .collect();
+    assert!(
+        datum_refs.contains(&StationRef::new(a, 0)) && datum_refs.contains(&StationRef::new(b, 1)),
+        "both datums must survive: {datum_refs:?}"
+    );
+}
+
+#[test]
+fn replacement_stitch_skips_a_pair_already_in_closure() {
+    let mut project = Project::new("ClosureOnPair".to_string(), None);
+    let x = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    let middle = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    let y = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    project.station_merges.push(StationMerge {
+        station_a: StationRef::new(x, 0).into(),
+        station_b: StationRef::new(middle, 0).into(),
+        merged_at: Utc::now(),
+    });
+    project.station_merges.push(StationMerge {
+        station_a: StationRef::new(y, 0).into(),
+        station_b: StationRef::new(middle, 0).into(),
+        merged_at: Utc::now(),
+    });
+    // A closure already describes exactly the pair the stitch would pick.
+    project.loop_closures.push(LoopClosure {
+        id: 7,
+        station_a: StationRef::new(x, 0).into(),
+        station_b: StationRef::new(y, 0).into(),
+        path_length: 4.0,
+        misclosure_distance: 0.1,
+        error_percentage: 2.5,
+        horizontal_misclosure: 0.1,
+        vertical_misclosure: 0.0,
+        strategy: ClosureStrategy::default(),
+        is_aligned: false,
+    });
+
+    project.preserve_connections_for_section_deletion(middle);
+    project.cleanup_section_references(middle);
+    project.remove_section(middle);
+
+    assert!(
+        !project.are_stations_merged(StationRef::new(x, 0), StationRef::new(y, 0)),
+        "a merge on a pair that already carries a closure is the state create_loop_closure \
+         refuses: {:?}",
+        project.station_merges
+    );
+    let survivor = project
+        .loop_closures
+        .iter()
+        .find(|lc| lc.id == 7)
+        .expect("the existing closure must survive untouched");
+    assert_eq!(
+        (
+            project.resolve_key(&survivor.station_a),
+            project.resolve_key(&survivor.station_b)
+        ),
+        (Some(StationRef::new(x, 0)), Some(StationRef::new(y, 0))),
+        "the closure keeps the soft topology and must not be rewired"
+    );
+}
+
+#[test]
+fn replacement_stitch_skips_rigidly_connected_components() {
+    let mut project = Project::new("AlreadyRigid".to_string(), None);
+    let x = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    let middle = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    let y = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    project.station_merges.push(StationMerge {
+        station_a: StationRef::new(x, 0).into(),
+        station_b: StationRef::new(middle, 0).into(),
+        merged_at: Utc::now(),
+    });
+    project.station_merges.push(StationMerge {
+        station_a: StationRef::new(y, 0).into(),
+        station_b: StationRef::new(middle, 0).into(),
+        merged_at: Utc::now(),
+    });
+    // An ALIGNED closure on a DIFFERENT pair already holds X and Y rigid, so the
+    // stitch would be the redundant rigid cycle merge_stations refuses.
+    project.loop_closures.push(LoopClosure {
+        id: 3,
+        station_a: StationRef::new(x, 1).into(),
+        station_b: StationRef::new(y, 1).into(),
+        path_length: 4.0,
+        misclosure_distance: 0.0,
+        error_percentage: 0.0,
+        horizontal_misclosure: 0.0,
+        vertical_misclosure: 0.0,
+        strategy: ClosureStrategy::default(),
+        is_aligned: true,
+    });
+
+    project.preserve_connections_for_section_deletion(middle);
+    project.cleanup_section_references(middle);
+    project.remove_section(middle);
+
+    assert!(
+        !merge_exists_between_sections(&project, x, y),
+        "X and Y are already rigidly connected through the aligned closure; a replacement \
+         merge adds nothing but a rigid cycle: {:?}",
+        project.station_merges
+    );
+    assert!(
+        project.loop_closures.iter().any(|lc| lc.id == 3),
+        "the aligned closure must survive"
+    );
+}
+
+#[test]
+fn removed_station_stitch_does_not_reweld_anchored_groups() {
+    // The station-removal site (`preserve_connections_for_removed_stations`),
+    // reached by an interior range delete, must apply the same guard.
+    let mut project = Project::new("RemovedStations".to_string(), None);
+    let (a, middle, b) = bridged_double_anchored_groups(&mut project);
+
+    let removed: HashSet<StationRef> = [StationRef::new(middle, 0)].into_iter().collect();
+    project.preserve_connections_for_removed_stations(&removed);
+    project.cleanup_removed_station_references(&removed);
+
+    assert!(
+        !merge_exists_between_sections(&project, a, b),
+        "removing the bridging station must not weld the two anchored halves: {:?}",
+        project.station_merges
+    );
+    assert!(
+        project.loop_closures.is_empty(),
+        "no closure may be invented in the merge's place: {:?}",
+        project.loop_closures
+    );
+    assert!(
+        project.over_anchored_merge_components().is_empty(),
+        "both halves are now independently anchored"
+    );
+}
+
+#[test]
+fn delete_shot_preview_and_execution_agree_on_the_skipped_stitch() {
+    // The single-shot path PREVIEWS the replacement merges in the dialog and then
+    // replays that exact list, so a guard that only fired at execution time would
+    // make the dialog promise a merge the delete never creates.
+    let mut project = Project::new("PreviewParity".to_string(), None);
+    let bridge = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    let p = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    let q = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    // P and Q meet only at the bridge station that the shot delete removes.
+    project.station_merges.push(StationMerge {
+        station_a: StationRef::new(p, 0).into(),
+        station_b: StationRef::new(bridge, 0).into(),
+        merged_at: Utc::now(),
+    });
+    project.station_merges.push(StationMerge {
+        station_a: StationRef::new(q, 0).into(),
+        station_b: StationRef::new(bridge, 0).into(),
+        merged_at: Utc::now(),
+    });
+    project.zero_datums.push(ZeroDatum {
+        station_ref: StationRef::new(p, 1).into(),
+        gps: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
+    });
+    project.zero_datums.push(ZeroDatum {
+        station_ref: StationRef::new(q, 1).into(),
+        gps: GpsCoordinates::new(11.0, 21.0, 0.0).unwrap(),
+    });
+
+    let shot_id = project.get_section(bridge).unwrap().shots[0].id;
+    let preview = project.preview_delete_shot(bridge, shot_id).unwrap();
+    assert_eq!(
+        preview.removed_station,
+        StationRef::new(bridge, 0),
+        "the delete must remove the bridging station"
+    );
+    assert!(
+        preview.replacement_merges.is_empty(),
+        "the dialog must not promise a merge welding two anchored components: {:?}",
+        preview.replacement_merges
+    );
+
+    let (_, impact) = project.remove_shot_with_rewire(bridge, shot_id).unwrap();
+    assert_eq!(
+        impact.replacement_merges.len(),
+        preview.replacement_merges.len(),
+        "preview and execution must plan the same replacement merges"
+    );
+    assert!(
+        !merge_exists_between_sections(&project, p, q),
+        "and the executed delete must create none: {:?}",
+        project.station_merges
+    );
+    assert!(project.over_anchored_merge_components().is_empty());
 }

@@ -601,14 +601,13 @@ impl AppState {
         // can't leave `cascade_deferred = true` and silently skip
         // cascades on every subsequent command.
         let cascade_guard = CascadeDeferGuard::arm(&self.project);
-        // Eagerly populate the section-id and merge-adjacency lookups
-        // so the per-call `get_section` / `get_merged_section_ids` stay
-        // O(1) / O(group) instead of degrading into O(N) linear scans
-        // inside `merge_stations`.
+        // Eagerly populate the section-id lookup so the per-call `get_section`
+        // stays O(1) instead of degrading into an O(N) linear scan inside
+        // `merge_stations`. (The merge adjacency needs no priming: it builds
+        // itself on first use and stays warm across the import's pushes.)
         if let Ok(mut proj_guard) = self.project.lock() {
             if let Some(project) = proj_guard.as_mut() {
                 project.rebuild_section_index();
-                project.rebuild_merge_adjacency();
                 // Make `resolve_key`'s AfterShot lookup O(1) for the hot
                 // merge/closure connectivity loops below - without this, a large
                 // import (e.g. a big Walls project) pins a core for minutes.
