@@ -89,3 +89,35 @@ describe('classifyDeleteRun with rows added in the dialog', () => {
     expect(isEndRun('all')).toBe(true);
   });
 });
+
+/**
+ * A delete range that mixes an unsaved row with a saved mid-section shot.
+ *
+ * `classifyDeleteRun` sees only the SAVED keys, so the run reads as `mid` and
+ * the dialog defers to the split/shift confirm. That deferral returned early,
+ * before the new-row targets were processed - so confirming deleted the saved
+ * shot and left the new row in the dialog. The fix carries the new-row keys into
+ * the pending state, making the gesture atomic; these pin the classification the
+ * fix rests on.
+ */
+describe('classifyDeleteRun with a mixed new-plus-saved range', () => {
+  const SAVED = ['a', 'b', 'c', 'd'];
+
+  it('still calls it mid when the saved half is mid-section', () => {
+    // The new row is invisible here by construction, so 'b' alone decides.
+    expect(classifyDeleteRun(SAVED, of('b'))).toBe('mid');
+    expect(isEndRun('mid')).toBe(false);
+  });
+
+  it('calls it an end run when the saved half is at an end', () => {
+    // No confirm, so the mixed range deletes outright and nothing is deferred.
+    expect(isEndRun(classifyDeleteRun(SAVED, of('d')))).toBe(true);
+    expect(isEndRun(classifyDeleteRun(SAVED, of('a')))).toBe(true);
+  });
+
+  it('calls a range of only new rows none, which never defers', () => {
+    // Nothing saved is being deleted, so there is nothing to confirm.
+    expect(classifyDeleteRun(SAVED, of())).toBe('none');
+    expect(isEndRun('none')).toBe(true);
+  });
+});
