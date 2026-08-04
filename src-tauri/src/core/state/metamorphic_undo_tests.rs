@@ -98,8 +98,8 @@ use tempfile::TempDir;
 
 use super::fuzz_undo_tests::{
     adjusted_diffs, adjusted_geometry_of, build_project, canonical_snapshot, describe_diffs,
-    diff_snapshots, integrity_verdict, random_offset, random_shot, read_targets, Diff, Rng,
-    Targets, Verdict, COLORS,
+    diff_snapshots, integrity_verdict, random_offset, random_shot, read_targets,
+    topology_signature, Diff, Rng, Targets, Verdict, COLORS,
 };
 use super::AppState;
 use crate::core::Command;
@@ -480,6 +480,11 @@ struct Twins {
     /// The state both sides started from, for the measured (not asserted)
     /// baseline distance after an unwind.
     baseline: String,
+    /// The topology signature of the state the pair was built on. Reported by
+    /// the sweep so the shapes this engine reaches are a number rather than an
+    /// assumption - see `fuzz_corpus_sweep` for why that number matters and why
+    /// corpus guidance was measured NOT to improve it.
+    signature: String,
 }
 
 /// Which twin a route drives.
@@ -538,11 +543,13 @@ impl Twins {
             "seed {seed}: two loads of ONE .stalx produced different projects, so no \
              path-equivalence below this line means anything"
         );
+        let signature = topology_signature(&left);
         Some(Self {
             left,
             right,
             _temp: temp,
             baseline,
+            signature,
         })
     }
 
@@ -771,6 +778,8 @@ struct PairOutcome {
     /// Differences a KNOWN open defect explains, by id. Counted and printed,
     /// never asserted - see `EXPLAINS`.
     hits: BTreeMap<&'static str, usize>,
+    /// Topology signatures the pair was built on, for coverage reporting.
+    signatures: std::collections::BTreeSet<String>,
     /// Paths each unwound twin still differs from its own baseline in, summed.
     /// Measured, never asserted - see the module header.
     baseline_distance: usize,
@@ -1220,6 +1229,7 @@ fn run_pairs(
             skipped: 0,
             problems: Vec::new(),
             hits: BTreeMap::new(),
+            signatures: std::collections::BTreeSet::new(),
             baseline_distance: 0,
         });
         for repeat in 0..repeats {
@@ -1234,6 +1244,7 @@ fn run_pairs(
                 entry.skipped += 1;
                 continue;
             };
+            entry.signatures.insert(twins.signature.clone());
             match (pair.run)(&twins, &mut rng, pair.id) {
                 None => entry.skipped += 1,
                 Some(found) => {
@@ -1427,6 +1438,7 @@ fn metamorphic_fuzz() {
 
     let mut totals: BTreeMap<&'static str, (usize, usize, usize, usize)> = BTreeMap::new();
     let mut classified: BTreeMap<&'static str, usize> = BTreeMap::new();
+    let mut signatures: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     let mut dirty = Vec::new();
     for seed in 1..=seeds {
         let outcomes = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -1448,6 +1460,7 @@ fn metamorphic_fuzz() {
             for (hit, count) in &outcome.hits {
                 *classified.entry(hit).or_insert(0) += count;
             }
+            signatures.extend(outcome.signatures.iter().cloned());
             if verbose {
                 for problem in &outcome.problems {
                     println!("--- {problem}");
@@ -1466,6 +1479,10 @@ fn metamorphic_fuzz() {
              baseline-distance {distance}"
         );
     }
+    println!(
+        "topology coverage: {} distinct signature(s) over {seeds} seed(s)",
+        signatures.len()
+    );
     println!("classified totals: {classified:?}");
     println!(
         "seeds with at least one UNEXPLAINED divergence ({}): {dirty:?}",

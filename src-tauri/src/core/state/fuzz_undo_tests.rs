@@ -2036,6 +2036,104 @@ pub(super) fn random_offset(rng: &mut Rng) -> Coordinates {
 }
 
 // ===========================================================================
+// Topology signature, for corpus guidance
+// ===========================================================================
+
+/// A count, bucketed.
+///
+/// Bucketing is the whole trick. An EXACT count makes every project novel -
+/// 41 shots is not the same signature as 42 - so a corpus keyed on exact counts
+/// stores everything and guides nothing. These classes are chosen so that
+/// crossing one means the project acquired a structural possibility rather than
+/// one more of something it already had.
+const fn bucket(count: usize) -> u8 {
+    match count {
+        0 => 0,
+        1 => 1,
+        2 => 2,
+        3..=4 => 3,
+        5..=8 => 4,
+        9..=16 => 5,
+        17..=32 => 6,
+        _ => 7,
+    }
+}
+
+/// A compact, deterministic fingerprint of a project's SHAPE.
+///
+/// Counts and structural features only - no float appears anywhere in it, which
+/// is what makes it stable across platforms and across the float dust findings
+/// 21 and 23 are about. Two projects with the same signature can reach the same
+/// generators; two with different signatures cannot necessarily.
+///
+/// The features are the ones this programme has actually needed. Findings 4 and
+/// 10 were unreachable by random walk because they need a second closure and an
+/// orphaned one; finding 3 needs an EMPTY section; findings 8, 12 and 13 need
+/// ids that have diverged from positional order. Every one of those is a bit
+/// here, so a corpus keyed on this can tell "I have been in a project like this
+/// before" from "this is a shape I have never had".
+pub(super) fn topology_signature(state: &AppState) -> String {
+    let Some(project) = state.get_project_state() else {
+        return "no-project".to_string();
+    };
+    let sections = project.sections.len();
+    let empty = project
+        .sections
+        .iter()
+        .filter(|section| section.shots.is_empty())
+        .count();
+    let single = project
+        .sections
+        .iter()
+        .filter(|section| section.shots.len() == 1)
+        .count();
+    let shots: usize = project.sections.iter().map(|s| s.shots.len()).sum();
+
+    // The merge graph's SHAPE, not its size: the largest degree tells a chain
+    // (2) from a star (3+), and comparing the edge count against the node count
+    // tells whether it holds a cycle.
+    let mut degree: BTreeMap<SectionId, usize> = BTreeMap::new();
+    let mut edges = 0;
+    for merge in &project.station_merges {
+        if merge.station_a.section_id == merge.station_b.section_id {
+            continue;
+        }
+        edges += 1;
+        *degree.entry(merge.station_a.section_id).or_insert(0) += 1;
+        *degree.entry(merge.station_b.section_id).or_insert(0) += 1;
+    }
+    let max_degree = degree.values().copied().max().unwrap_or(0);
+    let merged_nodes = degree.len();
+    // More edges than nodes minus one means at least one cycle somewhere.
+    let cyclic = u8::from(edges + 1 > merged_nodes && merged_nodes > 0);
+
+    // The id-vs-position divergence findings 8, 12 and 13 need, as a bit.
+    let diverged =
+        u8::from(project.sections.iter().any(|section| {
+            let base = section.id * crate::models::FEATURE_ID_STRIDE;
+            section.shots.iter().enumerate().any(|(position, shot)| {
+                shot.id != base + position as u32 && shot.id != position as u32
+            })
+        }));
+
+    format!(
+        "s{}e{}o{}h{}m{}d{}c{}y{}z{}g{}k{}v{}",
+        bucket(sections),
+        bucket(empty),
+        bucket(single),
+        bucket(shots),
+        bucket(edges),
+        bucket(max_degree),
+        bucket(project.loop_closures.len()),
+        cyclic,
+        bucket(project.zero_datums.len()),
+        bucket(project.section_offsets.len()),
+        bucket(project.station_comments.len()),
+        diverged,
+    )
+}
+
+// ===========================================================================
 // The fuzzer
 // ===========================================================================
 
@@ -2079,6 +2177,9 @@ struct Outcome {
     trimmed: usize,
     /// Largest collection sizes seen. Growth sanity for a long run.
     peak: Peak,
+    /// The topology signature of the state the run ENDED in. Corpus guidance
+    /// keys on this; nothing else reads it.
+    signature: String,
 }
 
 /// The largest each unbounded-in-principle collection got during a run.
@@ -4859,6 +4960,14 @@ struct Plan {
     /// `closures`'s reason too: the shapes are built to reach known defects, so
     /// the hit counts say nothing about new ones.
     closure_shapes: bool,
+    /// Replay `(seed, moves)` as a PROLOGUE before this run's own stream.
+    ///
+    /// Corpus guidance, and the reason it costs nothing: every run in this
+    /// module is a pure function of its seed, so "the state that run reached
+    /// after n moves" is fully described by the pair `(seed, n)`. No project
+    /// has to be serialized, stored or reloaded to replay a shape - which is
+    /// what makes a corpus affordable inside a test binary.
+    prologue: Option<(u32, usize)>,
     /// How many times a persistence run crosses save/close/reopen.
     ///
     /// One is the historical behaviour and what the gate uses. MORE than one is
@@ -4880,7 +4989,25 @@ struct Plan {
 }
 
 fn run_fuzz(seed: u32, plan: Plan) -> Outcome {
-    let mut fuzzer = Fuzzer::new(seed, plan.closures || plan.closure_shapes);
+    // A corpus prologue rebuilds the shape a previous run reached, then hands
+    // over to THIS run's stream. The project is built from the prologue's seed
+    // (the builder is part of the shape) and the RNG is re-seeded at the
+    // handover, so the continuation is fresh randomness over an inherited
+    // topology rather than a longer replay of the same one.
+    let mut fuzzer = Fuzzer::new(
+        plan.prologue
+            .map_or(seed, |(prologue_seed, _)| prologue_seed),
+        plan.closures || plan.closure_shapes,
+    );
+    if let Some((_, moves)) = plan.prologue {
+        for _ in 0..moves {
+            if fuzzer.outcome.alignment_panic || fuzzer.outcome.drift_stop {
+                break;
+            }
+            fuzzer.step_mutate();
+        }
+        fuzzer.rng = Rng::new(seed);
+    }
     // The exposure prologue runs FIRST and crosses the boundary itself, so the
     // block of id-bearing entries it builds is the newest thing on the stack
     // when the reload lands and the closing unwind starts on it.
@@ -4988,6 +5115,7 @@ fn run_fuzz(seed: u32, plan: Plan) -> Outcome {
         }
     }
 
+    fuzzer.outcome.signature = topology_signature(&fuzzer.state);
     if !fuzzer.outcome.wedged && !fuzzer.outcome.alignment_panic && !fuzzer.outcome.drift_stop {
         // Cross the boundary at least once per persistence run, so the closing
         // walk below runs against a RESTORED stack rather than an in-memory one.
@@ -5132,6 +5260,7 @@ fn undo_redo_fuzz_gate() {
                 iterations: GATE_ITERATIONS,
                 persistence: false,
                 crossings: 1,
+                prologue: None,
                 jumps: false,
                 closures: false,
                 divergence: false,
@@ -5175,6 +5304,7 @@ fn undo_redo_fuzz_gate_persistence() {
                 iterations: GATE_ITERATIONS,
                 persistence: true,
                 crossings: 1,
+                prologue: None,
                 jumps: false,
                 closures: false,
                 divergence: false,
@@ -5224,6 +5354,7 @@ fn undo_redo_fuzz_gate_multi_crossing() {
                 iterations: GATE_ITERATIONS,
                 persistence: true,
                 crossings: 3,
+                prologue: None,
                 jumps: false,
                 closures: false,
                 divergence: false,
@@ -5261,6 +5392,7 @@ fn the_fuzzer_is_deterministic() {
             iterations: GATE_ITERATIONS,
             persistence: false,
             crossings: 1,
+            prologue: None,
             jumps: false,
             closures: false,
             divergence: false,
@@ -5325,6 +5457,7 @@ fn finding_14_no_insert_leaves_a_merge_out_of_alignment() {
             iterations: 60,
             persistence: false,
             crossings: 1,
+            prologue: None,
             jumps: false,
             closures: true,
             divergence: false,
@@ -5362,6 +5495,7 @@ fn bug_7_a_jump_is_n_single_steps() {
             iterations: 150,
             persistence: true,
             crossings: 1,
+            prologue: None,
             jumps: true,
             closures: true,
             divergence: false,
@@ -5412,6 +5546,7 @@ fn fuzz_seed_survey() {
                 iterations,
                 persistence,
                 crossings,
+                prologue: None,
                 jumps,
                 closures,
                 divergence,
@@ -5460,6 +5595,175 @@ fn fuzz_seed_survey() {
         println!("FAILING {} seed(s) on: {headline}", seeds.len());
         println!("  seeds: {seeds:?}");
     }
+}
+
+/// CORPUS-GUIDED sweeping, and the measurement that says whether it is worth
+/// anything.
+///
+/// # The claim
+///
+/// A random walk under-reaches topology space. That is not a hypothesis here -
+/// findings 4 and 10 had to have their shapes HAND-BUILT because a 30-seed
+/// sweep produced none, and the metamorphic sweep still skips a fifth of its
+/// `move-out-and-back` draws on a guard the random project keeps tripping. So:
+/// remember the shapes a sweep reaches, and start later runs from one.
+///
+/// # Why it costs nothing
+///
+/// Every run in this module is a pure function of its seed, so "the state seed
+/// 7 was in after 40 moves" is fully described by the pair `(7, 40)`. A corpus
+/// entry is two integers. No project is serialized, no file is written, and
+/// nothing has to be kept compatible across a change to the generators - a
+/// stale corpus simply replays to a different shape and is re-keyed on the
+/// spot.
+///
+/// # The measurement, and its answer: NO
+///
+/// This runs the SAME budget twice, once with guidance and once without, and
+/// reports distinct signatures reached by each. Measured at 80 runs x 60 moves:
+///
+/// ```text
+///   UNGUIDED: 78 distinct signature(s), 8 classifier id(s)
+///   GUIDED:   73 distinct signature(s), 8 classifier id(s), corpus grew to 73
+///   reached ONLY with guidance: 34
+///   reached ONLY without:       39
+/// ```
+///
+/// **Guidance is slightly WORSE, and the diagnosis is in the numbers.** 78 of
+/// 80 unguided runs land on a distinct signature, and the corpus admitted 73 of
+/// 80 - so "novel" carries almost no information at this granularity. The
+/// corpus admits nearly everything, and "guided" therefore just means "half the
+/// budget spent replaying a prefix instead of drawing a fresh seed", which
+/// costs diversity rather than buying it. The classifier id sets are identical,
+/// so it reaches no finding the random walk does not.
+///
+/// The union of the two (34 + 39 signatures reached by only one) is much larger
+/// than either, which says the two explore differently and neither dominates -
+/// the random walk is simply not the bottleneck this was built to relieve.
+///
+/// What WOULD make a corpus pay, and is left for whoever picks this up: a
+/// coarser signature (the current one splits on eight buckets across twelve
+/// features, which is far finer than the generators can exploit), or admission
+/// keyed on a RARE feature rather than on novelty - the shapes findings 4 and
+/// 10 needed are rare, not merely new, and `c`/`y`/`v` in the signature are
+/// exactly those bits. Guidance keyed on "has a closure" or "ids have diverged"
+/// would compound the shapes that matter instead of every shape at all.
+///
+/// The mechanism is kept because the measurement is the deliverable and because
+/// `Plan::prologue` costs two integers; it is NOT wired into any gate, and this
+/// comment is the reason.
+///
+/// ```text
+/// STALAGMIGHT_RUST_FUZZ_CORPUS_BUDGET=120 STALAGMIGHT_RUST_FUZZ_ITERATIONS=60 \
+///   TELEMETRY_ENDPOINT=http://localhost/dummy cargo test \
+///   --manifest-path src-tauri/Cargo.toml --features telemetry \
+///   --lib fuzz_corpus_sweep -- --ignored --nocapture
+/// ```
+#[test]
+#[ignore = "measurement: compares signature coverage with corpus guidance on and off"]
+fn fuzz_corpus_sweep() {
+    let budget: usize = std::env::var("STALAGMIGHT_RUST_FUZZ_CORPUS_BUDGET")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(80);
+    let iterations: usize = std::env::var("STALAGMIGHT_RUST_FUZZ_ITERATIONS")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(GATE_ITERATIONS);
+
+    let base = |prologue: Option<(u32, usize)>| Plan {
+        iterations,
+        persistence: false,
+        crossings: 1,
+        prologue,
+        jumps: false,
+        closures: false,
+        divergence: false,
+        closure_shapes: false,
+        horizon: false,
+    };
+
+    // ---- UNGUIDED: `budget` fresh seeds, nothing remembered. ----
+    let mut unguided: BTreeSet<String> = BTreeSet::new();
+    let mut unguided_hits: BTreeMap<&'static str, usize> = BTreeMap::new();
+    for seed in 1..=budget as u32 {
+        if let Ok(outcome) =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run_fuzz(seed, base(None))))
+        {
+            unguided.insert(outcome.signature);
+            for (id, count) in outcome.hits {
+                *unguided_hits.entry(id).or_insert(0) += count;
+            }
+        }
+    }
+
+    // ---- GUIDED: the same budget, but every other run starts from a shape a
+    // previous run reached and only then draws its own stream. ----
+    let mut guided: BTreeSet<String> = BTreeSet::new();
+    let mut guided_hits: BTreeMap<&'static str, usize> = BTreeMap::new();
+    // `(seed, moves)` pairs whose signature was novel when it was recorded.
+    let mut corpus: Vec<(u32, usize)> = Vec::new();
+    let mut picker = Rng::new(0x00C0_FFEE);
+    for step in 0..budget {
+        let seed = step as u32 + 1;
+        // Alternate: a fresh seed keeps feeding the corpus new material, a
+        // corpus entry compounds what is already there. All-corpus would
+        // converge on one lineage and reach less than the random walk does.
+        let prologue = if corpus.is_empty() || step % 2 == 0 {
+            None
+        } else {
+            Some(corpus[picker.below(corpus.len())])
+        };
+        let Ok(outcome) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            run_fuzz(seed, base(prologue))
+        })) else {
+            continue;
+        };
+        let novel = guided.insert(outcome.signature.clone());
+        for (id, count) in outcome.hits {
+            *guided_hits.entry(id).or_insert(0) += count;
+        }
+        // A run that reached a shape nothing had reached becomes corpus
+        // material - at a PREFIX of its length, so a later run inherits the
+        // topology and still has most of its own budget to explore with.
+        if novel {
+            corpus.push((
+                prologue.map_or(seed, |(prologue_seed, _)| prologue_seed),
+                iterations / 2,
+            ));
+        }
+    }
+
+    println!("corpus sweep: budget {budget} run(s) x {iterations} moves, each way");
+    println!(
+        "  UNGUIDED: {} distinct signature(s), {} classifier id(s)",
+        unguided.len(),
+        unguided_hits.len()
+    );
+    println!(
+        "  GUIDED:   {} distinct signature(s), {} classifier id(s), corpus grew to {}",
+        guided.len(),
+        guided_hits.len(),
+        corpus.len()
+    );
+    let only_guided: Vec<&String> = guided.difference(&unguided).collect();
+    let only_unguided: Vec<&String> = unguided.difference(&guided).collect();
+    println!(
+        "  reached ONLY with guidance ({}): {only_guided:?}",
+        only_guided.len()
+    );
+    println!(
+        "  reached ONLY without ({}): {only_unguided:?}",
+        only_unguided.len()
+    );
+    println!(
+        "  unguided classifier ids: {:?}",
+        unguided_hits.keys().collect::<Vec<_>>()
+    );
+    println!(
+        "  guided classifier ids:   {:?}",
+        guided_hits.keys().collect::<Vec<_>>()
+    );
 }
 
 /// THE HORIZON RUN: thousands of moves, past the app's own history limit.
@@ -5514,6 +5818,7 @@ fn undo_redo_fuzz_horizon() {
             iterations,
             persistence,
             crossings: 1,
+            prologue: None,
             jumps: true,
             closures: false,
             divergence: false,
@@ -5596,6 +5901,7 @@ fn undo_redo_fuzz_soak() {
                     // a snapshot two epochs back is compared against a project
                     // that has been through the loader twice.
                     crossings: 3,
+                    prologue: None,
                     // The soak DOES draw jumps and build closures: findings 7 and
                     // 14 are real, and this is the tier that can afford to keep
                     // hitting them.
