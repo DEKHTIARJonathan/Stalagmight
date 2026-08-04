@@ -436,7 +436,60 @@ fn describe_diffs(diffs: &[Diff]) -> String {
 struct Classifier {
     /// Finding id on issue #413.
     id: &'static str,
-    matches: fn(&Diff) -> bool,
+    matches: fn(&Diff, &MoveCtx) -> bool,
+}
+
+/// What produced the difference being classified.
+///
+/// The harness tier cannot see this - its bridge only knows the move's DIRECTION
+/// - which is why its gauge-anchor classifier has to conflate findings 1 and 11.
+/// Here the entry that a move consumed is a `get_undo_stack` read away, so the
+/// two can be told apart precisely, and several other classifiers can be narrowed
+/// to the exact entry shape their bug needs instead of to a path alone.
+#[derive(Clone, Copy)]
+struct MoveCtx<'a> {
+    /// The entry the move consumed, when the move was an undo or a redo.
+    entry: Option<&'a EntryMeta>,
+    /// Has this run crossed a save?
+    after_save: bool,
+    /// Has this run reopened a saved project?
+    after_reload: bool,
+    /// The run's current epoch; an entry with a lower one predates the last save.
+    epoch: u32,
+    /// Has finding 1 or finding 11 ALREADY reverted the save's gauge capture in
+    /// this run?
+    heal_reverted: bool,
+}
+
+impl MoveCtx<'_> {
+    fn command_is(&self, command: &str) -> bool {
+        self.entry.is_some_and(|entry| entry.command == command)
+    }
+
+    /// True when the consumed entry was recorded BEFORE the most recent save -
+    /// finding 11's precondition, since such an entry's `ProjectSnapshotPair`
+    /// holds the pre-heal project in both halves.
+    fn entry_predates_save(&self) -> bool {
+        self.after_save && self.entry.is_some_and(|entry| entry.epoch < self.epoch)
+    }
+
+    /// The section a consumed `CreateShot` appended the FIRST shot into, when it
+    /// did - finding 3's exact precondition.
+    fn appended_into_empty(&self) -> Option<SectionId> {
+        self.entry.and_then(|entry| entry.appended_into_empty)
+    }
+}
+
+/// What the entry pushed at one depth was.
+#[derive(Clone, Debug, Default)]
+struct EntryMeta {
+    /// `UndoHistoryItem::command_type` of the entry that takes depth d-1 to d.
+    command: String,
+    /// Epoch the entry was pushed in.
+    epoch: u32,
+    /// Set when the entry is a `CreateShot` that appended the first shot into a
+    /// previously EMPTY section.
+    appended_into_empty: Option<SectionId>,
 }
 
 fn is_null_or_false(text: &str) -> bool {
@@ -491,22 +544,38 @@ const CLASSIFIERS: &[Classifier] = &[
     // both halves. Both show up as a gauge anchor going value -> null. Narrowed
     // to LOSS: an anchor changing to a DIFFERENT value is not either bug.
     Classifier {
-        id: "finding-1-or-11-gauge-anchor-lost",
-        matches: |d| {
-            (path_is(d, "sections[#].gauge_shot_uuid")
-                || path_is(d, "sections[#].gauge_neighbour_uuid")
-                || path_is(d, "sections[#].reverse_parity"))
-                && is_null_or_false(&d.actual)
-        },
+        id: "finding-1-redo-of-create-section-drops-gauge-anchors",
+        matches: |d, ctx| is_gauge_loss(d) && ctx.command_is("create_section"),
+    },
+    // FINDING 11, told apart from finding 1 by the ENTRY rather than by the path.
+    // A `ProjectSnapshotPair` recorded BEFORE a save holds the pre-heal project in
+    // both halves and neither is refreshed, so undoing or redoing an unrelated
+    // pre-save command reverts the save's `capture_missing_gauge_anchors`. The
+    // harness cannot make this distinction - its bridge does not know which entry
+    // a move consumed - so it reports both as finding 1. This tier can.
+    Classifier {
+        id: "finding-11-pre-save-entry-reverts-the-saves-heals",
+        matches: |d, ctx| is_gauge_loss(d) && ctx.entry_predates_save(),
     },
     // FINDING 1. `UndoData::CreatedSectionSnapshot` stores a `SectionData`, which
     // has no uuid field, so redo goes `restore_section` -> `Section::new_with_id`
     // -> `Shot::new` -> `Uuid::new_v4()` and every shot in the section is
     // re-minted. Narrowed to value -> DIFFERENT value: a uuid being filled in is
     // a save heal, and a uuid being lost is not a shape this bug produces.
+    // FINDINGS 1 and 11, CASCADING. Once either has reverted the save's gauge
+    // capture, the anchors are simply GONE from the live project, so every deeper
+    // snapshot that was recorded with them disagrees. Those are re-measurements of
+    // the same defect, not new ones. Ordered after the two precise classifiers so
+    // a first-hand hit is still attributed to the right finding, and still
+    // narrowed to the anchor paths and to LOSS - a gauge anchor changing to a
+    // different value is not this and still fails.
+    Classifier {
+        id: "finding-1-or-11-cascade-anchors-already-reverted",
+        matches: |d, ctx| is_gauge_loss(d) && ctx.heal_reverted,
+    },
     Classifier {
         id: "finding-1-redo-of-create-section-remints-shot-uuids",
-        matches: |d| {
+        matches: |d, _| {
             path_is(d, "sections[#].shots[#].uuid")
                 && d.expected != ABSENT
                 && d.expected != "null"
@@ -521,7 +590,7 @@ const CLASSIFIERS: &[Classifier] = &[
     // sides, so an offset key appearing with real geometry in it still fails.
     Classifier {
         id: "finding-2-orphan-zero-section-offset",
-        matches: |d| {
+        matches: |d, _| {
             path_is(d, "section_offsets.#")
                 && is_absent_or_zero(&d.expected)
                 && is_absent_or_zero(&d.actual)
@@ -537,20 +606,50 @@ const CLASSIFIERS: &[Classifier] = &[
     // is not this bug and still fails.
     Classifier {
         id: "finding-5-undo-cannot-restore-null-section-field",
-        matches: |d| {
+        matches: |d, _| {
             (path_is(d, "sections[#].name")
                 || path_is(d, "sections[#].surveyor")
                 || path_is(d, "sections[#].date"))
                 && (d.expected == "null") != (d.actual == "null")
         },
     },
+    // FINDING 3. `Project::add_shot` (the append path) is offset-neutral, but the
+    // undo routes through `remove_shot_with_rewire`, whose `pos == 0` branch
+    // unconditionally calls `adjust_section_offset`. With one shot the appended
+    // shot IS index 0, so the delete slides the whole section by that shot's
+    // horizontal vector - and the displacement RATCHETS on every further cycle.
+    //
+    // Narrowed to the ENTRY, not to the path: a `section_offsets` entry gaining or
+    // losing real geometry is otherwise indistinguishable from a genuine offset
+    // bug, and finding 15 is exactly that shape on a different entry. Only a
+    // consumed `create_shot` that appended the FIRST shot into an empty section
+    // qualifies, and only on that section's own offset key.
+    Classifier {
+        id: "finding-3-undo-of-the-first-shot-displaces-an-empty-section",
+        matches: |d, ctx| {
+            let Some(section_id) = ctx.appended_into_empty() else {
+                return false;
+            };
+            d.path == format!("section_offsets.{section_id}")
+        },
+    },
 ];
 
+/// A gauge anchor (or the reverse-parity flag) being LOST rather than changed.
+/// Shared by findings 1 and 11, which produce the same shape from different
+/// causes; the classifiers above separate them by the consumed entry.
+fn is_gauge_loss(diff: &Diff) -> bool {
+    (path_is(diff, "sections[#].gauge_shot_uuid")
+        || path_is(diff, "sections[#].gauge_neighbour_uuid")
+        || path_is(diff, "sections[#].reverse_parity"))
+        && is_null_or_false(&diff.actual)
+}
+
 /// Which classifier explains `diff`, if any.
-fn classify(diff: &Diff) -> Option<&'static str> {
+fn classify(diff: &Diff, ctx: &MoveCtx) -> Option<&'static str> {
     CLASSIFIERS
         .iter()
-        .find(|classifier| (classifier.matches)(diff))
+        .find(|classifier| (classifier.matches)(diff, ctx))
         .map(|classifier| classifier.id)
 }
 
@@ -939,6 +1038,9 @@ struct Fuzzer {
     snapshots: Vec<String>,
     /// Epoch each snapshot was recorded in; a save or a reload bumps the epoch.
     epochs: Vec<u32>,
+    /// `entry_meta[d]` describes the entry that takes depth d-1 to d. Index 0 is
+    /// a placeholder so the indexing matches `snapshots`.
+    entry_meta: Vec<EntryMeta>,
     epoch: u32,
     cursor: usize,
     top: usize,
@@ -950,6 +1052,11 @@ struct Fuzzer {
     temp: Option<TempDir>,
     /// May the generators create loop closures? See `Plan::closures`.
     closures: bool,
+    /// Set once findings 1 or 11 have reverted the save's gauge capture. From then
+    /// on the live project no longer HAS the anchors, so every later depth
+    /// recorded with them disagrees - the same defect, re-measured. See the
+    /// cascade classifier.
+    heal_reverted: bool,
 }
 
 impl Fuzzer {
@@ -963,6 +1070,7 @@ impl Fuzzer {
             seed,
             snapshots: Vec::new(),
             epochs: Vec::new(),
+            entry_meta: vec![EntryMeta::default()],
             epoch: 0,
             cursor: 0,
             top: 0,
@@ -971,6 +1079,7 @@ impl Fuzzer {
             outcome: Outcome::default(),
             temp: None,
             closures,
+            heal_reverted: false,
         };
         // The builder's own commands are undoable, so the stacks are not empty.
         // Clear them: the model measures depth from a known floor, and the
@@ -1061,7 +1170,15 @@ impl Fuzzer {
     /// bug or by a save/reload heal - in which case the hit is counted and the
     /// model resyncs, so one open defect does not cascade into every later
     /// comparison. Anything else panics with the full payload.
-    fn expect_state(&mut self, depth: usize, what: &str) {
+    fn expect_state(&mut self, depth: usize, what: &str, consumed: Option<EntryMeta>) {
+        let ctx_entry = consumed;
+        let ctx = MoveCtx {
+            entry: ctx_entry.as_ref(),
+            after_save: self.outcome.saves > 0,
+            after_reload: self.outcome.reloads > 0,
+            epoch: self.epoch,
+            heal_reverted: self.heal_reverted,
+        };
         let actual = self.snapshot();
         let expected = self.snapshots[depth].clone();
         if expected == actual {
@@ -1094,7 +1211,7 @@ impl Fuzzer {
         let mut classified: BTreeMap<&'static str, usize> = BTreeMap::new();
         let mut unknown = Vec::new();
         for diff in &diffs {
-            match classify(diff) {
+            match classify(diff, &ctx) {
                 Some(id) => *classified.entry(id).or_insert(0) += 1,
                 None => unknown.push(diff.clone()),
             }
@@ -1103,6 +1220,11 @@ impl Fuzzer {
         if unknown.is_empty() && !classified.is_empty() {
             for id in classified.keys() {
                 *self.outcome.hits.entry(id).or_insert(0) += 1;
+                if id.starts_with("finding-1-redo-of-create-section-drops")
+                    || id.starts_with("finding-11-")
+                {
+                    self.heal_reverted = true;
+                }
             }
             self.resync(depth, actual);
             return;
@@ -1121,7 +1243,7 @@ impl Fuzzer {
             self.resync(depth, actual);
             return;
         }
-        if self.outcome.reloads > 0 && is_shot_identity_swap(&expected, &actual) {
+        if ctx.after_reload && is_shot_identity_swap(&expected, &actual) {
             *self
                 .outcome
                 .hits
@@ -1131,9 +1253,25 @@ impl Fuzzer {
             return;
         }
 
+        let entry_note = ctx_entry.as_ref().map_or_else(
+            || "  consumed entry: (none - not a history move)".to_string(),
+            |entry| {
+                format!(
+                    "  consumed entry: {} (pushed in epoch {}, run epoch {}{})",
+                    entry.command,
+                    entry.epoch,
+                    self.epoch,
+                    if entry.appended_into_empty.is_some() {
+                        ", appended into an EMPTY section"
+                    } else {
+                        ""
+                    }
+                )
+            },
+        );
         self.fail(
             &format!("{what} did not restore the state recorded at depth {depth}"),
-            &format!(
+            &(format!(
                 "  {} unexplained difference(s){}:\n{}",
                 unknown.len(),
                 if classified.is_empty() {
@@ -1145,7 +1283,8 @@ impl Fuzzer {
                     )
                 },
                 describe_diffs(&unknown),
-            ),
+            ) + "\n"
+                + entry_note.as_str()),
         );
     }
 
@@ -1234,6 +1373,20 @@ impl Fuzzer {
 struct Drawn {
     label: String,
     result: CommandResult,
+    /// Set when this was a `CreateShot` that appended the FIRST shot into an
+    /// empty section - finding 3's precondition, recorded here because only the
+    /// generator knows the section was empty.
+    appended_into_empty: Option<SectionId>,
+}
+
+impl Drawn {
+    fn new(label: String, result: CommandResult) -> Self {
+        Self {
+            label,
+            result,
+            appended_into_empty: None,
+        }
+    }
 }
 
 impl Fuzzer {
@@ -1274,9 +1427,9 @@ impl Fuzzer {
         let count = self.rng.below(4);
         let shots: Vec<ShotData> = (0..count).map(|_| random_shot(&mut self.rng)).collect();
         let null_metadata = self.rng.chance(30);
-        Some(Drawn {
-            label: format!("createSection(shots={count},nullMeta={null_metadata})"),
-            result: self.state.execute(Command::CreateSection {
+        Some(Drawn::new(
+            format!("createSection(shots={count},nullMeta={null_metadata})"),
+            self.state.execute(Command::CreateSection {
                 name: (!null_metadata).then(|| format!("fuzz-{}", self.rng.range(1000, 9999))),
                 surveyor: (!null_metadata).then(|| "fuzz".to_string()),
                 date: None,
@@ -1284,7 +1437,7 @@ impl Fuzzer {
                 direction: None,
                 shots,
             }),
-        })
+        ))
     }
 
     fn gen_create_shot(&mut self, targets: &Targets) -> Option<Drawn> {
@@ -1305,15 +1458,21 @@ impl Fuzzer {
                 _ => (None, None, "append"),
             }
         };
-        Some(Drawn {
-            label: format!("createShot(s={section_id},n={},{how})", shots.len()),
-            result: self.state.execute(Command::CreateShot {
+        let appended_into_empty = (how == "append" && shots.is_empty()).then_some(section_id);
+        let mut drawn = Drawn::new(
+            format!("createShot(s={section_id},n={},{how})", shots.len()),
+            self.state.execute(Command::CreateShot {
                 section_id,
                 shot,
                 after_shot_id: after,
                 before_shot_id: before,
             }),
-        })
+        );
+        // FINDING 3's precondition, and only the generator knows it: the section
+        // had NO shots, so the appended shot is index 0 and its undo goes through
+        // `remove_shot_with_rewire`'s `pos == 0` branch.
+        drawn.appended_into_empty = appended_into_empty;
+        Some(drawn)
     }
 
     /// A shot picked from a section that has one, with its section.
@@ -1357,14 +1516,14 @@ impl Fuzzer {
                     .then(|| format!("c{}", self.rng.range(0, 999))),
             );
         }
-        Some(Drawn {
-            label: format!("updateShot(s={section_id},shot={shot_id})"),
-            result: self.state.execute(Command::UpdateShot {
+        Some(Drawn::new(
+            format!("updateShot(s={section_id},shot={shot_id})"),
+            self.state.execute(Command::UpdateShot {
                 section_id,
                 shot_id,
                 updates,
             }),
-        })
+        ))
     }
 
     fn gen_set_shot_kind(&mut self, targets: &Targets) -> Option<Drawn> {
@@ -1372,14 +1531,14 @@ impl Fuzzer {
         let kind = *self
             .rng
             .pick(&[ShotKind::Normal, ShotKind::Jump, ShotKind::Reference]);
-        Some(Drawn {
-            label: format!("setShotKind(s={section_id},shot={shot_id},{kind:?})"),
-            result: self.state.execute(Command::SetShotKind {
+        Some(Drawn::new(
+            format!("setShotKind(s={section_id},shot={shot_id},{kind:?})"),
+            self.state.execute(Command::SetShotKind {
                 section_id,
                 shot_id,
                 kind,
             }),
-        })
+        ))
     }
 
     fn gen_update_section(&mut self, targets: &Targets) -> Option<Drawn> {
@@ -1408,24 +1567,24 @@ impl Fuzzer {
         if self.rng.chance(30) {
             updates.quality = Some(self.rng.range(1, 5) as f64);
         }
-        Some(Drawn {
-            label: format!("updateSection(s={section_id})"),
-            result: self.state.execute(Command::UpdateSectionMetadata {
+        Some(Drawn::new(
+            format!("updateSection(s={section_id})"),
+            self.state.execute(Command::UpdateSectionMetadata {
                 section_id,
                 updates,
             }),
-        })
+        ))
     }
 
     fn gen_delete_shot(&mut self, targets: &Targets) -> Option<Drawn> {
         let (section_id, shot_id) = self.pick_shot(targets)?;
-        Some(Drawn {
-            label: format!("deleteShot(s={section_id},shot={shot_id})"),
-            result: self.state.execute(Command::DeleteShot {
+        Some(Drawn::new(
+            format!("deleteShot(s={section_id},shot={shot_id})"),
+            self.state.execute(Command::DeleteShot {
                 section_id,
                 shot_id,
             }),
-        })
+        ))
     }
 
     fn gen_delete_section(&mut self, targets: &Targets) -> Option<Drawn> {
@@ -1434,10 +1593,10 @@ impl Fuzzer {
             return None;
         }
         let section_id = targets.sections[self.rng.below(targets.sections.len())].0;
-        Some(Drawn {
-            label: format!("deleteSection(s={section_id})"),
-            result: self.state.execute(Command::DeleteSection { section_id }),
-        })
+        Some(Drawn::new(
+            format!("deleteSection(s={section_id})"),
+            self.state.execute(Command::DeleteSection { section_id }),
+        ))
     }
 
     fn gen_reverse_section(&mut self, targets: &Targets) -> Option<Drawn> {
@@ -1446,13 +1605,13 @@ impl Fuzzer {
         }
         let section_id = targets.sections[self.rng.below(targets.sections.len())].0;
         let swap = self.rng.chance(50);
-        Some(Drawn {
-            label: format!("reverseSection(s={section_id},swapLR={swap})"),
-            result: self.state.execute(Command::ReverseSection {
+        Some(Drawn::new(
+            format!("reverseSection(s={section_id},swapLR={swap})"),
+            self.state.execute(Command::ReverseSection {
                 section_id,
                 swap_left_right: swap,
             }),
-        })
+        ))
     }
 
     fn gen_move(&mut self, targets: &Targets) -> Option<Drawn> {
@@ -1462,8 +1621,8 @@ impl Fuzzer {
         let section_id = targets.sections[self.rng.below(targets.sections.len())].0;
         let offset = random_offset(&mut self.rng);
         let segment = self.rng.chance(50);
-        Some(Drawn {
-            label: format!(
+        Some(Drawn::new(
+            format!(
                 "{}(s={section_id})",
                 if segment {
                     "moveSegment"
@@ -1471,12 +1630,12 @@ impl Fuzzer {
                     "moveSection"
                 }
             ),
-            result: self.state.execute(if segment {
+            self.state.execute(if segment {
                 Command::MoveSegment { section_id, offset }
             } else {
                 Command::MoveSection { section_id, offset }
             }),
-        })
+        ))
     }
 
     fn gen_move_station(&mut self, targets: &Targets) -> Option<Drawn> {
@@ -1484,13 +1643,13 @@ impl Fuzzer {
             return None;
         }
         let (section_id, index) = targets.stations[self.rng.below(targets.stations.len())];
-        Some(Drawn {
-            label: format!("moveStation({section_id}/{index})"),
-            result: self.state.execute(Command::MoveStation {
+        Some(Drawn::new(
+            format!("moveStation({section_id}/{index})"),
+            self.state.execute(Command::MoveStation {
                 station_ref: StationRef::new(section_id, index),
                 offset: random_offset(&mut self.rng),
             }),
-        })
+        ))
     }
 
     fn gen_station_comment(&mut self, targets: &Targets) -> Option<Drawn> {
@@ -1502,13 +1661,13 @@ impl Fuzzer {
             .rng
             .chance(70)
             .then(|| format!("note-{}", self.rng.range(0, 9999)));
-        Some(Drawn {
-            label: format!("stationComment({section_id}/{index},{})", comment.is_some()),
-            result: self.state.execute(Command::SetStationComment {
+        Some(Drawn::new(
+            format!("stationComment({section_id}/{index},{})", comment.is_some()),
+            self.state.execute(Command::SetStationComment {
                 station_ref: StationRef::new(section_id, index),
                 comment,
             }),
-        })
+        ))
     }
 
     /// Two stations in DIFFERENT sections: merging or closing within one section
@@ -1536,13 +1695,13 @@ impl Fuzzer {
 
     fn gen_merge(&mut self, targets: &Targets) -> Option<Drawn> {
         let (a, b) = self.pick_cross_pair(targets)?;
-        Some(Drawn {
-            label: format!("mergeStations({}/{},{}/{})", a.0, a.1, b.0, b.1),
-            result: self.state.execute(Command::MergeStations {
+        Some(Drawn::new(
+            format!("mergeStations({}/{},{}/{})", a.0, a.1, b.0, b.1),
+            self.state.execute(Command::MergeStations {
                 station_a: StationRef::new(a.0, a.1),
                 station_b: StationRef::new(b.0, b.1),
             }),
-        })
+        ))
     }
 
     fn gen_unmerge(&mut self, targets: &Targets) -> Option<Drawn> {
@@ -1550,13 +1709,13 @@ impl Fuzzer {
             return None;
         }
         let (a, b) = targets.merges[self.rng.below(targets.merges.len())];
-        Some(Drawn {
-            label: format!("unmergePair({}/{},{}/{})", a.0, a.1, b.0, b.1),
-            result: self.state.execute(Command::UnmergeStationPair {
+        Some(Drawn::new(
+            format!("unmergePair({}/{},{}/{})", a.0, a.1, b.0, b.1),
+            self.state.execute(Command::UnmergeStationPair {
                 station_a: StationRef::new(a.0, a.1),
                 station_b: StationRef::new(b.0, b.1),
             }),
-        })
+        ))
     }
 
     fn gen_closure(&mut self, targets: &Targets) -> Option<Drawn> {
@@ -1565,12 +1724,11 @@ impl Fuzzer {
         }
         if !targets.closures.is_empty() && self.rng.chance(40) {
             let closure_id = targets.closures[self.rng.below(targets.closures.len())];
-            return Some(Drawn {
-                label: format!("removeLoopClosure({closure_id})"),
-                result: self
-                    .state
+            return Some(Drawn::new(
+                format!("removeLoopClosure({closure_id})"),
+                self.state
                     .execute(Command::RemoveLoopClosure { closure_id }),
-            });
+            ));
         }
         let (a, b) = self.pick_cross_pair(targets)?;
         // `ProportionalByLength` / `EqualDistribution` are rejected outright by
@@ -1583,25 +1741,25 @@ impl Fuzzer {
             ClosureStrategy::LeastSquaresWeighted,
             ClosureStrategy::ProportionalByLength,
         ]);
-        Some(Drawn {
-            label: format!("createLoopClosure({}/{},{}/{})", a.0, a.1, b.0, b.1),
-            result: self.state.execute(Command::CreateLoopClosure {
+        Some(Drawn::new(
+            format!("createLoopClosure({}/{},{}/{})", a.0, a.1, b.0, b.1),
+            self.state.execute(Command::CreateLoopClosure {
                 station_a: StationRef::new(a.0, a.1),
                 station_b: StationRef::new(b.0, b.1),
                 closure_strategy: strategy,
             }),
-        })
+        ))
     }
 
     fn gen_zero_datum(&mut self, targets: &Targets) -> Option<Drawn> {
         if !targets.datums.is_empty() && self.rng.chance(50) {
             let (section_id, index) = targets.datums[self.rng.below(targets.datums.len())];
-            return Some(Drawn {
-                label: format!("removeZeroDatum({section_id}/{index})"),
-                result: self.state.execute(Command::RemoveZeroDatum {
+            return Some(Drawn::new(
+                format!("removeZeroDatum({section_id}/{index})"),
+                self.state.execute(Command::RemoveZeroDatum {
                     station_ref: StationRef::new(section_id, index),
                 }),
-            });
+            ));
         }
         if targets.stations.is_empty() {
             return None;
@@ -1613,13 +1771,13 @@ impl Fuzzer {
             self.rng.float(0.0, 5.0),
         )
         .ok()?;
-        Some(Drawn {
-            label: format!("setZeroDatum({section_id}/{index})"),
-            result: self.state.execute(Command::SetZeroDatum {
+        Some(Drawn::new(
+            format!("setZeroDatum({section_id}/{index})"),
+            self.state.execute(Command::SetZeroDatum {
                 station_ref: StationRef::new(section_id, index),
                 coordinates: gps,
             }),
-        })
+        ))
     }
 
     /// The delete/split family, which are `AppState` entry points rather than
@@ -1642,28 +1800,26 @@ impl Fuzzer {
                 } else {
                     self.rng.float(0.1, 8.0)
                 };
-                Some(Drawn {
-                    label: format!("splitShotAtDistance(s={section_id},shot={shot_id})"),
-                    result: self
-                        .state
+                Some(Drawn::new(
+                    format!("splitShotAtDistance(s={section_id},shot={shot_id})"),
+                    self.state
                         .execute_split_shot_at_distance(section_id, shot_id, distance),
-                })
+                ))
             }
-            1 => Some(Drawn {
-                label: format!("deleteShotAndSplit(s={section_id},shot={shot_id})"),
-                result: self.state.execute_delete_shot_and_split(
+            1 => Some(Drawn::new(
+                format!("deleteShotAndSplit(s={section_id},shot={shot_id})"),
+                self.state.execute_delete_shot_and_split(
                     section_id,
                     shot_id,
                     "split-a".to_string(),
                     "split-b".to_string(),
                 ),
-            }),
-            2 => Some(Drawn {
-                label: format!("deleteLastShotAndSection(s={section_id},shot={shot_id})"),
-                result: self
-                    .state
+            )),
+            2 => Some(Drawn::new(
+                format!("deleteLastShotAndSection(s={section_id},shot={shot_id})"),
+                self.state
                     .execute_delete_last_shot_and_section(section_id, shot_id),
-            }),
+            )),
             _ => {
                 if shots.len() < 2 {
                     return None;
@@ -1672,8 +1828,8 @@ impl Fuzzer {
                 let second = self.rng.below(shots.len());
                 let (lo, hi) = (first.min(second), first.max(second));
                 let split = self.rng.chance(50);
-                Some(Drawn {
-                    label: format!(
+                Some(Drawn::new(
+                    format!(
                         "{}(s={section_id},{}..{})",
                         if split {
                             "deleteShotRangeSplit"
@@ -1683,7 +1839,7 @@ impl Fuzzer {
                         shots[lo],
                         shots[hi]
                     ),
-                    result: if split {
+                    if split {
                         self.state.execute_delete_shot_range_split(
                             section_id,
                             shots[lo],
@@ -1695,7 +1851,7 @@ impl Fuzzer {
                         self.state
                             .execute_delete_shot_range_shift(section_id, shots[lo], shots[hi])
                     },
-                })
+                ))
             }
         }
     }
@@ -1758,10 +1914,10 @@ impl Fuzzer {
                 offset: Coordinates::new(1.0, 1.0, 1.0),
             });
         }
-        Some(Drawn {
-            label: format!("batch(n={},poisoned={poisoned})", commands.len()),
-            result: self.state.execute(Command::Batch { commands }),
-        })
+        Some(Drawn::new(
+            format!("batch(n={},poisoned={poisoned})", commands.len()),
+            self.state.execute(Command::Batch { commands }),
+        ))
     }
 }
 
@@ -1804,7 +1960,7 @@ impl Fuzzer {
                     &format!("  error: {:?}", drawn.result.error),
                 );
             }
-            self.expect_state(self.cursor, "a rejected command");
+            self.expect_state(self.cursor, "a rejected command", None);
             return;
         }
 
@@ -1819,9 +1975,25 @@ impl Fuzzer {
             self.top = self.cursor;
             self.snapshots.truncate(self.cursor);
             self.epochs.truncate(self.cursor);
+            self.entry_meta.truncate(self.cursor);
             let snapshot = self.snapshot();
             self.snapshots.push(snapshot);
             self.epochs.push(self.epoch);
+            // Read the entry BACK off the stack rather than inferring it from the
+            // command that was drawn: the app is the authority on what it pushed,
+            // and several entry points push an entry labelled by a different
+            // command than the one the caller named.
+            let command = self
+                .state
+                .get_undo_stack()
+                .first()
+                .map(|item| item.command_type.clone())
+                .unwrap_or_default();
+            self.entry_meta.push(EntryMeta {
+                command,
+                epoch: self.epoch,
+                appended_into_empty: drawn.appended_into_empty,
+            });
             self.outcome.mutations += 1;
             self.outcome.max_depth = self.outcome.max_depth.max(self.cursor);
             self.expect_merges_aligned(&drawn.label);
@@ -1842,13 +2014,14 @@ impl Fuzzer {
             self.top = self.cursor;
             self.snapshots.truncate(self.cursor + 1);
             self.epochs.truncate(self.cursor + 1);
+            self.entry_meta.truncate(self.cursor + 1);
         } else if self.redo_len() != before_redo {
             self.fail(
                 "a no-op command changed the redo stack without clearing it",
                 &format!("  after {}", drawn.label),
             );
         }
-        self.expect_state(self.cursor, "a no-op command");
+        self.expect_state(self.cursor, "a no-op command", None);
     }
 
     /// Did a failed history move fail for a KNOWN, documented reason?
@@ -1884,6 +2057,15 @@ impl Fuzzer {
         }
         let steps = steps.min(reach);
         let jumped = steps > 1;
+        // The entry this move will consume. For an undo that is the one at the
+        // current depth; for a redo, the one just above it. A jump consumes
+        // several - the FIRST one is what the classifiers key on, since it is the
+        // one whose restore produced the state being compared.
+        let consumed = if back {
+            self.entry_meta.get(self.cursor).cloned()
+        } else {
+            self.entry_meta.get(self.cursor + 1).cloned()
+        };
         let result = if back {
             if jumped {
                 self.state.undo_to(steps - 1)
@@ -1930,7 +2112,7 @@ impl Fuzzer {
             self.outcome.jumps += 1;
         }
         self.expect_stacks(&label);
-        self.expect_state(self.cursor, &label);
+        self.expect_state(self.cursor, &label, consumed);
         self.expect_merges_aligned(&label);
         true
     }
@@ -1959,7 +2141,7 @@ impl Fuzzer {
         self.outcome.saves += 1;
         self.note(format!("save -> ok (depth {})", self.cursor));
         self.expect_stacks("save");
-        self.expect_state(self.cursor, "save");
+        self.expect_state(self.cursor, "save", None);
 
         let closed = self.state.execute(Command::CloseProject);
         if !closed.success {
@@ -1982,7 +2164,7 @@ impl Fuzzer {
         self.outcome.reloads += 1;
         self.note(format!("reload -> depth {}", self.cursor));
         self.expect_stacks("reload");
-        self.expect_state(self.cursor, "reload");
+        self.expect_state(self.cursor, "reload", None);
         true
     }
 
