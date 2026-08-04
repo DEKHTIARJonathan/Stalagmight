@@ -39,6 +39,8 @@ mod undo_restore;
 mod warnings;
 
 #[cfg(test)]
+mod open_undo_bugs_tests;
+#[cfg(test)]
 #[expect(
     clippy::unwrap_used,
     clippy::indexing_slicing,
