@@ -1384,6 +1384,196 @@ fn detects_two_datums_in_one_merge_component() {
     assert!(project.over_anchored_merge_components().is_empty());
 }
 
+/// The damage a past bug left in saved files: two independently GPS-anchored
+/// merge components (A+B, and C) welded together by a RIGID merge whose two
+/// endpoints sit 40 m apart. `resolve_offsets` can never satisfy it - each half
+/// is pinned to its own datum - so it stays torn open forever.
+///
+/// Fully synthetic: three 2-shot sections running due north, placed by hand.
+///   A:0 (0,0)  A:1 (0,10)  A:2 (0,20)   <- datum on A:0
+///   B:0 (0,20) B:1 (0,30)  B:2 (0,40)   <- merged A:2 = B:0, correctly aligned
+///   C:0 (0,0)  C:1 (0,10)  C:2 (0,20)   <- datum on C:0
+/// plus the bogus merge B:2 <-> C:0, i.e. (0,40) welded to (0,0).
+fn double_anchored_bridge_project() -> (Project, SectionId, SectionId, SectionId) {
+    let mut project = Project::new("DoubleAnchoredBridge".to_string(), None);
+    let add = |p: &mut Project| {
+        p.add_section(SectionData {
+            shots: vec![
+                shot(0.0, 0.0, 10.0, 0.0, 0.0),
+                shot(0.0, 0.0, 10.0, 0.0, 0.0),
+            ],
+            ..Default::default()
+        })
+        .id
+    };
+    let (a, b, c) = (add(&mut project), add(&mut project), add(&mut project));
+    project.ensure_shot_uuids();
+
+    // The legitimate, correctly aligned merge inside the first component.
+    project.station_merges.push(StationMerge {
+        station_a: StationRef::new(a, 2).into(),
+        station_b: StationRef::new(b, 0).into(),
+        merged_at: Utc::now(),
+    });
+    project.set_section_offset(b, (0.0, 20.0));
+
+    // One datum per component - legal on its own, which is why the interactive
+    // guards never fired.
+    project.zero_datums.push(ZeroDatum {
+        station_ref: StationRef::new(a, 0).into(),
+        gps: GpsCoordinates::new(45.0, -90.0, 0.0).unwrap(),
+    });
+    project.zero_datums.push(ZeroDatum {
+        station_ref: StationRef::new(c, 0).into(),
+        gps: GpsCoordinates::new(45.001, -90.0, 0.0).unwrap(),
+    });
+
+    // The bogus promotion: what should have stayed a loop closure.
+    project.station_merges.push(StationMerge {
+        station_a: StationRef::new(b, 2).into(),
+        station_b: StationRef::new(c, 0).into(),
+        merged_at: Utc::now(),
+    });
+
+    (project, a, b, c)
+}
+
+#[test]
+fn repair_demotes_a_double_anchoring_bridge_merge() {
+    let (mut project, _a, b, c) = double_anchored_bridge_project();
+
+    // Precondition: this is exactly the pair of symptoms a damaged file shows,
+    // and re-solving offsets cannot clear either of them.
+    assert_eq!(project.resolve_offsets(), 0, "the tear is unsolvable");
+    assert_eq!(
+        project.check_merge_alignment().len(),
+        1,
+        "the bogus merge reports as misaligned"
+    );
+    assert_eq!(
+        project.over_anchored_merge_components().len(),
+        1,
+        "both datums sit in one merge component"
+    );
+
+    assert_eq!(project.demote_double_anchoring_merges(), 1);
+
+    assert_eq!(
+        project.station_merges.len(),
+        1,
+        "only the legitimate A-B merge survives"
+    );
+    assert!(
+        !project.are_stations_merged(StationRef::new(b, 2), StationRef::new(c, 0)),
+        "the over-constraining merge is gone"
+    );
+    assert!(
+        project.are_stations_in_closure(StationRef::new(b, 2), StationRef::new(c, 0)),
+        "an equivalent loop closure records the same coincidence"
+    );
+    let closure = project
+        .loop_closures
+        .last()
+        .expect("the demotion pushed a closure");
+    assert!(
+        !closure.is_aligned,
+        "an aligned closure would re-impose the constraint just removed"
+    );
+    assert!(closure.id > 0, "the closure gets a real monotonic id");
+
+    // Both symptoms clear, and the solve is now achievable.
+    project.resolve_offsets();
+    assert!(
+        project.check_merge_alignment().is_empty(),
+        "no merge is left torn open"
+    );
+    assert!(
+        project.over_anchored_merge_components().is_empty(),
+        "each datum is back in its own merge component"
+    );
+    assert!(
+        project
+            .check_structural_integrity()
+            .iter()
+            .all(|v| v.category != "multiple_datums_per_merge_component"),
+        "the over-anchoring warning is cleared"
+    );
+}
+
+#[test]
+fn repair_leaves_legitimate_merges_alone() {
+    // (a) NOT a sole bridge: a second merge path keeps the two sections in one
+    // rigid component either way, so dropping one heals nothing. Both misaligned
+    // merges must survive - demotion is only for the merge that IS the bridge.
+    let (mut project, _a, b, c) = double_anchored_bridge_project();
+    project.station_merges.push(StationMerge {
+        station_a: StationRef::new(b, 1).into(),
+        station_b: StationRef::new(c, 1).into(),
+        merged_at: Utc::now(),
+    });
+    assert_eq!(
+        project.check_merge_alignment().len(),
+        2,
+        "both cross-component merges are torn open"
+    );
+    assert_eq!(
+        project.demote_double_anchoring_merges(),
+        0,
+        "a merge with a parallel merge path is redundant, not over-constraining"
+    );
+    assert_eq!(project.station_merges.len(), 3, "every merge is intact");
+    assert!(project.loop_closures.is_empty(), "no closure was invented");
+
+    // (b) A sole bridge whose FAR half carries no datum. That is an ordinary
+    // single-anchor group with drift, which resolve_offsets can and does heal by
+    // moving the unanchored half - demoting it would destroy a real connection.
+    let (mut project, _a, _b, c) = double_anchored_bridge_project();
+    assert!(project.remove_zero_datum(StationRef::new(c, 0)));
+    assert_eq!(
+        project.demote_double_anchoring_merges(),
+        0,
+        "a bridge to an unanchored group is a legitimate merge"
+    );
+    assert_eq!(project.station_merges.len(), 2, "every merge is intact");
+    assert!(project.loop_closures.is_empty(), "no closure was invented");
+    project.resolve_offsets();
+    assert!(
+        project.check_merge_alignment().is_empty(),
+        "and the ordinary solver heals it, which is why demotion must not fire"
+    );
+}
+
+#[test]
+fn demoted_closure_is_not_re_promoted_by_orphan_conversion() {
+    // The demotion and `convert_orphan_closures_to_merges` run in the same Repair
+    // pass, and the converter's job is turning sole-bridge closures INTO merges -
+    // exactly what was just undone. Its double-anchor guard must see the same two
+    // anchored halves and leave the demoted closure alone, or Repair would
+    // ping-pong the same edge forever.
+    let (mut project, _a, _b, _c) = double_anchored_bridge_project();
+    assert_eq!(project.demote_double_anchoring_merges(), 1);
+
+    assert_eq!(
+        project.convert_orphan_closures_to_merges(),
+        0,
+        "the converter must not re-promote the closure it was just handed"
+    );
+    assert_eq!(project.loop_closures.len(), 1, "the closure survives");
+    assert_eq!(project.station_merges.len(), 1, "no merge was recreated");
+    assert!(
+        project
+            .check_orphan_closures()
+            .iter()
+            .all(|v| v.category != "orphan_closure"),
+        "and it is not flagged as an orphan Repair can never convert"
+    );
+
+    // Idempotent: a second Repair finds nothing left to demote.
+    assert_eq!(project.demote_double_anchoring_merges(), 0);
+    assert_eq!(project.loop_closures.len(), 1);
+    assert_eq!(project.station_merges.len(), 1);
+}
+
 #[test]
 fn set_zero_datum_error_includes_section_name() {
     // Error message should include section name if available
