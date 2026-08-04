@@ -159,9 +159,11 @@ export interface CustomDimState {
   planIdleDim: boolean;
 }
 
-/** Shared empty-set sentinel for every "nothing dimmed/emphasized" case below -
- *  declared before its first use so callers don't rely on `const` hoisting
- *  behavior specific to function bodies. */
+/** Shared empty-`Set<number>` sentinel, reused by both the dim state below
+ *  (`EMPTY_DIM`, `buildCustomDimState`'s gas-off branches) and the highlight
+ *  state fields further down (`segmentHoverState` et al.) - declared before its
+ *  first use so callers don't rely on `const` hoisting behavior specific to
+ *  function bodies. */
 const EMPTY_FEATURE_SET: ReadonlySet<number> = new Set<number>();
 
 const EMPTY_DIM: CustomDimState = {
@@ -200,9 +202,6 @@ export function buildCustomDimState(
 
 /** No features hidden (drag inactive): the zero-cost default for the hide flag. */
 const EMPTY_EXCLUSION: CustomRenderExclusion = {};
-
-/** No sections emphasized: the default for each highlight-source set. */
-const EMPTY_HIGHLIGHT: ReadonlySet<number> = new Set<number>();
 
 /** Emphasis levels stored in the per-vertex highlight flag, mirroring the stock
  *  feature-state bumps. Hover wins over selection when a section is in both
@@ -260,9 +259,9 @@ export class SurveyCustomController {
    *  (setSectionSelect). Hover (segment or section) both map to level 2, matching
    *  the stock `hover` feature-state; selection maps to level 1 (stock
    *  `selected`). Anchored sections are excluded from segment-hover upstream. */
-  private segmentHoverState: ReadonlySet<number> = EMPTY_HIGHLIGHT;
-  private sectionHoverState: ReadonlySet<number> = EMPTY_HIGHLIGHT;
-  private sectionSelectState: ReadonlySet<number> = EMPTY_HIGHLIGHT;
+  private segmentHoverState: ReadonlySet<number> = EMPTY_FEATURE_SET;
+  private sectionHoverState: ReadonlySet<number> = EMPTY_FEATURE_SET;
+  private sectionSelectState: ReadonlySet<number> = EMPTY_FEATURE_SET;
   /** Cached build products backing the cheap dim-only refresh (setDimming),
    *  the drag hide refresh (setDragHide), and the incremental edit path: the
    *  last CustomRenderData (its per-vertex arrays are rewritten in place) plus
@@ -716,7 +715,7 @@ export class SurveyCustomController {
    * leaves geometry / drag begins). See {@link refreshHighlight}.
    */
   setHighlight(sectionIds: readonly number[]): void {
-    this.segmentHoverState = sectionIds.length > 0 ? new Set(sectionIds) : EMPTY_HIGHLIGHT;
+    this.segmentHoverState = sectionIds.length > 0 ? new Set(sectionIds) : EMPTY_FEATURE_SET;
     this.refreshHighlight();
   }
 
@@ -727,7 +726,7 @@ export class SurveyCustomController {
    * hover level here. See {@link refreshHighlight}.
    */
   setSectionHover(sectionIds: readonly number[]): void {
-    this.sectionHoverState = sectionIds.length > 0 ? new Set(sectionIds) : EMPTY_HIGHLIGHT;
+    this.sectionHoverState = sectionIds.length > 0 ? new Set(sectionIds) : EMPTY_FEATURE_SET;
     this.refreshHighlight();
   }
 
@@ -738,16 +737,16 @@ export class SurveyCustomController {
    * {@link refreshHighlight}.
    */
   setSectionSelect(sectionIds: readonly number[]): void {
-    this.sectionSelectState = sectionIds.length > 0 ? new Set(sectionIds) : EMPTY_HIGHLIGHT;
+    this.sectionSelectState = sectionIds.length > 0 ? new Set(sectionIds) : EMPTY_FEATURE_SET;
     this.refreshHighlight();
   }
 
   /** Clear every emphasis source (segment hover, section hover, selection) in one
    *  refresh. Cheaper + clearer than three empty setters at a clear-all site. */
   clearHighlights(): void {
-    this.segmentHoverState = EMPTY_HIGHLIGHT;
-    this.sectionHoverState = EMPTY_HIGHLIGHT;
-    this.sectionSelectState = EMPTY_HIGHLIGHT;
+    this.segmentHoverState = EMPTY_FEATURE_SET;
+    this.sectionHoverState = EMPTY_FEATURE_SET;
+    this.sectionSelectState = EMPTY_FEATURE_SET;
     this.refreshHighlight();
   }
 

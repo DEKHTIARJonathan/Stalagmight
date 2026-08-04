@@ -5,7 +5,12 @@ import {
   STATION_FLAG_IS_ZERO_DATUM,
   type SurveyData,
 } from '../../../../../types/survey-data';
-import { SurveyCustomController, buildCustomDimState, type CustomSyncParams } from '../controller';
+import {
+  SurveyCustomController,
+  buildCustomDimState,
+  GAS_DIM_LEVEL,
+  type CustomSyncParams,
+} from '../controller';
 import type { CustomRenderData } from '../surveyCustomLayer';
 import { CUSTOM_RENDER_SYNC_HOOK } from '../gate';
 
@@ -594,5 +599,49 @@ describe('buildCustomDimState plan-idle tint (#395 revision)', () => {
   it('defaults planIdleDim to false when the caller omits it', () => {
     const state = buildCustomDimState(noSets, noSets, noSets, false, null);
     expect(state.planIdleDim).toBe(false);
+  });
+});
+
+/**
+ * The per-vertex dim VALUES the plan-idle tint actually produces
+ * (controller.ts `dimForStation`/`dimForShot`: `gasDim || planIdleDim ?
+ * GAS_DIM_LEVEL : 0`). The `buildCustomDimState` suite above only pins the flag
+ * pass-through; this drives a real `sync()` + `setDimming()` so removing the
+ * `|| planIdleDim` read fails on the built `circle.dim` buffer, not just on the
+ * state object.
+ */
+describe('SurveyCustomController plan-idle tint dim buffer (#395 revision)', () => {
+  beforeEach(() => {
+    h.layerState.disabledAfterAdd = false;
+    h.layerState.last = null;
+    vi.spyOn(console, 'info').mockImplementation(() => {});
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  const dataOf = (): CustomRenderData => h.layerState.last!.data as CustomRenderData;
+  const noSets = new Set<number>();
+
+  it('dims an anchored section fully (1) and everything else at GAS_DIM_LEVEL when idle', () => {
+    const { map } = makeFakeMap();
+    const c = new SurveyCustomController(map);
+    c.sync(makeParams());
+    // Fixture: section 1 owns stations 0-2 (rows 0-2), section 2 owns station 0
+    // (row 3). Anchor section 1; the idle tint should still reach section 2's
+    // un-anchored station.
+    c.setDimming(buildCustomDimState(new Set([1]), noSets, noSets, false, null, true));
+    const dim = dataOf().circle.dim;
+    // 4 vertices (corners) per station.
+    for (let i = 0; i < 3 * 4; i++) expect(dim[i]).toBe(1);
+    for (let i = 3 * 4; i < 4 * 4; i++) expect(dim[i]).toBe(GAS_DIM_LEVEL);
+  });
+
+  it('dims nothing when planIdleDim is false and no other dim source is set', () => {
+    const { map } = makeFakeMap();
+    const c = new SurveyCustomController(map);
+    c.sync(makeParams());
+    c.setDimming(buildCustomDimState(noSets, noSets, noSets, false, null, false));
+    const dim = dataOf().circle.dim;
+    for (let i = 0; i < dim.length; i++) expect(dim[i]).toBe(0);
   });
 });
