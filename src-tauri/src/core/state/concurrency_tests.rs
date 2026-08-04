@@ -176,7 +176,8 @@ impl Progress {
 /// main thread never sees that cell. So this hook appends into a shared,
 /// mutex-free-at-read `Mutex<Vec<..>>` keyed by nothing - the point is that a
 /// panic HAPPENED and where, not which thread owned it.
-static PANICS: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+static PANICS: std::sync::Mutex<Vec<(std::thread::ThreadId, String)>> =
+    std::sync::Mutex::new(Vec::new());
 
 fn install_panic_recorder() {
     static ONCE: std::sync::Once = std::sync::Once::new();
@@ -197,19 +198,37 @@ fn install_panic_recorder() {
                 })
                 .unwrap_or_else(|| "<non-string panic>".to_string());
             if let Ok(mut panics) = PANICS.lock() {
-                panics.push(format!("{site}: {}", message.lines().next().unwrap_or("")));
+                panics.push((
+                    std::thread::current().id(),
+                    format!("{site}: {}", message.lines().next().unwrap_or("")),
+                ));
             }
             previous(info);
         }));
     });
 }
 
-/// Take and clear whatever the hook recorded.
-fn drain_panics() -> Vec<String> {
-    PANICS
-        .lock()
-        .map(|mut panics| std::mem::take(&mut *panics))
-        .unwrap_or_default()
+/// Take the panics belonging to `mine`, and leave everyone else's alone.
+///
+/// The filter is not tidiness, it is CORRECTNESS. `set_hook` is
+/// process-global, libtest runs tests in parallel in one process, and this
+/// crate has several tests that poison a mutex ON PURPOSE for lock-failure
+/// coverage (`core/state/tests.rs:59`, `speleodb.rs:2996`, `speleodb.rs:6189`,
+/// `speleodb_lock_release.rs:573`). Without the thread filter this gate
+/// reported twelve of THEIR panics as its own workers racing - which is how it
+/// first went red, and is a far more convincing false positive than a real one.
+///
+/// Entries from other threads are put back, so a concurrently running test that
+/// installs its own reader still sees them.
+fn drain_panics(mine: &[std::thread::ThreadId]) -> Vec<String> {
+    let Ok(mut panics) = PANICS.lock() else {
+        return Vec::new();
+    };
+    let (ours, theirs): (Vec<_>, Vec<_>) = std::mem::take(&mut *panics)
+        .into_iter()
+        .partition(|(thread, _)| mine.contains(thread));
+    *panics = theirs;
+    ours.into_iter().map(|(_, text)| text).collect()
 }
 
 /// The two panic sites issue #413 already documents, so a run that trips one is
@@ -248,7 +267,37 @@ fn worker(
         if stop.load(Ordering::Relaxed) {
             break;
         }
-        let targets = read_targets(state);
+        // A project that has gone away under this worker is a reason to SKIP,
+        // not to die: `read_targets` ends in an `expect` (it is written for the
+        // single-threaded engines, where no project can vanish mid-run), and a
+        // harness panic here would be reported as an app panic. The project can
+        // legitimately be absent for one instant - another worker's known
+        // assert can poison the mutex, and every lock site then reads "no
+        // project open".
+        // `read_targets` ends in an `expect` - it is written for the
+        // single-threaded engines, where no project can vanish mid-run. Here
+        // one CAN: another worker tripping a known assert poisons the project
+        // mutex, and from that instant every lock site reads "no project open".
+        //
+        // Checking first is not enough and the check is kept only as a cheap
+        // fast path: the poison can land between the check and the read. So the
+        // read itself is caught, and the record the hook made for it is dropped
+        // from THIS thread's entries - otherwise a harness `expect` would be
+        // reported as an app panic, which is how this gate failed one run in
+        // fourteen.
+        if state.get_project_state().is_none() {
+            progress.enter(thread, 15);
+            progress.leave(thread);
+            continue;
+        }
+        let Ok(targets) =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| read_targets(state)))
+        else {
+            let _ = drain_panics(&[std::thread::current().id()]);
+            progress.enter(thread, 15);
+            progress.leave(thread);
+            continue;
+        };
         let sections: Vec<SectionId> = targets.sections.iter().map(|(id, _)| *id).collect();
         let pick_shot = |rng: &mut Rng| -> Option<(SectionId, ShotId)> {
             let populated: Vec<&(SectionId, Vec<ShotId>)> = targets
@@ -423,7 +472,8 @@ struct Outcome {
 /// Drive one `AppState` from `threads` workers, then check what survived.
 fn run_concurrent(seed: u32, threads: usize, operations: usize, deadline_secs: u64) -> Outcome {
     install_panic_recorder();
-    let _ = drain_panics();
+    // Anything this thread recorded in an earlier run is not this run's.
+    let _ = drain_panics(&[std::thread::current().id()]);
     let mut outcome = Outcome::default();
 
     let Ok(state) = AppState::new() else {
@@ -518,6 +568,8 @@ fn run_concurrent(seed: u32, threads: usize, operations: usize, deadline_secs: u
     }
     // Even after a stall the workers are asked to stop and joined, so the test
     // process does not leak threads into the rest of the suite.
+    let worker_threads: Vec<std::thread::ThreadId> =
+        handles.iter().map(|handle| handle.thread().id()).collect();
     let mut died = 0;
     for handle in handles {
         if handle.join().is_err() {
@@ -528,11 +580,22 @@ fn run_concurrent(seed: u32, threads: usize, operations: usize, deadline_secs: u
     outcome.died = died;
 
     // NO PANIC, and NO POISON.
-    for panic in drain_panics() {
+    for panic in drain_panics(&worker_threads) {
         match known_panic(&panic) {
             Some(id) => *outcome.hits.entry(id).or_insert(0) += 1,
             None => outcome.problems.push(format!("a worker PANICKED: {panic}")),
         }
+    }
+    // A KNOWN app panic (findings 14, 20, 24 all have live sites) unwound
+    // through the project mutex, which POISONS it - and from that instant every
+    // lock site in the app reads "no project open". So the poison check and the
+    // post-run walk below would both be re-reporting one already-classified
+    // defect as three, and the follow-on panics from other workers are its
+    // consequences rather than races. The run is TERMINAL, exactly as the
+    // roundtrip fuzzer's `alignment_panic` is, and for the same reason: nothing
+    // after it measures the app.
+    if !outcome.hits.is_empty() {
+        return outcome;
     }
     if outcome.died > 0 && outcome.hits.is_empty() && outcome.problems.is_empty() {
         outcome.problems.push(format!(
@@ -554,10 +617,33 @@ fn run_concurrent(seed: u32, threads: usize, operations: usize, deadline_secs: u
 
     // POST-RUN CONSISTENCY. Everything below is interleaving-independent: it is
     // about the state that survived, not about how it got there.
+    //
+    // Inside `catch_unwind`, and NOT because a post-run check is expected to
+    // panic: the walk drives real commands, and findings 14 and 20 have live
+    // `#[cfg(test)]` assert sites that any of them can trip. On the main thread
+    // that is an immediate test abort with no classification at all - which is
+    // how this gate failed one run in thirteen before the guard went in.
     if outcome.problems.is_empty() {
-        outcome
-            .problems
-            .extend(check_final_state(&state, &mut outcome.walked));
+        let mut walked = 0;
+        let checked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            check_final_state(&state, &mut walked)
+        }));
+        outcome.walked += walked;
+        match checked {
+            Ok(problems) => outcome.problems.extend(problems),
+            Err(_) => {
+                // The hook recorded it under THIS thread, so the same
+                // classification the workers get applies.
+                for panic in drain_panics(&[std::thread::current().id()]) {
+                    match known_panic(&panic) {
+                        Some(id) => *outcome.hits.entry(id).or_insert(0) += 1,
+                        None => outcome
+                            .problems
+                            .push(format!("the post-run walk PANICKED: {panic}")),
+                    }
+                }
+            }
+        }
     }
     outcome
 }
@@ -669,11 +755,23 @@ fn check_sequential_replay(seed: u32, thread: usize, operations: usize) -> Vec<S
         temp.path(),
         &stop,
     );
+    // Same guard, same reason: a replayed stream can trip a known assert on the
+    // main thread just as a worker can.
     let mut walked = 0;
-    check_final_state(&state, &mut walked)
-        .into_iter()
-        .map(|problem| format!("sequential replay of thread {thread}: {problem}"))
-        .collect()
+    let checked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        check_final_state(&state, &mut walked)
+    }));
+    match checked {
+        Ok(problems) => problems
+            .into_iter()
+            .map(|problem| format!("sequential replay of thread {thread}: {problem}"))
+            .collect(),
+        Err(_) => drain_panics(&[std::thread::current().id()])
+            .into_iter()
+            .filter(|panic| known_panic(panic).is_none())
+            .map(|panic| format!("sequential replay of thread {thread} PANICKED: {panic}"))
+            .collect(),
+    }
 }
 
 // ===========================================================================
