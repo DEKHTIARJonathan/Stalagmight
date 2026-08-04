@@ -66,6 +66,8 @@ import {
 } from '../../utils/dmpTemporalRerank';
 import { extractFilename } from '../../utils/path';
 import { blockedByIncompleteShots, countIncompleteShots } from '../common/incompleteShots';
+import { isBlankNewShot } from '../common/editableShotStatus';
+import { blankEditableShot } from '../common/editableShot';
 import { aggregateImportReceipts } from '../../utils/importReceipt';
 import type { ImportReceipt } from '../../types/ipc/ImportReceipt';
 
@@ -1242,6 +1244,10 @@ export default function DmpNewImportDialog({
 
   // Section editing state
   const [editState, setEditState] = useState<SectionEditState | null>(null);
+  /** The live edit state, for actions that must not read a captured copy - see
+   *  refuseIncompleteShots. */
+  const editStateRef = useRef<SectionEditState | null>(null);
+  editStateRef.current = editState;
   // Tracks which import section index the current editState was loaded for.
   // Used to prevent the sync effect from writing stale editState to the wrong section
   // when currentSuggestion changes before editState catches up.
@@ -1912,37 +1918,23 @@ export default function DmpNewImportDialog({
     []
   );
 
-  const handleAddShot = useCallback(() => {
-    const tempId = nextTempIdRef.current++;
+  /** Append `count` blank shots in ONE update, each with its own temp id. */
+  const handleAddShots = useCallback((count: number) => {
+    const n = Math.max(1, count);
+    const ids = Array.from({ length: n }, () => nextTempIdRef.current++);
     setEditState((prev) => {
       if (!prev) return prev;
       return {
         ...prev,
         shots: [
           ...prev.shots,
-          {
-            id: -tempId,
-            // Non-finite, NOT zero - see the blank-row note in ZeroDatumConfigDialog.
-            azimuth_in: NaN,
-            azimuth_out: NaN,
-            length: NaN,
-            depth_in: NaN,
-            depth_out: NaN,
-            pitch_in: null,
-            pitch_out: null,
-            left: null,
-            right: null,
-            up: null,
-            down: null,
-            comment: null,
-            kind: 'Normal' as const,
-            isNew: true,
-            tempId,
-          },
+          ...ids.map((tempId) => ({ ...blankEditableShot(-tempId), tempId })),
         ],
       };
     });
   }, []);
+
+  const handleAddShot = useCallback(() => handleAddShots(1), [handleAddShots]);
 
   const handleDeleteShot = useCallback((index: number) => {
     if (frozenShotIndices.has(index)) return;
@@ -1962,25 +1954,7 @@ export default function DmpNewImportDialog({
     setEditState((prev) => {
       if (!prev) return prev;
       const newShots = [...prev.shots];
-      newShots.splice(index, 0, {
-        id: -tempId,
-        // Non-finite, NOT zero - see the blank-row note in ZeroDatumConfigDialog.
-        azimuth_in: NaN,
-        azimuth_out: NaN,
-        length: NaN,
-        depth_in: NaN,
-        depth_out: NaN,
-        pitch_in: null,
-        pitch_out: null,
-        left: null,
-        right: null,
-        up: null,
-        down: null,
-        comment: null,
-        kind: 'Normal' as const,
-        isNew: true,
-        tempId,
-      });
+      newShots.splice(index, 0, { ...blankEditableShot(-tempId), tempId });
       return { ...prev, shots: newShots };
     });
   }, []);
@@ -2718,15 +2692,22 @@ export default function DmpNewImportDialog({
 
   // Confirm handler - records a virtual connection + overlap info (instant, no backend call).
   // Overlap treatment is deferred to applyAllOverlapTreatments which runs before batch import.
-  /** Rows in the edited section that hold something but are not a usable shot. */
-  const incompleteEditedShots = useMemo(
-    () => countIncompleteShots(editState?.shots ?? []),
-    [editState]
+  /** Refuse while the edited section holds a half-filled row, reading the count
+   *  FRESH. The wizard's actions suppress exhaustive-deps, so a captured count is
+   *  stale exactly when it matters: clear a cell, click Confirm without touching
+   *  anything else, and the old callback still remembers zero. */
+  const refuseIncompleteShots = useCallback(
+    () => blockedByIncompleteShots(
+      countIncompleteShots(editStateRef.current?.shots ?? []),
+      t,
+      'dmp-wizard-incomplete'
+    ),
+    [t]
   );
 
   const handleConfirm = useCallback(async () => {
     if (!currentSuggestion) return;
-    if (blockedByIncompleteShots(incompleteEditedShots, t, 'dmp-wizard-incomplete')) return;
+    if (refuseIncompleteShots()) return;
     if (suggestionActionInFlightRef.current || transitionToPlacingInFlightRef.current) return;
     suggestionActionInFlightRef.current = true;
     try {
@@ -2813,7 +2794,7 @@ export default function DmpNewImportDialog({
 
   // Skip handler (suggesting phase)
   const handleSkip = useCallback(async () => {
-    if (blockedByIncompleteShots(incompleteEditedShots, t, 'dmp-wizard-incomplete')) return;
+    if (refuseIncompleteShots()) return;
     if (!currentSuggestion) return;
     if (suggestionActionInFlightRef.current || transitionToPlacingInFlightRef.current) return;
     suggestionActionInFlightRef.current = true;
@@ -3075,6 +3056,7 @@ export default function DmpNewImportDialog({
 
   // Place segment handler
   const handleSegmentPlace = useCallback(() => {
+    if (refuseIncompleteShots()) return;
     if (!currentSegment || !segmentAnchor) return;
 
     let placement: ImportPlacement;
@@ -3184,7 +3166,7 @@ export default function DmpNewImportDialog({
 
       const edits = sectionEditsRef.current.get(anchor.sectionIndex);
       const shots: ShotData[] = edits
-        ? edits.shots.filter((s) => !s.isDeleted).map(editableShotToShotData)
+        ? edits.shots.filter((s) => !s.isDeleted && !isBlankNewShot(s)).map(editableShotToShotData)
         : convertToEditableShots(anchorDmpSection.shots).map(editableShotToShotData);
 
       const sectionData = {
@@ -3225,7 +3207,7 @@ export default function DmpNewImportDialog({
             sectionPalette[(secSelectedPos >= 0 ? secSelectedPos : entry.sectionIndex) % sectionPalette.length] ??
             '#95a5a6';
           const secShots = secEdits
-            ? secEdits.shots.filter((s) => !s.isDeleted).map(editableShotToShotData)
+            ? secEdits.shots.filter((s) => !s.isDeleted && !isBlankNewShot(s)).map(editableShotToShotData)
             : convertToEditableShots(sec.shots).map(editableShotToShotData);
           return {
             sectionData: {
@@ -3362,6 +3344,7 @@ export default function DmpNewImportDialog({
 
   // Manual map placement for a segment
   const handleStartSegmentPlacement = useCallback(() => {
+    if (refuseIncompleteShots()) return;
     if (!currentSegment || !segmentAnchor) return;
     setAutoStartManualPlacementPending(false);
 
@@ -3628,6 +3611,7 @@ export default function DmpNewImportDialog({
                   shots={effectiveShots}
                   onShotChange={handleShotChange}
                   onAddShot={handleAddShot}
+                  onAddShots={handleAddShots}
                   onDeleteShot={handleDeleteShot}
                   onInsertBefore={handleInsertBefore}
                   onInsertAfter={handleInsertAfter}
@@ -3867,6 +3851,7 @@ export default function DmpNewImportDialog({
                   shots={effectiveShots}
                   onShotChange={handleShotChange}
                   onAddShot={handleAddShot}
+                  onAddShots={handleAddShots}
                   onDeleteShot={handleDeleteShot}
                   onInsertBefore={handleInsertBefore}
                   onInsertAfter={handleInsertAfter}

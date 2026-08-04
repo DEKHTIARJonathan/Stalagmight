@@ -9,6 +9,7 @@ import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import { getThemeColor } from '../../utils/themeColors';
 import { ShotTableEditor, type EditableShot } from '../common/ShotTableEditor';
+import { blankEditableShot } from '../common/editableShot';
 import { validateEditableShot } from '../../utils/validation';
 import { isBlankNewShot, isShotComplete } from '../common/editableShotStatus';
 import { EDITABLE_AZIMUTH_AVG_KEY } from '../common/editableShotColumns';
@@ -109,33 +110,23 @@ export default function EditSectionDialog() {
     });
   }, []);
 
-  const handleAddShot = useCallback(() => {
-    const newShot: EditableShot = {
-      id: nextTempId,
-      tempId: nextTempId,
-      // Empty, not invented. A new row materializes from the trailing blank on
-      // the first keystroke, and prefilling the rest with a plausible-looking
-      // length of 1 and an azimuth of 0/180 put numbers into the survey that
-      // nobody measured. Non-finite renders blank in the grid and reads as
-      // missing to the validation that gates Save.
-      azimuth_in: NaN,
-      azimuth_out: NaN,
-      length: NaN,
-      depth_in: NaN,
-      depth_out: NaN,
-      pitch_in: null,
-      pitch_out: null,
-      left: null,
-      right: null,
-      up: null,
-      down: null,
-      comment: null,
-      kind: 'Normal' as const,
-      isNew: true,
-    };
-    setShots(prev => [...prev, newShot]);
-    setNextTempId(prev => prev - 1);
+  /** Append `count` blank shots in ONE update, each with its own temp id. Called
+   *  N times instead, every row would carry the same captured id - duplicate
+   *  identities that the grid keys per-cell state by. */
+  const handleAddShots = useCallback((count: number) => {
+    const n = Math.max(1, count);
+    setShots((prev) => {
+      const added: EditableShot[] = [];
+      for (let i = 0; i < n; i++) {
+        const id = nextTempId - i;
+        added.push(blankEditableShot(id));
+      }
+      return [...prev, ...added];
+    });
+    setNextTempId((prev) => prev - n);
   }, [nextTempId]);
+
+  const handleAddShot = useCallback(() => handleAddShots(1), [handleAddShots]);
 
   // Rows that cannot be written: a new row starts blank, so Save has to refuse
   // until it is filled in - otherwise a NaN length would reach the backend. The
@@ -560,6 +551,7 @@ export default function EditSectionDialog() {
             shots={shots}
             onShotChange={handleShotChange}
             onAddShot={handleAddShot}
+            onAddShots={handleAddShots}
             onDeleteShot={handleDeleteShot}
             onDeleteShots={handleDeleteShots}
             readOnly={editingBlocked}

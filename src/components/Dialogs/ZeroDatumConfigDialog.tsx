@@ -1,6 +1,7 @@
 import { useState, useCallback, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { blockedByIncompleteShots, countIncompleteShots } from '../common/incompleteShots';
+import { blankEditableShot } from '../common/editableShot';
 import { DialogWrapper } from './DialogWrapper';
 import SectionPreview from './SectionPreview';
 import { Button } from '../common/Button';
@@ -36,29 +37,10 @@ export interface ZeroDatumConfigResult {
 }
 
 /** A blank row for the shot table, shared by the add and the two insert paths. */
-/** A row the user has added but not measured. Non-finite, NOT zero: a 0 length
- *  with a 0 azimuth and 0 depths is a due-north, zero-depth shot nobody took, and
- *  every one of those values passes range validation on the way to the backend.
- *  Blank renders blank in the grid and reads as missing to the completeness gate. */
+/** The shared blank-row contract; `id` stays negative here as this dialog keys
+ *  its rows by it. */
 function makeNewShot(tempId: number): EditableShot {
-  return {
-    id: -tempId,
-    azimuth_in: NaN,
-    azimuth_out: NaN,
-    length: NaN,
-    depth_in: NaN,
-    depth_out: NaN,
-    pitch_in: null,
-    pitch_out: null,
-    left: null,
-    right: null,
-    up: null,
-    down: null,
-    comment: null,
-    kind: 'Normal' as const,
-    isNew: true,
-    tempId,
-  };
+  return { ...blankEditableShot(-tempId), tempId };
 }
 
 /**
@@ -268,6 +250,17 @@ export default function ZeroDatumConfigDialog({
   // pick), but it goes through the same path so the invariant has one owner.
   const handleAddShot = useCallback(() => insertShotAt(shots.length), [insertShotAt, shots.length]);
 
+  /** Append `count` blank shots in ONE functional update, each with its own temp
+   *  id. `insertShotAt` rebuilds from the closed-over `shots`, so calling it N
+   *  times in one React event has every call overwrite the last. Appending never
+   *  renumbers a station pick (the new rows land past every one), so this can go
+   *  straight to state without the reanchoring that path does. */
+  const handleAddShots = useCallback((count: number) => {
+    const n = Math.max(1, count);
+    setShots((prev) => [...prev, ...Array.from({ length: n }, (_, i) => makeNewShot(nextTempId + i))]);
+    setNextTempId((prev) => prev + n);
+  }, [nextTempId]);
+
   const handleInsertBefore = useCallback(
     (index: number) => insertShotAt(index),
     [insertShotAt]
@@ -469,6 +462,7 @@ export default function ZeroDatumConfigDialog({
                 shots={shots}
                 onShotChange={handleShotChange}
                 onAddShot={handleAddShot}
+                onAddShots={handleAddShots}
                 onDeleteShot={handleDeleteShot}
                 onInsertBefore={handleInsertBefore}
                 onInsertAfter={handleInsertAfter}

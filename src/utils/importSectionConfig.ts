@@ -9,6 +9,7 @@
  * implementation and makes it unit-testable without mounting the wizard.
  */
 import type { ImportPlacement, ImportSectionConfig } from '../types/commands';
+import { isBlankNewShot } from '../components/common/editableShotStatus';
 import type { ShotData } from '../types/project';
 import type { ZeroDatumConfigResult } from '../components/Dialogs/ZeroDatumConfigDialog';
 import type { VirtualConnection } from './segmentContext';
@@ -71,7 +72,13 @@ export function finalizePlacementForReverse(
  */
 export function buildZeroDatumSectionConfig(config: ZeroDatumConfigResult): ImportSectionConfig {
   const { sectionIndex, stationIndex, gps, metadata, shots } = config;
-  const backendShots: ShotData[] = shots.filter((s) => !s.isDeleted).map(editableShotToShotData);
+  // Deleted rows go, and so do rows that were added and never filled in. The
+  // completeness gates let a wholly blank row through on purpose - it is an
+  // invitation, not an obligation - which is only safe if it is dropped HERE.
+  // Otherwise it serializes as NaN length, depths and azimuths.
+  const backendShots: ShotData[] = shots
+    .filter((s) => !s.isDeleted && !isBlankNewShot(s))
+    .map(editableShotToShotData);
   const reverse = metadata.reverse ?? false;
 
   const placement: ImportPlacement = {
