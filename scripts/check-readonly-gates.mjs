@@ -62,6 +62,12 @@ export const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url
 export const CLOSURE_ADJUSTED_ALLOWLIST = {
   // The geometry-mode radio control itself: this IS the setting, not a gate.
   'src/components/SingleSystemView/DisplayMenu.tsx': 2,
+  // "Switch and continue" FIX path (#407 follow-up): decides whether the
+  // restored/current view still needs dropping to measured before the
+  // confirmed import re-routes - a display-mode write, not a mutation gate.
+  // The gate that blocks the import is isEditingBlockedNow() in
+  // routeOpenedFile; this code runs only after the user confirmed the switch.
+  'src/components/Dialogs/ImportBlockedDialog.tsx': 1,
   // Adjusted-geometry data-fetch trigger, the auto-revert-to-measured logic (the
   // very mechanism the appMode trap above exists because of), and the read-only
   // banner display - none are mutation gates.
