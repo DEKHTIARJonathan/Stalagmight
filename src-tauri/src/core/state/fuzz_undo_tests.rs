@@ -4084,6 +4084,84 @@ fn the_fuzzer_is_deterministic() {
     }
 }
 
+// ===========================================================================
+// RED tests pinned to a SEED
+// ===========================================================================
+//
+// Two findings have no reduction that reproduces them - both were measured, and
+// both attempts are recorded in `open_undo_bugs_tests.rs`. What they do have is
+// a deterministic seed, which is a repro in every sense that matters: it is
+// synthetic (no fixture is read or derived from), it is byte-identical on every
+// machine (`Rng` is integer-only and no float makes a decision anywhere in this
+// module), and it fails today for the documented reason.
+//
+// They are `#[ignore]`d like every other red test. DELETE THE IGNORE WHEN THE
+// BUG IS FIXED and each becomes its regression guard.
+
+/// FINDING 14, red: an insert leaves a merged partner metres out of alignment,
+/// and the app's own `#[cfg(test)]` assert says so from inside
+/// `insert_shot_after`.
+///
+/// The fuzzer catches that panic, verifies the message is that assert, and stops
+/// the run - so the finding shows up here as `alignment_panic` rather than as a
+/// process abort.
+#[test]
+#[ignore = "open finding 14: a mid-chain insert leaves a merged partner metres out of alignment"]
+fn finding_14_no_insert_leaves_a_merge_out_of_alignment() {
+    let outcome = run_fuzz(
+        6,
+        Plan {
+            iterations: 60,
+            persistence: false,
+            jumps: false,
+            closures: true,
+            divergence: false,
+            closure_shapes: false,
+        },
+    );
+    assert!(
+        !outcome.alignment_panic,
+        "seed 6 x60 with closures tripped the app's own merge-alignment assert: {}",
+        summarize("finding-14", 6, &outcome)
+    );
+}
+
+/// BUG 7, red: `undo_to(N)` is not N x `undo()`.
+///
+/// `undo()`/`redo()` end in `reconcile_geometry()`; `undo_to()`/`redo_to()` loop
+/// the `*_inner` variants and call it neither per step nor at the end
+/// (core/state/undo.rs). The fuzzer proves the inequality rather than
+/// recognising it: on a jump that diverges it replays the same distance in
+/// single steps and only records the finding when the single-step path lands
+/// exactly where the model says it should.
+///
+/// This is the first pin bug 7 has ever had. `open_undo_bugs_tests.rs` records
+/// the four synthetic reductions that were measured and do NOT diverge, and why:
+/// `realign_merges` is `resolve_offsets` behind a 5 cm gate, and every command's
+/// own epilogue has already run it, so a persistently misaligned merge is not
+/// reachable through the command API in a small project.
+#[test]
+#[ignore = "open bug 7: undo_to/redo_to skip the reconcile epilogue, so a jump is not N single steps"]
+fn bug_7_a_jump_is_n_single_steps() {
+    let outcome = run_fuzz(
+        6,
+        Plan {
+            iterations: 150,
+            persistence: true,
+            jumps: true,
+            closures: true,
+            divergence: false,
+            closure_shapes: true,
+        },
+    );
+    assert_eq!(
+        outcome.hits.get("finding-7-a-jump-is-not-n-single-steps"),
+        None,
+        "a multi-step undo_to/redo_to landed somewhere the same number of single steps does not: {}",
+        summarize("bug-7", 6, &outcome)
+    );
+}
+
 /// Which seeds are currently clean, and what the rest fail on.
 ///
 /// The triage tool for choosing (and re-choosing) `GATE_SEEDS`: it catches each

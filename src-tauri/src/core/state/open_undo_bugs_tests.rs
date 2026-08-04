@@ -1148,46 +1148,233 @@ fn undo_after_reload_is_not_wedged_by_an_out_of_range_shot_id() {
 }
 
 // ===========================================================================
-// Finding 14: REAL, reproduced by the Rust-tier fuzzer, NOT reproducible
-// synthetically here (yet)
+// Finding 14: REAL, and pinned - but by a SEED, not by a reduction
 // ===========================================================================
 //
-// `src-tauri/src/core/state/fuzz_undo_tests.rs` reproduces it deterministically:
-// with a datum on section A and a merge chain A -> B -> C, a mid-chain
-// `CreateShot` into A leaves the A/B merge 6.97 m apart and the app's own
-// `debug_assert_merge_alignment` (`models/project/offsets.rs`, whose assert arm is
-// `#[cfg(test)]` and therefore exists in NO other tier) panics inside
-// `insert_shot_after`. The fuzzer re-checks raw merge alignment after every move
-// with the same measure the assert uses, and that check is clean on the move
-// immediately before - so it is the insert that breaks it, not a leftover.
+// With a datum on section A and a merge chain A -> B -> C, a mid-chain
+// `CreateShot` into A leaves the A/B merge metres apart and the app's own
+// `debug_assert_merge_alignment` (`models/project/offsets.rs`, whose assert arm
+// is `#[cfg(test)]` and therefore exists in NO other tier) panics inside
+// `insert_shot_after`.
 //
-// The suspected mechanism is `Project::insert_shot_after`
-// (`models/project/shots.rs:185-227`), which back-shifts the section offset only
-// when the downstream side is INDEPENDENTLY datum-anchored:
+// The red test is `finding_14_no_insert_leaves_a_merge_out_of_alignment` in
+// `src-tauri/src/core/state/fuzz_undo_tests.rs`, pinned to one deterministic
+// fuzzer seed. It lives there rather than here because two reductions were
+// MEASURED not to reproduce, and a red test has to be red:
 //
-//     on_tail(our) && their.section_id != section_id
-//         && self.has_datum_path_excluding(their.section_id, section_id)
+//   * sections A(3 shots, datum at 0), B(1), C(1), merges A:3<->B:0 and
+//     B:1<->C:0, then `CreateShot(after = A's first shot)` - every merge stays
+//     aligned. The cascade handles the plain chain.
+//   * the same with the fuzzer's FULL starting topology transcribed (seven
+//     sections of varied length, the zero datum, both merges, the loop closure)
+//     and a `MoveStation` on the bridge before the insert - also clean.
 //
-// On a plain chain B's only datum path runs through A, so that guard is false, no
-// compensation runs, and `cascade_connection_offsets` is expected to move B
-// instead.
-//
-// MEASURED, and it does NOT reproduce: the obvious reduction - sections A(3
-// shots, datum at 0), B(1), C(1), merges A:3<->B:0 and B:1<->C:0, then
-// `CreateShot(after = A's first shot)` - leaves every merge aligned. So the
-// cascade DOES handle the plain chain, and the fuzzer's state carries a further
-// ingredient this reduction is missing (its runs reach the shape after dozens of
-// moves including moves, reverses and deletes). Recorded here rather than pinned
-// by a test that passes, which would claim the opposite of what is true.
-//
-// Reproduce with the fuzzer:
-//
-//     STALAGMIGHT_RUST_FUZZ_CLOSURES=1 STALAGMIGHT_RUST_FUZZ_SEEDS=4 \
-//       TELEMETRY_ENDPOINT=http://localhost/dummy cargo test \
-//       --manifest-path src-tauri/Cargo.toml --features telemetry \
-//       --lib fuzz_seed_survey -- --ignored --nocapture
+// So the ingredient is further back in the fuzzer's history than either
+// reduction reaches, and pinning the seed pins the defect honestly while a
+// reduction would only pin a guess. `models/project/shots.rs`'s
+// `insert_shot_after` back-shifts the section offset only when the merged
+// partner has an INDEPENDENT datum path (`has_datum_path_excluding`), which on a
+// chain it does not, leaving `cascade_connection_offsets` to move the partner
+// instead - that is still the suspected mechanism, and it is what a fix should
+// start from.
 //
 // Also part of the finding: `check_merge_alignment`
 // (`models/project/integrity.rs`) measures through `resolved_station_offsets()`
 // and reports NOTHING about the same state the raw-coordinate assert panics on.
 // Whichever is authoritative, the two should not disagree.
+
+// ===========================================================================
+// Finding 15: an undo leaves a `section_offsets` entry with REAL geometry -
+// which is FINDING 3, re-measured several moves later
+// ===========================================================================
+
+/// Finding 15 was filed as its own defect because the move that FAILS is not
+/// the move that did it. Finding 3 displaces the empty section on the undo that
+/// removes its first shot; nothing puts that back (the redo re-inserts through
+/// the offset-neutral append path, which is finding 3's ratchet half), so the
+/// leftover is still there several undos later, when the entry being consumed
+/// is something unrelated - a `set_station_comment`, an `update_shot` - and the
+/// snapshot it is compared against never had the key.
+///
+/// Root-caused with the Rust fuzzer's own reported instance: seed 7 at 100
+/// moves, `section_offsets.1` = `[7.11187043796, 0.315846281796]` at depth 14,
+/// whose immediately preceding two moves are `createShot(s=1,n=0,append)` and
+/// the undo of it. The write-up read the move log from the wrong end.
+///
+/// This test pins the CONSEQUENCE rather than the cause, because that is what a
+/// user sees and what finding 3's own tests do not cover: unwinding the whole
+/// history has to return the project to the state it started in.
+#[test]
+#[ignore = "open finding 15 (= finding 3, cascading): the empty-section displacement survives every later undo - see src-tauri/src/core/state/fuzz_undo_tests.rs"]
+fn unwinding_the_history_leaves_no_displaced_section_behind() {
+    let state = state_with_project();
+    let keeper = create_section(&state, "Keeper", vec![shot(0.0, 5.0)]);
+    let empty = create_section(&state, "Empty", vec![]);
+
+    let before = section_offset(&state, empty);
+    assert_eq!(
+        before, None,
+        "setup: a section that has never been moved should have no offset entry"
+    );
+
+    // Depth 1: an ordinary edit on an unrelated section.
+    let keeper_shot = shot_ids(&state, keeper)[0];
+    let edited = state.execute(Command::UpdateShot {
+        section_id: keeper,
+        shot_id: keeper_shot,
+        updates: ShotUpdates {
+            length: Some(9.0),
+            ..Default::default()
+        },
+    });
+    assert!(edited.success, "UpdateShot failed: {:?}", edited.error);
+
+    // Depth 2: the first shot appended into the empty section.
+    let created = state.execute(Command::CreateShot {
+        section_id: empty,
+        shot: shot(90.0, 10.0),
+        after_shot_id: None,
+        before_shot_id: None,
+    });
+    assert!(created.success, "CreateShot failed: {:?}", created.error);
+
+    // All the way back down.
+    assert!(state.undo().success, "undo of CreateShot failed");
+    assert!(state.undo().success, "undo of UpdateShot failed");
+
+    assert_eq!(
+        section_offset(&state, empty),
+        before,
+        "unwinding the history left section {empty} displaced: the undo of the first shot in an \
+         empty section slides it (finding 3) and nothing puts it back, so the offset is still \
+         there after the undo of an UNRELATED entry - which is what finding 15 observed"
+    );
+}
+
+// ===========================================================================
+// Finding 16: after a reload, an undo/redo cycle of CreateShot leaves the
+// section holding the SAME shot uuid twice
+// ===========================================================================
+
+/// The redo half of finding 8, which nothing had exercised.
+///
+/// After a reload the undo deletes the wrong shot (finding 8) and leaves the
+/// created one in place. The redo then re-runs the SAME insert through
+/// `redo_inner`'s `CreatedShotSnapshot` arm (`core/state/undo.rs`), which forces
+/// both the id AND the uuid from the entry - so the shot it re-creates is a
+/// second copy of one that never left. The section ends up holding one
+/// `Shot::uuid` twice.
+///
+/// That is worse than a wrong shot: uuid is the identity `StationKey::AfterShot`
+/// resolves stations by (`models/station.rs`), the identity the Ariane export
+/// writes, and the identity `ensure_unique_shot_uuids` will silently RE-MINT on
+/// the next save - moving whichever anchor loses the coin toss.
+///
+/// Found by the Rust fuzzer at seed 13 x 60 with persistence.
+#[test]
+#[ignore = "open finding 16 (DATA CORRUPTION): after a reload, undo+redo of CreateShot duplicates a shot uuid - see src-tauri/src/core/state/fuzz_undo_tests.rs"]
+fn redo_after_reload_does_not_duplicate_a_shot_uuid() {
+    let temp = TempDir::new().unwrap();
+    let save_path: PathBuf = temp.path().join("duplicated.stalx");
+
+    let section_id;
+    {
+        let state = state_with_project();
+        section_id = diverged_section(&state);
+        let saved = state.save_project(Some(save_path.clone()));
+        assert!(saved.success, "save failed: {:?}", saved.error);
+    }
+
+    let reopened = AppState::new().unwrap();
+    let opened = reopened.execute(Command::OpenProject { path: save_path });
+    assert!(opened.success, "reopen failed: {:?}", opened.error);
+
+    assert!(reopened.undo().success, "undo after reopen failed");
+    assert!(reopened.redo().success, "redo after reopen failed");
+
+    let uuids: Vec<String> = shot_uuids(&reopened, section_id)
+        .into_iter()
+        .flatten()
+        .collect();
+    let mut unique = uuids.clone();
+    unique.sort_unstable();
+    unique.dedup();
+    assert_eq!(
+        unique.len(),
+        uuids.len(),
+        "an undo/redo cycle after the reopen left section {section_id} holding the same shot uuid \
+         twice: {uuids:?}. The undo deleted the wrong shot and the redo re-inserted the one that \
+         was still there, forcing the persisted uuid onto the copy"
+    );
+}
+
+// ===========================================================================
+// Finding 17: undo of RemoveZeroDatum appends the datum instead of restoring
+// its index - finding 4's defect, one collection over
+// ===========================================================================
+
+/// `UndoData::ZeroDatumInfo`'s restore arm ends in
+/// `project.zero_datums.push(ZeroDatum { .. })` (`core/state/undo.rs`) where the
+/// forward path removed the datum in place, so a datum that was not last comes
+/// back last.
+///
+/// Exactly finding 4's shape and exactly its consequences: `zero_datums` is
+/// persisted in order, the frontend indexes it, and `resolve_offsets` anchors
+/// connected groups by walking it - so the order decides which datum wins when a
+/// component has more than one candidate anchor.
+///
+/// Found by the Rust fuzzer's closure-shapes mode, which is the first thing that
+/// gave a run two datums to reorder.
+#[test]
+#[ignore = "open finding 17: undo of RemoveZeroDatum appends instead of reinserting at its index - see src-tauri/src/core/state/fuzz_undo_tests.rs"]
+fn undo_of_remove_zero_datum_restores_the_original_order() {
+    let state = state_with_project();
+    // Two INDEPENDENT components, so both may carry a datum: a second datum in
+    // one component is refused.
+    let first = create_section(&state, "First", vec![shot(0.0, 5.0)]);
+    let second = create_section(&state, "Second", vec![shot(90.0, 5.0)]);
+    for (section_id, latitude) in [(first, 10.0), (second, 11.0)] {
+        let datum = state.execute(Command::SetZeroDatum {
+            station_ref: StationRef::new(section_id, 0),
+            coordinates: GpsCoordinates::new(latitude, 20.0, 0.0).unwrap(),
+        });
+        assert!(datum.success, "SetZeroDatum failed: {:?}", datum.error);
+    }
+
+    let before = datum_sections(&state);
+    assert_eq!(
+        before,
+        vec![first, second],
+        "setup: the datums should be in creation order"
+    );
+
+    // Remove the FIRST of the two. Removing the last one would come back in the
+    // right place by luck and prove nothing.
+    let removed = state.execute(Command::RemoveZeroDatum {
+        station_ref: StationRef::new(first, 0),
+    });
+    assert!(
+        removed.success,
+        "RemoveZeroDatum failed: {:?}",
+        removed.error
+    );
+    assert!(state.undo().success, "undo of RemoveZeroDatum failed");
+
+    assert_eq!(
+        datum_sections(&state),
+        before,
+        "undo put the datum back at the END of zero_datums instead of its original index; the \
+         order is persisted, indexed by the frontend, and the order resolve_offsets anchors \
+         connected groups in"
+    );
+}
+
+/// The section of every zero datum, in `Project::zero_datums` order.
+fn datum_sections(state: &AppState) -> Vec<SectionId> {
+    let project = state.get_project_state().expect("no project open");
+    project
+        .zero_datums
+        .iter()
+        .map(|datum| datum.station_ref.section_id)
+        .collect()
+}
