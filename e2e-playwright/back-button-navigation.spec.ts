@@ -26,6 +26,16 @@ function filterMockErrors(errors: string[]): string[] {
     if (error.includes('unregisterListener')) {
       return false;
     }
+    // Resource-load failures from EXTERNAL hosts are network weather, not JS
+    // errors in the app - this assertion exists for the getLayer crash class.
+    // Scoped by the captured location URL (appended in beforeEach): a failed
+    // SAME-ORIGIN load (a 404'd app chunk or asset) still fails the spec.
+    // The known external fetch is the unpkg.com maplibre CSS (#357); the
+    // former offender, the dev agent bridge's /__agent/token probe, is gated
+    // off under VITE_E2E since #417.
+    if (error.startsWith('Failed to load resource') && !error.includes('[http://localhost')) {
+      return false;
+    }
     return true;
   });
 }
@@ -63,7 +73,12 @@ test.describe('Back Button Navigation', () => {
     });
     page.on('console', (msg) => {
       if (msg.type() === 'error') {
-        errors.push(msg.text());
+        // Resource-failure console messages ("Failed to load resource...")
+        // carry no URL in their text - append the source location so
+        // filterMockErrors can tell an external host's weather from a broken
+        // same-origin app asset (#417).
+        const url = msg.location().url;
+        errors.push(url ? `${msg.text()} [${url}]` : msg.text());
       }
     });
 

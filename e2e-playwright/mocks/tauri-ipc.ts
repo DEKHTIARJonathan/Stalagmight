@@ -126,6 +126,14 @@ export async function setupTauriMocks(page: Page): Promise<void> {
     }),
   );
 
+  // Note on external hosts (#417): the frontend never fetches the live esri
+  // host in this env - tileConfig always emits the stalagmight-tiles protocol
+  // stubbed above (the mock's arcgisonline url_template has no fetching
+  // consumer). The #417 local-red/CI-green console noise was the dev-only
+  // agent bridge's /__agent/token probe, now gated off under VITE_E2E in
+  // main.tsx. The one remaining external fetch is the maplibre CSS pinned to
+  // unpkg.com in index.html (#357) - loaded by the page, not this mock.
+
   // Inject the msgpack UMD bundle first so the load_project_full_binary
   // mock can encode its result the same way the real backend does.
   // Exposes `window.MessagePack` synchronously before any app JS runs.
