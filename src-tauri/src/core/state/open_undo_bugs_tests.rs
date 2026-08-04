@@ -31,8 +31,8 @@ use tempfile::TempDir;
 use super::AppState;
 use crate::core::Command;
 use crate::models::{
-    ClosureStrategy, GpsCoordinates, SectionId, SectionUpdates, ShotData, ShotId, ShotUpdates,
-    StationRef,
+    ClosureStrategy, Coordinates, GpsCoordinates, SectionId, SectionUpdates, ShotData, ShotId,
+    ShotUpdates, StationRef,
 };
 
 /// A shot with distinct, easily-recognised geometry.
@@ -765,5 +765,86 @@ fn save_and_reopen_preserves_an_orphan_loop_closure() {
         before,
         "save + reopen reclassified a loop closure as a station merge: the delete path that \
          orphaned it does not run convert_orphan_closures_to_merges, but the loader does"
+    );
+}
+
+// ===========================================================================
+// Finding 11: a save's undo-less heals are reverted by undoing a snapshot-pair
+// entry recorded before it
+// ===========================================================================
+
+/// `save_project` HEALS live state with no undo entry of its own -
+/// `ensure_shot_uuids`, `ensure_unique_shot_uuids`,
+/// `capture_missing_gauge_anchors`, the orphan `section_offsets` retain
+/// (`core/state/project_io.rs`). A `ProjectSnapshotPair` captured BEFORE that
+/// save holds the pre-heal project in BOTH its `before` and its `after`, and
+/// neither is refreshed. So undoing (or redoing) an unrelated command recorded
+/// before the save silently reverts the heal.
+///
+/// The consequence is worse than losing the anchors, which the next save would
+/// re-capture: it makes the project at a given undo depth depend on the ROUTE
+/// taken to reach it. Land on depth N by saving there and it has the anchors;
+/// land on the same depth N by undoing a pre-save entry and it does not. An undo
+/// stack whose states are not well-defined is the thing the whole history
+/// feature promises.
+///
+/// Found by the fuzzer at fractal seed 4 x60 STRICT on the v2 stream, where a
+/// save at depth 1 was followed by a redo/undo of a `moveStation` recorded
+/// before it.
+#[test]
+#[ignore = "open finding 11: undoing a snapshot-pair entry recorded before a save reverts the save's heals - see e2e/agent/scenarios/undoRedoFuzz.ts header"]
+fn undo_of_a_pre_save_entry_keeps_the_saves_gauge_anchors() {
+    let temp = TempDir::new().unwrap();
+    let state = state_with_project();
+    let section_id = create_section(&state, "Gauged", vec![shot(0.0, 5.0), shot(90.0, 4.0)]);
+
+    let gauge_of = |s: &AppState| -> (Option<String>, Option<String>) {
+        let project = s.get_project_state().expect("no project");
+        let section = project
+            .sections
+            .iter()
+            .find(|sec| sec.id == section_id)
+            .expect("section missing");
+        (
+            section.gauge_shot_uuid.clone(),
+            section.gauge_neighbour_uuid.clone(),
+        )
+    };
+
+    // A command whose undo data is a ProjectSnapshotPair, recorded BEFORE the
+    // save so both of its snapshots predate the heal.
+    let moved = state.execute(Command::MoveStation {
+        station_ref: StationRef::new(section_id, 1),
+        offset: Coordinates {
+            x: 1.0,
+            y: 2.0,
+            z: 0.0,
+        },
+    });
+    assert!(moved.success, "MoveStation failed: {:?}", moved.error);
+    assert_eq!(
+        gauge_of(&state),
+        (None, None),
+        "setup: the gauge pair is only captured on save, so it should still be unset"
+    );
+
+    // The save mints the gauge pair, with no undo entry of its own.
+    let saved = state.save_project(Some(temp.path().join("pre-save-entry.stalx")));
+    assert!(saved.success, "save failed: {:?}", saved.error);
+    let after_save = gauge_of(&state);
+    assert!(
+        after_save.0.is_some(),
+        "setup: the save should have captured a gauge anchor, got {after_save:?}"
+    );
+
+    // Undo the move recorded BEFORE the save.
+    assert!(state.undo().success, "undo of MoveStation failed");
+
+    assert_eq!(
+        gauge_of(&state),
+        after_save,
+        "undoing a command recorded BEFORE the save reverted the save's gauge capture: the \
+         snapshot pair holds the pre-heal project in both halves, so the heal is lost and the \
+         project at this depth now depends on the route taken to reach it"
     );
 }

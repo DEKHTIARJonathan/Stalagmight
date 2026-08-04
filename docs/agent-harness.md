@@ -404,7 +404,7 @@ The findings are tracked at
 with its mechanism, repro and fix direction; the scenario header is the
 authoritative copy of the repro commands.
 
-It currently reproduces eight open undo bugs plus one open reload finding, enumerated with per-fixture,
+It currently reproduces nine open undo bugs plus one open reload finding, enumerated with per-fixture,
 per-seed repro commands in the scenario's header comment, so it is RED by
 default. The most serious is bug 8: after a save/reload an undo DELETES THE WRONG
 SHOT, because shots are renumbered on load while persisted undo entries keep the

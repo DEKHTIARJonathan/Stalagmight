@@ -305,22 +305,30 @@
  *    the INPUT (`GEOMETRY_EXTREME`, undoRedoFuzzActions.ts) rather than by
  *    loosening the oracle, which would have blinded it to real sub-centimetre
  *    drift.
- * 11. NEW, open, NOT root-caused. `--seed 4 --iterations 60` on fractal, STRICT,
- *    on the plain v2 stream (no Repair move needed - it was found WITH the
- *    Repair generator but reproduces without it, so the generator only
- *    surfaced it) fails with `sections[0].gauge_shot_uuid` and `gauge_neighbour_uuid` going
- *    from a captured value to `null` on an undo below the Repair entry - i.e.
- *    undoing past a Repair discards gauge anchors a save had captured, on
- *    fixture sections the run never created.
+ * 11. ROOT-CAUSED, REAL. A save HEALS live state with no undo entry
+ *    (`ensure_shot_uuids`, `ensure_unique_shot_uuids`,
+ *    `capture_missing_gauge_anchors`, the orphan `section_offsets` retain -
+ *    core/state/project_io.rs). A `ProjectSnapshotPair` captured BEFORE that
+ *    save holds the pre-heal project in BOTH halves and neither is refreshed,
+ *    so undoing or redoing an UNRELATED command recorded before the save
+ *    silently reverts the heal.
  *
- *    Ruled out so far: the fields serialize fine (plain `Option<String>` with
- *    `#[serde(default)]`, so a snapshot pair round-trips them), and they ARE
- *    persisted (`persistence/sqlite/read.rs:261-284` reads them with a
- *    legacy-file fallback), so it is neither a serde nor a persistence loss.
- *    `Section::new` (models/section.rs:302) is the only place that sets them to
- *    `None`, which points at a rebuild path - but `restore_section` is bug 1's
- *    mechanism and applies to sections the run CREATED, not fixture ones. Needs
- *    the standard protocol: minimize, root-cause, red test, issue comment.
+ *    The real damage is not the lost anchors (the next save re-captures them):
+ *    it is that the project at a given undo DEPTH now depends on the ROUTE
+ *    taken to reach it. Reach depth N by saving there and it has the anchors;
+ *    reach the same depth N by undoing a pre-save entry and it does not. That
+ *    is the fuzzer's roundtrip oracle doing exactly its job - a depth whose
+ *    state is not well-defined breaks the promise the history feature makes.
+ *
+ *    Fuzzer: `--seed 4 --iterations 60` on fractal, STRICT (a save at depth 1
+ *    followed by a redo/undo of a `moveStation` recorded before it).
+ *    Unit test: `undo_of_a_pre_save_entry_keeps_the_saves_gauge_anchors` -
+ *    four commands, fully synthetic.
+ *
+ *    NOT an oracle gap. The model's save attribution deliberately allows
+ *    null -> value ACROSS a save epoch (the heal itself); this is
+ *    value -> null WITHIN the post-save epoch, which is the app losing state
+ *    it had, and it is right to fail.
  * 10. NEW, open. A loop closure BECOMES a station merge across save/reload:
  *    naharon seed 26 x40 gives `loop_closures.length` 5 -> 4 with
  *    `station_merges.length` 34 -> 35. `redrive_offsets_after_load` calls
@@ -446,11 +454,14 @@ const SAVE_STREAM_SALT = 0x85ebca6b;
  * It is not a no-op in practice - bug 2's leaked all-zero offset keys and
  * finding 10's orphan closures are both things repair heals.
  *
- * OFF BY DEFAULT behind `STALAGMIGHT_FUZZ_REPAIR=1`. On its first run it
- * surfaced an unexplained failure (see finding 11 in the header) that makes
- * fractal seed 4 x60 red, and every documented repro line has to keep working -
- * so the move is opt-in until that finding is root-caused, at which point this
- * gate should come off.
+ * OFF BY DEFAULT behind `STALAGMIGHT_FUZZ_REPAIR=1`, and it stays off - but for
+ * a different reason than when the gate went in. It was added because Repair
+ * surfaced finding 11, which is now root-caused and reproduces WITHOUT Repair,
+ * so that justification is gone. The gate remains because Repair pushes an undo
+ * entry whenever it changes the project, and that entry is walked by the final
+ * unwind/rewind - so enabling it by default would add one undo and one redo to
+ * every run's counts, changing the metrics the faithfulness checks compare
+ * byte-for-byte. Opt in when hunting; leave off when verifying.
  */
 const REPAIR_ENABLED = process.env.STALAGMIGHT_FUZZ_REPAIR === '1';
 
