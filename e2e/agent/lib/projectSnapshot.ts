@@ -441,3 +441,80 @@ export const RELOAD_RESOLVED_GEOMETRY: readonly KnownAsymmetry[] = [
       'reload performs.',
   },
 ];
+
+/** Per-section shot-identity delta between two canonical snapshots. */
+export interface ShotSetDelta {
+  sectionId: number;
+  /** Shot uuids present in `expected` but missing from `actual`. */
+  missing: string[];
+  /** Shot uuids present in `actual` but missing from `expected`. */
+  extra: string[];
+  expectedCount: number;
+  actualCount: number;
+}
+
+/**
+ * Which SHOTS (by uuid, the identity that survives a save/reload) a section
+ * gained or lost between two snapshots.
+ *
+ * A shifted shot list produces dozens of field-level diffs that all look like
+ * value changes, and those cannot distinguish "the same shots moved" from "a
+ * different shot was removed". This answers that directly, which is the
+ * difference between a reordering and data loss.
+ */
+export function shotSetDelta(expectedJson: string, actualJson: string): ShotSetDelta[] {
+  const read = (text: string): Map<number, string[]> => {
+    const out = new Map<number, string[]>();
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      return out;
+    }
+    const project = isPlainObject(parsed) ? parsed.project : null;
+    if (!isPlainObject(project) || !Array.isArray(project.sections)) return out;
+    for (const section of project.sections) {
+      if (!isPlainObject(section) || !Array.isArray(section.shots)) continue;
+      const uuids: string[] = [];
+      for (const shot of section.shots) {
+        if (isPlainObject(shot)) uuids.push(typeof shot.uuid === 'string' ? shot.uuid : '<no-uuid>');
+      }
+      out.set(Number(section.id), uuids);
+    }
+    return out;
+  };
+
+  const expected = read(expectedJson);
+  const actual = read(actualJson);
+  const deltas: ShotSetDelta[] = [];
+  for (const [sectionId, expectedUuids] of expected) {
+    const actualUuids = actual.get(sectionId);
+    if (actualUuids === undefined) continue;
+    const actualSet = new Set(actualUuids);
+    const expectedSet = new Set(expectedUuids);
+    const missing = expectedUuids.filter((uuid) => !actualSet.has(uuid));
+    const extra = actualUuids.filter((uuid) => !expectedSet.has(uuid));
+    if (missing.length > 0 || extra.length > 0) {
+      deltas.push({
+        sectionId,
+        missing,
+        extra,
+        expectedCount: expectedUuids.length,
+        actualCount: actualUuids.length,
+      });
+    }
+  }
+  return deltas;
+}
+
+/** Render a shot-set delta for a failure message. */
+export function describeShotSetDelta(deltas: readonly ShotSetDelta[]): string {
+  return deltas
+    .map(
+      (delta) =>
+        `  section ${delta.sectionId}: ${delta.expectedCount} shot(s) expected, ${delta.actualCount} present\n` +
+        `    shots MISSING (present before, gone now): ${JSON.stringify(delta.missing)}\n` +
+        `    shots UNEXPECTED (absent before, present now): ${JSON.stringify(delta.extra)}`,
+    )
+    .join('\n');
+}

@@ -373,9 +373,17 @@ recorded. That decision is drawn from a separate PRNG (`mulberry32(seed ^
 0x9e3779b9)`) so the primary draw stream every recorded repro depends on is
 untouched.
 
-It currently reproduces seven open undo bugs, enumerated with per-fixture,
+Runs also cross the PERSISTENCE boundary - save to a temp path, close, reopen -
+because undo history is persisted and nothing below a save point is exercised
+otherwise. Save-time healing mutations and the reload's zero-trust offset
+re-solve are subtracted only from comparisons that cross that boundary (an epoch
+stamp per recorded depth), so within an epoch the oracle stays strict.
+
+It currently reproduces eight open undo bugs, enumerated with per-fixture,
 per-seed repro commands in the scenario's header comment, so it is RED by
-default. Three are classified (`KNOWN_UNDO_ASYMMETRIES` plus
+default. The most serious is bug 8: after a save/reload an undo DELETES THE WRONG
+SHOT, because shots are renumbered on load while persisted undo entries keep the
+pre-reload ids and nothing remaps them. Three are classified (`KNOWN_UNDO_ASYMMETRIES` plus
 `LOOP_CLOSURE_REORDER`), which makes the failure message name the bug and makes
 them tolerable under the env var above. The other four - a section displaced by
 undoing its first shot, an undo that cannot restore a previously-null section

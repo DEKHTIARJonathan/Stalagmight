@@ -142,16 +142,35 @@
  *    history dropdown. The fix is to give undo_to/redo_to the same epilogue
  *    undo/redo have (once, after the loop - not per step).
  *
- * 8. OPEN LEAD, root cause NOT yet established:
- *    `... seed=12, iterations=16` with ALLOW_KNOWN_BUGS on fractal - after a
- *    save/reload, `undo` at depth 7 lands with all of `sections[14].shots[3..]`
- *    holding DIFFERENT shots (76 differing paths, shot COUNT unchanged, so the
- *    list is shifted rather than truncated). The suspicion is that a persisted
- *    `CreatedShotSnapshot` addresses its shot by an id the reload has since
- *    renumbered, so its undo removes the wrong slot - but that is not confirmed,
- *    and an id-agnostic-comparison artefact has not been fully excluded either.
- *    Left failing and unclassified deliberately: do not tolerate it until it is
- *    understood.
+ * 8. DATA CORRUPTION. `... seed=12, iterations=16` with ALLOW_KNOWN_BUGS on
+ *    fractal - after a save/reload, an `undo` DELETES THE WRONG SHOT. At depth 7
+ *    section 14 holds 4 shots before and 4 after, but uuid
+ *    `782a9454-...` is gone and `3bb50693-...` is back: the undo destroyed a shot
+ *    the user still had and resurrected one they had deleted. Silent, and it
+ *    persists on the next save.
+ *
+ *    The chain: shots are RENUMBERED on load to
+ *    `section_id * FEATURE_ID_STRIDE + sequence_order` (read.rs:372); undo entries
+ *    are persisted and reloaded as OPAQUE JSON (`load_undo_stack`,
+ *    persistence/sqlite/undo.rs:138-158) with NO remapping anywhere on the
+ *    restore path; and `UndoData::CreatedShotSnapshot { section_id, shot_id }`
+ *    undoes by calling `delete_shot(section_id, shot_id)`
+ *    (core/state/undo.rs:126-133). Because the in-session allocator
+ *    (`take_shot_id`) hands out ids from the SAME `section_id * STRIDE + n` space
+ *    the loader renumbers into, a stale id does not miss - it COLLIDES with
+ *    whatever shot now occupies that slot. A section only diverges from positional
+ *    order after a mid-section insert or delete, which is why this needs a fuzzer
+ *    to reach.
+ *
+ *    `test_undo_actually_works_after_project_reopen` (core/state/tests.rs:18911)
+ *    covers the happy case only: one section, one shot, save, reopen, undo the
+ *    CreateSection. No `CreatedShotSnapshot`, no renumbering divergence, no
+ *    identity check.
+ *
+ *    NOT classified as tolerable, and the absolute invariant suite correctly does
+ *    NOT fire: the resulting state is perfectly well-formed - right shot count,
+ *    unique ids, no dangling refs. Only the ROUNDTRIP oracle can see that it is
+ *    the wrong state, which is exactly what that oracle is for.
  *
  * Set `STALAGMIGHT_FUZZ_ALLOW_KNOWN_BUGS=1` to keep going past a mismatch that is
  * ENTIRELY a classified asymmetry (1, 2 and 4; it is logged, counted as the
@@ -224,6 +243,8 @@ import {
   LOOP_CLOSURE_REORDER,
   RELOAD_RESOLVED_GEOMETRY,
   SAVE_HEALING_MUTATIONS,
+  describeShotSetDelta,
+  shotSetDelta,
   classifyDiffs,
   describeDiffs,
   diffSnapshots,
@@ -356,6 +377,18 @@ function checkSnapshot(expected: string, actual: string, attributable: readonly 
 
   const lines = [describeDiffs(diffs.slice(0, SHOWN_DIFFS))];
   if (diffs.length > SHOWN_DIFFS) lines.push(`  ...and ${diffs.length - SHOWN_DIFFS} more differing path(s)`);
+  // A shot list that differs field-by-field cannot say whether the same shots
+  // moved or a DIFFERENT shot was removed. uuid survives a save/reload, so it
+  // answers that - and the answer is the difference between drift and data loss.
+  if (diffs.some((diff) => /^project\.sections\[\d+\]\.shots\b/.test(diff.path))) {
+    const deltas = shotSetDelta(expected, actual);
+    if (deltas.length > 0) {
+      lines.push('  SHOT IDENTITY DELTA (by uuid, which survives save/reload):');
+      lines.push(describeShotSetDelta(deltas));
+    } else {
+      lines.push('  (shot identity by uuid is IDENTICAL on both sides - the shots moved, none was lost)');
+    }
+  }
   for (const entry of attributed) {
     lines.push(`  (plus attributable change(s) [${entry.id}], subtracted before this diff)`);
   }
