@@ -5,9 +5,9 @@ surface carries. This is normative: new code follows it, and review holds change
 it. It synthesizes the Carbon notification pattern, Apple's HIG interruption levels,
 and Material's notification content guidance, applied to this codebase's surfaces.
 
-Some existing code predates this policy; the cleanup checklist is tracked in a
-GitHub issue (search issues for "notification policy compliance"). Do not copy an
-existing callsite's behavior without checking it against this page first.
+Some existing code predates this policy; the cleanup checklist is issue #415. Do
+not copy an existing callsite's behavior without checking it against this page
+first.
 
 ## Adding a notification? Answer these first
 
