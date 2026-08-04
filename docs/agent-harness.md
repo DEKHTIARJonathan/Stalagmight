@@ -394,7 +394,12 @@ stream, so different seeds explore different shapes of history rather than all
 sampling the same uniform mix. The profile is recorded in the metrics and the log
 line.
 
-It currently reproduces eight open undo bugs, enumerated with per-fixture,
+A 60-cell v2 sweep (both fixtures, seeds 1-30, x40, tolerant) yields 18 failures
+and a v2 repro for bugs 1, 5, 6, 7 and 8; bugs 2, 3 and 4 were not re-found and
+keep their v1 lines, executable with `STALAGMIGHT_FUZZ_STREAM=v1`. The full table
+is in the scenario header.
+
+It currently reproduces eight open undo bugs plus one open reload finding, enumerated with per-fixture,
 per-seed repro commands in the scenario's header comment, so it is RED by
 default. The most serious is bug 8: after a save/reload an undo DELETES THE WRONG
 SHOT, because shots are renumbered on load while persisted undo entries keep the
@@ -406,7 +411,11 @@ field, an undo that FAILS OUTRIGHT and wedges the history, and a multi-step
 `undoTo` landing metres away from the same depth reached by single undos
 (`undo_to`/`redo_to` call neither `invalidate_adjusted_cache()` nor
 `reconcile_geometry()`, which `undo()`/`redo()` both do) - are deliberately never
-tolerated.
+tolerated. A tenth finding - a loop closure silently reclassified as a station
+merge across save/reload, `convert_orphan_closures_to_merges` in
+`redrive_offsets_after_load` - is also left failing: it looks intended, but it
+means save+reopen is not state-preserving, and whether to normalize eagerly or
+tolerate it is a maintainer's call.
 
 ## Oracles
 

@@ -235,24 +235,59 @@
  * 60671-byte snapshot it always has). EVERY repro line numbered 1-8 above runs
  * verbatim with that variable set.
  *
- * Confirmed v2 repros, from a 24-cell sweep (both fixtures, seeds 1-12, x40,
- * tolerant):
+ * V2 REPRO TABLE, mined from a 60-cell sweep (both fixtures, seeds 1-30, x40,
+ * tolerant, release; 18 failures). Every line below is `--release` with
+ * `STALAGMIGHT_FUZZ_ALLOW_KNOWN_BUGS=1` unless marked STRICT:
  *
- *   - bug 1 (gauge-anchor half): fractal seed 1 x40, STRICT. This is what the
- *     `agent:scenarios` smoke entry hits, which is why that entry is 40.
- *   - bug 6: naharon seed 1 x40 - "undo at depth 2 failed outright ... Both
- *     sides are anchored to a zero datum."
+ *   bug 1  fractal seed 1  x40  STRICT   (gauge-anchor half; the smoke entry)
+ *   bug 2  -- v1 escape --           not re-found in the sweep
+ *   bug 3  -- v1 escape --           not re-found in the sweep
+ *   bug 4  -- v1 escape --           not re-found in the sweep
+ *   bug 5  naharon seed 16 x40       sections[20].surveyor null -> kept
+ *   bug 6  naharon seed 1  x40       "undo at depth 2 failed outright"
+ *   bug 7  fractal seed 12 x40       undoTo(0) 2.4 m section_offsets divergence
+ *          fractal seed 15 x40       same bug via the INTEGRITY oracle instead:
+ *                                    undoTo skips reconcile_geometry, so
+ *                                    realign_merges never runs and the reloaded
+ *                                    project reports "Merged stations 6:0 and
+ *                                    3:2 are 5.00 m apart". The state compare
+ *                                    had absorbed the geometry paths as
+ *                                    reload-resolved across the epoch, so ONLY
+ *                                    the integrity delta caught it - which is
+ *                                    the argument for having three oracles.
+ *   bug 8  fractal seed 14 x6        createShot(before=) into a 1-shot section,
+ *                                    save/reload, undo -> the WRONG shot is
+ *                                    deleted. Six iterations, the cleanest
+ *                                    repro of the worst bug.
  *
- * 9. NEW, open, NOT root-caused. Micron-scale geometry drift on undo, distinct
- *    from bugs 3 and 7 (which are metres): fractal seed 12 x40 tolerant gives
- *    `project.section_offsets.8[0]` expected -16.9047304696, actual
- *    -16.9047350279 - about 4.6e-6 m, nine orders of magnitude above the
- *    oracle's 1e-9 float tolerance, so it is a real computation difference and
- *    not noise. naharon seed 2 x40 shows the same signature on
- *    `stations[145].coordinates`. Both were surfaced by the v2 action space, so
- *    a new generator (splitShotAtDistance and the delete/split family do fresh
- *    trigonometry) is the obvious suspect - but that is UNVERIFIED. Left failing
- *    and unclassified.
+ * Bugs 2, 3 and 4 were not re-found across those 60 cells. Their v1 lines above
+ * remain exact and executable with `STALAGMIGHT_FUZZ_STREAM=v1`, which
+ * reproduces the legacy stream byte for byte - so no repro has been lost, and
+ * the fallback is a stream selector rather than a weakened assertion.
+ *
+ * 9. RESOLVED - not an app bug. The micron-scale drift seen at fractal seed 12
+ *    was the fuzzer's OWN 1e6-metre boundary offsets: absolute error tracked the
+ *    injected magnitude (1e6 -> 4.56e-6 m, 1e5 -> 1.59e-7, 1e4 -> 1.7e-9,
+ *    1e3 -> below tolerance, all at the same step), the signature of float
+ *    cancellation, and the shot fields roundtripped exactly. Fixed by bounding
+ *    the INPUT (`GEOMETRY_EXTREME`, undoRedoFuzzActions.ts) rather than by
+ *    loosening the oracle, which would have blinded it to real sub-centimetre
+ *    drift.
+ * 10. NEW, open. A loop closure BECOMES a station merge across save/reload:
+ *    naharon seed 26 x40 gives `loop_closures.length` 5 -> 4 with
+ *    `station_merges.length` 34 -> 35. `redrive_offsets_after_load` calls
+ *    `convert_orphan_closures_to_merges` unconditionally
+ *    (models/project/offsets.rs:185, helper at :191-198), which normalizes a
+ *    closure whose endpoints are no longer independently connected into the
+ *    merge it really is. That looks INTENDED - the app's stated invariant is
+ *    that a closure exists only for a true loop - but it means save+reopen is
+ *    not state-preserving, and the same conversion is not applied after every
+ *    command, so an in-session project can hold a closure the next reload will
+ *    silently reclassify. naharon seed 14 x40 shows the same count drop on a
+ *    plain UNDO. Left FAILING and unclassified: a tolerance here would have to
+ *    match a paired length change across two collections, and whether the fix is
+ *    "normalize eagerly" or "tolerate in the oracle" is a maintainer's call, not
+ *    the fuzzer's.
  *
  * ## Determinism
  *
