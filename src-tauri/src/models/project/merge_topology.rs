@@ -53,17 +53,11 @@ impl MergeTopology {
     /// other mutator invalidates.
     pub fn push(&mut self, merge: StationMerge) {
         if let Some(adjacency) = self.adjacency.get_mut() {
-            // Same insertion order as `build` sees when it reaches the last
-            // merge, so the delta and a fresh rebuild agree exactly (asserted by
-            // `debug_assert_memo_fresh`).
-            adjacency
-                .entry(merge.station_a.section_id)
-                .or_default()
-                .push(merge.station_b.section_id);
-            adjacency
-                .entry(merge.station_b.section_id)
-                .or_default()
-                .push(merge.station_a.section_id);
+            // The delta and `build` share ONE edge-insertion routine, so "same
+            // insertion order as a fresh rebuild reaching the last merge" is now
+            // structurally guaranteed rather than a comment two call sites have
+            // to honor (still asserted by `debug_assert_memo_fresh`).
+            Self::insert_edge(adjacency, &merge);
         }
         self.merges.push(merge);
     }
@@ -97,24 +91,33 @@ impl MergeTopology {
         self.merges.remove(index)
     }
 
-    /// Replace the whole merge list.
-    pub fn set(&mut self, merges: Vec<StationMerge>) {
+    /// Insert `merge` at `index`, shifting the rest right.
+    ///
+    /// # Panics
+    /// Panics if `index > len` (same contract as `Vec::insert`).
+    pub fn insert(&mut self, index: usize, merge: StationMerge) {
         self.adjacency.take();
-        self.merges = merges;
+        self.merges.insert(index, merge);
+    }
+
+    /// The one place a merge becomes two adjacency entries, shared by [`Self::build`]
+    /// and [`Self::push`]'s O(1) delta so the two cannot describe an edge differently.
+    fn insert_edge(adjacency: &mut HashMap<SectionId, Vec<SectionId>>, m: &StationMerge) {
+        // Each merge contributes one entry in each direction.
+        adjacency
+            .entry(m.station_a.section_id)
+            .or_default()
+            .push(m.station_b.section_id);
+        adjacency
+            .entry(m.station_b.section_id)
+            .or_default()
+            .push(m.station_a.section_id);
     }
 
     fn build(merges: &[StationMerge]) -> HashMap<SectionId, Vec<SectionId>> {
         let mut adjacency: HashMap<SectionId, Vec<SectionId>> = HashMap::new();
-        // Each merge contributes one entry in each direction.
         for m in merges {
-            adjacency
-                .entry(m.station_a.section_id)
-                .or_default()
-                .push(m.station_b.section_id);
-            adjacency
-                .entry(m.station_b.section_id)
-                .or_default()
-                .push(m.station_a.section_id);
+            Self::insert_edge(&mut adjacency, m);
         }
         adjacency
     }
@@ -226,7 +229,10 @@ mod tests {
             (
                 "push onto a cold memo",
                 Box::new(|t: &mut MergeTopology| {
-                    t.set(vec![merge(0, 1), merge(1, 2)]);
+                    // `From` (like `FromIterator`) starts cold, so this replaces
+                    // the warm memo with an uninitialized one - the push below
+                    // then has no memo to delta and must simply leave it cold.
+                    *t = MergeTopology::from(vec![merge(0, 1), merge(1, 2)]);
                     t.push(merge(2, 3));
                 }),
             ),
@@ -255,12 +261,12 @@ mod tests {
                 }),
             ),
             (
-                "set",
-                Box::new(|t: &mut MergeTopology| t.set(vec![merge(4, 5)])),
+                "insert at an interior index",
+                Box::new(|t: &mut MergeTopology| t.insert(1, merge(4, 5))),
             ),
             (
-                "set to empty",
-                Box::new(|t: &mut MergeTopology| t.set(Vec::new())),
+                "insert at the end index",
+                Box::new(|t: &mut MergeTopology| t.insert(t.len(), merge(4, 5))),
             ),
         ];
 
