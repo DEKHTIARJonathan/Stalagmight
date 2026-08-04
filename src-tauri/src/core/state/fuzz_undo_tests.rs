@@ -2690,6 +2690,13 @@ impl Fuzzer {
         let Some(drawn) = self.draw_mutation() else {
             return;
         };
+        self.record_mutation(drawn, before_undo, before_redo);
+    }
+
+    /// The bookkeeping half of `step_mutate`, split out so the exposure prologue
+    /// can push its own commands through the SAME model updates and the SAME
+    /// per-move oracles rather than a parallel path.
+    fn record_mutation(&mut self, drawn: Drawn, before_undo: usize, before_redo: usize) {
         let accepted = drawn.result.success;
         let pushed = self.undo_len().saturating_sub(before_undo);
         self.note(format!(
@@ -2787,6 +2794,183 @@ impl Fuzzer {
             None,
             StaleTargets::default(),
         );
+    }
+
+    /// Run one command through the model exactly as a drawn mutation, for the
+    /// prologues that need a specific shape rather than a random one.
+    ///
+    /// `before` is the stack shape from BEFORE the command ran, which the caller
+    /// has to capture: `record_mutation` tells a push from a no-op by the
+    /// difference, and reading it here would make every forced command look like
+    /// a no-op.
+    fn forced(&mut self, drawn: Drawn, before: (usize, usize)) {
+        self.record_mutation(drawn, before.0, before.1);
+    }
+
+    /// The current `(undo, redo)` stack depths.
+    fn stacks(&self) -> (usize, usize) {
+        (self.undo_len(), self.redo_len())
+    }
+
+    /// Build the state findings 8, 12 and 13 need, instead of waiting for a seed
+    /// to stumble into it.
+    ///
+    /// The three defects all require a shot id that means something DIFFERENT
+    /// after a reload, and an entry carrying such an id that a walk actually
+    /// reaches. A random stream reaches both by luck: it has to insert
+    /// mid-section (so the ids stop matching positional order), then push an
+    /// id-bearing entry, then save, then unwind to it without crossing a
+    /// `ProjectSnapshotPair` on the way - and a snapshot-pair entry is a WALL,
+    /// because `Shot::id` is serialized inside a project snapshot, so restoring
+    /// one puts the whole project back into the pre-save id space and every
+    /// stale id below it becomes valid again.
+    ///
+    /// So this builds the shape directly, in the order the harness's
+    /// `undo-persistence-fuzz` arrived at for the same reason
+    /// (`e2e/agent/scenarios/undoPersistenceCoverage.ts`, "why a
+    /// ProjectSnapshotPair entry is a wall"): a fresh section, the insert that
+    /// makes ids diverge, then EVERY id-bearing entry contiguous at the top, so
+    /// the reload lands inside that block and the unwind starts on it.
+    ///
+    /// The section is FRESH - disconnected, no datum, in no loop - on purpose:
+    /// `delete_shot`'s loop guard would otherwise refuse the undo of the insert
+    /// (finding 6) and wedge the history before any of this could be observed.
+    fn expose_stale_ids(&mut self) {
+        let shots: Vec<ShotData> = (0..3).map(|_| random_shot(&mut self.rng)).collect();
+        let before = self.stacks();
+        let created = self.state.execute(Command::CreateSection {
+            name: Some("exposed".to_string()),
+            surveyor: None,
+            date: None,
+            color: (*self.rng.pick(COLORS)).to_string(),
+            direction: None,
+            shots,
+        });
+        let Some(section_id) = created.section_id else {
+            self.fail(
+                "the exposure prologue could not create its section",
+                &format!("  error: {:?}", created.error),
+            );
+        };
+        self.forced(
+            Drawn::new(
+                format!("exposure:createSection(s={section_id},shots=3)"),
+                created,
+            ),
+            before,
+        );
+
+        // The insert that makes ids diverge from positional order. BEFORE the
+        // first shot, so every id moves by one slot when the loader renumbers.
+        let first = self.live_shot_ids(section_id);
+        let Some(&first_shot) = first.first() else {
+            self.fail("the exposure prologue's section has no shots", "");
+        };
+        let anchor = self.shot_target(section_id, first_shot);
+        let shot = random_shot(&mut self.rng);
+        let before = self.stacks();
+        let inserted = self.state.execute(Command::CreateShot {
+            section_id,
+            shot,
+            after_shot_id: None,
+            before_shot_id: Some(first_shot),
+        });
+        let mut drawn = Drawn::new(
+            format!("exposure:createShot(s={section_id},before)"),
+            inserted,
+        );
+        drawn.anchor = anchor;
+        drawn.target = drawn
+            .result
+            .shot_id
+            .and_then(|shot_id| self.shot_target(section_id, shot_id));
+        self.forced(drawn, before);
+
+        // The divergence is the whole precondition, so it is CHECKED rather than
+        // assumed: a section whose ids still equal `section * STRIDE + position`
+        // survives the reload unchanged and none of this proves anything.
+        let colliding = self.colliding_shots(section_id);
+        assert!(
+            !colliding.is_empty(),
+            "the exposure prologue produced no colliding shot id in section {section_id}: ids {:?}",
+            self.live_shot_ids(section_id)
+        );
+
+        // Every id-bearing edit variant, contiguous, on top: `PreviousValues`
+        // (update_shot) and `InverseCommand` (set_shot_kind), each aimed at a
+        // shot whose id will address a DIFFERENT one after the renumbering.
+        for &shot_id in colliding.iter().take(2) {
+            let target = self.shot_target(section_id, shot_id);
+            let before = self.stacks();
+            let edited = self.state.execute(Command::UpdateShot {
+                section_id,
+                shot_id,
+                updates: ShotUpdates {
+                    length: Some(self.rng.float(20.0, 40.0)),
+                    ..ShotUpdates::default()
+                },
+            });
+            let mut drawn = Drawn::new(
+                format!("exposure:updateShot(s={section_id},shot={shot_id})"),
+                edited,
+            );
+            drawn.target = target;
+            self.forced(drawn, before);
+        }
+        for &shot_id in colliding.iter().take(2) {
+            let target = self.shot_target(section_id, shot_id);
+            let before = self.stacks();
+            let marked = self.state.execute(Command::SetShotKind {
+                section_id,
+                shot_id,
+                // Never `Normal`: every shot here starts Normal, so setting it
+                // would be a forward no-op with a no-op inverse, and an undo
+                // landing on the WRONG shot would be unobservable.
+                kind: ShotKind::Jump,
+            });
+            let mut drawn = Drawn::new(
+                format!("exposure:setShotKind(s={section_id},shot={shot_id})"),
+                marked,
+            );
+            drawn.target = target;
+            self.forced(drawn, before);
+        }
+    }
+
+    /// Live shot ids of one section, in positional order.
+    fn live_shot_ids(&self, section_id: SectionId) -> Vec<ShotId> {
+        self.state
+            .get_project_state()
+            .map(|project| {
+                project
+                    .sections
+                    .iter()
+                    .find(|section| section.id == section_id)
+                    .map(|section| section.shots.iter().map(|shot| shot.id).collect())
+                    .unwrap_or_default()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Shots whose id will address a DIFFERENT, still-valid position once the
+    /// loader has renumbered the section.
+    ///
+    /// The loader rewrites position `i` to `section_id * FEATURE_ID_STRIDE + i`
+    /// (persistence/sqlite/read.rs), so a persisted id `ids[i]` will address
+    /// position `ids[i] - section_id * STRIDE` after a reload. It is a COLLISION
+    /// exactly when that number is a different, still-valid position - which is
+    /// findings 8 and 12's regime, as opposed to finding 13's (out of range).
+    fn colliding_shots(&self, section_id: SectionId) -> Vec<ShotId> {
+        let ids = self.live_shot_ids(section_id);
+        let base = section_id * crate::models::FEATURE_ID_STRIDE;
+        ids.iter()
+            .enumerate()
+            .filter(|(position, id)| {
+                let lands = id.saturating_sub(base) as usize;
+                lands != *position && lands < ids.len()
+            })
+            .map(|(_, id)| *id)
+            .collect()
     }
 
     /// Did a failed history move fail for a KNOWN, documented reason?
@@ -3053,14 +3237,31 @@ struct Plan {
     /// message. Delete this flag when finding 14 is fixed; the gate then covers
     /// `ClosureInfo` again, which is the coverage it currently costs.
     closures: bool,
+    /// Build the id-vs-position divergence findings 8, 12 and 13 need, and put
+    /// every id-bearing entry contiguous on top, before crossing the save
+    /// boundary. See `Fuzzer::expose_stale_ids`.
+    ///
+    /// OFF for the gate. Not because it is slow but because it is DELIBERATE
+    /// corruption: with it on a run reaches the data-loss findings by
+    /// construction, and its classified-hit counts then say nothing about
+    /// whether the model has acquired a NEW way to be wrong, which is the only
+    /// thing the gate is for.
+    divergence: bool,
 }
 
 fn run_fuzz(seed: u32, plan: Plan) -> Outcome {
     let mut fuzzer = Fuzzer::new(seed, plan.closures);
+    // The exposure prologue runs FIRST and crosses the boundary itself, so the
+    // block of id-bearing entries it builds is the newest thing on the stack
+    // when the reload lands and the closing unwind starts on it.
+    if plan.divergence {
+        fuzzer.expose_stale_ids();
+        fuzzer.cross_boundary();
+    }
     // Crossing at a third of the way in leaves entries both below and above the
     // boundary, so the closing walk covers restored UNDO entries and restored
     // REDO entries alike.
-    let boundary_at = if plan.persistence {
+    let boundary_at = if plan.persistence && !plan.divergence {
         plan.iterations / 3
     } else {
         usize::MAX
@@ -3233,6 +3434,7 @@ fn undo_redo_fuzz_gate() {
                 persistence: false,
                 jumps: false,
                 closures: false,
+                divergence: false,
             },
         );
         println!("{}", summarize("in-memory", seed, &outcome));
@@ -3272,6 +3474,7 @@ fn undo_redo_fuzz_gate_persistence() {
                 persistence: true,
                 jumps: false,
                 closures: false,
+                divergence: false,
             },
         );
         println!("{}", summarize("persistence", seed, &outcome));
@@ -3301,6 +3504,7 @@ fn the_fuzzer_is_deterministic() {
             persistence: false,
             jumps: false,
             closures: false,
+            divergence: false,
         };
         let first = run_fuzz(seed, plan);
         let second = run_fuzz(seed, plan);
@@ -3349,6 +3553,7 @@ fn fuzz_seed_survey() {
         .unwrap_or(GATE_ITERATIONS);
     let jumps = std::env::var("STALAGMIGHT_RUST_FUZZ_JUMPS").is_ok();
     let closures = std::env::var("STALAGMIGHT_RUST_FUZZ_CLOSURES").is_ok();
+    let divergence = std::env::var("STALAGMIGHT_RUST_FUZZ_DIVERGENCE").is_ok();
     let verbose = std::env::var("STALAGMIGHT_RUST_FUZZ_VERBOSE").is_ok();
     let mut clean = Vec::new();
     let mut failures: BTreeMap<String, Vec<u32>> = BTreeMap::new();
@@ -3359,6 +3564,7 @@ fn fuzz_seed_survey() {
                 persistence,
                 jumps,
                 closures,
+                divergence,
             };
             let outcome =
                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run_fuzz(seed, plan)));
@@ -3444,6 +3650,7 @@ fn undo_redo_fuzz_soak() {
                     // hitting them.
                     jumps: true,
                     closures: true,
+                    divergence: persistence,
                 },
             );
             if outcome.wedged {
