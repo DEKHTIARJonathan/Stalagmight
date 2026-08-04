@@ -547,6 +547,7 @@ export default function EditSectionDialog() {
             onAddShot={handleAddShot}
             onDeleteShot={handleDeleteShot}
             onDeleteShots={handleDeleteShots}
+            readOnly={editingBlocked}
             onInsertBefore={handleInsertBefore}
             onInsertAfter={handleInsertAfter}
             validationConfig={validationConfig}
@@ -643,7 +644,7 @@ export default function EditSectionDialog() {
           <Button
             variant="primary"
             onClick={handleSave}
-            disabled={isLoading || pendingMidDelete !== null || incompleteRows.length > 0}
+            disabled={isLoading || editingBlocked || pendingMidDelete !== null || incompleteRows.length > 0}
             data-testid="edit-section-save"
           >
             {isLoading ? 'Saving...' : 'Save'}
