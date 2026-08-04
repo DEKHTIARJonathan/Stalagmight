@@ -209,14 +209,22 @@ fn default_data_table_hidden_columns() -> Vec<String> {
     vec!["section_id".to_string(), "shot_id".to_string()]
 }
 
-/// The new-section dialog opens on the columns the old hand-rolled table showed
-/// (length, average azimuth, both depths) plus kind and comment; the in/out
-/// legs, pitch and LRUD are one click away in the grid's Columns menu.
-/// The edit-section grid opens on everything it has: it is editing a survey that
-/// already exists, so there is no "start simple" case the way there is when
-/// entering a brand-new section.
+/// The edit-section grid hides the azimuth legs and the whole inclination family
+/// and shows everything else. It is editing a survey that already exists, so
+/// there is no "start simple" case the way there is when entering a brand-new
+/// section - but those five columns were added to the grid after the fact, and
+/// hiding them is what keeps the four dialogs that render it looking exactly as
+/// they did before. The averages are what they have always shown.
+///
+/// Mirrored by `DEFAULT_EDIT_SECTION_HIDDEN_COLUMNS` in ShotTableEditor.tsx.
 fn default_edit_section_hidden_columns() -> Vec<String> {
-    Vec::new()
+    vec![
+        "azimuth_in".to_string(),
+        "azimuth_out".to_string(),
+        "_pitch_avg".to_string(),
+        "pitch_in".to_string(),
+        "pitch_out".to_string(),
+    ]
 }
 
 fn default_new_section_hidden_columns() -> Vec<String> {

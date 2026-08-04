@@ -48,16 +48,32 @@ export function isBlankNewShot(shot: EditableShot): boolean {
  * that is complete, and empty for a blank new row - nothing is "missing" from a
  * row that holds nothing.
  *
- * The azimuth is reported against the AVERAGE column, which is the one on screen
- * by default; setting it fills both legs.
+ * The azimuth mark goes on whichever azimuth column is actually SHOWING. The
+ * average is the default, but the eye menu can swap it for the in/out legs, and
+ * marking a hidden column paints a red cell nobody can see while Save refuses to
+ * proceed - the same dead end the new-section dialog solves by revealing.
  */
-export function missingRequiredCells(shot: EditableShot, azimuthAvgKey: string): Set<string> {
+export function missingRequiredCells(
+  shot: EditableShot,
+  azimuthAvgKey: string,
+  /** Hidden column keys, so the mark lands somewhere visible. Omit when the
+   *  caller only needs completeness, not cell identity. */
+  hiddenColumns?: ReadonlySet<string>
+): Set<string> {
   const missing = new Set<string>();
   if (isBlankNewShot(shot)) return missing;
   if (!fin(shot.length) || shot.length <= 0) missing.add('length');
   if (!fin(shot.depth_in)) missing.add('depth_in');
   if (!fin(shot.depth_out)) missing.add('depth_out');
-  if (!fin(shot.azimuth_in) && !fin(shot.azimuth_out)) missing.add(azimuthAvgKey);
+  if (!fin(shot.azimuth_in) && !fin(shot.azimuth_out)) {
+    if (hiddenColumns?.has(azimuthAvgKey) === true) {
+      // Avg is hidden, so the legs are what the user can see and fill.
+      missing.add('azimuth_in');
+      missing.add('azimuth_out');
+    } else {
+      missing.add(azimuthAvgKey);
+    }
+  }
   return missing;
 }
 

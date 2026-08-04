@@ -3521,7 +3521,13 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 ],
                 new_section_column_widths: {},
                 edit_section_column_order: [],
-                edit_section_hidden_columns: [],
+                edit_section_hidden_columns: [
+                  'azimuth_in',
+                  'azimuth_out',
+                  '_pitch_avg',
+                  'pitch_in',
+                  'pitch_out',
+                ],
                 edit_section_column_widths: {},
                 // Concrete reveal state so initPanels never falls back to its
                 // defaults. Deliberately NOT the shipped default any more: a fresh
@@ -3894,7 +3900,13 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 ],
                 new_section_column_widths: {},
                 edit_section_column_order: [],
-                edit_section_hidden_columns: [],
+                edit_section_hidden_columns: [
+                  'azimuth_in',
+                  'azimuth_out',
+                  '_pitch_avg',
+                  'pitch_in',
+                  'pitch_out',
+                ],
                 edit_section_column_widths: {},
                 // Concrete reveal state so initPanels never falls back to its
                 // defaults. Deliberately NOT the shipped default any more: a fresh

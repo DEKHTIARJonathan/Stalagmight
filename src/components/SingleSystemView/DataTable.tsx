@@ -8,7 +8,7 @@ import { useEditingBlocked } from '../../hooks/useEditingBlocked';
 import { useShallow } from 'zustand/react/shallow';
 import { SpreadsheetGrid } from '../common/SpreadsheetGrid';
 import { EntityBlob } from '../common/EntityBlob';
-import { ChevronDownIcon, ExpandIcon, EyeIcon } from '../common/icons';
+import { ChevronDownIcon, ExpandIcon } from '../common/icons';
 import type { ProjectWarning } from '../../types/commands';
 import { formatShotId, formatStationId } from '../../utils/formatters';
 import { getDeleteShotDialog, deriveRangeDeleteParams } from '../../utils/contextMenuHelpers';
@@ -16,6 +16,7 @@ import { getNumberFormatLocale } from '../../i18n/format';
 import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
 import { useGridLabels } from '../../hooks/useGridLabels';
 import { useDismissableLayer } from '../../hooks/useDismissableLayer';
+import { ShotColumnsMenu } from '../common/ShotColumnsMenu';
 import { useAnchoredFixedMenu } from '../../hooks/useAnchoredFixedMenu';
 import { setSource } from '../../utils/telemetry';
 import { syntacticLevelAtLeast } from '../../theme/syntacticPalette';
@@ -586,12 +587,6 @@ export default function DataTable({ sections }: DataTableProps) {
   // declared width. The grid commits these on resize release, not per mousemove.
   const [shotColumnWidths, setShotColumnWidths] = useState<Record<string, number>>({});
   const [stationColumnWidths, setStationColumnWidths] = useState<Record<string, number>>({});
-  const [colMenuOpen, setColMenuOpen] = useState(false);
-  // Wraps both the eye trigger and its anchored dropdown, so an outside-mousedown
-  // check can treat the whole control as "inside".
-  const colMenuWrapRef = useRef<HTMLDivElement | null>(null);
-  const colMenuBtnRef = useRef<HTMLButtonElement | null>(null);
-  const colMenuListRef = useRef<HTMLDivElement | null>(null);
   // Right-click on a column header: hide it / switch the angle family's mode.
   const [headerMenu, setHeaderMenu] = useState<{ x: number; y: number; colKey: string } | null>(null);
   const headerMenuRef = useRef<HTMLDivElement | null>(null);
@@ -628,14 +623,6 @@ export default function DataTable({ sections }: DataTableProps) {
       window.removeEventListener('keydown', onKey);
     };
   }, [headerMenu]);
-  // Position the dropdown with `position:fixed` so it escapes the Dock's
-  // overflow-hidden clip box when it flips up (the data table sits at the bottom
-  // of the window, so this usually means upward).
-  const colMenuStyle = useAnchoredFixedMenu(colMenuOpen, colMenuBtnRef, colMenuListRef, {
-    align: 'right',
-    gap: 4,
-    width: 224, // px; the hook also sets this as the dropdown width (single source of truth)
-  });
 
   const shotHiddenColumns = useMemo(() => {
     const hidden = [...hiddenShotCols];
@@ -699,26 +686,6 @@ export default function DataTable({ sections }: DataTableProps) {
     }
   );
 
-  // Close on outside mousedown / external scroll / resize (shared hook). The
-  // dropdown is position:fixed at a captured rect (useAnchoredFixedMenu), so any
-  // scroll/resize would otherwise leave it floating at a stale spot; the wrapper
-  // still contains it in the DOM, so inside clicks count as inside. Escape stays
-  // separate below.
-  useDismissableLayer({
-    open: colMenuOpen,
-    onDismiss: () => setColMenuOpen(false),
-    contains: [colMenuWrapRef],
-  });
-  useEffect(() => {
-    if (!colMenuOpen) return undefined;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setColMenuOpen(false);
-    };
-    window.addEventListener('keydown', onKey);
-    return () => {
-      window.removeEventListener('keydown', onKey);
-    };
-  }, [colMenuOpen]);
 
   // --- Draft "new shot" rows --------------------------------------------------
   // The grid always shows one empty editable row at the end (the end draft);
@@ -1527,56 +1494,19 @@ export default function DataTable({ sections }: DataTableProps) {
     return items;
   }, [headerMenu, tableView, t, changeAngleMode, hideShotCols, shotColumns, stationColumns, hideStationCols]);
 
-  // Rows of the column-visibility menu: a checkbox per column (or group - the
-  // LRUD keys toggle together), and a tri-state Avg / In+Out / Off control for
-  // the azimuth and inclination column families. The menu serves whichever
-  // view is active, so the checkboxes read/write that view's hidden set.
+  // The column-visibility menu serves whichever view is active, so it reads and
+  // writes that view's hidden set. The rows themselves live in ShotColumnsMenu,
+  // shared with the new-section dialog and the shot editor; the stations view
+  // has a different column domain, so it passes its own rows instead.
   const menuHiddenCols = tableView === 'shots' ? hiddenShotCols : hiddenStationCols;
   const menuToggleCols = tableView === 'shots' ? toggleShotCols : toggleStationCols;
-  const colCheckRow = (keys: string[], label: string, className = '', problem = false) => (
-    <label
-      key={keys[0]}
-      className={`flex cursor-pointer items-center gap-2 rounded px-2 py-0.5 hover:bg-accent-10 ${
-        problem ? 'text-error' : ''
-      } ${className}`}
-    >
-      <input
-        type="checkbox"
-        checked={keys.every((k) => !menuHiddenCols.has(k))}
-        onChange={() => menuToggleCols(keys)}
-        data-testid={`col-vis-${keys[0]}`}
-      />
-      {label}
-    </label>
-  );
-  const angleModeRow = (
-    label: string,
-    mode: 'avg' | 'inout' | 'off',
-    setMode: (m: 'avg' | 'inout' | 'off') => void,
-    testId: string,
-    problem = false,
-  ) => (
-    <div className="flex items-center justify-between gap-2 px-2 py-0.5">
-      <span className={problem ? 'text-error' : undefined}>{label}</span>
-      <span className="flex overflow-hidden rounded border border-border">
-        {(['avg', 'inout', 'off'] as const).map((m) => (
-          <button
-            key={m}
-            className={`px-1.5 py-0.5 ${
-              mode === m ? 'bg-accent-20 text-text' : 'text-text-secondary hover:bg-accent-10'
-            }`}
-            onClick={() => setMode(m)}
-            data-testid={`${testId}-${m}`}
-          >
-            {m === 'avg'
-              ? t('dataTable.columnsMenu.avg')
-              : m === 'inout'
-                ? t('dataTable.columnsMenu.inOut')
-                : t('dataTable.columnsMenu.off')}
-          </button>
-        ))}
-      </span>
-    </div>
+  const stationMenuRows = useMemo(
+    () =>
+      STATION_MENU_COLS.map(({ keys, nameKey }) => ({
+        keys,
+        label: t(`dataTable.stationColumnsMenu.${nameKey}`),
+      })),
+    [t]
   );
 
   return (
@@ -1688,56 +1618,29 @@ export default function DataTable({ sections }: DataTableProps) {
             </button>
           ))}
         </div>
-        {/* Column-visibility menu; inside clicks must not reach the window
-            mousedown listener that closes it. */}
-        <div ref={colMenuWrapRef} className="relative" onMouseDown={(e) => e.stopPropagation()}>
-          <button
-            ref={colMenuBtnRef}
-            onClick={() => setColMenuOpen((v) => !v)}
-            className={
-              tableView === 'shots' && draftHiddenProblems.size > 0
-                ? 'text-error'
-                : colMenuOpen
-                  ? 'text-text'
-                  : 'text-text-secondary hover:text-text'
-            }
-            title={t('dataTable.columnsMenu.button')}
-            data-testid="data-table-columns-menu"
-          >
-            <EyeIcon size={14} />
-          </button>
-          {colMenuOpen && (
-            <div
-              ref={colMenuListRef}
-              className="overflow-auto rounded border border-border bg-panel p-1 shadow-lg"
-              style={colMenuStyle}
-              data-dropdown-open
-              data-testid="data-table-columns-dropdown"
-            >
-              {tableView === 'shots' ? (
-                <>
-                  {colCheckRow(['_warnings'], t('dataTable.columnsMenu.warnings'))}
-                  {colCheckRow(['section_id'], t('dataTable.columnsMenu.sectionId'))}
-                  {colCheckRow(['shot_id'], t('dataTable.columnsMenu.shotId'))}
-                  {colCheckRow(['length'], t('dataTable.columnsMenu.length'), '', draftHiddenProblems.has('length'))}
-                  {angleModeRow(t('dataTable.columnsMenu.azimuth'), azimuthMode, (m) => changeAngleMode('azimuth', m), 'col-azimuth', draftHiddenProblems.has('azimuth'))}
-                  {angleModeRow(t('dataTable.columnsMenu.inclination'), inclinationMode, (m) => changeAngleMode('inclination', m), 'col-inclination')}
-                  <div className="flex">
-                    {colCheckRow(['depth_in'], t('dataTable.columnsMenu.depthIn'), 'flex-1', draftHiddenProblems.has('depthIn'))}
-                    {colCheckRow(['depth_out'], t('dataTable.columnsMenu.depthOut'), 'flex-1', draftHiddenProblems.has('depthOut'))}
-                  </div>
-                  {colCheckRow(['left', 'right', 'up', 'down'], t('dataTable.columnsMenu.lrud'))}
-                  {colCheckRow(['kind'], t('dataTable.columnsMenu.reference'))}
-                  {colCheckRow(['comment'], t('dataTable.columnsMenu.comment'))}
-                </>
-              ) : (
-                STATION_MENU_COLS.map(({ keys, nameKey }) =>
-                  colCheckRow(keys, t(`dataTable.stationColumnsMenu.${nameKey}`))
-                )
-              )}
-            </div>
-          )}
-        </div>
+        <ShotColumnsMenu
+          hidden={menuHiddenCols}
+          onToggle={menuToggleCols}
+          buttonTestId="data-table-columns-menu"
+          dropdownTestId="data-table-columns-dropdown"
+          anchorScope={panelRef}
+          {...(tableView === 'shots'
+            ? {
+                extraRows: { warnings: true, sectionId: true, shotId: true },
+                angleModes: {
+                  azimuth: {
+                    mode: azimuthMode,
+                    onPick: (m) => changeAngleMode('azimuth', m),
+                  },
+                  inclination: {
+                    mode: inclinationMode,
+                    onPick: (m) => changeAngleMode('inclination', m),
+                  },
+                },
+                problems: draftHiddenProblems,
+              }
+            : { rowsOverride: stationMenuRows })}
+        />
         {!dataTableFullScreen && (
           <button
             onClick={enterDataTableFullScreen}
