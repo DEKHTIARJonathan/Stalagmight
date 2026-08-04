@@ -212,6 +212,19 @@
  * missed all of this, and why `COVERAGE_STEPS` puts every snapshot-pair step as
  * low in the stack as its preconditions allow.
  *
+ * ## Trace record / replay
+ *
+ * Each iteration records its resolved move list and, on failure, writes it to the
+ * session artifacts dir (path named in the message). The recorder RESETS per
+ * iteration, because the cycles are independent - so the trace is of the cycle
+ * that failed, already minimal in that dimension.
+ *
+ * `--trace <file>` replays one and `pnpm agent:fuzz-shrink` minimizes it. On a
+ * replay the PLAN's own preconditions are skipped - id divergence, the
+ * renumbering check, variant coverage, "the plan pushed no entries" - because a
+ * shrunk trace is by construction not the plan. Every APP oracle still runs:
+ * roundtrip, absolute invariants, integrity delta and stack survival.
+ *
  * ## Determinism
  *
  * Every value and every target is drawn from `ctx.rng()`; the plan's order is

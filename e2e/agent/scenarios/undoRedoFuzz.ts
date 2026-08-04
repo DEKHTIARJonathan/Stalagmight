@@ -345,6 +345,24 @@
  *    "normalize eagerly" or "tolerate in the oracle" is a maintainer's call, not
  *    the fuzzer's.
  *
+ * ## Trace record / replay
+ *
+ * Every run records its RESOLVED move list - the generator draws already
+ * collapsed into concrete `projectStore` actions and args - and writes it to the
+ * session artifacts dir on FAILURE, naming the path in the message.
+ * `STALAGMIGHT_FUZZ_TRACE=path` also writes one on success.
+ *
+ * `pnpm agent:scenario undo-redo-fuzz --trace <file>` replays it. Replay is a
+ * MODE of this scenario, not a separate one: only the source of the decisions
+ * changes, so the oracles, the model and the failure payload are the same code.
+ * `pnpm agent:fuzz-shrink <trace>` then ddmins it down to a 1-minimal move list.
+ * See `e2e/agent/lib/fuzzTrace.ts` and docs/agent-harness.md.
+ *
+ * Recording is OBSERVE-ONLY - it draws nothing, reads no app state and runs after
+ * the decision it records - so every repro seed above is unaffected by it. Both
+ * faithfulness lines (bug 1 at seed 1 x40 strict, bug 8 at seed 14 x6 tolerant)
+ * are re-verified with recording active.
+ *
  * ## Determinism
  *
  * Every draw comes from `ctx.rng()`/`randInt`/`pick`, and every target id is
