@@ -49,6 +49,16 @@ test('current bundle passes', () => {
   assert.deepEqual(checkBundle(root), []);
 });
 
+test('a CRLF checkout of lockfiles and bundle still passes (autocrlf)', () => {
+  const toCrlf = (s) => s.replace(/\n/g, '\r\n');
+  const root = makeTree({
+    cargo: toCrlf('cargo-lock-v1\n'),
+    pnpm: toCrlf('pnpm-lock-v1\n'),
+    bundle: toCrlf(currentBundle('cargo-lock-v1\n', 'pnpm-lock-v1\n')),
+  });
+  assert.deepEqual(checkBundle(root), []);
+});
+
 test('hand-edited body fails and says so', () => {
   const good = currentBundle('cargo-lock-v1', 'pnpm-lock-v1');
   const root = makeTree({ bundle: good.replace('fixture body', 'edited body') });

@@ -44,7 +44,13 @@ const OUT_FILE = path.join(REPO_ROOT, 'THIRD-PARTY-LICENSES.md');
 const FIRST_PARTY_CRATES = new Set(['stalagmight']);
 
 const sha256 = (buf) => createHash('sha256').update(buf).digest('hex');
-const lockfileHash = (rel) => sha256(fs.readFileSync(path.join(REPO_ROOT, rel)));
+// Hashes are CRLF-normalised on both the generator and checker side, so a
+// core.autocrlf=true checkout (Windows) regenerates the same hashes CI's LF
+// checkout verifies. (A .gitattributes eol pin was tried instead and broke
+// test-release.sh's CRLF-tolerance case - release.sh must keep accepting a
+// CRLF Cargo.lock, so the gate normalises rather than the checkout.)
+const hashNormalised = (text) => sha256(text.replace(/\r\n/g, '\n'));
+const lockfileHash = (rel) => hashNormalised(fs.readFileSync(path.join(REPO_ROOT, rel), 'utf8'));
 
 // CRLF-normalise but otherwise keep license text verbatim - the notices are
 // the payload here.
@@ -241,7 +247,7 @@ stale or hand-edited; regenerate after any dependency change.
 <!-- lockfile-hashes
 Cargo.lock=${lockfileHash('src-tauri/Cargo.lock')}
 pnpm-lock.yaml=${lockfileHash('pnpm-lock.yaml')}
-bundle-body=${sha256(tail)}
+bundle-body=${hashNormalised(tail)}
 -->
 `;
 

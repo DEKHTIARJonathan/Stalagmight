@@ -45,6 +45,10 @@ const LOCKFILES = ['src-tauri/Cargo.lock', 'pnpm-lock.yaml'];
 const MAX_BUNDLE_BYTES = 32 * 1024 * 1024;
 
 const sha256 = (buf) => createHash('sha256').update(buf).digest('hex');
+// CRLF-normalised to mirror the generator: an autocrlf checkout must verify
+// the same hashes an LF checkout does. Must stay in lockstep with
+// gen-third-party-licenses.mjs's hashNormalised.
+const hashNormalised = (text) => sha256(text.replace(/\r\n/g, '\n'));
 
 // Returns a list of problem strings; empty means the bundle is current.
 export function checkBundle(root) {
@@ -60,7 +64,9 @@ export function checkBundle(root) {
   }
   let body;
   try {
-    body = fs.readFileSync(bundlePath, 'utf8');
+    // Normalised up front so the comment regex and the body hash both work
+    // on an autocrlf (CRLF) checkout of the bundle itself.
+    body = fs.readFileSync(bundlePath, 'utf8').replace(/\r\n/g, '\n');
   } catch {
     return [`${BUNDLE} is unreadable`];
   }
@@ -76,7 +82,7 @@ export function checkBundle(root) {
       problems.push(`${BUNDLE} records no hash for ${rel} - regenerate it`);
       continue;
     }
-    const got = sha256(fs.readFileSync(path.join(root, rel)));
+    const got = hashNormalised(fs.readFileSync(path.join(root, rel), 'utf8'));
     if (got !== want) problems.push(`${rel} changed since ${BUNDLE} was generated`);
   }
   // Everything after the comment's closing marker is the generated body; a
@@ -86,7 +92,7 @@ export function checkBundle(root) {
     problems.push(`${BUNDLE} records no bundle-body hash - regenerate it`);
   } else {
     const tail = body.slice(body.indexOf(comment[0]) + comment[0].length);
-    if (sha256(tail) !== wantBody) {
+    if (hashNormalised(tail) !== wantBody) {
       problems.push(`${BUNDLE} body does not match its recorded hash - it was edited by hand; regenerate it`);
     }
   }
