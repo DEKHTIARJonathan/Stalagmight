@@ -115,6 +115,32 @@
 //! and the frontend's own bookkeeping. Those are the harness's job and the
 //! reason it stays.
 //!
+//! # Four oracles, not one
+//!
+//! | oracle | what it compares | what only it can see |
+//! |---|---|---|
+//! | ROUNDTRIP | a canonical serialized `Project` per undo depth | anything stored that a history move fails to restore |
+//! | ALIGNMENT | every cross-section merge, RAW and RESOLVED | a move that leaves the survey network geometrically broken, and a disagreement between the app's two measures of that |
+//! | INTEGRITY DELTA | `AppState::integrity_check`'s own verdict per depth | a state that roundtrips while the app's verdict on it does not |
+//! | ADJUSTED GEOMETRY | `get_adjusted_stations` per depth - what the map draws | a SOLVE whose result moved, including through a stale memo, while the stored inputs agree |
+//!
+//! The last two are ports of the harness's, and the integrity one is there
+//! because at that tier it caught a finding 7 manifestation ALONE: the state
+//! compared equal (the geometry paths were absorbed as reload-resolved across an
+//! epoch boundary) while `check_project_integrity` reported a merge 5.00 m out.
+//!
+//! They cost little next to the roundtrip oracle they join. Measured over seed 1
+//! at 60 moves, 59 comparisons: the project snapshot is ~1.8 ms per comparison,
+//! the integrity verdict ~81 us (4.6% of it) and the adjusted solve ~208 us
+//! (12%). Both run on EVERY comparison; no checkpointing was needed, and the
+//! per-run totals are printed in the summary line so the number stays honest as
+//! the model grows.
+//!
+//! The consistency rule they need is in `expect_derived`: when a classified
+//! known bug resyncs the state model, the verdict and the adjusted geometry
+//! resync at the same moment. A derived model that kept the pre-bug expectation
+//! would report the same defect at every later depth as a fresh failure.
+//!
 //! # The oracle sees MORE than the harness one
 //!
 //! The harness compares `get_project_state`, which is `ProjectIpc` - and that
@@ -508,6 +534,88 @@ fn describe_diffs(diffs: &[Diff]) -> String {
     }
     lines.join("\n")
 }
+
+// ===========================================================================
+// The two derived-state oracles
+// ===========================================================================
+
+/// The app's OWN integrity verdict (`AppState::integrity_check`), normalized.
+///
+/// Ported from the harness tier, where this oracle earned its place by catching
+/// a finding 7 manifestation ALONE: the state compared equal (the geometry paths
+/// had been absorbed as reload-resolved across an epoch boundary) while
+/// `check_project_integrity` reported a merge 5.00 m out. A verdict is part of
+/// the state a history move is supposed to restore, and it is derived through a
+/// different path than the snapshot - so it sees what the snapshot cannot.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct Verdict {
+    save_blocked: bool,
+    /// Violation messages, SORTED.
+    ///
+    /// The app sorts them by severity only (`commands.rs`), and that sort is
+    /// stable - so within a severity the order is the order the checks pushed
+    /// them, which for the `for_each_station_ref` traversal follows `HashMap`
+    /// iteration and is not stable between runs. Sorting loses nothing the
+    /// oracle wants (the SET of violations is the verdict) and is what makes it
+    /// comparable at all.
+    ///
+    /// Values are kept VERBATIM otherwise, ids and distances included. Every id
+    /// a message can carry - section id, station index, closure id, uuid -
+    /// survives a save/reload unchanged, and the distances are quantized to a
+    /// centimetre by the `{:.2}` in the messages themselves, so float dust
+    /// cannot move one except exactly on a rounding boundary. Stripping them
+    /// would hide "5.00 m apart" turning into "500.00 m apart", which is the
+    /// kind of thing this exists to see.
+    messages: Vec<String>,
+}
+
+impl Verdict {
+    fn describe(&self) -> String {
+        format!(
+            "save_blocked={} messages={:?}",
+            self.save_blocked, self.messages
+        )
+    }
+}
+
+/// One merged pair, measured BOTH ways.
+///
+/// `check_merge_alignment` (models/project/integrity.rs) measures through
+/// `resolved_station_offsets()`, which folds in closure adjustment;
+/// `debug_assert_merge_alignment` (models/project/offsets.rs) measures
+/// `compute_station_raw_coords`. Issue #413's finding 14 records that the two
+/// DISAGREE about the same state - the assert panics at 6.97 m while the checker
+/// reports nothing - and asks which is authoritative. This is the oracle that
+/// mines that class instead of noting it.
+struct MergeMeasurement {
+    label: String,
+    raw: f64,
+    resolved: f64,
+}
+
+/// Tolerance for the per-depth ADJUSTED-geometry comparison, in metres.
+///
+/// Deliberately not the raw oracle's 1e-9. The adjusted stations are the output
+/// of a least-squares solve over the whole network, so an input difference the
+/// raw oracle tolerates (1e-9 m) can come out of the solve amplified by the
+/// condition number of the system. A micron is four orders of magnitude below
+/// the smallest geometry change anyone can mean (a millimetre) and three above
+/// what the raw comparison already lets through, which makes it tight enough to
+/// catch a real regression and loose enough not to report the solver's own dust.
+///
+/// Accumulation past this bound over a long run is a FINDING, not noise - see
+/// the horizon mode, which re-baselines expressly to detect it.
+const ADJUSTED_TOLERANCE_M: f64 = 1e-6;
+
+/// The app's OWN merge-alignment tolerance, taken from the app rather than
+/// copied: 5 cm, the distance past which `check_merge_alignment` calls a merged
+/// pair broken.
+const MERGE_ALIGNMENT_TOLERANCE_M: f64 = crate::models::Project::MERGE_ALIGNMENT_TOLERANCE_M;
+/// Under this, a measure is calling the pair SOUND. The gap between the two
+/// constants is deliberate: a pair sitting between 1 cm and 5 cm is not being
+/// called sound by either measure, so a disagreement there is not a
+/// contradiction and is not reported.
+const RAW_RESOLVED_AGREEMENT_M: f64 = 0.01;
 
 // ===========================================================================
 // Known-bug classifiers
@@ -1702,6 +1810,15 @@ struct Outcome {
     /// True when the app's own `#[cfg(test)]` merge-alignment assert fired
     /// (finding 14) and the run stopped there.
     alignment_panic: bool,
+    /// Integrity verdicts compared. Counted so the oracle can be SHOWN to be
+    /// doing work rather than passing vacuously.
+    integrity_compared: usize,
+    /// Adjusted-geometry states compared.
+    adjusted_compared: usize,
+    /// Wall time spent inside each derived-state oracle, in microseconds:
+    /// (snapshot, integrity, adjusted). Reported per run so the cost of the two
+    /// ports is a measured number rather than a guess.
+    oracle_us: (u128, u128, u128),
 }
 
 struct Fuzzer {
@@ -1710,6 +1827,11 @@ struct Fuzzer {
     seed: u32,
     /// `snapshots[d]` is the canonical project at undo depth `d`.
     snapshots: Vec<String>,
+    /// `verdicts[d]` is the app's own integrity verdict at undo depth `d`.
+    verdicts: Vec<Verdict>,
+    /// `adjusted[d]` is the canonical ADJUSTED station geometry at depth `d` -
+    /// what the map draws, solved rather than stored.
+    adjusted: Vec<String>,
     /// Epoch each snapshot was recorded in; a save or a reload bumps the epoch.
     epochs: Vec<u32>,
     /// `entry_meta[d]` describes the entry that takes depth d-1 to d. Index 0 is
@@ -1767,6 +1889,8 @@ impl Fuzzer {
             rng,
             seed,
             snapshots: Vec::new(),
+            verdicts: Vec::new(),
+            adjusted: Vec::new(),
             epochs: Vec::new(),
             entry_meta: vec![EntryMeta::default()],
             epoch: 0,
@@ -1795,6 +1919,10 @@ impl Fuzzer {
         assert_eq!(fuzzer.redo_len(), 0, "setup left redo entries behind");
         let base = fuzzer.snapshot();
         fuzzer.snapshots.push(base);
+        let base_verdict = fuzzer.verdict();
+        fuzzer.verdicts.push(base_verdict);
+        let base_adjusted = fuzzer.adjusted_geometry();
+        fuzzer.adjusted.push(base_adjusted);
         fuzzer.epochs.push(0);
         fuzzer
     }
@@ -1808,19 +1936,174 @@ impl Fuzzer {
     }
 
     /// Canonical snapshot of the live project.
-    fn snapshot(&self) -> String {
+    fn snapshot(&mut self) -> String {
+        let started = std::time::Instant::now();
         let raw = self
             .state
             .capture_project_snapshot()
             .expect("capture_project_snapshot failed");
         let parsed: serde_json::Value = serde_json::from_str(&raw).expect("snapshot is not JSON");
-        canonicalize(&parsed, "", self.id_agnostic).to_string()
+        let out = canonicalize(&parsed, "", self.id_agnostic).to_string();
+        self.outcome.oracle_us.0 += started.elapsed().as_micros();
+        out
+    }
+
+    /// The app's own integrity verdict, normalized. See `Verdict`.
+    fn verdict(&mut self) -> Verdict {
+        let started = std::time::Instant::now();
+        let result = self.state.integrity_check();
+        let mut messages = result.messages;
+        messages.sort();
+        self.outcome.oracle_us.1 += started.elapsed().as_micros();
+        Verdict {
+            save_blocked: result.save_blocked,
+            messages,
+        }
+    }
+
+    /// The ADJUSTED station geometry - `AppState::get_adjusted_stations`, which
+    /// is what the map draws and what every export writes - canonicalized to a
+    /// comparable string.
+    ///
+    /// This is DERIVED state, solved from the project rather than stored in it,
+    /// so it is a second, independent view of every history move. Two things it
+    /// can see that the stored snapshot cannot: a solve whose result depends on
+    /// something the snapshot drops, and a stale memo. The second is not
+    /// hypothetical - issue #413's finding 7 originally claimed the missing
+    /// `invalidate_adjusted_cache()` in `undo_to`/`redo_to` was part of the
+    /// defect, and the correction argued it is unobservable because the cache
+    /// keys on `modified_at`, which every undo touches. This comparison is that
+    /// argument's test.
+    fn adjusted_geometry(&mut self) -> String {
+        let started = std::time::Instant::now();
+        let Some(stations) = self.state.get_adjusted_stations() else {
+            return String::new();
+        };
+        let mut rows: Vec<String> = stations
+            .iter()
+            .map(|station| {
+                format!(
+                    "{}:{}|{}|{}|{}",
+                    station.station_ref.section_id,
+                    station.station_ref.station_index,
+                    round_significant(station.coordinates.x),
+                    round_significant(station.coordinates.y),
+                    round_significant(station.coordinates.z),
+                )
+            })
+            .collect();
+        // Sorted: `get_adjusted_stations` builds its list by walking sections,
+        // and a command that reorders sections would otherwise read as every
+        // station having moved.
+        rows.sort();
+        self.outcome.oracle_us.2 += started.elapsed().as_micros();
+        rows.join("\n")
+    }
+
+    /// Every difference between two adjusted-geometry states, outside
+    /// `ADJUSTED_TOLERANCE_M`.
+    fn adjusted_diffs(expected: &str, actual: &str) -> Vec<String> {
+        let parse = |text: &str| -> BTreeMap<String, [f64; 3]> {
+            text.lines()
+                .filter_map(|line| {
+                    let mut parts = line.split('|');
+                    let key = parts.next()?.to_string();
+                    let x = parts.next()?.parse().ok()?;
+                    let y = parts.next()?.parse().ok()?;
+                    let z = parts.next()?.parse().ok()?;
+                    Some((key, [x, y, z]))
+                })
+                .collect()
+        };
+        let (before, after) = (parse(expected), parse(actual));
+        let mut out = Vec::new();
+        for (key, left) in &before {
+            match after.get(key) {
+                None => out.push(format!("station {key} is GONE from the adjusted solve")),
+                Some(right) => {
+                    let worst = (0..3)
+                        .map(|axis| (left[axis] - right[axis]).abs())
+                        .fold(0.0_f64, f64::max);
+                    if worst > ADJUSTED_TOLERANCE_M {
+                        out.push(format!(
+                            "station {key} moved {worst:.6} m: {left:?} -> {right:?}"
+                        ));
+                    }
+                }
+            }
+        }
+        for key in after.keys() {
+            if !before.contains_key(key) {
+                out.push(format!("station {key} APPEARED in the adjusted solve"));
+            }
+        }
+        out.truncate(8);
+        out
+    }
+
+    /// Every cross-section merge, measured raw AND resolved.
+    fn merge_measurements(&self) -> Vec<MergeMeasurement> {
+        let Some(project) = self.state.get_project_state() else {
+            return Vec::new();
+        };
+        let adjusted: BTreeMap<(SectionId, u32), (f64, f64)> = self
+            .state
+            .get_adjusted_stations()
+            .unwrap_or_default()
+            .iter()
+            .map(|station| {
+                (
+                    (
+                        station.station_ref.section_id,
+                        station.station_ref.station_index,
+                    ),
+                    (station.coordinates.x, station.coordinates.y),
+                )
+            })
+            .collect();
+        let mut out = Vec::new();
+        for merge in &project.station_merges {
+            if merge.station_a.section_id == merge.station_b.section_id {
+                continue;
+            }
+            let (Some(a), Some(b)) = (
+                project.resolve_key(&merge.station_a),
+                project.resolve_key(&merge.station_b),
+            ) else {
+                continue;
+            };
+            let (Some(raw_a), Some(raw_b)) = (
+                project.compute_station_raw_coords(a),
+                project.compute_station_raw_coords(b),
+            ) else {
+                continue;
+            };
+            let (Some(res_a), Some(res_b)) = (
+                adjusted.get(&(a.section_id, a.station_index)),
+                adjusted.get(&(b.section_id, b.station_index)),
+            ) else {
+                continue;
+            };
+            out.push(MergeMeasurement {
+                label: format!(
+                    "{}:{} <-> {}:{}",
+                    a.section_id, a.station_index, b.section_id, b.station_index
+                ),
+                raw: ((raw_a.x - raw_b.x).powi(2) + (raw_a.y - raw_b.y).powi(2)).sqrt(),
+                resolved: ((res_a.0 - res_b.0).powi(2) + (res_a.1 - res_b.1).powi(2)).sqrt(),
+            });
+        }
+        out
     }
 
     /// Re-express every recorded snapshot in id-agnostic form. Called once, on the
     /// first reload: `Shot::id` is not persisted, so from then on a byte-exact
     /// comparison against a pre-reload snapshot would report the renumbering as
     /// drift.
+    /// The derived models need no equivalent: an integrity message names section
+    /// ids, station indices, closure ids and uuids, and an adjusted station names
+    /// a `StationRef` - none of which the loader renumbers. Shot ids appear in
+    /// neither.
     fn enable_id_agnostic(&mut self) {
         if self.id_agnostic {
             return;
@@ -1913,11 +2196,16 @@ impl Fuzzer {
         let actual = self.snapshot();
         let expected = self.snapshots[depth].clone();
         if expected == actual {
+            self.expect_derived(depth, what, false);
             return;
         }
         let mut diffs = diff_snapshots(&expected, &actual);
         if diffs.is_empty() {
             self.outcome.float_noise += 1;
+            // The stored state is equal WITHIN TOLERANCE, so the derived views
+            // are still compared strictly - the whole point of having them is
+            // that a solve can amplify what the raw comparison let through.
+            self.expect_derived(depth, what, false);
             return;
         }
 
@@ -2037,6 +2325,7 @@ impl Fuzzer {
             self.outcome.attributed += before - unknown.len();
             if unknown.is_empty() && classified.is_empty() && ref_drop.is_none() {
                 self.resync(depth, actual);
+                self.expect_derived(depth, what, true);
                 return;
             }
         }
@@ -2073,6 +2362,7 @@ impl Fuzzer {
                 ids.join(", ")
             ));
             self.resync(depth, actual);
+            self.expect_derived(depth, what, true);
             return;
         }
 
@@ -2104,6 +2394,7 @@ impl Fuzzer {
                         .or_insert(0) += 1;
                     self.corrupted.insert(target.section_id);
                     self.resync(depth, actual);
+                    self.expect_derived(depth, what, true);
                     return;
                 }
             }
@@ -2127,6 +2418,7 @@ impl Fuzzer {
                 .or_insert(0) += 1;
             self.stale_corruption = true;
             self.resync(depth, actual);
+            self.expect_derived(depth, what, true);
             return;
         }
 
@@ -2147,6 +2439,7 @@ impl Fuzzer {
                 .entry("finding-8-cascade-the-wrong-shot-is-already-gone")
                 .or_insert(0) += 1;
             self.resync(depth, actual);
+            self.expect_derived(depth, what, true);
             return;
         }
         let entry_note = ctx_entry.as_ref().map_or_else(
@@ -2243,6 +2536,108 @@ impl Fuzzer {
         self.displaced.insert(section_id, offset.to_string());
     }
 
+    /// The two DERIVED-state oracles, run after the stored-state comparison has
+    /// settled, and the consistency rule that makes them usable at all.
+    ///
+    /// `resynced` is the whole subtlety. When a classified known bug explains a
+    /// difference, the model accepts the live state as the expectation at that
+    /// depth - and the derived models MUST accept it at the same moment. A
+    /// verdict model that kept the pre-bug expectation would report the same
+    /// defect again at every later depth as a fresh integrity failure, which is
+    /// chasing phantoms rather than finding bugs. The harness tier resolves this
+    /// the same way (`undoRedoFuzz.ts`, `resolveMismatch` re-records the
+    /// integrity verdict alongside the state).
+    ///
+    /// When the stored state MATCHED, both are compared strictly. That case is
+    /// the one worth having: a verdict or a solved geometry that differs while
+    /// the stored project agrees is either a checker that is not a function of
+    /// the state, or a divergence the snapshot cannot see. At the harness tier
+    /// exactly that caught a finding 7 manifestation nothing else did.
+    fn expect_derived(&mut self, depth: usize, what: &str, resynced: bool) {
+        let verdict = self.verdict();
+        let adjusted = self.adjusted_geometry();
+        if resynced {
+            if depth < self.verdicts.len() {
+                self.verdicts[depth] = verdict;
+            }
+            if depth < self.adjusted.len() {
+                self.adjusted[depth] = adjusted;
+            }
+            return;
+        }
+        if let Some(expected) = self.verdicts.get(depth).cloned() {
+            self.outcome.integrity_compared += 1;
+            if expected != verdict {
+                self.fail(
+                    &format!(
+                        "{what} restored the state but NOT the integrity verdict recorded at depth {depth}"
+                    ),
+                    &format!(
+                        "  expected: {}\n  actual:   {}",
+                        expected.describe(),
+                        verdict.describe()
+                    ),
+                );
+            }
+        }
+        if let Some(expected) = self.adjusted.get(depth).cloned() {
+            self.outcome.adjusted_compared += 1;
+            let diffs = Self::adjusted_diffs(&expected, &adjusted);
+            if !diffs.is_empty() {
+                self.fail(
+                    &format!(
+                        "{what} restored the stored state but NOT the ADJUSTED geometry recorded at depth {depth}"
+                    ),
+                    &format!("  {}", diffs.join("\n  ")),
+                );
+            }
+        }
+    }
+
+    /// RAW versus RESOLVED, on the same merges, in the same state.
+    ///
+    /// The app measures merge alignment two ways and issue #413's finding 14
+    /// records that they disagree. This asserts they agree about the only thing
+    /// either is used to decide: whether a merged pair is aligned. A pair that
+    /// one measure calls sound (under a centimetre) while the other calls broken
+    /// (past the app's own 5 cm `MERGE_ALIGNMENT_TOLERANCE_M`) is a contradiction
+    /// no consumer can resolve - `debug_assert_merge_alignment` panics a test
+    /// build on it while `check_project_integrity` tells the user nothing.
+    ///
+    /// Deliberately NOT "the two distances are equal": they are not supposed to
+    /// be. The resolved measure folds in closure adjustment, which legitimately
+    /// moves stations. Only the VERDICTS have to agree.
+    fn expect_raw_and_resolved_agree(&mut self, what: &str) {
+        let disagreements: Vec<String> = self
+            .merge_measurements()
+            .into_iter()
+            .filter(|m| {
+                (m.raw >= MERGE_ALIGNMENT_TOLERANCE_M && m.resolved < RAW_RESOLVED_AGREEMENT_M)
+                    || (m.resolved >= MERGE_ALIGNMENT_TOLERANCE_M
+                        && m.raw < RAW_RESOLVED_AGREEMENT_M)
+            })
+            .map(|m| {
+                format!(
+                    "merged {} is {:.6} m apart RAW and {:.6} m apart RESOLVED",
+                    m.label, m.raw, m.resolved
+                )
+            })
+            .collect();
+        if disagreements.is_empty() {
+            return;
+        }
+        *self
+            .outcome
+            .hits
+            .entry("finding-18-raw-and-resolved-merge-alignment-disagree")
+            .or_insert(0) += 1;
+        self.note(format!(
+            "  ^ raw and resolved disagree about {} merge(s) after {what}: {}",
+            disagreements.len(),
+            disagreements.join("; ")
+        ));
+    }
+
     /// Accept the live state as the model's expectation at `depth`. Only ever
     /// reached for a difference that was ENTIRELY explained.
     fn resync(&mut self, depth: usize, actual: String) {
@@ -2263,41 +2658,27 @@ impl Fuzzer {
     /// (`models/project/integrity.rs`), so this asserts the app's own contract
     /// rather than a re-invented one.
     fn expect_merges_aligned(&mut self, what: &str) {
-        let Some(project) = self.state.get_project_state() else {
-            return;
-        };
-        // The RAW check, deliberately, and not `check_merge_alignment()`: the two
-        // disagree. `check_merge_alignment` measures through
-        // `resolved_station_offsets()`, which folds in closure adjustment, while
-        // `debug_assert_merge_alignment` measures `compute_station_raw_coords`.
-        // Only the second one panics the process, so the second one is what this
-        // has to pre-empt if a violation is to be attributed to the move that
-        // caused it rather than to the next command that happens to look.
-        let mut messages = Vec::new();
-        for merge in &project.station_merges {
-            if merge.station_a.section_id == merge.station_b.section_id {
-                continue;
-            }
-            let (Some(a), Some(b)) = (
-                project.resolve_key(&merge.station_a),
-                project.resolve_key(&merge.station_b),
-            ) else {
-                continue;
-            };
-            let (Some(pa), Some(pb)) = (
-                project.compute_station_raw_coords(a),
-                project.compute_station_raw_coords(b),
-            ) else {
-                continue;
-            };
-            let dist = ((pa.x - pb.x).powi(2) + (pa.y - pb.y).powi(2)).sqrt();
-            if dist >= 0.01 {
-                messages.push(format!(
-                    "merged {}:{} and {}:{} are {dist:.6} m apart (raw)",
-                    a.section_id, a.station_index, b.section_id, b.station_index
-                ));
-            }
-        }
+        // Measured BOTH ways, in one pass, so the failure payload can say what
+        // the other checker thought of the same state. Issue #413's finding 14
+        // asserts the two disagree; this is where that claim becomes a number.
+        let measurements = self.merge_measurements();
+        let messages: Vec<String> = measurements
+            .iter()
+            .filter(|m| m.raw >= RAW_RESOLVED_AGREEMENT_M)
+            .map(|m| {
+                format!(
+                    "merged {} is {:.6} m apart RAW ({:.6} m RESOLVED{})",
+                    m.label,
+                    m.raw,
+                    m.resolved,
+                    if m.resolved < RAW_RESOLVED_AGREEMENT_M {
+                        " - which calls the same pair SOUND"
+                    } else {
+                        ""
+                    }
+                )
+            })
+            .collect();
         if messages.is_empty() {
             return;
         }
@@ -3000,10 +3381,16 @@ impl Fuzzer {
             self.cursor += 1;
             self.top = self.cursor;
             self.snapshots.truncate(self.cursor);
+            self.verdicts.truncate(self.cursor);
+            self.adjusted.truncate(self.cursor);
             self.epochs.truncate(self.cursor);
             self.entry_meta.truncate(self.cursor);
             let snapshot = self.snapshot();
             self.snapshots.push(snapshot);
+            let verdict = self.verdict();
+            self.verdicts.push(verdict);
+            let adjusted = self.adjusted_geometry();
+            self.adjusted.push(adjusted);
             self.epochs.push(self.epoch);
             // Read the entry BACK off the stack rather than inferring it from the
             // command that was drawn: the app is the authority on what it pushed,
@@ -3025,6 +3412,7 @@ impl Fuzzer {
             self.outcome.mutations += 1;
             self.outcome.max_depth = self.outcome.max_depth.max(self.cursor);
             self.expect_merges_aligned(&drawn.label);
+            self.expect_raw_and_resolved_agree(&drawn.label);
             return;
         }
         if pushed > 1 {
@@ -3041,6 +3429,8 @@ impl Fuzzer {
         if self.redo_len() == 0 {
             self.top = self.cursor;
             self.snapshots.truncate(self.cursor + 1);
+            self.verdicts.truncate(self.cursor + 1);
+            self.adjusted.truncate(self.cursor + 1);
             self.epochs.truncate(self.cursor + 1);
             self.entry_meta.truncate(self.cursor + 1);
         } else if self.redo_len() != before_redo {
@@ -3663,6 +4053,7 @@ impl Fuzzer {
         }
         self.expect_state(self.cursor, &label, consumed, stale);
         self.expect_merges_aligned(&label);
+        self.expect_raw_and_resolved_agree(&label);
         true
     }
 
@@ -4018,7 +4409,8 @@ fn summarize(label: &str, seed: u32, outcome: &Outcome) -> String {
         .join(" ");
     format!(
         "{label} seed={seed}: {} mutations, {} rejected, {} no-ops, {} undos, {} redos, \
-         {} jumps, {} saves, {} reloads, depth<={}, float-noise={}, attributed={}{}{}",
+         {} jumps, {} saves, {} reloads, depth<={}, float-noise={}, attributed={}, \
+         integrity-compared={}, adjusted-compared={}, oracle-us=(snap {} integrity {} adjusted {}){}{}",
         outcome.mutations,
         outcome.rejected,
         outcome.noops,
@@ -4030,6 +4422,11 @@ fn summarize(label: &str, seed: u32, outcome: &Outcome) -> String {
         outcome.max_depth,
         outcome.float_noise,
         outcome.attributed,
+        outcome.integrity_compared,
+        outcome.adjusted_compared,
+        outcome.oracle_us.0,
+        outcome.oracle_us.1,
+        outcome.oracle_us.2,
         if outcome.wedged {
             " WEDGED"
         } else if outcome.alignment_panic {
