@@ -20929,6 +20929,99 @@ fn repair_open_project_integrity_reports_fixed_and_remaining() {
     );
 }
 
+#[test]
+fn repair_command_demotes_a_double_anchoring_bridge_merge() {
+    // End-to-end through the Repair action on the damage a past bug left in saved
+    // files: a RIGID merge bridging two independently GPS-anchored merge
+    // components. `resolve_offsets` cannot satisfy it (each half is pinned to its
+    // own datum), so before this repair the project reported `merge_misaligned` +
+    // `multiple_datums_per_merge_component` on every check and Repair could never
+    // clear them. Fully synthetic: three sections built by command, welded by hand.
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Damaged".to_string(),
+        location: None,
+    });
+    let section = |name: &str| {
+        state
+            .execute(Command::CreateSection {
+                name: Some(name.to_string()),
+                surveyor: None,
+                date: None,
+                color: "#111111".to_string(),
+                direction: Some(SurveyDirection::In),
+                shots: vec![test_shot_data(10.0), test_shot_data(10.0)],
+            })
+            .section_id
+            .unwrap()
+    };
+    let (a, b, c) = (section("A"), section("B"), section("C"));
+
+    {
+        let mut guard = state.project.lock().unwrap();
+        let project = guard.as_mut().unwrap();
+        // The legitimate merge inside the first component, made through the real
+        // API so it is correctly aligned.
+        project
+            .merge_stations(StationRef::new(a, 2), StationRef::new(b, 0))
+            .unwrap();
+        // One datum per component - individually legal, which is why the
+        // interactive guards never fired on the way in.
+        project.zero_datums.push(crate::models::ZeroDatum {
+            station_ref: StationRef::new(a, 0).into(),
+            gps: GpsCoordinates::new(45.0, -90.0, 0.0).unwrap(),
+        });
+        project.zero_datums.push(crate::models::ZeroDatum {
+            station_ref: StationRef::new(c, 0).into(),
+            gps: GpsCoordinates::new(45.001, -90.0, 0.0).unwrap(),
+        });
+        // Park C 500 m away, then weld it to B with the merge the promotion bug
+        // created out of what should have stayed a loop closure.
+        project.set_section_offset(c, (500.0, 0.0));
+        project.station_merges.push(StationMerge {
+            station_a: StationRef::new(b, 2).into(),
+            station_b: StationRef::new(c, 0).into(),
+            merged_at: chrono::Utc::now(),
+        });
+    }
+
+    let before = state.integrity_violation_messages().len();
+    assert!(
+        before >= 2,
+        "seeded a torn merge AND an over-anchored merge component, got {before}"
+    );
+
+    let result = state.repair_open_project_integrity();
+    assert!(
+        result.fixed >= 1,
+        "the demotion is reported as a fix, got {result:?}"
+    );
+    assert!(result.changed, "repair mutated the project");
+    assert_eq!(
+        result.remaining,
+        0,
+        "both symptoms clear: {:?}",
+        state.integrity_violation_messages()
+    );
+
+    let guard = state.project.lock().unwrap();
+    let project = guard.as_ref().unwrap();
+    assert_eq!(
+        project.station_merges.len(),
+        1,
+        "only the legitimate A-B merge survives"
+    );
+    assert!(
+        project.are_stations_in_closure(StationRef::new(b, 2), StationRef::new(c, 0)),
+        "the demoted pair is now a loop closure - and it is still one after \
+         convert_orphan_closures_to_merges ran later in the SAME repair pass"
+    );
+    assert!(
+        project.loop_closures.iter().all(|lc| !lc.is_aligned),
+        "an aligned closure would re-impose the constraint the demotion removed"
+    );
+}
+
 // ===========================================================================
 // #191 - read-only edit gate + dirty bit + chokepoint enumeration (Track B).
 // Stamped-remote fixture: a temp .stalx carrying a speleo_link row, opened so
