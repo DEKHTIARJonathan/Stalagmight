@@ -125,6 +125,12 @@ describe('convertToUnmanagedStalx ordering', () => {
     expect(converted).toBe(false);
     expect(order).toEqual(['save', 'speleodb_unlink']);
     expect(loadProjectMock).not.toHaveBeenCalled();
-    expect(openDialog).toHaveBeenCalledWith('error', expect.anything());
+    // Routed through the save-failure router (with its own Detach Failed title
+    // and skipIntegrityRouting - the unlink reject ran no integrity re-check).
+    expect(surfaceSaveFailureMock).toHaveBeenCalledWith(
+      expect.stringContaining('detaching from SpeleoDB failed'),
+      openDialog,
+      expect.objectContaining({ skipIntegrityRouting: true }),
+    );
   });
 });

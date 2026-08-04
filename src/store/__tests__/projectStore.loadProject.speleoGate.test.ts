@@ -119,7 +119,7 @@ beforeEach(() => {
     frozenShots: [],
     warnings: [],
     recentProjects: [],
-    error: null,
+    autosaveFailure: null,
     isDirty: false,
     loading: { loadingId: 0n, clientOpId: 0, isLoading: false, overallProgress: 0 },
   });

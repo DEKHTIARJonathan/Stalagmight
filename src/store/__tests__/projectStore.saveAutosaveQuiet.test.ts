@@ -66,8 +66,11 @@ describe('saveProject autosave quieting', () => {
     await useProjectStore.getState().saveProject('/cave.stalx', true);
 
     expect(openDialogSpy).not.toHaveBeenCalledWith('save-permission', expect.anything());
-    // The error still reaches the status surface, so the failure is not swallowed.
-    expect(useProjectStore.getState().error).toBeTruthy();
+    // The failure is not swallowed - it feeds the autosave-failure banner,
+    // without leaking the raw FS_PERMISSION_DENIED marker.
+    const banner = useProjectStore.getState().autosaveFailure;
+    expect(banner).toBeTruthy();
+    expect(banner).not.toContain('FS_PERMISSION_DENIED');
   });
 
   it('DOES open the save-permission dialog on a manual save', async () => {

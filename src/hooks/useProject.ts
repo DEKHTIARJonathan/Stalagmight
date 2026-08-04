@@ -38,7 +38,6 @@ export function useProject() {
   const stations = useProjectStore((s) => s.stations);
   const recentProjects = useProjectStore((s) => s.recentProjects);
   const loading = useProjectStore((s) => s.loading);
-  const error = useProjectStore((s) => s.error);
   const canUndo = useProjectStore((s) => s.canUndo);
   const canRedo = useProjectStore((s) => s.canRedo);
 
@@ -193,7 +192,6 @@ export function useProject() {
     recentProjects,
     isLoading: loading.isLoading,
     loading,
-    error,
     canUndo,
     canRedo,
 

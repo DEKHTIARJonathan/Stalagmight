@@ -68,7 +68,7 @@ describe('projectStore.createProject', () => {
       frozenShots: [],
       warnings: [],
       recentProjects: [],
-      error: null,
+      autosaveFailure: null,
       isDirty: false,
       loading: {
         loadingId: 0n,

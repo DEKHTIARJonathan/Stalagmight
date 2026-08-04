@@ -6,7 +6,8 @@ import { useProjectStore } from './store/projectStore';
 import { useUIStore } from './store/uiStore';
 import { useSpeleoStore } from './store/speleoStore';
 import { useGasPlanStore, selectIsPlanDirty } from './store/gasPlanStore';
-import { invokeIpc } from './utils/ipc';
+import { invokeIpc, getErrorMessage } from './utils/ipc';
+import { surfaceSaveFailure } from './utils/saveFeedback';
 import { extractFilename } from './utils/path';
 import { routeOpenedFile } from './utils/openOrImport';
 import { guardQuit } from './utils/quit';
@@ -41,6 +42,9 @@ function App() {
   const integrityDialogOpen = useProjectStore((s) => s.integrityDialogOpen);
   const openIntegrityDialog = useProjectStore((s) => s.openIntegrityDialog);
   const closeIntegrityDialog = useProjectStore((s) => s.closeIntegrityDialog);
+  const autosaveFailure = useProjectStore((s) => s.autosaveFailure);
+  const clearAutosaveFailure = useProjectStore((s) => s.clearAutosaveFailure);
+  const saveProject = useProjectStore((s) => s.saveProject);
   const [repairingIntegrity, setRepairingIntegrity] = useState(false);
   const {
     view,
@@ -508,6 +512,50 @@ function App() {
               Dismiss
             </button>
           )}
+        </div>
+      )}
+
+      {/* Autosave-failure banner (docs/notifications.md: an ongoing "your latest
+          changes are not on disk" condition is banner-class, not modal and not a
+          repeating toast). When saving is integrity-blocked the integrity banner
+          above already owns the "saving is paused" story, so this one yields. */}
+      {autosaveFailure !== null && !integritySaveBlocked && project && !loading.isLoading && (
+        <div
+          className="bg-warning-10 border-b border-warning-20 px-4 py-2 flex items-center gap-3 text-sm"
+          role="status"
+          data-testid="autosave-banner"
+        >
+          <span className="text-warning font-medium flex-1 min-w-0">
+            {t('banners.autosave.lead')} {autosaveFailure}
+          </span>
+          <button
+            onClick={() => {
+              void (async () => {
+                const result = await saveProject().catch((e: unknown) => {
+                  surfaceSaveFailure(getErrorMessage(e, t('banners.autosave.genericFailure')), openDialog, {
+                    skipIntegrityRouting: true,
+                  });
+                  return null;
+                });
+                // A manual retry that still fails gets the full user-initiated
+                // treatment (permission guidance / Review & Repair / error dialog).
+                if (result && !result.success) {
+                  surfaceSaveFailure(result.error, openDialog);
+                }
+              })();
+            }}
+            className="px-3 py-1 rounded bg-accent text-white text-xs"
+            data-testid="autosave-save-button"
+          >
+            {t('banners.autosave.saveNow')}
+          </button>
+          <button
+            onClick={clearAutosaveFailure}
+            className="px-2 py-1 text-text-secondary hover:text-text text-xs"
+            data-testid="autosave-dismiss-button"
+          >
+            {t('banners.autosave.dismiss')}
+          </button>
         </div>
       )}
 

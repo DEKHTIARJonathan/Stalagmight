@@ -19,18 +19,26 @@ import type { ImportReceipt } from '../types/ipc/ImportReceipt';
  *  3. Anything else (a real I/O error) - show the error dialog as before.
  *
  * Reads `integritySaveBlocked`, which `saveProject` refreshes (awaited) on
- * failure, so it is current by the time this runs.
+ * failure, so it is current by the time this runs. On an IPC-transport reject
+ * that re-check never ran, so `integritySaveBlocked` may be stale - pass
+ * `skipIntegrityRouting` there to go straight to the error dialog instead of
+ * wrongly opening Review & Repair. `title` overrides the dialog title (e.g.
+ * "Detach Failed") without leaving the router.
  */
 export function surfaceSaveFailure(
   error: string | null | undefined,
   openDialog: (dialog: string, data?: Record<string, unknown>) => void,
+  opts?: { skipIntegrityRouting?: boolean; title?: string },
 ): void {
-  if (useProjectStore.getState().integritySaveBlocked) {
+  if (!opts?.skipIntegrityRouting && useProjectStore.getState().integritySaveBlocked) {
     useProjectStore.getState().openIntegrityDialog();
     return;
   }
   if (error && !isPermissionError(error)) {
-    openDialog('error', { message: error, title: 'Save Failed' });
+    openDialog('error', {
+      message: error,
+      title: opts?.title ?? i18n.t('dialogs.saveFailure.title'),
+    });
   }
 }
 

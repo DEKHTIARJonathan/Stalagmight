@@ -19,6 +19,7 @@ import { useUIStore } from '../store/uiStore';
 import { useSpeleoStore } from '../store/speleoStore';
 import { needsSpeleoHandBackPrompt } from './quit';
 import { surfaceSaveFailure } from './saveFeedback';
+import i18n from '../i18n';
 import { getErrorMessage, invokeIpc } from './ipc';
 import {
   ensureExtension,
@@ -108,9 +109,8 @@ export async function saveProjectAs(opts?: {
     // call sites don't catch. Return null (not a failure result) so the
     // delegating handleSaveProject doesn't surface a second dialog and
     // saveAndClose treats it as "not saved" and keeps the project open.
-    openDialog('error', {
-      title: 'Save Failed',
-      message: getErrorMessage(e, 'Failed to save project'),
+    surfaceSaveFailure(getErrorMessage(e, 'Failed to save project'), openDialog, {
+      skipIntegrityRouting: true,
     });
     return null;
   }
@@ -153,9 +153,8 @@ export async function convertToUnmanagedStalx(): Promise<boolean> {
     }
     wroteDetachedCopy = Boolean(result.unlinked_copy_path);
   } catch (e) {
-    openDialog('error', {
-      title: 'Save Failed',
-      message: getErrorMessage(e, 'Failed to save a local copy'),
+    surfaceSaveFailure(getErrorMessage(e, 'Failed to save a local copy'), openDialog, {
+      skipIntegrityRouting: true,
     });
     return false;
   }
@@ -176,10 +175,11 @@ export async function convertToUnmanagedStalx(): Promise<boolean> {
   try {
     await invokeIpc('speleodb_unlink');
   } catch (e) {
-    openDialog('error', {
-      title: 'Detach Failed',
-      message: getErrorMessage(e, 'The local copy was saved, but detaching from SpeleoDB failed'),
-    });
+    surfaceSaveFailure(
+      getErrorMessage(e, 'The local copy was saved, but detaching from SpeleoDB failed'),
+      openDialog,
+      { skipIntegrityRouting: true, title: i18n.t('dialogs.saveFailure.detachTitle') },
+    );
     return false;
   }
   await useSpeleoStore.getState().refreshLinkStatus();

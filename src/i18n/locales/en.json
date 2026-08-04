@@ -1203,6 +1203,10 @@
       "message": "Reset all {{category}} settings to their default values?",
       "note": "This will only affect the current category. Changes are not saved until you click {{action}}."
     },
+    "saveFailure": {
+      "title": "Save Failed",
+      "detachTitle": "Detach Failed"
+    },
     "importFailure": {
       "commandTitle": "Import Errors",
       "transportTitle": "Import Failed",
@@ -2151,6 +2155,15 @@
       "sectionIncomplete_one": "\"{{name}}\": 1 shot is missing required values. Fill it in or clear the row.",
       "sectionIncomplete_other": "\"{{name}}\": {{count}} shots are missing required values. Fill them in or clear the rows.",
       "placementHint": "Placement: Click to place section. Esc for more placement options and metadata changes."
+    }
+  },
+  "banners": {
+    "autosave": {
+      "lead": "Autosave is failing - your latest changes are not on disk.",
+      "permissionDenied": "Folder access denied - check Privacy & Security settings.",
+      "genericFailure": "Failed to save project",
+      "saveNow": "Save now",
+      "dismiss": "Dismiss"
     }
   },
   "integrityRepair": {
