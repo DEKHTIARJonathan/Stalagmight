@@ -263,13 +263,35 @@ than ignored, and floats compare with a 1e-9 absolute / 1e-12 relative tolerance
 because geometry is re-derived rather than copied after every undo/redo. Backend
 truth for the model is the app's own `get_undo_stack` / `get_redo_stack` lengths.
 
-It currently reproduces three open undo bugs, enumerated with per-seed repro
-commands in the scenario's header comment, so it is RED by default. Two of them
-are classified in `KNOWN_UNDO_ASYMMETRIES`, which makes the failure message name
-the bug; exporting `STALAGMIGHT_FUZZ_ALLOW_KNOWN_BUGS=1` tolerates exactly those
-two (logged, counted, model resynced) so the rest of the fuzzer can still be
-exercised. The third - undoing the first shot appended into an EMPTY section
-displaces the whole section - is deliberately left un-tolerated.
+The starting point is chosen and cleaned rather than inherited. The scenario
+closes whatever project is open, materializes its own copy of the fixture,
+DELETES that copy's persisted undo history, loads it, and then asserts both
+history stacks are empty. Tracked fixtures ship with a stack
+(`undo_persist_limit`, 20 rows in the fractal fixture and 2 in naharon), and a
+scenario that models undo depth must not fuzz on top of somebody else's entries
+or burn the headroom below the 100-entry limit. `stripUndoHistory`
+(`e2e/agent/lib/fixtures.ts`) is the harness-side replica of the app's own
+`Database::clear_undo_history_at`, and refuses any path inside `e2e/fixtures/`
+so it can only ever touch a temp copy.
+
+| Env var | Effect |
+|---|---|
+| `STALAGMIGHT_FUZZ_FIXTURE` | Which `.stalx` under `e2e/fixtures/` to fuzz, by BASENAME (`fixtureSourcePath`'s `path.basename` is the containment guard). Defaults to `DEFAULT_FIXTURE`. Recorded in the metrics and the log line so a run stays attributable. |
+| `STALAGMIGHT_FUZZ_ALLOW_KNOWN_BUGS` | `1` keeps going past a mismatch that is ENTIRELY a classified known bug (logged, counted, model resynced). Not the default: a green default would mean the oracle had been weakened. |
+
+Fixture choice is load-bearing, not cosmetic. The fractal fixture has no loop
+closures, no zero datums and a non-null surveyor on all 32 sections; naharon has
+all three plus 13 null-surveyor sections, and half the bugs below are only
+reachable there.
+
+It currently reproduces six open undo bugs, enumerated with per-fixture,
+per-seed repro commands in the scenario's header comment, so it is RED by
+default. Three are classified (`KNOWN_UNDO_ASYMMETRIES` plus
+`LOOP_CLOSURE_REORDER`), which makes the failure message name the bug and makes
+them tolerable under the env var above. The other three - a section displaced by
+undoing its first shot, an undo that cannot restore a previously-null section
+field, and an undo that FAILS OUTRIGHT and wedges the history - are deliberately
+never tolerated.
 
 ## Oracles
 

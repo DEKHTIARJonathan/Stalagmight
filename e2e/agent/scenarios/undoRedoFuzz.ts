@@ -53,9 +53,14 @@
  *
  * ## Open app bugs this reproduces
  *
- * None of these are normalized away. The oracle fails on all three; the first
- * two are classified in `projectSnapshot.ts`'s `KNOWN_UNDO_ASYMMETRIES` so the
+ * None of these are normalized away. The oracle fails on all of them; 1, 2 and 4
+ * are classified (`KNOWN_UNDO_ASYMMETRIES` plus `LOOP_CLOSURE_REORDER`) so the
  * message names them rather than reading as a mystery.
+ *
+ * 4, 5 and 6 need `STALAGMIGHT_FUZZ_FIXTURE=naharon.stalx`: they need loop
+ * closures, zero datums and null section metadata present AT LOAD, and the
+ * fractal fixture has none of those (all 32 of its sections have a non-null
+ * surveyor; naharon has 13 null ones). Fixture diversity is what found them.
  *
  * 1. `run_scenario("undo-redo-fuzz", seed=1, iterations=3)` - create a section,
  *    undo, redo: every shot uuid is re-minted.
@@ -78,13 +83,36 @@
  *    Deliberately NOT classified as tolerable: it is a geometry bug, and the
  *    same branch drops merges / zero datums / station comments keyed to that
  *    section's station 0.
+ * 4. `... seed=4, iterations=19` on naharon - undoing a loop-closure removal
+ *    puts the closure back at the END of `project.loop_closures` instead of its
+ *    original index (`core/state/undo.rs:244` pushes; the removal used
+ *    `Vec::remove(pos)`). Order-only, but the order is persisted, indexed by the
+ *    frontend, and feeds `resolve_offsets`' adjacency lists.
+ * 5. `... seed=5, iterations=7` on naharon - undoing `updateSection` CANNOT
+ *    restore a `name` / `surveyor` / `date` that was previously null; the new
+ *    value silently survives the undo. The capture is right
+ *    (`undo_capture.rs:144-146` builds `Some(None)`), but `SectionUpdates`
+ *    (`models/section.rs:122-142`) has only `#[serde(default)]` on those three
+ *    fields, so `Some(None)` and `None` BOTH serialize to `null` in
+ *    `values_json` and both read back as `None` = "leave it alone". `ShotUpdates`
+ *    has `deserialize_with = "double_option"` + `skip_serializing_if` on exactly
+ *    these grounds; `SectionUpdates` was left out. Not classified: silent,
+ *    persistable data loss.
+ * 6. `... seed=21, iterations=60` on naharon - undo FAILS OUTRIGHT: "This shot is
+ *    part of a loop ... Both sides are anchored to a zero datum. Use split
+ *    instead." Undo of `CreateShot` runs the user-facing `delete_shot`, guards
+ *    and all, so an insert into an anchored loop is an action that CANNOT be
+ *    undone - and `undo.rs:439-444` pushes the entry back, so it fails the same
+ *    way forever and everything beneath it is unreachable. A wedged history is
+ *    the worst outcome here; the forward command was permitted, so its inverse
+ *    must be too (raw-remove what was inserted, or capture a snapshot pair).
  *
- * Set `STALAGMIGHT_FUZZ_ALLOW_KNOWN_BUGS=1` to keep going past a mismatch whose
- * every differing path is a CLASSIFIED asymmetry (1 and 2; it is logged, counted
- * as the `knownAsymmetry` metric, and the model resyncs). That exists so the
- * rest of the fuzzer can be exercised while those are open - it is deliberately
- * NOT the default, because a green default here would mean the oracle had been
- * weakened.
+ * Set `STALAGMIGHT_FUZZ_ALLOW_KNOWN_BUGS=1` to keep going past a mismatch that is
+ * ENTIRELY a classified asymmetry (1, 2 and 4; it is logged, counted as the
+ * `knownAsymmetry` metric, and the model resyncs). That exists so the rest of
+ * the fuzzer can be exercised while those are open - it is deliberately NOT the
+ * default, because a green default here would mean the oracle had been weakened.
+ * 3, 5 and 6 are never tolerated.
  *
  * ## Determinism
  *
