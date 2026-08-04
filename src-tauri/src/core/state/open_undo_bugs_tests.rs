@@ -1668,3 +1668,124 @@ fn the_adjusted_solve_is_a_function_of_the_project() {
          depends on HashMap iteration order, not only on the project"
     );
 }
+
+// ===========================================================================
+// Finding 22: a range delete is not the single deletes it says it generalizes
+// ===========================================================================
+
+/// Every `section_offsets` entry, by section, ascending.
+fn section_offsets(state: &AppState) -> Vec<(SectionId, (f64, f64))> {
+    let project = state.get_project_state().expect("no project open");
+    let mut out: Vec<(SectionId, (f64, f64))> = project
+        .section_offsets
+        .iter()
+        .map(|(id, offset)| (*id, (offset.0, offset.1)))
+        .collect();
+    out.sort_by_key(|entry| entry.0);
+    out
+}
+
+/// A four-shot section merged at its far end to a one-shot section, anchored by
+/// nothing. Returns `(a, b)`.
+fn merged_chain_for_range_delete(state: &AppState) -> (SectionId, SectionId) {
+    let a = create_section(
+        state,
+        "A",
+        vec![
+            shot(0.0, 5.0),
+            shot(30.0, 6.0),
+            shot(60.0, 7.0),
+            shot(90.0, 8.0),
+        ],
+    );
+    let b = create_section(state, "B", vec![shot(120.0, 5.0)]);
+    let merged = state.execute(Command::MergeStations {
+        station_a: StationRef::new(a, 4),
+        station_b: StationRef::new(b, 0),
+    });
+    assert!(merged.success, "MergeStations failed: {:?}", merged.error);
+    (a, b)
+}
+
+/// FINDING 22: `execute_delete_shot_range_shift` and the single deletes its own
+/// doc comment says it generalizes put the survey in two different places.
+///
+/// `command_delete_split.rs:503-509` states the contract in as many words:
+///
+/// > Delete a contiguous range of shots by gap-closing (shifting) [...]
+/// > Generalizes the single-shot `delete_shot` (`remove_shot_with_rewire`) to a
+/// > range by deleting the range's shots in forward order within ONE
+/// > `ProjectSnapshotPair` undo unit
+///
+/// It does not. Deleting the last two shots of a section whose far station is
+/// merged to another section leaves the PARTNER section in a different place
+/// depending on which entry point the user reached for: the range path leaves it
+/// with no `section_offsets` entry at all, the two single deletes leave it seven
+/// metres away at `(-6.06, -3.50)`.
+///
+/// Mechanism. The two routes differ in WHEN geometry is reconciled, not in what
+/// they delete. `Command::DeleteShot` goes through `AppState::execute`, whose
+/// epilogue runs `convert_orphan_closures_in_open_project()` and
+/// `reconcile_geometry()` after EVERY command (`core/state/commands.rs:646-655`),
+/// so the merged partner is re-anchored against the section as it shrinks, one
+/// shot at a time. The range path does the whole range inside one project lock
+/// and calls `reconcile_geometry()` once at the end
+/// (`core/state/command_delete_split.rs:642`) - by which time the station the
+/// merge was anchored to is already gone, so there is nothing left to re-anchor
+/// the partner against and its offset is dropped instead of carried.
+///
+/// The range is a SUFFIX one on purpose, and that is the whole reduction: the
+/// interior and prefix cases agree to the last bit. Measured, on this exact
+/// topology:
+///
+/// | range | ranged | singles |
+/// |---|---|---|
+/// | prefix `[0..=1]`, plain | `[(0, (3.00, 10.20))]` | identical |
+/// | prefix `[0..=1]`, merged | `[(0, (-14.06, -3.50)), (1, (0.00, 0.00))]` | identical |
+/// | interior `[1..=2]`, merged | `[(0, ..), (1, (-9.06, -8.70))]` | identical |
+/// | suffix `[2..=3]`, plain | `[]` | identical |
+/// | **suffix `[2..=3]`, merged** | `[(0, (-17.06, -13.70))]` | **plus `(1, (-6.06, -3.50))`** |
+///
+/// Found by the metamorphic engine (`metamorphic_undo_tests.rs`), which drives
+/// two `AppState`s loaded from ONE `.stalx` down the two routes and compares
+/// them - seed 3, where the same divergence reads as a station moving 10.26 m
+/// in the adjusted solve.
+#[test]
+#[ignore = "open finding 22: a range shift-delete is not the single deletes it generalizes - see src-tauri/src/core/state/metamorphic_undo_tests.rs"]
+fn a_range_shift_delete_is_its_single_deletes() {
+    let ranged_state = state_with_project();
+    let (ranged_a, _) = merged_chain_for_range_delete(&ranged_state);
+    let ids = shot_ids(&ranged_state, ranged_a);
+    // The SUFFIX range: the last two shots, so the station the merge is anchored
+    // to is one of the ones that goes.
+    let ranged = ranged_state.execute_delete_shot_range_shift(ranged_a, ids[2], ids[3]);
+    assert!(
+        ranged.success,
+        "execute_delete_shot_range_shift failed: {:?}",
+        ranged.error
+    );
+
+    let singles_state = state_with_project();
+    let (singles_a, _) = merged_chain_for_range_delete(&singles_state);
+    // "in forward order": delete the shot at the range's start position, twice.
+    for step in 0..2 {
+        let live = shot_ids(&singles_state, singles_a);
+        let single = singles_state.execute(Command::DeleteShot {
+            section_id: singles_a,
+            shot_id: live[2],
+        });
+        assert!(
+            single.success,
+            "single delete {step} failed: {:?}",
+            single.error
+        );
+    }
+
+    assert_eq!(
+        section_offsets(&ranged_state),
+        section_offsets(&singles_state),
+        "deleting a suffix range in one call and deleting the same shots one at a time put the \
+         merged partner section in two different places, so where the survey ends up depends on \
+         which menu item the user reached for"
+    );
+}
