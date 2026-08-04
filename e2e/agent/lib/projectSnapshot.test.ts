@@ -4,6 +4,7 @@ import {
   KNOWN_UNDO_ASYMMETRIES,
   LOOP_CLOSURES_PATH,
   LOOP_CLOSURE_REORDER,
+  SAVE_HEALING_MUTATIONS,
   canonicalJson,
   classifyDiffs,
   describeDiffs,
@@ -190,5 +191,48 @@ describe('isListPermutationOnly', () => {
     const after = canonicalJson({ project: { loop_closures: [b, a] }, stations: [{ x: 2 }] });
 
     expect(isListPermutationOnly(before, after, LOOP_CLOSURES_PATH)).toBe(false);
+  });
+});
+
+describe('SAVE_HEALING_MUTATIONS', () => {
+  it('accepts the three documented save-time heals, in the documented direction', () => {
+    const classified = classifyDiffs(
+      [
+        { path: 'project.sections[2].gauge_shot_uuid', expected: 'null', actual: '"u-1"' },
+        { path: 'project.sections[2].gauge_neighbour_uuid', expected: 'null', actual: '"u-2"' },
+        { path: 'project.sections[0].shots[1].uuid', expected: '<absent>', actual: '"u-3"' },
+        { path: 'project.section_offsets.9', expected: '[0,0]', actual: '<absent>' },
+      ],
+      SAVE_HEALING_MUTATIONS,
+    );
+
+    expect(classified.unknown).toEqual([]);
+    expect(classified.asymmetries).toHaveLength(3);
+  });
+
+  it('rejects the same paths moving the WRONG way', () => {
+    const classified = classifyDiffs(
+      [
+        // A gauge anchor changing value (not null -> value) is not a heal.
+        { path: 'project.sections[2].gauge_shot_uuid', expected: '"old"', actual: '"new"' },
+        // An offset entry APPEARING is not the orphan retain.
+        { path: 'project.section_offsets.9', expected: '<absent>', actual: '[1,2]' },
+        // A uuid being cleared is not the backfill.
+        { path: 'project.sections[0].shots[1].uuid', expected: '"u"', actual: '<absent>' },
+      ],
+      SAVE_HEALING_MUTATIONS,
+    );
+
+    expect(classified.known).toEqual([]);
+    expect(classified.unknown).toHaveLength(3);
+  });
+
+  it('rejects anything else a save might have touched', () => {
+    const classified = classifyDiffs(
+      [{ path: 'project.sections[0].shots[1].length', expected: '5', actual: '6' }],
+      SAVE_HEALING_MUTATIONS,
+    );
+
+    expect(classified.unknown).toHaveLength(1);
   });
 });

@@ -7,6 +7,7 @@ import {
   buildTargetingDigest,
   canonicalProjectSnapshot,
   checkProjectInvariants,
+  idAgnosticSnapshot,
   oracleInjectionSource,
   type TargetingDigest,
 } from './fuzzOracleCore';
@@ -413,5 +414,78 @@ describe('checkProjectInvariants', () => {
 
     expect(injected(corrupt)).toEqual(checkProjectInvariants(corrupt));
     expect(injected(corrupt).length).toBeGreaterThan(0);
+  });
+});
+
+describe('id-agnostic canonicalization (cross save/reload comparison)', () => {
+  /** Two sections whose shot ids are NOT positional (a mid-section delete). */
+  const preReload = {
+    project: {
+      sections: [
+        { id: 3, shots: [{ id: 300004, uuid: 'u1' }, { id: 300009, uuid: 'u2' }] },
+        { id: 7, shots: [{ id: 700002, uuid: 'u3' }] },
+      ],
+    },
+    stations: [],
+  };
+  /** The same project after a save/reload renumbered ids to section*STRIDE+seq. */
+  const postReload = {
+    project: {
+      sections: [
+        { id: 3, shots: [{ id: 300000, uuid: 'u1' }, { id: 300001, uuid: 'u2' }] },
+        { id: 7, shots: [{ id: 700000, uuid: 'u3' }] },
+      ],
+    },
+    stations: [],
+  };
+
+  it('reports renumbering as a difference in exact mode', () => {
+    expect(canonicalProjectSnapshot(preReload)).not.toBe(canonicalProjectSnapshot(postReload));
+  });
+
+  it('absorbs renumbering in id-agnostic mode', () => {
+    expect(canonicalProjectSnapshot(preReload, true)).toBe(canonicalProjectSnapshot(postReload, true));
+  });
+
+  it('converts an already-canonical string to the same id-agnostic form', () => {
+    expect(idAgnosticSnapshot(canonicalProjectSnapshot(preReload))).toBe(
+      canonicalProjectSnapshot(postReload, true),
+    );
+  });
+
+  it('is idempotent and leaves a non-snapshot string alone', () => {
+    const once = idAgnosticSnapshot(canonicalProjectSnapshot(preReload));
+    expect(idAgnosticSnapshot(once)).toBe(once);
+    expect(idAgnosticSnapshot('not json')).toBe('not json');
+  });
+
+  it('does NOT hide a real change behind the renumbering', () => {
+    // Same positions, but a shot's uuid and geometry changed: still different.
+    const tampered = JSON.parse(JSON.stringify(postReload)) as typeof postReload;
+    const shot = tampered.project.sections[0]?.shots[1];
+    if (shot) shot.uuid = 'CHANGED';
+
+    expect(canonicalProjectSnapshot(preReload, true)).not.toBe(canonicalProjectSnapshot(tampered, true));
+  });
+
+  it('does not touch SECTION ids, which are persisted and must match', () => {
+    const renamedSection = JSON.parse(JSON.stringify(postReload)) as typeof postReload;
+    const section = renamedSection.project.sections[1];
+    if (section) section.id = 8;
+
+    expect(canonicalProjectSnapshot(postReload, true)).not.toBe(
+      canonicalProjectSnapshot(renamedSection, true),
+    );
+  });
+
+  it('runs identically injected and called directly', () => {
+    const injected = new Function(
+      `${oracleInjectionSource()}\nreturn globalThis.${ORACLE_GLOBAL};`,
+    )() as { canonical: (s: unknown, a?: boolean) => string; idAgnostic: (s: string) => string };
+
+    expect(injected.canonical(preReload, true)).toBe(canonicalProjectSnapshot(preReload, true));
+    expect(injected.idAgnostic(canonicalProjectSnapshot(preReload))).toBe(
+      idAgnosticSnapshot(canonicalProjectSnapshot(preReload)),
+    );
   });
 });

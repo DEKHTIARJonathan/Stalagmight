@@ -74,7 +74,7 @@ export const SIGNIFICANT_DIGITS = 12;
  *
  * Keep this dependency-free - it is injected into the webview verbatim.
  */
-export function canonicalProjectSnapshot(state: unknown): string {
+export function canonicalProjectSnapshot(state: unknown, idAgnostic?: boolean): string {
   // Inlined rather than imported: see the module header. `NON_ROLLBACK_PATHS`
   // and `SIGNIFICANT_DIGITS` mirror these, and a unit test pins them together.
   const dropped: Record<string, true> = {
@@ -119,7 +119,62 @@ export function canonicalProjectSnapshot(state: unknown): string {
   };
 
   const normalized = walk(state, '');
+  // ID-AGNOSTIC mode, used ONLY for comparisons that cross a save/reload.
+  // `Shot::id` is not persisted: the loader renumbers every shot to
+  // `section_id * FEATURE_ID_STRIDE + sequence_order`
+  // (src-tauri/src/persistence/sqlite/read.rs:372), so a session that deleted or
+  // inserted a shot mid-section comes back with different ids for the same
+  // shots. Replacing each id with its position makes the comparison independent
+  // of that renumbering while leaving everything else - uuids, geometry,
+  // ordering, every other field - compared exactly. Section ids ARE persisted
+  // and are NOT touched here.
+  if (idAgnostic === true && normalized !== null && typeof normalized === 'object') {
+    const project = (normalized as Record<string, unknown>).project;
+    if (isPlainObject(project) && Array.isArray(project.sections)) {
+      for (let i = 0; i < project.sections.length; i++) {
+        const section = project.sections[i];
+        if (!isPlainObject(section) || !Array.isArray(section.shots)) continue;
+        for (let j = 0; j < section.shots.length; j++) {
+          const shot = section.shots[j];
+          if (isPlainObject(shot) && 'id' in shot) shot.id = j;
+        }
+      }
+    }
+  }
   return JSON.stringify(normalized === undefined ? null : normalized);
+}
+
+/**
+ * SELF-CONTAINED. Re-express an ALREADY-canonical snapshot string in id-agnostic
+ * form, so snapshots recorded before a save/reload can still be compared against
+ * states observed after it. Same rule as the `idAgnostic` flag above; this is the
+ * version for strings the model already holds.
+ *
+ * Keep this dependency-free - it is injected into the webview verbatim.
+ */
+export function idAgnosticSnapshot(canonicalJsonText: string): string {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(canonicalJsonText);
+  } catch {
+    return canonicalJsonText;
+  }
+  const isObj = (value: unknown): value is Record<string, unknown> =>
+    typeof value === 'object' && value !== null && !Array.isArray(value);
+  if (!isObj(parsed)) return canonicalJsonText;
+  const project = parsed.project;
+  if (isObj(project) && Array.isArray(project.sections)) {
+    for (let i = 0; i < project.sections.length; i++) {
+      const section = project.sections[i];
+      if (!isObj(section) || !Array.isArray(section.shots)) continue;
+      for (let j = 0; j < section.shots.length; j++) {
+        const shot = section.shots[j];
+        if (isObj(shot) && 'id' in shot) shot.id = j;
+      }
+    }
+  }
+  // Key order is preserved from the already-sorted input, so this stays canonical.
+  return JSON.stringify(parsed);
 }
 
 /**
@@ -222,6 +277,7 @@ export function oracleInjectionSource(): string {
     { name: 'canonicalProjectSnapshot', source: canonicalProjectSnapshot.toString() },
     { name: 'buildTargetingDigest', source: buildTargetingDigest.toString() },
     { name: 'checkProjectInvariants', source: checkProjectInvariants.toString() },
+    { name: 'idAgnosticSnapshot', source: idAgnosticSnapshot.toString() },
   ];
   for (const part of parts) {
     // A toolchain that renames or wraps these (a minifier, a coverage
@@ -241,6 +297,8 @@ export function oracleInjectionSource(): string {
     '  canonical: canonicalProjectSnapshot,',
     '  digest: buildTargetingDigest,',
     '  invariants: checkProjectInvariants,',
+    '  idAgnostic: idAgnosticSnapshot,',
+    '  idAgnosticMode: false,',
     '  snapshots: [],',
     '  integrity: [],',
     '  lastExpected: null,',

@@ -48,7 +48,7 @@ export interface StepRequest {
    * `steps`, and the state they land on must equal the snapshot single steps
    * recorded at that depth - that equivalence is the whole point of testing them.
    */
-  kind: 'mutate' | 'undo' | 'redo' | 'undoTo' | 'redoTo';
+  kind: 'mutate' | 'undo' | 'redo' | 'undoTo' | 'redoTo' | 'save' | 'reload';
   /** projectStore action name. */
   action: string;
   args: unknown[];
@@ -144,7 +144,7 @@ const OBSERVE = `
   const redoLen = (await core.invoke('get_redo_stack')).length;
   const observeMs = Date.now() - observeStarted;
   const canonicalStarted = Date.now();
-  const canonical = O.canonical(project);
+  const canonical = O.canonical(project, O.idAgnosticMode);
   const digest = O.digest(project);
   const invariants = O.invariants(project);
   const canonicalMs = Date.now() - canonicalStarted;
@@ -203,8 +203,11 @@ export async function runStep(ctx: ScenarioContext, request: StepRequest): Promi
     let commandSuccess = null;
     let commandError = null;
     const actionStarted = Date.now();
-    const action = store.getState()[req.action];
-    if (typeof action !== 'function') {
+    const action = req.action === 'noop:observe' ? null : store.getState()[req.action];
+    if (req.action === 'noop:observe') {
+      // Pure re-observation (used right after a reload): no action is dispatched.
+      commandSuccess = true;
+    } else if (typeof action !== 'function') {
       actionOk = false;
       actionError = 'action ' + req.action + ' is not a function';
     } else {
@@ -250,6 +253,12 @@ export async function runStep(ctx: ScenarioContext, request: StepRequest): Promi
       } else {
         verdict = 'unexpected';
       }
+    } else if (req.kind === 'save' || req.kind === 'reload') {
+      // Neither moves the history cursor. Both are compared against the depth
+      // they were taken at: a save should be state-preserving apart from its
+      // documented healing mutations, and a reload should restore exactly what
+      // was saved (modulo the shot-id renumbering the id-agnostic mode absorbs).
+      comparedIndex = req.cursor;
     } else {
       const back = req.kind === 'undo' || req.kind === 'undoTo';
       cursorAfter = req.cursor + (back ? -steps : steps);
@@ -339,4 +348,33 @@ export async function resyncModel(
   `,
     [{ index, integrity }],
   );
+}
+
+
+/**
+ * Switch the model to id-agnostic comparison and re-express every recorded
+ * snapshot in that form.
+ *
+ * Called once, on the first reload of a run. `Shot::id` is not persisted - the
+ * loader renumbers - so from the first reload onwards a byte-exact comparison
+ * against snapshots recorded pre-reload would report the renumbering as drift.
+ * Everything else stays compared exactly, and comparisons BEFORE any reload stay
+ * byte-exact, so a run that never saves is unaffected.
+ */
+export async function enableIdAgnosticModel(ctx: ScenarioContext): Promise<number> {
+  return ctx.eval<number>(`
+    const O = ${ORACLE};
+    if (!O) throw new Error('fuzz oracle is not injected');
+    if (O.idAgnosticMode) return O.snapshots.length;
+    O.idAgnosticMode = true;
+    for (let i = 0; i < O.snapshots.length; i++) {
+      O.snapshots[i] = O.idAgnostic(O.snapshots[i]);
+    }
+    return O.snapshots.length;
+  `);
+}
+
+/** Re-observe without acting, e.g. straight after a reload. */
+export async function observeOnly(ctx: ScenarioContext, cursor: number): Promise<StepResponse> {
+  return runStep(ctx, { kind: 'save', action: 'noop:observe', args: [], cursor, undo0: 0 });
 }

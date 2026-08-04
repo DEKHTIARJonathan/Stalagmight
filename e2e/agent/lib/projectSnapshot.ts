@@ -347,3 +347,48 @@ export function describeDiffs(diffs: readonly SnapshotDiff[]): string {
     .map((diff) => `  at ${diff.path}\n    expected: ${diff.expected}\n    actual:   ${diff.actual}`)
     .join('\n');
 }
+
+/**
+ * Changes a SAVE is documented to make to live project state, with no undo entry
+ * of its own (`AppState::save_project`, src-tauri/src/core/state/project_io.rs).
+ *
+ * These are healing mutations: the save settles identity and drops dead data
+ * before writing. They are real state changes the roundtrip model has to account
+ * for, but they are ATTRIBUTABLE - so a save whose diff is entirely explained by
+ * this list is absorbed (and recorded), while a save that changes ANYTHING else
+ * is a hard failure. That is the oracle: "save mutated the project in an
+ * undocumented way".
+ *
+ * Deliberately narrow, by value as well as by path: a gauge anchor may only go
+ * from null to a value (capture_missing_*), a uuid may only be filled in, and an
+ * offset entry may only disappear (the orphan retain). A gauge anchor CHANGING
+ * from one value to another, or an offset entry appearing, is not on this list.
+ */
+export const SAVE_HEALING_MUTATIONS: readonly KnownAsymmetry[] = [
+  {
+    id: 'save-captures-missing-gauge-anchors',
+    pathPattern: /^project\.sections\[\d+\]\.gauge_(shot|neighbour)_uuid$/,
+    accepts: (diff) => diff.expected === 'null' && diff.actual !== 'null',
+    description:
+      'save_project calls capture_missing_gauge_anchors(), which records the least-squares ' +
+      'gauge pair for any section that lacks one (project_io.rs). Null -> value only; it never ' +
+      'moves coordinates.',
+  },
+  {
+    id: 'save-backfills-shot-uuids',
+    pathPattern: /^project\.sections\[\d+\]\.shots\[\d+\]\.uuid$/,
+    accepts: (diff) => (diff.expected === ABSENT || diff.expected === 'null') && diff.actual !== ABSENT,
+    description:
+      'save_project calls ensure_shot_uuids(), minting a uuid for any shot still missing one ' +
+      '(pre-v6 files). Absent -> value only.',
+  },
+  {
+    id: 'save-drops-orphan-section-offsets',
+    pathPattern: /^project\.section_offsets\.\d+$/,
+    accepts: (diff) => diff.actual === ABSENT,
+    description:
+      'save_project retains only section_offsets whose section still exists - the SQLite row ' +
+      'carries a FOREIGN KEY to sections(id), so an orphan would abort the whole save. ' +
+      'Disappearance only.',
+  },
+];

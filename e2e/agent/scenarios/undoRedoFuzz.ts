@@ -170,11 +170,15 @@
  * so every sort and every pick sees the same values in the same sequence - the
  * draw stream, and every repro seed above, is unchanged by the move in-page.
  */
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 import { mulberry32, type Scenario, type ScenarioContext } from './framework';
 import { DEFAULT_FIXTURE, disableAutoSave, loadFixtureWithoutUndoHistory } from './common';
 import {
   LOOP_CLOSURES_PATH,
   LOOP_CLOSURE_REORDER,
+  SAVE_HEALING_MUTATIONS,
   classifyDiffs,
   describeDiffs,
   diffSnapshots,
@@ -184,9 +188,11 @@ import {
 import type { TargetingDigest } from '../lib/fuzzOracleCore';
 import { drawAction } from './undoRedoFuzzActions';
 import {
+  enableIdAgnosticModel,
   fetchMismatch,
   initModel,
   injectOracle,
+  observeOnly,
   resyncModel,
   runStep,
   type IntegrityVerdict,
@@ -219,6 +225,24 @@ const P_UNDO = 0.25;
  */
 const P_JUMP = 0.1;
 const JUMP_STREAM_SALT = 0x9e3779b9;
+
+/**
+ * Share of iterations that take a save/close/reopen round trip, drawn from the
+ * same secondary stream as jumps (never from `ctx.rng()`).
+ *
+ * Undo history is PERSISTED - both stacks serialize into the .stalx and restore
+ * on open - so nothing below the save point is exercised until a run crosses
+ * that boundary. Kept low because a round trip costs a full save plus a full
+ * reopen, and capped per run.
+ */
+const P_SAVE = 0.05;
+const MAX_SAVE_RELOADS = 3;
+/**
+ * Its OWN salt, not the jump stream's. Each optional feature draws from an
+ * independent stream so adding one cannot move another's decisions - sharing a
+ * stream would have made "add saves" silently change which jumps a seed takes.
+ */
+const SAVE_STREAM_SALT = 0x85ebca6b;
 
 /** Diffs shown in a failure message (more are counted, not printed). */
 const SHOWN_DIFFS = 6;
@@ -350,6 +374,19 @@ export const undoRedoFuzz: Scenario = {
     let redoLen = init.redoLen;
     let digest: TargetingDigest = init.digest;
     const jumpRng = mulberry32((ctx.seed ^ JUMP_STREAM_SALT) >>> 0);
+    const saveRng = mulberry32((ctx.seed ^ SAVE_STREAM_SALT) >>> 0);
+    let savesDone = 0;
+    const saveDir = fs.mkdtempSync(path.join(os.tmpdir(), 'stalagmight-fuzz-save-'));
+    const savePath = path.join(saveDir, 'fuzz-roundtrip.stalx');
+    // Both stacks persist, but only the newest `undo_persist_limit` entries do.
+    // Crossing the boundary with a deeper history would silently truncate the
+    // restored stack and invalidate the model, so the move is skipped instead.
+    const persistLimit = await ctx.eval<number>(`
+      const config = window.__E2E_TEST__.projectStore.getState().config;
+      return config && config.general && typeof config.general.undo_persist_limit === 'number'
+        ? config.general.undo_persist_limit
+        : 20;
+    `);
 
     const note = (line: string): void => {
       history.push(line);
@@ -373,7 +410,7 @@ export const undoRedoFuzz: Scenario = {
 
     /** One fused round trip, timed. */
     const step = async (
-      kind: 'mutate' | 'undo' | 'redo' | 'undoTo' | 'redoTo',
+      kind: 'mutate' | 'undo' | 'redo' | 'undoTo' | 'redoTo' | 'save' | 'reload',
       action: string,
       actionArgs: unknown[],
       steps = 1,
@@ -472,6 +509,20 @@ export const undoRedoFuzz: Scenario = {
         if (check.floatNoise) ctx.metric('floatNoise');
         return;
       }
+      // A save makes documented, undo-less healing changes to live state
+      // (gauge anchors, uuid backfill, orphan-offset drop), so from the first
+      // save onwards a snapshot recorded BEFORE it can legitimately differ by
+      // exactly those. Narrow by path AND value; anything else still fails.
+      if (savesDone > 0) {
+        const diffs = diffSnapshots(pair.expected ?? '', pair.actual ?? '', 200);
+        const healed = classifyDiffs(diffs, SAVE_HEALING_MUTATIONS);
+        if (diffs.length > 0 && healed.unknown.length === 0) {
+          ctx.metric('resyncs');
+          for (const mutation of healed.asymmetries) ctx.metric(`resync:${mutation.id}`);
+          top = await resyncModel(ctx, pair.index, resyncIntegrity);
+          return;
+        }
+      }
       if (ALLOW_KNOWN_BUGS && check.onlyKnown) {
         ctx.metric('knownAsymmetry');
         for (const asymmetry of check.asymmetries) ctx.metric(`known:${asymmetry.id}`);
@@ -552,6 +603,88 @@ export const undoRedoFuzz: Scenario = {
     };
 
     /**
+     * Save, close, reopen: the persistence boundary.
+     *
+     * Undo history lives in the .stalx (both stacks, sequence renumbered), so
+     * until a run crosses this boundary nothing below it is exercised at all.
+     * Three separate oracles run here:
+     *
+     *   1. SAVE IS ATTRIBUTABLE. `save_project` heals live state with no undo
+     *      entry - `ensure_shot_uuids`, `ensure_unique_shot_uuids`,
+     *      `capture_missing_gauge_anchors`, the orphan `section_offsets` retain,
+     *      non-finite sanitize. Every path that changes must match
+     *      `SAVE_HEALING_MUTATIONS` by path AND direction; anything else fails.
+     *   2. THE STACKS SURVIVE. Both lengths must come back exactly.
+     *   3. THE RESTORED STACK IS THE SAME HISTORY. From here the model compares
+     *      id-agnostically (the loader renumbers `Shot::id` to
+     *      `section_id * FEATURE_ID_STRIDE + sequence_order`), and the run's
+     *      final unwind/rewind then walks the whole RESTORED stack against the
+     *      snapshots recorded before the save.
+     */
+    const saveAndReload = async (tag: string): Promise<void> => {
+      const saveRes = await step('save', 'saveProject', [savePath]);
+      if (!saveRes.actionOk || saveRes.commandSuccess === false) {
+        note(`${tag} save -> FAILED`);
+        fail('saveProject failed', `  error: ${saveRes.commandError ?? saveRes.actionError ?? 'unknown'}`);
+      }
+      note(`${tag} save -> ok (depth ${cursor}, undo ${saveRes.undoLen}, redo ${saveRes.redoLen})`);
+      assertInvariants(saveRes, 'save');
+      assertStacks('save changed the history stacks', saveRes);
+      savesDone += 1;
+      if (saveRes.verdict !== 'equal') {
+        await resolveMismatch(
+          'save mutated the project in a way SAVE_HEALING_MUTATIONS does not account for',
+          saveRes.integrity,
+        );
+      }
+      record(saveRes);
+      ctx.metric('saves');
+
+      const closed = (await ctx.callAction('project', 'closeProject', [])) as {
+        ok: boolean;
+        error?: string;
+        result?: { success?: boolean; error?: string };
+      };
+      if (!closed.ok || closed.result?.success === false) {
+        fail('closeProject failed before reopen', `  error: ${closed.result?.error ?? closed.error ?? 'unknown'}`);
+      }
+      const opened = (await ctx.callAction('project', 'loadProject', [savePath])) as {
+        ok: boolean;
+        error?: string;
+        result?: { success?: boolean; error?: string };
+      };
+      if (!opened.ok || opened.result?.success === false) {
+        fail('reopening the saved project failed', `  error: ${opened.result?.error ?? opened.error ?? 'unknown'}`);
+      }
+
+      // Switch BEFORE re-observing so both sides of the comparison are in the
+      // same form. Idempotent, so later reloads are a no-op.
+      await enableIdAgnosticModel(ctx);
+      const res = await observeOnly(ctx, cursor);
+      note(`${tag} reload -> depth ${cursor} (undo ${res.undoLen}, redo ${res.redoLen})`);
+      assertInvariants(res, 'reload');
+      assertStacks('the persisted history did not come back intact', res);
+      if (res.verdict !== 'equal') {
+        await resolveMismatch('reopening the saved project did not restore the state it was saved at', res.integrity);
+      }
+      assertIntegrityDelta(res, 'reload');
+      record(res);
+      ctx.metric('reloads');
+    };
+
+    /** Should this iteration cross the save/reload boundary? */
+    const wantSaveReload = (): boolean => {
+      if (savesDone >= MAX_SAVE_RELOADS) return false;
+      // Only the newest `undo_persist_limit` entries survive the write, so a
+      // deeper history would come back truncated - skip rather than model it.
+      if (top > persistLimit) {
+        ctx.metric('savesSkippedDeepHistory');
+        return false;
+      }
+      return saveRng() < P_SAVE;
+    };
+
+    /**
      * How wide a jump to take, or null for a single step. Drawn from the
      * SEPARATE stream so the primary sequence is untouched.
      */
@@ -566,6 +699,12 @@ export const undoRedoFuzz: Scenario = {
 
     for (let iteration = 1; iteration <= iterations; iteration++) {
       const tag = `#${iteration}`;
+      // Drawn from the SECONDARY stream, and taken IN ADDITION to this
+      // iteration's normal move rather than instead of it: consuming the
+      // iteration would leave the run with fewer mutations than the same seed
+      // produced before, and the point of the secondary stream is that adding a
+      // feature does not move the primary numbers.
+      if (wantSaveReload()) await saveAndReload(tag);
       const roll = ctx.rng();
       let move: 'mutate' | 'undo' | 'redo' =
         roll < P_MUTATE ? 'mutate' : roll < P_MUTATE + P_UNDO ? 'undo' : 'redo';
@@ -669,6 +808,12 @@ export const undoRedoFuzz: Scenario = {
       record(res);
     }
 
+    // Cross the persistence boundary at least once per run, so the final
+    // unwind/rewind below walks a RESTORED stack rather than an in-memory one.
+    if (savesDone === 0 && top > 0 && top <= persistLimit) {
+      await saveAndReload('boundary');
+    }
+
     // Full roundtrip: unwind every entry, then replay every entry, verifying
     // the recorded snapshot at each depth in both directions.
     const summit = top;
@@ -676,6 +821,12 @@ export const undoRedoFuzz: Scenario = {
     while (cursor < summit) await walk('redo', 'rewind');
 
     if (cursor !== summit) fail(`roundtrip ended at depth ${cursor}, expected ${summit}`);
+
+    try {
+      fs.rmSync(saveDir, { recursive: true, force: true });
+    } catch {
+      // Best-effort: a leftover temp dir is not a scenario failure.
+    }
 
     ctx.setMetric('modelDepth', summit);
     ctx.setMetric('maxDepth', deepest);
