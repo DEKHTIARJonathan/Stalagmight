@@ -125,7 +125,13 @@
  *    Since jumps were added this seed reaches it through `undoTo(2)` and fails
  *    at "step 2 of 3" - i.e. the multi-step path applies the first undo, then
  *    wedges PARTWAY, which is strictly worse than the single-step case.
- * 7. `... seed=12, iterations=16` with ALLOW_KNOWN_BUGS - `undoTo(7)` (an 8-step
+ * 7. NOTE the mechanism correction recorded in
+ *    `src-tauri/src/core/state/open_undo_bugs_tests.rs`: the missing
+ *    `invalidate_adjusted_cache()` is NOT observable (the adjusted cache is
+ *    keyed on `modified_at`, which every undo bumps via `touch()`), so only the
+ *    missing `reconcile_geometry()` is a real defect - and a fix only needs to
+ *    add that one call.
+ *    `... seed=12, iterations=16` with ALLOW_KNOWN_BUGS - `undoTo(7)` (an 8-step
  *    jump, the history dropdown's path) lands on a DIFFERENT state than the same
  *    depth reached by eight single undos: `section_offsets` for two sections are
  *    out by 1.55 m and 3.33 m, and the stations with them.
@@ -387,6 +393,12 @@ const SAVE_STREAM_SALT = 0x85ebca6b;
 const SHOWN_DIFFS = 6;
 /** Actions shown in the failure message's history tail. */
 const HISTORY_TAIL = 12;
+/**
+ * `STALAGMIGHT_FUZZ_DUMP_HISTORY=1` prints the WHOLE action history on failure
+ * instead of the tail. The tail is right for reading a failure; the full
+ * sequence is what you need to transcribe a repro into a Rust test.
+ */
+const DUMP_FULL_HISTORY = process.env.STALAGMIGHT_FUZZ_DUMP_HISTORY === '1';
 /** Headroom kept below the undo history limit so FIFO trimming can never fire. */
 const DEPTH_HEADROOM = 5;
 
@@ -587,7 +599,9 @@ export const undoRedoFuzz: Scenario = {
     };
 
     const fail = (headline: string, detail = ''): never => {
-      const tail = history.slice(-HISTORY_TAIL).map((line) => `    ${line}`);
+      const tail = (DUMP_FULL_HISTORY ? history : history.slice(-HISTORY_TAIL)).map(
+        (line) => `    ${line}`,
+      );
       throw new Error(
         [
           headline,

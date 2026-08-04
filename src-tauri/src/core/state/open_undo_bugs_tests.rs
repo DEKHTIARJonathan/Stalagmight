@@ -31,7 +31,8 @@ use tempfile::TempDir;
 use super::AppState;
 use crate::core::Command;
 use crate::models::{
-    ClosureStrategy, GpsCoordinates, SectionId, SectionUpdates, ShotData, ShotId, StationRef,
+    ClosureStrategy, GpsCoordinates, SectionId, SectionUpdates, ShotData, ShotId, ShotUpdates,
+    StationRef,
 };
 
 /// A shot with distinct, easily-recognised geometry.
@@ -611,44 +612,141 @@ fn undo_of_create_shot_in_an_anchored_loop_succeeds() {
 }
 
 // ===========================================================================
-// Bug 7: REAL, but not reproducible by a minimal construction - no test
+// Bug 7: REAL, reproduced by the fuzzer, NOT reproducible synthetically here
 // ===========================================================================
 //
-// `undo()`/`redo()` call `invalidate_adjusted_cache()` and
-// `reconcile_geometry()`; `undo_to()`/`redo_to()` loop the `*_inner` variants
-// and call NEITHER (core/state/undo.rs). That is verified in the source, and the
-// fuzzer reproduces the consequence twice - a 2.4 m `section_offsets` divergence
+// `undo()`/`redo()` call `invalidate_adjusted_cache()` before and
+// `reconcile_geometry()` after (core/state/undo.rs); `undo_to()`/`redo_to()`
+// loop the `*_inner` variants and call NEITHER. The fuzzer reproduces the
+// consequence deterministically twice: a 2.4 m `section_offsets` divergence
 // (fractal seed 12 x40) and a merge left 5.00 m out of alignment that only the
 // integrity oracle caught (fractal seed 15 x40).
 //
-// It resists a minimal synthetic repro because the divergence only appears when
-// a jump walks past drift that `realign_merges` would otherwise heal, and the
-// only drift source small enough to build here is bug 3 - whose `pos == 0`
-// branch DROPS the merge keyed to station 0 in the same breath as displacing the
-// section. An empty section has no other station to merge on, so the very undo
-// that creates the drift also removes the merge that would have been misaligned,
-// and both unwind strategies then agree.
+// CORRECTION to the mechanism as previously documented. The missing
+// `invalidate_adjusted_cache()` is NOT observable: `get_adjusted_stations`
+// (core/state/app_state.rs) keys its cache on `project.modified_at` plus a
+// config hash, and every undo calls `Project::touch()`, so the next read misses
+// and re-solves whether or not the cache was explicitly cleared. The explicit
+// invalidation is belt-and-braces. Only the missing `reconcile_geometry()` half
+// is a real defect - which also means a fix only needs to add that call.
 //
-// A test that passes would claim to pin this and does not, so there is none.
+// That half needs an undo whose RAW restore leaves a merge beyond
+// MERGE_ALIGNMENT_TOLERANCE_M, and none of the drift sources reachable in a
+// small synthetic project qualifies. Measured, not assumed:
+//
+//   * bug 3's empty-section displacement DROPS the merge it would misalign -
+//     the `pos == 0` branch removes refs keyed to station 0, and an empty
+//     section has no other station to merge on.
+//   * `UpdateShot` on a merged section restores the offsets symmetrically: both
+//     unwind paths land on the same offset (verified by instrumenting this test).
+//   * an insert-before on a section merged at a SURVIVING station compensates
+//     correctly - the offset returns to (0, 0) and `check_merge_alignment()`
+//     stays empty on both paths.
+//
+// The remaining lead is undo-of-`RepairIntegrity`, whose `before` snapshot is
+// documented to carry the >=tolerance drift Repair healed (see the comment in
+// `undo()`), and which therefore RELIES on the reconcile epilogue. Constructing
+// it needs a project that already holds real drift - i.e. the drift source this
+// list says is missing - so it is circular without a fixture.
+//
+// Left uncovered deliberately rather than covered by a test that passes.
 // Reproduce with the fuzzer seeds above.
 //
 // ===========================================================================
-// Finding 10: NOT reproduced by a minimal construction - deliberately no test
+// Finding 10: a delete path strands a loop closure without converting it,
+// so save + reopen is not state-preserving
 // ===========================================================================
-//
-// The fuzzer saw a loop closure come back from a save/reopen as a station merge
-// (naharon seed 26 x40): `redrive_offsets_after_load` calls
-// `convert_orphan_closures_to_merges` unconditionally
-// (models/project/offsets.rs), reclassifying a closure whose endpoints are no
-// longer independently connected.
-//
-// Every minimal construction tried here - create a closure, then remove the
-// merge that provided the loop's other path, save, reopen - comes back
-// PRESERVED, because `execute`'s epilogue runs the same conversion for removal
-// commands, so the in-memory state is already normalized before the save. In
-// other words the simple paths are consistent, and whatever reaches the
-// divergent state does so through a path that skips that epilogue.
-//
-// A test asserting preservation would therefore PASS and quietly claim to pin a
-// bug it does not, which is worse than no test. Left uncovered on purpose; the
-// only known reproduction is the fuzzer seed named above.
+
+/// The app's invariant is that a loop closure exists only for a TRUE loop; a
+/// closure that has become the sole connection is "really" a merge, and
+/// `convert_orphan_closures_to_merges` normalizes it. That conversion runs from
+/// `execute()`'s epilogue for commands flagged `can_orphan_closures`
+/// (core/state/commands.rs), from two of the four delete-family entry points
+/// (`execute_delete_shot_and_split`, `execute_delete_shot_range_split`), and
+/// unconditionally on LOAD from `redrive_offsets_after_load`.
+///
+/// It does NOT run from `execute_delete_last_shot_and_section` or
+/// `execute_delete_shot_range_shift` (command_delete_split.rs), which are
+/// separate entry points rather than `Command` variants and so never see the
+/// `execute()` epilogue either. Deleting the section that carried the loop's
+/// other path therefore leaves an orphan closure in memory, the save persists
+/// it, and the next load silently reclassifies it as a merge.
+///
+/// This may be INTENDED - the loader is entitled to enforce the invariant. The
+/// test exists to force an explicit decision: either the two delete paths should
+/// convert like their siblings do (so memory and disk agree), or save/reopen is
+/// knowingly not state-preserving and this test should be deleted saying so.
+///
+/// Derived from the fuzzer's naharon seed 26 x40, whose history contains
+/// `deleteLastShotAndSection` before the reload that diverged.
+#[test]
+#[ignore = "finding 10 (may be intended): a delete path orphans a closure without converting it, so reopen reclassifies it - see e2e/agent/scenarios/undoRedoFuzz.ts header"]
+fn save_and_reopen_preserves_an_orphan_loop_closure() {
+    let temp = TempDir::new().unwrap();
+    let save_path: PathBuf = temp.path().join("orphan-closure.stalx");
+
+    let before = {
+        let state = state_with_project();
+        // A - bridge - B, plus a closure straight from A to B: a genuine loop
+        // with two independent paths.
+        let a = create_section(&state, "A", vec![shot(0.0, 5.0)]);
+        let bridge = create_section(&state, "Bridge", vec![shot(90.0, 5.0)]);
+        let b = create_section(&state, "B", vec![shot(180.0, 5.0)]);
+        let datum = state.execute(Command::SetZeroDatum {
+            station_ref: StationRef::new(a, 0),
+            coordinates: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
+        });
+        assert!(datum.success, "SetZeroDatum failed: {:?}", datum.error);
+        for (left, right) in [((a, 1), (bridge, 0)), ((bridge, 1), (b, 0))] {
+            let merged = state.execute(Command::MergeStations {
+                station_a: StationRef::new(left.0, left.1),
+                station_b: StationRef::new(right.0, right.1),
+            });
+            assert!(merged.success, "MergeStations failed: {:?}", merged.error);
+        }
+        let closure = state.execute(Command::CreateLoopClosure {
+            station_a: StationRef::new(a, 0),
+            station_b: StationRef::new(b, 1),
+            closure_strategy: ClosureStrategy::default(),
+        });
+        assert!(
+            closure.success,
+            "CreateLoopClosure failed: {:?}",
+            closure.error
+        );
+
+        // Delete the bridge through the entry point that does NOT convert.
+        let bridge_shot = shot_ids(&state, bridge)[0];
+        let deleted = state.execute_delete_last_shot_and_section(bridge, bridge_shot);
+        assert!(
+            deleted.success,
+            "delete_last_shot_and_section failed: {:?}",
+            deleted.error
+        );
+
+        let project = state.get_project_state().expect("no project");
+        let counts = (project.loop_closures.len(), project.station_merges.len());
+        assert!(
+            counts.0 > 0,
+            "setup: the closure should still be present in memory after the delete, got {counts:?}"
+        );
+
+        let saved = state.save_project(Some(save_path.clone()));
+        assert!(saved.success, "save failed: {:?}", saved.error);
+        counts
+    };
+
+    let reopened = AppState::new().unwrap();
+    let opened = reopened.execute(Command::OpenProject { path: save_path });
+    assert!(opened.success, "reopen failed: {:?}", opened.error);
+
+    let project = reopened
+        .get_project_state()
+        .expect("no project after reopen");
+    assert_eq!(
+        (project.loop_closures.len(), project.station_merges.len()),
+        before,
+        "save + reopen reclassified a loop closure as a station merge: the delete path that \
+         orphaned it does not run convert_orphan_closures_to_merges, but the loader does"
+    );
+}
