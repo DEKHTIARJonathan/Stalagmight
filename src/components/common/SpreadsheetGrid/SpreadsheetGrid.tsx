@@ -126,6 +126,12 @@ export interface SpreadsheetGridProps<Row> {
    *  skipped for every row the paste creates - and the same block would then
    *  land under DIFFERENT rules depending on how far down each line fell. */
   pasteGrowsRows?: { growRowTemplate: () => Row };
+  /** How many of the LAST rows are a placeholder rather than data - the trailing
+   *  blank a host renders as an invitation and materializes on first edit. The
+   *  row-counting context-menu entries stop short of them, so "Delete 3 shots"
+   *  on a gutter drag that swept the blank names, inserts and deletes the same
+   *  two rows the host can actually act on. Default 0 (no placeholder). */
+  trailingPlaceholderRows?: number;
   /** Delete the contiguous data rows [fromRow..toRow] (host owns the row set).
    *  Enables "Delete N rows" in the context menu. */
   /** Delete rows. Return `false` when the delete did NOT happen - refused, or
@@ -236,6 +242,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
     onColumnWidthsChange,
     onMoveRows,
     onInsertRows, pasteGrowsRows,
+    trailingPlaceholderRows = 0,
     onDeleteRows,
     onPasteReport,
     onRowHover,
@@ -682,31 +689,39 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
   // updater must be pure - StrictMode double-invokes it in dev). `refocus`
   // returns keyboard focus to the grid so the type→Enter→Arrow loop keeps
   // working; the blur path passes false so a deliberate click-away isn't trapped.
+  // Returns false when the draft was rejected and the editor is STILL OPEN on
+  // it, so a caller that would move on (Tab) stays with the cell being fixed.
   const commitEdit = useCallback(
-    (advance: 'down' | 'up' | null, refocus = true) => {
+    (advance: 'down' | 'up' | null, refocus = true): boolean => {
       const cur = editing;
-      if (!cur) return;
+      if (!cur) return true;
       const colIdx = colIndexOf(cur.colKey);
       const col = colAt(colIdx);
       // An untouched draft just closes the editor - no edit, no undo entry.
       const dirty = cur.draft !== cur.initial;
       const value = dirty && col ? parseForColumn(col, cur.draft, cur.row) : undefined;
-      // Reject an invalid value: flash red, and on a keyboard commit keep the
-      // editor open so it can be fixed (blur just discards the invalid draft).
+      // Reject the draft: a parsed value `validate` refused, OR a non-empty one
+      // the column could not parse at all ("15.2m", "1o5"). Both are input to
+      // fix, not a request to empty the cell - treating the second as a clear
+      // told a provisional host to drop a field the user never cleared, which
+      // wrote NaN over the value they were mistyping a correction to. Flash red,
+      // and on a keyboard commit keep the editor open (blur discards the draft).
       const row = rows[cur.row];
-      if (col && value !== undefined && row !== undefined && col.validate && col.validate(value, row)) {
+      const rejected = !!col && dirty && (value === undefined
+        ? cur.draft.trim() !== ''
+        : !!(row !== undefined && col.validate?.(value, row)));
+      if (rejected) {
         flashInvalid({ row: cur.row, colKey: cur.colKey });
-        if (refocus) return;
+        if (refocus) return false;
         setEditing(null);
-        return;
+        return true;
       }
       setEditing(null);
       if (col && dirty && value === undefined) {
-        // The dirty draft didn't parse to a value - a required cell emptied, or
-        // unparseable input ("abc" in a number cell, garbage in a custom-parse
-        // column): keep the model value, show the cell as missing until a valid
-        // value is committed (same rule as Delete). A provisional host (draft
-        // row) is told so it can drop the field rather than keep a stale value.
+        // The draft was EMPTIED (anything else non-empty was rejected above):
+        // keep the model value, show the cell as missing until a valid value is
+        // committed (same rule as Delete). A provisional host (draft row) is
+        // told so it can drop the field rather than keep a stale value.
         const k = missKey(cur.row, cur.colKey);
         if (k !== null) markMissing([k]);
         onClearMissing?.(cur.row, cur.colKey);
@@ -733,6 +748,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
         suppressBlurCommitRef.current = true;
         scrollRef.current?.focus({ preventScroll: true });
       }
+      return true;
     },
     [editing, colIndexOf, colAt, parseForColumn, rows, flashInvalid, onEdit, onClearMissing, rowCount, colCount, moveFocusTo, missKey, markMissing, missingCells],
   );
@@ -854,13 +870,14 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
         }
         return next.size === prev.size ? prev : next;
       });
-      if (edits.length === 1 && edits[0]) {
-        onEdit(edits[0].row, edits[0].colKey, edits[0].value);
-      } else if (onBatchEdit) {
-        onBatchEdit(edits);
-      } else {
-        for (const e of edits) onEdit(e.row, e.colKey, e.value);
-      }
+      // ONE edit is a batch of one, not a different kind of edit. Routing a lone
+      // edit to `onEdit` sent it down a path hosts wrote for interactive typing:
+      // the shot editor's can only materialize the row that IS the trailing
+      // blank, so a grown paste whose single value landed one row past it
+      // resolved to nothing and was dropped - while the paste report still
+      // counted it as written.
+      if (onBatchEdit) onBatchEdit(edits);
+      else for (const e of edits) onEdit(e.row, e.colKey, e.value);
     },
     [onEdit, onBatchEdit, missKey],
   );
@@ -1100,6 +1117,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
   const doClear = useCallback(() => {
     const { edits, missing, restored, cleared } = planClear({
       rect, colAt, cellEditable, parseForColumn, missKey, missingCells,
+      valueAt: (r, col) => { const data = rows[r]; return data === undefined ? undefined : col.getValue(data, r); },
     });
     if (missing.length || restored.length) {
       setMissingCells((prev) => {
@@ -1111,7 +1129,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
     }
     if (onClearMissing) for (const c of cleared) onClearMissing(c.row, c.colKey);
     applyEdits(edits);
-  }, [rect, colAt, cellEditable, parseForColumn, applyEdits, missKey, missingCells, onClearMissing]);
+  }, [rect, colAt, cellEditable, parseForColumn, rows, applyEdits, missKey, missingCells, onClearMissing]);
 
   // --- Keyboard -------------------------------------------------------------
   const onKeyDown = useCallback(
@@ -1138,8 +1156,10 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
         } else if (e.key === 'Tab') {
           e.preventDefault();
           const t = tabTarget(editing.row, colIndexOf(editing.colKey), e.shiftKey ? -1 : 1, writableColIdxs, rowCount);
-          commitEdit(null);
-          if (t) moveFocusTo(t.row, t.colIdx, false);
+          // A rejected draft keeps the editor open ON THIS CELL, so the focus
+          // must stay with it - otherwise the selection walks off to the next
+          // column while the user is still fixing this one.
+          if (commitEdit(null) && t) moveFocusTo(t.row, t.colIdx, false);
         } else if (e.key === 'Escape') {
           e.preventDefault();
           cancelEdit();
@@ -1240,6 +1260,28 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
         scrollColIntoView(n.colIdx);
         onActiveCellChange?.(n.row, key);
       };
+      // Type-to-edit: a printable character starts an edit seeded with it - or,
+      // on a click-only cell, commits straight through the parser. Named (rather
+      // than living in `default:`) because Space reaches it too, whenever the
+      // cell had no button for Space to press.
+      const typeToEdit = () => {
+        if (ctrl || e.altKey || !PRINTABLE.test(e.key) || e.nativeEvent.isComposing) return;
+        const col = colAt(colIdx);
+        if (!col || !cellEditable(row, col)) return;
+        // Consumed by the grid, so it must not ALSO fire a host shortcut bound
+        // to that character (a reserved `?` overlay), as Delete / Ctrl+A do.
+        const typed = directTypedValue(col, rows[row], e.key);
+        if (col.noInlineEdit === true) {
+          if (typed === undefined) return;
+          e.preventDefault();
+          e.stopPropagation();
+          onEdit(row, col.key, typed);
+          return;
+        }
+        e.preventDefault();
+        e.stopPropagation();
+        beginEdit(row, colIdx, e.key);
+      };
 
       switch (e.key) {
         case 'ArrowDown': e.preventDefault(); { const t = ctrl ? dataEdgeTarget(oR, oC, 1, 0) : arrowTarget(oR, oC, 1, 0, rowCount, colCount); moveFocusTo(t.row, t.colIdx, e.shiftKey); } return;
@@ -1270,13 +1312,18 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
           if (!activateCell(row, colIdx, 1)) beginEdit(row, colIdx, null);
           return;
         case ' ':
-          // Space is the button key, and a `noInlineEdit` cell IS a button.
+          // Space is the button key, and a `noInlineEdit` cell IS a button. On
+          // every other cell there is no button to press, so it stays the plain
+          // printable character it has always been - breaking out of the switch
+          // instead left the keypress to the browser, which page-scrolled the
+          // grid rather than opening an editor seeded with a space.
           if (!ctrl && !e.altKey && activateCell(row, colIdx, e.shiftKey ? -1 : 1)) {
             e.preventDefault();
             e.stopPropagation();
             return;
           }
-          break;
+          typeToEdit();
+          return;
         case 'Delete':
         case 'Backspace': {
           e.preventDefault();
@@ -1297,26 +1344,8 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
           setCutRect(null);
           return;
         }
-        default: {
-          // Type-to-edit: a printable character starts an edit seeded with it -
-          // or, on a click-only cell, commits straight through the parser.
-          if (ctrl || e.altKey || !PRINTABLE.test(e.key) || e.nativeEvent.isComposing) return;
-          const col = colAt(colIdx);
-          if (!col || !cellEditable(row, col)) return;
-          // Consumed by the grid, so it must not ALSO fire a host shortcut bound
-          // to that character (a reserved `?` overlay), as Delete / Ctrl+A do.
-          const typed = directTypedValue(col, rows[row], e.key);
-          if (col.noInlineEdit === true) {
-            if (typed === undefined) return;
-            e.preventDefault();
-            e.stopPropagation();
-            onEdit(row, col.key, typed);
-            return;
-          }
-          e.preventDefault();
-          e.stopPropagation();
-          beginEdit(row, colIdx, e.key);
-        }
+        default:
+          typeToEdit();
       }
     },
     [
@@ -1967,7 +1996,12 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
   const totalHeight = virtualizer.getTotalSize();
   // Context-menu labels speak the host's language: full-row selections name
   // the domain rows ("3 shots"), full-column selections name columns.
-  const ctxRowCount = rect.r1 - rect.r0 + 1;
+  // The row entries stop at the last REAL row: a selection dragged over the
+  // host's trailing blank must not promise a row nobody can insert or delete.
+  // A selection that is only the blank keeps a count of one, so "Insert shot
+  // above" there still means "append one" rather than nothing at all.
+  const ctxLastRow = Math.min(rect.r1, Math.max(rect.r0, rowCount - 1 - trailingPlaceholderRows));
+  const ctxRowCount = ctxLastRow - rect.r0 + 1;
   const ctxColCount = rect.c1 - rect.c0 + 1;
   const ctxFullRows = rect.c0 === 0 && rect.c1 === colCount - 1;
   const ctxFullCols = rect.r0 === 0 && rect.r1 === rowCount - 1 && rowCount > 1;
@@ -2380,7 +2414,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
           shapeSuffix={ctxShapeSuffix}
           rowsLabel={ctxRowsLabel}
           fromRow={rect.r0}
-          toRow={rect.r1}
+          toRow={ctxLastRow}
           testIdPrefix={testIdPrefix}
           onCopy={() => void doCopy()}
           onCut={() => void doCut()}
