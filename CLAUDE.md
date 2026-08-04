@@ -140,6 +140,8 @@ Make small, frequent commits as you work. Don't accumulate large uncommitted cha
 Do not wait for user to prompt for commits, make commits as you go.
 
 ### Never commit or extract fixtures and limit their use
+The following rules exist to prevent leaking private and propriatary data.
+
 Commiting fixtures (*.stalx, *.tml, *.tmlu, *.mak, *.dat, *.wpj, *.srv, *.dmp, *.gpx, 
 *.csv, ...) is strictly prohibitted even with users explicit consent. User can and 
 should commit and push them manually if they wish to include them in the public repo.
@@ -151,7 +153,6 @@ available through the external paths.
 When constructing tests (for example to prevent regressions), never extract parts of 
 external fixtures. You can create fully synthetic data that reporoduces the issue such
 that no data is leaked.
-
 
 ### Changelog
 
