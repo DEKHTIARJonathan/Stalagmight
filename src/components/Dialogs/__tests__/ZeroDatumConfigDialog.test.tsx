@@ -166,6 +166,16 @@ function deleteRow(visibleIndex: number) {
   fireEvent.click(screen.getByTestId('shot-editor-context-delete-rows'));
 }
 
+/** Select a whole run by its row gutters, then delete it in one gesture. */
+function deleteRowRange(from: number, to: number) {
+  const gutters = document.querySelectorAll('.sg-gutter');
+  fireEvent.mouseDown(gutters[from]!);
+  fireEvent.mouseDown(gutters[to]!, { shiftKey: true });
+  fireEvent.mouseUp(gutters[to]!, { shiftKey: true });
+  fireEvent.contextMenu(screen.getByTestId(`shot-editor-cell-${to}-length`));
+  fireEvent.click(screen.getByTestId('shot-editor-context-delete-rows'));
+}
+
 function insertBeforeRow(visibleIndex: number) {
   // Insert now goes through the grid's own context menu ("above" = before).
   fireEvent.contextMenu(screen.getByTestId(`shot-editor-cell-${visibleIndex}-length`));
@@ -370,5 +380,45 @@ describe('ZeroDatumConfigDialog station pick across blank transitions', () => {
     insertBeforeRow(0);
     deleteRow(0);
     expect(confirmedStationIndex()).toBe(PICK);
+  });
+});
+
+/**
+ * A pick that sat inside a deleted run has nowhere to shift TO: the stations it
+ * addressed are gone. It collapses to the run's start, which is the boundary the
+ * deleted span closed up to.
+ *
+ * Applying the whole run's delta instead subtracted more stations than preceded
+ * the pick - deleting stations 2..7 with 5 picked gave 5 - 6, clamped to 0, so
+ * the GPS anchor jumped to the head of the section.
+ */
+describe('ZeroDatumConfigDialog pick inside a deleted run', () => {
+  beforeAll(() => {
+    Element.prototype.scrollIntoView = vi.fn();
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('collapses a pick inside the run to the run start, not to zero', () => {
+    renderDialog();
+    pickStation(5);
+    deleteRowRange(1, 6); // rows 1..6 -> stations 2..7
+    expect(confirmedStationIndex()).toBe(1);
+  });
+
+  it('still shifts a pick that sits after the run by the whole run', () => {
+    renderDialog();
+    pickStation(8);
+    deleteRowRange(1, 3); // three stations removed upstream of the pick
+    expect(confirmedStationIndex()).toBe(5);
+  });
+
+  it('leaves a pick before the run alone', () => {
+    renderDialog();
+    pickStation(1);
+    deleteRowRange(4, 6);
+    expect(confirmedStationIndex()).toBe(1);
   });
 });

@@ -91,6 +91,26 @@ function reanchorStation(
   return Math.max(0, Math.min(survivorsAfter, shifted));
 }
 
+/**
+ * A pick that sat INSIDE a removed run collapses to the run's start - the
+ * boundary the deleted span closed up to, and the station that still physically
+ * exists where the pick was.
+ *
+ * {@link reanchorStation} alone applies the whole run's delta to any pick past
+ * the run's first station, which for a pick inside the run subtracts more
+ * stations than precede it: deleting stations 2..7 with 5 picked gave 5 - 6,
+ * clamped to 0, sending the GPS anchor to the head of the section.
+ */
+function reanchorAfterRunDelete(
+  pick: number,
+  runStart: number,
+  countedGone: number,
+  survivorsAfter: number,
+): number {
+  if (pick > runStart && pick <= runStart + countedGone) return runStart;
+  return reanchorStation(pick, runStart, -countedGone, survivorsAfter);
+}
+
 interface ZeroDatumConfigDialogProps {
   dmpFile: DmpFile;
   selectionConfig: DmpSelectionConfig;
@@ -226,29 +246,43 @@ export default function ZeroDatumConfigDialog({
   // Shot editing handlers
   const handleShotChange = useCallback(
     (index: number, field: keyof EditableShot, value: number | string | boolean | null) => {
+      // `shots` may not hold this index yet: typing into the trailing blank row
+      // materializes it via onAddShot in the SAME event, so the row exists in
+      // the next state but not in this closure. Reading it here and bailing out
+      // silently dropped that first keystroke - the primary way rows are added.
+      const existing = shots[index];
+      const updated = { ...(existing ?? blankEditableShot(0)), [field]: value } as EditableShot;
+
+      // A row joining or LEAVING the payload renumbers every station after it.
+      // Inserting the row did not move the pick (an uncounted row changes no
+      // numbering), so the shift is owed here - and owed back again when the row
+      // is cleared to blank.
+      //
+      // Computed and committed OUTSIDE the state updater, which must stay pure:
+      // StrictMode (dev and the Playwright build) invokes updaters twice on
+      // purpose, and a side effect in there reanchored the pick twice for a
+      // single row change.
+      const was = existing !== undefined && isCounted(existing);
+      const now = isCounted(updated);
+
+      // The write itself goes through `prev`, which DOES have a row just
+      // materialized this event.
       setShots((prev) => {
+        const current = prev[index];
+        if (!current) return prev;
         const newShots = [...prev];
-        const shot = newShots[index];
-        if (!shot) return newShots;
-        const updated = { ...shot, [field]: value } as EditableShot;
-        newShots[index] = updated;
-        // A row joining or LEAVING the payload renumbers every station after
-        // it. Inserting the row did not move the pick (an uncounted row changes
-        // no numbering), so the shift is owed here - and owed back again when
-        // the row is cleared to blank, which the first version of this missed:
-        // the pick stayed shifted while the row had left the payload.
-        const was = isCounted(shot);
-        const now = isCounted(updated);
-        if (was !== now) {
-          const delta = now ? 1 : -1;
-          const before = emittedBefore(prev, index);
-          const total = newShots.filter(isCounted).length;
-          commitStation(reanchorStation(stationIndexRef.current, before, delta, total));
-        }
+        newShots[index] = { ...current, [field]: value } as EditableShot;
         return newShots;
       });
+
+      if (was !== now) {
+        const delta = now ? 1 : -1;
+        const before = emittedBefore(shots, index);
+        const total = shots.filter(isCounted).length + delta;
+        commitStation(reanchorStation(stationIndexRef.current, before, delta, total));
+      }
     },
-    [commitStation]
+    [shots, commitStation]
   );
 
   // The three shot-count mutators re-anchor the committed pick as they go, so
@@ -336,10 +370,10 @@ export default function ZeroDatumConfigDialog({
       // Subtracting every target moved the anchor a station upstream.
       const countedGone = targets.filter((i) => isCounted(shots[i])).length;
       commitStation(
-        reanchorStation(
+        reanchorAfterRunDelete(
           stationIndex,
           survivorsBefore(shots, first),
-          -countedGone,
+          countedGone,
           survivors - countedGone,
         ),
       );

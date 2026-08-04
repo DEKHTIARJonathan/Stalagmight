@@ -38,11 +38,35 @@ const allocator = (start = 100) => {
 };
 
 describe('isBlankRow', () => {
-  it('is true only for a row with no fields at all', () => {
+  it('is true for a row with no fields at all', () => {
     expect(isBlankRow(blankRow(1))).toBe(true);
+  });
+
+  it('is false once a cell holds a real value', () => {
     expect(isBlankRow(row(1, { comment: 'x' }))).toBe(false);
-    // An explicit clear is still a touched row - the user typed there.
-    expect(isBlankRow(row(1, { pitch_in: null }))).toBe(false);
+    expect(isBlankRow(row(1, { length: 5 }))).toBe(false);
+  });
+
+  /**
+   * Judged by value rather than by key presence. This used to assert that an
+   * explicit clear made a row "touched", which read reasonably but meant that
+   * cycling the kind back to Normal, or emptying a comment, left a visually
+   * blank invitation row classified as incomplete - Create stayed disabled and
+   * closing offered to discard a row holding nothing.
+   */
+  it('stays blank when a cell is written back to its default', () => {
+    expect(isBlankRow(row(1, { pitch_in: null }))).toBe(true);
+    expect(isBlankRow(row(1, { comment: '' }))).toBe(true);
+    expect(isBlankRow(row(1, { kind: 'Normal' }))).toBe(true);
+    expect(isBlankRow(row(1, { length: NaN }))).toBe(true);
+  });
+
+  it('is not blank when the kind was cycled AWAY from the default', () => {
+    expect(isBlankRow(row(1, { kind: 'Jump' }))).toBe(false);
+  });
+
+  it('is blank when every written cell is at its default, together', () => {
+    expect(isBlankRow(row(1, { kind: 'Normal', comment: '', pitch_in: null }))).toBe(true);
   });
 });
 
