@@ -12668,8 +12668,7 @@ fn test_delete_range_interior_shift_not_blocked_by_closure_loop() {
     // User report: a range whose two sides are connected only through a LOOP
     // CLOSURE must NOT block the gap-close - a closure is a soft/redundant
     // constraint the delete removes/converts, so the result is still valid. (A
-    // merge-based loop still blocks; see
-    // test_delete_range_interior_shift_blocked_by_loop_via_replacement_merge.)
+    // merge-based loop still blocks; see test_delete_range_shift_blocked_aborts.)
     let state = AppState::new().unwrap();
     state.execute(Command::CreateProject {
         name: "Closure Loop".to_string(),
@@ -12961,15 +12960,25 @@ fn test_delete_range_interior_shift_not_blocked_via_removed_tail_boundary() {
 }
 
 #[test]
-fn test_delete_range_interior_shift_blocked_by_loop_via_replacement_merge() {
-    // Self-review (HIGH): two external sections P and Q are each merged ONLY to a
-    // removed interior station, so head and tail are NOT connected on the raw
-    // graph (the path runs through the removed station). The gap-close re-bridges
-    // P<->Q with a replacement merge, reconnecting head and tail into a loop. The
-    // blocker checks the POST-preservation graph, so it must catch this and block.
+fn test_delete_range_interior_shift_not_blocked_when_stitch_is_redundant() {
+    // Two external sections P and Q are each merged to a removed interior station
+    // AND to a surviving station of the same section A. The stitch the deletion
+    // would once have invented, A:2<->Q:0, is rigid-REDUNDANT: Q is already
+    // merged to A:5, so section A and section Q are rigidly connected without it
+    // (the merge would only close the cycle A:2-Q:0-A:5-shots-A:2, which
+    // merge_stations refuses interactively). `replacement_merge_allowed` skips it,
+    // so no head<->tail loop re-forms and the gap-close must be OFFERED.
+    //
+    // This test previously asserted the opposite. Blocking here was circular: the
+    // auto-stitch fabricated the very loop that then blocked the shift. With the
+    // merge gone the premise dissolves - after the gap-close A:2 and old A:5 are
+    // adjacent through the closed gap with P merged to one end and Q to the
+    // other, so the rigid graph is the tree P-A-Q and nothing is over-constrained.
+    // P and Q stay rigidly connected through A; only their merge-graph adjacency
+    // (which described a bridge station that no longer exists) is gone.
     let state = AppState::new().unwrap();
     state.execute(Command::CreateProject {
-        name: "Loop Via Replacement".to_string(),
+        name: "Redundant Stitch".to_string(),
         location: None,
     });
     let create_a = state.execute(Command::CreateSection {
@@ -13047,9 +13056,19 @@ fn test_delete_range_interior_shift_blocked_by_loop_via_replacement_merge() {
     let proj = state.get_project_state().unwrap();
     let impact = proj.preview_delete_shot_range(sec_a, s2, s3).unwrap();
     assert!(
-        impact.shift_blocked,
-        "the gap-close re-forms a head<->tail loop via a replacement merge; must block: {:?}",
+        !impact.shift_blocked,
+        "no loop re-forms once the redundant stitch is skipped, so the gap-close must be \
+         offered: {:?}",
         impact.shift_blocked_reasons
+    );
+    assert!(
+        !impact.replacement_merges.iter().any(|pair| {
+            (pair.station_a.section_id == sec_a && pair.station_b.section_id == sec_q)
+                || (pair.station_a.section_id == sec_q && pair.station_b.section_id == sec_a)
+        }),
+        "A and Q are already rigidly connected through Q:0<->A:5; the dialog must not promise \
+         a redundant stitch: {:?}",
+        impact.replacement_merges
     );
 }
 
