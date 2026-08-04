@@ -15,7 +15,7 @@ import { PANEL_SIZE_BOUNDS } from '../../components/SingleSystemView/layoutConst
  *     src-tauri/src/config/column_widths.rs vs `MIN_COL_WIDTH`/`MAX_COL_WIDTH`
  *     in src/components/common/SpreadsheetGrid/useColumnWidths.ts.
  *   - panel sizes: the three `.clamp(a, b)` calls in
- *     `PanelsConfig::normalize` (src-tauri/src/config/types.rs) vs
+ *     `PanelsConfig::normalize` (src-tauri/src/config/panels.rs) vs
  *     `PANEL_SIZE_BOUNDS` in src/components/SingleSystemView/layoutConstants.ts.
  *
  * A one-sided bump gives a SILENT SNAP-BACK: the frontend accepts and saves a
@@ -30,7 +30,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const REPO_ROOT = path.resolve(__dirname, '../../../');
 const COLUMN_WIDTHS_RS = path.join(REPO_ROOT, 'src-tauri/src/config/column_widths.rs');
-const TYPES_RS = path.join(REPO_ROOT, 'src-tauri/src/config/types.rs');
+const PANELS_RS = path.join(REPO_ROOT, 'src-tauri/src/config/panels.rs');
 
 function parseRustConst(source: string, name: string, file: string): number {
   const re = new RegExp(`const ${name}:\\s*u32\\s*=\\s*(\\d+)\\s*;`);
@@ -79,10 +79,10 @@ describe('cross-language numeric bounds mirror (#357 item 18)', () => {
   });
 
   it('panel size bounds agree: PanelsConfig::normalize clamps (Rust) vs PANEL_SIZE_BOUNDS (TS)', () => {
-    const rustSource = fs.readFileSync(TYPES_RS, 'utf8');
-    const rustSections = parseRustClamp(rustSource, 'sections_panel_width', 'types.rs');
-    const rustDetail = parseRustClamp(rustSource, 'detail_panel_width', 'types.rs');
-    const rustDataTable = parseRustClamp(rustSource, 'data_table_height', 'types.rs');
+    const rustSource = fs.readFileSync(PANELS_RS, 'utf8');
+    const rustSections = parseRustClamp(rustSource, 'sections_panel_width', 'panels.rs');
+    const rustDetail = parseRustClamp(rustSource, 'detail_panel_width', 'panels.rs');
+    const rustDataTable = parseRustClamp(rustSource, 'data_table_height', 'panels.rs');
 
     expect(
       rustSections,
