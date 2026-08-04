@@ -1430,7 +1430,7 @@ where
 
 /// Fetch a tile and return its bytes directly.
 /// Used by the `fetch_tile` IPC command.
-pub fn tile_fetch_impl(
+pub(crate) fn tile_fetch_impl(
     provider: &str,
     z: u32,
     y: u32,
