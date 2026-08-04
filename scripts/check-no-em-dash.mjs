@@ -80,6 +80,9 @@ const MAX_SCAN_BYTES = 5 * 1024 * 1024;
 // Whole files excluded from the scan.
 const EXCLUDE_EXACT = new Set([
   'src/types/ipc.generated.ts', // generated IPC types (regenerate, don't hand-edit)
+  // Generated third-party license texts, reproduced verbatim (same class as the
+  // vendored crate below) - upstream notices legitimately carry Unicode dashes.
+  'THIRD-PARTY-LICENSES.md',
 ]);
 const EXCLUDE_PREFIXES = [
   'src-tauri/vendor/', // vendored upstream crate - left verbatim (its own author/license)

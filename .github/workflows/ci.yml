@@ -119,6 +119,13 @@ jobs:
         run: |
           pnpm lint:ts-file-size:test
           pnpm lint:ts-file-size
+      # Third-party attribution staleness gate (#226): a lockfile change must
+      # come with a regenerated THIRD-PARTY-LICENSES.md (pnpm gen:third-party).
+      # Pure-Node hash comparison - no cargo-about install here on purpose.
+      - name: Third-party license bundle gate
+        run: |
+          pnpm lint:third-party:test
+          pnpm lint:third-party
       # Canonical read-only gating tripwire (#275): blocks a new raw
       # `geometryMode === 'closureAdjusted'` mutation gate (wrong whenever
       # appMode !== 'survey') or a new isMapReadOnly call site missing the

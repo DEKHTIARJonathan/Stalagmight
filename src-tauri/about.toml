@@ -1,0 +1,25 @@
+# cargo-about config for the third-party license bundle.
+# Consumed by scripts/gen-third-party-licenses.mjs (pnpm gen:third-party).
+#
+# `accepted` is an allowlist: generation FAILS if any dependency carries a
+# license not listed here, so a future dependency with a copyleft or unknown
+# license is a loud stop, not a silent inclusion.
+accepted = [
+    "MIT",
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "MPL-2.0",
+    "Zlib",
+    "BSL-1.0",
+    "CC0-1.0",
+    "Unicode-3.0",
+    "0BSD",
+    "Apache-2.0 WITH LLVM-exception",
+    "CDLA-Permissive-2.0",
+    # Stalagmight's own license: cargo-about resolves the workspace crate too.
+    # The generator drops first-party crates from the output, so this entry only
+    # stops resolution failing, it does not put AGPL text in the bundle.
+    "AGPL-3.0-or-later",
+]
