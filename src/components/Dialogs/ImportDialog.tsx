@@ -14,6 +14,7 @@ import {
   draftMissing,
 } from '../SingleSystemView/dataTableDrafts';
 import {
+  ANGLE_FAMILY_KEYS,
   applyAngleMode,
   applyEdits,
   type AzimuthMode,
@@ -25,6 +26,8 @@ import {
   deriveAzimuthMode,
   insertBlankRows,
   moveRows,
+  normalizeAngleFamilies,
+  reorderForAngleMode,
   summarizeSubmit,
 } from './newSectionRows';
 import {
@@ -113,7 +116,13 @@ export default function ImportDialog() {
     viewSetters,
     DEFAULT_NEW_SECTION_HIDDEN_COLUMNS
   );
-  const hiddenColumnList = useMemo(() => [...hiddenColumns], [hiddenColumns]);
+  // Normalized on the way to the grid: a set stored before these columns existed
+  // can leave an average AND its legs visible at once. The stored value stays the
+  // user's; only what renders is repaired.
+  const hiddenColumnList = useMemo(
+    () => [...normalizeAngleFamilies(hiddenColumns)],
+    [hiddenColumns]
+  );
 
   // --- Chrome: column-visibility menu + expand ------------------------------
   // The dialog draws these itself (the grid's built-in toolbar is off), so the
@@ -134,12 +143,6 @@ export default function ImportDialog() {
     });
   }, []);
 
-  const setAngleMode = useCallback((family: 'azimuth' | 'pitch', mode: AzimuthMode) => {
-    const avgKey = family === 'azimuth' ? AZIMUTH_AVG_KEY : PITCH_AVG_KEY;
-    setHiddenColumns((prev) =>
-      applyAngleMode(prev, mode, avgKey, `${family}_in`, `${family}_out`)
-    );
-  }, []);
 
 
   // --- Grid height ----------------------------------------------------------
@@ -185,6 +188,25 @@ export default function ImportDialog() {
         onCycleShotKind,
       }),
     [t, precision, editingBlocked, onCycleShotKind]
+  );
+
+  const setAngleMode = useCallback(
+    (family: 'azimuth' | 'pitch', mode: AzimuthMode) => {
+      const avgKey = family === 'azimuth' ? AZIMUTH_AVG_KEY : PITCH_AVG_KEY;
+      const legIn = `${family}_in`;
+      const legOut = `${family}_out`;
+      const current = deriveAngleMode(hiddenColumns, avgKey, legIn, legOut);
+      if (current === mode) return;
+      // Incoming columns take the outgoing ones' slot - see reorderForAngleMode.
+      if (current !== 'off' && mode !== 'off') {
+        const keys = ANGLE_FAMILY_KEYS[family === 'azimuth' ? 'azimuth' : 'inclination'];
+        setColumnOrder((prev) =>
+          reorderForAngleMode(prev, columns.map((c) => c.key), keys[current], keys[mode])
+        );
+      }
+      setHiddenColumns((prev) => applyAngleMode(prev, mode, avgKey, legIn, legOut));
+    },
+    [hiddenColumns, columns]
   );
 
   // One funnel for every edit path, so the row cap has a single place to report
