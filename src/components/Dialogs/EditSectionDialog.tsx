@@ -14,7 +14,7 @@ import { validateEditableShot } from '../../utils/validation';
 import { isBlankNewShot, isShotComplete } from '../common/editableShotStatus';
 import { EDITABLE_AZIMUTH_AVG_KEY } from '../common/editableShotColumns';
 import { SectionMetadataForm } from '../common/SectionMetadataForm';
-import type { Shot, ShotData, ShotId } from '../../types/project';
+import type { Section, Shot, ShotData, ShotId } from '../../types/project';
 import type { DeleteShotImpact } from '../../types/commands';
 import { defaultConfig } from '../../types/config';
 import DeleteShotImpactDetails from './DeleteShotImpactDetails';
@@ -444,19 +444,9 @@ export default function EditSectionDialog() {
   };
 
   // Track if form has been modified
-  const isDirty = section ? (
-    name !== (section.name ?? '') ||
-    surveyor !== (section.surveyor ?? '') ||
-    date !== (section.date ?? '') ||
-    color !== section.color ||
-    direction !== (section.direction ?? 'in') ||
-    quality !== (section.quality ?? 1) ||
-    shots.some(s => s.isNew || s.isDeleted) ||
-    shots.some(s => {
-      const original = section.shots.find(o => o.id === s.id);
-      return original && hasChanges(original, s);
-    })
-  ) : false;
+  const isDirty = section
+    ? isEditSectionDirty({ name, surveyor, date, color, direction, quality, shots }, section)
+    : false;
 
   // Per-project validation thresholds (#57) so inline warnings match the
   // Warnings panel. project.validation is a non-null ValidationConfig (seeded
@@ -679,6 +669,44 @@ export function plannedShotInserts(rows: readonly EditableShot[]): PlannedShotIn
     plan.push(nextSavedId === undefined ? { shot: row } : { shot: row, beforeShotId: nextSavedId });
   }
   return plan.reverse();
+}
+
+/** The form snapshot the dialog diffs against the saved section. */
+export interface EditSectionDirtyState {
+  name: string;
+  surveyor: string;
+  date: string;
+  color: string;
+  direction: 'in' | 'out';
+  quality: number;
+  shots: readonly EditableShot[];
+}
+
+/**
+ * Whether the dialog holds unsaved changes.
+ *
+ * A row added and then cleared back to blank is exactly what Save skips (the
+ * `isBlankNewShot` / `plannedShotInserts` predicate emits nothing for it), so it
+ * does not count as a pending change either - treating every `isNew` row as
+ * dirty prompted "discard changes?" on close when Save would have written
+ * nothing for that row and the metadata was untouched. A real (filled-in) new
+ * row, a soft-deleted existing row, an edited existing row, or changed metadata
+ * all still count.
+ */
+export function isEditSectionDirty(state: EditSectionDirtyState, section: Section): boolean {
+  return (
+    state.name !== (section.name ?? '') ||
+    state.surveyor !== (section.surveyor ?? '') ||
+    state.date !== (section.date ?? '') ||
+    state.color !== section.color ||
+    state.direction !== (section.direction ?? 'in') ||
+    state.quality !== (section.quality ?? 1) ||
+    state.shots.some((s) => s.isDeleted === true || (s.isNew === true && !isBlankNewShot(s))) ||
+    state.shots.some((s) => {
+      const original = section.shots.find((o) => o.id === s.id);
+      return original !== undefined && hasChanges(original, s);
+    })
+  );
 }
 
 function hasChanges(original: Shot, current: EditableShot): boolean {
