@@ -4,6 +4,7 @@ import { openUrl } from '@tauri-apps/plugin-opener';
 import { useUIStore } from '../store/uiStore';
 import { useSpeleoStore } from '../store/speleoStore';
 import { speleoProjectUrl, type SpeleoWebPage } from '../utils/speleoWebUrl';
+import { TOAST_KEYS } from '../utils/toastKeys';
 
 /**
  * The "open this project on speleodb.org" affordance: the resolved URL (null when
@@ -26,7 +27,7 @@ export function useSpeleoWebLink(page?: SpeleoWebPage): { url: string | null; op
     // A user-initiated "open my browser" that silently does nothing is worse than
     // a toast, so the rejection is surfaced rather than logged and dropped.
     void openUrl(url).catch(() => {
-      showToast(t('speleodb.web.failed'), 'speleodb-web', 'error');
+      showToast(t('speleodb.web.failed'), TOAST_KEYS.SPELEODB_WEB, 'error');
     });
   }, [url, showToast, t]);
 

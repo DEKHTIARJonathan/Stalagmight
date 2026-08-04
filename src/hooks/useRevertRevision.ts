@@ -8,6 +8,7 @@ import { useSpeleoActions } from './useSpeleoActions';
 import { useRestoreRevision } from './useRestoreRevision';
 import { humanizeSpeleoError, unpushedLocalEdits, dumpCandidates } from '../utils/speleoError';
 import type { SpeleoDumpCandidate } from '../types/ipc.generated';
+import { TOAST_KEYS } from '../utils/toastKeys';
 
 export interface RevertRevisionArgs {
   projectId: string;
@@ -139,7 +140,7 @@ export function useRevertRevision() {
       if (result === null) return { kind: 'push_failed' };
       const kind = asDoneKind(result.kind);
       if (kind === 'released') {
-        showToast(t('speleodb.revert.done', { sha: shortSha }), 'speleodb-revert', 'success');
+        showToast(t('speleodb.revert.done', { sha: shortSha }), TOAST_KEYS.SPELEODB_REVERT, 'success');
         return { kind: 'reverted' };
       }
       if (kind === 'push_unconfirmed') return { kind: 'push_unconfirmed' };

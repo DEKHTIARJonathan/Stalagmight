@@ -8,6 +8,7 @@ import { holdsWriteLock } from '../../utils/quit';
 import { trackDialogComplete } from '../../utils/telemetry';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
+import { TOAST_KEYS } from '../../utils/toastKeys';
 
 /**
  * [#303] Confirmation for the explicit "Discard changes" action.
@@ -48,7 +49,7 @@ export default function SpeleoDiscardChangesDialog() {
           outcome === 'editing'
             ? t('speleodb.discardChanges.doneKeptToast')
             : t('speleodb.discardChanges.doneReleasedToast'),
-          'speleodb-discarded',
+          TOAST_KEYS.SPELEODB_DISCARDED,
           'success',
         );
       }

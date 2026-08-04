@@ -87,6 +87,7 @@ import { reanchorAfterRunDelete, reanchorStation } from '../../utils/stationRean
 import { blankEditableShot } from '../common/editableShot';
 import { aggregateImportReceipts } from '../../utils/importReceipt';
 import type { ImportReceipt } from '../../types/ipc/ImportReceipt';
+import { TOAST_KEYS } from '../../utils/toastKeys';
 
 interface DmpNewImportDialogProps {
   dmpFile: DmpFile;
@@ -1646,7 +1647,7 @@ export default function DmpNewImportDialog({
   const refuseFrozenDelete = useCallback((count: number) => {
     useUIStore
       .getState()
-      .showToast(t('editSection.frozenNotDeleted', { count }), 'dmp-wizard-frozen-delete', 'warning');
+      .showToast(t('editSection.frozenNotDeleted', { count }), TOAST_KEYS.DMP_WIZARD_FROZEN_DELETE, 'warning');
   }, [t]);
 
   const handleDeleteShot = useCallback((index: number) => {
@@ -1806,7 +1807,7 @@ export default function DmpNewImportDialog({
     );
     useUIStore.getState().showToast(
       `Not imported - no shots left to import: ${names.join(', ')}`,
-      'dmp-wizard-empty-sections',
+      TOAST_KEYS.DMP_WIZARD_EMPTY_SECTIONS,
       'warning',
     );
   }, [dmpFile.sections]);
@@ -2437,7 +2438,7 @@ export default function DmpNewImportDialog({
     if (!blocking) return false;
     useUIStore.getState().showToast(
       `"${blocking.name}": ${t('editSection.incompleteBlocked', { count: blocking.count })}`,
-      'dmp-wizard-incomplete',
+      TOAST_KEYS.DMP_WIZARD_INCOMPLETE,
       'warning',
     );
     return true;
@@ -3215,7 +3216,7 @@ export default function DmpNewImportDialog({
 
       showToast(
         'Placement: Click to place section. Esc for more placement options and metadata changes.',
-        'dmp-manual-placement-hint'
+        TOAST_KEYS.DMP_MANUAL_PLACEMENT_HINT
       );
     };
 

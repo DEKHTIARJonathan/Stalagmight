@@ -5,6 +5,7 @@ import { speleoProjectSessionIssuedFor } from '../store/speleoStore';
 import { invokeIpc } from '../utils/ipc';
 import { applySpeleoTreeReplacement } from '../utils/speleoTreeReplacement';
 import type { SpeleoOpenResult } from '../types/ipc.generated';
+import { TOAST_KEYS } from '../utils/toastKeys';
 
 export interface RestoreRevisionArgs {
   projectId: string;
@@ -131,7 +132,7 @@ export function useRestoreRevision() {
           restore
             ? t('speleodb.restore.doneToast', { sha: shortSha })
             : t('speleodb.restore.viewToast', { sha: shortSha }),
-          'speleodb-restore',
+          TOAST_KEYS.SPELEODB_RESTORE,
           // A completed restore rewrote the tree; "now viewing revision X" is just
           // a statement of where you are.
           restore ? 'success' : 'info',

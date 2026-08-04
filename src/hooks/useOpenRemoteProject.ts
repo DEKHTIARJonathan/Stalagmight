@@ -18,6 +18,7 @@ import {
   dumpCandidateKind,
 } from '../utils/speleoError';
 import { needsSpeleoHandBackPrompt } from '../utils/quit';
+import { TOAST_KEYS } from '../utils/toastKeys';
 import type {
   SpeleoProjectSummary,
   SpeleoOpenResult,
@@ -216,7 +217,7 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
       // #193 b8: a lock held by THIS account at open time = a second same-account
       // session; warn (keyed so repeat opens don't stack duplicate toasts).
       if (result.concurrent_session) {
-        showToast(t('speleodb.browser.concurrentSession'), 'speleodb-concurrent-session', 'warning');
+        showToast(t('speleodb.browser.concurrentSession'), TOAST_KEYS.SPELEODB_CONCURRENT_SESSION, 'warning');
       }
       // `forPath` is the exact string handed to `loadProject` below, so the
       // `syncProjectLink` inside that load recognises this seed as belonging to
@@ -910,7 +911,7 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
               : result.type_flipped
                 ? t('speleodb.adopt.doneToast')
                 : t('speleodb.adopt.doneToastNoTypeFlip'),
-          key: 'speleodb-adopted',
+          key: TOAST_KEYS.SPELEODB_ADOPTED,
           /**
            * Green for the one outcome where nothing is left to do, amber for the two
            * where something is. The neutral default read as "done" over both of the

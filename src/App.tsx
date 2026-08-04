@@ -27,6 +27,7 @@ import { MemoryProbe } from './components/MemoryProbe/MemoryProbe';
 import type { DmpSelectionConfig } from './components/Dialogs/DmpSelectionDialog';
 import type { ZeroDatumConfigResult } from './components/Dialogs/ZeroDatumConfigDialog';
 import type { OrphanPlacementSuggestion } from './types/commands';
+import { TOAST_KEYS } from './utils/toastKeys';
 
 function App() {
   const { t } = useTranslation();
@@ -439,7 +440,9 @@ function App() {
         remaining > 0
           ? `Fixed ${fixed} issue${fixed === 1 ? '' : 's'}; ${remaining} need${remaining === 1 ? 's' : ''} manual attention (recompute or remove drifted loop closures, fix non-finite shots). Save to keep the fix.`
           : `Repaired ${fixed} issue${fixed === 1 ? '' : 's'}. Save to keep the fix.`;
-      useUIStore.getState().showToast(message, 'integrity-repair', remaining > 0 ? 'warning' : 'success');
+      useUIStore
+        .getState()
+        .showToast(message, TOAST_KEYS.INTEGRITY_REPAIR, remaining > 0 ? 'warning' : 'success');
       // Close the dialog only when fully clean. Read the AUTHORITATIVE store state
       // (the same integrityIssues the banner and the dialog render-gate use) rather
       // than the point-in-time `remaining` - a command or undo that interleaved
@@ -454,7 +457,13 @@ function App() {
       // during teardown) rather than reporting a fake no-op success. Surface it and
       // keep the dialog open - integrityIssues is untouched, so the banner/save-block
       // stay correct and the user can retry.
-      useUIStore.getState().showToast('Repair failed - nothing was changed. Please try again.', 'integrity-repair', 'error');
+      useUIStore
+        .getState()
+        .showToast(
+          'Repair failed - nothing was changed. Please try again.',
+          TOAST_KEYS.INTEGRITY_REPAIR,
+          'error',
+        );
     } finally {
       setRepairingIntegrity(false);
     }

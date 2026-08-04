@@ -54,6 +54,7 @@ import type { SurveyData } from '../types/survey-data';
 import { emptySurveyData, surveyDataFromLegacy, surveyDataWithAdjustedStations } from '../types/survey-data';
 import { createProjectConfigActions, type ProjectConfigActions } from './projectConfigActions';
 import { runProjectSwitch } from '../utils/projectTransition';
+import { TOAST_KEYS } from '../utils/toastKeys';
 
 type ShotUpdatesPatch = Partial<ShotUpdates>;
 
@@ -646,7 +647,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         if (isReverifyDivergedError(result.error)) {
           useSpeleoStore.getState().notifyReverifyDivergence();
         } else if (isEditDisabledError(result.error)) {
-          useUIStore.getState().showToast(READ_ONLY_EDIT_NOTICE, 'edit-disabled', 'warning');
+          useUIStore.getState().showToast(READ_ONLY_EDIT_NOTICE, TOAST_KEYS.EDIT_DISABLED, 'warning');
         }
       }
       return result;
@@ -731,7 +732,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         if (isReverifyDivergedError(result.error)) {
           useSpeleoStore.getState().notifyReverifyDivergence();
         } else if (isEditDisabledError(result.error)) {
-          useUIStore.getState().showToast(READ_ONLY_EDIT_NOTICE, 'edit-disabled', 'warning');
+          useUIStore.getState().showToast(READ_ONLY_EDIT_NOTICE, TOAST_KEYS.EDIT_DISABLED, 'warning');
         } else {
           useUIStore.getState().showToast(result.error ?? 'Unknown error', toastId, 'error');
         }
@@ -1266,7 +1267,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
           .getState()
           .showToast(
             i18n.t('speleodb.managedFile.copySaved', { path: result.unlinked_copy_path }),
-            'speleodb-unlinked-copy'
+            TOAST_KEYS.SPELEODB_UNLINKED_COPY
           );
         // The heals above ran on the LIVE project before the pipeline decided to
         // write a copy, so the frontend's mirror is stale here too - and the
@@ -2060,16 +2061,16 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
 
   // Undo/Redo
   undo: async () =>
-    executeUndoRedo('undo', undefined, { purpose: 'undo last action' }, 'undo-failed', false),
+    executeUndoRedo('undo', undefined, { purpose: 'undo last action' }, TOAST_KEYS.UNDO_FAILED, false),
 
   redo: async () =>
-    executeUndoRedo('redo', undefined, { purpose: 'redo last undone action' }, 'redo-failed', false),
+    executeUndoRedo('redo', undefined, { purpose: 'redo last undone action' }, TOAST_KEYS.REDO_FAILED, false),
 
   undoTo: async (index: number) =>
-    executeUndoRedo('undo_to', { index }, { purpose: 'undo to history index', fields: { index } }, 'undo-failed', true),
+    executeUndoRedo('undo_to', { index }, { purpose: 'undo to history index', fields: { index } }, TOAST_KEYS.UNDO_FAILED, true),
 
   redoTo: async (index: number) =>
-    executeUndoRedo('redo_to', { index }, { purpose: 'redo to history index', fields: { index } }, 'redo-failed', true),
+    executeUndoRedo('redo_to', { index }, { purpose: 'redo to history index', fields: { index } }, TOAST_KEYS.REDO_FAILED, true),
 
   getUndoStack: async () => {
     return await invokeIpc<UndoHistoryItem[]>('get_undo_stack', undefined, {

@@ -10,6 +10,7 @@ import {
   type GridViewSetters,
   type GridViewState,
 } from './useGridViewPersistence';
+import { TOAST_KEYS } from '../../utils/toastKeys';
 
 export type NewSectionViewState = GridViewState;
 export type NewSectionViewSetters = GridViewSetters;
@@ -26,6 +27,6 @@ export function useNewSectionViewPersistence(
     widthsField: 'new_section_column_widths',
     command: 'update_new_section_view',
     fallbackHidden,
-    toastKey: 'new-section-view-save',
+    toastKey: TOAST_KEYS.NEW_SECTION_VIEW_SAVE,
   });
 }

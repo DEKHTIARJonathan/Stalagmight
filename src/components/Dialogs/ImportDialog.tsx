@@ -48,6 +48,7 @@ import { ShotColumnsMenu } from '../common/ShotColumnsMenu';
 import { getNumberFormatLocale } from '../../i18n/format';
 import { nextShotKind } from '../../utils/shotKind';
 import { trackDialogComplete } from '../../utils/telemetry';
+import { TOAST_KEYS } from '../../utils/toastKeys';
 
 /** Grid height to assume before the first measurement, and under jsdom (which
  *  has no ResizeObserver). Tall enough that virtualization renders rows. */
@@ -208,7 +209,7 @@ export default function ImportDialog() {
       if (droppedPastCap > 0) {
         showToast(
           t('newSection.pasteCapped', { count: droppedPastCap }),
-          'new-section-paste-cap',
+          TOAST_KEYS.NEW_SECTION_PASTE_CAP,
           'error'
         );
       }
@@ -285,7 +286,7 @@ export default function ImportDialog() {
       if (written > 0) parts.push(t('dataTable.pasteReport.written', { count: written }));
       if (clipped > 0) parts.push(t('dataTable.pasteReport.clipped', { count: clipped }));
       if (skipped > 0) parts.push(t('dataTable.pasteReport.skipped', { count: skipped }));
-      if (parts.length > 0) showToast(parts.join(' \u00b7 '), 'new-section-paste');
+      if (parts.length > 0) showToast(parts.join(' \u00b7 '), TOAST_KEYS.NEW_SECTION_PASTE);
     },
     [t, showToast]
   );

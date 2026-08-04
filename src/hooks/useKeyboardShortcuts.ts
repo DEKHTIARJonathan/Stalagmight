@@ -12,6 +12,7 @@ import type { ToolType, Selection, DisplayToggleKey } from '../store/uiStore';
 import { setSource, trackNav } from '../utils/telemetry';
 import type { ShortcutsConfig, ShortcutFeedback } from '../types/config';
 import { defaultConfig } from '../types/config';
+import { TOAST_KEYS, shortcutToastKey } from '../utils/toastKeys';
 
 /**
  * Action types that can be triggered by keyboard shortcuts.
@@ -473,7 +474,7 @@ export function useKeyboardShortcuts() {
         if (isNonInteractiveTool(currentToolA)) return;
         // GUARD: Block select all when stations are hidden
         if (!showStations) {
-          showToast("Enable 'Stations' in Display menu to select all", 'stations-hidden', 'warning');
+          showToast("Enable 'Stations' in Display menu to select all", TOAST_KEYS.STATIONS_HIDDEN, 'warning');
           return;
         }
         if (stations.length > 0) {
@@ -545,7 +546,7 @@ export function useKeyboardShortcuts() {
         if (shouldShowToast(actionName, shortcutFeedback)) {
           const label = ACTION_LABELS[actionName];
           const message = stateInfo ? `${label}: ${stateInfo}` : label;
-          showToast(message, `shortcut-${actionName}`);
+          showToast(message, shortcutToastKey(actionName));
         }
       };
 

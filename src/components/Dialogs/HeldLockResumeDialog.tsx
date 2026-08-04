@@ -10,6 +10,7 @@ import { humanizeSpeleoError } from '../../utils/speleoError';
 import { needsSpeleoHandBackPrompt } from '../../utils/quit';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
+import { TOAST_KEYS } from '../../utils/toastKeys';
 
 /**
  * Held-lock resume/release prompt (#201, B1). SpeleoDB has no server-side lock
@@ -125,7 +126,7 @@ export default function HeldLockResumeDialog() {
     } catch (e) {
       showToast(
         humanizeSpeleoError(e, t('speleodb.heldLocks.releaseFailed')),
-        'speleodb-release-one-error',
+        TOAST_KEYS.SPELEODB_RELEASE_ONE_ERROR,
         'error',
       );
     } finally {
@@ -152,7 +153,7 @@ export default function HeldLockResumeDialog() {
         // 'continue' precisely because NOTHING is known about the local copy.)
         showToast(
           t('speleodb.localEdits.heldLocks.openFailed', { name: lock.projectName }),
-          'speleodb-continue-editing-error',
+          TOAST_KEYS.SPELEODB_CONTINUE_EDITING_ERROR,
           'warning',
         );
         return;
@@ -181,7 +182,7 @@ export default function HeldLockResumeDialog() {
         if (useProjectStore.getState().isDirty) {
           showToast(
             t('speleodb.localEdits.heldLocks.unsavedChanges', { name: lock.projectName }),
-            'speleodb-continue-editing-dirty',
+            TOAST_KEYS.SPELEODB_CONTINUE_EDITING_DIRTY,
             'warning',
           );
           return;
@@ -189,7 +190,7 @@ export default function HeldLockResumeDialog() {
         if (needsSpeleoHandBackPrompt(openLink)) {
           showToast(
             t('speleodb.localEdits.heldLocks.unpushedWork', { name: lock.projectName }),
-            'speleodb-continue-editing-unpushed',
+            TOAST_KEYS.SPELEODB_CONTINUE_EDITING_UNPUSHED,
             'warning',
           );
           return;

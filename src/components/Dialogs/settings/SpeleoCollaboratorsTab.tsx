@@ -11,6 +11,7 @@ import { invokeIpc } from '../../../utils/ipc';
 import { humanizeSpeleoError } from '../../../utils/speleoError';
 import { permissionAtLeast, USER_LEVELS, TEAM_LEVELS } from '../../../utils/speleoPermission';
 import type { Permission, SpeleoCollaborators, SpeleoTeamOption } from '../../../types/ipc.generated';
+import { TOAST_KEYS } from '../../../utils/toastKeys';
 
 const inputClass =
   'w-full px-2 py-1 bg-background border border-border rounded text-sm disabled:opacity-60';
@@ -237,7 +238,7 @@ export function SpeleoCollaboratorsTab() {
       try {
         setRoster(await op());
       } catch (e) {
-        showToast(humanizeSpeleoError(e, t(failKey)), 'speleodb-collaborators', 'error');
+        showToast(humanizeSpeleoError(e, t(failKey)), TOAST_KEYS.SPELEODB_COLLABORATORS, 'error');
       } finally {
         setBusy(false);
         // Disarm on completion, either way, and for every mutation (an add is just

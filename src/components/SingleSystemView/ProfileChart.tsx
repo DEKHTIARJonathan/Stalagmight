@@ -14,6 +14,7 @@ import {
   type DiveProfileRequest,
 } from '../../utils/divePlanApi';
 import { getErrorMessage } from '../../utils/ipc';
+import { TOAST_KEYS } from '../../utils/toastKeys';
 import {
   buildRouteProfile,
   projectProfile,
@@ -177,7 +178,7 @@ function ProfileExportControls({
     try {
       await fn();
     } catch (e) {
-      showToast(getErrorMessage(e, t('planTables.profile.export.failed')), 'profile-export-failed');
+      showToast(getErrorMessage(e, t('planTables.profile.export.failed')), TOAST_KEYS.PROFILE_EXPORT_FAILED);
     } finally {
       setBusy(false);
     }
@@ -219,7 +220,7 @@ function ProfileExportControls({
         );
       }
       await exportDiveProfile(ensureExtension(path, '.xml'), 'subsurface-xml', currentRequest());
-      showToast(t('planTables.profile.export.written'), 'profile-export-ok');
+      showToast(t('planTables.profile.export.written'), TOAST_KEYS.PROFILE_EXPORT_OK);
     });
 
   const onCopy = () =>

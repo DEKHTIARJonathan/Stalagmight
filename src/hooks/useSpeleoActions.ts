@@ -14,6 +14,7 @@ import { invokeIpc } from '../utils/ipc';
 import { openExitPrompt, type PendingExit } from '../utils/quit';
 import { speleoErrorAction, humanizeSpeleoError } from '../utils/speleoError';
 import { applySpeleoTreeReplacement } from '../utils/speleoTreeReplacement';
+import { TOAST_KEYS } from '../utils/toastKeys';
 import type {
   DoneResult,
   PushResult,
@@ -141,7 +142,7 @@ export function useSpeleoActions(): SpeleoActions {
       // drop); other errors are transient - surface and let the user retry.
       if (speleoErrorAction(e) === 'ReLogin') clearSession();
       const message = humanizeSpeleoError(e, t(prefixKey));
-      showToast(message, 'speleodb-action-error', 'error');
+      showToast(message, TOAST_KEYS.SPELEODB_ACTION_ERROR, 'error');
       return message;
     },
     [clearSession, showToast, t],
@@ -160,7 +161,7 @@ export function useSpeleoActions(): SpeleoActions {
       switch (result.kind) {
         case 'editing':
           if (showEditingToast) {
-            showToast(t('speleodb.editBar.toasts.editing'), 'speleodb-editing', 'success');
+            showToast(t('speleodb.editBar.toasts.editing'), TOAST_KEYS.SPELEODB_EDITING, 'success');
           }
           return { editing: true, treeReplaced: false, landed: true };
         case 'fast_forwarded': {
@@ -179,7 +180,7 @@ export function useSpeleoActions(): SpeleoActions {
             t('speleodb.editBar.toasts.lockedBy', {
               email: result.email ?? t('speleodb.editBar.someone'),
             }),
-            'speleodb-locked-by',
+            TOAST_KEYS.SPELEODB_LOCKED_BY,
             'warning',
           );
           return { editing: false, treeReplaced: false, landed: true };
@@ -254,7 +255,7 @@ export function useSpeleoActions(): SpeleoActions {
       // the read-only badge off and the big-red banner on.
       await invokeIpc<null>('speleodb_force_edit');
       await refreshLinkStatus();
-      showToast(t('speleodb.forceEdit.toasts.active'), 'speleodb-force-edit', 'warning');
+      showToast(t('speleodb.forceEdit.toasts.active'), TOAST_KEYS.SPELEODB_FORCE_EDIT, 'warning');
       return true;
     } catch (e) {
       // Backend refusal (opt-in off / link lost / already lock-held): surface the
@@ -279,7 +280,7 @@ export function useSpeleoActions(): SpeleoActions {
       applyUpdate(result);
       switch (result.kind) {
         case 'up_to_date':
-          showToast(t('speleodb.editBar.toasts.upToDate'), 'speleodb-up-to-date');
+          showToast(t('speleodb.editBar.toasts.upToDate'), TOAST_KEYS.SPELEODB_UP_TO_DATE);
           break;
         case 'fast_forwarded':
           // See startEditing: the FF reload swapped the tree in the backend, but
@@ -331,7 +332,7 @@ export function useSpeleoActions(): SpeleoActions {
         applyPush(result);
         const kind = asPushKind(result.kind);
         if (kind === 'pushed') {
-          showToast(t('speleodb.editBar.toasts.pushed'), 'speleodb-pushed', 'success');
+          showToast(t('speleodb.editBar.toasts.pushed'), TOAST_KEYS.SPELEODB_PUSHED, 'success');
           noteNoAnchorIfNeeded();
           await flushToDiskAfterPush();
         } else if (kind === 'not_editing') {
@@ -340,7 +341,7 @@ export function useSpeleoActions(): SpeleoActions {
           // way to re-issue from there). A green "Changes pushed to SpeleoDB." here
           // was a lie that also cost the flush + no-anchor check their meaning, so
           // say what actually happened and name the way out.
-          showToast(t('speleodb.editBar.toasts.notEditing'), 'speleodb-not-editing', 'warning');
+          showToast(t('speleodb.editBar.toasts.notEditing'), TOAST_KEYS.SPELEODB_NOT_EDITING, 'warning');
           // ...and keep a DURABLE surface for it. This arm neither lands nor
           // throws, so nothing else re-raises the failure the attempt started by
           // clearing - and the toast is gone in 3 s. Since the usual way here is
@@ -442,7 +443,7 @@ export function useSpeleoActions(): SpeleoActions {
               hadUnpushedEdits
                 ? t('speleodb.editBar.toasts.released')
                 : t('speleodb.editBar.toasts.releasedNothingToUpload'),
-              'speleodb-released',
+              TOAST_KEYS.SPELEODB_RELEASED,
               'success',
             );
             noteNoAnchorIfNeeded();
@@ -458,7 +459,7 @@ export function useSpeleoActions(): SpeleoActions {
             // No lock was held, so nothing was uploaded AND nothing was released.
             // `applyDone` deliberately left the dirty bit alone; callers key off
             // `kind === 'released'`, so the close/quit dialogs correctly stay open.
-            showToast(t('speleodb.editBar.toasts.notEditing'), 'speleodb-not-editing', 'warning');
+            showToast(t('speleodb.editBar.toasts.notEditing'), TOAST_KEYS.SPELEODB_NOT_EDITING, 'warning');
             // See the same arm in `push`: neither landed nor threw, so re-raise the
             // durable banner this attempt cleared on its way in - otherwise the only
             // trace of a release that released nothing is a 3 s toast, and the
@@ -516,7 +517,7 @@ export function useSpeleoActions(): SpeleoActions {
       const { success } = await loadProject(localPath);
       if (!success) return false;
       if (!(await applySpeleoTreeReplacement(issuedFor))) return false;
-      showToast(t('speleodb.editBar.toasts.tookRemote'), 'speleodb-took-remote', 'success');
+      showToast(t('speleodb.editBar.toasts.tookRemote'), TOAST_KEYS.SPELEODB_TOOK_REMOTE, 'success');
       return true;
     } catch (e) {
       handleError(e, 'speleodb.editBar.toasts.takeRemoteFailed');

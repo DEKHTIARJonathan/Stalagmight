@@ -28,6 +28,7 @@ import RawTableView from './RawTableView';
 import { DetailLink } from '../common/DetailLink';
 import { buildShotUpdates, buildShotUpdateBatch, AZIMUTH_AVG_KEY, PITCH_AVG_KEY } from './dataTableEdits';
 import { useDataTableViewPersistence } from './useDataTableViewPersistence';
+import { TOAST_KEYS } from '../../utils/toastKeys';
 import { canSplitShot } from '../../utils/shotSplit';
 import { nextShotKind } from '../../utils/shotKind';
 import {
@@ -1005,7 +1006,7 @@ export default function DataTable({ sections }: DataTableProps) {
       if (written > 0) parts.push(t('dataTable.pasteReport.written', { count: written }));
       if (clipped > 0) parts.push(t('dataTable.pasteReport.clipped', { count: clipped }));
       if (skipped > 0) parts.push(t('dataTable.pasteReport.skipped', { count: skipped }));
-      if (parts.length > 0) showToast(parts.join(' · '), 'data-table-paste');
+      if (parts.length > 0) showToast(parts.join(' · '), TOAST_KEYS.DATA_TABLE_PASTE);
     },
     [t, showToast]
   );
@@ -1057,7 +1058,7 @@ export default function DataTable({ sections }: DataTableProps) {
       // remove unselected shots). Drafts only trail the real shots, so this is
       // unreachable in practice.
       if (lastIdx - firstIdx + 1 !== inRange.length) {
-        showToast(t('dataTable.multiDeleteUnsupported'), 'data-table-delete', 'warning');
+        showToast(t('dataTable.multiDeleteUnsupported'), TOAST_KEYS.DATA_TABLE_DELETE, 'warning');
         return false;
       }
 

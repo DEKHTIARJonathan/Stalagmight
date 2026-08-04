@@ -17,6 +17,7 @@ import { holdsWriteLock } from '../../../utils/quit';
 import { permissionAtLeast } from '../../../utils/speleoPermission';
 import { formatDate } from '../../../i18n/format';
 import type { SpeleoRevision } from '../../../types/ipc.generated';
+import { TOAST_KEYS } from '../../../utils/toastKeys';
 
 /** RFC-3339 -> localized date/time; falls back to the raw string if unparseable. */
 function formatWhen(iso: string | null): string {
@@ -150,7 +151,7 @@ export function SpeleoRevisionHistory() {
         unpushedLocalEdits(e)
           ? t('speleodb.revisions.viewBlockedByUnpushed')
           : humanizeSpeleoError(e, t('speleodb.restore.failed')),
-        'speleodb-restore',
+        TOAST_KEYS.SPELEODB_RESTORE,
         'error',
       );
     } finally {
@@ -267,7 +268,7 @@ export function SpeleoRevisionHistory() {
                     variant="secondary"
                     size="sm"
                     onClick={() =>
-                      openDialog('speleodb-restore', {
+                      openDialog(TOAST_KEYS.SPELEODB_RESTORE, {
                         projectId,
                         projectName,
                         hexsha: rev.id,

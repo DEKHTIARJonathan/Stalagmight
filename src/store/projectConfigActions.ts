@@ -7,6 +7,7 @@ import type { GasConfig } from '../types/ipc.generated';
 import type { CommandResult } from '../types/commands';
 import type { ConfigSaveReport } from '../types/ipc/ConfigSaveReport';
 import { emptyCommandResult, type ProjectStore } from './projectStore';
+import { TOAST_KEYS } from '../utils/toastKeys';
 
 /**
  * Split out of `projectStore.ts` rather than rebaselined (#157: split at an API
@@ -73,7 +74,7 @@ export function createProjectConfigActions(
               i18n.t('settings.speleodb.disableKeychain.evictionFailed', {
                 reason: report.keychain_residue,
               }),
-              'speleodb-keychain-residue',
+              TOAST_KEYS.SPELEODB_KEYCHAIN_RESIDUE,
               'warning',
             );
         }
@@ -92,7 +93,7 @@ export function createProjectConfigActions(
               i18n.t('settings.speleodb.disableKeychain.sweepFailed', {
                 reason: report.persistent_residue,
               }),
-              'speleodb-token-residue',
+              TOAST_KEYS.SPELEODB_TOKEN_RESIDUE,
               'warning',
             );
         }

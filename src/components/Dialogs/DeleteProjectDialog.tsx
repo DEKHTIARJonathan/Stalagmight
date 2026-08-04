@@ -4,6 +4,7 @@ import { useProjectStore } from '../../store/projectStore';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import { trackDialogComplete } from '../../utils/telemetry';
+import { TOAST_KEYS } from '../../utils/toastKeys';
 
 /**
  * Destructive confirm for permanently deleting a project from disk (#118).
@@ -60,7 +61,7 @@ export default function DeleteProjectDialog() {
       // i18n) rather than paraphrasing it - it carries the OS error detail.
       const warnings = result.warnings ?? [];
       if (warnings.length > 0) {
-        showToast(warnings.map((w) => w.message).join(' '), 'delete-project-warning', 'warning');
+        showToast(warnings.map((w) => w.message).join(' '), TOAST_KEYS.DELETE_PROJECT_WARNING, 'warning');
       }
       // Mark the dialog completed BEFORE closing: closeDialog() runs
       // checkDialogCancel('delete-project'), which would otherwise record a

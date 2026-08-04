@@ -5,6 +5,7 @@ import { useUIStore } from '../../store/uiStore';
 import { useSpeleoStore } from '../../store/speleoStore';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
+import { TOAST_KEYS } from '../../utils/toastKeys';
 
 /**
  * The tier each button is ASKING for, so "did they get what they clicked?" is one
@@ -67,7 +68,7 @@ export default function SpeleoStorageChoiceDialog() {
       // landed while the key sits wherever the failed login left it.
       const landed = await setTokenStorage(mode);
       if (landed === null) {
-        showToast(t('speleodb.storageChoice.failed'), 'speleodb-storage-choice', 'error');
+        showToast(t('speleodb.storageChoice.failed'), TOAST_KEYS.SPELEODB_STORAGE_CHOICE, 'error');
         // "Stays open" has to be RE-ASSERTED, not merely left un-closed. The option
         // buttons are disabled for the length of the await above, but Escape, the
         // title-bar close and the backdrop are not - all three reach `onClose`, which
@@ -133,7 +134,7 @@ export default function SpeleoStorageChoiceDialog() {
         asAsked
           ? t(`speleodb.storageChoice.toasts.${mode}`)
           : t(`speleodb.storageChoice.landedElsewhere.${landed}`),
-        'speleodb-storage-choice',
+        TOAST_KEYS.SPELEODB_STORAGE_CHOICE,
         asAsked ? 'success' : 'warning',
       );
     } finally {

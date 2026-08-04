@@ -52,7 +52,8 @@ export interface GridViewPersistenceConfig {
   /** Hidden set for a config that has never stored one. Only used when the
    *  field is ABSENT - see the seed effect. */
   fallbackHidden: readonly string[];
-  /** Toast key, so one grid's failure does not replace another's toast. */
+  /** Toast key, so one grid's failure does not replace another's toast. Callers
+   *  must pass a value from `TOAST_KEYS` (src/utils/toastKeys.ts). */
   toastKey: string;
 }
 

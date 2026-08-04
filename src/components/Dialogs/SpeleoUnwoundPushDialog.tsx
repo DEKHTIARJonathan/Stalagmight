@@ -8,6 +8,7 @@ import { trackDialogComplete } from '../../utils/telemetry';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import { SpeleoPushFailureNotice } from './SpeleoPushFailureNotice';
+import { TOAST_KEYS } from '../../utils/toastKeys';
 
 /**
  * [#303] Raised when a push is attempted on a copy that is dirty ONLY because a chain step
@@ -81,7 +82,7 @@ export default function SpeleoUnwoundPushDialog() {
       // discard, and this dialog's whole body is the acknowledgement.
       const outcome = await discardChanges(true);
       if (outcome === 'editing') {
-        showToast(t('speleodb.unwoundPush.discardedToast'), 'speleodb-discarded', 'success');
+        showToast(t('speleodb.unwoundPush.discardedToast'), TOAST_KEYS.SPELEODB_DISCARDED, 'success');
       }
       trackDialogComplete('speleodb-unwound-push');
       // Not the exit: this branch keeps the lock so the user can carry on editing, and

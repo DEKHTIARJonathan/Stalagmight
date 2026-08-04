@@ -11,6 +11,7 @@ import { holdsWriteLock, performQuit } from '../../utils/quit';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import { SpeleoPushFailureNotice } from './SpeleoPushFailureNotice';
+import { TOAST_KEYS } from '../../utils/toastKeys';
 
 /**
  * [#270] Quit-flow guard: shown when the app is asked to quit (menu Quit, Ctrl+Q,
@@ -151,7 +152,7 @@ export default function SpeleoQuitDialog() {
     try {
       await invokeIpc<null>('speleodb_release_current_lock');
     } catch (e) {
-      showToast(humanizeSpeleoError(e, t('speleodb.lock.releaseFailed')), 'speleodb-lock', 'error');
+      showToast(humanizeSpeleoError(e, t('speleodb.lock.releaseFailed')), TOAST_KEYS.SPELEODB_LOCK, 'error');
       setReleasing(false);
       // Re-probe so the button/badge reflect whatever the server actually thinks.
       void refreshLinkStatus();

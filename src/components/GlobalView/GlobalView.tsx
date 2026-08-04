@@ -52,6 +52,7 @@ import type { ProjectMetadata } from '../../types/project';
 import type { SpeleoProjectSummary } from '../../types/ipc.generated';
 import { formatNumber } from '../../i18n/format';
 import { debugLog } from '../../utils/debugLog';
+import { TOAST_KEYS } from '../../utils/toastKeys';
 
 /** Map phase enum values to human-readable labels */
 function formatPhaseLabel(
@@ -193,7 +194,7 @@ export default function GlobalView() {
         const outcome = await openRemote(summary);
         if (outcome.status === 'adopt') setPendingAdopt(summary);
         else if (outcome.status === 'error') {
-          showToast(outcome.message, 'speleodb-open-remote-error', 'error');
+          showToast(outcome.message, TOAST_KEYS.SPELEODB_OPEN_REMOTE_ERROR, 'error');
         }
       } finally {
         remoteBusyRef.current = false;
@@ -210,7 +211,7 @@ export default function GlobalView() {
     setRemoteBusy(true);
     try {
       const outcome = await adoptRemote(summary);
-      if (outcome.status === 'error') showToast(outcome.message, 'speleodb-open-remote-error', 'error');
+      if (outcome.status === 'error') showToast(outcome.message, TOAST_KEYS.SPELEODB_OPEN_REMOTE_ERROR, 'error');
     } finally {
       remoteBusyRef.current = false;
       setRemoteBusy(false);

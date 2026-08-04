@@ -14,6 +14,7 @@ import { reachableStationKeySet, nearestOriginShotEndpoint } from '../utils/gasR
 import { setSource } from '../utils/telemetry';
 import type { SurveyLayerCallbacks } from '../components/Map/SurveyLayer';
 import { projectParamOnSegment } from '../components/Map/surveyLayer/hitTest';
+import { TOAST_KEYS } from '../utils/toastKeys';
 
 /**
  * #395: what a plain Plan-mode select-click does to the gas plan pins.
@@ -344,7 +345,7 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
 
       setIsCheckingConnectivity(true);
       setMergeStationB(stationB);
-      showToast('Checking connectivity...', 'merge-connectivity-check');
+      showToast('Checking connectivity...', TOAST_KEYS.MERGE_CHECK);
       try {
         const result = await checkMergeConnectivity(stationA, stationB);
         // Discard result if a newer request was started or merge was cancelled
@@ -374,12 +375,12 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
           });
         } else {
           // Not connected and merge blocked (e.g. both sides have zero datums)
-          showToast(result.reason ?? 'Merge not allowed.', 'merge-blocked', 'warning');
+          showToast(result.reason ?? 'Merge not allowed.', TOAST_KEYS.MERGE_BLOCKED, 'warning');
           clearMergeStations();
         }
       } catch (e) {
         if (requestId !== connectivityRequestIdRef.current) return;
-        showToast(getErrorMessage(e), 'merge-error', 'error');
+        showToast(getErrorMessage(e), TOAST_KEYS.MERGE_ERROR, 'error');
         clearMergeStations();
       } finally {
         if (requestId === connectivityRequestIdRef.current) {
@@ -399,7 +400,7 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
 
       // GUARD: Block all station interactions when hidden
       if (!showStations) {
-        showToast("Enable 'Stations' in Display menu to interact with station markers", 'stations-hidden', 'warning');
+        showToast("Enable 'Stations' in Display menu to interact with station markers", TOAST_KEYS.STATIONS_HIDDEN, 'warning');
         return;
       }
 
@@ -518,7 +519,7 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
           if (!moveCommentSource) {
             // First click: pick up source - just record it, don't mutate backend
             if (!mcStation?.comment) {
-              showToast('No comment to move', 'move-comment-empty', 'warning');
+              showToast('No comment to move', TOAST_KEYS.MOVE_COMMENT_EMPTY, 'warning');
               break;
             }
             setSelection({ type: 'station', stationRef: ref });
@@ -578,7 +579,7 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
 
       // GUARD: Block all shot interactions when hidden
       if (!showShots) {
-        showToast("Enable 'Shots' in Display menu to interact with shot lines", 'shots-hidden', 'warning');
+        showToast("Enable 'Shots' in Display menu to interact with shot lines", TOAST_KEYS.SHOTS_HIDDEN, 'warning');
         return;
       }
 
@@ -698,7 +699,7 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
           if (!moveCommentSource) {
             // First click: pick up source - just record it, don't mutate backend
             if (!mcShot?.comment) {
-              showToast('No comment to move', 'move-comment-empty', 'warning');
+              showToast('No comment to move', TOAST_KEYS.MOVE_COMMENT_EMPTY, 'warning');
               break;
             }
             setSelection({ type: 'shot', sectionId, shotId });
@@ -793,7 +794,7 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
           case 'merge':
             // GUARD: Block merge snap when stations are hidden
             if (!showStations) {
-              showToast("Enable 'Stations' in Display menu to merge", 'stations-hidden', 'warning');
+              showToast("Enable 'Stations' in Display menu to merge", TOAST_KEYS.STATIONS_HIDDEN, 'warning');
               return;
             }
             if (isCheckingConnectivity) return;
