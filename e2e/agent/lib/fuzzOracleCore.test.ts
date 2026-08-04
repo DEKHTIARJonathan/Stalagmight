@@ -6,6 +6,7 @@ import {
   SIGNIFICANT_DIGITS,
   buildTargetingDigest,
   canonicalProjectSnapshot,
+  checkProjectInvariants,
   oracleInjectionSource,
   type TargetingDigest,
 } from './fuzzOracleCore';
@@ -211,5 +212,206 @@ describe('buildTargetingDigest', () => {
     expect(JSON.stringify(buildTargetingDigest(state)).length).toBeLessThan(
       canonicalProjectSnapshot(state).length / 2,
     );
+  });
+});
+
+describe('checkProjectInvariants', () => {
+  /** A minimal SOUND state: 2 sections, 1 and 2 shots, 5 stations. */
+  function sound(): Record<string, unknown> {
+    return {
+      project: {
+        next_section_id: 3,
+        next_closure_id: 2,
+        sections: [
+          { id: 1, next_shot_id: 100001, shots: [{ id: 100000, uuid: 'a' }] },
+          { id: 2, next_shot_id: 200002, shots: [{ id: 200000, uuid: 'b' }, { id: 200001, uuid: 'c' }] },
+        ],
+        station_merges: [
+          { station_a: { section_id: 1, station_index: 1 }, station_b: { section_id: 2, station_index: 0 } },
+        ],
+        zero_datums: [{ station_ref: { section_id: 1, station_index: 0 } }],
+        loop_closures: [
+          {
+            id: 1,
+            station_a: { section_id: 1, station_index: 0 },
+            station_b: { section_id: 2, station_index: 2 },
+          },
+        ],
+      },
+      stations: [
+        { station_ref: { section_id: 1, station_index: 0 } },
+        { station_ref: { section_id: 1, station_index: 1 } },
+        { station_ref: { section_id: 2, station_index: 0 } },
+        { station_ref: { section_id: 2, station_index: 1 } },
+        { station_ref: { section_id: 2, station_index: 2 } },
+      ],
+      stats: { section_count: 2, shot_count: 3, station_count: 5 },
+      frozen_shots: [{ section_id: 2, shot_index: 1 }],
+    };
+  }
+
+  /** Mutate a copy of the sound state and return the violations it produces. */
+  function violationsAfter(mutate: (state: Record<string, unknown>) => void): string[] {
+    const state = sound();
+    mutate(state);
+    return checkProjectInvariants(state);
+  }
+
+  it('passes a well-formed state', () => {
+    expect(checkProjectInvariants(sound())).toEqual([]);
+  });
+
+  it('survives an empty or absent payload rather than throwing', () => {
+    expect(checkProjectInvariants({})).toEqual([]);
+    expect(checkProjectInvariants(null)).toEqual([]);
+  });
+
+  it('fires on a duplicate section id', () => {
+    const violations = violationsAfter((state) => {
+      const sections = (state.project as { sections: { id: number }[] }).sections;
+      if (sections[1]) sections[1].id = 1;
+    });
+
+    expect(violations.some((v) => v.includes('duplicate section id 1'))).toBe(true);
+  });
+
+  it('fires on a duplicate shot id within a section', () => {
+    const violations = violationsAfter((state) => {
+      const shots = (state.project as { sections: { shots: { id: number }[] }[] }).sections[1]?.shots;
+      if (shots?.[1]) shots[1].id = 200000;
+    });
+
+    expect(violations.some((v) => v.includes('two shots with id 200000'))).toBe(true);
+  });
+
+  it('fires on a duplicate loop closure id', () => {
+    const violations = violationsAfter((state) => {
+      const project = state.project as { loop_closures: unknown[]; next_closure_id: number };
+      project.next_closure_id = 3;
+      project.loop_closures.push({
+        id: 1,
+        station_a: { section_id: 1, station_index: 0 },
+        station_b: { section_id: 2, station_index: 0 },
+      });
+    });
+
+    expect(violations.some((v) => v.includes('duplicate loop closure id 1'))).toBe(true);
+  });
+
+  it('fires when an id allocator no longer dominates the live ids', () => {
+    expect(
+      violationsAfter((state) => {
+        (state.project as { next_section_id: number }).next_section_id = 2;
+      }).some((v) => v.includes('section id 2 is at or above next_section_id 2')),
+    ).toBe(true);
+
+    expect(
+      violationsAfter((state) => {
+        const sections = (state.project as { sections: { next_shot_id: number }[] }).sections;
+        if (sections[0]) sections[0].next_shot_id = 100000;
+      }).some((v) => v.includes('at or above next_shot_id')),
+    ).toBe(true);
+
+    expect(
+      violationsAfter((state) => {
+        (state.project as { next_closure_id: number }).next_closure_id = 1;
+      }).some((v) => v.includes('at or above next_closure_id')),
+    ).toBe(true);
+  });
+
+  it('fires on a wire ref pointing at a missing section', () => {
+    const violations = violationsAfter((state) => {
+      const merges = (state.project as { station_merges: { station_a: { section_id: number } }[] })
+        .station_merges;
+      if (merges[0]) merges[0].station_a.section_id = 99;
+    });
+
+    expect(violations.some((v) => v.includes('station_merges[0].station_a references missing section 99'))).toBe(
+      true,
+    );
+  });
+
+  it('fires on an out-of-range station index (a section with N shots has N+1 stations)', () => {
+    // index === shots.length is the terminal station and IS valid...
+    expect(
+      violationsAfter((state) => {
+        const datums = (state.project as { zero_datums: { station_ref: { station_index: number } }[] })
+          .zero_datums;
+        if (datums[0]) datums[0].station_ref.station_index = 1;
+      }),
+    ).toEqual([]);
+    // ...one past it is not.
+    expect(
+      violationsAfter((state) => {
+        const datums = (state.project as { zero_datums: { station_ref: { station_index: number } }[] })
+          .zero_datums;
+        if (datums[0]) datums[0].station_ref.station_index = 2;
+      }).some((v) => v.includes('out of range for section 1 (0..1)')),
+    ).toBe(true);
+  });
+
+  it('fires when the derived station list disagrees with the sections', () => {
+    const violations = violationsAfter((state) => {
+      (state.stations as unknown[]).pop();
+      (state.stats as { station_count: number }).station_count = 4;
+    });
+
+    expect(violations.some((v) => v.includes('stations has 4 entries but the sections imply 5'))).toBe(true);
+  });
+
+  it('fires on a frozen shot outside its section', () => {
+    expect(
+      violationsAfter((state) => {
+        (state.frozen_shots as { shot_index: number }[])[0]!.shot_index = 2;
+      }).some((v) => v.includes('frozen_shots[0] shot index 2 out of range')),
+    ).toBe(true);
+
+    expect(
+      violationsAfter((state) => {
+        (state.frozen_shots as { section_id: number }[])[0]!.section_id = 42;
+      }).some((v) => v.includes('frozen_shots[0] references missing section 42')),
+    ).toBe(true);
+  });
+
+  it('fires when derived stats drift from the model', () => {
+    expect(
+      violationsAfter((state) => {
+        (state.stats as { shot_count: number }).shot_count = 99;
+      }).some((v) => v.includes('stats.shot_count 99 != 3 shot(s)')),
+    ).toBe(true);
+    expect(
+      violationsAfter((state) => {
+        (state.stats as { section_count: number }).section_count = 7;
+      }).some((v) => v.includes('stats.section_count 7 != 2 section(s)')),
+    ).toBe(true);
+  });
+
+  it('does NOT duplicate what check_project_integrity owns', () => {
+    // Per-section duplicate uuid, non-finite geometry and orphan section_offsets
+    // are the integrity checker's job (and the integrity-delta oracle's); this
+    // suite must stay silent on them or every run would double-report.
+    const withIntegrityIssues = sound();
+    const project = withIntegrityIssues.project as {
+      sections: { shots: { uuid: string; length?: number }[] }[];
+      section_offsets: Record<number, [number, number]>;
+    };
+    const shots = project.sections[1]?.shots;
+    if (shots?.[0] && shots[1]) shots[1].uuid = shots[0].uuid;
+    if (shots?.[0]) shots[0].length = Number.NaN;
+    project.section_offsets = { 99: [1, 2] };
+
+    expect(checkProjectInvariants(withIntegrityIssues)).toEqual([]);
+  });
+
+  it('runs identically injected and called directly', () => {
+    const corrupt = sound();
+    (corrupt.project as { next_section_id: number }).next_section_id = 1;
+
+    const injected = new Function(
+      `${oracleInjectionSource()}\nreturn globalThis.${ORACLE_GLOBAL}.invariants;`,
+    )() as (s: unknown) => string[];
+
+    expect(injected(corrupt)).toEqual(checkProjectInvariants(corrupt));
+    expect(injected(corrupt).length).toBeGreaterThan(0);
   });
 });

@@ -42,7 +42,13 @@ import { ORACLE_GLOBAL, oracleInjectionSource, type TargetingDigest } from '../l
 
 /** What Node asks the page to do for one step. */
 export interface StepRequest {
-  kind: 'mutate' | 'undo' | 'redo';
+  /**
+   * `undoTo`/`redoTo` are MULTI-step jumps through the history-dropdown path
+   * (store `undoTo`/`redoTo` -> IPC `undo_to`/`redo_to`). They move the cursor by
+   * `steps`, and the state they land on must equal the snapshot single steps
+   * recorded at that depth - that equivalence is the whole point of testing them.
+   */
+  kind: 'mutate' | 'undo' | 'redo' | 'undoTo' | 'redoTo';
   /** projectStore action name. */
   action: string;
   args: unknown[];
@@ -50,6 +56,15 @@ export interface StepRequest {
   cursor: number;
   /** Undo-stack length before this step (from the previous response). */
   undo0: number;
+  /** History moves only: how many entries this move crosses (1 for singles). */
+  steps?: number;
+}
+
+/** `check_project_integrity`, normalized for comparison across depths. */
+export interface IntegrityVerdict {
+  saveBlocked: boolean;
+  /** Sorted, so message order can never masquerade as a difference. */
+  messages: string[];
 }
 
 /** Everything Node needs to run its case analysis, and nothing else. */
@@ -78,6 +93,16 @@ export interface StepResponse {
   top: number;
   digest: TargetingDigest;
   /**
+   * ABSOLUTE well-formedness violations in the observed state (empty = sound).
+   * Independent of the roundtrip comparison: these fire even when every snapshot
+   * matches, which is the case a corrupting command with a faithful undo hits.
+   */
+  invariants: string[];
+  /** This step's integrity verdict, and the one recorded at the depth landed on. */
+  integrity: IntegrityVerdict;
+  /** Null when the model has no verdict recorded for this depth yet. */
+  integrityExpected: IntegrityVerdict | null;
+  /**
    * In-page attribution for the step, in ms. Not diagnostics for their own
    * sake: they are what says whether the remaining cost is the bridge, the
    * store action's own work (`flushPlanAnchors` + the IPC command +
@@ -85,7 +110,7 @@ export interface StepResponse {
    * calls, or the canonicalization - so the next optimization is aimed at
    * evidence rather than at a guess.
    */
-  timing: { actionMs: number; observeMs: number; canonicalMs: number };
+  timing: { actionMs: number; observeMs: number; canonicalMs: number; integrityMs: number };
 }
 
 /** The initial observation, taken before any action. */
@@ -94,6 +119,8 @@ export interface InitResponse {
   redoLen: number;
   bytes: number;
   digest: TargetingDigest;
+  invariants: string[];
+  integrity: IntegrityVerdict;
 }
 
 const ORACLE = `globalThis.${ORACLE_GLOBAL}`;
@@ -119,7 +146,17 @@ const OBSERVE = `
   const canonicalStarted = Date.now();
   const canonical = O.canonical(project);
   const digest = O.digest(project);
+  const invariants = O.invariants(project);
   const canonicalMs = Date.now() - canonicalStarted;
+  // Measured separately: it is a whole extra IPC command doing O(N) structural
+  // work, and whether it is worth paying every step is a numbers question.
+  const integrityStarted = Date.now();
+  const integrityRaw = await core.invoke('check_project_integrity');
+  const integrity = {
+    saveBlocked: !!(integrityRaw && integrityRaw.save_blocked),
+    messages: (integrityRaw && integrityRaw.messages ? integrityRaw.messages.slice() : []).sort(),
+  };
+  const integrityMs = Date.now() - integrityStarted;
 `;
 
 /** Install the oracle (and reset its model) for this run. */
@@ -133,10 +170,18 @@ export async function initModel(ctx: ScenarioContext): Promise<InitResponse> {
     ${PREAMBLE}
     ${OBSERVE}
     O.snapshots = [canonical];
+    O.integrity = [integrity];
     O.lastExpected = null;
     O.lastActual = null;
     O.mismatchIndex = -1;
-    return { undoLen: undoLen, redoLen: redoLen, bytes: canonical.length, digest: digest };
+    return {
+      undoLen: undoLen,
+      redoLen: redoLen,
+      bytes: canonical.length,
+      digest: digest,
+      invariants: invariants,
+      integrity: integrity,
+    };
   `);
 }
 
@@ -179,6 +224,7 @@ export async function runStep(ctx: ScenarioContext, request: StepRequest): Promi
 
     ${OBSERVE}
 
+    const steps = req.steps === undefined ? 1 : req.steps;
     let cursorAfter = req.cursor;
     let comparedIndex = -1;
     let verdict = null;
@@ -189,18 +235,24 @@ export async function runStep(ctx: ScenarioContext, request: StepRequest): Promi
       } else if (pushed === 1) {
         O.snapshots.length = req.cursor + 1;
         O.snapshots.push(canonical);
+        O.integrity.length = req.cursor + 1;
+        O.integrity.push(integrity);
         cursorAfter = req.cursor + 1;
         verdict = 'recorded';
       } else if (pushed === 0) {
         // A no-op command may still have cleared the redo stack, which
         // truncates the model's forward branch BEFORE the comparison.
-        if (redoLen === 0) O.snapshots.length = req.cursor + 1;
+        if (redoLen === 0) {
+          O.snapshots.length = req.cursor + 1;
+          O.integrity.length = req.cursor + 1;
+        }
         comparedIndex = req.cursor;
       } else {
         verdict = 'unexpected';
       }
     } else {
-      cursorAfter = req.cursor + (req.kind === 'undo' ? -1 : 1);
+      const back = req.kind === 'undo' || req.kind === 'undoTo';
+      cursorAfter = req.cursor + (back ? -steps : steps);
       comparedIndex = cursorAfter;
     }
 
@@ -227,7 +279,17 @@ export async function runStep(ctx: ScenarioContext, request: StepRequest): Promi
       cursorAfter: cursorAfter,
       top: O.snapshots.length - 1,
       digest: digest,
-      timing: { actionMs: actionMs, observeMs: observeMs, canonicalMs: canonicalMs },
+      invariants: invariants,
+      integrity: integrity,
+      integrityExpected: comparedIndex >= 0 && O.integrity[comparedIndex] !== undefined
+        ? O.integrity[comparedIndex]
+        : null,
+      timing: {
+        actionMs: actionMs,
+        observeMs: observeMs,
+        canonicalMs: canonicalMs,
+        integrityMs: integrityMs,
+      },
     };
   `,
     [request],
@@ -254,7 +316,11 @@ export async function fetchMismatch(
  * only under `STALAGMIGHT_FUZZ_ALLOW_KNOWN_BUGS=1`, so one open bug does not
  * cascade into every later comparison.
  */
-export async function resyncModel(ctx: ScenarioContext, index: number): Promise<number> {
+export async function resyncModel(
+  ctx: ScenarioContext,
+  index: number,
+  integrity: IntegrityVerdict | null,
+): Promise<number> {
   return ctx.eval<number>(
     `
     const req = args[0];
@@ -265,8 +331,12 @@ export async function resyncModel(ctx: ScenarioContext, index: number): Promise<
     }
     if (O.lastActual === null) throw new Error('no recorded mismatch to resync from');
     O.snapshots[req.index] = O.lastActual;
+    // The integrity verdict recorded at that depth belongs to the snapshot being
+    // replaced, so it has to move with it or the delta oracle would compare the
+    // resynced state against a verdict from the state it superseded.
+    if (req.integrity !== null) O.integrity[req.index] = req.integrity;
     return O.snapshots.length - 1;
   `,
-    [{ index }],
+    [{ index, integrity }],
   );
 }

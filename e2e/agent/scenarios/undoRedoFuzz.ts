@@ -137,7 +137,7 @@
  * so every sort and every pick sees the same values in the same sequence - the
  * draw stream, and every repro seed above, is unchanged by the move in-page.
  */
-import type { Scenario, ScenarioContext } from './framework';
+import { mulberry32, type Scenario, type ScenarioContext } from './framework';
 import { DEFAULT_FIXTURE, disableAutoSave, loadFixtureWithoutUndoHistory } from './common';
 import {
   LOOP_CLOSURES_PATH,
@@ -156,6 +156,7 @@ import {
   injectOracle,
   resyncModel,
   runStep,
+  type IntegrityVerdict,
   type StepResponse,
 } from './undoRedoFuzzBridge';
 
@@ -172,6 +173,19 @@ const FIXTURE = process.env.STALAGMIGHT_FUZZ_FIXTURE || DEFAULT_FIXTURE;
 /** Move mix. Undo/redo are re-rolled when the stack they need is empty. */
 const P_MUTATE = 0.6;
 const P_UNDO = 0.25;
+
+/**
+ * Share of history moves taken as a MULTI-step jump through
+ * `undoTo`/`redoTo` (the history dropdown's path) instead of a single step.
+ *
+ * Drawn from a SEPARATE PRNG (`mulberry32(seed ^ JUMP_STREAM_SALT)`), never from
+ * `ctx.rng()`: an extra draw on the primary stream would shift every subsequent
+ * decision and invalidate every recorded repro. The primary stream still decides
+ * mutate-vs-undo-vs-redo, every generator and every value; this stream only
+ * decides whether a history move is taken in one hop and how wide.
+ */
+const P_JUMP = 0.1;
+const JUMP_STREAM_SALT = 0x9e3779b9;
 
 /** Diffs shown in a failure message (more are counted, not printed). */
 const SHOWN_DIFFS = 6;
@@ -280,6 +294,13 @@ export const undoRedoFuzz: Scenario = {
       );
     }
 
+    if (init.invariants.length > 0) {
+      throw new Error(
+        `${FIXTURE} violates project invariants BEFORE any fuzzing:\n` +
+          init.invariants.map((violation) => `  INVARIANT: ${violation}`).join('\n'),
+      );
+    }
+
     // Never push so many entries that the stack's FIFO trimming fires - that
     // would silently invalidate snapshots[0] and every depth above it. baseUndo
     // is 0 by the assertion above; it stays in the arithmetic so the bound still
@@ -295,6 +316,7 @@ export const undoRedoFuzz: Scenario = {
     let undoLen = init.undoLen;
     let redoLen = init.redoLen;
     let digest: TargetingDigest = init.digest;
+    const jumpRng = mulberry32((ctx.seed ^ JUMP_STREAM_SALT) >>> 0);
 
     const note = (line: string): void => {
       history.push(line);
@@ -318,12 +340,20 @@ export const undoRedoFuzz: Scenario = {
 
     /** One fused round trip, timed. */
     const step = async (
-      kind: 'mutate' | 'undo' | 'redo',
+      kind: 'mutate' | 'undo' | 'redo' | 'undoTo' | 'redoTo',
       action: string,
       actionArgs: unknown[],
+      steps = 1,
     ): Promise<StepResponse> => {
       const started = Date.now();
-      const res = await runStep(ctx, { kind, action, args: actionArgs, cursor, undo0: undoLen });
+      const res = await runStep(ctx, {
+        kind,
+        action,
+        args: actionArgs,
+        cursor,
+        undo0: undoLen,
+        steps,
+      });
       ctx.metric('fusedStepMs', Date.now() - started);
       // Attribution, so the next round of tuning aims at evidence: the store
       // action's own work, the three read-only IPC calls, the in-page
@@ -331,6 +361,7 @@ export const undoRedoFuzz: Scenario = {
       ctx.metric('actionMs', res.timing.actionMs);
       ctx.metric('observeMs', res.timing.observeMs);
       ctx.metric('canonicalMs', res.timing.canonicalMs);
+      ctx.metric('integrityMs', res.timing.integrityMs);
       ctx.metric('steps');
       return res;
     };
@@ -343,6 +374,44 @@ export const undoRedoFuzz: Scenario = {
           `  page model says cursor=${res.cursorAfter} top=${res.top}, Node says cursor=${cursor} top=${top}`,
         );
       }
+    };
+
+    /**
+     * ABSOLUTE well-formedness, checked on every observed state. Independent of
+     * the roundtrip comparison: a forward command that corrupts the project and
+     * an undo that faithfully restores the corruption match at every depth, so
+     * only this fires.
+     */
+    const assertInvariants = (res: StepResponse, what: string): void => {
+      if (res.invariants.length === 0) return;
+      fail(
+        `project invariant(s) violated after ${what}`,
+        res.invariants.map((violation) => `  INVARIANT: ${violation}`).join('\n'),
+      );
+    };
+
+    const sameIntegrity = (a: IntegrityVerdict, b: IntegrityVerdict): boolean =>
+      a.saveBlocked === b.saveBlocked && a.messages.join('\u0000') === b.messages.join('\u0000');
+
+    /**
+     * The app runs `check_project_integrity` after every undo/redo anyway, so
+     * its verdict is part of the state a history move is supposed to restore. A
+     * state that roundtrips while its integrity verdict does not is either a bug
+     * in the checker or a divergence the snapshot cannot see.
+     */
+    const assertIntegrityDelta = (res: StepResponse, what: string): void => {
+      const expected = res.integrityExpected;
+      if (expected === null) return;
+      // Counted so the oracle can be shown to be doing work rather than
+      // passing vacuously on a model that never recorded a verdict.
+      ctx.metric('integrityCompared');
+      if (sameIntegrity(expected, res.integrity)) return;
+      const format = (verdict: IntegrityVerdict): string =>
+        `saveBlocked=${verdict.saveBlocked} messages=${JSON.stringify(verdict.messages)}`;
+      fail(
+        `${what} restored the state but NOT the integrity verdict recorded at depth ${cursor}`,
+        `  expected: ${format(expected)}\n  actual:   ${format(res.integrity)}`,
+      );
     };
 
     const assertStacks = (headline: string, res: StepResponse): void => {
@@ -361,7 +430,7 @@ export const undoRedoFuzz: Scenario = {
      * only time they cross the bridge) and either tolerates the difference or
      * fails with the full diff.
      */
-    const resolveMismatch = async (headline: string): Promise<void> => {
+    const resolveMismatch = async (headline: string, resyncIntegrity: IntegrityVerdict | null): Promise<void> => {
       const pair = await fetchMismatch(ctx);
       const check = checkSnapshot(pair.expected ?? '', pair.actual ?? '');
       if (check.equal) {
@@ -375,7 +444,7 @@ export const undoRedoFuzz: Scenario = {
         for (const asymmetry of check.asymmetries) ctx.metric(`known:${asymmetry.id}`);
         ctx.log(`tolerated known asymmetry at depth ${cursor}: ${check.asymmetries.map((a) => a.id).join(', ')}`);
         // Resync so one open bug does not cascade into every later comparison.
-        top = await resyncModel(ctx, pair.index);
+        top = await resyncModel(ctx, pair.index, resyncIntegrity);
         return;
       }
       fail(headline, check.text);
@@ -389,28 +458,77 @@ export const undoRedoFuzz: Scenario = {
       deepest = Math.max(deepest, cursor);
     };
 
-    const walk = async (direction: 'undo' | 'redo', tag: string): Promise<void> => {
+    /**
+     * One history move. `jumpSteps` takes it through `undoTo`/`redoTo` - the
+     * history dropdown's multi-step path - instead of a single `undo`/`redo`.
+     *
+     * The oracle is deliberately the SAME snapshot array either way: the state a
+     * jump lands on must equal the one single steps recorded at that depth. That
+     * equivalence is not free - `undo_to`/`redo_to` loop `undo_inner`/`redo_inner`
+     * and call NEITHER `invalidate_adjusted_cache()` NOR `reconcile_geometry()`,
+     * both of which `undo()`/`redo()` do (verified in
+     * src-tauri/src/core/state/undo.rs) - so a divergence here is a real product
+     * bug reachable from the dropdown.
+     */
+    const walk = async (
+      direction: 'undo' | 'redo',
+      tag: string,
+      jumpSteps: number | null = null,
+    ): Promise<void> => {
+      const steps = jumpSteps ?? 1;
+      const back = direction === 'undo';
+      const jumped = jumpSteps !== null;
+      const action = jumped ? (back ? 'undoTo' : 'redoTo') : direction;
+      const label = jumped ? `${action}(${steps - 1})[${steps} step(s)]` : direction;
       const beforeUndo = undoLen;
       const beforeRedo = redoLen;
-      const res = await step(direction, direction, []);
+      const res = await step(
+        jumped ? (back ? 'undoTo' : 'redoTo') : direction,
+        action,
+        jumped ? [steps - 1] : [],
+        steps,
+      );
       if (!res.actionOk || res.commandSuccess === false) {
-        note(`${tag} ${direction} -> FAILED`);
+        note(`${tag} ${label} -> FAILED`);
         fail(
-          `${direction} at depth ${cursor} failed outright`,
+          `${label} at depth ${cursor} failed outright`,
           `  error: ${res.commandError ?? res.actionError ?? 'unknown'}`,
         );
       }
-      cursor += direction === 'undo' ? -1 : 1;
+      cursor += back ? -steps : steps;
       note(
-        `${tag} ${direction} -> depth ${cursor} (undo ${beforeUndo}->${res.undoLen}, redo ${beforeRedo}->${res.redoLen})`,
+        `${tag} ${label} -> depth ${cursor} (undo ${beforeUndo}->${res.undoLen}, redo ${beforeRedo}->${res.redoLen})`,
       );
-      assertModel(res, `${direction} left the page model where Node did not expect it`);
-      assertStacks(`${direction} left the history stacks in an unexpected shape`, res);
+      assertInvariants(res, label);
+      assertModel(res, `${label} left the page model where Node did not expect it`);
+      assertStacks(`${label} left the history stacks in an unexpected shape`, res);
       if (res.verdict !== 'equal') {
-        await resolveMismatch(`${direction} did not restore the state recorded at depth ${cursor}`);
+        await resolveMismatch(
+          `${label} did not restore the state recorded at depth ${cursor}`,
+          res.integrity,
+        );
       }
+      assertIntegrityDelta(res, label);
       record(res);
       ctx.metric(direction === 'undo' ? 'undos' : 'redos');
+      if (jumped) {
+        ctx.metric('jumps');
+        ctx.metric(`jump:${action}`);
+        ctx.metric('jumpSteps', steps);
+      }
+    };
+
+    /**
+     * How wide a jump to take, or null for a single step. Drawn from the
+     * SEPARATE stream so the primary sequence is untouched.
+     */
+    const drawJump = (direction: 'undo' | 'redo'): number | null => {
+      const reach = direction === 'undo' ? cursor : top - cursor;
+      if (reach < 1) return null;
+      if (jumpRng() >= P_JUMP) return null;
+      // 1..reach. A 1-step jump is still worth taking: undo_to(0) reaches the
+      // same depth through a different backend path than undo().
+      return 1 + Math.floor(jumpRng() * reach);
     };
 
     for (let iteration = 1; iteration <= iterations; iteration++) {
@@ -423,7 +541,7 @@ export const undoRedoFuzz: Scenario = {
       if (move === 'mutate' && cursor >= maxDepth) move = 'undo';
 
       if (move !== 'mutate') {
-        await walk(move, tag);
+        await walk(move, tag, drawJump(move));
         continue;
       }
 
@@ -448,13 +566,16 @@ export const undoRedoFuzz: Scenario = {
               `  undo ${beforeUndo}->${res.undoLen}, redo ${beforeRedo}->${res.redoLen}`,
           );
         }
+        assertInvariants(res, `a rejected ${action.action}`);
         assertModel(res, 'a rejected command moved the page model');
         if (res.verdict !== 'equal') {
           await resolveMismatch(
             `a REJECTED command (${action.action}) mutated the project: ` +
               `${res.commandError ?? res.actionError ?? 'unknown'}`,
+            res.integrity,
           );
         }
+        assertIntegrityDelta(res, `a rejected ${action.action}`);
         record(res);
         continue;
       }
@@ -468,6 +589,7 @@ export const undoRedoFuzz: Scenario = {
         }
         cursor += 1;
         top = cursor;
+        assertInvariants(res, action.label);
         assertModel(res, 'the page recorded the new snapshot at a different depth than Node expected');
         if (res.verdict !== 'recorded') {
           fail(`the page did not record a snapshot for a pushed entry (verdict=${res.verdict})`);
@@ -502,10 +624,15 @@ export const undoRedoFuzz: Scenario = {
           `  redo ${beforeRedo}->${res.redoLen} after ${action.label}`,
         );
       }
+      assertInvariants(res, `a no-op ${action.action}`);
       assertModel(res, 'a no-op command moved the page model');
       if (res.verdict !== 'equal') {
-        await resolveMismatch(`a no-op command (${action.action}) changed the project state`);
+        await resolveMismatch(
+          `a no-op command (${action.action}) changed the project state`,
+          res.integrity,
+        );
       }
+      assertIntegrityDelta(res, `a no-op ${action.action}`);
       record(res);
     }
 

@@ -72,8 +72,14 @@ export interface ScenarioMetrics {
   metrics: Record<string, number>;
 }
 
-/** mulberry32: tiny, fast, deterministic PRNG. */
-function mulberry32(seed: number): () => number {
+/**
+ * mulberry32: tiny, fast, deterministic PRNG.
+ *
+ * Exported so a scenario can derive an INDEPENDENT stream from the same seed
+ * (e.g. `mulberry32(seed ^ 0x9e3779b9)`) for decisions it wants to add without
+ * shifting the primary draw sequence every existing repro depends on.
+ */
+export function mulberry32(seed: number): () => number {
   let a = seed >>> 0;
   return () => {
     a |= 0;

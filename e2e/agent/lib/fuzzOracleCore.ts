@@ -221,6 +221,7 @@ export function oracleInjectionSource(): string {
   const parts = [
     { name: 'canonicalProjectSnapshot', source: canonicalProjectSnapshot.toString() },
     { name: 'buildTargetingDigest', source: buildTargetingDigest.toString() },
+    { name: 'checkProjectInvariants', source: checkProjectInvariants.toString() },
   ];
   for (const part of parts) {
     // A toolchain that renames or wraps these (a minifier, a coverage
@@ -239,11 +240,194 @@ export function oracleInjectionSource(): string {
     `globalThis.${ORACLE_GLOBAL} = {`,
     '  canonical: canonicalProjectSnapshot,',
     '  digest: buildTargetingDigest,',
+    '  invariants: checkProjectInvariants,',
     '  snapshots: [],',
+    '  integrity: [],',
     '  lastExpected: null,',
     '  lastActual: null,',
     '  mismatchIndex: -1,',
     '};',
     '})();',
   ].join('\n');
+}
+
+/**
+ * SELF-CONTAINED. ABSOLUTE well-formedness checks on one observed state,
+ * returning a violation message per broken invariant (empty = sound).
+ *
+ * ## Why this exists next to the roundtrip oracle
+ *
+ * The snapshot comparison only catches drift BETWEEN states. If a forward
+ * command corrupts the project and undo faithfully restores the corruption,
+ * every snapshot matches and nothing fires. These are the checks that do not
+ * care what the previous state was.
+ *
+ * ## What lives here vs in `check_project_integrity`
+ *
+ * The app already has a structural-integrity checker
+ * (`AppState::integrity_check` -> `Project::check_structural_integrity`,
+ * `src-tauri/src/models/project/integrity.rs`). Duplicating it would be noise,
+ * so this suite deliberately does NOT re-check what it owns:
+ *
+ *   - non-finite (NaN/inf) shot geometry
+ *   - two shots in ONE section sharing a uuid (note: the app's contract is
+ *     per-section, not global - `ensure_unique_shot_uuids` dedupes per section -
+ *     so global uniqueness is NOT asserted here either)
+ *   - dangling merge / loop-closure / zero-datum refs, orphan station offsets
+ *     and comments, orphan `section_offsets` keys
+ *
+ * Those are covered instead by the integrity-DELTA oracle, which records the
+ * checker's own verdict per depth and asserts undo/redo restores it. Two further
+ * reasons not to duplicate them: several are `Warning`, i.e. states the app
+ * considers repairable rather than corrupt, and the ref checks are largely
+ * unobservable from this payload anyway - `ProjectIpc` emits merges, closures
+ * and datums through `filter_map(..._to_wire)`, so a dangling ref is DROPPED on
+ * the way out rather than shown.
+ *
+ * What is left, and what this suite asserts, is well-formedness nothing else
+ * checks: id uniqueness, id-allocator dominance, and agreement between the
+ * model and the derived arrays computed from it.
+ *
+ * Keep this dependency-free - it is injected into the webview verbatim.
+ */
+export function checkProjectInvariants(state: unknown): string[] {
+  const violations: string[] = [];
+  const root = (state ?? {}) as Record<string, unknown>;
+  const project = (root.project ?? {}) as Record<string, unknown>;
+  const sections = Array.isArray(project.sections) ? project.sections : [];
+  const stations = Array.isArray(root.stations) ? root.stations : [];
+  const closures = Array.isArray(project.loop_closures) ? project.loop_closures : [];
+  const frozen = Array.isArray(root.frozen_shots) ? root.frozen_shots : [];
+  const stats = (root.stats ?? {}) as Record<string, unknown>;
+
+  const nextSectionId = Number(project.next_section_id);
+  const nextClosureId = Number(project.next_closure_id);
+
+  // Section id uniqueness + allocator dominance. `get_section` takes the FIRST
+  // match, so a duplicate id silently shadows a section; an id at or above the
+  // allocator means the next create collides with a live section.
+  const seenSectionIds: Record<string, true> = {};
+  const shotCounts: Record<string, number> = {};
+  let totalShots = 0;
+  for (let i = 0; i < sections.length; i++) {
+    const section = (sections[i] ?? {}) as Record<string, unknown>;
+    const id = Number(section.id);
+    const key = String(id);
+    if (seenSectionIds[key] === true) {
+      violations.push(`duplicate section id ${id}`);
+    }
+    seenSectionIds[key] = true;
+    if (Number.isFinite(nextSectionId) && id >= nextSectionId) {
+      violations.push(`section id ${id} is at or above next_section_id ${nextSectionId}`);
+    }
+
+    const shots = Array.isArray(section.shots) ? section.shots : [];
+    shotCounts[key] = shots.length;
+    totalShots += shots.length;
+    const nextShotId = Number(section.next_shot_id);
+    const seenShotIds: Record<string, true> = {};
+    for (let j = 0; j < shots.length; j++) {
+      const shot = (shots[j] ?? {}) as Record<string, unknown>;
+      const shotId = Number(shot.id);
+      const shotKey = String(shotId);
+      if (seenShotIds[shotKey] === true) {
+        violations.push(`section ${id} has two shots with id ${shotId}`);
+      }
+      seenShotIds[shotKey] = true;
+      if (Number.isFinite(nextShotId) && shotId >= nextShotId) {
+        violations.push(`section ${id} shot id ${shotId} is at or above next_shot_id ${nextShotId}`);
+      }
+    }
+  }
+
+  // Loop-closure id uniqueness + allocator dominance. Undo/redo of a closure
+  // restores it BY ID (`UndoData::ClosureInfo`), so a duplicate id makes those
+  // paths ambiguous.
+  const seenClosureIds: Record<string, true> = {};
+  for (let i = 0; i < closures.length; i++) {
+    const closure = (closures[i] ?? {}) as Record<string, unknown>;
+    const id = Number(closure.id);
+    const key = String(id);
+    if (seenClosureIds[key] === true) violations.push(`duplicate loop closure id ${id}`);
+    seenClosureIds[key] = true;
+    if (Number.isFinite(nextClosureId) && id >= nextClosureId) {
+      violations.push(`loop closure id ${id} is at or above next_closure_id ${nextClosureId}`);
+    }
+  }
+
+  // Every station ref ON THE WIRE must address a real station. The integrity
+  // checker validates StationKeys BEFORE the wire conversion drops the ones that
+  // do not resolve; this validates what consumers actually index into.
+  const checkRef = (label: string, value: unknown): void => {
+    const ref = (value ?? {}) as Record<string, unknown>;
+    const sectionId = Number(ref.section_id);
+    const index = Number(ref.station_index);
+    const count = shotCounts[String(sectionId)];
+    if (count === undefined) {
+      violations.push(`${label} references missing section ${sectionId}`);
+      return;
+    }
+    // A section with N shots has N+1 stations, indices 0..N.
+    if (!Number.isInteger(index) || index < 0 || index > count) {
+      violations.push(`${label} station index ${index} out of range for section ${sectionId} (0..${count})`);
+    }
+  };
+
+  const merges = Array.isArray(project.station_merges) ? project.station_merges : [];
+  for (let i = 0; i < merges.length; i++) {
+    const merge = (merges[i] ?? {}) as Record<string, unknown>;
+    checkRef(`station_merges[${i}].station_a`, merge.station_a);
+    checkRef(`station_merges[${i}].station_b`, merge.station_b);
+  }
+  const datums = Array.isArray(project.zero_datums) ? project.zero_datums : [];
+  for (let i = 0; i < datums.length; i++) {
+    checkRef(`zero_datums[${i}]`, (datums[i] as Record<string, unknown>).station_ref);
+  }
+  for (let i = 0; i < closures.length; i++) {
+    const closure = (closures[i] ?? {}) as Record<string, unknown>;
+    checkRef(`loop_closures[${i}].station_a`, closure.station_a);
+    checkRef(`loop_closures[${i}].station_b`, closure.station_b);
+  }
+  for (let i = 0; i < stations.length; i++) {
+    checkRef(`stations[${i}]`, (stations[i] as Record<string, unknown>).station_ref);
+  }
+
+  // The derived station list must agree with the model it was computed from:
+  // one station per shot plus a terminal one, per section.
+  const expectedStations = sections.length + totalShots;
+  if (stations.length !== expectedStations) {
+    violations.push(
+      `stations has ${stations.length} entries but the sections imply ${expectedStations} ` +
+        `(${sections.length} section(s) + ${totalShots} shot(s))`,
+    );
+  }
+
+  // frozen_shots indexes into the same model.
+  for (let i = 0; i < frozen.length; i++) {
+    const entry = (frozen[i] ?? {}) as Record<string, unknown>;
+    const sectionId = Number(entry.section_id);
+    const count = shotCounts[String(sectionId)];
+    const shotIndex = Number(entry.shot_index);
+    if (count === undefined) {
+      violations.push(`frozen_shots[${i}] references missing section ${sectionId}`);
+    } else if (!Number.isInteger(shotIndex) || shotIndex < 0 || shotIndex >= count) {
+      violations.push(
+        `frozen_shots[${i}] shot index ${shotIndex} out of range for section ${sectionId} (0..${count - 1})`,
+      );
+    }
+  }
+
+  // Derived stats vs the model. Cheap, and it catches a stats computation that
+  // has drifted from the project it summarizes.
+  if (Number.isFinite(Number(stats.section_count)) && Number(stats.section_count) !== sections.length) {
+    violations.push(`stats.section_count ${Number(stats.section_count)} != ${sections.length} section(s)`);
+  }
+  if (Number.isFinite(Number(stats.shot_count)) && Number(stats.shot_count) !== totalShots) {
+    violations.push(`stats.shot_count ${Number(stats.shot_count)} != ${totalShots} shot(s)`);
+  }
+  if (Number.isFinite(Number(stats.station_count)) && Number(stats.station_count) !== stations.length) {
+    violations.push(`stats.station_count ${Number(stats.station_count)} != ${stations.length} station(s)`);
+  }
+
+  return violations;
 }
