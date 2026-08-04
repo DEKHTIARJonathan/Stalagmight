@@ -1921,11 +1921,12 @@ export default function DmpNewImportDialog({
           ...prev.shots,
           {
             id: -tempId,
-            azimuth_in: 0,
-            azimuth_out: 0,
-            length: 0,
-            depth_in: 0,
-            depth_out: 0,
+            // Non-finite, NOT zero - see the blank-row note in ZeroDatumConfigDialog.
+            azimuth_in: NaN,
+            azimuth_out: NaN,
+            length: NaN,
+            depth_in: NaN,
+            depth_out: NaN,
             pitch_in: null,
             pitch_out: null,
             left: null,
@@ -1962,11 +1963,12 @@ export default function DmpNewImportDialog({
       const newShots = [...prev.shots];
       newShots.splice(index, 0, {
         id: -tempId,
-        azimuth_in: 0,
-        azimuth_out: 0,
-        length: 0,
-        depth_in: 0,
-        depth_out: 0,
+        // Non-finite, NOT zero - see the blank-row note in ZeroDatumConfigDialog.
+        azimuth_in: NaN,
+        azimuth_out: NaN,
+        length: NaN,
+        depth_in: NaN,
+        depth_out: NaN,
         pitch_in: null,
         pitch_out: null,
         left: null,
@@ -1989,11 +1991,12 @@ export default function DmpNewImportDialog({
       const newShots = [...prev.shots];
       newShots.splice(index + 1, 0, {
         id: -tempId,
-        azimuth_in: 0,
-        azimuth_out: 0,
-        length: 0,
-        depth_in: 0,
-        depth_out: 0,
+        // Non-finite, NOT zero - see the blank-row note in ZeroDatumConfigDialog.
+        azimuth_in: NaN,
+        azimuth_out: NaN,
+        length: NaN,
+        depth_in: NaN,
+        depth_out: NaN,
         pitch_in: null,
         pitch_out: null,
         left: null,
