@@ -175,15 +175,22 @@ export default function ContextMenu() {
   // Close on outside mousedown / external scroll / resize (shared hook). This
   // component only mounts while the context-menu dialog is active, so `open` is
   // always true here. Escape is kept separate - the hook doesn't own it.
-  // NOTE: a menu opened over a scrolling list (sections panel, data table) can
-  // outlive the row it points at, because `contains` holds only the menu and the
-  // hook now dismisses solely on scrolls that can MOVE the layer. Fixing that
-  // needs the opening call site to hand in its scroll container as `anchorScope`
-  // - probing for it from the captured coordinates does not work, because the
-  // menu's own backdrop and the dialog layer sit over that point. Deliberately
-  // NOT dismissing on unrelated scrolls: that is what keeps a map right-click
-  // alive while the data table scrolls a row into view.
-  useDismissableLayer({ open: true, onDismiss: closeDialog, contains: [menuRef] });
+  /** The scroller this menu was opened over, named by the opener. Only a menu
+   *  raised from a scrolling LIST has one: it is pinned to cursor coordinates
+   *  and rendered from the dialog layer, so its own ancestors say nothing about
+   *  what can strand it, and probing the coordinates finds its own backdrop.
+   *  A map right-click passes nothing and is therefore never dismissed by a
+   *  panel scrolling elsewhere, which is the behaviour that matters there. */
+  const scrollScope = dialogData.scrollScope as string | undefined;
+  const scrollScopeRef = useRef<HTMLElement | null>(null);
+  scrollScopeRef.current = scrollScope ? document.querySelector<HTMLElement>(scrollScope) : null;
+
+  useDismissableLayer({
+    open: true,
+    onDismiss: closeDialog,
+    contains: [menuRef],
+    anchorScope: scrollScopeRef,
+  });
   useEffect(() => {
     const handleEscape = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
