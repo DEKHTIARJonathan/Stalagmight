@@ -1,5 +1,7 @@
 import { useState, useCallback, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
+import { isBlankNewShot, isShotComplete } from '../common/editableShotStatus';
+import { EDITABLE_AZIMUTH_AVG_KEY } from '../common/editableShotColumns';
 import { DialogWrapper } from './DialogWrapper';
 import SectionPreview from './SectionPreview';
 import { Button } from '../common/Button';
@@ -120,6 +122,7 @@ export default function ZeroDatumConfigDialog({
   onConfirm,
 }: ZeroDatumConfigDialogProps) {
   const { t } = useTranslation();
+  const showToast = useUIStore((st) => st.showToast);
   const precision = useDecimalPrecision();
 
   const section = dmpFile.sections[sectionIndex];
@@ -291,8 +294,31 @@ export default function ZeroDatumConfigDialog({
     [shots, stationIndex, commitStation]
   );
 
+  /** Rows that hold SOMETHING but are not a usable shot. A row added and left
+   *  entirely blank is nothing at all and is dropped; a half-filled one would
+   *  otherwise carry a NaN length or depth into the import, which the grid writes
+   *  deliberately to mean "no measurement". */
+  const incompleteShots = useMemo(
+    () =>
+      shots.filter(
+        (shot) =>
+          shot.isDeleted !== true &&
+          !isBlankNewShot(shot) &&
+          !isShotComplete(shot, EDITABLE_AZIMUTH_AVG_KEY)
+      ).length,
+    [shots]
+  );
+
   const handleConfirm = useCallback(() => {
     if (!gpsCoords) return;
+    if (incompleteShots > 0) {
+      showToast(
+        t('editSection.incompleteBlocked', { count: incompleteShots }),
+        'zero-datum-incomplete',
+        'warning'
+      );
+      return;
+    }
     onConfirm({
       sectionIndex,
       stationIndex,
@@ -308,7 +334,7 @@ export default function ZeroDatumConfigDialog({
       },
       shots,
     });
-  }, [gpsCoords, onConfirm, sectionIndex, stationIndex, name, surveyor, date, color, direction, reverse, shots]);
+  }, [gpsCoords, onConfirm, sectionIndex, stationIndex, name, surveyor, date, color, direction, reverse, shots, incompleteShots, showToast, t]);
 
   if (!section) return null;
 

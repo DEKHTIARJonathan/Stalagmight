@@ -142,13 +142,21 @@ function pickStation(index: number) {
   fireEvent.click(screen.getByText(`Station ${index}`));
 }
 
-/** Materialize the trailing blank row, which is how a shot gets added. */
+/** Materialize the trailing blank row, which is how a shot gets added.
+ *  Fills a COMPLETE shot: Confirm refuses a row that holds something but is not
+ *  a usable measurement, so a length-only row would block the dialog rather than
+ *  exercise what these cases are about. */
 function appendShot() {
-  const blank = screen.getByTestId(`shot-editor-cell-${SHOT_COUNT}-length`);
-  fireEvent.doubleClick(blank);
-  const editor = screen.getByTestId('shot-editor-cell-editor');
-  fireEvent.change(editor, { target: { value: '5' } });
-  fireEvent.keyDown(editor, { key: 'Enter' });
+  const fill = (colKey: string, value: string) => {
+    fireEvent.doubleClick(screen.getByTestId(`shot-editor-cell-${SHOT_COUNT}-${colKey}`));
+    const editor = screen.getByTestId('shot-editor-cell-editor');
+    fireEvent.change(editor, { target: { value } });
+    fireEvent.keyDown(editor, { key: 'Enter' });
+  };
+  fill('length', '5');
+  fill('_azimuth_avg', '90');
+  fill('depth_in', '-1');
+  fill('depth_out', '-2');
 }
 
 function deleteRow(visibleIndex: number) {
