@@ -4,6 +4,11 @@
 
 [![License: AGPL-3.0-or-later](https://img.shields.io/badge/License-AGPL--3.0--or--later-blue.svg)](LICENSE)
 
+**Website: [stalagmight.com](https://stalagmight.com)** ·
+**[Releases](https://github.com/Stalagmight/Stalagmight/releases)**
+
+![A surveyed underwater cave in Stalagmight: depth-coloured survey lines on the map, the section list, the data table, and project statistics](docs/screenshot.png)
+
 Stalagmight is an intuitive, modern, open underwater cave survey application.
 It takes other surveys, hand surveys, or `.dmp` files from an mNemo device
 and guides the user into creating a clean, editable, georeferenced
