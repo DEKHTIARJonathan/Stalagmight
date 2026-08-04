@@ -56,15 +56,23 @@ export function reachableStationKeySet(field: GasReachField): Set<string> {
 }
 
 /**
- * Pick which of a shot's two endpoint stations is "nearer the entrance" (#395/#397): every
+ * Pick which of a shot's two endpoint stations is nearer the CURRENT ORIGIN (#395/#397): every
  * plan-mode point-set click that lands on a shot (not a station) anchors to whichever endpoint
- * is closer to where the dive starts, so the resulting pin reads the same as clicking the nearer
- * station directly.
+ * is closer to that origin, so the resulting pin reads the same as clicking the nearer station
+ * directly. Despite the shape of the name, this does NOT always rank against the entrance - see
+ * the two regimes below, which differ in what "origin" means at call time.
  *
  * Two rules, in order:
  * 1. A loaded {@link GasReachField} is engine truth: compare `gas_to_reach` (litres to reach each
  *    endpoint from the current origin) and take the smaller. `null` (unconnected, or the walk
  *    stalled) sorts as infinitely far; if BOTH are null there is no signal, so fall through.
+ *    Two regimes fall out of "current origin" here:
+ *      - Pre-origin (first click, entrance not yet chosen): the field is null or rooted at the
+ *        entrance itself, so `origin == entrance` and this rule ranks by distance-to-entrance.
+ *      - Re-armed pick-on-map (`gas-pick-origin`, origin already set once): the loaded field is
+ *        still rooted at the OUTGOING origin - the one about to be replaced - not the entrance.
+ *        This deliberately ranks the new click against where the diver currently starts, not
+ *        where the cave starts; that is the origin a re-pick is meant to move away from.
  * 2. No field yet (the pre-origin click, before an origin exists to solve from) - or both
  *    endpoints tied under rule 1: approximate with straight-line distance to the nearest
  *    zero-datum station, mirroring the engine's own multi-root "entrance" (`zero_datum_roots`,
@@ -74,7 +82,7 @@ export function reachableStationKeySet(field: GasReachField): Set<string> {
  *    either) - in that unreachable edge case this deterministically keeps `a`, the same endpoint
  *    the old lower-station-index rule always picked, rather than inventing a coordinate origin.
  */
-export function nearestEntranceShotEndpoint(
+export function nearestOriginShotEndpoint(
   a: StationRef,
   b: StationRef,
   reachField: GasReachField | null | undefined,

@@ -4,7 +4,7 @@ import {
   gasReachColorExpression,
   gasBeyondReachFeatureIds,
   reachableStationKeySet,
-  nearestEntranceShotEndpoint,
+  nearestOriginShotEndpoint,
   UNREACHABLE_GAS,
   BEYOND_GAS_RANGE,
 } from '../gasReach';
@@ -166,7 +166,7 @@ describe('reachableStationKeySet', () => {
   });
 });
 
-describe('nearestEntranceShotEndpoint', () => {
+describe('nearestOriginShotEndpoint (nearest to the CURRENT origin, not always the entrance)', () => {
   const a: StationRef = { section_id: 1, station_index: 0 };
   const b: StationRef = { section_id: 1, station_index: 1 };
 
@@ -178,13 +178,30 @@ describe('nearestEntranceShotEndpoint', () => {
     }) as unknown as GasReachField;
 
   it('picks the smaller gas_to_reach when a field is loaded', () => {
-    expect(nearestEntranceShotEndpoint(a, b, fieldWith(50, 200), [])).toBe(a);
-    expect(nearestEntranceShotEndpoint(a, b, fieldWith(200, 50), [])).toBe(b);
+    expect(nearestOriginShotEndpoint(a, b, fieldWith(50, 200), [])).toBe(a);
+    expect(nearestOriginShotEndpoint(a, b, fieldWith(200, 50), [])).toBe(b);
   });
 
   it('treats null gas_to_reach as infinitely far', () => {
-    expect(nearestEntranceShotEndpoint(a, b, fieldWith(null, 50), [])).toBe(b);
-    expect(nearestEntranceShotEndpoint(a, b, fieldWith(50, null), [])).toBe(a);
+    expect(nearestOriginShotEndpoint(a, b, fieldWith(null, 50), [])).toBe(b);
+    expect(nearestOriginShotEndpoint(a, b, fieldWith(50, null), [])).toBe(a);
+  });
+
+  it('re-armed pick-on-map: with a field loaded, ranks against the OUTGOING origin, not the ' +
+    'entrance - even when that disagrees with straight-line distance to the nearest zero datum', () => {
+    const stations = [
+      { station_ref: a, coordinates: { x: 0, y: 0, z: 0 }, is_zero_datum: false },
+      { station_ref: b, coordinates: { x: 10, y: 0, z: 0 }, is_zero_datum: false },
+      {
+        station_ref: { section_id: 9, station_index: 0 },
+        coordinates: { x: 10, y: 0, z: 0 }, // right next to b: b is the entrance-nearest endpoint
+        is_zero_datum: true,
+      },
+    ];
+    // A loaded field rooted at the diver's CURRENT (outgoing) origin, not the entrance: a costs
+    // less gas to reach from there even though b sits right on top of the zero datum. The field
+    // wins outright - this is the whole point of the re-pick regime.
+    expect(nearestOriginShotEndpoint(a, b, fieldWith(10, 200), stations)).toBe(a);
   });
 
   it('falls through to the euclidean rule when both endpoints are null', () => {
@@ -199,7 +216,7 @@ describe('nearestEntranceShotEndpoint', () => {
     ];
     // a is 1m from the zero datum, b is 9m - a wins even though the field claims neither is
     // reachable.
-    expect(nearestEntranceShotEndpoint(a, b, fieldWith(null, null), stations)).toBe(a);
+    expect(nearestOriginShotEndpoint(a, b, fieldWith(null, null), stations)).toBe(a);
   });
 
   it('with no field loaded, picks the endpoint nearest a zero-datum station', () => {
@@ -212,7 +229,7 @@ describe('nearestEntranceShotEndpoint', () => {
         is_zero_datum: true,
       },
     ];
-    expect(nearestEntranceShotEndpoint(a, b, null, stations)).toBe(b);
+    expect(nearestOriginShotEndpoint(a, b, null, stations)).toBe(b);
   });
 
   it('with no zero datum on the project, deterministically keeps the first endpoint', () => {
@@ -220,7 +237,7 @@ describe('nearestEntranceShotEndpoint', () => {
       { station_ref: a, coordinates: { x: 0, y: 0, z: 0 }, is_zero_datum: false },
       { station_ref: b, coordinates: { x: 10, y: 0, z: 0 }, is_zero_datum: false },
     ];
-    expect(nearestEntranceShotEndpoint(a, b, null, stations)).toBe(a);
-    expect(nearestEntranceShotEndpoint(b, a, null, stations)).toBe(b);
+    expect(nearestOriginShotEndpoint(a, b, null, stations)).toBe(a);
+    expect(nearestOriginShotEndpoint(b, a, null, stations)).toBe(b);
   });
 });

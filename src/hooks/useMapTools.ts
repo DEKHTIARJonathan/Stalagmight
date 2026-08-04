@@ -10,7 +10,7 @@ import { getErrorMessage, invokeIpc } from '../utils/ipc';
 import type { SectionId, ShotId, StationRef, Coordinates, RulerEndpoint, AlongLineResult } from '../types/project';
 import type { GpsOrigin } from '../types/config';
 import { distance, mapCoordsToMeters } from '../utils/coordinates';
-import { reachableStationKeySet, nearestEntranceShotEndpoint } from '../utils/gasReach';
+import { reachableStationKeySet, nearestOriginShotEndpoint } from '../utils/gasReach';
 import { setSource } from '../utils/telemetry';
 import type { SurveyLayerCallbacks } from '../components/Map/SurveyLayer';
 import { projectParamOnSegment } from '../components/Map/surveyLayer/hitTest';
@@ -614,9 +614,11 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
               if (showDistanceGradient) setDistanceGradientOrigin(ref);
               if (showGasPlan) {
                 // A shot click anchors to whichever of its two endpoint stations is nearer the
-                // entrance, not always the lower-numbered one (#395 regression fix).
+                // current origin, not always the lower-numbered one (#395 regression fix) -
+                // "current origin" is the entrance pre-origin, or the outgoing origin on a
+                // re-armed pick-on-map (see nearestOriginShotEndpoint's JSDoc).
                 const other = { section_id: sectionId, station_index: shotIndex + 1 };
-                const nearer = nearestEntranceShotEndpoint(
+                const nearer = nearestOriginShotEndpoint(
                   ref,
                   other,
                   useGasPlanStore.getState().reachField,
