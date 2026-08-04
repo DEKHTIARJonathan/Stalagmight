@@ -30,19 +30,25 @@ function test(name, fn) {
 
 const sha256 = (buf) => createHash('sha256').update(buf).digest('hex');
 
-function makeTree({ cargo = 'cargo-lock-v1', pnpm = 'pnpm-lock-v1', bundle } = {}) {
+const GEN_V1 = 'generator-script-v1';
+const ABOUT_V1 = 'about-toml-v1';
+
+function makeTree({ cargo = 'cargo-lock-v1', pnpm = 'pnpm-lock-v1', gen = GEN_V1, about = ABOUT_V1, bundle } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'tpl-gate-'));
   fs.mkdirSync(path.join(root, 'src-tauri'));
+  fs.mkdirSync(path.join(root, 'scripts'));
   fs.writeFileSync(path.join(root, 'src-tauri', 'Cargo.lock'), cargo);
   fs.writeFileSync(path.join(root, 'pnpm-lock.yaml'), pnpm);
+  fs.writeFileSync(path.join(root, 'scripts', 'gen-third-party-licenses.mjs'), gen);
+  fs.writeFileSync(path.join(root, 'src-tauri', 'about.toml'), about);
   if (bundle !== undefined) fs.writeFileSync(path.join(root, 'THIRD-PARTY-LICENSES.md'), bundle);
   return root;
 }
 
-// Mirrors the generator's layout: hashes comment, then the body it hashes
-// (every byte after the comment's closing `-->\n`).
+// Mirrors the generator's layout: hashes comment (all four inputs + body),
+// then the body it hashes (every byte after the comment's closing `-->\n`).
 const currentBundle = (cargo, pnpm, body = '\n## npm packages\n\nfixture body\n') =>
-  `# Third-party licenses\n\n<!-- lockfile-hashes\nCargo.lock=${sha256(cargo)}\npnpm-lock.yaml=${sha256(pnpm)}\nbundle-body=${sha256(body)}\n-->\n${body}`;
+  `# Third-party licenses\n\n<!-- lockfile-hashes\nCargo.lock=${sha256(cargo)}\npnpm-lock.yaml=${sha256(pnpm)}\ngen-third-party-licenses.mjs=${sha256(GEN_V1)}\nabout.toml=${sha256(ABOUT_V1)}\nbundle-body=${sha256(body)}\n-->\n${body}`;
 
 test('current bundle passes', () => {
   const root = makeTree({ bundle: currentBundle('cargo-lock-v1', 'pnpm-lock-v1') });
@@ -68,9 +74,8 @@ test('hand-edited body fails and says so', () => {
 });
 
 test('bundle without a bundle-body hash fails', () => {
-  const body = '\nbody\n';
-  const bundle = `# x\n\n<!-- lockfile-hashes\nCargo.lock=${sha256('cargo-lock-v1')}\npnpm-lock.yaml=${sha256('pnpm-lock-v1')}\n-->\n${body}`;
-  const root = makeTree({ bundle });
+  const good = currentBundle('cargo-lock-v1', 'pnpm-lock-v1');
+  const root = makeTree({ bundle: good.replace(/^bundle-body=[0-9a-f]{64}\n/m, '') });
   const problems = checkBundle(root);
   assert.equal(problems.length, 1);
   assert.match(problems[0], /records no bundle-body hash/);
@@ -115,13 +120,19 @@ test('both lockfiles stale reports both', () => {
 });
 
 test('a hash entry missing from the comment fails', () => {
-  const cargo = 'cargo-lock-v1';
-  const body = '\nbody\n';
-  const bundle = `# x\n\n<!-- lockfile-hashes\nCargo.lock=${sha256(cargo)}\nbundle-body=${sha256(body)}\n-->\n${body}`;
-  const root = makeTree({ bundle });
+  const good = currentBundle('cargo-lock-v1', 'pnpm-lock-v1');
+  const root = makeTree({ bundle: good.replace(/^pnpm-lock\.yaml=[0-9a-f]{64}\n/m, '') });
   const problems = checkBundle(root);
   assert.equal(problems.length, 1);
   assert.match(problems[0], /records no hash for pnpm-lock\.yaml/);
+});
+
+test('an edited generator script or about.toml fails', () => {
+  const bundle = currentBundle('cargo-lock-v1', 'pnpm-lock-v1');
+  const genRoot = makeTree({ bundle, gen: 'generator-script-v2' });
+  assert.match(checkBundle(genRoot)[0], /gen-third-party-licenses\.mjs changed/);
+  const aboutRoot = makeTree({ bundle, about: 'about-toml-v2' });
+  assert.match(checkBundle(aboutRoot)[0], /about\.toml changed/);
 });
 
 // The gate must pass against the real repo right now - a committed stale

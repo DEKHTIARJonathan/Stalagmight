@@ -38,7 +38,15 @@ import { fileURLToPath } from 'url';
 export const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 const BUNDLE = 'THIRD-PARTY-LICENSES.md';
-const LOCKFILES = ['src-tauri/Cargo.lock', 'pnpm-lock.yaml'];
+// Must stay in lockstep with HASHED_INPUTS in gen-third-party-licenses.mjs:
+// the two lockfiles plus the generator and its cargo-about config, so a
+// renderer or harvest change also demands a regen, not just a dependency bump.
+const HASHED_INPUTS = [
+  'src-tauri/Cargo.lock',
+  'pnpm-lock.yaml',
+  'scripts/gen-third-party-licenses.mjs',
+  'src-tauri/about.toml',
+];
 // Sibling gates cap reads too; the real bundle is ~0.5 MB, so 32 MB is pure
 // headroom. Fail-closed with its own message rather than mislabeling an
 // unreadable giant as "missing".
@@ -76,7 +84,7 @@ export function checkBundle(root) {
     [...comment[1].matchAll(/^(\S+)=([0-9a-f]{64})$/gm)].map((m) => [m[1], m[2]]),
   );
   const problems = [];
-  for (const rel of LOCKFILES) {
+  for (const rel of HASHED_INPUTS) {
     const want = recorded.get(path.posix.basename(rel));
     if (!want) {
       problems.push(`${BUNDLE} records no hash for ${rel} - regenerate it`);
@@ -102,7 +110,7 @@ export function checkBundle(root) {
 function main() {
   const problems = checkBundle(REPO_ROOT);
   if (problems.length === 0) {
-    console.log(`✓ ${BUNDLE} matches both lockfiles`);
+    console.log(`✓ ${BUNDLE} matches its generator inputs (lockfiles, generator, about.toml) and its own body`);
     return;
   }
   for (const p of problems) console.error(`✗ ${p}`);

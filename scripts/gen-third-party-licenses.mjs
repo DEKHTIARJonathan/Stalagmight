@@ -50,7 +50,18 @@ const sha256 = (buf) => createHash('sha256').update(buf).digest('hex');
 // test-release.sh's CRLF-tolerance case - release.sh must keep accepting a
 // CRLF Cargo.lock, so the gate normalises rather than the checkout.)
 const hashNormalised = (text) => sha256(text.replace(/\r\n/g, '\n'));
-const lockfileHash = (rel) => hashNormalised(fs.readFileSync(path.join(REPO_ROOT, rel), 'utf8'));
+const inputHash = (rel) => hashNormalised(fs.readFileSync(path.join(REPO_ROOT, rel), 'utf8'));
+
+// Everything the output is a pure function of (given a pinned cargo-about and
+// a fresh install): the two lockfiles, this generator, and the cargo-about
+// config. Hashing the last two means a renderer or harvest-config change also
+// demands a regen - the checker verifies the same list.
+const HASHED_INPUTS = [
+  'src-tauri/Cargo.lock',
+  'pnpm-lock.yaml',
+  'scripts/gen-third-party-licenses.mjs',
+  'src-tauri/about.toml',
+];
 
 // CRLF-normalise but otherwise keep license text verbatim - the notices are
 // the payload here.
@@ -113,6 +124,68 @@ function collectRust() {
 // packages' own shipped files.
 const LICENSE_FILE_RE = /^(licen[cs]e|copying|notice)([-._].*)?(\.(md|txt|markdown))?$/i;
 
+// Packages whose published npm tarball ships NO license file. Each entry was
+// vetted by hand: the text is the upstream repository's own notice, reproduced
+// verbatim, with the source recorded. Generation FAILS on a license-file-less
+// package that is not listed here - shipping an attribution bundle with no
+// actual terms for a package is exactly what this file exists to prevent, so
+// a new hit means vetting the upstream and adding an entry, not a warning.
+const VETTED_MISSING_LICENSE = new Map(Object.entries({
+  'html-parse-stringify@3.0.1': {
+    licenseId: 'MIT',
+    source: 'https://github.com/henrikjoreteg/html-parse-stringify/blob/master/LICENSE (verified 2026-08-03)',
+    text: `MIT License
+
+Copyright (c) 2025 Henrik Joreteg <henrik@joreteg.com>
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+`,
+  },
+  'murmurhash-js@1.0.0': {
+    licenseId: 'MIT',
+    source: 'https://github.com/mikolalysenko/murmurhash-js/blob/master/README.md ("License (MIT)" section, verified 2026-08-03)',
+    text: `Copyright (c) 2011 Gary Court
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+`,
+  },
+  // No license field in its package.json either (pnpm reports "Unknown"), but
+  // upstream states MIT: the fork's README carries the original jsonlint
+  // notice verbatim.
+  '@mapbox/jsonlint-lines-primitives@2.0.2': {
+    licenseId: 'MIT',
+    source: 'https://github.com/mapbox/jsonlint/blob/master/README.md ("MIT License" section, verified 2026-08-03; fork of zaach/jsonlint, same notice)',
+    text: `Copyright (C) 2012 Zachary Carter
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+`,
+  },
+}));
+
 function licenseFilesIn(dir) {
   let entries;
   try {
@@ -130,7 +203,7 @@ function collectJs() {
   const parsed = JSON.parse(run('pnpm', ['licenses', 'list', '--prod', '--json']));
   if (parsed.error) throw new Error(`pnpm licenses failed: ${parsed.error.message}`);
   const groups = [];
-  const missing = [];
+  const unvetted = [];
   for (const [licenseId, pkgs] of Object.entries(parsed)) {
     for (const pkg of pkgs) {
       // pnpm reports one entry per package; versions[] and paths[] are
@@ -140,11 +213,16 @@ function collectJs() {
         const files = licenseFilesIn(dir);
         const label = { name: pkg.name, version: pkg.versions[i] ?? pkg.versions[0] };
         if (files.length === 0) {
-          missing.push(label);
+          const vetted = VETTED_MISSING_LICENSE.get(`${label.name}@${label.version}`);
+          if (!vetted) {
+            unvetted.push(`${label.name}@${label.version} (declared: ${licenseId})`);
+            continue;
+          }
           groups.push({
-            licenseId,
-            licenseName: licenseId,
-            text: `(The published npm package does not ship a license file. It is declared ${licenseId}; see https://www.npmjs.com/package/${pkg.name} for its terms.)\n`,
+            licenseId: vetted.licenseId,
+            licenseName: vetted.licenseId,
+            note: `The published package ships no license file; notice reproduced from ${vetted.source}.`,
+            text: normalise(vetted.text),
             packages: [label],
           });
           continue;
@@ -159,8 +237,12 @@ function collectJs() {
       }
     }
   }
-  if (missing.length > 0) {
-    console.warn(`warning: no license file shipped for ${missing.map((m) => `${m.name}@${m.version}`).join(', ')} - listed with a pointer instead.`);
+  if (unvetted.length > 0) {
+    throw new Error(
+      'refusing to generate: these npm packages ship no license file and have no vetted entry in VETTED_MISSING_LICENSE:\n' +
+        unvetted.map((u) => `  - ${u}`).join('\n') +
+        '\nVet each upstream notice by hand and add an entry (with source and date) before regenerating.',
+    );
   }
   return groups;
 }
@@ -203,6 +285,7 @@ function renderSection(title, intro, groups) {
     const pkgList = g.packages.map((p) => `\`${p.name} ${p.version}\``).join(', ');
     parts.push(`### ${g.licenseName}\n`);
     parts.push(`Applies to: ${pkgList}\n`);
+    if (g.note) parts.push(`${g.note}\n`);
     // Four-backtick fences: a hostile npm package's license file containing a
     // ``` line must not be able to break out of the block and inject markdown
     // into a file the em-dash gate exempts.
@@ -245,8 +328,7 @@ from the dependency lockfiles - do not edit by hand. CI fails if this file is
 stale or hand-edited; regenerate after any dependency change.
 
 <!-- lockfile-hashes
-Cargo.lock=${lockfileHash('src-tauri/Cargo.lock')}
-pnpm-lock.yaml=${lockfileHash('pnpm-lock.yaml')}
+${HASHED_INPUTS.map((rel) => `${path.posix.basename(rel)}=${inputHash(rel)}`).join('\n')}
 bundle-body=${hashNormalised(tail)}
 -->
 `;

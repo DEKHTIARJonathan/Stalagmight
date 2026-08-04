@@ -12,7 +12,9 @@ stale or hand-edited; regenerate after any dependency change.
 <!-- lockfile-hashes
 Cargo.lock=22611c89041caf26448843ea35b2f1e450cf78ab77e766d2624e0f3050501834
 pnpm-lock.yaml=98e7b00c3d204c8f92df55569640b374de723a0d9ccd6b7fca65c1c33de346d9
-bundle-body=1713285eed7f2994e66032e90e0e6d93c707fbf295192c78da60be6f06ce6469
+gen-third-party-licenses.mjs=d3fca0b94b8a58ba5c4f323714cf1b01fcd1562327eced45ec0c9e6e26d07c8b
+about.toml=a6751e567d54df96b63b6e14089a1763d14443b34a815b085dbb45a57436d455
+bundle-body=039ccaf2d9b36acce1304a5d1d145711969e32bc8d85bfa995626d517749247d
 -->
 
 ## npm packages
@@ -1197,6 +1199,22 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ### MIT
 
+Applies to: `@mapbox/jsonlint-lines-primitives 2.0.2`
+
+The published package ships no license file; notice reproduced from https://github.com/mapbox/jsonlint/blob/master/README.md ("MIT License" section, verified 2026-08-03; fork of zaach/jsonlint, same notice).
+
+````text
+Copyright (C) 2012 Zachary Carter
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+````
+
+### MIT
+
 Applies to: `@maplibre/vt-pbf 4.2.1`
 
 ````text
@@ -1429,8 +1447,30 @@ THE SOFTWARE.
 
 Applies to: `html-parse-stringify 3.0.1`
 
+The published package ships no license file; notice reproduced from https://github.com/henrikjoreteg/html-parse-stringify/blob/master/LICENSE (verified 2026-08-03).
+
 ````text
-(The published npm package does not ship a license file. It is declared MIT; see https://www.npmjs.com/package/html-parse-stringify for its terms.)
+MIT License
+
+Copyright (c) 2025 Henrik Joreteg <henrik@joreteg.com>
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
 ````
 
 ### MIT
@@ -1602,8 +1642,16 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 Applies to: `murmurhash-js 1.0.0`
 
+The published package ships no license file; notice reproduced from https://github.com/mikolalysenko/murmurhash-js/blob/master/README.md ("License (MIT)" section, verified 2026-08-03).
+
 ````text
-(The published npm package does not ship a license file. It is declared MIT; see https://www.npmjs.com/package/murmurhash-js for its terms.)
+Copyright (c) 2011 Gary Court
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 ````
 
 ### MIT
@@ -1828,14 +1876,6 @@ PackageDownloadLocation: git://github.com/tauri-apps/tauri
 PackageDownloadLocation: git+https://github.com/tauri-apps/tauri.git
 PackageDownloadLocation: git+ssh://github.com/tauri-apps/tauri.git
 Creator: Person: Daniel Thompson-Yvetot
-````
-
-### Unknown
-
-Applies to: `@mapbox/jsonlint-lines-primitives 2.0.2`
-
-````text
-(The published npm package does not ship a license file. It is declared Unknown; see https://www.npmjs.com/package/@mapbox/jsonlint-lines-primitives for its terms.)
 ````
 
 ## Rust crates
