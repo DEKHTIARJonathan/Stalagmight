@@ -930,6 +930,10 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
           setSource('map');
           setSelection({ type: 'station', stationRef: best });
           openDialog('context-menu', {
+            // Over the map canvas: no scroller can move it, and opening it sets
+            // a selection that scrolls the panels. This is the station/shot
+            // right-click the flash-and-vanish bug was reported against.
+            survivesScroll: true,
             target: { type: 'station', ref: best },
             position: { x: event.originalEvent.clientX, y: event.originalEvent.clientY },
           });
@@ -948,6 +952,8 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
 
         // Open context menu
         openDialog('context-menu', {
+          // Map canvas - see above.
+          survivesScroll: true,
           target,
           position: { x: event.originalEvent.clientX, y: event.originalEvent.clientY },
         });

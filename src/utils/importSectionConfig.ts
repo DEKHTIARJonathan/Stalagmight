@@ -9,7 +9,7 @@
  * implementation and makes it unit-testable without mounting the wizard.
  */
 import type { ImportPlacement, ImportSectionConfig } from '../types/commands';
-import { isBlankNewShot } from '../components/common/editableShotStatus';
+import { isEmittedShot } from '../components/common/emittedShots';
 import type { ShotData } from '../types/project';
 import type { ZeroDatumConfigResult } from '../components/Dialogs/ZeroDatumConfigDialog';
 import type { VirtualConnection } from './segmentContext';
@@ -77,7 +77,7 @@ export function buildZeroDatumSectionConfig(config: ZeroDatumConfigResult): Impo
   // invitation, not an obligation - which is only safe if it is dropped HERE.
   // Otherwise it serializes as NaN length, depths and azimuths.
   const backendShots: ShotData[] = shots
-    .filter((s) => !s.isDeleted && !isBlankNewShot(s))
+    .filter(isEmittedShot)
     .map(editableShotToShotData);
   const reverse = metadata.reverse ?? false;
 

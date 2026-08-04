@@ -232,15 +232,18 @@ export default function ZeroDatumConfigDialog({
         if (!shot) return newShots;
         const updated = { ...shot, [field]: value } as EditableShot;
         newShots[index] = updated;
-        // The moment a blank row stops being blank it JOINS the payload, and
-        // every station after it is renumbered. Inserting the row did not move
-        // the pick (an uncounted row changes no numbering), so this is where
-        // that shift is owed - deferred to the edit rather than guessed at the
-        // insert, which is what put the picker out of step with the payload.
-        if (isCounted(updated) && !isCounted(shot)) {
+        // A row joining or LEAVING the payload renumbers every station after
+        // it. Inserting the row did not move the pick (an uncounted row changes
+        // no numbering), so the shift is owed here - and owed back again when
+        // the row is cleared to blank, which the first version of this missed:
+        // the pick stayed shifted while the row had left the payload.
+        const was = isCounted(shot);
+        const now = isCounted(updated);
+        if (was !== now) {
+          const delta = now ? 1 : -1;
           const before = emittedBefore(prev, index);
           const total = newShots.filter(isCounted).length;
-          commitStation(reanchorStation(stationIndexRef.current, before, 1, total));
+          commitStation(reanchorStation(stationIndexRef.current, before, delta, total));
         }
         return newShots;
       });
@@ -328,12 +331,16 @@ export default function ZeroDatumConfigDialog({
       setShots(next);
       // Anchor against the EARLIEST removal, shifted by the whole run.
       const first = Math.min(...targets);
+      // Only the rows that were COUNTED renumber anything: a blank row in the
+      // range is absent from the payload, so removing it shifts no station.
+      // Subtracting every target moved the anchor a station upstream.
+      const countedGone = targets.filter((i) => isCounted(shots[i])).length;
       commitStation(
         reanchorStation(
           stationIndex,
           survivorsBefore(shots, first),
-          -targets.length,
-          survivors - targets.length,
+          -countedGone,
+          survivors - countedGone,
         ),
       );
       return true;
@@ -346,11 +353,13 @@ export default function ZeroDatumConfigDialog({
       const shot = shots[index];
       if (!shot || shot.isDeleted) return;
       const survivors = shots.filter(isCounted).length;
+      // A blank row is not in the payload, so deleting it renumbers nothing.
+      const delta = isCounted(shot) ? -1 : 0;
       const newShots = [...shots];
       newShots[index] = { ...shot, isDeleted: true };
       setShots(newShots);
       commitStation(
-        reanchorStation(stationIndex, survivorsBefore(shots, index), -1, survivors - 1),
+        reanchorStation(stationIndex, survivorsBefore(shots, index), delta, survivors + delta),
       );
     },
     [shots, stationIndex, commitStation]
