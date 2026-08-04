@@ -673,6 +673,10 @@ struct MergeMeasurement {
     label: String,
     raw: f64,
     resolved: f64,
+    /// The two sections the pair joins. Finding 20's classifier asks whether
+    /// their merge group is datum-anchored, which is a question about the
+    /// SECTIONS rather than about the distance.
+    sections: (SectionId, SectionId),
 }
 
 /// Tolerance for the per-depth ADJUSTED-geometry comparison, in metres.
@@ -1912,6 +1916,10 @@ struct Outcome {
     /// True when the app's own `#[cfg(test)]` merge-alignment assert fired
     /// (finding 14) and the run stopped there.
     alignment_panic: bool,
+    /// True when finding 20 left a merge drifted under the app's own 5 cm heal
+    /// gate and the run stopped there. See `expect_merges_aligned` for why the
+    /// hit is terminal rather than merely counted.
+    drift_stop: bool,
     /// Integrity verdicts compared. Counted so the oracle can be SHOWN to be
     /// doing work rather than passing vacuously.
     integrity_compared: usize,
@@ -2238,6 +2246,7 @@ impl Fuzzer {
                 ),
                 raw: ((raw_a.x - raw_b.x).powi(2) + (raw_a.y - raw_b.y).powi(2)).sqrt(),
                 resolved: ((res_a.0 - res_b.0).powi(2) + (res_a.1 - res_b.1).powi(2)).sqrt(),
+                sections: (a.section_id, b.section_id),
             });
         }
         out
@@ -2862,10 +2871,16 @@ impl Fuzzer {
         // Measured BOTH ways, in one pass, so the failure payload can say what
         // the other checker thought of the same state. Issue #413's finding 14
         // asserts the two disagree; this is where that claim becomes a number.
-        let measurements = self.merge_measurements();
-        let messages: Vec<String> = measurements
-            .iter()
+        let broken: Vec<MergeMeasurement> = self
+            .merge_measurements()
+            .into_iter()
             .filter(|m| m.raw >= RAW_RESOLVED_AGREEMENT_M)
+            .collect();
+        if broken.is_empty() {
+            return;
+        }
+        let messages: Vec<String> = broken
+            .iter()
             .map(|m| {
                 format!(
                     "merged {} is {:.6} m apart RAW ({:.6} m RESOLVED{})",
@@ -2880,13 +2895,71 @@ impl Fuzzer {
                 )
             })
             .collect();
-        if messages.is_empty() {
+        // FINDING 20, classified by its MECHANISM rather than by the move that
+        // exposed it: the two things that would repair a drifted merge both
+        // decline, and each declines for a reason that is a property of the
+        // STATE, so both are measurable here.
+        //
+        // * `realign_after_shot_edit` (models/project/mutations.rs:923) - the
+        //   only repair `update_shot` runs - returns at line 941 when the merge
+        //   group holds no resolvable zero datum;
+        // * `realign_merges` (models/project/offsets.rs:280), the epilogue's
+        //   repair, re-solves only when `check_merge_alignment` already reports
+        //   a violation, and that threshold is the app's own 5 cm.
+        //
+        // So: every drifted pair under 5 cm, in a merge group with no anchor.
+        // A pair at or past 5 cm is something the app WOULD have healed and is
+        // not this; a drifted pair in an ANCHORED group got past a repair that
+        // ran, which is a different defect (finding 14's family) and still
+        // fails.
+        let unanchored = broken.iter().all(|m| {
+            m.raw < MERGE_ALIGNMENT_TOLERANCE_M
+                && self.group_is_unanchored(m.sections.0)
+                && self.group_is_unanchored(m.sections.1)
+        });
+        if unanchored {
+            *self
+                .outcome
+                .hits
+                .entry("finding-20-an-unanchored-merge-group-is-never-realigned")
+                .or_insert(0) += 1;
+            self.note(format!(
+                "  ^ finding 20 after {what}: {}",
+                messages.join("; ")
+            ));
+            // TERMINAL, and not because the drift is fatal to the model - it is
+            // not, the stored state still roundtrips. The next command that
+            // calls `debug_assert_merge_alignment` panics on this pair
+            // (`a_shot_edit_does_not_arm_an_alignment_assert_for_a_later_command`
+            // in open_undo_bugs_tests.rs proves it with an insert into an
+            // unrelated section), and `catching_alignment` would then attribute
+            // that panic to FINDING 14 by its context string. Carrying on would
+            // buy more moves at the price of mislabelling one finding as
+            // another, which is the one thing the classifiers exist to prevent.
+            self.outcome.drift_stop = true;
             return;
         }
         self.fail(
             &format!("{what} left a station merge out of alignment"),
             &format!("  {}", messages.join("\n  ")),
         );
+    }
+
+    /// FINDING 20's precondition, measured: does the merge group containing
+    /// `section_id` hold no zero datum that still resolves?
+    ///
+    /// The same question `realign_after_shot_edit` asks before it gives up
+    /// (models/project/mutations.rs:930-942), asked the same way - a datum whose
+    /// anchor key no longer resolves is not an anchor there either.
+    fn group_is_unanchored(&self, section_id: SectionId) -> bool {
+        let Some(project) = self.state.get_project_state() else {
+            return false;
+        };
+        let group = project.get_merged_section_ids(section_id);
+        !project.zero_datums.iter().any(|datum| {
+            group.contains(&datum.station_ref.section_id)
+                && project.resolve_key(&datum.station_ref).is_some()
+        })
     }
 
     fn expect_stacks(&self, what: &str) {
@@ -4417,7 +4490,7 @@ impl Fuzzer {
         self.expect_state(self.cursor, &label, consumed, stale);
         self.expect_merges_aligned(&label);
         self.expect_raw_and_resolved_agree(&label);
-        true
+        !self.outcome.drift_stop
     }
 
     /// FINDING 7, decided by PROVING the inequality rather than by recognising a
@@ -4650,7 +4723,7 @@ fn run_fuzz(seed: u32, plan: Plan) -> Outcome {
         // Nothing after the app's own assert measures the app: it unwound
         // through the project mutex, so the lock is poisoned and half the call
         // sites now read "no project open".
-        if fuzzer.outcome.alignment_panic {
+        if fuzzer.outcome.alignment_panic || fuzzer.outcome.drift_stop {
             break;
         }
         if iteration == boundary_at {
@@ -4688,7 +4761,7 @@ fn run_fuzz(seed: u32, plan: Plan) -> Outcome {
                 continue;
             }
             fuzzer.step_mutate();
-            if fuzzer.outcome.alignment_panic {
+            if fuzzer.outcome.alignment_panic || fuzzer.outcome.drift_stop {
                 break;
             }
             continue;
@@ -4715,12 +4788,12 @@ fn run_fuzz(seed: u32, plan: Plan) -> Outcome {
         if !fuzzer.step_history(back, steps) {
             break;
         }
-        if fuzzer.outcome.alignment_panic {
+        if fuzzer.outcome.alignment_panic || fuzzer.outcome.drift_stop {
             break;
         }
     }
 
-    if !fuzzer.outcome.wedged && !fuzzer.outcome.alignment_panic {
+    if !fuzzer.outcome.wedged && !fuzzer.outcome.alignment_panic && !fuzzer.outcome.drift_stop {
         // Cross the boundary at least once per persistence run, so the closing
         // walk below runs against a RESTORED stack rather than an in-memory one.
         if plan.persistence && fuzzer.outcome.reloads == 0 {
@@ -4830,6 +4903,8 @@ fn summarize(label: &str, seed: u32, outcome: &Outcome) -> String {
             " WEDGED"
         } else if outcome.alignment_panic {
             " ALIGNMENT-PANIC"
+        } else if outcome.drift_stop {
+            " MERGE-DRIFT-STOP"
         } else {
             ""
         },
