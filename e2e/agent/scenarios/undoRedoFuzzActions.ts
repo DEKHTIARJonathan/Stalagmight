@@ -19,28 +19,28 @@
  */
 import type { ScenarioContext } from './framework';
 
-/** Mirrors `src/types/ipc/StationRef.ts`. */
+/** Mirrors `src/types/ipc/StationRef.ts` - the arg shape the store actions take. */
 export interface StationRef {
   section_id: number;
   station_index: number;
 }
 
-/** The slice of `src/types/ipc/Section.ts` the generators target. */
-export interface RawSection {
-  id: number;
-  shots: { id: number }[];
-}
+/**
+ * Generators read a `TargetingDigest` (`e2e/agent/lib/fuzzOracleCore.ts`), not
+ * the raw project state: the digest is built IN THE WEBVIEW and is ~20x smaller
+ * than the payload it summarizes, which is what makes one round trip per step
+ * affordable.
+ *
+ * It carries exactly the fields read below, each list in payload order, so every
+ * sort and every `ctx.pick` sees the same values in the same sequence it saw
+ * when this read the raw state - the rng draw sequence, and therefore every
+ * documented repro seed, is unchanged.
+ */
+import type { TargetingDigest } from '../lib/fuzzOracleCore';
+export type { TargetingDigest };
 
-/** The slice of `src/types/ipc/ProjectState.ts` the generators target. */
-export interface RawProjectState {
-  project: {
-    sections: RawSection[];
-    station_merges: { station_a: StationRef; station_b: StationRef }[];
-    zero_datums: { station_ref: StationRef }[];
-    loop_closures: { id: number | bigint }[];
-  };
-  stations: { station_ref: StationRef }[];
-}
+/** `[sectionId, [shotId, ...]]`, one entry of the digest's section list. */
+type DigestSection = [number, number[]];
 
 /** One drawn mutation: a `projectStore` action plus its args. */
 export interface FuzzAction {
@@ -55,7 +55,7 @@ export interface ActionGenerator {
   /** Relative draw weight. */
   weight: number;
   /** Returns null when the live project has no valid target for this action. */
-  build(ctx: ScenarioContext, state: RawProjectState): FuzzAction | null;
+  build(ctx: ScenarioContext, state: TargetingDigest): FuzzAction | null;
 }
 
 const COLORS = ['#3388FF', '#FF8833', '#33CC66', '#CC33AA', '#FFCC00', '#6666FF'] as const;
@@ -98,33 +98,31 @@ function pickDistinct<T>(ctx: ScenarioContext, items: readonly T[], count: numbe
 }
 
 /** Sections by ascending id, so the draw does not depend on Vec order. */
-function sortedSections(state: RawProjectState): RawSection[] {
-  return [...state.project.sections].sort((a, b) => a.id - b.id);
+function sortedSections(state: TargetingDigest): DigestSection[] {
+  return [...state.s].sort((a, b) => a[0] - b[0]);
 }
 
-function pickSection(ctx: ScenarioContext, state: RawProjectState): RawSection | null {
+function pickSection(ctx: ScenarioContext, state: TargetingDigest): DigestSection | null {
   const sections = sortedSections(state);
   return sections.length > 0 ? ctx.pick(sections) : null;
 }
 
 function pickShot(
   ctx: ScenarioContext,
-  state: RawProjectState,
-): { section: RawSection; shotId: number } | null {
-  const populated = sortedSections(state).filter((section) => section.shots.length > 0);
+  state: TargetingDigest,
+): { sectionId: number; shotId: number } | null {
+  const populated = sortedSections(state).filter((section) => section[1].length > 0);
   if (populated.length === 0) return null;
   const section = ctx.pick(populated);
-  const shotIds = section.shots.map((shot) => shot.id).sort((a, b) => a - b);
-  return { section, shotId: ctx.pick(shotIds) };
+  const shotIds = [...section[1]].sort((a, b) => a - b);
+  return { sectionId: section[0], shotId: ctx.pick(shotIds) };
 }
 
-function sortedStationRefs(state: RawProjectState): StationRef[] {
-  return [...state.stations]
-    .map((station) => station.station_ref)
-    .sort((a, b) => a.section_id - b.section_id || a.station_index - b.station_index);
+function sortedStationRefs(state: TargetingDigest): [number, number][] {
+  return [...state.st].sort((a, b) => a[0] - b[0] || a[1] - b[1]);
 }
 
-function pickStationRef(ctx: ScenarioContext, state: RawProjectState): StationRef | null {
+function pickStationRef(ctx: ScenarioContext, state: TargetingDigest): [number, number] | null {
   const refs = sortedStationRefs(state);
   return refs.length > 0 ? ctx.pick(refs) : null;
 }
@@ -136,13 +134,13 @@ function pickStationRef(ctx: ScenarioContext, state: RawProjectState): StationRe
  */
 function pickCrossSectionPair(
   ctx: ScenarioContext,
-  state: RawProjectState,
-): [StationRef, StationRef] | null {
-  const bySection = new Map<number, StationRef[]>();
+  state: TargetingDigest,
+): [[number, number], [number, number]] | null {
+  const bySection = new Map<number, [number, number][]>();
   for (const ref of sortedStationRefs(state)) {
-    const bucket = bySection.get(ref.section_id);
+    const bucket = bySection.get(ref[0]);
     if (bucket) bucket.push(ref);
-    else bySection.set(ref.section_id, [ref]);
+    else bySection.set(ref[0], [ref]);
   }
   const sectionIds = [...bySection.keys()].sort((a, b) => a - b);
   if (sectionIds.length < 2) return null;
@@ -153,8 +151,13 @@ function pickCrossSectionPair(
   return a && b ? [a, b] : null;
 }
 
-function refLabel(ref: StationRef): string {
-  return `${ref.section_id}/${ref.station_index}`;
+/** Digest tuple -> the `StationRef` shape the store actions and IPC expect. */
+function toRef(ref: [number, number]): StationRef {
+  return { section_id: ref[0], station_index: ref[1] };
+}
+
+function refLabel(ref: [number, number]): string {
+  return `${ref[0]}/${ref[1]}`;
 }
 
 /** A valid `ShotData` (every field present; nullable ones explicitly null-or-value). */
@@ -290,18 +293,18 @@ export const ACTION_GENERATORS: readonly ActionGenerator[] = [
       const section = pickSection(ctx, state);
       if (!section) return null;
       const shot = randomShotData(ctx);
-      const shotIds = section.shots.map((s) => s.id).sort((a, b) => a - b);
+      const shotIds = [...section[1]].sort((a, b) => a - b);
       // The PRE-insert shot count is in every label: appending into a section
       // that currently has none takes a different backend path from appending
       // onto a populated one, and that distinction has already been the
       // difference between a clean roundtrip and a displaced section.
-      const where = `s=${section.id},n=${shotIds.length}`;
+      const where = `s=${section[0]},n=${shotIds.length}`;
       const mode = shotIds.length === 0 ? 'append' : ctx.pick(['append', 'after', 'before'] as const);
       if (mode === 'after') {
         const afterId = ctx.pick(shotIds);
         return {
           action: 'createShot',
-          args: [section.id, shot, afterId],
+          args: [section[0], shot, afterId],
           label: `createShot(${where},after=${afterId})`,
         };
       }
@@ -309,11 +312,11 @@ export const ACTION_GENERATORS: readonly ActionGenerator[] = [
         const beforeId = ctx.pick(shotIds);
         return {
           action: 'createShot',
-          args: [section.id, shot, null, beforeId],
+          args: [section[0], shot, null, beforeId],
           label: `createShot(${where},before=${beforeId})`,
         };
       }
-      return { action: 'createShot', args: [section.id, shot], label: `createShot(${where},append)` };
+      return { action: 'createShot', args: [section[0], shot], label: `createShot(${where},append)` };
     },
   },
   {
@@ -325,8 +328,8 @@ export const ACTION_GENERATORS: readonly ActionGenerator[] = [
       const { patch, label } = buildPatch(ctx, SHOT_PATCH_FIELDS, ctx.randInt(1, 4));
       return {
         action: 'updateShot',
-        args: [target.section.id, target.shotId, patch],
-        label: `updateShot(s=${target.section.id},shot=${target.shotId},{${label}})`,
+        args: [target.sectionId, target.shotId, patch],
+        label: `updateShot(s=${target.sectionId},shot=${target.shotId},{${label}})`,
       };
     },
   },
@@ -338,8 +341,8 @@ export const ACTION_GENERATORS: readonly ActionGenerator[] = [
       if (!target) return null;
       return {
         action: 'deleteShot',
-        args: [target.section.id, target.shotId],
-        label: `deleteShot(s=${target.section.id},shot=${target.shotId})`,
+        args: [target.sectionId, target.shotId],
+        label: `deleteShot(s=${target.sectionId},shot=${target.shotId})`,
       };
     },
   },
@@ -348,10 +351,10 @@ export const ACTION_GENERATORS: readonly ActionGenerator[] = [
     weight: 3,
     build(ctx, state) {
       // Keep at least two sections so cross-section merges stay reachable.
-      if (state.project.sections.length <= 2) return null;
+      if (state.s.length <= 2) return null;
       const section = pickSection(ctx, state);
       if (!section) return null;
-      return { action: 'deleteSection', args: [section.id], label: `deleteSection(s=${section.id})` };
+      return { action: 'deleteSection', args: [section[0]], label: `deleteSection(s=${section[0]})` };
     },
   },
   {
@@ -363,8 +366,8 @@ export const ACTION_GENERATORS: readonly ActionGenerator[] = [
       const { patch, label } = buildPatch(ctx, SECTION_PATCH_FIELDS, ctx.randInt(1, 3));
       return {
         action: 'updateSection',
-        args: [section.id, patch],
-        label: `updateSection(s=${section.id},{${label}})`,
+        args: [section[0], patch],
+        label: `updateSection(s=${section[0]},{${label}})`,
       };
     },
   },
@@ -377,8 +380,8 @@ export const ACTION_GENERATORS: readonly ActionGenerator[] = [
       const swap = chance(ctx, 0.5);
       return {
         action: 'reverseSection',
-        args: [section.id, swap],
-        label: `reverseSection(s=${section.id},swapLR=${swap})`,
+        args: [section[0], swap],
+        label: `reverseSection(s=${section[0]},swapLR=${swap})`,
       };
     },
   },
@@ -391,8 +394,8 @@ export const ACTION_GENERATORS: readonly ActionGenerator[] = [
       const kind = ctx.pick(SHOT_KINDS);
       return {
         action: 'setShotKind',
-        args: [target.section.id, target.shotId, kind],
-        label: `setShotKind(s=${target.section.id},shot=${target.shotId},${kind})`,
+        args: [target.sectionId, target.shotId, kind],
+        label: `setShotKind(s=${target.sectionId},shot=${target.shotId},${kind})`,
       };
     },
   },
@@ -405,7 +408,7 @@ export const ACTION_GENERATORS: readonly ActionGenerator[] = [
       const comment = chance(ctx, 0.3) ? null : `fuzz-station-${ctx.randInt(0, 9999)}`;
       return {
         action: 'updateStationComment',
-        args: [ref, comment],
+        args: [toRef(ref), comment],
         label: `updateStationComment(${refLabel(ref)},${comment === null ? 'null' : 'text'})`,
       };
     },
@@ -421,7 +424,7 @@ export const ACTION_GENERATORS: readonly ActionGenerator[] = [
       const offset = randomOffset(ctx);
       return {
         action: 'moveStation',
-        args: [ref, offset],
+        args: [toRef(ref), offset],
         label: `moveStation(${refLabel(ref)},d=${offset.x}/${offset.y}/${offset.z})`,
       };
     },
@@ -435,8 +438,8 @@ export const ACTION_GENERATORS: readonly ActionGenerator[] = [
       const offset = randomOffset(ctx);
       return {
         action: 'moveSection',
-        args: [section.id, offset],
-        label: `moveSection(s=${section.id},d=${offset.x}/${offset.y}/${offset.z})`,
+        args: [section[0], offset],
+        label: `moveSection(s=${section[0]},d=${offset.x}/${offset.y}/${offset.z})`,
       };
     },
   },
@@ -449,8 +452,8 @@ export const ACTION_GENERATORS: readonly ActionGenerator[] = [
       const offset = randomOffset(ctx);
       return {
         action: 'moveSegment',
-        args: [section.id, offset],
-        label: `moveSegment(s=${section.id},d=${offset.x}/${offset.y}/${offset.z})`,
+        args: [section[0], offset],
+        label: `moveSegment(s=${section[0]},d=${offset.x}/${offset.y}/${offset.z})`,
       };
     },
   },
@@ -462,7 +465,7 @@ export const ACTION_GENERATORS: readonly ActionGenerator[] = [
       if (!pair) return null;
       return {
         action: 'mergeStations',
-        args: [pair[0], pair[1]],
+        args: [toRef(pair[0]), toRef(pair[1])],
         label: `mergeStations(${refLabel(pair[0])},${refLabel(pair[1])})`,
       };
     },
@@ -471,19 +474,17 @@ export const ACTION_GENERATORS: readonly ActionGenerator[] = [
     name: 'unmergeStationPair',
     weight: 4,
     build(ctx, state) {
-      const merges = [...state.project.station_merges].sort(
-        (a, b) =>
-          a.station_a.section_id - b.station_a.section_id ||
-          a.station_a.station_index - b.station_a.station_index ||
-          a.station_b.section_id - b.station_b.section_id ||
-          a.station_b.station_index - b.station_b.station_index,
+      const merges = [...state.m].sort(
+        (a, b) => a[0] - b[0] || a[1] - b[1] || a[2] - b[2] || a[3] - b[3],
       );
       if (merges.length === 0) return null;
       const merge = ctx.pick(merges);
+      const a: [number, number] = [merge[0], merge[1]];
+      const b: [number, number] = [merge[2], merge[3]];
       return {
         action: 'unmergeStationPair',
-        args: [merge.station_a, merge.station_b],
-        label: `unmergeStationPair(${refLabel(merge.station_a)},${refLabel(merge.station_b)})`,
+        args: [toRef(a), toRef(b)],
+        label: `unmergeStationPair(${refLabel(a)},${refLabel(b)})`,
       };
     },
   },
@@ -501,7 +502,7 @@ export const ACTION_GENERATORS: readonly ActionGenerator[] = [
       // fitToBounds:false - the camera fit is UI churn the oracle does not want.
       return {
         action: 'setZeroDatum',
-        args: [ref, gps, { fitToBounds: false }],
+        args: [toRef(ref), gps, { fitToBounds: false }],
         label: `setZeroDatum(${refLabel(ref)})`,
       };
     },
@@ -510,17 +511,13 @@ export const ACTION_GENERATORS: readonly ActionGenerator[] = [
     name: 'removeZeroDatum',
     weight: 2,
     build(ctx, state) {
-      const datums = [...state.project.zero_datums].sort(
-        (a, b) =>
-          a.station_ref.section_id - b.station_ref.section_id ||
-          a.station_ref.station_index - b.station_ref.station_index,
-      );
+      const datums = [...state.z].sort((a, b) => a[0] - b[0] || a[1] - b[1]);
       if (datums.length === 0) return null;
       const datum = ctx.pick(datums);
       return {
         action: 'removeZeroDatum',
-        args: [datum.station_ref],
-        label: `removeZeroDatum(${refLabel(datum.station_ref)})`,
+        args: [toRef(datum)],
+        label: `removeZeroDatum(${refLabel(datum)})`,
       };
     },
   },
@@ -533,7 +530,7 @@ export const ACTION_GENERATORS: readonly ActionGenerator[] = [
       const strategy = ctx.pick(CLOSURE_STRATEGIES);
       return {
         action: 'createLoopClosure',
-        args: [pair[0], pair[1], strategy],
+        args: [toRef(pair[0]), toRef(pair[1]), strategy],
         label: `createLoopClosure(${refLabel(pair[0])},${refLabel(pair[1])},${strategy})`,
       };
     },
@@ -542,7 +539,7 @@ export const ACTION_GENERATORS: readonly ActionGenerator[] = [
     name: 'removeLoopClosure',
     weight: 2,
     build(ctx, state) {
-      const ids = state.project.loop_closures.map((closure) => Number(closure.id)).sort((a, b) => a - b);
+      const ids = [...state.c].sort((a, b) => a - b);
       if (ids.length === 0) return null;
       const id = ctx.pick(ids);
       // The store action's declared type is bigint, but it does `Number(closureId)`
@@ -568,7 +565,7 @@ const BY_NAME = new Map(ACTION_GENERATORS.map((generator) => [generator.name, ge
  */
 export function drawAction(
   ctx: ScenarioContext,
-  state: RawProjectState,
+  state: TargetingDigest,
   attempts = 8,
 ): FuzzAction {
   for (let i = 0; i < attempts; i++) {

@@ -23,11 +23,21 @@
  *
  * ## The model
  *
- * `snapshots[d]` is the expected normalized `get_project_state` at undo depth
+ * `snapshots[d]` is the expected canonical `get_project_state` at undo depth
  * `d` (`snapshots[0]` = the state right after the fixture opened). `cursor` is
  * the current depth; the ground truth for it is the backend's own
  * `get_undo_stack` / `get_redo_stack` lengths, re-read after every move, so the
  * model can never quietly drift away from the app.
+ *
+ * The snapshot array lives IN THE WEBVIEW and each step is a single fused
+ * `executeAsync` - call the action, observe, canonicalize, compare - so a
+ * ~60 KB (fractal) / ~277 KB (naharon) payload no longer crosses the bridge
+ * twice per iteration. See `undoRedoFuzzBridge.ts` for the contract and
+ * `fuzzOracleCore.ts` for the serializer, which is one self-contained function
+ * injected into the page and called directly by Node, never two copies. Node
+ * keeps `cursor`/`top` mirrors, re-derives them from the same rules, and asserts
+ * the page agrees. Full canonical strings are fetched only when a comparison
+ * has ALREADY failed.
  *
  *   - MUTATE: draw an action, run it, then reconcile with what the stacks did.
  *     A rejected command must change neither the stacks nor the state (that
@@ -45,11 +55,13 @@
  *
  * ## What "exactly" means
  *
- * `e2e/agent/lib/projectSnapshot.ts` owns the normalization and documents every
- * field it drops (all of them monotonic counters or `touch()`/`file_path`
+ * `e2e/agent/lib/fuzzOracleCore.ts` owns the canonical serializer and documents
+ * every field it drops (all of them monotonic counters or `touch()`/`file_path`
  * artefacts). Map key order is canonicalized rather than dropped, and floats are
  * rounded to 12 significant digits. Shot uuids, `reverse_parity`, the gauge
- * anchors, `merged_at`, all closure metrics and all geometry ARE compared.
+ * anchors, `merged_at`, all closure metrics and all geometry ARE compared. When
+ * two canonical strings still disagree, `projectSnapshot.ts` re-compares them
+ * with a 1e-9 absolute tolerance and classifies the result.
  *
  * ## Open app bugs this reproduces
  *
@@ -119,6 +131,11 @@
  * Every draw comes from `ctx.rng()`/`randInt`/`pick`, and every target id is
  * read back out of the live project and sorted before it is picked, so
  * `run_scenario("undo-redo-fuzz", seed, iterations)` replays byte-for-byte.
+ *
+ * The generators read a `TargetingDigest` rather than the raw project state.
+ * The digest carries exactly the fields they read, each list in payload order,
+ * so every sort and every pick sees the same values in the same sequence - the
+ * draw stream, and every repro seed above, is unchanged by the move in-page.
  */
 import type { Scenario, ScenarioContext } from './framework';
 import { DEFAULT_FIXTURE, disableAutoSave, loadFixtureWithoutUndoHistory } from './common';
@@ -129,10 +146,18 @@ import {
   describeDiffs,
   diffSnapshots,
   isListPermutationOnly,
-  snapshotProjectState,
   type KnownAsymmetry,
 } from '../lib/projectSnapshot';
-import { drawAction, type RawProjectState } from './undoRedoFuzzActions';
+import type { TargetingDigest } from '../lib/fuzzOracleCore';
+import { drawAction } from './undoRedoFuzzActions';
+import {
+  fetchMismatch,
+  initModel,
+  injectOracle,
+  resyncModel,
+  runStep,
+  type StepResponse,
+} from './undoRedoFuzzBridge';
 
 /** Opt in to surviving a mismatch that is entirely a documented open app bug. */
 const ALLOW_KNOWN_BUGS = process.env.STALAGMIGHT_FUZZ_ALLOW_KNOWN_BUGS === '1';
@@ -155,65 +180,28 @@ const HISTORY_TAIL = 12;
 /** Headroom kept below the undo history limit so FIFO trimming can never fire. */
 const DEPTH_HEADROOM = 5;
 
-/** One observation of backend truth: normalized state + both stack lengths. */
-interface Observed {
-  raw: RawProjectState;
-  json: string;
-  bytes: number;
-  undoLen: number;
-  redoLen: number;
-}
-
-/**
- * Read the whole oracle in ONE webview round trip. The two history stacks are
- * counted in the page (they carry preview data for up to 100 entries each);
- * only the project state itself crosses the WebDriver bridge.
- */
-const READ_STATE_JS = `
-  const core = window.__TAURI__ && window.__TAURI__.core;
-  if (!core || typeof core.invoke !== 'function') throw new Error('window.__TAURI__.core.invoke unavailable');
-  const state = await core.invoke('get_project_state');
-  const undo = await core.invoke('get_undo_stack');
-  const redo = await core.invoke('get_redo_stack');
-  return { state, undoLen: undo.length, redoLen: redo.length };
-`;
-
-async function readObserved(ctx: ScenarioContext): Promise<Observed> {
-  const started = Date.now();
-  const read = await ctx.eval<{ state: unknown; undoLen: number; redoLen: number }>(READ_STATE_JS);
-  ctx.metric('oracleReadMs', Date.now() - started);
-  if (read.state === null || read.state === undefined) {
-    throw new Error('get_project_state returned null: the project closed mid-run');
-  }
-  const json = snapshotProjectState(read.state);
-  return {
-    raw: read.state as RawProjectState,
-    json,
-    bytes: json.length,
-    undoLen: read.undoLen,
-    redoLen: read.redoLen,
-  };
-}
-
 interface SnapshotCheck {
   equal: boolean;
-  /** Equal only once floating-point tolerance was applied (see projectSnapshot.ts). */
+  /** Equal only once floating-point tolerance was applied. */
   floatNoise: boolean;
   /** Rendered diff block (empty when equal). */
   text: string;
-  /** True when every differing path is explained by a known open app bug. */
+  /** True when every difference is explained by a known open app bug. */
   onlyKnown: boolean;
   asymmetries: KnownAsymmetry[];
 }
 
 const EQUAL: SnapshotCheck = { equal: true, floatNoise: false, text: '', onlyKnown: false, asymmetries: [] };
 
+/**
+ * The SLOW path, reached only after the page has already reported a mismatch:
+ * re-compare with numeric tolerance, then work out whether the difference is
+ * one of the known open bugs.
+ */
 function checkSnapshot(expected: string, actual: string): SnapshotCheck {
-  // Fast path: the canonical strings match outright.
   if (expected === actual) return EQUAL;
-  // Slow path: re-compare with numeric tolerance. Geometry is re-derived rather
-  // than copied on every undo/redo, so a coordinate whose true value is 0 can
-  // come back as different femtometre-scale dust.
+  // Geometry is re-derived rather than copied on every undo/redo, so a
+  // coordinate whose true value is 0 can come back as different femtometre dust.
   const diffs = diffSnapshots(expected, actual, 200);
   if (diffs.length === 0) return { ...EQUAL, floatNoise: true };
 
@@ -253,7 +241,7 @@ export const undoRedoFuzz: Scenario = {
   name: 'undo-redo-fuzz',
   description:
     'Seeded random mutations interleaved with undo/redo walks; asserts an exact ' +
-    'normalized state roundtrip at every history depth.',
+    'canonical state roundtrip at every history depth, compared in-page.',
   defaultIterations: 40,
   async run(ctx, { iterations }) {
     const { stripped } = await loadFixtureWithoutUndoHistory(ctx, FIXTURE);
@@ -275,17 +263,19 @@ export const undoRedoFuzz: Scenario = {
         : 100;
     `);
 
-    let observed = await readObserved(ctx);
+    await injectOracle(ctx);
+    const init = await initModel(ctx);
+
     // Hard expectation, not a tolerance: the fixture's persisted history was
     // deleted from the temp copy before the load, so the app must come up with
     // both stacks empty. Anything else means the strip did not take (a table
     // this build persists that `UNDO_HISTORY_TABLES` does not list, say), and
     // every depth in the model would be measured from the wrong floor.
-    const baseUndo = observed.undoLen;
-    if (baseUndo !== 0 || observed.redoLen !== 0) {
+    const baseUndo = init.undoLen;
+    if (baseUndo !== 0 || init.redoLen !== 0) {
       throw new Error(
         `${FIXTURE} opened with inherited history after stripping ` +
-          `${strippedRows} row(s): undoLen=${baseUndo} redoLen=${observed.redoLen} ` +
+          `${strippedRows} row(s): undoLen=${baseUndo} redoLen=${init.redoLen} ` +
           `(cleared ${JSON.stringify(stripped.cleared)}, absent ${JSON.stringify(stripped.missing)})`,
       );
     }
@@ -296,11 +286,15 @@ export const undoRedoFuzz: Scenario = {
     // reads as "headroom from wherever the stack actually starts".
     const maxDepth = Math.max(1, Math.min(iterations, historyLimit - baseUndo - DEPTH_HEADROOM));
 
-    const snapshots: string[] = [observed.json];
     const history: string[] = [];
     let cursor = 0;
+    /** Node's mirror of the page's `snapshots.length - 1`. */
+    let top = 0;
     let deepest = 0;
-    let maxBytes = observed.bytes;
+    let maxBytes = init.bytes;
+    let undoLen = init.undoLen;
+    let redoLen = init.redoLen;
+    let digest: TargetingDigest = init.digest;
 
     const note = (line: string): void => {
       history.push(line);
@@ -314,7 +308,7 @@ export const undoRedoFuzz: Scenario = {
           `  reproduce: run_scenario("undo-redo-fuzz", seed=${ctx.seed}, iterations=${iterations})` +
             `${FIXTURE === DEFAULT_FIXTURE ? '' : ` with STALAGMIGHT_FUZZ_FIXTURE=${FIXTURE}`}` +
             `${ALLOW_KNOWN_BUGS ? ' with STALAGMIGHT_FUZZ_ALLOW_KNOWN_BUGS=1' : ''}`,
-          `  fixture=${FIXTURE} depth=${cursor} modelTop=${snapshots.length - 1} baseUndo=${baseUndo}`,
+          `  fixture=${FIXTURE} depth=${cursor} modelTop=${top} baseUndo=${baseUndo}`,
           ...(detail ? [detail] : []),
           `  last ${tail.length} action(s):`,
           ...tail,
@@ -322,12 +316,47 @@ export const undoRedoFuzz: Scenario = {
       );
     };
 
+    /** One fused round trip, timed. */
+    const step = async (
+      kind: 'mutate' | 'undo' | 'redo',
+      action: string,
+      actionArgs: unknown[],
+    ): Promise<StepResponse> => {
+      const started = Date.now();
+      const res = await runStep(ctx, { kind, action, args: actionArgs, cursor, undo0: undoLen });
+      ctx.metric('fusedStepMs', Date.now() - started);
+      return res;
+    };
+
+    /** The page applied the same bookkeeping rules; prove it landed in the same place. */
+    const assertModel = (res: StepResponse, headline: string): void => {
+      if (res.cursorAfter !== cursor || res.top !== top) {
+        fail(
+          headline,
+          `  page model says cursor=${res.cursorAfter} top=${res.top}, Node says cursor=${cursor} top=${top}`,
+        );
+      }
+    };
+
+    const assertStacks = (headline: string, res: StepResponse): void => {
+      const wantUndo = baseUndo + cursor;
+      const wantRedo = top - cursor;
+      if (res.undoLen !== wantUndo || res.redoLen !== wantRedo) {
+        fail(
+          headline,
+          `  expected undoLen=${wantUndo} redoLen=${wantRedo}, got undoLen=${res.undoLen} redoLen=${res.redoLen}`,
+        );
+      }
+    };
+
     /**
-     * Compare backend truth against the model. Returns true when the caller
-     * should keep going (equal, or a tolerated known-bug mismatch).
+     * Resolve a mismatch the page reported. Fetches both canonical strings (the
+     * only time they cross the bridge) and either tolerates the difference or
+     * fails with the full diff.
      */
-    const assertSnapshot = (headline: string, actual: string): void => {
-      const check = checkSnapshot(snapshots[cursor] ?? '', actual);
+    const resolveMismatch = async (headline: string): Promise<void> => {
+      const pair = await fetchMismatch(ctx);
+      const check = checkSnapshot(pair.expected ?? '', pair.actual ?? '');
       if (check.equal) {
         // Counted, never resynced: keeping the ORIGINAL expectation means the
         // tolerance can never ratchet, only ever absorb the same dust again.
@@ -339,57 +368,46 @@ export const undoRedoFuzz: Scenario = {
         for (const asymmetry of check.asymmetries) ctx.metric(`known:${asymmetry.id}`);
         ctx.log(`tolerated known asymmetry at depth ${cursor}: ${check.asymmetries.map((a) => a.id).join(', ')}`);
         // Resync so one open bug does not cascade into every later comparison.
-        snapshots[cursor] = actual;
+        top = await resyncModel(ctx, pair.index);
         return;
       }
       fail(headline, check.text);
     };
 
-    const assertStacks = (headline: string, next: Observed): void => {
-      const wantUndo = baseUndo + cursor;
-      const wantRedo = snapshots.length - 1 - cursor;
-      if (next.undoLen !== wantUndo || next.redoLen !== wantRedo) {
-        fail(
-          headline,
-          `  expected undoLen=${wantUndo} redoLen=${wantRedo}, got undoLen=${next.undoLen} redoLen=${next.redoLen}`,
-        );
-      }
-    };
-
-    const record = (next: Observed): void => {
-      observed = next;
-      maxBytes = Math.max(maxBytes, next.bytes);
+    const record = (res: StepResponse): void => {
+      undoLen = res.undoLen;
+      redoLen = res.redoLen;
+      digest = res.digest;
+      maxBytes = Math.max(maxBytes, res.bytes);
       deepest = Math.max(deepest, cursor);
     };
 
-    const step = async (direction: 'undo' | 'redo', tag: string): Promise<void> => {
-      const before = observed;
-      const res = (await ctx.callAction('project', direction, [])) as {
-        ok: boolean;
-        error?: string;
-        result?: { success?: boolean; error?: string };
-      };
-      if (!res.ok || res.result?.success === false) {
+    const walk = async (direction: 'undo' | 'redo', tag: string): Promise<void> => {
+      const beforeUndo = undoLen;
+      const beforeRedo = redoLen;
+      const res = await step(direction, direction, []);
+      if (!res.actionOk || res.commandSuccess === false) {
         note(`${tag} ${direction} -> FAILED`);
         fail(
           `${direction} at depth ${cursor} failed outright`,
-          `  error: ${res.result?.error ?? res.error ?? 'unknown'}`,
+          `  error: ${res.commandError ?? res.actionError ?? 'unknown'}`,
         );
       }
-      const next = await readObserved(ctx);
       cursor += direction === 'undo' ? -1 : 1;
       note(
-        `${tag} ${direction} -> depth ${cursor} (undo ${before.undoLen}->${next.undoLen}, redo ${before.redoLen}->${next.redoLen})`,
+        `${tag} ${direction} -> depth ${cursor} (undo ${beforeUndo}->${res.undoLen}, redo ${beforeRedo}->${res.redoLen})`,
       );
-      assertStacks(`${direction} left the history stacks in an unexpected shape`, next);
-      assertSnapshot(`${direction} did not restore the state recorded at depth ${cursor}`, next.json);
-      record(next);
+      assertModel(res, `${direction} left the page model where Node did not expect it`);
+      assertStacks(`${direction} left the history stacks in an unexpected shape`, res);
+      if (res.verdict !== 'equal') {
+        await resolveMismatch(`${direction} did not restore the state recorded at depth ${cursor}`);
+      }
+      record(res);
       ctx.metric(direction === 'undo' ? 'undos' : 'redos');
     };
 
     for (let iteration = 1; iteration <= iterations; iteration++) {
       const tag = `#${iteration}`;
-      const top = snapshots.length - 1;
       const roll = ctx.rng();
       let move: 'mutate' | 'undo' | 'redo' =
         roll < P_MUTATE ? 'mutate' : roll < P_MUTATE + P_UNDO ? 'undo' : 'redo';
@@ -398,55 +416,56 @@ export const undoRedoFuzz: Scenario = {
       if (move === 'mutate' && cursor >= maxDepth) move = 'undo';
 
       if (move !== 'mutate') {
-        await step(move, tag);
+        await walk(move, tag);
         continue;
       }
 
-      const action = drawAction(ctx, observed.raw);
-      const before = observed;
-      const res = (await ctx.callAction('project', action.action, action.args)) as {
-        ok: boolean;
-        error?: string;
-        result?: { success?: boolean; error?: string };
-      };
-      const accepted = res.ok && res.result?.success !== false;
-      const next = await readObserved(ctx);
-      const pushed = next.undoLen - before.undoLen;
+      const action = drawAction(ctx, digest);
+      const beforeUndo = undoLen;
+      const beforeRedo = redoLen;
+      const res = await step('mutate', action.action, action.args);
+      const accepted = res.actionOk && res.commandSuccess !== false;
+      const pushed = res.undoLen - beforeUndo;
       note(
         `${tag} ${action.label} -> ${accepted ? 'ok' : 'rejected'} ` +
-          `(undo ${before.undoLen}->${next.undoLen}, redo ${before.redoLen}->${next.redoLen})`,
+          `(undo ${beforeUndo}->${res.undoLen}, redo ${beforeRedo}->${res.redoLen})`,
       );
 
       if (!accepted) {
         ctx.metric('rejected');
         ctx.metric(`rejected:${action.action}`);
-        if (pushed !== 0 || next.redoLen !== before.redoLen) {
+        if (pushed !== 0 || res.redoLen !== beforeRedo) {
           fail(
             'a REJECTED command changed the history stacks',
-            `  error: ${res.result?.error ?? res.error ?? 'unknown'}\n` +
-              `  undo ${before.undoLen}->${next.undoLen}, redo ${before.redoLen}->${next.redoLen}`,
+            `  error: ${res.commandError ?? res.actionError ?? 'unknown'}\n` +
+              `  undo ${beforeUndo}->${res.undoLen}, redo ${beforeRedo}->${res.redoLen}`,
           );
         }
-        assertSnapshot(
-          `a REJECTED command (${action.action}) mutated the project: ` +
-            `${res.result?.error ?? res.error ?? 'unknown'}`,
-          next.json,
-        );
-        record(next);
+        assertModel(res, 'a rejected command moved the page model');
+        if (res.verdict !== 'equal') {
+          await resolveMismatch(
+            `a REJECTED command (${action.action}) mutated the project: ` +
+              `${res.commandError ?? res.actionError ?? 'unknown'}`,
+          );
+        }
+        record(res);
         continue;
       }
 
       if (pushed === 1) {
-        if (next.redoLen !== 0) {
+        if (res.redoLen !== 0) {
           fail(
             'a successful command did not clear the redo stack',
-            `  redo ${before.redoLen}->${next.redoLen} after ${action.label}`,
+            `  redo ${beforeRedo}->${res.redoLen} after ${action.label}`,
           );
         }
-        snapshots.length = cursor + 1;
-        snapshots.push(next.json);
         cursor += 1;
-        record(next);
+        top = cursor;
+        assertModel(res, 'the page recorded the new snapshot at a different depth than Node expected');
+        if (res.verdict !== 'recorded') {
+          fail(`the page did not record a snapshot for a pushed entry (verdict=${res.verdict})`);
+        }
+        record(res);
         ctx.metric('mutations');
         ctx.metric(`op:${action.action}`);
         continue;
@@ -463,28 +482,31 @@ export const undoRedoFuzz: Scenario = {
       // touched the project; it MAY have cleared the redo stack.
       ctx.metric('noops');
       ctx.metric(`noop:${action.action}`);
-      if (next.undoLen >= historyLimit - 1) {
+      if (res.undoLen >= historyLimit - 1) {
         fail(
           'the undo stack hit its history limit; FIFO trimming invalidates the model',
-          `  undoLen=${next.undoLen} limit=${historyLimit}`,
+          `  undoLen=${res.undoLen} limit=${historyLimit}`,
         );
       }
-      if (next.redoLen === 0) snapshots.length = cursor + 1;
-      else if (next.redoLen !== before.redoLen) {
+      if (res.redoLen === 0) top = cursor;
+      else if (res.redoLen !== beforeRedo) {
         fail(
           'a no-op command changed the redo stack without clearing it',
-          `  redo ${before.redoLen}->${next.redoLen} after ${action.label}`,
+          `  redo ${beforeRedo}->${res.redoLen} after ${action.label}`,
         );
       }
-      assertSnapshot(`a no-op command (${action.action}) changed the project state`, next.json);
-      record(next);
+      assertModel(res, 'a no-op command moved the page model');
+      if (res.verdict !== 'equal') {
+        await resolveMismatch(`a no-op command (${action.action}) changed the project state`);
+      }
+      record(res);
     }
 
     // Full roundtrip: unwind every entry, then replay every entry, verifying
     // the recorded snapshot at each depth in both directions.
-    const summit = snapshots.length - 1;
-    while (cursor > 0) await step('undo', 'unwind');
-    while (cursor < summit) await step('redo', 'rewind');
+    const summit = top;
+    while (cursor > 0) await walk('undo', 'unwind');
+    while (cursor < summit) await walk('redo', 'rewind');
 
     if (cursor !== summit) fail(`roundtrip ended at depth ${cursor}, expected ${summit}`);
 

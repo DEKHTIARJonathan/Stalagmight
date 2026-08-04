@@ -1,71 +1,31 @@
 /**
- * Normalized `get_project_state` snapshots + a diff reporter, for the undo/redo
- * fuzzer oracle (`e2e/agent/scenarios/undoRedoFuzz.ts`).
+ * NODE-SIDE half of the undo/redo fuzzer's oracle: the diff reporter and the
+ * known-asymmetry classifier.
  *
- * The fuzzer's whole claim is "undo/redo roundtrips the project EXACTLY", so
- * the oracle compares the full IPC payload (`project` + `stations` + `stats` +
- * `frozen_shots`) rather than a cheap signature. `project` alone is not enough:
- * `ProjectIpc` deliberately omits `station_offsets` / `station_comments`, and
- * those only become observable through `stations[].coordinates` and
- * `stations[].comment`.
+ * The canonical snapshot itself is taken IN THE WEBVIEW - see
+ * `fuzzOracleCore.ts`, which owns the serializer and documents what it
+ * normalizes. Only the rare, slow paths live here: when two canonical strings
+ * disagree, Node fetches both and works out whether the difference is real,
+ * floating-point dust, or one of the open bugs listed below.
  *
- * Normalization is deliberately minimal - every field dropped here is a place a
- * real undo bug could hide, so the list is short, justified, and centralized:
+ * ## Why there is a tolerance at all
  *
- *   - `project.modified_at`  - every undo/redo path calls `Project::touch()`
- *     (`src-tauri/src/core/state/undo.rs`), so it can never match by design.
- *   - `project.file_path`    - `restore_snapshot_into` carries the LIVE path
- *     across a snapshot restore (`core/state/app_state.rs`), and
- *     `serialize_project_snapshot` blanks it on the way in.
- *   - `project.next_section_id`, `project.next_closure_id`,
- *     `project.sections.*.next_shot_id` - monotonic id counters. They are an
- *     ASYMMETRY, not a bug: a snapshot-pair undo restores them verbatim, while
- *     a targeted undo (`restore_section`, `restore_shot`) only ever raises
- *     them. Comparing them would report the asymmetry on every mixed history.
+ * Station coordinates and section offsets are RE-DERIVED after an undo/redo
+ * (`reconcile_geometry()` -> `compute_station_coordinates`), not copied, so a
+ * value whose true result is 0 can land on different floating-point dust
+ * depending on the order the survey chain was summed in. Observed in practice:
+ * `stations[].coordinates.x` coming back as -3.55e-15 where the recorded
+ * snapshot had -7.11e-15 (femtometres, either side of a true zero) after `undo`
+ * of a `moveStation`.
  *
- * Everything else is compared: shot uuids, `reverse_parity`, the gauge anchors,
- * `StationMerge.merged_at`, every `LoopClosure` metric, both imported-hash
- * vectors, and all geometry.
- *
- * Two other classes of noise are handled structurally instead of by dropping:
- *
- *   - MAP ORDER. `Project::section_offsets` is a `HashMap`, so its JSON key
- *     order is not stable across a snapshot restore (a deserialized map gets a
- *     fresh `RandomState`). `normalizeProjectState` sorts every object's keys,
- *     which canonicalizes that (and anything like it) without hiding a value.
- *   - FLOAT NOISE. Station coordinates and section offsets are RE-DERIVED after
- *     an undo/redo (`reconcile_geometry()` -> `compute_station_coordinates`),
- *     not copied, so a value whose true result is 0 can land on different
- *     floating-point dust depending on the order the survey chain was summed in.
- *     Observed in practice: `stations[].coordinates.x` coming back as
- *     -3.55e-15 where the recorded snapshot had -7.11e-15 (femtometres, either
- *     side of a true zero) after `undo` of a `moveStation`.
- *
- *     Two layers handle that. Values are rounded to
- *     `DEFAULT_SIGNIFICANT_DIGITS` (12 significant digits) so the canonical
- *     strings usually match outright, and when they do not, `diffJson` compares
- *     numbers against `DEFAULT_TOLERANCE` - 1e-9 ABSOLUTE (a nanometre; this is
- *     what catches the near-zero case, which no relative bound can) plus 1e-12
- *     relative. A real geometry regression is millimetres at the very least, so
- *     nothing a bug could produce is inside that envelope; a caller that wants
- *     bit-exactness passes `tolerance: null`.
+ * The canonical string is rounded to 12 significant digits, which usually makes
+ * the strings match outright; when they do not, `diffJson` compares numbers
+ * against `DEFAULT_TOLERANCE` - 1e-9 ABSOLUTE (a nanometre; this is what catches
+ * the near-zero case, which no relative bound can) plus 1e-12 relative. A real
+ * geometry regression is millimetres at the very least, so nothing a bug could
+ * produce is inside that envelope; a caller that wants bit-exactness passes
+ * `tolerance: null`.
  */
-
-/** Significant digits every finite number is rounded to before comparison. */
-export const DEFAULT_SIGNIFICANT_DIGITS = 12;
-
-/**
- * Paths removed before comparison, with `*` standing for any array index.
- * See the module header for why each one is here; adding to this list weakens
- * the oracle, so anything new needs the same kind of justification.
- */
-export const NON_ROLLBACK_PATHS: readonly string[] = [
-  'project.modified_at',
-  'project.file_path',
-  'project.next_section_id',
-  'project.next_closure_id',
-  'project.sections.*.next_shot_id',
-];
 
 /**
  * An undo/redo asymmetry that is a KNOWN OPEN APP BUG rather than expected
@@ -135,65 +95,9 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-/** Round to `digits` significant digits; `null` digits means "compare exactly". */
-export function roundSignificant(value: number, digits: number | null): number {
-  if (digits === null || !Number.isFinite(value) || value === 0) return value;
-  if (digits < 1 || digits > 100) return value;
-  return Number(value.toPrecision(digits));
-}
-
-export interface NormalizeOptions {
-  /** Significant digits for float rounding; `null` compares exactly. */
-  significantDigits?: number | null;
-  /** Path patterns to drop (`*` = any array index). Defaults to `NON_ROLLBACK_PATHS`. */
-  dropPaths?: readonly string[];
-}
-
-function normalizeValue(
-  value: unknown,
-  path: string,
-  drops: ReadonlySet<string>,
-  digits: number | null,
-): unknown {
-  if (Array.isArray(value)) {
-    const childPath = path ? `${path}.*` : '*';
-    return value.map((item) => normalizeValue(item, childPath, drops, digits));
-  }
-  if (isPlainObject(value)) {
-    const out: Record<string, unknown> = {};
-    // Sorted so a HashMap-backed map (section_offsets) canonicalizes.
-    for (const key of Object.keys(value).sort()) {
-      const childPath = path ? `${path}.${key}` : key;
-      if (drops.has(childPath)) continue;
-      out[key] = normalizeValue(value[key], childPath, drops, digits);
-    }
-    return out;
-  }
-  if (typeof value === 'number') return roundSignificant(value, digits);
-  // u64 ids can arrive as BigInt through some bridges; compare them as text.
-  if (typeof value === 'bigint') return value.toString();
-  return value;
-}
-
-/**
- * Drop the non-rolling-back fields, sort every object's keys, and round floats.
- * The result is order-canonical, so `canonicalJson` of two equal states is
- * byte-identical.
- */
-export function normalizeProjectState(state: unknown, opts: NormalizeOptions = {}): unknown {
-  const digits = opts.significantDigits === undefined ? DEFAULT_SIGNIFICANT_DIGITS : opts.significantDigits;
-  const drops = new Set(opts.dropPaths ?? NON_ROLLBACK_PATHS);
-  return normalizeValue(state, '', drops, digits);
-}
-
-/** Deterministic JSON for an already-normalized value (keys are pre-sorted). */
+/** Deterministic JSON for an already-canonical value (keys are pre-sorted). */
 export function canonicalJson(value: unknown): string {
   return JSON.stringify(value ?? null);
-}
-
-/** Normalize + serialize in one step: the snapshot the fuzzer stores per depth. */
-export function snapshotProjectState(state: unknown, opts: NormalizeOptions = {}): string {
-  return canonicalJson(normalizeProjectState(state, opts));
 }
 
 export interface SnapshotDiff {

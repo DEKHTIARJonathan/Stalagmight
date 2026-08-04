@@ -4,124 +4,17 @@ import {
   KNOWN_UNDO_ASYMMETRIES,
   LOOP_CLOSURES_PATH,
   LOOP_CLOSURE_REORDER,
-  NON_ROLLBACK_PATHS,
   canonicalJson,
   classifyDiffs,
   describeDiffs,
   diffJson,
   diffSnapshots,
   isListPermutationOnly,
-  normalizeProjectState,
-  roundSignificant,
-  snapshotProjectState,
 } from './projectSnapshot';
 
-/** Minimal shape-accurate `get_project_state` payload. */
-function projectState(overrides: Record<string, unknown> = {}): Record<string, unknown> {
-  return {
-    project: {
-      name: 'p',
-      location: null,
-      created_at: '2026-01-01T00:00:00Z',
-      modified_at: '2026-01-01T00:00:00Z',
-      sections: [
-        {
-          id: 1,
-          name: 's1',
-          color: '#3388FF',
-          next_shot_id: 4,
-          reverse_parity: false,
-          gauge_shot_uuid: null,
-          shots: [{ id: 1, uuid: 'u-1', length: 5, comment: null, kind: 'Normal' }],
-        },
-      ],
-      station_merges: [],
-      zero_datums: [],
-      loop_closures: [],
-      file_path: '/tmp/a.stalx',
-      next_section_id: 9,
-      section_offsets: { 2: [1, 2], 10: [3, 4] },
-      imported_file_hashes: [],
-      imported_section_hashes: [],
-      next_closure_id: 3,
-      validation: { warn_shot_length_min: 0.5 },
-      ...overrides,
-    },
-    stations: [{ station_ref: { section_id: 1, station_index: 0 }, coordinates: { x: 0, y: 0, z: 0 } }],
-    stats: { section_count: 1, shot_count: 1 },
-    frozen_shots: [],
-  };
-}
-
-describe('normalizeProjectState', () => {
-  it('drops exactly the documented non-rolling-back fields', () => {
-    const normalized = normalizeProjectState(projectState()) as {
-      project: Record<string, unknown> & { sections: Record<string, unknown>[] };
-    };
-
-    expect(NON_ROLLBACK_PATHS).toEqual([
-      'project.modified_at',
-      'project.file_path',
-      'project.next_section_id',
-      'project.next_closure_id',
-      'project.sections.*.next_shot_id',
-    ]);
-    expect('modified_at' in normalized.project).toBe(false);
-    expect('file_path' in normalized.project).toBe(false);
-    expect('next_section_id' in normalized.project).toBe(false);
-    expect('next_closure_id' in normalized.project).toBe(false);
-    expect('next_shot_id' in (normalized.project.sections[0] as object)).toBe(false);
-    // ...and keeps the fields a real undo bug would show up in.
-    expect(normalized.project.created_at).toBe('2026-01-01T00:00:00Z');
-    expect(normalized.project.sections[0]?.reverse_parity).toBe(false);
-    expect(normalized.project.sections[0]?.gauge_shot_uuid).toBeNull();
-  });
-
-  it('keeps shot uuids so the CreateSection-redo re-mint is still reported', () => {
-    const a = snapshotProjectState(projectState());
-    const mutated = projectState();
-    const project = mutated.project as { sections: { shots: { uuid: string }[] }[] };
-    const shot = project.sections[0]?.shots[0];
-    if (shot) shot.uuid = 'u-2';
-
-    expect(snapshotProjectState(mutated)).not.toBe(a);
-  });
-
-  it('is insensitive to map key order (HashMap-backed section_offsets)', () => {
-    const ordered = projectState();
-    const shuffled = projectState({ section_offsets: { 10: [3, 4], 2: [1, 2] } });
-
-    expect(snapshotProjectState(shuffled)).toBe(snapshotProjectState(ordered));
-  });
-
-  it('sorts nested object keys so insertion order never leaks into the snapshot', () => {
-    expect(canonicalJson(normalizeProjectState({ b: 1, a: { d: 2, c: 3 } }, { dropPaths: [] }))).toBe(
-      '{"a":{"c":3,"d":2},"b":1}',
-    );
-  });
-
-  it('does not confuse a dropped path with a same-named field elsewhere', () => {
-    const normalized = normalizeProjectState(
-      { project: { name: 'p' }, stats: { modified_at: 'keep-me', file_path: 'keep-me-too' } },
-    ) as { stats: Record<string, unknown> };
-
-    expect(normalized.stats.modified_at).toBe('keep-me');
-    expect(normalized.stats.file_path).toBe('keep-me-too');
-  });
-
-  it('rounds floats to significant digits, and compares exactly when asked', () => {
-    expect(roundSignificant(1 + 1e-15, 12)).toBe(1);
-    expect(roundSignificant(0, 12)).toBe(0);
-    expect(roundSignificant(1.23456789012345e8, 12)).toBe(123456789.012);
-    expect(roundSignificant(1 + 1e-15, null)).toBe(1 + 1e-15);
-    // A real geometry regression (millimetres, let alone centimetres) survives.
-    expect(roundSignificant(10.001, 12)).not.toBe(roundSignificant(10.002, 12));
-  });
-
-  it('renders u64-style bigints as text rather than throwing in JSON', () => {
-    expect(canonicalJson(normalizeProjectState({ id: 7n }, { dropPaths: [] }))).toBe('{"id":"7"}');
-  });
-});
+// The canonical serializer and its normalization rules are tested in
+// fuzzOracleCore.test.ts, which owns them. This file covers the Node-only
+// half: the tolerant diff, the classifier, and the permutation detector.
 
 describe('diffJson', () => {
   it('names the first differing path with both values', () => {
