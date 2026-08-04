@@ -1096,7 +1096,12 @@ export const useUIStore = create<UIStore>((set) => ({
   detailPanelMode: 'pin',
   detailPanelWidth: 300,
   detailPanelTab: 'details',
-  dataTableOpen: true,
+  // Closed until the config arrives, even though a fresh install ends up OPEN -
+  // that default is delivered by initPanels' `?? true` below, which is the path
+  // a config with no stored value takes. Starting open instead mounted the
+  // heaviest panel in the app on every launch for everyone who keeps it closed,
+  // then unmounted it a moment later, with the map briefly sized around it.
+  dataTableOpen: false,
   dataTableMode: 'pin',
   dataTableHeight: 200,
   detailRevealNonce: 0,

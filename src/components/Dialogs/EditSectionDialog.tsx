@@ -621,9 +621,9 @@ export default function EditSectionDialog() {
             disabled={isLoading || isDirty || pendingMidDelete !== null || editingBlocked}
             title={
               editingBlocked
-                ? 'Editing is disabled in the current view'
+                ? t('editSection.editingDisabled')
                 : isDirty
-                  ? 'Save or discard your edits first'
+                  ? t('editSection.saveOrDiscardFirst')
                   : 'Renumber this section end-to-end (the cave does not move)'
             }
             data-testid="edit-section-reverse"
@@ -633,8 +633,8 @@ export default function EditSectionDialog() {
           {incompleteRows.length > 0 && (
             <p className="text-sm text-error" data-testid="edit-section-blocker">
               {incompleteRows.length === 1
-                ? `Row ${incompleteRows[0]} is missing required values.`
-                : `Rows ${incompleteRows.join(', ')} are missing required values.`}
+                ? t('editSection.incompleteRow', { count: 1, rows: incompleteRows[0] })
+                : t('editSection.incompleteRow', { count: incompleteRows.length, rows: incompleteRows.join(', ') })}
             </p>
           )}
           <div className="flex-1" />
@@ -647,7 +647,7 @@ export default function EditSectionDialog() {
             disabled={isLoading || editingBlocked || pendingMidDelete !== null || incompleteRows.length > 0}
             data-testid="edit-section-save"
           >
-            {isLoading ? 'Saving...' : 'Save'}
+            {isLoading ? t('editSection.saving') : t('editSection.save')}
           </Button>
         </div>
       </div>
