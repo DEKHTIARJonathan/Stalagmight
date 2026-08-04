@@ -29,9 +29,28 @@ export type AzimuthMode = 'avg' | 'inout' | 'off';
 
 const fin = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
 
-/** A row the user has not touched at all. Blank rows are dropped at submit and
- *  never reported as incomplete. */
-export const isBlankRow = (draft: ShotDraft): boolean => Object.keys(draft.data).length === 0;
+/**
+ * A row with nothing in it. Blank rows are dropped at submit and never reported
+ * as incomplete.
+ *
+ * Judged by VALUE, not by whether a key was written. Cycling the kind back to
+ * Normal, or clearing a comment or pitch to null, records a key while leaving
+ * the row visually empty - which used to make the invitation row read as
+ * half-filled, so Create stayed disabled and closing offered to discard a row
+ * holding nothing. A cell returned to its default is untouched, and this now
+ * says so.
+ */
+export const isBlankRow = (draft: ShotDraft): boolean =>
+  Object.entries(draft.data).every(([key, value]) => isDefaultCell(key, value));
+
+/** Whether a written cell is indistinguishable from never having been touched.
+ *  `kind` defaults to Normal; everything else is empty when null/blank/NaN. */
+function isDefaultCell(key: string, value: unknown): boolean {
+  if (value === null || value === undefined || value === '') return true;
+  if (typeof value === 'number' && !Number.isFinite(value)) return true;
+  if (key === 'kind') return value === 'Normal';
+  return false;
+}
 
 /** A fresh blank row. Keys come from a monotonic counter and are NEVER reused:
  *  the grid keys per-cell state (missing-cell marks) by row identity, so a
