@@ -1501,6 +1501,62 @@ fn repair_demotes_a_double_anchoring_bridge_merge() {
 }
 
 #[test]
+fn demoted_closure_measures_the_merge_free_path() {
+    // The merge being demoted is itself a zero-cost pathfinding edge between
+    // the two stations being measured. Metrics taken while it still exists ride
+    // that edge and persist path_length = 0 / error_percentage = 0 on the
+    // replacement closure. Give the survey a real detour - soft closures
+    // through a fourth section - and the demoted closure must carry the
+    // detour's surveyed length instead.
+    let (mut project, _a, b, c) = double_anchored_bridge_project();
+    let d = project
+        .add_section(SectionData {
+            shots: vec![
+                shot(0.0, 0.0, 10.0, 0.0, 0.0),
+                shot(0.0, 0.0, 10.0, 0.0, 0.0),
+            ],
+            ..Default::default()
+        })
+        .id;
+    project.ensure_shot_uuids();
+    let detour = |id: u64, from: StationRef, to: StationRef| LoopClosure {
+        id,
+        station_a: from.into(),
+        station_b: to.into(),
+        path_length: 1.0,
+        misclosure_distance: 0.0,
+        error_percentage: 0.0,
+        horizontal_misclosure: 0.0,
+        vertical_misclosure: 0.0,
+        strategy: ClosureStrategy::default(),
+        is_aligned: false,
+    };
+    project
+        .loop_closures
+        .push(detour(1, StationRef::new(b, 1), StationRef::new(d, 0)));
+    project
+        .loop_closures
+        .push(detour(2, StationRef::new(d, 2), StationRef::new(c, 1)));
+
+    assert_eq!(project.demote_double_anchoring_merges(), 1);
+
+    let closure = project
+        .loop_closures
+        .last()
+        .expect("the demotion pushed a closure");
+    assert!(
+        closure.path_length > 0.0,
+        "the metric must not ride the merge being demoted (got {})",
+        closure.path_length
+    );
+    assert!(
+        closure.error_percentage > 0.0,
+        "a metres-wide misclosure over a real path is a nonzero error (got {})",
+        closure.error_percentage
+    );
+}
+
+#[test]
 fn repair_leaves_legitimate_merges_alone() {
     // (a) NOT a sole bridge: a second merge path keeps the two sections in one
     // rigid component either way, so dropping one heals nothing. Both misaligned

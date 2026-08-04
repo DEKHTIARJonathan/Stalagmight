@@ -379,22 +379,27 @@ impl Project {
         // components the remaining candidates are judged against. A damaged file
         // holds 0-2 of these, so the repeated scan costs nothing.
         while let Some(index) = self.first_double_anchoring_merge() {
-            let Some(merge) = self.station_merges.get(index).cloned() else {
-                break;
-            };
+            // Pull the merge out BEFORE measuring: merges are zero-cost
+            // pathfinding edges, so measuring with it still present would ride
+            // the very edge being demoted and record path_length = 0 (and so
+            // error_percentage = 0) on the replacement closure. Removing first
+            // measures the same graph the closure will actually live in - the
+            // creation path (`create_loop_closure`) rejects merged pairs, so a
+            // user-created closure is always measured merge-free too. On any
+            // failure the merge is pushed back, leaving the project untouched.
+            let merge = self.station_merges.remove(index);
             // The scan already resolved both endpoints and measured their
-            // positions, so these cannot fail here - but bail rather than remove a
-            // merge we could not replace with an equivalent closure.
+            // positions, so these cannot fail here - but restore rather than
+            // drop a merge we could not replace with an equivalent closure.
             let (Some(a), Some(b)) = (
                 self.resolve_key(&merge.station_a),
                 self.resolve_key(&merge.station_b),
             ) else {
+                self.station_merges.push(merge);
                 break;
             };
-            // Measure BEFORE dropping the merge, so a metrics failure leaves the
-            // project untouched. The merge is a zero-length edge, so its presence
-            // does not change the path length between the endpoints.
             let Ok(metrics) = self.compute_closure_metrics(a, b) else {
+                self.station_merges.push(merge);
                 break;
             };
             let already_closed = self.are_stations_in_closure(a, b);
@@ -405,8 +410,6 @@ impl Project {
                 purpose = "remove an unsatisfiable rigid constraint",
                 "Demoted a merge bridging two zero-datum-anchored groups back to a loop closure"
             );
-
-            self.station_merges.remove(index);
             if !already_closed {
                 let id = self.next_closure_id;
                 self.next_closure_id += 1;

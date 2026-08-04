@@ -829,9 +829,10 @@ impl Project {
         self.station_merges.push(merge);
     }
 
-    /// Drop every merge for which `f` returns false. The only way for code
-    /// outside `models::project` to remove merges, so [`MergeTopology`] keeps
-    /// ownership of its adjacency memo.
+    /// Drop every merge for which `f` returns false. A convenience forward so
+    /// callers outside `models::project` don't reach into the field; the memo
+    /// stays honest either way because every [`MergeTopology`] mutator
+    /// invalidates or maintains it.
     pub(crate) fn retain_station_merges(&mut self, f: impl FnMut(&StationMerge) -> bool) {
         self.station_merges.retain(f);
     }
