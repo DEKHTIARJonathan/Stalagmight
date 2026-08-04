@@ -434,6 +434,52 @@ impl Project {
             .collect()
     }
 
+    /// Merge-only component of `section_id`, optionally computed as if the merge
+    /// at index `skip_merge_idx` did not exist.
+    ///
+    /// `None` is the real graph and goes through the memoized
+    /// [`Self::get_merged_section_ids`]. `Some(i)` is a HYPOTHETICAL graph, so it
+    /// walks `station_merges` into a throwaway local adjacency instead: the shared
+    /// memo describes the merges that actually exist, and answering a "what if
+    /// this merge were gone" question must never mutate the project or that memo.
+    pub(crate) fn merged_section_ids_excluding(
+        &self,
+        section_id: SectionId,
+        skip_merge_idx: Option<usize>,
+    ) -> HashSet<SectionId> {
+        let Some(skip) = skip_merge_idx else {
+            return self.get_merged_section_ids(section_id);
+        };
+        let mut adjacency: HashMap<SectionId, Vec<SectionId>> = HashMap::new();
+        for (i, m) in self.station_merges.iter().enumerate() {
+            if i == skip {
+                continue;
+            }
+            adjacency
+                .entry(m.station_a.section_id)
+                .or_default()
+                .push(m.station_b.section_id);
+            adjacency
+                .entry(m.station_b.section_id)
+                .or_default()
+                .push(m.station_a.section_id);
+        }
+        let mut connected = HashSet::new();
+        let mut queue = vec![section_id];
+        while let Some(current) = queue.pop() {
+            if connected.insert(current) {
+                if let Some(neighbours) = adjacency.get(&current) {
+                    for &n in neighbours {
+                        if !connected.contains(&n) {
+                            queue.push(n);
+                        }
+                    }
+                }
+            }
+        }
+        connected
+    }
+
     /// Would adding a merge between sections `a` and `b` place two zero datums in
     /// one merge component? True only when `a` and `b` are in DIFFERENT merge
     /// components and EACH component is already anchored - i.e. the merge would
@@ -442,7 +488,24 @@ impl Project {
     /// over-constraint (a closure between two anchored groups is legitimate; a
     /// rigid merge between them is not).
     pub(crate) fn merge_would_double_anchor(&self, a: SectionId, b: SectionId) -> bool {
-        let component_a = self.get_merged_section_ids(a);
+        self.merge_would_double_anchor_excluding(None, a, b)
+    }
+
+    /// [`Self::merge_would_double_anchor`] against a graph with the merge at
+    /// `skip_merge_idx` removed - "would this merge double-anchor if it did not
+    /// already exist?".
+    ///
+    /// `Project::demote_double_anchoring_merges` asks it with the candidate's own
+    /// index so an EXISTING merge is judged the same way the converter judges a
+    /// prospective one: pass `None` and the merge itself would put both endpoints
+    /// in one component, and the answer would always be a useless `false`.
+    pub(crate) fn merge_would_double_anchor_excluding(
+        &self,
+        skip_merge_idx: Option<usize>,
+        a: SectionId,
+        b: SectionId,
+    ) -> bool {
+        let component_a = self.merged_section_ids_excluding(a, skip_merge_idx);
         if component_a.contains(&b) {
             // Already the same merge component - a redundant merge adds no anchor.
             return false;
@@ -453,6 +516,6 @@ impl Project {
                 .filter_map(|zd| self.resolve_key(&zd.station_ref))
                 .any(|sr| component.contains(&sr.section_id))
         };
-        anchored(&component_a) && anchored(&self.get_merged_section_ids(b))
+        anchored(&component_a) && anchored(&self.merged_section_ids_excluding(b, skip_merge_idx))
     }
 }

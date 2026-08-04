@@ -1,7 +1,9 @@
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
-use crate::models::{SectionId, StationAnchor, StationKey};
+use crate::models::{
+    ClosureStrategy, LoopClosure, SectionId, StationAnchor, StationKey, StationRef,
+};
 
 use super::Project;
 
@@ -246,6 +248,27 @@ impl Project {
         violations
     }
 
+    /// World-space gap between two stored endpoints: the pair resolved against
+    /// the CURRENT structure plus their horizontal distance in metres, or `None`
+    /// when either endpoint dangles or has no computable position.
+    ///
+    /// The single measurement used by the merge and closure alignment checks and
+    /// by [`Self::demote_double_anchoring_merges`], so those three cannot disagree
+    /// about how far apart a pair is.
+    fn endpoint_gap(
+        &self,
+        key_a: &StationKey,
+        key_b: &StationKey,
+        local: &HashMap<SectionId, Vec<(f64, f64)>>,
+        station_offsets: &HashMap<StationRef, (f64, f64, f64)>,
+    ) -> Option<(StationRef, StationRef, f64)> {
+        let a = self.resolve_key(key_a)?;
+        let b = self.resolve_key(key_b)?;
+        let (ax, ay) = self.station_world_xy(a, local, station_offsets)?;
+        let (bx, by) = self.station_world_xy(b, local, station_offsets)?;
+        Some((a, b, ((ax - bx).powi(2) + (ay - by).powi(2)).sqrt()))
+    }
+
     /// Cross-section merges whose two stations have drifted apart - the
     /// references are valid but the geometry is wrong (a stale section offset
     /// from a missed cascade). Distinct from [`Self::check_structural_integrity`];
@@ -260,34 +283,156 @@ impl Project {
             if merge.station_a.section_id == merge.station_b.section_id {
                 continue;
             }
+            let Some((a, b, dist)) =
+                self.endpoint_gap(&merge.station_a, &merge.station_b, &local, &station_offsets)
+            else {
+                continue;
+            };
+            if dist >= Self::MERGE_ALIGNMENT_TOLERANCE_M {
+                violations.push(IntegrityViolation {
+                    severity: ViolationSeverity::Critical,
+                    category: "merge_misaligned".to_string(),
+                    message: format!(
+                        "Merged stations {}:{} and {}:{} are {:.2} m apart but should be the same point",
+                        a.section_id, a.station_index, b.section_id, b.station_index, dist
+                    ),
+                });
+            }
+        }
+        violations
+    }
+
+    /// Index of the first merge that a past bug promoted out of a loop closure:
+    /// a rigid cross-section merge that is (1) visibly torn open, (2) the SOLE
+    /// merge bridging its two sections, and (3) flanked by two independently
+    /// zero-datum-anchored merge components. `None` when there is none.
+    fn first_double_anchoring_merge(&self) -> Option<usize> {
+        let local = self.section_local_coords();
+        let station_offsets = self.resolved_station_offsets();
+        for (index, merge) in self.station_merges.iter().enumerate() {
+            // Same-section merges are physically meaningless (test-only).
+            let (a_section, b_section) = (merge.station_a.section_id, merge.station_b.section_id);
+            if a_section == b_section {
+                continue;
+            }
+            // (1) Torn open past the reporting tolerance. An aligned merge is
+            // doing its job; only a merge the offset solver has visibly failed to
+            // satisfy is a demotion candidate.
+            let Some((_, _, gap)) =
+                self.endpoint_gap(&merge.station_a, &merge.station_b, &local, &station_offsets)
+            else {
+                continue;
+            };
+            if gap < Self::MERGE_ALIGNMENT_TOLERANCE_M {
+                continue;
+            }
+            // (2) Sole bridge. With a parallel merge path the two sections stay
+            // one rigid component either way, so this merge is redundant rather
+            // than over-constraining - dropping it would not heal anything.
+            if self
+                .merged_section_ids_excluding(a_section, Some(index))
+                .contains(&b_section)
+            {
+                continue;
+            }
+            // (3) Two independent anchors. Judged with this merge excluded, which
+            // is exactly the question `convert_orphan_closures_to_merges` asks
+            // before it refuses to CREATE such a merge - so demotion is that
+            // guard applied retroactively to a merge that predates it. A half
+            // with no datum is a legitimate single-anchor group whose drift
+            // `resolve_offsets` can and does heal: leave it alone.
+            if !self.merge_would_double_anchor_excluding(Some(index), a_section, b_section) {
+                continue;
+            }
+            return Some(index);
+        }
+        None
+    }
+
+    /// Demote every over-constrained merge back to the loop closure it should
+    /// have stayed, returning how many were demoted.
+    ///
+    /// A merge bridging two independently zero-datum-anchored components cannot
+    /// be satisfied: [`Self::resolve_offsets`] anchors each half at its own datum,
+    /// so the merge stays torn open and the project reports `merge_misaligned`
+    /// plus `multiple_datums_per_merge_component` on every check, forever. Re-
+    /// cascading offsets cannot heal it - only removing the rigid constraint can.
+    /// The soft edge (a loop closure, `is_aligned: false`) records the same
+    /// coincidence without over-constraining the geometry, which is what the pair
+    /// was before a past bug promoted it.
+    ///
+    /// EXPLICIT REPAIR ONLY - deliberately not called on the load path: it deletes
+    /// a user-visible merge, so it belongs behind the undoable Repair action, not
+    /// behind opening a file.
+    pub fn demote_double_anchoring_merges(&mut self) -> usize {
+        // Legacy files can carry closures with id 0 and a stale counter; normalize
+        // once so the demoted closures get unique ids (same convention as
+        // `create_loop_closure` / `create_loop_closures_batch`).
+        let max_existing = self.loop_closures.iter().map(|lc| lc.id).max().unwrap_or(0);
+        if self.next_closure_id <= max_existing {
+            self.next_closure_id = max_existing + 1;
+        }
+
+        let mut demoted = 0;
+        // Re-scan from scratch after each demotion rather than collecting indices
+        // up front: removing a merge shifts every later index AND changes the
+        // components the remaining candidates are judged against. A damaged file
+        // holds 0-2 of these, so the repeated scan costs nothing.
+        while let Some(index) = self.first_double_anchoring_merge() {
+            let Some(merge) = self.station_merges.get(index).cloned() else {
+                break;
+            };
+            // The scan already resolved both endpoints and measured their
+            // positions, so these cannot fail here - but bail rather than remove a
+            // merge we could not replace with an equivalent closure.
             let (Some(a), Some(b)) = (
                 self.resolve_key(&merge.station_a),
                 self.resolve_key(&merge.station_b),
             ) else {
-                continue;
+                break;
             };
-            if let (Some((ax, ay)), Some((bx, by))) = (
-                self.station_world_xy(a, &local, &station_offsets),
-                self.station_world_xy(b, &local, &station_offsets),
-            ) {
-                let dist = ((ax - bx).powi(2) + (ay - by).powi(2)).sqrt();
-                if dist >= Self::MERGE_ALIGNMENT_TOLERANCE_M {
-                    violations.push(IntegrityViolation {
-                        severity: ViolationSeverity::Critical,
-                        category: "merge_misaligned".to_string(),
-                        message: format!(
-                            "Merged stations {}:{} and {}:{} are {:.2} m apart but should be the same point",
-                            a.section_id,
-                            a.station_index,
-                            b.section_id,
-                            b.station_index,
-                            dist
-                        ),
-                    });
-                }
+            // Measure BEFORE dropping the merge, so a metrics failure leaves the
+            // project untouched. The merge is a zero-length edge, so its presence
+            // does not change the path length between the endpoints.
+            let Ok(metrics) = self.compute_closure_metrics(a, b) else {
+                break;
+            };
+            let already_closed = self.are_stations_in_closure(a, b);
+            tracing::warn!(
+                station_a = %a,
+                station_b = %b,
+                misclosure_m = metrics.misclosure_distance,
+                purpose = "remove an unsatisfiable rigid constraint",
+                "Demoted a merge bridging two zero-datum-anchored groups back to a loop closure"
+            );
+
+            self.station_merges.remove(index);
+            if !already_closed {
+                let id = self.next_closure_id;
+                self.next_closure_id += 1;
+                self.loop_closures.push(LoopClosure {
+                    id,
+                    station_a: merge.station_a,
+                    station_b: merge.station_b,
+                    path_length: metrics.path_length,
+                    misclosure_distance: metrics.misclosure_distance,
+                    error_percentage: metrics.error_percentage,
+                    horizontal_misclosure: metrics.horizontal_misclosure,
+                    vertical_misclosure: metrics.vertical_misclosure,
+                    strategy: ClosureStrategy::Batch,
+                    // Never aligned: the endpoints are metres apart and each half
+                    // is pinned to its own datum. An aligned closure would rigidify
+                    // the same over-constraint the demotion just removed.
+                    is_aligned: false,
+                });
             }
+            demoted += 1;
         }
-        violations
+
+        if demoted > 0 {
+            self.touch();
+        }
+        demoted
     }
 
     /// Cross-section *aligned* loop closures whose two stations have drifted
@@ -307,32 +452,28 @@ impl Project {
             if !closure.is_aligned || closure.station_a.section_id == closure.station_b.section_id {
                 continue;
             }
-            let (Some(a), Some(b)) = (
-                self.resolve_key(&closure.station_a),
-                self.resolve_key(&closure.station_b),
+            let Some((a, b, dist)) = self.endpoint_gap(
+                &closure.station_a,
+                &closure.station_b,
+                &local,
+                &station_offsets,
             ) else {
                 continue;
             };
-            if let (Some((ax, ay)), Some((bx, by))) = (
-                self.station_world_xy(a, &local, &station_offsets),
-                self.station_world_xy(b, &local, &station_offsets),
-            ) {
-                let dist = ((ax - bx).powi(2) + (ay - by).powi(2)).sqrt();
-                if dist >= Self::MERGE_ALIGNMENT_TOLERANCE_M {
-                    violations.push(IntegrityViolation {
-                        severity: ViolationSeverity::Critical,
-                        category: "closure_misaligned".to_string(),
-                        message: format!(
-                            "Loop closure {} ({}:{} ↔ {}:{}) is marked closed but its ends are {:.2} m apart - recompute or remove it",
-                            closure.id,
-                            a.section_id,
-                            a.station_index,
-                            b.section_id,
-                            b.station_index,
-                            dist
-                        ),
-                    });
-                }
+            if dist >= Self::MERGE_ALIGNMENT_TOLERANCE_M {
+                violations.push(IntegrityViolation {
+                    severity: ViolationSeverity::Critical,
+                    category: "closure_misaligned".to_string(),
+                    message: format!(
+                        "Loop closure {} ({}:{} ↔ {}:{}) is marked closed but its ends are {:.2} m apart - recompute or remove it",
+                        closure.id,
+                        a.section_id,
+                        a.station_index,
+                        b.section_id,
+                        b.station_index,
+                        dist
+                    ),
+                });
             }
         }
         violations
