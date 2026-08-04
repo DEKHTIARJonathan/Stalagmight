@@ -124,12 +124,12 @@ describe('routeOpenedFile - read-only-map import guard (#243)', () => {
     expect(useUIStore.getState().activeDialog).not.toBe('error');
   });
 
-  it('blocks a DMP import in the closure-adjusted survey view (advise: Measured view)', async () => {
+  it('blocks a DMP import in the closure-adjusted survey view with the import-blocked prompt (cause: view)', async () => {
     useUIStore.setState({ appMode: 'survey', geometryMode: 'closureAdjusted' });
     await routeOpenedFile('/cave/survey.dmp');
     expect(importDmp).not.toHaveBeenCalled();
-    expect(useUIStore.getState().activeDialog).toBe('error');
-    expect(String(useUIStore.getState().dialogData.message)).toContain('Measured view');
+    expect(useUIStore.getState().activeDialog).toBe('import-blocked');
+    expect(useUIStore.getState().dialogData).toMatchObject({ path: '/cave/survey.dmp', cause: 'view' });
   });
 
   // The regression the #243 guard closes: Plan/Export force closureAdjusted, but that
@@ -143,7 +143,7 @@ describe('routeOpenedFile - read-only-map import guard (#243)', () => {
     await routeOpenedFile('/cave/survey.dmp');
     expect(importDmp).not.toHaveBeenCalled();
     expect(useUIStore.getState().activeDialog).toBe('import-blocked');
-    expect(useUIStore.getState().dialogData.path).toBe('/cave/survey.dmp');
+    expect(useUIStore.getState().dialogData).toMatchObject({ path: '/cave/survey.dmp', cause: 'mode' });
   });
 
   it('blocks a DMP import in Export (measured fallback) with the same import-blocked prompt', async () => {
@@ -185,16 +185,17 @@ describe('routeOpenedFile - read-only-map import guard (#243)', () => {
     expect(message).toContain('Survey mode');
   });
 
-  // The switch-and-continue re-route from ImportBlockedDialog: a cause that
-  // SURVIVES the confirmed switch (restored closure-adjusted view) must inform
-  // via toast and get out of the way - the user already clicked once.
-  it('reports a residual read-only cause as a toast, not a second modal, when re-routed with residualReadOnlyToast', async () => {
-    useUIStore.setState({ appMode: 'survey', geometryMode: 'closureAdjusted' });
+  // The switch-and-continue re-route from ImportBlockedDialog: the one cause a
+  // switch cannot fix (the SpeleoDB write lock) must inform via toast and get
+  // out of the way - the user already clicked once.
+  it('reports a residual SpeleoDB-lock cause as a toast, not a second modal, when re-routed with residualReadOnlyToast', async () => {
+    useUIStore.setState({ appMode: 'survey', geometryMode: 'measured' });
+    useSpeleoStore.setState({ link: READ_ONLY_LINK });
     await routeOpenedFile('/cave/survey.dmp', 'Import Failed', { residualReadOnlyToast: true });
     expect(importDmp).not.toHaveBeenCalled();
     expect(useUIStore.getState().activeDialog).toBeNull();
     const toasts = useUIStore.getState().toasts;
-    expect(JSON.stringify(toasts)).toContain('Measured view');
+    expect(JSON.stringify(toasts)).toContain('SpeleoDB write lock');
   });
 
   it('allows a DMP import once the SpeleoDB write lock is held', async () => {

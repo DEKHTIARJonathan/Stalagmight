@@ -20,7 +20,7 @@ const h = vi.hoisted(() => {
     trackDialogComplete: vi.fn(),
     appMode: 'plan',
     restoredGeometryMode: 'measured',
-    dialogData: {} as { path?: string },
+    dialogData: {} as { path?: string; cause?: string },
   };
   const storeState = () => ({
     closeDialog: env.closeDialog,
@@ -68,6 +68,7 @@ beforeEach(() => {
   h.env.appMode = 'plan';
   h.env.restoredGeometryMode = 'measured';
   h.env.dialogData.path = '/cave/survey.dmp';
+  h.env.dialogData.cause = 'mode';
 });
 
 describe('ImportBlockedDialog', () => {
@@ -114,6 +115,29 @@ describe('ImportBlockedDialog', () => {
     h.env.appMode = 'export';
     render(<ImportBlockedDialog />);
     expect(screen.getByTestId('import-blocked-stay').textContent).toBe('dialogs.importBlocked.stayInExport');
+  });
+
+  it('cause "view" (closure-adjusted in Survey): switches the view, not the mode, and continues', () => {
+    h.env.appMode = 'survey';
+    h.env.restoredGeometryMode = 'closureAdjusted';
+    h.env.dialogData.cause = 'view';
+    render(<ImportBlockedDialog />);
+    expect(screen.getByTestId('import-blocked-dialog').textContent).toContain(
+      'dialogs.importBlocked.bodyView',
+    );
+    expect(screen.getByTestId('import-blocked-switch').textContent).toBe(
+      'dialogs.importBlocked.switchToMeasured',
+    );
+    expect(screen.getByTestId('import-blocked-stay').textContent).toBe(
+      'dialogs.importBlocked.stayInAdjusted',
+    );
+    fireEvent.click(screen.getByTestId('import-blocked-switch'));
+    // Already in Survey - only the view needs fixing.
+    expect(setAppMode).not.toHaveBeenCalled();
+    expect(setGeometryMode).toHaveBeenCalledWith('measured');
+    expect(routeOpenedFile).toHaveBeenCalledWith('/cave/survey.dmp', 'Import Failed', {
+      residualReadOnlyToast: true,
+    });
   });
 
   it('a missing path still switches the mode but routes nothing (no crash)', () => {

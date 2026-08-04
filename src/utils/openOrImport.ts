@@ -101,32 +101,33 @@ export async function routeOpenedFile(
       const speleoReadOnly = selectSpeleoReadOnly(useSpeleoStore.getState());
       const nonSurveyMode = ui.appMode !== 'survey';
       const closureAdjusted = ui.geometryMode === 'closureAdjusted';
-      if (!speleoReadOnly && nonSurveyMode) {
-        // Mode-blocked only: not an error - the fix is one safe click, so the
-        // dedicated prompt offers it ("Switch to Survey" continues THIS import;
-        // "Stay in Plan/Export" abandons it). The dialog owns the pending
-        // telemetry source from here (complete-on-switch / cancel-on-stay).
-        ui.openDialog('import-blocked', { path });
+      if (!speleoReadOnly) {
+        // Every non-SpeleoDB cause is one safe click from fixed, so it's a
+        // choice, not an error: the import-blocked prompt offers the switch
+        // (Survey mode and/or the Measured view) and CONTINUES this import,
+        // or abandons it. `cause` picks the wording; mode wins when both
+        // apply because its switch also drops the view. The dialog owns the
+        // pending telemetry source from here (complete-on-switch /
+        // cancel-on-stay).
+        ui.openDialog('import-blocked', { path, cause: nonSurveyMode ? 'mode' : 'view' });
         handedOff = true;
         return;
       }
-      // The remaining causes (missing SpeleoDB write lock, closure-adjusted
-      // view, and compound states) keep the plain error dialog: their fixes
-      // aren't a single safe click this code could offer.
+      // A missing SpeleoDB write lock is the one cause no local switch can
+      // fix, so it keeps the plain error dialog (compound states included -
+      // switching mode/view alone would still leave the import blocked).
       let message: string;
-      if (speleoReadOnly && nonSurveyMode) {
+      if (nonSurveyMode) {
         message = 'Switch to Survey mode and acquire the SpeleoDB write lock to import.';
-      } else if (speleoReadOnly && closureAdjusted) {
+      } else if (closureAdjusted) {
         message = 'Switch to the Measured view and acquire the SpeleoDB write lock to import.';
-      } else if (speleoReadOnly) {
-        message = 'Acquire the SpeleoDB write lock to import.';
       } else {
-        message = 'Switch to the Measured view to import - the closure-adjusted view is read-only.';
+        message = 'Acquire the SpeleoDB write lock to import.';
       }
       if (opts?.residualReadOnlyToast) {
-        // The user just confirmed "Switch to Survey" on the import-blocked
-        // prompt - don't demand a second click for a cause that survived the
-        // switch; inform and get out of the way.
+        // The user just confirmed a switch on the import-blocked prompt -
+        // don't demand a second click for a cause the switch could not fix;
+        // inform and get out of the way.
         ui.showToast(message, 'import-read-only-residual', 'warning');
       } else {
         ui.openDialog('error', { title: 'Import', message });
