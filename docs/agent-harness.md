@@ -303,6 +303,7 @@ throwing. Small-n values for the `pnpm agent:scenarios` gate live in
 | `seed-large-project` | A fractal fixture opens cleanly into a multi-section single-system view. |
 | `undo-redo-churn` | Create N sections, undo N + redo N; the cheap state signature returns to baseline. |
 | `undo-redo-fuzz` | Seeded random mutations interleaved with random undo/redo walks; an EXACT normalized `get_project_state` roundtrip at every history depth (see below). |
+| `undo-persistence-fuzz` | Builds an undo stack covering every reachable `UndoData` variant, saves/closes/reopens it, then walks the whole RESTORED history down and back up (see below). |
 | `dialog-cycling` | Opening/closing dialogs leaves no residue and no DOM growth. |
 | `tool-switch-spam` | `activeTool` tracks every switch. |
 | `map-storm` | A seeded `jumpTo` barrage does not stall the main thread. |
@@ -421,6 +422,67 @@ merge across save/reload, `convert_orphan_closures_to_merges` in
 `redrive_offsets_after_load` - is also left failing: it looks intended, but it
 means save+reopen is not state-preserving, and whether to normalize eagerly or
 tolerate it is a maintainer's call.
+
+### undo-persistence-fuzz
+
+The sibling scenario, and the one that took bug 8 seriously as a MECHANISM rather
+than as a single defect. Bug 8 is "shots are renumbered on load, persisted undo
+entries are opaque JSON that nothing remaps, and the in-session allocator draws
+from the same id space, so a stale id collides". None of that is specific to
+`CreatedShotSnapshot` - so this scenario goes looking for the siblings, on
+purpose rather than by luck.
+
+Every iteration is one complete, independent cycle:
+
+1. open a fresh copy of the fixture with its persisted undo history stripped;
+2. run a fixed COVERAGE PLAN (`undoPersistenceCoverage.ts`) whose targets and
+   values are seeded but whose SET and ORDER are not, so the stack carries every
+   `UndoData` variant a live command can produce;
+3. assert the shot ids really have diverged from positional order (the collision
+   precondition), rather than assuming the plan produced it;
+4. undo a few entries so the REDO stack is non-empty at save time;
+5. save, close, reopen - both stack lengths must come back exactly; and
+6. unwind through every restored undo entry to depth 0, then redo back to the
+   top, **through the restored redo entries**, which nothing else in the harness
+   had ever exercised.
+
+The plan's order is the load-bearing part, and it is not the obvious one.
+`Shot::id` is serialized inside a project snapshot, so `UndoData::ProjectSnapshotPair`
+restores the PRE-SAVE id space wholesale and heals every stale id beyond it: a
+snapshot-pair entry is a WALL, and the exposed window is exactly "from the depth
+the reload lands on, down to the first pair beneath it". The first arrangement put
+all the pairs above the id-bearing entries and 60 iterations found nothing new;
+inverted - pairs as low as their preconditions allow, every id-bearing entry
+contiguous at the top - two defects fell out on the third iteration.
+
+Beyond the main fuzzer's three oracles it adds two of its own: COVERAGE (every
+variant a guaranteed plan step promises must be present on the RESTORED stack)
+and STACK SURVIVAL (both lengths must equal what they were at save time). Six
+`UndoData` variants are reported once per run as out of scope: `MergeInfo`,
+`UnmergeInfo`, `StationMoveInfo`, `ShotSnapshot`, `SectionSnapshot` and
+`ProjectSnapshot` still have restore arms in `undo()` but have no live producer
+left, so a project whose history was stripped can never construct one.
+
+| Env var | Effect |
+|---|---|
+| `STALAGMIGHT_FUZZ_FIXTURE` | Same as the main fuzzer: which `.stalx` to build on, by basename. |
+| `STALAGMIGHT_FUZZ_ALLOW_KNOWN_BUGS` | `1` walks past the classified open bugs (bug 1, bug 8, findings 11/12/13) instead of stopping at the first. Not the default. |
+| `STALAGMIGHT_PERSIST_FUZZ_DELETE_IN_TARGET` | `1` moves the plan's mid-section delete onto the section the shot entries target. That is finding 13's repro, and it is terminal: the stale id then runs past the renumbered range, the undo fails, and the unwind cannot continue. |
+
+It found two new bugs, both now written up on issue #413 and pinned red in
+`open_undo_bugs_tests.rs`. **Finding 12**: after a save/reload, undo or redo of
+`SetShotKind` / `UpdateShot` edits the WRONG shot - `UndoData::InverseCommand` and
+`UndoData::PreviousValues { shot_id }` both name a shot by its in-session id, and
+`redo_inner`'s catch-all re-executes the original command with the same id. It
+needs no delete, unlike bug 8; one insert-before is enough, and nothing about the
+resulting project looks wrong. **Finding 13**: when the section HAS had a shot
+deleted, the allocator has run past the renumbered range, so the stale id misses
+instead of colliding - the undo fails outright, `undo_inner` pushes the entry
+back, and the history is WEDGED with every entry beneath it unreachable.
+
+Both are the same root cause as bug 8 and should get the same fix; the write-ups
+argue for addressing shots by `uuid` in the persisted entries, which is the route
+`StationKey` and `CreatedShotSnapshot { uuid }` already took.
 
 ## Oracles
 

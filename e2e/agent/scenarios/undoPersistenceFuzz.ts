@@ -103,16 +103,103 @@
  *          (`UndoData::CreatedShotSnapshot`, core/state/undo.rs:126-133) - the
  *          exact mechanism bug 8 names.
  *
- *     and only for the exact SIGNATURE `isShotIdentitySwap` recognises: every
- *     section with a shot-set delta holds the same NUMBER of shots as expected,
- *     with some of them different. A count change, a one-sided loss, or a
- *     difference that leaves the uuid sets equal is NOT bug 8 and still fails.
- *     A wrong-shot swap on any other entry type is a NEW finding, by
- *     construction.
+ *     and only for the exact SIGNATURE `isShotIdentitySwap` recognises: ONE
+ *     section holding the right NUMBER of shots with exactly one of them the
+ *     wrong shot. A count change, a one-sided loss, more than one section, more
+ *     than one swap, or a difference that leaves the uuid sets equal is NOT bug 8
+ *     and still fails. A wrong-shot swap on any other entry type is a NEW
+ *     finding, by construction.
+ *
+ *   - FINDINGS 12 and 13, this scenario's own (see below). Same treatment and
+ *     the same three conditions: 12 (`stale-id-writes-to-the-wrong-shot` plus its
+ *     three derived-geometry siblings) applies only to a `set_shot_kind` or
+ *     `update_shot` entry after a reload, and only over the SCALAR shot fields
+ *     and the geometry derived from them - a shot count change, a uuid change or
+ *     anything structural is not covered and still fails. 13 is an undo that
+ *     FAILS OUTRIGHT with the exact error `Shot N not found in section S`; it is
+ *     counted and the unwind stops there, because the entry is pushed back and
+ *     the history really is wedged.
+ *
+ *   - CONTAMINATION. Once a stale-id defect has fired, the live project no longer
+ *     matches any snapshot recorded before the save, so every remaining
+ *     comparison in that walk is re-measuring the same defect. From that point
+ *     the finding-12 classifiers apply regardless of entry type
+ *     (`classifierFor`'s `contaminated` argument) and, if a mismatch still cannot
+ *     be classified, the ROUNDTRIP and INTEGRITY-DELTA oracles are downgraded to
+ *     counters for the rest of that walk.
+ *
+ *     That is a real reduction in what the walk can prove, and the alternative -
+ *     stopping at the first defect - proves strictly less, because these oracles
+ *     stay HARD throughout: the ABSOLUTE INVARIANT suite, an undo or redo that
+ *     fails outright (bar the one documented wedge signature), a stack-shape
+ *     change, and every crash / error-log oracle the sweep runs afterwards. So
+ *     the walk still exercises every restore path in the stack, against a project
+ *     the app itself corrupted - which is a harder input than any it would see
+ *     otherwise.
  *
  * ## Findings
  *
- * (none yet - this section is the scenario's half of issue #413's ledger)
+ * Two, both new, both root-caused and pinned red in
+ * `src-tauri/src/core/state/open_undo_bugs_tests.rs`, both written up at
+ * <https://github.com/Stalagmight/Stalagmight/issues/413>. They are the same
+ * root cause as bug 8 - no id remapping on the undo restore path - in variants
+ * and directions nothing had reached before.
+ *
+ * 12. DATA CORRUPTION, quiet. After a save/reload, undo (or redo) of
+ *     `SetShotKind` or `UpdateShot` applies to the WRONG SHOT.
+ *     `UndoData::InverseCommand(Command::SetShotKind { shot_id })` and
+ *     `UndoData::PreviousValues { shot_id }` both name a shot by its in-session
+ *     id (undo_capture.rs:172-185 and :94-135); undo re-executes them against the
+ *     live project (undo.rs:60-62, :65-88) and `redo_inner`'s catch-all arm
+ *     re-executes `entry.command` verbatim (undo.rs:696), which carries the same
+ *     id. Nothing is deleted, no uuid changes, no count moves and
+ *     `check_project_integrity` is silent: one shot keeps an edit the undo should
+ *     have taken away and another gains one it never had.
+ *
+ *     Needs no delete, unlike bug 8 - one insert-before is enough.
+ *
+ *     STRICT repro: `--seed 1 --iterations 2` on fractal, which fails on the
+ *     first id-bearing entry it unwinds:
+ *
+ *         undo did not restore the state recorded at depth 15
+ *           (the entry it consumed was set_shot_kind)
+ *           at project.sections[32].shots[1].kind
+ *             expected: "Normal"   actual: "Jump"
+ *
+ *     What is NOT affected, which bounds the fix: `SegmentMoveInfo` and
+ *     `ZeroDatumInfo` name sections and section ids ARE persisted; `ClosureInfo`
+ *     and every stored station reference use `StationKey`
+ *     (`SectionStart` / `AfterShot(uuid)`, models/station.rs), which is
+ *     uuid-anchored on purpose. Six further variants have restore arms but no
+ *     live producer at all - see `UNREACHABLE_VARIANTS`.
+ *
+ * 13. WEDGED HISTORY. Same mechanism, opposite outcome. A section that has had a
+ *     shot DELETED has handed out more ids than it has shots, so the newest
+ *     persisted id runs PAST `section_id * STRIDE + (len - 1)` and misses
+ *     everything: `delete_shot` / `update_shot` / `set_shot_kind` return
+ *     "Shot N not found in section S", the undo fails, and `undo_inner`'s
+ *     epilogue (undo.rs:439-444) pushes the entry back - so it fails identically
+ *     forever and every entry beneath it is unreachable for good.
+ *
+ *     Bug 8's write-up says a stale id "does not miss - it COLLIDES". True only
+ *     while the section still has as many shots as ids were handed out; a delete
+ *     breaks that and switches the whole defect into this regime.
+ *
+ *     Repro: `STALAGMIGHT_PERSIST_FUZZ_DELETE_IN_TARGET=1 --seed 1 --iterations 3`
+ *     on fractal. That flag is off by default because the wedge is terminal - the
+ *     unwind cannot get past it, so the lower two thirds of the stack goes
+ *     unwalked. With the delete on the plan's SPARE section instead, the target's
+ *     ids stay in range, a stale id collides rather than misses, and the walk
+ *     runs to the bottom.
+ *
+ * A structural fact worth keeping, found while reaching these: a
+ * `ProjectSnapshotPair` entry is a WALL. `Shot::id` is serialized inside a
+ * project snapshot (models/shot.rs, no `skip`), so restoring one puts the project
+ * back into the PRE-SAVE id space and every stale id beyond it becomes valid
+ * again. The exposed window is exactly "from the depth the reload lands on, down
+ * to the first `ProjectSnapshotPair` beneath it" - which is why a random fuzzer
+ * missed all of this, and why `COVERAGE_STEPS` puts every snapshot-pair step as
+ * low in the stack as its preconditions allow.
  *
  * ## Determinism
  *

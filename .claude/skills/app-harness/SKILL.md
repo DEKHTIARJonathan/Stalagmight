@@ -82,6 +82,15 @@ stress loop then a full sweep:
   results table with every failure's repro line. Add `--release` to either runner to
   drive the release binary (~1.4x on the bigger workloads); debug is the default
   because its `debug_assert!`s are oracles too - see docs/agent-harness.md
+- `undo-persistence-fuzz` - the save/reload sibling of the above. Each iteration builds an
+  undo stack carrying every `UndoData` variant a live command can produce, forces the shot
+  ids to diverge from positional order, leaves the redo stack non-empty, saves/closes/reopens,
+  then walks the whole RESTORED history to depth 0 and back up - including the restored REDO
+  entries. Also RED by default (`STALAGMIGHT_FUZZ_ALLOW_KNOWN_BUGS=1` to walk past the
+  classified ones): it found findings 12 and 13 on issue #413, where undo after a reload
+  edits the WRONG shot (`SetShotKind` / `UpdateShot` carry the in-session shot id) or fails
+  outright and wedges the history. `STALAGMIGHT_PERSIST_FUZZ_DELETE_IN_TARGET=1` is finding
+  13's repro and is terminal for the walk - see docs/agent-harness.md
 - `dialog-cycling` - open/close dialogs, assert no residue / DOM growth
 - `tool-switch-spam` - cycle every tool, assert activeTool tracks each switch
 - `map-storm` - seeded jumpTo barrage + main-thread stall probe

@@ -25,6 +25,21 @@ const SMOKE_ITERATIONS: Record<string, number> = {
   // Lower it only if someone decides a green gate matters more than the
   // standing reminder - and re-check that the lower count still fails.
   'undo-redo-fuzz': 40,
+  // RED at the moment, deliberately, for the same reason as `undo-redo-fuzz`
+  // above: it reproduces open app bugs, so a green gate would mean its oracle had
+  // been weakened. ONE iteration is enough and is what the entry is set to - the
+  // scenario is not a random walk, so every iteration builds the same 18-entry
+  // covering stack and crosses the same save/reload boundary; a second iteration
+  // adds ~5 s and no new signal.
+  //
+  // What that one iteration hits, deterministically: finding 12 (undo of
+  // set_shot_kind / update_shot edits the wrong shot after a reload) on the first
+  // id-bearing entry the unwind reaches, which is where a STRICT run stops. With
+  // STALAGMIGHT_FUZZ_ALLOW_KNOWN_BUGS=1 it walks the whole restored stack in both
+  // directions and also reports bug 1, bug 8 and finding 11, all classified.
+  // Raise it only if someone wants a longer soak here rather than in
+  // `pnpm agent:scenario`, and re-check that the lower count still fails.
+  'undo-persistence-fuzz': 1,
   'dialog-cycling': 8,
   'tool-switch-spam': 20,
   'map-storm': 30,
