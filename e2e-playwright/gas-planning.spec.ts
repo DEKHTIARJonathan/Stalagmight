@@ -485,12 +485,28 @@ test.describe('Gas planning', () => {
     expect(idleColors.has(GAS_FAR_KEY)).toBe(false);
     expect(idleColors.has(await greyKey(page))).toBe(false);
 
+    // Positive check the negative-only assertions above cannot give us: capture the
+    // idle-tint pixel now, and compare it against a station in a DIFFERENT reachability
+    // bucket that is ALSO idle-tinted (LAST_REACHABLE would be gold once a ramp exists;
+    // BEYOND_RANGE would be dimmed purple) - if idle painted anything but a uniform
+    // color, this would catch it, unlike a set of "is not any of these N colors" checks
+    // that can never fail against a wrong-but-unlisted 4th color.
+    const idlePixelKey = (await stationCenter(page, LAST_REACHABLE)).join(',');
+    expect((await stationCenter(page, BEYOND_RANGE)).join(',')).toBe(idlePixelKey);
+
     // Answering it reveals the full rig and the ramp.
     await chooseEntrance(page);
     await expect(page.locator('[data-testid="gas-entry-card"]')).toBeHidden();
     await expect(page.locator('[data-testid="gas-legend"]')).toBeVisible({ timeout: 3000 });
     await setMapZoom(page, zoom);
     await expect.poll(() => stationPaints(page, 0, GAS_NEAR_KEY), { timeout: 3000 }).toBe(true);
+    // The idle tint and the post-origin "beyond range" dim are the SAME construction
+    // (GAS_FAR blended at GAS_DIM_ALPHA), so once the ramp resolves, BEYOND_RANGE reads the
+    // EXACT pixel the idle tint painted before an origin existed - the positive twin of the
+    // negative checks above. Polled (the ramp resolves over IPC), then read once settled.
+    await expect
+      .poll(async () => (await stationCenter(page, BEYOND_RANGE)).join(','), { timeout: 3000 })
+      .toBe(idlePixelKey);
   });
 
   test('R9/R10 (#395): "Pick on map" arms a one-shot origin pick, disarmed by Escape or a second press @smoke', async ({
@@ -1064,7 +1080,7 @@ test.describe('Gas planning', () => {
     // Zero-datum at the FAR end (station 10) reverses "nearer the entrance" from the trivial
     // lower-index case, so a correct pick proves the entrance-distance rule ran, rather than the
     // pre-#397 bug of always anchoring to the shot's lower-indexed (`from`) station.
-    await page.evaluate(async () => {
+    const secId = await page.evaluate(async () => {
       const e2e = (window as unknown as {
         __E2E_TEST__?: {
           projectStore: {
@@ -1086,6 +1102,7 @@ test.describe('Gas planning', () => {
         { latitude: 24.55, longitude: -81.78, depth_reference: 0 },
       );
       await ps.refreshProjectState();
+      return secId;
     });
 
     // `setZeroDatum` triggers `triggerFitToBounds` (projectStore.ts), which re-fits the camera
@@ -1136,7 +1153,7 @@ test.describe('Gas planning', () => {
           ),
         { timeout: 2000 },
       )
-      .toEqual({ section_id: 1, station_index: 5 });
+      .toEqual({ section_id: secId, station_index: 5 });
   });
 
   test('#397: once an origin is chosen, a plain left-click on a SHOT sets the endpoint', async ({
