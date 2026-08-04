@@ -297,6 +297,23 @@
  * reproduces the legacy stream byte for byte - so no repro has been lost, and
  * the fallback is a stream selector rather than a weakened assertion.
  *
+ * ALL OF THEM ALSO REPRODUCE IN THE RUST TIER NOW, classified by finding id
+ * rather than merely hit, and about a thousand times cheaper per sequence. See
+ * the BUG IDENTIFICATION MATRIX in the header of
+ * `src-tauri/src/core/state/fuzz_undo_tests.rs` for the mode, seed and move
+ * count per finding. Two things changed there that matter to this file:
+ *
+ *   - BUG 7 IS PINNED. It had no unit test anywhere ("left uncovered
+ *     deliberately rather than covered by a test that passes"), because every
+ *     synthetic reduction was measured not to diverge. The Rust fuzzer now
+ *     PROVES the inequality instead of recognising a shape: on a jump that
+ *     diverges it replays the same distance in single steps and records the
+ *     finding only when the single-step path lands where the model says and the
+ *     jump did not. `bug_7_a_jump_is_n_single_steps`, seed-pinned and red.
+ *   - FINDING 15 WAS FINDING 3. Its displacement is never put back, so the
+ *     leftover is still there several undos later when the consumed entry is
+ *     unrelated - which is what 15 described.
+ *
  * 9. RESOLVED - not an app bug. The micron-scale drift seen at fractal seed 12
  *    was the fuzzer's OWN 1e6-metre boundary offsets: absolute error tracked the
  *    injected magnitude (1e6 -> 4.56e-6 m, 1e5 -> 1.59e-7, 1e4 -> 1.7e-9,

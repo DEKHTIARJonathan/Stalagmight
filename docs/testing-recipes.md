@@ -23,9 +23,36 @@ TELEMETRY_ENDPOINT=http://localhost/dummy cargo test --manifest-path src-tauri/C
   --features telemetry --lib fuzz_undo -- --nocapture --test-threads=1
 ```
 
-**Soak.** Same engine, no iteration budget, and with the two features the gate
-leaves off (multi-step `undo_to`/`redo_to` jumps, and loop closures) because both
-reach open findings:
+**Reproducing a specific known bug.** The module carries a BUG IDENTIFICATION
+MATRIX in its header: for every finding on
+[issue 413](https://github.com/Stalagmight/Stalagmight/issues/413), the mode,
+seed and move count under which this tier reaches it AND classifies it by id.
+Four environment flags switch the modes on, and the gate uses none of them
+because each one CONSTRUCTS a known defect:
+
+| flag | what it adds | the findings it exists for |
+|---|---|---|
+| `STALAGMIGHT_RUST_FUZZ_JUMPS=1` | multi-step `undo_to`/`redo_to` jumps | 7 |
+| `STALAGMIGHT_RUST_FUZZ_CLOSURES=1` | a real loop closure in the starting project | 6, 14 |
+| `STALAGMIGHT_RUST_FUZZ_DIVERGENCE=1` | shot ids that diverge from positional order, with every id-bearing entry contiguous on top, before the save | 8, 12, 13 |
+| `STALAGMIGHT_RUST_FUZZ_CLOSURE_SHAPES=1` | two closures with the first one removed, and an orphaned closure built just before the save | 4, 10 |
+
+So, for example, findings 8 and 12 in twelve moves:
+
+```bash
+STALAGMIGHT_RUST_FUZZ_DIVERGENCE=1 STALAGMIGHT_RUST_FUZZ_SEEDS=1 \
+  STALAGMIGHT_RUST_FUZZ_ITERATIONS=12 \
+  TELEMETRY_ENDPOINT=http://localhost/dummy cargo test --manifest-path src-tauri/Cargo.toml \
+  --features telemetry --lib fuzz_seed_survey -- --ignored --nocapture
+```
+
+Every seed prints one summary line per mode ending in `classified hits: ...`,
+and that list is the answer: a finding is *identified* when its id appears
+there, not merely when the seed fails.
+
+**Soak.** Same engine, no iteration budget, and with the features the gate
+leaves off (multi-step `undo_to`/`redo_to` jumps, loop closures, and both
+constructed shapes) because each reaches open findings:
 
 ```bash
 STALAGMIGHT_RUST_FUZZ_SEEDS=200 STALAGMIGHT_RUST_FUZZ_ITERATIONS=1000 \
@@ -45,10 +72,19 @@ STALAGMIGHT_RUST_FUZZ_SEEDS=40 STALAGMIGHT_RUST_FUZZ_ITERATIONS=100 \
 ```
 
 **Debugging a failure.** `STALAGMIGHT_RUST_FUZZ_TRACE=1` streams every move as it
-happens. That matters because the app has assertions of its own -
-`debug_assert_merge_alignment` is `#[cfg(test)]`, so it exists ONLY in this tier -
-and when one of those panics it takes the process down before the fuzzer's own
-payload is built.
+happens, including the line the classifier writes when a hit is explained - which
+matters, because a classified hit RESYNCS the model and can arm a cascade, so a
+later failure that looks spontaneous usually is not (that is exactly how finding
+15 came to be filed as its own defect).
+`STALAGMIGHT_RUST_FUZZ_VERBOSE=1` prints the whole panic payload per seed in the
+survey, and every differing path rather than the first eight.
+
+The app also has assertions of its own - `debug_assert_merge_alignment` is
+`#[cfg(test)]`, so it exists ONLY in this tier. The fuzzer catches that one
+specifically, checks the message is that assert at one of the call sites finding
+14 names, records it as a classified hit and stops the run (the unwind poisoned
+the project mutex, so nothing after it would be measuring the app). Any other
+panic is re-raised verbatim.
 
 Runs are deterministic: the same seed replays identically, forever, on every
 platform (integer-only PRNG, and no float is used to make a decision).

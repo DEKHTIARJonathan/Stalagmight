@@ -495,6 +495,14 @@ each one buys:
 | this harness | the real app over IPC | anything the frontend store or the IPC boundary breaks | on demand |
 | `open_undo_bugs_tests.rs` | `AppState` directly | the known open bugs, pinned red | `-- --ignored` |
 
+Both `#[ignore]`d red suites are worth running together, since two findings are
+pinned by a SEED in the fuzz module rather than by a reduction in the red one:
+
+```bash
+TELEMETRY_ENDPOINT=http://localhost/dummy cargo test --manifest-path src-tauri/Cargo.toml \
+  --features telemetry --lib "open_undo_bugs\|finding_14\|bug_7" -- --ignored
+```
+
 The Rust tier exists because neither of the other two GATES anything: the harness
 needs a built desktop app and a display, and the red tests are `#[ignore]`d by
 design. It runs the same model - a canonical snapshot per undo depth, asserted
@@ -507,7 +515,17 @@ serialization, which is where the `updateSection` double-option bug (finding 5)
 was found and where the undo-fails-outright bug (finding 6) surfaced. Equally it
 sees two things the harness cannot: `station_offsets` / `station_comments`, which
 `ProjectIpc` omits entirely, and the app's own `#[cfg(test)]`
-`debug_assert_merge_alignment`. Findings 14 and 15 came from those.
+`debug_assert_merge_alignment`. Findings 14, 16 and 17 came from those.
+
+**Every finding the harness found is now reachable in the Rust tier too, and
+classified by id there.** Its header carries a BUG IDENTIFICATION MATRIX: per
+finding, the mode, seed and move count under which it fires and is named. That
+is worth having for two reasons beyond convenience - a finding you can only
+reach by driving a desktop app is a finding nobody re-checks after a refactor,
+and the matrix is what made three duplicates and three NEW defects visible
+(finding 15 is finding 3 re-measured; findings 16 and 17 and finding 14's
+mirror image were found while building the modes). The harness stays the tier
+that owns everything above `AppState`.
 
 ### Record, replay, shrink
 

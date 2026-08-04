@@ -23,7 +23,90 @@
 //! |---|---|---|---|
 //! | this module | `AppState` directly | undo/redo model + persistence regressions | EVERY CI run |
 //! | agent harness | the real app over IPC | anything the frontend store or the IPC boundary breaks | on demand |
-//! | `open_undo_bugs_tests.rs` | `AppState` directly | the eleven KNOWN open bugs, pinned | `-- --ignored` |
+//! | `open_undo_bugs_tests.rs` | `AppState` directly | the KNOWN open bugs, pinned | `-- --ignored` |
+//!
+//! # THE BUG IDENTIFICATION MATRIX
+//!
+//! Every finding the agent-harness fuzzers found is reachable HERE, and is
+//! CLASSIFIED by id rather than merely hit. The table below is the evidence: for
+//! each one, a mode, a seed and a move count under which this module reaches it
+//! and names it. Every row was run twice and the two runs are byte-identical
+//! (`the_fuzzer_is_deterministic` pins that property for the gate's seeds; the
+//! whole table was re-run and diffed by hand for the rest).
+//!
+//! Read a row as: run `fuzz_seed_survey` with the listed environment, and the
+//! per-seed summary line for that seed carries the listed classified-hit id.
+//! `SEEDS=n` runs seeds 1..=n, so the named seed is included.
+//!
+//! | # | classified as | mode env | seed | moves |
+//! |---|---|---|---|---|
+//! | 1 (uuids) | `finding-1-redo-of-create-section-remints-shot-uuids` | (none) | 1 | 60 |
+//! | 1 (anchors) | `finding-1-redo-of-create-section-drops-gauge-anchors` | (none), persistence half | 1 | 60 |
+//! | 2 | `finding-2-orphan-zero-section-offset` | (none) | 1 | 60 |
+//! | 3 (offset) | `finding-3-undo-of-the-first-shot-displaces-an-empty-section` | (none) | 2 | 60 |
+//! | 3 (data loss) | `finding-3-undo-of-the-first-shot-drops-station-zero-refs` | (none) | 37 | 60 |
+//! | 4 | `finding-4-closure-reordered-on-undo` | `CLOSURE_SHAPES=1` | 1 | 40 |
+//! | 5 | `finding-5-undo-cannot-restore-null-section-field` | (none) | 6 | 60 |
+//! | 6 | `finding-6-undo-refused-by-a-delete-guard` | `CLOSURES=1` | 4 | 60 |
+//! | 7 | `finding-7-a-jump-is-not-n-single-steps` | `JUMPS=1 CLOSURE_SHAPES=1`, persistence half | 6 | 150 |
+//! | 8 | `finding-8-stale-id-deletes-the-wrong-shot` | `DIVERGENCE=1` | 1 | 12 |
+//! | 10 | `finding-10-reload-converts-an-orphan-closure-to-a-merge` | `CLOSURE_SHAPES=1`, persistence half | 1 | 40 |
+//! | 11 | `finding-11-pre-save-entry-reverts-the-saves-heals` | (none), persistence half | 1 | 60 |
+//! | 12 | `finding-12-stale-id-edits-the-wrong-shot` | `DIVERGENCE=1` | 1 | 12 |
+//! | 13 | `finding-13-stale-id-misses-and-wedges-the-history` | (none), persistence half | 5 | 60 |
+//! | 14 | `finding-14-insert-leaves-a-merge-metres-out-of-alignment` | `CLOSURES=1` | 6 | 60 |
+//! | 14 (mirror) | `finding-14-variant-a-shot-removal-leaves-a-merge-out-of-alignment` | `JUMPS=1 CLOSURE_SHAPES=1` | 1 | 150 |
+//! | 15 | = finding 3, see below | (none) | 5 | 20 |
+//! | 16 | `finding-16-redo-of-a-create-shot-duplicates-a-shot-uuid` | (none), persistence half | 13 | 60 |
+//! | 17 | `finding-17-zero-datum-reordered-on-undo` | (none) | 1 | 60 |
+//!
+//! Environment prefix for every row: `STALAGMIGHT_RUST_FUZZ_`. So the finding-7
+//! row is
+//!
+//! ```text
+//! STALAGMIGHT_RUST_FUZZ_JUMPS=1 STALAGMIGHT_RUST_FUZZ_CLOSURE_SHAPES=1 \
+//!   STALAGMIGHT_RUST_FUZZ_SEEDS=6 STALAGMIGHT_RUST_FUZZ_ITERATIONS=150 \
+//!   TELEMETRY_ENDPOINT=http://localhost/dummy cargo test \
+//!   --manifest-path src-tauri/Cargo.toml --features telemetry \
+//!   --lib fuzz_seed_survey -- --ignored --nocapture
+//! ```
+//!
+//! Three findings on the issue are NOT rows because they are not this tier's:
+//! finding 9 was triaged out as float cancellation from the fuzzer's own inputs,
+//! and 15 turned out not to exist separately - see below.
+//!
+//! ## What finding 15 was
+//!
+//! Finding 15 ("an undo leaves a `section_offsets` entry carrying REAL geometry")
+//! is FINDING 3, re-measured. Finding 3 displaces the empty section on the undo
+//! that removes its first shot; nothing ever puts that back, because the redo
+//! re-inserts through the offset-neutral append path - which is finding 3's own
+//! ratchet half. So the leftover is still in the project several undos later,
+//! when the entry being consumed is unrelated and the snapshot it is compared
+//! against never had the key.
+//!
+//! Confirmed against the reported instance itself: seed 7 at 100 moves, depth 14,
+//! `section_offsets.1` = `[7.11187043796, 0.315846281796]` - whose two
+//! immediately preceding moves are `createShot(s=1,n=0,append)` and the undo of
+//! it, into and out of section 1, the very section that ends up displaced. The
+//! write-up read the move log from the wrong end.
+//!
+//! The classifiers now carry that shape as `finding-3-cascade-...`, and
+//! `unwinding_the_history_leaves_no_displaced_section_behind` in
+//! `open_undo_bugs_tests.rs` pins the consequence a user sees.
+//!
+//! ## Modes, and why the gate uses none of them
+//!
+//! | env | what it adds | why it is not in the gate |
+//! |---|---|---|
+//! | `JUMPS=1` | multi-step `undo_to`/`redo_to` | finding 7 |
+//! | `CLOSURES=1` | a real loop closure in the starting project | findings 6 and 14 |
+//! | `DIVERGENCE=1` | the id-vs-position divergence findings 8/12/13 need, built | deliberate corruption |
+//! | `CLOSURE_SHAPES=1` | the two closure shapes findings 4 and 10 need, built | deliberate, and implies `CLOSURES` |
+//!
+//! A mode that CONSTRUCTS a known defect cannot also be a regression gate: its
+//! hit counts say nothing about whether the model acquired a new way to be
+//! wrong, which is the only thing the gate is for.
 //!
 //! # What it does NOT cover
 //!
@@ -3865,23 +3948,26 @@ fn run_fuzz(seed: u32, plan: Plan) -> Outcome {
 // The CI gate
 // ===========================================================================
 
-/// Seeds the gate runs, in both modes. Fixed rather than random: a gate whose
-/// input moves is not a gate.
 /// Seeds the gate runs, in both modes.
 ///
-/// PINNED, and pinned deliberately rather than arbitrarily. `fuzz_seed_survey`
-/// (below) reports which seeds are currently clean; these six are clean at 100
-/// moves, so they have headroom above the 60 the gate uses. The other 32 of the
-/// first 40 reach an OPEN, unclassified finding within 100 moves - findings 14
-/// and 15 on <https://github.com/Stalagmight/Stalagmight/issues/413>, both found
-/// by this module and both written up there before these seeds were chosen.
+/// PINNED, and pinned deliberately rather than arbitrarily: `fuzz_seed_survey`
+/// (below) reports which seeds are currently clean, and these are clean at 100
+/// moves, so they have headroom above the 60 the gate uses.
 ///
-/// That is a real limit on what the gate proves, and it is stated rather than
-/// hidden: the gate guards against NEW ways for the undo model to be wrong on
-/// short sequences, not against the ones already known. Re-run the survey and
-/// widen this list as findings are fixed; the soak is what keeps hitting them
-/// meanwhile.
-const GATE_SEEDS: &[u32] = &[1, 3, 6, 12, 19, 26];
+/// RE-PINNED once the classifiers could name what they were hitting. The list
+/// was six seeds when 32 of the first 40 reached an unclassified finding within
+/// 100 moves; both of the findings responsible turned out to be one already on
+/// the issue (finding 3, which nothing classified in its ratcheted or
+/// data-loss form) plus its cascade, and with those named 35 of the first 40 are
+/// clean at 100. Thirteen of them are gated, which is still well under a second
+/// per mode.
+///
+/// What that does NOT mean is that the gate now covers those findings: it covers
+/// SEQUENCES that do not reach them. The modes that construct a known defect
+/// (`Plan::divergence`, `Plan::closure_shapes`, `jumps`, `closures`) stay out of
+/// the gate on purpose - see the matrix in the module header. Re-run the survey
+/// and widen this list as findings are FIXED.
+const GATE_SEEDS: &[u32] = &[1, 2, 3, 4, 5, 6, 7, 9, 10, 11, 12, 19, 26];
 /// Moves per gate seed. 60 keeps the whole gate well inside a second while still
 /// reaching depth 20+, crossing the persistence boundary and walking the closing
 /// unwind/rewind over every entry.

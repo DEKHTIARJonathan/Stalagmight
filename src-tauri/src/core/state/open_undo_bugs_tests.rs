@@ -612,62 +612,54 @@ fn undo_of_create_shot_in_an_anchored_loop_succeeds() {
 }
 
 // ===========================================================================
-// Bug 7: REAL, reproduced by the fuzzer, NOT reproducible synthetically here
+// Bug 7: PINNED at last - by a seed, in the fuzz module
 // ===========================================================================
 //
 // `undo()`/`redo()` call `invalidate_adjusted_cache()` before and
 // `reconcile_geometry()` after (core/state/undo.rs); `undo_to()`/`redo_to()`
-// loop the `*_inner` variants and call NEITHER. The fuzzer reproduces the
-// consequence deterministically twice: a 2.4 m `section_offsets` divergence
-// (fractal seed 12 x40) and a merge left 5.00 m out of alignment that only the
-// integrity oracle caught (fractal seed 15 x40).
+// loop the `*_inner` variants and call NEITHER.
+//
+// The red test is `bug_7_a_jump_is_n_single_steps` in
+// `src-tauri/src/core/state/fuzz_undo_tests.rs`. It does not pattern-match a
+// shape: on a jump that diverges the fuzzer REPLAYS the same distance one step
+// at a time, through the same `undo()`/`redo()` entry points a user's Ctrl+Z
+// would, and records the finding only when the single-step path lands exactly
+// on the state the model recorded while the jump did not. That is the contract
+// "undo_to(N) == N x undo()" measured directly.
 //
 // CORRECTION to the mechanism as previously documented. The missing
 // `invalidate_adjusted_cache()` is NOT observable: `get_adjusted_stations`
 // (core/state/app_state.rs) keys its cache on `project.modified_at` plus a
 // config hash, and every undo calls `Project::touch()`, so the next read misses
-// and re-solves whether or not the cache was explicitly cleared. The explicit
-// invalidation is belt-and-braces. Only the missing `reconcile_geometry()` half
-// is a real defect - which also means a fix only needs to add that call.
+// and re-solves whether or not the cache was explicitly cleared. Only the
+// missing `reconcile_geometry()` half is a real defect.
 //
-// That half needs an undo whose RAW restore leaves a merge beyond
-// MERGE_ALIGNMENT_TOLERANCE_M, and none of the drift sources reachable in a
-// small synthetic project qualifies. Measured, not assumed:
+// WHY IT IS NOT PINNED HERE, which is the part worth keeping. It needs an undo
+// whose RAW restore leaves a merge beyond MERGE_ALIGNMENT_TOLERANCE_M, and none
+// of the drift sources reachable in a small synthetic project qualifies. Each
+// was measured, not assumed:
 //
 //   * bug 3's empty-section displacement DROPS the merge it would misalign -
 //     the `pos == 0` branch removes refs keyed to station 0, and an empty
 //     section has no other station to merge on.
 //   * `UpdateShot` on a merged section restores the offsets symmetrically: both
-//     unwind paths land on the same offset (verified by instrumenting this test).
+//     unwind paths land on the same offset (verified by instrumenting).
 //   * an insert-before on a section merged at a SURVIVING station compensates
 //     correctly - the offset returns to (0, 0) and `check_merge_alignment()`
 //     stays empty on both paths.
+//   * undo-of-`RepairIntegrity`, whose `before` snapshot is documented to carry
+//     the drift Repair healed and which therefore RELIES on the epilogue. Two
+//     repairable shapes were built: bug 3's displaced section (repair returns
+//     `changed = false`, so no entry is pushed at all) and finding 10's orphan
+//     closure (repair fires, but `undo()` and `undo_to(0)` land on identical
+//     projects - `realign_merges` early-returns while `check_merge_alignment()`
+//     is empty, and it is empty in both).
 //
-// The undo-of-`RepairIntegrity` lead was then tried directly, because its
-// `before` snapshot is documented to carry the drift Repair healed (see the
-// comment in `undo()`) and it therefore RELIES on the reconcile epilogue. Two
-// repairable shapes were built and measured; neither diverges:
-//
-//   * bug 3's displaced section - `repair_open_project_integrity` returns
-//     `changed = false`, so no undo entry is pushed at all. The `pos == 0`
-//     branch had already dropped the merge, and for a now-disconnected section
-//     the displaced offset IS what `resolve_offsets` re-derives.
-//   * finding 10's orphan closure - repair fires (`fixed = 1`,
-//     `changed = true`), but `undo()` and `undo_to(0)` land on identical
-//     projects (1 closure, 0 merges, section offset (5, 5)). `reconcile_geometry`
-//     is `realign_merges`, which early-returns while `check_merge_alignment()`
-//     is empty - and it is empty in both, so the epilogue is a no-op and its
-//     absence cannot be observed.
-//
-// That is the general shape of the difficulty: `realign_merges` IS
-// `resolve_offsets` behind a tolerance gate, and every command's own epilogue
-// has already run it, so a persistently misaligned merge is not reachable
-// through the command API. Bug 7 needs drift produced by ANOTHER bug (3, or its
-// ratchet) that leaves a SURVIVING merge misaligned - which long fuzzer
-// histories on real topologies reach and minimal synthesis does not.
-//
-// Left uncovered deliberately rather than covered by a test that passes.
-// Reproduce with the fuzzer seeds above.
+// That is the shape of the difficulty: `realign_merges` IS `resolve_offsets`
+// behind a tolerance gate, and every command's own epilogue has already run it,
+// so a persistently misaligned merge is not reachable through the command API in
+// a small project. It needs drift produced by ANOTHER bug over a long history -
+// which the fuzzer reaches and minimal synthesis does not. Hence a seed.
 //
 // ===========================================================================
 // Finding 10: a delete path strands a loop closure without converting it,
