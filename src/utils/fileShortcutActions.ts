@@ -1,5 +1,5 @@
 /**
- * Shared file/project shortcut actions: New / Open / Import DMP / Quit.
+ * Shared file/project shortcut actions: New / Open / Import / Quit.
  *
  * GlobalView and SingleSystemView each register their own keyboard dispatcher,
  * but both expose this same set of file actions. Routing them through one helper

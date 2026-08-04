@@ -51,30 +51,38 @@ beforeEach(() => {
   useSpeleoStore.setState({ link: null, projectLinkKind: 'local', session: null });
 });
 
+// Asserts PRESENCE (submenu row rendered) as well as no `disabled` flag in
+// every state: `importItem()?.disabled` alone would also pass if a regression
+// conditionally OMITTED the group in blocked states - the same picker-side
+// gate class these pins exist to block, just in a stronger form.
+function expectImportItemAvailable(): void {
+  const item = importItem();
+  expect(item?.submenu).toHaveLength(1);
+  expect(item?.disabled).toBeUndefined();
+}
+
 describe('useProjectMenuItems Import item - never picker-disabled (#407)', () => {
   it('is present with its row in the fully-editable baseline', () => {
-    const item = importItem();
-    expect(item?.disabled).toBeUndefined();
-    expect(item?.submenu).toHaveLength(1);
+    expectImportItemAvailable();
   });
 
-  it('stays enabled in the closure-adjusted view (router guards the DMP case)', () => {
+  it('stays available in the closure-adjusted view (router guards the DMP case)', () => {
     useUIStore.setState({ geometryMode: 'closureAdjusted' });
-    expect(importItem()?.disabled).toBeUndefined();
+    expectImportItemAvailable();
   });
 
-  it('stays enabled in Plan mode even when geometryMode falls back to measured', () => {
+  it('stays available in Plan mode even when geometryMode falls back to measured', () => {
     useUIStore.setState({ appMode: 'plan', geometryMode: 'measured' });
-    expect(importItem()?.disabled).toBeUndefined();
+    expectImportItemAvailable();
   });
 
-  it('stays enabled on a locked remote SpeleoDB project', () => {
+  it('stays available on a locked remote SpeleoDB project', () => {
     useSpeleoStore.setState({ link: READ_ONLY_LINK });
-    expect(importItem()?.disabled).toBeUndefined();
+    expectImportItemAvailable();
   });
 
-  it('stays enabled with the SpeleoDB write lock held', () => {
+  it('stays available with the SpeleoDB write lock held', () => {
     useSpeleoStore.setState({ link: { ...READ_ONLY_LINK, editState: 'editing', lockedByOther: false } });
-    expect(importItem()?.disabled).toBeUndefined();
+    expectImportItemAvailable();
   });
 });

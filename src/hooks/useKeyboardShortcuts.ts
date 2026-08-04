@@ -132,7 +132,7 @@ const ACTION_LABELS: Record<ShortcutAction, string> = {
   open_file: 'Open',
   save: 'Save',
   save_as: 'Save As',
-  import_dmp: 'Import DMP',
+  import_dmp: 'Import survey data',
   export: 'Export',
   quit: 'Quit',
 };

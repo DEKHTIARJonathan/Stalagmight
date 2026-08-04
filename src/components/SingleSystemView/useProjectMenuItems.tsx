@@ -12,7 +12,6 @@ import { useTranslation } from 'react-i18next';
 import { useProject } from '../../hooks/useProject';
 import { useUIStore } from '../../store/uiStore';
 import { useSpeleoStore } from '../../store/speleoStore';
-import { useEditingBlocked } from '../../hooks/useEditingBlocked';
 import { useSpeleoMenuItems } from './useSpeleoMenuItems';
 import { SpeleoDbLogo } from '../common/SpeleoDbLogo';
 import { SpeleoBadgedIcon } from '../common/SpeleoBadgedIcon';
@@ -55,11 +54,6 @@ export function useProjectMenuItems({ onSave, saveFailed = false }: UseProjectMe
   // The submenu's rows live in their own hook - the toolbar status button's
   // right-click menu renders the very same array.
   const speleoItems = useSpeleoMenuItems();
-  // The read-only map (closure-adjusted view, Plan/Export #243, or a locked
-  // remote SpeleoDB project) rejects imports - they add sections. Disable the
-  // Import item up front (the toolbar Import button and Ctrl+I already do), so
-  // the user isn't sent through a file picker only to be rejected after choosing.
-  const editingBlocked = useEditingBlocked();
 
   return useMemo(() => {
     const sz = 18;
@@ -207,5 +201,5 @@ export function useProjectMenuItems({ onSave, saveFailed = false }: UseProjectMe
       },
       quitMenuItem(t),
     ];
-  }, [t, openDialog, showDevStats, toggleDisplay, editingBlocked, onSave, saveFailed, handleNewProject, handleSaveProjectAs, handleCloseProject, speleoLink, speleoSession, speleoItems]);
+  }, [t, openDialog, showDevStats, toggleDisplay, onSave, saveFailed, handleNewProject, handleSaveProjectAs, handleCloseProject, speleoLink, speleoSession, speleoItems]);
 }

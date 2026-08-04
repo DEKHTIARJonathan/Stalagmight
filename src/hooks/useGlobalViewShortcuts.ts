@@ -11,8 +11,8 @@
  * - Ctrl+A: Select all systems
  * - Arrow keys: Navigate to nearest system in direction (map view only)
  * - Ctrl+N: New project (configurable)
- * - Ctrl+O: Open project (configurable)
- * - Ctrl+I: Import DMP (configurable)
+ * - Ctrl+O: Open / Import - the unified picker (configurable)
+ * - Ctrl+I: Import survey data - same unified picker (configurable)
  */
 
 import { useEffect, useRef, useCallback, type Dispatch, type SetStateAction } from 'react';
