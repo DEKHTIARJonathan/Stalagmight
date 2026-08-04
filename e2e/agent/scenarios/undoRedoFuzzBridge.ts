@@ -103,6 +103,14 @@ export interface StepResponse {
   /** Null when the model has no verdict recorded for this depth yet. */
   integrityExpected: IntegrityVerdict | null;
   /**
+   * True when the snapshot being compared against was recorded in an EARLIER
+   * epoch - i.e. before a save or reload made an undo-less change to live state.
+   * Only such a comparison may subtract the documented save-heal / reload-resolve
+   * families; within one epoch the comparison stays strict, so a geometry bug
+   * cannot hide behind "a reload re-solves offsets".
+   */
+  crossesEpoch: boolean;
+  /**
    * In-page attribution for the step, in ms. Not diagnostics for their own
    * sake: they are what says whether the remaining cost is the bridge, the
    * store action's own work (`flushPlanAnchors` + the IPC command +
@@ -171,6 +179,8 @@ export async function initModel(ctx: ScenarioContext): Promise<InitResponse> {
     ${OBSERVE}
     O.snapshots = [canonical];
     O.integrity = [integrity];
+    O.epoch = 0;
+    O.epochs = [0];
     O.lastExpected = null;
     O.lastActual = null;
     O.mismatchIndex = -1;
@@ -240,6 +250,8 @@ export async function runStep(ctx: ScenarioContext, request: StepRequest): Promi
         O.snapshots.push(canonical);
         O.integrity.length = req.cursor + 1;
         O.integrity.push(integrity);
+        O.epochs.length = req.cursor + 1;
+        O.epochs.push(O.epoch);
         cursorAfter = req.cursor + 1;
         verdict = 'recorded';
       } else if (pushed === 0) {
@@ -248,6 +260,7 @@ export async function runStep(ctx: ScenarioContext, request: StepRequest): Promi
         if (redoLen === 0) {
           O.snapshots.length = req.cursor + 1;
           O.integrity.length = req.cursor + 1;
+          O.epochs.length = req.cursor + 1;
         }
         comparedIndex = req.cursor;
       } else {
@@ -293,6 +306,7 @@ export async function runStep(ctx: ScenarioContext, request: StepRequest): Promi
       integrityExpected: comparedIndex >= 0 && O.integrity[comparedIndex] !== undefined
         ? O.integrity[comparedIndex]
         : null,
+      crossesEpoch: comparedIndex >= 0 && (O.epochs[comparedIndex] === undefined || O.epochs[comparedIndex] < O.epoch),
       timing: {
         actionMs: actionMs,
         observeMs: observeMs,
@@ -344,6 +358,7 @@ export async function resyncModel(
     // replaced, so it has to move with it or the delta oracle would compare the
     // resynced state against a verdict from the state it superseded.
     if (req.integrity !== null) O.integrity[req.index] = req.integrity;
+    O.epochs[req.index] = O.epoch;
     return O.snapshots.length - 1;
   `,
     [{ index, integrity }],
@@ -377,4 +392,20 @@ export async function enableIdAgnosticModel(ctx: ScenarioContext): Promise<numbe
 /** Re-observe without acting, e.g. straight after a reload. */
 export async function observeOnly(ctx: ScenarioContext, cursor: number): Promise<StepResponse> {
   return runStep(ctx, { kind: 'save', action: 'noop:observe', args: [], cursor, undo0: 0 });
+}
+
+
+/**
+ * Start a new epoch: something changed live state with no undo entry (a save's
+ * healing mutations, or a reload's zero-trust re-solve of derived geometry).
+ * Snapshots recorded in an earlier epoch may then differ by exactly those
+ * documented families; snapshots recorded since may not.
+ */
+export async function bumpEpoch(ctx: ScenarioContext): Promise<number> {
+  return ctx.eval<number>(`
+    const O = ${ORACLE};
+    if (!O) throw new Error('fuzz oracle is not injected');
+    O.epoch += 1;
+    return O.epoch;
+  `);
 }

@@ -392,3 +392,38 @@ export const SAVE_HEALING_MUTATIONS: readonly KnownAsymmetry[] = [
       'Disappearance only.',
   },
 ];
+
+/**
+ * Derived geometry a RELOAD re-solves from scratch.
+ *
+ * `Project::redrive_offsets_after_load` (src-tauri/src/models/project/offsets.rs:186-188)
+ * ends with an unconditional `resolve_offsets()` under the comment "Zero-trust:
+ * never honor a persisted derivable offset - re-solve unconditionally so a
+ * sub-tolerance stale offset can't survive the load." So `section_offsets` and
+ * the station coordinates derived from them are NOT restored from the file -
+ * they are recomputed - and a snapshot recorded in-session before the save can
+ * legitimately hold a drifted value the reload then corrects. (In this fuzzer's
+ * own runs the drift is usually bug 3's or bug 7's, which is exactly the kind of
+ * corruption a reload is designed to heal.)
+ *
+ * Deliberately scoped to those two derived families and applied ONLY to
+ * comparisons that cross a reload. Everything else - section and shot fields,
+ * uuids, merges, closures, datums, comments, stats - must still match exactly,
+ * so this cannot hide a structural divergence.
+ */
+export const RELOAD_RESOLVED_GEOMETRY: readonly KnownAsymmetry[] = [
+  {
+    id: 'reload-resolves-section-offsets',
+    pathPattern: /^project\.section_offsets\.\d+(\[\d+\])?$/,
+    description:
+      'A reload re-solves section_offsets unconditionally rather than trusting the persisted ' +
+      'value (offsets.rs redrive_offsets_after_load).',
+  },
+  {
+    id: 'reload-resolves-station-coordinates',
+    pathPattern: /^stations\[\d+\]\.coordinates\.[xyz]$/,
+    description:
+      'Station coordinates are derived from section_offsets, so they move with the re-solve a ' +
+      'reload performs.',
+  },
+];

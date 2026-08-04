@@ -299,6 +299,8 @@ export function oracleInjectionSource(): string {
     '  invariants: checkProjectInvariants,',
     '  idAgnostic: idAgnosticSnapshot,',
     '  idAgnosticMode: false,',
+    '  epoch: 0,',
+    '  epochs: [],',
     '  snapshots: [],',
     '  integrity: [],',
     '  lastExpected: null,',

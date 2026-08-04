@@ -178,6 +178,7 @@ import { DEFAULT_FIXTURE, disableAutoSave, loadFixtureWithoutUndoHistory } from 
 import {
   LOOP_CLOSURES_PATH,
   LOOP_CLOSURE_REORDER,
+  RELOAD_RESOLVED_GEOMETRY,
   SAVE_HEALING_MUTATIONS,
   classifyDiffs,
   describeDiffs,
@@ -188,6 +189,7 @@ import {
 import type { TargetingDigest } from '../lib/fuzzOracleCore';
 import { drawAction } from './undoRedoFuzzActions';
 import {
+  bumpEpoch,
   enableIdAgnosticModel,
   fetchMismatch,
   initModel,
@@ -255,6 +257,8 @@ interface SnapshotCheck {
   equal: boolean;
   /** Equal only once floating-point tolerance was applied. */
   floatNoise: boolean;
+  /** Save/reload changes subtracted before classifying the rest (empty = none). */
+  attributed: KnownAsymmetry[];
   /** Rendered diff block (empty when equal). */
   text: string;
   /** True when every difference is explained by a known open app bug. */
@@ -262,33 +266,67 @@ interface SnapshotCheck {
   asymmetries: KnownAsymmetry[];
 }
 
-const EQUAL: SnapshotCheck = { equal: true, floatNoise: false, text: '', onlyKnown: false, asymmetries: [] };
+const EQUAL: SnapshotCheck = {
+  equal: true,
+  floatNoise: false,
+  attributed: [],
+  text: '',
+  onlyKnown: false,
+  asymmetries: [],
+};
 
 /**
  * The SLOW path, reached only after the page has already reported a mismatch:
  * re-compare with numeric tolerance, then work out whether the difference is
  * one of the known open bugs.
  */
-function checkSnapshot(expected: string, actual: string): SnapshotCheck {
+function checkSnapshot(expected: string, actual: string, attributable: readonly KnownAsymmetry[]): SnapshotCheck {
   if (expected === actual) return EQUAL;
   // Geometry is re-derived rather than copied on every undo/redo, so a
   // coordinate whose true value is 0 can come back as different femtometre dust.
-  const diffs = diffSnapshots(expected, actual, 200);
-  if (diffs.length === 0) return { ...EQUAL, floatNoise: true };
+  const all = diffSnapshots(expected, actual, 200);
+  if (all.length === 0) return { ...EQUAL, floatNoise: true };
+
+  // SUBTRACT the paths a save or a reload is documented to change before
+  // classifying the rest. Without this a real bug found after a save reads as a
+  // pile of gauge-anchor noise with the actual divergence buried in it.
+  let diffs = all;
+  let attributed: KnownAsymmetry[] = [];
+  if (attributable.length > 0) {
+    const split = classifyDiffs(all, attributable);
+    if (split.known.length > 0) {
+      diffs = split.unknown;
+      attributed = split.asymmetries;
+    }
+  }
+  if (diffs.length === 0) {
+    return {
+      equal: false,
+      floatNoise: false,
+      attributed,
+      text: attributed.map((entry) => `  ATTRIBUTED [${entry.id}]: ${entry.description}`).join('\n'),
+      onlyKnown: false,
+      asymmetries: [],
+    };
+  }
 
   const lines = [describeDiffs(diffs.slice(0, SHOWN_DIFFS))];
   if (diffs.length > SHOWN_DIFFS) lines.push(`  ...and ${diffs.length - SHOWN_DIFFS} more differing path(s)`);
+  for (const entry of attributed) {
+    lines.push(`  (plus attributable change(s) [${entry.id}], subtracted before this diff)`);
+  }
 
   // A shifted list reads as dozens of unrelated value diffs at every index past
   // the move. Prove that shape structurally before falling back to per-path
   // classification, so it is reported as the one thing it is.
-  if (isListPermutationOnly(expected, actual, LOOP_CLOSURES_PATH)) {
+  if (attributed.length === 0 && isListPermutationOnly(expected, actual, LOOP_CLOSURES_PATH)) {
     lines.push('  (every difference above is explained by project.loop_closures being REORDERED:');
     lines.push('   same closures, same ids, same metrics, different positions)');
     lines.push(`  KNOWN OPEN APP BUG [${LOOP_CLOSURE_REORDER.id}]: ${LOOP_CLOSURE_REORDER.description}`);
     return {
       equal: false,
       floatNoise: false,
+      attributed,
       text: lines.join('\n'),
       onlyKnown: true,
       asymmetries: [LOOP_CLOSURE_REORDER],
@@ -302,6 +340,7 @@ function checkSnapshot(expected: string, actual: string): SnapshotCheck {
   return {
     equal: false,
     floatNoise: false,
+    attributed,
     text: lines.join('\n'),
     onlyKnown: classified.unknown.length === 0,
     asymmetries: classified.asymmetries,
@@ -376,6 +415,7 @@ export const undoRedoFuzz: Scenario = {
     const jumpRng = mulberry32((ctx.seed ^ JUMP_STREAM_SALT) >>> 0);
     const saveRng = mulberry32((ctx.seed ^ SAVE_STREAM_SALT) >>> 0);
     let savesDone = 0;
+    let reloadsDone = 0;
     const saveDir = fs.mkdtempSync(path.join(os.tmpdir(), 'stalagmight-fuzz-save-'));
     const savePath = path.join(saveDir, 'fuzz-roundtrip.stalx');
     // Both stacks persist, but only the newest `undo_persist_limit` entries do.
@@ -500,28 +540,36 @@ export const undoRedoFuzz: Scenario = {
      * only time they cross the bridge) and either tolerates the difference or
      * fails with the full diff.
      */
-    const resolveMismatch = async (headline: string, resyncIntegrity: IntegrityVerdict | null): Promise<void> => {
+    const resolveMismatch = async (
+      headline: string,
+      resyncIntegrity: IntegrityVerdict | null,
+      res: StepResponse,
+    ): Promise<void> => {
       const pair = await fetchMismatch(ctx);
-      const check = checkSnapshot(pair.expected ?? '', pair.actual ?? '');
+      // ONLY a comparison that crosses an epoch boundary may subtract the
+      // documented undo-less changes. Within an epoch the oracle stays strict -
+      // otherwise "a reload re-solves offsets" would permanently hide every
+      // section_offsets bug the fuzzer exists to find (bugs 3 and 7).
+      const attributable = res.crossesEpoch
+        ? [
+            ...(savesDone > 0 ? SAVE_HEALING_MUTATIONS : []),
+            ...(reloadsDone > 0 ? RELOAD_RESOLVED_GEOMETRY : []),
+          ]
+        : [];
+      const check = checkSnapshot(pair.expected ?? '', pair.actual ?? '', attributable);
       if (check.equal) {
         // Counted, never resynced: keeping the ORIGINAL expectation means the
         // tolerance can never ratchet, only ever absorb the same dust again.
         if (check.floatNoise) ctx.metric('floatNoise');
         return;
       }
-      // A save makes documented, undo-less healing changes to live state
-      // (gauge anchors, uuid backfill, orphan-offset drop), so from the first
-      // save onwards a snapshot recorded BEFORE it can legitimately differ by
-      // exactly those. Narrow by path AND value; anything else still fails.
-      if (savesDone > 0) {
-        const diffs = diffSnapshots(pair.expected ?? '', pair.actual ?? '', 200);
-        const healed = classifyDiffs(diffs, SAVE_HEALING_MUTATIONS);
-        if (diffs.length > 0 && healed.unknown.length === 0) {
-          ctx.metric('resyncs');
-          for (const mutation of healed.asymmetries) ctx.metric(`resync:${mutation.id}`);
-          top = await resyncModel(ctx, pair.index, resyncIntegrity);
-          return;
-        }
+      // Every difference was a documented save heal or reload re-solve: record
+      // the new baseline and carry on. Nothing else is tolerated here.
+      if (check.attributed.length > 0 && check.text.startsWith('  ATTRIBUTED')) {
+        ctx.metric('resyncs');
+        for (const entry of check.attributed) ctx.metric(`resync:${entry.id}`);
+        top = await resyncModel(ctx, pair.index, resyncIntegrity);
+        return;
       }
       if (ALLOW_KNOWN_BUGS && check.onlyKnown) {
         ctx.metric('knownAsymmetry');
@@ -590,6 +638,7 @@ export const undoRedoFuzz: Scenario = {
         await resolveMismatch(
           `${label} did not restore the state recorded at depth ${cursor}`,
           res.integrity,
+          res,
         );
       }
       assertIntegrityDelta(res, label);
@@ -622,6 +671,9 @@ export const undoRedoFuzz: Scenario = {
      *      snapshots recorded before the save.
      */
     const saveAndReload = async (tag: string): Promise<void> => {
+      // The save is about to make undo-less changes, so everything recorded so
+      // far belongs to the previous epoch.
+      await bumpEpoch(ctx);
       const saveRes = await step('save', 'saveProject', [savePath]);
       if (!saveRes.actionOk || saveRes.commandSuccess === false) {
         note(`${tag} save -> FAILED`);
@@ -635,6 +687,7 @@ export const undoRedoFuzz: Scenario = {
         await resolveMismatch(
           'save mutated the project in a way SAVE_HEALING_MUTATIONS does not account for',
           saveRes.integrity,
+          saveRes,
         );
       }
       record(saveRes);
@@ -660,12 +713,18 @@ export const undoRedoFuzz: Scenario = {
       // Switch BEFORE re-observing so both sides of the comparison are in the
       // same form. Idempotent, so later reloads are a no-op.
       await enableIdAgnosticModel(ctx);
+      await bumpEpoch(ctx);
+      reloadsDone += 1;
       const res = await observeOnly(ctx, cursor);
       note(`${tag} reload -> depth ${cursor} (undo ${res.undoLen}, redo ${res.redoLen})`);
       assertInvariants(res, 'reload');
       assertStacks('the persisted history did not come back intact', res);
       if (res.verdict !== 'equal') {
-        await resolveMismatch('reopening the saved project did not restore the state it was saved at', res.integrity);
+        await resolveMismatch(
+          'reopening the saved project did not restore the state it was saved at',
+          res.integrity,
+          res,
+        );
       }
       assertIntegrityDelta(res, 'reload');
       record(res);
@@ -745,6 +804,7 @@ export const undoRedoFuzz: Scenario = {
             `a REJECTED command (${action.action}) mutated the project: ` +
               `${res.commandError ?? res.actionError ?? 'unknown'}`,
             res.integrity,
+            res,
           );
         }
         assertIntegrityDelta(res, `a rejected ${action.action}`);
@@ -802,6 +862,7 @@ export const undoRedoFuzz: Scenario = {
         await resolveMismatch(
           `a no-op command (${action.action}) changed the project state`,
           res.integrity,
+          res,
         );
       }
       assertIntegrityDelta(res, `a no-op ${action.action}`);
