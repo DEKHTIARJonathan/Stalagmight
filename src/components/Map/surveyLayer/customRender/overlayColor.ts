@@ -43,12 +43,12 @@ function lerpChannelFloor(nearByte: number, farByte: number, t: number): number 
 /**
  * The packed ramp color for one feature value. Mirrors the stock expression:
  * `value === BEYOND_GAS_RANGE` (connected but past the gas/turn budget) ->
- * `null`, signaling the caller to fall through to the feature's own resolved
- * base color instead of grey or the ramp; any other `value < 0` (topologically
- * unconnected) -> grey; otherwise interpolate near->far over `0 -> safeMax`,
- * with the endpoint short-circuits MapLibre's `interpolate` evaluate applies
- * (`value <= 0` -> the exact near color, `value >= safeMax` -> the exact far
- * color) so the boundaries never drift by a ULP.
+ * `far` - the ramp's own far-end color, clamped, never the feature's base
+ * color; any other `value < 0` (topologically unconnected) -> grey; otherwise
+ * interpolate near->far over `0 -> safeMax`, with the endpoint short-circuits
+ * MapLibre's `interpolate` evaluate applies (`value <= 0` -> the exact near
+ * color, `value >= safeMax` -> the exact far color) so the boundaries never
+ * drift by a ULP.
  */
 export function packRampColor(
   value: number,
@@ -56,8 +56,8 @@ export function packRampColor(
   near: Rgba8,
   far: Rgba8,
   grey: Rgba8,
-): Rgba8 | null {
-  if (value === BEYOND_GAS_RANGE) return null;
+): Rgba8 {
+  if (value === BEYOND_GAS_RANGE) return far;
   if (value < 0) return grey;
   if (value <= 0) return near;
   if (value >= safeMax) return far;
@@ -80,14 +80,14 @@ export function packRampColor(
 export function makeOverlayColor(
   overlay: OverlayColorInput,
   grayLine: string,
-): (value: number) => Rgba8 | null {
+): (value: number) => Rgba8 {
   const [near, far] =
     overlay.mode === 'distance'
       ? [packCssColor(DISTANCE_NEAR), packCssColor(DISTANCE_FAR)]
       : [packCssColor(GAS_NEAR), packCssColor(GAS_FAR)];
   const grey = packCssColor(grayLine);
   const safeMax = overlay.max > 0 ? overlay.max : 1;
-  return (value: number): Rgba8 | null => packRampColor(value, safeMax, near, far, grey);
+  return (value: number): Rgba8 => packRampColor(value, safeMax, near, far, grey);
 }
 
 /**

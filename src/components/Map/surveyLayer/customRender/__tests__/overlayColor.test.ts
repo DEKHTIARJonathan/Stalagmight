@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { emptySurveyData, type SurveyData } from '../../../../../types/survey-data';
 import { DISTANCE_NEAR, DISTANCE_FAR } from '../../../../../utils/distanceGradient';
-import { GAS_NEAR, GAS_FAR } from '../../../../../utils/gasReach';
+import { GAS_NEAR, GAS_FAR, BEYOND_GAS_RANGE } from '../../../../../utils/gasReach';
 import { encodeFeatureId } from '../../../../../utils/ids';
 import type { DisplayColorContext, OverlayColorInput } from '../../displayColor';
 import { packCssColor, type Rgba8 } from '../colorPack';
@@ -49,6 +49,10 @@ describe('packRampColor byte-parity with MapLibre data-driven interpolate', () =
   it('unreachable (value < 0) renders the grey sentinel', () => {
     expect(packRampColor(-1, 100, NEAR, FAR, GREY)).toEqual(GREY);
     expect(packRampColor(-0.0001, 100, NEAR, FAR, GREY)).toEqual(GREY);
+  });
+
+  it('beyond-gas-range clamps to the ramp far color, never grey or the base color (#395)', () => {
+    expect(packRampColor(BEYOND_GAS_RANGE, 100, NEAR, FAR, GREY)).toEqual(FAR);
   });
 
   it('endpoints are the exact near / far colors', () => {

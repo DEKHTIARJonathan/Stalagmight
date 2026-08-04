@@ -12,8 +12,8 @@ import { encodeFeatureId } from './ids';
  * budget** carry a colorable value (gold near the origin -> purple at the
  * budget); stations connected to the survey but beyond reach - the gas budget
  * OR the scooter rig's usable range (the backend ANDs both, `gas.rs`
- * `budget_view`'s `in_range`) - keep their BASE color (dimmed, not greyed -
- * see `GAS_DIM_ALPHA`); only topologically UNCONNECTED stations read grey.
+ * `budget_view`'s `in_range`) - clamp to the ramp's FAR color (dimmed, not
+ * greyed - see `GAS_DIM_ALPHA`); only topologically UNCONNECTED stations read grey.
  * This three-way split lets a diver tell "past my turn point or scooter range"
  * (dimmed, colored) apart from "not part of this cave section at all" (grey)
  * at a glance. These pure helpers keep the transform unit-testable in
@@ -25,7 +25,8 @@ import { encodeFeatureId } from './ids';
 export const UNREACHABLE_GAS = -1;
 
 /** Sentinel `gasReach` for "connected to the survey, but beyond the gas/turn
- *  budget" (renders the base section color, dimmed - never grey, never ramped). */
+ *  budget" (renders the ramp's far color, dimmed - never grey, never the base
+ *  section color; a uniform "just gas reach, but dimmer" clamp). */
 export const BEYOND_GAS_RANGE = -2;
 
 /**
@@ -151,10 +152,9 @@ export function gasBeyondReachFeatureIds(map: Map<number, number> | undefined): 
  * The gas reachable-frontier color ramp (shared by shots line-color and stations
  * circle-color so the two can't drift). Mirrors `distanceColorExpression` but reads
  * the `gasReach` feature-state key, plus a third case: {@link BEYOND_GAS_RANGE}
- * (connected but past budget) falls through to `baseColorInput` - the feature's
- * own already-resolved base/section color (`['get', 'color']` on the interact /
- * drag-preview overlay features) - rather than grey or the ramp, approximating
- * the custom renderer's per-vertex dim.
+ * (connected but past budget) clamps to `far` - the ramp's own far-end color -
+ * rather than grey or the feature's base color, matching the custom renderer's
+ * per-vertex dim ("just gas reach, but dimmer").
  */
 export function gasReachColorExpression(
   near: string,
@@ -162,7 +162,6 @@ export function gasReachColorExpression(
   max: number,
   grey: string,
   gasInput: ExpressionSpecification = ['feature-state', 'gasReach'] as ExpressionSpecification,
-  baseColorInput: ExpressionSpecification = ['get', 'color'] as ExpressionSpecification,
 ): ExpressionSpecification {
   const safeMax = max > 0 ? max : 1;
   return [
@@ -172,7 +171,7 @@ export function gasReachColorExpression(
     [
       'case',
       ['==', ['var', 'g'], BEYOND_GAS_RANGE],
-      baseColorInput,
+      far,
       ['<', ['var', 'g'], 0],
       grey,
       ['interpolate', ['linear'], ['var', 'g'], 0, near, safeMax, far],

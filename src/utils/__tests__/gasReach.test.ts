@@ -117,7 +117,7 @@ describe('gasReachColorExpression', () => {
     expect(s).toContain('#888888'); // grey branch for the unconnected sentinel
   });
 
-  it('falls through to the base color expression for the beyond-range sentinel, matched BEFORE the generic grey case', () => {
+  it('clamps the beyond-range sentinel to the ramp far color, matched BEFORE the generic grey case', () => {
     // Structural, not string-substring: pins the actual ['case', ...] branch
     // shape and ORDER, so reordering the branches (grey first) fails this test
     // even though it would still contain both substrings.
@@ -125,9 +125,9 @@ describe('gasReachColorExpression', () => {
     // expr = ['let', 'g', ['coalesce', ...], caseExpr] - the case lives at index 3.
     const caseExpr = expr[3] as unknown[];
     expect(caseExpr[0]).toBe('case');
-    // First branch: BEYOND_GAS_RANGE -> the base color input (['get', 'color']).
+    // First branch: BEYOND_GAS_RANGE -> the ramp's far color, clamped.
     expect(caseExpr[1]).toEqual(['==', ['var', 'g'], BEYOND_GAS_RANGE]);
-    expect(caseExpr[2]).toEqual(['get', 'color']);
+    expect(caseExpr[2]).toBe('#bbbbbb');
     // Second branch: any other negative value (the unconnected sentinel) -> grey.
     expect(caseExpr[3]).toEqual(['<', ['var', 'g'], 0]);
     expect(caseExpr[4]).toBe('#888888');

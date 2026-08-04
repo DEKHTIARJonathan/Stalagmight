@@ -10,7 +10,7 @@ import {
   type PixelRgba,
   type SectionSeed,
 } from './helpers/app';
-import { GAS_NEAR } from '../src/utils/gasReach';
+import { GAS_NEAR, GAS_FAR } from '../src/utils/gasReach';
 import {
   gasCylinderRows,
   gasMarkedLabelInputs,
@@ -74,10 +74,11 @@ const sectionSeeds: SectionSeed[] = [
  * station `i` at `x = i * 10` and charges `|x| * 20` litres against a fixed
  * 1500 L budget, so stations 0..7 are reachable (7 -> 1400 L, the last one inside
  * the budget) and 8..10 are over budget. Of those, 8 stays CONNECTED-but-over-budget
- * (finite `gas_to_reach`, `reachable: false`) - beyond gas range: dimmed, still its
- * own section/base color, never grey (#395). The mock's LAST station (10) is
- * additionally patched to a null `gas_to_reach` - genuinely topologically
- * UNCONNECTED - the only case that still renders grey.
+ * (finite `gas_to_reach`, `reachable: false`) - beyond gas range: dimmed, clamped
+ * to the ramp's FAR (purple) color, never the section color, never grey (#395,
+ * revised). The mock's LAST station (10) is additionally patched to a null
+ * `gas_to_reach` - genuinely topologically UNCONNECTED - the only case that still
+ * renders grey.
  */
 const LAST_REACHABLE = 7;
 const BEYOND_RANGE = 8;
@@ -168,6 +169,12 @@ function colorKey(hex: string): string {
  *  exactly this (MapLibre's `interpolate` short-circuits the 0 stop, and
  *  `packRampColor` reproduces that). */
 const GAS_NEAR_KEY = colorKey(GAS_NEAR);
+
+/** The far (purple) end of the reachable ramp: a station at or beyond the turn
+ *  budget clamps to this, at full alpha - the beyond-range station is the SAME
+ *  hue, dimmed (blended with reduced alpha), so its painted pixel differs from
+ *  this exact key while still reading "far ramp color" to the eye. */
+const GAS_FAR_KEY = colorKey(GAS_FAR);
 
 /** The theme's gray line, which both the stock ramp and the custom resolver use
  *  for "unreachable on this gas plan". Read from the live theme so a theme change
@@ -419,11 +426,13 @@ test.describe('Gas planning', () => {
     expect(lastReachable.has(sectionKey)).toBe(false);
     expect(lastReachable.has(GAS_NEAR_KEY)).toBe(false);
     expect(lastReachable.has(grey)).toBe(false);
-    // The beyond-range station (connected, but past the budget) is DIMMED, not
-    // greyed: neither the ramp, the plain (undimmed) section color, nor grey (#395).
+    // The beyond-range station (connected, but past the budget) is clamped to the
+    // ramp's FAR color, dimmed: distinct from the in-budget ramp pixels (near end
+    // and its own section color), the plain undimmed far color, and grey (#395).
     const beyondRange = await stationColors(page, BEYOND_RANGE);
     expect(beyondRange.has(grey)).toBe(false);
     expect(beyondRange.has(GAS_NEAR_KEY)).toBe(false);
+    expect(beyondRange.has(GAS_FAR_KEY)).toBe(false);
     expect(beyondRange.has(sectionKey)).toBe(false);
     // ...while the genuinely UNCONNECTED station still goes grey (the conservative
     // direction the renderer reserves for "not part of this cave section at all").
@@ -1514,6 +1523,7 @@ test.describe('Gas planning', () => {
     expect(reachableColors.has(grey)).toBe(false);
     const beyondRangeBefore = await stationColors(page, BEYOND_RANGE);
     expect(beyondRangeBefore.has(grey)).toBe(false);
+    expect(beyondRangeBefore.has(GAS_FAR_KEY)).toBe(false);
     expect(beyondRangeBefore.has(sectionKey)).toBe(false);
     expect(await stationPaints(page, UNCONNECTED, grey)).toBe(true);
 
@@ -1539,6 +1549,7 @@ test.describe('Gas planning', () => {
     await expect.poll(() => stationBlock(page, LAST_REACHABLE), { timeout: 3000 }).toEqual(reachableBefore);
     const beyondRangeAfter = await stationColors(page, BEYOND_RANGE);
     expect(beyondRangeAfter.has(grey)).toBe(false);
+    expect(beyondRangeAfter.has(GAS_FAR_KEY)).toBe(false);
     expect(beyondRangeAfter.has(sectionKey)).toBe(false);
     const unconnected = await stationColors(page, UNCONNECTED);
     expect(unconnected.has(grey)).toBe(true);

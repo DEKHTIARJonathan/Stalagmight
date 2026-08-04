@@ -124,8 +124,8 @@ export function GasLegend({ field, units, visible }: GasLegendProps) {
           </>
         )}
         {/* Beyond gas range (#395): a short line sample at the same dimmed opacity
-            the renderer paints beyond-budget geometry with, in the survey's default
-            section color - explains why some legs look faded but still colored
+            the renderer paints beyond-budget geometry with, clamped to the ramp's
+            far color - explains why some legs look faded but still colored
             (vs. the fully grey unconnected parts, which need no key of their own). */}
         <KeyRow label={t('map.gasLegend.key.beyondRange')}>
           <span
@@ -133,7 +133,7 @@ export function GasLegend({ field, units, visible }: GasLegendProps) {
               width: 14,
               height: 3,
               borderRadius: 2,
-              background: getThemeColor('--cc-station-default'),
+              background: GAS_FAR,
               opacity: GAS_DIM_ALPHA,
               flexShrink: 0,
             }}
