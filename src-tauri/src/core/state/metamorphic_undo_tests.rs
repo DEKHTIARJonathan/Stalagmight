@@ -384,6 +384,23 @@ const EXPLAINS: &[Explains] = &[
     // so the next run of this programme starts from the evidence rather than
     // from a surprise. Narrowed to `station_comments`: any other path in the
     // same comparison is unexplained and still fails.
+    //
+    // ONE LEAD, found and not yet confirmed: the range-delete impact analysis
+    // collects an ORDER-DEPENDENT vector out of a `HashMap` -
+    //
+    //     let removed_comments: Vec<StationRef> = self
+    //         .station_comments
+    //         .keys()
+    //         .filter_map(|k| self.resolve_key(k))
+    //         .filter(|sr| removed_set.contains(sr))
+    //         .collect();
+    //
+    // (`models/project/shots.rs:772-777`). That is the right SHAPE for an
+    // intermittent re-key and it is in the right file, but it has not been
+    // shown to feed the divergence: the collection there describes the dialog's
+    // impact summary rather than performing the re-key, so the next step is to
+    // find whether anything downstream consumes its ORDER. Until that is
+    // answered this stays an observation.
     Explains {
         id: "observation-split-routes-disagree-on-station-comment-keys",
         each: |diff| diff.path.starts_with("station_comments"),
