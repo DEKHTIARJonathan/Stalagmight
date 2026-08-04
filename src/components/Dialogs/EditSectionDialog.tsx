@@ -14,7 +14,7 @@ import { validateEditableShot } from '../../utils/validation';
 import { isBlankNewShot, isShotComplete } from '../common/editableShotStatus';
 import { EDITABLE_AZIMUTH_AVG_KEY } from '../common/editableShotColumns';
 import { SectionMetadataForm } from '../common/SectionMetadataForm';
-import type { Shot, ShotData } from '../../types/project';
+import type { Shot, ShotData, ShotId } from '../../types/project';
 import type { DeleteShotImpact } from '../../types/commands';
 import { defaultConfig } from '../../types/config';
 import DeleteShotImpactDetails from './DeleteShotImpactDetails';
@@ -213,16 +213,24 @@ export default function EditSectionDialog() {
    * of the section.
    */
   const handleDeleteShots = useCallback((indices: number[]): boolean => {
+    // Each row is carried WITH the index it came in on: that index is already in
+    // the editor's own row space, which is the space `frozenShotIndices` speaks,
+    // so the frozen check below is a set lookup rather than a search of `shots`
+    // per requested row.
     const requested = indices
-      .map((i) => shots[i])
-      .filter((s): s is EditableShot => s !== undefined && s.isDeleted !== true);
+      .map((index) => ({ index, shot: shots[index] }))
+      .filter((row): row is { index: number; shot: EditableShot } =>
+        row.shot !== undefined && row.shot.isDeleted !== true
+      );
     if (requested.length === 0) return false;
 
     // A frozen shot's geometry belongs to the closure solve and the backend
     // refuses to delete it. Soft-deleting it here would take the row off screen
     // and surface the refusal at SAVE, minutes and several edits later - the old
     // table simply offered no delete control on those rows.
-    const targets = requested.filter((s) => !frozenShotIndices?.has(shots.indexOf(s)));
+    const targets = requested
+      .filter((row) => frozenShotIndices?.has(row.index) !== true)
+      .map((row) => row.shot);
     const frozenSkipped = requested.length - targets.length;
     if (frozenSkipped > 0) {
       showToast(
@@ -463,10 +471,9 @@ export default function EditSectionDialog() {
         }
       }
 
-      // Create new shots
+      // Create new shots, each where the user put it (see plannedShotInserts).
       // Rows added and left empty are not shots; they never reach the backend.
-      const newShots = shots.filter(s => s.isNew && !s.isDeleted && !isBlankNewShot(s));
-      for (const shot of newShots) {
+      for (const { shot, beforeShotId } of plannedShotInserts(shots)) {
         const shotData: ShotData = {
           azimuth_in: shot.azimuth_in,
           azimuth_out: shot.azimuth_out,
@@ -484,7 +491,7 @@ export default function EditSectionDialog() {
           marker_index: null,
           temperature: null,
         };
-        const result = await createShot(sectionId, shotData);
+        const result = await createShot(sectionId, shotData, undefined, beforeShotId);
         if (!result.success) {
           setError(result.error ?? 'Failed to create shot');
           return;
@@ -693,6 +700,51 @@ export default function EditSectionDialog() {
       </div>
     </DialogWrapper>
   );
+}
+
+/** A row Save has to create, and the shot it must land in front of. */
+export interface PlannedShotInsert {
+  shot: EditableShot;
+  /** Absent = append at the end of the section, which is where the row is. */
+  beforeShotId?: ShotId;
+}
+
+/**
+ * The rows Save has to create, in the order it must create them, each anchored
+ * to where the user actually put it.
+ *
+ * `createShot` with NEITHER anchor appends, so every added row - including one
+ * inserted between two measured shots - used to be written at the end of the
+ * section, rearranging the passage on save.
+ *
+ * The anchor is the next SAVED shot rather than the previous one, because that
+ * is the one identity that can be named for every row of a run without waiting
+ * on the id the backend is about to mint: consecutive added rows all quote the
+ * same anchor, and each insert lands immediately before it - i.e. after the row
+ * created just before it - so a run keeps the order it has on screen. A run with
+ * no saved shot after it appends, in order, which is the same position.
+ *
+ * Excluded from the walk, and from the anchoring:
+ * - deleted rows. Their deletes run FIRST in `handleSave`, so a deleted shot's
+ *   id no longer resolves by the time a create quotes it, and the backend would
+ *   reject the create outright.
+ * - blank added rows, which are not shots and are never written.
+ */
+export function plannedShotInserts(rows: readonly EditableShot[]): PlannedShotInsert[] {
+  const plan: PlannedShotInsert[] = [];
+  // Backwards, so every added row already knows the saved shot that follows it.
+  let nextSavedId: ShotId | undefined;
+  for (let i = rows.length - 1; i >= 0; i--) {
+    const row = rows[i]!;
+    if (row.isDeleted === true) continue;
+    if (row.isNew !== true) {
+      nextSavedId = row.id;
+      continue;
+    }
+    if (isBlankNewShot(row)) continue;
+    plan.push(nextSavedId === undefined ? { shot: row } : { shot: row, beforeShotId: nextSavedId });
+  }
+  return plan.reverse();
 }
 
 function hasChanges(original: Shot, current: EditableShot): boolean {
