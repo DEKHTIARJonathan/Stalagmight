@@ -35,14 +35,18 @@ export interface ZeroDatumConfigResult {
 }
 
 /** A blank row for the shot table, shared by the add and the two insert paths. */
+/** A row the user has added but not measured. Non-finite, NOT zero: a 0 length
+ *  with a 0 azimuth and 0 depths is a due-north, zero-depth shot nobody took, and
+ *  every one of those values passes range validation on the way to the backend.
+ *  Blank renders blank in the grid and reads as missing to the completeness gate. */
 function makeNewShot(tempId: number): EditableShot {
   return {
     id: -tempId,
-    azimuth_in: 0,
-    azimuth_out: 0,
-    length: 0,
-    depth_in: 0,
-    depth_out: 0,
+    azimuth_in: NaN,
+    azimuth_out: NaN,
+    length: NaN,
+    depth_in: NaN,
+    depth_out: NaN,
     pitch_in: null,
     pitch_out: null,
     left: null,
