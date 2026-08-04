@@ -9,7 +9,14 @@
  * GPS anchor or merge point on the wrong station. These pin the shared answer.
  */
 import { describe, it, expect } from 'vitest';
-import { isEmittedShot, emittedBefore, toEmittedStationIndex } from '../emittedShots';
+import {
+  isEmittedShot,
+  emittedBefore,
+  fromEmittedStationIndex,
+  toEmittedStationIndex,
+  visibleBefore,
+  visibleShotCount,
+} from '../emittedShots';
 import type { EditableShot } from '../editableShot';
 
 const measured = (id: number): EditableShot =>
@@ -101,6 +108,60 @@ describe('toEmittedStationIndex', () => {
   it('ignores deleted rows on both sides of the count', () => {
     const rows = [deleted(0), measured(1), blank(2), measured(3)];
     expect(toEmittedStationIndex(rows, 2)).toBe(1);
+  });
+});
+
+describe('visibleBefore / visibleShotCount', () => {
+  const rows = [measured(0), blank(1), deleted(2), measured(3)];
+
+  it('counts the rows on screen, blanks included and deleted ones not', () => {
+    expect(visibleShotCount(rows)).toBe(3);
+    expect(visibleBefore(rows, 4)).toBe(3);
+    expect(visibleBefore(rows, 3)).toBe(2); // the deleted row occupies no station
+    expect(visibleBefore(rows, 0)).toBe(0);
+    expect(visibleBefore(rows, 99)).toBe(3);
+  });
+
+  it('differs from the emitted count by exactly the blank rows', () => {
+    expect(visibleShotCount(rows) - rows.filter(isEmittedShot).length).toBe(1);
+  });
+});
+
+describe('fromEmittedStationIndex', () => {
+  it('pushes a drawn station past the blanks above it', () => {
+    // The preview draws only the measured row, so its station 0 is the one the
+    // grid calls station 1.
+    const rows = [blank(0), measured(1)];
+    expect(fromEmittedStationIndex(rows, 0)).toBe(1);
+    expect(fromEmittedStationIndex(rows, 1)).toBe(2);
+  });
+
+  it('answers with the index it was handed when nothing is blank', () => {
+    const rows = [measured(0), measured(1), measured(2)];
+    for (const station of [0, 1, 2, 3]) {
+      expect(fromEmittedStationIndex(rows, station)).toBe(station);
+    }
+  });
+
+  it('ends the run at the last emitted row, not after a trailing blank', () => {
+    const rows = [measured(0), blank(1)];
+    expect(fromEmittedStationIndex(rows, 1)).toBe(1);
+  });
+
+  it('clamps a station the preview cannot have drawn', () => {
+    expect(fromEmittedStationIndex([measured(0)], 9)).toBe(1);
+    expect(fromEmittedStationIndex([blank(0)], 0)).toBe(0);
+    expect(fromEmittedStationIndex([], 3)).toBe(0);
+  });
+
+  it('round-trips every drawn station back to itself', () => {
+    // This is the property the preview click depends on: click a dot, store the
+    // visible station, send the emitted one, and land on the dot clicked.
+    const rows = [blank(0), measured(1), blank(2), measured(3), measured(4), blank(5)];
+    const emitted = rows.filter(isEmittedShot).length;
+    for (let station = 0; station <= emitted; station++) {
+      expect(toEmittedStationIndex(rows, fromEmittedStationIndex(rows, station))).toBe(station);
+    }
   });
 });
 
