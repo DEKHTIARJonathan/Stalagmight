@@ -168,12 +168,13 @@
  *
  *     Needs no delete, unlike bug 8 - one insert-before is enough.
  *
- *     STRICT repro: `--seed 1 --iterations 2` on fractal, which fails on the
- *     first id-bearing entry it unwinds:
+ *     STRICT repro: `--seed 1 --iterations 1` on fractal (what the
+ *     `agent:scenarios` smoke entry runs), which fails on the first id-bearing
+ *     entry it unwinds:
  *
- *         undo did not restore the state recorded at depth 15
+ *         undo did not restore the state recorded at depth 16
  *           (the entry it consumed was set_shot_kind)
- *           at project.sections[32].shots[1].kind
+ *           at project.sections[32].shots[0].kind
  *             expected: "Normal"   actual: "Jump"
  *
  *     What is NOT affected, which bounds the fix: `SegmentMoveInfo` and
