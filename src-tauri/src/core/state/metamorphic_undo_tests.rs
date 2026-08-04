@@ -61,7 +61,7 @@
 //! per-entry-point special cases all the way down - it is where finding 10's
 //! class lives (two of four delete entry points do not convert orphan closures)
 //! - and "both routes undo to the same place" is a property no single-route
-//! fuzzer can even express.
+//!   fuzzer can even express.
 //!
 //! The inverse check compares the two UNWOUND TWINS TO EACH OTHER, not to the
 //! baseline. Comparing to the baseline re-measures the open findings on this
@@ -74,13 +74,17 @@
 //! # Data
 //!
 //! Everything is generated in code. No fixture is read, copied or derived from.
+//!
+//! `struct_field_names` is expected rather than renamed: `explains_geometry`
+//! reads as a sentence about the defect and `geometry` alone would not.
 
 #![expect(
-    clippy::unwrap_used,
-    clippy::expect_used,
     clippy::indexing_slicing,
-    clippy::too_many_lines,
     reason = "test module: see docs/linting.md for the per-test-module expect idiom"
+)]
+#![expect(
+    clippy::struct_field_names,
+    reason = "`Explains::explains_geometry` reads as a sentence about the defect; `geometry` alone               would not"
 )]
 #![expect(
     clippy::print_stdout,
@@ -845,9 +849,7 @@ fn pair_range_shift_vs_singles(
     }
     for _ in start..=end {
         let live = shot_ids(&twins.right, section_id);
-        let Some(&target) = live.get(start) else {
-            return None;
-        };
+        let &target = live.get(start)?;
         let single = twins.right.execute(Command::DeleteShot {
             section_id,
             shot_id: target,
@@ -963,7 +965,7 @@ fn pair_batch_vs_sequential(
 fn pair_poisoned_batch_is_a_no_op(
     twins: &Twins,
     rng: &mut Rng,
-    pair: &'static str,
+    _pair: &'static str,
 ) -> Option<Comparison> {
     let mut commands = batch_commands(&twins.left, rng)?;
     let before = mask_timestamps(&canonical_snapshot(&twins.left, false));
@@ -1159,9 +1161,7 @@ fn pair_create_with_shots_vs_appends(
         direction: None,
         shots: Vec::new(),
     });
-    let Some(section_id) = empty.section_id else {
-        return None;
-    };
+    let section_id = empty.section_id?;
     for shot in shots {
         let appended = twins.right.execute(Command::CreateShot {
             section_id,
