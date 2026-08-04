@@ -349,3 +349,107 @@ fn undo_after_reload_deletes_the_shot_it_created() {
          uuids: {remaining:?}"
     );
 }
+
+/// `section_offsets` for `section_id`, or `None` when the section has no entry.
+fn section_offset(state: &AppState, section_id: SectionId) -> Option<(f64, f64)> {
+    let project = state.get_project_state().expect("no project open");
+    project.section_offsets.get(&section_id).copied()
+}
+
+// ===========================================================================
+// Bug 2: undo of a shot insert leaves an orphan all-zero section_offsets entry
+// ===========================================================================
+
+/// `adjust_section_offset` CREATES the `section_offsets` key while compensating
+/// an insert; the undo puts the value back to zero but nothing removes the key.
+/// Geometrically inert, but it means undo is not an exact inverse and the leaked
+/// key is serialized into the .stalx.
+#[test]
+#[ignore = "open bug 2: undo of a shot insert leaks an all-zero section_offsets key - see e2e/agent/scenarios/undoRedoFuzz.ts header"]
+fn undo_of_a_shot_insert_leaves_no_orphan_offset_entry() {
+    let state = state_with_project();
+    let section_id = create_section(&state, "Inserted", vec![shot(0.0, 5.0), shot(90.0, 4.0)]);
+    let first_shot = shot_ids(&state, section_id)[0];
+
+    let before = section_offset(&state, section_id);
+
+    let created = state.execute(Command::CreateShot {
+        section_id,
+        shot: shot(180.0, 3.0),
+        after_shot_id: None,
+        before_shot_id: Some(first_shot),
+    });
+    assert!(created.success, "CreateShot failed: {:?}", created.error);
+    assert!(state.undo().success, "undo of CreateShot failed");
+
+    let after = section_offset(&state, section_id);
+    assert_eq!(
+        before, after,
+        "undo of a shot insert changed the section_offsets map: it was {before:?} and is now \
+         {after:?} (the compensating adjust_section_offset creates the key and nothing removes it)"
+    );
+}
+
+// ===========================================================================
+// Bug 3: appending the FIRST shot into an EMPTY section, then undoing,
+// displaces the whole section - and the displacement RATCHETS
+// ===========================================================================
+
+/// `Project::add_shot` (the append path) is offset-neutral, but the undo routes
+/// through `remove_shot_with_rewire`, whose `pos == 0` branch unconditionally
+/// calls `adjust_section_offset`. With one shot the appended shot IS index 0, so
+/// the delete slides the section by that shot's horizontal vector.
+#[test]
+#[ignore = "open bug 3: undoing the first shot appended into an empty section displaces it - see e2e/agent/scenarios/undoRedoFuzz.ts header"]
+fn undo_of_the_first_shot_in_an_empty_section_does_not_move_it() {
+    let state = state_with_project();
+    let section_id = create_section(&state, "Empty", vec![]);
+
+    let before = section_offset(&state, section_id).unwrap_or((0.0, 0.0));
+
+    let created = state.execute(Command::CreateShot {
+        section_id,
+        shot: shot(90.0, 10.0),
+        after_shot_id: None,
+        before_shot_id: None,
+    });
+    assert!(created.success, "CreateShot failed: {:?}", created.error);
+    assert!(state.undo().success, "undo of CreateShot failed");
+
+    let after = section_offset(&state, section_id).unwrap_or((0.0, 0.0));
+    assert_eq!(
+        before, after,
+        "undoing the first shot appended into an empty section moved the section from {before:?} \
+         to {after:?}"
+    );
+}
+
+/// The displacement is not a one-off: redo re-inserts without giving the offset
+/// back, so every undo/redo cycle slides the section again.
+#[test]
+#[ignore = "open bug 3 (ratchet): the displacement compounds on every undo/redo cycle - see e2e/agent/scenarios/undoRedoFuzz.ts header"]
+fn the_empty_section_displacement_does_not_ratchet() {
+    let state = state_with_project();
+    let section_id = create_section(&state, "Ratchet", vec![]);
+
+    let created = state.execute(Command::CreateShot {
+        section_id,
+        shot: shot(90.0, 10.0),
+        after_shot_id: None,
+        before_shot_id: None,
+    });
+    assert!(created.success, "CreateShot failed: {:?}", created.error);
+
+    assert!(state.undo().success, "first undo failed");
+    let after_one = section_offset(&state, section_id).unwrap_or((0.0, 0.0));
+
+    assert!(state.redo().success, "redo failed");
+    assert!(state.undo().success, "second undo failed");
+    let after_two = section_offset(&state, section_id).unwrap_or((0.0, 0.0));
+
+    assert_eq!(
+        after_one, after_two,
+        "a second undo/redo cycle moved the section again ({after_one:?} -> {after_two:?}): the \
+         displacement compounds without bound"
+    );
+}
