@@ -73,9 +73,10 @@ stress loop then a full sweep:
   null section metadata that reach half the known bugs). Runs three oracles: state
   roundtrip (including multi-step `undoTo`/`redoTo` jumps against the same snapshots),
   absolute project invariants, and an integrity-verdict delta. Currently reproduces
-  seven open undo bugs (listed with repro commands in the scenario's header comment), so
+  eight open undo bugs (listed with repro commands in the scenario's header comment), so
   it is RED by default; `STALAGMIGHT_FUZZ_ALLOW_KNOWN_BUGS=1` tolerates the three
-  classified ones so the rest still runs. Snapshotting and comparison happen in-page, so a step is one
+  classified ones so the rest still runs. `STALAGMIGHT_FUZZ_STREAM=v1` restores the
+  pre-expansion generator set for repro lines minimized against it. Snapshotting and comparison happen in-page, so a step is one
   round trip. To sweep it, `pnpm agent:fuzz-matrix --fixtures a,b --seeds 1..8 --workers 3`
   runs the matrix in parallel (max 5 workers - one Xvfb display each) and prints a
   results table with every failure's repro line. Add `--release` to either runner to

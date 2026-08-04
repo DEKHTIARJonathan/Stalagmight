@@ -16,14 +16,15 @@ import { callStoreAction } from './lib/stores';
 const SMOKE_ITERATIONS: Record<string, number> = {
   'seed-large-project': 1,
   'undo-redo-churn': 5,
-  // RED at the moment, and deliberately so: this seed reaches the shot-uuid
-  // re-mint on its third action. `undo-redo-fuzz` reproduces three open undo
-  // bugs (enumerated with per-seed repro commands in the scenario's header);
-  // making the gate green would mean weakening its oracle. Run the whole gate
-  // with STALAGMIGHT_FUZZ_ALLOW_KNOWN_BUGS=1 to tolerate the two classified
-  // ones, or drop this to 2 once someone decides a green gate matters more than
-  // the standing reminder.
-  'undo-redo-fuzz': 12,
+  // RED at the moment, and deliberately so: seed 1 reaches a classified known
+  // bug at this count on the v2 generator stream (it took 3 actions on v1, but
+  // v2 draws differently - see the scenario header). `undo-redo-fuzz`
+  // reproduces eight open undo bugs, so making the gate green would mean
+  // weakening its oracle. Run the whole gate with
+  // STALAGMIGHT_FUZZ_ALLOW_KNOWN_BUGS=1 to tolerate the classified ones.
+  // Lower it only if someone decides a green gate matters more than the
+  // standing reminder - and re-check that the lower count still fails.
+  'undo-redo-fuzz': 40,
   'dialog-cycling': 8,
   'tool-switch-spam': 20,
   'map-storm': 30,

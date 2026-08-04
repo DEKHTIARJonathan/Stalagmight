@@ -222,6 +222,38 @@
  *    in the checker or a divergence the snapshot cannot see. `integrityCompared`
  *    counts the comparisons so this cannot pass vacuously.
  *
+ * ## Generator streams: v1 repro lines, v2 default
+ *
+ * The action space above is the v2 stream. It necessarily DRAWS DIFFERENTLY from
+ * the v1 stream every repro line in this header was minimized against, so those
+ * lines do not replay verbatim under the default.
+ *
+ * `STALAGMIGHT_FUZZ_STREAM=v1` restores the original generator set, weights and
+ * value ranges exactly - the v2-only helpers short-circuit without consuming a
+ * draw - and reproduces the legacy stream byte for byte (verified: fractal seed 4
+ * x60 gives the same 32 mutations, 37 undos, 20 redos, 2 jumps, depth 15 and
+ * 60671-byte snapshot it always has). EVERY repro line numbered 1-8 above runs
+ * verbatim with that variable set.
+ *
+ * Confirmed v2 repros, from a 24-cell sweep (both fixtures, seeds 1-12, x40,
+ * tolerant):
+ *
+ *   - bug 1 (gauge-anchor half): fractal seed 1 x40, STRICT. This is what the
+ *     `agent:scenarios` smoke entry hits, which is why that entry is 40.
+ *   - bug 6: naharon seed 1 x40 - "undo at depth 2 failed outright ... Both
+ *     sides are anchored to a zero datum."
+ *
+ * 9. NEW, open, NOT root-caused. Micron-scale geometry drift on undo, distinct
+ *    from bugs 3 and 7 (which are metres): fractal seed 12 x40 tolerant gives
+ *    `project.section_offsets.8[0]` expected -16.9047304696, actual
+ *    -16.9047350279 - about 4.6e-6 m, nine orders of magnitude above the
+ *    oracle's 1e-9 float tolerance, so it is a real computation difference and
+ *    not noise. naharon seed 2 x40 shows the same signature on
+ *    `stations[145].coordinates`. Both were surfaced by the v2 action space, so
+ *    a new generator (splitShotAtDistance and the delete/split family do fresh
+ *    trigonometry) is the obvious suspect - but that is UNVERIFIED. Left failing
+ *    and unclassified.
+ *
  * ## Determinism
  *
  * Every draw comes from `ctx.rng()`/`randInt`/`pick`, and every target id is

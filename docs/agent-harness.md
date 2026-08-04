@@ -359,6 +359,7 @@ so it can only ever touch a temp copy.
 | Env var | Effect |
 |---|---|
 | `STALAGMIGHT_FUZZ_FIXTURE` | Which `.stalx` under `e2e/fixtures/` to fuzz, by BASENAME (`fixtureSourcePath`'s `path.basename` is the containment guard). Defaults to `DEFAULT_FIXTURE`. Recorded in the metrics and the log line so a run stays attributable. |
+| `STALAGMIGHT_FUZZ_STREAM` | `v1` restores the ORIGINAL generator set, weights and value ranges, reproducing the legacy draw stream byte for byte. The default v2 stream adds the delete/split family, batches, comment moves, synthetic imports, boundary-biased values and per-run swarm weights - and necessarily draws differently, so v1-era repro lines need this variable. |
 | `STALAGMIGHT_FUZZ_ALLOW_KNOWN_BUGS` | `1` keeps going past a mismatch that is ENTIRELY a classified known bug (logged, counted, model resynced). Not the default: a green default would mean the oracle had been weakened. |
 
 Fixture choice is load-bearing, not cosmetic. The fractal fixture has no loop
@@ -386,6 +387,12 @@ because undo history is persisted and nothing below a save point is exercised
 otherwise. Save-time healing mutations and the reload's zero-trust offset
 re-solve are subtracted only from comparisons that cross that boundary (an epoch
 stamp per recorded depth), so within an epoch the oracle stays strict.
+
+Each run also picks a SWARM PROFILE from the seed (merge-heavy, delete-heavy,
+batch-heavy, split-heavy, move-heavy, metadata-heavy, balanced) on its own
+stream, so different seeds explore different shapes of history rather than all
+sampling the same uniform mix. The profile is recorded in the metrics and the log
+line.
 
 It currently reproduces eight open undo bugs, enumerated with per-fixture,
 per-seed repro commands in the scenario's header comment, so it is RED by
