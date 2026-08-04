@@ -785,10 +785,10 @@ struct MoveCtx<'a> {
     /// Has finding 1 or finding 11 ALREADY reverted the save's gauge capture in
     /// this run?
     heal_reverted: bool,
-    /// Sections finding 3 has already displaced in this run, and the canonical
-    /// text of the `section_offsets` value it left behind. See the cascade
-    /// classifier.
-    displaced: &'a BTreeMap<SectionId, String>,
+    /// Sections finding 3 has already displaced in this run, and every value
+    /// it has left in each one's `section_offsets` entry - the RATCHET's whole
+    /// trajectory. See the cascade classifier.
+    displaced: &'a BTreeMap<SectionId, Vec<[f64; 2]>>,
     /// Whether the shot ids the consumed entry addresses still address the
     /// shots they were recorded against - measured BEFORE the move ran.
     stale: StaleTargets,
@@ -882,31 +882,64 @@ impl MoveCtx<'_> {
         named.is_some_and(|id| self.corrupted.contains(&id))
     }
 
-    /// Does `diff` sit on the `section_offsets` key of a section finding 3 has
-    /// already displaced, with the exact value it left on one side of it?
-    fn is_finding_3_leftover(&self, diff: &Diff) -> bool {
+    /// Is `diff` finding 3's displacement on this section, re-measured?
+    ///
+    /// Matched against the RATCHET'S TRAJECTORY - every value finding 3 has left
+    /// in this key over the run - and it takes BOTH sides, which is what makes
+    /// it narrower than the version it replaces rather than looser.
+    ///
+    /// The first version recorded the canonical text of the offset the
+    /// first-hand hit left and required it verbatim on ONE side of a later diff.
+    /// That is correct exactly once, because finding 3 compounds: every further
+    /// undo of a first-shot append adds the shot's horizontal vector again
+    /// (`remove_shot_with_rewire`'s `pos == 0` branch calls
+    /// `adjust_section_offset` unconditionally, and the redo re-inserts through
+    /// the offset-neutral append path). Once the ratchet has turned twice, a
+    /// comparison between two snapshots recorded at DIFFERENT points on the
+    /// trajectory has the recorded text on neither side, and the cascade stopped
+    /// classifying - which is what the horizon run's seeds 2, 7 and 8 were
+    /// failing on.
+    ///
+    /// So the model follows the arithmetic: it remembers the sequence of values
+    /// finding 3 has produced here, starting from the pre-slide `[0, 0]`, and a
+    /// diff is this defect iff both of its sides are on that sequence. A section
+    /// that acquired an offset from anywhere else is not this and still fails.
+    fn is_finding_3_displacement(&self, diff: &Diff) -> bool {
         let Some((section_id, element)) = offset_key_of(&diff.path) else {
             return false;
         };
-        let Some(recorded) = self.displaced.get(&section_id) else {
+        let Some(trajectory) = self.displaced.get(&section_id) else {
             return false;
         };
-        // For a whole-key diff the recorded text is the pair; for an element diff
-        // it is that element of the pair. Either way the leftover has to appear
-        // VERBATIM on one side, so a section that has since acquired a different
-        // offset is not this and still fails.
-        let Some(leftover) = element.map_or_else(
-            || Some(recorded.clone()),
-            |index| {
-                serde_json::from_str::<serde_json::Value>(recorded)
-                    .ok()?
-                    .get(index)
-                    .map(ToString::to_string)
-            },
-        ) else {
-            return false;
-        };
-        diff.expected == leftover || diff.actual == leftover
+        match element {
+            // `section_offsets.5[0]` - one component, scalars on both sides. The
+            // differ only produces this spelling when the key exists on BOTH
+            // sides, so neither can be absent.
+            Some(index) => {
+                let on_trajectory = |text: &str| {
+                    text.parse::<f64>().is_ok_and(|value| {
+                        trajectory.iter().any(|point| {
+                            point
+                                .get(index)
+                                .is_some_and(|want| displacements_equal(value, *want))
+                        })
+                    })
+                };
+                on_trajectory(&diff.expected) && on_trajectory(&diff.actual)
+            }
+            // `section_offsets.5` - the whole pair, and one side may be absent,
+            // which MEANS a zero offset.
+            None => {
+                let on_trajectory = |text: &str| {
+                    offset_pair(text).is_some_and(|value| {
+                        trajectory.iter().any(|point| {
+                            (0..2).all(|axis| displacements_equal(value[axis], point[axis]))
+                        })
+                    })
+                };
+                on_trajectory(&diff.expected) && on_trajectory(&diff.actual)
+            }
+        }
     }
 }
 
@@ -939,6 +972,52 @@ fn section_of_path(path: &str, section_ids: &[SectionId]) -> Option<SectionId> {
     let rest = path.strip_prefix("sections[")?;
     let (index, _) = rest.split_once(']')?;
     section_ids.get(index.parse::<usize>().ok()?).copied()
+}
+
+/// Two displacements are the SAME displacement.
+///
+/// Looser than `numbers_equal`, and for a stated reason rather than because a
+/// failure went away: what is being compared here is a DIFFERENCE of two
+/// canonical numbers, each already rounded to 12 significant digits, so the
+/// subtraction carries up to ~1e-12 of the larger operand's magnitude in
+/// rounding error before anything real has happened. 1e-11 relative is ten
+/// times that headroom and still eight orders below the millimetre any real
+/// geometry change is - and finding 3's displacements are metres to kilometres,
+/// so nothing near the boundary is being decided.
+fn displacements_equal(a: f64, b: f64) -> bool {
+    (a - b).abs() <= TOLERANCE_ABS + 1e-11 * a.abs().max(b.abs())
+}
+
+/// One side of a whole-key `section_offsets` diff as a pair.
+///
+/// `<absent>` is `[0, 0]`, because that is what an absent offset MEANS - and
+/// treating it as "unknown" instead would make the appearance of a key
+/// unclassifiable, which is half of finding 3's shape.
+fn offset_pair(text: &str) -> Option<[f64; 2]> {
+    if text == ABSENT {
+        return Some([0.0, 0.0]);
+    }
+    let serde_json::Value::Array(items) = serde_json::from_str::<serde_json::Value>(text).ok()?
+    else {
+        return None;
+    };
+    Some([
+        items.first().and_then(serde_json::Value::as_f64)?,
+        items.get(1).and_then(serde_json::Value::as_f64)?,
+    ])
+}
+
+/// The `section_offsets` entry for `section_id` in a canonical snapshot, or
+/// `[0, 0]` when the key is absent.
+fn offset_of(snapshot: &str, section_id: SectionId) -> Option<[f64; 2]> {
+    let value = serde_json::from_str::<serde_json::Value>(snapshot).ok()?;
+    let Some(offset) = value
+        .get("section_offsets")
+        .and_then(|offsets| offsets.get(section_id.to_string()))
+    else {
+        return Some([0.0, 0.0]);
+    };
+    offset_pair(&offset.to_string())
 }
 
 /// `(section, element)` for a diff path inside `section_offsets`.
@@ -1179,7 +1258,7 @@ const CLASSIFIERS: &[Classifier] = &[
     // this and still fails.
     Classifier {
         id: "finding-3-cascade-a-displaced-empty-section-persists",
-        matches: |d, ctx| ctx.is_finding_3_leftover(d),
+        matches: |d, ctx| ctx.is_finding_3_displacement(d),
     },
     // FINDING 16, CASCADING. A section holding one `Shot::uuid` twice cannot
     // match any snapshot recorded before the duplication: one shot was destroyed
@@ -2119,7 +2198,7 @@ struct Fuzzer {
     /// `section_offsets` value it left. Same idea as `heal_reverted`, one
     /// defect down: the slide is never undone, so every deeper snapshot
     /// recorded without it disagrees until a snapshot-pair entry heals it.
-    displaced: BTreeMap<SectionId, String>,
+    displaced: BTreeMap<SectionId, Vec<[f64; 2]>>,
     /// Sections whose station-0 refs finding 3 has destroyed. Same cascade, on
     /// the data-loss half of the same branch.
     ref_dropped: BTreeSet<SectionId>,
@@ -2596,7 +2675,7 @@ impl Fuzzer {
                     self.heal_reverted = true;
                 }
                 if *id == "finding-3-undo-of-the-first-shot-displaces-an-empty-section" {
-                    self.record_displacement(ctx.appended_into_empty(), &actual);
+                    self.record_displacement(ctx.appended_into_empty(), &expected, &actual);
                 }
                 if id.starts_with("finding-12-") || id.starts_with("finding-16-") {
                     self.stale_corruption = true;
@@ -2766,25 +2845,34 @@ impl Fuzzer {
         }
     }
 
-    /// Remember what finding 3 left in `section_offsets`, so the cascade
-    /// classifier can recognise the SAME value later and nothing else.
+    /// Extend the trajectory finding 3 has walked this section's offset along,
+    /// so the cascade classifier can recognise the SAME ratchet later and
+    /// nothing else.
     ///
-    /// The value is read out of the snapshot the hit was measured against, in
-    /// its canonical form, which is the exact text a later `Diff` will carry.
-    fn record_displacement(&mut self, section_id: Option<SectionId>, actual: &str) {
+    /// Both sides of the hit are recorded, not just the new value: the point
+    /// the slide STARTED from is on the trajectory too, and a later comparison
+    /// can land on either. The sequence is seeded with `[0, 0]` because that is
+    /// where the key was before finding 3 ever touched it, and an absent key
+    /// means exactly that.
+    fn record_displacement(&mut self, section_id: Option<SectionId>, expected: &str, actual: &str) {
         let Some(section_id) = section_id else {
             return;
         };
-        let Ok(value) = serde_json::from_str::<serde_json::Value>(actual) else {
-            return;
-        };
-        let Some(offset) = value
-            .get("section_offsets")
-            .and_then(|offsets| offsets.get(section_id.to_string()))
-        else {
-            return;
-        };
-        self.displaced.insert(section_id, offset.to_string());
+        let trajectory = self
+            .displaced
+            .entry(section_id)
+            .or_insert_with(|| vec![[0.0, 0.0]]);
+        for snapshot in [expected, actual] {
+            let Some(point) = offset_of(snapshot, section_id) else {
+                continue;
+            };
+            let known = trajectory
+                .iter()
+                .any(|seen| (0..2).all(|axis| displacements_equal(point[axis], seen[axis])));
+            if !known {
+                trajectory.push(point);
+            }
+        }
     }
 
     /// The two DERIVED-state oracles, run after the stored-state comparison has
