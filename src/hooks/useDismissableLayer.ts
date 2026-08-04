@@ -23,6 +23,12 @@ interface UseDismissableLayerOptions {
    *  ancestor of the menu nor the page. Pass the enclosing panel and that scroll
    *  is covered, while a scroll outside the panel still is not. */
   anchorScope?: RefObject<HTMLElement | null>;
+  /**
+   * Opt OUT of the cursor-pinned default below. Set this only for a layer that
+   * is positioned relative to a trigger element the scroll guard can find, and
+   * that should therefore survive a scroll of an unrelated scroller.
+   */
+  survivesUnrelatedScroll?: boolean;
 }
 
 /**
@@ -44,6 +50,7 @@ export function useDismissableLayer({
   contains,
   scrollSafe,
   anchorScope,
+  survivesUnrelatedScroll = false,
 }: UseDismissableLayerOptions): void {
   const onDismissRef = useRef(onDismiss);
   onDismissRef.current = onDismiss;
@@ -53,6 +60,8 @@ export function useDismissableLayer({
   scrollSafeRef.current = scrollSafe ?? contains;
   const anchorScopeRef = useRef(anchorScope);
   anchorScopeRef.current = anchorScope;
+  const survivesRef = useRef(survivesUnrelatedScroll);
+  survivesRef.current = survivesUnrelatedScroll;
 
   useEffect(() => {
     if (!open) return undefined;
@@ -91,7 +100,13 @@ export function useDismissableLayer({
         // The ancestor test above cannot see this case: a menu pinned to cursor
         // coordinates renders as a fixed sibling of the scroller, so the scroller
         // contains the ANCHOR but not the menu.
-        anchorScopeRef.current?.current?.contains(target) === true;
+        anchorScopeRef.current?.current?.contains(target) === true ||
+        // A cursor-pinned layer holds coordinates captured at click time and has
+        // no trigger element to re-measure against, so ANY scroll can leave it
+        // floating over different content while its actions still target what
+        // was under the cursor - acting on the wrong row. Closing is the only
+        // safe default; a layer anchored to a real trigger opts out.
+        !survivesRef.current;
       if (!movesLayer) return;
       onDismissRef.current();
     };

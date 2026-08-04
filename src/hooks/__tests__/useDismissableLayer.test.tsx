@@ -78,9 +78,10 @@ describe('useDismissableLayer', () => {
     panel.remove();
   });
 
-  it('ignores an anchorScope the host did not supply', () => {
-    // The map's context menu passes no scope, so no panel scrolling elsewhere can
-    // close it - the property the shared menu depends on for map right-clicks.
+  it('survives an unrelated scroll once the host opts in', () => {
+    // The map's context menu: it names the scroller that moves it, so a scroll
+    // anywhere else leaves it correct. This is the property map right-clicks
+    // depend on - but it must be ASKED for, see the default below.
     const elsewhere = document.createElement('div');
     document.body.appendChild(elsewhere);
     renderHook(() =>
@@ -89,6 +90,7 @@ describe('useDismissableLayer', () => {
         onDismiss: onDismiss as unknown as () => void,
         contains: [ref(dropdown)],
         anchorScope: ref(null),
+        survivesUnrelatedScroll: true,
       }),
     );
     elsewhere.dispatchEvent(new Event('scroll'));
@@ -96,14 +98,20 @@ describe('useDismissableLayer', () => {
     elsewhere.remove();
   });
 
-  it('does NOT dismiss when an unrelated subtree scrolls', () => {
-    // The map context-menu bug: right-clicking a station scrolls the data table
-    // and the sections panel, neither of which can move a menu portaled elsewhere.
+  /**
+   * The default is to CLOSE, and it has to be: a cursor-pinned layer holds
+   * coordinates captured at click time with no trigger to re-measure against, so
+   * an unrelated scroll can leave it floating over different content while its
+   * actions still target what was under the cursor. That is how the GlobalView
+   * recent-projects menu came to act on the wrong project after its own list
+   * scrolled - it never opted in, and silently inherited "survive".
+   */
+  it('dismisses on an unrelated scroll by default', () => {
     const elsewhere = document.createElement('div');
     document.body.appendChild(elsewhere);
     mount([dropdown]);
     elsewhere.dispatchEvent(new Event('scroll'));
-    expect(onDismiss).not.toHaveBeenCalled();
+    expect(onDismiss).toHaveBeenCalledTimes(1);
     elsewhere.remove();
   });
 

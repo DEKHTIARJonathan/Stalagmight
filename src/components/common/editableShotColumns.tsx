@@ -307,6 +307,11 @@ export function buildEditableShotColumns(
       isEditable: () => !readOnly,
       // A three-state button, so no cell editor - same as the other two grids.
       noInlineEdit: true,
+      // The keyboard equivalent of that button's click (F2 / Space, Shift to go
+      // back), so the cell is not mouse-only.
+      activate: (_shot, index, dir) => {
+        if (!readOnly && !isPhantomAt(index)) onCycleKindAt(index, dir);
+      },
       parse: (raw) => {
         const v = raw.trim().toLowerCase();
         if (v === '' || v === 'n' || v === 'normal' || v === 'permanent') return 'Normal';

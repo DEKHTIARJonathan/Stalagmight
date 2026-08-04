@@ -101,7 +101,9 @@ export function ShotColumnsMenu({
     open,
     onDismiss: () => setOpen(false),
     contains: [wrapRef],
-    ...(anchorScope ? { anchorScope } : {}),
+    // Anchored to the eye button, so an unrelated scroll leaves it correct;
+    // `anchorScope` is the scroller that DOES move it.
+    ...(anchorScope ? { anchorScope, survivesUnrelatedScroll: true } : {}),
   });
   useEffect(() => {
     if (!open) return undefined;

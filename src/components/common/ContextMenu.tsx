@@ -190,6 +190,13 @@ export default function ContextMenu() {
     onDismiss: closeDialog,
     contains: [menuRef],
     anchorScope: scrollScopeRef,
+    // Only a caller that has NAMED the scroller which moves this menu can be
+    // trusted to survive an unrelated one. Without a scrollScope the menu is
+    // pinned to captured cursor coordinates with nothing to re-measure against,
+    // so any scroll can leave it over a different row while its actions still
+    // target what was under the cursor - the GlobalView recent-projects menu
+    // acting on the wrong project.
+    survivesUnrelatedScroll: scrollScope !== undefined,
   });
   useEffect(() => {
     const handleEscape = (e: KeyboardEvent) => {
