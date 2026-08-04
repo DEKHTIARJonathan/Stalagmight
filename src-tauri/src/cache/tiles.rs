@@ -75,6 +75,24 @@ pub struct CachePolicy {
     /// left be recorded as fresh for a further 24 - serving imagery as current
     /// past the window the provider actually gave.
     pub age_seconds: Option<i64>,
+    /// The provider granted storage but forbade unvalidated reuse (`no-cache`).
+    ///
+    /// Kept separate from `max_age_seconds: Some(0)`, which it also produces,
+    /// because on disk the two are otherwise identical - and they are not the
+    /// same permission. A grant that merely ran out may still answer a failed
+    /// request (`stale-if-error`); `no-cache` may not. RFC 9111 5.2.2.4 requires
+    /// successful validation on the origin BEFORE reuse, so a `no-cache` row is
+    /// excluded from the stale path even when the network is down.
+    pub no_cache: bool,
+    /// The header could not be parsed, so we know NOTHING about permission.
+    ///
+    /// Distinct from "the provider sent no directive", which is a statement -
+    /// permission withdrawn, drop the copy. This is the absence of one: a proxy
+    /// mangled a header, which says nothing about whether the grant a stored
+    /// copy was written under still stands. Both write paths therefore skip
+    /// writing AND skip deleting, leaving any existing row to age out on the
+    /// deadline it already recorded.
+    pub malformed: bool,
 }
 
 impl CachePolicy {
@@ -94,6 +112,9 @@ impl CachePolicy {
     /// cheap revalidation) and never served as current. That is exactly the
     /// shape `no-cache` already maps to.
     pub fn granted_seconds(&self) -> Option<i64> {
+        if self.malformed {
+            return None;
+        }
         // Clamped HERE rather than only at the parser: `TileEntry::
         // remaining_policy` also mints a max-age (for an overzoomed crop) and it
         // reaches `put` through the same door. Enforcing the ceiling on the gate
@@ -145,6 +166,8 @@ impl TileEntry {
             // Already accounted for: `expires_at` was stamped net of the
             // parent's `Age`, so subtracting it again would age the crop twice.
             age_seconds: None,
+            no_cache: false,
+            malformed: false,
         }
     }
 }
@@ -214,15 +237,19 @@ pub fn parse_cache_control(header: &str) -> CachePolicy {
     // `max-age=86400` in the same header silently overwrite it.
     let mut no_cache = false;
     let Some(tokens) = split_directives(header) else {
-        // Malformed quoting. Treated as "said nothing", which is the same as any
-        // header we cannot read: no grant, so nothing is stored. Deliberately
-        // NOT `no_store`, which would also evict a copy already held under a
-        // grant that was valid when it was given.
+        // Malformed quoting: no grant, and no information either. Flagged rather
+        // than returned as a plain default, because "said nothing" DELETES an
+        // existing row (permission withdrawn) and a header we simply could not
+        // read is no reason to drop a copy stored under a grant that was valid
+        // when it was given.
         tracing::debug!(
             header,
-            "Unbalanced quoting in Cache-Control; treating as no grant"
+            "Unbalanced quoting in Cache-Control; no grant, and no revocation either"
         );
-        return CachePolicy::default();
+        return CachePolicy {
+            malformed: true,
+            ..CachePolicy::default()
+        };
     };
     for token in tokens {
         let token = token.trim().to_ascii_lowercase();
@@ -252,6 +279,7 @@ pub fn parse_cache_control(header: &str) -> CachePolicy {
     }
     if no_cache {
         policy.max_age_seconds = Some(0);
+        policy.no_cache = true;
     }
     policy
 }
@@ -425,6 +453,17 @@ impl TileCache {
         if !existing.iter().any(|c| c == "etag") {
             self.conn
                 .execute("ALTER TABLE tiles ADD COLUMN etag TEXT", [])?;
+        }
+        // `no-cache` rows must never answer a failed request (RFC 9111 5.2.2.4),
+        // and on disk they are otherwise indistinguishable from a grant that
+        // simply ran out. Rows written before this column existed default to 0:
+        // they were stored under a plain `max-age`, since `no-cache` was mapped
+        // to the same shape and is not something Esri sends.
+        if !existing.iter().any(|c| c == "no_cache") {
+            self.conn.execute(
+                "ALTER TABLE tiles ADD COLUMN no_cache INTEGER NOT NULL DEFAULT 0",
+                [],
+            )?;
         }
 
         Ok(())
@@ -632,6 +671,12 @@ impl TileCache {
     /// existed: never servable as fresh, still usable as a last resort while
     /// they are inside retention.
     ///
+    /// A `no-cache` row is excluded outright. RFC 9111 5.2.2.4 requires
+    /// successful validation on the origin BEFORE reuse, so "the network failed"
+    /// is exactly the condition under which such a tile may NOT be served -
+    /// which is the opposite of every other row here. On disk it is otherwise
+    /// identical to a grant that ran out, hence the dedicated column.
+    ///
     /// Does NOT update `accessed_at` since we're serving stale data.
     ///
     /// Returns `None` if the tile is not cached at all (fresh or stale).
@@ -639,12 +684,13 @@ impl TileCache {
         let now = Self::now();
         let min_fetched_at = now - self.ttl_for(provider);
 
-        // Inside retention, and not fresh.
+        // Inside retention, not fresh, and not held under `no-cache`.
         let result: Result<TileEntry, rusqlite::Error> = self.conn.query_row(
             "SELECT data, content_type, size_bytes, fetched_at, accessed_at, expires_at, etag FROM tiles
              WHERE provider = ?1 AND z = ?2 AND y = ?3 AND x = ?4
                AND fetched_at > ?5
-               AND (expires_at IS NULL OR expires_at <= ?6)",
+               AND (expires_at IS NULL OR expires_at <= ?6)
+               AND no_cache = 0",
             params![provider, z, y, x, min_fetched_at, now],
             |row| {
                 Ok(TileEntry {
@@ -699,6 +745,20 @@ impl TileCache {
         // `max-age` is simply silence, and this cache does not read silence as
         // consent. Either way any copy we already hold goes with it - a provider
         // that stops granting should not leave us holding yesterday's grant.
+        if policy.malformed {
+            // We could not read the header, so we learned nothing - not that
+            // permission was withdrawn. Skip the write, and leave any existing
+            // row to age out on the deadline it already recorded.
+            tracing::debug!(
+                provider,
+                z,
+                y,
+                x,
+                "Unreadable Cache-Control; not caching, and not dropping what is held"
+            );
+            return Ok(());
+        }
+
         let Some(max_age) = policy.granted_seconds() else {
             let dropped = self.conn.execute(
                 "DELETE FROM tiles WHERE provider = ?1 AND z = ?2 AND y = ?3 AND x = ?4",
@@ -760,9 +820,9 @@ impl TileCache {
 
         // Insert or replace the tile
         self.conn.execute(
-            "INSERT OR REPLACE INTO tiles (provider, z, y, x, data, content_type, size_bytes, fetched_at, accessed_at, expires_at, etag)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
-            params![provider, z, y, x, data, content_type, new_size as i64, now, now, Some(expires_at), etag],
+            "INSERT OR REPLACE INTO tiles (provider, z, y, x, data, content_type, size_bytes, fetched_at, accessed_at, expires_at, etag, no_cache)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+            params![provider, z, y, x, data, content_type, new_size as i64, now, now, Some(expires_at), etag, i64::from(policy.no_cache)],
         )?;
 
         Ok(())
@@ -809,6 +869,10 @@ impl TileCache {
         // stale-but-retained and revalidates again next request. Rows with no
         // recorded grant at all (pre-migration) are left alone, so silence can
         // never keep a grantless row alive indefinitely.
+        //
+        // A malformed header lands here too, and correctly: unreadable is not
+        // revocation either, and `granted_seconds` already returns `None` for
+        // it. Nothing is deleted on this path.
         let Some(max_age) = policy.granted_seconds() else {
             let updated = self.conn.execute(
                 "UPDATE tiles SET fetched_at = ?1, accessed_at = ?1
@@ -820,10 +884,23 @@ impl TileCache {
         };
 
         let expires_at = now.saturating_add(max_age);
+        // `no_cache` is re-stamped from THIS response, not left as it was: the
+        // 304 restates the directives, so a provider that has stopped sending
+        // `no-cache` releases the row from the stale-path exclusion, and one
+        // that has started sending it imposes the exclusion on a row already
+        // held.
         let updated = self.conn.execute(
-            "UPDATE tiles SET fetched_at = ?1, accessed_at = ?1, expires_at = ?2
-             WHERE provider = ?3 AND z = ?4 AND y = ?5 AND x = ?6",
-            params![now, Some(expires_at), provider, z, y, x],
+            "UPDATE tiles SET fetched_at = ?1, accessed_at = ?1, expires_at = ?2, no_cache = ?3
+             WHERE provider = ?4 AND z = ?5 AND y = ?6 AND x = ?7",
+            params![
+                now,
+                Some(expires_at),
+                i64::from(policy.no_cache),
+                provider,
+                z,
+                y,
+                x
+            ],
         )?;
         Ok(updated > 0)
     }
@@ -890,6 +967,8 @@ impl TileCache {
                 max_age_seconds: Some(30 * 24 * 60 * 60),
                 no_store: false,
                 age_seconds: None,
+                no_cache: false,
+                malformed: false,
             },
             None,
         )
@@ -1090,12 +1169,14 @@ impl TileCache {
         let now = Self::now();
         let min_fetched_at = now - self.ttl_for(provider);
 
-        // Mirrors `get_stale` exactly - both are "retained, and not fresh".
+        // Mirrors `get_stale` exactly - both are "retained, not fresh, and not
+        // held under `no-cache`".
         match self.conn.query_row(
             "SELECT COUNT(*) FROM tiles
              WHERE provider = ?1 AND z = ?2 AND y = ?3 AND x = ?4
                AND fetched_at > ?5
-               AND (expires_at IS NULL OR expires_at <= ?6)",
+               AND (expires_at IS NULL OR expires_at <= ?6)
+               AND no_cache = 0",
             params![provider, z, y, x, min_fetched_at, now],
             |row| row.get::<_, i64>(0),
         ) {
@@ -1830,6 +1911,8 @@ mod tests {
             max_age_seconds: Some(60),
             no_store: false,
             age_seconds: None,
+            no_cache: false,
+            malformed: false,
         };
         cache
             .put(
@@ -1919,9 +2002,13 @@ mod tests {
     }
 
     #[test]
-    fn no_cache_is_a_grant_to_store_even_though_it_is_never_fresh() {
-        // "Keep it, but always ask" is still permission to keep it - and that
-        // stored copy is what answers when the network is gone.
+    fn no_cache_is_a_grant_to_store_even_though_it_is_never_served() {
+        // "Keep it, but always ask" is still permission to KEEP it - the bytes
+        // and the validator are what make the next request a cheap 304 instead
+        // of a full download. What it is not is permission to serve: this test
+        // used to assert the copy answered stale-if-error, which RFC 9111
+        // 5.2.2.4 forbids. See
+        // `a_no_cache_tile_is_never_served_as_a_last_resort`.
         let mut cache = TileCache::in_memory(10, 30).unwrap();
         cache
             .put(
@@ -1936,13 +2023,14 @@ mod tests {
             )
             .unwrap();
 
+        assert_eq!(cache.get_stats().tile_count, 1, "stored");
         assert!(
             cache.get("esri", 1, 2, 3).is_none(),
             "never served as fresh"
         );
         assert!(
-            cache.get_stale("esri", 1, 2, 3).is_some(),
-            "but retained for stale-if-error"
+            cache.get_stale("esri", 1, 2, 3).is_none(),
+            "and never served unvalidated either"
         );
     }
 
@@ -1980,6 +2068,8 @@ mod tests {
                     max_age_seconds: None,
                     no_store: true,
                     age_seconds: None,
+                    no_cache: false,
+                    malformed: false,
                 },
                 None,
             )
@@ -2090,6 +2180,8 @@ mod tests {
                     max_age_seconds: Some(60),
                     no_store: false,
                     age_seconds: None,
+                    no_cache: false,
+                    malformed: false,
                 },
                 Some("\"sjii0vvv1sqvf\""),
             )
@@ -2116,6 +2208,8 @@ mod tests {
                     max_age_seconds: Some(60),
                     no_store: false,
                     age_seconds: None,
+                    no_cache: false,
+                    malformed: false,
                 },
                 Some("\"abc\""),
             )
@@ -2148,6 +2242,8 @@ mod tests {
                     max_age_seconds: Some(60),
                     no_store: false,
                     age_seconds: None,
+                    no_cache: false,
+                    malformed: false,
                 },
                 Some("\"abc\""),
             )
@@ -2171,6 +2267,8 @@ mod tests {
                     max_age_seconds: Some(86_400),
                     no_store: false,
                     age_seconds: None,
+                    no_cache: false,
+                    malformed: false,
                 },
             )
             .unwrap();
@@ -2230,6 +2328,8 @@ mod tests {
                     max_age_seconds: Some(i64::MAX),
                     no_store: false,
                     age_seconds: None,
+                    no_cache: false,
+                    malformed: false,
                 },
                 None,
             )
@@ -2290,6 +2390,8 @@ mod tests {
                     max_age_seconds: Some(86_400),
                     no_store: true,
                     age_seconds: None,
+                    no_cache: false,
+                    malformed: false,
                 },
             )
             .unwrap();
@@ -2542,6 +2644,132 @@ mod tests {
     }
 
     #[test]
+    fn a_no_cache_tile_is_never_served_as_a_last_resort() {
+        // `no-cache` grants storage but forbids reuse WITHOUT successful
+        // validation on the origin (RFC 9111 5.2.2.4). "The network failed" is
+        // therefore the one condition under which such a tile may not be
+        // served - the opposite of every other retained row. On disk it looks
+        // exactly like a grant that ran out, which is why the flag is stored.
+        let mut cache = TileCache::in_memory(10, 30).unwrap();
+        cache
+            .put(
+                "esri",
+                1,
+                2,
+                3,
+                b"revalidate-me",
+                "image/jpeg",
+                parse_cache_control("no-cache"),
+                Some("\"v1\""),
+            )
+            .unwrap();
+
+        // Stored - the bytes and the ETag are what make revalidation cheap.
+        assert_eq!(cache.get_stats().tile_count, 1);
+        assert!(cache.get("esri", 1, 2, 3).is_none(), "never fresh");
+        assert!(
+            cache.get_stale("esri", 1, 2, 3).is_none(),
+            "and never servable unvalidated, however the network is doing"
+        );
+        assert!(!cache.has_stale_tile("esri", 1, 2, 3));
+
+        // A plain expired grant, by contrast, is exactly what stale-if-error is
+        // for. Same on-disk shape, different permission.
+        cache
+            .put(
+                "esri",
+                4,
+                5,
+                6,
+                b"ordinary",
+                "image/jpeg",
+                parse_cache_control("max-age=86400"),
+                Some("\"v2\""),
+            )
+            .unwrap();
+        cache.expire_for_test("esri", 4, 5, 6).unwrap();
+        assert!(cache.get_stale("esri", 4, 5, 6).is_some());
+    }
+
+    #[test]
+    fn a_304_restates_no_cache_rather_than_leaving_it_set() {
+        // The 304 carries the current directives, so a provider that has stopped
+        // sending `no-cache` releases the row, and one that has started sending
+        // it imposes the exclusion on a row already held.
+        let mut cache = TileCache::in_memory(10, 30).unwrap();
+        cache
+            .put(
+                "esri",
+                1,
+                2,
+                3,
+                b"tile",
+                "image/jpeg",
+                parse_cache_control("no-cache"),
+                Some("\"v1\""),
+            )
+            .unwrap();
+        assert!(cache.get_stale("esri", 1, 2, 3).is_none());
+
+        // Revalidated, and now under an ordinary grant.
+        cache
+            .refresh_validated("esri", 1, 2, 3, parse_cache_control("max-age=86400"))
+            .unwrap();
+        cache.expire_for_test("esri", 1, 2, 3).unwrap();
+        assert!(
+            cache.get_stale("esri", 1, 2, 3).is_some(),
+            "the no-cache exclusion must lift when the provider stops sending it"
+        );
+
+        // And back the other way.
+        cache
+            .refresh_validated("esri", 1, 2, 3, parse_cache_control("no-cache"))
+            .unwrap();
+        assert!(cache.get_stale("esri", 1, 2, 3).is_none());
+    }
+
+    #[test]
+    fn an_unreadable_header_does_not_drop_what_is_already_held() {
+        // "The provider sent no directive" is a statement - permission
+        // withdrawn, drop the copy. "We could not parse what it sent" is the
+        // absence of one, and says nothing about the grant the stored copy was
+        // written under. Collapsing both to "no grant" let one mangled header
+        // from a proxy drain the tile.
+        let mut cache = TileCache::in_memory(10, 30).unwrap();
+        cache
+            .put_granted("esri", 1, 2, 3, b"held", "image/jpeg")
+            .unwrap();
+
+        let malformed = parse_cache_control("max-age=86400, x=\"unterminated, no-store");
+        assert!(malformed.malformed);
+        assert_eq!(malformed.granted_seconds(), None, "still grants nothing");
+
+        cache
+            .put("esri", 1, 2, 3, b"new", "image/jpeg", malformed, None)
+            .unwrap();
+
+        let held = cache.get("esri", 1, 2, 3).expect("the old row survives");
+        assert_eq!(held.data, b"held", "and the new body was not written");
+
+        // The contrast: a response that genuinely carries no directive IS a
+        // revocation, and still drops it.
+        cache
+            .put(
+                "esri",
+                1,
+                2,
+                3,
+                b"new",
+                "image/jpeg",
+                CachePolicy::default(),
+                None,
+            )
+            .unwrap();
+        assert!(cache.get("esri", 1, 2, 3).is_none());
+        assert!(cache.get_stale("esri", 1, 2, 3).is_none());
+    }
+
+    #[test]
     fn an_escaped_quote_does_not_end_the_quoted_string() {
         // RFC 9110 5.6.4 allows `\"` inside a quoted-string. Toggling on every
         // quote ended it early, so this ONE `private` directive split into
@@ -2663,6 +2891,8 @@ mod tests {
             max_age_seconds: Some(i64::MAX),
             no_store: false,
             age_seconds: None,
+            no_cache: false,
+            malformed: false,
         };
         assert_eq!(hand_built.granted_seconds(), Some(MAX_GRANT_SECONDS));
     }
@@ -2686,6 +2916,8 @@ mod tests {
                     max_age_seconds: Some(60),
                     no_store: false,
                     age_seconds: None,
+                    no_cache: false,
+                    malformed: false,
                 },
                 Some("\"abc\""),
             )

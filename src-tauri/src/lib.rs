@@ -754,8 +754,27 @@ impl From<TileFetchError> for String {
 }
 
 enum TileFetchOutcome {
-    Tile { tile: TileFetchResult },
-    Missing { error: String },
+    Tile {
+        tile: TileFetchResult,
+    },
+    Missing {
+        error: String,
+        /// The provider refused this imagery outright, so climbing to a parent
+        /// zoom must stop rather than serve an upscaled crop of the area it just
+        /// denied. `401`/`403` only: for most tile services a `404` is how they
+        /// say "no imagery at this zoom here", which is precisely the case
+        /// overzoom exists to handle, so treating that as terminal would disable
+        /// the feature. (Esri never 404s - it answers 200 with a blank tile and
+        /// lets the tilemap probe decide - so this distinction is for the
+        /// providers the registry is built to take, not the one it ships.)
+        denied: bool,
+    },
+}
+
+/// Whether a failure is the provider refusing the imagery, as opposed to it
+/// being absent or unreachable.
+fn is_provider_denial(err: &TileFetchError) -> bool {
+    matches!(err.status, Some(401 | 403))
 }
 
 /// Where the bytes we served actually came from, for the per-provider
@@ -969,6 +988,8 @@ where
                     _ => TileFetchOutcome::Missing {
                         error: "Tile not available: provider returned 304 with no cached copy"
                             .to_string(),
+                        // A protocol oddity, not a refusal - a parent may serve.
+                        denied: false,
                     },
                 };
             };
@@ -1003,6 +1024,8 @@ where
                     _ => TileFetchOutcome::Missing {
                         error: "Tile not available: provider revoked storage on revalidation"
                             .to_string(),
+                        // Storage was revoked, not access - a parent may serve.
+                        denied: false,
                     },
                 };
             }
@@ -1038,6 +1061,7 @@ where
                 );
                 return TileFetchOutcome::Missing {
                     error: format!("Tile not available: {e}"),
+                    denied: is_provider_denial(&e),
                 };
             }
 
@@ -1066,6 +1090,7 @@ where
 
             TileFetchOutcome::Missing {
                 error: format!("Tile not available: {e}"),
+                denied: is_provider_denial(&e),
             }
         }
     }
@@ -1320,7 +1345,22 @@ where
                 );
                 return Ok(derived);
             }
-            TileFetchOutcome::Missing { error } => {
+            TileFetchOutcome::Missing { error, denied } => {
+                if denied {
+                    // The provider refused this imagery. Climbing to a parent
+                    // would hand back an upscaled crop of the very area it just
+                    // denied, which is the same refusal ignored at a coarser
+                    // resolution - and it would walk straight past the guard
+                    // that already stops a stored copy answering a non-5xx.
+                    tracing::debug!(
+                        provider = %provider,
+                        z = current_z,
+                        y = current_y,
+                        x = current_x,
+                        "Provider denied this imagery; not falling back to a parent zoom"
+                    );
+                    return Err(error);
+                }
                 last_error = Some(error);
             }
         }
@@ -2710,6 +2750,8 @@ mod tests {
                     max_age_seconds: Some(86_400),
                     no_store: false,
                     age_seconds: None,
+                    no_cache: false,
+                    malformed: false,
                 },
                 etag: None,
             }))
@@ -3006,6 +3048,104 @@ mod tests {
         headers.append("cache-control", "max-age=86400".parse().unwrap());
         headers.append("age", "80000".parse().unwrap());
         assert_eq!(read_cache_policy(&headers).granted_seconds(), Some(6_400));
+    }
+
+    /// A real, decodable 256x256 JPEG. The overzoom path decodes the parent and
+    /// crops it, so a parent of arbitrary bytes fails for the wrong reason.
+    fn make_jpeg_bytes() -> Vec<u8> {
+        let img = DynamicImage::new_rgb8(256, 256);
+        let mut buf = Cursor::new(Vec::new());
+        // `unwrap`, not `expect`: this module allows the former (see the
+        // `#[expect(clippy::unwrap_used)]` on it) and denies the latter.
+        img.write_to(&mut buf, ImageFormat::Jpeg).unwrap();
+        buf.into_inner()
+    }
+
+    #[test]
+    fn a_denied_tile_is_not_served_as_an_overzoomed_parent() {
+        // Refusing to answer a 403 off the stale cache is only half a guard: the
+        // overzoom loop treated "missing" as permission to climb, so a cached
+        // parent still produced an upscaled crop of the very area the provider
+        // had just denied.
+        let cache = Arc::new(Mutex::new(Some(TileCache::in_memory(10, 30).unwrap())));
+        let tilemap_cache = make_test_tilemap_cache();
+        {
+            // A parent one zoom up, fresh, ready to be cropped.
+            let mut guard = cache.lock().unwrap();
+            guard
+                .as_mut()
+                .unwrap()
+                .put_granted("esri", 9, 250, 125, &make_jpeg_bytes(), "image/jpeg")
+                .unwrap();
+        }
+
+        let denied = move |_: &str,
+                           _: u32,
+                           _: u32,
+                           _: u32,
+                           _: Option<&str>|
+              -> Result<TileFetchResponse, TileFetchError> {
+            Err(TileFetchError::status(403, "HTTP 403".to_string()))
+        };
+
+        let response = handle_tile_request_with_fetcher(
+            "esri",
+            10,
+            500,
+            250,
+            &cache,
+            &tilemap_cache,
+            denied,
+            true,
+        );
+        assert_eq!(
+            response.status(),
+            http::StatusCode::NOT_FOUND,
+            "a denial must not be answered at a coarser resolution either"
+        );
+    }
+
+    #[test]
+    fn a_missing_tile_still_falls_back_to_an_overzoomed_parent() {
+        // The other side, and the reason "any non-5xx is terminal" would be
+        // wrong: for most tile services a 404 means "no imagery at this zoom
+        // here", which is the entire purpose of overzoom. Making that terminal
+        // would disable the feature for any provider that uses it.
+        let cache = Arc::new(Mutex::new(Some(TileCache::in_memory(10, 30).unwrap())));
+        let tilemap_cache = make_test_tilemap_cache();
+        {
+            let mut guard = cache.lock().unwrap();
+            guard
+                .as_mut()
+                .unwrap()
+                .put_granted("esri", 9, 250, 125, &make_jpeg_bytes(), "image/jpeg")
+                .unwrap();
+        }
+
+        let absent = move |_: &str,
+                           _: u32,
+                           _: u32,
+                           _: u32,
+                           _: Option<&str>|
+              -> Result<TileFetchResponse, TileFetchError> {
+            Err(TileFetchError::status(404, "HTTP 404".to_string()))
+        };
+
+        let response = handle_tile_request_with_fetcher(
+            "esri",
+            10,
+            500,
+            250,
+            &cache,
+            &tilemap_cache,
+            absent,
+            true,
+        );
+        assert_eq!(
+            response.status(),
+            http::StatusCode::OK,
+            "a 404 is an absence, not a refusal - the parent may still serve"
+        );
     }
 
     #[test]
@@ -3490,6 +3630,8 @@ mod tests {
                     max_age_seconds: Some(60),
                     no_store: false,
                     age_seconds: None,
+                    no_cache: false,
+                    malformed: false,
                 },
                 Some("\"abc\""),
             )
@@ -3512,6 +3654,8 @@ mod tests {
                     max_age_seconds: Some(86_400),
                     no_store: false,
                     age_seconds: None,
+                    no_cache: false,
+                    malformed: false,
                 },
             })
         };
