@@ -154,6 +154,13 @@ hazards over long runs.
     at a chosen seed/n, then a full sweep. The one to reach for when a seeded
     scenario needs re-running: a fuzzer repro, or a soak at a bigger n than the
     gate would tolerate.
+  - `pnpm agent:fuzz-matrix [--fixtures a,b] [--seeds 1..8|1,3,7] [--workers K]
+    [--iterations M]` - runs `undo-redo-fuzz` across a (fixture x seed) matrix,
+    K child processes at a time, and prints a results table, every failure's
+    repro line, merged metric totals and the observed speedup. Each worker slot
+    gets its own port block (`STALAGMIGHT_AGENT_BASE_PORT = 4544 + 20*slot`) and
+    its own single-entry Xvfb pool (`STALAGMIGHT_AGENT_DISPLAYS`), so `K` is
+    hard-capped at 5 - the size of the display pool.
   - `pnpm agent:mcp` - run the server standalone (for an external MCP client).
   - `pnpm agent:bridge <dir>` - file-based access to the same server for plain
     shells and subagents without an MCP client: append JSON tool calls to
@@ -256,12 +263,30 @@ throwing. Small-n values for the `pnpm agent:scenarios` gate live in
 
 ### undo-redo-fuzz
 
-The oracle is a full normalized `get_project_state` snapshot per undo depth
-(`e2e/agent/lib/projectSnapshot.ts`, unit-tested under vitest): every field it
-drops is justified in that file's header, map key order is canonicalized rather
-than ignored, and floats compare with a 1e-9 absolute / 1e-12 relative tolerance
-because geometry is re-derived rather than copied after every undo/redo. Backend
-truth for the model is the app's own `get_undo_stack` / `get_redo_stack` lengths.
+The oracle is a full canonical `get_project_state` snapshot per undo depth: every
+field it drops is justified in `e2e/agent/lib/fuzzOracleCore.ts`'s header, map key
+order is canonicalized rather than ignored, and when two canonical strings
+disagree Node re-compares with a 1e-9 absolute / 1e-12 relative tolerance
+(`projectSnapshot.ts`), because geometry is re-derived rather than copied after
+every undo/redo. Backend truth for the model is the app's own `get_undo_stack` /
+`get_redo_stack` lengths.
+
+The snapshot is taken and compared IN THE WEBVIEW. `fuzzOracleCore.ts` holds the
+serializer and the targeting digest as two self-contained functions that Node
+calls directly and also injects into the page via `Function.prototype.toString()`
+- one implementation, with a unit test that feeds the same state to both and
+asserts byte-identical output. Each step is then a single fused `executeAsync`
+(`undoRedoFuzzBridge.ts`): call the projectStore action, observe, canonicalize,
+compare, return a verdict plus the digest. Full canonical strings cross the
+bridge only after a comparison has already failed.
+
+That leaves the bridge at roughly 6% of a step. Measured on fractal seed 4 x60
+(90 steps, `actionMs`/`observeMs`/`canonicalMs` are reported as metrics): 4775 ms
+in the store action's own `flushPlanAnchors` + command + `refreshProjectState` +
+`checkProjectIntegrity` chain, 810 ms in the three read-only IPC reads, 132 ms
+canonicalizing, ~390 ms of WebDriver. The action chain is the boundary coverage
+that found the `updateSection` and undo-fails-outright bugs, so it stays; further
+speedup has to come from parallelism, which is what `agent:fuzz-matrix` is for.
 
 The starting point is chosen and cleaned rather than inherited. The scenario
 closes whatever project is open, materializes its own copy of the fixture,
