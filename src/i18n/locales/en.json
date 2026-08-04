@@ -2123,6 +2123,8 @@
     "incompleteRow_other": "Rows {{rows}} are missing required values.",
     "editingDisabled": "Editing is disabled in the current view",
     "saveOrDiscardFirst": "Save or discard your edits first",
+    "frozenNotDeleted_one": "1 shot was kept: its geometry is locked by the closure solve.",
+    "frozenNotDeleted_other": "{{count}} shots were kept: their geometry is locked by the closure solve.",
     "midRunDelete": "Only shots at the start or end of a section can be deleted together. Delete a mid-section shot on its own to choose split or shift."
   },
   "newSection": {

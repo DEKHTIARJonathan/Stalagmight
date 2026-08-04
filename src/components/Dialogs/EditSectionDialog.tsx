@@ -200,9 +200,24 @@ export default function EditSectionDialog() {
    * of the section.
    */
   const handleDeleteShots = useCallback((indices: number[]): boolean => {
-    const targets = indices
+    const requested = indices
       .map((i) => shots[i])
       .filter((s): s is EditableShot => s !== undefined && s.isDeleted !== true);
+    if (requested.length === 0) return false;
+
+    // A frozen shot's geometry belongs to the closure solve and the backend
+    // refuses to delete it. Soft-deleting it here would take the row off screen
+    // and surface the refusal at SAVE, minutes and several edits later - the old
+    // table simply offered no delete control on those rows.
+    const targets = requested.filter((s) => !frozenShotIndices?.has(shots.indexOf(s)));
+    const frozenSkipped = requested.length - targets.length;
+    if (frozenSkipped > 0) {
+      showToast(
+        t('editSection.frozenNotDeleted', { count: frozenSkipped }),
+        'edit-section-frozen-delete',
+        'warning'
+      );
+    }
     if (targets.length === 0) return false;
 
     // Rows added in this dialog are not in the section yet, so they never make a
@@ -243,7 +258,7 @@ export default function EditSectionDialog() {
     );
     if (selectedShotKey !== null && targetKeys.has(selectedShotKey)) setSelectedShotKey(null);
     return true;
-  }, [getShotKey, section, selectedShotKey, shots, showToast]);
+  }, [getShotKey, section, selectedShotKey, shots, showToast, frozenShotIndices, t]);
 
   const handleDeleteShot = useCallback(
     (index: number) => handleDeleteShots([index]),

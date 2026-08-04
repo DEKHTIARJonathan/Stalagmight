@@ -227,6 +227,11 @@ export function ShotTableEditor({
   const precision = useDecimalPrecision();
   const gridLabels = useGridLabels('dataTable.shotNoun');
   const configValidation = useProjectStore((s) => s.config?.validation);
+  // Per-project thresholds (#57). Between the host's prop and the global config
+  // on purpose: a host that passes nothing - the import wizard, zero-datum -
+  // must still warn by the OPEN PROJECT's rules, or its inline warnings disagree
+  // with the Warnings panel and with the backend's own analysis of the same shots.
+  const projectValidation = useProjectStore((s) => s.project?.validation);
   const projectWarnings = useProjectStore((s) => s.warnings);
 
   /** The project's unresolved warnings for one shot, split by severity. The data
@@ -254,10 +259,12 @@ export function ShotTableEditor({
   const effectiveValidation: ValidationConfig = {
     azimuth_diff_threshold:
       validationConfig?.azimuth_diff_threshold ??
+      projectValidation?.azimuth_diff_threshold ??
       configValidation?.azimuth_diff_threshold ??
       DEFAULT_VALIDATION_CONFIG.azimuth_diff_threshold,
     pitch_diff_threshold:
       validationConfig?.pitch_diff_threshold ??
+      projectValidation?.pitch_diff_threshold ??
       configValidation?.pitch_diff_threshold ??
       DEFAULT_VALIDATION_CONFIG.pitch_diff_threshold,
   };
@@ -536,15 +543,20 @@ export function ShotTableEditor({
   // Insert: the grid reports an insertion BOUNDARY, which is "after the last
   // row" at the end and "before this row" everywhere else.
   const onInsertRows = useCallback(
-    (beforeIndex: number) => {
+    (beforeIndex: number, count = 1) => {
       if (readOnly) return;
-      if (beforeIndex >= visibleShots.length) {
-        const last = visibleShots.length - 1;
-        if (last >= 0 && onInsertAfter) onInsertAfter(actualIndex(last));
-        else onAddShot();
-        return;
+      // The menu says "Insert N shots" and passes N. Dropping it inserted one,
+      // so the label was a promise the table did not keep; the data table and
+      // the new-section dialog have always honoured it.
+      for (let n = 0; n < Math.max(1, count); n++) {
+        if (beforeIndex >= visibleShots.length) {
+          const last = visibleShots.length - 1;
+          if (last >= 0 && onInsertAfter) onInsertAfter(actualIndex(last));
+          else onAddShot();
+          continue;
+        }
+        onInsertBefore?.(actualIndex(beforeIndex));
       }
-      onInsertBefore?.(actualIndex(beforeIndex));
     },
     [readOnly, visibleShots.length, onInsertAfter, onInsertBefore, onAddShot, actualIndex]
   );
