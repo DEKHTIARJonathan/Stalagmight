@@ -563,10 +563,14 @@ export function ShotTableEditor({
       // dimmed: the old table faded the whole row, which read as "disabled" on
       // a row that is perfectly editable.
       if (isPhantomAt(rowIndex)) return 'sg-row-draft';
+      // Frozen BEFORE the error tint, and both when a row is both: the error
+      // tint used to win outright, so a frozen row that also failed validation
+      // lost the one signal that explained why half its cells would not accept
+      // an edit. The error tint is a 5% wash and rides on top of the amber.
+      if (isFrozenAt(rowIndex)) {
+        return errorsAt(rowIndex).length > 0 ? 'sg-row-frozen bg-error-5' : 'sg-row-frozen';
+      }
       if (errorsAt(rowIndex).length > 0) return 'bg-error-5';
-      // The data table's amber frozen tint, so a row whose geometry cells are
-      // locked says WHY rather than just looking greyed out.
-      if (isFrozenAt(rowIndex)) return 'sg-row-frozen';
       // Not-yet-saved rows borrow the grid's own uncommitted-row tint rather
       // than inventing a second one.
       if (shot.isNew) return 'sg-row-draft';
