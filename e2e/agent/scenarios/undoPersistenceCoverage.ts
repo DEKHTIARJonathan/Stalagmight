@@ -352,14 +352,14 @@ function target(memo: CoverageMemo): number | null {
 //
 // ## The arrangement that follows from that
 //
-//   1     the fresh target section.
-//   2-7   every ProjectSnapshotPair step, as LOW in the stack as their
+//   1-2   the fresh target section and the spare one the delete uses.
+//   3-8   every ProjectSnapshotPair step, as LOW in the stack as their
 //         preconditions allow, so they are the last thing a walk reaches.
-//   8-12  the graph and metadata entries, whose undo data names sections and
+//   9-13  the graph and metadata entries, whose undo data names sections and
 //         uuid-anchored stations rather than shot ids (`StationKey` is
 //         `SectionStart` / `AfterShot(uuid)`, models/station.rs), so they are
 //         id-safe and belong outside the window too.
-//   13-17 EVERY id-bearing entry, contiguous, at the top: two `CreateShot`s
+//   14-18 EVERY id-bearing entry, contiguous, at the top: two `CreateShot`s
 //         (bug 8's own variant, both anchor forms), two `UpdateShot`s
 //         (`PreviousValues { shot_id }`, whose undo calls
 //         `update_shot(section, stale_id)` and whose redo re-executes
