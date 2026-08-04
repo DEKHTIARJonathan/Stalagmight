@@ -27,22 +27,33 @@ import type { EditableShot } from './editableShot';
 
 /** Virtual column key for the displayed average azimuth (not a real field). */
 export const EDITABLE_AZIMUTH_AVG_KEY = '_azimuth_avg';
+/** Virtual column key for the displayed average inclination. Same string as the
+ *  data table's `PITCH_AVG_KEY`, deliberately: `buildShotUpdates` dispatches on
+ *  it, and both grids now route their averaged edits through that one function. */
+export const EDITABLE_PITCH_AVG_KEY = '_pitch_avg';
 /** Virtual column key for the per-row warning indicator. */
 export const EDITABLE_WARNINGS_KEY = '_warnings';
 /** Virtual column key for the per-row delete button. */
 export const EDITABLE_DELETE_KEY = '_delete';
 
-/** Columns whose edits touch the adjusted centerline -> locked on a frozen shot. */
+/** Columns whose edits touch the adjusted centerline -> locked on a frozen shot.
+ *  Matches the data table's set: the azimuth legs and the inclination family are
+ *  as network-adjusted as the averages they feed. */
 const FROZEN_LOCKED = new Set<string>([
   'length',
   EDITABLE_AZIMUTH_AVG_KEY,
+  'azimuth_in',
+  'azimuth_out',
+  EDITABLE_PITCH_AVG_KEY,
+  'pitch_in',
+  'pitch_out',
   'depth_in',
   'depth_out',
 ]);
 
 export interface EditableShotColumnContext {
   t: TFunction;
-  precision: { length: number; azimuth: number; depth: number };
+  precision: { length: number; azimuth: number; depth: number; inclination: number };
   readOnly: boolean;
   /** Blocking errors per VISIBLE row index (length/azimuth validity). */
   errorsAt: (visibleIndex: number) => string[];
@@ -104,6 +115,46 @@ export function buildEditableShotColumns(
     format: fixed(prec),
     editable: true,
     isEditable: editableUnlessFrozen(key),
+  });
+
+  const azimuthLegCol = (
+    key: 'azimuth_in' | 'azimuth_out',
+    header: string
+  ): GridColumn<EditableShot> => ({
+    key,
+    header,
+    width: 70,
+    align: 'right',
+    kind: 'number',
+    getValue: (r) => r[key],
+    format: fixed(precision.azimuth),
+    editable: true,
+    isEditable: editableUnlessFrozen(key),
+    validate: (v) =>
+      typeof v === 'number' && (v < 0 || v >= 360)
+        ? t('dataTable.validation.azimuthRange')
+        : null,
+  });
+
+  const pitchLegCol = (
+    key: 'pitch_in' | 'pitch_out',
+    header: string
+  ): GridColumn<EditableShot> => ({
+    key,
+    header,
+    width: 70,
+    align: 'right',
+    // Nullable: inclination is optional, so a cleared cell must clear the field
+    // rather than read as a required value the user failed to supply.
+    kind: 'number-nullable',
+    getValue: (r) => r[key],
+    format: fixed(precision.inclination),
+    editable: true,
+    isEditable: editableUnlessFrozen(key),
+    validate: (v) =>
+      typeof v === 'number' && (v < -90 || v > 90)
+        ? t('dataTable.validation.pitchRange')
+        : null,
   });
 
   const lrudCol = (
@@ -188,6 +239,42 @@ export function buildEditableShotColumns(
           ? t('dataTable.validation.azimuthRange')
           : null,
     },
+    azimuthLegCol('azimuth_in', t('dataTable.columns.azimuthInShort')),
+    azimuthLegCol('azimuth_out', t('dataTable.columns.azimuthOutShort')),
+    {
+      key: EDITABLE_PITCH_AVG_KEY,
+      header: t('dataTable.columns.inclinationShort'),
+      width: 70,
+      align: 'right',
+      // Nullable for the same reason as the legs: clearing the Avg must clear
+      // BOTH legs, which `number-nullable` expresses by emitting `null`.
+      kind: 'number-nullable',
+      // Mean of the present legs; one present leg IS the mean, no legs -> blank.
+      getValue: (r) =>
+        typeof r.pitch_in === 'number' && typeof r.pitch_out === 'number'
+          ? (r.pitch_in + r.pitch_out) / 2
+          : r.pitch_in ?? r.pitch_out ?? null,
+      format: fixed(precision.inclination),
+      editable: true,
+      isEditable: editableUnlessFrozen(EDITABLE_PITCH_AVG_KEY),
+      // Reject means outside +/-90, and means whose delta would push a leg past
+      // +/-90 - pitch does not wrap the way azimuth does.
+      validate: (v, r) => {
+        if (typeof v !== 'number') return null;
+        if (v < -90 || v > 90) return t('dataTable.validation.pitchRange');
+        if (typeof r.pitch_in === 'number' && typeof r.pitch_out === 'number') {
+          const delta = v - (r.pitch_in + r.pitch_out) / 2;
+          const movedIn = r.pitch_in + delta;
+          const movedOut = r.pitch_out + delta;
+          if (movedIn < -90 || movedIn > 90 || movedOut < -90 || movedOut > 90) {
+            return t('dataTable.validation.pitchRange');
+          }
+        }
+        return null;
+      },
+    },
+    pitchLegCol('pitch_in', t('dataTable.columns.pitchInShort')),
+    pitchLegCol('pitch_out', t('dataTable.columns.pitchOutShort')),
     numberCol('depth_in', t('shotTable.columns.depthIn'), 80, precision.depth),
     numberCol('depth_out', t('shotTable.columns.depthOut'), 95, precision.depth),
     lrudCol('left', t('shotTable.columns.leftShort')),

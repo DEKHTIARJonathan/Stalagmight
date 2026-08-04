@@ -11,18 +11,23 @@ import {
   hasPitchDiscrepancy,
   validateEditableShot,
 } from '../../utils/validation';
-import { applyAzimuthEdit } from '../../utils/shotTable';
 import { nextShotKind } from '../../utils/shotKind';
 import { SpreadsheetGrid } from './SpreadsheetGrid';
-import { ExpandIcon, EyeIcon, ShrinkIcon } from './icons';
-import { useDismissableLayer } from '../../hooks/useDismissableLayer';
-import { useAnchoredFixedMenu } from '../../hooks/useAnchoredFixedMenu';
+import { ExpandIcon, ShrinkIcon } from './icons';
 import { useEditSectionViewPersistence } from '../Dialogs/useEditSectionViewPersistence';
 import type { CellEdit } from './SpreadsheetGrid/types';
 import {
   buildEditableShotColumns,
   EDITABLE_AZIMUTH_AVG_KEY,
+  EDITABLE_PITCH_AVG_KEY,
 } from './editableShotColumns';
+import { ShotColumnsMenu } from './ShotColumnsMenu';
+import { buildShotUpdates } from '../SingleSystemView/dataTableEdits';
+import {
+  applyAngleMode,
+  deriveAngleMode,
+  type AzimuthMode,
+} from '../Dialogs/newSectionRows';
 import type { EditableShot } from './editableShot';
 import { missingRequiredCells } from './editableShotStatus';
 
@@ -143,9 +148,19 @@ const PHANTOM_ROW: EditableShot = {
   kind: 'Normal',
 };
 
-/** Nothing hidden by default: this grid edits a survey that already exists, so
- *  there is no "start simple" case the way there is for a brand-new section. */
-const DEFAULT_EDIT_SECTION_HIDDEN_COLUMNS: readonly string[] = [];
+/** The azimuth legs and the whole inclination family start hidden, so the four
+ *  dialogs that render this editor open looking exactly as they did before those
+ *  columns existed - the averages are what they have always shown. Everything
+ *  else this grid has stays visible: it edits a survey that already exists, so
+ *  there is no "start simple" case the way there is for a brand-new section.
+ *  Mirrors `default_edit_section_hidden_columns` in src-tauri/src/config/panels.rs. */
+const DEFAULT_EDIT_SECTION_HIDDEN_COLUMNS: readonly string[] = [
+  'azimuth_in',
+  'azimuth_out',
+  EDITABLE_PITCH_AVG_KEY,
+  'pitch_in',
+  'pitch_out',
+];
 
 export function ShotTableEditor({
   shots,
@@ -264,7 +279,12 @@ export function ShotTableEditor({
 
   // --- Column layout, persisted under the dialog's own `edit_section_*` keys --
   const [columnOrder, setColumnOrder] = useState<string[]>([]);
-  const [hiddenColumns, setHiddenColumns] = useState<ReadonlySet<string>>(() => new Set());
+  // Seeded from the default, not empty: the persisted config overrides this as
+  // soon as it loads, but before it does the grid must not flash the five columns
+  // that ship hidden.
+  const [hiddenColumns, setHiddenColumns] = useState<ReadonlySet<string>>(
+    () => new Set(DEFAULT_EDIT_SECTION_HIDDEN_COLUMNS)
+  );
   const [columnWidths, setColumnWidths] = useState<Record<string, number>>({});
   const viewSetters = useMemo(() => ({ setColumnOrder, setHiddenColumns, setColumnWidths }), []);
   useEditSectionViewPersistence(
@@ -274,20 +294,26 @@ export function ShotTableEditor({
   );
   const hiddenColumnList = useMemo(() => [...hiddenColumns], [hiddenColumns]);
 
-  const [colMenuOpen, setColMenuOpen] = useState(false);
-  const colMenuWrapRef = useRef<HTMLDivElement | null>(null);
-  const colMenuBtnRef = useRef<HTMLButtonElement | null>(null);
-  const colMenuListRef = useRef<HTMLDivElement | null>(null);
-  useDismissableLayer({
-    open: colMenuOpen,
-    onDismiss: () => setColMenuOpen(false),
-    contains: [colMenuWrapRef],
-  });
-  const colMenuStyle = useAnchoredFixedMenu(colMenuOpen, colMenuBtnRef, colMenuListRef, {
-    align: 'right',
-    gap: 4,
-    width: 224,
-  });
+
+  /** Which of avg / in-out / off an angle family is currently showing, read back
+   *  out of the hidden set - no separate mode state to keep in sync. */
+  const azimuthMode = useMemo(
+    () => deriveAngleMode(hiddenColumns, EDITABLE_AZIMUTH_AVG_KEY, 'azimuth_in', 'azimuth_out'),
+    [hiddenColumns]
+  );
+  const inclinationMode = useMemo(
+    () => deriveAngleMode(hiddenColumns, EDITABLE_PITCH_AVG_KEY, 'pitch_in', 'pitch_out'),
+    [hiddenColumns]
+  );
+  const setAngleMode = useCallback(
+    (family: 'azimuth' | 'pitch', mode: AzimuthMode) => {
+      const avgKey = family === 'azimuth' ? EDITABLE_AZIMUTH_AVG_KEY : EDITABLE_PITCH_AVG_KEY;
+      setHiddenColumns((prev) =>
+        applyAngleMode(prev, mode, avgKey, `${family}_in`, `${family}_out`)
+      );
+    },
+    []
+  );
 
   /** Show/hide a group of columns together (LRUD is one row, four keys). */
   const toggleCols = useCallback((keys: string[]) => {
@@ -302,20 +328,6 @@ export function ShotTableEditor({
     });
   }, []);
 
-  const colCheckRow = (keys: string[], label: string, className = '') => (
-    <label
-      key={keys[0]}
-      className={`flex cursor-pointer items-center gap-2 rounded px-2 py-0.5 hover:bg-accent-10 ${className}`}
-    >
-      <input
-        type="checkbox"
-        checked={keys.every((k) => !hiddenColumns.has(k))}
-        onChange={() => toggleCols(keys)}
-        data-testid={`shot-editor-col-vis-${keys[0]}`}
-      />
-      {label}
-    </label>
-  );
 
   const columns = useMemo(
     () =>
@@ -347,19 +359,22 @@ export function ShotTableEditor({
    *  full-array index. */
   const applyEditAt = useCallback(
     (index: number, colKey: string, value: unknown) => {
-      if (colKey === EDITABLE_AZIMUTH_AVG_KEY) {
-        // One displayed azimuth fans back out to both legs, unnormalized -
-        // exactly what the hand-rolled editor committed.
-        const typed = typeof value === 'number' ? value : Number(value);
-        if (!Number.isFinite(typed)) return;
-        const { azimuth_in, azimuth_out } = applyAzimuthEdit(typed, { normalize: false });
-        onShotChange(index, 'azimuth_in', azimuth_in);
-        onShotChange(index, 'azimuth_out', azimuth_out);
+      const shot = shots[index];
+      // An averaged column fans back out to its two legs. Routed through the data
+      // table's `buildShotUpdates` rather than a local rule, so both grids offset
+      // the legs by (new mean - old mean) and PRESERVE the spread between them.
+      // The editor used to set both legs to the typed value, which was invisible
+      // while the average was the only azimuth column on screen and is plainly
+      // wrong now that the legs can be shown next to it.
+      if (shot && (colKey === EDITABLE_AZIMUTH_AVG_KEY || colKey === EDITABLE_PITCH_AVG_KEY)) {
+        for (const [field, next] of Object.entries(buildShotUpdates(shot, [{ colKey, value }]))) {
+          onShotChange(index, field as keyof EditableShot, next as number | string | null);
+        }
         return;
       }
       onShotChange(index, colKey as keyof EditableShot, value as number | string | null);
     },
-    [onShotChange]
+    [onShotChange, shots]
   );
 
   /** Resolve a grid row to a full-array index, materializing the trailing blank
@@ -460,11 +475,11 @@ export function ShotTableEditor({
   const cellClassName = useCallback(
     (shot: EditableShot, rowIndex: number, colKey: string): string | undefined => {
       if (isPhantomAt(rowIndex)) return undefined;
-      return missingRequiredCells(shot, EDITABLE_AZIMUTH_AVG_KEY).has(colKey)
+      return missingRequiredCells(shot, EDITABLE_AZIMUTH_AVG_KEY, hiddenColumns).has(colKey)
         ? 'sg-cell-missing'
         : undefined;
     },
-    [isPhantomAt]
+    [isPhantomAt, hiddenColumns]
   );
 
   const rowClassName = useCallback(
@@ -524,37 +539,22 @@ export function ShotTableEditor({
   return (
     <div data-testid="shot-table-container" className="flex min-h-0 flex-1 flex-col gap-2">
       <div className="flex shrink-0 items-center justify-end gap-3">
-        <div ref={colMenuWrapRef} className="relative" onMouseDown={(e) => e.stopPropagation()}>
-          <button
-            ref={colMenuBtnRef}
-            type="button"
-            onClick={() => setColMenuOpen((v) => !v)}
-            className={colMenuOpen ? 'text-text' : 'text-text-secondary hover:text-text'}
-            title={t('dataTable.columnsMenu.button')}
-            data-testid="shot-editor-columns-menu"
-          >
-            <EyeIcon size={14} />
-          </button>
-          {colMenuOpen && (
-            <div
-              ref={colMenuListRef}
-              className="overflow-auto rounded border border-border bg-panel p-1 text-xs shadow-lg"
-              style={colMenuStyle}
-              data-dropdown-open
-              data-testid="shot-editor-columns-dropdown"
-            >
-              {colCheckRow(['length'], t('dataTable.columnsMenu.length'))}
-              {colCheckRow([EDITABLE_AZIMUTH_AVG_KEY], t('dataTable.columnsMenu.azimuth'))}
-              <div className="flex">
-                {colCheckRow(['depth_in'], t('dataTable.columnsMenu.depthIn'), 'flex-1')}
-                {colCheckRow(['depth_out'], t('dataTable.columnsMenu.depthOut'), 'flex-1')}
-              </div>
-              {colCheckRow(['left', 'right', 'up', 'down'], t('dataTable.columnsMenu.lrud'))}
-              {colCheckRow(['kind'], t('dataTable.columnsMenu.reference'))}
-              {colCheckRow(['comment'], t('dataTable.columnsMenu.comment'))}
-            </div>
-          )}
-        </div>
+        {/* No section-id / shot-id rows: those columns are the data table's way
+            of pointing at a shot across sections, and this grid edits one
+            section's shots in place. The warnings column IS here, so it gets a
+            toggle like the data table's. */}
+        <ShotColumnsMenu
+          hidden={hiddenColumns}
+          onToggle={toggleCols}
+          testIdPrefix="shot-editor-"
+          buttonTestId="shot-editor-columns-menu"
+          dropdownTestId="shot-editor-columns-dropdown"
+          extraRows={{ warnings: true }}
+          angleModes={{
+            azimuth: { mode: azimuthMode, onPick: (m) => setAngleMode('azimuth', m) },
+            inclination: { mode: inclinationMode, onPick: (m) => setAngleMode('pitch', m) },
+          }}
+        />
         {onToggleExpand && (
           <button
             type="button"

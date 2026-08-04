@@ -26,7 +26,10 @@ export const PITCH_AVG_KEY = '_pitch_avg';
  *  (cleared Avg cell) clears both legs. A non-finite new mean is skipped. All
  *  other column keys are real shot fields, assigned directly. */
 export function buildShotUpdates(
-  shot: Shot,
+  // Only the four angle legs are read, so this takes them rather than a whole
+  // `Shot`: that lets the shared shot editor's `EditableShot` rows through the
+  // same function instead of keeping a second copy of the averaging rule.
+  shot: Pick<Shot, 'azimuth_in' | 'azimuth_out' | 'pitch_in' | 'pitch_out'>,
   edits: { colKey: string; value: unknown }[],
 ): ShotUpdates {
   const updates: ShotUpdates = {};

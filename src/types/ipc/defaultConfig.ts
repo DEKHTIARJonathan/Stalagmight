@@ -255,7 +255,13 @@ export const defaultConfig: Config = {
     ],
     "new_section_column_widths": {},
     "edit_section_column_order": [],
-    "edit_section_hidden_columns": [],
+    "edit_section_hidden_columns": [
+      "azimuth_in",
+      "azimuth_out",
+      "_pitch_avg",
+      "pitch_in",
+      "pitch_out"
+    ],
     "edit_section_column_widths": {},
     "sections_panel_open": true,
     "sections_panel_mode": "pin",

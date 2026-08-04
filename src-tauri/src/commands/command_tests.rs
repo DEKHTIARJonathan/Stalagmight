@@ -221,9 +221,20 @@ fn test_get_config_defaults_panels() {
         ]
     );
     assert!(cfg.panels.new_section_column_widths.is_empty());
-    // The edit-section grid edits an existing survey, so it opens on everything.
+    // The edit-section grid edits an existing survey, so it opens on everything
+    // except the five columns added to it after the fact - hiding those is what
+    // keeps its four host dialogs looking as they did before they existed.
     assert!(cfg.panels.edit_section_column_order.is_empty());
-    assert!(cfg.panels.edit_section_hidden_columns.is_empty());
+    assert_eq!(
+        cfg.panels.edit_section_hidden_columns,
+        vec![
+            "azimuth_in",
+            "azimuth_out",
+            "_pitch_avg",
+            "pitch_in",
+            "pitch_out"
+        ]
+    );
     assert!(cfg.panels.edit_section_column_widths.is_empty());
 }
 

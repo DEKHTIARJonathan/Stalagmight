@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { useUIStore, type PlacementResult } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { Button } from '../common/Button';
-import { ExpandIcon, EyeIcon, ShrinkIcon } from '../common/icons';
+import { ExpandIcon, ShrinkIcon } from '../common/icons';
 import { DialogWrapper } from './DialogWrapper';
 import type { Shot, SectionData } from '../../types/project';
 import { SpreadsheetGrid } from '../common/SpreadsheetGrid';
@@ -38,9 +38,8 @@ import { useNewSectionViewPersistence } from './useNewSectionViewPersistence';
 import { getNextSectionColor } from '../../utils/colors';
 import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
 import { useEditingBlocked } from '../../hooks/useEditingBlocked';
-import { useDismissableLayer } from '../../hooks/useDismissableLayer';
-import { useAnchoredFixedMenu } from '../../hooks/useAnchoredFixedMenu';
 import { useGridLabels } from '../../hooks/useGridLabels';
+import { ShotColumnsMenu } from '../common/ShotColumnsMenu';
 import { getNumberFormatLocale } from '../../i18n/format';
 import { nextShotKind } from '../../utils/shotKind';
 import { trackDialogComplete } from '../../utils/telemetry';
@@ -121,22 +120,6 @@ export default function ImportDialog() {
   // column control is the same eye menu the data table uses rather than a second
   // idiom for the same job.
   const [expanded, setExpanded] = useState(false);
-  const [colMenuOpen, setColMenuOpen] = useState(false);
-  const colMenuWrapRef = useRef<HTMLDivElement | null>(null);
-  const colMenuBtnRef = useRef<HTMLButtonElement | null>(null);
-  const colMenuListRef = useRef<HTMLDivElement | null>(null);
-  useDismissableLayer({
-    open: colMenuOpen,
-    onDismiss: () => setColMenuOpen(false),
-    contains: [colMenuWrapRef],
-  });
-  // position:fixed at a captured rect so the dropdown escapes the grid box's
-  // overflow-hidden clip, and flips up near the bottom of the window.
-  const colMenuStyle = useAnchoredFixedMenu(colMenuOpen, colMenuBtnRef, colMenuListRef, {
-    align: 'right',
-    gap: 4,
-    width: 224,
-  });
 
   /** Show/hide a group of columns together (LRUD is one row, four keys). */
   const toggleCols = useCallback((keys: string[]) => {
@@ -158,46 +141,6 @@ export default function ImportDialog() {
     );
   }, []);
 
-  const colCheckRow = (keys: string[], label: string, className = '') => (
-    <label
-      key={keys[0]}
-      className={`flex cursor-pointer items-center gap-2 rounded px-2 py-0.5 hover:bg-accent-10 ${className}`}
-    >
-      <input
-        type="checkbox"
-        checked={keys.every((k) => !hiddenColumns.has(k))}
-        onChange={() => toggleCols(keys)}
-        data-testid={`new-section-col-vis-${keys[0]}`}
-      />
-      {label}
-    </label>
-  );
-
-  const angleModeRow = (
-    label: string,
-    mode: AzimuthMode,
-    onPick: (m: AzimuthMode) => void,
-    testId: string
-  ) => (
-    <div className="flex items-center justify-between gap-2 px-2 py-0.5">
-      <span>{label}</span>
-      <span className="flex overflow-hidden rounded border border-border">
-        {(['avg', 'inout', 'off'] as const).map((m) => (
-          <button
-            key={m}
-            type="button"
-            className={`px-1.5 py-0.5 ${
-              mode === m ? 'bg-accent-20 text-text' : 'text-text-secondary hover:bg-accent-10'
-            }`}
-            onClick={() => onPick(m)}
-            data-testid={`new-section-${testId}-${m}`}
-          >
-            {t(`dataTable.columnsMenu.${m === 'inout' ? 'inOut' : m}`)}
-          </button>
-        ))}
-      </span>
-    </div>
-  );
 
   // --- Grid height ----------------------------------------------------------
   // Virtualization needs an explicit pixel height, and the box is either a fixed
@@ -500,52 +443,22 @@ export default function ImportDialog() {
           <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border px-2 py-1">
             <span className="text-sm font-medium">{t('newSection.shots')}</span>
             <div className="flex items-center gap-2">
-              <div
-                ref={colMenuWrapRef}
-                className="relative"
-                onMouseDown={(e) => e.stopPropagation()}
-              >
-                <button
-                  ref={colMenuBtnRef}
-                  type="button"
-                  onClick={() => setColMenuOpen((v) => !v)}
-                  className={colMenuOpen ? 'text-text' : 'text-text-secondary hover:text-text'}
-                  title={t('dataTable.columnsMenu.button')}
-                  data-testid="new-section-columns-menu"
-                >
-                  <EyeIcon size={14} />
-                </button>
-                {colMenuOpen && (
-                  <div
-                    ref={colMenuListRef}
-                    className="overflow-auto rounded border border-border bg-panel p-1 text-xs shadow-lg"
-                    style={colMenuStyle}
-                    data-dropdown-open
-                    data-testid="new-section-columns-dropdown"
-                  >
-                    {colCheckRow(['length'], t('dataTable.columnsMenu.length'))}
-                    {angleModeRow(
-                      t('dataTable.columnsMenu.azimuth'),
-                      azimuthMode,
-                      (m) => setAngleMode('azimuth', m),
-                      'col-azimuth'
-                    )}
-                    {angleModeRow(
-                      t('dataTable.columnsMenu.inclination'),
-                      inclinationMode,
-                      (m) => setAngleMode('pitch', m),
-                      'col-inclination'
-                    )}
-                    <div className="flex">
-                      {colCheckRow(['depth_in'], t('dataTable.columnsMenu.depthIn'), 'flex-1')}
-                      {colCheckRow(['depth_out'], t('dataTable.columnsMenu.depthOut'), 'flex-1')}
-                    </div>
-                    {colCheckRow(['left', 'right', 'up', 'down'], t('dataTable.columnsMenu.lrud'))}
-                    {colCheckRow(['kind'], t('dataTable.columnsMenu.reference'))}
-                    {colCheckRow(['comment'], t('dataTable.columnsMenu.comment'))}
-                  </div>
-                )}
-              </div>
+              {/* No warnings / section-id / shot-id rows: this section does not
+                  exist yet, so the grid has none of those columns to toggle. */}
+              <ShotColumnsMenu
+                hidden={hiddenColumns}
+                onToggle={toggleCols}
+                testIdPrefix="new-section-"
+                buttonTestId="new-section-columns-menu"
+                dropdownTestId="new-section-columns-dropdown"
+                angleModes={{
+                  azimuth: { mode: azimuthMode, onPick: (m) => setAngleMode('azimuth', m) },
+                  inclination: {
+                    mode: inclinationMode,
+                    onPick: (m) => setAngleMode('pitch', m),
+                  },
+                }}
+              />
               <button
                 type="button"
                 onClick={() => setExpanded((v) => !v)}
