@@ -69,6 +69,13 @@ export interface GridColumn<Row> {
    *  paths - stamping one value down a run with the fill handle stays the point
    *  of having the column in the grid at all. */
   noInlineEdit?: boolean;
+  /** Keyboard equivalent of the click that {@link render}'s own control handles,
+   *  for a {@link noInlineEdit} column. Without it that flag removes EVERY
+   *  keyboard path - F2, Space and type-to-edit all route through the cell
+   *  editor - leaving a cell a keyboard-only user can focus but never change,
+   *  while every other column in the grid stays editable. `dir` mirrors the
+   *  click's Shift modifier, so Shift+Space cycles backwards. */
+  activate?: (row: Row, rowIdx: number, dir: 1 | -1) => void;
   /** Parse a raw typed/pasted string into the value to commit. Return
    *  `undefined` to SKIP the write (e.g. a non-finite number, or an empty string
    *  into a non-nullable numeric - never silently write 0). Defaults to a

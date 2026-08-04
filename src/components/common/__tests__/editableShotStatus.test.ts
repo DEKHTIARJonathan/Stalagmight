@@ -57,7 +57,32 @@ describe('missingRequiredCells azimuth targeting', () => {
     expect(isShotComplete(shot(), AVG)).toBe(true);
   });
 
-  it('one present leg is enough - the other is derived on save', () => {
-    expect(missingRequiredCells(shot({ azimuth_out: NaN }), AVG, new Set()).size).toBe(0);
+  /**
+   * This used to assert one leg was enough, on the belief that the other was
+   * derived on save. Nothing derives it: the Rust boundary rejects any
+   * non-finite geometry, so such a row passed every UI check and then failed at
+   * Save. Both legs are required, and the mark lands on the empty one.
+   */
+  it('requires the second leg, marking the empty one', () => {
+    expect([...missingRequiredCells(shot({ azimuth_out: NaN }), AVG, new Set())]).toEqual([
+      'azimuth_out',
+    ]);
+    expect([...missingRequiredCells(shot({ azimuth_in: NaN }), AVG, new Set())]).toEqual([
+      'azimuth_in',
+    ]);
+  });
+
+  it('marks the empty leg even while the avg column is the visible one', () => {
+    // The avg cell shows the lone reading, so marking IT would look wrong - the
+    // user would see a red cell holding a perfectly good number.
+    expect([...missingRequiredCells(shot({ azimuth_out: NaN }), AVG)]).toEqual(['azimuth_out']);
+  });
+
+  it('still marks the avg when NEITHER leg was measured', () => {
+    expect([...missingRequiredCells(shot(noAzimuth), AVG)]).toEqual([AVG]);
+  });
+
+  it('reports a one-legged row incomplete', () => {
+    expect(isShotComplete(shot({ azimuth_out: NaN }), AVG)).toBe(false);
   });
 });

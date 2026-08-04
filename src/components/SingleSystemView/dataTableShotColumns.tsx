@@ -293,6 +293,11 @@ export function buildShotColumns(ctx: ShotColumnContext): GridColumn<Shot>[] {
       // was a second, worse way to do the same thing. The bulk paths above are
       // unaffected - this only closes the inline editor.
       noInlineEdit: true,
+      // The keyboard equivalent of that click (F2 / Space, Shift to walk the
+      // ring backwards), so the cell is reachable without a mouse.
+      activate: (shot, _index, dir) => {
+        if (!geometryReadOnly) ctx.onCycleShotKind(shot, dir);
+      },
       parse: (raw) => {
         const v = raw.trim().toLowerCase();
         // Accept the rendered glyphs, the full words, and the legacy booleans

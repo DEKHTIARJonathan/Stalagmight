@@ -31,6 +31,9 @@ import { DEFAULT_GRID_LABELS, type GridLabels } from './gridLabels';
 import { GridToolbar } from './GridToolbar';
 import { GridContextMenu } from './GridContextMenu';
 import { GridHeaderRow } from './GridHeaderRow';
+import { activateCellIn, directTypedValue } from './gridActivate';
+import { measureColumnWidth, fillExtent } from './gridAutoFit';
+import { planClear } from './gridClear';
 import {
   arrowTarget,
   clamp,
@@ -643,6 +646,14 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
     [rowCount, colCount, colAt, rows],
   );
 
+  const activateCell = useCallback(
+    (rowIdx: number, colIdx: number, dir: 1 | -1): boolean => {
+      const col = colAt(colIdx);
+      return activateCellIn(col, rows[rowIdx], rowIdx, dir, col ? cellEditable(rowIdx, col) : false);
+    },
+    [colAt, rows, cellEditable],
+  );
+
   // --- Editing --------------------------------------------------------------
   const beginEdit = useCallback(
     (rowIdx: number, colIdx: number, seed: string | null) => {
@@ -1087,37 +1098,9 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
   );
 
   const doClear = useCallback(() => {
-    const edits: CellEdit[] = [];
-    const missing: string[] = [];
-    const restored: string[] = [];
-    // Required cells freshly cleared to "missing" - reported to a provisional
-    // host so it can drop the field (a present→missing transition only, never a
-    // restore).
-    const cleared: { row: number; colKey: string }[] = [];
-    for (let r = rect.r0; r <= rect.r1; r++) {
-      for (let c = rect.c0; c <= rect.c1; c++) {
-        const col = colAt(c);
-        if (!col || !cellEditable(r, col)) continue;
-        // Route through the column's coercion: number → undefined (required -
-        // never write 0; mark the cell as missing instead), number-nullable →
-        // null, text/custom-parse → its empty value. Delete on an already-
-        // missing cell restores it: the model still holds the value, so
-        // unmarking re-reveals it.
-        const value = parseForColumn(col, '', r);
-        if (value === undefined) {
-          const k = missKey(r, col.key);
-          if (k === null) continue;
-          if (missingCells.has(k)) {
-            restored.push(k);
-          } else {
-            missing.push(k);
-            cleared.push({ row: r, colKey: col.key });
-          }
-          continue;
-        }
-        edits.push({ row: r, colKey: col.key, value });
-      }
-    }
+    const { edits, missing, restored, cleared } = planClear({
+      rect, colAt, cellEditable, parseForColumn, missKey, missingCells,
+    });
     if (missing.length || restored.length) {
       setMissingCells((prev) => {
         const next = new Set(prev);
@@ -1282,7 +1265,18 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
           moveFocusTo(t.row, t.colIdx, false);
           return;
         }
-        case 'F2': e.preventDefault(); beginEdit(row, colIdx, null); return;
+        case 'F2':
+          e.preventDefault();
+          if (!activateCell(row, colIdx, 1)) beginEdit(row, colIdx, null);
+          return;
+        case ' ':
+          // Space is the button key, and a `noInlineEdit` cell IS a button.
+          if (!ctrl && !e.altKey && activateCell(row, colIdx, e.shiftKey ? -1 : 1)) {
+            e.preventDefault();
+            e.stopPropagation();
+            return;
+          }
+          break;
         case 'Delete':
         case 'Backspace': {
           e.preventDefault();
@@ -1303,19 +1297,26 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
           setCutRect(null);
           return;
         }
-        default:
-          // Type-to-edit: a printable character starts an edit seeded with it.
-          if (!ctrl && !e.altKey && PRINTABLE.test(e.key) && !e.nativeEvent.isComposing) {
-            const col = colAt(colIdx);
-            if (col && cellEditable(row, col)) {
-              e.preventDefault();
-              // The grid consumed this key to open the editor - keep it from
-              // also triggering a host shortcut bound to that character (e.g. a
-              // reserved `?` overlay), mirroring Delete / Ctrl+A above.
-              e.stopPropagation();
-              beginEdit(row, colIdx, e.key);
-            }
+        default: {
+          // Type-to-edit: a printable character starts an edit seeded with it -
+          // or, on a click-only cell, commits straight through the parser.
+          if (ctrl || e.altKey || !PRINTABLE.test(e.key) || e.nativeEvent.isComposing) return;
+          const col = colAt(colIdx);
+          if (!col || !cellEditable(row, col)) return;
+          // Consumed by the grid, so it must not ALSO fire a host shortcut bound
+          // to that character (a reserved `?` overlay), as Delete / Ctrl+A do.
+          const typed = directTypedValue(col, rows[row], e.key);
+          if (col.noInlineEdit === true) {
+            if (typed === undefined) return;
+            e.preventDefault();
+            e.stopPropagation();
+            onEdit(row, col.key, typed);
+            return;
           }
+          e.preventDefault();
+          e.stopPropagation();
+          beginEdit(row, colIdx, e.key);
+        }
       }
     },
     [
@@ -1548,17 +1549,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
   const autoFitColumn = useCallback((key: string) => {
     const root = scrollRef.current;
     if (!root) return;
-    let max = 0;
-    // Built from the grid's OWN prefix. Hardcoding `grid-` matched nothing in a
-    // grid that sets `testIdPrefix` - the new-section and shot-editor grids - so
-    // `max` stayed 0 and a double-click on the resize handle silently did
-    // nothing there while working in the data table.
-    const header = root.querySelector(`[data-testid="${testIdPrefix}-header-${key}"] span`);
-    if (header) max = Math.max(max, (header as HTMLElement).scrollWidth);
-    root.querySelectorAll(`[data-testid^="${testIdPrefix}-cell-"]`).forEach((el) => {
-      const node = el as HTMLElement;
-      if (node.dataset.testid?.endsWith(`-${key}`)) max = Math.max(max, node.scrollWidth);
-    });
+    const max = measureColumnWidth(root, testIdPrefix, key);
     if (max > 0) {
       commitWidths({
         ...widthsRef.current,
@@ -1572,14 +1563,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
   const onFillHandleDoubleClick = useCallback(() => {
     const guide = colAt(rect.c0 > 0 ? rect.c0 - 1 : rect.c0);
     if (!guide) return;
-    let end = rect.r1;
-    for (let r = rect.r1 + 1; r < rowCount; r++) {
-      const data = rows[r];
-      if (!data) break;
-      const v = guide.getValue(data, r);
-      if (v == null || v === '') break;
-      end = r;
-    }
+    const end = fillExtent(guide, rows, rect.r1, rowCount);
     if (end > rect.r1) commitFill({ r0: rect.r0, r1: end, c0: rect.c0, c1: rect.c1 });
   }, [colAt, rect, rowCount, rows, commitFill]);
 

@@ -65,13 +65,24 @@ export function missingRequiredCells(
   if (!fin(shot.length) || shot.length <= 0) missing.add('length');
   if (!fin(shot.depth_in)) missing.add('depth_in');
   if (!fin(shot.depth_out)) missing.add('depth_out');
-  if (!fin(shot.azimuth_in) && !fin(shot.azimuth_out)) {
+  // BOTH legs, not either. The Rust boundary rejects any non-finite geometry
+  // (`ShotData::all_finite` / `ShotUpdates::all_finite`), so a row with one leg
+  // cleared used to pass every UI check and then fail at Save with an error the
+  // user could do nothing about where it appeared. Refusing here puts the
+  // refusal on the cell. The average column still DISPLAYS a lone leg as the
+  // mean - reading one is honest, saving half a pair is not.
+  const legsMissing = !fin(shot.azimuth_in) || !fin(shot.azimuth_out);
+  if (legsMissing) {
     if (hiddenColumns?.has(azimuthAvgKey) === true) {
       // Avg is hidden, so the legs are what the user can see and fill.
-      missing.add('azimuth_in');
-      missing.add('azimuth_out');
-    } else {
+      if (!fin(shot.azimuth_in)) missing.add('azimuth_in');
+      if (!fin(shot.azimuth_out)) missing.add('azimuth_out');
+    } else if (!fin(shot.azimuth_in) && !fin(shot.azimuth_out)) {
       missing.add(azimuthAvgKey);
+    } else {
+      // Exactly one leg: the avg cell shows a value, so marking it would look
+      // wrong. Mark the empty leg, which is what has to be filled.
+      missing.add(fin(shot.azimuth_in) ? 'azimuth_out' : 'azimuth_in');
     }
   }
   return missing;

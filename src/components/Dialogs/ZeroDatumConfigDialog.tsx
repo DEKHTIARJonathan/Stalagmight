@@ -2,6 +2,7 @@ import { useState, useCallback, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { blockedByIncompleteShots, countIncompleteShots } from '../common/incompleteShots';
 import { blankEditableShot } from '../common/editableShot';
+import { isBlankNewShot } from '../common/editableShotStatus';
 import { DialogWrapper } from './DialogWrapper';
 import SectionPreview from './SectionPreview';
 import { Button } from '../common/Button';
@@ -50,10 +51,21 @@ function makeNewShot(tempId: number): EditableShot {
  * (deleted rows included), while a station index counts only survivors, so the
  * two spaces have to be bridged before a pick can be re-anchored.
  */
+/**
+ * The rows that will actually be imported - `buildZeroDatumSectionConfig`
+ * serializes exactly these. The dialog must count stations over the SAME set:
+ * a blank row left among the shots is dropped from the payload, so counting it
+ * here made the picker, the preview and the re-anchor all disagree with the
+ * backend, and the GPS anchor landed on a different station than the one shown.
+ */
+const isCounted = (s: EditableShot | undefined): boolean =>
+  s !== undefined && s.isDeleted !== true && !isBlankNewShot(s);
+
+/** How many counted rows precede this index in the FULL array. */
 function survivorsBefore(shots: EditableShot[], arrayIndex: number): number {
   let count = 0;
   for (let i = 0; i < arrayIndex && i < shots.length; i++) {
-    if (!shots[i]?.isDeleted) count++;
+    if (isCounted(shots[i])) count++;
   }
   return count;
 }
@@ -153,7 +165,7 @@ export default function ZeroDatumConfigDialog({
 
   // Station count = surviving shots + 1
   const stationCount = useMemo(() => {
-    return shots.filter((s) => !s.isDeleted).length + 1;
+    return shots.filter(isCounted).length + 1;
   }, [shots]);
 
   // The preview is drawn from the EDITED shots, not the file's original ones,
@@ -237,7 +249,7 @@ export default function ZeroDatumConfigDialog({
   // `stationIndex` always addresses the current, post-edit station order.
   const insertShotAt = useCallback(
     (arrayIndex: number) => {
-      const survivors = shots.filter((s) => !s.isDeleted).length;
+      const survivors = shots.filter(isCounted).length;
       const newShots = [...shots];
       newShots.splice(arrayIndex, 0, makeNewShot(nextTempId));
       setShots(newShots);
@@ -264,7 +276,7 @@ export default function ZeroDatumConfigDialog({
     (index: number, count: number, position: 'before' | 'after') => {
       const n = Math.max(1, count);
       const at = position === 'after' ? index + 1 : index;
-      const survivors = shots.filter((s) => !s.isDeleted).length;
+      const survivors = shots.filter(isCounted).length;
       const next = [...shots];
       next.splice(at, 0, ...Array.from({ length: n }, (_, i) => makeNewShot(nextTempId + i)));
       setShots(next);
@@ -299,7 +311,7 @@ export default function ZeroDatumConfigDialog({
     (indices: number[]): boolean => {
       const targets = indices.filter((i) => shots[i] && !shots[i]!.isDeleted);
       if (targets.length === 0) return false;
-      const survivors = shots.filter((s) => !s.isDeleted).length;
+      const survivors = shots.filter(isCounted).length;
       const next = [...shots];
       for (const i of targets) next[i] = { ...next[i]!, isDeleted: true };
       setShots(next);
@@ -322,7 +334,7 @@ export default function ZeroDatumConfigDialog({
     (index: number) => {
       const shot = shots[index];
       if (!shot || shot.isDeleted) return;
-      const survivors = shots.filter((s) => !s.isDeleted).length;
+      const survivors = shots.filter(isCounted).length;
       const newShots = [...shots];
       newShots[index] = { ...shot, isDeleted: true };
       setShots(newShots);

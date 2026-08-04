@@ -615,7 +615,13 @@ export function ShotTableEditor({
       const atEnd = beforeIndex >= visibleShots.length;
       const last = visibleShots.length - 1;
       if (onInsertShots) {
-        if (atEnd && last < 0) onAddShots?.(n) ?? onAddShot();
+        if (atEnd && last < 0) {
+          // `onAddShots?.(n) ?? onAddShot()` ran BOTH: a void return is
+          // `undefined`, which `??` reads as "nothing happened", so an empty
+          // table got n + 1 rows. Branch on whether the callback exists.
+          if (onAddShots) onAddShots(n);
+          else for (let i = 0; i < n; i++) onAddShot();
+        }
         else if (atEnd) onInsertShots(actualIndex(last), n, 'after');
         else onInsertShots(actualIndex(beforeIndex), n, 'before');
         return;

@@ -608,6 +608,7 @@ export default function DataTable({ sections }: DataTableProps) {
     onDismiss: () => setHeaderMenu(null),
     contains: [headerMenuRef],
     anchorScope: panelRef,
+    survivesUnrelatedScroll: true,
   });
   useEffect(() => {
     if (!headerMenu) return undefined;
@@ -1287,6 +1288,7 @@ export default function DataTable({ sections }: DataTableProps) {
     onDismiss: () => setConnMenu(null),
     contains: [connMenuRef],
     anchorScope: panelRef,
+    survivesUnrelatedScroll: true,
   });
   useEffect(() => {
     if (!connMenu) return undefined;

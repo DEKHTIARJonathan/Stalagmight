@@ -308,3 +308,50 @@ describe('ShotTableEditor one-legged azimuth display', () => {
     expect(screen.getByTestId('shot-cell-0-_azimuth_avg').textContent).toContain('100');
   });
 });
+
+/**
+ * `onAddShots?.(n) ?? onAddShot()` ran BOTH callbacks: a void return is
+ * `undefined`, which `??` reads as "nothing happened". With only the phantom
+ * row present, one requested row became two - and in hosts allocating ids from
+ * captured state the extra row could duplicate a temp key.
+ */
+describe('ShotTableEditor insert into an empty table', () => {
+  const insertBelow = () => {
+    fireEvent.contextMenu(screen.getByTestId('shot-cell-0-length'));
+    fireEvent.click(screen.getByTestId('shot-editor-context-insert-below'));
+  };
+
+  it('uses the bulk callback alone, without also adding a single row', () => {
+    const onAddShots = vi.fn();
+    const onAddShot = vi.fn();
+    render(
+      <ShotTableEditor
+        shots={[]}
+        onShotChange={vi.fn()}
+        onAddShot={onAddShot}
+        onAddShots={onAddShots}
+        onInsertShots={vi.fn()}
+        onDeleteShot={vi.fn()}
+      />
+    );
+    insertBelow();
+    expect(onAddShots).toHaveBeenCalledTimes(1);
+    expect(onAddShots).toHaveBeenCalledWith(1);
+    expect(onAddShot).not.toHaveBeenCalled();
+  });
+
+  it('still falls back to the single add when there is no bulk callback', () => {
+    const onAddShot = vi.fn();
+    render(
+      <ShotTableEditor
+        shots={[]}
+        onShotChange={vi.fn()}
+        onAddShot={onAddShot}
+        onInsertShots={vi.fn()}
+        onDeleteShot={vi.fn()}
+      />
+    );
+    insertBelow();
+    expect(onAddShot).toHaveBeenCalledTimes(1);
+  });
+});
