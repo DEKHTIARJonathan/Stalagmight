@@ -50,6 +50,25 @@ Every seed prints one summary line per mode ending in `classified hits: ...`,
 and that list is the answer: a finding is *identified* when its id appears
 there, not merely when the seed fails.
 
+**Long horizon.** Thousands of moves per seed, past the app's own
+`undo_history_limit`, so three things nothing shorter reaches get exercised: the
+FIFO trim and the sliding window it creates, float dust that ACCUMULATES past
+tolerance over dozens of visits to the same depth (classified as its own
+finding rather than reported as a fresh regression, then re-baselined), and id
+allocators / collection growth over a long run.
+
+```bash
+STALAGMIGHT_RUST_FUZZ_HORIZON=1 STALAGMIGHT_RUST_FUZZ_SEEDS=4 \
+  STALAGMIGHT_RUST_FUZZ_ITERATIONS=10000 \
+  TELEMETRY_ENDPOINT=http://localhost/dummy cargo test --manifest-path src-tauri/Cargo.toml \
+  --features telemetry --lib undo_redo_fuzz_horizon -- --ignored --nocapture
+```
+
+The mode changes the move mix while it is CLIMBING (85/8/7 mutate/undo/redo, and
+no jumps) for a measured reason: at the ordinary mix the depth random-walks
+around 25 and never reaches the limit at all, because every jump lands the
+cursor near the floor and the next mutation truncates everything above it.
+
 **Soak.** Same engine, no iteration budget, and with the features the gate
 leaves off (multi-step `undo_to`/`redo_to` jumps, loop closures, and both
 constructed shapes) because each reaches open findings:

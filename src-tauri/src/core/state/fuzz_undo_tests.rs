@@ -491,6 +491,62 @@ fn diff_values(
     }
 }
 
+/// Every numeric path that differs AT ALL, with the size of the difference.
+///
+/// The tolerant comparison reports nothing for a difference under
+/// `TOLERANCE_ABS`, which is right per comparison and wrong over a run: a depth
+/// visited a hundred times can be walked past the tolerance one grain at a time.
+/// This is what the accumulation oracle remembers between visits.
+fn numeric_drift(expected: &str, actual: &str) -> BTreeMap<String, f64> {
+    let (Ok(left), Ok(right)) = (
+        serde_json::from_str::<serde_json::Value>(expected),
+        serde_json::from_str::<serde_json::Value>(actual),
+    ) else {
+        return BTreeMap::new();
+    };
+    let mut out = BTreeMap::new();
+    collect_drift(&left, &right, "", &mut out);
+    out
+}
+
+fn collect_drift(
+    expected: &serde_json::Value,
+    actual: &serde_json::Value,
+    path: &str,
+    out: &mut BTreeMap<String, f64>,
+) {
+    match (expected, actual) {
+        (serde_json::Value::Object(a), serde_json::Value::Object(b)) => {
+            for (key, left) in a {
+                if let Some(right) = b.get(key) {
+                    let child = if path.is_empty() {
+                        key.clone()
+                    } else {
+                        format!("{path}.{key}")
+                    };
+                    collect_drift(left, right, &child, out);
+                }
+            }
+        }
+        (serde_json::Value::Array(a), serde_json::Value::Array(b)) => {
+            for (index, left) in a.iter().enumerate() {
+                if let Some(right) = b.get(index) {
+                    collect_drift(left, right, &format!("{path}[{index}]"), out);
+                }
+            }
+        }
+        (serde_json::Value::Number(a), serde_json::Value::Number(b)) => {
+            if let (Some(left), Some(right)) = (a.as_f64(), b.as_f64()) {
+                let delta = (left - right).abs();
+                if delta > 0.0 {
+                    out.insert(path.to_string(), delta);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
 fn diff_snapshots(expected: &str, actual: &str) -> Vec<Diff> {
     let (Ok(left), Ok(right)) = (
         serde_json::from_str::<serde_json::Value>(expected),
@@ -606,6 +662,26 @@ struct MergeMeasurement {
 /// Accumulation past this bound over a long run is a FINDING, not noise - see
 /// the horizon mode, which re-baselines expressly to detect it.
 const ADJUSTED_TOLERANCE_M: f64 = 1e-6;
+/// Relative companion to the above, and it is a MEASUREMENT, not a knob turned
+/// until a failure went away.
+///
+/// The horizon run found a state whose stored project roundtripped BYTE FOR BYTE
+/// while a station 2.2 km from the origin solved 28 microns (1.3e-8 relative)
+/// from where the same depth had it. The solve was then measured to be
+/// deterministic for a fixed project - 8 forced re-solves, zero spread
+/// (`measure_adjusted_solve_determinism`) - so the input differed in something
+/// the canonical comparison does not compare, and the candidate is the ORDER of
+/// `station_offsets` / `station_comments`: they serialize from a `HashMap`, the
+/// comparison SORTS them for exactly that reason, and `resolve_offsets` sums in
+/// stored order. A rebuilt map after a restore iterates differently, and
+/// floating-point addition is not associative.
+///
+/// That is a finding in its own right - derived geometry that depends on hash
+/// iteration order is not a function of the project's value - and it is written
+/// up as such rather than absorbed. This constant only stops the oracle
+/// reporting the same measured quantity on every long run: 1e-7 relative is 8x
+/// the observed spread and four orders below the millimetre anything real moves.
+const ADJUSTED_TOLERANCE_REL: f64 = 1e-7;
 
 /// The app's OWN merge-alignment tolerance, taken from the app rather than
 /// copied: 5 cm, the distance past which `check_merge_alignment` calls a merged
@@ -640,8 +716,8 @@ struct Classifier {
 
 /// What produced the difference being classified.
 ///
-/// The harness tier cannot see this - its bridge only knows the move's DIRECTION
-/// - which is why its gauge-anchor classifier has to conflate findings 1 and 11.
+/// The harness tier cannot see this (its bridge only knows the move's DIRECTION),
+/// which is why its gauge-anchor classifier has to conflate findings 1 and 11.
 /// Here the entry that a move consumed is a `get_undo_stack` read away, so the
 /// two can be told apart precisely, and several other classifiers can be narrowed
 /// to the exact entry shape their bug needs instead of to a path alone.
@@ -1394,9 +1470,9 @@ fn diffs_without_misplaced_shot(
 /// How many shots in `section_id` carry `uuid`. More than one is impossible by
 /// construction and is finding 16's whole signature.
 fn uuid_occurrences(snapshot: &str, section_id: SectionId, uuid: &str) -> usize {
-    section_shot_uuids(snapshot, section_id)
-        .map(|uuids| uuids.iter().filter(|found| *found == uuid).count())
-        .unwrap_or(0)
+    section_shot_uuids(snapshot, section_id).map_or(0, |uuids| {
+        uuids.iter().filter(|found| *found == uuid).count()
+    })
 }
 
 /// FINDING 10's structural signature: one loop closure is gone and one station
@@ -1819,6 +1895,22 @@ struct Outcome {
     /// (snapshot, integrity, adjusted). Reported per run so the cost of the two
     /// ports is a measured number rather than a guess.
     oracle_us: (u128, u128, u128),
+    /// Undo entries the app FIFO-trimmed out of reach during the run.
+    trimmed: usize,
+    /// Largest collection sizes seen. Growth sanity for a long run.
+    peak: Peak,
+}
+
+/// The largest each unbounded-in-principle collection got during a run.
+#[derive(Debug, Default, Clone, Copy)]
+struct Peak {
+    sections: usize,
+    stations: usize,
+    section_offsets: usize,
+    station_offsets: usize,
+    station_comments: usize,
+    merges: usize,
+    closures: usize,
 }
 
 struct Fuzzer {
@@ -1840,6 +1932,25 @@ struct Fuzzer {
     epoch: u32,
     cursor: usize,
     top: usize,
+    /// The lowest depth the history can still reach.
+    ///
+    /// Zero until the app's `undo_history_limit` FIFO-trims the oldest entries
+    /// (`UndoStack::enforce_depth_limit` -> `trim_to_count`, core/undo/budget.rs,
+    /// which drops from the FRONT of both stacks on every push). From then on
+    /// the model is a SLIDING WINDOW: depth `floor` is the deepest state the
+    /// user can still get back to, everything below it is gone for good, and
+    /// `undo_len` is `cursor - floor` rather than `cursor`.
+    floor: usize,
+    /// The app's own count limit, read from the app rather than assumed.
+    history_limit: usize,
+    /// Per depth, the largest tolerated numeric difference seen at each path.
+    ///
+    /// The accumulation oracle's memory: a difference that stays under
+    /// `TOLERANCE_ABS` is accepted every time it is seen, so a run that visits a
+    /// depth a hundred times can walk it past the tolerance one dust grain at a
+    /// time. Recording what was tolerated is what lets the failure be told apart
+    /// from a fresh regression.
+    drift: BTreeMap<usize, BTreeMap<String, f64>>,
     /// Human-readable move history, tailed into a failure payload.
     log: Vec<String>,
     id_agnostic: bool,
@@ -1882,6 +1993,10 @@ struct Fuzzer {
 impl Fuzzer {
     fn new(seed: u32, closures: bool) -> Self {
         let state = AppState::new().unwrap();
+        let history_limit = state
+            .undo_stack
+            .lock()
+            .map_or(DEFAULT_HISTORY_LIMIT, |stack| stack.history_limit());
         let mut rng = Rng::new(seed);
         build_project(&state, &mut rng, closures);
         let mut fuzzer = Self {
@@ -1896,6 +2011,9 @@ impl Fuzzer {
             epoch: 0,
             cursor: 0,
             top: 0,
+            floor: 0,
+            history_limit,
+            drift: BTreeMap::new(),
             log: Vec::new(),
             id_agnostic: false,
             outcome: Outcome::default(),
@@ -2024,7 +2142,10 @@ impl Fuzzer {
                     let worst = (0..3)
                         .map(|axis| (left[axis] - right[axis]).abs())
                         .fold(0.0_f64, f64::max);
-                    if worst > ADJUSTED_TOLERANCE_M {
+                    let magnitude = (0..3)
+                        .map(|axis| left[axis].abs().max(right[axis].abs()))
+                        .fold(0.0_f64, f64::max);
+                    if worst > ADJUSTED_TOLERANCE_M + ADJUSTED_TOLERANCE_REL * magnitude {
                         out.push(format!(
                             "station {key} moved {worst:.6} m: {left:?} -> {right:?}"
                         ));
@@ -2196,16 +2317,35 @@ impl Fuzzer {
         let actual = self.snapshot();
         let expected = self.snapshots[depth].clone();
         if expected == actual {
-            self.expect_derived(depth, what, false);
+            self.expect_derived(depth, &format!("{what} (stored state EXACT)"), false);
             return;
         }
         let mut diffs = diff_snapshots(&expected, &actual);
         if diffs.is_empty() {
             self.outcome.float_noise += 1;
+            // Remember WHAT the tolerance absorbed, and how much. This is the
+            // only record that a path was ever inexact here, and the
+            // accumulation classifier below needs it to tell "this has been
+            // creeping for fifty visits" from "this broke just now".
+            let measured = numeric_drift(&expected, &actual);
+            if !measured.is_empty() {
+                let seen = self.drift.entry(depth).or_default();
+                for (path, delta) in measured {
+                    let worst = seen.entry(path).or_insert(0.0);
+                    *worst = worst.max(delta);
+                }
+            }
             // The stored state is equal WITHIN TOLERANCE, so the derived views
             // are still compared strictly - the whole point of having them is
             // that a solve can amplify what the raw comparison let through.
-            self.expect_derived(depth, what, false);
+            let worst = numeric_drift(&expected, &actual)
+                .values()
+                .fold(0.0_f64, |acc, delta| acc.max(*delta));
+            self.expect_derived(
+                depth,
+                &format!("{what} (stored state within tolerance, worst input delta {worst:e})"),
+                false,
+            );
             return;
         }
 
@@ -2324,6 +2464,41 @@ impl Fuzzer {
             });
             self.outcome.attributed += before - unknown.len();
             if unknown.is_empty() && classified.is_empty() && ref_drop.is_none() {
+                self.resync(depth, actual);
+                self.expect_derived(depth, what, true);
+                return;
+            }
+        }
+
+        // ACCUMULATION, checked before the entry-shaped classifiers because it is
+        // about the HISTORY of a path rather than about this move. A difference
+        // is accumulated dust when every unexplained path is numeric, that path
+        // has been inexact at THIS depth before, and it has GROWN since - which
+        // is what "the tolerance absorbed a little each time and the little
+        // added up" looks like from the outside. A path that was exact until now
+        // is a fresh regression and is not this.
+        if !unknown.is_empty() {
+            let history = self.drift.get(&depth).cloned().unwrap_or_default();
+            let current = numeric_drift(&expected, &actual);
+            let accumulated = unknown.iter().all(|diff| {
+                match (history.get(&diff.path), current.get(&diff.path)) {
+                    (Some(was), Some(now)) => *now > *was && *was > 0.0,
+                    _ => false,
+                }
+            });
+            if accumulated {
+                *self
+                    .outcome
+                    .hits
+                    .entry("finding-19-tolerated-float-dust-accumulated-past-tolerance")
+                    .or_insert(0) += 1;
+                self.note(format!(
+                    "  ^ accumulation at depth {depth}: {} path(s) crept past the tolerance",
+                    unknown.len()
+                ));
+                // Re-baseline, so the NEXT accumulation is measured from here
+                // rather than reported again every visit.
+                self.drift.remove(&depth);
                 self.resync(depth, actual);
                 self.expect_derived(depth, what, true);
                 return;
@@ -2689,7 +2864,13 @@ impl Fuzzer {
     }
 
     fn expect_stacks(&self, what: &str) {
-        let (want_undo, want_redo) = (self.cursor, self.top - self.cursor);
+        // Under the sliding window the app holds `cursor - floor` undo entries,
+        // not `cursor`: everything below the floor was FIFO-trimmed. The redo
+        // stack is bounded by the same limit (`enforce_depth_limit` trims BOTH).
+        let (want_undo, want_redo) = (
+            self.cursor - self.floor,
+            (self.top - self.cursor).min(self.history_limit),
+        );
         if self.undo_len() != want_undo || self.redo_len() != want_redo {
             self.fail(
                 &format!("{what} left the history stacks in an unexpected shape"),
@@ -3317,8 +3498,12 @@ impl Fuzzer {
 /// model would be invalid. Matches `config::defaults`.
 const UNDO_PERSIST_LIMIT: usize = 20;
 /// Headroom kept below the in-memory history limit so FIFO trimming can never
-/// fire and silently invalidate `snapshots[0]`.
+/// fire in the ordinary modes. HORIZON mode deliberately goes past it - see
+/// `Plan::horizon`.
 const MAX_MODEL_DEPTH: usize = 40;
+/// Fallback when the app's own limit cannot be read (a poisoned lock, which
+/// would fail the run for other reasons first). Matches `config::defaults`.
+const DEFAULT_HISTORY_LIMIT: usize = 100;
 /// How often a history move is taken as a multi-step `undo_to`/`redo_to` jump,
 /// when `Plan::jumps` is on. Raised from 10 while hunting finding 7, which only
 /// exists on that path: a jump is the only move that skips `reconcile_geometry`.
@@ -3329,10 +3514,14 @@ impl Fuzzer {
     fn step_mutate(&mut self) {
         let before_undo = self.undo_len();
         let before_redo = self.redo_len();
+        let allocators = self.allocators();
         let Some(Some(drawn)) = self.catching_alignment(Self::draw_mutation) else {
             return;
         };
+        let label = drawn.label.clone();
         self.record_mutation(drawn, before_undo, before_redo);
+        self.expect_allocators_advanced(&allocators, &label);
+        self.record_growth();
     }
 
     /// The bookkeeping half of `step_mutate`, split out so the exposure prologue
@@ -3411,6 +3600,7 @@ impl Fuzzer {
             });
             self.outcome.mutations += 1;
             self.outcome.max_depth = self.outcome.max_depth.max(self.cursor);
+            self.absorb_trim(&drawn.label);
             self.expect_merges_aligned(&drawn.label);
             self.expect_raw_and_resolved_agree(&drawn.label);
             return;
@@ -3871,6 +4061,111 @@ impl Fuzzer {
         }
     }
 
+    /// Move the model's floor up when the app FIFO-trimmed the oldest entries,
+    /// and assert it trimmed exactly as much as the limit requires.
+    ///
+    /// `UndoStack::enforce_depth_limit` drops from the FRONT of the undo stack
+    /// while `len > history_limit` (core/undo/budget.rs). So after a push the
+    /// app holds at most `history_limit` entries, and the model's reachable
+    /// floor is `cursor - history_limit`. Everything below that is unreachable
+    /// FOREVER - not "not currently reachable" - so the model drops those
+    /// depths' expectations rather than keeping stale ones it can never check.
+    ///
+    /// The assertion is exact in both directions: too little trimming is an
+    /// unbounded history, too much is a user's edits disappearing early.
+    fn absorb_trim(&mut self, what: &str) {
+        let reachable = self.cursor - self.floor;
+        let expected_undo = reachable.min(self.history_limit);
+        let actual_undo = self.undo_len();
+        if actual_undo != expected_undo {
+            self.fail(
+                &format!("{what} left the undo stack the wrong length for the history limit"),
+                &format!(
+                    "  limit={} reachable={reachable} expected undo={expected_undo}, got {actual_undo}",
+                    self.history_limit
+                ),
+            );
+        }
+        if reachable > self.history_limit {
+            let new_floor = self.cursor - self.history_limit;
+            // The trimmed depths can never be observed again, so their
+            // expectations are dropped rather than left to rot. `snapshots` is
+            // indexed by ABSOLUTE depth, so the entries stay in place and only
+            // the floor moves - which keeps every other index meaningful.
+            self.outcome.trimmed += new_floor - self.floor;
+            self.floor = new_floor;
+        }
+    }
+
+    /// Allocators may not go BACKWARDS across a forward command.
+    ///
+    /// The roundtrip oracle drops them deliberately: a snapshot-pair undo
+    /// restores them verbatim while a targeted undo only ever raises them, so
+    /// comparing them per depth would fire on every mixed history. That leaves
+    /// the one thing about them that IS an invariant unchecked - a forward
+    /// command that lowers an allocator hands the same id out twice - which is
+    /// what this checks, per mutation, against the value from immediately
+    /// before it.
+    fn expect_allocators_advanced(&mut self, before: &BTreeMap<String, u32>, what: &str) {
+        let after = self.allocators();
+        let mut regressions = Vec::new();
+        for (key, old) in before {
+            if let Some(new) = after.get(key) {
+                if new < old {
+                    regressions.push(format!("{key}: {old} -> {new}"));
+                }
+            }
+        }
+        if regressions.is_empty() {
+            return;
+        }
+        self.fail(
+            &format!("{what} REWOUND an id allocator, so an id can now be issued twice"),
+            &format!("  {}", regressions.join("\n  ")),
+        );
+    }
+
+    /// Every id allocator in the project, by name.
+    fn allocators(&self) -> BTreeMap<String, u32> {
+        let mut out = BTreeMap::new();
+        let Some(project) = self.state.get_project_state() else {
+            return out;
+        };
+        out.insert("next_section_id".to_string(), project.next_section_id);
+        out.insert(
+            "next_closure_id".to_string(),
+            u32::try_from(project.next_closure_id).unwrap_or(u32::MAX),
+        );
+        for section in &project.sections {
+            out.insert(
+                format!("section {}.next_shot_id", section.id),
+                section.next_shot_id,
+            );
+        }
+        out
+    }
+
+    /// The sizes worth watching over a long run: an unbounded collection is a
+    /// leak whether or not any single move looks wrong.
+    fn record_growth(&mut self) {
+        let Some(project) = self.state.get_project_state() else {
+            return;
+        };
+        let stations: usize = project
+            .sections
+            .iter()
+            .map(|section| section.shots.len() + 1)
+            .sum();
+        let peak = &mut self.outcome.peak;
+        peak.sections = peak.sections.max(project.sections.len());
+        peak.stations = peak.stations.max(stations);
+        peak.section_offsets = peak.section_offsets.max(project.section_offsets.len());
+        peak.station_offsets = peak.station_offsets.max(project.station_offsets.len());
+        peak.station_comments = peak.station_comments.max(project.station_comments.len());
+        peak.merges = peak.merges.max(project.station_merges.len());
+        peak.closures = peak.closures.max(project.loop_closures.len());
+    }
+
     /// Did a failed history move fail for a KNOWN, documented reason?
     ///
     /// Both of these leave the entry on its stack (`undo_inner`'s epilogue pushes
@@ -3943,8 +4238,10 @@ impl Fuzzer {
     ///
     /// Returns false when a known wedge stopped it.
     fn step_history(&mut self, back: bool, steps: usize) -> bool {
+        // `floor`, not 0: everything below it was FIFO-trimmed and the app has
+        // no entry left to undo.
         let reach = if back {
-            self.cursor
+            self.cursor - self.floor
         } else {
             self.top - self.cursor
         };
@@ -4173,7 +4470,7 @@ impl Fuzzer {
     /// BOTH directions.
     fn finish(&mut self) {
         let summit = self.top;
-        while self.cursor > 0 {
+        while self.cursor > self.floor {
             if !self.step_history(true, 1) {
                 return;
             }
@@ -4243,6 +4540,14 @@ struct Plan {
     /// `closures`'s reason too: the shapes are built to reach known defects, so
     /// the hit counts say nothing about new ones.
     closure_shapes: bool,
+    /// Run PAST the app's `undo_history_limit`, so the FIFO trim fires and the
+    /// model becomes a sliding window.
+    ///
+    /// OFF for the gate because it needs thousands of moves to be worth
+    /// anything: the trim only starts at depth 100, and the accumulation oracle
+    /// it exists alongside needs a depth to be revisited dozens of times before
+    /// tolerated dust can add up to anything.
+    horizon: bool,
 }
 
 fn run_fuzz(seed: u32, plan: Plan) -> Outcome {
@@ -4267,6 +4572,14 @@ fn run_fuzz(seed: u32, plan: Plan) -> Outcome {
         usize::MAX
     };
 
+    // HORIZON mode deliberately pushes past the app's own history limit so the
+    // FIFO trim fires and the sliding window gets fuzzed; every other mode stays
+    // under it, which is what keeps `snapshots[0]` valid for the closing walk.
+    let depth_cap = if plan.horizon {
+        fuzzer.history_limit * 2
+    } else {
+        MAX_MODEL_DEPTH
+    };
     for iteration in 0..plan.iterations {
         // Nothing after the app's own assert measures the app: it unwound
         // through the project mutex, so the lock is poisoned and half the call
@@ -4280,17 +4593,29 @@ fn run_fuzz(seed: u32, plan: Plan) -> Outcome {
         // 60 / 25 / 15 mutate / undo / redo, re-rolled when the stack a move
         // needs is empty. Same mix as the harness.
         let roll = fuzzer.rng.below(100);
-        let mut back = roll >= 60 && roll < 85;
-        let mut forward = roll >= 85;
+        // 60 / 25 / 15 mutate / undo / redo, EXCEPT while a horizon run is still
+        // climbing: at that mix the depth random-walks around 25 and never
+        // reaches the history limit at all (measured - 335 mutations, depth 23),
+        // because every jump knocks the cursor down and the next mutation
+        // truncates everything above it. 85 / 8 / 7 climbs while still walking
+        // the history on the way up. ONE draw either way, so no other mode's
+        // stream moves.
+        let climbing = plan.horizon && fuzzer.cursor - fuzzer.floor < depth_cap;
+        let mut back = if climbing {
+            (85..93).contains(&roll)
+        } else {
+            (60..85).contains(&roll)
+        };
+        let mut forward = roll >= if climbing { 93 } else { 85 };
         if forward && fuzzer.cursor >= fuzzer.top {
             forward = false;
-            back = fuzzer.cursor > 0;
+            back = fuzzer.cursor > fuzzer.floor;
         }
-        if back && fuzzer.cursor == 0 {
+        if back && fuzzer.cursor == fuzzer.floor {
             back = false;
         }
         if !back && !forward {
-            if fuzzer.cursor >= MAX_MODEL_DEPTH {
+            if fuzzer.cursor - fuzzer.floor >= depth_cap {
                 if !fuzzer.step_history(true, 1) {
                     break;
                 }
@@ -4311,7 +4636,12 @@ fn run_fuzz(seed: u32, plan: Plan) -> Outcome {
         // One history move in ten is a jump by default. `plan.jumps` is checked
         // FIRST so a run without jumps draws nothing here and its stream is
         // unchanged by this knob - the gate's pinned seeds depend on that.
-        let steps = if plan.jumps && reach > 1 && fuzzer.rng.chance(JUMP_PERCENT) {
+        // No jumps while a horizon run is CLIMBING: a jump lands the cursor near
+        // the floor and the next mutation truncates everything above it, which
+        // caps the depth well below the history limit (measured - 909 mutations
+        // and 57 jumps got to depth 63, never to 100). Jumps resume once the
+        // window is sliding, which is where they are interesting anyway.
+        let steps = if plan.jumps && !climbing && reach > 1 && fuzzer.rng.chance(JUMP_PERCENT) {
             1 + fuzzer.rng.below(reach)
         } else {
             1
@@ -4410,7 +4740,8 @@ fn summarize(label: &str, seed: u32, outcome: &Outcome) -> String {
     format!(
         "{label} seed={seed}: {} mutations, {} rejected, {} no-ops, {} undos, {} redos, \
          {} jumps, {} saves, {} reloads, depth<={}, float-noise={}, attributed={}, \
-         integrity-compared={}, adjusted-compared={}, oracle-us=(snap {} integrity {} adjusted {}){}{}",
+         integrity-compared={}, adjusted-compared={}, oracle-us=(snap {} integrity {} adjusted {}), \
+         trimmed={}, peak={:?}{}{}",
         outcome.mutations,
         outcome.rejected,
         outcome.noops,
@@ -4427,6 +4758,8 @@ fn summarize(label: &str, seed: u32, outcome: &Outcome) -> String {
         outcome.oracle_us.0,
         outcome.oracle_us.1,
         outcome.oracle_us.2,
+        outcome.trimmed,
+        outcome.peak,
         if outcome.wedged {
             " WEDGED"
         } else if outcome.alignment_panic {
@@ -4466,6 +4799,7 @@ fn undo_redo_fuzz_gate() {
                 closures: false,
                 divergence: false,
                 closure_shapes: false,
+                horizon: false,
             },
         );
         println!("{}", summarize("in-memory", seed, &outcome));
@@ -4507,6 +4841,7 @@ fn undo_redo_fuzz_gate_persistence() {
                 closures: false,
                 divergence: false,
                 closure_shapes: false,
+                horizon: false,
             },
         );
         println!("{}", summarize("persistence", seed, &outcome));
@@ -4538,6 +4873,7 @@ fn the_fuzzer_is_deterministic() {
             closures: false,
             divergence: false,
             closure_shapes: false,
+            horizon: false,
         };
         let first = run_fuzz(seed, plan);
         let second = run_fuzz(seed, plan);
@@ -4600,6 +4936,7 @@ fn finding_14_no_insert_leaves_a_merge_out_of_alignment() {
             closures: true,
             divergence: false,
             closure_shapes: false,
+            horizon: false,
         },
     );
     assert!(
@@ -4635,6 +4972,7 @@ fn bug_7_a_jump_is_n_single_steps() {
             closures: true,
             divergence: false,
             closure_shapes: true,
+            horizon: false,
         },
     );
     assert_eq!(
@@ -4666,6 +5004,7 @@ fn fuzz_seed_survey() {
     let closures = std::env::var("STALAGMIGHT_RUST_FUZZ_CLOSURES").is_ok();
     let divergence = std::env::var("STALAGMIGHT_RUST_FUZZ_DIVERGENCE").is_ok();
     let closure_shapes = std::env::var("STALAGMIGHT_RUST_FUZZ_CLOSURE_SHAPES").is_ok();
+    let horizon = std::env::var("STALAGMIGHT_RUST_FUZZ_HORIZON").is_ok();
     let verbose = std::env::var("STALAGMIGHT_RUST_FUZZ_VERBOSE").is_ok();
     let mut clean = Vec::new();
     let mut failures: BTreeMap<String, Vec<u32>> = BTreeMap::new();
@@ -4678,6 +5017,7 @@ fn fuzz_seed_survey() {
                 closures,
                 divergence,
                 closure_shapes,
+                horizon,
             };
             let outcome =
                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run_fuzz(seed, plan)));
@@ -4723,6 +5063,100 @@ fn fuzz_seed_survey() {
     }
 }
 
+/// THE HORIZON RUN: thousands of moves, past the app's own history limit.
+///
+/// Three things only a long run can reach, and all three are about time rather
+/// than about any single move:
+///
+/// 1. **The FIFO trim.** `UndoStack::enforce_depth_limit` drops the oldest entry
+///    from BOTH stacks once either passes `undo_history_limit`
+///    (core/undo/budget.rs). Nothing shorter than ~100 pushes reaches it, so the
+///    sliding window was completely unfuzzed. The model follows it exactly:
+///    `absorb_trim` asserts the app trimmed neither too little (an unbounded
+///    history) nor too much (a user's edits disappearing early), moves the
+///    reachable `floor` up, and every walk from then on treats the floor as the
+///    bottom - including the closing unwind, which still verifies every depth
+///    that is still reachable.
+/// 2. **Accumulation.** A difference under `TOLERANCE_ABS` is accepted every
+///    time it is seen, so a depth visited a hundred times can be walked past the
+///    tolerance one grain at a time. The run remembers what it tolerated per
+///    depth per path, and a later failure whose every path has been inexact here
+///    before AND has grown is classified as accumulation rather than reported as
+///    a fresh regression - then re-baselined, so the next one is measured from
+///    there.
+/// 3. **Growth.** Id allocators may not be rewound by a forward command (that
+///    hands the same id out twice) and the peak size of every
+///    unbounded-in-principle collection is reported.
+///
+/// ```text
+/// STALAGMIGHT_RUST_FUZZ_HORIZON=1 STALAGMIGHT_RUST_FUZZ_SEEDS=4 \
+///   STALAGMIGHT_RUST_FUZZ_ITERATIONS=10000 \
+///   TELEMETRY_ENDPOINT=http://localhost/dummy cargo test \
+///   --manifest-path src-tauri/Cargo.toml --features telemetry \
+///   --lib undo_redo_fuzz_horizon -- --ignored --nocapture
+/// ```
+#[test]
+#[ignore = "horizon: thousands of moves per seed - run deliberately with STALAGMIGHT_RUST_FUZZ_SEEDS/ITERATIONS"]
+fn undo_redo_fuzz_horizon() {
+    let seeds: u32 = std::env::var("STALAGMIGHT_RUST_FUZZ_SEEDS")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(2);
+    let iterations: usize = std::env::var("STALAGMIGHT_RUST_FUZZ_ITERATIONS")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(10_000);
+    let persistence = std::env::var("STALAGMIGHT_RUST_FUZZ_PERSISTENCE").is_ok();
+    let mut total: BTreeMap<&'static str, usize> = BTreeMap::new();
+    let mut trimmed = 0;
+    let mut failures = Vec::new();
+    for seed in 1..=seeds {
+        let plan = Plan {
+            iterations,
+            persistence,
+            jumps: true,
+            closures: false,
+            divergence: false,
+            closure_shapes: false,
+            horizon: true,
+        };
+        // Caught per seed, and RE-RAISED at the end. A long run is expensive
+        // enough that stopping the whole sweep on the first failure wastes the
+        // other seeds' evidence; hiding the failure would be worse, so every one
+        // is reported and the test still fails.
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run_fuzz(seed, plan))) {
+            Ok(outcome) => {
+                println!("{}", summarize("horizon", seed, &outcome));
+                trimmed += outcome.trimmed;
+                for (id, count) in outcome.hits {
+                    *total.entry(id).or_insert(0) += count;
+                }
+            }
+            Err(payload) => {
+                let message = payload
+                    .downcast_ref::<String>()
+                    .cloned()
+                    .or_else(|| payload.downcast_ref::<&str>().map(|s| (*s).to_string()))
+                    .unwrap_or_else(|| "<non-string panic>".to_string());
+                println!("horizon seed={seed} FAILED:\n{message}");
+                failures.push(seed);
+            }
+        }
+    }
+    // A horizon run that never trimmed proves nothing about the window, which is
+    // the main thing it exists to exercise.
+    assert!(
+        trimmed > 0,
+        "no run reached the history limit ({trimmed} entries trimmed over {seeds} seed(s) x \
+         {iterations} moves); the sliding window went unfuzzed"
+    );
+    println!("horizon: {trimmed} entry(ies) trimmed; classified totals: {total:?}");
+    assert!(
+        failures.is_empty(),
+        "horizon seed(s) {failures:?} failed - see the payloads above"
+    );
+}
+
 /// The SOAK: the same engine, at a scale a CI gate cannot afford.
 ///
 /// `#[ignore]`d, and driven by the environment so a sweep needs no recompile:
@@ -4765,6 +5199,7 @@ fn undo_redo_fuzz_soak() {
                     closures: true,
                     divergence: persistence,
                     closure_shapes: true,
+                    horizon: false,
                 },
             );
             if outcome.wedged {
@@ -4777,4 +5212,47 @@ fn undo_redo_fuzz_soak() {
     }
     println!("soak: {seeds} seed(s) x {iterations} iterations x 2 modes");
     println!("soak classified totals: {total:?} ({wedges} wedged run(s))");
+}
+
+/// Is the adjusted solve a FUNCTION of the project, or does it wander?
+///
+/// The horizon run's adjusted-geometry oracle fired on a state whose stored
+/// project roundtripped byte for byte, with a station 28 microns from where the
+/// same depth had it - at kilometre-scale coordinates, 3e-8 relative. Either the
+/// solve is not deterministic or something outside the compared state feeds it,
+/// and the difference between those two answers decides whether the oracle's
+/// tolerance is a measurement or an excuse. This measures it.
+#[test]
+#[ignore = "measurement: prints the solve-to-solve spread, used to justify ADJUSTED_TOLERANCE_M"]
+fn measure_adjusted_solve_determinism() {
+    // No closures: the starting topology with one is finding 14's, and the
+    // app's own assert would stop this before it measured anything.
+    let mut fuzzer = Fuzzer::new(1, false);
+    for _ in 0..40 {
+        if fuzzer.catching_alignment(Fuzzer::step_mutate).is_none() {
+            break;
+        }
+    }
+    let first = fuzzer.adjusted_geometry();
+    let mut worst: f64 = 0.0;
+    for _ in 0..8 {
+        fuzzer.state.invalidate_adjusted_cache();
+        let again = fuzzer.adjusted_geometry();
+        let diffs = Fuzzer::adjusted_diffs(&first, &again);
+        if !diffs.is_empty() {
+            println!("solve differs: {diffs:?}");
+        }
+        for (a, b) in first.lines().zip(again.lines()) {
+            let (pa, pb): (Vec<&str>, Vec<&str>) = (a.split('|').collect(), b.split('|').collect());
+            for axis in 1..4 {
+                if let (Ok(x), Ok(y)) = (
+                    pa.get(axis).unwrap_or(&"0").parse::<f64>(),
+                    pb.get(axis).unwrap_or(&"0").parse::<f64>(),
+                ) {
+                    worst = worst.max((x - y).abs());
+                }
+            }
+        }
+    }
+    println!("worst solve-to-solve difference over 8 re-solves: {worst:e} m");
 }
