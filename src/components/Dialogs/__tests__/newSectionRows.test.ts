@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { ShotData } from '../../../types/project';
-import type { ShotDraft } from '../../SingleSystemView/dataTableDrafts';
+import { type ShotDraft, isBlankDraft } from '../../SingleSystemView/dataTableDrafts';
 import { AZIMUTH_AVG_KEY, PITCH_AVG_KEY } from '../../SingleSystemView/dataTableEdits';
 import {
   applyEditToData,
@@ -11,7 +11,6 @@ import {
   deleteRows,
   deriveAzimuthMode,
   insertBlankRows,
-  isBlankRow,
   MAX_PASTE_ROWS,
   moveRows,
   normalizeRows,
@@ -37,44 +36,14 @@ const allocator = (start = 100) => {
   return () => n++;
 };
 
-describe('isBlankRow', () => {
-  it('is true for a row with no fields at all', () => {
-    expect(isBlankRow(blankRow(1))).toBe(true);
-  });
-
-  it('is false once a cell holds a real value', () => {
-    expect(isBlankRow(row(1, { comment: 'x' }))).toBe(false);
-    expect(isBlankRow(row(1, { length: 5 }))).toBe(false);
-  });
-
-  /**
-   * Judged by value rather than by key presence. This used to assert that an
-   * explicit clear made a row "touched", which read reasonably but meant that
-   * cycling the kind back to Normal, or emptying a comment, left a visually
-   * blank invitation row classified as incomplete - Create stayed disabled and
-   * closing offered to discard a row holding nothing.
-   */
-  it('stays blank when a cell is written back to its default', () => {
-    expect(isBlankRow(row(1, { pitch_in: null }))).toBe(true);
-    expect(isBlankRow(row(1, { comment: '' }))).toBe(true);
-    expect(isBlankRow(row(1, { kind: 'Normal' }))).toBe(true);
-    expect(isBlankRow(row(1, { length: NaN }))).toBe(true);
-  });
-
-  it('is not blank when the kind was cycled AWAY from the default', () => {
-    expect(isBlankRow(row(1, { kind: 'Jump' }))).toBe(false);
-  });
-
-  it('is blank when every written cell is at its default, together', () => {
-    expect(isBlankRow(row(1, { kind: 'Normal', comment: '', pitch_in: null }))).toBe(true);
-  });
-});
-
+// The blankness rule itself is `isBlankDraft`, and lives (with its own tests)
+// beside the drafts it judges in dataTableDrafts. Here it is only the yardstick
+// for what these mutators leave behind.
 describe('normalizeRows', () => {
   it('appends a blank row when the last one holds data', () => {
     const next = normalizeRows([filled(1)], allocator());
     expect(next).toHaveLength(2);
-    expect(isBlankRow(next[1]!)).toBe(true);
+    expect(isBlankDraft(next[1]!)).toBe(true);
     expect(next[1]!.key).toBe(100);
   });
 
@@ -124,7 +93,7 @@ describe('deleteRows', () => {
   it('leaves one fresh blank row rather than an empty grid', () => {
     const next = deleteRows([filled(1), filled(2)], 0, 1, allocator());
     expect(next).toHaveLength(1);
-    expect(isBlankRow(next[0]!)).toBe(true);
+    expect(isBlankDraft(next[0]!)).toBe(true);
     expect(next[0]!.key).toBe(100);
   });
 
@@ -167,7 +136,7 @@ describe('moveRows', () => {
     // occupied, so there was nowhere to type the next shot.
     const next = moveRows([filled(1), blankRow(2)], 1, 1, 0, allocator());
     expect(next.map((r) => r.key)).toEqual([2, 1, 100]);
-    expect(isBlankRow(next[2]!)).toBe(true);
+    expect(isBlankDraft(next[2]!)).toBe(true);
   });
 });
 
@@ -192,6 +161,22 @@ describe('applyEditToData', () => {
     expect(applyEditToData({}, AZIMUTH_AVG_KEY, 45)).toEqual({
       azimuth_in: 45,
       azimuth_out: 45,
+    });
+  });
+
+  it('normalizes an out-of-range mean typed onto an unset row', () => {
+    // The unset-legs case is `buildShotUpdates`' own branch; a second copy here
+    // wrote the raw typed value straight to both legs, skipping normalizeAngle.
+    expect(applyEditToData({}, AZIMUTH_AVG_KEY, 400)).toEqual({
+      azimuth_in: 40,
+      azimuth_out: 40,
+    });
+  });
+
+  it('offsets from the single measured leg rather than averaging against NaN', () => {
+    expect(applyEditToData({ azimuth_in: 10 }, AZIMUTH_AVG_KEY, 25)).toEqual({
+      azimuth_in: 25,
+      azimuth_out: 25,
     });
   });
 
@@ -252,7 +237,7 @@ describe('applyEdits', () => {
     );
     expect(next[0]!.data).toEqual({ length: 10, depth_in: 0 });
     expect(next).toHaveLength(2);
-    expect(isBlankRow(next[1]!)).toBe(true);
+    expect(isBlankDraft(next[1]!)).toBe(true);
   });
 
   it('grows the row list for edits landing past the end (a pasted block)', () => {
@@ -268,7 +253,7 @@ describe('applyEdits', () => {
       allocator()
     );
     expect(next.map((r) => r.data.length)).toEqual([10, 20, 30, undefined]);
-    expect(isBlankRow(next[3]!)).toBe(true);
+    expect(isBlankDraft(next[3]!)).toBe(true);
   });
 
   it('refuses to conjure unbounded rows from a stray clipboard, and says so', () => {
@@ -343,6 +328,76 @@ describe('applyEdits', () => {
       allocator()
     );
     expect(next[1]!.data.depth_in).toBeUndefined();
+  });
+
+  it('does not seed Depth In when the edit only clears cells', () => {
+    // Pressing Delete over the trailing blank row: every edit is a clear, so the
+    // row has to come back empty rather than materializing a depth from above
+    // that then counts as data and blocks Create.
+    const { rows: next } = applyEdits(
+      [filled(1, { depth_out: -7 }), blankRow(2)],
+      [
+        { row: 1, colKey: 'length', value: undefined },
+        { row: 1, colKey: 'comment', value: null },
+      ],
+      allocator()
+    );
+    expect(next[1]!.data.depth_in).toBeUndefined();
+    expect(isBlankDraft(next[1]!)).toBe(true);
+  });
+
+  it('leaves the trailing row empty after a cell-by-cell whole-row Delete', () => {
+    // The grid reports one cleared cell per call, so the rule ran several times
+    // over the same row and the order of the clears decided whether a seeded
+    // depth survived.
+    const nextKey = allocator();
+    let rows = [filled(1, { depth_out: -7 }), blankRow(2)];
+    for (const colKey of ['length', 'depth_in', 'depth_out', 'comment']) {
+      rows = applyEdits(rows, [{ row: 1, colKey, value: undefined }], nextKey).rows;
+    }
+    expect(rows).toHaveLength(2);
+    expect(isBlankDraft(rows[1]!)).toBe(true);
+  });
+
+  it('re-establishes the invitation row when the trailing row is tagged J/R', () => {
+    // The J/R cell writes through this funnel precisely for this: setting `kind`
+    // straight into the array skipped normalizeRows and consumed the blank row.
+    const { rows: next } = applyEdits(
+      [blankRow(1)],
+      [{ row: 0, colKey: 'kind', value: 'Jump' }],
+      allocator()
+    );
+    expect(next.map((r) => r.key)).toEqual([1, 100]);
+    expect(isBlankDraft(next[1]!)).toBe(true);
+  });
+
+  it('does not seed Depth In for a tag alone, but does on the first measurement', () => {
+    // A kind is a label, not a reading: seeding on it would strand a depth on a
+    // row whose kind can be cycled straight back to Normal.
+    const tagged = applyEdits(
+      [filled(1, { depth_out: -7 }), blankRow(2)],
+      [{ row: 1, colKey: 'kind', value: 'Jump' }],
+      allocator()
+    ).rows;
+    expect(tagged[1]!.data).toEqual({ kind: 'Jump' });
+    const measured = applyEdits(
+      tagged,
+      [{ row: 1, colKey: 'length', value: 12 }],
+      allocator(200)
+    ).rows;
+    expect(measured[1]!.data).toEqual({ kind: 'Jump', length: 12, depth_in: -7 });
+  });
+
+  it('returns a row cycled back to Normal to blank, so Create is not stuck on it', () => {
+    const tagged = applyEdits(
+      [filled(1, { depth_out: -7 }), blankRow(2)],
+      [{ row: 1, colKey: 'kind', value: 'Jump' }],
+      allocator()
+    ).rows;
+    const back = applyEdits(tagged, [{ row: 1, colKey: 'kind', value: 'Normal' }], allocator(200))
+      .rows;
+    expect(isBlankDraft(back[1]!)).toBe(true);
+    expect(summarizeSubmit(back).incompleteRows).toEqual([]);
   });
 
   it('leaves untouched rows referentially identical', () => {

@@ -68,8 +68,9 @@ export interface NewSectionColumnContext {
    *  already open cannot leave editable cells behind. */
   readOnly: boolean;
   /** Advance a row's kind around Normal -> Jump -> Reference (the inline J/R
-   *  cell); `-1` walks it backwards on shift-click. */
-  onCycleShotKind: (shot: Shot, direction: 1 | -1) => void;
+   *  cell); `-1` walks it backwards on shift-click. `rowIndex` is the grid row,
+   *  which is what the dialog's edit funnel addresses rows by. */
+  onCycleShotKind: (shot: Shot, direction: 1 | -1, rowIndex: number) => void;
 }
 
 export function buildNewSectionShotColumns(ctx: NewSectionColumnContext): GridColumn<Shot>[] {

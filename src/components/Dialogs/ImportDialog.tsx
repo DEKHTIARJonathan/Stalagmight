@@ -12,6 +12,7 @@ import {
   type ShotDraft,
   materializeDraft,
   draftMissing,
+  isBlankDraft,
 } from '../SingleSystemView/dataTableDrafts';
 import {
   ANGLE_FAMILY_KEYS,
@@ -165,18 +166,66 @@ export default function ImportDialog() {
   }, []);
 
   // --- Rows -----------------------------------------------------------------
-  const rows = useMemo<Shot[]>(() => drafts.map(materializeDraft), [drafts]);
+  // Materialized per DRAFT, not per render: the row mutators hand back the same
+  // draft object for every row an edit did not touch, so one keystroke rebuilds
+  // one row instead of all of them - this grid takes 5000-row pastes.
+  const rowCache = useMemo(() => new WeakMap<ShotDraft, Shot>(), []);
+  const rows = useMemo<Shot[]>(
+    () =>
+      drafts.map((d) => {
+        const cached = rowCache.get(d);
+        if (cached) return cached;
+        const row = materializeDraft(d);
+        rowCache.set(d, row);
+        return row;
+      }),
+    [drafts, rowCache]
+  );
 
-  const onCycleShotKind = useCallback(
-    (shot: Shot, direction: 1 | -1) => {
+  // One funnel for every edit path, so the row cap has a single place to report
+  // from: `applyEdits` refuses edits that would grow the list past MAX_PASTE_ROWS
+  // and says how many, which would otherwise vanish without a word. It is also
+  // where the structural invariants live, so nothing may write `drafts` around
+  // it (see onCycleShotKind).
+  const applyGridEdits = useCallback(
+    (edits: CellEdit[]) => {
       if (editingBlocked) return;
-      setDrafts((prev) =>
-        prev.map((d) =>
-          d.key === shot.id ? { ...d, data: { ...d.data, kind: nextShotKind(shot.kind, direction) } } : d
-        )
-      );
+      // Functional: the grid calls this once PER cleared cell when several
+      // required cells are emptied at once, and each call computing from the
+      // same captured `drafts` meant only the last one survived - while the grid
+      // showed them all cleared, so Create could go green with a measurement the
+      // user believed they had removed. The toast below is read back OUT of the
+      // updater rather than fired inside it, because an updater can run more
+      // than once (StrictMode) and would double it.
+      let droppedPastCap = 0;
+      setDrafts((current) => {
+        const { rows: next, droppedPastCap: dropped } = applyEdits(current, edits, nextKey);
+        droppedPastCap = dropped;
+        return next;
+      });
+      if (droppedPastCap > 0) {
+        showToast(
+          t('newSection.pasteCapped', { count: droppedPastCap }),
+          'new-section-paste-cap',
+          'error'
+        );
+      }
     },
-    [editingBlocked]
+    [editingBlocked, nextKey, showToast, t]
+  );
+
+  // The J/R cell goes through that same funnel, addressing its row by grid
+  // position like every other edit. Writing `kind` straight into the drafts
+  // array skipped `normalizeRows`, so cycling the kind of the trailing blank row
+  // consumed the invitation row - no fresh blank below it, nowhere left to type,
+  // and Create disabled over a row the user had only tagged.
+  const onCycleShotKind = useCallback(
+    (shot: Shot, direction: 1 | -1, rowIndex: number) => {
+      applyGridEdits([
+        { row: rowIndex, colKey: 'kind', value: nextShotKind(shot.kind, direction) },
+      ]);
+    },
+    [applyGridEdits]
   );
 
   const columns = useMemo(
@@ -207,38 +256,6 @@ export default function ImportDialog() {
       setHiddenColumns((prev) => applyAngleMode(prev, mode, avgKey, legIn, legOut));
     },
     [hiddenColumns, columns]
-  );
-
-  // One funnel for every edit path, so the row cap has a single place to report
-  // from: `applyEdits` refuses edits that would grow the list past MAX_PASTE_ROWS
-  // and says how many, which would otherwise vanish without a word.
-  // Deliberately reads `drafts` rather than using the functional setState form:
-  // the toast is a side effect, and a state updater can be invoked more than
-  // once (StrictMode), which would double it. The grid emits at most one edit
-  // call per interaction, so there is no batching hazard in reading state here.
-  const applyGridEdits = useCallback(
-    (edits: CellEdit[]) => {
-      if (editingBlocked) return;
-      // Functional: the grid calls this once PER cleared cell when several
-      // required cells are emptied at once, and each call computing from the
-      // same captured `drafts` meant only the last one survived - while the grid
-      // showed them all cleared, so Create could go green with a measurement the
-      // user believed they had removed.
-      let droppedPastCap = 0;
-      setDrafts((current) => {
-        const { rows: next, droppedPastCap: dropped } = applyEdits(current, edits, nextKey);
-        droppedPastCap = dropped;
-        return next;
-      });
-      if (droppedPastCap > 0) {
-        showToast(
-          t('newSection.pasteCapped', { count: droppedPastCap }),
-          'new-section-paste-cap',
-          'error'
-        );
-      }
-    },
-    [editingBlocked, nextKey, showToast, t]
   );
 
   const onEdit = useCallback(
@@ -301,9 +318,23 @@ export default function ImportDialog() {
     () => deriveAngleMode(hiddenColumns, PITCH_AVG_KEY, 'pitch_in', 'pitch_out'),
     [hiddenColumns]
   );
+  // Validated per DRAFT like `rows` above, so a keystroke re-checks the row it
+  // changed rather than the whole grid. The cache is thrown away whenever the
+  // column layout it was computed against changes.
+  const missingCache = useMemo(
+    () => new WeakMap<ShotDraft, ReturnType<typeof draftMissing>>(),
+    [hiddenColumns, azimuthMode]
+  );
   const missingByRow = useMemo(
-    () => drafts.map((d) => draftMissing(d, hiddenColumns, azimuthMode)),
-    [drafts, hiddenColumns, azimuthMode]
+    () =>
+      drafts.map((d) => {
+        const cached = missingCache.get(d);
+        if (cached) return cached;
+        const missing = draftMissing(d, hiddenColumns, azimuthMode);
+        missingCache.set(d, missing);
+        return missing;
+      }),
+    [drafts, missingCache, hiddenColumns, azimuthMode]
   );
   const cellClassName = useCallback(
     (_row: Shot, rowIndex: number, colKey: string) =>
@@ -392,12 +423,11 @@ export default function ImportDialog() {
   };
 
   // Track if form has been modified. Any row carrying data counts, including an
-  // incomplete one - discarding it still loses typing.
+  // incomplete one - discarding it still loses typing. Judged by value, the same
+  // rule the grid and the Create gate use: a cleared optional leaves its key
+  // behind, so counting keys offered to discard an empty grid.
   const isDirty =
-    name !== '' ||
-    surveyor !== '' ||
-    date !== '' ||
-    drafts.some((d) => Object.keys(d.data).length > 0);
+    name !== '' || surveyor !== '' || date !== '' || drafts.some((d) => !isBlankDraft(d));
 
   return (
     <DialogWrapper

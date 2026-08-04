@@ -783,7 +783,9 @@ export default function DataTable({ sections }: DataTableProps) {
   // Each draft's still-missing required fields: visible columns tint their
   // draft cell red; hidden ones tint the columns (eye) button and their
   // dropdown row instead, until shown or filled. Inserted drafts surface them
-  // immediately; the end draft only once it has ANY value.
+  // immediately; the end draft only once it holds a real value - clearing an
+  // optional cell on it leaves `comment: null` behind (see applyDraftEdit) and
+  // must not turn the row red.
   const draftMissingByKey = useMemo(() => {
     const map = new Map<number, ReturnType<typeof draftMissing>>();
     for (const d of drafts) map.set(d.key, draftMissing(d, hiddenShotCols, azimuthMode));

@@ -11,7 +11,23 @@
  * `.tsx` so vitest runs it under jsdom.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render } from '@testing-library/react';
+import { render, fireEvent } from '@testing-library/react';
+
+// jsdom measures every box as 0 tall, so the real virtualizer renders no rows
+// at all. Same stand-in the SpreadsheetGrid suites use: every row is visible.
+vi.mock('@tanstack/react-virtual', () => ({
+  useVirtualizer: ({ count }: { count: number }) => ({
+    getVirtualItems: () =>
+      Array.from({ length: count }, (_, index) => ({
+        index,
+        key: index,
+        start: 33 + index * 33,
+        size: 33,
+      })),
+    getTotalSize: () => count * 33,
+    scrollToIndex: vi.fn(),
+  }),
+}));
 
 vi.mock('../../../utils/telemetry', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../../utils/telemetry')>()),
@@ -143,5 +159,56 @@ describe('ImportDialog create gate', () => {
     expect(byTestId('import-section-blocker')).toHaveTextContent(
       /Rows 1, 3 are missing required values/
     );
+  });
+
+  /**
+   * A row can hold keys and still be empty: clearing an optional cell writes
+   * `comment: null` / `pitch_in: null` rather than deleting the field. Judging
+   * the trailing row by key count painted its required cells red with no blocker
+   * text to explain them.
+   */
+  it('marks nothing on a trailing row holding only cleared optionals', () => {
+    renderWithDrafts([
+      draft(1, complete),
+      draft(2, { comment: null, pitch_in: null, pitch_out: null, kind: 'Normal' }),
+    ]);
+    expect(document.body.querySelectorAll('.sg-cell-missing')).toHaveLength(0);
+    expect(byTestId('import-section-create')).toBeEnabled();
+    expect(byTestId('import-section-blocker')).toHaveTextContent('');
+  });
+});
+
+describe('ImportDialog J/R cell', () => {
+  const complete = { length: 10, azimuth_in: 90, azimuth_out: 90, depth_in: 0, depth_out: 1 };
+
+  const rowCount = () => document.body.querySelectorAll('[data-testid^="new-section-row-"]').length;
+  const cycleKind = (rowIndex: number) => {
+    const cell = document.body.querySelector(
+      `[data-testid="new-section-cell-${rowIndex}-kind"] [data-testid="shot-kind-cell"]`
+    );
+    if (!cell) throw new Error(`kind cell for row ${rowIndex} not found`);
+    fireEvent.click(cell);
+  };
+
+  /** Cycling the kind used to write `drafts` around the edit funnel, so it
+   *  skipped the "keep a blank row at the end" invariant: the invitation row was
+   *  consumed by the click and there was nowhere left to type the next shot. */
+  it('leaves a fresh blank row below the row it tagged', () => {
+    renderWithDrafts([draft(1, complete), draft(2, {})]);
+    expect(rowCount()).toBe(2);
+    cycleKind(1);
+    expect(rowCount()).toBe(3);
+    expect(byTestId('import-section-blocker')).toHaveTextContent(
+      /Row 2 is missing required values/
+    );
+  });
+
+  it('cycles the whole ring back to blank', () => {
+    renderWithDrafts([draft(1, complete), draft(2, {})]);
+    cycleKind(1); // Jump
+    cycleKind(1); // Reference
+    cycleKind(1); // back to Normal - the row holds nothing again
+    expect(byTestId('import-section-create')).toBeEnabled();
+    expect(byTestId('import-section-blocker')).toHaveTextContent('');
   });
 });

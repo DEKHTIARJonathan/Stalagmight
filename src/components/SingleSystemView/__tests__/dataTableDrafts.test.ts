@@ -12,6 +12,8 @@ import {
   commitAnchorArgs,
   overflowDraft,
   respawnsBlank,
+  isBlankDraft,
+  isFiniteNumber,
 } from '../dataTableDrafts';
 import { AZIMUTH_AVG_KEY } from '../dataTableEdits';
 import type { Shot } from '../../../types/project';
@@ -163,6 +165,52 @@ describe('materializeDraft', () => {
   });
 });
 
+/**
+ * THE blankness rule, shared by the end draft, the new-section dialog's rows and
+ * the submit gate. Judged by value rather than by key presence: a cleared
+ * optional WRITES its key (`comment: null`, and `pitch_in: null` out of
+ * `buildShotUpdates`), so counting keys read an emptied row as half-filled.
+ */
+describe('isBlankDraft', () => {
+  it('is true for a row with no fields at all', () => {
+    expect(isBlankDraft(endDraft())).toBe(true);
+  });
+
+  it('is false once a cell holds a real value', () => {
+    expect(isBlankDraft(draft(-2, 'end', { comment: 'x' }))).toBe(false);
+    expect(isBlankDraft(draft(-2, 'end', { length: 5 }))).toBe(false);
+  });
+
+  it('stays blank when a cell is written back to its default', () => {
+    expect(isBlankDraft(draft(-2, 'end', { pitch_in: null, pitch_out: null }))).toBe(true);
+    expect(isBlankDraft(draft(-2, 'end', { comment: null }))).toBe(true);
+    expect(isBlankDraft(draft(-2, 'end', { comment: '' }))).toBe(true);
+    expect(isBlankDraft(draft(-2, 'end', { kind: 'Normal' }))).toBe(true);
+    expect(isBlankDraft(draft(-2, 'end', { length: NaN }))).toBe(true);
+  });
+
+  it('is not blank when the kind was cycled AWAY from the default', () => {
+    expect(isBlankDraft(draft(-2, 'end', { kind: 'Jump' }))).toBe(false);
+  });
+
+  it('is blank when every written cell is at its default, together', () => {
+    expect(isBlankDraft(draft(-2, 'end', { kind: 'Normal', comment: '', pitch_in: null }))).toBe(
+      true
+    );
+  });
+});
+
+describe('isFiniteNumber', () => {
+  it('accepts only finite numbers', () => {
+    expect(isFiniteNumber(0)).toBe(true);
+    expect(isFiniteNumber(-1.5)).toBe(true);
+    expect(isFiniteNumber(NaN)).toBe(false);
+    expect(isFiniteNumber(Infinity)).toBe(false);
+    expect(isFiniteNumber(null)).toBe(false);
+    expect(isFiniteNumber('5')).toBe(false);
+  });
+});
+
 describe('draftMissing', () => {
   const noHidden = new Set<string>();
 
@@ -170,6 +218,29 @@ describe('draftMissing', () => {
     const m = draftMissing(endDraft(), noHidden, 'avg');
     expect(m.cells.size).toBe(0);
     expect(m.hiddenProblems.size).toBe(0);
+  });
+
+  /**
+   * Clearing an optional cell on the trailing row writes `comment: null` /
+   * `pitch_in: null` rather than deleting the key. Judging the row by key count
+   * painted four red required cells on a visibly empty row, with no blocker text
+   * to explain them and Create disabled.
+   */
+  it('stays quiet when the end draft holds only cleared optionals', () => {
+    const cleared = draft(END_DRAFT_KEY, 'end', {
+      comment: null,
+      pitch_in: null,
+      pitch_out: null,
+      kind: 'Normal',
+    });
+    const m = draftMissing(cleared, noHidden, 'avg');
+    expect(m.cells.size).toBe(0);
+    expect(m.hiddenProblems.size).toBe(0);
+  });
+
+  it('surfaces the end draft once the kind is cycled away from Normal', () => {
+    const m = draftMissing(draft(END_DRAFT_KEY, 'end', { kind: 'Jump' }), noHidden, 'avg');
+    expect(m.cells).toEqual(new Set([AZIMUTH_AVG_KEY, 'length', 'depth_in', 'depth_out']));
   });
 
   it('surfaces an end draft once it has any value', () => {
