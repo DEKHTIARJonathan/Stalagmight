@@ -10,6 +10,8 @@ import {
   draftMissing,
   completeDraftData,
   commitAnchorArgs,
+  overflowDraft,
+  respawnsBlank,
 } from '../dataTableDrafts';
 import { AZIMUTH_AVG_KEY } from '../dataTableEdits';
 import type { Shot } from '../../../types/project';
@@ -241,5 +243,31 @@ describe('commitAnchorArgs', () => {
   it('passes id anchors through', () => {
     expect(commitAnchorArgs(draft(-2, { afterShotId: 1 }), shots)).toEqual({ afterShotId: 1 });
     expect(commitAnchorArgs(draft(-3, { beforeShotId: 2 }), shots)).toEqual({ beforeShotId: 2 });
+  });
+});
+
+/**
+ * A multi-row paste that runs past the trailing blank creates one end row per
+ * pasted row. Every end row respawning a fresh blank on commit is what left a
+ * 3-row paste showing 3 empty rows: only the canonical one may respawn.
+ */
+describe('overflow drafts from a grown paste', () => {
+  it('marks an overflow row as not the canonical trailing blank', () => {
+    expect(respawnsBlank(endDraft(-1))).toBe(true);
+    expect(respawnsBlank(overflowDraft(-2))).toBe(false);
+  });
+
+  it('still renders overflow rows at the end, in the order they were made', () => {
+    // End-anchored is what keeps pasted row 2 below pasted row 1; the flag only
+    // changes what happens when the row commits, never where it sits.
+    const shots = [{ id: 1 } as Shot];
+    const rows = interleaveRows(shots, [
+      endDraft(-1),
+      overflowDraft(-2),
+      overflowDraft(-3),
+    ]);
+    expect(rows.map((r) => (r.kind === 'draft' ? r.draft.key : r.shot.id))).toEqual([
+      1, -1, -2, -3,
+    ]);
   });
 });

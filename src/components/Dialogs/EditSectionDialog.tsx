@@ -78,7 +78,14 @@ export default function EditSectionDialog() {
   }, [sectionId, section, isShotFrozen, shots]);
   const [nextTempId, setNextTempId] = useState(-1);
   const [selectedShotKey, setSelectedShotKey] = useState<string | null>(null);
-  const [pendingMidDelete, setPendingMidDelete] = useState<{ index: number; shotId: number } | null>(null);
+  // `newKeys` are unsaved rows caught in the same delete range. They need no
+  // backend confirm, but they must not be dropped before it either: returning
+  // early used to skip them entirely, so confirming took only the saved shot and
+  // left the new row sitting in the dialog. Carried here, the gesture is atomic -
+  // confirm takes all of it, cancel keeps all of it.
+  const [pendingMidDelete, setPendingMidDelete] = useState<
+    { index: number; shotId: number; newKeys: string[] } | null
+  >(null);
   const [pendingImpact, setPendingImpact] = useState<DeleteShotImpact | null>(null);
   const [pendingImpactError, setPendingImpactError] = useState<string | null>(null);
   const shiftBlocked = pendingImpact?.shift_blocked ?? false;
@@ -238,7 +245,12 @@ export default function EditSectionDialog() {
       if (!isEndRun(kind)) {
         if (existingTargets.length === 1) {
           const only = existingTargets[0]!;
-          setPendingMidDelete({ index: shots.indexOf(only), shotId: only.id });
+          const existingKeys = new Set(existingTargets.map(getShotKey));
+          setPendingMidDelete({
+            index: shots.indexOf(only),
+            shotId: only.id,
+            newKeys: targets.filter((s) => !existingKeys.has(getShotKey(s))).map(getShotKey),
+          });
           // Deferred behind the split/shift confirm, so the rows are still there
           // and the selection must survive until the user answers.
           return false;
@@ -293,11 +305,15 @@ export default function EditSectionDialog() {
     setShots((prev) => {
       const current = prev[pendingMidDelete.index];
       if (!current) return prev;
-      if (current.isNew) {
-        return prev.filter((_, i) => i !== pendingMidDelete.index);
-      }
-      const updated = [...prev];
-      updated[pendingMidDelete.index] = { ...current, isDeleted: true } as EditableShot;
+      // Unsaved rows in the same range simply go; they were never in the section.
+      const dropNew = new Set(pendingMidDelete.newKeys);
+      const kept =
+        dropNew.size > 0 ? prev.filter((s) => !dropNew.has(getShotKey(s))) : prev;
+      const index = kept.indexOf(current);
+      if (index < 0) return kept;
+      if (current.isNew) return kept.filter((_, i) => i !== index);
+      const updated = [...kept];
+      updated[index] = { ...current, isDeleted: true } as EditableShot;
       return updated;
     });
     if (selectedShotKey !== null) {

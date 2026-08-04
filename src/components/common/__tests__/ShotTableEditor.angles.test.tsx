@@ -269,3 +269,42 @@ describe('ShotTableEditor warning column', () => {
     );
   });
 });
+
+/**
+ * A shot with exactly one measured azimuth leg is valid: the completeness rules
+ * allow it and Save accepts it. The average column computed a circular mean
+ * against NaN, which is NaN, so that real bearing rendered as an empty cell -
+ * indistinguishable from having no azimuth at all.
+ */
+describe('ShotTableEditor one-legged azimuth display', () => {
+  const renderOne = (over: Partial<EditableShot>) =>
+    render(
+      <ShotTableEditor
+        shots={[shot(over)]}
+        onShotChange={vi.fn()}
+        onAddShot={vi.fn()}
+        onDeleteShot={vi.fn()}
+      />
+    );
+
+  it('shows the measured leg as the average when the other is unset', () => {
+    renderOne({ azimuth_in: 42, azimuth_out: NaN });
+    expect(screen.getByTestId('shot-cell-0-_azimuth_avg').textContent).toContain('42');
+  });
+
+  it('shows it for the out leg too', () => {
+    renderOne({ azimuth_in: NaN, azimuth_out: 137 });
+    expect(screen.getByTestId('shot-cell-0-_azimuth_avg').textContent).toContain('137');
+  });
+
+  it('still renders blank when neither leg was measured', () => {
+    // Blank is right here - and must NOT become a confident 0.0.
+    renderOne({ azimuth_in: NaN, azimuth_out: NaN });
+    expect(screen.getByTestId('shot-cell-0-_azimuth_avg').textContent?.trim()).toBe('');
+  });
+
+  it('still averages when both legs are measured', () => {
+    renderOne({ azimuth_in: 90, azimuth_out: 110 });
+    expect(screen.getByTestId('shot-cell-0-_azimuth_avg').textContent).toContain('100');
+  });
+});

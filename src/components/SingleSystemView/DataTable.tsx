@@ -38,6 +38,8 @@ import {
   pruneDrafts,
   insertDraftsAt,
   materializeDraft,
+  overflowDraft,
+  respawnsBlank,
   draftMissing,
   completeDraftData,
   commitAnchorArgs,
@@ -770,7 +772,7 @@ export default function DataTable({ sections }: DataTableProps) {
       if (keys.size === 0) return;
       setDrafts((prev) =>
         prev.flatMap((d) =>
-          keys.has(d.key) ? (d.anchor === 'end' ? [endDraft(draftKeyRef.current--)] : []) : [d]
+          keys.has(d.key) ? (respawnsBlank(d) ? [endDraft(draftKeyRef.current--)] : []) : [d]
         )
       );
     },
@@ -813,7 +815,7 @@ export default function DataTable({ sections }: DataTableProps) {
         .then(() =>
           setDrafts((prev) =>
             prev.flatMap((d) =>
-              d.key === draft.key ? (d.anchor === 'end' ? [endDraft(draftKeyRef.current--)] : []) : [d]
+              d.key === draft.key ? (respawnsBlank(d) ? [endDraft(draftKeyRef.current--)] : []) : [d]
             )
           )
         )
@@ -864,7 +866,10 @@ export default function DataTable({ sections }: DataTableProps) {
         .sort((a, b) => a - b);
       const overflowKeys = new Map<number, number>();
       if (overflowRows.length > 0) {
-        const fresh = overflowRows.map(() => endDraft(draftKeyRef.current--));
+        // Overflow rows, NOT canonical trailing blanks: end-anchored so the
+        // pasted rows stay in order, but each disappears once committed rather
+        // than leaving one empty row per pasted row.
+        const fresh = overflowRows.map(() => overflowDraft(draftKeyRef.current--));
         overflowRows.forEach((row, i) => overflowKeys.set(row, fresh[i]!.key));
         setDrafts((prev) => [...prev, ...fresh]);
       }

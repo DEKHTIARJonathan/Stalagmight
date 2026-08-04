@@ -25,6 +25,14 @@ export interface ShotDraft {
   key: number;
   anchor: DraftAnchor;
   data: Partial<ShotData>;
+  /**
+   * An end-anchored row created only to receive a row of a multi-row paste that
+   * ran past the trailing blank. It renders at the end like the canonical blank
+   * - which is what keeps the pasted rows in order - but it is NOT that row, so
+   * committing or discarding it removes it instead of respawning a blank. Every
+   * end draft respawning is why a 3-row paste used to leave 3 empty rows behind.
+   */
+  ephemeral?: true;
 }
 
 /** One grid row: a real shot (with its index into the shots array) or a draft. */
@@ -39,6 +47,19 @@ export const END_DRAFT_KEY = -1;
  *  a key is NEVER reused - grid-internal per-cell state (missing-cell marks)
  *  is keyed by row identity and must not leak onto a later draft. */
 export const endDraft = (key: number = END_DRAFT_KEY): ShotDraft => ({ key, anchor: 'end', data: {} });
+
+/** An end row for pasted overflow - see {@link ShotDraft.ephemeral}. */
+export const overflowDraft = (key: number): ShotDraft => ({
+  key,
+  anchor: 'end',
+  data: {},
+  ephemeral: true,
+});
+
+/** Whether a committed/discarded draft respawns a fresh trailing blank. Only the
+ *  canonical end row does; overflow rows simply go. */
+export const respawnsBlank = (d: ShotDraft): boolean =>
+  d.anchor === 'end' && d.ephemeral !== true;
 
 const fin = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
 

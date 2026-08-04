@@ -900,7 +900,12 @@ export function buildBatchImport(
       if (edits) {
         const deletedCount = edits.shots.filter(s => s.isDeleted).length;
         backendShots = edits.shots
-          .filter((s) => !s.isDeleted)
+          // `!isBlankNewShot` as well: the completeness gate deliberately lets a
+          // row added and left wholly blank through (it is an invitation, not an
+          // obligation), which is only safe if every payload path drops it. The
+          // zero-datum and segment paths do; this one did not, so a row typed in
+          // and then cleared arrived as NaN length, depths and azimuths.
+          .filter((s) => !s.isDeleted && !isBlankNewShot(s))
           .map(editableShotToShotData);
         if (import.meta.env.DEV && deletedCount > 0) {
           console.warn(

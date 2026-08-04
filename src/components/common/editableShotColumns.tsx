@@ -31,6 +31,23 @@ export const EDITABLE_AZIMUTH_AVG_KEY = '_azimuth_avg';
  *  data table's `PITCH_AVG_KEY`, deliberately: `buildShotUpdates` dispatches on
  *  it, and both grids now route their averaged edits through that one function. */
 export const EDITABLE_PITCH_AVG_KEY = '_pitch_avg';
+
+/**
+ * The displayed azimuth average. With both legs measured it is their circular
+ * mean; with exactly one, that reading IS the mean - `circularMeanDegrees`
+ * returns NaN against a NaN leg, which rendered a real, saveable bearing as an
+ * empty cell. NaN only when neither leg was measured, where blank is right.
+ *
+ * The pitch average expresses the same rule inline: its legs are nullable, so
+ * `a ?? b` says it directly, while azimuth legs use NaN as the unset sentinel.
+ */
+function meanOrLoneLeg(a: number, b: number): number {
+  const aOk = Number.isFinite(a);
+  const bOk = Number.isFinite(b);
+  if (aOk && bOk) return circularMeanDegrees(a, b);
+  if (aOk) return a;
+  return bOk ? b : NaN;
+}
 /** Virtual column key for the per-row warning indicator. */
 export const EDITABLE_WARNINGS_KEY = '_warnings';
 
@@ -221,9 +238,13 @@ export function buildEditableShotColumns(
       // One displayed azimuth: the average of the two legs, with a commit
       // fanning back out to both (applyAzimuthEdit). Deliberately NOT
       // `getAzimuthAverage`, which coerces a non-finite leg to 0 - that made an
-      // unset azimuth render as a confident "0.0" the user never typed. Blank
-      // means blank, as in the data table.
-      getValue: (r) => circularMeanDegrees(r.azimuth_in, r.azimuth_out),
+      // unset azimuth render as a confident "0.0" the user never typed.
+      //
+      // Blank only when BOTH legs are unset. With exactly one measured leg -
+      // which the completeness rules allow and Save accepts - that reading IS
+      // the mean, so show it; `circularMeanDegrees(x, NaN)` is NaN, which
+      // rendered a real bearing as an empty cell. Same rule the edit path uses.
+      getValue: (r) => meanOrLoneLeg(r.azimuth_in, r.azimuth_out),
       format: fixed(precision.azimuth),
       editable: true,
       isEditable: editableUnlessFrozen(EDITABLE_AZIMUTH_AVG_KEY),
