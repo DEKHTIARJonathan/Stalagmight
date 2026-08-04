@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo, useRef } from 'react';
+import { useState, useCallback, useMemo, useReducer } from 'react';
 import { useTranslation } from 'react-i18next';
 import { blockedByIncompleteShots, countIncompleteShots } from '../common/incompleteShots';
 import { blankEditableShot } from '../common/editableShot';
@@ -14,7 +14,7 @@ import { formatFixed } from '../../i18n/format';
 import { convertToEditableShots } from '../../hooks/useImportState';
 import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
 import { editableShotsToDmpSection } from '../../utils/shotConversion';
-import type { DmpFile } from '../../types/commands';
+import type { DmpFile, DmpSection } from '../../types/commands';
 import type { DmpSelectionConfig } from './DmpSelectionDialog';
 import type { GpsCoordinates } from '../../types/project';
 import { sectionColorPalette } from '../../utils/colors';
@@ -37,30 +37,30 @@ export interface ZeroDatumConfigResult {
   shots: EditableShot[];
 }
 
-/** A blank row for the shot table, shared by the add and the two insert paths. */
-/** The shared blank-row contract; `id` stays negative here as this dialog keys
+/** A blank row for the shot table, shared by the add and the two insert paths.
+ *  The shared blank-row contract; `id` stays negative here as this dialog keys
  *  its rows by it. */
 function makeNewShot(tempId: number): EditableShot {
   return { ...blankEditableShot(-tempId), tempId };
 }
 
 /**
- * How many surviving rows precede `arrayIndex`.
- *
- * `ShotTableEditor` hands its callbacks an index into the FULL `shots` array
- * (deleted rows included), while a station index counts only survivors, so the
- * two spaces have to be bridged before a pick can be re-anchored.
- */
-/**
  * The rows that will actually be imported - `buildZeroDatumSectionConfig`
- * serializes exactly these. The dialog must count stations over the SAME set:
- * a blank row left among the shots is dropped from the payload, so counting it
- * here made the picker, the preview and the re-anchor all disagree with the
- * backend, and the GPS anchor landed on a different station than the one shown.
+ * serializes exactly these, and `editableShotsToDmpSection` draws exactly these.
+ * The dialog must count stations over the SAME set: a blank row left among the
+ * shots is dropped from the payload, so counting it here made the picker, the
+ * preview and the re-anchor all disagree with the backend, and the GPS anchor
+ * landed on a different station than the one shown.
  */
 const isCounted = isEmittedShot;
 
-/** How many counted rows precede this index in the FULL array. */
+/**
+ * How many counted rows precede `arrayIndex`.
+ *
+ * `ShotTableEditor` hands its callbacks an index into the FULL `shots` array
+ * (deleted rows included), while a station index counts only emitted rows, so
+ * the two spaces have to be bridged before a pick can be re-anchored.
+ */
 const survivorsBefore = emittedBefore;
 
 /**
@@ -111,6 +111,143 @@ function reanchorAfterRunDelete(
   return reanchorStation(pick, runStart, -countedGone, survivorsAfter);
 }
 
+/**
+ * The shot rows and the station pick, as ONE state.
+ *
+ * They belong together because no action touches only one of them: a row
+ * joining or leaving the payload renumbers the stations the pick addresses, so
+ * the new rows and the re-anchored pick have to be derived from the same
+ * snapshot. Holding them apart is what broke this dialog three times - the last
+ * shape read the rows from the render closure while committing the pick through
+ * a ref, and `ShotTableEditor` fans `onShotChange` out ONE CALL PER CELL (a
+ * pasted row is about five, an averaged azimuth two). Every call in the event
+ * saw the same pre-edit row, so one row joining the payload shifted the pick
+ * once per cell, and a row cleared back to blank never shifted it back.
+ *
+ * As a reducer each action reads the reducer's own `prev`, which already holds
+ * the earlier cells of the same event: the first write makes the row counted and
+ * owes the shift, the rest see it counted and owe nothing. The fan-out is
+ * idempotent without anyone having to coalesce it.
+ *
+ * Every case is PURE - StrictMode (dev and the Playwright build) invokes
+ * reducers twice on purpose, which is precisely what the ref-based version
+ * could not survive.
+ */
+interface ShotEditState {
+  shots: EditableShot[];
+  /** Committed pick, in the CURRENT emitted-station numbering: a section of `s`
+   *  counted rows has stations `0..s`. */
+  stationIndex: number;
+  /** What the preview highlights - follows dropdown hover, reverts to the pick. */
+  previewStationIndex: number;
+  /** Identity for the next blank row; never reused, so rows stay distinct
+   *  however many one gesture adds. */
+  nextTempId: number;
+}
+
+type ShotEditAction =
+  /** One cell of one row, at a FULL-array index (deleted rows included). */
+  | { type: 'edit'; index: number; field: keyof EditableShot; value: number | string | boolean | null }
+  /** `count` blank rows at a full-array index, or appended at `'end'`. One
+   *  action however many rows: asked row by row, a host that rebuilds from a
+   *  snapshot overwrites its own earlier inserts. */
+  | { type: 'insert'; at: number | 'end'; count: number }
+  /** Soft-delete a whole selection at once, so the pick can be judged against
+   *  the run rather than one row at a time. */
+  | { type: 'delete'; indices: number[] }
+  | { type: 'pick'; index: number }
+  /** Dropdown hover; `null` when it closes without a selection. */
+  | { type: 'hover'; index: number | null };
+
+/** Commit a pick: it is the value sent, the map highlight, and what a cancelled
+ *  hover reverts to. */
+function withPick(state: ShotEditState, shots: EditableShot[], pick: number): ShotEditState {
+  return { ...state, shots, stationIndex: pick, previewStationIndex: pick };
+}
+
+function shotEditReducer(state: ShotEditState, action: ShotEditAction): ShotEditState {
+  switch (action.type) {
+    case 'edit': {
+      const current = state.shots[action.index];
+      if (!current) return state;
+      const updated = { ...current, [action.field]: action.value } as EditableShot;
+      const shots = [...state.shots];
+      shots[action.index] = updated;
+      // Only a row crossing INTO or OUT OF the payload renumbers anything.
+      // Inserting it did not move the pick (an uncounted row changes no
+      // numbering), so the shift is owed here - and owed back when the row is
+      // cleared to blank.
+      const was = isCounted(current);
+      const now = isCounted(updated);
+      if (was === now) return { ...state, shots };
+      const delta = now ? 1 : -1;
+      return withPick(
+        state,
+        shots,
+        reanchorStation(
+          state.stationIndex,
+          survivorsBefore(state.shots, action.index),
+          delta,
+          state.shots.filter(isCounted).length + delta,
+        ),
+      );
+    }
+    case 'insert': {
+      const n = Math.max(1, action.count);
+      const at = action.at === 'end' ? state.shots.length : action.at;
+      const shots = [...state.shots];
+      shots.splice(at, 0, ...Array.from({ length: n }, (_, i) => makeNewShot(state.nextTempId + i)));
+      // The inserted rows are BLANK, so `isCounted` excludes them and the
+      // station numbering does not move at all. Shifting by `n` here while the
+      // dropdown counted the old total pushed the pick out of step with the
+      // payload - and Confirm could anchor the datum to a different station, or
+      // one past the end. Rows shift the pick only once they hold data, which
+      // is the 'edit' case above. The call is still made, for the clamp.
+      const counted = state.shots.filter(isCounted).length;
+      return {
+        ...withPick(
+          state,
+          shots,
+          reanchorStation(state.stationIndex, survivorsBefore(state.shots, at), 0, counted),
+        ),
+        nextTempId: state.nextTempId + n,
+      };
+    }
+    case 'delete': {
+      const targets = action.indices.filter((i) => state.shots[i] && !state.shots[i]!.isDeleted);
+      if (targets.length === 0) return state;
+      const shots = [...state.shots];
+      for (const i of targets) shots[i] = { ...shots[i]!, isDeleted: true };
+      // Anchor against the EARLIEST removal, shifted by the whole run. Only the
+      // rows that were COUNTED renumber anything: a blank row in the range is
+      // absent from the payload, so removing it shifts no station. Subtracting
+      // every target moved the anchor a station upstream.
+      const counted = state.shots.filter(isCounted).length;
+      const countedGone = targets.filter((i) => isCounted(state.shots[i])).length;
+      return withPick(
+        state,
+        shots,
+        reanchorAfterRunDelete(
+          state.stationIndex,
+          survivorsBefore(state.shots, Math.min(...targets)),
+          countedGone,
+          counted - countedGone,
+        ),
+      );
+    }
+    case 'pick':
+      return withPick(state, state.shots, action.index);
+    case 'hover':
+      return { ...state, previewStationIndex: action.index ?? state.stationIndex };
+  }
+}
+
+/** Rows straight from the file, the pick at the head, temp ids past the last row. */
+function initialShotEditState(section: DmpSection | undefined): ShotEditState {
+  const shots = section ? convertToEditableShots(section.shots) : [];
+  return { shots, stationIndex: 0, previewStationIndex: 0, nextTempId: shots.length + 1 };
+}
+
 interface ZeroDatumConfigDialogProps {
   dmpFile: DmpFile;
   selectionConfig: DmpSelectionConfig;
@@ -145,14 +282,17 @@ export default function ZeroDatumConfigDialog({
 
   const sectionPalette = useMemo(() => sectionColorPalette(resolvedTheme), [resolvedTheme]);
 
-  // Station selection: stationIndex is the committed value, previewStationIndex
-  // tracks what the map highlights (follows hover, reverts on dropdown close).
   // Expand grows the DIALOG, same as the other two shot-entry surfaces; the
   // editor only asks, the host owns its size.
   const [expanded, setExpanded] = useState(false);
-  const [stationIndex, setStationIndex] = useState(0);
-  const [previewStationIndex, setPreviewStationIndex] = useState(0);
-  const stationIndexRef = useRef(0);
+
+  // The shots and the station pick, in one reducer - see `shotEditReducer` for
+  // why they cannot be separate pieces of state.
+  const [{ shots, stationIndex, previewStationIndex }, dispatch] = useReducer(
+    shotEditReducer,
+    section,
+    initialShotEditState,
+  );
 
   // GPS input state
   const [gpsInput, setGpsInput] = useState('');
@@ -170,13 +310,8 @@ export default function ZeroDatumConfigDialog({
   const [direction, setDirection] = useState<'in' | 'out'>(section?.direction === 'out' ? 'out' : 'in');
   const [reverse, setReverse] = useState(false);
 
-  // Shots state
-  const [shots, setShots] = useState<EditableShot[]>(() =>
-    section ? convertToEditableShots(section.shots) : []
-  );
-  const [nextTempId, setNextTempId] = useState(() => shots.length + 1);
-
-  // Station count = surviving shots + 1
+  // Station count = counted shots + 1. The dropdown, the preview, the payload
+  // and the pick all count by `isCounted` - one predicate, one station space.
   const stationCount = useMemo(() => {
     return shots.filter(isCounted).length + 1;
   }, [shots]);
@@ -191,11 +326,7 @@ export default function ZeroDatumConfigDialog({
   );
 
   /** Commit a station pick: the value sent, the map highlight and the hover-revert target. */
-  const commitStation = useCallback((index: number) => {
-    setStationIndex(index);
-    setPreviewStationIndex(index);
-    stationIndexRef.current = index;
-  }, []);
+  const commitStation = useCallback((index: number) => dispatch({ type: 'pick', index }), []);
 
   // Station options for the Select component
   const stationOptions = useMemo(() => {
@@ -212,14 +343,9 @@ export default function ZeroDatumConfigDialog({
   }, [gpsCoords]);
 
   // When dropdown hovers an option, show it on the map; when dropdown closes
-  // without selecting, revert to the committed station.
+  // without selecting, the reducer reverts to the committed station.
   const handleStationHover = useCallback((value: string | null) => {
-    if (value !== null) {
-      setPreviewStationIndex(parseInt(value, 10));
-    } else {
-      // Dropdown closed without selection - revert
-      setPreviewStationIndex(stationIndexRef.current);
-    }
+    dispatch({ type: 'hover', index: value === null ? null : parseInt(value, 10) });
   }, []);
 
   // GPS input handler
@@ -243,160 +369,67 @@ export default function ZeroDatumConfigDialog({
     }
   }, []);
 
-  // Shot editing handlers
+  // Shot editing handlers. Each is one dispatch: the reducer derives the new
+  // rows and the re-anchored pick from the same `prev`, so `stationIndex`
+  // always addresses the current, post-edit station order - and the editor's
+  // per-cell fan-out cannot shift it more than once for one row.
   const handleShotChange = useCallback(
     (index: number, field: keyof EditableShot, value: number | string | boolean | null) => {
-      // `shots` may not hold this index yet: typing into the trailing blank row
-      // materializes it via onAddShot in the SAME event, so the row exists in
-      // the next state but not in this closure. Reading it here and bailing out
-      // silently dropped that first keystroke - the primary way rows are added.
-      const existing = shots[index];
-      const updated = { ...(existing ?? blankEditableShot(0)), [field]: value } as EditableShot;
-
-      // A row joining or LEAVING the payload renumbers every station after it.
-      // Inserting the row did not move the pick (an uncounted row changes no
-      // numbering), so the shift is owed here - and owed back again when the row
-      // is cleared to blank.
-      //
-      // Computed and committed OUTSIDE the state updater, which must stay pure:
-      // StrictMode (dev and the Playwright build) invokes updaters twice on
-      // purpose, and a side effect in there reanchored the pick twice for a
-      // single row change.
-      const was = existing !== undefined && isCounted(existing);
-      const now = isCounted(updated);
-
-      // The write itself goes through `prev`, which DOES have a row just
-      // materialized this event.
-      setShots((prev) => {
-        const current = prev[index];
-        if (!current) return prev;
-        const newShots = [...prev];
-        newShots[index] = { ...current, [field]: value } as EditableShot;
-        return newShots;
-      });
-
-      if (was !== now) {
-        const delta = now ? 1 : -1;
-        const before = emittedBefore(shots, index);
-        const total = shots.filter(isCounted).length + delta;
-        commitStation(reanchorStation(stationIndexRef.current, before, delta, total));
-      }
+      dispatch({ type: 'edit', index, field, value });
     },
-    [shots, commitStation]
+    []
   );
 
-  // The three shot-count mutators re-anchor the committed pick as they go, so
-  // `stationIndex` always addresses the current, post-edit station order.
-  const insertShotAt = useCallback(
-    (arrayIndex: number) => {
-      const survivors = shots.filter(isCounted).length;
-      const newShots = [...shots];
-      newShots.splice(arrayIndex, 0, makeNewShot(nextTempId));
-      setShots(newShots);
-      setNextTempId((prev) => prev + 1);
-      // A blank row is not counted, so the numbering is unchanged - see the
-      // bulk insert below.
-      commitStation(
-        reanchorStation(stationIndex, survivorsBefore(shots, arrayIndex), 0, survivors),
-      );
-    },
-    [shots, nextTempId, stationIndex, commitStation]
+  // Appending goes through the same action as an insert, so the invariant has
+  // one owner. `'end'` rather than a captured length: the trailing blank row is
+  // materialized and then written in ONE event, and the reducer's array is the
+  // only one that has both.
+  const handleAddShot = useCallback(() => dispatch({ type: 'insert', at: 'end', count: 1 }), []);
+
+  /** Append `count` blank shots in ONE action, each with its own temp id. Asked
+   *  N times in one React event instead, a host that rebuilds from a captured
+   *  array overwrites its own earlier appends and one that stamps rows from a
+   *  captured temp id gives them all the same identity. */
+  const handleAddShots = useCallback(
+    (count: number) => dispatch({ type: 'insert', at: 'end', count }),
+    []
   );
 
-  // Appending cannot renumber an existing station (the new one lands past every
-  // pick), but it goes through the same path so the invariant has one owner.
-  const handleAddShot = useCallback(() => insertShotAt(shots.length), [insertShotAt, shots.length]);
-
-  /** Append `count` blank shots in ONE functional update, each with its own temp
-   *  id. `insertShotAt` rebuilds from the closed-over `shots`, so calling it N
-   *  times in one React event has every call overwrite the last. Appending never
-   *  renumbers a station pick (the new rows land past every one), so this can go
-   *  straight to state without the reanchoring that path does. */
-  /** Insert `count` blank shots at `arrayIndex`, in ONE update, reanchoring the
+  /** Insert `count` blank shots at `index`, in ONE action, re-anchoring the
    *  station pick once for the whole run rather than per row. */
   const handleInsertShots = useCallback(
     (index: number, count: number, position: 'before' | 'after') => {
-      const n = Math.max(1, count);
-      const at = position === 'after' ? index + 1 : index;
-      const survivors = shots.filter(isCounted).length;
-      const next = [...shots];
-      next.splice(at, 0, ...Array.from({ length: n }, (_, i) => makeNewShot(nextTempId + i)));
-      setShots(next);
-      setNextTempId((prev) => prev + n);
-      // The inserted rows are BLANK, so `isCounted` excludes them and the
-      // station numbering does not move at all. Shifting by `n` here while the
-      // dropdown counted the old total pushed the pick out of step with the
-      // payload - and Confirm could anchor the datum to a different station, or
-      // one past the end. Rows shift the pick only once they hold data, which
-      // is a re-render away and handled by the same call from the edit path.
-      commitStation(reanchorStation(stationIndex, survivorsBefore(shots, at), 0, survivors));
+      dispatch({ type: 'insert', at: position === 'after' ? index + 1 : index, count });
     },
-    [shots, nextTempId, stationIndex, commitStation]
+    []
   );
 
-  const handleAddShots = useCallback((count: number) => {
-    const n = Math.max(1, count);
-    setShots((prev) => [...prev, ...Array.from({ length: n }, (_, i) => makeNewShot(nextTempId + i))]);
-    setNextTempId((prev) => prev + n);
-  }, [nextTempId]);
-
   const handleInsertBefore = useCallback(
-    (index: number) => insertShotAt(index),
-    [insertShotAt]
+    (index: number) => dispatch({ type: 'insert', at: index, count: 1 }),
+    []
   );
 
   const handleInsertAfter = useCallback(
-    (index: number) => insertShotAt(index + 1),
-    [insertShotAt]
+    (index: number) => dispatch({ type: 'insert', at: index + 1, count: 1 }),
+    []
   );
 
-  /** Soft-delete every selected index in ONE update, re-anchoring the station
-   *  pick once for the whole run. Without this the editor falls back to calling
-   *  `handleDeleteShot` per index, and each call rebuilds from the captured
-   *  `shots` - so only the last selected row actually went, and the station was
-   *  re-anchored as though one shot had been removed. */
+  /** Soft-delete every selected index in ONE action, so the pick is judged
+   *  against the whole run. The answer the grid needs is synchronous (a `false`
+   *  leaves its selection alone), so whether anything is left to delete is read
+   *  from the rendered rows; the reducer decides again from its own state. */
   const handleDeleteShots = useCallback(
     (indices: number[]): boolean => {
-      const targets = indices.filter((i) => shots[i] && !shots[i]!.isDeleted);
-      if (targets.length === 0) return false;
-      const survivors = shots.filter(isCounted).length;
-      const next = [...shots];
-      for (const i of targets) next[i] = { ...next[i]!, isDeleted: true };
-      setShots(next);
-      // Anchor against the EARLIEST removal, shifted by the whole run.
-      const first = Math.min(...targets);
-      // Only the rows that were COUNTED renumber anything: a blank row in the
-      // range is absent from the payload, so removing it shifts no station.
-      // Subtracting every target moved the anchor a station upstream.
-      const countedGone = targets.filter((i) => isCounted(shots[i])).length;
-      commitStation(
-        reanchorAfterRunDelete(
-          stationIndex,
-          survivorsBefore(shots, first),
-          countedGone,
-          survivors - countedGone,
-        ),
-      );
+      if (!indices.some((i) => shots[i] && !shots[i]!.isDeleted)) return false;
+      dispatch({ type: 'delete', indices });
       return true;
     },
-    [shots, stationIndex, commitStation]
+    [shots]
   );
 
   const handleDeleteShot = useCallback(
-    (index: number) => {
-      const shot = shots[index];
-      if (!shot || shot.isDeleted) return;
-      const survivors = shots.filter(isCounted).length;
-      // A blank row is not in the payload, so deleting it renumbers nothing.
-      const delta = isCounted(shot) ? -1 : 0;
-      const newShots = [...shots];
-      newShots[index] = { ...shot, isDeleted: true };
-      setShots(newShots);
-      commitStation(
-        reanchorStation(stationIndex, survivorsBefore(shots, index), delta, survivors + delta),
-      );
-    },
-    [shots, stationIndex, commitStation]
+    (index: number) => dispatch({ type: 'delete', indices: [index] }),
+    []
   );
 
   /** Rows that hold something but are not a usable shot - see countIncompleteShots. */

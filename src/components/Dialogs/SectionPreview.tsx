@@ -48,6 +48,18 @@ export interface ContextSectionGeometry {
 }
 
 /**
+ * A step that is not a number contributes nothing.
+ *
+ * A single NaN here does not spoil one station, it spoils EVERY station after
+ * it: each is computed from the last, so one unmeasured shot emptied the whole
+ * preview centerline and handed `fitBounds` NaNs. Unmeasured rows are filtered
+ * out before they reach a preview (`isEmittedShot`), so this is the backstop for
+ * whatever the next source of a half-filled shot turns out to be - the geometry
+ * downstream of the gap is still worth drawing.
+ */
+const finiteStep = (value: number): number => (Number.isFinite(value) ? value : 0);
+
+/**
  * Compute station coordinates from DMP shots.
  * Each station is positioned relative to the previous one based on shot heading and length.
  * Depth change uses depth_in/out to stay consistent with placement overlay behavior.
@@ -68,10 +80,13 @@ export function computeStationsFromDmpShots(shots: DmpShot[]): Array<{ x: number
 
     const depthChange = shot.depth_out - shot.depth_in;
 
-    // Compute next station position
-    const x = prev.x + shot.length * Math.sin(azimuthRad);
-    const y = prev.y + shot.length * Math.cos(azimuthRad);
-    const z = prev.z + depthChange;
+    // Compute next station position. A missing length, heading or depth leaves
+    // the station where the previous one is rather than poisoning the rest of
+    // the section - the shot still gets a station, so indices keep matching the
+    // rows they came from.
+    const x = prev.x + finiteStep(shot.length * Math.sin(azimuthRad));
+    const y = prev.y + finiteStep(shot.length * Math.cos(azimuthRad));
+    const z = prev.z + finiteStep(depthChange);
 
     stations.push({ x, y, z });
   }

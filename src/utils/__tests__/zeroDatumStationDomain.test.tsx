@@ -24,6 +24,8 @@ vi.mock('maplibre-gl', () => ({ default: {} }));
 import { computeStationsFromDmpShots } from '../../components/Dialogs/SectionPreview';
 import { convertToEditableShots } from '../../hooks/useImportState';
 import { editableShotsToDmpSection } from '../shotConversion';
+import { blankEditableShot } from '../../components/common/editableShot';
+import { isEmittedShot } from '../../components/common/emittedShots';
 import type { DmpSection, DmpShot } from '../../types/commands';
 import type { EditableShot } from '../../components/common/ShotTableEditor';
 
@@ -60,9 +62,11 @@ function section(shots: DmpShot[]): DmpSection {
   };
 }
 
-/** The dialog's `stationCount`: one station per surviving shot, plus the far end. */
+/** The dialog's `stationCount`: one station per EMITTED shot, plus the far end.
+ *  The same predicate the payload builder and the preview use - the three
+ *  disagreeing is the whole subject of this file. */
 function dialogStationCount(shots: EditableShot[]): number {
-  return shots.filter((s) => !s.isDeleted).length + 1;
+  return shots.filter(isEmittedShot).length + 1;
 }
 
 /** The dots `SectionPreview` actually draws for a section. */
@@ -111,11 +115,81 @@ describe('zero-datum station domains', () => {
     expect(clickableDots(preview)).toBe(dialogStationCount(edited));
   });
 
+  /**
+   * A row added and left blank is dropped from the payload, so drawing it put a
+   * NaN length and NaN azimuths into the preview - and every station is computed
+   * from the last, so the whole centerline after it collapsed to NaN and
+   * `fitBounds` was handed NaNs. It also drew one station more than the import
+   * would create, so a click on the preview committed a station index one past
+   * the one meant.
+   */
+  it('drops a blank new row from the preview geometry', () => {
+    const raw = section([standardShot(5), standardShot(5)]);
+    const withBlank = [...convertToEditableShots(raw.shots), blankEditableShot(99)];
+
+    const preview = editableShotsToDmpSection(raw, withBlank);
+    expect(preview.shots).toHaveLength(2);
+
+    const stations = computeStationsFromDmpShots(preview.shots);
+    expect(stations).toHaveLength(dialogStationCount(withBlank));
+    expect(stations.every((s) => Number.isFinite(s.x) && Number.isFinite(s.y) && Number.isFinite(s.z))).toBe(true);
+  });
+
+  it('keeps a partly filled row - it is not blank, and the gate blocks Confirm', () => {
+    // Only a WHOLLY blank row is dropped. A row holding one measurement is the
+    // user's work in progress: it is drawn, counted and refused at Confirm,
+    // which is the one place that can say why.
+    const raw = section([standardShot(5)]);
+    const partial = { ...blankEditableShot(99), length: 7 };
+    const rows = [...convertToEditableShots(raw.shots), partial];
+    expect(editableShotsToDmpSection(raw, rows).shots).toHaveLength(2);
+    expect(dialogStationCount(rows)).toBe(3);
+  });
+
   it('carries the raw section identity through, only rewriting the geometry', () => {
     const raw = section([standardShot(5), standardShot(5)]);
     const preview = editableShotsToDmpSection(raw, convertToEditableShots(raw.shots));
     expect(preview.name).toBe(raw.name);
     expect(preview.content_hash).toBe(raw.content_hash);
     expect(preview.direction).toBe(raw.direction);
+  });
+});
+
+/**
+ * A gap in the measurements costs one leg, not the whole section.
+ *
+ * Stations are computed from one another, so a single non-finite contribution
+ * reaches every station after it: the centerline disappears and the map is asked
+ * to fit bounds it cannot compute. Filtering unmeasured rows out upstream is the
+ * fix for the source we know about (above); this is the backstop for the next
+ * one, and it keeps the station COUNT intact so indices still address the rows
+ * they came from.
+ */
+describe('computeStationsFromDmpShots with unmeasured shots', () => {
+  it('carries the previous position through a wholly unmeasured shot', () => {
+    const unmeasured: DmpShot = {
+      ...standardShot(NaN),
+      heading_in: NaN,
+      heading_out: NaN,
+      depth_in: NaN,
+      depth_out: NaN,
+    };
+    const stations = computeStationsFromDmpShots([standardShot(5), unmeasured, standardShot(5)]);
+
+    expect(stations).toHaveLength(4);
+    expect(stations[2]).toEqual(stations[1]);
+    // The measured shot after the gap still runs its own length from there.
+    expect(stations[3]!.x).toBeCloseTo(2 * stations[1]!.x, 10);
+    expect(stations[3]!.y).toBeCloseTo(2 * stations[1]!.y, 10);
+  });
+
+  it('keeps the depth of a shot whose bearing is missing', () => {
+    const noBearing: DmpShot = {
+      ...standardShot(5),
+      heading_in: NaN,
+      heading_out: NaN,
+      depth_out: 3,
+    };
+    expect(computeStationsFromDmpShots([noBearing])[1]).toEqual({ x: 0, y: 0, z: 3 });
   });
 });

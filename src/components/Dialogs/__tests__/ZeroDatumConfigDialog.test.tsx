@@ -279,6 +279,29 @@ describe('ZeroDatumConfigDialog station pick', () => {
     expect(confirmedStationIndex()).toBe(PICK);
   });
 
+  it('materializes the trailing blank row from ONE averaged azimuth, adding one station', () => {
+    // The averaged azimuth column fans out to both legs, so this is TWO
+    // `onShotChange` calls in one React event - on a row that does not exist in
+    // the render either of them sees, because the same event materializes it.
+    // The value must land (it is the primary way a shot is added) and the row
+    // must join the payload once, not once per leg.
+    renderDialog();
+    pickStation(SHOT_COUNT);
+    fireEvent.doubleClick(screen.getByTestId(`shot-editor-cell-${SHOT_COUNT}-_azimuth_avg`));
+    const editor = screen.getByTestId('shot-editor-cell-editor');
+    fireEvent.change(editor, { target: { value: '90' } });
+    fireEvent.keyDown(editor, { key: 'Enter' });
+
+    expect(screen.getByTestId(`shot-editor-cell-${SHOT_COUNT}-_azimuth_avg`).textContent).toContain(
+      '90',
+    );
+    // The pick sat at the old far end and stays there; the new far end is one
+    // beyond it. Two stations would mean the row was counted twice.
+    expect(screen.getByRole('combobox').textContent).toContain(`Station ${SHOT_COUNT}`);
+    fireEvent.click(screen.getByRole('combobox'));
+    expect(screen.getAllByRole('option')).toHaveLength(SHOT_COUNT + 2);
+  });
+
   it('keeps a pick at the far end pinned to the far end when a shot is appended', () => {
     renderDialog();
     pickStation(SHOT_COUNT);
@@ -338,29 +361,28 @@ describe('ZeroDatumConfigDialog station pick across blank transitions', () => {
     vi.clearAllMocks();
   });
 
-  /** Fill row 0 completely - a half-filled row is blocked by the gate. */
-  const fillRow0 = () => {
-    for (const [col, value] of [
-      ['length', '12'],
-      ['_azimuth_avg', '90'],
-      ['depth_in', '-1'],
-      ['depth_out', '-2'],
-    ] as const) {
-      fireEvent.doubleClick(screen.getByTestId(`shot-editor-cell-0-${col}`));
-      const editor = screen.getByTestId('shot-editor-cell-editor');
-      fireEvent.change(editor, { target: { value } });
-      fireEvent.keyDown(editor, { key: 'Enter' });
-    }
+  /** Commit `value` (empty clears) into one cell of row 0. */
+  const editRow0 = (col: string, value: string) => {
+    fireEvent.doubleClick(screen.getByTestId(`shot-editor-cell-0-${col}`));
+    const editor = screen.getByTestId('shot-editor-cell-editor');
+    fireEvent.change(editor, { target: { value } });
+    fireEvent.keyDown(editor, { key: 'Enter' });
   };
 
-  /** Clear one required cell back out, returning the row to blank. */
-  const clearRow0 = () => {
-    for (const col of ['length', '_azimuth_avg', 'depth_in', 'depth_out'] as const) {
-      fireEvent.doubleClick(screen.getByTestId(`shot-editor-cell-0-${col}`));
-      const editor = screen.getByTestId('shot-editor-cell-editor');
-      fireEvent.change(editor, { target: { value: '' } });
-      fireEvent.keyDown(editor, { key: 'Enter' });
-    }
+  /** The four required cells, in the given order. Fill ALL of them - a
+   *  half-filled row is blocked by the completeness gate. */
+  const REQUIRED = ['length', '_azimuth_avg', 'depth_in', 'depth_out'] as const;
+  const VALUES: Record<string, string> = {
+    length: '12',
+    _azimuth_avg: '90',
+    depth_in: '-1',
+    depth_out: '-2',
+  };
+  const fillRow0 = (order: readonly string[] = REQUIRED) => {
+    for (const col of order) editRow0(col, VALUES[col] ?? '');
+  };
+  const clearRow0 = (order: readonly string[] = REQUIRED) => {
+    for (const col of order) editRow0(col, '');
   };
 
   it('returns the pick when a filled row is cleared back to blank', () => {
@@ -379,6 +401,34 @@ describe('ZeroDatumConfigDialog station pick across blank transitions', () => {
     pickStation(PICK);
     insertBeforeRow(0);
     deleteRow(0);
+    expect(confirmedStationIndex()).toBe(PICK);
+  });
+
+  /**
+   * The transition is owed ONCE per row, not once per cell.
+   *
+   * The averaged azimuth column fans out to both legs, so committing it is two
+   * `onShotChange` calls in ONE React event - and it is the cell that takes this
+   * row into the payload. Judged against the render's rows, both calls saw the
+   * same blank row and each claimed the shift, walking the pick two stations for
+   * one row (a pasted row, five cells, walked it further still).
+   */
+  it('shifts the pick ONCE when the cell that fills the row writes two fields', () => {
+    renderDialog();
+    pickStation(PICK);
+    insertBeforeRow(0);
+    fillRow0(['_azimuth_avg', 'length', 'depth_in', 'depth_out']);
+    expect(confirmedStationIndex()).toBe(PICK + 1);
+  });
+
+  /** The mirror: the row leaves the payload on the SECOND of that column's two
+   *  calls, and the first one had already reported "still counted". */
+  it('returns the pick when the cell that empties the row writes two fields', () => {
+    renderDialog();
+    pickStation(PICK);
+    insertBeforeRow(0);
+    fillRow0();
+    clearRow0(['length', 'depth_in', 'depth_out', '_azimuth_avg']);
     expect(confirmedStationIndex()).toBe(PICK);
   });
 });

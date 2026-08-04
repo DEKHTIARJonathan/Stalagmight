@@ -1,6 +1,7 @@
 import type { DmpSection, DmpShot } from '../types/commands';
 import type { ShotData } from '../types/project';
 import type { EditableShot } from '../components/common/ShotTableEditor';
+import { isEmittedShot } from '../components/common/emittedShots';
 
 /**
  * Convert an EditableShot to a ShotData for the backend.
@@ -41,10 +42,17 @@ export function editableShotToShotData(shot: EditableShot): ShotData {
  *
  * Callers that also track a name/direction edit should spread those over the
  * result; this only rewrites the geometry.
+ *
+ * The rows are the EMITTED ones (`isEmittedShot`), i.e. the same set the import
+ * payloads serialize. Keeping a wholly blank row here put a NaN length and NaN
+ * azimuths into the preview: `computeStationsFromDmpShots` carried that NaN into
+ * every station after it, so the centerline vanished and `fitBounds` was handed
+ * NaNs - and the preview drew one station more than the import would create, so
+ * a click on it committed a station index one past the one meant.
  */
 export function editableShotsToDmpSection(raw: DmpSection, shots: EditableShot[]): DmpSection {
   const syntheticShots: DmpShot[] = shots
-    .filter((s) => !s.isDeleted)
+    .filter(isEmittedShot)
     .map((s) => ({
       shot_type: 'Standard' as const,
       heading_in: s.azimuth_in,
