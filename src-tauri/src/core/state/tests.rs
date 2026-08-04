@@ -2268,10 +2268,11 @@ fn merge_allowed_across_inert_closure_but_rejected_across_aligned() {
 
 #[test]
 fn restore_snapshot_into_rebuilds_transient_caches() {
-    // The single restore chokepoint must rebuild the serde-skipped lookup caches
-    // (section_index_cache, merge_adjacency_cache), so no rollback/undo/redo path
-    // can install a project with an empty/stale cache that silently mis-resolves a
-    // section or merge group (catalog #14/#39).
+    // The single restore chokepoint must rebuild the serde-skipped section index,
+    // so no rollback/undo/redo path can install a project that silently
+    // mis-resolves a section (catalog #14/#39). The merge adjacency is not a
+    // field here - it is derived on demand - so the restored project must answer
+    // merge-group queries correctly with no rebuild call at all.
     let state = AppState::new().unwrap();
     state.execute(Command::CreateProject {
         name: "X".to_string(),
@@ -2322,9 +2323,12 @@ fn restore_snapshot_into_rebuilds_transient_caches() {
         !p.section_index_cache.is_empty(),
         "section index cache must be rebuilt"
     );
-    assert!(
-        !p.merge_adjacency_cache.is_empty(),
-        "merge adjacency cache must be rebuilt so get_merged_section_ids stays O(group)"
+    let merged = p.get_merged_section_ids(a);
+    assert_eq!(
+        merged,
+        HashSet::from([a, b]),
+        "a restored project must resolve the merge-connected component from its \
+         own merges, with no rebuild step: {merged:?}"
     );
     // Sanity: the rebuilt index resolves both sections.
     assert!(p.get_section(a).is_some() && p.get_section(b).is_some());
@@ -3476,7 +3480,6 @@ fn test_delete_shot_rejects_frozen_shot() {
         station_ref: StationRef::new(sec_b, 0).into(),
         gps: GpsCoordinates::new(46.0, -74.0, 110.0).unwrap(),
     });
-    project.rebuild_merge_adjacency();
 
     // SELF-VERIFY the chosen shot is genuinely frozen before asserting the
     // rejection, so the test fails loudly if the setup didn't freeze it.
@@ -3586,7 +3589,6 @@ fn test_delete_shot_and_split_rejects_frozen_shot() {
         station_ref: StationRef::new(sec_b, 0).into(),
         gps: GpsCoordinates::new(46.0, -74.0, 110.0).unwrap(),
     });
-    project.rebuild_merge_adjacency();
 
     // SELF-VERIFY the interior split shot (index 1) is genuinely frozen.
     let frozen = project.compute_frozen_shots();
@@ -3804,7 +3806,6 @@ fn test_split_shot_at_distance_preserves_anchor_on_endpoint_station() {
     project
         .station_comments
         .insert(endpoint_key, "endpoint note".to_string());
-    project.rebuild_merge_adjacency();
 
     let state = AppState::new().unwrap();
     state.set_project_for_tests(project);
@@ -3949,7 +3950,6 @@ fn test_split_shot_at_distance_first_shot_keeps_section_start_anchor() {
         station_ref: start_key,
         gps: GpsCoordinates::new(45.0, -73.0, 100.0).unwrap(),
     });
-    project.rebuild_merge_adjacency();
 
     let state = AppState::new().unwrap();
     state.set_project_for_tests(project);
@@ -4082,7 +4082,6 @@ fn test_split_shot_at_distance_rejects_frozen_shot() {
         station_ref: StationRef::new(sec_b, 0).into(),
         gps: GpsCoordinates::new(46.0, -74.0, 110.0).unwrap(),
     });
-    project.rebuild_merge_adjacency();
 
     let frozen = project.compute_frozen_shots();
     assert!(
@@ -11967,7 +11966,6 @@ fn test_delete_range_shift_blocked_aborts() {
             station_b: StationRef::new(sec_b, 1).into(),
             merged_at: chrono::Utc::now(),
         });
-        proj.merge_adjacency_cache.clear();
     }
 
     let (s1, s2) = {
@@ -12441,7 +12439,6 @@ fn test_delete_range_prefix_shift_not_blocked_by_internal_loop() {
             station_b: StationRef::new(section_id, 2).into(),
             merged_at: chrono::Utc::now(),
         });
-        proj.merge_adjacency_cache.clear();
     }
     let (s0, s1) = {
         let proj = state.get_project_state().unwrap();
@@ -12948,7 +12945,6 @@ fn test_delete_range_interior_shift_not_blocked_via_removed_tail_boundary() {
             station_b: StationRef::new(sec_e, 1).into(),
             merged_at: chrono::Utc::now(),
         });
-        proj.merge_adjacency_cache.clear();
     }
     let (s2, s3) = {
         let proj = state.get_project_state().unwrap();
@@ -13042,7 +13038,6 @@ fn test_delete_range_interior_shift_blocked_by_loop_via_replacement_merge() {
             station_b: StationRef::new(sec_a, 3).into(),
             merged_at: chrono::Utc::now(),
         });
-        proj.merge_adjacency_cache.clear();
     }
     let (s2, s3) = {
         let proj = state.get_project_state().unwrap();

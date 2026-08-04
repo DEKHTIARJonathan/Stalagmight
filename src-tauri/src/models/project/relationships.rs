@@ -513,7 +513,6 @@ impl Project {
             .into_iter()
             .filter(|m| !is_removed(self, &m.station_a) && !is_removed(self, &m.station_b))
             .collect();
-        self.merge_adjacency_cache.clear();
 
         let closures = std::mem::take(&mut self.loop_closures);
         self.loop_closures = closures
@@ -543,13 +542,10 @@ impl Project {
     /// Remove all merges, closures, section_offsets, station_offsets, and zero_datums
     /// that reference the given section. Call before `remove_section()` to avoid orphans.
     pub fn cleanup_section_references(&mut self, section_id: SectionId) {
-        // Remove merges referencing this section. Clearing the
-        // adjacency cache is mandatory - we just dropped entries that
-        // the cache still claims exist.
+        // Remove merges referencing this section.
         self.station_merges.retain(|m| {
             m.station_a.section_id != section_id && m.station_b.section_id != section_id
         });
-        self.merge_adjacency_cache.clear();
 
         // Remove closures referencing this section
         self.loop_closures.retain(|lc| {

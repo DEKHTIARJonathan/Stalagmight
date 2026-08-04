@@ -385,9 +385,6 @@ impl AppState {
             };
             // Drop dangling refs/orphans and re-mint duplicate shot UUIDs.
             project.repair_structural_integrity();
-            // Dropping refs may have cleared the adjacency cache; rebuild before
-            // the cascade walks the merge graph.
-            project.rebuild_merge_adjacency();
             // Turn any sole-bridge closure into a merge (a closure is only a
             // loop), then re-derive offsets. Repair is an explicit "fix my
             // project" action, so use the zero-trust re-solve that never honors a

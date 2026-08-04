@@ -4777,7 +4777,6 @@ fn test_over_anchoring_warning_is_never_suppressible() {
         station_b: StationRef::new(b, 0).into(),
         merged_at: chrono::Utc::now(),
     });
-    project.rebuild_merge_adjacency();
     project.zero_datums.push(ZeroDatum {
         station_ref: StationRef::new(a, 0).into(),
         gps: GpsCoordinates::new(45.0, -90.0, 0.0).unwrap(),

@@ -1096,7 +1096,6 @@ impl Project {
             self.station_merges
                 .retain(|m| m.station_a != rk && m.station_b != rk);
         }
-        self.merge_adjacency_cache.clear();
 
         // Pre-resolve replacement closure targets to keys (the drain below can't
         // borrow `self`).

@@ -534,9 +534,6 @@ impl Project {
 
         if let Some(pos) = pos {
             self.station_merges.remove(pos);
-            // Drop the adjacency cache - recomputing the precise edge
-            // deletion would duplicate the work `retain` already did.
-            self.merge_adjacency_cache.clear();
 
             // Decide which closures match the unmerged pair before the retain -
             // `resolve_key` needs `&self`, but `retain` borrows `loop_closures`

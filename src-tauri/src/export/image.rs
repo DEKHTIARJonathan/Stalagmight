@@ -2114,7 +2114,6 @@ mod tests {
             station_b: StationRef::new(main_id, 1).into(),
             merged_at,
         });
-        project.rebuild_merge_adjacency();
 
         let svg = generate_svg_string(&project, &ExportImageOptions::default()).unwrap();
         let (_, _, w, _) = parse_viewbox(&svg);
@@ -2365,7 +2364,6 @@ mod tests {
                 merged_at,
             });
         }
-        project.rebuild_merge_adjacency();
 
         let svg = generate_svg_string(
             &project,
@@ -2478,7 +2476,6 @@ mod tests {
                 merged_at,
             });
         }
-        project.rebuild_merge_adjacency();
 
         let svg = generate_svg_string(
             &project,
@@ -2589,7 +2586,6 @@ mod tests {
                 merged_at,
             });
         }
-        project.rebuild_merge_adjacency();
 
         let svg = generate_svg_string(
             &project,
@@ -2822,7 +2818,6 @@ mod tests {
                 merged_at,
             });
         }
-        project.rebuild_merge_adjacency();
 
         // threshold = 3: only the trunk (branching=3) is thick; leaves
         // (branching=1) are thin. So we should see TWO distinct stroke widths.
@@ -2904,7 +2899,6 @@ mod tests {
             station_b: StationRef::new(right_id, 1).into(),
             merged_at,
         });
-        project.rebuild_merge_adjacency();
 
         // threshold = 1 → both segments are thick (branching = 1 ≥ 1).
         let svg = generate_svg_string(
@@ -3004,7 +2998,6 @@ mod tests {
                 merged_at,
             });
         }
-        project.rebuild_merge_adjacency();
 
         // At threshold = 2 only the trunk (branching 2) is thick; the two
         // leaves (branching 1) are thin → two distinct stroke widths.
@@ -3085,7 +3078,6 @@ mod tests {
                 merged_at,
             });
         }
-        project.rebuild_merge_adjacency();
 
         // threshold = 2: every segment (branching = 2) ≥ threshold → all
         // shots thick. One stroke width.
@@ -3378,7 +3370,6 @@ mod tests {
             station_b: StationRef::new(far_id, 0).into(),
             merged_at,
         });
-        project.rebuild_merge_adjacency();
         let gps = GpsCoordinates::new(45.0, -122.0, 0.0).unwrap();
         project
             .set_zero_datum(StationRef::new(trunk_id, 0), gps)
@@ -3963,7 +3954,6 @@ mod tests {
             station_b: StationRef::new(main_id, 1).into(),
             merged_at: chrono::Utc::now(),
         });
-        project.rebuild_merge_adjacency();
 
         let svg = generate_svg_string(
             &project,

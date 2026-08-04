@@ -12,6 +12,19 @@ fn shot(azimuth_in: f64, azimuth_out: f64, length: f64, depth_in: f64, depth_out
     }
 }
 
+/// Rewrite the first merge in place, for the integrity tests that need a forged
+/// (dangling) endpoint. `iter_mut` is the only mutable path into the merges -
+/// there is deliberately no `&mut Vec<StationMerge>` - and it invalidates the
+/// adjacency memo, exactly as `map_station_refs` does in production.
+fn forge_first_merge(project: &mut Project, f: impl FnOnce(&mut StationMerge)) {
+    let merge = project
+        .station_merges
+        .iter_mut()
+        .next()
+        .expect("fixture has at least one merge");
+    f(merge);
+}
+
 #[test]
 fn get_connected_section_ids_traverses_merges() {
     let mut project = Project::new("Merged".to_string(), None);
@@ -1222,7 +1235,6 @@ fn set_zero_datum_rejects_across_multi_hop_merge_chain() {
             merged_at: Utc::now(),
         });
     }
-    project.rebuild_merge_adjacency();
 
     let gps = GpsCoordinates::new(45.0, -90.0, 0.0).unwrap();
     project.set_zero_datum(StationRef::new(a, 0), gps).unwrap();
@@ -1345,7 +1357,6 @@ fn detects_two_datums_in_one_merge_component() {
         station_b: StationRef::new(b, 0).into(),
         merged_at: Utc::now(),
     });
-    project.rebuild_merge_adjacency();
 
     project.zero_datums.push(ZeroDatum {
         station_ref: StationRef::new(a, 0).into(),
@@ -4409,8 +4420,9 @@ fn dangling_anchor_flagged_by_integrity() {
     );
 
     // Forge a merge endpoint onto a shot UUID that doesn't exist in the section.
-    project.station_merges[0].station_a =
-        StationKey::new(a, StationAnchor::AfterShot("does-not-exist".to_string()));
+    forge_first_merge(&mut project, |m| {
+        m.station_a = StationKey::new(a, StationAnchor::AfterShot("does-not-exist".to_string()));
+    });
     let v = project.check_structural_integrity();
     assert!(
         v.iter().any(|x| x.category == "dangling_merge_ref"),
@@ -9418,15 +9430,11 @@ fn lsq_spur_shots_are_not_modified() {
 }
 
 #[test]
-fn record_station_merge_rebuilds_cache_when_emptied_with_surviving_merges() {
-    // Reproduce the half-populated-cache trap Codex round-4 flagged:
-    // `delete_section` clears `merge_adjacency_cache` while keeping
-    // surviving merges in `station_merges`, leaving the cache empty
-    // and the merges intact.  Before the fix, the next
-    // `record_station_merge` only inserted ITS edge into the cache -
-    // and since `get_merged_section_ids` treats any non-empty cache as
-    // authoritative, every surviving merge from before the delete
-    // became invisible.
+fn record_station_merge_after_a_structural_removal_keeps_surviving_merges() {
+    // The half-populated-memo trap: a structural removal drops merges while
+    // others survive, and the NEXT recorded merge must land on a whole base, not
+    // on a map holding only its own edge (which `get_merged_section_ids` would
+    // then treat as the entire merge graph, hiding every surviving merge).
     let mut project = Project::new("Cache".to_string(), None);
     let a = project
         .add_section(SectionData {
@@ -9452,9 +9460,17 @@ fn record_station_merge_rebuilds_cache_when_emptied_with_surviving_merges() {
             ..Default::default()
         })
         .id;
+    // An extra, merge-free section: cleaning up ITS references is the structural
+    // removal that invalidates the adjacency below.
+    let e = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
 
-    // Establish two surviving merges A↔B and B↔C via the maintained
-    // helper so the cache is fully populated.
+    // Establish two surviving merges A↔B and B↔C, then read the group so the
+    // adjacency memo is warm.
     project.record_station_merge(StationMerge {
         station_a: StationRef::new(a, 0).into(),
         station_b: StationRef::new(b, 0).into(),
@@ -9467,15 +9483,11 @@ fn record_station_merge_rebuilds_cache_when_emptied_with_surviving_merges() {
     });
     assert_eq!(project.get_merged_section_ids(a).len(), 3);
 
-    // Simulate the `delete_section` cleanup: clear the cache while
-    // keeping `station_merges` populated.  The cache invariant is now
-    // "empty but merges exist".
-    project.merge_adjacency_cache.clear();
+    // The `delete_section` cleanup: a merge retain that keeps A↔B and B↔C.
+    project.cleanup_section_references(e);
 
-    // Now record a NEW merge (e.g. user merges D into the group).
-    // Without the rebuild-first guard this would leave the cache
-    // containing ONLY {C, D} edges; with the guard it must contain
-    // all three groups.
+    // Now record a NEW merge (e.g. the user merges D into the group). It must
+    // land on the whole surviving graph, not on a map holding only {C, D}.
     project.record_station_merge(StationMerge {
         station_a: StationRef::new(c, 0).into(),
         station_b: StationRef::new(d, 0).into(),
@@ -9484,10 +9496,57 @@ fn record_station_merge_rebuilds_cache_when_emptied_with_surviving_merges() {
     let merged = project.get_merged_section_ids(a);
     assert!(
         merged.contains(&a) && merged.contains(&b) && merged.contains(&c) && merged.contains(&d),
-        "expected the surviving A-B-C merges to still propagate after the cache was \
-         cleared + a new merge recorded; got {merged:?}"
+        "expected the surviving A-B-C merges to still propagate after a structural \
+         removal + a new merge recorded; got {merged:?}"
     );
     assert_eq!(merged.len(), 4);
+}
+
+#[test]
+fn map_station_refs_invalidates_the_merge_adjacency_memo() {
+    // `map_station_refs` can move a merge endpoint to a different SECTION - that
+    // is what the delete-shot split does - so it rewrites the very graph the
+    // merge-adjacency memo describes. Answering a later query from the pre-remap
+    // memo reports the wrong rigid group, which is how a bridge closure got
+    // promoted into a merge across two GPS-anchored components.
+    let mut project = Project::new("Remap".to_string(), None);
+    let mk = |project: &mut Project| {
+        project
+            .add_section(SectionData {
+                shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
+                ..Default::default()
+            })
+            .id
+    };
+    let (a, b, c) = (mk(&mut project), mk(&mut project), mk(&mut project));
+
+    project.record_station_merge(StationMerge {
+        station_a: StationRef::new(a, 1).into(),
+        station_b: StationRef::new(b, 0).into(),
+        merged_at: Utc::now(),
+    });
+    // Warm the memo on the pre-remap shape.
+    assert_eq!(project.get_merged_section_ids(a), HashSet::from([a, b]));
+
+    // The split's remap: the B endpoint now lives in section C.
+    project.map_station_refs(|key| {
+        if key.section_id == b {
+            StationRef::new(c, 0).into()
+        } else {
+            key
+        }
+    });
+
+    assert_eq!(
+        project.get_merged_section_ids(a),
+        HashSet::from([a, c]),
+        "the rigid group must follow the rewritten endpoint into section C"
+    );
+    assert_eq!(
+        project.get_merged_section_ids(b),
+        HashSet::from([b]),
+        "section B no longer carries a merge endpoint, so it stands alone"
+    );
 }
 
 #[test]
@@ -9499,7 +9558,6 @@ fn diagnose_naharon_section31_bridge_closure() {
     let db = Database::open_existing(path).unwrap();
     let mut project = db.load_project().unwrap();
     project.rebuild_section_index();
-    project.rebuild_merge_adjacency();
 
     let count31 = |p: &Project| {
         let merges = p
@@ -9541,7 +9599,6 @@ fn diagnose_naharon_merge_alignment() {
     let db = Database::open_existing(path).unwrap();
     let mut project = db.load_project().unwrap();
     project.rebuild_section_index();
-    project.rebuild_merge_adjacency();
 
     let before = project.check_merge_alignment();
     eprintln!("== misaligned merges BEFORE: {} ==", before.len());
@@ -9781,10 +9838,9 @@ fn redrive_offsets_after_load_heals_persisted_drift() {
     project
         .merge_stations(StationRef::new(a, 1), StationRef::new(b, 0))
         .unwrap();
-    // Persisted drift + stale caches.
+    // Persisted drift + an empty section index (as after deserialization).
     project.adjust_section_offset(b, 31.0, -9.0);
     project.section_index_cache.clear();
-    project.merge_adjacency_cache.clear();
     assert!(!project.check_merge_alignment().is_empty());
 
     let healed = project.redrive_offsets_after_load();
@@ -10457,7 +10513,9 @@ fn integrity_clean_project_has_no_violations() {
 fn integrity_flags_merge_to_missing_section() {
     let (mut project, a, _) = integrity_fixture();
     // Point the merge at a section id that doesn't exist.
-    project.station_merges[0].station_b = StationRef::new(9999, 0).into();
+    forge_first_merge(&mut project, |m| {
+        m.station_b = StationRef::new(9999, 0).into();
+    });
     let v = project.check_structural_integrity();
     assert_eq!(v.len(), 1, "{v:?}");
     assert_eq!(v[0].severity, ViolationSeverity::Critical);
@@ -10472,7 +10530,9 @@ fn integrity_flags_station_index_out_of_range() {
     let (mut project, a, _) = integrity_fixture();
     // Section a has 1 shot → stations 0..=1; index 5 is out of range, so the
     // transitional Index anchor no longer resolves → flagged as a dangling ref.
-    project.station_merges[0].station_a = StationRef::new(a, 5).into();
+    forge_first_merge(&mut project, |m| {
+        m.station_a = StationRef::new(a, 5).into();
+    });
     let v = project.check_structural_integrity();
     assert_eq!(v.len(), 1, "{v:?}");
     assert_eq!(v[0].severity, ViolationSeverity::Critical);

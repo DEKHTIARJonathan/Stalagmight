@@ -4,9 +4,9 @@ use rusqlite::{params, OptionalExtension};
 use std::collections::HashMap;
 
 use crate::models::{
-    ClosureStrategy, GpsCoordinates, LoopClosure, Project, Section, SectionData, SectionId, Shot,
-    ShotKind, StationKey, StationMerge, SurveyDirection, UnrecognisedShotKind, ZeroDatum,
-    FEATURE_ID_STRIDE,
+    ClosureStrategy, GpsCoordinates, LoopClosure, MergeTopology, Project, Section, SectionData,
+    SectionId, Shot, ShotKind, StationKey, StationMerge, SurveyDirection, UnrecognisedShotKind,
+    ZeroDatum, FEATURE_ID_STRIDE,
 };
 
 use super::Database;
@@ -594,20 +594,8 @@ impl Database {
         for (i, s) in sections.iter().enumerate() {
             section_index_cache.insert(s.id, i);
         }
-        // Same for merge adjacency - the first compute_station_coordinates
-        // call hammers get_merged_section_ids and would otherwise pay the
-        // O(N) linear fallback on every BFS step.
-        let mut merge_adjacency_cache: HashMap<u32, Vec<u32>> = HashMap::new();
-        for m in &station_merges {
-            merge_adjacency_cache
-                .entry(m.station_a.section_id)
-                .or_default()
-                .push(m.station_b.section_id);
-            merge_adjacency_cache
-                .entry(m.station_b.section_id)
-                .or_default()
-                .push(m.station_a.section_id);
-        }
+        // (The merge adjacency needs no priming: `MergeTopology` builds it the
+        // first time `get_merged_section_ids` asks.)
         // Pre-build the shot-UUID index too, so `resolve_key`'s `AfterShot` arm
         // is O(1) right after load (mirrors the two caches above).
         let mut shot_uuid_index = HashMap::new();
@@ -628,7 +616,7 @@ impl Database {
             created_at,
             modified_at,
             sections,
-            station_merges,
+            station_merges: MergeTopology::from(station_merges),
             zero_datums,
             loop_closures,
             section_offsets,
@@ -642,7 +630,6 @@ impl Database {
             validation,
             cascade_deferred: false,
             section_index_cache,
-            merge_adjacency_cache,
             shot_uuid_index,
         })
     }

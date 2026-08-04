@@ -312,43 +312,23 @@ impl Project {
     /// Closures are NOT followed. Use this for rigid-group operations:
     /// datum propagation, offset application, zero-datum validation.
     pub fn get_merged_section_ids(&self, section_id: SectionId) -> HashSet<SectionId> {
+        // ONE path: BFS over the merge-only adjacency, which
+        // [`MergeTopology::adjacency`] builds on demand and every mutator
+        // invalidates. There is deliberately no linear-scan fallback - the old
+        // "empty cache means fall back" branch is what let a stale-but-non-empty
+        // map answer authoritatively after `map_station_refs` moved an endpoint.
+        // Each connected section is visited once with O(neighbours) work per
+        // step, so this is O(group size), not O(group × merges).
+        let adjacency = self.station_merges.adjacency();
         let mut connected = HashSet::new();
-        // Fast path: the adjacency cache is non-empty (or we have no
-        // merges at all). BFS visits each connected section once with
-        // O(neighbours) work per step → O(group size) total instead of
-        // the legacy O(group × N_merges).
-        if !self.merge_adjacency_cache.is_empty() || self.station_merges.is_empty() {
-            let mut queue = vec![section_id];
-            while let Some(current) = queue.pop() {
-                if connected.insert(current) {
-                    if let Some(neighbours) = self.merge_adjacency_cache.get(&current) {
-                        for &n in neighbours {
-                            if !connected.contains(&n) {
-                                queue.push(n);
-                            }
-                        }
-                    }
-                }
-            }
-            return connected;
-        }
-
-        // Cold path: cache was cleared (e.g. after deserialisation or a
-        // structural remove). Fall back to the legacy linear scan rather
-        // than mutating self here - callers that care about throughput
-        // call `rebuild_merge_adjacency` first.
         let mut queue = vec![section_id];
         while let Some(current) = queue.pop() {
             if connected.insert(current) {
-                for merge in &self.station_merges {
-                    if merge.station_a.section_id == current {
-                        if !connected.contains(&merge.station_b.section_id) {
-                            queue.push(merge.station_b.section_id);
+                if let Some(neighbours) = adjacency.get(&current) {
+                    for &n in neighbours {
+                        if !connected.contains(&n) {
+                            queue.push(n);
                         }
-                    } else if merge.station_b.section_id == current
-                        && !connected.contains(&merge.station_a.section_id)
-                    {
-                        queue.push(merge.station_a.section_id);
                     }
                 }
             }

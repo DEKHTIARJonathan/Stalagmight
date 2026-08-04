@@ -40,6 +40,7 @@ mod mutations;
 mod shots;
 
 mod integrity;
+mod merge_topology;
 mod offsets;
 mod relationships;
 mod reverse;
@@ -54,6 +55,7 @@ pub use gas::{
     TankMaterial, Team,
 };
 pub use integrity::{IntegrityViolation, ViolationSeverity};
+pub use merge_topology::MergeTopology;
 pub use reverse::{reverse_shots, shot_run_displacement};
 pub use shots::MIN_SPLIT_CHILD_LENGTH_M;
 
@@ -242,8 +244,11 @@ pub struct Project {
     pub sections: Vec<Section>,
     /// Station merges. Stored with position-independent [`StationKey`] endpoints;
     /// the TS/frontend shape is the positional wire form (resolved at IPC encode).
+    /// Reads like a `[StationMerge]` slice; [`MergeTopology`] additionally owns
+    /// the merge-only section adjacency memo and keeps it honest across every
+    /// mutation (serde shape is unchanged - the bare merge array).
     #[ts(type = "Array<StationMerge>")]
-    pub station_merges: Vec<StationMerge>,
+    pub station_merges: MergeTopology,
     /// Zero datums
     #[ts(type = "Array<ZeroDatum>")]
     pub zero_datums: Vec<ZeroDatum>,
@@ -314,18 +319,6 @@ pub struct Project {
     #[serde(skip, default)]
     #[ts(skip)]
     pub section_index_cache: HashMap<SectionId, usize>,
-
-    /// Merge-only section adjacency cache: section_id → [neighbor section
-    /// ids via station_merges]. Transient, NOT persisted. Maintained
-    /// incrementally by `add_station_merge` / `remove_station_merge`;
-    /// any structural mutation outside those entry points is expected
-    /// to call `rebuild_merge_adjacency`. The cache exists to turn the
-    /// per-BFS-step iteration over all `station_merges` (O(N) inner)
-    /// into a HashMap lookup (O(1) inner). For a tree-shape import that
-    /// converts `get_merged_section_ids` from O(N²) to O(N) per call.
-    #[serde(skip, default)]
-    #[ts(skip)]
-    pub merge_adjacency_cache: HashMap<SectionId, Vec<SectionId>>,
 
     /// `(section_id, shot_uuid)` → shot vector index. Transient, NOT persisted.
     /// Turns `resolve_key`'s `AfterShot` arm from an O(shots) linear scan with a
@@ -547,7 +540,7 @@ impl Project {
             created_at: now,
             modified_at: now,
             sections: Vec::new(),
-            station_merges: Vec::new(),
+            station_merges: MergeTopology::default(),
             zero_datums: Vec::new(),
             loop_closures: Vec::new(),
             file_path: None,
@@ -561,7 +554,6 @@ impl Project {
             validation: crate::config::ValidationConfig::default(),
             cascade_deferred: false,
             section_index_cache: HashMap::new(),
-            merge_adjacency_cache: HashMap::new(),
             shot_uuid_index: HashMap::new(),
         }
     }
@@ -778,28 +770,6 @@ impl Project {
         }
     }
 
-    /// Rebuild the merge-only section adjacency cache from
-    /// `station_merges`. O(N) where N is the merge count. Required
-    /// after any path that mutates `station_merges` outside the
-    /// `record_station_merge` / `remove_station_merges_matching`
-    /// helpers (e.g. a serde-deserialised project, or a snapshot
-    /// rollback).
-    pub fn rebuild_merge_adjacency(&mut self) {
-        self.merge_adjacency_cache.clear();
-        // Each merge contributes one entry in each direction.
-        self.merge_adjacency_cache.reserve(self.sections.len());
-        for m in &self.station_merges {
-            self.merge_adjacency_cache
-                .entry(m.station_a.section_id)
-                .or_default()
-                .push(m.station_b.section_id);
-            self.merge_adjacency_cache
-                .entry(m.station_b.section_id)
-                .or_default()
-                .push(m.station_a.section_id);
-        }
-    }
-
     /// Rebuild the `(section_id, shot_uuid)` → shot-index cache from the current
     /// `sections`. O(total shots). Call before a hot `resolve_key` loop (batch
     /// import, post-load, snapshot restore). Because `resolve_key` re-checks the
@@ -852,32 +822,18 @@ impl Project {
         }
     }
 
-    /// Push a new merge AND incrementally update the adjacency cache.
-    /// Always use this instead of writing to `station_merges` directly
-    /// so the cache stays in sync.
+    /// Record a new merge. Thin wrapper over [`MergeTopology::push`] (which
+    /// keeps the adjacency memo current) - kept as the named entry point the
+    /// merge paths call.
     pub(crate) fn record_station_merge(&mut self, merge: StationMerge) {
-        // Guard against the half-populated-cache trap: `delete_section` /
-        // `delete_shot` clear `merge_adjacency_cache` after retaining
-        // surviving merges in `station_merges`, leaving the cache empty
-        // and the merges intact.  If we then incrementally insert just
-        // this new merge, the cache becomes non-empty but only contains
-        // THIS edge - and `get_merged_section_ids` treats any non-empty
-        // cache as authoritative, silently ignoring every surviving
-        // merge from before the delete.  Rebuild from `station_merges`
-        // first when the cache is empty but merges exist so the
-        // incremental insert lands on a whole base.
-        if self.merge_adjacency_cache.is_empty() && !self.station_merges.is_empty() {
-            self.rebuild_merge_adjacency();
-        }
-        self.merge_adjacency_cache
-            .entry(merge.station_a.section_id)
-            .or_default()
-            .push(merge.station_b.section_id);
-        self.merge_adjacency_cache
-            .entry(merge.station_b.section_id)
-            .or_default()
-            .push(merge.station_a.section_id);
         self.station_merges.push(merge);
+    }
+
+    /// Drop every merge for which `f` returns false. The only way for code
+    /// outside `models::project` to remove merges, so [`MergeTopology`] keeps
+    /// ownership of its adjacency memo.
+    pub(crate) fn retain_station_merges(&mut self, f: impl FnMut(&StationMerge) -> bool) {
+        self.station_merges.retain(f);
     }
 
     /// Compute the (dx, dy) horizontal displacement of a shot from its data.
@@ -935,7 +891,10 @@ impl Project {
     /// [`Self::reanchor_station_refs`]. (Keys are position-independent, so
     /// insert/delete no longer rewrite them - `shift_station_refs` is gone.)
     pub(crate) fn map_station_refs(&mut self, mut f: impl FnMut(StationKey) -> StationKey) {
-        for m in &mut self.station_merges {
+        // `iter_mut` invalidates the merge-adjacency memo: `f` can move an
+        // endpoint to another section (the delete-shot split does exactly that),
+        // which rewrites the very graph the memo describes.
+        for m in self.station_merges.iter_mut() {
             m.station_a = f(m.station_a.clone());
             m.station_b = f(m.station_b.clone());
         }

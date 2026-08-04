@@ -241,8 +241,6 @@ impl Project {
         self.station_offsets.retain(|key, _| key_valid(key));
         self.station_comments.retain(|key, _| key_valid(key));
 
-        // Merges may have been dropped; the adjacency cache is now stale.
-        self.merge_adjacency_cache.clear();
         self.touch();
 
         violations
