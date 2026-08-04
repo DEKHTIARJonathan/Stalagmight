@@ -20,8 +20,7 @@
 #![expect(
     clippy::unwrap_used,
     clippy::expect_used,
-    clippy::panic,
-    clippy::float_cmp,
+    clippy::indexing_slicing,
     reason = "test module: see docs/linting.md for the per-test-module expect idiom"
 )]
 
@@ -31,7 +30,9 @@ use tempfile::TempDir;
 
 use super::AppState;
 use crate::core::Command;
-use crate::models::{SectionId, SectionUpdates, ShotData, ShotId};
+use crate::models::{
+    ClosureStrategy, GpsCoordinates, SectionId, SectionUpdates, ShotData, ShotId, StationRef,
+};
 
 /// A shot with distinct, easily-recognised geometry.
 fn shot(azimuth: f64, length: f64) -> ShotData {
@@ -67,7 +68,9 @@ fn create_section(state: &AppState, name: &str, shots: Vec<ShotData>) -> Section
         shots,
     });
     assert!(result.success, "CreateSection failed: {:?}", result.error);
-    result.section_id.expect("CreateSection returned no section id")
+    result
+        .section_id
+        .expect("CreateSection returned no section id")
 }
 
 /// Every shot uuid in `section_id`, in order.
@@ -323,13 +326,15 @@ fn undo_after_reload_deletes_the_shot_it_created() {
 
     // Reopen: the loader renumbers shot ids, the persisted undo entry does not.
     let reopened = AppState::new().unwrap();
-    let opened = reopened.execute(Command::OpenProject {
-        path: save_path.clone(),
-    });
+    let opened = reopened.execute(Command::OpenProject { path: save_path });
     assert!(opened.success, "reopen failed: {:?}", opened.error);
 
     let undone = reopened.undo();
-    assert!(undone.success, "undo after reopen failed: {:?}", undone.error);
+    assert!(
+        undone.success,
+        "undo after reopen failed: {:?}",
+        undone.error
+    );
 
     let project = reopened.get_project_state().expect("no project after undo");
     let remaining: Vec<Option<String>> = project
@@ -339,12 +344,16 @@ fn undo_after_reload_deletes_the_shot_it_created() {
         .collect();
 
     assert!(
-        remaining.iter().any(|u| u.as_deref() == Some(original_uuid.as_str())),
+        remaining
+            .iter()
+            .any(|u| u.as_deref() == Some(original_uuid.as_str())),
         "undo of CreateShot destroyed the ORIGINAL shot {original_uuid} instead of the one it \
          created; surviving uuids: {remaining:?}"
     );
     assert!(
-        !remaining.iter().any(|u| u.as_deref() == Some(inserted_uuid.as_str())),
+        !remaining
+            .iter()
+            .any(|u| u.as_deref() == Some(inserted_uuid.as_str())),
         "undo of CreateShot left the shot it created ({inserted_uuid}) in place; surviving \
          uuids: {remaining:?}"
     );
@@ -352,8 +361,11 @@ fn undo_after_reload_deletes_the_shot_it_created() {
 
 /// `section_offsets` for `section_id`, or `None` when the section has no entry.
 fn section_offset(state: &AppState, section_id: SectionId) -> Option<(f64, f64)> {
-    let project = state.get_project_state().expect("no project open");
-    project.section_offsets.get(&section_id).copied()
+    state
+        .get_project_state()?
+        .section_offsets
+        .get(&section_id)
+        .copied()
 }
 
 // ===========================================================================
@@ -453,3 +465,190 @@ fn the_empty_section_displacement_does_not_ratchet() {
          displacement compounds without bound"
     );
 }
+
+/// The ids of every loop closure, in `Project::loop_closures` order.
+fn closure_ids(state: &AppState) -> Vec<u64> {
+    let project = state.get_project_state().expect("no project open");
+    project.loop_closures.iter().map(|c| c.id).collect()
+}
+
+/// Two sections joined by a merge, with a zero datum anchoring the first, so a
+/// loop closure between them is legal. Returns `(section_a, section_b)`.
+fn two_merged_sections(state: &AppState) -> (SectionId, SectionId) {
+    let a = create_section(state, "A", vec![shot(0.0, 5.0), shot(0.0, 5.0)]);
+    let b = create_section(state, "B", vec![shot(90.0, 5.0)]);
+    let datum = state.execute(Command::SetZeroDatum {
+        station_ref: StationRef::new(a, 0),
+        coordinates: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
+    });
+    assert!(datum.success, "SetZeroDatum failed: {:?}", datum.error);
+    let merged = state.execute(Command::MergeStations {
+        station_a: StationRef::new(a, 2),
+        station_b: StationRef::new(b, 0),
+    });
+    assert!(merged.success, "MergeStations failed: {:?}", merged.error);
+    (a, b)
+}
+
+// ===========================================================================
+// Bug 4: undo of RemoveLoopClosure appends instead of reinserting
+// ===========================================================================
+
+/// The removal takes the closure out with `Vec::remove(pos)`; the undo puts it
+/// back with `loop_closures.push()` (core/state/undo.rs). Same closure, same id,
+/// new position - and the order is persisted to the .stalx, indexed by the
+/// frontend, and used to build the adjacency lists `resolve_offsets` traverses.
+#[test]
+#[ignore = "open bug 4: undo of RemoveLoopClosure appends instead of reinserting at its index - see e2e/agent/scenarios/undoRedoFuzz.ts header"]
+fn undo_of_remove_loop_closure_restores_the_original_order() {
+    let state = state_with_project();
+    let (a, b) = two_merged_sections(&state);
+
+    let first = state.execute(Command::CreateLoopClosure {
+        station_a: StationRef::new(a, 0),
+        station_b: StationRef::new(b, 1),
+        closure_strategy: ClosureStrategy::default(),
+    });
+    assert!(
+        first.success,
+        "first CreateLoopClosure failed: {:?}",
+        first.error
+    );
+    let second = state.execute(Command::CreateLoopClosure {
+        station_a: StationRef::new(a, 1),
+        station_b: StationRef::new(b, 1),
+        closure_strategy: ClosureStrategy::default(),
+    });
+    assert!(
+        second.success,
+        "second CreateLoopClosure failed: {:?}",
+        second.error
+    );
+
+    let before = closure_ids(&state);
+    assert_eq!(
+        before.len(),
+        2,
+        "setup: expected two closures, got {before:?}"
+    );
+    let removed_id = before[0];
+
+    let removed = state.execute(Command::RemoveLoopClosure {
+        closure_id: removed_id,
+    });
+    assert!(
+        removed.success,
+        "RemoveLoopClosure failed: {:?}",
+        removed.error
+    );
+    assert!(state.undo().success, "undo of RemoveLoopClosure failed");
+
+    let after = closure_ids(&state);
+    assert_eq!(
+        before, after,
+        "undo put closure {removed_id} back at the END of loop_closures instead of its original \
+         index; the list order is persisted and is what resolve_offsets traverses"
+    );
+}
+
+// ===========================================================================
+// Bug 6: a CreateShot that is permitted forward but CANNOT be undone
+// ===========================================================================
+
+/// Undo of `CreateShot` runs the user-facing `delete_shot`, guards and all, so a
+/// shot inserted into a datum-anchored loop is an action that cannot be undone.
+/// `core/state/undo.rs` pushes the entry back on failure, so it fails the same
+/// way forever and every entry beneath it is unreachable - a WEDGED history,
+/// which is worse than any amount of drift.
+#[test]
+#[ignore = "open bug 6: undo of CreateShot into an anchored loop fails and wedges the history - see e2e/agent/scenarios/undoRedoFuzz.ts header"]
+fn undo_of_create_shot_in_an_anchored_loop_succeeds() {
+    let state = state_with_project();
+    let (a, b) = two_merged_sections(&state);
+
+    // Close the loop. It has to be a CLOSURE, not a second merge: A and B are
+    // already connected, and MergeStations refuses that with "Stations are
+    // already connected. Use Create Loop Closure instead." (A second zero datum
+    // is refused for the same component too, which is why the precondition here
+    // is the loop itself - matching the guard the fuzzer's naharon soak hit.)
+    let closed = state.execute(Command::CreateLoopClosure {
+        station_a: StationRef::new(a, 0),
+        station_b: StationRef::new(b, 1),
+        closure_strategy: ClosureStrategy::default(),
+    });
+    assert!(
+        closed.success,
+        "loop-closing closure failed: {:?}",
+        closed.error
+    );
+
+    // MID-CHAIN, not appended: an appended shot ends at a fresh leaf station,
+    // which is not part of the cycle, so its removal is unguarded. A shot
+    // inserted inside A's chain has both endpoints on the loop, which is the
+    // condition `delete_shot` refuses.
+    let first_shot_of_a = shot_ids(&state, a)[0];
+    let created = state.execute(Command::CreateShot {
+        section_id: a,
+        shot: shot(45.0, 3.0),
+        after_shot_id: Some(first_shot_of_a),
+        before_shot_id: None,
+    });
+    assert!(
+        created.success,
+        "setup: the forward CreateShot must be permitted for this test to mean anything: {:?}",
+        created.error
+    );
+
+    let undone = state.undo();
+    assert!(
+        undone.success,
+        "undo of a PERMITTED CreateShot was refused ({:?}); the entry is pushed back, so the \
+         history is now wedged and nothing beneath it can ever be undone. A second undo fails \
+         identically: {:?}",
+        undone.error,
+        state.undo().error
+    );
+}
+
+// ===========================================================================
+// Bug 7: REAL, but not reproducible by a minimal construction - no test
+// ===========================================================================
+//
+// `undo()`/`redo()` call `invalidate_adjusted_cache()` and
+// `reconcile_geometry()`; `undo_to()`/`redo_to()` loop the `*_inner` variants
+// and call NEITHER (core/state/undo.rs). That is verified in the source, and the
+// fuzzer reproduces the consequence twice - a 2.4 m `section_offsets` divergence
+// (fractal seed 12 x40) and a merge left 5.00 m out of alignment that only the
+// integrity oracle caught (fractal seed 15 x40).
+//
+// It resists a minimal synthetic repro because the divergence only appears when
+// a jump walks past drift that `realign_merges` would otherwise heal, and the
+// only drift source small enough to build here is bug 3 - whose `pos == 0`
+// branch DROPS the merge keyed to station 0 in the same breath as displacing the
+// section. An empty section has no other station to merge on, so the very undo
+// that creates the drift also removes the merge that would have been misaligned,
+// and both unwind strategies then agree.
+//
+// A test that passes would claim to pin this and does not, so there is none.
+// Reproduce with the fuzzer seeds above.
+//
+// ===========================================================================
+// Finding 10: NOT reproduced by a minimal construction - deliberately no test
+// ===========================================================================
+//
+// The fuzzer saw a loop closure come back from a save/reopen as a station merge
+// (naharon seed 26 x40): `redrive_offsets_after_load` calls
+// `convert_orphan_closures_to_merges` unconditionally
+// (models/project/offsets.rs), reclassifying a closure whose endpoints are no
+// longer independently connected.
+//
+// Every minimal construction tried here - create a closure, then remove the
+// merge that provided the loop's other path, save, reopen - comes back
+// PRESERVED, because `execute`'s epilogue runs the same conversion for removal
+// commands, so the in-memory state is already normalized before the save. In
+// other words the simple paths are consistent, and whatever reaches the
+// divergent state does so through a path that skips that epilogue.
+//
+// A test asserting preservation would therefore PASS and quietly claim to pin a
+// bug it does not, which is worse than no test. Left uncovered on purpose; the
+// only known reproduction is the fuzzer seed named above.
