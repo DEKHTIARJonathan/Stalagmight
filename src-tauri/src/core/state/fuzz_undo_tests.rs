@@ -22,6 +22,9 @@
 //! | tier | drives | catches | runs |
 //! |---|---|---|---|
 //! | this module | `AppState` directly | undo/redo model + persistence regressions | EVERY CI run |
+//! | `metamorphic_undo_tests.rs` | two `AppState`s from one file | two routes to the same edit disagreeing | EVERY CI run |
+//! | `format_property_tests.rs` | the `.stalx` on disk | a writer or reader that is not a function | EVERY CI run |
+//! | `adversarial_tests.rs` | `AppState` with hostile arguments | a refusal that mutates, and any panic | EVERY CI run |
 //! | agent harness | the real app over IPC | anything the frontend store or the IPC boundary breaks | on demand |
 //! | `open_undo_bugs_tests.rs` | `AppState` directly | the KNOWN open bugs, pinned | `-- --ignored` |
 //!
@@ -62,6 +65,8 @@
 //! | 20 | `finding-20-an-unanchored-merge-group-is-never-realigned` | `HORIZON=1` | 1 | 2000 |
 //! | 21 | red test only - `the_adjusted_solve_is_a_function_of_the_project` | n/a | n/a | n/a |
 //! | 22 | `finding-22-a-range-shift-delete-is-not-its-single-deletes` | metamorphic gate | 3 | n/a |
+//! | 23 | `finding-23-a-save-load-cycle-is-not-a-fixpoint` | format-property gate | 1 | n/a |
+//! | 24 | `finding-24-shot-display-position-overflows-before-validation` | adversarial gate | 4 | 120 |
 //!
 //! Findings 18 and 19 are ids this module's own classifiers already use and are
 //! NOT rows: 18 is the raw-versus-resolved alignment disagreement (issue #413's
@@ -70,11 +75,14 @@
 //! has not fired. They are reserved so the numbering does not collide, which is
 //! why the new ones start at 20.
 //!
-//! Findings 21 and 22 are not roundtrip-oracle rows because neither is a
-//! roundtrip defect: 21 is measured by re-solving one project
-//! (`open_undo_bugs_tests.rs`) and 22 by the METAMORPHIC engine in
-//! `metamorphic_undo_tests.rs`, which compares two routes rather than two
-//! moments.
+//! Findings 21 to 24 are not roundtrip-oracle rows because none of them is a
+//! roundtrip defect. 21 is measured by re-solving one project
+//! (`open_undo_bugs_tests.rs`); 22 by the METAMORPHIC engine
+//! (`metamorphic_undo_tests.rs`), which compares two routes rather than two
+//! moments; 23 by the FILE-FORMAT engine (`format_property_tests.rs`), which
+//! compares two saves rather than two states; and 24 by the ADVERSARIAL engine
+//! (`adversarial_tests.rs`), which compares nothing at all - it asserts that a
+//! refusal is a no-op and that nothing panics.
 //!
 //! Environment prefix for every row: `STALAGMIGHT_RUST_FUZZ_`. So the finding-7
 //! row is
@@ -153,6 +161,15 @@
 //!   >5 cm edit that trips the realign gate - all restore their offsets exactly.
 //!   No classifier, because nothing here is understood well enough to write one.
 //!
+//! * STILL OPEN, and NEW: seed 10 under `crossings: 3`. Undoing a
+//!   `set_shot_kind` entry pushed two epochs earlier finds three fields of one
+//!   shot changed - `azimuth_in` 298.3571 -> 295.8378, `left` 1.25 -> null,
+//!   `length` 4.12579457236 -> 2.859 - on a shot whose persisted id is MEASURED
+//!   `Fresh`, so it is none of findings 8, 12 or 13, and `set_shot_kind`'s undo
+//!   writes only `kind`. Surveyed at 30 seeds x 60 moves x 3 crossings, 29 are
+//!   clean; seed 10 is excluded from `MULTI_CROSSING_SEEDS` BY NAME so the
+//!   exclusion is visible and reversible rather than a quietly shorter list.
+//!
 //! ## Modes, and why the gate uses none of them
 //!
 //! | env | what it adds | why it is not in the gate |
@@ -162,6 +179,7 @@
 //! | `DIVERGENCE=1` | the id-vs-position divergence findings 8/12/13 need, built | deliberate corruption |
 //! | `CLOSURE_SHAPES=1` | the two closure shapes findings 4 and 10 need, built | deliberate, and implies `CLOSURES` |
 //! | `HORIZON=1` | thousands of moves, past the app's own history limit: the FIFO trim and its sliding window, accumulated float dust, allocator and growth sanity | minutes per seed |
+//! | `CROSSINGS=n` | n save/close/reopen boundaries per persistence run instead of one: heals stacking on heals, and a snapshot compared across two epochs | IS gated - see `undo_redo_fuzz_gate_multi_crossing` |
 //!
 //! A mode that CONSTRUCTS a known defect cannot also be a regression gate: its
 //! hit counts say nothing about whether the model acquired a new way to be

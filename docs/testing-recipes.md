@@ -36,6 +36,7 @@ because each one CONSTRUCTS a known defect:
 | `STALAGMIGHT_RUST_FUZZ_CLOSURES=1` | a real loop closure in the starting project | 6, 14 |
 | `STALAGMIGHT_RUST_FUZZ_DIVERGENCE=1` | shot ids that diverge from positional order, with every id-bearing entry contiguous on top, before the save | 8, 12, 13 |
 | `STALAGMIGHT_RUST_FUZZ_CLOSURE_SHAPES=1` | two closures with the first one removed, and an orphaned closure built just before the save | 4, 10 |
+| `STALAGMIGHT_RUST_FUZZ_CROSSINGS=n` | n save/close/reopen boundaries per persistence run instead of one | 8, 13 - without any constructed mode |
 
 So, for example, findings 8 and 12 in twelve moves:
 
@@ -79,8 +80,8 @@ STALAGMIGHT_RUST_FUZZ_SEEDS=200 STALAGMIGHT_RUST_FUZZ_ITERATIONS=1000 \
   --features telemetry --lib undo_redo_fuzz_soak -- --ignored --nocapture
 ```
 
-**The red tests.** Twenty-four of them, all `#[ignore]`d, all failing today on
-the bug named in each `#[ignore]` reason. Twenty-two are reductions in
+**The red tests.** Twenty-five of them, all `#[ignore]`d, all failing today on
+the bug named in each `#[ignore]` reason. Twenty-three are reductions in
 `open_undo_bugs_tests.rs`; two are pinned to a fuzzer SEED in the fuzz module
 instead, because every reduction for those two was measured not to reproduce
 (finding 14, and bug 7 - which had no test anywhere before). Delete an
@@ -146,6 +147,62 @@ It found finding 22 on its first run. The classified-hit ids it prints follow
 the same delete-when-fixed contract the roundtrip classifiers do, and one of
 them is deliberately named `observation-...` rather than `finding-...` because
 it is intermittent on identical inputs and has not been root-caused.
+
+## The file-format gate (Rust tier)
+
+`src-tauri/src/core/state/format_property_tests.rs` is the only thing that
+looks at the `.stalx` itself. Byte-comparison is the wrong instrument for a
+SQLite database (page allocation, freelists, the change counter), so the
+comparison is on the database's LOGICAL content: every user table, every row,
+sorted, with the save's own wall clock masked by value shape.
+
+```bash
+TELEMETRY_ENDPOINT=http://localhost/dummy cargo test --manifest-path src-tauri/Cargo.toml \
+  --features telemetry --lib format_
+
+STALAGMIGHT_RUST_FORMAT_SEEDS=60 STALAGMIGHT_RUST_FORMAT_CLOSURES=1 \
+  TELEMETRY_ENDPOINT=http://localhost/dummy cargo test --manifest-path src-tauri/Cargo.toml \
+  --features telemetry --lib format_property_sweep -- --ignored --nocapture
+```
+
+Three properties: save -> load -> save is a fixpoint (finding 23, classified);
+the loader is a function of the file (four loads per seed, green); and the
+documented legacy fallbacks work, tested by writing a current file and
+degrading it with SQL - dropping the gauge columns `read.rs`'s
+`has_gauge_columns` probe expects to be missing, winding `PRAGMA user_version`
+back, desynchronising the two version markers, and dropping the undo tables.
+No fixture is involved: every degraded file is built from a fresh one.
+
+The fixpoint property does NOT assert that the drift settles. It does not:
+over eight gate runs "settles after one cycle" held four times and failed four
+on the same inputs. What it asserts is that no save/load cycle changes anything
+except bounded float dust in the derived and history tables.
+
+## The adversarial gate (Rust tier)
+
+`src-tauri/src/core/state/adversarial_tests.rs` fuzzes the command layer's
+VALIDATION, which every other generator here avoids by construction.
+
+```bash
+TELEMETRY_ENDPOINT=http://localhost/dummy cargo test --manifest-path src-tauri/Cargo.toml \
+  --features telemetry --lib adversarial
+
+STALAGMIGHT_RUST_ADV_SEEDS=200 STALAGMIGHT_RUST_ADV_MOVES=400 \
+  STALAGMIGHT_RUST_ADV_CLOSURES=1 \
+  TELEMETRY_ENDPOINT=http://localhost/dummy cargo test --manifest-path src-tauri/Cargo.toml \
+  --features telemetry --lib adversarial_sweep -- --ignored --nocapture
+```
+
+Two invariants: a rejected command is a PERFECT no-op (all five oracles, not
+just the stacks), and no command ever panics. The second is why every move runs
+inside `catch_unwind` - and why the classifier matches a panic's LOCATION
+rather than its message, since "attempt to add with overflow" says nothing
+about where and a text matcher would swallow every future overflow anywhere in
+the app.
+
+Draws are weighted towards the hand-written `execute_*` entry points, which do
+their own argument checking after taking the project lock. Measured at 60 seeds
+x 300 moves: 10 696 calls, 9 331 rejected, zero no-op violations.
 
 **Choosing gate seeds.** `fuzz_seed_survey` catches each run's panic instead of
 propagating it, so one bad seed does not hide the twenty after it, and prints
