@@ -129,7 +129,7 @@ describe('defaultConfig structure', () => {
 
     it('has correct satellite defaults', () => {
       expect(defaultConfig.map.satellite_provider).toBe('esri');
-      expect(defaultConfig.map.satellite_enabled).toBe(false);
+      expect(defaultConfig.map.satellite_enabled).toBe(true);
     });
   });
 

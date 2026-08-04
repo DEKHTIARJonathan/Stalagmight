@@ -104,7 +104,28 @@ function createMockSection(overrides?: Partial<MockSection>): MockSection {
  * Set up Tauri IPC mocks before the page loads.
  * This intercepts all Tauri API calls and returns mock data.
  */
+/** 1x1 transparent PNG, enough for MapLibre to treat a tile as loaded. */
+const STUB_TILE_PNG = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==',
+  'base64',
+);
+
 export async function setupTauriMocks(page: Page): Promise<void> {
+  // Serve the custom tile protocol. In the real app Tauri registers
+  // `stalagmight-tiles` and answers these; a plain browser has no such handler,
+  // so every tile 404s through CORS and floods the console. That was invisible
+  // while satellite defaulted off - now that it ships on, the map requests tiles
+  // in every spec, and the ones asserting a clean console would fail on noise
+  // that says nothing about the app.
+  await page.route(/stalagmight-tiles(\.localhost)?/, (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'image/png',
+      headers: { 'Access-Control-Allow-Origin': '*', 'Cache-Control': 'max-age=86400' },
+      body: STUB_TILE_PNG,
+    }),
+  );
+
   // Inject the msgpack UMD bundle first so the load_project_full_binary
   // mock can encode its result the same way the real backend does.
   // Exposes `window.MessagePack` synchronously before any app JS runs.
@@ -763,7 +784,9 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 showZeroDatum: true,
                 showGrid: false,
                 showScaleBar: true,
-                showSatellite: false,
+                // Mirrors the backend's DisplaySettings default (loading.rs);
+                // satellite ships on.
+                showSatellite: true,
                 showDepthGradient: false,
                 gridSpacing: 10,
               },
@@ -1014,7 +1037,9 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 showZeroDatum: true,
                 showGrid: false,
                 showScaleBar: true,
-                showSatellite: false,
+                // Mirrors the backend's DisplaySettings default (loading.rs);
+                // satellite ships on.
+                showSatellite: true,
                 showDepthGradient: false,
                 gridSpacing: 10,
               },
@@ -4672,7 +4697,11 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 name: 'esri',
                 display_label: 'ESRI World Imagery',
                 url_template: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
-                attribution: '© Esri, Maxar, Earthstar Geographics',
+                attribution: 'Source: Esri, Vantor, Earthstar Geographics, and the GIS User Community',
+                attribution_notice: 'Powered by Esri',
+                attribution_url: 'https://www.esri.com',
+                service_info_url:
+                  'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer?f=json',
                 tile_size: 256,
                 min_zoom: 1,
                 max_zoom: 22,
@@ -4682,6 +4711,20 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 available: true,
               },
             ];
+
+          case 'get_tile_attribution':
+            // Mirrors the offline path of the real command: specs run with no
+            // network, so the backend would answer with its compiled-in source
+            // names and live: false. Asserting on THAT is the point - the map
+            // must still be attributed when the fetch cannot happen.
+            console.log('[Mock IPC] get_tile_attribution called');
+            return {
+              provider: (args?.provider as string) ?? 'esri',
+              text: 'Source: Esri, Vantor, Earthstar Geographics, and the GIS User Community',
+              notice: 'Powered by Esri',
+              notice_url: 'https://www.esri.com',
+              live: false,
+            };
 
           // Plugin: event system handlers for @tauri-apps/api/event
           case 'plugin:event|listen': {

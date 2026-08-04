@@ -3798,7 +3798,8 @@ fn test_get_cache_stats_counts_provider() {
         let mut guard = cache.lock().unwrap();
         *guard = Some(crate::cache::TileCache::in_memory(1, 30).unwrap());
         let c = guard.as_mut().unwrap();
-        c.put("esri", 1, 2, 3, b"data", "image/png").unwrap();
+        c.put_granted("esri", 1, 2, 3, b"data", "image/png")
+            .unwrap();
     }
     let stats = cache::get_cache_stats(state(&app)).unwrap();
     assert_eq!(stats.total_tiles, 1);
@@ -3824,7 +3825,8 @@ fn test_clear_tile_cache_all_clears() {
         let mut guard = cache.lock().unwrap();
         *guard = Some(crate::cache::TileCache::in_memory(1, 30).unwrap());
         let c = guard.as_mut().unwrap();
-        c.put("esri", 1, 2, 3, b"data", "image/png").unwrap();
+        c.put_granted("esri", 1, 2, 3, b"data", "image/png")
+            .unwrap();
     }
     cache::clear_tile_cache(state(&app), None).unwrap();
     let stats = cache::get_cache_stats(state(&app)).unwrap();
@@ -3839,8 +3841,10 @@ fn test_clear_tile_cache_provider_only_clears() {
         let mut guard = cache.lock().unwrap();
         *guard = Some(crate::cache::TileCache::in_memory(1, 30).unwrap());
         let c = guard.as_mut().unwrap();
-        c.put("esri", 1, 2, 3, b"data", "image/png").unwrap();
-        c.put("other", 1, 2, 3, b"data", "image/png").unwrap();
+        c.put_granted("esri", 1, 2, 3, b"data", "image/png")
+            .unwrap();
+        c.put_granted("other", 1, 2, 3, b"data", "image/png")
+            .unwrap();
     }
     cache::clear_tile_cache(state(&app), Some("esri".to_string())).unwrap();
     let stats = cache::get_cache_stats(state(&app)).unwrap();
@@ -3864,19 +3868,30 @@ fn test_fetch_tile_cache_hit_returns_data() {
         let mut guard = cache.lock().unwrap();
         *guard = Some(crate::cache::TileCache::in_memory(1, 30).unwrap());
         let c = guard.as_mut().unwrap();
-        c.put("esri", 1, 2, 3, b"data", "image/png").unwrap();
-    }
-    let bytes =
-        tauri::async_runtime::block_on(cache::fetch_tile(state(&app), "esri".to_string(), 1, 2, 3))
+        c.put_granted("esri", 1, 2, 3, b"data", "image/png")
             .unwrap();
+    }
+    // Through the impl, not the command: the command takes a concrete
+    // `AppHandle` for the telemetry collector, and these run on `MockRuntime`.
+    // `None` skips only the tracking call.
+    let bytes = tauri::async_runtime::block_on(cache::fetch_tile_impl(
+        None,
+        state(&app).inner(),
+        "esri".to_string(),
+        1,
+        2,
+        3,
+    ))
+    .unwrap();
     assert_eq!(bytes, b"data");
 }
 
 #[test]
 fn test_fetch_tile_unknown_provider_errors() {
     let app = app_with_state();
-    let result = tauri::async_runtime::block_on(cache::fetch_tile(
-        state(&app),
+    let result = tauri::async_runtime::block_on(cache::fetch_tile_impl(
+        None,
+        state(&app).inner(),
         "unknown".to_string(),
         1,
         2,

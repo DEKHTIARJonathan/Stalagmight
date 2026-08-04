@@ -220,6 +220,86 @@ it is dev-only. For E2E, `src/dev/mapE2eHooks.ts` exposes
 draws from - a spec reaching for `queryRenderedFeatures` on survey geometry is
 querying something that no longer exists.
 
+## Imagery attribution
+
+The satellite basemap is Esri World Imagery, and Esri asks for two different
+things that this app deliberately puts in two different places
+([the rules](https://developers.arcgis.com/documentation/esri-and-data-attribution/interactive-maps/)):
+
+| What | Where Esri allows it | Where it lives here |
+|---|---|---|
+| **Data attribution** - the source names (`Source: Esri, Vantor, ...`) | on or at the bottom of the map, always visible; may collapse behind an expandable affordance when it does not fit | `Map/MapAttribution.tsx`, over the map |
+| **Esri attribution** - `Powered by Esri` | on the map, *or* "in a window that is accessible from a menu or button" | `Dialogs/AboutMapImagery.tsx`, in About (Settings -> About) |
+
+Only the first is required over the map, so only the first is there. A survey map
+spends its pixels on survey data.
+
+`MapAttribution` is mounted on all three surfaces that can draw imagery, each
+passing its own visibility because the obligation follows the *layer*, not the
+map:
+
+| Surface | Mounted in | Visible when |
+|---|---|---|
+| Survey map | `SingleSystemView.tsx` (beside `OfflineIndicator`, not inside `MapCanvas`) | `showSatellite` |
+| Global View | `GlobalViewMap.tsx` | always - imagery is its base layer |
+| Section Preview | `SectionPreview.tsx`, `variant="compact"` | the section has a GPS origin |
+
+On the survey map it is a bottom-flush bar butted against the left edge of the
+Data dock's tab, so the two read as one continuous strip and neither obstructs the
+other. Only its top-left corner is rounded - the bottom meets the map edge and the
+right meets the tab.
+
+**That inset is measured, not computed.** The Dock reports its tab's viewport rect
+through `onTabBoundsChange`, and `SingleSystemView` subtracts it from the map
+column's own rect. Two things defeat the arithmetic version: the Data overlay is
+portalled to Main with its own left/right offsets, so `tabInset` is not relative to
+the map column; and the tab's width changes when the panel opens (label to pin +
+close icons) and again under webview text-zoom. A static offset left a 9px gap.
+
+It collapses automatically below a 540px host width, and always in the Section
+Preview. That threshold is a budget for everything on the bottom edge (names + tab
+inset + ScaleControl) - undershooting it slides the names under the scale bar,
+which is the obstruction the terms forbid.
+
+Collapsed, it reads `by <first source> (i)` rather than a bare `i`, so the chip is
+still an attribution on its own; `primarySourceName` reads that name out of the
+live string (falling back to the bare `i` if none parses, rather than inventing
+one). The rest of the list is one hover, click or focus away, in a panel portalled
+through `common/Tooltip.tsx` - which is what keeps it clear of the Section
+Preview's `overflow-hidden`.
+
+Colours come from the app's theme tokens (`bg-panel-90 text-text-secondary`), the
+same ones `PanelOpenerTab` uses, so a dark theme gets a dark bar. Esri's
+recommended design (`#323232` on white at 65%, 12px or larger) is guidance rather
+than a term of use; what the terms require is legible, unobstructed names, and the
+bar renders at 10px in a 20px-tall strip against a themed backing.
+
+**Imagery is never stored for offline use.** The tile cache is an ordinary HTTP
+cache: a tile is written only where the provider's own `Cache-Control` grants it,
+kept no longer than it grants, and revalidated with the provider's `ETag` once
+that runs out. Nothing bulk-downloads a region and nothing calls an export API
+(the service disables that anyway - `exportTilesAllowed: false`). A stored copy is
+served only as a last resort when the provider cannot be reached at all
+(`stale-if-error`, RFC 5861) - a transport failure or a 5xx, never a 403 or 404,
+which are the provider answering rather than absent. It is never presented as
+current, and any `Age` on the response is subtracted from the grant first, since
+`max-age` runs from when the origin made the response and not from when we got
+it. See
+`src-tauri/src/cache/tiles.rs`.
+
+**The string is fetched, not hard-coded.** `src-tauri/src/tile_attribution.rs`
+reads `copyrightText` from the provider's `service_info_url`, caches it for a day,
+and falls back to the registry's own `attribution` when the fetch fails - which is
+the normal case offline. Both copies of the fallback (`tile_providers.rs` and
+`utils/tileConfig.ts`) assert the exact same string in their tests, because two
+different attributions for one basemap is its own bug. Esri's list does change:
+it said "Maxar" for as long as that was the only copy and nobody noticed the
+rename to Vantor.
+
+Note that `attributionControl: false` on the MapLibre instances is intentional and
+should stay: MapLibre offers no way to update a live source's `attribution` after
+the source is created, which the live fetch requires.
+
 ## Relationship to `performance.md`
 
 The frontend section of [`performance.md`](performance.md) predates this renderer.
@@ -247,6 +327,7 @@ the Zustand write.
 | Label text or placement wrong | `labelLayout.ts` (shaping, em offsets), `labelStyle.ts` (per-kind style) |
 | Sizes wrong after dragging the window to another monitor | the DPR watcher in `SurveyLayer` - device-pixel sizes are baked into the buffers |
 | Global View wrong but the survey map fine | `GlobalView/customRender/` - a separate implementation |
+| Imagery drawn with no source names, or the wrong ones | `MapAttribution.tsx` visibility prop at the mount site, then `tile_attribution.rs` (a failed fetch backs off for 5 min and serves the fallback) |
 
 Tests live in `surveyLayer/customRender/__tests__/` and `surveyLayer/__tests__/`.
 Almost every module here is deliberately pure - no GL, no DOM - so tessellation,

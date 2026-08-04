@@ -61,7 +61,7 @@ export const defaultConfig: Config = {
   },
   "map": {
     "satellite_provider": "esri",
-    "satellite_enabled": false,
+    "satellite_enabled": true,
     "satellite_gps_origin": {
       "latitude": 24.55,
       "longitude": -81.78
@@ -252,11 +252,7 @@ export const defaultConfig: Config = {
     "tile_cache_enabled": true,
     "tile_cache_max_mb": 500,
     "tile_ttl_days": 30,
-    "providers": {
-      "esri": {
-        "offline_caching": false
-      }
-    }
+    "providers": {}
   },
   "debug": {
     "map": {

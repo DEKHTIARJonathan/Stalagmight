@@ -25,7 +25,13 @@ describe('getTileConfig', () => {
     const config = getTileConfig('esri');
 
     expect(config.tiles).toEqual(['stalagmight-tiles://esri/{z}/{y}/{x}']);
-    expect(config.attribution).toBe('&copy; Esri, Maxar, Earthstar Geographics');
+    // Mirrors the Rust registry (src-tauri/src/tile_providers.rs), which is the
+    // fallback the live copyrightText fetch degrades to. The two copies drifting
+    // apart would mean two different attributions for the same imagery, so both
+    // sides assert the exact string.
+    expect(config.attribution).toBe(
+      'Source: Esri, Vantor, Earthstar Geographics, and the GIS User Community',
+    );
     expect(config.tileSize).toBe(256);
     expect(config.minZoom).toBe(0);
     expect(config.maxZoom).toBe(22);

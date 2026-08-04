@@ -773,7 +773,7 @@ test.describe('Display Menu State Persistence', () => {
     expect(await isToggleOn(page, 'showReferenceShots')).toBe(true);
     expect(await isToggleOn(page, 'showZeroDatum')).toBe(true);
     expect(await isToggleOn(page, 'showGrid')).toBe(false);
-    expect(await isToggleOn(page, 'showSatellite')).toBe(false);
+    expect(await isToggleOn(page, 'showSatellite')).toBe(true);
     expect(await isToggleOn(page, 'showDepthGradient')).toBe(false);
   });
 });

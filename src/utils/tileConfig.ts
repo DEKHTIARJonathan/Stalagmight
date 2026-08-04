@@ -48,10 +48,36 @@ function tileUrlTemplate(provider: string): string {
     : `stalagmight-tiles://${provider}/{z}/{y}/{x}`;
 }
 
+/**
+ * Attribution a provider's imagery must be shown with, used until the live
+ * value arrives from the backend (and forever, offline).
+ *
+ * Esri splits this in two, and so does this table. `attribution` names the data
+ * sources and has to be visible wherever the imagery is drawn; `notice` is the
+ * "Powered by Esri" credit, which Esri explicitly allows to live behind a menu
+ * or button, so the app puts it in the About dialog instead of on the map. See
+ * https://developers.arcgis.com/documentation/esri-and-data-attribution/interactive-maps/
+ *
+ * These mirror the Rust registry in `src-tauri/src/tile_providers.rs`; that
+ * side is authoritative and is the copy the live fetch falls back to.
+ */
+const ESRI_ATTRIBUTION = {
+  attribution: 'Source: Esri, Vantor, Earthstar Geographics, and the GIS User Community',
+  notice: 'Powered by Esri',
+  noticeUrl: 'https://www.esri.com',
+} as const;
+
+export const PROVIDER_ATTRIBUTION: Record<
+  string,
+  { attribution: string; notice: string | null; noticeUrl: string | null }
+> = {
+  esri: ESRI_ATTRIBUTION,
+};
+
 /** Default hardcoded values for fallback when no metadata available */
 const DEFAULT_PROVIDER_METADATA: Record<string, Omit<TileConfig, 'tiles'>> = {
   esri: {
-    attribution: '&copy; Esri, Maxar, Earthstar Geographics',
+    attribution: ESRI_ATTRIBUTION.attribution,
     tileSize: 256,
     minZoom: 0,
     maxZoom: 22,

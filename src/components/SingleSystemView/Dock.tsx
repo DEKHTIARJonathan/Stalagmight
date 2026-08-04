@@ -56,6 +56,12 @@ interface DockProps {
   /** Right inset (px) for the bottom-edge tab, so it can be moved clear of the
    *  Details tab on the right. Ignored for left/right edges. */
   tabInset?: number;
+  /** Reports the tab's measured viewport rect whenever it changes. Lets a
+   *  neighbour sit flush against the tab. Deliberately the RECT and not a width:
+   *  this overlay is portaled and carries its own left/right offsets, so a
+   *  consumer positioned in a different frame cannot reconstruct the tab's edge
+   *  from `tabInset` plus a width. */
+  onTabBoundsChange?: (rect: DOMRect) => void;
   /** Side panels (left/right) only: while this panel is MINIMIZED (showing the
    *  opener bar), raise the bar's bottom by this many px so it doesn't run
    *  full-height alongside an open Data panel. The reflow spacer is unaffected,
@@ -107,6 +113,7 @@ function DockComponent({
   tabLabels,
   tabTop = 72,
   tabInset = 8,
+  onTabBoundsChange,
   closedBottomInset = 0,
   fullscreen = false,
   overlayContainer,
@@ -201,14 +208,23 @@ function DockComponent({
     const read = (el: Element) => el.getBoundingClientRect()[anchorAxis];
     const sync = () => {
       if (outerEl) setOuterExtent(read(outerEl));
-      if (tabEl) setTabExtent(read(tabEl));
+      if (tabEl) {
+        const rect = tabEl.getBoundingClientRect();
+        setTabExtent(rect[anchorAxis]);
+        // Surfaced so a neighbour can butt against the tab rather than guess at
+        // its edge. `tabInset` pins the tab's far edge within THIS overlay, whose
+        // own offsets a consumer in another frame does not know; and the tab's
+        // size moves with its contents (a label when closed, pin + close icons
+        // when open) and with webview text-zoom. Only the rect is knowable.
+        onTabBoundsChange?.(rect);
+      }
     };
     sync();
     const ro = new ResizeObserver(sync);
     if (outerEl) ro.observe(outerEl);
     if (tabEl) ro.observe(tabEl);
     return () => ro.disconnect();
-  }, [outerEl, tabEl, anchorAxis]);
+  }, [outerEl, tabEl, anchorAxis, onTabBoundsChange]);
 
   useEffect(() => {
     onResizingChange?.(isResizing);

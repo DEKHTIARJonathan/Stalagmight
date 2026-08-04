@@ -74,6 +74,35 @@ export const MAP_MIN_WIDTH = 360;
 export const MAP_MIN_HEIGHT = 200;
 
 /**
+ * Right inset (px) of the Data dock's opener tab, which pins that tab's RIGHT
+ * edge (its width then follows its own contents).
+ *
+ * Shared with the on-map imagery attribution bar: the bar runs along the map's
+ * bottom edge and ends flush against this tab's left edge, so the two read as
+ * one row and neither obstructs the other (Esri requires the source names stay
+ * unobstructed, and the tab drew straight over them before).
+ *
+ * The bar's own inset is NOT derived from this constant. It is measured: the
+ * Dock reports its tab's viewport rect through `onTabBoundsChange`, and
+ * `SingleSystemView` subtracts that from the map column's own rect. Arithmetic
+ * on `DATA_DOCK_TAB_INSET + <tab width>` was tried and left a visible gap - the
+ * Data overlay is portalled to Main with its own offsets, so this inset is
+ * measured from a different box than the column the bar sits in, and the tab's
+ * width moves with its contents (label when closed, pin + close icons when
+ * open) and with the webview text-zoom.
+ */
+export const DATA_DOCK_TAB_INSET = 40;
+
+/**
+ * Attribution-bar inset assumed until the Dock's first tab measurement lands
+ * (one frame), and in a zero-layout test environment. Sized from the closed tab
+ * as it measures in practice - `DATA_DOCK_TAB_INSET` plus a ~45px tab plus the
+ * Data overlay's own right offset - so the bar's first paint does not visibly
+ * jump into place.
+ */
+export const DATA_DOCK_TAB_FALLBACK_INSET = 94;
+
+/**
  * Panel reveal/close timing budget (ms). Centralized so the interacting graces are
  * tuned together (a short transit grace vs a generous post-resize grace - usePanelReveal's
  * scheduleClose has explicit "don't shorten a longer grace" logic precisely because

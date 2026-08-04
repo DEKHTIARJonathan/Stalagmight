@@ -381,6 +381,57 @@ test.describe('DMP Import Dialog - Zero Datum + Wizard Flow', () => {
     await expect(page.getByTestId('wizard-manual-placing')).toBeVisible({ timeout: 10000 });
   });
 
+  /**
+   * The section preview starts drawing Esri imagery the moment valid GPS
+   * coordinates are entered, so it owes attribution from that moment too. It is
+   * a few hundred pixels square, so the source names live behind the `i` button
+   * Esri's guidance allows for exactly this case - and that panel has to escape
+   * the preview's own `overflow-hidden`, which is why it is portalled.
+   * https://developers.arcgis.com/documentation/esri-and-data-attribution/interactive-maps/
+   */
+  test('attributes the imagery the section preview draws, behind an i button', async ({ page }) => {
+    await createProject(page, 'Zero Datum Attribution Test');
+    await openDmpSelectionDialog(page);
+
+    await page.getByTestId('continue-button').click();
+    await expect(page.getByTestId('zero-datum-selection-dialog')).toBeVisible({ timeout: 5000 });
+    await page.getByTestId('zero-datum-section-card-0').click();
+    await expect(page.getByTestId('zero-datum-config-dialog')).toBeVisible({ timeout: 5000 });
+
+    // Scoped to the preview: the survey map behind this dialog draws satellite
+    // by default and carries its own attribution, so an unscoped locator would
+    // match two elements and assert against the wrong one.
+    const preview = page.getByTestId('section-preview');
+
+    // No imagery before there is a GPS origin, so nothing is owed yet.
+    await expect(preview.getByTestId('map-attribution')).toBeHidden();
+
+    await page.getByTestId('zero-datum-gps-input').fill('24.550123, -81.780456');
+    await expect(page.getByTestId('zero-datum-gps-parsed')).toBeVisible({ timeout: 5000 });
+
+    const toggle = preview.getByTestId('map-attribution-toggle');
+    await expect(toggle).toBeVisible({ timeout: 5000 });
+    // Reachable without hovering at all: the names are on the button itself.
+    await expect(toggle).toHaveAttribute('title', /Esri/);
+
+    await toggle.click();
+    const panel = page.getByTestId('map-attribution-panel');
+    await expect(panel).toBeVisible();
+    await expect(panel).toContainText('Esri');
+
+    // The preview clips its own children; the panel must not be one of them.
+    const escapesPreview = await page.evaluate(() => {
+      const preview = document.querySelector('[data-testid="section-preview"]');
+      const el = document.querySelector('[data-testid="map-attribution-panel"]');
+      if (!preview || !el) return 'missing';
+      return { contained: preview.contains(el), inBody: el.closest('body') !== null };
+    });
+    expect(escapesPreview).toEqual({ contained: false, inBody: true });
+
+    await page.keyboard.press('Escape');
+    await expect(panel).toBeHidden();
+  });
+
   test('should skip zero datum selection and open wizard', async ({ page }) => {
     await createProject(page, 'Zero Datum Skip Test');
     await openDmpSelectionDialog(page);

@@ -13,6 +13,7 @@ import { useNetworkStore } from '../../store/networkStore';
 import { formatFixed, formatNumber } from '../../i18n/format';
 import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
 import { testIdPart } from '../../utils/testId';
+import { MapAttribution } from '../Map/MapAttribution';
 
 /** Local storage key for persisting map position/zoom. */
 const MAP_STATE_STORAGE_KEY = 'globalViewMapState';
@@ -1175,8 +1176,15 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
         />
       </div>
 
+      {/* Imagery source names. Unconditional here: unlike the survey map, the
+          satellite layer IS this map's base layer, so the attribution is owed
+          for as long as the view exists. Bottom-flush on the right, with the
+          project count lifted above it - Esri requires the names not be
+          obstructed, and the count chip previously owned this corner. */}
+      <MapAttribution visible className="absolute bottom-0 right-0 z-10" />
+
       {/* Project count indicator */}
-      <div className="absolute bottom-2 right-2 bg-panel-90 border border-border rounded px-2 py-1 text-xs">
+      <div className="absolute bottom-8 right-2 bg-panel-90 border border-border rounded px-2 py-1 text-xs">
         {t('globalView.map.systemCount', {
           count: gpsProjects.length,
           countFormatted: formatNumber(gpsProjects.length),

@@ -126,14 +126,65 @@ enabled_merge = true                # Enable snap-to-station in merge tool
 enabled_measure = true              # Enable snap-to-station in measure tool
 
 [cache]
-tile_cache_enabled = true           # Master switch; the default esri provider still opts out below
+tile_cache_enabled = true           # The one on/off switch for tile caching
 tile_cache_max_mb = 500             # Maximum cache size in MB
-tile_ttl_days = 30                  # Days before tiles are stale
-# Per-provider override. Note: the default config ships esri (the default
-# provider) with offline_caching = false, so satellite tiles are NOT cached
-# out of the box - flip this to opt in.
+tile_ttl_days = 30                  # Default retention: days a tile stays on disk
+# Per-provider retention override; omit to use tile_ttl_days.
 # [cache.providers.esri]
-# offline_caching = false
+# ttl_days = 7
+#
+# Imagery is never stored for offline use, or for any purpose of our own. These
+# keys bound an ordinary HTTP cache; what may be kept, and for how long, is the
+# provider's decision via its own Cache-Control.
+#
+# There is no per-provider on/off switch, because config is not what decides
+# whether a tile is stored. `tile_cache_enabled` permits the cache to be used at
+# all; after that a tile is written ONLY if its response carried a
+# `Cache-Control` granting it (a `max-age`, or `no-cache` for "keep but always
+# revalidate"). A response with no directive is served and dropped - silence is
+# not read as consent, so the app holds third-party imagery only where the
+# provider's own headers say it may, and only for as long as they say.
+#
+# TTL is RETENTION - how long a tile is kept at all. It is NOT how long a tile
+# may be served as current: that is separately capped by the provider's own
+# `Cache-Control: max-age` (Esri sends `max-age=86400`), recorded per tile when
+# it is cached. Raising ttl_days therefore only lengthens how long a stored copy
+# remains available to answer a request the network could not; it can never make
+# the app show stale imagery as though it were fresh.
+#
+# Past max-age the tile is REVALIDATED, not re-downloaded: the request carries
+# the stored ETag as If-None-Match, and Esri answers an unchanged tile with
+# `304 Not Modified` and no body (~20 KB saved per tile over real imagery).
+# A 304 re-stamps the tile as current, so a slow-changing basemap costs one
+# body-less round trip per tile per day rather than a full re-fetch. The stored
+# copy is only served without asking when the network call fails outright -
+# `stale-if-error`, and only where that actually applies: a transport failure or
+# a 5xx. A 403 or 404 is the provider answering, so the tile is reported missing
+# rather than answered off the stored copy - and a 401/403/410 also stops the
+# overzoom fallback, so a denial cannot come back as an upscaled crop of a parent
+# tile. (A 404 still climbs: for most tile services that is how they say "no
+# imagery at this zoom here", which is what overzoom is for. 410 Gone gets no
+# such carve-out - it says the imagery was removed on purpose.)
+#
+# A `no-cache` response is stored, and IS revalidated - keeping its ETag is the
+# whole reason to store it - but it is never served without a successful
+# validation first. RFC 9111 5.2.2.4 requires that before reuse, which makes a
+# failed revalidation the one case where a retained copy may not answer. And a
+# `Cache-Control` we cannot parse grants nothing but revokes nothing either: the
+# response is not cached, and a copy already held keeps the deadline it was
+# stored under rather than being dropped over a header a proxy mangled.
+#
+# `max-age` is counted from when the ORIGIN made the response, not from when we
+# received it, so any `Age` the response carries is subtracted before the
+# deadline is recorded. Esri is behind CloudFront and does send it; without this
+# a tile with an hour of its grant left would be treated as fresh for a further
+# day.
+#
+# Retention is enforced at the point of use as well as by eviction. Eviction runs
+# on a tile write, so an offline session - which never writes one - could
+# otherwise be served a copy past `ttl_days` for as long as it lasted. Retired
+# rows are also dropped when the cache opens, so the setting bounds what is kept
+# on disk and not merely what is shown.
 
 [global_view]
 fps_threshold = 30                  # FPS below which auto-throttle activates

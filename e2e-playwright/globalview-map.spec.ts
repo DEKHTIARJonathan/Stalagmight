@@ -92,6 +92,40 @@ test.describe('GlobalView Map', () => {
       await expect(mapContainer).toBeVisible();
     });
 
+    /**
+     * Unlike the survey map, imagery is this map's base layer rather than an
+     * optional overlay - there is no toggle that turns it off - so Esri's
+     * requirement that the source names stay visible applies for as long as the
+     * view exists. It had none until now.
+     */
+    test('attributes the imagery it is drawn on', async ({ page }) => {
+      const attribution = page.getByTestId('map-attribution-text');
+      await expect(attribution).toBeVisible({ timeout: 5000 });
+      await expect(attribution).toContainText('Esri');
+
+      // The project-count chip owns the bottom-right corner, and Esri requires
+      // the names not be obstructed by other UI - so they must not share pixels.
+      const overlapping = await page.evaluate(() => {
+        const chip = document.querySelector('[data-testid="map-attribution"]');
+        const map = document.querySelector('[data-testid="globalview-map"]');
+        if (!chip || !map) return 'missing';
+        const cr = chip.getBoundingClientRect();
+        return [...map.querySelectorAll('*')]
+          .filter((e) => e !== chip && !chip.contains(e) && !e.contains(chip))
+          .filter((e) => getComputedStyle(e).backgroundColor !== 'rgba(0, 0, 0, 0)')
+          .filter((e) => {
+            const r = e.getBoundingClientRect();
+            if (!r.width || !r.height) return false;
+            return (
+              Math.min(cr.right, r.right) > Math.max(cr.left, r.left) &&
+              Math.min(cr.bottom, r.bottom) > Math.max(cr.top, r.top)
+            );
+          })
+          .map((e) => e.getAttribute('data-testid') ?? e.tagName);
+      });
+      expect(overlapping).toEqual([]);
+    });
+
     test('should show system markers on the map in markers mode', async ({ page }) => {
       // Switch to markers mode so all markers are visible
       const toggle = page.getByTestId('view-mode-toggle');

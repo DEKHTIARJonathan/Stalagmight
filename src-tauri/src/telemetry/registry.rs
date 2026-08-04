@@ -83,6 +83,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "command.get_section_relationships",
     "command.get_segment_geometry",
     "command.get_survey_geometry_for_file",
+    "command.get_tile_attribution",
     "command.get_tile_fetch_stats",
     "command.get_tile_providers",
     "command.get_undo_stack",
@@ -523,12 +524,20 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "action.dialog.bulk-delete",
     "dialog-cancel.bulk-delete",
     "dwell.dialog.bulk-delete",
-    // Map-tile consumption per provider (#31): `tile.fetch.<provider>` = tiles pulled
-    // fresh from the provider over the network; `tile.cache.<provider>` = tiles served
-    // from the local cache. Add a `tile.fetch.<p>` + `tile.cache.<p>` pair here (and in
-    // the worker registry) when a new provider is added to tile_providers.rs;
-    // unregistered providers still report, via the overflow map.
+    // Map-tile consumption per provider (#31), one event per SERVED tile:
+    //   `tile.fetch.<p>`      imagery bytes pulled from the provider
+    //   `tile.revalidate.<p>` served from cache after a 304 - a round trip, but
+    //                         no imagery crossed the wire
+    //   `tile.cache.<p>`      served from cache with no network call at all
+    // The three are disjoint and sum to tiles used. Splitting revalidations out
+    // is what keeps `tile.fetch` meaning "consumed from the provider": past the
+    // first day nearly every request revalidates, so folding those into `fetch`
+    // would report near-total consumption for a session that downloaded nothing.
+    // Add all three here (and in the worker registry) when a provider is added
+    // to tile_providers.rs; unregistered providers still report, via the
+    // overflow map.
     "tile.fetch.esri",
+    "tile.revalidate.esri",
     "tile.cache.esri",
     // Active-dwell mirror of every dwell state (#31): like `dwell.<state>` but
     // only accumulates while the user interacted within the last 15s (active vs
@@ -1051,7 +1060,24 @@ mod tests {
         //       a project is open:
         //       {action.dialog,dialog-cancel,dwell.dialog,active-dwell.dialog}
         //       .import-as-new-project = 717.
-        assert_eq!(EVENT_NAMES.len(), 717);
+        //   + 1 get_tile_attribution. Reads the imagery provider's live source names,
+        //       which the map is required to display. Counts how often a surface
+        //       ASKED, not how often we fetched: the renderer shares only the
+        //       in-flight request, so every mount of an imagery surface calls in
+        //       and the backend answers from its own 24h cache (or a 5-minute
+        //       failure backoff). So the shape to watch is the ratio to sessions
+        //       and to satellite toggles, not an absolute rate - a count far
+        //       above the number of imagery surfaces opened would mean the
+        //       in-flight sharing is broken, and each true miss is a blocking
+        //       fetch behind a map that is already drawing:
+        //       command.get_tile_attribution = 718.
+        //   + 1 tile.revalidate.esri. Splits a 304 out of `tile.fetch.<p>`: the
+        //       network was reached, but no imagery crossed the wire, and past
+        //       the first day nearly every request revalidates. Folded together
+        //       they would report near-total provider consumption for a session
+        //       that downloaded nothing, which is the one thing #31 measures:
+        //       tile.revalidate.esri = 719.
+        assert_eq!(EVENT_NAMES.len(), 719);
     }
 
     /// Active-dwell mirrors every dwell state 1:1 (#31): for each `dwell.<key>` there
@@ -1077,7 +1103,7 @@ mod tests {
     #[test]
     fn every_tile_provider_has_consumption_events() {
         for info in crate::tile_providers::get_all_provider_info() {
-            for kind in ["fetch", "cache"] {
+            for kind in ["fetch", "revalidate", "cache"] {
                 let event = format!("tile.{kind}.{}", info.name);
                 assert!(
                     EVENT_NAMES.iter().any(|&e| e == event),

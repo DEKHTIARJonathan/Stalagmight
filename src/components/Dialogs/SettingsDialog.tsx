@@ -37,6 +37,7 @@ import { trackDialogComplete } from '../../utils/telemetry';
 import { isValidationConfigValid } from '../../utils/validation';
 import { useSpeleoStore } from '../../store/speleoStore';
 import { humanizeSpeleoError } from '../../utils/speleoError';
+import { AboutMapImagery } from './AboutMapImagery';
 
 /**
  * Deep comparison of two config objects to detect changed field paths.
@@ -853,6 +854,7 @@ export default function SettingsDialog() {
               {t('dialogs.about.website')}
             </a>
           </p>
+          <AboutMapImagery />
         </div>
       </AlertDialog>
     </>

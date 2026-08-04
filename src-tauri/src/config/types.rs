@@ -477,15 +477,28 @@ fn default_inclination_mode() -> String {
 /// Per-provider cache override
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct ProviderCacheConfig {
-    /// Whether offline caching is enabled for this provider
-    #[serde(default = "default_true")]
-    pub offline_caching: bool,
+    /// Retention TTL for this provider's tiles, in days. Falls back to the
+    /// global `tile_ttl_days` when unset.
+    ///
+    /// This bounds how long a tile stays on disk. It does NOT extend how long
+    /// one may be served as current: that is additionally capped by the
+    /// provider's own `Cache-Control: max-age` (see `crate::cache::tiles`), so
+    /// raising this only lengthens how long a stored copy remains available to
+    /// answer a request the network could not - never staler "fresh" tiles.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ttl_days: Option<u32>,
 }
 
-/// Tile cache configuration for offline satellite imagery
+/// HTTP cache configuration for map tiles.
+///
+/// Imagery is never stored for offline use, or for any purpose of our own. It is
+/// cached strictly under the provider's own `Cache-Control`: stored only where
+/// the response grants it, for no longer than it grants, and revalidated with
+/// the provider's own validator after that.
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct CacheConfig {
-    /// Enable tile caching for offline access
+    /// Whether the tile cache may be used at all. Whether any individual tile
+    /// is stored remains the provider's decision, via its `Cache-Control`.
     #[serde(default = "default_tile_cache_enabled")]
     pub tile_cache_enabled: bool,
     /// Maximum cache size in megabytes
@@ -500,16 +513,13 @@ pub struct CacheConfig {
 }
 
 impl CacheConfig {
-    /// Check whether caching is enabled for a specific provider.
-    /// Returns false if the global toggle is off, or if the provider
-    /// has explicitly disabled offline caching.
-    pub fn is_provider_cache_enabled(&self, provider: &str) -> bool {
-        if !self.tile_cache_enabled {
-            return false;
-        }
+    /// Per-provider retention TTLs in days, for every provider that overrides
+    /// the global one. Providers absent from the map use `tile_ttl_days`.
+    pub fn provider_ttl_days(&self) -> HashMap<String, u32> {
         self.providers
-            .get(provider)
-            .map_or(true, |p| p.offline_caching)
+            .iter()
+            .filter_map(|(name, cfg)| cfg.ttl_days.map(|days| (name.clone(), days)))
+            .collect()
     }
 }
 

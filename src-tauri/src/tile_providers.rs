@@ -21,9 +21,25 @@ pub struct TileProvider {
     /// URL template with `{z}`, `{y}`, `{x}` placeholders
     #[serde(default)]
     pub url_template: String,
-    /// Attribution text
+    /// Data-source attribution: the names of every source behind the imagery.
+    /// Esri requires these to be visible on (or directly beneath) the map for as
+    /// long as the imagery is drawn, so this is what the map overlay renders.
+    /// Used when the live value cannot be read from
+    /// `service_info_url` - see `crate::tile_attribution`.
     #[serde(default)]
     pub attribution: String,
+    /// Provider notice ("Powered by Esri"). Unlike `attribution` this may live
+    /// behind a menu or button, so the app credits it in the About dialog rather
+    /// than spending map real estate on it.
+    #[serde(default)]
+    pub attribution_notice: Option<String>,
+    /// Brand URL the notice links to.
+    #[serde(default)]
+    pub attribution_url: Option<String>,
+    /// Service metadata endpoint whose `copyrightText` holds the authoritative,
+    /// current `attribution` string.
+    #[serde(default)]
+    pub service_info_url: Option<String>,
     /// Tile pixel size (typically 256)
     #[serde(default)]
     pub tile_size: u32,
@@ -61,6 +77,12 @@ pub struct TileProviderInfo {
     #[serde(default)]
     pub attribution: String,
     #[serde(default)]
+    pub attribution_notice: Option<String>,
+    #[serde(default)]
+    pub attribution_url: Option<String>,
+    #[serde(default)]
+    pub service_info_url: Option<String>,
+    #[serde(default)]
     pub tile_size: u32,
     #[serde(default)]
     pub min_zoom: u32,
@@ -93,7 +115,20 @@ fn init_registry() -> HashMap<String, TileProvider> {
             url_template:
                 "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
                     .to_string(),
-            attribution: "© Esri, Maxar, Earthstar Geographics".to_string(),
+            // Fallback only. The live value is read from
+            // `service_info_url`'s `copyrightText` at runtime, because Esri's
+            // source list changes (this string said "Maxar" until that company
+            // was renamed Vantor, and it drifted unnoticed for exactly as long
+            // as it was the only copy). Re-verify with:
+            //   curl -s '<service_info_url>' | jq -r .copyrightText
+            attribution: "Source: Esri, Vantor, Earthstar Geographics, and the GIS User Community"
+                .to_string(),
+            attribution_notice: Some("Powered by Esri".to_string()),
+            attribution_url: Some("https://www.esri.com".to_string()),
+            service_info_url: Some(
+                "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer?f=json"
+                    .to_string(),
+            ),
             tile_size: 256,
             min_zoom: 1,
             max_zoom: 22,
@@ -133,6 +168,9 @@ pub fn get_all_provider_info() -> Vec<TileProviderInfo> {
                 display_label: p.display_label.clone(),
                 url_template: p.url_template.clone(),
                 attribution: p.attribution.clone(),
+                attribution_notice: p.attribution_notice.clone(),
+                attribution_url: p.attribution_url.clone(),
+                service_info_url: p.service_info_url.clone(),
                 tile_size: p.tile_size,
                 min_zoom: p.min_zoom,
                 max_zoom: p.max_zoom,
@@ -224,6 +262,38 @@ mod tests {
         assert!(json.get("min_zoom").is_some());
         assert!(json.get("max_zoom").is_some());
         assert!(json.get("content_type_hint").is_some());
+        // The attribution split has to survive the wire: the UI decides what to
+        // put over the map from `attribution`, and what to put in About from
+        // `attribution_notice`/`attribution_url`.
+        assert_eq!(json["attribution_notice"], "Powered by Esri");
+        assert_eq!(json["attribution_url"], "https://www.esri.com");
+        assert!(json.get("service_info_url").is_some());
+    }
+
+    /// The registry string is what renders when the live fetch fails, so it has to name the
+    /// sources on its own. It also has to stay in step with the frontend's own
+    /// fallback in `src/utils/tileConfig.ts` - a divergence there shows up as
+    /// two different attributions for the same imagery.
+    #[test]
+    fn test_esri_attribution_names_sources_and_carries_notice() {
+        let provider = get_provider("esri").unwrap();
+        assert_eq!(
+            provider.attribution,
+            "Source: Esri, Vantor, Earthstar Geographics, and the GIS User Community"
+        );
+        assert_eq!(
+            provider.attribution_notice.as_deref(),
+            Some("Powered by Esri")
+        );
+        assert_eq!(
+            provider.attribution_url.as_deref(),
+            Some("https://www.esri.com")
+        );
+        // Live retrieval reads copyrightText from this endpoint; without the
+        // `f=json` query it answers HTML and the fetch silently falls back.
+        let info_url = provider.service_info_url.as_ref().unwrap();
+        assert!(info_url.contains("World_Imagery/MapServer"));
+        assert!(info_url.contains("f=json"));
     }
 
     #[test]
@@ -233,6 +303,9 @@ mod tests {
             display_label: "Test Provider".to_string(),
             url_template: "https://example.com/{z}/{y}/{x}".to_string(),
             attribution: "Test".to_string(),
+            attribution_notice: None,
+            attribution_url: None,
+            service_info_url: None,
             tile_size: 256,
             min_zoom: 0,
             max_zoom: 18,
@@ -273,6 +346,9 @@ mod tests {
             display_label: "Test".to_string(),
             url_template: "https://example.com/{z}/{y}/{x}".to_string(),
             attribution: String::new(),
+            attribution_notice: None,
+            attribution_url: None,
+            service_info_url: None,
             tile_size: 256,
             min_zoom: 0,
             max_zoom: 18,
@@ -291,6 +367,9 @@ mod tests {
             display_label: "Custom".to_string(),
             url_template: String::new(),
             attribution: String::new(),
+            attribution_notice: None,
+            attribution_url: None,
+            service_info_url: None,
             tile_size: 256,
             min_zoom: 0,
             max_zoom: 18,

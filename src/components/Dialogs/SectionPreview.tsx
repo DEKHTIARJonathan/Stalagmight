@@ -8,6 +8,7 @@ import { useUIStore } from '../../store/uiStore';
 import { useNetworkStore } from '../../store/networkStore';
 import { getMapThemeColors, getThemeColor } from '../../utils/themeColors';
 import { getTileConfig } from '../../utils/tileConfig';
+import { MapAttribution } from '../Map/MapAttribution';
 import type { GpsOrigin } from '../../types/config';
 
 /**
@@ -1139,6 +1140,17 @@ export default function SectionPreview({
     >
       {/* Map container is always mounted for proper lifecycle */}
       <div ref={containerRef} className="w-full h-full" data-testid="section-preview-map" />
+
+      {/* Imagery attribution, forced compact. This preview is a few hundred
+          pixels square and the whole point of it is the geometry underneath, so
+          the source names live behind the `i` that Esri's guidance allows for
+          exactly this case. The panel is portalled by Tooltip, which is what
+          keeps it out of this container's `overflow-hidden`. */}
+      <MapAttribution
+        visible={!!gpsOrigin}
+        variant="compact"
+        className="absolute bottom-1 right-1 z-10"
+      />
 
       {/* Overlay placeholder when no section selected */}
       {!effectiveSection && !(segmentSections && segmentSections.length > 0) && (

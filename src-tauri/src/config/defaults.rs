@@ -4,9 +4,8 @@ use super::{
     DecimalPrecision, DepthGradientConfig, DisplayConfig, ExportConfig, GasConfig, GeneralConfig,
     GlobalViewConfig, GpsOrigin, ImportConfig, LengthUnit, LoggingConfig, MapAnimationConfig,
     MapConfig, MapControlsConfig, MapSnapConfig, PanelsConfig, PlacementSuggestionConfig,
-    ProviderCacheConfig, SectionColorsConfig, ShortcutFeedback, ShortcutsConfig, ShotConfig,
-    SpeleoDbConfig, StationConfig, SyntacticHighlightingConfig, UnitsConfig, ValidationConfig,
-    WebkitMemoryConfig,
+    SectionColorsConfig, ShortcutFeedback, ShortcutsConfig, ShotConfig, SpeleoDbConfig,
+    StationConfig, SyntacticHighlightingConfig, UnitsConfig, ValidationConfig, WebkitMemoryConfig,
 };
 
 #[expect(clippy::derivable_impls)]
@@ -132,7 +131,7 @@ impl Default for MapConfig {
     fn default() -> Self {
         Self {
             satellite_provider: "esri".to_string(),
-            satellite_enabled: false,
+            satellite_enabled: true,
             satellite_gps_origin: GpsOrigin {
                 latitude: 24.55,
                 longitude: -81.78,
@@ -290,12 +289,11 @@ impl Default for CacheConfig {
             tile_cache_enabled: true,
             tile_cache_max_mb: 500, // per SPEC.md
             tile_ttl_days: 30,
-            providers: std::collections::HashMap::from([(
-                "esri".to_string(),
-                ProviderCacheConfig {
-                    offline_caching: false,
-                },
-            )]),
+            // No per-provider overrides by default. The single on/off switch is
+            // `tile_cache_enabled`; whether any given tile is actually written
+            // is decided per response by its `Cache-Control` grant, not by
+            // config (see `crate::cache::tiles`).
+            providers: std::collections::HashMap::new(),
         }
     }
 }

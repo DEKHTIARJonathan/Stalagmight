@@ -1889,7 +1889,12 @@ const virtualizer = useVirtualizer({
 
 ### 13.5 Tile Caching
 
-Satellite tiles are cached using SQLite storage for offline access:
+Satellite tiles are cached in SQLite strictly under the provider's own
+`Cache-Control`. Imagery is never stored for offline use or for any other
+purpose: a tile is kept only where the response grants it, for no longer than it
+grants, and is revalidated with the provider's validator once that runs out. A
+stored copy is served only as a last resort, when the provider cannot be reached
+at all (`stale-if-error`, RFC 5861):
 
 ```
 ~/.cache/stalagmight/tile_cache.db
@@ -1966,7 +1971,8 @@ function useNetworkStatus() {
 
 - Detect offline state
 - Show offline indicator in status bar
-- Serve cached tiles when offline
+- Serve an already-cached tile when the provider cannot be reached
+  (`stale-if-error`; nothing is pre-fetched or stored for offline use)
 - Auto-recovery when back online
 
 ### 14.4 File Corruption Recovery

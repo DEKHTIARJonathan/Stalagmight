@@ -124,7 +124,8 @@ pub struct AppState {
     /// Held for the entire duration of execute(), undo(), and redo() to prevent
     /// concurrent commands from interleaving (especially with batch sub-commands).
     pub(super) command_lock: Mutex<()>,
-    /// Tile cache for offline satellite imagery.
+    /// HTTP cache for map tiles, held strictly under the provider's own
+    /// `Cache-Control` - imagery is never stored for offline use.
     ///
     /// Note: Uses Arc<Mutex<...>> rather than plain Mutex<...> because the protocol handler
     /// runs in a separate async task/thread that outlives the closure scope, requiring
@@ -201,8 +202,8 @@ impl AppState {
                 Err(e) => {
                     tracing::warn!(
                         error = %e,
-                        purpose = "enable offline tiles at startup",
-                        "Failed to initialize tile cache; offline tile access will be unavailable"
+                        purpose = "enable tile caching at startup",
+                        "Failed to initialize tile cache; every tile will be re-fetched"
                     );
                     None
                 }
@@ -249,11 +250,18 @@ impl AppState {
     pub(super) fn init_tile_cache(config: &Config) -> Result<TileCache> {
         let cache_dir = crate::app_dirs::cache_dir()
             .ok_or_else(|| anyhow::anyhow!("Could not determine app cache directory"))?;
-        TileCache::open(
+        let mut cache = TileCache::open(
             cache_dir,
             config.cache.tile_cache_max_mb,
             config.cache.tile_ttl_days,
-        )
+        )?;
+        cache.set_provider_ttls(&config.cache.provider_ttl_days());
+        // After the overrides, never before - see `purge_retired`. A failure
+        // here is housekeeping, not a reason to run without a cache.
+        if let Err(e) = cache.purge_retired() {
+            tracing::warn!(error = %e, "Failed to drop tiles past retention at startup");
+        }
+        Ok(cache)
     }
 
     /// Get a clone of the tile cache Arc for sharing across threads

@@ -25,6 +25,30 @@ async function isSatelliteEnabled(page: Page): Promise<boolean> {
   return checkbox.evaluate((el) => el.classList.contains('bg-accent'));
 }
 
+/** Open the Display menu unless it is already open (the button toggles it). */
+async function ensureDisplayMenuOpen(page: Page): Promise<void> {
+  const toggle = page.locator('[data-testid="display-toggle-showSatellite"]');
+  if (await toggle.isVisible().catch(() => false)) return;
+  await openDisplayMenu(page);
+}
+
+/**
+ * Drive the Satellite toggle to a known state.
+ *
+ * Satellite is ON by default, so "open the menu and click" - which used to mean
+ * "enable" - now disables it. Asserting the destination rather than counting
+ * clicks keeps these tests correct whichever way the default goes.
+ */
+async function setSatellite(page: Page, on: boolean): Promise<void> {
+  await ensureDisplayMenuOpen(page);
+  if ((await isSatelliteEnabled(page)) !== on) {
+    await toggleSatellite(page);
+  }
+  await expect
+    .poll(() => isSatelliteEnabled(page), { timeout: 2000 })
+    .toBe(on);
+}
+
 /**
  * Helper to wait for map layer to exist using polling
  */
@@ -69,8 +93,7 @@ test.describe('Satellite Edge Cases', () => {
       await page.mouse.up();
 
       // Now immediately toggle satellite (map may still be in inertia)
-      await openDisplayMenu(page);
-      await toggleSatellite(page);
+      await setSatellite(page, true);
 
       // Verify toggle succeeded
       const checkbox = page.locator('[data-testid="display-toggle-showSatellite"]');
@@ -88,8 +111,7 @@ test.describe('Satellite Edge Cases', () => {
       await page.mouse.wheel(0, -200);
 
       // Immediately open menu and toggle satellite during zoom
-      await openDisplayMenu(page);
-      await toggleSatellite(page);
+      await setSatellite(page, true);
 
       // Verify toggle succeeded
       const checkbox = page.locator('[data-testid="display-toggle-showSatellite"]');
@@ -103,8 +125,7 @@ test.describe('Satellite Edge Cases', () => {
   test.describe('Network Scenarios', () => {
     test('should handle network failure mid-tile-load', async ({ page, context }) => {
       // Enable satellite
-      await openDisplayMenu(page);
-      await toggleSatellite(page);
+      await setSatellite(page, true);
 
       // Wait for layer to be added
       await waitForMapLayer(page, 'satellite-tiles');
@@ -126,8 +147,7 @@ test.describe('Satellite Edge Cases', () => {
 
     test('should handle tile error (404 from server)', async ({ page }) => {
       // Enable satellite
-      await openDisplayMenu(page);
-      await toggleSatellite(page);
+      await setSatellite(page, true);
 
       // Wait for layer to be added (mock handler provides tiles)
       await waitForMapLayer(page, 'satellite-tiles');
@@ -142,8 +162,7 @@ test.describe('Satellite Edge Cases', () => {
 
     test('should handle cache full scenario (mock)', async ({ page }) => {
       // This tests that the app gracefully handles cache limits
-      await openDisplayMenu(page);
-      await toggleSatellite(page);
+      await setSatellite(page, true);
 
       // Wait for layer to be added
       await waitForMapLayer(page, 'satellite-tiles');
@@ -165,8 +184,7 @@ test.describe('Satellite Edge Cases', () => {
   test.describe('Stress Tests', () => {
     test('should handle rapid zoom stress test', async ({ page }) => {
       // Enable satellite
-      await openDisplayMenu(page);
-      await toggleSatellite(page);
+      await setSatellite(page, true);
 
       // Wait for layer to be added
       await waitForMapLayer(page, 'satellite-tiles');
@@ -190,14 +208,15 @@ test.describe('Satellite Edge Cases', () => {
       await openDisplayMenu(page);
       const checkbox = page.locator('[data-testid="display-toggle-showSatellite"]');
 
-      // Toggle multiple times very quickly, verifying state after each
+      // Toggle multiple times very quickly, verifying state after each. Starts
+      // ON, so the first toggle takes it off - the reverse of the parity that
+      // held when satellite defaulted to off.
       for (let i = 0; i < 20; i++) {
         await toggleSatellite(page);
-        // Verify state changed
         if (i % 2 === 0) {
-          await expect(checkbox).toHaveClass(/bg-accent/);
-        } else {
           await expect(checkbox).not.toHaveClass(/bg-accent/);
+        } else {
+          await expect(checkbox).toHaveClass(/bg-accent/);
         }
       }
 
@@ -212,10 +231,11 @@ test.describe('Satellite Edge Cases', () => {
      * the unsaved-changes dialog with timing issues in the mock environment.
      */
     test('should reset satellite state across project switch', async ({ page }) => {
-      // Enable satellite
-      await openDisplayMenu(page);
-      await toggleSatellite(page);
-      await expect.poll(() => isSatelliteEnabled(page)).toBe(true);
+      // Drive it AWAY from the default. Enabling would prove nothing now that
+      // satellite ships on - the assertion would pass without any reset
+      // happening at all.
+      await setSatellite(page, false);
+      await expect.poll(() => isSatelliteEnabled(page)).toBe(false);
 
       // Close display menu
       await page.keyboard.press('Escape');
@@ -229,15 +249,15 @@ test.describe('Satellite Edge Cases', () => {
       // Open display menu and check state
       await openDisplayMenu(page);
 
-      // New project should apply default display settings (satellite off)
-      await expect.poll(() => isSatelliteEnabled(page)).toBe(false);
+      // New project applies default display settings, not the previous
+      // project's leftovers - so satellite is back on.
+      await expect.poll(() => isSatelliteEnabled(page)).toBe(true);
     });
 
     test('should toggle immediately after project create', async ({ page }) => {
       // Already in a project from beforeEach
       // Toggle satellite immediately
-      await openDisplayMenu(page);
-      await toggleSatellite(page);
+      await setSatellite(page, true);
 
       // Should be enabled without errors
       await expect.poll(() => isSatelliteEnabled(page)).toBe(true);
@@ -258,8 +278,7 @@ test.describe('Satellite Edge Cases', () => {
       await createProject(page, 'Empty Satellite Test');
 
       // Toggle satellite
-      await openDisplayMenu(page);
-      await toggleSatellite(page);
+      await setSatellite(page, true);
 
       // Should work without errors
       await expect.poll(() => isSatelliteEnabled(page)).toBe(true);
@@ -270,8 +289,7 @@ test.describe('Satellite Edge Cases', () => {
   test.describe('Zoom Levels', () => {
     test('should handle large zoom level tile requests', async ({ page }) => {
       // Enable satellite
-      await openDisplayMenu(page);
-      await toggleSatellite(page);
+      await setSatellite(page, true);
       await page.keyboard.press('Escape');
 
       // Wait for layer to be added
@@ -291,8 +309,7 @@ test.describe('Satellite Edge Cases', () => {
 
     test('should handle min zoom level tile requests', async ({ page }) => {
       // Enable satellite
-      await openDisplayMenu(page);
-      await toggleSatellite(page);
+      await setSatellite(page, true);
       await page.keyboard.press('Escape');
 
       // Wait for layer to be added
@@ -313,10 +330,8 @@ test.describe('Satellite Edge Cases', () => {
 
   test.describe('Overlay Combinations', () => {
     test('should work with grid overlay combination', async ({ page }) => {
-      await openDisplayMenu(page);
-
       // Enable satellite
-      await toggleSatellite(page);
+      await setSatellite(page, true);
 
       // Enable grid
       await page.locator('[data-testid="display-toggle-showGrid"]').click();
@@ -331,10 +346,8 @@ test.describe('Satellite Edge Cases', () => {
     });
 
     test('should work with depth gradient combination', async ({ page }) => {
-      await openDisplayMenu(page);
-
       // Enable satellite
-      await toggleSatellite(page);
+      await setSatellite(page, true);
 
       // Enable depth gradient
       await page.locator('[data-testid="display-toggle-showDepthGradient"]').click();
@@ -418,8 +431,7 @@ test.describe('Satellite Edge Cases', () => {
   test.describe('Protocol and Cleanup', () => {
     test('should register tile protocol for caching', async ({ page }) => {
       // Enable satellite
-      await openDisplayMenu(page);
-      await toggleSatellite(page);
+      await setSatellite(page, true);
 
       // Wait for layer to be added
       await waitForMapLayer(page, 'satellite-tiles');
@@ -437,26 +449,22 @@ test.describe('Satellite Edge Cases', () => {
     });
 
     test('should clean up satellite layer when disabled', async ({ page }) => {
-      await openDisplayMenu(page);
-
       // Enable satellite
-      await toggleSatellite(page);
+      await setSatellite(page, true);
 
       // Wait for layer to be added
       await waitForMapLayer(page, 'satellite-tiles');
 
       // Disable satellite
-      await toggleSatellite(page);
+      await setSatellite(page, false);
 
       // Verify layer is removed using polling
       await waitForNoMapLayer(page, 'satellite-tiles');
     });
 
     test('should clean up source when satellite disabled', async ({ page }) => {
-      await openDisplayMenu(page);
-
       // Enable satellite
-      await toggleSatellite(page);
+      await setSatellite(page, true);
 
       // Wait for source to exist
       await expect.poll(async () => {
@@ -467,7 +475,7 @@ test.describe('Satellite Edge Cases', () => {
       }, { timeout: 5000 }).toBe(true);
 
       // Disable satellite
-      await toggleSatellite(page);
+      await setSatellite(page, false);
 
       // Verify source is removed using polling
       await expect.poll(async () => {
@@ -482,8 +490,7 @@ test.describe('Satellite Edge Cases', () => {
   test.describe('Resize Scenarios', () => {
     test('should handle map resize with satellite enabled', async ({ page }) => {
       // Enable satellite
-      await openDisplayMenu(page);
-      await toggleSatellite(page);
+      await setSatellite(page, true);
       await page.keyboard.press('Escape');
 
       // Wait for layer to be added
@@ -506,8 +513,7 @@ test.describe('Satellite Edge Cases', () => {
 
     test('should handle full-screen toggle with satellite enabled', async ({ page }) => {
       // Enable satellite
-      await openDisplayMenu(page);
-      await toggleSatellite(page);
+      await setSatellite(page, true);
       await page.keyboard.press('Escape');
 
       // Wait for layer to be added

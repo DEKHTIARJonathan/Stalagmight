@@ -613,7 +613,7 @@
       },
       "ttl": {
         "label": "Cache TTL",
-        "help": "How long to keep cached tiles before refreshing (1-365 days)",
+        "help": "Upper limit on how long a cached tile is kept (1-365 days). Tiles are refreshed as often as the imagery provider's own caching policy says, which is usually far sooner, and are not cached at all unless it allows it.",
         "aria": "Cache TTL in days",
         "unit": "days"
       },
@@ -1341,7 +1341,10 @@
       "build": "Build {{commit}}",
       "description": "Desktop application for processing underwater cave survey data.",
       "website": "stalagmight.com",
-      "close": "Close"
+      "close": "Close",
+      "mapImagery": {
+        "title": "Map imagery"
+      }
     }
   },
   "undo": {
@@ -1983,6 +1986,10 @@
   },
   "map": {
     "fitToViewTitle": "Fit to view",
+    "attribution": {
+      "expandAria": "Show map imagery sources",
+      "collapsed": "by {{source}}"
+    },
     "geometry": {
       "adjustedBadge": "Closure-adjusted · read-only",
       "computing": "Computing closures…",
