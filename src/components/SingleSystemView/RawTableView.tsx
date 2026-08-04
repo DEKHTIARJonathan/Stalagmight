@@ -118,7 +118,6 @@ export default function RawTableView({ tableName, height }: RawTableViewProps) {
         height={showPager ? height - PAGER_HEIGHT : height}
         onEdit={noop}
         rowLabel={(_row, index) => page * RAW_TABLE_PAGE_SIZE + index + 1}
-        showToolbar={false}
       />
       {showPager && (
         <div

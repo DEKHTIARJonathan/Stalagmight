@@ -549,11 +549,9 @@ export default function ImportDialog() {
             cellClassName={cellClassName}
             labels={gridLabels}
             testIdPrefix="new-section"
-            showToolbar={false}
             hiddenColumns={hiddenColumnList}
             columnOrder={columnOrder}
             onColumnOrderChange={setColumnOrder}
-            onHiddenColumnsChange={(hidden) => setHiddenColumns(new Set(hidden))}
             columnWidths={columnWidths}
             onColumnWidthsChange={setColumnWidths}
             // Every row here is provisional, so a paste may run past the last

@@ -1726,7 +1726,6 @@ export default function DataTable({ sections }: DataTableProps) {
                 rowLabel={shotRowLabel}
                 labels={gridLabels}
                 gutterWidth={72}
-                showToolbar={false}
                 onSelectionChange={setGridSel}
                 onHeaderContextMenu={(colKey, pos) => setHeaderMenu({ ...pos, colKey })}
                 {...(editingBlocked ? {} : { onInsertRows: onShotInsertRows })}
@@ -1762,7 +1761,6 @@ export default function DataTable({ sections }: DataTableProps) {
                 rowLabel={stationRowLabel}
                 labels={stationGridLabels}
                 gutterWidth={72}
-                showToolbar={false}
                 onHeaderContextMenu={(colKey, pos) => setHeaderMenu({ ...pos, colKey })}
                 hiddenColumns={stationHiddenColumns}
                 columnOrder={stationColumnOrder}

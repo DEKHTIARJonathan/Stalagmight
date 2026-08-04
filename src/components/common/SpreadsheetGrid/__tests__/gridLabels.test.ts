@@ -41,12 +41,6 @@ describe('DEFAULT_GRID_LABELS', () => {
     expect(DEFAULT_GRID_LABELS.columnNoun(2)).toBe('columns');
   });
 
-  it('reproduces the legacy toolbar buttons', () => {
-    expect(DEFAULT_GRID_LABELS.columnsButton).toBe('Columns');
-    expect(DEFAULT_GRID_LABELS.maximize).toBe('Maximize');
-    expect(DEFAULT_GRID_LABELS.restore).toBe('Restore');
-  });
-
   it('reproduces the legacy editor aria-label', () => {
     expect(DEFAULT_GRID_LABELS.editCellAria('Len (m)', 3)).toBe('Edit Len (m) row 3');
   });
