@@ -9,6 +9,12 @@
  *
  *   pnpm agent:scenario undo-redo-fuzz --seed 7 --iterations 60
  *
+ * `--trace <file>` REPLAYS a recorded trace instead of drawing moves - same
+ * bridge, same oracles, same model, same failure payload; only the source of the
+ * decisions changes. A trace is dropped into the session artifacts dir whenever
+ * a fuzz run fails, so the usual loop is "run, fail, replay the trace it left,
+ * then `pnpm agent:fuzz-shrink` it".
+ *
  * `--release` (or `STALAGMIGHT_AGENT_RELEASE=1`) drives the release binary
  * instead of the debug one. Opt-in on purpose: a debug build's `debug_assert!`s
  * and `debug_assertions`-gated self-checks are oracles in their own right, so
@@ -17,6 +23,7 @@
  * Exits non-zero when the scenario throws or the sweep reports a fatal finding,
  * so it works as a one-off gate too.
  */
+import * as path from 'path';
 import { AppSession } from './session';
 import { getScenario, listScenarios, runScenario } from './scenarios';
 import { runSweep, newOracleState } from './lib/oracles';
@@ -26,13 +33,15 @@ interface Args {
   seed?: number;
   iterations?: number;
   release: boolean;
+  /** Replay a recorded trace instead of drawing moves. */
+  trace?: string;
 }
 
 function parseArgs(argv: string[]): Args {
   const [name, ...rest] = argv;
   if (!name) {
     throw new Error(
-      `usage: pnpm agent:scenario <name> [--seed N] [--iterations M] [--release]\n` +
+      `usage: pnpm agent:scenario <name> [--seed N] [--iterations M] [--release] [--trace FILE]\n` +
         `known: ${listScenarios().join(', ')}`,
     );
   }
@@ -41,6 +50,13 @@ function parseArgs(argv: string[]): Args {
     const flag = rest[i];
     if (flag === '--release') {
       args.release = true;
+      continue;
+    }
+    if (flag === '--trace') {
+      const value = rest[i + 1];
+      if (value === undefined) throw new Error('--trace needs a path');
+      i += 1;
+      args.trace = value;
       continue;
     }
     const raw = rest[i + 1];
@@ -65,6 +81,10 @@ async function main(): Promise<void> {
   // Set BEFORE `session.start()`: `agentBuildMode()` is read at call time, which
   // is what lets a flag parsed after this module's imports still take effect.
   if (args.release) process.env.STALAGMIGHT_AGENT_RELEASE = '1';
+  // Same reason, and it is how replay reaches the scenario: the scenarios read
+  // their knobs from the environment, so the flag is just a nicer spelling of
+  // the env var and the two are interchangeable.
+  if (args.trace) process.env.STALAGMIGHT_FUZZ_REPLAY = path.resolve(args.trace);
 
   const session = new AppSession();
   const started = await session.start({ build: 'auto' });

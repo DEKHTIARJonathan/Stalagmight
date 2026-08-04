@@ -380,7 +380,16 @@ import {
   drawAction,
   swarmProfileFor,
   weightedNamesFor,
+  type FuzzAction,
 } from './undoRedoFuzzActions';
+import {
+  TraceRecorder,
+  defaultTracePath,
+  readTrace,
+  writeTrace,
+  type FuzzTrace,
+  type TraceStep,
+} from '../lib/fuzzTrace';
 import {
   bumpEpoch,
   enableIdAgnosticModel,
@@ -396,6 +405,21 @@ import {
 
 /** Opt in to surviving a mismatch that is entirely a documented open app bug. */
 const ALLOW_KNOWN_BUGS = process.env.STALAGMIGHT_FUZZ_ALLOW_KNOWN_BUGS === '1';
+
+/**
+ * Replay a recorded trace instead of drawing moves (`STALAGMIGHT_FUZZ_REPLAY`,
+ * or `--trace` on `pnpm agent:scenario`, which sets it).
+ *
+ * Replay is a MODE of this scenario, never a separate one. Everything after the
+ * move is chosen - the fused step, the three oracles, the model bookkeeping, the
+ * classification and the failure payload - is the same code on both paths, so a
+ * replayed failure is the same failure and not a lookalike. Only the source of
+ * the decisions changes.
+ */
+const REPLAY_TRACE = process.env.STALAGMIGHT_FUZZ_REPLAY ?? '';
+
+/** Force-write the trace of a run that PASSED, to this path. */
+const TRACE_OUT = process.env.STALAGMIGHT_FUZZ_TRACE ?? '';
 
 /**
  * Which `.stalx` under `e2e/fixtures/` to fuzz. Basename only - anything else is
@@ -640,6 +664,14 @@ export const undoRedoFuzz: Scenario = {
     // reads as "headroom from wherever the stack actually starts".
     const maxDepth = Math.max(1, Math.min(iterations, historyLimit - baseUndo - DEPTH_HEADROOM));
 
+    /** Non-null when this run is replaying a recorded trace instead of drawing. */
+    const replay: FuzzTrace | null = REPLAY_TRACE ? readTrace(REPLAY_TRACE) : null;
+    if (replay && replay.scenario !== 'undo-redo-fuzz') {
+      throw new Error(
+        `trace ${REPLAY_TRACE} was recorded by ${replay.scenario}; run it with that scenario`,
+      );
+    }
+
     const history: string[] = [];
     let cursor = 0;
     /** Node's mirror of the page's `snapshots.length - 1`. */
@@ -674,24 +706,74 @@ export const undoRedoFuzz: Scenario = {
       history.push(line);
     };
 
+    /**
+     * The resolved move list for this run. Observe-only: `record` is called AFTER
+     * the decision it describes, draws nothing and reads no app state, so a run
+     * with recording on takes exactly the trajectory it took without.
+     *
+     * The closing unwind/rewind is deliberately NOT recorded - it is a function
+     * of the depth the run ends at, and a replay regenerates it. See
+     * `e2e/agent/lib/fuzzTrace.ts`.
+     */
+    const recorder = new TraceRecorder();
+
+    const recordMove = (direction: 'undo' | 'redo', jumpSteps: number | null): void => {
+      if (jumpSteps === null) {
+        recorder.record(direction === 'undo' ? { kind: 'undo' } : { kind: 'redo' });
+        return;
+      }
+      recorder.record(
+        direction === 'undo'
+          ? { kind: 'undoTo', steps: jumpSteps }
+          : { kind: 'redoTo', steps: jumpSteps },
+      );
+    };
+
+    /** Write the trace, best-effort: a failed write must not mask the failure. */
+    const dumpTrace = (failure: { message: string } | null, explicitPath: string): string | null => {
+      const target =
+        explicitPath ||
+        (ctx.artifactsDir ? defaultTracePath(ctx.artifactsDir, 'undo-redo-fuzz', ctx.seed) : '');
+      if (!target) return null;
+      try {
+        return writeTrace(
+          target,
+          recorder.build({
+            scenario: 'undo-redo-fuzz',
+            seed: ctx.seed,
+            iterations,
+            fixture: FIXTURE,
+            stream: STREAM_V2 ? 'v2' : 'v1',
+            failure,
+          }),
+        );
+      } catch {
+        return null;
+      }
+    };
+
     const fail = (headline: string, detail = ''): never => {
       const tail = (DUMP_FULL_HISTORY ? history : history.slice(-HISTORY_TAIL)).map(
         (line) => `    ${line}`,
       );
-      throw new Error(
-        [
-          headline,
-          `  reproduce: run_scenario("undo-redo-fuzz", seed=${ctx.seed}, iterations=${iterations})` +
-            `${FIXTURE === DEFAULT_FIXTURE ? '' : ` with STALAGMIGHT_FUZZ_FIXTURE=${FIXTURE}`}` +
-            `${STREAM_V2 ? '' : ' with STALAGMIGHT_FUZZ_STREAM=v1'}` +
-            `${ALLOW_KNOWN_BUGS ? ' with STALAGMIGHT_FUZZ_ALLOW_KNOWN_BUGS=1' : ''}`,
-          `  fixture=${FIXTURE} stream=${STREAM_V2 ? 'v2' : 'v1'} swarm=${swarm.name} ` +
-            `depth=${cursor} modelTop=${top} baseUndo=${baseUndo}`,
-          ...(detail ? [detail] : []),
-          `  last ${tail.length} action(s):`,
-          ...tail,
-        ].join('\n'),
-      );
+      const message = [
+        headline,
+        `  reproduce: run_scenario("undo-redo-fuzz", seed=${ctx.seed}, iterations=${iterations})` +
+          `${FIXTURE === DEFAULT_FIXTURE ? '' : ` with STALAGMIGHT_FUZZ_FIXTURE=${FIXTURE}`}` +
+          `${STREAM_V2 ? '' : ' with STALAGMIGHT_FUZZ_STREAM=v1'}` +
+          `${ALLOW_KNOWN_BUGS ? ' with STALAGMIGHT_FUZZ_ALLOW_KNOWN_BUGS=1' : ''}` +
+          `${REPLAY_TRACE ? ` (REPLAY of ${REPLAY_TRACE})` : ''}`,
+        `  fixture=${FIXTURE} stream=${STREAM_V2 ? 'v2' : 'v1'} swarm=${swarm.name} ` +
+          `depth=${cursor} modelTop=${top} baseUndo=${baseUndo}`,
+        ...(detail ? [detail] : []),
+        `  last ${tail.length} action(s):`,
+        ...tail,
+      ].join('\n');
+      // The trace carries the message VERBATIM, so a shrink compares signatures
+      // taken from the same text a human reads. The path is appended afterwards,
+      // which is why it is not part of what was recorded.
+      const written = dumpTrace({ message }, TRACE_OUT);
+      throw new Error(written ? `${message}\n  trace: ${written}` : message);
     };
 
     /** One fused round trip, timed. */
@@ -1056,27 +1138,21 @@ export const undoRedoFuzz: Scenario = {
       return 1 + Math.floor(jumpRng() * reach);
     };
 
-    for (let iteration = 1; iteration <= iterations; iteration++) {
-      const tag = `#${iteration}`;
-      // Drawn from the SECONDARY stream, and taken IN ADDITION to this
-      // iteration's normal move rather than instead of it: consuming the
-      // iteration would leave the run with fewer mutations than the same seed
-      // produced before, and the point of the secondary stream is that adding a
-      // feature does not move the primary numbers.
-      if (wantSaveReload()) await saveAndReload(tag);
-      const roll = ctx.rng();
-      let move: 'mutate' | 'undo' | 'redo' =
-        roll < P_MUTATE ? 'mutate' : roll < P_MUTATE + P_UNDO ? 'undo' : 'redo';
-      if (move === 'redo' && cursor >= top) move = cursor > 0 ? 'undo' : 'mutate';
-      if (move === 'undo' && cursor === 0) move = 'mutate';
-      if (move === 'mutate' && cursor >= maxDepth) move = 'undo';
-
-      if (move !== 'mutate') {
-        await walk(move, tag, drawJump(move));
-        continue;
-      }
-
-      const action = drawAction(ctx, digest, weightedNames);
+    /**
+     * Apply ONE mutation and run the whole case analysis on what the stacks did.
+     *
+     * Lifted out of the main loop unchanged so that REPLAY can drive it with a
+     * recorded action instead of a drawn one. The generator path still hands it
+     * exactly what `drawAction` returned, in the same place in the sequence, so
+     * no draw moved and every recorded repro seed is unaffected.
+     */
+    const applyMutation = async (action: FuzzAction, tag: string): Promise<void> => {
+      recorder.record({
+        kind: 'mutate',
+        action: action.action,
+        args: action.args,
+        label: action.label,
+      });
       const beforeUndo = undoLen;
       const beforeRedo = redoLen;
       const res = await step('mutate', action.action, action.args);
@@ -1109,7 +1185,7 @@ export const undoRedoFuzz: Scenario = {
         }
         assertIntegrityDelta(res, `a rejected ${action.action}`);
         record(res);
-        continue;
+        return;
       }
 
       if (pushed === 1) {
@@ -1129,7 +1205,7 @@ export const undoRedoFuzz: Scenario = {
         record(res);
         ctx.metric('mutations');
         ctx.metric(`op:${action.action}`);
-        continue;
+        return;
       }
 
       if (pushed !== 0) {
@@ -1167,15 +1243,118 @@ export const undoRedoFuzz: Scenario = {
       }
       assertIntegrityDelta(res, `a no-op ${action.action}`);
       record(res);
+    };
+
+    /**
+     * Apply one recorded move.
+     *
+     * A history move whose precondition no longer holds is SKIPPED rather than
+     * failed, and a jump wider than the reach is CLAMPED to it. That rule is what
+     * makes an arbitrary subsequence of a trace runnable, which is what the
+     * shrinker needs: removing a mutation leaves the moves around it pointing at
+     * depths that no longer exist. Skipping asserts nothing, so it can never turn
+     * a failing candidate green by hiding something - it just declines to
+     * pretend a move was possible. Every skip is counted.
+     */
+    const applyTraceStep = async (traceStep: TraceStep, tag: string): Promise<void> => {
+      if (traceStep.kind === 'mutate') {
+        if (cursor >= maxDepth) {
+          ctx.metric('replaySkipped:mutate');
+          return;
+        }
+        await applyMutation(
+          { action: traceStep.action, args: traceStep.args, label: traceStep.label },
+          tag,
+        );
+        return;
+      }
+      if (traceStep.kind === 'repair') {
+        recorder.record({ kind: 'repair' });
+        await runRepair(tag);
+        return;
+      }
+      if (traceStep.kind === 'save') {
+        // Only the newest `undo_persist_limit` entries survive the write, and a
+        // save at depth 0 has no history to carry, so both are skips rather than
+        // failures - exactly as the generator path treats them.
+        if (top === 0 || top > persistLimit) {
+          ctx.metric('replaySkipped:save');
+          return;
+        }
+        recorder.record({ kind: 'save' });
+        await saveAndReload(tag);
+        return;
+      }
+      const back = traceStep.kind === 'undo' || traceStep.kind === 'undoTo';
+      const reach = back ? cursor : top - cursor;
+      if (reach < 1) {
+        ctx.metric(`replaySkipped:${traceStep.kind}`);
+        return;
+      }
+      const direction = back ? 'undo' : 'redo';
+      if (traceStep.kind === 'undo' || traceStep.kind === 'redo') {
+        recordMove(direction, null);
+        await walk(direction, tag);
+        return;
+      }
+      const steps = Math.min(traceStep.steps, reach);
+      if (steps !== traceStep.steps) ctx.metric('replayClamped:jump');
+      recordMove(direction, steps);
+      await walk(direction, tag, steps);
+    };
+
+    if (replay) {
+      ctx.setMetric('replaySteps', replay.steps.length);
+      for (let index = 0; index < replay.steps.length; index++) {
+        await applyTraceStep(replay.steps[index] as TraceStep, `T${index + 1}`);
+      }
+    }
+
+    // Zero when replaying: the trace supplies every move, and drawing more would
+    // make the replay something other than the run it came from.
+    const generatorIterations = replay ? 0 : iterations;
+    for (let iteration = 1; iteration <= generatorIterations; iteration++) {
+      const tag = `#${iteration}`;
+      // Drawn from the SECONDARY stream, and taken IN ADDITION to this
+      // iteration's normal move rather than instead of it: consuming the
+      // iteration would leave the run with fewer mutations than the same seed
+      // produced before, and the point of the secondary stream is that adding a
+      // feature does not move the primary numbers.
+      if (wantSaveReload()) {
+        recorder.record({ kind: 'save' });
+        await saveAndReload(tag);
+      }
+      const roll = ctx.rng();
+      let move: 'mutate' | 'undo' | 'redo' =
+        roll < P_MUTATE ? 'mutate' : roll < P_MUTATE + P_UNDO ? 'undo' : 'redo';
+      if (move === 'redo' && cursor >= top) move = cursor > 0 ? 'undo' : 'mutate';
+      if (move === 'undo' && cursor === 0) move = 'mutate';
+      if (move === 'mutate' && cursor >= maxDepth) move = 'undo';
+
+      if (move !== 'mutate') {
+        const jump = drawJump(move);
+        recordMove(move, jump);
+        await walk(move, tag, jump);
+        continue;
+      }
+      await applyMutation(drawAction(ctx, digest, weightedNames), tag);
     }
 
     // Repair once, before the boundary crossing, so its entry is both persisted
-    // and walked by the final roundtrip.
-    if (REPAIR_ENABLED) await runRepair('repair');
+    // and walked by the final roundtrip. Skipped on a replay: the trace already
+    // contains whatever Repair the recorded run did, in the place it did it.
+    if (REPAIR_ENABLED && !replay) {
+      recorder.record({ kind: 'repair' });
+      await runRepair('repair');
+    }
 
     // Cross the persistence boundary at least once per run, so the final
     // unwind/rewind below walks a RESTORED stack rather than an in-memory one.
-    if (savesDone === 0 && top > 0 && top <= persistLimit) {
+    // Also skipped on a replay, and for the same reason: a shrink is allowed to
+    // remove the boundary crossing, and re-adding one here would make that
+    // candidate untestable.
+    if (!replay && savesDone === 0 && top > 0 && top <= persistLimit) {
+      recorder.record({ kind: 'save' });
       await saveAndReload('boundary');
     }
 
@@ -1193,11 +1372,21 @@ export const undoRedoFuzz: Scenario = {
       // Best-effort: a leftover temp dir is not a scenario failure.
     }
 
+    // A run that PASSED only writes a trace when asked to by name. Dropping one
+    // per green run would fill the artifacts dir with files nobody reads; naming
+    // a path is the signal that this particular run is wanted (recording a
+    // baseline, or capturing a trace to shrink against a future regression).
+    if (TRACE_OUT) {
+      const written = dumpTrace(null, TRACE_OUT);
+      if (written) ctx.log(`trace written to ${written} (${recorder.length} step(s))`);
+    }
+    ctx.setMetric('traceSteps', recorder.length);
     ctx.setMetric('modelDepth', summit);
     ctx.setMetric('maxDepth', deepest);
     ctx.setMetric('snapshotBytesMax', maxBytes);
     ctx.setMetric('historyLimit', historyLimit);
     ctx.log(
+      `${replay ? `REPLAY of ${REPLAY_TRACE} (${replay.steps.length} recorded step(s)) ` : ''}` +
       `fixture=${FIXTURE} stream=${STREAM_V2 ? 'v2' : 'v1'} swarm=${swarm.name} ` +
         `(stripped ${strippedRows} inherited undo row(s)) seed=${ctx.seed}: ` +
         `${ctx.metrics.mutations ?? 0} mutations, ${ctx.metrics.undos ?? 0} undos, ` +

@@ -44,6 +44,13 @@ export interface ScenarioContext {
    * `run_scenario(name, seed, iterations)` that reproduces it.
    */
   readonly seed: number;
+  /**
+   * The session's artifact directory, when the runner has one. Scenarios drop
+   * failure traces here (`e2e/agent/lib/fuzzTrace.ts`); null when a caller
+   * constructed a context without a session dir, in which case a trace is only
+   * written if `STALAGMIGHT_FUZZ_TRACE` names a path.
+   */
+  readonly artifactsDir: string | null;
   /** Uniform in [0, 1). Deterministic for a given seed. */
   rng(): number;
   /** Integer in [min, max] inclusive. */
@@ -114,6 +121,7 @@ export function makeContext(
       target.exclusive(() => callStoreAction(target.browser, store, action, args)),
     keys: (keys) => target.exclusive(() => target.browser.keys(keys)),
     seed: effectiveSeed,
+    artifactsDir: target.sessionDir ?? null,
     rng: () => rand(),
     randInt: (min, max) => min + Math.floor(rand() * (max - min + 1)),
     pick: (items) => items[Math.floor(rand() * items.length)] as (typeof items)[number],

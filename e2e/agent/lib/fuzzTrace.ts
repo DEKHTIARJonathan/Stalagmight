@@ -51,8 +51,13 @@ export const TRACE_VERSION = 1;
  */
 export type TraceStep =
   | { kind: 'mutate'; action: string; args: unknown[]; label: string }
-  | { kind: 'undo' | 'redo' }
-  | { kind: 'undoTo' | 'redoTo'; steps: number }
+  // One literal `kind` per member, not `'undo' | 'redo'` on a shared one: the
+  // replayer narrows on it, and TypeScript will not discharge a member whose
+  // discriminant is itself a union.
+  | { kind: 'undo' }
+  | { kind: 'redo' }
+  | { kind: 'undoTo'; steps: number }
+  | { kind: 'redoTo'; steps: number }
   | { kind: 'save' }
   | { kind: 'repair' };
 
