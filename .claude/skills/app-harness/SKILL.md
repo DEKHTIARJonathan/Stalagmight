@@ -70,10 +70,12 @@ stress loop then a full sweep:
   copy of the fixture with the persisted undo history stripped, from depth 0.
   `STALAGMIGHT_FUZZ_FIXTURE=<basename>.stalx` picks the starting fixture (default
   `fractal_plant_iter3.stalx`; `naharon.stalx` has the loop closures, zero datums and
-  null section metadata that reach half the known bugs). Currently reproduces six open
-  undo bugs (listed with repro commands in the scenario's header comment), so it is RED
-  by default; `STALAGMIGHT_FUZZ_ALLOW_KNOWN_BUGS=1` tolerates the three classified ones
-  so the rest still runs. Snapshotting and comparison happen in-page, so a step is one
+  null section metadata that reach half the known bugs). Runs three oracles: state
+  roundtrip (including multi-step `undoTo`/`redoTo` jumps against the same snapshots),
+  absolute project invariants, and an integrity-verdict delta. Currently reproduces
+  seven open undo bugs (listed with repro commands in the scenario's header comment), so
+  it is RED by default; `STALAGMIGHT_FUZZ_ALLOW_KNOWN_BUGS=1` tolerates the three
+  classified ones so the rest still runs. Snapshotting and comparison happen in-page, so a step is one
   round trip. To sweep it, `pnpm agent:fuzz-matrix --fixtures a,b --seeds 1..8 --workers 3`
   runs the matrix in parallel (max 5 workers - one Xvfb display each) and prints a
   results table with every failure's repro line. Add `--release` to either runner to

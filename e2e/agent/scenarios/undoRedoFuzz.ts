@@ -81,12 +81,12 @@
  *    `Shot::new` -> `Uuid::new_v4()`. The sibling `CreateShot` path was
  *    explicitly fixed for this exact reason (a fresh uuid dangles every
  *    `StationKey::AfterShot` anchor and the Ariane export identity).
- * 2. `... seed=11, iterations=150` (and seed 12) - undoing a shot INSERT leaves
+ * 2. `... seed=11, iterations=150` - undoing a shot INSERT leaves
  *    behind an all-zero `section_offsets` entry the section did not have.
  *    `adjust_section_offset` creates the key while compensating; the undo puts
  *    the value back to 0 but nothing removes the key. Geometrically inert, and
  *    it is serialized into the .stalx.
- * 3. `... seed=2, iterations=36` - appending the FIRST shot into an EMPTY
+ * 3. `... seed=2, iterations=36` (fails at #36, depth 11) - appending the FIRST shot into an EMPTY
  *    section and undoing displaces the whole section by that shot's horizontal
  *    vector (1.13 m in the repro), and the displacement RATCHETS on every
  *    further undo/redo cycle. `Project::add_shot` (the append path) is
@@ -118,13 +118,46 @@
  *    way forever and everything beneath it is unreachable. A wedged history is
  *    the worst outcome here; the forward command was permitted, so its inverse
  *    must be too (raw-remove what was inserted, or capture a snapshot pair).
+ *    Since jumps were added this seed reaches it through `undoTo(2)` and fails
+ *    at "step 2 of 3" - i.e. the multi-step path applies the first undo, then
+ *    wedges PARTWAY, which is strictly worse than the single-step case.
+ * 7. `... seed=12, iterations=16` with ALLOW_KNOWN_BUGS - `undoTo(7)` (an 8-step
+ *    jump, the history dropdown's path) lands on a DIFFERENT state than the same
+ *    depth reached by eight single undos: `section_offsets` for two sections are
+ *    out by 1.55 m and 3.33 m, and the stations with them.
+ *
+ *    `undo()`/`redo()` call `invalidate_adjusted_cache()` before and
+ *    `reconcile_geometry()` after (src-tauri/src/core/state/undo.rs:23,37 and
+ *    :460,466). `undo_to()`/`redo_to()` loop `undo_inner`/`redo_inner` directly
+ *    (:854-876, :920-940) and call NEITHER. So the merge realignment that runs
+ *    after every single step - `realign_merges()`, which fires once a merge is
+ *    more than MERGE_ALIGNMENT_TOLERANCE_M (5 cm) out - never runs for a jump,
+ *    and the closure-adjusted cache is left stale on top. N single undos and one
+ *    N-wide jump are not the same operation. Deliberately NOT classified as
+ *    tolerable: it is metres of geometry, reachable by clicking an entry in the
+ *    history dropdown. The fix is to give undo_to/redo_to the same epilogue
+ *    undo/redo have (once, after the loop - not per step).
  *
  * Set `STALAGMIGHT_FUZZ_ALLOW_KNOWN_BUGS=1` to keep going past a mismatch that is
  * ENTIRELY a classified asymmetry (1, 2 and 4; it is logged, counted as the
  * `knownAsymmetry` metric, and the model resyncs). That exists so the rest of
  * the fuzzer can be exercised while those are open - it is deliberately NOT the
  * default, because a green default here would mean the oracle had been weakened.
- * 3, 5 and 6 are never tolerated.
+ * 3, 5, 6 and 7 are never tolerated.
+ *
+ * ## Three oracles, not one
+ *
+ * 1. ROUNDTRIP - the snapshot-per-depth comparison above, including the
+ *    single-step/jump equivalence.
+ * 2. ABSOLUTE INVARIANTS (`checkProjectInvariants`, run in-page on every
+ *    observed state). The roundtrip only sees drift BETWEEN states: a command
+ *    that corrupts the project and an undo that faithfully restores the
+ *    corruption match at every depth. Only an absolute check fires on that.
+ * 3. INTEGRITY DELTA - `check_project_integrity`'s own verdict is recorded per
+ *    depth alongside the snapshot and must be restored by every history move. A
+ *    state that roundtrips while its integrity verdict does not is either a bug
+ *    in the checker or a divergence the snapshot cannot see. `integrityCompared`
+ *    counts the comparisons so this cannot pass vacuously.
  *
  * ## Determinism
  *

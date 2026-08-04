@@ -358,14 +358,32 @@ closures, no zero datums and a non-null surveyor on all 32 sections; naharon has
 all three plus 13 null-surveyor sections, and half the bugs below are only
 reachable there.
 
-It currently reproduces six open undo bugs, enumerated with per-fixture,
+Three oracles run, not one. The **roundtrip** comparison above; an **absolute
+invariant** suite (`checkProjectInvariants`) run in-page on every observed state,
+because the roundtrip only sees drift BETWEEN states and a command that corrupts
+the project with an undo that faithfully restores the corruption matches at every
+depth; and an **integrity delta**, which records
+`check_project_integrity`'s own verdict per depth and asserts every history move
+restores it. The invariant suite deliberately does not re-check what the integrity
+checker owns - the split, and why, is in `fuzzOracleCore.ts`.
+
+About 10% of history moves are taken as a MULTI-step `undoTo`/`redoTo` jump - the
+history dropdown's path - verified against the same snapshots single steps
+recorded. That decision is drawn from a separate PRNG (`mulberry32(seed ^
+0x9e3779b9)`) so the primary draw stream every recorded repro depends on is
+untouched.
+
+It currently reproduces seven open undo bugs, enumerated with per-fixture,
 per-seed repro commands in the scenario's header comment, so it is RED by
 default. Three are classified (`KNOWN_UNDO_ASYMMETRIES` plus
 `LOOP_CLOSURE_REORDER`), which makes the failure message name the bug and makes
-them tolerable under the env var above. The other three - a section displaced by
+them tolerable under the env var above. The other four - a section displaced by
 undoing its first shot, an undo that cannot restore a previously-null section
-field, and an undo that FAILS OUTRIGHT and wedges the history - are deliberately
-never tolerated.
+field, an undo that FAILS OUTRIGHT and wedges the history, and a multi-step
+`undoTo` landing metres away from the same depth reached by single undos
+(`undo_to`/`redo_to` call neither `invalidate_adjusted_cache()` nor
+`reconcile_geometry()`, which `undo()`/`redo()` both do) - are deliberately never
+tolerated.
 
 ## Oracles
 
