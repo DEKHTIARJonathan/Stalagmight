@@ -75,6 +75,11 @@ export interface ShotTableEditorProps {
    *  appends, and one that stamps rows from a captured temp id gives them all the
    *  same identity. Falls back to N calls of {@link onAddShot} when absent. */
   onAddShots?: (count: number) => void;
+  /** Insert `count` blank shots at a full-array index, in ONE update. Same reason
+   *  as {@link onAddShots}: called N times in one event, a host that rebuilds from
+   *  a captured array or a captured temp id loses rows or duplicates identities.
+   *  Falls back to N calls of the single-row insert callbacks when absent. */
+  onInsertShots?: (index: number, count: number, position: 'before' | 'after') => void;
   /** Callback to delete a shot at the given index */
   onDeleteShot: (index: number) => void;
   /** Delete several shots at once (full-array indices, descending). Supply this
@@ -218,6 +223,7 @@ export function ShotTableEditor({
   onShotChange,
   onAddShot,
   onAddShots,
+  onInsertShots,
   onDeleteShot,
   onDeleteShots,
   onInsertBefore,
@@ -594,9 +600,17 @@ export function ShotTableEditor({
       // The menu says "Insert N shots" and passes N. Dropping it inserted one,
       // so the label was a promise the table did not keep; the data table and
       // the new-section dialog have always honoured it.
-      for (let n = 0; n < Math.max(1, count); n++) {
-        if (beforeIndex >= visibleShots.length) {
-          const last = visibleShots.length - 1;
+      const n = Math.max(1, count);
+      const atEnd = beforeIndex >= visibleShots.length;
+      const last = visibleShots.length - 1;
+      if (onInsertShots) {
+        if (atEnd && last < 0) onAddShots?.(n) ?? onAddShot();
+        else if (atEnd) onInsertShots(actualIndex(last), n, 'after');
+        else onInsertShots(actualIndex(beforeIndex), n, 'before');
+        return;
+      }
+      for (let i = 0; i < n; i++) {
+        if (atEnd) {
           if (last >= 0 && onInsertAfter) onInsertAfter(actualIndex(last));
           else onAddShot();
           continue;
@@ -604,7 +618,7 @@ export function ShotTableEditor({
         onInsertBefore?.(actualIndex(beforeIndex));
       }
     },
-    [readOnly, visibleShots.length, onInsertAfter, onInsertBefore, onAddShot, actualIndex]
+    [readOnly, visibleShots.length, onInsertAfter, onInsertBefore, onAddShot, onAddShots, onInsertShots, actualIndex]
   );
 
   // Delete high-to-low so each removal cannot shift the indices still to come.
@@ -618,7 +632,9 @@ export function ShotTableEditor({
       }
       const descending = indices.sort((a, b) => b - a);
       // A host with the batch callback answers for the whole run; the one-at-a-
-      // time fallback has no way to refuse, so it always counts as done.
+      // time fallback has no way to refuse, so it always counts as done - and it
+      // is unsafe for a host that rebuilds from a captured array, which is why
+      // every host in this repo supplies the batch form.
       if (onDeleteShots) return onDeleteShots(descending);
       for (const i of descending) onDeleteShot(i);
     },

@@ -76,7 +76,10 @@ function survivorsBefore(shots: EditableShot[], arrayIndex: number): number {
 function reanchorStation(
   pick: number,
   editPosition: number,
-  delta: 1 | -1,
+  /** Rows added (positive) or removed (negative) at `editPosition`. Was `1 | -1`
+   *  when every edit was a single row; a bulk insert shifts by its whole count,
+   *  and the arithmetic below never cared how big the step was. */
+  delta: number,
   survivorsAfter: number,
 ): number {
   const shifted = pick > editPosition ? pick + delta : pick;
@@ -255,6 +258,22 @@ export default function ZeroDatumConfigDialog({
    *  times in one React event has every call overwrite the last. Appending never
    *  renumbers a station pick (the new rows land past every one), so this can go
    *  straight to state without the reanchoring that path does. */
+  /** Insert `count` blank shots at `arrayIndex`, in ONE update, reanchoring the
+   *  station pick once for the whole run rather than per row. */
+  const handleInsertShots = useCallback(
+    (index: number, count: number, position: 'before' | 'after') => {
+      const n = Math.max(1, count);
+      const at = position === 'after' ? index + 1 : index;
+      const survivors = shots.filter((s) => !s.isDeleted).length;
+      const next = [...shots];
+      next.splice(at, 0, ...Array.from({ length: n }, (_, i) => makeNewShot(nextTempId + i)));
+      setShots(next);
+      setNextTempId((prev) => prev + n);
+      commitStation(reanchorStation(stationIndex, survivorsBefore(shots, at), n, survivors + n));
+    },
+    [shots, nextTempId, stationIndex, commitStation]
+  );
+
   const handleAddShots = useCallback((count: number) => {
     const n = Math.max(1, count);
     setShots((prev) => [...prev, ...Array.from({ length: n }, (_, i) => makeNewShot(nextTempId + i))]);
@@ -463,6 +482,7 @@ export default function ZeroDatumConfigDialog({
                 onShotChange={handleShotChange}
                 onAddShot={handleAddShot}
                 onAddShots={handleAddShots}
+                onInsertShots={handleInsertShots}
                 onDeleteShot={handleDeleteShot}
                 onInsertBefore={handleInsertBefore}
                 onInsertAfter={handleInsertAfter}

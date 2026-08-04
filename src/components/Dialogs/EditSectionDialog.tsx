@@ -128,6 +128,21 @@ export default function EditSectionDialog() {
 
   const handleAddShot = useCallback(() => handleAddShots(1), [handleAddShots]);
 
+  /** Insert `count` blank shots at `index`, in ONE update with an id per row. */
+  const handleInsertShots = useCallback(
+    (index: number, count: number, position: 'before' | 'after') => {
+      const n = Math.max(1, count);
+      const at = position === 'after' ? index + 1 : index;
+      setShots((prev) => {
+        const next = [...prev];
+        next.splice(at, 0, ...Array.from({ length: n }, (_, i) => blankEditableShot(nextTempId - i)));
+        return next;
+      });
+      setNextTempId((prev) => prev - n);
+    },
+    [nextTempId]
+  );
+
   // Rows that cannot be written: a new row starts blank, so Save has to refuse
   // until it is filled in - otherwise a NaN length would reach the backend. The
   // same gate the new-section dialog puts in front of Create.
@@ -552,6 +567,7 @@ export default function EditSectionDialog() {
             onShotChange={handleShotChange}
             onAddShot={handleAddShot}
             onAddShots={handleAddShots}
+            onInsertShots={handleInsertShots}
             onDeleteShot={handleDeleteShot}
             onDeleteShots={handleDeleteShots}
             readOnly={editingBlocked}

@@ -1936,6 +1936,22 @@ export default function DmpNewImportDialog({
 
   const handleAddShot = useCallback(() => handleAddShots(1), [handleAddShots]);
 
+  /** Insert `count` blank shots at `index`, in ONE update with an id per row. */
+  const handleInsertShots = useCallback(
+    (index: number, count: number, position: 'before' | 'after') => {
+      const n = Math.max(1, count);
+      const at = position === 'after' ? index + 1 : index;
+      const ids = Array.from({ length: n }, () => nextTempIdRef.current++);
+      setEditState((prev) => {
+        if (!prev) return prev;
+        const shots = [...prev.shots];
+        shots.splice(at, 0, ...ids.map((tempId) => ({ ...blankEditableShot(-tempId), tempId })));
+        return { ...prev, shots };
+      });
+    },
+    []
+  );
+
   const handleDeleteShot = useCallback((index: number) => {
     if (frozenShotIndices.has(index)) return;
     setEditState((prev) => {
@@ -3612,6 +3628,7 @@ export default function DmpNewImportDialog({
                   onShotChange={handleShotChange}
                   onAddShot={handleAddShot}
                   onAddShots={handleAddShots}
+                  onInsertShots={handleInsertShots}
                   onDeleteShot={handleDeleteShot}
                   onInsertBefore={handleInsertBefore}
                   onInsertAfter={handleInsertAfter}
@@ -3852,6 +3869,7 @@ export default function DmpNewImportDialog({
                   onShotChange={handleShotChange}
                   onAddShot={handleAddShot}
                   onAddShots={handleAddShots}
+                  onInsertShots={handleInsertShots}
                   onDeleteShot={handleDeleteShot}
                   onInsertBefore={handleInsertBefore}
                   onInsertAfter={handleInsertAfter}

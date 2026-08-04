@@ -44,9 +44,23 @@ export function buildShotUpdates(
       // passes the range validation and saves. The pitch branch below has always
       // had this case; azimuth did not, and only got here when the shared shot
       // editor stopped using its own averaging rule.
-      if (!Number.isFinite(shot.azimuth_in) && !Number.isFinite(shot.azimuth_out)) {
+      const inFinite = Number.isFinite(shot.azimuth_in);
+      const outFinite = Number.isFinite(shot.azimuth_out);
+      if (!inFinite && !outFinite) {
         updates.azimuth_in = normalizeAngle(newMean);
         updates.azimuth_out = normalizeAngle(newMean);
+        continue;
+      }
+      if (!inFinite || !outFinite) {
+        // ONE leg measured, which is a valid shot. The mean of a number and a
+        // NaN is NaN, and normalizeAngle folds that to 0 - so averaging here
+        // used to replace a real bearing with due north. The single reading IS
+        // the current mean, so offset from it and give the missing leg the same
+        // value; nothing is invented that the user did not type.
+        const present = inFinite ? shot.azimuth_in : shot.azimuth_out;
+        const delta = newMean - present;
+        updates.azimuth_in = normalizeAngle((inFinite ? shot.azimuth_in : present) + delta);
+        updates.azimuth_out = normalizeAngle((outFinite ? shot.azimuth_out : present) + delta);
         continue;
       }
       const delta = newMean - circularMeanDegrees(shot.azimuth_in, shot.azimuth_out);

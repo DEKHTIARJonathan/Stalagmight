@@ -120,3 +120,33 @@ describe('buildShotUpdateBatch', () => {
     expect(cmds).toEqual([]);
   });
 });
+
+describe('buildShotUpdates azimuth with a missing leg', () => {
+  const base = { azimuth_in: NaN, azimuth_out: NaN, pitch_in: null, pitch_out: null };
+
+  it('sets both legs when neither is measured', () => {
+    const u = buildShotUpdates(base, [{ colKey: AZIMUTH_AVG_KEY, value: 45 }]);
+    expect(u.azimuth_in).toBeCloseTo(45);
+    expect(u.azimuth_out).toBeCloseTo(45);
+  });
+
+  it('offsets from the ONE measured leg rather than folding to 0', () => {
+    // A shot with a single reading is valid. Averaging against a NaN produced a
+    // NaN delta, which normalizeAngle turned into due north.
+    const u = buildShotUpdates({ ...base, azimuth_in: 90 }, [{ colKey: AZIMUTH_AVG_KEY, value: 100 }]);
+    expect(u.azimuth_in).toBeCloseTo(100);
+    expect(u.azimuth_out).toBeCloseTo(100);
+  });
+
+  it('works whichever leg is the measured one', () => {
+    const u = buildShotUpdates({ ...base, azimuth_out: 270 }, [{ colKey: AZIMUTH_AVG_KEY, value: 260 }]);
+    expect(u.azimuth_in).toBeCloseTo(260);
+    expect(u.azimuth_out).toBeCloseTo(260);
+  });
+
+  it('never yields 0 from a measured bearing', () => {
+    const u = buildShotUpdates({ ...base, azimuth_in: 123 }, [{ colKey: AZIMUTH_AVG_KEY, value: 124 }]);
+    expect(u.azimuth_in).not.toBe(0);
+    expect(u.azimuth_out).not.toBe(0);
+  });
+});
