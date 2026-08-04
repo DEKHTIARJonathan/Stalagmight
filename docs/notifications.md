@@ -115,9 +115,12 @@ regions). Read the comment blocks in those two files plus
 
 - **`success: false` never dies silently.** Precedence: a specific handler first
   (read-only `EDIT_DISABLED` notice, divergence prompt, the save/import routers);
-  when nothing specific claims the failure, the catch-all error toast surfaces
-  `result.error` - the pattern `executeUndoRedoInner` in `projectStore.ts` already
-  implements. New command flows must land in one of those two buckets.
+  when nothing specific claims the failure, `executeCommandInner`'s catch-all
+  error toast (key `command-failed`) surfaces `result.error`. The catch-all
+  yields while a dialog is open - dialogs own their inline errors and are open
+  when they issue commands - so a panel or map flow must NOT add its own
+  failure toast for an `executeCommand`-backed action; the catch-all is the
+  surface. Undo/redo keep their own equivalent fallback.
 - **`CommandResult::with_warning` (code `"SYSTEM"`) is exclusive to the deferred-
   save contract** (#92/#104): "imported but could not save" keeps
   `success: true` + warning so data survives exit. Never route ordinary warnings
