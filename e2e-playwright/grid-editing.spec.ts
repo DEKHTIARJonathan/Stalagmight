@@ -11,7 +11,8 @@ import {
 /**
  * E2E tests for core SpreadsheetGrid editing in the shots view.
  *
- * Covers type-to-edit, the unparseable-input → missing-red → recover cycle,
+ * Covers type-to-edit, rejected-draft handling (unparseable input is fixed in
+ * place; only an emptied cell goes missing-red, then recovers),
  * the Delete clear/restore toggle on a required cell, the clipboard round trip
  * (display TSV out, external TSV in), cut-completes-on-paste as ONE
  * execute_batch (one undo unit), and Ctrl+D fill-down.
@@ -112,37 +113,86 @@ test.describe('Grid editing', () => {
     expect((await getShots(page)).map((s) => s.length)).toEqual([10, 42, 30]);
   });
 
-  test('unparseable input marks the cell missing-red and recovers on a valid commit', async ({ page }) => {
+  test('an unparseable draft is rejected in place instead of clearing the cell', async ({ page }) => {
     const cell = page.getByTestId('grid-cell-0-length');
     await cell.dblclick();
     const editor = page.getByTestId('grid-cell-editor');
     await editor.fill('abc');
     await page.keyboard.press('Enter');
-    await expect(editor).toHaveCount(0);
 
-    // Garbage never reaches the model: the cell goes red-empty, the shot keeps 10.
-    await expect(cell).toHaveClass(/sg-cell-missing/);
-    await expect(cell).toHaveText('');
+    // A non-empty draft the column cannot parse is a typo to fix, NOT a request
+    // to empty the cell: the editor stays open on the draft and the model is
+    // untouched. Lumping this in with the clear let a host acting on the clear
+    // signal write its unset sentinel over the measurement the user was only
+    // mistyping a correction to.
+    await expect(editor).toHaveValue('abc');
+    await expect(cell).not.toHaveClass(/sg-cell-missing/);
     expect((await getShots(page))[0]!.length).toBe(10);
 
-    // Re-edit: a missing cell seeds an EMPTY editor (not the hidden old value).
+    // Tab must not walk the selection off the cell still being fixed.
+    await page.keyboard.press('Tab');
+    await expect(editor).toHaveValue('abc');
+    await expect(cell).toHaveAttribute('data-active-cell', 'true');
+
+    // Escape discards the bad draft outright: nothing committed, nothing marked,
+    // and the committed value is still there once the editor is out of the way
+    // (a cell renders empty only while its own editor is open).
+    await page.keyboard.press('Escape');
+    await expect(editor).toHaveCount(0);
+    await expect(cell).not.toHaveClass(/sg-cell-missing/);
+    await expect(cell).toHaveText('10.0');
+    expect((await getShots(page))[0]!.length).toBe(10);
+
+    // Fixing a rejected draft in place commits it and closes the editor.
     await cell.dblclick();
-    await expect(editor).toHaveValue('');
+    await editor.fill('1o5');
+    await page.keyboard.press('Enter');
+    await expect(editor).toHaveValue('1o5');
     await editor.fill('12.5');
     await page.keyboard.press('Enter');
-
-    await expect(cell).not.toHaveClass(/sg-cell-missing/);
+    await expect(editor).toHaveCount(0);
     await expect(cell).toHaveText('12.5');
     expect((await getShots(page))[0]!.length).toBe(12.5);
 
-    // Nullable columns too: only an EMPTY draft clears to null; garbage in an
-    // LRUD cell must also go missing-red, never silently discard or write null.
+    // Nullable columns take the same rule: garbage in an LRUD cell is rejected
+    // in place, never silently discarded and never written as null.
     const lrud = page.getByTestId('grid-cell-0-left');
     await lrud.dblclick();
     await editor.fill('xyz');
     await page.keyboard.press('Enter');
-    await expect(lrud).toHaveClass(/sg-cell-missing/);
+    await expect(editor).toHaveValue('xyz');
+    await expect(lrud).not.toHaveClass(/sg-cell-missing/);
     expect((await getShots(page))[0]!.left).toBe(1.5);
+
+    await page.keyboard.press('Escape');
+    await expect(editor).toHaveCount(0);
+  });
+
+  // Kept separate from the rejection test above so a regression in one branch
+  // cannot mask the other: emptying is the ONE draft that still clears.
+  test('an emptied required cell goes missing-red and recovers on a valid commit', async ({ page }) => {
+    const cell = page.getByTestId('grid-cell-0-length');
+    const editor = page.getByTestId('grid-cell-editor');
+
+    // An EMPTIED draft is a real clear: the cell goes red-empty while the model
+    // keeps its value (a survey never stores 0 for "not measured").
+    await cell.dblclick();
+    await editor.fill('');
+    await page.keyboard.press('Enter');
+    await expect(editor).toHaveCount(0);
+    await expect(cell).toHaveClass(/sg-cell-missing/);
+    await expect(cell).toHaveText('');
+    expect((await getShots(page))[0]!.length).toBe(10);
+
+    // Re-edit: a missing cell seeds an EMPTY editor (not the hidden old value),
+    // and a valid commit clears the mark.
+    await cell.dblclick();
+    await expect(editor).toHaveValue('');
+    await editor.fill('7.5');
+    await page.keyboard.press('Enter');
+    await expect(cell).not.toHaveClass(/sg-cell-missing/);
+    await expect(cell).toHaveText('7.5');
+    expect((await getShots(page))[0]!.length).toBe(7.5);
   });
 
   test('Delete on a required cell toggles missing-red without touching the model', async ({ page }) => {
