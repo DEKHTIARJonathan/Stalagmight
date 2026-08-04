@@ -6,11 +6,10 @@ import { getErrorMessage } from '../utils/ipc';
 import { surfaceSaveFailure } from '../utils/saveFeedback';
 import {
   ensureExtension,
-  projectOpenFilters,
   exportSaveFilters,
   saveDialog,
 } from '../utils/fileDialogs';
-import { openOrImport, pickAndRoute } from '../utils/openOrImport';
+import { openOrImport } from '../utils/openOrImport';
 import { newProjectGuarded, saveProjectAs } from '../utils/projectActions';
 import { debugLog } from '../utils/debugLog';
 import { needsSpeleoHandBackPrompt } from '../utils/quit';
@@ -47,11 +46,6 @@ export function useProject() {
   // (the New-project unsaved-changes guard, the picker/route flow, and the
   // Save-As + overwrite-confirm flow each live in exactly one place).
   const handleNewProject = useCallback(() => newProjectGuarded(), []);
-
-  const handleOpenProject = useCallback(
-    () => pickAndRoute(projectOpenFilters(), 'Open Failed'),
-    [],
-  );
 
   const handleSaveProjectAs = useCallback(
     (opts?: { closeAfterSave?: boolean }) => saveProjectAs(opts),
@@ -198,7 +192,6 @@ export function useProject() {
     canRedo,
 
     handleNewProject,
-    handleOpenProject,
     handleOpenOrImport,
     handleSaveProject,
     handleSaveProjectAs,

@@ -2375,7 +2375,7 @@ not live co-editing), and floating/dockable panels.
 | Undo | Ctrl+Z |
 | Redo | Ctrl+Y / Ctrl+Shift+Z |
 | Save | Ctrl+S |
-| Import DMP | Ctrl+I (configurable) |
+| Import survey data | Ctrl+I (configurable) |
 | Export | Ctrl+E (configurable) |
 | Delete Selected | Delete / Backspace |
 | Select All | Ctrl+A |
@@ -2395,7 +2395,7 @@ not live co-editing), and floating/dockable panels.
 | Open Settings | Ctrl+, (Cmd+, on macOS) |
 | Keyboard Shortcuts Overlay | ? |
 
-**Note**: Import DMP (Ctrl+I) and Export (Ctrl+E) shortcuts are user-configurable via the Settings dialog. The defaults shown above can be reassigned to any available key combination.
+**Note**: Import (Ctrl+I) and Export (Ctrl+E) shortcuts are user-configurable via the Settings dialog. Open (Ctrl+O) and Import (Ctrl+I) open the same unified picker - any supported file routes to the right open/import flow by extension (#407). The defaults shown above can be reassigned to any available key combination.
 
 **Note**: When Pan (P) or Zoom (Z) tools are active, selection-related shortcuts (Ctrl+A, Delete/Backspace) are disabled to prevent accidental modifications while navigating the map. Hover effects and click selection are also disabled.
 

@@ -20,10 +20,13 @@
  * which carries its own SpeleoDB hand-back and unsaved-changes guards) rather
  * than mutating it, so the read-only guard doesn't apply to them.
  *
- * The routing is intentionally shared between the toolbar "Open / Import"
- * button, the "open it from file" hint link, and the Ctrl+I keyboard shortcut
- * so all three behave identically. Stores are read via `getState()` so this is
- * callable outside React (e.g. from a raw keydown handler).
+ * ONE DOOR (#407): every open/import entry point - the toolbar "Open / Import"
+ * button, the hamburger Open and Import rows in both views, the EmptyState
+ * card, the "open it from file" hint link, Ctrl+O, Ctrl+I, and drag-drop -
+ * offers the same unified picker (`openOrImportFilters`) and routes the chosen
+ * file through here, so "Open" and "Import" are two words for one behavior.
+ * Stores are read via `getState()` so this is callable outside React (e.g.
+ * from a raw keydown handler).
  */
 import { useProjectStore } from '../store/projectStore';
 import { useUIStore } from '../store/uiStore';

@@ -18,6 +18,7 @@ vi.mock('../openOrImport', () => ({
 }));
 
 import { runFileShortcutAction } from '../fileShortcutActions';
+import { openOrImportFilters } from '../fileDialogs';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { useSpeleoStore, type SpeleoLinkState } from '../../store/speleoStore';
@@ -62,7 +63,7 @@ describe('runFileShortcutAction("new_file")', () => {
   });
 });
 
-describe('runFileShortcutAction("import_dmp") - read-only-map guard (#243)', () => {
+describe('runFileShortcutAction - one door for Ctrl+O and Ctrl+I (#407)', () => {
   beforeEach(() => {
     pickAndRouteMock.mockClear();
     useProjectStore.setState({ project: { name: 'X' } as never, isDirty: false });
@@ -75,42 +76,28 @@ describe('runFileShortcutAction("import_dmp") - read-only-map guard (#243)', () 
     useSpeleoStore.setState({ link: null, projectLinkKind: 'local' });
   });
 
-  it('opens the picker in Survey + measured (the editable baseline)', () => {
+  it('open_file and import_dmp open the SAME unified picker (only the error title differs)', () => {
+    runFileShortcutAction('open_file');
     runFileShortcutAction('import_dmp');
-    expect(pickAndRouteMock).toHaveBeenCalled();
+    expect(pickAndRouteMock).toHaveBeenCalledTimes(2);
+    const [openFilters, openTitle] = pickAndRouteMock.mock.calls[0]!;
+    const [importFilters, importTitle] = pickAndRouteMock.mock.calls[1]!;
+    expect(importFilters).toEqual(openFilters);
+    expect(openFilters).toEqual(openOrImportFilters());
+    expect(openTitle).toBe('Open Failed');
+    expect(importTitle).toBe('Import Failed');
   });
 
-  // Ctrl+I is the third import route the #243 guard had to cover; Plan/Export force
-  // closureAdjusted, which falls back to measured on a no-closures project - so a
-  // geometryMode-only check would open the picker under the read-only map.
-  it('skips the picker in Plan even when geometryMode fell back to measured', () => {
+  // The pre-#407 Ctrl+I pre-guard silently swallowed the keystroke whenever
+  // editing was blocked, which also blocked the legal non-mutating routes
+  // (.stalx open, import-as-new-project). The picker now always opens; the
+  // additive DMP-into-open-project case is rejected by routeOpenedFile's
+  // read-only guard with a cause-specific message (pinned in
+  // openOrImport.test.ts, the #243 guard's home).
+  it('import_dmp opens the picker even when editing is blocked (router guards the DMP case)', () => {
     useUIStore.setState({ appMode: 'plan', geometryMode: 'measured' });
-    runFileShortcutAction('import_dmp');
-    expect(pickAndRouteMock).not.toHaveBeenCalled();
-  });
-
-  it('skips the picker in the closure-adjusted survey view', () => {
-    useUIStore.setState({ appMode: 'survey', geometryMode: 'closureAdjusted' });
-    runFileShortcutAction('import_dmp');
-    expect(pickAndRouteMock).not.toHaveBeenCalled();
-  });
-
-  it('opens the picker with NO project (GlobalView) regardless of mode - the guard is project-scoped', () => {
-    useProjectStore.setState({ project: null, isDirty: false });
-    useUIStore.setState({ appMode: 'plan', geometryMode: 'measured' });
-    runFileShortcutAction('import_dmp');
-    expect(pickAndRouteMock).toHaveBeenCalled();
-  });
-
-  it('skips the picker on a locked remote SpeleoDB project (Survey + measured otherwise editable)', () => {
     useSpeleoStore.setState({ link: READ_ONLY_LINK });
     runFileShortcutAction('import_dmp');
-    expect(pickAndRouteMock).not.toHaveBeenCalled();
-  });
-
-  it('opens the picker once the SpeleoDB write lock is held', () => {
-    useSpeleoStore.setState({ link: { ...READ_ONLY_LINK, editState: 'editing', lockedByOther: false } });
-    runFileShortcutAction('import_dmp');
-    expect(pickAndRouteMock).toHaveBeenCalled();
+    expect(pickAndRouteMock).toHaveBeenCalledWith(openOrImportFilters(), 'Import Failed');
   });
 });

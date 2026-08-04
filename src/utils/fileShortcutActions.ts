@@ -12,19 +12,27 @@
  * Stores are read via `getState()` so this is callable from raw keydown handlers
  * (outside React), like the rest of the open/import routing.
  */
-import { useProjectStore } from '../store/projectStore';
-import { isEditingBlockedNow } from '../hooks/useEditingBlocked';
 import { pickAndRoute } from './openOrImport';
 import { newProjectGuarded } from './projectActions';
 import { quitApp } from './quit';
 import { setProjectActionSource } from './telemetry';
-import { projectOpenFilters, importFiltersForContext } from './fileDialogs';
+import { openOrImportFilters } from './fileDialogs';
 
 export type FileShortcutAction = 'new_file' | 'open_file' | 'import_dmp' | 'quit';
 
 /**
  * Run one shared file action. Caller has already `preventDefault()`-ed the event
  * and (for telemetry on the toast path) may show a toast afterwards.
+ *
+ * One door (#407): Ctrl+O and Ctrl+I open the SAME unified picker (every file
+ * the app can open or import) and route through the shared open/import router -
+ * the two bindings survive because users reach for either word, but the
+ * behavior is one (only the error-dialog title differs). The old Ctrl+I
+ * pre-guard (skip the picker entirely while editing is blocked) is gone on
+ * purpose: it silently swallowed the keystroke, and it wrongly blocked the
+ * now-legal non-mutating routes (.stalx open, import-as-new-project). The
+ * additive DMP-into-open-project case is still rejected - by routeOpenedFile's
+ * read-only guard, which explains WHICH read-only cause to fix.
  */
 export function runFileShortcutAction(action: FileShortcutAction): void {
   switch (action) {
@@ -36,23 +44,12 @@ export function runFileShortcutAction(action: FileShortcutAction): void {
       break;
     case 'open_file':
       setProjectActionSource('keyboard');
-      void pickAndRoute(projectOpenFilters(), 'Open Failed');
+      void pickAndRoute(openOrImportFilters(), 'Open Failed');
       break;
-    case 'import_dmp': {
-      const hasProject = !!useProjectStore.getState().project;
-      // The read-only map (#70 closure-adjusted view, #243 Plan/Export, or a
-      // locked remote SpeleoDB project) rejects imports - they add sections. Skip
-      // even opening the picker (routeOpenedFile also guards). Only meaningful
-      // with a project open; GlobalView has none.
-      if (hasProject && isEditingBlockedNow()) return;
+    case 'import_dmp':
       setProjectActionSource('keyboard');
-      // Every importable format is offered regardless of context (#391): .dmp
-      // still routes additively into an open project, others now open the
-      // "import as new project?" confirm dialog. pickAndRoute dispatches by
-      // extension.
-      void pickAndRoute(importFiltersForContext(hasProject), 'Import Failed');
+      void pickAndRoute(openOrImportFilters(), 'Import Failed');
       break;
-    }
     case 'quit':
       quitApp();
       break;

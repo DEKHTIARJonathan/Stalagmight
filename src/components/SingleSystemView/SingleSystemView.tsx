@@ -34,7 +34,7 @@ import { useSidePanelSqueeze, useDataPanelSqueeze, resolveResize } from './sideP
 import { ChevronDownIcon, ChevronLeftIcon, ChevronRightIcon, ChevronUpIcon } from '../common/icons';
 import { usePanelReveal } from './usePanelReveal';
 import { Dock, BAR } from './Dock';
-import { importFiltersForContext } from '../../utils/fileDialogs';
+import { openOrImportFilters } from '../../utils/fileDialogs';
 import { pickAndRoute } from '../../utils/openOrImport';
 import { useProjectMenuItems } from './useProjectMenuItems';
 import { setSource, withTrackingSuppressed, withPersistSuppressed, setProjectActionSource } from '../../utils/telemetry';
@@ -162,13 +162,14 @@ export default function SingleSystemView() {
     return rawSave(opts);
   }, [cancelPending, rawSave]);
 
-  // Toolbar "Import" button: every importable format (#391), routed through the
-  // shared open/import router. `.dmp` still routes additively into this project;
-  // every other format now opens the "import as new project?" confirm dialog
-  // instead of the old close-first dead end.
+  // Toolbar "Import" button - one door (#407): the same unified picker as every
+  // Open/Import entry point, routed through the shared open/import router.
+  // `.dmp` routes additively into this project, other survey formats open the
+  // "import as new project?" confirm dialog, and a `.stalx` is a plain open
+  // (guarded by the router's SpeleoDB hand-back / unsaved-changes prompts).
   const handleImportDmp = useCallback(async () => {
     setProjectActionSource('toolbar');
-    await pickAndRoute(importFiltersForContext(true), 'Import Failed');
+    await pickAndRoute(openOrImportFilters(), 'Import Failed');
   }, []);
 
   // Hamburger menu items (file/project actions). Built here so it can use the

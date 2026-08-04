@@ -11,21 +11,13 @@ import { useGlobalViewStore } from '../../store/globalViewStore';
 import { useSpeleoStore } from '../../store/speleoStore';
 import { Button } from '../common/Button';
 import { AppMenu, type AppMenuItem } from '../common/AppMenu';
-import { leadingMenuItems, serviceMenuItems, quitMenuItem, importMenuItem, openFromSpeleoDbMenuItem } from '../common/appMenuItems';
+import { leadingMenuItems, serviceMenuItems, quitMenuItem, importMenuGroup, openFromSpeleoDbMenuItem } from '../common/appMenuItems';
 import { CloseIcon, DownloadIcon, FilePlusIcon, FolderOpenIcon, ListIcon, MapIcon } from '../common/icons';
 import { SpeleoBadgedIcon, RefreshGlyph } from '../common/SpeleoBadgedIcon';
 import { syntacticLevelAtLeast } from '../../theme/syntacticPalette';
 import { MENU_ICON_COLORS } from '../common/menuColors';
 import { setProjectActionSource } from '../../utils/telemetry';
-import {
-  dmpOpenFilters,
-  tmlOpenFilters,
-  compassOpenFilters,
-  wallsOpenFilters,
-  gpxOpenFilters,
-  PROJECT_EXTENSION,
-  IMPORT_EXTENSIONS,
-} from '../../utils/fileDialogs';
+import { PROJECT_EXTENSION, IMPORT_EXTENSIONS } from '../../utils/fileDialogs';
 import { LoadingProgress } from '../LoadingProgress';
 import SystemCard from './SystemCard';
 import { resolveSpeleoLock } from './SpeleoLockBadge';
@@ -121,7 +113,6 @@ export default function GlobalView() {
   const {
     recentProjects,
     handleNewProject,
-    handleOpenProject,
     handleOpenOrImport,
   } = useProject();
 
@@ -725,41 +716,25 @@ export default function GlobalView() {
   const actionsCondensed = headerCondense >= 2;
   const tabsCondensed = headerCondense >= 3;
 
-  // Hamburger menu contents. The New/Open/Settings/Debug/Quit rows are shared
-  // with the in-project menu (appMenuItems); only the Import submenu differs
-  // (the start screen offers every new-project format). Memoized so AppMenu's
-  // items-dependent callbacks don't churn on every keystroke-driven re-render.
+  // Hamburger menu contents. The New/Open/Import/Settings/Debug/Quit rows are
+  // all shared with the in-project menu (appMenuItems) - one door (#407), so
+  // the two hamburgers cannot drift. Memoized so AppMenu's items-dependent
+  // callbacks don't churn on every keystroke-driven re-render.
   const menuItems: AppMenuItem[] = useMemo(
     () => [
-      ...leadingMenuItems(t, { onNewProject: handleNewProject, onOpenProject: handleOpenProject }, 'hamburger'),
+      ...leadingMenuItems(t, { onNewProject: handleNewProject }, 'hamburger'),
       // "Open from SpeleoDB" needs a signed-in session (the browser lists the
       // caller's remote projects), so hide it when logged out.
       ...(speleoLoggedIn
         ? [openFromSpeleoDbMenuItem(t, { onOpen: () => openDialog('open-from-speleodb') })]
         : []),
-      {
-        id: 'global-import-menu-button',
-        label: t('globalView.actions.import'),
-        icon: <DownloadIcon size={18} />,
-        iconColor: MENU_ICON_COLORS.import,
-        // Route every format through the shared open/import router (like the
-        // in-project Import submenu) so all import entry points behave identically.
-        // No project is open here, so the broader format set is offered, each with
-        // its own per-format picker filter (matching the legacy per-format handlers).
-        submenu: [
-          importMenuItem('global-import-dmp-button', t('globalView.actions.importDmp'), dmpOpenFilters, 'hamburger', 'import_dmp'),
-          importMenuItem('global-import-tml-button', t('globalView.actions.importTml'), tmlOpenFilters, 'hamburger'),
-          importMenuItem('global-import-compass-button', t('globalView.actions.importCompass'), compassOpenFilters, 'hamburger'),
-          importMenuItem('global-import-walls-button', t('globalView.actions.importWalls'), wallsOpenFilters, 'hamburger'),
-          importMenuItem('global-import-gpx-button', t('globalView.actions.importGpx'), gpxOpenFilters, 'hamburger'),
-        ],
-      },
+      importMenuGroup(t),
       { id: 'app-menu-sep-1', label: '', separator: true },
       ...serviceMenuItems(t, { onSettings: () => openDialog('settings'), onDebug: () => openDialog('debug') }),
       { id: 'app-menu-sep-2', label: '', separator: true },
       quitMenuItem(t),
     ],
-    [t, handleNewProject, handleOpenProject, openDialog, speleoLoggedIn],
+    [t, handleNewProject, openDialog, speleoLoggedIn],
   );
 
   return (
