@@ -85,6 +85,12 @@ export interface ShotTableEditorProps {
   onRowSelect?: (index: number) => void;
   /** Set of shot indices whose geometry fields should be disabled (frozen shots) */
   frozenShotIndices?: Set<number>;
+  /** The section these shots belong to. Supply it and the warning column shows
+   *  the project's warnings for each shot, exactly as the data table does; the
+   *  editor's own threshold checks are layered on top for edits the backend has
+   *  not seen yet. Omit it for shots that are not in a section yet (the import
+   *  wizard, zero-datum config), where there is nothing to look up. */
+  sectionId?: number;
   /** Whether the host dialog is currently enlarged. Supply this together with
    *  {@link onToggleExpand} to get the Expand control; the HOST owns the size,
    *  because this editor is a child of three different dialogs and cannot
@@ -113,9 +119,22 @@ function cssHeightToPx(value: string | undefined): number {
   return Math.round(n);
 }
 
-function warningsFor(shot: EditableShot, config: ValidationConfig, t: TFunction): string[] {
+/** The editor's own live threshold checks, for edits the backend's analysis has
+ *  not seen yet. `covered` names the warning codes the project already reports
+ *  for this shot, so the tooltip does not say the same thing twice in two
+ *  wordings - the backend's version names the shot and the measured value, so it
+ *  is the one worth keeping. */
+function warningsFor(
+  shot: EditableShot,
+  config: ValidationConfig,
+  t: TFunction,
+  covered: ReadonlySet<string> = new Set()
+): string[] {
   const out: string[] = [];
-  if (hasAzimuthDiscrepancy(shot.azimuth_in, shot.azimuth_out, config.azimuth_diff_threshold)) {
+  if (
+    !covered.has('AZIMUTH_DEVIATION') &&
+    hasAzimuthDiscrepancy(shot.azimuth_in, shot.azimuth_out, config.azimuth_diff_threshold)
+  ) {
     out.push(
       t('shotTable.warnings.azimuthDiff', {
         threshold: `${formatFixed(config.azimuth_diff_threshold, undefined, 0)}°`,
@@ -178,6 +197,7 @@ export function ShotTableEditor({
   selectedRowIndex,
   onRowSelect,
   frozenShotIndices,
+  sectionId,
   expanded = false,
   onToggleExpand,
 }: ShotTableEditorProps) {
@@ -185,6 +205,29 @@ export function ShotTableEditor({
   const precision = useDecimalPrecision();
   const gridLabels = useGridLabels('dataTable.shotNoun');
   const configValidation = useProjectStore((s) => s.config?.validation);
+  const projectWarnings = useProjectStore((s) => s.warnings);
+
+  /** The project's unresolved warnings for one shot, split by severity. The data
+   *  table's warning column reads exactly this; without it the editor showed only
+   *  its own two threshold checks and the column sat empty on shots the data
+   *  table flagged. A row added here has no backend warnings yet - it does not
+   *  exist as far as the last analysis is concerned. */
+  const backendWarningsFor = useCallback(
+    (shot: EditableShot): { errors: string[]; warnings: string[]; codes: Set<string> } => {
+      const empty = { errors: [], warnings: [], codes: new Set<string>() };
+      if (sectionId === undefined || shot.isNew === true || shot.isDeleted === true) return empty;
+      const errors: string[] = [];
+      const warnings: string[] = [];
+      const codes = new Set<string>();
+      for (const w of projectWarnings) {
+        if (w.sectionId !== sectionId || w.shotId !== shot.id || w.isResolved) continue;
+        (w.severity === 'error' ? errors : warnings).push(w.message);
+        codes.add(w.code);
+      }
+      return { errors, warnings, codes };
+    },
+    [projectWarnings, sectionId]
+  );
 
   const effectiveValidation: ValidationConfig = {
     azimuth_diff_threshold:
@@ -233,7 +276,7 @@ export function ShotTableEditor({
     (visibleIndex: number): string[] => {
       const shot = visibleShots[visibleIndex];
       if (!shot) return []; // the trailing blank is an invitation, not an error
-      return validateEditableShot(
+      const local = validateEditableShot(
         {
           length: shot.length,
           azimuth_in: shot.azimuth_in,
@@ -243,17 +286,27 @@ export function ShotTableEditor({
         actualIndex(visibleIndex),
         0
       ).map((e) => e.message);
+      // Deduped by message: a live check and the backend's analysis can name the
+      // same problem, and the tooltip should say it once.
+      return [...new Set([...local, ...backendWarningsFor(shot).errors])];
     },
-    [visibleShots, actualIndex]
+    [visibleShots, actualIndex, backendWarningsFor]
   );
 
   const warningsAt = useCallback(
     (visibleIndex: number): string[] => {
       const shot = visibleShots[visibleIndex];
-      return shot ? warningsFor(shot, effectiveValidation, t) : [];
+      if (!shot) return [];
+      const backend = backendWarningsFor(shot);
+      return [
+        ...new Set([
+          ...warningsFor(shot, effectiveValidation, t, backend.codes),
+          ...backend.warnings,
+        ]),
+      ];
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps -- thresholds are primitives
-    [visibleShots, effectiveValidation.azimuth_diff_threshold, effectiveValidation.pitch_diff_threshold, t]
+    [visibleShots, effectiveValidation.azimuth_diff_threshold, effectiveValidation.pitch_diff_threshold, t, backendWarningsFor]
   );
 
   const isFrozenAt = useCallback(

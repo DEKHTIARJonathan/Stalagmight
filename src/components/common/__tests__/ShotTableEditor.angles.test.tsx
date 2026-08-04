@@ -31,6 +31,7 @@ vi.mock('@tanstack/react-virtual', () => ({
 import { render, screen, fireEvent } from '@testing-library/react';
 import { ShotTableEditor } from '../ShotTableEditor';
 import type { EditableShot } from '../editableShot';
+import { useProjectStore } from '../../../store/projectStore';
 
 const shot = (over: Partial<EditableShot> = {}): EditableShot => ({
   id: 1,
@@ -129,5 +130,101 @@ describe('ShotTableEditor averaged-angle edits', () => {
     for (const key of ['azimuth_in', 'azimuth_out', '_pitch_avg', 'pitch_in', 'pitch_out']) {
       expect(screen.queryByTestId(`shot-cell-0-${key}`)).toBeNull();
     }
+  });
+});
+
+/**
+ * The warning column was showing nothing where the data table showed warnings:
+ * it only ever ran the editor's own two threshold checks, never the project's
+ * analysis. Passing a sectionId opts a host into that shared source.
+ */
+describe('ShotTableEditor warning column', () => {
+  const warning = (over: Record<string, unknown> = {}) => ({
+    sectionId: 7,
+    shotId: 1,
+    shotIndex: 0,
+    code: 'SHORT_SHOT',
+    message: 'Shot 7:1 is suspiciously short',
+    severity: 'warning',
+    isResolved: false,
+    ...over,
+  });
+
+  const renderEditor = (props: Record<string, unknown> = {}) =>
+    render(
+      <ShotTableEditor
+        shots={[shot()]}
+        onShotChange={vi.fn()}
+        onAddShot={vi.fn()}
+        onDeleteShot={vi.fn()}
+        {...props}
+      />
+    );
+
+  it('shows the project warning for a shot once a sectionId is given', () => {
+    useProjectStore.setState({ warnings: [warning()] as never });
+    renderEditor({ sectionId: 7 });
+    expect(screen.getByTestId('shot-warning-0').getAttribute('title')).toContain(
+      'suspiciously short'
+    );
+  });
+
+  it('shows nothing from the project without a sectionId to look up', () => {
+    useProjectStore.setState({ warnings: [warning()] as never });
+    renderEditor();
+    expect(screen.queryByTestId('shot-warning-0')).toBeNull();
+  });
+
+  it('reds the icon for an error-severity warning', () => {
+    useProjectStore.setState({ warnings: [warning({ severity: 'error' })] as never });
+    renderEditor({ sectionId: 7 });
+    expect(screen.getByTestId('shot-warning-0').className).toContain('text-error');
+  });
+
+  it('ignores a resolved warning, and one for another shot or section', () => {
+    useProjectStore.setState({
+      warnings: [
+        warning({ isResolved: true }),
+        warning({ shotId: 999 }),
+        warning({ sectionId: 8 }),
+      ] as never,
+    });
+    renderEditor({ sectionId: 7 });
+    expect(screen.queryByTestId('shot-warning-0')).toBeNull();
+  });
+
+  it('does not repeat an azimuth discrepancy the project already reports', () => {
+    useProjectStore.setState({
+      warnings: [warning({ code: 'AZIMUTH_DEVIATION', message: 'backend azimuth text' })] as never,
+    });
+    // Legs 180 apart trip the editor's own azimuth check too.
+    render(
+      <ShotTableEditor
+        shots={[shot({ azimuth_in: 10, azimuth_out: 190 })]}
+        onShotChange={vi.fn()}
+        onAddShot={vi.fn()}
+        onDeleteShot={vi.fn()}
+        sectionId={7}
+      />
+    );
+    const title = screen.getByTestId('shot-warning-0').getAttribute('title') ?? '';
+    expect(title).toContain('backend azimuth text');
+    expect(title).not.toContain('Azimuth in/out differs');
+  });
+
+  it('still runs its own checks for a row the project has never seen', () => {
+    useProjectStore.setState({ warnings: [] as never });
+    render(
+      <ShotTableEditor
+        shots={[shot({ isNew: true, azimuth_in: 10, azimuth_out: 190 })]}
+        onShotChange={vi.fn()}
+        onAddShot={vi.fn()}
+        onDeleteShot={vi.fn()}
+        sectionId={7}
+      />
+    );
+    expect(screen.getByTestId('shot-warning-0').getAttribute('title')).toContain(
+      'Azimuth in/out differs'
+    );
   });
 });
