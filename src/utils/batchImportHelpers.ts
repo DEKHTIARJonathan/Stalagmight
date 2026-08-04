@@ -5,6 +5,7 @@
  * logic during the batch import config-building phase.
  */
 
+import { isEmittedShot } from '../components/common/emittedShots';
 import type { EditableShot } from '../components/common/ShotTableEditor';
 import type { VirtualConnection } from './segmentContext';
 import type { CrossSectionSuggestion } from '../types/commands';
@@ -49,8 +50,13 @@ export interface ConfirmedOverlapInfo {
 
 /**
  * When overlap shots are deleted from an import section, station indices
- * shift. This counts non-deleted shots before the original station position
- * to compute the adjusted index in the filtered shot array.
+ * shift. This counts EMITTED shots before the original station position to
+ * compute the adjusted index in the filtered shot array.
+ *
+ * "Emitted", not merely non-deleted: the payload builders also drop wholly
+ * blank new rows, so counting one here left the adjustment expecting a longer
+ * section than was sent, and `import_station` pointed a station too far
+ * downstream.
  */
 export function adjustStationForDeletedShots(
   shots: EditableShot[],
@@ -58,7 +64,7 @@ export function adjustStationForDeletedShots(
 ): number {
   let adjusted = 0;
   for (const s of shots) {
-    if (s.isDeleted) continue;
+    if (!isEmittedShot(s)) continue;
     if (!s.isNew && s.id >= originalStation) break;
     adjusted++;
   }

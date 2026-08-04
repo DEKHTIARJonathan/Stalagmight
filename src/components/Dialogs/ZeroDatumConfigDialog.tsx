@@ -2,7 +2,7 @@ import { useState, useCallback, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { blockedByIncompleteShots, countIncompleteShots } from '../common/incompleteShots';
 import { blankEditableShot } from '../common/editableShot';
-import { isBlankNewShot } from '../common/editableShotStatus';
+import { isEmittedShot, emittedBefore } from '../common/emittedShots';
 import { DialogWrapper } from './DialogWrapper';
 import SectionPreview from './SectionPreview';
 import { Button } from '../common/Button';
@@ -58,17 +58,10 @@ function makeNewShot(tempId: number): EditableShot {
  * here made the picker, the preview and the re-anchor all disagree with the
  * backend, and the GPS anchor landed on a different station than the one shown.
  */
-const isCounted = (s: EditableShot | undefined): boolean =>
-  s !== undefined && s.isDeleted !== true && !isBlankNewShot(s);
+const isCounted = isEmittedShot;
 
 /** How many counted rows precede this index in the FULL array. */
-function survivorsBefore(shots: EditableShot[], arrayIndex: number): number {
-  let count = 0;
-  for (let i = 0; i < arrayIndex && i < shots.length; i++) {
-    if (isCounted(shots[i])) count++;
-  }
-  return count;
-}
+const survivorsBefore = emittedBefore;
 
 /**
  * Keep a committed station pick on the same physical station across a shot edit.
@@ -236,13 +229,23 @@ export default function ZeroDatumConfigDialog({
       setShots((prev) => {
         const newShots = [...prev];
         const shot = newShots[index];
-        if (shot) {
-          newShots[index] = { ...shot, [field]: value };
+        if (!shot) return newShots;
+        const updated = { ...shot, [field]: value } as EditableShot;
+        newShots[index] = updated;
+        // The moment a blank row stops being blank it JOINS the payload, and
+        // every station after it is renumbered. Inserting the row did not move
+        // the pick (an uncounted row changes no numbering), so this is where
+        // that shift is owed - deferred to the edit rather than guessed at the
+        // insert, which is what put the picker out of step with the payload.
+        if (isCounted(updated) && !isCounted(shot)) {
+          const before = emittedBefore(prev, index);
+          const total = newShots.filter(isCounted).length;
+          commitStation(reanchorStation(stationIndexRef.current, before, 1, total));
         }
         return newShots;
       });
     },
-    []
+    [commitStation]
   );
 
   // The three shot-count mutators re-anchor the committed pick as they go, so
@@ -254,8 +257,10 @@ export default function ZeroDatumConfigDialog({
       newShots.splice(arrayIndex, 0, makeNewShot(nextTempId));
       setShots(newShots);
       setNextTempId((prev) => prev + 1);
+      // A blank row is not counted, so the numbering is unchanged - see the
+      // bulk insert below.
       commitStation(
-        reanchorStation(stationIndex, survivorsBefore(shots, arrayIndex), 1, survivors + 1),
+        reanchorStation(stationIndex, survivorsBefore(shots, arrayIndex), 0, survivors),
       );
     },
     [shots, nextTempId, stationIndex, commitStation]
@@ -281,7 +286,13 @@ export default function ZeroDatumConfigDialog({
       next.splice(at, 0, ...Array.from({ length: n }, (_, i) => makeNewShot(nextTempId + i)));
       setShots(next);
       setNextTempId((prev) => prev + n);
-      commitStation(reanchorStation(stationIndex, survivorsBefore(shots, at), n, survivors + n));
+      // The inserted rows are BLANK, so `isCounted` excludes them and the
+      // station numbering does not move at all. Shifting by `n` here while the
+      // dropdown counted the old total pushed the pick out of step with the
+      // payload - and Confirm could anchor the datum to a different station, or
+      // one past the end. Rows shift the pick only once they hold data, which
+      // is a re-render away and handled by the same call from the edit path.
+      commitStation(reanchorStation(stationIndex, survivorsBefore(shots, at), 0, survivors));
     },
     [shots, nextTempId, stationIndex, commitStation]
   );
