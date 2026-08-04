@@ -202,8 +202,10 @@ void main() {
   // WINS over the virtual cases, matching the stock line-opacity case order
   // (immovable 0.25, anchored 0.25, virtual, else 1). A jump keeps the 0.5 it
   // has always had so existing surveys look unchanged; a reference is fainter
-  // still, because it is not a leg anyone swims (#27).
-  v_alpha_mul = (a_dim > 0.75) ? ${glslFloat(SHOT_ALPHA_DIMMED)} : ((a_dim > 0.25) ? ${glslFloat(GAS_DIM_ALPHA)} : (isRef ? ${glslFloat(SHOT_ALPHA_REFERENCE)} : (isJump ? ${glslFloat(SHOT_ALPHA_JUMP)} : ${glslFloat(SHOT_ALPHA_NORMAL)})));
+  // still, because it is not a leg anyone swims (#27). The gas-dim (0.45) level
+  // must never BRIGHTEN a fainter per-kind base (a reference at 0.28), so it
+  // clamps against the per-kind alpha via min() rather than replacing it.
+  v_alpha_mul = (a_dim > 0.75) ? ${glslFloat(SHOT_ALPHA_DIMMED)} : ((a_dim > 0.25) ? min(${glslFloat(GAS_DIM_ALPHA)}, (isRef ? ${glslFloat(SHOT_ALPHA_REFERENCE)} : (isJump ? ${glslFloat(SHOT_ALPHA_JUMP)} : ${glslFloat(SHOT_ALPHA_NORMAL)}))) : (isRef ? ${glslFloat(SHOT_ALPHA_REFERENCE)} : (isJump ? ${glslFloat(SHOT_ALPHA_JUMP)} : ${glslFloat(SHOT_ALPHA_NORMAL)})));
   // Signed perpendicular px, along-axis px (from endpoint A; the cap extension
   // shifts each base vert by capSign*outset), and segment length px. The fragment
   // rebuilds the capsule distance and the clamped color fraction from these.

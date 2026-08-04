@@ -76,10 +76,12 @@ export function shotOverlayFeature(
   const overlayKind = shotKindFromFlags(
     deps.cachedSurveyData?.shotFlags[geo.globalIdx] ?? 0,
   );
+  // Gas-dim must never brighten a fainter per-kind base (a reference at 0.28
+  // < GAS_DIM_ALPHA 0.45), matching the shader's min() clamp (#395 review).
   const opacity = deps.isSectionAnchored(sectionId)
     ? SHOT_ALPHA_DIMMED
     : idleActive
-      ? GAS_DIM_ALPHA
+      ? Math.min(GAS_DIM_ALPHA, SHOT_ALPHA_BY_KIND[overlayKind])
       : SHOT_ALPHA_BY_KIND[overlayKind];
   const properties: Record<string, unknown> = {
     kind: measured ? 'shotMeasured' : 'shot',

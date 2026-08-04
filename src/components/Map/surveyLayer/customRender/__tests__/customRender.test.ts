@@ -661,13 +661,29 @@ describe('anchored/immovable dim flag (stock opacity parity)', () => {
     // applies v_alpha_mul to the color. #27 splits the single 0.5 virtual case: a
     // jump keeps 0.5 so existing surveys look unchanged, a reference is fainter
     // because it is not swum. #395 adds a third a_dim level (0.5 = beyond gas
-    // range) mapping to 0.45, between full-dim (1.0) and none (0).
+    // range) mapping to 0.45, between full-dim (1.0) and none (0). The gas-dim
+    // level must never BRIGHTEN a fainter per-kind base (reference at 0.28), so
+    // it clamps against the per-kind alpha via min() rather than replacing it
+    // outright (Codex review on #397).
     expect(LINE_VERTEX_SRC).toContain(
-      'v_alpha_mul = (a_dim > 0.75) ? 0.25 : ((a_dim > 0.25) ? 0.45 : (isRef ? 0.28 : (isJump ? 0.5 : 1.0)));',
+      'v_alpha_mul = (a_dim > 0.75) ? 0.25 : ((a_dim > 0.25) ? min(0.45, (isRef ? 0.28 : (isJump ? 0.5 : 1.0))) : (isRef ? 0.28 : (isJump ? 0.5 : 1.0)));',
     );
     expect(LINE_FRAGMENT_SRC).toContain('col.a * v_alpha_mul * alpha');
     // Circle fragment folds the dim factor into the final alpha (same 3-level map).
+    // Stations have no per-kind base alpha (always 1.0 outside dim), so a flat
+    // replace here cannot brighten anything - unlike the line vertex above.
     expect(CIRCLE_FRAGMENT_SRC).toContain('(v_dim > 0.75) ? 0.25 : ((v_dim > 0.25) ? 0.45 : 1.0)');
+  });
+
+  it('a reference leg beyond gas range keeps its fainter base alpha, never brightens', () => {
+    // Reference base is 0.28; gas-dim is 0.45. min(0.45, 0.28) = 0.28, so the
+    // gas-dim branch for a reference leg must literally contain the reference
+    // constant, not the bare 0.45 gas-dim constant (proves the clamp, not just
+    // its presence).
+    expect(LINE_VERTEX_SRC).toContain('min(0.45, (isRef ? 0.28 : (isJump ? 0.5 : 1.0)))');
+    // A normal shot's per-kind base (1.0) is brighter than gas-dim, so it still
+    // dims down to 0.45 as before.
+    expect(LINE_VERTEX_SRC).not.toContain('a_dim > 0.25) ? 0.45 :');
   });
 });
 
