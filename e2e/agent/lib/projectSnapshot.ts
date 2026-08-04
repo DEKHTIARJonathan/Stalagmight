@@ -325,27 +325,31 @@ export const PRE_SAVE_SNAPSHOT_HEAL_REVERT: KnownAsymmetry = {
 };
 
 /**
- * True when two snapshots disagree about WHICH shots exist rather than how many:
- * every section with a delta holds the same number of shots as expected, but
- * some of them are different shots.
+ * True for bug 8's exact signature: ONE section holds the right NUMBER of shots
+ * but exactly one of them is the wrong shot - one uuid that should be there is
+ * gone and one that should not be there is present.
  *
- * This is bug 8's signature - "after a save/reload an undo deletes the WRONG
- * shot" - and it is a classification tool, never a comparison one: the snapshots
- * are still unequal. `undo-persistence-fuzz` uses it to walk PAST a known bug-8
- * instance in tolerant mode, because bug 8 fires early on the unwind and would
- * otherwise mask the sibling defects that scenario exists to find.
+ * That is what "after a save/reload an undo deletes the WRONG shot" looks like
+ * from the outside: `delete_shot` removed one shot instead of another, so the
+ * count is right and a single identity is swapped. It is a classification tool,
+ * never a comparison one - the snapshots are still unequal.
+ * `undo-persistence-fuzz` uses it to walk PAST a known bug-8 instance in tolerant
+ * mode, because bug 8 fires high on the restored stack and would otherwise mask
+ * the sibling defects that scenario exists to find.
  *
- * Deliberately strict about the shape. A section that GAINED or LOST shots, a
- * one-sided disappearance, and any difference that leaves the uuid sets equal
- * all return false, so the only thing this can absorb is an even identity swap.
+ * Deliberately as narrow as the bug. More than one section affected, more than
+ * one shot swapped, a count change, a one-sided disappearance, or a difference
+ * that leaves the uuid sets equal all return false. In particular the sweeping
+ * re-mint of bug 1 (`redo of CreateSection re-mints EVERY shot uuid`) swaps a
+ * whole section's worth of identities at once and is correctly rejected here -
+ * it is classified by path instead, which is why callers must run
+ * `classifyDiffs` FIRST and only fall through to this when unknown diffs remain.
  */
 export function isShotIdentitySwap(deltas: readonly ShotSetDelta[]): boolean {
-  if (deltas.length === 0) return false;
-  return deltas.every(
-    (delta) =>
-      delta.expectedCount === delta.actualCount &&
-      delta.missing.length > 0 &&
-      delta.missing.length === delta.extra.length,
+  const only = deltas.length === 1 ? deltas[0] : undefined;
+  if (only === undefined) return false;
+  return (
+    only.expectedCount === only.actualCount && only.missing.length === 1 && only.extra.length === 1
   );
 }
 

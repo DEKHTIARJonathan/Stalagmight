@@ -135,10 +135,29 @@ export interface CoverageAction {
   label: string;
 }
 
+/**
+ * `STALAGMIGHT_PERSIST_FUZZ_DELETE_IN_TARGET=1` moves the plan's mid-section
+ * delete onto the TARGET section instead of the spare one.
+ *
+ * That single change is the repro for finding 13 (the stale-id WEDGE), and it is
+ * off by default because it is terminal. A section that has had a shot deleted
+ * has handed out more ids than it has shots, so the newest persisted id runs PAST
+ * the renumbered range: the undo does not hit the wrong shot, it hits nothing,
+ * fails, and `undo_inner` pushes the entry back - after which every entry beneath
+ * it is unreachable for good. The unwind then cannot continue, and the whole
+ * lower two thirds of the stack goes unwalked.
+ *
+ * With the delete on the spare section the target's ids stay inside the
+ * renumbered range, so a stale id COLLIDES instead of missing: the undo succeeds
+ * on the wrong shot (bug 8 / finding 12), the oracle catches it, and the walk
+ * carries on through the rest of the stack. That is the more useful default.
+ */
+export const DELETE_IN_TARGET = process.env.STALAGMIGHT_PERSIST_FUZZ_DELETE_IN_TARGET === '1';
+
 /** State the plan carries between its steps. */
 export interface CoverageMemo {
   /**
-   * The section `createSection` made, and the target of every shot-level step.
+   * The section every shot-level step targets.
    *
    * Deliberately a FRESH section rather than one of the fixture's: it is
    * disconnected, has no zero datum and is in no loop, so `delete_shot`'s
@@ -146,16 +165,23 @@ export interface CoverageMemo {
    * a shot insert. That guard is open bug 6, an in-session defect this scenario
    * is not hunting, and letting it fire here would wedge the history before the
    * persistence walk ever started.
+   *
+   * It also never has a shot DELETED from it (unless `DELETE_IN_TARGET` is set),
+   * which is what keeps every id it hands out inside the range the loader
+   * renumbers into - see that constant for why that matters.
    */
   createdSectionId: number | null;
-  /** Section ids present before `createSection` ran, so the new one is identifiable. */
-  sectionIdsBefore: number[];
+  /**
+   * A second fresh section, whose only job is to be the victim of the plan's
+   * mid-section delete without disturbing the target's id space.
+   */
+  spareSectionId: number | null;
   /** Closure ids present before the plan's `createLoopClosure` step. */
   closureIdsBefore: number[];
 }
 
 export function newCoverageMemo(): CoverageMemo {
-  return { createdSectionId: null, sectionIdsBefore: [], closureIdsBefore: [] };
+  return { createdSectionId: null, spareSectionId: null, closureIdsBefore: [] };
 }
 
 export interface CoverageStep {
@@ -171,6 +197,8 @@ export interface CoverageStep {
   guaranteed: boolean;
   /** Why the step is here, one line, shown in the coverage report. */
   purpose: string;
+  /** Set when the step creates a section the plan needs to keep hold of. */
+  remembers?: 'target' | 'spare';
   build(ctx: ScenarioContext, digest: TargetingDigest, memo: CoverageMemo): CoverageAction | null;
 }
 
@@ -186,7 +214,12 @@ export interface CoverageStep {
 // ---------------------------------------------------------------------------
 
 const COLORS = ['#3388FF', '#FF8833', '#33CC66', '#CC33AA', '#FFCC00', '#6666FF'] as const;
-const SHOT_KINDS = ['Normal', 'Jump', 'Reference'] as const;
+/**
+ * Kinds that differ from `Normal`, which is what every shot this plan creates
+ * starts as. Setting `Normal` would be a forward no-op with a no-op inverse, and
+ * an undo landing on the WRONG shot would then be unobservable.
+ */
+const NON_DEFAULT_SHOT_KINDS = ['Jump', 'Reference'] as const;
 const SURVEY_DIRECTIONS = ['in', 'out'] as const;
 
 function rounded(ctx: ScenarioContext, min: number, max: number, decimals: number): number {
@@ -247,6 +280,38 @@ function shotsOf(digest: TargetingDigest, sectionId: number): number[] {
   return found ? [...found[1]] : [];
 }
 
+/**
+ * A shot whose id will address a DIFFERENT shot after the reload, together with
+ * the position it will then land on.
+ *
+ * The digest lists a section's shot ids in payload (i.e. positional) order, and
+ * the loader renumbers position `i` to `sectionId * FEATURE_ID_STRIDE + i`. So a
+ * persisted id `ids[i]` addresses position `ids[i] - sectionId * STRIDE` after
+ * the reload, and it is a COLLISION exactly when that number is a different, but
+ * still valid, position.
+ *
+ * Targeting such a shot deliberately is what turns "a stale id might hit the
+ * wrong shot" into a property the plan guarantees. Picking uniformly instead
+ * leaves it to luck: a run where every id happens to sit at its own position
+ * exercises the same code and observes nothing, which is how a coverage claim
+ * quietly becomes vacuous.
+ *
+ * Returns null when the section has no colliding shot; callers fall back to any
+ * shot rather than dropping the step, since the entry is still worth having.
+ */
+function pickCollidingShot(
+  ctx: ScenarioContext,
+  digest: TargetingDigest,
+  sectionId: number,
+): { shotId: number; position: number; lands: number } | null {
+  const ids = shotsOf(digest, sectionId);
+  const colliding = ids
+    .map((id, position) => ({ shotId: id, position, lands: id - sectionId * FEATURE_ID_STRIDE }))
+    .filter((entry) => entry.lands !== entry.position && entry.lands >= 0 && entry.lands < ids.length);
+  if (colliding.length === 0) return null;
+  return colliding[ctx.randInt(0, colliding.length - 1)] ?? null;
+}
+
 /** Station refs inside one section, ascending by index. */
 function stationsOf(digest: TargetingDigest, sectionId: number): number[] {
   return digest.st
@@ -265,16 +330,45 @@ function target(memo: CoverageMemo): number | null {
 }
 
 // ---------------------------------------------------------------------------
-// The plan. Order is load-bearing:
+// The plan. The ORDER is the most load-bearing thing in this file, and it is not
+// the obvious one. It was corrected after a 60-iteration run showed the first
+// arrangement could not expose a single stale-id defect.
 //
-//   1-6   build the shot-level history INSIDE the fresh section, and with it the
-//         id-vs-position divergence bug 8 needs. All of it happens while that
-//         section is still disconnected, so no delete guard can refuse an undo.
-//   7-12  section-level and geometry entries.
-//   13-17 the graph entries. The merge comes before the closure because
-//         `create_loop_closure` refuses an unconnected pair, and the whole graph
-//         block comes last so the unwind takes it apart before touching the
-//         shots.
+// ## Why a ProjectSnapshotPair entry is a wall
+//
+// `Shot::id` IS serialized inside a project snapshot (models/shot.rs has no
+// `skip` on it), and `UndoData::ProjectSnapshotPair` restores the whole project
+// verbatim (`restore_snapshot_into`, core/state/undo.rs). So the moment a walk
+// crosses ONE snapshot-pair entry in either direction, the project is back in
+// the PRE-SAVE id space - and every stale id in every entry beyond it is
+// suddenly valid again. A snapshot-pair entry heals the very corruption this
+// scenario is looking for.
+//
+// The exposed window is therefore exactly: from the depth the reload lands on,
+// down to (not including) the first `ProjectSnapshotPair` beneath it. In the
+// first arrangement every snapshot-pair step sat ABOVE the id-bearing ones, so
+// that window was two or three entries wide and contained none of them. 60
+// iterations of it reported only bugs already known.
+//
+// ## The arrangement that follows from that
+//
+//   1     the fresh target section.
+//   2-7   every ProjectSnapshotPair step, as LOW in the stack as their
+//         preconditions allow, so they are the last thing a walk reaches.
+//   8-12  the graph and metadata entries, whose undo data names sections and
+//         uuid-anchored stations rather than shot ids (`StationKey` is
+//         `SectionStart` / `AfterShot(uuid)`, models/station.rs), so they are
+//         id-safe and belong outside the window too.
+//   13-17 EVERY id-bearing entry, contiguous, at the top: two `CreateShot`s
+//         (bug 8's own variant, both anchor forms), two `UpdateShot`s
+//         (`PreviousValues { shot_id }`, whose undo calls
+//         `update_shot(section, stale_id)` and whose redo re-executes
+//         `Command::UpdateShot` with the same id) and a `SetShotKind`
+//         (`InverseCommand`, id-bearing on BOTH the undo and the redo).
+//
+// `MAX_PRE_SAVE_UNDOS` is 4 and this block is 5 entries deep, so wherever the
+// pre-save undos leave the cursor, the reload lands INSIDE the block and the
+// unwind starts on an id-bearing entry against the loader's renumbered ids.
 // ---------------------------------------------------------------------------
 
 export const COVERAGE_STEPS: readonly CoverageStep[] = [
@@ -283,57 +377,36 @@ export const COVERAGE_STEPS: readonly CoverageStep[] = [
     variant: 'CreatedSectionSnapshot',
     guaranteed: true,
     purpose: 'CreatedSectionSnapshot { section_id, section_data }, and the fresh target section',
-    build(ctx, digest, memo) {
-      memo.sectionIdsBefore = sortedSections(digest).map((entry) => entry[0]);
+    remembers: 'target',
+    build(ctx) {
       const data = nominalSection(ctx);
-      return { action: 'createSection', args: [data], label: 'createSection(shots=3)' };
+      return { action: 'createSection', args: [data], label: 'createSection(target,shots=3)' };
     },
   },
   {
-    name: 'createShotBefore',
-    variant: 'CreatedShotSnapshot',
+    name: 'createSectionSpare',
+    variant: 'CreatedSectionSnapshot',
     guaranteed: true,
     purpose:
-      'CreatedShotSnapshot with a BEFORE anchor: the id comes from the allocator while the ' +
-      'position is 0, so ids stop matching positional order - bug 8s precondition',
-    build(ctx, digest, memo) {
-      const sectionId = target(memo);
-      if (sectionId === null) return null;
-      const shotIds = shotsOf(digest, sectionId).sort((a, b) => a - b);
-      const beforeId = shotIds[0];
-      if (beforeId === undefined) return null;
-      return {
-        action: 'createShot',
-        args: [sectionId, nominalShot(ctx), null, beforeId],
-        label: `createShot(s=${sectionId},before=${beforeId})`,
-      };
-    },
-  },
-  {
-    name: 'createShotAfter',
-    variant: 'CreatedShotSnapshot',
-    guaranteed: true,
-    purpose: 'CreatedShotSnapshot with an AFTER anchor (the other redo path in undo.rs)',
-    build(ctx, digest, memo) {
-      const sectionId = target(memo);
-      if (sectionId === null) return null;
-      const shotIds = shotsOf(digest, sectionId).sort((a, b) => a - b);
-      const afterId = shotIds[Math.floor(shotIds.length / 2)];
-      if (afterId === undefined) return null;
-      return {
-        action: 'createShot',
-        args: [sectionId, nominalShot(ctx), afterId],
-        label: `createShot(s=${sectionId},after=${afterId})`,
-      };
+      'a second fresh section, so the DeleteShot pair path has a victim that is NOT the target. ' +
+      'A delete leaves the section with fewer shots than ids handed out, and the plan needs the ' +
+      'targets ids to stay inside the range the loader renumbers into (see DELETE_IN_TARGET)',
+    remembers: 'spare',
+    build(ctx) {
+      const data = nominalSection(ctx);
+      return { action: 'createSection', args: [data], label: 'createSection(spare,shots=3)' };
     },
   },
   {
     name: 'deleteShotMid',
     variant: 'ProjectSnapshotPair',
     guaranteed: true,
-    purpose: 'a mid-section delete: widens the id-vs-position gap and takes the DeleteShot pair path',
+    purpose:
+      'the DeleteShot ProjectSnapshotPair path. Runs on the SPARE section by default; ' +
+      'STALAGMIGHT_PERSIST_FUZZ_DELETE_IN_TARGET=1 moves it onto the target, which is the ' +
+      'repro for finding 13 (the stale-id wedge)',
     build(ctx, digest, memo) {
-      const sectionId = target(memo);
+      const sectionId = DELETE_IN_TARGET ? target(memo) : memo.spareSectionId;
       if (sectionId === null) return null;
       const shotIds = shotsOf(digest, sectionId);
       if (shotIds.length < 3) return null;
@@ -345,113 +418,6 @@ export const COVERAGE_STEPS: readonly CoverageStep[] = [
         action: 'deleteShot',
         args: [sectionId, shotId],
         label: `deleteShot(s=${sectionId},shot=${shotId})`,
-      };
-    },
-  },
-  {
-    name: 'updateShot',
-    variant: 'PreviousValues(shot)',
-    guaranteed: true,
-    purpose:
-      'PreviousValues { section_id, shot_id: Some(..) } on the DIVERGED section: undo calls ' +
-      'update_shot(section, stale_id) and redo re-executes Command::UpdateShot with the same id',
-    build(ctx, digest, memo) {
-      const sectionId = target(memo);
-      if (sectionId === null) return null;
-      const shotIds = shotsOf(digest, sectionId).sort((a, b) => a - b);
-      const shotId = shotIds[ctx.randInt(0, shotIds.length - 1)];
-      if (shotId === undefined) return null;
-      return {
-        action: 'updateShot',
-        args: [
-          sectionId,
-          shotId,
-          { length: rounded(ctx, 1, 15, 2), azimuth_in: rounded(ctx, 0, 359.9, 1) },
-        ],
-        label: `updateShot(s=${sectionId},shot=${shotId})`,
-      };
-    },
-  },
-  {
-    name: 'setShotKind',
-    variant: 'InverseCommand',
-    guaranteed: true,
-    purpose:
-      'InverseCommand(SetShotKind { shot_id }) on the DIVERGED section: both the undo and the ' +
-      'redo re-execute a Command that names the shot by id',
-    build(ctx, digest, memo) {
-      const sectionId = target(memo);
-      if (sectionId === null) return null;
-      const shotIds = shotsOf(digest, sectionId).sort((a, b) => a - b);
-      const shotId = shotIds[ctx.randInt(0, shotIds.length - 1)];
-      if (shotId === undefined) return null;
-      const kind = ctx.pick(SHOT_KINDS);
-      return {
-        action: 'setShotKind',
-        args: [sectionId, shotId, kind],
-        label: `setShotKind(s=${sectionId},shot=${shotId},${kind})`,
-      };
-    },
-  },
-  {
-    name: 'updateSection',
-    variant: 'PreviousValues(section)',
-    guaranteed: true,
-    purpose: 'PreviousValues { section_id, shot_id: None }',
-    build(ctx, digest, memo) {
-      const sectionId = target(memo);
-      if (sectionId === null) return null;
-      // Only the three NON-NULLABLE fields. `name` / `surveyor` / `date` are
-      // open bug 5 (SectionUpdates has no double_option, so undo cannot restore
-      // a previously-null value) - an in-session defect that is already pinned
-      // red and is not what this scenario hunts. Patching it here would make
-      // every iteration fail on bug 5 before the persistence walk started. This
-      // is input selection, not a relaxed oracle: an unexpected change to any of
-      // those three fields still fails.
-      return {
-        action: 'updateSection',
-        args: [
-          sectionId,
-          {
-            color: ctx.pick(COLORS),
-            direction: ctx.pick(SURVEY_DIRECTIONS),
-            quality: ctx.randInt(1, 5),
-          },
-        ],
-        label: `updateSection(s=${sectionId},color/direction/quality)`,
-      };
-    },
-  },
-  {
-    name: 'updateStationComment',
-    variant: 'InverseCommand',
-    guaranteed: true,
-    purpose: 'InverseCommand(SetStationComment { station_ref }) - a positional ref, not an id',
-    build(ctx, digest, memo) {
-      const sectionId = target(memo);
-      if (sectionId === null) return null;
-      const stations = stationsOf(digest, sectionId);
-      const index = stations[ctx.randInt(0, stations.length - 1)];
-      if (index === undefined) return null;
-      return {
-        action: 'updateStationComment',
-        args: [toRef(sectionId, index), `persist-station-${ctx.randInt(0, 9999)}`],
-        label: `updateStationComment(${sectionId}/${index})`,
-      };
-    },
-  },
-  {
-    name: 'moveSection',
-    variant: 'SegmentMoveInfo',
-    guaranteed: true,
-    purpose: 'SegmentMoveInfo { affected_sections, previous_offsets } - section ids, which DO persist',
-    build(ctx, digest, memo) {
-      const sectionId = target(memo);
-      if (sectionId === null) return null;
-      return {
-        action: 'moveSection',
-        args: [sectionId, nominalOffset(ctx)],
-        label: `moveSection(s=${sectionId})`,
       };
     },
   },
@@ -522,34 +488,22 @@ export const COVERAGE_STEPS: readonly CoverageStep[] = [
     },
   },
   {
-    name: 'zeroDatum',
-    variant: 'ZeroDatumInfo',
+    name: 'moveSection',
+    variant: 'SegmentMoveInfo',
     guaranteed: true,
-    purpose:
-      'ZeroDatumInfo { station_ref, previous_gps, previous_offsets }. Adaptive: a fixture that ' +
-      'already has datums (naharon) gets a REMOVE, one that has none (fractal) gets a SET, so ' +
-      'the variant is reached on both without tripping the one-datum-per-component guard',
+    purpose: 'SegmentMoveInfo { affected_sections, previous_offsets } - section ids, which DO persist',
     build(ctx, digest, memo) {
-      const existing = [...digest.z].sort((a, b) => a[0] - b[0] || a[1] - b[1]);
-      const first = existing[0];
-      if (first !== undefined) {
-        return {
-          action: 'removeZeroDatum',
-          args: [toRef(first[0], first[1])],
-          label: `removeZeroDatum(${first[0]}/${first[1]})`,
-        };
-      }
+      // Runs before the merge and before the zero datum, both of which would
+      // refuse it: `Cannot move a segment whose rigid group holds a zero datum`
+      // (core/state/command_move.rs) applies to the whole rigid group, so once
+      // the fresh section is merged into a fixture component that carries one
+      // (naharon ships several) the move is rejected and the variant is lost.
       const sectionId = target(memo);
       if (sectionId === null) return null;
-      const gps = {
-        latitude: rounded(ctx, 20.2, 20.5, 6),
-        longitude: rounded(ctx, -87.5, -87.2, 6),
-        depth_reference: rounded(ctx, 0, 5, 2),
-      };
       return {
-        action: 'setZeroDatum',
-        args: [toRef(sectionId, 0), gps, { fitToBounds: false }],
-        label: `setZeroDatum(${sectionId}/0)`,
+        action: 'moveSection',
+        args: [sectionId, nominalOffset(ctx)],
+        label: `moveSection(s=${sectionId})`,
       };
     },
   },
@@ -622,11 +576,218 @@ export const COVERAGE_STEPS: readonly CoverageStep[] = [
       'ClosureInfo from the REMOVE side (a different arm of the same match in undo.rs). ' +
       'Topology-dependent: it needs a closure to exist, which is either the one above or one ' +
       'the fixture shipped',
-    build(ctx, digest) {
+    build(ctx, digest, memo) {
       const ids = [...digest.c].sort((a, b) => a - b);
-      const id = ids[ctx.randInt(0, ids.length - 1)];
+      // Prefer the closure the step above created. Removing it puts the target
+      // section back to being a pendant of the survey graph, so the shot inserts
+      // that follow are not inserts INTO A LOOP - which `delete_shot` refuses,
+      // wedging their undo (open bug 6). On a fixture that shipped closures the
+      // fallback is any of them, which is still a real ClosureInfo entry.
+      const fresh = ids.filter((id) => !memo.closureIdsBefore.includes(id));
+      const pool = fresh.length > 0 ? fresh : ids;
+      const id = pool[ctx.randInt(0, pool.length - 1)];
       if (id === undefined) return null;
-      return { action: 'removeLoopClosure', args: [id], label: `removeLoopClosure(${id})` };
+      return {
+        action: 'removeLoopClosure',
+        args: [id],
+        label: `removeLoopClosure(${id}${fresh.length > 0 ? ',just-created' : ',pre-existing'})`,
+      };
+    },
+  },
+  {
+    name: 'zeroDatum',
+    variant: 'ZeroDatumInfo',
+    guaranteed: true,
+    purpose:
+      'ZeroDatumInfo { station_ref, previous_gps, previous_offsets }. Adaptive: a fixture that ' +
+      'already has datums (naharon) gets a REMOVE, one that has none (fractal) gets a SET, so ' +
+      'the variant is reached on both without tripping the one-datum-per-component guard',
+    build(ctx, digest, memo) {
+      const existing = [...digest.z].sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+      const first = existing[0];
+      if (first !== undefined) {
+        return {
+          action: 'removeZeroDatum',
+          args: [toRef(first[0], first[1])],
+          label: `removeZeroDatum(${first[0]}/${first[1]})`,
+        };
+      }
+      const sectionId = target(memo);
+      if (sectionId === null) return null;
+      const gps = {
+        latitude: rounded(ctx, 20.2, 20.5, 6),
+        longitude: rounded(ctx, -87.5, -87.2, 6),
+        depth_reference: rounded(ctx, 0, 5, 2),
+      };
+      return {
+        action: 'setZeroDatum',
+        args: [toRef(sectionId, 0), gps, { fitToBounds: false }],
+        label: `setZeroDatum(${sectionId}/0)`,
+      };
+    },
+  },
+  {
+    name: 'updateSection',
+    variant: 'PreviousValues(section)',
+    guaranteed: true,
+    purpose: 'PreviousValues { section_id, shot_id: None }',
+    build(ctx, digest, memo) {
+      const sectionId = target(memo);
+      if (sectionId === null) return null;
+      // Only the three NON-NULLABLE fields. `name` / `surveyor` / `date` are
+      // open bug 5 (SectionUpdates has no double_option, so undo cannot restore
+      // a previously-null value) - an in-session defect that is already pinned
+      // red and is not what this scenario hunts. Patching it here would make
+      // every iteration fail on bug 5 before the persistence walk started. This
+      // is input selection, not a relaxed oracle: an unexpected change to any of
+      // those three fields still fails.
+      return {
+        action: 'updateSection',
+        args: [
+          sectionId,
+          {
+            color: ctx.pick(COLORS),
+            direction: ctx.pick(SURVEY_DIRECTIONS),
+            quality: ctx.randInt(1, 5),
+          },
+        ],
+        label: `updateSection(s=${sectionId},color/direction/quality)`,
+      };
+    },
+  },
+  {
+    name: 'updateStationComment',
+    variant: 'InverseCommand',
+    guaranteed: true,
+    purpose: 'InverseCommand(SetStationComment { station_ref }) - a positional ref, not an id',
+    build(ctx, digest, memo) {
+      const sectionId = target(memo);
+      if (sectionId === null) return null;
+      const stations = stationsOf(digest, sectionId);
+      const index = stations[ctx.randInt(0, stations.length - 1)];
+      if (index === undefined) return null;
+      return {
+        action: 'updateStationComment',
+        args: [toRef(sectionId, index), `persist-station-${ctx.randInt(0, 9999)}`],
+        label: `updateStationComment(${sectionId}/${index})`,
+      };
+    },
+  },
+  {
+    name: 'createShotBefore',
+    variant: 'CreatedShotSnapshot',
+    guaranteed: true,
+    purpose:
+      'CreatedShotSnapshot with a BEFORE anchor: the id comes from the allocator while the ' +
+      'position is 0, so ids stop matching positional order - bug 8s precondition',
+    build(ctx, digest, memo) {
+      const sectionId = target(memo);
+      if (sectionId === null) return null;
+      const shotIds = shotsOf(digest, sectionId).sort((a, b) => a - b);
+      const beforeId = shotIds[0];
+      if (beforeId === undefined) return null;
+      return {
+        action: 'createShot',
+        args: [sectionId, nominalShot(ctx), null, beforeId],
+        label: `createShot(s=${sectionId},before=${beforeId})`,
+      };
+    },
+  },
+  {
+    name: 'createShotAfter',
+    variant: 'CreatedShotSnapshot',
+    guaranteed: true,
+    purpose: 'CreatedShotSnapshot with an AFTER anchor (the other redo path in undo.rs)',
+    build(ctx, digest, memo) {
+      const sectionId = target(memo);
+      if (sectionId === null) return null;
+      const shotIds = shotsOf(digest, sectionId).sort((a, b) => a - b);
+      const afterId = shotIds[Math.floor(shotIds.length / 2)];
+      if (afterId === undefined) return null;
+      return {
+        action: 'createShot',
+        args: [sectionId, nominalShot(ctx), afterId],
+        label: `createShot(s=${sectionId},after=${afterId})`,
+      };
+    },
+  },
+  {
+    name: 'updateShot',
+    variant: 'PreviousValues(shot)',
+    guaranteed: true,
+    purpose:
+      'PreviousValues { section_id, shot_id: Some(..) } on the DIVERGED section: undo calls ' +
+      'update_shot(section, stale_id) and redo re-executes Command::UpdateShot with the same id',
+    build(ctx, digest, memo) {
+      const sectionId = target(memo);
+      if (sectionId === null) return null;
+      const collide = pickCollidingShot(ctx, digest, sectionId);
+      const shotIds = shotsOf(digest, sectionId).sort((a, b) => a - b);
+      const shotId = collide?.shotId ?? shotIds[ctx.randInt(0, shotIds.length - 1)];
+      if (shotId === undefined) return null;
+      return {
+        action: 'updateShot',
+        args: [
+          sectionId,
+          shotId,
+          { length: rounded(ctx, 1, 15, 2), azimuth_in: rounded(ctx, 0, 359.9, 1) },
+        ],
+        label:
+          `updateShot(s=${sectionId},shot=${shotId}` +
+          `${collide ? `,pos ${collide.position} -> lands on ${collide.lands} after reload` : ',no collision available'})`,
+      };
+    },
+  },
+  {
+    name: 'setShotKind',
+    variant: 'InverseCommand',
+    guaranteed: true,
+    purpose:
+      'InverseCommand(SetShotKind { shot_id }) on the DIVERGED section: both the undo and the ' +
+      'redo re-execute a Command that names the shot by id',
+    build(ctx, digest, memo) {
+      const sectionId = target(memo);
+      if (sectionId === null) return null;
+      const collide = pickCollidingShot(ctx, digest, sectionId);
+      const shotIds = shotsOf(digest, sectionId).sort((a, b) => a - b);
+      const shotId = collide?.shotId ?? shotIds[ctx.randInt(0, shotIds.length - 1)];
+      if (shotId === undefined) return null;
+      // NEVER `Normal`. Every shot the plan creates starts `Normal`, so setting
+      // `Normal` would be a forward no-op whose inverse is also a no-op - and an
+      // undo that lands on the WRONG shot would then be invisible. `Jump` /
+      // `Reference` make the difference observable, which is the whole point.
+      const kind = ctx.pick(NON_DEFAULT_SHOT_KINDS);
+      return {
+        action: 'setShotKind',
+        args: [sectionId, shotId, kind],
+        label:
+          `setShotKind(s=${sectionId},shot=${shotId},${kind}` +
+          `${collide ? `,pos ${collide.position} -> lands on ${collide.lands} after reload` : ',no collision available'})`,
+      };
+    },
+  },
+  {
+    name: 'updateShotTop',
+    variant: 'PreviousValues(shot)',
+    guaranteed: true,
+    purpose:
+      'a SECOND PreviousValues { shot_id } entry, so the id-bearing block at the top of the ' +
+      'stack is five deep - one more than MAX_PRE_SAVE_UNDOS. That is what guarantees the ' +
+      'reload lands inside the block whatever the pre-save undo count draws',
+    build(ctx, digest, memo) {
+      const sectionId = target(memo);
+      if (sectionId === null) return null;
+      const collide = pickCollidingShot(ctx, digest, sectionId);
+      const shotIds = shotsOf(digest, sectionId).sort((a, b) => a - b);
+      const shotId = collide?.shotId ?? shotIds[ctx.randInt(0, shotIds.length - 1)];
+      if (shotId === undefined) return null;
+      return {
+        action: 'updateShot',
+        args: [sectionId, shotId, { depth_out: rounded(ctx, 0, 30, 2), left: rounded(ctx, 0.1, 4, 2) }],
+        label:
+          `updateShot(s=${sectionId},shot=${shotId},top` +
+          `${collide ? `,pos ${collide.position} -> lands on ${collide.lands} after reload` : ',no collision available'})`,
+      };
     },
   },
 ];
