@@ -110,6 +110,7 @@ pnpm lint:ts-file-size                                             # TS file-siz
 pnpm lint:readonly-gates:test && pnpm lint:readonly-gates          # read-only gating tripwire (a CI gate)
 pnpm lint:private-leaks                                            # no internal/personal refs in the public tree (a CI gate)
 pnpm lint:no-em-dash:test && pnpm lint:no-em-dash                  # ASCII hyphens only, no Unicode dashes (a CI gate)
+pnpm lint:third-party:test && pnpm lint:third-party                # third-party attribution bundle is current (a CI gate)
 cargo fmt --manifest-path src-tauri/Cargo.toml --check             # Rust formatting
 TELEMETRY_ENDPOINT=http://localhost/dummy \
   cargo clippy --manifest-path src-tauri/Cargo.toml --features telemetry --all-targets   # deny-level lints

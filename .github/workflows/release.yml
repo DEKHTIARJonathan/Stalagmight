@@ -34,6 +34,14 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm tsc --noEmit
+      # The attribution bundle ships inside every installer, and the leak-scan
+      # workflow that normally gates it runs on branch/PR events only - a
+      # direct tag push would otherwise publish installers carrying a stale
+      # THIRD-PARTY-LICENSES.md.
+      - name: Third-party license bundle gate
+        run: |
+          node scripts/check-third-party-licenses.test.mjs
+          node scripts/check-third-party-licenses.mjs
       - run: cargo test --manifest-path src-tauri/Cargo.toml --features telemetry
         env:
           XDG_CONFIG_HOME: ${{ runner.temp }}/config

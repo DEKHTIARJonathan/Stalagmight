@@ -65,6 +65,10 @@ const ATTRIBUTION_BASENAMES = new Set([
   'authors', 'authors.md', 'contributors', 'contributors.md',
   'license', 'license.md', 'license-mit', 'license-apache', 'notice',
   'changelog.md', 'codeowners',
+  // Generated verbatim third-party license texts: upstream copyright lines
+  // legitimately contain first names that collide with the maintainer-name
+  // markers. Every other rule still scans the file.
+  'third-party-licenses.md',
 ]);
 
 // One rule per marker. `re` MUST carry the `g` flag (scanned with exec-in-loop).
