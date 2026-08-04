@@ -22,6 +22,7 @@ import {
   blankRow,
   canSubmit,
   collectShots,
+  countEditsPastCap,
   deleteRows,
   deriveAngleMode,
   deriveAzimuthMode,
@@ -190,19 +191,20 @@ export default function ImportDialog() {
   const applyGridEdits = useCallback(
     (edits: CellEdit[]) => {
       if (editingBlocked) return;
-      // Functional: the grid calls this once PER cleared cell when several
-      // required cells are emptied at once, and each call computing from the
-      // same captured `drafts` meant only the last one survived - while the grid
+      // Decide the capped-paste toast BEFORE scheduling state. Reading the drop
+      // count back out of the updater used to lose it: the updater can run later
+      // than this function returns (so the read saw a stale 0 and the toast
+      // vanished) or twice under StrictMode (which would double it). The cap is
+      // only ever reached by a paste, which arrives as one batch against the
+      // rows on screen, so `drafts.length` here is the same count `applyEdits`
+      // would see - no updater `prev` needed.
+      const droppedPastCap = countEditsPastCap(drafts.length, edits);
+      // Still functional: the grid calls this once PER cleared cell when several
+      // required cells are emptied at once, and each call computing from the same
+      // captured `drafts` meant only the last one survived - while the grid
       // showed them all cleared, so Create could go green with a measurement the
-      // user believed they had removed. The toast below is read back OUT of the
-      // updater rather than fired inside it, because an updater can run more
-      // than once (StrictMode) and would double it.
-      let droppedPastCap = 0;
-      setDrafts((current) => {
-        const { rows: next, droppedPastCap: dropped } = applyEdits(current, edits, nextKey);
-        droppedPastCap = dropped;
-        return next;
-      });
+      // user believed they had removed.
+      setDrafts((current) => applyEdits(current, edits, nextKey).rows);
       if (droppedPastCap > 0) {
         showToast(
           t('newSection.pasteCapped', { count: droppedPastCap }),
@@ -211,7 +213,7 @@ export default function ImportDialog() {
         );
       }
     },
-    [editingBlocked, nextKey, showToast, t]
+    [editingBlocked, drafts, nextKey, showToast, t]
   );
 
   // The J/R cell goes through that same funnel, addressing its row by grid

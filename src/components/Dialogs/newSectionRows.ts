@@ -172,24 +172,40 @@ export interface ApplyEditsResult {
   droppedPastCap: number;
 }
 
+/**
+ * How many of `edits` would be refused for landing past the row cap, given a
+ * list currently `currentRowCount` rows long.
+ *
+ * The cap bounds GROWTH only, so an already-long list raises the ceiling to its
+ * own length (an existing row stays editable however far down it is). One source
+ * of truth for both {@link applyEdits} and the host's capped-paste toast, which
+ * must agree - and the host must be able to count WITHOUT the drafts updater's
+ * `prev`, because a value read back out of a deferred (or StrictMode-doubled)
+ * updater is unreliable. A paste, the only edit that can reach the cap, arrives
+ * as one batch against the committed rows, so the current count is enough.
+ */
+export function countEditsPastCap(currentRowCount: number, edits: CellEdit[]): number {
+  const limit = Math.max(currentRowCount, MAX_PASTE_ROWS);
+  let dropped = 0;
+  for (const e of edits) if (e.row >= limit) dropped++;
+  return dropped;
+}
+
 export function applyEdits(
   rows: ShotDraft[],
   edits: CellEdit[],
   nextKey: () => number
 ): ApplyEditsResult {
+  const droppedPastCap = countEditsPastCap(rows.length, edits);
   const byRow = new Map<number, CellEdit[]>();
   let maxRow = -1;
-  let droppedPastCap = 0;
   // The cap bounds GROWTH, never editing: a row that already exists is always
   // editable, however far down it is. Bounding by the raw index instead meant
   // that once the list legitimately passed the cap (two big pastes), typing
   // into those rows was discarded and the cell silently reverted.
   const limit = Math.max(rows.length, MAX_PASTE_ROWS);
   for (const e of edits) {
-    if (e.row >= limit) {
-      droppedPastCap++;
-      continue;
-    }
+    if (e.row >= limit) continue;
     if (e.row > maxRow) maxRow = e.row;
     const arr = byRow.get(e.row);
     if (arr) arr.push(e);

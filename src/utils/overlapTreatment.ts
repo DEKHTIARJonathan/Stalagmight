@@ -9,6 +9,7 @@
  */
 import type { CrossSectionSuggestion, DmpFile } from '../types/commands';
 import type { OverlapMode } from '../types/config';
+import type { EditableShot } from '../components/common/ShotTableEditor';
 import { isEmittedShot } from '../components/common/emittedShots';
 import { convertToEditableShots } from '../hooks/useImportState';
 import { useProjectStore } from '../store/projectStore';
@@ -102,6 +103,27 @@ export function removeExistingShotUpdatesForSections(
   sectionIndices: Set<number>,
 ): ExistingShotUpdateLocal[] {
   return updates.filter((update) => !sectionIndices.has(update.importSectionIndex));
+}
+
+/**
+ * Resolve the array position of a target-import overlap row by its ORIGINAL
+ * identity, not by raw array position.
+ *
+ * `computeTargetShotIndex` answers in the target section's ORIGINAL DMP
+ * ordering, and `convertToEditableShots` stamps each original shot's `id` with
+ * exactly that index - so the value it returns IS the id of the row to treat.
+ * Rows the user added in the wizard carry their own temp ids and shift every
+ * position after them, so `shots[dmpIndex]` lands on an inserted row whenever
+ * one sits before the overlap, treating the wrong row and leaving the real
+ * overlap row untouched. Matching on the non-new row whose id equals the DMP
+ * index instead follows the shot through inserts AND deletions (the same
+ * identity-key rule the edit dialog's frozen-index resolution relies on). On an
+ * unedited section (id === position, nothing new) it returns the same index the
+ * old positional lookup did. Returns -1 when no such row exists.
+ */
+function resolveTargetRowIndex(shots: readonly EditableShot[], dmpIndex: number): number {
+  if (dmpIndex < 0) return -1;
+  return shots.findIndex((shot) => shot.isNew !== true && shot.id === dmpIndex);
 }
 
 export function applyAllOverlapTreatments(
@@ -453,8 +475,11 @@ export function applyAllOverlapTreatments(
 
         let hasUntreatedTarget = false;
         for (const overlapId of actionableIds) {
-          const targetShotIdx = computeTargetShotIndex(overlapId, overlapParams);
-          if (targetShotIdx >= 0 && targetShotIdx < targetEdits.shots.length) {
+          const targetShotIdx = resolveTargetRowIndex(
+            targetEdits.shots,
+            computeTargetShotIndex(overlapId, overlapParams),
+          );
+          if (targetShotIdx >= 0) {
             const shot = targetEdits.shots[targetShotIdx];
             if (shot && !shot.isDeleted && !treatedShots.has(`${targetImportIndex}:${shot.id}`)) {
               hasUntreatedTarget = true;
@@ -473,8 +498,11 @@ export function applyAllOverlapTreatments(
           let skippedOutOfRange = 0, skippedAlreadyTreated = 0, skippedNoImport = 0;
 
           for (const overlapId of actionableIds) {
-            const targetShotIdx = computeTargetShotIndex(overlapId, overlapParams);
-            if (targetShotIdx < 0 || targetShotIdx >= targetShots.length) { skippedOutOfRange++; continue; }
+            const targetShotIdx = resolveTargetRowIndex(
+              targetShots,
+              computeTargetShotIndex(overlapId, overlapParams),
+            );
+            if (targetShotIdx < 0) { skippedOutOfRange++; continue; }
 
             const targetShot = targetShots[targetShotIdx];
             if (!targetShot || targetShot.isDeleted) { skippedAlreadyTreated++; continue; }
