@@ -1064,6 +1064,7 @@ const EMPTY_DIM = {
   immovableShotFeatureIds: new Set<number>(),
   gasDimStationFeatureIds: new Set<number>(),
   gasDimShotFeatureIds: new Set<number>(),
+  planIdleDim: false,
 };
 
 /** Fixture + a station comment on g0 (section 1) and a shot comment on shot 0. */

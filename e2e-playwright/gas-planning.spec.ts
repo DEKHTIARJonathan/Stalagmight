@@ -473,7 +473,16 @@ test.describe('Gas planning', () => {
     await expect(page.locator('[data-testid="gas-legend-loading"]')).not.toBeVisible();
     await expect(page.locator('[data-testid="cylinders-table"]')).not.toBeVisible();
     await setMapZoom(page, zoom);
-    expect(await stationPaints(page, LAST_REACHABLE, sectionKey)).toBe(true);
+    // No leaked SECTION color either (#395 revision, owner feedback): the whole
+    // survey renders the gas ramp's dim far tint while the origin is unanswered -
+    // matching "beyond gas range" everywhere, so it's coherent with the gas
+    // scheme instead of the section-color map underneath it. Not the plain
+    // section color, not the exact undimmed far color (it's alpha-blended), and
+    // not grey (grey is reserved for "unconnected", which has no meaning yet).
+    const idleColors = await stationColors(page, LAST_REACHABLE);
+    expect(idleColors.has(sectionKey)).toBe(false);
+    expect(idleColors.has(GAS_FAR_KEY)).toBe(false);
+    expect(idleColors.has(await greyKey(page))).toBe(false);
 
     // Answering it reveals the full rig and the ramp.
     await chooseEntrance(page);

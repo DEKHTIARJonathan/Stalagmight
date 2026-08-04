@@ -5,7 +5,7 @@ import {
   STATION_FLAG_IS_ZERO_DATUM,
   type SurveyData,
 } from '../../../../../types/survey-data';
-import { SurveyCustomController, type CustomSyncParams } from '../controller';
+import { SurveyCustomController, buildCustomDimState, type CustomSyncParams } from '../controller';
 import type { CustomRenderData } from '../surveyCustomLayer';
 import { CUSTOM_RENDER_SYNC_HOOK } from '../gate';
 
@@ -572,5 +572,27 @@ describe('SurveyCustomController highlight width/radius resolution (C2)', () => 
     expect(d.lineSelectWidthMul).toBeCloseTo(1.5);
     expect(d.circleHoverSizeMul).toBeCloseTo(2.5);
     expect(d.circleSelectSizeMul).toBeCloseTo(1.5);
+  });
+});
+
+/**
+ * Plan-mode idle tint (#395 revision): `buildCustomDimState`'s `planIdleDim`
+ * output. The per-vertex GAS_DIM_LEVEL/anchored-wins-over-idle precedence itself
+ * is exercised through `colorResolvers.test.ts` (color) and the gas-planning e2e
+ * spec (the full renderer, incl. this dim path).
+ */
+describe('buildCustomDimState plan-idle tint (#395 revision)', () => {
+  const noSets = new Set<number>();
+
+  it('carries planIdleDim through untouched when no gas-reach mode is active', () => {
+    const off = buildCustomDimState(noSets, noSets, noSets, false, null, false);
+    expect(off.planIdleDim).toBe(false);
+    const on = buildCustomDimState(noSets, noSets, noSets, false, null, true);
+    expect(on.planIdleDim).toBe(true);
+  });
+
+  it('defaults planIdleDim to false when the caller omits it', () => {
+    const state = buildCustomDimState(noSets, noSets, noSets, false, null);
+    expect(state.planIdleDim).toBe(false);
   });
 });
