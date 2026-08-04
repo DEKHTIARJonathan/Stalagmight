@@ -132,10 +132,14 @@ impl Project {
                         }
                     }
                     if let Some((a, b)) = found {
-                        if !self.has_direct_merge(a, b)
-                            && !replacement_merges
-                                .iter()
-                                .any(|(ra, rb)| (*ra == a && *rb == b) || (*ra == b && *rb == a))
+                        if self.replacement_merge_allowed(
+                            a,
+                            b,
+                            &section_stations,
+                            &replacement_merges,
+                        ) && !replacement_merges
+                            .iter()
+                            .any(|(ra, rb)| (*ra == a && *rb == b) || (*ra == b && *rb == a))
                         {
                             replacement_merges.push((a, b));
                         }
@@ -229,6 +233,157 @@ impl Project {
                 }
             }
         }
+    }
+
+    /// May a deletion auto-invent a replacement merge between `a` and `b`?
+    ///
+    /// Every "replacement merge" site stitches a torn merge group back together
+    /// through an ARBITRARILY picked surviving pair. Left unguarded that mints
+    /// exactly the states the rest of the integrity machinery exists to repair:
+    /// a rigid merge welding two independently anchored components (what
+    /// [`Self::demote_double_anchoring_merges`] has to demote), a merge sharing a
+    /// station pair with a loop closure (what [`Self::create_loop_closure`]
+    /// refuses to create), or a redundant merge across sections an aligned
+    /// closure already holds rigid (what [`Self::merge_stations`] refuses
+    /// interactively).
+    ///
+    /// `doomed` is the set of stations the deletion is about to remove, and
+    /// `planned` the replacement merges already accepted in this batch. Guards 3
+    /// and 4 ask about the graph that REMAINS: every site runs BEFORE the doomed
+    /// stations' own merges are dropped, so reading the live graph would see the
+    /// very connection the deletion is about to sever and answer "already
+    /// connected" for every candidate - and a batch that adds pair after pair
+    /// against an unchanging `self` would weld two anchored components together
+    /// in two hops.
+    ///
+    /// `false` means SKIP THIS PAIR: the two components simply stay separate. No
+    /// alternative pair is hunted for, and nothing softer is invented in its
+    /// place - the pair is arbitrary, so a closure here would fabricate a survey
+    /// relationship nobody measured.
+    pub(crate) fn replacement_merge_allowed(
+        &self,
+        a: StationRef,
+        b: StationRef,
+        doomed: &HashSet<StationRef>,
+        planned: &[(StationRef, StationRef)],
+    ) -> bool {
+        // 1. The merge is already there.
+        if self.has_direct_merge(a, b) {
+            return false;
+        }
+        // 2. A closure already describes this pair. Merge-and-closure on one
+        //    pair is the state `create_loop_closure` refuses and the demotion
+        //    has to normalize; the surviving closure keeps the soft topology,
+        //    and `convert_orphan_closures_to_merges` is the designed path to
+        //    promote it later if that ever becomes valid.
+        if self.are_stations_in_closure(a, b) {
+            return false;
+        }
+        // 3. The sections are already rigidly connected without the doomed
+        //    stations - merges plus ALIGNED closures, the same graph
+        //    `merge_stations` tests before rejecting a redundant merge. A
+        //    same-section pair lands here too: a section's own shots already
+        //    hold its stations rigid.
+        if self
+            .connected_sections_after_removal(a.section_id, doomed, planned, true)
+            .contains(&b.section_id)
+        {
+            return false;
+        }
+        // 4. Both halves survive independently anchored. Welding them is the
+        //    over-constraint `over_anchored_merge_components` reports; each half
+        //    holds its own position through its own datum, so creating NOTHING
+        //    lets the deletion heal a file that was already over-anchored.
+        !self.would_double_anchor_after_removal(a.section_id, b.section_id, doomed, planned)
+    }
+
+    /// Sections reachable from `from` through merges - and, when
+    /// `follow_aligned_closures`, aligned loop closures - once every edge
+    /// anchored on a `doomed` station is gone and the `planned` replacement
+    /// merges are in place.
+    ///
+    /// Post-deletion twin of [`Self::get_rigid_connected_section_ids`] /
+    /// [`Self::get_merged_section_ids`], which read the live graph (the latter
+    /// through a memo that must keep describing the merges that actually exist,
+    /// so a "what if these were gone" question must never go through it).
+    fn connected_sections_after_removal(
+        &self,
+        from: SectionId,
+        doomed: &HashSet<StationRef>,
+        planned: &[(StationRef, StationRef)],
+        follow_aligned_closures: bool,
+    ) -> HashSet<SectionId> {
+        // An endpoint that no longer resolves cannot carry connectivity either
+        // (matching `build_merge_components_excluding_section`).
+        let survives = |key: &StationKey| -> Option<SectionId> {
+            let station = self.resolve_key(key)?;
+            (!doomed.contains(&station)).then_some(station.section_id)
+        };
+        let mut edges: Vec<(SectionId, SectionId)> = Vec::new();
+        for merge in &self.station_merges {
+            if let (Some(x), Some(y)) = (survives(&merge.station_a), survives(&merge.station_b)) {
+                edges.push((x, y));
+            }
+        }
+        for (x, y) in planned {
+            edges.push((x.section_id, y.section_id));
+        }
+        if follow_aligned_closures {
+            for closure in self.loop_closures.iter().filter(|lc| lc.is_aligned) {
+                if let (Some(x), Some(y)) =
+                    (survives(&closure.station_a), survives(&closure.station_b))
+                {
+                    edges.push((x, y));
+                }
+            }
+        }
+
+        let mut connected: HashSet<SectionId> = HashSet::new();
+        let mut queue = vec![from];
+        while let Some(current) = queue.pop() {
+            if !connected.insert(current) {
+                continue;
+            }
+            for &(x, y) in &edges {
+                if x == current && !connected.contains(&y) {
+                    queue.push(y);
+                } else if y == current && !connected.contains(&x) {
+                    queue.push(x);
+                }
+            }
+        }
+        connected
+    }
+
+    /// Would merging sections `a` and `b` put two zero datums in one rigid merge
+    /// group, once the `doomed` stations (and any datum they carry) are gone and
+    /// the `planned` replacement merges are in place?
+    ///
+    /// Post-deletion twin of [`Self::merge_would_double_anchor`], down to the
+    /// merges-ONLY component definition it and
+    /// [`Self::over_anchored_merge_components`] share - so the guard and the
+    /// detector that would flag the result cannot disagree.
+    fn would_double_anchor_after_removal(
+        &self,
+        a: SectionId,
+        b: SectionId,
+        doomed: &HashSet<StationRef>,
+        planned: &[(StationRef, StationRef)],
+    ) -> bool {
+        let component_a = self.connected_sections_after_removal(a, doomed, planned, false);
+        if component_a.contains(&b) {
+            // Already one merge component - a redundant merge adds no anchor.
+            return false;
+        }
+        let anchored = |component: &HashSet<SectionId>| {
+            self.zero_datums
+                .iter()
+                .filter_map(|zd| self.resolve_key(&zd.station_ref))
+                .filter(|sr| !doomed.contains(sr))
+                .any(|sr| component.contains(&sr.section_id))
+        };
+        anchored(&component_a)
+            && anchored(&self.connected_sections_after_removal(b, doomed, planned, false))
     }
 
     /// Like `build_merge_components` but excludes ALL stations from a given section
@@ -354,7 +509,7 @@ impl Project {
                         }
                     }
                     if let Some((a, b)) = found {
-                        if !self.has_direct_merge(a, b)
+                        if self.replacement_merge_allowed(a, b, removed, &replacement_merges)
                             && !replacement_merges
                                 .iter()
                                 .any(|(ra, rb)| (*ra == a && *rb == b) || (*ra == b && *rb == a))
