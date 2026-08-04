@@ -520,10 +520,18 @@ export function ShotTableEditor({
   const onEdit = useCallback(
     (rowIndex: number, colKey: string, value: unknown) => {
       if (readOnly) return;
+      // The kind cell is a badge, not a value: on the trailing blank it renders
+      // nothing to click and answers no Space, because a shot whose only content
+      // is "Jump" is an incomplete row that blocks Save. Typing `j` reached the
+      // grid's other keyboard route into a click-only column and materialized
+      // exactly that row, so this closes it - the two deliberate refusals and
+      // this one now say the same thing. Only the interactive path comes through
+      // here; a paste carrying a kind still grows the table via onBatchEdit.
+      if (colKey === 'kind' && isPhantomAt(rowIndex)) return;
       const index = resolveRowForEdit(rowIndex);
       if (index >= 0) applyEditAt(index, colKey, value);
     },
-    [readOnly, resolveRowForEdit, applyEditAt]
+    [readOnly, isPhantomAt, resolveRowForEdit, applyEditAt]
   );
 
   /**
@@ -791,7 +799,15 @@ export function ShotTableEditor({
         <SpreadsheetGrid<EditableShot>
           columns={columns}
           rows={readOnly ? visibleShots : gridRows}
-          rowKey={(s, i) => s.tempId ?? s.id ?? i}
+          // Namespaced like EditSectionDialog's own shot key: temp ids and
+          // imported ids are both small integers drawn from separate counters,
+          // so a bare `tempId ?? id` collides the moment the mNemo wizard shows
+          // a fresh row beside an imported one. React then reuses one row's DOM
+          // for the other, and the grid's missing-cell marks - keyed off this
+          // very value - paint on the twin.
+          rowKey={(s, i) =>
+            s.tempId != null ? `t:${s.tempId}` : s.id != null ? `i:${s.id}` : `x:${i}`
+          }
           rowTestId={(_s, i) => `shot-row-${i}`}
           cellTestId={(_s, i, colKey) => `shot-cell-${i}-${colKey}`}
           testIdPrefix="shot-editor"
@@ -813,7 +829,17 @@ export function ShotTableEditor({
           columnWidths={columnWidths}
           onColumnWidthsChange={setColumnWidths}
           onPasteReport={onPasteReport}
-          {...(readOnly ? {} : { onInsertRows, onDeleteRows, pasteGrowsRows: growRows })}
+          {...(readOnly
+            ? {}
+            : {
+                onInsertRows,
+                onDeleteRows,
+                pasteGrowsRows: growRows,
+                // The trailing blank is rendered, never stored, so the row menu
+                // must not count it: it used to say "3 shots" over a gutter drag
+                // that ended on it, then insert three and delete two.
+                trailingPlaceholderRows: 1,
+              })}
         />
       </div>
     </div>
