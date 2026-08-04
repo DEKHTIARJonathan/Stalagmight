@@ -1009,15 +1009,20 @@ export default function DataTable({ sections }: DataTableProps) {
   // the detail panel / map. A contiguous run of >1 real shot opens the
   // bulk-delete flow (or the section-delete confirm when the whole section is
   // selected).
+  /** Returns false because this NEVER deletes here: it opens a confirm and the
+   *  rows are still on screen until the user answers. The grid collapses the
+   *  selection only on a delete that happened, so cancelling the dialog no
+   *  longer leaves the rows with their selection gone. */
   const onShotDeleteRows = useCallback(
-    (fromRow: number, toRow: number) => {
-      if (!selectedSection || editingBlocked) return;
+    (fromRow: number, toRow: number): boolean => {
+      if (!selectedSection || editingBlocked) return false;
       setSource('data-table');
       const inRange = rowEntries
         .slice(fromRow, toRow + 1)
         .flatMap((e) => (e.kind === 'shot' ? [{ shot: e.shot, shotIndex: e.shotIndex }] : []));
       discardDraftRows(fromRow, toRow);
-      if (inRange.length === 0) return;
+      // Draft rows only: those ARE gone, so the collapse is right here.
+      if (inRange.length === 0) return true;
 
       const total = selectedSection.shots.length;
       const sectionName =
@@ -1034,7 +1039,7 @@ export default function DataTable({ sections }: DataTableProps) {
           sectionName
         );
         openDialog(dialog, data);
-        return;
+        return false;
       }
 
       const firstIdx = inRange[0]!.shotIndex;
@@ -1045,7 +1050,7 @@ export default function DataTable({ sections }: DataTableProps) {
       // unreachable in practice.
       if (lastIdx - firstIdx + 1 !== inRange.length) {
         showToast(t('dataTable.multiDeleteUnsupported'), 'data-table-delete', 'warning');
-        return;
+        return false;
       }
 
       const { kind } = deriveRangeDeleteParams(firstIdx, lastIdx, total);
@@ -1056,7 +1061,7 @@ export default function DataTable({ sections }: DataTableProps) {
           sectionId: selectedSection.id,
           sectionName,
         });
-        return;
+        return false;
       }
 
       openDialog('bulk-delete', {
@@ -1069,6 +1074,8 @@ export default function DataTable({ sections }: DataTableProps) {
         startStationIndex: firstIdx,
         endStationIndex: lastIdx + 1,
       });
+      // Never deleted here - a dialog is open and the rows are still on screen.
+      return false;
     },
     [selectedSection, editingBlocked, rowEntries, discardDraftRows, showToast, t, openDialog]
   );
