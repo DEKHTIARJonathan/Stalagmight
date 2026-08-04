@@ -643,11 +643,28 @@ fn undo_of_create_shot_in_an_anchored_loop_succeeds() {
 //     correctly - the offset returns to (0, 0) and `check_merge_alignment()`
 //     stays empty on both paths.
 //
-// The remaining lead is undo-of-`RepairIntegrity`, whose `before` snapshot is
-// documented to carry the >=tolerance drift Repair healed (see the comment in
-// `undo()`), and which therefore RELIES on the reconcile epilogue. Constructing
-// it needs a project that already holds real drift - i.e. the drift source this
-// list says is missing - so it is circular without a fixture.
+// The undo-of-`RepairIntegrity` lead was then tried directly, because its
+// `before` snapshot is documented to carry the drift Repair healed (see the
+// comment in `undo()`) and it therefore RELIES on the reconcile epilogue. Two
+// repairable shapes were built and measured; neither diverges:
+//
+//   * bug 3's displaced section - `repair_open_project_integrity` returns
+//     `changed = false`, so no undo entry is pushed at all. The `pos == 0`
+//     branch had already dropped the merge, and for a now-disconnected section
+//     the displaced offset IS what `resolve_offsets` re-derives.
+//   * finding 10's orphan closure - repair fires (`fixed = 1`,
+//     `changed = true`), but `undo()` and `undo_to(0)` land on identical
+//     projects (1 closure, 0 merges, section offset (5, 5)). `reconcile_geometry`
+//     is `realign_merges`, which early-returns while `check_merge_alignment()`
+//     is empty - and it is empty in both, so the epilogue is a no-op and its
+//     absence cannot be observed.
+//
+// That is the general shape of the difficulty: `realign_merges` IS
+// `resolve_offsets` behind a tolerance gate, and every command's own epilogue
+// has already run it, so a persistently misaligned merge is not reachable
+// through the command API. Bug 7 needs drift produced by ANOTHER bug (3, or its
+// ratchet) that leaves a SURVIVING merge misaligned - which long fuzzer
+// histories on real topologies reach and minimal synthesis does not.
 //
 // Left uncovered deliberately rather than covered by a test that passes.
 // Reproduce with the fuzzer seeds above.
