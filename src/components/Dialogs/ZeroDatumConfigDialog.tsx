@@ -290,6 +290,34 @@ export default function ZeroDatumConfigDialog({
     [insertShotAt]
   );
 
+  /** Soft-delete every selected index in ONE update, re-anchoring the station
+   *  pick once for the whole run. Without this the editor falls back to calling
+   *  `handleDeleteShot` per index, and each call rebuilds from the captured
+   *  `shots` - so only the last selected row actually went, and the station was
+   *  re-anchored as though one shot had been removed. */
+  const handleDeleteShots = useCallback(
+    (indices: number[]): boolean => {
+      const targets = indices.filter((i) => shots[i] && !shots[i]!.isDeleted);
+      if (targets.length === 0) return false;
+      const survivors = shots.filter((s) => !s.isDeleted).length;
+      const next = [...shots];
+      for (const i of targets) next[i] = { ...next[i]!, isDeleted: true };
+      setShots(next);
+      // Anchor against the EARLIEST removal, shifted by the whole run.
+      const first = Math.min(...targets);
+      commitStation(
+        reanchorStation(
+          stationIndex,
+          survivorsBefore(shots, first),
+          -targets.length,
+          survivors - targets.length,
+        ),
+      );
+      return true;
+    },
+    [shots, stationIndex, commitStation]
+  );
+
   const handleDeleteShot = useCallback(
     (index: number) => {
       const shot = shots[index];
@@ -484,6 +512,7 @@ export default function ZeroDatumConfigDialog({
                 onAddShots={handleAddShots}
                 onInsertShots={handleInsertShots}
                 onDeleteShot={handleDeleteShot}
+                onDeleteShots={handleDeleteShots}
                 onInsertBefore={handleInsertBefore}
                 onInsertAfter={handleInsertAfter}
                 expanded={expanded}

@@ -577,8 +577,14 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           | Record<string, unknown>
           | undefined) ?? {}),
       };
+      // Its OWN seed, deliberately not derived from the edit-section one. The
+      // production change gave the import-time grids separate `import_shots_*`
+      // fields precisely so reshaping columns mid-import cannot rewrite the
+      // edit-section layout; seeding both from one hook would let a regression
+      // that reads or writes the wrong slice look identical to correct
+      // behaviour, in the mock that exists to prove they stay apart.
       const mockImportShotsView: Record<string, unknown> = {
-        ...(((window as unknown as Record<string, unknown>).__E2E_SEED_EDIT_SECTION_VIEW__ as
+        ...(((window as unknown as Record<string, unknown>).__E2E_SEED_IMPORT_SHOTS_VIEW__ as
           | Record<string, unknown>
           | undefined) ?? {}),
       };
