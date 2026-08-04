@@ -2090,6 +2090,17 @@ function MapCanvas() {
     }
   }, [showGasPlan, gasReachField, surveyData, mapLoaded, surveyLayerRef, gasFieldFailed]);
 
+  // Plan-mode idle tint (#395 revision): while Plan is active but no gas origin has
+  // been chosen yet, tint the whole survey the gas ramp's dim far color instead of
+  // leaking section colors under the gas color scheme. Driven purely off
+  // `gasOriginChosen`, not off `gasReachField` - SurveyLayer itself yields to a real
+  // field the moment one is set (see setGasReach / isPlanIdleActive), so this clears
+  // the instant an origin is chosen even before the field's first fetch resolves.
+  useEffect(() => {
+    if (!surveyLayerRef.current || !mapLoaded) return;
+    surveyLayerRef.current.setPlanIdleTint(showGasPlan && !gasOriginChosen);
+  }, [showGasPlan, gasOriginChosen, mapLoaded, surveyLayerRef]);
+
   // Highlight the picked route over the survey (#233): full-opacity swum legs + faded jumps (#243).
   useEffect(() => {
     if (!surveyLayerRef.current || !mapLoaded) return;

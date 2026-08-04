@@ -9,7 +9,7 @@ import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
 import { selectActiveSurveyData } from '../../store/geometrySelectors';
 import { surveyDataFromLegacy, shotKindFromFlags } from '../../types/survey-data';
-import { SHOT_ALPHA_BY_KIND, SHOT_ALPHA_DIMMED } from './surveyLayer/customRender/shaders';
+import { SHOT_ALPHA_BY_KIND, SHOT_ALPHA_DIMMED, GAS_DIM_ALPHA } from './surveyLayer/customRender/shaders';
 import { hasLiveStyle } from './mapUtils';
 import { buildGhostFeatures } from './surveyLayer/ghostFeatures';
 import {
@@ -331,6 +331,11 @@ export default class SurveyLayer {
   // the shots/stations color paint), enforced upstream in uiStore.
   private gasReachMode: boolean = false;
   private gasReachState: GasReachFeatureState | null = null;
+  // Plan-mode idle tint (#395 revision): true while Plan is active but no gas
+  // origin has been chosen yet - the whole survey renders the gas ramp's dim far
+  // color instead of leaking section colors under the gas scheme. Driven by
+  // MapCanvas (setPlanIdleTint); yields to a real gas field via isPlanIdleActive().
+  private planIdleTint: boolean = false;
   // Gas route highlight (#233): the current picked-route legs. Re-applied after every source
   // rebuild (its own GeoJSON source survives setData, but a feature rebuild re-pushes the data).
   private gasRouteLegs: (RouteLeg & { color: string })[] = [];
@@ -1585,6 +1590,7 @@ export default class SurveyLayer {
       themeColors: this.themeColors,
       showIssueSeverity: this.showIssueSeverity && !!this.cachedIssueSeverity,
       issueSeverity: this.cachedIssueSeverity,
+      planIdleTint: this.isPlanIdleActive(),
     };
   }
 
@@ -1609,14 +1615,20 @@ export default class SurveyLayer {
     const fid = this.parseFeatureId(idStr);
     const measured = fid !== null && this.measuredPathIds?.has(fid);
     const section = this.geoIndex.section(sectionId);
+    // Plan-mode idle tint (#395 revision): a hovered/selected shot must not flash
+    // its section color while there is no gas field yet - it paints the SAME flat
+    // far color + dim alpha the bulk geometry does.
+    const idleActive = this.isPlanIdleActive();
     const color = measured
       ? this.measureTintColor
-      : resolveShotDisplayColor(
-          this.cachedSurveyData,
-          section?.color ?? this.themeColors.stationDefault,
-          geo.globalIdx,
-          this.displayColorContext(),
-        );
+      : idleActive
+        ? GAS_FAR
+        : resolveShotDisplayColor(
+            this.cachedSurveyData,
+            section?.color ?? this.themeColors.stationDefault,
+            geo.globalIdx,
+            this.displayColorContext(),
+          );
     // Per-kind, from the same table the shader is generated from (#27):
     // `geo.isReference` is "any virtual kind", so a flat 0.5 here drew a
     // hovered/selected reference tie brighter than its own base geometry.
@@ -1625,7 +1637,9 @@ export default class SurveyLayer {
     );
     const opacity = this.isSectionAnchored(sectionId)
       ? SHOT_ALPHA_DIMMED
-      : SHOT_ALPHA_BY_KIND[overlayKind];
+      : idleActive
+        ? GAS_DIM_ALPHA
+        : SHOT_ALPHA_BY_KIND[overlayKind];
     const properties: Record<string, unknown> = {
       kind: measured ? 'shotMeasured' : 'shot',
       color,
@@ -1675,14 +1689,19 @@ export default class SurveyLayer {
     const section = this.geoIndex.section(ref.section_id);
     const ctx = this.displayColorContext();
     const measured = fid !== null && this.measuredPathStationIds?.has(fid);
+    // Plan-mode idle tint (#395 revision): see shotOverlayFeature - same flat far
+    // color + dim alpha instead of section color while there is no gas field yet.
+    const idleActive = this.isPlanIdleActive();
     const color = measured
       ? this.measureTintColor
-      : resolveStationDisplayColor(
-          this.cachedSurveyData,
-          section?.color ?? this.themeColors.stationDefault,
-          g,
-          ctx,
-        );
+      : idleActive
+        ? GAS_FAR
+        : resolveStationDisplayColor(
+            this.cachedSurveyData,
+            section?.color ?? this.themeColors.stationDefault,
+            g,
+            ctx,
+          );
     const properties: Record<string, unknown> = {
       kind: 'station',
       color,
@@ -1690,7 +1709,7 @@ export default class SurveyLayer {
       strokeWidth: style === 'hover' ? 4 : 2.5,
       strokeColor:
         style === 'hover' ? this.themeColors.hoverHighlight : this.themeColors.selectHighlight,
-      opacity: this.isSectionAnchored(ref.section_id) ? 0.25 : 1,
+      opacity: this.isSectionAnchored(ref.section_id) ? 0.25 : idleActive ? GAS_DIM_ALPHA : 1,
     };
     if (this.distanceMode && fid !== null) {
       properties.dist = this.distanceState?.stations.get(fid) ?? -1;
@@ -1743,6 +1762,29 @@ export default class SurveyLayer {
     this.resyncCustomRenderFromStore();
     // Beyond-gas-range dimming (#395) follows the same mode/state - toggling
     // Plan mode (or a budget change) applies/clears the gas-dim set.
+    this.syncCustomDimming();
+  }
+
+  /** True when the plan-idle tint should actually paint: the flag is set AND no
+   *  real gas field is active - a real field always wins (#395 revision). */
+  private isPlanIdleActive(): boolean {
+    return this.planIdleTint && !(this.gasReachMode && this.gasReachState);
+  }
+
+  /**
+   * Tint the whole survey uniformly in the gas ramp's dim far color (#395
+   * revision) while Plan mode is active but no gas origin has been chosen yet -
+   * keeps the map coherent with the gas color scheme before there is a field to
+   * shade. Mirrors {@link setGasReach}'s wiring exactly (recolor + redim, no
+   * feature rebuild); cleared the instant a real field goes live or Plan mode
+   * exits (MapCanvas drives both).
+   */
+  setPlanIdleTint(enabled: boolean): void {
+    if (this.planIdleTint === enabled) return;
+    this.planIdleTint = enabled;
+    if (!this.map || !hasLiveStyle(this.map)) return;
+    this.applyOverlayPaint();
+    this.resyncCustomRenderFromStore();
     this.syncCustomDimming();
   }
 
@@ -2471,7 +2513,7 @@ export default class SurveyLayer {
    *  station/section labels, immovable + gas-dim dim individual shot/station labels;
    *  comments and section-name immovable/gas-dim are left bright, matching stock). */
   private syncCustomDimming(): void {
-    const dim = buildCustomDimState(this.anchoredSectionIds, this.immovableStationFeatureIds, this.immovableShotFeatureIds, this.gasReachMode, this.gasReachState);
+    const dim = buildCustomDimState(this.anchoredSectionIds, this.immovableStationFeatureIds, this.immovableShotFeatureIds, this.gasReachMode, this.gasReachState, this.isPlanIdleActive());
     this.customRender?.setDimming(dim);
     this.customLabels?.setDimming(dim);
   }
@@ -3327,6 +3369,9 @@ export default class SurveyLayer {
       // Move-comment palette tint (#52): custom features carry no commentColor
       // property, so the resolvers recompute it (only while move_comment is active).
       commentTint: this.activeTool === 'move_comment',
+      // Plan-mode idle tint (#395 revision): paints every feature the gas ramp's
+      // dim far color while there is no origin yet.
+      planIdleTint: this.isPlanIdleActive(),
     };
     this.customRender.sync({
       surveyData,

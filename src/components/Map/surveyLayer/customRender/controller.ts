@@ -153,6 +153,10 @@ export interface CustomDimState {
   immovableShotFeatureIds: ReadonlySet<number>;
   gasDimStationFeatureIds: ReadonlySet<number>;
   gasDimShotFeatureIds: ReadonlySet<number>;
+  /** Plan-mode idle tint (#395 revision): true dims EVERY station/shot at the
+   *  lighter {@link GAS_DIM_LEVEL} (0.5), mirroring "beyond gas range" before an
+   *  origin is chosen - full anchored/immovable dim (1.0) still wins. */
+  planIdleDim: boolean;
 }
 
 /** Shared empty-set sentinel for every "nothing dimmed/emphasized" case below -
@@ -166,6 +170,7 @@ const EMPTY_DIM: CustomDimState = {
   immovableShotFeatureIds: EMPTY_FEATURE_SET,
   gasDimStationFeatureIds: EMPTY_FEATURE_SET,
   gasDimShotFeatureIds: EMPTY_FEATURE_SET,
+  planIdleDim: false,
 };
 
 /** The per-vertex `a_dim` / `v_dim` level for "beyond gas range" (#395): between
@@ -183,11 +188,13 @@ export function buildCustomDimState(
   immovableShotFeatureIds: ReadonlySet<number>,
   gasReachMode: boolean,
   gasReachState: GasReachFeatureState | null,
+  planIdleDim = false,
 ): CustomDimState {
   return {
     anchoredSectionIds, immovableStationFeatureIds, immovableShotFeatureIds,
     gasDimStationFeatureIds: gasReachMode ? gasBeyondReachFeatureIds(gasReachState?.stations) : EMPTY_FEATURE_SET,
     gasDimShotFeatureIds: gasReachMode ? gasBeyondReachFeatureIds(gasReachState?.shots) : EMPTY_FEATURE_SET,
+    planIdleDim,
   };
 }
 
@@ -534,29 +541,31 @@ export class SurveyCustomController {
     return data;
   }
 
-  /** True when some anchored section, immovable feature, or gas-dim feature is
-   *  currently set. */
+  /** True when some anchored section, immovable feature, gas-dim feature, or the
+   *  plan-idle tint is currently set. */
   private hasDimming(): boolean {
     return (
       this.dimState.anchoredSectionIds.size > 0 ||
       this.dimState.immovableStationFeatureIds.size > 0 ||
       this.dimState.immovableShotFeatureIds.size > 0 ||
       this.dimState.gasDimStationFeatureIds.size > 0 ||
-      this.dimState.gasDimShotFeatureIds.size > 0
+      this.dimState.gasDimShotFeatureIds.size > 0 ||
+      this.dimState.planIdleDim
     );
   }
 
   /** Per-station / per-shot dim LEVEL predicates for the current {@link dimState}:
    *  a feature dims fully (1) when its section is anchored OR its featureId is
    *  immovable; else it dims at {@link GAS_DIM_LEVEL} (0.5) when its featureId is
-   *  beyond the active gas-reach budget - full dim wins on overlap. */
+   *  beyond the active gas-reach budget OR the plan-idle tint (#395 revision) is
+   *  on (every feature dims) - full dim wins on overlap either way. */
   private dimPredicates(surveyData: SurveyData): {
     dimForStation: (g: number) => number;
     dimForShot: (globalShotIdx: number, sectionId: number) => number;
   } {
     const {
       anchoredSectionIds, immovableStationFeatureIds, immovableShotFeatureIds,
-      gasDimStationFeatureIds, gasDimShotFeatureIds,
+      gasDimStationFeatureIds, gasDimShotFeatureIds, planIdleDim,
     } = this.dimState;
     return {
       dimForStation: (g: number): number => {
@@ -568,7 +577,8 @@ export class SurveyCustomController {
         ) {
           return 1;
         }
-        return gasDimStationFeatureIds.size > 0 && gasDimStationFeatureIds.has(fid) ? GAS_DIM_LEVEL : 0;
+        const gasDim = gasDimStationFeatureIds.size > 0 && gasDimStationFeatureIds.has(fid);
+        return gasDim || planIdleDim ? GAS_DIM_LEVEL : 0;
       },
       dimForShot: (globalShotIdx: number, sectionId: number): number => {
         const fid = sectionId * FEATURE_ID_STRIDE + surveyData.shotIds[globalShotIdx]!;
@@ -578,7 +588,8 @@ export class SurveyCustomController {
         ) {
           return 1;
         }
-        return gasDimShotFeatureIds.size > 0 && gasDimShotFeatureIds.has(fid) ? GAS_DIM_LEVEL : 0;
+        const gasDim = gasDimShotFeatureIds.size > 0 && gasDimShotFeatureIds.has(fid);
+        return gasDim || planIdleDim ? GAS_DIM_LEVEL : 0;
       },
     };
   }

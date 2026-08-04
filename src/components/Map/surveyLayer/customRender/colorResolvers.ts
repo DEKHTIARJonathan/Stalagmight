@@ -20,6 +20,7 @@ import {
   resolveStationStrokeColor,
   type DisplayColorContext,
 } from '../displayColor';
+import { GAS_FAR } from '../../../../utils/gasReach';
 import { packCssColor, type Rgba8 } from './colorPack';
 import { makeOverlayColor } from './overlayColor';
 
@@ -76,11 +77,18 @@ export function makeColorResolvers(
   // to an active overlay (checked first) exactly as `shotsLineColor` does.
   const commentTint = colorCtx.commentTint === true;
 
+  // Plan-mode idle tint (#395 revision): every shot/station paints the gas
+  // ramp's flat far color while there is no origin (and hence no `overlay`) yet.
+  // Checked after `overlay` (a real field wins outright) and before the comment
+  // tint, mirroring the "an active overlay owns color outright" precedence.
+  const planIdleColor = !overlay && colorCtx.planIdleTint === true ? pack(GAS_FAR) : null;
+
   const colorForShot = (shotGlobalIdx: number, sectionId: number): Rgba8 => {
     if (overlay && overlayColor) {
       const fid = encodeFeatureId(sectionId, surveyData.shotIds[shotGlobalIdx]!);
       return overlayColor(overlay.shots.get(fid) ?? -1);
     }
+    if (planIdleColor) return planIdleColor;
     if (commentTint && surveyData.shotComments.get(shotGlobalIdx)) {
       return pack(commentColorForKey(`${sectionId}:s${surveyData.shotIds[shotGlobalIdx]!}`));
     }
@@ -97,6 +105,7 @@ export function makeColorResolvers(
       const c = colorForShot(shotGlobalIdx, sectionId);
       return [c, c];
     }
+    if (planIdleColor) return [planIdleColor, planIdleColor];
     const sectionColor = sectionById.get(sectionId)?.color ?? stationDefault;
     const [from, to] = resolveShotEndpointColors(surveyData, sectionColor, shotGlobalIdx, colorCtx);
     return [pack(from), pack(to)];
@@ -107,6 +116,7 @@ export function makeColorResolvers(
       const fid = encodeFeatureId(sectionId, surveyData.stationIndices[g]!);
       return overlayColor(overlay.stations.get(fid) ?? -1);
     }
+    if (planIdleColor) return planIdleColor;
     if (commentTint && surveyData.stationComments.get(g)) {
       return pack(commentColorForKey(`${sectionId}:st${surveyData.stationIndices[g]!}`));
     }
@@ -122,7 +132,7 @@ export function makeColorResolvers(
   // depth sub-layer too (applyOverlayPaint), so in both the depth-endpoint path
   // is off and shots draw the flat colorForShot (with the comment tint coalesced).
   const useDepthEndpoints =
-    colorCtx.showDepthGradient && !colorCtx.showIssueSeverity && !overlay && !commentTint;
+    colorCtx.showDepthGradient && !colorCtx.showIssueSeverity && !overlay && !commentTint && !planIdleColor;
 
   return {
     colorForShot,

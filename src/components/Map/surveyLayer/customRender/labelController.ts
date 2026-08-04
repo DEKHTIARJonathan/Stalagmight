@@ -140,6 +140,7 @@ const EMPTY_DIM: CustomDimState = {
   immovableShotFeatureIds: new Set<number>(),
   gasDimStationFeatureIds: new Set<number>(),
   gasDimShotFeatureIds: new Set<number>(),
+  planIdleDim: false,
 };
 /** Drag-exclusion set - the SAME shape the geometry controller takes
  *  ({@link CustomRenderExclusion}); dragged features' labels hide. */
