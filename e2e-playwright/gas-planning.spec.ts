@@ -1379,7 +1379,7 @@ test.describe('Gas planning', () => {
     await expect.poll(getCalls, { timeout: 2000 }).toEqual(['undo', 'redo']);
   });
 
-  test('Ctrl+I import is blocked in Plan but works in Survey (read-only-map guard, #243) @smoke', async ({
+  test('Ctrl+I in Plan opens the picker but the router rejects the DMP with the read-only dialog (#243, #407) @smoke', async ({
     page,
   }) => {
     const openCount = () =>
@@ -1396,16 +1396,34 @@ test.describe('Gas planning', () => {
         window as unknown as { __MOCK_RESET_DIALOG_OPEN_COUNT__: () => void }
       ).__MOCK_RESET_DIALOG_OPEN_COUNT__(),
     );
+    // One door (#407): Ctrl+I opens the unified picker even in Plan mode - the old
+    // pre-guard that swallowed the keystroke is gone, because a .stalx open or an
+    // import-as-new-project is legal here. The #243 read-only guard moved to the
+    // router: the mocked picker returns a .dmp (the one additive, mutating import),
+    // and THAT is rejected - with a dialog naming the fix, not silence.
     // The default seed has no eligible closures, so Plan's forced closureAdjusted
     // reverts to measured - the exact trap a geometryMode-only guard would miss.
     await page.keyboard.press('Control+i');
-    expect(await openCount()).toBe(0);
+    await expect.poll(openCount, { timeout: 2000 }).toBeGreaterThan(0);
+    const errorDialog = page.getByTestId('error-dialog');
+    await expect(errorDialog).toBeVisible({ timeout: 5000 });
+    await expect(errorDialog).toContainText('Switch to Survey mode');
+    await errorDialog.locator('button:has-text("OK")').click();
+    await expect(errorDialog).toBeHidden({ timeout: 5000 });
 
-    // Survey positive control: the picker DOES open, proving the recorder is live and
-    // the 0 above is the guard, not a broken keybinding.
+    // Survey positive control: the same keystroke + the same mocked .dmp now routes
+    // into the DMP import flow (no error dialog), proving the rejection above is the
+    // read-only guard, not a broken keybinding or an always-on error path.
     await enterMode(page, 'survey');
+    await page.evaluate(() =>
+      (
+        window as unknown as { __MOCK_RESET_DIALOG_OPEN_COUNT__: () => void }
+      ).__MOCK_RESET_DIALOG_OPEN_COUNT__(),
+    );
     await page.keyboard.press('Control+i');
     await expect.poll(openCount, { timeout: 2000 }).toBeGreaterThan(0);
+    await expect(page.getByTestId('dmp-selection-dialog')).toBeVisible({ timeout: 5000 });
+    await expect(page.getByTestId('error-dialog')).toHaveCount(0);
   });
 
   test('the planned route renders as a highlighted overlay @smoke', async ({ page }) => {
