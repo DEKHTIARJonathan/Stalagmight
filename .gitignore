@@ -31,8 +31,18 @@ summary-fn-*.md
 src-tauri/WixTools/
 src-tauri/target/
 
-# Project files (binary, change frequently)
+# Commiting fixtures even with user consent is strictly prohibitted
+# User must commit and push/PR all fixtures manually.
 *.stalx
+*.tml
+*.tmlu
+*.mak
+*.dat
+*.wpj
+*.srv
+*.dmp
+*.gpx
+*.csv
 
 # Test artifacts
 playwright-report/

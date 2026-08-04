@@ -134,6 +134,11 @@ pre-PR review has run at least once on the current change: `/pre-pr` in Claude C
 If the user states that the pre-PR review has already run, take them at their word and
 proceed.
 
+Never open a PR in which either the current state or history contains fixture files 
+(*.stalx, *.tml, *.tmlu, *.mak, *.dat, *.wpj, *.srv, *.dmp, *.gpx, *.csv,...) even if 
+not including them breaks tests or behaviour. User MUST commit and PR/push fixtures 
+deliberately and manually. LLM-driven push/PR of these fixtures is not allowed.
+
 ### Rust lints + formatting are CI-gated
 
 The `check` job enforces **both** `cargo fmt --check` and `cargo clippy`
@@ -187,6 +192,20 @@ including the one drift shape the gate cannot see.
 
 Make small, frequent commits as you work. Don't accumulate large uncommitted changesets.
 Do not wait for user to prompt for commits, make commits as you go.
+
+### Never commit or extract fixtures and limit their use
+Commiting fixtures (*.stalx, *.tml, *.tmlu, *.mak, *.dat, *.wpj, *.srv, *.dmp, *.gpx, 
+*.csv, ...) is strictly prohibitted even with users explicit consent. User can and 
+should commit and push them manually if they wish to include them in the public repo.
+
+Fixtures outside of this repository may be used for testing purposes with users explicit
+consent. These tests should be marked skip and only run when the required fixtures are
+available through the external paths.
+
+When constructing tests (for example to prevent regressions), never extract parts of 
+external fixtures. You can create fully synthetic data that reporoduces the issue such
+that no data is leaked.
+
 
 ### Changelog
 
