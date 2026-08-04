@@ -144,8 +144,8 @@ impl Project {
             }
         }
 
-        // Add replacement merges (via the helper so the adjacency cache
-        // stays consistent for subsequent BFS calls in this transaction).
+        // Add replacement merges (via the helper, which keeps the adjacency memo
+        // warm for the BFS calls later in this transaction).
         for (a, b) in &replacement_merges {
             let (Some(ka), Some(kb)) = (self.key_for_ref(*a), self.key_for_ref(*b)) else {
                 continue;

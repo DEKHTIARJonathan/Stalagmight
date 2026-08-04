@@ -130,9 +130,9 @@ impl Project {
         );
         self.adjust_rigid_group_offsets(moving_section_id, offset_x, offset_y);
 
-        // Record the merge via the helper so the merge-adjacency cache
-        // stays in sync. (Direct push would silently skip the cache,
-        // forcing the next BFS into the O(N) fallback path.)
+        // Record the merge through the named entry point (it forwards to
+        // MergeTopology::push, which carries the adjacency memo forward with an
+        // O(1) delta instead of dropping it).
         let (Some(key_a), Some(key_b)) = (self.key_for_ref(station_a), self.key_for_ref(station_b))
         else {
             return Err("Cannot merge: station has no stable anchor".to_string());
