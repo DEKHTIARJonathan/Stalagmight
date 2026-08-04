@@ -157,6 +157,14 @@ function warningsFor(
   return out;
 }
 
+/** Angle legs for a row that exists on screen but not yet in `shots`. */
+const UNSET_ANGLE_LEGS = {
+  azimuth_in: NaN,
+  azimuth_out: NaN,
+  pitch_in: null,
+  pitch_out: null,
+} as const;
+
 /** The blank trailing row. Rendered, never stored: `onAddShot` turns it into a
  *  real shot the first time a value lands in it. */
 const PHANTOM_ROW: EditableShot = {
@@ -431,14 +439,19 @@ export function ShotTableEditor({
    *  full-array index. */
   const applyEditAt = useCallback(
     (index: number, colKey: string, value: unknown) => {
-      const shot = shots[index];
+      // The trailing blank has just been materialized by `resolveRowForEdit`, so
+      // its index is one past the `shots` this render was given. Fall back to an
+      // unset row rather than skipping the averaged-column branch, which would
+      // write the VIRTUAL key ('_azimuth_avg') onto the shot as a real field and
+      // drop the value - on the primary way of adding a shot.
+      const shot = shots[index] ?? UNSET_ANGLE_LEGS;
       // An averaged column fans back out to its two legs. Routed through the data
       // table's `buildShotUpdates` rather than a local rule, so both grids offset
       // the legs by (new mean - old mean) and PRESERVE the spread between them.
       // The editor used to set both legs to the typed value, which was invisible
       // while the average was the only azimuth column on screen and is plainly
       // wrong now that the legs can be shown next to it.
-      if (shot && (colKey === EDITABLE_AZIMUTH_AVG_KEY || colKey === EDITABLE_PITCH_AVG_KEY)) {
+      if (colKey === EDITABLE_AZIMUTH_AVG_KEY || colKey === EDITABLE_PITCH_AVG_KEY) {
         for (const [field, next] of Object.entries(buildShotUpdates(shot, [{ colKey, value }]))) {
           onShotChange(index, field as keyof EditableShot, next as number | string | null);
         }
@@ -544,6 +557,28 @@ export function ShotTableEditor({
     [readOnly, actualIndex, onDeleteShot, onDeleteShots, visibleShots.length]
   );
 
+  /** Missing values whose column is HIDDEN, as the eye menu's row identities.
+   *  Without this, turning an angle family OFF (a first-class menu choice) hides
+   *  every column the mark could land on, so an incomplete row shows nothing at
+   *  all - the blocker names the row but never the field. */
+  const hiddenProblems = useMemo(() => {
+    const problems = new Set<string>();
+    const rowIdentity: Record<string, string> = {
+      length: 'length',
+      depth_in: 'depthIn',
+      depth_out: 'depthOut',
+      [EDITABLE_AZIMUTH_AVG_KEY]: 'azimuth',
+      azimuth_in: 'azimuth',
+      azimuth_out: 'azimuth',
+    };
+    for (const shot of visibleShots) {
+      for (const key of missingRequiredCells(shot, EDITABLE_AZIMUTH_AVG_KEY, hiddenColumns)) {
+        if (hiddenColumns.has(key) && rowIdentity[key]) problems.add(rowIdentity[key]);
+      }
+    }
+    return problems;
+  }, [visibleShots, hiddenColumns]);
+
   // Required-but-empty cells get the grid's red missing tint, so an incomplete
   // row points at the cells to fill rather than only naming the row.
   const cellClassName = useCallback(
@@ -628,6 +663,7 @@ export function ShotTableEditor({
           buttonTestId="shot-editor-columns-menu"
           dropdownTestId="shot-editor-columns-dropdown"
           extraRows={{ warnings: true }}
+          problems={hiddenProblems}
           angleModes={{
             azimuth: { mode: azimuthMode, onPick: (m) => setAngleMode('azimuth', m) },
             inclination: { mode: inclinationMode, onPick: (m) => setAngleMode('pitch', m) },
