@@ -65,6 +65,7 @@ import {
   rerankSuggestionsByTemporalPlan,
 } from '../../utils/dmpTemporalRerank';
 import { extractFilename } from '../../utils/path';
+import { blockedByIncompleteShots, countIncompleteShots } from '../common/incompleteShots';
 import { aggregateImportReceipts } from '../../utils/importReceipt';
 import type { ImportReceipt } from '../../types/ipc/ImportReceipt';
 
@@ -2717,8 +2718,15 @@ export default function DmpNewImportDialog({
 
   // Confirm handler - records a virtual connection + overlap info (instant, no backend call).
   // Overlap treatment is deferred to applyAllOverlapTreatments which runs before batch import.
+  /** Rows in the edited section that hold something but are not a usable shot. */
+  const incompleteEditedShots = useMemo(
+    () => countIncompleteShots(editState?.shots ?? []),
+    [editState]
+  );
+
   const handleConfirm = useCallback(async () => {
     if (!currentSuggestion) return;
+    if (blockedByIncompleteShots(incompleteEditedShots, t, 'dmp-wizard-incomplete')) return;
     if (suggestionActionInFlightRef.current || transitionToPlacingInFlightRef.current) return;
     suggestionActionInFlightRef.current = true;
     try {
@@ -2805,6 +2813,7 @@ export default function DmpNewImportDialog({
 
   // Skip handler (suggesting phase)
   const handleSkip = useCallback(async () => {
+    if (blockedByIncompleteShots(incompleteEditedShots, t, 'dmp-wizard-incomplete')) return;
     if (!currentSuggestion) return;
     if (suggestionActionInFlightRef.current || transitionToPlacingInFlightRef.current) return;
     suggestionActionInFlightRef.current = true;

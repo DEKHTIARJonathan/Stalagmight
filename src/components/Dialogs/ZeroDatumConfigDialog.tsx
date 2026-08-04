@@ -1,7 +1,6 @@
 import { useState, useCallback, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
-import { isBlankNewShot, isShotComplete } from '../common/editableShotStatus';
-import { EDITABLE_AZIMUTH_AVG_KEY } from '../common/editableShotColumns';
+import { blockedByIncompleteShots, countIncompleteShots } from '../common/incompleteShots';
 import { DialogWrapper } from './DialogWrapper';
 import SectionPreview from './SectionPreview';
 import { Button } from '../common/Button';
@@ -294,31 +293,12 @@ export default function ZeroDatumConfigDialog({
     [shots, stationIndex, commitStation]
   );
 
-  /** Rows that hold SOMETHING but are not a usable shot. A row added and left
-   *  entirely blank is nothing at all and is dropped; a half-filled one would
-   *  otherwise carry a NaN length or depth into the import, which the grid writes
-   *  deliberately to mean "no measurement". */
-  const incompleteShots = useMemo(
-    () =>
-      shots.filter(
-        (shot) =>
-          shot.isDeleted !== true &&
-          !isBlankNewShot(shot) &&
-          !isShotComplete(shot, EDITABLE_AZIMUTH_AVG_KEY)
-      ).length,
-    [shots]
-  );
+  /** Rows that hold something but are not a usable shot - see countIncompleteShots. */
+  const incompleteShots = useMemo(() => countIncompleteShots(shots), [shots]);
 
   const handleConfirm = useCallback(() => {
     if (!gpsCoords) return;
-    if (incompleteShots > 0) {
-      showToast(
-        t('editSection.incompleteBlocked', { count: incompleteShots }),
-        'zero-datum-incomplete',
-        'warning'
-      );
-      return;
-    }
+    if (blockedByIncompleteShots(incompleteShots, t, 'zero-datum-incomplete')) return;
     onConfirm({
       sectionIndex,
       stationIndex,
