@@ -65,7 +65,7 @@
     reason = "the generators take &mut Fuzzer uniformly; some branches happen not to draw, and               splitting the signature by branch would make the generator table unreadable"
 )]
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
 use tempfile::TempDir;
@@ -399,7 +399,15 @@ fn diff_snapshots(expected: &str, actual: &str) -> Vec<Diff> {
 }
 
 fn describe_diffs(diffs: &[Diff]) -> String {
-    let shown = diffs.len().min(8);
+    // Eight is enough to recognise a shape and short enough to read; a triage
+    // run that needs the whole list sets `STALAGMIGHT_RUST_FUZZ_VERBOSE=1`
+    // rather than editing this number, which is how the eight got chosen twice.
+    let limit = if std::env::var("STALAGMIGHT_RUST_FUZZ_VERBOSE").is_ok() {
+        MAX_DIFFS
+    } else {
+        8
+    };
+    let shown = diffs.len().min(limit);
     let mut lines: Vec<String> = diffs[..shown]
         .iter()
         .map(|d| {
@@ -486,10 +494,47 @@ impl MoveCtx<'_> {
     /// Does `diff` sit on the `section_offsets` key of a section finding 3 has
     /// already displaced, with the exact value it left on one side of it?
     fn is_finding_3_leftover(&self, diff: &Diff) -> bool {
-        self.displaced.iter().any(|(section_id, value)| {
-            diff.path == format!("section_offsets.{section_id}")
-                && (diff.expected == *value || diff.actual == *value)
-        })
+        let Some((section_id, element)) = offset_key_of(&diff.path) else {
+            return false;
+        };
+        let Some(recorded) = self.displaced.get(&section_id) else {
+            return false;
+        };
+        // For a whole-key diff the recorded text is the pair; for an element diff
+        // it is that element of the pair. Either way the leftover has to appear
+        // VERBATIM on one side, so a section that has since acquired a different
+        // offset is not this and still fails.
+        let Some(leftover) = element.map_or_else(
+            || Some(recorded.clone()),
+            |index| {
+                serde_json::from_str::<serde_json::Value>(recorded)
+                    .ok()?
+                    .get(index)
+                    .map(ToString::to_string)
+            },
+        ) else {
+            return false;
+        };
+        diff.expected == leftover || diff.actual == leftover
+    }
+}
+
+/// `(section, element)` for a diff path inside `section_offsets`.
+///
+/// A whole key (`section_offsets.5`) is what an absent-vs-present difference
+/// produces; an element (`section_offsets.5[0]`) is what a key that exists on
+/// BOTH sides produces, because the differ recurses into the pair. The two
+/// spellings are the same defect seen through a different starting state, and a
+/// classifier that knew only the first silently stopped classifying as soon as
+/// the section already had an offset.
+fn offset_key_of(path: &str) -> Option<(SectionId, Option<usize>)> {
+    let rest = path.strip_prefix("section_offsets.")?;
+    match rest.split_once('[') {
+        None => rest.parse().ok().map(|id| (id, None)),
+        Some((id, index)) => {
+            let index = index.strip_suffix(']')?.parse().ok()?;
+            id.parse().ok().map(|id| (id, Some(index)))
+        }
     }
 }
 
@@ -643,7 +688,13 @@ const CLASSIFIERS: &[Classifier] = &[
             let Some(section_id) = ctx.appended_into_empty() else {
                 return false;
             };
-            d.path == format!("section_offsets.{section_id}")
+            // Both spellings: the section may or may not already have had an
+            // offset, and the differ recurses into a pair that exists on both
+            // sides (`section_offsets.5[0]`) while reporting a whole key when it
+            // does not (`section_offsets.5`). The RATCHET half of the finding
+            // only ever produces the second shape, so a classifier that matched
+            // only the first could not see it.
+            offset_key_of(&d.path).is_some_and(|(id, _)| id == section_id)
         },
     },
     // FINDING 3, CASCADING - and the answer to what FINDING 15 was.
@@ -775,6 +826,95 @@ fn is_shot_identity_swap(expected: &str, actual: &str) -> bool {
         }
     }
     swapped
+}
+
+/// Does this subtree name station 0 of `section_id`?
+///
+/// Station 0 of any section is `StationKey { section_id, anchor: SectionStart }`
+/// (models/station.rs), and every stored station reference - a merge endpoint, a
+/// zero datum, a station-comment key - serializes to that shape. Matching the
+/// SHAPE rather than each container's field names is what lets one predicate
+/// cover all three lists.
+fn names_station_zero(value: &serde_json::Value, section_id: SectionId) -> bool {
+    match value {
+        serde_json::Value::Object(map) => {
+            // `as_f64`, not `as_u64`: `canonicalize` rounds every number through
+            // `Number::from_f64`, so an id reads back as `6.0` and an integer
+            // accessor returns None for all of them.
+            let is_ref = map.get("section_id").and_then(serde_json::Value::as_f64)
+                == Some(f64::from(section_id))
+                && map.get("anchor").and_then(serde_json::Value::as_str) == Some("SectionStart");
+            is_ref
+                || map
+                    .values()
+                    .any(|child| names_station_zero(child, section_id))
+        }
+        serde_json::Value::Array(items) => items
+            .iter()
+            .any(|child| names_station_zero(child, section_id)),
+        _ => false,
+    }
+}
+
+/// Drop every array element that names station 0 of `section_id`, and return how
+/// many were dropped.
+fn strip_station_zero_refs(value: &mut serde_json::Value, section_id: SectionId) -> usize {
+    let mut dropped = 0;
+    match value {
+        serde_json::Value::Object(map) => {
+            for child in map.values_mut() {
+                dropped += strip_station_zero_refs(child, section_id);
+            }
+        }
+        serde_json::Value::Array(items) => {
+            let before = items.len();
+            items.retain(|item| !names_station_zero(item, section_id));
+            dropped += before - items.len();
+            for child in items.iter_mut() {
+                dropped += strip_station_zero_refs(child, section_id);
+            }
+        }
+        _ => {}
+    }
+    dropped
+}
+
+/// FINDING 3's DATA-LOSS half: the same `pos == 0` branch that displaces the
+/// section also DROPS every ref keyed to its station 0 (`shots.rs`, the
+/// `pos == 0` branch). An empty section has only station 0, so a merge, a zero
+/// datum or a station comment anchored there is destroyed by the undo.
+///
+/// Recognised structurally rather than by path, because a dropped merge
+/// re-indexes the whole list and every field of every later entry reads as
+/// changed. Returns what is STILL different once both sides are stripped of refs
+/// to that one station, so the offset half of the same hit keeps classifying
+/// normally and anything else the move broke still fails. `None` means the shape
+/// is absent - the expected side did not hold strictly more such refs - and the
+/// caller compares as usual.
+fn diffs_without_station_zero_refs(
+    expected: &str,
+    actual: &str,
+    section_id: SectionId,
+    require_drop: bool,
+) -> Option<Vec<Diff>> {
+    let (Ok(mut left), Ok(mut right)) = (
+        serde_json::from_str::<serde_json::Value>(expected),
+        serde_json::from_str::<serde_json::Value>(actual),
+    ) else {
+        return None;
+    };
+    let before = strip_station_zero_refs(&mut left, section_id);
+    let after = strip_station_zero_refs(&mut right, section_id);
+    // A first-hand hit is an undo that DESTROYS refs, so the expected side has
+    // to hold more of them. The cascade takes either direction: once the model
+    // has resynced to a state missing them, a redo back UP to that depth
+    // restores them and the same loss is re-measured with the sides swapped.
+    if before == after || (require_drop && before < after) {
+        return None;
+    }
+    let mut diffs = Vec::new();
+    diff_values(&left, &right, "", &mut diffs);
+    Some(diffs)
 }
 
 /// FINDING 4's structural signature: `loop_closures` holds the same members in a
@@ -1098,6 +1238,9 @@ struct Fuzzer {
     /// defect down: the slide is never undone, so every deeper snapshot
     /// recorded without it disagrees until a snapshot-pair entry heals it.
     displaced: BTreeMap<SectionId, String>,
+    /// Sections whose station-0 refs finding 3 has destroyed. Same cascade, on
+    /// the data-loss half of the same branch.
+    ref_dropped: BTreeSet<SectionId>,
 }
 
 impl Fuzzer {
@@ -1122,6 +1265,7 @@ impl Fuzzer {
             closures,
             heal_reverted: false,
             displaced: BTreeMap::new(),
+            ref_dropped: BTreeSet::new(),
         };
         // The builder's own commands are undoable, so the stacks are not empty.
         // Clear them: the model measures depth from a known floor, and the
@@ -1238,24 +1382,52 @@ impl Fuzzer {
             return;
         }
 
-        // ONLY a comparison that crosses an epoch boundary may subtract the
-        // documented undo-less changes a save or a reload makes. Within an epoch
-        // the oracle stays strict, which is what keeps a geometry bug from hiding
-        // behind "a reload re-solves offsets".
-        let crosses_epoch = self.epochs[depth] < self.epoch;
-        if crosses_epoch {
-            let before = diffs.len();
-            diffs.retain(|diff| {
-                !(self.outcome.saves > 0 && attributable_to_save(diff))
-                    && !(self.outcome.reloads > 0 && attributable_to_reload(diff))
-            });
-            if diffs.is_empty() {
-                self.outcome.attributed += before;
-                self.resync(depth, actual);
-                return;
+        // FINDING 3's DATA-LOSS half, subtracted before anything else looks at
+        // the diffs: a dropped merge re-indexes the list, so every field of every
+        // later entry reads as changed and the offset half of the SAME hit would
+        // be buried under twenty derived paths. Only ever applied when the
+        // consumed entry is the empty-section append the finding needs, and only
+        // when refs to that section's station 0 were really lost.
+        let mut ref_drop = None;
+        if let Some(section_id) = ctx.appended_into_empty() {
+            if let Some(remaining) =
+                diffs_without_station_zero_refs(&expected, &actual, section_id, true)
+            {
+                ref_drop = Some((
+                    "finding-3-undo-of-the-first-shot-drops-station-zero-refs",
+                    Some(section_id),
+                ));
+                diffs = remaining;
+            }
+        }
+        // ... and its cascade. Nothing restores a dropped merge, datum or
+        // comment either, so every deeper snapshot that still holds one
+        // disagrees until a snapshot-pair entry puts the whole project back -
+        // the same shape as the displacement cascade above it, one field over.
+        // Only sections finding 3 has ALREADY destroyed refs on are candidates,
+        // and only while the expected side still holds strictly more of them.
+        if ref_drop.is_none() {
+            for section_id in self.ref_dropped.clone() {
+                if let Some(remaining) =
+                    diffs_without_station_zero_refs(&expected, &actual, section_id, false)
+                {
+                    ref_drop = Some(("finding-3-cascade-station-zero-refs-still-missing", None));
+                    diffs = remaining;
+                    break;
+                }
             }
         }
 
+        // A KNOWN BUG gets first refusal, BEFORE the epoch attribution below.
+        //
+        // The two overlap on `section_offsets`: a reload re-solves the whole map,
+        // and finding 3 leaves a key in it. Attributing first read finding 3's
+        // displacement as "the reload re-solved offsets", which silently swallowed
+        // the hit AND resynced the model to a state carrying it - so the redo back
+        // up to that depth failed later with nothing to explain it (seed 4,
+        // persistence). Classifying first attributes the difference to the defect
+        // that caused it and arms the cascade tracker, which is what makes the
+        // later comparison readable.
         let mut classified: BTreeMap<&'static str, usize> = BTreeMap::new();
         let mut unknown = Vec::new();
         for diff in &diffs {
@@ -1265,6 +1437,30 @@ impl Fuzzer {
             }
         }
 
+        // ONLY a comparison that crosses an epoch boundary may subtract the
+        // documented undo-less changes a save or a reload makes. Within an epoch
+        // the oracle stays strict, which is what keeps a geometry bug from hiding
+        // behind "a reload re-solves offsets".
+        let crosses_epoch = self.epochs[depth] < self.epoch;
+        if crosses_epoch {
+            let before = unknown.len();
+            unknown.retain(|diff| {
+                !(self.outcome.saves > 0 && attributable_to_save(diff))
+                    && !(self.outcome.reloads > 0 && attributable_to_reload(diff))
+            });
+            self.outcome.attributed += before - unknown.len();
+            if unknown.is_empty() && classified.is_empty() && ref_drop.is_none() {
+                self.resync(depth, actual);
+                return;
+            }
+        }
+
+        if let Some((id, section_id)) = ref_drop {
+            classified.entry(id).or_insert(0);
+            if let Some(section_id) = section_id {
+                self.ref_dropped.insert(section_id);
+            }
+        }
         if unknown.is_empty() && !classified.is_empty() {
             for id in classified.keys() {
                 *self.outcome.hits.entry(id).or_insert(0) += 1;
@@ -2115,7 +2311,17 @@ impl Fuzzer {
         if error.contains("part of a loop") || error.contains("zero datum") {
             return Some("finding-6-undo-refused-by-a-delete-guard");
         }
-        if error.contains("not found in section") {
+        // Two spellings, one defect. Finding 13 names all three arms a stale shot
+        // id can reach, and they do not word it the same way:
+        // `delete_shot`/`restore_shot` say "Shot {id} not found in section {s}"
+        // (models/project/shots.rs), while `update_shot` and `set_shot_kind` say
+        // "Shot {s}:{id} not found" (core/state/command_shot.rs). Matching only
+        // the first left the `PreviousValues` and `InverseCommand` arms - the two
+        // finding 13's own write-up lists after `CreatedShotSnapshot` -
+        // unclassified.
+        if error.contains("not found in section")
+            || (error.starts_with("Shot ") && error.ends_with(" not found"))
+        {
             return Some("finding-13-stale-id-misses-and-wedges-the-history");
         }
         None
