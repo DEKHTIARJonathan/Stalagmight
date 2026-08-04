@@ -79,7 +79,29 @@ export interface KnownAsymmetry {
   id: string;
   /** Matched against a diff path such as `project.sections[3].shots[1].uuid`. */
   pathPattern: RegExp;
+  /**
+   * Optional extra narrowing on the VALUES. A path pattern alone cannot tell
+   * "an all-zero offset entry appeared" from "an offset entry with real
+   * geometry appeared", and only the first is the known bug.
+   */
+  accepts?(diff: SnapshotDiff): boolean;
   description: string;
+}
+
+/** True for `<absent>`, or for a coordinate pair whose every member is ~0. */
+function isAbsentOrZeroPair(text: string): boolean {
+  if (text === ABSENT) return true;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return false;
+  }
+  return (
+    Array.isArray(parsed) &&
+    parsed.length > 0 &&
+    parsed.every((value) => typeof value === 'number' && Math.abs(value) <= DEFAULT_TOLERANCE.absolute)
+  );
 }
 
 export const KNOWN_UNDO_ASYMMETRIES: readonly KnownAsymmetry[] = [
@@ -93,6 +115,19 @@ export const KNOWN_UNDO_ASYMMETRIES: readonly KnownAsymmetry[] = [
       'CreateShot path was explicitly fixed for exactly this reason ' +
       '(`UndoData::CreatedShotSnapshot { uuid }`, core/state/undo.rs) because a fresh uuid ' +
       'dangles every `StationKey::AfterShot` anchor and the Ariane export identity.',
+  },
+  {
+    id: 'undo-leaks-orphan-zero-section-offset',
+    pathPattern: /^project\.section_offsets\.\d+$/,
+    accepts: (diff) => isAbsentOrZeroPair(diff.expected) && isAbsentOrZeroPair(diff.actual),
+    description:
+      'Undoing a shot insert leaves behind a section_offsets entry the section did not have ' +
+      'before. The offset cascade INSERTS a key while solving (adjust_section_offset, ' +
+      'models/project/connectivity.rs) and nothing removes it again, so an all-zero entry ' +
+      'survives the undo. Geometrically inert (the value is 0, or 2.2e-16), but it means undo ' +
+      'is not an exact inverse and the leaked key is serialized into the .stalx. NOTE the ' +
+      'value narrowing: an offset key appearing with REAL geometry in it is a different, ' +
+      'unclassified failure and still fails the fuzzer.',
   },
 ];
 
@@ -301,7 +336,9 @@ export function classifyDiffs(
   const unknown: SnapshotDiff[] = [];
   const seen = new Map<string, KnownAsymmetry>();
   for (const diff of diffs) {
-    const hit = known.find((candidate) => candidate.pathPattern.test(diff.path));
+    const hit = known.find(
+      (candidate) => candidate.pathPattern.test(diff.path) && (candidate.accepts?.(diff) ?? true),
+    );
     if (hit) {
       matched.push({ diff, asymmetry: hit });
       seen.set(hit.id, hit);

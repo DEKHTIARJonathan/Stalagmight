@@ -207,6 +207,26 @@ describe('classifyDiffs', () => {
     expect(classified.unknown).toHaveLength(1);
   });
 
+  it('recognises the orphan zero section_offsets entry an undo leaks', () => {
+    const classified = classifyDiffs([
+      { path: 'project.section_offsets.32', expected: '<absent>', actual: '[0,0]' },
+      { path: 'project.section_offsets.7', expected: '<absent>', actual: '[2.22044604925e-16,0]' },
+    ]);
+
+    expect(classified.unknown).toHaveLength(0);
+    expect(classified.asymmetries.map((a) => a.id)).toEqual(['undo-leaks-orphan-zero-section-offset']);
+  });
+
+  it('does NOT accept an offset entry carrying real geometry as that known bug', () => {
+    const classified = classifyDiffs([
+      { path: 'project.section_offsets.28', expected: '<absent>', actual: '[-20.6,1.2]' },
+      { path: 'project.section_offsets.28[0]', expected: '-19.47', actual: '-20.61' },
+    ]);
+
+    expect(classified.known).toHaveLength(0);
+    expect(classified.unknown).toHaveLength(2);
+  });
+
   it('exposes each known asymmetry with an id and an explanation', () => {
     for (const asymmetry of KNOWN_UNDO_ASYMMETRIES) {
       expect(asymmetry.id).toMatch(/^[a-z0-9-]+$/);
