@@ -78,6 +78,24 @@ describe('useDismissableLayer', () => {
     panel.remove();
   });
 
+  it('ignores an anchorScope the host did not supply', () => {
+    // The map's context menu passes no scope, so no panel scrolling elsewhere can
+    // close it - the property the shared menu depends on for map right-clicks.
+    const elsewhere = document.createElement('div');
+    document.body.appendChild(elsewhere);
+    renderHook(() =>
+      useDismissableLayer({
+        open: true,
+        onDismiss: onDismiss as unknown as () => void,
+        contains: [ref(dropdown)],
+        anchorScope: ref(null),
+      }),
+    );
+    elsewhere.dispatchEvent(new Event('scroll'));
+    expect(onDismiss).not.toHaveBeenCalled();
+    elsewhere.remove();
+  });
+
   it('does NOT dismiss when an unrelated subtree scrolls', () => {
     // The map context-menu bug: right-clicking a station scrolls the data table
     // and the sections panel, neither of which can move a menu portaled elsewhere.

@@ -496,6 +496,11 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
     openDialog('context-menu', {
       target: { type: 'section', sectionId },
       position: { x, y },
+      // The menu is pinned to these coordinates and rendered from the dialog
+      // layer, so nothing about its own DOM says the list can move under it.
+      // Naming the scroller here is what lets it close when this list scrolls,
+      // while a scroll anywhere else - the map, the data table - leaves it be.
+      scrollScope: '[data-testid="sections-list"]',
     });
   }, [openDialog]);
 
