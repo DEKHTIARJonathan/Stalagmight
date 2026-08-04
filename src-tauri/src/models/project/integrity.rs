@@ -250,11 +250,20 @@ impl Project {
 
     /// World-space gap between two stored endpoints: the pair resolved against
     /// the CURRENT structure plus their horizontal distance in metres, or `None`
-    /// when either endpoint dangles or has no computable position.
+    /// when either endpoint dangles, has no computable position, or sits on
+    /// non-finite (NaN/inf) geometry.
     ///
     /// The single measurement used by the merge and closure alignment checks and
     /// by [`Self::demote_double_anchoring_merges`], so those three cannot disagree
-    /// about how far apart a pair is.
+    /// about how far apart a pair is - including about a pair they cannot measure
+    /// at all. A NaN gap compares false against the tolerance in either direction,
+    /// so an unguarded distance would read as "aligned" to the two checks and as
+    /// "not torn" to the demotion by accident rather than by decision. `None` makes
+    /// it a decision: broken geometry means "cannot measure - hands off", so the
+    /// checks stay quiet (`non_finite_geometry` is the violation that describes
+    /// the real problem) and the demotion never deletes a merge on the strength of
+    /// a distance that does not exist. Testing the final distance covers a
+    /// non-finite value in either input coordinate.
     fn endpoint_gap(
         &self,
         key_a: &StationKey,
@@ -266,7 +275,8 @@ impl Project {
         let b = self.resolve_key(key_b)?;
         let (ax, ay) = self.station_world_xy(a, local, station_offsets)?;
         let (bx, by) = self.station_world_xy(b, local, station_offsets)?;
-        Some((a, b, ((ax - bx).powi(2) + (ay - by).powi(2)).sqrt()))
+        let dist = ((ax - bx).powi(2) + (ay - by).powi(2)).sqrt();
+        dist.is_finite().then_some((a, b, dist))
     }
 
     /// Cross-section merges whose two stations have drifted apart - the

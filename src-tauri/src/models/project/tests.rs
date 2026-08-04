@@ -1600,6 +1600,59 @@ fn repair_leaves_legitimate_merges_alone() {
 }
 
 #[test]
+fn unmeasurable_geometry_is_never_demoted_or_flagged() {
+    // Non-finite (NaN/inf) shot geometry makes every distance derived from it
+    // NaN, and `NaN < TOL` and `NaN >= TOL` are BOTH false. Left unguarded, the
+    // three consumers of `endpoint_gap` would each answer by accident: the two
+    // alignment checks would call the pair aligned, and the demotion would call
+    // it not-torn. `endpoint_gap` returning `None` makes that one deliberate
+    // decision - unmeasurable means hands off - so the poisoned project is
+    // described by the `non_finite_geometry` violation and by nothing else.
+    let (mut project, a, b, c) = double_anchored_bridge_project();
+    // Poison ONLY the far end of the bogus bridge: section B's second shot puts
+    // B:2 at NaN while B:0 and B:1 stay finite, so the legitimate A:2 = B:0 merge
+    // is still measurable and this is a test about the unmeasurable pair alone.
+    project.get_section_mut(b).unwrap().shots[1].length = f64::NAN;
+    // The third consumer needs an ALIGNED closure over a poisoned pair.
+    project.loop_closures.push(LoopClosure {
+        id: 1,
+        station_a: StationRef::new(b, 2).into(),
+        station_b: StationRef::new(c, 1).into(),
+        path_length: 10.0,
+        misclosure_distance: 0.0,
+        error_percentage: 0.0,
+        horizontal_misclosure: 0.0,
+        vertical_misclosure: 0.0,
+        strategy: ClosureStrategy::default(),
+        is_aligned: true,
+    });
+
+    assert!(
+        project
+            .check_structural_integrity()
+            .iter()
+            .any(|v| v.category == "non_finite_geometry"),
+        "the poison itself is what gets reported"
+    );
+    assert!(
+        project.check_merge_alignment().is_empty(),
+        "no merge is reported: A:2 = B:0 measures 0 m, and B:2 = C:0 cannot be measured at all"
+    );
+    assert!(
+        project.check_closure_alignment().is_empty(),
+        "broken geometry is not evidence that an aligned closure has drifted open"
+    );
+    assert_eq!(
+        project.demote_double_anchoring_merges(),
+        0,
+        "and no merge is deleted on the strength of a distance that does not exist"
+    );
+    assert_eq!(project.station_merges.len(), 2, "both merges are intact");
+    assert!(project.are_stations_merged(StationRef::new(a, 2), StationRef::new(b, 0)));
+    assert!(project.are_stations_merged(StationRef::new(b, 2), StationRef::new(c, 0)));
+}
+
+#[test]
 fn demoted_closure_is_not_re_promoted_by_orphan_conversion() {
     // The demotion and `convert_orphan_closures_to_merges` run in the same Repair
     // pass, and the converter's job is turning sole-bridge closures INTO merges -
