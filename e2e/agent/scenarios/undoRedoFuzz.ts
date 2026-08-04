@@ -415,11 +415,20 @@ const ALLOW_KNOWN_BUGS = process.env.STALAGMIGHT_FUZZ_ALLOW_KNOWN_BUGS === '1';
  * classification and the failure payload - is the same code on both paths, so a
  * replayed failure is the same failure and not a lookalike. Only the source of
  * the decisions changes.
+ *
+ * Read at RUN time, not at import time: `pnpm agent:scenario --trace` parses its
+ * flags inside `main()`, which is after this module has been imported, so a
+ * module-level const would capture the empty string and silently fall back to
+ * generating - a replay that quietly was not one. Same for the trace-out path.
  */
-const REPLAY_TRACE = process.env.STALAGMIGHT_FUZZ_REPLAY ?? '';
+function replayTracePath(): string {
+  return process.env.STALAGMIGHT_FUZZ_REPLAY ?? '';
+}
 
 /** Force-write the trace of a run that PASSED, to this path. */
-const TRACE_OUT = process.env.STALAGMIGHT_FUZZ_TRACE ?? '';
+function traceOutPath(): string {
+  return process.env.STALAGMIGHT_FUZZ_TRACE ?? '';
+}
 
 /**
  * Which `.stalx` under `e2e/fixtures/` to fuzz. Basename only - anything else is
@@ -665,10 +674,12 @@ export const undoRedoFuzz: Scenario = {
     const maxDepth = Math.max(1, Math.min(iterations, historyLimit - baseUndo - DEPTH_HEADROOM));
 
     /** Non-null when this run is replaying a recorded trace instead of drawing. */
-    const replay: FuzzTrace | null = REPLAY_TRACE ? readTrace(REPLAY_TRACE) : null;
+    const replayPath = replayTracePath();
+    const traceOut = traceOutPath();
+    const replay: FuzzTrace | null = replayPath ? readTrace(replayPath) : null;
     if (replay && replay.scenario !== 'undo-redo-fuzz') {
       throw new Error(
-        `trace ${REPLAY_TRACE} was recorded by ${replay.scenario}; run it with that scenario`,
+        `trace ${replayPath} was recorded by ${replay.scenario}; run it with that scenario`,
       );
     }
 
@@ -762,7 +773,7 @@ export const undoRedoFuzz: Scenario = {
           `${FIXTURE === DEFAULT_FIXTURE ? '' : ` with STALAGMIGHT_FUZZ_FIXTURE=${FIXTURE}`}` +
           `${STREAM_V2 ? '' : ' with STALAGMIGHT_FUZZ_STREAM=v1'}` +
           `${ALLOW_KNOWN_BUGS ? ' with STALAGMIGHT_FUZZ_ALLOW_KNOWN_BUGS=1' : ''}` +
-          `${REPLAY_TRACE ? ` (REPLAY of ${REPLAY_TRACE})` : ''}`,
+          `${replayPath ? ` (REPLAY of ${replayPath})` : ''}`,
         `  fixture=${FIXTURE} stream=${STREAM_V2 ? 'v2' : 'v1'} swarm=${swarm.name} ` +
           `depth=${cursor} modelTop=${top} baseUndo=${baseUndo}`,
         ...(detail ? [detail] : []),
@@ -772,7 +783,7 @@ export const undoRedoFuzz: Scenario = {
       // The trace carries the message VERBATIM, so a shrink compares signatures
       // taken from the same text a human reads. The path is appended afterwards,
       // which is why it is not part of what was recorded.
-      const written = dumpTrace({ message }, TRACE_OUT);
+      const written = dumpTrace({ message }, traceOut);
       throw new Error(written ? `${message}\n  trace: ${written}` : message);
     };
 
@@ -1376,8 +1387,8 @@ export const undoRedoFuzz: Scenario = {
     // per green run would fill the artifacts dir with files nobody reads; naming
     // a path is the signal that this particular run is wanted (recording a
     // baseline, or capturing a trace to shrink against a future regression).
-    if (TRACE_OUT) {
-      const written = dumpTrace(null, TRACE_OUT);
+    if (traceOut) {
+      const written = dumpTrace(null, traceOut);
       if (written) ctx.log(`trace written to ${written} (${recorder.length} step(s))`);
     }
     ctx.setMetric('traceSteps', recorder.length);
@@ -1386,7 +1397,7 @@ export const undoRedoFuzz: Scenario = {
     ctx.setMetric('snapshotBytesMax', maxBytes);
     ctx.setMetric('historyLimit', historyLimit);
     ctx.log(
-      `${replay ? `REPLAY of ${REPLAY_TRACE} (${replay.steps.length} recorded step(s)) ` : ''}` +
+      `${replay ? `REPLAY of ${replayPath} (${replay.steps.length} recorded step(s)) ` : ''}` +
       `fixture=${FIXTURE} stream=${STREAM_V2 ? 'v2' : 'v1'} swarm=${swarm.name} ` +
         `(stripped ${strippedRows} inherited undo row(s)) seed=${ctx.seed}: ` +
         `${ctx.metrics.mutations ?? 0} mutations, ${ctx.metrics.undos ?? 0} undos, ` +

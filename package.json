@@ -50,6 +50,7 @@
     "agent:smoke": "tsx e2e/agent/smoke.ts",
     "agent:scenarios": "tsx e2e/agent/scenarios-smoke.ts",
     "agent:scenario": "tsx e2e/agent/scenario-run.ts",
+    "agent:fuzz-shrink": "tsx e2e/agent/fuzz-shrink.ts",
     "agent:fuzz-matrix": "tsx e2e/agent/fuzz-matrix.ts",
     "agent:mcp": "tsx e2e/agent/mcp/server.ts",
     "agent:bridge": "tsx e2e/agent/mcp/bridge.ts",

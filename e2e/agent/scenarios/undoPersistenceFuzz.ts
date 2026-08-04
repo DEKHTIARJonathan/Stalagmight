@@ -701,7 +701,7 @@ async function runIteration(
   };
 
   const sameIntegrity = (a: IntegrityVerdict, b: IntegrityVerdict): boolean =>
-    a.saveBlocked === b.saveBlocked && a.messages.join(' ') === b.messages.join(' ');
+    a.saveBlocked === b.saveBlocked && a.messages.join('\u0000') === b.messages.join('\u0000');
 
   const assertIntegrityDelta = (res: StepResponse, what: string): void => {
     const expected = res.integrityExpected;
