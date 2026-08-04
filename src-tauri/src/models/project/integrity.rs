@@ -313,50 +313,77 @@ impl Project {
     }
 
     /// Index of the first merge that a past bug promoted out of a loop closure:
-    /// a rigid cross-section merge that is (1) visibly torn open, (2) the SOLE
-    /// merge bridging its two sections, and (3) flanked by two independently
+    /// a rigid cross-section merge that is visibly torn open and, with every OTHER
+    /// torn merge also set aside, still separates two independently
     /// zero-datum-anchored merge components. `None` when there is none.
-    fn first_double_anchoring_merge(&self) -> Option<usize> {
-        let local = self.section_local_coords();
-        let station_offsets = self.resolved_station_offsets();
+    ///
+    /// The candidate is judged against the graph with the WHOLE torn set removed,
+    /// not just itself. Two torn merges bridging the same two anchored halves
+    /// otherwise shield each other: each looks redundant because the other still
+    /// joins the halves, so neither is demoted and the project stays permanently
+    /// torn. Excluding the set asks the question that matters - "is this pair of
+    /// anchored halves welded together only by merges the solver cannot satisfy?"
+    ///
+    /// Both conservative-safety properties survive that widening, and they are the
+    /// point of the design:
+    /// - A torn merge whose halves remain connected through a NON-torn merge is
+    ///   skipped. That merge is redundant, not over-constraining: the halves stay
+    ///   one rigid component either way, so dropping it heals nothing.
+    /// - A torn merge whose far half carries no datum is skipped. That is an
+    ///   ordinary single-anchor group with drift, which `resolve_offsets` can and
+    ///   does heal by moving the unanchored half; demoting it would destroy a real
+    ///   connection.
+    ///
+    /// The anchoring test is the same one `convert_orphan_closures_to_merges` asks
+    /// before it refuses to CREATE such a merge, so demotion is that guard applied
+    /// retroactively to a merge that predates it.
+    ///
+    /// `local` / `station_offsets` come from the caller because they are invariant
+    /// across the whole demotion scan (see [`Self::demote_double_anchoring_merges`]).
+    fn first_double_anchoring_merge(
+        &self,
+        local: &HashMap<SectionId, Vec<(f64, f64)>>,
+        station_offsets: &HashMap<StationRef, (f64, f64, f64)>,
+    ) -> Option<usize> {
+        // The torn set: every cross-section merge the offset solver has visibly
+        // failed to satisfy. An aligned merge is doing its job, and an unmeasurable
+        // one (`endpoint_gap` = None, broken geometry) is not evidence of anything.
+        let mut torn: Vec<usize> = Vec::new();
         for (index, merge) in self.station_merges.iter().enumerate() {
             // Same-section merges are physically meaningless (test-only).
-            let (a_section, b_section) = (merge.station_a.section_id, merge.station_b.section_id);
-            if a_section == b_section {
+            if merge.station_a.section_id == merge.station_b.section_id {
                 continue;
             }
-            // (1) Torn open past the reporting tolerance. An aligned merge is
-            // doing its job; only a merge the offset solver has visibly failed to
-            // satisfy is a demotion candidate.
             let Some((_, _, gap)) =
-                self.endpoint_gap(&merge.station_a, &merge.station_b, &local, &station_offsets)
+                self.endpoint_gap(&merge.station_a, &merge.station_b, local, station_offsets)
             else {
                 continue;
             };
             if gap < Self::MERGE_ALIGNMENT_TOLERANCE_M {
                 continue;
             }
-            // (2) Sole bridge. With a parallel merge path the two sections stay
-            // one rigid component either way, so this merge is redundant rather
-            // than over-constraining - dropping it would not heal anything.
-            if self
-                .merged_section_ids_excluding(a_section, Some(index))
-                .contains(&b_section)
-            {
-                continue;
-            }
-            // (3) Two independent anchors. Judged with this merge excluded, which
-            // is exactly the question `convert_orphan_closures_to_merges` asks
-            // before it refuses to CREATE such a merge - so demotion is that
-            // guard applied retroactively to a merge that predates it. A half
-            // with no datum is a legitimate single-anchor group whose drift
-            // `resolve_offsets` can and does heal: leave it alone.
-            if !self.merge_would_double_anchor_excluding(Some(index), a_section, b_section) {
-                continue;
-            }
-            return Some(index);
+            torn.push(index);
         }
-        None
+        if torn.is_empty() {
+            return None;
+        }
+
+        // ONE components computation for the whole scan, with the whole torn set
+        // excluded - both the separation test and the anchoring test below read it,
+        // so they cannot be answered against different graphs.
+        let skip: HashSet<usize> = torn.iter().copied().collect();
+        let components = self.merge_components_excluding(&skip);
+        // Ascending index order, so which candidate a damaged file yields first is
+        // deterministic. The caller demotes it and re-scans; the torn set shrinks
+        // as merges become closures, so parallel torn bridges between the same
+        // anchored halves are demoted one per pass until the tear is healed.
+        torn.into_iter().find(|&index| {
+            let merge = &self.station_merges[index];
+            let (a_section, b_section) = (merge.station_a.section_id, merge.station_b.section_id);
+            !components.same_component(a_section, b_section)
+                && components.is_anchored(a_section)
+                && components.is_anchored(b_section)
+        })
     }
 
     /// Demote every over-constrained merge back to the loop closure it should
@@ -380,12 +407,20 @@ impl Project {
         // `create_loop_closure` / `create_loop_closures_batch`).
         self.normalize_next_closure_id();
 
+        // Loop-invariant across every pass, so both tables are built once and
+        // reused: a demotion only removes a merge and adds (or softens) a loop
+        // closure. It never touches shots, section offsets, or station offsets,
+        // which are the only inputs to the per-section local-coordinate walk and
+        // the resolved station-offset map.
+        let local = self.section_local_coords();
+        let station_offsets = self.resolved_station_offsets();
+
         let mut demoted = 0;
         // Re-scan from scratch after each demotion rather than collecting indices
         // up front: removing a merge shifts every later index AND changes the
         // components the remaining candidates are judged against. A damaged file
         // holds 0-2 of these, so the repeated scan costs nothing.
-        while let Some(index) = self.first_double_anchoring_merge() {
+        while let Some(index) = self.first_double_anchoring_merge(&local, &station_offsets) {
             // Pull the merge out BEFORE measuring: merges are zero-cost
             // pathfinding edges, so measuring with it still present would ride
             // the very edge being demoted and record path_length = 0 (and so
@@ -393,7 +428,8 @@ impl Project {
             // measures the same graph the closure will actually live in - the
             // creation path (`create_loop_closure`) rejects merged pairs, so a
             // user-created closure is always measured merge-free too. On any
-            // failure the merge is pushed back, leaving the project untouched.
+            // failure the merge goes back at its original index, leaving the
+            // project untouched.
             let merge = self.station_merges.remove(index);
             // The scan already resolved both endpoints and measured their
             // positions, so these cannot fail here - but restore rather than
@@ -402,11 +438,11 @@ impl Project {
                 self.resolve_key(&merge.station_a),
                 self.resolve_key(&merge.station_b),
             ) else {
-                self.station_merges.push(merge);
+                self.station_merges.insert(index, merge);
                 break;
             };
             let Ok(metrics) = self.compute_closure_metrics(a, b) else {
-                self.station_merges.push(merge);
+                self.station_merges.insert(index, merge);
                 break;
             };
             let already_closed = self.are_stations_in_closure(a, b);

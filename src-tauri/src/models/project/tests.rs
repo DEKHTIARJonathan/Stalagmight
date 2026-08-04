@@ -1558,24 +1558,29 @@ fn demoted_closure_measures_the_merge_free_path() {
 
 #[test]
 fn repair_leaves_legitimate_merges_alone() {
-    // (a) NOT a sole bridge: a second merge path keeps the two sections in one
-    // rigid component either way, so dropping one heals nothing. Both misaligned
-    // merges must survive - demotion is only for the merge that IS the bridge.
-    let (mut project, _a, b, c) = double_anchored_bridge_project();
+    // (a) A torn merge whose two halves stay connected through a HEALTHY merge.
+    // A:0 and C:0 both sit at world (0,0), so that parallel merge is aligned and
+    // is not going anywhere: it keeps A+B+C one rigid component whether or not
+    // the torn B:2 = C:0 bridge survives. Dropping the torn merge therefore heals
+    // nothing, and demotion (which exists to SEPARATE two anchored halves) must
+    // leave it alone. Note the contrast with two torn merges bridging the same
+    // halves - see `parallel_torn_bridges_are_all_demoted` - where neither is
+    // load-bearing and both have to go.
+    let (mut project, a, _b, c) = double_anchored_bridge_project();
     project.station_merges.push(StationMerge {
-        station_a: StationRef::new(b, 1).into(),
-        station_b: StationRef::new(c, 1).into(),
+        station_a: StationRef::new(a, 0).into(),
+        station_b: StationRef::new(c, 0).into(),
         merged_at: Utc::now(),
     });
     assert_eq!(
         project.check_merge_alignment().len(),
-        2,
-        "both cross-component merges are torn open"
+        1,
+        "only the bogus bridge is torn open; the parallel A:0 = C:0 merge measures 0 m"
     );
     assert_eq!(
         project.demote_double_anchoring_merges(),
         0,
-        "a merge with a parallel merge path is redundant, not over-constraining"
+        "a torn merge with an intact parallel merge path is redundant, not over-constraining"
     );
     assert_eq!(project.station_merges.len(), 3, "every merge is intact");
     assert!(project.loop_closures.is_empty(), "no closure was invented");
@@ -1596,6 +1601,56 @@ fn repair_leaves_legitimate_merges_alone() {
     assert!(
         project.check_merge_alignment().is_empty(),
         "and the ordinary solver heals it, which is why demotion must not fire"
+    );
+}
+
+#[test]
+fn parallel_torn_bridges_are_all_demoted() {
+    // Two bogus merges welding the SAME two anchored halves together. Judging a
+    // candidate with only itself excluded makes them shield each other: each one
+    // looks redundant because the other still joins B to C, so neither is demoted
+    // and the project stays torn forever. Judging the whole torn set at once asks
+    // the question that matters - are these halves welded together only by merges
+    // the solver cannot satisfy? - and both go.
+    //
+    // B:1 is world (0,30) and C:1 is (0,10), so the second bridge is a 20 m tear
+    // needing no extra geometry.
+    let (mut project, _a, b, c) = double_anchored_bridge_project();
+    project.station_merges.push(StationMerge {
+        station_a: StationRef::new(b, 1).into(),
+        station_b: StationRef::new(c, 1).into(),
+        merged_at: Utc::now(),
+    });
+    assert_eq!(
+        project.check_merge_alignment().len(),
+        2,
+        "both cross-component merges are torn open"
+    );
+
+    assert_eq!(project.demote_double_anchoring_merges(), 2);
+
+    assert_eq!(
+        project.station_merges.len(),
+        1,
+        "only the legitimate A-B merge survives"
+    );
+    assert!(!project.are_stations_merged(StationRef::new(b, 2), StationRef::new(c, 0)));
+    assert!(!project.are_stations_merged(StationRef::new(b, 1), StationRef::new(c, 1)));
+    assert!(
+        project.are_stations_in_closure(StationRef::new(b, 2), StationRef::new(c, 0)),
+        "each demoted merge leaves an equivalent loop closure"
+    );
+    assert!(project.are_stations_in_closure(StationRef::new(b, 1), StationRef::new(c, 1)));
+    assert_eq!(project.loop_closures.len(), 2);
+
+    project.resolve_offsets();
+    assert!(
+        project.check_merge_alignment().is_empty(),
+        "no merge is left torn open"
+    );
+    assert!(
+        project.over_anchored_merge_components().is_empty(),
+        "each datum is back in its own merge component"
     );
 }
 
