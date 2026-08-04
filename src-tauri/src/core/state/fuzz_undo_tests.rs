@@ -459,6 +459,10 @@ struct MoveCtx<'a> {
     /// Has finding 1 or finding 11 ALREADY reverted the save's gauge capture in
     /// this run?
     heal_reverted: bool,
+    /// Sections finding 3 has already displaced in this run, and the canonical
+    /// text of the `section_offsets` value it left behind. See the cascade
+    /// classifier.
+    displaced: &'a BTreeMap<SectionId, String>,
 }
 
 impl MoveCtx<'_> {
@@ -477,6 +481,15 @@ impl MoveCtx<'_> {
     /// did - finding 3's exact precondition.
     fn appended_into_empty(&self) -> Option<SectionId> {
         self.entry.and_then(|entry| entry.appended_into_empty)
+    }
+
+    /// Does `diff` sit on the `section_offsets` key of a section finding 3 has
+    /// already displaced, with the exact value it left on one side of it?
+    fn is_finding_3_leftover(&self, diff: &Diff) -> bool {
+        self.displaced.iter().any(|(section_id, value)| {
+            diff.path == format!("section_offsets.{section_id}")
+                && (diff.expected == *value || diff.actual == *value)
+        })
     }
 }
 
@@ -632,6 +645,29 @@ const CLASSIFIERS: &[Classifier] = &[
             };
             d.path == format!("section_offsets.{section_id}")
         },
+    },
+    // FINDING 3, CASCADING - and the answer to what FINDING 15 was.
+    //
+    // Finding 3's displacement is not undone by anything: the redo re-inserts
+    // through the offset-neutral append path (that is the RATCHET half of the
+    // finding), and no targeted undo below it touches `section_offsets`. So once
+    // the empty section has slid, the live project carries that key until the
+    // walk crosses a `ProjectSnapshotPair` entry, which restores the whole
+    // project and heals it. Every snapshot recorded before the slide disagrees
+    // meanwhile - in EITHER direction, since the model resynced the depth the
+    // hit landed on, so a later redo back UP to that depth is missing a key the
+    // model now expects.
+    //
+    // Finding 15 was reported as a separate defect ("an undo leaves a
+    // `section_offsets` entry carrying REAL geometry") because the move that
+    // FAILS is several steps past the one that did it and consumes an unrelated
+    // entry - an `update_shot`, a `set_station_comment`. It is finding 3,
+    // re-measured. Narrowed to the displaced section's own key AND to the exact
+    // value finding 3 left, so a section acquiring a DIFFERENT offset is not
+    // this and still fails.
+    Classifier {
+        id: "finding-3-cascade-a-displaced-empty-section-persists",
+        matches: |d, ctx| ctx.is_finding_3_leftover(d),
     },
 ];
 
@@ -1057,6 +1093,11 @@ struct Fuzzer {
     /// recorded with them disagrees - the same defect, re-measured. See the
     /// cascade classifier.
     heal_reverted: bool,
+    /// Sections finding 3 has displaced, and the canonical text of the
+    /// `section_offsets` value it left. Same idea as `heal_reverted`, one
+    /// defect down: the slide is never undone, so every deeper snapshot
+    /// recorded without it disagrees until a snapshot-pair entry heals it.
+    displaced: BTreeMap<SectionId, String>,
 }
 
 impl Fuzzer {
@@ -1080,6 +1121,7 @@ impl Fuzzer {
             temp: None,
             closures,
             heal_reverted: false,
+            displaced: BTreeMap::new(),
         };
         // The builder's own commands are undoable, so the stacks are not empty.
         // Clear them: the model measures depth from a known floor, and the
@@ -1172,12 +1214,18 @@ impl Fuzzer {
     /// comparison. Anything else panics with the full payload.
     fn expect_state(&mut self, depth: usize, what: &str, consumed: Option<EntryMeta>) {
         let ctx_entry = consumed;
+        // Cloned rather than borrowed: the classification loop below records new
+        // displacements into `self`, and a live borrow of the map would make
+        // that a borrow error. The map holds one small entry per section finding
+        // 3 has displaced.
+        let displaced = self.displaced.clone();
         let ctx = MoveCtx {
             entry: ctx_entry.as_ref(),
             after_save: self.outcome.saves > 0,
             after_reload: self.outcome.reloads > 0,
             epoch: self.epoch,
             heal_reverted: self.heal_reverted,
+            displaced: &displaced,
         };
         let actual = self.snapshot();
         let expected = self.snapshots[depth].clone();
@@ -1225,7 +1273,20 @@ impl Fuzzer {
                 {
                     self.heal_reverted = true;
                 }
+                if *id == "finding-3-undo-of-the-first-shot-displaces-an-empty-section" {
+                    self.record_displacement(ctx.appended_into_empty(), &actual);
+                }
             }
+            // The move log is what a reader reconstructs a failure from, and a
+            // classified hit is a MOVE with consequences - it resyncs the model
+            // and, for findings 1, 11 and 3, arms a cascade. A log that showed
+            // only the moves would make the later failure look spontaneous,
+            // which is exactly how finding 15 came to be filed separately.
+            let ids: Vec<&str> = classified.keys().copied().collect();
+            self.note(format!(
+                "  ^ classified at depth {depth}: {}",
+                ids.join(", ")
+            ));
             self.resync(depth, actual);
             return;
         }
@@ -1286,6 +1347,27 @@ impl Fuzzer {
             ) + "\n"
                 + entry_note.as_str()),
         );
+    }
+
+    /// Remember what finding 3 left in `section_offsets`, so the cascade
+    /// classifier can recognise the SAME value later and nothing else.
+    ///
+    /// The value is read out of the snapshot the hit was measured against, in
+    /// its canonical form, which is the exact text a later `Diff` will carry.
+    fn record_displacement(&mut self, section_id: Option<SectionId>, actual: &str) {
+        let Some(section_id) = section_id else {
+            return;
+        };
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(actual) else {
+            return;
+        };
+        let Some(offset) = value
+            .get("section_offsets")
+            .and_then(|offsets| offsets.get(section_id.to_string()))
+        else {
+            return;
+        };
+        self.displaced.insert(section_id, offset.to_string());
     }
 
     /// Accept the live state as the model's expectation at `depth`. Only ever
@@ -2318,6 +2400,42 @@ const GATE_SEEDS: &[u32] = &[1, 3, 6, 12, 19, 26];
 /// unwind/rewind over every entry.
 const GATE_ITERATIONS: usize = 60;
 
+/// Bucket a failure by its SHAPE rather than by its text.
+///
+/// The headline alone buckets by depth ("did not restore the state recorded at
+/// depth 23"), which splits one defect across twenty buckets and hides how many
+/// distinct things a sweep actually found. Digits are collapsed to `#` and the
+/// first differing path is appended, so two seeds that lost the same field at
+/// different depths land in the same bucket - which is what a triage read wants.
+fn failure_signature(message: &str) -> String {
+    let collapse = |text: &str| -> String {
+        let mut out = String::with_capacity(text.len());
+        let mut in_digits = false;
+        for ch in text.chars() {
+            if ch.is_ascii_digit() {
+                if !in_digits {
+                    out.push('#');
+                    in_digits = true;
+                }
+            } else {
+                out.push(ch);
+                in_digits = false;
+            }
+        }
+        out
+    };
+    let headline = collapse(message.lines().next().unwrap_or("<empty>"));
+    let first_path = message
+        .lines()
+        .map(str::trim)
+        .find(|line| line.starts_with("at "))
+        .map(collapse);
+    match first_path {
+        Some(path) => format!("{headline} | {path}"),
+        None => headline,
+    }
+}
+
 fn summarize(label: &str, seed: u32, outcome: &Outcome) -> String {
     let hits = outcome
         .hits
@@ -2486,6 +2604,7 @@ fn fuzz_seed_survey() {
         .unwrap_or(GATE_ITERATIONS);
     let jumps = std::env::var("STALAGMIGHT_RUST_FUZZ_JUMPS").is_ok();
     let closures = std::env::var("STALAGMIGHT_RUST_FUZZ_CLOSURES").is_ok();
+    let verbose = std::env::var("STALAGMIGHT_RUST_FUZZ_VERBOSE").is_ok();
     let mut clean = Vec::new();
     let mut failures: BTreeMap<String, Vec<u32>> = BTreeMap::new();
     for seed in 1..=seeds {
@@ -2518,8 +2637,16 @@ fn fuzz_seed_survey() {
                         .cloned()
                         .or_else(|| payload.downcast_ref::<&str>().map(|s| (*s).to_string()))
                         .unwrap_or_else(|| "<non-string panic>".to_string());
-                    let headline = message.lines().next().unwrap_or("<empty>").to_string();
-                    failures.entry(headline).or_default().push(seed);
+                    if verbose {
+                        println!(
+                            "--- seed {seed} ({}) panicked ---\n{message}",
+                            if persistence { "persist" } else { "memory" }
+                        );
+                    }
+                    failures
+                        .entry(failure_signature(&message))
+                        .or_default()
+                        .push(seed);
                     clean.retain(|&s| s != seed);
                 }
             }
