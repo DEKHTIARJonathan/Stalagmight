@@ -33,10 +33,18 @@ export default function ImportBlockedDialog() {
     trackDialogComplete('import-blocked');
     closeDialog();
     setAppMode('survey');
-    // Re-route the SAME picked file now that the mode allows it. The router
-    // re-checks every guard; a remaining cause (e.g. the restored survey view
-    // being closure-adjusted) surfaces as a TOAST, not a second modal - the
-    // user just confirmed intent here, so no further click is owed.
+    // setAppMode restored the pre-Plan/Export survey view, which may be the
+    // read-only closure-adjusted one. The user just asked for an import, so
+    // silently drop to the measured view instead of bouncing the confirmed
+    // import off the next read-only cause (same setter as the DisplayMenu
+    // toggle, so the switch persists as the remembered view and clears the
+    // geometry-dependent caches).
+    const ui = useUIStore.getState();
+    if (ui.geometryMode === 'closureAdjusted') ui.setGeometryMode('measured');
+    // Re-route the SAME picked file now that mode and view allow it. The
+    // router re-checks every guard; the one cause a switch cannot fix (a
+    // missing SpeleoDB write lock) surfaces as a TOAST, not a second modal -
+    // the user just confirmed intent here, so no further click is owed.
     if (path) void routeOpenedFile(path, 'Import Failed', { residualReadOnlyToast: true });
   }, [closeDialog, setAppMode, path]);
 

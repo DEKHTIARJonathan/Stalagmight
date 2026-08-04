@@ -8,20 +8,40 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 
-const closeDialog = vi.fn();
-const setAppMode = vi.fn();
-const routeOpenedFile = vi.fn();
-const trackDialogComplete = vi.fn();
+// vi.mock factories are hoisted above imports, so everything they touch lives
+// in vi.hoisted. `env.restoredGeometryMode` models the view setAppMode('survey')
+// restores - the switch path reads it fresh via getState() after the mode flip.
+const h = vi.hoisted(() => {
+  const env = {
+    closeDialog: vi.fn(),
+    setAppMode: vi.fn(),
+    setGeometryMode: vi.fn(),
+    routeOpenedFile: vi.fn(),
+    trackDialogComplete: vi.fn(),
+    appMode: 'plan',
+    restoredGeometryMode: 'measured',
+    dialogData: {} as { path?: string },
+  };
+  const storeState = () => ({
+    closeDialog: env.closeDialog,
+    setAppMode: env.setAppMode,
+    setGeometryMode: env.setGeometryMode,
+    dialogData: env.dialogData,
+    appMode: env.appMode,
+    geometryMode: env.restoredGeometryMode,
+  });
+  const useUIStore = (sel: (s: unknown) => unknown) => sel(storeState());
+  useUIStore.getState = storeState;
+  return { env, useUIStore };
+});
+const { closeDialog, setAppMode, setGeometryMode, routeOpenedFile, trackDialogComplete } = h.env;
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
 }));
 
-let appMode = 'plan';
-const dialogData: { path?: string } = {};
-
 vi.mock('../../../store/uiStore', () => ({
-  useUIStore: (sel: (s: unknown) => unknown) => sel({ closeDialog, setAppMode, dialogData, appMode }),
+  useUIStore: h.useUIStore,
 }));
 
 vi.mock('../../../utils/openOrImport', () => ({
@@ -45,8 +65,9 @@ import ImportBlockedDialog from '../ImportBlockedDialog';
 
 beforeEach(() => {
   vi.clearAllMocks();
-  appMode = 'plan';
-  dialogData.path = '/cave/survey.dmp';
+  h.env.appMode = 'plan';
+  h.env.restoredGeometryMode = 'measured';
+  h.env.dialogData.path = '/cave/survey.dmp';
 });
 
 describe('ImportBlockedDialog', () => {
@@ -56,8 +77,21 @@ describe('ImportBlockedDialog', () => {
     expect(trackDialogComplete).toHaveBeenCalledWith('import-blocked');
     expect(closeDialog).toHaveBeenCalled();
     expect(setAppMode).toHaveBeenCalledWith('survey');
-    // residualReadOnlyToast: a cause that survives the switch (e.g. restored
-    // closure-adjusted view) must toast, not raise a second modal.
+    // The restored view was already measured - nothing to silently fix.
+    expect(setGeometryMode).not.toHaveBeenCalled();
+    // residualReadOnlyToast: the one cause a switch cannot fix (SpeleoDB lock)
+    // must toast, not raise a second modal.
+    expect(routeOpenedFile).toHaveBeenCalledWith('/cave/survey.dmp', 'Import Failed', {
+      residualReadOnlyToast: true,
+    });
+  });
+
+  it('silently drops a restored closure-adjusted view to measured so the import actually runs', () => {
+    h.env.restoredGeometryMode = 'closureAdjusted';
+    render(<ImportBlockedDialog />);
+    fireEvent.click(screen.getByTestId('import-blocked-switch'));
+    expect(setAppMode).toHaveBeenCalledWith('survey');
+    expect(setGeometryMode).toHaveBeenCalledWith('measured');
     expect(routeOpenedFile).toHaveBeenCalledWith('/cave/survey.dmp', 'Import Failed', {
       residualReadOnlyToast: true,
     });
@@ -77,13 +111,13 @@ describe('ImportBlockedDialog', () => {
     const { unmount } = render(<ImportBlockedDialog />);
     expect(screen.getByTestId('import-blocked-stay').textContent).toBe('dialogs.importBlocked.stayInPlan');
     unmount();
-    appMode = 'export';
+    h.env.appMode = 'export';
     render(<ImportBlockedDialog />);
     expect(screen.getByTestId('import-blocked-stay').textContent).toBe('dialogs.importBlocked.stayInExport');
   });
 
   it('a missing path still switches the mode but routes nothing (no crash)', () => {
-    delete dialogData.path;
+    delete h.env.dialogData.path;
     render(<ImportBlockedDialog />);
     fireEvent.click(screen.getByTestId('import-blocked-switch'));
     expect(setAppMode).toHaveBeenCalledWith('survey');
