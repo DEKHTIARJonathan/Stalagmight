@@ -1,3 +1,4 @@
+import { usePreviewSquareSize } from './usePreviewSquareSize';
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { invokeIpc } from '../../utils/ipc';
@@ -1163,46 +1164,6 @@ export function buildBatchImport(
   return { configs, unreachable, emittedDmpIndices: Array.from(emittedPosition.keys()) };
 }
 
-/**
- * Returns a callback ref + a square pixel size that fits the ref'd container's
- * height (minus the preview panel's `p-4`), capped at `max`. The wizard's
- * SectionPreview is a fixed square, so without this it overflows and is clipped
- * by the dialog's `overflow-hidden` when the window is near its 600px minimum
- * height (#93 review). Reacts to window/layout resizes via ResizeObserver.
- */
-function usePreviewSquareSize(
-  max = 440,
-  min = 240,
-): [(el: HTMLDivElement | null) => void, number] {
-  const [size, setSize] = useState(max);
-  const elRef = useRef<HTMLDivElement | null>(null);
-  const observerRef = useRef<ResizeObserver | null>(null);
-
-  const measure = useCallback(() => {
-    const el = elRef.current;
-    if (!el) return;
-    // Preview panel adds p-4 (1rem on every side = 32px per axis) around the
-    // square. Fit BOTH axes: sizing off height alone left the map letterboxed
-    // in its column, and made widening the column do nothing.
-    const available = Math.min(el.clientHeight - 32, el.clientWidth - 32);
-    setSize(Math.max(min, Math.min(max, Math.floor(available))));
-  }, [max, min]);
-
-  const setRef = useCallback(
-    (el: HTMLDivElement | null) => {
-      observerRef.current?.disconnect();
-      elRef.current = el;
-      if (el) {
-        measure();
-        observerRef.current = new ResizeObserver(measure);
-        observerRef.current.observe(el);
-      }
-    },
-    [measure],
-  );
-
-  return [setRef, size];
-}
 
 /**
  * Connection Wizard - pre-calculates all placements at startup, presents
