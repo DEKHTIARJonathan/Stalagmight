@@ -76,7 +76,9 @@ stress loop then a full sweep:
   so the rest still runs. Snapshotting and comparison happen in-page, so a step is one
   round trip. To sweep it, `pnpm agent:fuzz-matrix --fixtures a,b --seeds 1..8 --workers 3`
   runs the matrix in parallel (max 5 workers - one Xvfb display each) and prints a
-  results table with every failure's repro line
+  results table with every failure's repro line. Add `--release` to either runner to
+  drive the release binary (~1.4x on the bigger workloads); debug is the default
+  because its `debug_assert!`s are oracles too - see docs/agent-harness.md
 - `dialog-cycling` - open/close dialogs, assert no residue / DOM growth
 - `tool-switch-spam` - cycle every tool, assert activeTool tracks each switch
 - `map-storm` - seeded jumpTo barrage + main-thread stall probe

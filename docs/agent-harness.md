@@ -150,12 +150,12 @@ hazards over long runs.
   - `pnpm agent:mcp:smoke` - MCP-layer smoke (spawns the server, round-trips
     every tool through the protocol, self-tests the crash oracle).
   - `pnpm agent:scenarios` - runs all 9 stress scenarios once at small n.
-  - `pnpm agent:scenario <name> [--seed N] [--iterations M]` - runs ONE scenario
-    at a chosen seed/n, then a full sweep. The one to reach for when a seeded
-    scenario needs re-running: a fuzzer repro, or a soak at a bigger n than the
-    gate would tolerate.
+  - `pnpm agent:scenario <name> [--seed N] [--iterations M] [--release]` - runs
+    ONE scenario at a chosen seed/n, then a full sweep. The one to reach for when
+    a seeded scenario needs re-running: a fuzzer repro, or a soak at a bigger n
+    than the gate would tolerate.
   - `pnpm agent:fuzz-matrix [--fixtures a,b] [--seeds 1..8|1,3,7] [--workers K]
-    [--iterations M]` - runs `undo-redo-fuzz` across a (fixture x seed) matrix,
+    [--iterations M] [--release]` - runs `undo-redo-fuzz` across a (fixture x seed) matrix,
     K child processes at a time, and prints a results table, every failure's
     repro line, merged metric totals and the observed speedup. Each worker slot
     gets its own port block (`STALAGMIGHT_AGENT_BASE_PORT = 4544 + 20*slot`) and
@@ -172,6 +172,51 @@ hazards over long runs.
   `.claude/agents/code-analyst.md` (Opus, read-only; per-issue root-cause
   analysis it spawns).
 
+## Build profile: debug by default, release opt-in
+
+The harness drives the **debug** binary unless `STALAGMIGHT_AGENT_RELEASE=1` is
+set (`--release` on `agent:scenario` and `agent:fuzz-matrix` sets it for their
+children). That default is a deliberate trade, not inertia.
+
+**What release costs you.** `debug_assertions` is off, so these stop running:
+
+- Every `debug_assert!` in a live path - `core/state/command_comment.rs:71`,
+  four in `core/loading.rs`, `models/project/reverse.rs:358`,
+  `models/project/classify.rs:244`, `models/project/offsets.rs:112`. Each is an
+  invariant check the app performs on itself during exactly the mutations a
+  fuzzer drives.
+- `Project::debug_assert_merge_alignment` (`models/project/offsets.rs:72`), whose
+  whole body is `#[cfg(debug_assertions)]`. In debug it emits a `tracing::error!`
+  when a merge ends up more than 5 cm out of alignment inside a single command;
+  that line rides the ring buffer into the harness's error-log oracle. In release
+  the check does not exist, so that class of drift becomes invisible.
+- Rust's debug-only integer-overflow panics: an overflow that aborts loudly in
+  debug wraps silently in release.
+- `[profile.release]` sets `strip = true`, so a crash marker's
+  `Backtrace::force_capture()` has no symbol names.
+
+In other words a debug build is itself an oracle, and the release build trades
+several of them for speed. Reach for release when you are sweeping seeds for
+throughput; keep debug for the run whose result you intend to trust.
+
+**What release keeps.** The release harness build passes `--features e2e`, the
+repo's own name for this build. That keeps `debug_trigger_panic` compiled in
+(`#[cfg(any(debug_assertions, feature = "e2e"))]`,
+`src-tauri/src/commands/debug.rs`), so the crash-oracle self-test still works
+without `debug_assertions`. The panic hook, the crash marker and the ring buffer
+are not feature-gated and behave identically. `window.__E2E_TEST__` is gated on
+`import.meta.env.DEV || MODE === 'test' || VITE_E2E === '1'`, and the frontend leg
+is the same `pnpm build` in both profiles, so `VITE_E2E=1` supplies the hooks in a
+production-mode vite build too; `waitForE2EHooks` fails the start loudly, naming
+the profile and the binary path, if they are ever missing. The debug build passes
+no features, so the DEFAULT build is byte-for-byte what it always was.
+
+**Cost.** One-time cold release build: about 3.5 minutes wall clock on the
+self-hosted runner (`Finished release profile [optimized] in 2m 08s` plus the
+vite leg and the link), against roughly 4.5 minutes for debug. Both profiles are
+cached independently under `$CARGO_TARGET_DIR`, so switching back and forth does
+not rebuild.
+
 ## Build freshness + the E2E build stamp
 
 `app_start(build: "auto")` rebuilds when either signal says stale
@@ -179,13 +224,17 @@ hazards over long runs.
 
 1. **mtimes** - any file under `src/`, `src-tauri/src/`, or one of
    `tauri.conf.json` / `package.json` / `index.html` / `vite.config.ts` is newer
-   than the debug binary.
+   than the binary for the profile being started.
 2. **E2E build stamp** - `buildApp` writes
-   `$CARGO_TARGET_DIR/debug/.stalagmight-e2e-build-stamp.json` after a
-   successful build, recording `viteE2E`, the vite mode, and the mtime of the
-   binary it produced. A missing stamp, a stamp whose `viteE2E` disagrees with
-   what the start needs, or a binary whose mtime no longer matches the stamp
-   (`./scripts/dev.sh` or a plain `pnpm tauri build` relinked it) is stale.
+   `$CARGO_TARGET_DIR/<profile>/.stalagmight-e2e-build-stamp.json` after a
+   successful build, recording the profile, its cargo features, `viteE2E`, the
+   vite mode, and the mtime of the binary it produced. A missing stamp, a stamp
+   whose profile / features / `viteE2E` disagree with what the start needs, or a
+   binary whose mtime no longer matches the stamp (`./scripts/dev.sh` or a plain
+   `pnpm tauri build` relinked it) is stale. One stamp per profile, beside the
+   binary it vouches for, is what lets debug and release coexist without
+   thrashing rebuilds or running the wrong binary; a pre-release-mode `v1` stamp
+   cannot name its profile and is treated as absent (one rebuild, once).
 
 mtimes alone cannot see *how* a binary was built, so before the stamp a
 `dev.sh`-built binary looked fresh and `auto` attached to a hookless dist, only
