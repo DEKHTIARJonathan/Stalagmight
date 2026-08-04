@@ -3714,10 +3714,14 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           case 'update_import_shots_view': {
             console.log('[Mock IPC] update_import_shots_view called with:', args);
             const win = window as unknown as Record<string, unknown>;
-            const existing = win.__MOCK_EDIT_SECTION_VIEW_CALLS__ as unknown[] | undefined;
+            // Its OWN call list. Recording import saves under the edit-section key
+            // made an import-grid save indistinguishable from an edit-section one,
+            // so no spec could assert that either slice wrote only its own fields -
+            // which is the whole point of the separate `import_shots_*` config.
+            const existing = win.__MOCK_IMPORT_SHOTS_VIEW_CALLS__ as unknown[] | undefined;
             const calls = Array.isArray(existing) ? existing : [];
             calls.push(args ?? null);
-            win.__MOCK_EDIT_SECTION_VIEW_CALLS__ = calls;
+            win.__MOCK_IMPORT_SHOTS_VIEW_CALLS__ = calls;
             const columnOrder = (args?.columnOrder ?? args?.column_order) as string[] | undefined;
             if (columnOrder != null) mockImportShotsView.import_shots_column_order = columnOrder;
             const hiddenColumns = (args?.hiddenColumns ?? args?.hidden_columns) as
