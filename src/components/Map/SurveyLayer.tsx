@@ -8,8 +8,7 @@ import type { ToolType } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
 import { selectActiveSurveyData } from '../../store/geometrySelectors';
-import { surveyDataFromLegacy, shotKindFromFlags } from '../../types/survey-data';
-import { SHOT_ALPHA_BY_KIND, SHOT_ALPHA_DIMMED, GAS_DIM_ALPHA } from './surveyLayer/customRender/shaders';
+import { surveyDataFromLegacy } from '../../types/survey-data';
 import { hasLiveStyle } from './mapUtils';
 import { buildGhostFeatures } from './surveyLayer/ghostFeatures';
 import {
@@ -22,18 +21,20 @@ import {
 } from './surveyLayer/displayColor';
 import {
   SurveyGeometryIndex,
-  isKindVisible,
   type VisibleKinds,
 } from './surveyLayer/geometryIndex';
 import {
-  offsetOverlayPoint,
-  offsetOverlayShot,
   type DragPreviewFeature,
   type DragPreviewSet,
   type MovingEnd,
   type Projector,
 } from './surveyLayer/dragPreviewSource';
 import { DRAG_PREVIEW_SOURCE, type DragPreviewLayerCtx } from './surveyLayer/dragPreviewLayers';
+import {
+  shotOverlayFeature,
+  stationOverlayFeature,
+  type InteractOverlayDeps,
+} from './surveyLayer/interactOverlayFeatures';
 import { DragGhostController } from './surveyLayer/dragGhostController';
 import type { GhostRenderData } from './surveyLayer/customRender/surveyGhostLayer';
 import { buildGhostRenderData } from './surveyLayer/dragGhostData';
@@ -1594,139 +1595,40 @@ export default class SurveyLayer {
     };
   }
 
-  /**
-   * One interact-overlay feature for a shot ("sectionId:shotId"), drawn at
-   * `width`. Kind `shotMeasured` (measure tint, round caps, above the tint
-   * layer) when the shot is on the measured path, else `shot` (its exact bulk
-   * color; the ramp expressions take over in distance/gas modes via the
-   * carried dist/gasReach values).
-   */
-  private shotOverlayFeature(idStr: string, width: number): GeoJSON.Feature | null {
-    if (!this.geoIndex || !this.cachedSurveyData) return null;
-    const [secStr, shotStr] = idStr.split(':');
-    const sectionId = Number(secStr);
-    const shotId = Number(shotStr);
-    if (Number.isNaN(sectionId) || Number.isNaN(shotId)) return null;
-    const geo = this.geoIndex.shotGeometry(sectionId, shotId);
-    if (!geo) return null;
-    // A shot of a hidden kind must not surface via the overlay either (#27).
-    if (geo.isReference && !isKindVisible(geo.kindFlags, this.visibleKinds())) return null;
-
-    const fid = this.parseFeatureId(idStr);
-    const measured = fid !== null && this.measuredPathIds?.has(fid);
-    const section = this.geoIndex.section(sectionId);
-    // Plan-mode idle tint (#395 revision): a hovered/selected shot must not flash
-    // its section color while there is no gas field yet - it paints the SAME flat
-    // far color + dim alpha the bulk geometry does.
-    const idleActive = this.isPlanIdleActive();
-    const color = measured
-      ? this.measureTintColor
-      : idleActive
-        ? GAS_FAR
-        : resolveShotDisplayColor(
-            this.cachedSurveyData,
-            section?.color ?? this.themeColors.stationDefault,
-            geo.globalIdx,
-            this.displayColorContext(),
-          );
-    // Per-kind, from the same table the shader is generated from (#27):
-    // `geo.isReference` is "any virtual kind", so a flat 0.5 here drew a
-    // hovered/selected reference tie brighter than its own base geometry.
-    const overlayKind = shotKindFromFlags(
-      this.cachedSurveyData?.shotFlags[geo.globalIdx] ?? 0,
-    );
-    const opacity = this.isSectionAnchored(sectionId)
-      ? SHOT_ALPHA_DIMMED
-      : idleActive
-        ? GAS_DIM_ALPHA
-        : SHOT_ALPHA_BY_KIND[overlayKind];
-    const properties: Record<string, unknown> = {
-      kind: measured ? 'shotMeasured' : 'shot',
-      color,
-      width,
-      opacity,
-    };
-    // Overlay modes read these via the same ramp expressions as the bulk
-    // layers (GPU-identical colors). -1 = unreachable (renders grey).
-    if (this.distanceMode && fid !== null) {
-      properties.dist = this.distanceState?.shots.get(fid) ?? -1;
-    }
-    if (this.gasReachMode && fid !== null) {
-      properties.gasReach = this.gasReachState?.shots.get(fid) ?? -1;
-    }
-    // Follow an active drag: stretch this shot's moving endpoint(s) by the offset
-    // so a selected/hovered highlight tracks the preview (#C).
-    const off = this.dragOverlayOffset;
-    const { from, to } = off
-      ? offsetOverlayShot(geo.from, geo.to, this.dragMovingShots.get(idStr), this.dragProjector(), off.dx, off.dy)
-      : { from: geo.from, to: geo.to };
+  /** deps for the extracted interact-overlay feature builders (#157 split). */
+  private interactOverlayDeps(): InteractOverlayDeps {
     return {
-      type: 'Feature',
-      geometry: { type: 'LineString', coordinates: [from, to] },
-      properties,
+      geoIndex: this.geoIndex,
+      cachedSurveyData: this.cachedSurveyData,
+      visibleKinds: this.visibleKinds(),
+      parseFeatureId: (id) => this.parseFeatureId(id),
+      measuredPathIds: this.measuredPathIds,
+      measuredPathStationIds: this.measuredPathStationIds,
+      measureTintColor: this.measureTintColor,
+      isSectionAnchored: (sectionId) => this.isSectionAnchored(sectionId),
+      isPlanIdleActive: this.isPlanIdleActive(),
+      displayColorContext: this.displayColorContext(),
+      themeColors: this.themeColors,
+      distanceMode: this.distanceMode,
+      distanceState: this.distanceState,
+      gasReachMode: this.gasReachMode,
+      gasReachState: this.gasReachState,
+      dragOverlayOffset: this.dragOverlayOffset,
+      dragMovingShots: this.dragMovingShots,
+      dragMovingStationKeys: this.dragMovingStationKeys,
+      dragProjector: () => this.dragProjector(),
     };
   }
 
-  /**
-   * One interact-overlay feature for a station ("sectionId:stationIndex") in
-   * hover or selected style - the same radius/stroke the old feature-state
-   * paint cases produced.
-   */
-  private stationOverlayFeature(idStr: string, style: 'hover' | 'selected'): GeoJSON.Feature | null {
-    if (!this.geoIndex || !this.cachedSurveyData) return null;
-    const [secStr, idxStr] = idStr.split(':');
-    const ref = { section_id: Number(secStr), station_index: Number(idxStr) };
-    if (Number.isNaN(ref.section_id) || Number.isNaN(ref.station_index)) return null;
-    const coords = this.geoIndex.stationCoords(ref);
-    const g = this.geoIndex.stationGlobalIndex(ref);
-    if (!coords || g === null) return null;
-    // A station hidden because every kind touching it is hidden must not
-    // surface via a highlight (matches the circle shader's both-off test).
-    if (!this.geoIndex.isStationDrawn(ref, this.visibleKinds()))
-      return null;
+  /** See interactOverlayFeatures.ts: one interact-overlay feature for a shot. */
+  private shotOverlayFeature(idStr: string, width: number): GeoJSON.Feature | null {
+    return shotOverlayFeature(this.interactOverlayDeps(), idStr, width);
+  }
 
-    const fid = this.parseFeatureId(idStr);
-    const section = this.geoIndex.section(ref.section_id);
-    const ctx = this.displayColorContext();
-    const measured = fid !== null && this.measuredPathStationIds?.has(fid);
-    // Plan-mode idle tint (#395 revision): see shotOverlayFeature - same flat far
-    // color + dim alpha instead of section color while there is no gas field yet.
-    const idleActive = this.isPlanIdleActive();
-    const color = measured
-      ? this.measureTintColor
-      : idleActive
-        ? GAS_FAR
-        : resolveStationDisplayColor(
-            this.cachedSurveyData,
-            section?.color ?? this.themeColors.stationDefault,
-            g,
-            ctx,
-          );
-    const properties: Record<string, unknown> = {
-      kind: 'station',
-      color,
-      radius: style === 'hover' ? this.getStationHoverRadius() : this.getStationSelectionRadius(),
-      strokeWidth: style === 'hover' ? 4 : 2.5,
-      strokeColor:
-        style === 'hover' ? this.themeColors.hoverHighlight : this.themeColors.selectHighlight,
-      opacity: this.isSectionAnchored(ref.section_id) ? 0.25 : idleActive ? GAS_DIM_ALPHA : 1,
-    };
-    if (this.distanceMode && fid !== null) {
-      properties.dist = this.distanceState?.stations.get(fid) ?? -1;
-    }
-    if (this.gasReachMode && fid !== null) {
-      properties.gasReach = this.gasReachState?.stations.get(fid) ?? -1;
-    }
-    // Follow an active drag: offset this station's highlight if it is moving (#C).
-    const off = this.dragOverlayOffset;
-    const point = off
-      ? offsetOverlayPoint(coords, this.dragMovingStationKeys.has(idStr), this.dragProjector(), off.dx, off.dy)
-      : coords;
-    return {
-      type: 'Feature',
-      geometry: { type: 'Point', coordinates: point },
-      properties,
-    };
+  /** See interactOverlayFeatures.ts: one interact-overlay feature for a station. */
+  private stationOverlayFeature(idStr: string, style: 'hover' | 'selected'): GeoJSON.Feature | null {
+    const radius = style === 'hover' ? this.getStationHoverRadius() : this.getStationSelectionRadius();
+    return stationOverlayFeature(this.interactOverlayDeps(), idStr, style, radius);
   }
 
   /**
