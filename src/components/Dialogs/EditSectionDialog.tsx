@@ -25,17 +25,6 @@ export default function EditSectionDialog() {
   const sectionId = dialogData.sectionId as number | undefined;
   const section = project?.sections.find((s) => s.id === sectionId);
 
-  // Compute frozen shot indices for the ShotTableEditor
-  const frozenShotIndices = useMemo(() => {
-    if (sectionId === undefined || !section) return undefined;
-    const frozen = new Set<number>();
-    for (let i = 0; i < section.shots.length; i++) {
-      if (isShotFrozen(sectionId, i)) {
-        frozen.add(i);
-      }
-    }
-    return frozen.size > 0 ? frozen : undefined;
-  }, [sectionId, section, isShotFrozen]);
 
   // Reverse (#24) mutates the survey, and the closure-adjusted / Plan / Export
   // read-only mode has no server backstop (see useEditingBlocked's
@@ -58,6 +47,32 @@ export default function EditSectionDialog() {
 
   // Shots state
   const [shots, setShots] = useState<EditableShot[]>([]);
+
+  // Which rows the editor must lock, in the editor's OWN index space.
+  //
+  // `isShotFrozen` is positional against the SAVED section, but the editor
+  // indexes the dialog's array, and the two stop agreeing the moment a row is
+  // inserted here: everything after the insert shifts by one, so frozen-ness
+  // stays on the position and slides onto the wrong shot - locking a shot that
+  // is editable, and worse, unlocking one whose geometry is adjusted. Resolve
+  // the saved indices to shot IDs first, then find those IDs in the dialog's
+  // array, so the lock follows the shot (the identity-key rule, #157-era
+  // landmine).
+  const frozenShotIndices = useMemo(() => {
+    if (sectionId === undefined || !section) return undefined;
+    const frozenIds = new Set<number>();
+    section.shots.forEach((shot, i) => {
+      if (isShotFrozen(sectionId, i)) frozenIds.add(shot.id);
+    });
+    if (frozenIds.size === 0) return undefined;
+    const indices = new Set<number>();
+    shots.forEach((shot, i) => {
+      // A row added here has no saved counterpart, so it can never be frozen -
+      // and its `id` is a temp id that could collide with a real one.
+      if (shot.isNew !== true && frozenIds.has(shot.id)) indices.add(i);
+    });
+    return indices.size > 0 ? indices : undefined;
+  }, [sectionId, section, isShotFrozen, shots]);
   const [nextTempId, setNextTempId] = useState(-1);
   const [selectedShotKey, setSelectedShotKey] = useState<string | null>(null);
   const [pendingMidDelete, setPendingMidDelete] = useState<{ index: number; shotId: number } | null>(null);
