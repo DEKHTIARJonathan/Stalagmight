@@ -252,6 +252,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "action.dialog.held-lock-resume",
     "action.dialog.speleodb-dump-picker",
     "action.dialog.import",
+    "action.dialog.import-blocked",
     "action.dialog.insert-station",
     "action.dialog.keyboard-shortcuts",
     "action.dialog.merge",
@@ -326,6 +327,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "dialog-cancel.held-lock-resume",
     "dialog-cancel.speleodb-dump-picker",
     "dialog-cancel.import",
+    "dialog-cancel.import-blocked",
     "dialog-cancel.insert-station",
     "dialog-cancel.keyboard-shortcuts",
     "dialog-cancel.merge",
@@ -427,6 +429,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "dwell.dialog.held-lock-resume",
     "dwell.dialog.speleodb-dump-picker",
     "dwell.dialog.import",
+    "dwell.dialog.import-blocked",
     "dwell.dialog.insert-station",
     "dwell.dialog.keyboard-shortcuts",
     "dwell.dialog.merge",
@@ -574,6 +577,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "active-dwell.dialog.edit-station",
     "active-dwell.dialog.error",
     "active-dwell.dialog.export",
+    "active-dwell.dialog.import-blocked",
     "active-dwell.dialog.gpx-placement",
     "active-dwell.dialog.gpx-selection",
     "active-dwell.dialog.held-lock-resume",
@@ -1097,7 +1101,12 @@ mod tests {
         //       reshaping columns mid-import cannot overwrite the layout used to
         //       review a saved section:
         //       command.update_import_shots_view = 722.
-        assert_eq!(EVENT_NAMES.len(), 722);
+        //   + 4 the import-blocked prompt (#407 follow-up): the Plan/Export
+        //       mode-only DMP rejection is a choice ("Switch to Survey" vs
+        //       stay), not an error dialog, so it gets the full per-dialog set:
+        //       action.dialog + dialog-cancel + dwell.dialog +
+        //       active-dwell.dialog for import-blocked = 726.
+        assert_eq!(EVENT_NAMES.len(), 726);
     }
 
     /// Active-dwell mirrors every dwell state 1:1 (#31): for each `dwell.<key>` there

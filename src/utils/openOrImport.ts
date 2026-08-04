@@ -91,6 +91,18 @@ export async function routeOpenedFile(path: string, errorTitle = 'Open Failed'):
       const speleoReadOnly = selectSpeleoReadOnly(useSpeleoStore.getState());
       const nonSurveyMode = ui.appMode !== 'survey';
       const closureAdjusted = ui.geometryMode === 'closureAdjusted';
+      if (!speleoReadOnly && nonSurveyMode) {
+        // Mode-blocked only: not an error - the fix is one safe click, so the
+        // dedicated prompt offers it ("Switch to Survey" continues THIS import;
+        // "Stay in Plan/Export" abandons it). The dialog owns the pending
+        // telemetry source from here (complete-on-switch / cancel-on-stay).
+        ui.openDialog('import-blocked', { path });
+        handedOff = true;
+        return;
+      }
+      // The remaining causes (missing SpeleoDB write lock, closure-adjusted
+      // view, and compound states) keep the plain error dialog: their fixes
+      // aren't a single safe click this code could offer.
       let message: string;
       if (speleoReadOnly && nonSurveyMode) {
         message = 'Switch to Survey mode and acquire the SpeleoDB write lock to import.';
@@ -98,8 +110,6 @@ export async function routeOpenedFile(path: string, errorTitle = 'Open Failed'):
         message = 'Switch to the Measured view and acquire the SpeleoDB write lock to import.';
       } else if (speleoReadOnly) {
         message = 'Acquire the SpeleoDB write lock to import.';
-      } else if (nonSurveyMode) {
-        message = 'Switch to Survey mode to import - the Plan and Export workspaces are read-only.';
       } else {
         message = 'Switch to the Measured view to import - the closure-adjusted view is read-only.';
       }
