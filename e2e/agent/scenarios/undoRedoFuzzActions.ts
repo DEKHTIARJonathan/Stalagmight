@@ -38,6 +38,35 @@ export const STREAM_V2 = process.env.STALAGMIGHT_FUZZ_STREAM !== 'v1';
 /** Share of generated values that take an extreme instead of a nominal value. */
 const P_BOUNDARY = 0.15;
 
+/**
+ * Largest magnitude a boundary value that FEEDS COORDINATE ARITHMETIC may take.
+ *
+ * Not arbitrary - measured. A station move of 1e6 m puts coordinates in a regime
+ * where re-deriving `section_offsets` loses about 4.6e-12 RELATIVE precision
+ * (roughly 2e4 ULPs through the summation and trig chain), which is 4.6e-6 m
+ * ABSOLUTE. That is 3 orders above the oracle's 1e-9 floor, so it reads as a
+ * roundtrip failure when it is really catastrophic cancellation in the injected
+ * input. The scaling was verified at the same step of the same seed
+ * (fractal seed 12 x40, `undo` at depth 3, `project.section_offsets.8[0]`):
+ *
+ *     injected z    drift
+ *     1e6           4.56e-6 m
+ *     1e5           1.59e-7 m
+ *     1e4           1.7e-9 m
+ *     1e3           below the 1e-9 tolerance
+ *
+ * i.e. absolute error tracks the injected magnitude, the signature of float
+ * cancellation rather than of a logic error - and the shot fields themselves
+ * roundtrip EXACTLY (the failure had six differing paths, every one of them
+ * derived geometry).
+ *
+ * So the bound goes on the INPUT, not on the oracle: a kilometre-scale
+ * displacement is already far beyond any real survey and is a genuine boundary,
+ * while keeping derived geometry inside the existing tolerance. Loosening the
+ * oracle instead would have blinded it to real sub-centimetre drift everywhere.
+ */
+const GEOMETRY_EXTREME = 1e3;
+
 /** Mirrors `src/types/ipc/StationRef.ts` - the arg shape the store actions take. */
 export interface StationRef {
   section_id: number;
@@ -121,7 +150,7 @@ function biasedFloat(
   min: number,
   max: number,
   decimals: number,
-  extremes: readonly number[] = [0, -0.0001, 1e6, -1e6, 1e-9],
+  extremes: readonly number[] = [0, -0.0001, GEOMETRY_EXTREME, -GEOMETRY_EXTREME, 1e-9],
 ): number {
   if (!STREAM_V2) return roundedFloat(ctx, min, max, decimals);
   if (ctx.rng() < P_BOUNDARY) return ctx.pick(extremes);
@@ -241,7 +270,7 @@ export function randomShotData(ctx: ScenarioContext): Record<string, unknown> {
   return {
     azimuth_in: azimuth,
     azimuth_out: Number(((azimuth + roundedFloat(ctx, -1.5, 1.5, 1) + 360) % 360).toFixed(1)),
-    length: biasedFloat(ctx, 1, 12, 2, [0, 1e-9, 1e6, -5, 0.0001]),
+    length: biasedFloat(ctx, 1, 12, 2, [0, 1e-9, GEOMETRY_EXTREME, -5, 0.0001]),
     depth_in: depthIn,
     depth_out: Number(depthOut.toFixed(2)),
     pitch_in: chance(ctx, 0.5) ? roundedFloat(ctx, -60, 60, 1) : null,
@@ -283,7 +312,7 @@ interface PatchField {
 const SHOT_PATCH_FIELDS: readonly PatchField[] = [
   { key: 'azimuth_in', nullable: false, gen: (c) => roundedFloat(c, 0, 359.9, 1) },
   { key: 'azimuth_out', nullable: false, gen: (c) => roundedFloat(c, 0, 359.9, 1) },
-  { key: 'length', nullable: false, gen: (c) => biasedFloat(c, 0.5, 20, 2, [0, 1e-9, 1e6, -3]) },
+  { key: 'length', nullable: false, gen: (c) => biasedFloat(c, 0.5, 20, 2, [0, 1e-9, GEOMETRY_EXTREME, -3]) },
   { key: 'depth_in', nullable: false, gen: (c) => roundedFloat(c, 0, 40, 2) },
   { key: 'depth_out', nullable: false, gen: (c) => roundedFloat(c, 0, 40, 2) },
   { key: 'pitch_in', nullable: true, gen: (c) => roundedFloat(c, -60, 60, 1) },
@@ -337,9 +366,9 @@ function buildPatch(
 
 function randomOffset(ctx: ScenarioContext): Record<string, number> {
   return {
-    x: biasedFloat(ctx, -3, 3, 3, [0, 1e6, -1e6, 1e-9]),
-    y: biasedFloat(ctx, -3, 3, 3, [0, 1e6, -1e6, 1e-9]),
-    z: biasedFloat(ctx, -1.5, 1.5, 3, [0, 1e6, -1e6, 1e-9]),
+    x: biasedFloat(ctx, -3, 3, 3, [0, GEOMETRY_EXTREME, -GEOMETRY_EXTREME, 1e-9]),
+    y: biasedFloat(ctx, -3, 3, 3, [0, GEOMETRY_EXTREME, -GEOMETRY_EXTREME, 1e-9]),
+    z: biasedFloat(ctx, -1.5, 1.5, 3, [0, GEOMETRY_EXTREME, -GEOMETRY_EXTREME, 1e-9]),
   };
 }
 
@@ -805,7 +834,7 @@ export const ACTION_GENERATORS: readonly ActionGenerator[] = [
       if (!target) return null;
       // Distances AT the boundaries (0 and the full shot length) are the
       // interesting ones - a split there degenerates into a zero-length shot.
-      const distance = biasedFloat(ctx, 0.1, 8, 3, [0, 1e-9, 1e6, -1]);
+      const distance = biasedFloat(ctx, 0.1, 8, 3, [0, 1e-9, GEOMETRY_EXTREME, -1]);
       return {
         action: 'splitShotAtDistance',
         args: [target.sectionId, target.shotId, distance],
