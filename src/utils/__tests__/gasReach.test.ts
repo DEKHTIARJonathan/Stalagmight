@@ -2,12 +2,16 @@ import { describe, it, expect } from 'vitest';
 import {
   buildGasReachFeatureState,
   gasReachColorExpression,
+  gasBeyondReachFeatureIds,
   reachableStationKeySet,
+  nearestOriginShotEndpoint,
   UNREACHABLE_GAS,
+  BEYOND_GAS_RANGE,
 } from '../gasReach';
 import { encodeFeatureId } from '../ids';
 import type { SurveyData } from '../../types/survey-data';
 import type { GasReachField } from '../../types/ipc.generated';
+import type { StationRef } from '../../types/project';
 
 describe('buildGasReachFeatureState', () => {
   // Section 1: shots id10 (st0→st1), id11 (st1→st2). Section 2: shot id20 (st0→st1).
@@ -66,10 +70,11 @@ describe('buildGasReachFeatureState', () => {
     expect(stations.get(encodeFeatureId(2, 0))).toBe(200);
   });
 
-  it('greys a finite-but-OVER-budget station (the conservative direction - never paint it reachable)', () => {
-    // gas_to_reach is Some(1500) but reachable=false; it must NOT leak the 1500 value.
+  it('marks a finite-but-OVER-budget station BEYOND_GAS_RANGE (connected but past budget, not grey)', () => {
+    // gas_to_reach is Some(1500) but reachable=false; it must NOT leak the 1500
+    // value, AND must be distinguishable from a topologically unconnected station.
     const { stations } = buildGasReachFeatureState(data, field);
-    expect(stations.get(encodeFeatureId(1, 2))).toBe(UNREACHABLE_GAS);
+    expect(stations.get(encodeFeatureId(1, 2))).toBe(BEYOND_GAS_RANGE);
   });
 
   it('greys a disconnected station (null gas_to_reach)', () => {
@@ -83,12 +88,19 @@ describe('buildGasReachFeatureState', () => {
     expect(shots.get(encodeFeatureId(1, 10))).toBe(150);
   });
 
-  it('greys a shot when either endpoint is unreachable (over-budget OR disconnected)', () => {
+  it('takes the WORSE class when a shot spans a beyond-range and an unconnected endpoint', () => {
     const { shots } = buildGasReachFeatureState(data, field);
-    // id11: st1=300 reachable, st2 over-budget → grey
-    expect(shots.get(encodeFeatureId(1, 11))).toBe(UNREACHABLE_GAS);
-    // id20: st0=200 reachable, st1 disconnected → grey
+    // id11: st1=300 reachable, st2 beyond-range → beyond-range (not grey)
+    expect(shots.get(encodeFeatureId(1, 11))).toBe(BEYOND_GAS_RANGE);
+    // id20: st0=200 reachable, st1 disconnected → unconnected dominates
     expect(shots.get(encodeFeatureId(2, 20))).toBe(UNREACHABLE_GAS);
+  });
+
+  it('gasBeyondReachFeatureIds picks out only the beyond-range features', () => {
+    const { stations, shots } = buildGasReachFeatureState(data, field);
+    expect(gasBeyondReachFeatureIds(stations)).toEqual(new Set([encodeFeatureId(1, 2)]));
+    expect(gasBeyondReachFeatureIds(shots)).toEqual(new Set([encodeFeatureId(1, 11)]));
+    expect(gasBeyondReachFeatureIds(undefined).size).toBe(0);
   });
 
   it('uses the turn budget (not max_reachable_gas) as the interpolate scale max', () => {
@@ -99,12 +111,28 @@ describe('buildGasReachFeatureState', () => {
 });
 
 describe('gasReachColorExpression', () => {
-  it('greys negative (unreachable) gasReach and interpolates near→far over 0→budget', () => {
+  it('greys unconnected gasReach and interpolates near→far over 0→budget', () => {
     const s = JSON.stringify(gasReachColorExpression('#aaaaaa', '#bbbbbb', 1000, '#888888'));
     expect(s).toContain('interpolate');
     expect(s).toContain('coalesce');
     expect(s).toContain('gasReach'); // reads the dedicated feature-state key
-    expect(s).toContain('#888888'); // grey branch for the unreachable sentinel
+    expect(s).toContain('#888888'); // grey branch for the unconnected sentinel
+  });
+
+  it('clamps the beyond-range sentinel to the ramp far color, matched BEFORE the generic grey case', () => {
+    // Structural, not string-substring: pins the actual ['case', ...] branch
+    // shape and ORDER, so reordering the branches (grey first) fails this test
+    // even though it would still contain both substrings.
+    const expr = gasReachColorExpression('#aaaaaa', '#bbbbbb', 1000, '#888888');
+    // expr = ['let', 'g', ['coalesce', ...], caseExpr] - the case lives at index 3.
+    const caseExpr = expr[3] as unknown[];
+    expect(caseExpr[0]).toBe('case');
+    // First branch: BEYOND_GAS_RANGE -> the ramp's far color, clamped.
+    expect(caseExpr[1]).toEqual(['==', ['var', 'g'], BEYOND_GAS_RANGE]);
+    expect(caseExpr[2]).toBe('#bbbbbb');
+    // Second branch: any other negative value (the unconnected sentinel) -> grey.
+    expect(caseExpr[3]).toEqual(['<', ['var', 'g'], 0]);
+    expect(caseExpr[4]).toBe('#888888');
   });
 
   it('guards a non-positive budget so the interpolate stops never collide', () => {
@@ -135,5 +163,81 @@ describe('reachableStationKeySet', () => {
   it('returns an empty set when nothing is reachable', () => {
     const none = { ...field, reachable: [false, false, false, false] } as unknown as GasReachField;
     expect(reachableStationKeySet(none).size).toBe(0);
+  });
+});
+
+describe('nearestOriginShotEndpoint (nearest to the CURRENT origin, not always the entrance)', () => {
+  const a: StationRef = { section_id: 1, station_index: 0 };
+  const b: StationRef = { section_id: 1, station_index: 1 };
+
+  const fieldWith = (aGas: number | null, bGas: number | null): GasReachField =>
+    ({
+      station_refs: [a, b],
+      gas_to_reach: [aGas, bGas],
+      reachable: [aGas != null, bGas != null],
+    }) as unknown as GasReachField;
+
+  it('picks the smaller gas_to_reach when a field is loaded', () => {
+    expect(nearestOriginShotEndpoint(a, b, fieldWith(50, 200), [])).toBe(a);
+    expect(nearestOriginShotEndpoint(a, b, fieldWith(200, 50), [])).toBe(b);
+  });
+
+  it('treats null gas_to_reach as infinitely far', () => {
+    expect(nearestOriginShotEndpoint(a, b, fieldWith(null, 50), [])).toBe(b);
+    expect(nearestOriginShotEndpoint(a, b, fieldWith(50, null), [])).toBe(a);
+  });
+
+  it('re-armed pick-on-map: with a field loaded, ranks against the OUTGOING origin, not the ' +
+    'entrance - even when that disagrees with straight-line distance to the nearest zero datum', () => {
+    const stations = [
+      { station_ref: a, coordinates: { x: 0, y: 0, z: 0 }, is_zero_datum: false },
+      { station_ref: b, coordinates: { x: 10, y: 0, z: 0 }, is_zero_datum: false },
+      {
+        station_ref: { section_id: 9, station_index: 0 },
+        coordinates: { x: 10, y: 0, z: 0 }, // right next to b: b is the entrance-nearest endpoint
+        is_zero_datum: true,
+      },
+    ];
+    // A loaded field rooted at the diver's CURRENT (outgoing) origin, not the entrance: a costs
+    // less gas to reach from there even though b sits right on top of the zero datum. The field
+    // wins outright - this is the whole point of the re-pick regime.
+    expect(nearestOriginShotEndpoint(a, b, fieldWith(10, 200), stations)).toBe(a);
+  });
+
+  it('falls through to the euclidean rule when both endpoints are null', () => {
+    const stations = [
+      { station_ref: a, coordinates: { x: 0, y: 0, z: 0 }, is_zero_datum: false },
+      { station_ref: b, coordinates: { x: 10, y: 0, z: 0 }, is_zero_datum: false },
+      {
+        station_ref: { section_id: 9, station_index: 0 },
+        coordinates: { x: 1, y: 0, z: 0 },
+        is_zero_datum: true,
+      },
+    ];
+    // a is 1m from the zero datum, b is 9m - a wins even though the field claims neither is
+    // reachable.
+    expect(nearestOriginShotEndpoint(a, b, fieldWith(null, null), stations)).toBe(a);
+  });
+
+  it('with no field loaded, picks the endpoint nearest a zero-datum station', () => {
+    const stations = [
+      { station_ref: a, coordinates: { x: 0, y: 0, z: 0 }, is_zero_datum: false },
+      { station_ref: b, coordinates: { x: 10, y: 0, z: 0 }, is_zero_datum: false },
+      {
+        station_ref: { section_id: 9, station_index: 0 },
+        coordinates: { x: 9, y: 0, z: 0 },
+        is_zero_datum: true,
+      },
+    ];
+    expect(nearestOriginShotEndpoint(a, b, null, stations)).toBe(b);
+  });
+
+  it('with no zero datum on the project, deterministically keeps the first endpoint', () => {
+    const stations = [
+      { station_ref: a, coordinates: { x: 0, y: 0, z: 0 }, is_zero_datum: false },
+      { station_ref: b, coordinates: { x: 10, y: 0, z: 0 }, is_zero_datum: false },
+    ];
+    expect(nearestOriginShotEndpoint(a, b, null, stations)).toBe(a);
+    expect(nearestOriginShotEndpoint(b, a, null, stations)).toBe(b);
   });
 });

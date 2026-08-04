@@ -8,8 +8,7 @@ import type { ToolType } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
 import { selectActiveSurveyData } from '../../store/geometrySelectors';
-import { surveyDataFromLegacy, shotKindFromFlags } from '../../types/survey-data';
-import { SHOT_ALPHA_BY_KIND, SHOT_ALPHA_DIMMED } from './surveyLayer/customRender/shaders';
+import { surveyDataFromLegacy } from '../../types/survey-data';
 import { hasLiveStyle } from './mapUtils';
 import { buildGhostFeatures } from './surveyLayer/ghostFeatures';
 import {
@@ -22,24 +21,26 @@ import {
 } from './surveyLayer/displayColor';
 import {
   SurveyGeometryIndex,
-  isKindVisible,
   type VisibleKinds,
 } from './surveyLayer/geometryIndex';
 import {
-  offsetOverlayPoint,
-  offsetOverlayShot,
   type DragPreviewFeature,
   type DragPreviewSet,
   type MovingEnd,
   type Projector,
 } from './surveyLayer/dragPreviewSource';
 import { DRAG_PREVIEW_SOURCE, type DragPreviewLayerCtx } from './surveyLayer/dragPreviewLayers';
+import {
+  shotOverlayFeature,
+  stationOverlayFeature,
+  type InteractOverlayDeps,
+} from './surveyLayer/interactOverlayFeatures';
 import { DragGhostController } from './surveyLayer/dragGhostController';
 import type { GhostRenderData } from './surveyLayer/customRender/surveyGhostLayer';
 import { buildGhostRenderData } from './surveyLayer/dragGhostData';
 import { padProbeBox, type ProbeGeometry } from './surveyLayer/hitProbe';
 import { computeIssueSeverity, type IssueSeverity } from './surveyLayer/severity';
-import { SurveyCustomController, type CustomRenderExclusion } from './surveyLayer/customRender/controller';
+import { SurveyCustomController, buildCustomDimState, type CustomRenderExclusion } from './surveyLayer/customRender/controller';
 import { SurveyLabelController } from './surveyLayer/customRender/labelController';
 import { overlayInputFrom } from './surveyLayer/customRender/overlayColor';
 import { MeasurePathController } from './surveyLayer/customRender/measurePathController';
@@ -331,6 +332,11 @@ export default class SurveyLayer {
   // the shots/stations color paint), enforced upstream in uiStore.
   private gasReachMode: boolean = false;
   private gasReachState: GasReachFeatureState | null = null;
+  // Plan-mode idle tint (#395 revision): true while Plan is active but no gas
+  // origin has been chosen yet - the whole survey renders the gas ramp's dim far
+  // color instead of leaking section colors under the gas scheme. Driven by
+  // MapCanvas (setPlanIdleTint); yields to a real gas field via isPlanIdleActive().
+  private planIdleTint: boolean = false;
   // Gas route highlight (#233): the current picked-route legs. Re-applied after every source
   // rebuild (its own GeoJSON source survives setData, but a feature rebuild re-pushes the data).
   private gasRouteLegs: (RouteLeg & { color: string })[] = [];
@@ -1585,129 +1591,44 @@ export default class SurveyLayer {
       themeColors: this.themeColors,
       showIssueSeverity: this.showIssueSeverity && !!this.cachedIssueSeverity,
       issueSeverity: this.cachedIssueSeverity,
+      planIdleTint: this.isPlanIdleActive(),
     };
   }
 
-  /**
-   * One interact-overlay feature for a shot ("sectionId:shotId"), drawn at
-   * `width`. Kind `shotMeasured` (measure tint, round caps, above the tint
-   * layer) when the shot is on the measured path, else `shot` (its exact bulk
-   * color; the ramp expressions take over in distance/gas modes via the
-   * carried dist/gasReach values).
-   */
+  /** deps for the extracted interact-overlay feature builders (#157 split). */
+  private interactOverlayDeps(): InteractOverlayDeps {
+    return {
+      geoIndex: this.geoIndex,
+      cachedSurveyData: this.cachedSurveyData,
+      visibleKinds: this.visibleKinds(),
+      parseFeatureId: (id) => this.parseFeatureId(id),
+      measuredPathIds: this.measuredPathIds,
+      measuredPathStationIds: this.measuredPathStationIds,
+      measureTintColor: this.measureTintColor,
+      isSectionAnchored: (sectionId) => this.isSectionAnchored(sectionId),
+      isPlanIdleActive: this.isPlanIdleActive(),
+      displayColorContext: this.displayColorContext(),
+      themeColors: this.themeColors,
+      distanceMode: this.distanceMode,
+      distanceState: this.distanceState,
+      gasReachMode: this.gasReachMode,
+      gasReachState: this.gasReachState,
+      dragOverlayOffset: this.dragOverlayOffset,
+      dragMovingShots: this.dragMovingShots,
+      dragMovingStationKeys: this.dragMovingStationKeys,
+      dragProjector: () => this.dragProjector(),
+    };
+  }
+
+  /** See interactOverlayFeatures.ts: one interact-overlay feature for a shot. */
   private shotOverlayFeature(idStr: string, width: number): GeoJSON.Feature | null {
-    if (!this.geoIndex || !this.cachedSurveyData) return null;
-    const [secStr, shotStr] = idStr.split(':');
-    const sectionId = Number(secStr);
-    const shotId = Number(shotStr);
-    if (Number.isNaN(sectionId) || Number.isNaN(shotId)) return null;
-    const geo = this.geoIndex.shotGeometry(sectionId, shotId);
-    if (!geo) return null;
-    // A shot of a hidden kind must not surface via the overlay either (#27).
-    if (geo.isReference && !isKindVisible(geo.kindFlags, this.visibleKinds())) return null;
-
-    const fid = this.parseFeatureId(idStr);
-    const measured = fid !== null && this.measuredPathIds?.has(fid);
-    const section = this.geoIndex.section(sectionId);
-    const color = measured
-      ? this.measureTintColor
-      : resolveShotDisplayColor(
-          this.cachedSurveyData,
-          section?.color ?? this.themeColors.stationDefault,
-          geo.globalIdx,
-          this.displayColorContext(),
-        );
-    // Per-kind, from the same table the shader is generated from (#27):
-    // `geo.isReference` is "any virtual kind", so a flat 0.5 here drew a
-    // hovered/selected reference tie brighter than its own base geometry.
-    const overlayKind = shotKindFromFlags(
-      this.cachedSurveyData?.shotFlags[geo.globalIdx] ?? 0,
-    );
-    const opacity = this.isSectionAnchored(sectionId)
-      ? SHOT_ALPHA_DIMMED
-      : SHOT_ALPHA_BY_KIND[overlayKind];
-    const properties: Record<string, unknown> = {
-      kind: measured ? 'shotMeasured' : 'shot',
-      color,
-      width,
-      opacity,
-    };
-    // Overlay modes read these via the same ramp expressions as the bulk
-    // layers (GPU-identical colors). -1 = unreachable (renders grey).
-    if (this.distanceMode && fid !== null) {
-      properties.dist = this.distanceState?.shots.get(fid) ?? -1;
-    }
-    if (this.gasReachMode && fid !== null) {
-      properties.gasReach = this.gasReachState?.shots.get(fid) ?? -1;
-    }
-    // Follow an active drag: stretch this shot's moving endpoint(s) by the offset
-    // so a selected/hovered highlight tracks the preview (#C).
-    const off = this.dragOverlayOffset;
-    const { from, to } = off
-      ? offsetOverlayShot(geo.from, geo.to, this.dragMovingShots.get(idStr), this.dragProjector(), off.dx, off.dy)
-      : { from: geo.from, to: geo.to };
-    return {
-      type: 'Feature',
-      geometry: { type: 'LineString', coordinates: [from, to] },
-      properties,
-    };
+    return shotOverlayFeature(this.interactOverlayDeps(), idStr, width);
   }
 
-  /**
-   * One interact-overlay feature for a station ("sectionId:stationIndex") in
-   * hover or selected style - the same radius/stroke the old feature-state
-   * paint cases produced.
-   */
+  /** See interactOverlayFeatures.ts: one interact-overlay feature for a station. */
   private stationOverlayFeature(idStr: string, style: 'hover' | 'selected'): GeoJSON.Feature | null {
-    if (!this.geoIndex || !this.cachedSurveyData) return null;
-    const [secStr, idxStr] = idStr.split(':');
-    const ref = { section_id: Number(secStr), station_index: Number(idxStr) };
-    if (Number.isNaN(ref.section_id) || Number.isNaN(ref.station_index)) return null;
-    const coords = this.geoIndex.stationCoords(ref);
-    const g = this.geoIndex.stationGlobalIndex(ref);
-    if (!coords || g === null) return null;
-    // A station hidden because every kind touching it is hidden must not
-    // surface via a highlight (matches the circle shader's both-off test).
-    if (!this.geoIndex.isStationDrawn(ref, this.visibleKinds()))
-      return null;
-
-    const fid = this.parseFeatureId(idStr);
-    const section = this.geoIndex.section(ref.section_id);
-    const ctx = this.displayColorContext();
-    const measured = fid !== null && this.measuredPathStationIds?.has(fid);
-    const color = measured
-      ? this.measureTintColor
-      : resolveStationDisplayColor(
-          this.cachedSurveyData,
-          section?.color ?? this.themeColors.stationDefault,
-          g,
-          ctx,
-        );
-    const properties: Record<string, unknown> = {
-      kind: 'station',
-      color,
-      radius: style === 'hover' ? this.getStationHoverRadius() : this.getStationSelectionRadius(),
-      strokeWidth: style === 'hover' ? 4 : 2.5,
-      strokeColor:
-        style === 'hover' ? this.themeColors.hoverHighlight : this.themeColors.selectHighlight,
-      opacity: this.isSectionAnchored(ref.section_id) ? 0.25 : 1,
-    };
-    if (this.distanceMode && fid !== null) {
-      properties.dist = this.distanceState?.stations.get(fid) ?? -1;
-    }
-    if (this.gasReachMode && fid !== null) {
-      properties.gasReach = this.gasReachState?.stations.get(fid) ?? -1;
-    }
-    // Follow an active drag: offset this station's highlight if it is moving (#C).
-    const off = this.dragOverlayOffset;
-    const point = off
-      ? offsetOverlayPoint(coords, this.dragMovingStationKeys.has(idStr), this.dragProjector(), off.dx, off.dy)
-      : coords;
-    return {
-      type: 'Feature',
-      geometry: { type: 'Point', coordinates: point },
-      properties,
-    };
+    const radius = style === 'hover' ? this.getStationHoverRadius() : this.getStationSelectionRadius();
+    return stationOverlayFeature(this.interactOverlayDeps(), idStr, style, radius);
   }
 
   /**
@@ -1741,6 +1662,32 @@ export default class SurveyLayer {
     // survey geometry with the new overlay colors.
     this.applyOverlayPaint();
     this.resyncCustomRenderFromStore();
+    // Beyond-gas-range dimming (#395) follows the same mode/state - toggling
+    // Plan mode (or a budget change) applies/clears the gas-dim set.
+    this.syncCustomDimming();
+  }
+
+  /** True when the plan-idle tint should actually paint: the flag is set AND no
+   *  real gas field is active - a real field always wins (#395 revision). */
+  private isPlanIdleActive(): boolean {
+    return this.planIdleTint && !(this.gasReachMode && this.gasReachState);
+  }
+
+  /**
+   * Tint the whole survey uniformly in the gas ramp's dim far color (#395
+   * revision) while Plan mode is active but no gas origin has been chosen yet -
+   * keeps the map coherent with the gas color scheme before there is a field to
+   * shade. Mirrors {@link setGasReach}'s wiring exactly (recolor + redim, no
+   * feature rebuild); cleared the instant a real field goes live or Plan mode
+   * exits (MapCanvas drives both).
+   */
+  setPlanIdleTint(enabled: boolean): void {
+    if (this.planIdleTint === enabled) return;
+    this.planIdleTint = enabled;
+    if (!this.map || !hasLiveStyle(this.map)) return;
+    this.applyOverlayPaint();
+    this.resyncCustomRenderFromStore();
+    this.syncCustomDimming();
   }
 
   /**
@@ -2461,18 +2408,14 @@ export default class SurveyLayer {
     this.applyDimChangeToOverlay(before);
   }
 
-  /** Push the current anchored + immovable dim set to the custom-render layers so
-   *  they dim the same features the stock paint expressions do (#customRender).
-   *  Both geometry AND labels take the same {@link CustomDimState}; the label
-   *  controller reproduces the stock LABEL dim rules (anchored dims shot/station/
-   *  section labels, immovable dims individual shot/station labels; comments and
-   *  section-name immovable are left bright, matching stock). */
+  /** Push the current anchored + immovable + gas-dim (#395) set to the custom-render
+   *  layers so they dim the same features the stock paint expressions do
+   *  (#customRender). Both geometry AND labels take the same {@link CustomDimState};
+   *  the label controller reproduces the stock LABEL dim rules (anchored dims shot/
+   *  station/section labels, immovable + gas-dim dim individual shot/station labels;
+   *  comments and section-name immovable/gas-dim are left bright, matching stock). */
   private syncCustomDimming(): void {
-    const dim = {
-      anchoredSectionIds: this.anchoredSectionIds,
-      immovableStationFeatureIds: this.immovableStationFeatureIds,
-      immovableShotFeatureIds: this.immovableShotFeatureIds,
-    };
+    const dim = buildCustomDimState(this.anchoredSectionIds, this.immovableStationFeatureIds, this.immovableShotFeatureIds, this.gasReachMode, this.gasReachState, this.isPlanIdleActive());
     this.customRender?.setDimming(dim);
     this.customLabels?.setDimming(dim);
   }
@@ -3328,6 +3271,9 @@ export default class SurveyLayer {
       // Move-comment palette tint (#52): custom features carry no commentColor
       // property, so the resolvers recompute it (only while move_comment is active).
       commentTint: this.activeTool === 'move_comment',
+      // Plan-mode idle tint (#395 revision): paints every feature the gas ramp's
+      // dim far color while there is no origin yet.
+      planIdleTint: this.isPlanIdleActive(),
     };
     this.customRender.sync({
       surveyData,

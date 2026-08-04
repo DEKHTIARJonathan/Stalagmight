@@ -329,7 +329,9 @@ export const LINE_SIDE = [-1, 1, -1, 1];
 export interface LineSectionInputs {
   colorForShot: (globalShotIdx: number, sectionId: number) => Rgba8;
   colorForShotEndpoints?: ((globalShotIdx: number, sectionId: number) => readonly [Rgba8, Rgba8]) | undefined;
-  dimForShot?: ((globalShotIdx: number, sectionId: number) => boolean) | undefined;
+  /** Dim LEVEL for a shot (0 none, 0.5 gas-beyond-reach, 1 anchored/immovable),
+   *  or a boolean the writer coerces to 0 / 1 (legacy callers / tests). */
+  dimForShot?: ((globalShotIdx: number, sectionId: number) => number | boolean) | undefined;
   hideForShot?: ((globalShotIdx: number, sectionId: number) => boolean) | undefined;
   /** Emphasis LEVEL for a shot (0 none, 1 selection, 2 hover), or a boolean the
    *  writer coerces to 0 / 1 (legacy callers / tests). */
@@ -377,7 +379,7 @@ function emitLineSection(
     // bool, so the shader can fade and hide jumps and references separately.
     // Every "is virtual" test still reads as > 0.5.
     const isRef = shotKindToFlags(shotKindFromFlags(data.shotFlags[shotGlobalIdx]!));
-    const isDim = dimForShot?.(shotGlobalIdx, section.id) === true ? 1 : 0;
+    const isDim = flagValue(dimForShot?.(shotGlobalIdx, section.id));
     const isHide = hideForShot?.(shotGlobalIdx, section.id) === true ? 1 : 0;
     const isHighlight = flagValue(highlightForShot?.(shotGlobalIdx, section.id));
     const ax = stationRel[fromGlobal * 2]!;
@@ -426,7 +428,7 @@ export function buildLineBuffers(
   colorForShot: (globalShotIdx: number, sectionId: number) => Rgba8,
   exclude?: CustomRenderExclusion,
   colorForShotEndpoints?: (globalShotIdx: number, sectionId: number) => readonly [Rgba8, Rgba8],
-  dimForShot?: (globalShotIdx: number, sectionId: number) => boolean,
+  dimForShot?: (globalShotIdx: number, sectionId: number) => number | boolean,
   hideForShot?: (globalShotIdx: number, sectionId: number) => boolean,
   highlightForShot?: (globalShotIdx: number, sectionId: number) => number | boolean,
 ): LineBuffers {
@@ -621,7 +623,9 @@ export const CIRCLE_CY = [-1, -1, 1, 1];
 export interface CircleStationInputs {
   fillForStation: (globalIdx: number) => Rgba8;
   strokeForStation: (globalIdx: number) => Rgba8;
-  dimForStation?: ((globalIdx: number) => boolean) | undefined;
+  /** Dim LEVEL for a station (0 none, 0.5 gas-beyond-reach, 1 anchored/immovable),
+   *  or a boolean the writer coerces to 0 / 1 (legacy callers / tests). */
+  dimForStation?: ((globalIdx: number) => number | boolean) | undefined;
   hideForStation?: ((globalIdx: number) => boolean) | undefined;
   /** Emphasis LEVEL for a station (0 none, 1 selection, 2 hover), or a boolean
    *  the writer coerces to 0 / 1 (legacy callers / tests). */
@@ -653,7 +657,7 @@ function emitStation(
   const [sr, sg, sb, sa] = strokeForStation(g);
   // Zero-datum stations render at 2x radius + 2x stroke (stock parity).
   const sm = (data.stationFlags[g]! & STATION_FLAG_IS_ZERO_DATUM) !== 0 ? 2 : 1;
-  const dm = dimForStation?.(g) === true ? 1 : 0;
+  const dm = flagValue(dimForStation?.(g));
   const hd = hideForStation?.(g) === true ? 1 : 0;
   const hl = flagValue(highlightForStation?.(g));
   const base = out * 4;
@@ -698,7 +702,7 @@ export function buildCircleBuffers(
   strokeForStation: (globalIdx: number) => Rgba8,
   exclude?: CustomRenderExclusion,
   allReferenceFlags?: Float32Array,
-  dimForStation?: (globalIdx: number) => boolean,
+  dimForStation?: (globalIdx: number) => number | boolean,
   hideForStation?: (globalIdx: number) => boolean,
   highlightForStation?: (globalIdx: number) => number | boolean,
 ): CircleBuffers {

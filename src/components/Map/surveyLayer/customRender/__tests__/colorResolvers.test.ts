@@ -3,6 +3,7 @@ import { makeColorResolvers } from '../colorResolvers';
 import { packCssColor } from '../colorPack';
 import { commentColorForKey, type DisplayColorContext } from '../../displayColor';
 import { emptySurveyData, type SurveyData } from '../../../../../types/survey-data';
+import { GAS_FAR } from '../../../../../utils/gasReach';
 
 /**
  * Move-comment palette tint (#52) parity for the custom-render color resolvers.
@@ -101,5 +102,56 @@ describe('move-comment tint in the custom color resolvers', () => {
     // unreachable) instead: overlay is checked before the comment tint.
     expect(res.colorForShot(0, 1)).toEqual(grey);
     expect(res.fillForStation(2)).toEqual(grey);
+  });
+});
+
+/**
+ * Plan-mode idle tint (#395 revision): before a gas origin is chosen, every
+ * feature paints the gas ramp's flat far color instead of section/depth color
+ * (dimming is a SEPARATE step, applied via the custom-render dim buffers - not
+ * this resolver).
+ */
+describe('plan-idle tint in the custom color resolvers', () => {
+  it('paints every shot/station the far color when active; base otherwise', () => {
+    const d = fixtureWithComments();
+    const base = packCssColor('#ff0000');
+    const far = packCssColor(GAS_FAR);
+
+    const off = makeColorResolvers(d, ctx({ planIdleTint: false }));
+    expect(off.colorForShot(0, 1)).toEqual(base);
+    expect(off.fillForStation(1)).toEqual(base);
+
+    const on = makeColorResolvers(d, ctx({ planIdleTint: true }));
+    expect(on.colorForShot(0, 1)).toEqual(far);
+    expect(on.colorForShot(1, 1)).toEqual(far);
+    expect(on.fillForStation(0)).toEqual(far);
+    expect(on.fillForStation(1)).toEqual(far);
+    // Endpoints (depth-mode callers) stay a flat pair of the same far color.
+    expect(on.colorForShotEndpoints(0, 1)).toEqual([far, far]);
+    // Stroke is untouched (mirrors the gas/distance overlay: stock leaves
+    // circle-stroke-color alone).
+    expect(on.strokeForStation(0)).toEqual(off.strokeForStation(0));
+  });
+
+  it('disables depth endpoints while the idle tint is active', () => {
+    const d = fixtureWithComments();
+    expect(
+      makeColorResolvers(d, ctx({ showDepthGradient: true, planIdleTint: true })).useDepthEndpoints,
+    ).toBe(false);
+  });
+
+  it('a real overlay wins over the idle tint', () => {
+    const d = fixtureWithComments();
+    const overlay = {
+      mode: 'gasReach' as const,
+      shots: new Map<number, number>(), // empty -> every shot unreachable (grey)
+      stations: new Map<number, number>(),
+      max: 100,
+    };
+    const grey = packCssColor(THEME.grayLine);
+    const res = makeColorResolvers(d, ctx({ planIdleTint: true, overlay }));
+    // Station has no entry in the overlay map -> unreachable grey, NOT the idle
+    // far tint: the overlay is checked first and owns color outright once active.
+    expect(res.fillForStation(0)).toEqual(grey);
   });
 });

@@ -79,6 +79,15 @@ export interface DisplayColorContext {
    *  (which have no per-feature properties) recompute the same color at build
    *  time. Yields to an active `overlay` (distance / gas own color outright). */
   commentTint?: boolean;
+  /** Plan-mode idle tint (#395 revision): true while Plan mode is active but no
+   *  gas origin has been chosen yet - every shot/station paints the gas ramp's
+   *  far color (uniform "nothing computed yet" tint) instead of section/depth
+   *  color, so the pre-origin map reads coherently with the gas scheme rather
+   *  than leaking section colors under it. Yields to an active `overlay` (a real
+   *  gas field wins the moment one exists) exactly like `commentTint`. Only the
+   *  custom color resolvers read this - the stock feature builder has no
+   *  equivalent path since the custom renderer is the sole survey renderer. */
+  planIdleTint?: boolean;
 }
 
 /**

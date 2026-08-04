@@ -289,7 +289,7 @@ describe('ProfileChart (#299)', () => {
     render(<ProfileChart />);
     expect(screen.getByTestId('plan-profile-label-stage-drop-0').textContent).toBe('Stage 1');
     expect(screen.getByTestId('plan-profile-label-waypoint-0').textContent).toBe('WP 1');
-    expect(screen.getByTestId('plan-profile-label-turn').textContent).toBe('Turn');
+    expect(screen.getByTestId('plan-profile-label-turn').textContent).toBe('Turnaround');
   });
 
   it('stops the turnaround rule at the profile, not at the plot floor', () => {

@@ -2009,14 +2009,14 @@
     },
     "gasLegend": {
       "title": "Gas reach",
-      "aria": "Gas-to-reach scale from {{min}} (near) to {{max}} (turn budget)",
+      "aria": "Gas-to-reach scale from {{min}} (near) to {{max}} (reachable limit)",
       "fromEntrance": "from entrance",
       "fromStation": "from {{id}}",
       "computing": "Gas reach: computing…",
       "key": {
-        "turnPoint": "Turn / end point",
+        "beyondRange": "Beyond gas range",
         "stageDrop": "Stage drop",
-        "finalTurn": "Final turn",
+        "finalTurn": "Turnaround",
         "route": "Planned route",
         "routeJump": "Jump leg (swum shortcut)",
         "waypoint": "Way point",
@@ -2200,6 +2200,7 @@
       "sectionsName": "Sections",
       "detailName": "Details",
       "dataName": "Data",
+      "gearName": "Gear",
       "open": "Open {{name}}",
       "close": "Close {{name}}",
       "pin": "Pin open",
@@ -2218,12 +2219,20 @@
   },
   "gasPanel": {
     "title": "Gas & route planning",
-    "subtitle": "Reachable extent and turn point for your gas. Open-circuit, single diver.",
+    "subtitle": "Reachable extent and turnaround for your gas. Open circuit, single diver · CCR planned.",
+    "entry": {
+      "heading": "Where does this dive start?",
+      "helper": "Click any station on the map, or use the entrance.",
+      "startFromEntrance": "★ Start from entrance",
+      "adjustAssumptions": "Adjust assumptions"
+    },
     "origin": {
       "label": "Origin",
       "entrance": "Entrance",
       "reset": "Reset",
-      "hint": "Click the ★ to start from a zero datum, or right-click a station and choose \"Set as start point\".",
+      "pick": "Pick on map",
+      "pickArmed": "Click a station to set the origin…",
+      "hint": "Or click the ★, or right-click a station and choose \"Set as start point\".",
       "datumAria": "Start the plan from this zero datum",
       "datumTooltip": "Zero datum - click to start the plan here"
     },
@@ -2325,7 +2334,7 @@
     },
     "readout": {
       "label": "Plan",
-      "backgasTurnPressure": "Backgas turn pressure",
+      "backgasTurnPressure": "Backgas turnaround pressure",
       "backgasSwitchPressure": "Backgas switch pressure",
       "stageDropPressure": "Stage {{n}} drop",
       "resetDrop": "reset",
@@ -2351,8 +2360,6 @@
       "dropAria": "Stage {{n}} drop point: drag or use arrow keys to move it along the route, Delete to reset",
       "finalTurnTooltip": "Turn around here",
       "scooterDropTooltip": "Scooters parked here - the passage beyond is swum",
-      "turnMarkerTooltip": "Click to set as endpoint",
-      "turnMarkerAria": "Candidate route endpoint - activate to set as endpoint",
       "waypointTooltip": "Way point {{n}} - click to remove, right-click for route options",
       "waypointAria": "Way point {{n}} - activate to remove it from the route",
       "markedTooltip": "Marked point - click to remove, right-click for route options",
@@ -2460,7 +2467,7 @@
         "minutes": "min"
       },
       "marker": {
-        "turn": "Turn",
+        "turn": "Turnaround",
         "stage": "Stage {{n}}",
         "waypoint": "WP {{n}}"
       },

@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useState, type ReactNode } from 'react';
+import { Fragment, useCallback, useEffect, useId, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useShallow } from 'zustand/react/shallow';
 import { useGasPlanStore } from '../../store/gasPlanStore';
@@ -7,38 +7,12 @@ import { defaultConfig } from '../../types/config';
 import { flushGasConfigWrite, queueGasConfigWrite } from '../../utils/gasConfigDisk';
 import { formatStationId } from '../../utils/formatters';
 import { formatFixed } from '../../i18n/format';
-import {
-  formatGasLength,
-  formatPressure,
-  formatVolume,
-  pressureFromDisplay,
-  pressureToDisplay,
-  rmvFromDisplay,
-  rmvToDisplay,
-  speedFromDisplay,
-  speedToDisplay,
-} from '../../utils/formatGas';
-import { PositiveNumberField } from '../common/PositiveNumberField';
+import { gasAssumptionsSummary } from '../../utils/gasAssumptionsSummary';
+import { formatGasLength, formatPressure, formatVolume } from '../../utils/formatGas';
+import { ChevronRightIcon } from '../common/icons';
+import { GasAssumptionsSections, REQUIRED_STAGES } from './GasAssumptionsSections';
 import { DivePlanBar } from './DivePlanBar';
-import type { GasUnits, ReservePreset } from '../../types/ipc.generated';
-
-const RESERVE_PRESETS: readonly ReservePreset[] = [
-  'all_thirds',
-  'one_stage',
-  'two_stage',
-  'free',
-];
-const UNIT_OPTIONS: readonly GasUnits[] = ['metric', 'imperial'];
-
-/** Stage cylinders a strategy requires in the rig - mirrors the Rust `required_stages`
- *  (gas.rs). The Half-Minus strategies are greyed until the diver carries that many stages;
- *  Free (#245) needs none (the diver sets each tank's usable gas by hand). */
-const REQUIRED_STAGES: Record<ReservePreset, number> = {
-  all_thirds: 0,
-  one_stage: 1,
-  two_stage: 2,
-  free: 0,
-};
+import type { ReservePreset } from '../../types/ipc.generated';
 
 /** Mirrors the Rust `MAX_MARKED_LABEL_CHARS` (core/state/dive_plan.rs). Capping the input here
  *  means a label typed in the panel can never be the reason a whole plan fails to save; the
@@ -61,6 +35,8 @@ function formatRouteRuntime(min: number): string {
 export function GasPlanPanel() {
   const { t } = useTranslation();
   const {
+    originChosen,
+    originPickArmed,
     origin,
     endpoint,
     waypoints,
@@ -72,6 +48,8 @@ export function GasPlanPanel() {
     stageDropOverrides,
     unresolved,
     pushyAck,
+    chooseEntrance,
+    setOriginPickArmed,
     setOrigin,
     setEndpoint,
     removeWaypoint,
@@ -84,6 +62,8 @@ export function GasPlanPanel() {
     setStageDropOverride,
   } = useGasPlanStore(
     useShallow((s) => ({
+      originChosen: s.originChosen,
+      originPickArmed: s.originPickArmed,
       origin: s.origin,
       endpoint: s.endpoint,
       waypoints: s.waypoints,
@@ -95,6 +75,8 @@ export function GasPlanPanel() {
       stageDropOverrides: s.stageDropOverrides,
       unresolved: s.unresolved,
       pushyAck: s.pushyAck,
+      chooseEntrance: s.chooseEntrance,
+      setOriginPickArmed: s.setOriginPickArmed,
       setOrigin: s.setOrigin,
       setEndpoint: s.setEndpoint,
       removeWaypoint: s.removeWaypoint,
@@ -159,6 +141,18 @@ export function GasPlanPanel() {
   useEffect(
     () => () => {
       void flushGasConfigWrite();
+    },
+    []
+  );
+
+  // Disarm an origin pick on the way out of Plan mode (#395 review): this panel unmounts
+  // whenever `appMode` leaves `plan`, but the armed flag itself deliberately survives mode
+  // switches in the store, and Escape is the only other disarm path. Left armed and
+  // abandoned, it would consume the very next plain map click - in Survey mode, or in Plan
+  // mode again after a fresh remount - as an origin overwrite instead of a normal click.
+  useEffect(
+    () => () => {
+      useGasPlanStore.getState().setOriginPickArmed(false);
     },
     []
   );
@@ -324,6 +318,85 @@ export function GasPlanPanel() {
       reserve_profile: { ...gasConfig.reserve_profile, all_thirds_safety_margin_bar: n },
     });
 
+  // Props shared by both render branches below (#395): the entry card's "Adjust assumptions"
+  // disclosure and the full rig's always-visible sidebar section render the exact same inputs.
+  const assumptionsProps = {
+    units,
+    diver,
+    gasConfig,
+    setDiver,
+    setGasConfig,
+    persistSwimSpeed,
+    stageCount,
+    strategy,
+    isStaged,
+    reserveBar,
+    safetyMarginBar,
+    pendingPushy,
+    selectPreset,
+    confirmPushy,
+    setPendingPushy,
+    setReserveBar,
+    setSafetyMargin,
+  };
+
+  // R9/R10 (#395): live, never hardcoded - the same values the disclosure reveals.
+  const assumptionsSummary = gasAssumptionsSummary(diver, cylinders, gasConfig, t);
+  const [assumptionsExpanded, setAssumptionsExpanded] = useState(false);
+  const assumptionsRegionId = useId();
+
+  if (!originChosen) {
+    return (
+      <div
+        className="h-full bg-panel flex flex-col overflow-auto text-sm text-text-primary"
+        data-testid="gas-panel"
+      >
+        <div className="px-3 py-2 border-b border-border shrink-0">
+          <h2 className="font-semibold">{t('gasPanel.title')}</h2>
+          <p className="text-xs opacity-70">{t('gasPanel.subtitle')}</p>
+        </div>
+
+        <div className="p-3 space-y-3" data-testid="gas-entry-card">
+          <h3 className="text-sm font-semibold">{t('gasPanel.entry.heading')}</h3>
+          <p className="text-xs opacity-70">{t('gasPanel.entry.helper')}</p>
+          <button
+            type="button"
+            className="w-full text-sm px-3 py-2 rounded border border-accent bg-accent/10 hover:bg-accent/20"
+            onClick={chooseEntrance}
+            data-testid="gas-start-entrance"
+          >
+            {t('gasPanel.entry.startFromEntrance')}
+          </button>
+
+          <div className="pt-2 space-y-1">
+            <p className="text-xs opacity-60" data-testid="gas-assumptions-summary">
+              {assumptionsSummary}
+            </p>
+            <button
+              type="button"
+              onClick={() => setAssumptionsExpanded(!assumptionsExpanded)}
+              className="flex items-center gap-1 text-xs text-text-secondary hover:text-text-primary"
+              data-testid="gas-assumptions-toggle"
+              aria-expanded={assumptionsExpanded}
+              aria-controls={assumptionsRegionId}
+            >
+              <ChevronRightIcon
+                size={12}
+                className={assumptionsExpanded ? 'rotate-90 transition-transform' : 'transition-transform'}
+              />
+              <span>{t('gasPanel.entry.adjustAssumptions')}</span>
+            </button>
+            {assumptionsExpanded && (
+              <div id={assumptionsRegionId} className="space-y-4 pt-1">
+                <GasAssumptionsSections {...assumptionsProps} />
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div
       className="h-full bg-panel flex flex-col overflow-auto text-sm text-text-primary"
@@ -354,6 +427,21 @@ export function GasPlanPanel() {
               {t('gasPanel.origin.reset')}
             </button>
           </div>
+          {/* #395: one-shot "Pick on map" - the next station click sets the origin instead of
+              the endpoint. Escape or a second press disarms (see useKeyboardShortcuts). */}
+          <button
+            type="button"
+            aria-pressed={originPickArmed}
+            className={`text-xs px-2 py-0.5 rounded border w-full ${
+              originPickArmed
+                ? 'border-accent ring-1 ring-accent bg-accent/10'
+                : 'border-border hover:bg-border'
+            }`}
+            onClick={() => setOriginPickArmed(!originPickArmed)}
+            data-testid="gas-pick-origin"
+          >
+            {t(originPickArmed ? 'gasPanel.origin.pickArmed' : 'gasPanel.origin.pick')}
+          </button>
           <p className="text-xs opacity-60">{t('gasPanel.origin.hint')}</p>
         </section>
 
@@ -541,167 +629,7 @@ export function GasPlanPanel() {
           )}
         </section>
 
-        {/* Diver RMV */}
-        <section className="space-y-1">
-          <SectionLabel>{t('gasPanel.diver.rmvLabel')}</SectionLabel>
-          <div className="flex items-center gap-2">
-            <PositiveNumberField
-              value={rmvToDisplay(diver.rmv_l_per_min, units)}
-              onCommit={(n) => setDiver({ ...diver, rmv_l_per_min: rmvFromDisplay(n, units) })}
-              step={units === 'imperial' ? 0.05 : 1}
-              displayPrecision={units === 'imperial' ? 2 : 1}
-              className="w-24 bg-transparent border border-border rounded px-2 py-1"
-              testId="gas-rmv-input"
-            />
-            <span className="text-xs opacity-70">
-              {t(units === 'imperial' ? 'gasPanel.diver.rmvUnitImperial' : 'gasPanel.diver.rmvUnit')}
-            </span>
-          </div>
-        </section>
-
-        {/* Swim speed - the diver's pace; feeds the in-leg gas-to-reach computation. Unlike the
-            panel's other (per-session) inputs, swim speed PERSISTS: a commit updates the working
-            copy (so the overlay/route refetch immediately) AND writes the value back to the saved
-            config - the same gas.swim_speed_m_per_min that Settings ▸ Gas edits - so a speed set
-            while planning sticks across Plan exit / restart and stays in sync with Settings (#236).
-            The disk write is debounced (see persistSwimSpeed) so rapid typing doesn't fire one
-            config save per keystroke; only this field is written back, reserve / units / diver
-            stay per-session (#241). */}
-        <section className="space-y-1">
-          <SectionLabel>{t('gasPanel.swimSpeed.label')}</SectionLabel>
-          <div className="flex items-center gap-2">
-            <PositiveNumberField
-              value={speedToDisplay(gasConfig.swim_speed_m_per_min, units)}
-              onCommit={(n) => {
-                const v = speedFromDisplay(n, units);
-                setGasConfig({ ...gasConfig, swim_speed_m_per_min: v });
-                persistSwimSpeed(v);
-              }}
-              step={units === 'imperial' ? 1 : 0.5}
-              displayPrecision={1}
-              className="w-24 bg-transparent border border-border rounded px-2 py-1"
-              testId="gas-swim-speed-input"
-            />
-            <span className="text-xs opacity-70">
-              {t(
-                units === 'imperial'
-                  ? 'gasPanel.swimSpeed.unitImperial'
-                  : 'gasPanel.swimSpeed.unit'
-              )}
-            </span>
-          </div>
-        </section>
-
-        {/* Gas strategy */}
-        <section className="space-y-1">
-          <SectionLabel>{t('gasPanel.reserve.label')}</SectionLabel>
-          <div className="flex gap-1">
-            {RESERVE_PRESETS.map((preset) => {
-              const needs = REQUIRED_STAGES[preset];
-              const disabled = stageCount < needs;
-              return (
-                <button
-                  key={preset}
-                  type="button"
-                  disabled={disabled}
-                  title={
-                    disabled ? t('gasPanel.reserve.needsStages', { count: needs }) : undefined
-                  }
-                  className={`text-xs px-2 py-1 rounded border disabled:opacity-40 disabled:cursor-not-allowed ${
-                    gasConfig.default_reserve === preset
-                      ? 'border-accent ring-1 ring-accent'
-                      : 'border-border hover:bg-border'
-                  }`}
-                  onClick={() => selectPreset(preset)}
-                  data-testid={`gas-reserve-${preset}`}
-                >
-                  {t(`gasPanel.reserve.${preset}`)}
-                </button>
-              );
-            })}
-          </div>
-          {pendingPushy && (
-            <div
-              className="mt-1 p-2 rounded border border-accent text-xs space-y-1"
-              data-testid="gas-pushy-ack"
-            >
-              <p className="font-semibold">{t('gasPanel.reserve.advancedTitle')}</p>
-              <p className="opacity-80">{t('gasPanel.reserve.advancedBody')}</p>
-              <div className="flex gap-2 pt-1">
-                <button
-                  type="button"
-                  className="px-2 py-0.5 rounded border border-accent hover:bg-border"
-                  onClick={confirmPushy}
-                  data-testid="gas-pushy-ack-confirm"
-                >
-                  {t('gasPanel.reserve.advancedConfirm')}
-                </button>
-                <button
-                  type="button"
-                  className="px-2 py-0.5 rounded border border-border hover:bg-border"
-                  onClick={() => setPendingPushy(null)}
-                  data-testid="gas-pushy-ack-cancel"
-                >
-                  {t('gasPanel.reserve.advancedCancel')}
-                </button>
-              </div>
-            </div>
-          )}
-          {isStaged && (
-            <div className="flex items-center gap-2 pt-1">
-              <span className="text-xs opacity-70">{t('gasPanel.reserve.stageReserveLabel')}</span>
-              <PositiveNumberField
-                value={pressureToDisplay(reserveBar, units)}
-                onCommit={(n) => setReserveBar(pressureFromDisplay(n, units))}
-                step={units === 'imperial' ? 5 : 1}
-                displayPrecision={0}
-                className="w-20 bg-transparent border border-border rounded px-2 py-1"
-                testId="gas-stage-reserve-input"
-              />
-              <span className="text-xs opacity-70">
-                {t(units === 'imperial' ? 'gasPanel.tanks.psi' : 'gasPanel.tanks.bar')}
-              </span>
-            </div>
-          )}
-          {strategy === 'all_thirds' && (
-            <div className="flex items-center gap-2 pt-1" title={t('gasPanel.reserve.safetyMarginHint')}>
-              <span className="text-xs opacity-70">{t('gasPanel.reserve.safetyMarginLabel')}</span>
-              <PositiveNumberField
-                value={pressureToDisplay(safetyMarginBar, units)}
-                onCommit={(n) => setSafetyMargin(pressureFromDisplay(n, units))}
-                step={units === 'imperial' ? 5 : 1}
-                displayPrecision={0}
-                allowZero
-                className="w-20 bg-transparent border border-border rounded px-2 py-1"
-                testId="gas-safety-margin-input"
-              />
-              <span className="text-xs opacity-70">
-                {t(units === 'imperial' ? 'gasPanel.tanks.psi' : 'gasPanel.tanks.bar')}
-              </span>
-            </div>
-          )}
-        </section>
-
-        {/* Units */}
-        <section className="space-y-1">
-          <SectionLabel>{t('gasPanel.units.label')}</SectionLabel>
-          <div className="flex gap-1">
-            {UNIT_OPTIONS.map((u) => (
-              <button
-                key={u}
-                type="button"
-                className={`text-xs px-2 py-1 rounded border ${
-                  units === u ? 'border-accent ring-1 ring-accent' : 'border-border hover:bg-border'
-                }`}
-                onClick={() => setGasConfig({ ...gasConfig, units: u })}
-                data-testid={`gas-units-${u}`}
-              >
-                {t(`gasPanel.units.${u}`)}
-              </button>
-            ))}
-          </div>
-          <p className="text-xs opacity-60">{t('gasPanel.tanks.editHint')}</p>
-        </section>
+        <GasAssumptionsSections {...assumptionsProps} />
 
         {/* Readout */}
         <section className="space-y-1 border-t border-border pt-3" data-testid="gas-readout">

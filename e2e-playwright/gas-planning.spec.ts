@@ -4,13 +4,14 @@ import {
   seedProjectWithSections,
   deleteShotAt,
   waitForDrawnStations,
+  waitForMapIdle,
   getStationScreenPositions,
   readCanvasPixel,
   readCanvasPixelBlock,
   type PixelRgba,
   type SectionSeed,
 } from './helpers/app';
-import { GAS_NEAR } from '../src/utils/gasReach';
+import { GAS_NEAR, GAS_FAR } from '../src/utils/gasReach';
 import {
   gasCylinderRows,
   gasMarkedLabelInputs,
@@ -73,10 +74,16 @@ const sectionSeeds: SectionSeed[] = [
  * Station indices the pixel probes use, from the mock's synthetic field: it puts
  * station `i` at `x = i * 10` and charges `|x| * 20` litres against a fixed
  * 1500 L budget, so stations 0..7 are reachable (7 -> 1400 L, the last one inside
- * the budget) and 8..10 are over budget and render grey.
+ * the budget) and 8..10 are over budget. Of those, 8 stays CONNECTED-but-over-budget
+ * (finite `gas_to_reach`, `reachable: false`) - beyond gas range: dimmed, clamped
+ * to the ramp's FAR (purple) color, never the section color, never grey (#395,
+ * revised). The mock's LAST station (10) is additionally patched to a null
+ * `gas_to_reach` - genuinely topologically UNCONNECTED - the only case that still
+ * renders grey.
  */
 const LAST_REACHABLE = 7;
-const OVER_BUDGET = 10;
+const BEYOND_RANGE = 8;
+const UNCONNECTED = 10;
 
 /**
  * Zoom bump for the pixel probes. +3 spreads the 11 stations to ~37 px apart (so a
@@ -147,15 +154,6 @@ async function gasEndpoint(page: Page): Promise<StationRefLite | null> {
   );
 }
 
-/** The reachable turn-frontier refs, in the order the map markers are built from. */
-async function turnFrontier(page: Page): Promise<StationRefLite[]> {
-  return page.evaluate(
-    () =>
-      (window as unknown as E2EWindow).__E2E_TEST__?.gasPlanStore.getState().reachField
-        ?.turn_frontier ?? [],
-  );
-}
-
 async function activeTool(page: Page): Promise<string> {
   return page.evaluate(
     () => (window as unknown as E2EWindow).__E2E_TEST__?.uiStore.getState().activeTool ?? '',
@@ -172,6 +170,12 @@ function colorKey(hex: string): string {
  *  exactly this (MapLibre's `interpolate` short-circuits the 0 stop, and
  *  `packRampColor` reproduces that). */
 const GAS_NEAR_KEY = colorKey(GAS_NEAR);
+
+/** The far (purple) end of the reachable ramp: a station at or beyond the turn
+ *  budget clamps to this, at full alpha - the beyond-range station is the SAME
+ *  hue, dimmed (blended with reduced alpha), so its painted pixel differs from
+ *  this exact key while still reading "far ramp color" to the eye. */
+const GAS_FAR_KEY = colorKey(GAS_FAR);
 
 /** The theme's gray line, which both the stock ramp and the custom resolver use
  *  for "unreachable on this gas plan". Read from the live theme so a theme change
@@ -253,9 +257,28 @@ async function enterMode(page: Page, mode: 'survey' | 'plan' | 'export'): Promis
   await page.locator(`[data-testid="mode-${mode}"]`).click();
 }
 
+/**
+ * R9/R10 (#395): answer Plan mode's entry question ("Where does this dive start?") with the
+ * entrance, revealing the full rig. Idempotent - safe to call again after a mode round-trip,
+ * since `originChosen` persists across mode switches (#244).
+ */
+async function chooseEntrance(page: Page): Promise<void> {
+  const entranceButton = page.locator('[data-testid="gas-start-entrance"]');
+  if (await entranceButton.isVisible().catch(() => false)) {
+    await entranceButton.click();
+  }
+}
+
+/** Enter Plan mode AND answer the entry question, for the (overwhelming majority of) tests that
+ *  exercise the full rig rather than the entry card itself. */
+async function enterPlanMode(page: Page): Promise<void> {
+  await enterMode(page, 'plan');
+  await chooseEntrance(page);
+}
+
 /** Enter Plan, add a stage, select + acknowledge the 1-stage strategy → one ▼ drop marker + route. */
 async function setupOneStageDrop(page: Page): Promise<void> {
-  await enterMode(page, 'plan');
+  await enterPlanMode(page);
   await expect(page.locator('[data-testid="cylinders-table"]')).toBeVisible({ timeout: 3000 });
   await page.selectOption('[data-testid="gas-add-tank"]', 'al80');
   await qualifiedIndexTestIds(page, 'gas-cylinder-role').last().selectOption('stage');
@@ -377,9 +400,9 @@ test.describe('Gas planning', () => {
     const sectionKey = (await stationCenter(page, LAST_REACHABLE)).join(',');
     expect(await stationPaints(page, LAST_REACHABLE, sectionKey)).toBe(true);
     expect(await stationPaints(page, 0, GAS_NEAR_KEY)).toBe(false);
-    expect(await stationPaints(page, OVER_BUDGET, grey)).toBe(false);
+    expect(await stationPaints(page, UNCONNECTED, grey)).toBe(false);
 
-    await enterMode(page, 'plan');
+    await enterPlanMode(page);
     expect(await appMode(page)).toBe('plan');
 
     // The setup sidebar replaces the detail panel in the right Dock slot.
@@ -387,8 +410,9 @@ test.describe('Gas planning', () => {
     // Legend appears with the entrance origin.
     await expect(page.locator('[data-testid="gas-legend"]')).toBeVisible({ timeout: 3000 });
     await expect(page.locator('[data-testid="gas-legend-origin"]')).toContainText('entrance');
-    // The symbol key explains the markers (turn/end point always present in Plan).
-    await expect(page.locator('[data-testid="gas-legend-key"]')).toContainText('Turn / end point');
+    // The symbol key explains the dim (#395: beyond-range geometry is dimmed, not
+    // marked with a turn-point dot anymore).
+    await expect(page.locator('[data-testid="gas-legend-key"]')).toContainText('Beyond gas range');
 
     // The reachable ramp is populated, not an all-grey field: the origin station sits
     // at gas cost 0, the exact gold near end of the ramp. Polled (the field is
@@ -403,10 +427,19 @@ test.describe('Gas planning', () => {
     expect(lastReachable.has(sectionKey)).toBe(false);
     expect(lastReachable.has(GAS_NEAR_KEY)).toBe(false);
     expect(lastReachable.has(grey)).toBe(false);
-    // ...and the over-budget station goes grey (the conservative direction).
-    const overBudget = await stationColors(page, OVER_BUDGET);
-    expect(overBudget.has(grey)).toBe(true);
-    expect(overBudget.has(sectionKey)).toBe(false);
+    // The beyond-range station (connected, but past the budget) is clamped to the
+    // ramp's FAR color, dimmed: distinct from the in-budget ramp pixels (near end
+    // and its own section color), the plain undimmed far color, and grey (#395).
+    const beyondRange = await stationColors(page, BEYOND_RANGE);
+    expect(beyondRange.has(grey)).toBe(false);
+    expect(beyondRange.has(GAS_NEAR_KEY)).toBe(false);
+    expect(beyondRange.has(GAS_FAR_KEY)).toBe(false);
+    expect(beyondRange.has(sectionKey)).toBe(false);
+    // ...while the genuinely UNCONNECTED station still goes grey (the conservative
+    // direction the renderer reserves for "not part of this cave section at all").
+    const unconnected = await stationColors(page, UNCONNECTED);
+    expect(unconnected.has(grey)).toBe(true);
+    expect(unconnected.has(sectionKey)).toBe(false);
 
     // Back to Survey → panel + legend gone, section colors restored (the overlay is
     // appMode-gated; the gas store itself persists across mode switches, #244).
@@ -419,13 +452,118 @@ test.describe('Gas planning', () => {
       .poll(() => stationPaints(page, LAST_REACHABLE, sectionKey), { timeout: 3000 })
       .toBe(true);
     expect(await stationPaints(page, 0, GAS_NEAR_KEY)).toBe(false);
-    expect(await stationPaints(page, OVER_BUDGET, grey)).toBe(false);
+    expect(await stationPaints(page, UNCONNECTED, grey)).toBe(false);
+  });
+
+  test('R9/R10 (#395): Plan opens with the entry card - no legend, no ramp, no bottom panel until an origin is chosen @smoke', async ({
+    page,
+  }) => {
+    await waitForDrawnStations(page, 1);
+    const zoom = (await mapZoom(page)) + PROBE_ZOOM_DELTA;
+    await setMapZoom(page, zoom);
+    const sectionKey = (await stationCenter(page, LAST_REACHABLE)).join(',');
+
+    await enterMode(page, 'plan');
+    expect(await appMode(page)).toBe('plan');
+
+    await expect(page.locator('[data-testid="gas-entry-card"]')).toBeVisible({ timeout: 3000 });
+    await expect(page.locator('[data-testid="gas-start-entrance"]')).toBeVisible();
+    await expect(page.locator('[data-testid="gas-assumptions-summary"]')).toBeVisible();
+    // No shading, no legend, no bottom tables panel before the question is answered.
+    await expect(page.locator('[data-testid="gas-legend"]')).not.toBeVisible();
+    await expect(page.locator('[data-testid="gas-legend-loading"]')).not.toBeVisible();
+    await expect(page.locator('[data-testid="cylinders-table"]')).not.toBeVisible();
+    await setMapZoom(page, zoom);
+    // No leaked SECTION color either (#395 revision, owner feedback): the whole
+    // survey renders the gas ramp's dim far tint while the origin is unanswered -
+    // matching "beyond gas range" everywhere, so it's coherent with the gas
+    // scheme instead of the section-color map underneath it. Not the plain
+    // section color, not the exact undimmed far color (it's alpha-blended), and
+    // not grey (grey is reserved for "unconnected", which has no meaning yet).
+    const idleColors = await stationColors(page, LAST_REACHABLE);
+    expect(idleColors.has(sectionKey)).toBe(false);
+    expect(idleColors.has(GAS_FAR_KEY)).toBe(false);
+    expect(idleColors.has(await greyKey(page))).toBe(false);
+
+    // Positive check the negative-only assertions above cannot give us: capture the
+    // idle-tint pixel now, and compare it against a station in a DIFFERENT reachability
+    // bucket that is ALSO idle-tinted (LAST_REACHABLE would be gold once a ramp exists;
+    // BEYOND_RANGE would be dimmed purple) - if idle painted anything but a uniform
+    // color, this would catch it, unlike a set of "is not any of these N colors" checks
+    // that can never fail against a wrong-but-unlisted 4th color.
+    const idlePixelKey = (await stationCenter(page, LAST_REACHABLE)).join(',');
+    expect((await stationCenter(page, BEYOND_RANGE)).join(',')).toBe(idlePixelKey);
+
+    // Answering it reveals the full rig and the ramp.
+    await chooseEntrance(page);
+    await expect(page.locator('[data-testid="gas-entry-card"]')).toBeHidden();
+    await expect(page.locator('[data-testid="gas-legend"]')).toBeVisible({ timeout: 3000 });
+    await setMapZoom(page, zoom);
+    await expect.poll(() => stationPaints(page, 0, GAS_NEAR_KEY), { timeout: 3000 }).toBe(true);
+    // The idle tint and the post-origin "beyond range" dim are the SAME construction
+    // (GAS_FAR blended at GAS_DIM_ALPHA), so once the ramp resolves, BEYOND_RANGE reads the
+    // EXACT pixel the idle tint painted before an origin existed - the positive twin of the
+    // negative checks above. Polled (the ramp resolves over IPC), then read once settled.
+    await expect
+      .poll(async () => (await stationCenter(page, BEYOND_RANGE)).join(','), { timeout: 3000 })
+      .toBe(idlePixelKey);
+  });
+
+  test('R9/R10 (#395): "Pick on map" arms a one-shot origin pick, disarmed by Escape or a second press @smoke', async ({
+    page,
+  }) => {
+    await enterPlanMode(page);
+    await waitForDrawnStations(page);
+    await setMapZoom(page, (await mapZoom(page)) + PROBE_ZOOM_DELTA);
+    await waitForDrawnStations(page);
+    const canvasBox = await page.locator('canvas').first().boundingBox();
+    expect(canvasBox).not.toBeNull();
+
+    const pickButton = page.locator('[data-testid="gas-pick-origin"]');
+    await expect(pickButton).toBeVisible();
+    await expect(pickButton).toHaveAttribute('aria-pressed', 'false');
+
+    // Arm, then a station click sets the ORIGIN, not the endpoint - even though one already
+    // exists (the entrance default from `chooseEntrance`).
+    await pickButton.click();
+    await expect(pickButton).toHaveAttribute('aria-pressed', 'true');
+    const pt = await stationAt(page, 4);
+    await page.mouse.click(canvasBox!.x + pt.x, canvasBox!.y + pt.y);
+    await expect
+      .poll(
+        () =>
+          page.evaluate(
+            () => (window as unknown as E2EWindow).__E2E_TEST__?.gasPlanStore.getState().origin ?? null,
+          ),
+        { timeout: 2000 },
+      )
+      .toEqual({ section_id: 1, station_index: 4 });
+    expect(await gasEndpoint(page)).toBeNull();
+    // One-shot: disarmed after the pick.
+    await expect(pickButton).toHaveAttribute('aria-pressed', 'false');
+
+    // Arm again, then Escape disarms without picking.
+    await pickButton.click();
+    await expect(pickButton).toHaveAttribute('aria-pressed', 'true');
+    await page.keyboard.press('Escape');
+    await expect(pickButton).toHaveAttribute('aria-pressed', 'false');
+    expect(
+      await page.evaluate(
+        () => (window as unknown as E2EWindow).__E2E_TEST__?.gasPlanStore.getState().origin ?? null,
+      ),
+    ).toEqual({ section_id: 1, station_index: 4 });
+
+    // Arm, then a second press disarms without picking.
+    await pickButton.click();
+    await expect(pickButton).toHaveAttribute('aria-pressed', 'true');
+    await pickButton.click();
+    await expect(pickButton).toHaveAttribute('aria-pressed', 'false');
   });
 
   test('Plan gates the staged reserve presets to a stage-carrying rig; readout reads as gas @smoke', async ({
     page,
   }) => {
-    await enterMode(page, 'plan');
+    await enterPlanMode(page);
     expect(await appMode(page)).toBe('plan');
     await expect(page.locator('[data-testid="gas-panel"]')).toBeVisible({ timeout: 3000 });
 
@@ -446,14 +584,14 @@ test.describe('Gas planning', () => {
     await expect(page.locator('[data-testid="gas-panel"]')).toContainText('Gas to farthest point');
     // The strategy is "Gas strategy" with the back-gas turn-pressure gauge (All-thirds default).
     await expect(page.locator('[data-testid="gas-panel"]')).toContainText('Gas strategy');
-    await expect(page.locator('[data-testid="gas-panel"]')).toContainText('Backgas turn pressure');
+    await expect(page.locator('[data-testid="gas-panel"]')).toContainText('Backgas turnaround pressure');
     await expect(page.locator('[data-testid="gas-readout-backgas-turn"]')).toBeVisible();
   });
 
   test('Plan readout shows the route distance + max/avg depth once a route resolves @smoke', async ({
     page,
   }) => {
-    await enterMode(page, 'plan');
+    await enterPlanMode(page);
     expect(await appMode(page)).toBe('plan');
     // Entering Plan resolves a route to the deepest reachable station, so the distance + depth
     // rows appear, formatted with a length unit (#236). Values come straight from the backend.
@@ -471,7 +609,7 @@ test.describe('Gas planning', () => {
   });
 
   test('Profile tab draws the planned dive profile and switches axis (#299)', async ({ page }) => {
-    await enterMode(page, 'plan');
+    await enterPlanMode(page);
     await expect(page.locator('[data-testid="plan-tables-panel"]')).toBeVisible({ timeout: 3000 });
     await page.locator('[data-testid="plan-tab-profile"]').click();
 
@@ -509,7 +647,7 @@ test.describe('Gas planning', () => {
   });
 
   test('Profile exports carry the plan inputs, not a client-held field (#299)', async ({ page }) => {
-    await enterMode(page, 'plan');
+    await enterPlanMode(page);
     await expect(page.locator('[data-testid="plan-tables-panel"]')).toBeVisible({ timeout: 3000 });
     await page.locator('[data-testid="plan-tab-profile"]').click();
     await expect(page.locator('[data-testid="plan-profile-svg"]')).toBeVisible({ timeout: 3000 });
@@ -573,7 +711,7 @@ test.describe('Gas planning', () => {
   });
 
   test('Plan swim speed persists to the saved config @smoke', async ({ page }) => {
-    await enterMode(page, 'plan');
+    await enterPlanMode(page);
     const swim = page.locator('[data-testid="gas-swim-speed-input"]');
     await expect(swim).toBeVisible({ timeout: 3000 });
     // Editing swim speed writes back to the saved config (#236) - unlike the panel's other
@@ -619,7 +757,7 @@ test.describe('Gas planning', () => {
 
     // Plan: the visibility toggles remain, but the geometry toggle (closure map is forced) and the
     // color overlays (the gas gradient owns the coloring) are gone.
-    await enterMode(page, 'plan');
+    await enterPlanMode(page);
     await openMenu();
     await expect(page.locator('[data-testid="display-toggle-showStations"]')).toBeVisible();
     await expect(page.locator('[data-testid="geometry-mode-measured"]')).toHaveCount(0);
@@ -635,7 +773,7 @@ test.describe('Gas planning', () => {
   test('adding a stage enables a pushy preset behind the advanced acknowledgment @smoke', async ({
     page,
   }) => {
-    await enterMode(page, 'plan');
+    await enterPlanMode(page);
     await expect(page.locator('[data-testid="cylinders-table"]')).toBeVisible({ timeout: 3000 });
 
     // Default twin-AL80 rig has no stages → 1-stage is greyed and selecting it is impossible.
@@ -673,7 +811,7 @@ test.describe('Gas planning', () => {
   test('a cylinder can be disabled - the row dims and it drops out of the plan (#245) @smoke', async ({
     page,
   }) => {
-    await enterMode(page, 'plan');
+    await enterPlanMode(page);
     await expect(page.locator('[data-testid="cylinders-table"]')).toBeVisible({ timeout: 3000 });
     const firstRow = gasCylinderRows(page).first();
     const toggle = qualifiedIndexTestIds(page, 'gas-cylinder-enabled').first();
@@ -702,7 +840,7 @@ test.describe('Gas planning', () => {
   test('disabling the only stage drops the staged reserve control (UI/backend parity #245) @smoke', async ({
     page,
   }) => {
-    await enterMode(page, 'plan');
+    await enterPlanMode(page);
     await expect(page.locator('[data-testid="cylinders-table"]')).toBeVisible({ timeout: 3000 });
     // Carry one stage and select the (acked) 1-stage strategy → the stage-reserve control shows.
     await page.selectOption('[data-testid="gas-add-tank"]', 'al80');
@@ -722,7 +860,7 @@ test.describe('Gas planning', () => {
   test('the Free strategy makes the usable-gas column editable per cylinder (#245) @smoke', async ({
     page,
   }) => {
-    await enterMode(page, 'plan');
+    await enterPlanMode(page);
     await expect(page.locator('[data-testid="cylinders-table"]')).toBeVisible({ timeout: 3000 });
     // Under a reserve strategy the usable column is READ-ONLY (engine-computed).
     await expect(qualifiedIndexTestIds(page, 'gas-cylinder-usable-readonly').first()).toBeVisible();
@@ -763,13 +901,13 @@ test.describe('Gas planning', () => {
   test('readout: no Turn points row; backgas label switches; stage drops show distance (#245) @smoke', async ({
     page,
   }) => {
-    await enterMode(page, 'plan');
+    await enterPlanMode(page);
     const readout = page.locator('[data-testid="gas-readout"]');
     await expect(readout).toBeVisible({ timeout: 3000 });
     // "Turn points" row is removed.
     await expect(readout).not.toContainText('Turn points');
     // All-thirds (default, no stages): the back-gas gauge reads "turn pressure".
-    await expect(readout).toContainText('Backgas turn pressure');
+    await expect(readout).toContainText('Backgas turnaround pressure');
     await expect(readout).not.toContainText('Backgas switch pressure');
 
     // Add a stage + select the staged strategy → the gauge flips to "switch pressure", and the
@@ -779,14 +917,14 @@ test.describe('Gas planning', () => {
     await page.locator('[data-testid="gas-reserve-one_stage"]').click();
     await page.locator('[data-testid="gas-pushy-ack-confirm"]').click();
     await expect(readout).toContainText('Backgas switch pressure');
-    await expect(readout).not.toContainText('Backgas turn pressure');
+    await expect(readout).not.toContainText('Backgas turnaround pressure');
     await expect(page.locator('[data-testid="gas-readout-stage1-drop"]')).toContainText('@');
   });
 
   test('All-thirds safety margin input appears only in thirds and round-trips to config (#245) @smoke', async ({
     page,
   }) => {
-    await enterMode(page, 'plan');
+    await enterPlanMode(page);
     // The margin input shows only for All-thirds (the default); the staged reserve input does not.
     const margin = page.locator('[data-testid="gas-safety-margin-input"]');
     await expect(margin).toBeVisible({ timeout: 3000 });
@@ -822,7 +960,7 @@ test.describe('Gas planning', () => {
   test('Plan right-click offers gas route picks, not the survey menu; Set as endpoint stores it @smoke', async ({
     page,
   }) => {
-    await enterMode(page, 'plan');
+    await enterPlanMode(page);
     await expect(page.locator('[data-testid="gas-panel"]')).toBeVisible({ timeout: 3000 });
 
     // Open the station context menu programmatically (the right-click hit-test itself is covered by
@@ -883,8 +1021,9 @@ test.describe('Gas planning', () => {
     page,
   }) => {
     // #298 flipped this: a map click used to re-root the origin. Picking a destination is the
-    // frequent action, and the origin is nearly always the entrance.
-    await enterMode(page, 'plan');
+    // frequent action, and the origin is nearly always the entrance. #395: this only holds once
+    // an origin exists at all - answer the entry question first.
+    await enterPlanMode(page);
     await expect(page.locator('[data-testid="gas-panel"]')).toBeVisible({ timeout: 3000 });
     await waitForDrawnStations(page);
     // Zoom in the same way the pixel probes do: at the fit-to-bounds zoom the 11 stations are only
@@ -900,6 +1039,141 @@ test.describe('Gas planning', () => {
 
     await expect.poll(() => gasEndpoint(page), { timeout: 2000 }).not.toBeNull();
     // The origin must be untouched (still the entrance default) - the whole point of the change.
+    expect(
+      await page.evaluate(
+        () => (window as unknown as E2EWindow).__E2E_TEST__?.gasPlanStore.getState().origin ?? null,
+      ),
+    ).toBeNull();
+  });
+
+  test('before an origin is chosen, a plain left-click sets the ORIGIN @smoke', async ({
+    page,
+  }) => {
+    // R9/R10 (#395): the entry question needs an answer before a click can mean "endpoint" -
+    // the first click IS the answer.
+    await enterMode(page, 'plan');
+    await expect(page.locator('[data-testid="gas-entry-card"]')).toBeVisible({ timeout: 3000 });
+    await waitForDrawnStations(page);
+    await setMapZoom(page, (await mapZoom(page)) + PROBE_ZOOM_DELTA);
+    await waitForDrawnStations(page);
+    const pt = await stationAt(page, 3);
+    const canvasBox = await page.locator('canvas').first().boundingBox();
+    expect(canvasBox).not.toBeNull();
+    await page.mouse.click(canvasBox!.x + pt.x, canvasBox!.y + pt.y);
+
+    await expect.poll(
+      () =>
+        page.evaluate(
+          () => (window as unknown as E2EWindow).__E2E_TEST__?.gasPlanStore.getState().origin ?? null,
+        ),
+      { timeout: 2000 },
+    ).toEqual({ section_id: 1, station_index: 3 });
+    expect(await gasEndpoint(page)).toBeNull();
+    // Answering the question reveals the full rig.
+    await expect(page.locator('[data-testid="gas-entry-card"]')).toBeHidden();
+    await expect(page.locator('[data-testid="gas-origin-readout"]')).toBeVisible();
+  });
+
+  test('#397: before an origin is chosen, a plain left-click on a SHOT sets the origin at the endpoint nearer the entrance', async ({
+    page,
+  }) => {
+    // Zero-datum at the FAR end (station 10) reverses "nearer the entrance" from the trivial
+    // lower-index case, so a correct pick proves the entrance-distance rule ran, rather than the
+    // pre-#397 bug of always anchoring to the shot's lower-indexed (`from`) station.
+    const secId = await page.evaluate(async () => {
+      const e2e = (window as unknown as {
+        __E2E_TEST__?: {
+          projectStore: {
+            getState: () => {
+              project: { sections: Array<{ id: number }> } | null;
+              setZeroDatum: (
+                ref: { section_id: number; station_index: number },
+                gps: { latitude: number; longitude: number; depth_reference: number },
+              ) => Promise<unknown>;
+              refreshProjectState: () => Promise<void>;
+            };
+          };
+        };
+      }).__E2E_TEST__;
+      const ps = e2e!.projectStore.getState();
+      const secId = ps.project!.sections[0].id;
+      await ps.setZeroDatum(
+        { section_id: secId, station_index: 10 },
+        { latitude: 24.55, longitude: -81.78, depth_reference: 0 },
+      );
+      await ps.refreshProjectState();
+      return secId;
+    });
+
+    // `setZeroDatum` triggers `triggerFitToBounds` (projectStore.ts), which re-fits the camera
+    // asynchronously - wait for that request to be consumed before applying the probe zoom, or
+    // the fit-to-bounds can land AFTER our zoom and silently zoom back out.
+    await expect
+      .poll(
+        () =>
+          page.evaluate(
+            () =>
+              (window as unknown as {
+                __E2E_TEST__?: { uiStore: { getState: () => { requestFitToBounds: unknown } } };
+              }).__E2E_TEST__?.uiStore.getState().requestFitToBounds ?? false,
+          ),
+        { timeout: 3000 },
+      )
+      .toBe(false);
+
+    await enterMode(page, 'plan');
+    await expect(page.locator('[data-testid="gas-entry-card"]')).toBeVisible({ timeout: 3000 });
+    await waitForDrawnStations(page);
+    // Let the datum-triggered fit-to-bounds fully settle BEFORE reading the zoom to bump - a
+    // mid-animation read would bake a transient value into `targetZoom`, and the later
+    // `waitForMapIdle` calls would then just settle onto that (wrong) target.
+    await waitForMapIdle(page);
+    const targetZoom = (await mapZoom(page)) + PROBE_ZOOM_DELTA;
+    await setMapZoom(page, targetZoom);
+    await waitForMapIdle(page);
+    await waitForDrawnStations(page);
+
+    // Stations near the CENTER of the survey (not the edges): a +3 zoom is centered on the
+    // bounds midpoint, so an edge station's screen position can end up off-canvas.
+    const a = await stationAt(page, 4);
+    const b = await stationAt(page, 5);
+    const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+    const canvasBox = await page.locator('canvas').first().boundingBox();
+    expect(canvasBox).not.toBeNull();
+    await page.mouse.click(canvasBox!.x + mid.x, canvasBox!.y + mid.y);
+
+    // Station 5 is nearer the (far-end, station-10) entrance than station 4, so the click
+    // anchors there - not the shot's lower-indexed endpoint.
+    await expect
+      .poll(
+        () =>
+          page.evaluate(
+            () =>
+              (window as unknown as E2EWindow).__E2E_TEST__?.gasPlanStore.getState().origin ?? null,
+          ),
+        { timeout: 2000 },
+      )
+      .toEqual({ section_id: secId, station_index: 5 });
+  });
+
+  test('#397: once an origin is chosen, a plain left-click on a SHOT sets the endpoint', async ({
+    page,
+  }) => {
+    await enterPlanMode(page);
+    await expect(page.locator('[data-testid="gas-panel"]')).toBeVisible({ timeout: 3000 });
+    await waitForDrawnStations(page);
+    await setMapZoom(page, (await mapZoom(page)) + PROBE_ZOOM_DELTA);
+    await waitForDrawnStations(page);
+
+    const a = await stationAt(page, 5);
+    const b = await stationAt(page, 6);
+    const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+    const canvasBox = await page.locator('canvas').first().boundingBox();
+    expect(canvasBox).not.toBeNull();
+    await page.mouse.click(canvasBox!.x + mid.x, canvasBox!.y + mid.y);
+
+    await expect.poll(() => gasEndpoint(page), { timeout: 2000 }).not.toBeNull();
+    // The origin must be untouched (still the entrance default), matching the station-click case.
     expect(
       await page.evaluate(
         () => (window as unknown as E2EWindow).__E2E_TEST__?.gasPlanStore.getState().origin ?? null,
@@ -949,7 +1223,7 @@ test.describe('Gas planning', () => {
 
     await enterMode(page, 'survey');
     await deleteShotAt(page, 0);
-    await enterMode(page, 'plan');
+    await enterPlanMode(page);
     await expect(page.locator('[data-testid="gas-panel"]')).toBeVisible({ timeout: 3000 });
 
     // Discriminating assertion: the corrected ref must reach the engine, and it must NOT be
@@ -964,7 +1238,7 @@ test.describe('Gas planning', () => {
   });
 
   test('way points: add, reorder, remove - order reaches the engine @smoke', async ({ page }) => {
-    await enterMode(page, 'plan');
+    await enterPlanMode(page);
     await expect(page.locator('[data-testid="gas-panel"]')).toBeVisible({ timeout: 3000 });
     // Empty state first, so the list rows below are proof of the add and not pre-existing.
     await expect(page.locator('[data-testid="gas-waypoints-empty"]')).toBeVisible();
@@ -1012,7 +1286,7 @@ test.describe('Gas planning', () => {
   });
 
   test('marked points: pin, label, remove - and no gas recompute (#298)', async ({ page }) => {
-    await enterMode(page, 'plan');
+    await enterPlanMode(page);
     await expect(page.locator('[data-testid="gas-panel"]')).toBeVisible({ timeout: 3000 });
     await expect(page.locator('[data-testid="gas-marked-empty"]')).toBeVisible();
     // Let the initial field settle so the call count below reflects only what marking does.
@@ -1056,7 +1330,7 @@ test.describe('Gas planning', () => {
   });
 
   test('the legend keys the route line and the new route symbols (#298)', async ({ page }) => {
-    await enterMode(page, 'plan');
+    await enterPlanMode(page);
     const key = page.locator('[data-testid="gas-legend-key"]');
     await expect(key).toBeVisible({ timeout: 3000 });
     // The route line is drawn by default (origin -> deepest reachable), so its key is always there.
@@ -1066,65 +1340,6 @@ test.describe('Gas planning', () => {
     await openPlanMenu(page, 2);
     await planMenuItem(page, 'Set as way point').click();
     await expect(key.getByText('Way point')).toBeVisible();
-  });
-
-  test('right-clicking a turn-frontier dot opens the Plan menu and sets the endpoint @smoke', async ({
-    page,
-  }) => {
-    await enterMode(page, 'plan');
-    // The red turn-frontier dots are the candidate end points; they render even with survey
-    // stations hidden, so they are the route-pick target (a station right-click needs stations on).
-    await expect
-      .poll(() => page.locator('[data-testid="gas-turn-marker"]').count(), { timeout: 3000 })
-      .toBeGreaterThan(0);
-    await page.locator('[data-testid="gas-turn-marker"]').first().click({ button: 'right' });
-    await expect(planMenuItem(page, 'Set as endpoint')).toBeVisible();
-    await planMenuItem(page, 'Set as endpoint').click();
-    expect(await gasEndpoint(page)).not.toBeNull();
-  });
-
-  test('left-clicking a turn-frontier dot selects THAT station as the route endpoint @smoke', async ({
-    page,
-  }) => {
-    await enterMode(page, 'plan');
-    await expect
-      .poll(() => page.locator('[data-testid="gas-turn-marker"]').count(), { timeout: 3000 })
-      .toBeGreaterThan(0);
-    // Capture which station the first marker represents (markers are built in
-    // turn_frontier order), so we assert the pick set THAT ref - a wrong-ref bug
-    // (all markers picking the same station, or an off-by-one) would slip past a
-    // mere "endpoint is non-null" check.
-    const expected = (await turnFrontier(page))[0];
-    expect(expected).toBeTruthy();
-    // A single left click sets the endpoint directly - no menu round-trip (#243).
-    await page.locator('[data-testid="gas-turn-marker"]').first().click();
-    await expect.poll(() => gasEndpoint(page), { timeout: 2000 }).toEqual(expected);
-    // And it must not have opened the context menu.
-    await expect(planMenuItem(page, 'Set as endpoint')).toHaveCount(0);
-  });
-
-  test('keyboard-activating a turn-frontier dot (Enter) selects it and preserves focus (#243 a11y)', async ({
-    page,
-  }) => {
-    await enterMode(page, 'plan');
-    await expect
-      .poll(() => page.locator('[data-testid="gas-turn-marker"]').count(), { timeout: 3000 })
-      .toBeGreaterThan(0);
-    await page.locator('[data-testid="gas-turn-marker"]').first().focus();
-    await page.keyboard.press('Enter');
-    // Enter picks the endpoint (keyboard parity with the left click)…
-    await expect.poll(() => gasEndpoint(page), { timeout: 2000 }).not.toBeNull();
-    // …and focus is NOT stranded on <body>: setEndpoint tears down every marker, so
-    // the rebuild must re-focus the picked marker or the AT user loses their place.
-    await expect
-      .poll(
-        () =>
-          page.evaluate(
-            () => document.activeElement?.getAttribute('data-testid') ?? document.body.tagName,
-          ),
-        { timeout: 2000 },
-      )
-      .toBe('gas-turn-marker');
   });
 
   test('undo/redo shortcuts are inert in Plan AND Export (read-only guard parity with the hidden buttons) @smoke', async ({
@@ -1138,7 +1353,7 @@ test.describe('Gas planning', () => {
           ).__MOCK_GET_UNDO_REDO_CALLS__(),
       );
 
-    await enterMode(page, 'plan');
+    await enterPlanMode(page);
     await page.evaluate(() =>
       (
         window as unknown as { __MOCK_RESET_UNDO_REDO_CALLS__: () => void }
@@ -1175,7 +1390,7 @@ test.describe('Gas planning', () => {
           ).__MOCK_GET_DIALOG_OPEN_COUNT__(),
       );
 
-    await enterMode(page, 'plan');
+    await enterPlanMode(page);
     await page.evaluate(() =>
       (
         window as unknown as { __MOCK_RESET_DIALOG_OPEN_COUNT__: () => void }
@@ -1194,7 +1409,7 @@ test.describe('Gas planning', () => {
   });
 
   test('the planned route renders as a highlighted overlay @smoke', async ({ page }) => {
-    await enterMode(page, 'plan');
+    await enterPlanMode(page);
     // The default route (origin → deepest reachable) draws the solid route line over the survey.
     await expect
       .poll(
@@ -1248,7 +1463,7 @@ test.describe('Gas planning', () => {
     await expect(page.locator('[data-testid="export-panel"]')).toBeVisible({ timeout: 3000 });
 
     // Plan: setup sidebar + tabbed tables; the map is read-only.
-    await enterMode(page, 'plan');
+    await enterPlanMode(page);
     expect(await appMode(page)).toBe('plan');
     await expect(page.locator('[data-testid="gas-panel"]')).toBeVisible({ timeout: 3000 });
     await expect(page.locator('[data-testid="plan-tables-panel"]')).toBeVisible();
@@ -1346,7 +1561,7 @@ test.describe('Gas planning', () => {
   test('Plan map is read-only: Delete on a selection opens no confirm dialog @smoke', async ({
     page,
   }) => {
-    await enterMode(page, 'plan');
+    await enterPlanMode(page);
     // Select a shot via the store, then press Delete. Plan/Export are read-only even on a
     // no-closures project (where geometryMode falls back to 'measured'), so the appMode
     // guard must block the delete - no confirm dialog opens.
@@ -1404,47 +1619,50 @@ test.describe('Gas planning', () => {
       await ps.refreshProjectState();
     });
 
+    // #395: the entry question is still unanswered - clicking the star must count as answering
+    // it (the full rig appears), not require choosing the entrance first.
     await enterMode(page, 'plan');
+    await expect(page.locator('[data-testid="gas-entry-card"]')).toBeVisible({ timeout: 3000 });
     // The black star renders on the zero-datum station.
     await expect
       .poll(() => page.locator('[data-testid="gas-zero-datum-marker"]').count(), { timeout: 3000 })
       .toBeGreaterThan(0);
-    // Default origin is the entrance; clicking the star picks the datum explicitly, so
-    // the readout leaves "Entrance" for the station id.
-    const readout = page.locator('[data-testid="gas-origin-readout"]');
-    await expect(readout).toHaveText('Entrance');
     await page.locator('[data-testid="gas-zero-datum-marker"]').first().click();
+    await expect(page.locator('[data-testid="gas-entry-card"]')).toBeHidden();
+    const readout = page.locator('[data-testid="gas-origin-readout"]');
     await expect(readout).not.toHaveText('Entrance');
   });
 
-  test('the gas ramp survives a feature rebuild, and a turn marker renders', async ({ page }) => {
+  test('the gas ramp (and the beyond-range dim / unconnected grey) survives a feature rebuild', async ({
+    page,
+  }) => {
     await waitForDrawnStations(page, 1);
     const zoom = (await mapZoom(page)) + PROBE_ZOOM_DELTA;
     await setMapZoom(page, zoom);
     const grey = await greyKey(page);
     const sectionKey = (await stationCenter(page, LAST_REACHABLE)).join(',');
 
-    await enterMode(page, 'plan');
+    await enterPlanMode(page);
     await setMapZoom(page, zoom);
     await expect.poll(() => stationPaints(page, 0, GAS_NEAR_KEY), { timeout: 3000 }).toBe(true);
     // The last station inside the budget is painted an interior ramp color, the
-    // over-budget one grey. Snapshot the reachable one's whole footprint so "still
-    // ramp-painted after the rebuild" can be asserted byte-for-byte.
+    // beyond-range one dimmed (not grey), the unconnected one grey. Snapshot the
+    // reachable one's whole footprint so "still ramp-painted after the rebuild" can
+    // be asserted byte-for-byte.
     const reachableBefore = await stationBlock(page, LAST_REACHABLE);
     const reachableColors = await stationColors(page, LAST_REACHABLE);
     expect(reachableColors.has(sectionKey)).toBe(false);
     expect(reachableColors.has(GAS_NEAR_KEY)).toBe(false);
     expect(reachableColors.has(grey)).toBe(false);
-    expect(await stationPaints(page, OVER_BUDGET, grey)).toBe(true);
-    // The mock's fixed budget leaves the far stations unreachable, so the turn
-    // frontier is non-empty → at least one turn marker renders.
-    await expect
-      .poll(() => page.locator('[data-testid="gas-turn-marker"]').count(), { timeout: 3000 })
-      .toBeGreaterThan(0);
+    const beyondRangeBefore = await stationColors(page, BEYOND_RANGE);
+    expect(beyondRangeBefore.has(grey)).toBe(false);
+    expect(beyondRangeBefore.has(GAS_FAR_KEY)).toBe(false);
+    expect(beyondRangeBefore.has(sectionKey)).toBe(false);
+    expect(await stationPaints(page, UNCONNECTED, grey)).toBe(true);
 
     // A survey edit rebuilds every feature (the custom renderer rebuilds its vertex
     // buffers from scratch; the stock path had setData wipe the feature-state). The
-    // overlay must re-apply its ramp afterward, the key correctness risk.
+    // overlay must re-apply its ramp AND the dim afterward, the key correctness risk.
     await seedProjectWithSections(page, [
       {
         name: 'Gas B',
@@ -1462,9 +1680,13 @@ test.describe('Gas planning', () => {
     // `modified_at` on create_section, the field's refetch key, so the new section's
     // stations paint grey where they land on top of the first two of this one.)
     await expect.poll(() => stationBlock(page, LAST_REACHABLE), { timeout: 3000 }).toEqual(reachableBefore);
-    const overBudget = await stationColors(page, OVER_BUDGET);
-    expect(overBudget.has(grey)).toBe(true);
-    expect(overBudget.has(sectionKey)).toBe(false);
+    const beyondRangeAfter = await stationColors(page, BEYOND_RANGE);
+    expect(beyondRangeAfter.has(grey)).toBe(false);
+    expect(beyondRangeAfter.has(GAS_FAR_KEY)).toBe(false);
+    expect(beyondRangeAfter.has(sectionKey)).toBe(false);
+    const unconnected = await stationColors(page, UNCONNECTED);
+    expect(unconnected.has(grey)).toBe(true);
+    expect(unconnected.has(sectionKey)).toBe(false);
     await expect(page.locator('[data-testid="gas-legend"]')).toBeVisible();
   });
 
@@ -1524,7 +1746,7 @@ test.describe('Gas planning', () => {
   test('Segments tab: one row per span; a way point adds a row, removing it takes it away (#317) @smoke', async ({
     page,
   }) => {
-    await enterMode(page, 'plan');
+    await enterPlanMode(page);
     await expect(page.locator('[data-testid="gas-panel"]')).toBeVisible({ timeout: 3000 });
     await page.locator('[data-testid="plan-tab-segments"]').click();
     await expect(page.locator('[data-testid="segments-table"]')).toBeVisible();
@@ -1552,7 +1774,7 @@ test.describe('Gas planning', () => {
   test('editing a segment speed reaches the backend, not just a local re-render (#317) @smoke', async ({
     page,
   }) => {
-    await enterMode(page, 'plan');
+    await enterPlanMode(page);
     await expect(page.locator('[data-testid="gas-panel"]')).toBeVisible({ timeout: 3000 });
     await page.locator('[data-testid="plan-tab-segments"]').click();
     const speed = page.locator('[data-testid="segment-speed-0"]');
@@ -1585,7 +1807,7 @@ test.describe('Gas planning', () => {
   test('the DPV scooter checkbox is disabled without a configured rig, and the readout has no scooter row (#317) @smoke', async ({
     page,
   }) => {
-    await enterMode(page, 'plan');
+    await enterPlanMode(page);
     await expect(page.locator('[data-testid="gas-panel"]')).toBeVisible({ timeout: 3000 });
 
     // The runtime row is engine-derived and rig-independent - it appears from the first route
@@ -1605,7 +1827,7 @@ test.describe('Gas planning', () => {
   test('configuring a DPV rig in the Equipment tab enables the segment scooter checkbox and its readout row (#317)', async ({
     page,
   }) => {
-    await enterMode(page, 'plan');
+    await enterPlanMode(page);
     await expect(page.locator('[data-testid="gas-panel"]')).toBeVisible({ timeout: 3000 });
     await enableDpvRig(page);
 
@@ -1630,7 +1852,7 @@ test.describe('Gas planning', () => {
   test('a DPV rig configured in one Plan-mode entry survives leaving to Survey and coming back (#317)', async ({
     page,
   }) => {
-    await enterMode(page, 'plan');
+    await enterPlanMode(page);
     await expect(page.locator('[data-testid="gas-panel"]')).toBeVisible({ timeout: 3000 });
     await expect(page.locator('[data-testid="gas-readout-scooter-range"]')).toHaveCount(0);
     await enableDpvRig(page);
@@ -1642,7 +1864,7 @@ test.describe('Gas planning', () => {
     // across mode switches (#244), so re-entering must find the rig exactly as it was left,
     // without a project reload.
     await enterMode(page, 'survey');
-    await enterMode(page, 'plan');
+    await enterPlanMode(page);
     await expect(page.locator('[data-testid="gas-panel"]')).toBeVisible({ timeout: 3000 });
     await expect(page.locator('[data-testid="gas-readout-scooter-range"]')).toBeVisible({
       timeout: 3000,
@@ -1657,7 +1879,7 @@ test.describe('Gas planning', () => {
   test('the scooter park marker appears mid-route and disappears once every segment is scootered (#317)', async ({
     page,
   }) => {
-    await enterMode(page, 'plan');
+    await enterPlanMode(page);
     await expect(page.locator('[data-testid="gas-panel"]')).toBeVisible({ timeout: 3000 });
     await enableDpvRig(page);
 
@@ -1693,7 +1915,7 @@ test.describe('Gas planning', () => {
   test('unticking a scootered segment resets it at the backend, not just the checkbox (#317)', async ({
     page,
   }) => {
-    await enterMode(page, 'plan');
+    await enterPlanMode(page);
     await expect(page.locator('[data-testid="gas-panel"]')).toBeVisible({ timeout: 3000 });
     await enableDpvRig(page);
 
@@ -1721,7 +1943,7 @@ test.describe('Gas planning', () => {
   test('disabling the DPV rig reaches the backend with no rig, resets scootered segments, and persists (#317)', async ({
     page,
   }) => {
-    await enterMode(page, 'plan');
+    await enterPlanMode(page);
     await expect(page.locator('[data-testid="gas-panel"]')).toBeVisible({ timeout: 3000 });
     await enableDpvRig(page);
 

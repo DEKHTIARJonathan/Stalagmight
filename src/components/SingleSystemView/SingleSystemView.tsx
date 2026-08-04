@@ -4,6 +4,7 @@ import { useOnboardingStep } from '../../hooks/useOnboardingStep';
 import { useProject } from '../../hooks/useProject';
 import { useAutoSave, type AutoSaveStatus } from '../../hooks/useAutoSave';
 import { useProjectStore } from '../../store/projectStore';
+import { useGasPlanStore } from '../../store/gasPlanStore';
 import { PANEL_FIELDS, useUIStore, type PanelId, type PanelMode } from '../../store/uiStore';
 import type { SectionId } from '../../types/project';
 import { useShallow } from 'zustand/react/shallow';
@@ -93,6 +94,9 @@ export default function SingleSystemView() {
   // stub and hides the bottom table. The carousel owns enter/exit; setView()/setColorMode
   // reset it. The left Sections Dock is survey-only (Plan/Export are read-only).
   const appMode = useUIStore((s) => s.appMode);
+  // R9/R10 (#395): the bottom Equipment/Segments/Profile panel belongs to the full rig, which
+  // only exists once the diver has answered "Where does this dive start?".
+  const gasOriginChosen = useGasPlanStore((s) => s.originChosen);
   // Drives the imagery attribution overlay below; MapCanvas adds and removes the
   // satellite source off this same flag.
   const showSatellite = useUIStore((s) => s.showSatellite);
@@ -130,6 +134,18 @@ export default function SingleSystemView() {
     observer.observe(host);
     return () => observer.disconnect();
   }, [syncAttributionInset]);
+
+  // Pin the bottom Dock open the moment the origin is chosen in Plan mode (it is
+  // hidden entirely before that - see the Dock render condition below). Inlined
+  // setState (not a toggle action) because a mode-forced open is not a user
+  // action: it must never persist via savePanelLayout, or the user's real
+  // closed-panel preference gets silently overwritten on disk. setAppMode used to
+  // do this unconditionally on Plan entry (#241); staged entry moved it here.
+  useEffect(() => {
+    if (appMode === 'plan' && gasOriginChosen) {
+      useUIStore.setState({ dataTableOpen: true, dataTableMode: 'pin' });
+    }
+  }, [appMode, gasOriginChosen]);
 
   // Export mode shows a large WYSIWYG export preview over the map area; it
   // mirrors the inline ExportControls options via the shared export store.
@@ -652,11 +668,13 @@ export default function SingleSystemView() {
   const dataInner = useMemo(
     () =>
       appMode === 'plan' ? (
-        <div className="h-full">
-          <ErrorBoundary panelName="Plan Tables">
-            <PlanTablesPanel />
-          </ErrorBoundary>
-        </div>
+        gasOriginChosen ? (
+          <div className="h-full">
+            <ErrorBoundary panelName="Plan Tables">
+              <PlanTablesPanel />
+            </ErrorBoundary>
+          </div>
+        ) : null
       ) : sections ? (
         <div className={`h-full ${dimCls}`}>
           <ErrorBoundary panelName="Data Table">
@@ -664,7 +682,7 @@ export default function SingleSystemView() {
           </ErrorBoundary>
         </div>
       ) : null,
-    [appMode, sections, dimCls],
+    [appMode, gasOriginChosen, sections, dimCls],
   );
 
   // Memoized on `t` (changes only on locale switch): each Dock's `label` and
@@ -675,7 +693,9 @@ export default function SingleSystemView() {
     const name = {
       sections: t('singleView.panels.sectionsName'),
       detail: t('singleView.panels.detailName'),
-      data: t('singleView.panels.dataName'),
+      // In Plan mode the bottom Dock holds the Equipment/Segments/Profile tables,
+      // so its tab says "Gear" rather than "Data" (#395).
+      data: appMode === 'plan' ? t('singleView.panels.gearName') : t('singleView.panels.dataName'),
     };
     const labels = (n: string) => ({
       open: t('singleView.panels.open', { name: n }),
@@ -689,7 +709,7 @@ export default function SingleSystemView() {
       detail: labels(name.detail),
       data: labels(name.data),
     };
-  }, [t]);
+  }, [t, appMode]);
 
   if (!project) {
     return (
@@ -801,8 +821,11 @@ export default function SingleSystemView() {
 
           {/* Data (bottom) - inside the center column so docked side panels push
               it (and its tab) for free. Fullscreen renders without reparenting. In
-              Plan mode it holds the tabbed plan tables; Export hides it (map only). */}
-          {appMode !== 'export' && (
+              Plan mode it holds the tabbed plan tables ("Gear"); Export hides it
+              (map only), and Plan hides it too until an origin is chosen - the
+              staged entry screen is the question card plus the map, nothing else
+              (#395). */}
+          {appMode !== 'export' && !(appMode === 'plan' && !gasOriginChosen) && (
           <Dock
             reveal={dataReveal}
             edge="bottom"

@@ -133,4 +133,12 @@ describe('overlayApplyAction (origin-change blink guard)', () => {
     // hasField wins over `failed`: once a new field lands the ramp installs.
     expect(overlayApplyAction(true, true, true, true)).toBe('ramp');
   });
+
+  it('gas plan: origin not chosen clears the stale ramp (does not hold it) (#395)', () => {
+    // MapCanvas's "!gasOriginChosen" branch nulls the field and sets its local
+    // `gasFieldFailed` flag exactly like a failed fetch (mirroring the stalled-plan
+    // `gasComputeGate.skip` branch just below it), so switching projects while the
+    // entry card is up never leaves the PREVIOUS project's ramp painted underneath it.
+    expect(overlayApplyAction(true, false, true, true)).toBe('off');
+  });
 });

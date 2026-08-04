@@ -138,6 +138,9 @@ const EMPTY_DIM: CustomDimState = {
   anchoredSectionIds: new Set<number>(),
   immovableStationFeatureIds: new Set<number>(),
   immovableShotFeatureIds: new Set<number>(),
+  gasDimStationFeatureIds: new Set<number>(),
+  gasDimShotFeatureIds: new Set<number>(),
+  planIdleDim: false,
 };
 /** Drag-exclusion set - the SAME shape the geometry controller takes
  *  ({@link CustomRenderExclusion}); dragged features' labels hide. */
@@ -618,13 +621,28 @@ export class SurveyLabelController {
   /**
    * Whether a label dims (0.25), keyed on the SAME state the stock label paint
    * expressions use (updateLabelAnchoredOpacity / updateImmovableLabelOpacity):
+   *  - plan-idle tint (#395 revision): EVERY label dims, no exceptions - it
+   *    mirrors the geometry side's "every feature dims" (controller.ts
+   *    `dimForStation`/`dimForShot`), so labels don't stay full-bright while the
+   *    whole survey underneath them tints.
    *  - shot label:    anchored(section) OR immovable-shot(section·STRIDE+shotId)
+   *                   OR gas-dim-shot(section·STRIDE+shotId) (#395)
    *  - station label: anchored(section) OR immovable-station(section·STRIDE+idx)
-   *  - section name:  anchored(section) only (never immovable-dimmed)
-   *  - comments:      never (stock never dims comment layers).
+   *                   OR gas-dim-station(section·STRIDE+idx) (#395)
+   *  - section name:  anchored(section) only (never immovable- or gas-dimmed)
+   *  - comments:      never (stock never dims comment layers), except under the
+   *                   plan-idle tint above.
+   *
+   *  Labels only ever dim/don't (this bit feeds {@link LABEL_FLAG}.DIM, a single
+   *  flag) - unlike the geometry's graded `a_dim` level, there is no lighter
+   *  "gas-dim" look for labels.
    */
   private dimBitFor(desc: LabelDescriptor): boolean {
-    const { anchoredSectionIds, immovableStationFeatureIds, immovableShotFeatureIds } = this.dimState;
+    const {
+      anchoredSectionIds, immovableStationFeatureIds, immovableShotFeatureIds,
+      gasDimStationFeatureIds, gasDimShotFeatureIds, planIdleDim,
+    } = this.dimState;
+    if (planIdleDim) return true;
     const sid = desc.sectionId;
     if (sid === undefined) return false;
     const anchored = anchoredSectionIds.has(sid);
@@ -632,16 +650,20 @@ export class SurveyLabelController {
       case LABEL_KIND.SHOT_LABEL:
         return (
           anchored ||
-          (immovableShotFeatureIds.size > 0 &&
-            desc.shotId !== undefined &&
-            immovableShotFeatureIds.has(sid * FEATURE_ID_STRIDE + desc.shotId))
+          (desc.shotId !== undefined &&
+            ((immovableShotFeatureIds.size > 0 &&
+              immovableShotFeatureIds.has(sid * FEATURE_ID_STRIDE + desc.shotId)) ||
+              (gasDimShotFeatureIds.size > 0 &&
+                gasDimShotFeatureIds.has(sid * FEATURE_ID_STRIDE + desc.shotId))))
         );
       case LABEL_KIND.STATION_LABEL:
         return (
           anchored ||
-          (immovableStationFeatureIds.size > 0 &&
-            desc.stationIndex !== undefined &&
-            immovableStationFeatureIds.has(sid * FEATURE_ID_STRIDE + desc.stationIndex))
+          (desc.stationIndex !== undefined &&
+            ((immovableStationFeatureIds.size > 0 &&
+              immovableStationFeatureIds.has(sid * FEATURE_ID_STRIDE + desc.stationIndex)) ||
+              (gasDimStationFeatureIds.size > 0 &&
+                gasDimStationFeatureIds.has(sid * FEATURE_ID_STRIDE + desc.stationIndex))))
         );
       case LABEL_KIND.SECTION_NAME:
         return anchored;

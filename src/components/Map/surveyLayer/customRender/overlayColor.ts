@@ -13,7 +13,7 @@
  * stock ramp pixel. No GL, no DOM: unit-testable in the `node` vitest env.
  */
 import { DISTANCE_NEAR, DISTANCE_FAR } from '../../../../utils/distanceGradient';
-import { GAS_NEAR, GAS_FAR } from '../../../../utils/gasReach';
+import { GAS_NEAR, GAS_FAR, BEYOND_GAS_RANGE } from '../../../../utils/gasReach';
 import type { DistanceFeatureState } from '../../../../utils/distanceGradient';
 import type { GasReachFeatureState } from '../../../../utils/gasReach';
 import type { OverlayColorInput } from '../displayColor';
@@ -42,10 +42,13 @@ function lerpChannelFloor(nearByte: number, farByte: number, t: number): number 
 
 /**
  * The packed ramp color for one feature value. Mirrors the stock expression:
- * `value < 0` -> grey (unreachable); otherwise interpolate near->far over
- * `0 -> safeMax`, with the endpoint short-circuits MapLibre's `interpolate`
- * evaluate applies (`value <= 0` -> the exact near color, `value >= safeMax` ->
- * the exact far color) so the boundaries never drift by a ULP.
+ * `value === BEYOND_GAS_RANGE` (connected but past the gas/turn budget) ->
+ * `far` - the ramp's own far-end color, clamped, never the feature's base
+ * color; any other `value < 0` (topologically unconnected) -> grey; otherwise
+ * interpolate near->far over `0 -> safeMax`, with the endpoint short-circuits
+ * MapLibre's `interpolate` evaluate applies (`value <= 0` -> the exact near
+ * color, `value >= safeMax` -> the exact far color) so the boundaries never
+ * drift by a ULP.
  */
 export function packRampColor(
   value: number,
@@ -54,6 +57,7 @@ export function packRampColor(
   far: Rgba8,
   grey: Rgba8,
 ): Rgba8 {
+  if (value === BEYOND_GAS_RANGE) return far;
   if (value < 0) return grey;
   if (value <= 0) return near;
   if (value >= safeMax) return far;

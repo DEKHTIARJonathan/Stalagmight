@@ -70,6 +70,10 @@ beforeEach(async () => {
   await flushGasConfigWrite();
   vi.useFakeTimers();
   useGasPlanStore.setState({
+    // Entry card is a separate concern (#395, see its own describe block below); every existing
+    // test in this file exercises the full rig, so answer the entry question up front.
+    originChosen: true,
+    originPickArmed: false,
     origin: null,
     endpoint: null,
     diver: { rmv_l_per_min: 20, label: null },
@@ -145,6 +149,16 @@ describe('GasPlanPanel swim-speed persist debounce (#241)', () => {
     expect(updateGasConfig).toHaveBeenCalledWith(
       expect.objectContaining({ swim_speed_m_per_min: 15 }),
     );
+  });
+
+  it('disarms a stale origin pick on unmount, so leaving Plan mode never leaks it into the next click (#395 review)', () => {
+    const { unmount } = render(<GasPlanPanel />);
+    fireEvent.click(screen.getByTestId('gas-pick-origin'));
+    expect(useGasPlanStore.getState().originPickArmed).toBe(true);
+
+    unmount();
+
+    expect(useGasPlanStore.getState().originPickArmed).toBe(false);
   });
 });
 
@@ -278,5 +292,65 @@ describe('GasPlanPanel Settings-only gas sync (#317)', () => {
     rerender(<GasPlanPanel />);
 
     expect(useGasPlanStore.getState().gasConfig.jump_rmv_multiplier).toBe(3.5);
+  });
+});
+
+/**
+ * R9/R10 (#395): the entry card - Plan mode opens with one question ("Where does this dive
+ * start?") before showing the full sidebar. `originChosen` gates the split.
+ */
+describe('GasPlanPanel entry card (#395)', () => {
+  beforeEach(() => {
+    useGasPlanStore.setState({ originChosen: false, originPickArmed: false });
+  });
+
+  it('renders the entry card, not the full rig, before an origin is chosen', () => {
+    render(<GasPlanPanel />);
+
+    expect(screen.getByTestId('gas-entry-card')).toBeInTheDocument();
+    expect(screen.getByTestId('gas-start-entrance')).toBeInTheDocument();
+    expect(screen.queryByTestId('gas-origin-readout')).toBeNull();
+    expect(screen.queryByTestId('gas-readout')).toBeNull();
+    expect(screen.queryByTestId('gas-rmv-input')).toBeNull();
+  });
+
+  it('reveals the full rig once "Start from entrance" is clicked', () => {
+    render(<GasPlanPanel />);
+
+    fireEvent.click(screen.getByTestId('gas-start-entrance'));
+
+    expect(useGasPlanStore.getState().originChosen).toBe(true);
+    expect(screen.queryByTestId('gas-entry-card')).toBeNull();
+    expect(screen.getByTestId('gas-origin-readout')).toBeInTheDocument();
+    expect(screen.getByTestId('gas-rmv-input')).toBeInTheDocument();
+  });
+
+  it('toggles the assumptions disclosure and reflects live store values, not constants', () => {
+    useGasPlanStore.setState({
+      diver: { rmv_l_per_min: 25, label: null },
+      cylinders: [],
+    });
+    render(<GasPlanPanel />);
+
+    expect(screen.getByTestId('gas-assumptions-summary')).toHaveTextContent('25');
+    expect(screen.queryByTestId('gas-rmv-input')).toBeNull();
+
+    fireEvent.click(screen.getByTestId('gas-assumptions-toggle'));
+    expect(screen.getByTestId('gas-rmv-input')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('gas-assumptions-toggle'));
+    expect(screen.queryByTestId('gas-rmv-input')).toBeNull();
+  });
+
+  it('does not resurrect the entry card when setOrigin(null) resets the origin after chooseEntrance', () => {
+    render(<GasPlanPanel />);
+    fireEvent.click(screen.getByTestId('gas-start-entrance'));
+    expect(screen.getByTestId('gas-origin-readout')).toBeInTheDocument();
+
+    useGasPlanStore.getState().setOrigin(null);
+
+    expect(useGasPlanStore.getState().originChosen).toBe(true);
+    expect(screen.queryByTestId('gas-entry-card')).toBeNull();
+    expect(screen.getByTestId('gas-origin-readout')).toBeInTheDocument();
   });
 });

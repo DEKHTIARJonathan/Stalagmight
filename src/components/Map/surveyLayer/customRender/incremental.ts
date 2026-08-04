@@ -106,6 +106,9 @@ export function sameColorGlobals(prev: DisplayColorContext, next: DisplayColorCo
   // flush while it is active force a full rebuild; the tool is not a hot-edit path
   // (full rebuild is ~1 ms on 4naharon), so the conservative gate is cheap.
   if ((prev.commentTint === true) || (next.commentTint === true)) return false;
+  // Plan-mode idle tint (#395 revision): entering/leaving it recolors every
+  // feature the same way an overlay enter/exit does, so a flip forces a recompute.
+  if ((prev.planIdleTint === true) !== (next.planIdleTint === true)) return false;
   return true;
 }
 

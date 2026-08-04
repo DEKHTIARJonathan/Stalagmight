@@ -754,6 +754,15 @@ describe('gasPlanStore dive-plan dirty tracking (#244)', () => {
     expect(selectIsPlanDirty(s)).toBe(false);
   });
 
+  it('applyLoadedPlan disarms a stale origin pick (#395 review)', () => {
+    // A pick left armed from before the load (e.g. the panel unmounted mid-pick) must not
+    // consume the next plain map click as an overwrite of the plan that just loaded.
+    useGasPlanStore.getState().setOriginPickArmed(true);
+    const snapshot = divePlanSnapshotOf(useGasPlanStore.getState());
+    useGasPlanStore.getState().applyLoadedPlan(7, snapshot);
+    expect(useGasPlanStore.getState().originPickArmed).toBe(false);
+  });
+
   it('selectHasPins counts BASELINE pins, so the anchor round trip survives clearing the live ones', () => {
     // Load a plan with an endpoint, then clear it live: `selectIsPlanDirty` still compares
     // against the baseline's ref, which a renumbering edit would silently rebind if the

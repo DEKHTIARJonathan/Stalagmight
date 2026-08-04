@@ -3,6 +3,7 @@ import maplibregl from 'maplibre-gl';
 import { useTranslation } from 'react-i18next';
 
 import { useGasPlanStore } from '../../store/gasPlanStore';
+import { U_TURN_ARROW_PATH } from '../common/icons';
 import type { GpsOrigin } from '../../types/config';
 import type { GasReachField } from '../../types/ipc.generated';
 import type { Station, StationRef } from '../../types/project';
@@ -229,8 +230,13 @@ export function useGasPlanDropMarkers({
         el.setAttribute('data-testid', 'gas-final-turn-marker');
         el.title = t('gasPanel.map.finalTurnTooltip');
         el.style.cssText =
-          'width:16px;height:16px;border-radius:50%;border:3px solid #ffffff;' +
-          'background:#7b2fbf;box-shadow:0 0 4px rgba(0,0,0,0.7);pointer-events:none;';
+          'width:18px;height:18px;border-radius:3px;border:2px solid #ffffff;' +
+          'background:#7b2fbf;box-shadow:0 0 4px rgba(0,0,0,0.7);pointer-events:none;' +
+          'display:flex;align-items:center;justify-content:center;';
+        el.innerHTML =
+          '<svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true">' +
+          `<path d="${U_TURN_ARROW_PATH}" fill="none" stroke="#ffffff" stroke-width="2.5" ` +
+          'stroke-linecap="round" stroke-linejoin="round"/></svg>';
         gasFinalTurnMarkerRef.current = new maplibregl.Marker({ element: el })
           .setLngLat(lngLat)
           .addTo(mapInst);

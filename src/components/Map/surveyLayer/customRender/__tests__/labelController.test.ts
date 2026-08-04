@@ -1062,6 +1062,9 @@ const EMPTY_DIM = {
   anchoredSectionIds: new Set<number>(),
   immovableStationFeatureIds: new Set<number>(),
   immovableShotFeatureIds: new Set<number>(),
+  gasDimStationFeatureIds: new Set<number>(),
+  gasDimShotFeatureIds: new Set<number>(),
+  planIdleDim: false,
 };
 
 /** Fixture + a station comment on g0 (section 1) and a shot comment on shot 0. */
@@ -1112,6 +1115,25 @@ describe('SurveyLabelController dim parity (DIM flag)', () => {
     expect(stationLabelFlag(layer, p, 1) & LABEL_FLAG.DIM).toBe(0); // g1 does not
     // Section names are not immovable-dimmed.
     expect(anyKindHasBit(layer, LABEL_KIND.SECTION_NAME, LABEL_FLAG.DIM)).toBe(false);
+  });
+
+  it('plan-idle tint (#395 revision): EVERY label dims, including comments', () => {
+    const cam = zoomOnlyMap(18);
+    const c = cameraController(cam.map);
+    c.sync(commentParams());
+    const layer = h.layerState.last!;
+    c.setDimming({ ...EMPTY_DIM, planIdleDim: true });
+    expect(allKindHaveBit(layer, LABEL_KIND.SHOT_LABEL, LABEL_FLAG.DIM)).toBe(true);
+    expect(allKindHaveBit(layer, LABEL_KIND.STATION_LABEL, LABEL_FLAG.DIM)).toBe(true);
+    expect(allKindHaveBit(layer, LABEL_KIND.SECTION_NAME, LABEL_FLAG.DIM)).toBe(true);
+    // Unlike anchored dim, the idle tint reaches comments too - it mirrors the
+    // "whole survey tints" geometry behavior, so nothing stays full-bright.
+    expect(allKindHaveBit(layer, LABEL_KIND.STATION_COMMENT, LABEL_FLAG.DIM)).toBe(true);
+    expect(allKindHaveBit(layer, LABEL_KIND.SHOT_COMMENT, LABEL_FLAG.DIM)).toBe(true);
+    // Clearing the flag drops back to full-bright.
+    c.setDimming(EMPTY_DIM);
+    expect(anyKindHasBit(layer, LABEL_KIND.SHOT_LABEL, LABEL_FLAG.DIM)).toBe(false);
+    expect(anyKindHasBit(layer, LABEL_KIND.STATION_COMMENT, LABEL_FLAG.DIM)).toBe(false);
   });
 
   it('clearing the dim set removes DIM (flags-only)', () => {

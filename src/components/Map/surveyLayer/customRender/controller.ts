@@ -27,6 +27,7 @@ import type { SurveyData } from '../../../../types/survey-data';
 import { metersToMapCoords } from '../../../../utils/coordinates';
 import { debugLog } from '../../../../utils/debugLog';
 import { FEATURE_ID_STRIDE } from '../../../../utils/ids';
+import { gasBeyondReachFeatureIds, type GasReachFeatureState } from '../../../../utils/gasReach';
 import type { DisplayColorContext } from '../displayColor';
 import { lngLatToMercator } from '../mercatorCoords';
 import { computeMercatorAnchor } from './mercator';
@@ -141,24 +142,66 @@ export type { CustomRenderExclusion } from './tessellate';
  * `featureId = sectionId * FEATURE_ID_STRIDE + stationIndex | shotId`, matching
  * the stock layers' `['get','featureId']` matching. Held on the controller so a
  * layer re-create (re-enable / re-sync) re-applies it during the next build.
+ *
+ * `gasDim*FeatureIds` (#395) are the stations/shots beyond the active gas-reach
+ * budget: dimmed at the lighter {@link GAS_DIM_LEVEL} (0.5) rather than the full
+ * anchored/immovable dim (1.0) - full dim wins on overlap (see {@link dimPredicates}).
  */
 export interface CustomDimState {
   anchoredSectionIds: ReadonlySet<number>;
   immovableStationFeatureIds: ReadonlySet<number>;
   immovableShotFeatureIds: ReadonlySet<number>;
+  gasDimStationFeatureIds: ReadonlySet<number>;
+  gasDimShotFeatureIds: ReadonlySet<number>;
+  /** Plan-mode idle tint (#395 revision): true dims EVERY station/shot at the
+   *  lighter {@link GAS_DIM_LEVEL} (0.5), mirroring "beyond gas range" before an
+   *  origin is chosen - full anchored/immovable dim (1.0) still wins. */
+  planIdleDim: boolean;
 }
 
+/** Shared empty-`Set<number>` sentinel, reused by both the dim state below
+ *  (`EMPTY_DIM`, `buildCustomDimState`'s gas-off branches) and the highlight
+ *  state fields further down (`segmentHoverState` et al.) - declared before its
+ *  first use so callers don't rely on `const` hoisting behavior specific to
+ *  function bodies. */
+const EMPTY_FEATURE_SET: ReadonlySet<number> = new Set<number>();
+
 const EMPTY_DIM: CustomDimState = {
-  anchoredSectionIds: new Set<number>(),
-  immovableStationFeatureIds: new Set<number>(),
-  immovableShotFeatureIds: new Set<number>(),
+  anchoredSectionIds: EMPTY_FEATURE_SET,
+  immovableStationFeatureIds: EMPTY_FEATURE_SET,
+  immovableShotFeatureIds: EMPTY_FEATURE_SET,
+  gasDimStationFeatureIds: EMPTY_FEATURE_SET,
+  gasDimShotFeatureIds: EMPTY_FEATURE_SET,
+  planIdleDim: false,
 };
+
+/** The per-vertex `a_dim` / `v_dim` level for "beyond gas range" (#395): between
+ *  none (0) and the full anchored/immovable dim (1.0). See `shaders.ts` for the
+ *  shader-side threshold mapping. */
+export const GAS_DIM_LEVEL = 0.5;
+
+/** Assemble a {@link CustomDimState} from SurveyLayer's held sets + the current
+ *  gas-reach mode/state (#395) - the single place the gas-dim sets are derived,
+ *  shared by the geometry `setDimming` and label `setDimming` calls SurveyLayer
+ *  pushes the SAME state to. */
+export function buildCustomDimState(
+  anchoredSectionIds: ReadonlySet<number>,
+  immovableStationFeatureIds: ReadonlySet<number>,
+  immovableShotFeatureIds: ReadonlySet<number>,
+  gasReachMode: boolean,
+  gasReachState: GasReachFeatureState | null,
+  planIdleDim = false,
+): CustomDimState {
+  return {
+    anchoredSectionIds, immovableStationFeatureIds, immovableShotFeatureIds,
+    gasDimStationFeatureIds: gasReachMode ? gasBeyondReachFeatureIds(gasReachState?.stations) : EMPTY_FEATURE_SET,
+    gasDimShotFeatureIds: gasReachMode ? gasBeyondReachFeatureIds(gasReachState?.shots) : EMPTY_FEATURE_SET,
+    planIdleDim,
+  };
+}
 
 /** No features hidden (drag inactive): the zero-cost default for the hide flag. */
 const EMPTY_EXCLUSION: CustomRenderExclusion = {};
-
-/** No sections emphasized: the default for each highlight-source set. */
-const EMPTY_HIGHLIGHT: ReadonlySet<number> = new Set<number>();
 
 /** Emphasis levels stored in the per-vertex highlight flag, mirroring the stock
  *  feature-state bumps. Hover wins over selection when a section is in both
@@ -216,9 +259,9 @@ export class SurveyCustomController {
    *  (setSectionSelect). Hover (segment or section) both map to level 2, matching
    *  the stock `hover` feature-state; selection maps to level 1 (stock
    *  `selected`). Anchored sections are excluded from segment-hover upstream. */
-  private segmentHoverState: ReadonlySet<number> = EMPTY_HIGHLIGHT;
-  private sectionHoverState: ReadonlySet<number> = EMPTY_HIGHLIGHT;
-  private sectionSelectState: ReadonlySet<number> = EMPTY_HIGHLIGHT;
+  private segmentHoverState: ReadonlySet<number> = EMPTY_FEATURE_SET;
+  private sectionHoverState: ReadonlySet<number> = EMPTY_FEATURE_SET;
+  private sectionSelectState: ReadonlySet<number> = EMPTY_FEATURE_SET;
   /** Cached build products backing the cheap dim-only refresh (setDimming),
    *  the drag hide refresh (setDragHide), and the incremental edit path: the
    *  last CustomRenderData (its per-vertex arrays are rewritten in place) plus
@@ -497,35 +540,56 @@ export class SurveyCustomController {
     return data;
   }
 
-  /** True when some anchored section or immovable feature is currently set. */
+  /** True when some anchored section, immovable feature, gas-dim feature, or the
+   *  plan-idle tint is currently set. */
   private hasDimming(): boolean {
     return (
       this.dimState.anchoredSectionIds.size > 0 ||
       this.dimState.immovableStationFeatureIds.size > 0 ||
-      this.dimState.immovableShotFeatureIds.size > 0
+      this.dimState.immovableShotFeatureIds.size > 0 ||
+      this.dimState.gasDimStationFeatureIds.size > 0 ||
+      this.dimState.gasDimShotFeatureIds.size > 0 ||
+      this.dimState.planIdleDim
     );
   }
 
-  /** Per-station / per-shot dim predicates for the current {@link dimState}:
-   *  a feature dims when its section is anchored OR its featureId is immovable. */
+  /** Per-station / per-shot dim LEVEL predicates for the current {@link dimState}:
+   *  a feature dims fully (1) when its section is anchored OR its featureId is
+   *  immovable; else it dims at {@link GAS_DIM_LEVEL} (0.5) when its featureId is
+   *  beyond the active gas-reach budget OR the plan-idle tint (#395 revision) is
+   *  on (every feature dims) - full dim wins on overlap either way. */
   private dimPredicates(surveyData: SurveyData): {
-    dimForStation: (g: number) => boolean;
-    dimForShot: (globalShotIdx: number, sectionId: number) => boolean;
+    dimForStation: (g: number) => number;
+    dimForShot: (globalShotIdx: number, sectionId: number) => number;
   } {
-    const { anchoredSectionIds, immovableStationFeatureIds, immovableShotFeatureIds } = this.dimState;
+    const {
+      anchoredSectionIds, immovableStationFeatureIds, immovableShotFeatureIds,
+      gasDimStationFeatureIds, gasDimShotFeatureIds, planIdleDim,
+    } = this.dimState;
     return {
-      dimForStation: (g: number): boolean => {
+      dimForStation: (g: number): number => {
         const sid = surveyData.stationSectionIds[g]!;
-        return (
+        const fid = sid * FEATURE_ID_STRIDE + surveyData.stationIndices[g]!;
+        if (
           anchoredSectionIds.has(sid) ||
-          (immovableStationFeatureIds.size > 0 &&
-            immovableStationFeatureIds.has(sid * FEATURE_ID_STRIDE + surveyData.stationIndices[g]!))
-        );
+          (immovableStationFeatureIds.size > 0 && immovableStationFeatureIds.has(fid))
+        ) {
+          return 1;
+        }
+        const gasDim = gasDimStationFeatureIds.size > 0 && gasDimStationFeatureIds.has(fid);
+        return gasDim || planIdleDim ? GAS_DIM_LEVEL : 0;
       },
-      dimForShot: (globalShotIdx: number, sectionId: number): boolean =>
-        anchoredSectionIds.has(sectionId) ||
-        (immovableShotFeatureIds.size > 0 &&
-          immovableShotFeatureIds.has(sectionId * FEATURE_ID_STRIDE + surveyData.shotIds[globalShotIdx]!)),
+      dimForShot: (globalShotIdx: number, sectionId: number): number => {
+        const fid = sectionId * FEATURE_ID_STRIDE + surveyData.shotIds[globalShotIdx]!;
+        if (
+          anchoredSectionIds.has(sectionId) ||
+          (immovableShotFeatureIds.size > 0 && immovableShotFeatureIds.has(fid))
+        ) {
+          return 1;
+        }
+        const gasDim = gasDimShotFeatureIds.size > 0 && gasDimShotFeatureIds.has(fid);
+        return gasDim || planIdleDim ? GAS_DIM_LEVEL : 0;
+      },
     };
   }
 
@@ -651,7 +715,7 @@ export class SurveyCustomController {
    * leaves geometry / drag begins). See {@link refreshHighlight}.
    */
   setHighlight(sectionIds: readonly number[]): void {
-    this.segmentHoverState = sectionIds.length > 0 ? new Set(sectionIds) : EMPTY_HIGHLIGHT;
+    this.segmentHoverState = sectionIds.length > 0 ? new Set(sectionIds) : EMPTY_FEATURE_SET;
     this.refreshHighlight();
   }
 
@@ -662,7 +726,7 @@ export class SurveyCustomController {
    * hover level here. See {@link refreshHighlight}.
    */
   setSectionHover(sectionIds: readonly number[]): void {
-    this.sectionHoverState = sectionIds.length > 0 ? new Set(sectionIds) : EMPTY_HIGHLIGHT;
+    this.sectionHoverState = sectionIds.length > 0 ? new Set(sectionIds) : EMPTY_FEATURE_SET;
     this.refreshHighlight();
   }
 
@@ -673,16 +737,16 @@ export class SurveyCustomController {
    * {@link refreshHighlight}.
    */
   setSectionSelect(sectionIds: readonly number[]): void {
-    this.sectionSelectState = sectionIds.length > 0 ? new Set(sectionIds) : EMPTY_HIGHLIGHT;
+    this.sectionSelectState = sectionIds.length > 0 ? new Set(sectionIds) : EMPTY_FEATURE_SET;
     this.refreshHighlight();
   }
 
   /** Clear every emphasis source (segment hover, section hover, selection) in one
    *  refresh. Cheaper + clearer than three empty setters at a clear-all site. */
   clearHighlights(): void {
-    this.segmentHoverState = EMPTY_HIGHLIGHT;
-    this.sectionHoverState = EMPTY_HIGHLIGHT;
-    this.sectionSelectState = EMPTY_HIGHLIGHT;
+    this.segmentHoverState = EMPTY_FEATURE_SET;
+    this.sectionHoverState = EMPTY_FEATURE_SET;
+    this.sectionSelectState = EMPTY_FEATURE_SET;
     this.refreshHighlight();
   }
 

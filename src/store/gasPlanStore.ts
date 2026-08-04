@@ -344,6 +344,25 @@ function redistribute<T, U>(shape: PinSlots<T>, values: (U | null)[]): PinSlots<
 }
 
 interface GasPlanState {
+  /**
+   * R9/R10 (#395): whether the diver has answered "Where does this dive start?" - by picking
+   * the entrance (`chooseEntrance`), placing a real origin (`setOrigin` with a non-null ref), or
+   * loading a saved plan (`applyLoadedPlan`). Gates the sidebar between the single-question entry
+   * card and the full rig, and gates the reach-field fetch / bottom tables panel the same way.
+   *
+   * Survives mode switches (#244) and a `setOrigin(null)` reset (the panel's own "Reset" button,
+   * or the project-switch default fallback in `MapCanvas`) - both leave `origin` at the entrance
+   * default without re-asking the question. Only `reset()` (a fresh project load) returns it to
+   * `false`.
+   */
+  originChosen: boolean;
+  /**
+   * #395: the diver clicked "Pick on map" in the Origin section and the next station click sets
+   * the ORIGIN rather than the endpoint - a one-shot arm/disarm, mirroring `placementMode`
+   * (uiStore). Consumed (and cleared) by `setOrigin`, so any origin pick - map click or Escape -
+   * always leaves it disarmed.
+   */
+  originPickArmed: boolean;
   /** Penetration origin; `null` = the zero-datum entrance default. */
   origin: StationRef | null;
   /** Chosen route endpoint (the lead being planned); `null` = the deepest in-budget point. */
@@ -431,6 +450,10 @@ interface GasPlanState {
    *  never sent to the gas engine and blocks a Save. */
   unresolved: PlanPinFlags;
 
+  /** #395: answer "Where does this dive start?" with the entrance (leaves `origin: null`). */
+  chooseEntrance: () => void;
+  /** #395: arm/disarm the one-shot "Pick on map" origin picker. */
+  setOriginPickArmed: (armed: boolean) => void;
   setOrigin: (origin: StationRef | null) => void;
   setEndpoint: (endpoint: StationRef | null) => void;
   /** #298: append a way point to the end of the visit order. */
@@ -524,6 +547,8 @@ interface GasPlanState {
 
 const initialState = (): Pick<
   GasPlanState,
+  | 'originChosen'
+  | 'originPickArmed'
   | 'origin'
   | 'endpoint'
   | 'waypoints'
@@ -546,6 +571,8 @@ const initialState = (): Pick<
   | 'baselineAnchoredPins'
   | 'unresolved'
 > => ({
+  originChosen: false,
+  originPickArmed: false,
   origin: null,
   endpoint: null,
   waypoints: [],
@@ -855,14 +882,27 @@ export const useGasPlanStore = create<GasPlanState>((set, get) => ({
     });
   },
 
+  // #395: the entrance IS the default origin (`origin: null`), so choosing it answers the
+  // question without moving any pin.
+  chooseEntrance: () => set({ originChosen: true }),
+  setOriginPickArmed: (armed) => set({ originPickArmed: armed }),
+
   // Every pin setter maintains `unresolved` alongside the pins it moves (#310). Picking a pin
   // CLEARS its flag: the flag says "the backend could not place the ref this slot held", and the
   // slot no longer holds it. Without that, one dangling origin latched the flag forever and
   // `selectComputeGate` went on nulling every replacement the diver clicked - the field silently
   // rooting at the entrance while the origin star sat where they put it.
+  //
+  // #395: only a NON-null ref answers the entry question - `setOrigin(null)` (the panel's Reset
+  // button, or the project-switch default fallback in MapCanvas) intentionally leaves
+  // `originChosen` untouched, so the full rig stays up rather than resurrecting the entry card.
+  // `originPickArmed` always clears here: this IS the pick landing, whether it came from the
+  // one-shot "Pick on map" button or the ordinary pre-origin click-to-set-origin flow.
   setOrigin: (origin) =>
     set((s) => ({
       origin,
+      originChosen: origin !== null ? true : s.originChosen,
+      originPickArmed: false,
       reachField: null,
       stageDropOverrides: [],
       unresolved: routeInputFlags(s.unresolved, { origin: false }),
@@ -1146,6 +1186,12 @@ export const useGasPlanStore = create<GasPlanState>((set, get) => ({
             stageDropOverrides: anchors.stage_drop_overrides,
           };
     set({
+      // #395: a loaded plan answers the entry question outright, whether or not its own origin
+      // ended up at the entrance default.
+      originChosen: true,
+      // A stale arm from before the load (e.g. Escape never fired, or the panel unmounted mid-pick)
+      // must not consume the next plain map click as an origin overwrite on the just-loaded plan.
+      originPickArmed: false,
       origin: normalized.origin,
       endpoint: normalized.endpoint,
       waypoints: normalized.waypoints,

@@ -67,8 +67,20 @@ async function createProject(page: Page, name: string): Promise<void> {
   await page.waitForSelector('canvas', { timeout: 10000 });
 }
 
+/**
+ * R9/R10 (#395): Plan opens on the entry card, and `DivePlanBar` only mounts once the diver has
+ * answered "Where does this dive start?" - answer it with the entrance so every test here (none
+ * of which is about the entry card itself) reaches the full rig.
+ */
 async function enterPlan(page: Page): Promise<void> {
   await page.locator('[data-testid="mode-plan"]').click();
+  // `originChosen` persists across mode switches (#244), so a RE-entry after Plan -> Survey/
+  // Export -> Plan finds the full rig already up - only click through the entry card the first
+  // time it appears.
+  const startEntrance = page.locator('[data-testid="gas-start-entrance"]');
+  if (await startEntrance.isVisible().catch(() => false)) {
+    await startEntrance.click();
+  }
   await expect(page.locator('[data-testid="dive-plan-bar"]')).toBeVisible({ timeout: 3000 });
 }
 
