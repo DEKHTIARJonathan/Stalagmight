@@ -26,6 +26,30 @@ export async function ensureProjectLoaded(ctx: ScenarioContext, fixture = DEFAUL
   if (!(await hasProject(ctx))) throw new Error('project still null after loadProject');
 }
 
+/**
+ * Turn auto-save off for this session (frontend-only: `setConfig` does not
+ * persist, so the user's/profile's config file is untouched).
+ *
+ * Any scenario that compares project state across time needs this. `save_project`
+ * MUTATES the live project with no undo entry - `ensure_shot_uuids`,
+ * `ensure_unique_shot_uuids`, `capture_missing_gauge_anchors`, orphan
+ * `section_offsets` retain and non-finite sanitize (`core/state/project_io.rs`) -
+ * so a 30 s auto-save timer firing mid-run silently changes state that no command
+ * accounts for. Returns true when auto-save is definitely off (including the case
+ * where config has not loaded yet, which `useAutoSave` already treats as off).
+ */
+export async function disableAutoSave(ctx: ScenarioContext): Promise<boolean> {
+  return ctx.eval<boolean>(`
+    const store = window.__E2E_TEST__.projectStore;
+    const config = store.getState().config;
+    if (!config) return true;
+    if (config.general && config.general.auto_save === false) return true;
+    store.getState().setConfig({ ...config, general: { ...config.general, auto_save: false } });
+    const now = store.getState().config;
+    return !!now && !!now.general && now.general.auto_save === false;
+  `);
+}
+
 /** A valid minimal section (two standard shots), unique per index. */
 export function makeSection(i: number): Record<string, unknown> {
   const shot = (az: number, len: number, dIn: number, dOut: number) => ({

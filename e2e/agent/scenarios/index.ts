@@ -6,6 +6,7 @@
 import { makeContext, type Scenario, type ScenarioMetrics, type ScenarioTarget } from './framework';
 import { seedLargeProject } from './seedLargeProject';
 import { undoRedoChurn } from './undoRedoChurn';
+import { undoRedoFuzz } from './undoRedoFuzz';
 import { dialogCycling } from './dialogCycling';
 import { toolSwitchSpam } from './toolSwitchSpam';
 import { mapStorm } from './mapStorm';
@@ -16,6 +17,7 @@ import { rapidProjectCycle } from './rapidProjectCycle';
 const SCENARIOS: Scenario[] = [
   seedLargeProject,
   undoRedoChurn,
+  undoRedoFuzz,
   dialogCycling,
   toolSwitchSpam,
   mapStorm,

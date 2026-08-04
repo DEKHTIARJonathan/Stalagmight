@@ -16,6 +16,7 @@ import { callStoreAction } from './lib/stores';
 const SMOKE_ITERATIONS: Record<string, number> = {
   'seed-large-project': 1,
   'undo-redo-churn': 5,
+  'undo-redo-fuzz': 12,
   'dialog-cycling': 8,
   'tool-switch-spam': 20,
   'map-storm': 30,
