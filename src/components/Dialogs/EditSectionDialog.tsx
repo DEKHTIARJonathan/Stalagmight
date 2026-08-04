@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useUIStore } from '../../store/uiStore';
+import { classifyDeleteRun, isEndRun } from './editSectionDeletes';
 import { useProjectStore } from '../../store/projectStore';
 import { useEditingBlocked } from '../../hooks/useEditingBlocked';
 import { invokeIpc, getErrorMessage } from '../../utils/ipc';
@@ -18,7 +19,7 @@ import DeleteShotImpactDetails from './DeleteShotImpactDetails';
 import { setSource, trackDialogComplete } from '../../utils/telemetry';
 
 export default function EditSectionDialog() {
-  const { closeDialog, dialogData, openDialog } = useUIStore();
+  const { closeDialog, dialogData, openDialog, showToast } = useUIStore();
   const { updateSection, createShot, updateShot, deleteShot, project, isShotFrozen } = useProjectStore();
 
   const sectionId = dialogData.sectionId as number | undefined;
@@ -171,50 +172,63 @@ export default function EditSectionDialog() {
     }
   }, [getShotKey, selectedShotKey, shots]);
 
-  const handleDeleteShot = useCallback((index: number) => {
-    const shot = shots[index];
-    if (!shot) return;
-    const isSelected = selectedShotKey !== null && getShotKey(shot) === selectedShotKey;
+  /**
+   * Delete a set of shots as ONE decision.
+   *
+   * Truncating either end of the section is a plain shortening; taking shots out
+   * of the middle either splits the passage or shifts everything downstream, so
+   * that still asks first. The classification has to see the whole selection at
+   * once: run per shot, each call would judge the others as still present, which
+   * is why deleting a multi-row selection used to be refused even at the very end
+   * of the section.
+   */
+  const handleDeleteShots = useCallback((indices: number[]) => {
+    const targets = indices
+      .map((i) => shots[i])
+      .filter((s): s is EditableShot => s !== undefined && s.isDeleted !== true);
+    if (targets.length === 0) return;
 
-    if (!shot.isNew && section) {
-      // Mid-ness is a question about the SAVED section - the split/shift preview
-      // runs against the backend's topology - but about the part of it that will
-      // survive this dialog. So: existing shots (a row added here is not in the
-      // section yet and will simply be appended) minus the ones already deleted
-      // here (soft-deleted, kept in the array so the host's indices hold).
-      //
-      // Reading section.shots directly got the second half wrong: deleting the
-      // last shot and then the one before it - now the last one on screen - was
-      // refused as "a mid-section shot", because the saved section still listed
-      // a shot after it that the user had just deleted.
+    // Rows added in this dialog are not in the section yet, so they never make a
+    // delete mid-section - they are simply dropped.
+    const existingTargets = targets.filter((s) => s.isNew !== true);
+    if (existingTargets.length > 0 && section) {
       const surviving = shots.filter((s) => !s.isDeleted && !s.isNew);
-      const position = surviving.findIndex((s) => getShotKey(s) === getShotKey(shot));
-      const isMidShot =
-        surviving.length >= 3 && position > 0 && position < surviving.length - 1;
-      if (isMidShot) {
-        setPendingMidDelete({ index, shotId: shot.id });
+      const kind = classifyDeleteRun(
+        surviving.map(getShotKey),
+        new Set(existingTargets.map(getShotKey))
+      );
+      if (!isEndRun(kind)) {
+        if (existingTargets.length === 1) {
+          const only = existingTargets[0]!;
+          setPendingMidDelete({ index: shots.indexOf(only), shotId: only.id });
+          return;
+        }
+        // The split/shift preview answers for one shot, so a mid-section run has
+        // no path here yet. Say so rather than silently dropping the gesture.
+        showToast(
+          'Only shots at the start or end of a section can be deleted together. Delete a mid-section shot on its own to choose split or shift.',
+          'edit-section-mid-run-delete',
+          'warning'
+        );
         return;
       }
     }
 
-    setShots((prev) => {
-      const current = prev[index];
-      if (!current) return prev;
-      if (current.isNew) {
-        // New shot - just remove from array
-        return prev.filter((_, i) => i !== index);
-      }
-      // Existing shot - mark as deleted
-      const updated = [...prev];
-      updated[index] = { ...current, isDeleted: true } as EditableShot;
-      return updated;
-    });
+    const targetKeys = new Set(targets.map(getShotKey));
+    setShots((prev) =>
+      prev
+        // A new row leaves no trace; an existing one is soft-deleted so the
+        // indices the editor was handed stay valid.
+        .filter((s) => !(s.isNew === true && targetKeys.has(getShotKey(s))))
+        .map((s) => (targetKeys.has(getShotKey(s)) ? ({ ...s, isDeleted: true } as EditableShot) : s))
+    );
+    if (selectedShotKey !== null && targetKeys.has(selectedShotKey)) setSelectedShotKey(null);
+  }, [getShotKey, section, selectedShotKey, shots, showToast]);
 
-    // Clear selection if deleted row was selected
-    if (isSelected) {
-      setSelectedShotKey(null);
-    }
-  }, [getShotKey, section, selectedShotKey, shots]);
+  const handleDeleteShot = useCallback(
+    (index: number) => handleDeleteShots([index]),
+    [handleDeleteShots]
+  );
 
   useEffect(() => {
     if (pendingMidDelete && sectionId !== undefined) {
@@ -512,6 +526,7 @@ export default function EditSectionDialog() {
             onShotChange={handleShotChange}
             onAddShot={handleAddShot}
             onDeleteShot={handleDeleteShot}
+            onDeleteShots={handleDeleteShots}
             onInsertBefore={handleInsertBefore}
             onInsertAfter={handleInsertAfter}
             validationConfig={validationConfig}

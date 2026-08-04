@@ -69,6 +69,12 @@ export interface ShotTableEditorProps {
   onAddShot: () => void;
   /** Callback to delete a shot at the given index */
   onDeleteShot: (index: number) => void;
+  /** Delete several shots at once (full-array indices, descending). Supply this
+   *  and a multi-row delete arrives as ONE call, which is the only way a host can
+   *  judge the selection as a whole - asked one shot at a time, each answer would
+   *  treat the others as still present. Falls back to a loop over
+   *  {@link onDeleteShot} when absent. */
+  onDeleteShots?: (indices: number[]) => void;
   /** Optional callback to insert a shot before the given index */
   onInsertBefore?: (index: number) => void;
   /** Optional callback to insert a shot after the given index */
@@ -189,6 +195,7 @@ export function ShotTableEditor({
   onShotChange,
   onAddShot,
   onDeleteShot,
+  onDeleteShots,
   onInsertBefore,
   onInsertAfter,
   validationConfig,
@@ -530,9 +537,11 @@ export function ShotTableEditor({
         const i = actualIndex(r);
         if (i >= 0) indices.push(i);
       }
-      for (const i of indices.sort((a, b) => b - a)) onDeleteShot(i);
+      const descending = indices.sort((a, b) => b - a);
+      if (onDeleteShots) onDeleteShots(descending);
+      else for (const i of descending) onDeleteShot(i);
     },
-    [readOnly, actualIndex, onDeleteShot, visibleShots.length]
+    [readOnly, actualIndex, onDeleteShot, onDeleteShots, visibleShots.length]
   );
 
   // Required-but-empty cells get the grid's red missing tint, so an incomplete
