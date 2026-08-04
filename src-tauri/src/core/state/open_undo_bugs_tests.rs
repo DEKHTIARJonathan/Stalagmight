@@ -1370,3 +1370,162 @@ fn datum_sections(state: &AppState) -> Vec<SectionId> {
         .map(|datum| datum.station_ref.section_id)
         .collect()
 }
+
+// ===========================================================================
+// Finding 20: a geometry edit inside an UNANCHORED merge group leaves the merge
+// drifted, under every threshold that would report it
+// ===========================================================================
+
+/// The raw distance between two stations, measured the way
+/// `Project::debug_assert_merge_alignment` measures it
+/// (`compute_station_raw_coords`, `models/project/offsets.rs`) rather than
+/// through `resolved_station_offsets()`. The app's two alignment measures
+/// disagree by construction (issue #413 finding 14), so a test about the
+/// invariant the app ASSERTS has to use the assert's own measure.
+fn raw_station_gap(state: &AppState, a: (SectionId, u32), b: (SectionId, u32)) -> f64 {
+    let project = state.get_project_state().expect("no project open");
+    let left = project
+        .compute_station_raw_coords(StationRef::new(a.0, a.1))
+        .expect("station a has no raw coordinates");
+    let right = project
+        .compute_station_raw_coords(StationRef::new(b.0, b.1))
+        .expect("station b has no raw coordinates");
+    ((left.x - right.x).powi(2) + (left.y - right.y).powi(2)).sqrt()
+}
+
+/// Two sections joined by ONE merge and anchored by NOTHING - no zero datum
+/// anywhere in the project. Returns `(a, b)`, merged at `a:1 <-> b:0`.
+///
+/// The absence of the datum is the whole precondition, so it is not an
+/// oversight: `realign_after_shot_edit` looks for a datum in the edited
+/// section's merge group and returns early when there is none.
+fn two_unanchored_merged_sections(state: &AppState) -> (SectionId, SectionId) {
+    let a = create_section(state, "A", vec![shot(0.0, 5.0), shot(0.0, 5.0)]);
+    let b = create_section(state, "B", vec![shot(90.0, 5.0)]);
+    let merged = state.execute(Command::MergeStations {
+        station_a: StationRef::new(a, 1),
+        station_b: StationRef::new(b, 0),
+    });
+    assert!(merged.success, "MergeStations failed: {:?}", merged.error);
+    assert!(
+        raw_station_gap(state, (a, 1), (b, 0)) < 1e-9,
+        "setup: MergeStations should leave the pair co-located"
+    );
+    (a, b)
+}
+
+/// FINDING 20: editing a shot's geometry inside a merge group that holds no zero
+/// datum moves one side of the merge and realigns nothing, and the drift then
+/// sits below every threshold that would report it.
+///
+/// Two gates decline in sequence:
+///
+/// 1. `Project::realign_after_shot_edit` (`models/project/mutations.rs:923`) -
+///    the only thing `update_shot` calls to repair the merge
+///    (`core/state/command_shot.rs:173`) - looks for a zero datum in the edited
+///    section's merge group and, finding none, returns at
+///    `mutations.rs:941` ("No anchor in this group, nothing to realign").
+/// 2. `AppState::execute`'s epilogue (`core/state/commands.rs:654`) then runs
+///    `reconcile_geometry()` -> `Project::realign_merges()`
+///    (`models/project/offsets.rs:280`), which re-solves ONLY when
+///    `check_merge_alignment()` already reports a violation - and that checker's
+///    threshold is `Project::MERGE_ALIGNMENT_TOLERANCE_M` = 5 cm
+///    (`models/project.rs:1064`).
+///
+/// So drift under 5 cm survives, and the app's OWN invariant for the same pair,
+/// asserted by `debug_assert_merge_alignment` (`models/project/offsets.rs:112`),
+/// is 1 cm. The whole band from 1 cm to 5 cm is a state the app asserts cannot
+/// exist and produces on purpose.
+///
+/// Measured band, from the probe this test was reduced from: +0.005 m of shot
+/// length leaves 0.005 m, +0.02 leaves 0.02, +0.0499 leaves 0.0499, +0.0501
+/// leaves 0 (the epilogue heals it), +0.5 leaves 0. And with a datum in the
+/// group every one of those leaves 0.
+///
+/// Found by the Rust fuzzer's HORIZON mode, seed 1, where an `updateShot` after
+/// a `mergeStations` left a pair 1.58 cm apart, raw and resolved agreeing.
+#[test]
+#[ignore = "open finding 20: a shot edit in an unanchored merge group leaves the merge drifted under the 5 cm heal gate - see src-tauri/src/core/state/fuzz_undo_tests.rs"]
+fn a_shot_edit_keeps_an_unanchored_merge_aligned() {
+    let state = state_with_project();
+    let (a, b) = two_unanchored_merged_sections(&state);
+
+    // 2 cm of extra length on the shot BEFORE the merged station, so the station
+    // moves by exactly that. Deliberately inside the band: 5.1 cm would be
+    // healed by the epilogue and would prove nothing.
+    let first_shot = shot_ids(&state, a)[0];
+    let updated = state.execute(Command::UpdateShot {
+        section_id: a,
+        shot_id: first_shot,
+        updates: ShotUpdates {
+            length: Some(5.02),
+            ..ShotUpdates::default()
+        },
+    });
+    assert!(updated.success, "UpdateShot failed: {:?}", updated.error);
+
+    let gap = raw_station_gap(&state, (a, 1), (b, 0));
+    assert!(
+        gap < 0.01,
+        "a shot edit left the merged pair {gap:.6} m apart, past the 0.01 m the app's own \
+         debug_assert_merge_alignment calls a violation - and under the 0.05 m \
+         check_merge_alignment reports, so the user is told nothing and the drift is saved"
+    );
+}
+
+/// The same defect's CONSEQUENCE, and the reason it is not merely cosmetic: the
+/// drift is a landmine for a later, unrelated command.
+///
+/// `update_shot` is not one of the call sites that runs
+/// `debug_assert_merge_alignment` (the eight that do are the insert/remove/split
+/// shot paths, `merge_stations`, `set_zero_datum`, `adjust_loop_closures` and
+/// `delete_shot_range_shift`), so the edit itself says nothing. The next command
+/// that DOES assert - here a `CreateShot` into a third, entirely unrelated
+/// section - trips on the merge the edit broke two commands ago, in a test build
+/// with no way to attribute it.
+///
+/// In a release build the same state produces neither the assert nor a user
+/// warning: it is simply saved.
+#[test]
+#[ignore = "open finding 20: the drift an unanchored shot edit leaves trips the app's own alignment assert in a later unrelated command"]
+fn a_shot_edit_does_not_arm_an_alignment_assert_for_a_later_command() {
+    let state = state_with_project();
+    let (a, _b) = two_unanchored_merged_sections(&state);
+    let elsewhere = create_section(&state, "Elsewhere", vec![shot(45.0, 5.0)]);
+
+    let first_shot = shot_ids(&state, a)[0];
+    let updated = state.execute(Command::UpdateShot {
+        section_id: a,
+        shot_id: first_shot,
+        updates: ShotUpdates {
+            length: Some(5.02),
+            ..ShotUpdates::default()
+        },
+    });
+    assert!(updated.success, "UpdateShot failed: {:?}", updated.error);
+
+    // A command in a DIFFERENT section, touching neither side of the merge.
+    let anchor = shot_ids(&state, elsewhere)[0];
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        state.execute(Command::CreateShot {
+            section_id: elsewhere,
+            shot: shot(10.0, 3.0),
+            after_shot_id: Some(anchor),
+            before_shot_id: None,
+        })
+    }));
+    let message = match outcome {
+        Ok(_) => String::new(),
+        Err(payload) => payload
+            .downcast_ref::<String>()
+            .cloned()
+            .or_else(|| payload.downcast_ref::<&str>().map(|s| (*s).to_string()))
+            .unwrap_or_else(|| "<non-string panic>".to_string()),
+    };
+    assert!(
+        message.is_empty(),
+        "an unrelated insert into a third section tripped the app's own merge-alignment assert \
+         on the merge a shot edit broke two commands earlier: {}",
+        message.lines().next().unwrap_or_default()
+    );
+}
