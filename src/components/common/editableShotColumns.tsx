@@ -13,7 +13,7 @@
 import type { ReactNode } from 'react';
 import type { TFunction } from 'i18next';
 import type { GridColumn } from './SpreadsheetGrid/types';
-import { AlertCircleIcon, AlertTriangleIcon, CloseIcon, LockIcon } from './icons';
+import { AlertCircleIcon, AlertTriangleIcon, LockIcon } from './icons';
 import { formatFixed } from '../../i18n/format';
 import { circularMeanDegrees } from '../../utils/angles';
 import {
@@ -33,8 +33,6 @@ export const EDITABLE_AZIMUTH_AVG_KEY = '_azimuth_avg';
 export const EDITABLE_PITCH_AVG_KEY = '_pitch_avg';
 /** Virtual column key for the per-row warning indicator. */
 export const EDITABLE_WARNINGS_KEY = '_warnings';
-/** Virtual column key for the per-row delete button. */
-export const EDITABLE_DELETE_KEY = '_delete';
 
 /** Columns whose edits touch the adjusted centerline -> locked on a frozen shot.
  *  Matches the data table's set: the azimuth legs and the inclination family are
@@ -61,10 +59,6 @@ export interface EditableShotColumnContext {
   warningsAt: (visibleIndex: number) => string[];
   /** Whether the shot at this VISIBLE row index is frozen. */
   isFrozenAt: (visibleIndex: number) => boolean;
-  /** Delete the shot at this VISIBLE row index. These tables are short enough
-   *  that a visible per-row control beats making the context menu the only way
-   *  out - and the hosts' tests have always driven deletion through it. */
-  onDeleteAt: (visibleIndex: number) => void;
   /** Advance the shot's kind around Normal -> Jump -> Reference; `-1` walks it
    *  backwards (shift-click). */
   onCycleKindAt: (visibleIndex: number, direction: 1 | -1) => void;
@@ -88,7 +82,6 @@ export function buildEditableShotColumns(
     errorsAt,
     warningsAt,
     isFrozenAt,
-    onDeleteAt,
     onCycleKindAt,
     isPhantomAt,
   } = ctx;
@@ -338,33 +331,5 @@ export function buildEditableShotColumns(
       editable: !readOnly,
       parse: (raw) => (raw.trim() === '' ? null : raw),
     },
-    ...(readOnly
-      ? []
-      : [
-          {
-            key: EDITABLE_DELETE_KEY,
-            header: '',
-            width: 30,
-            align: 'center' as const,
-            getValue: () => '',
-            render: (_shot: EditableShot, index: number): ReactNode =>
-              isPhantomAt(index) ? null : (
-              <button
-                type="button"
-                data-testid={`shot-delete-${index}`}
-                aria-label={t('shotTable.actions.delete')}
-                title={t('shotTable.actions.delete')}
-                className="text-error hover:text-error-80"
-                onMouseDown={(e) => e.stopPropagation()}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onDeleteAt(index);
-                }}
-              >
-                <CloseIcon size={12} />
-              </button>
-            ),
-          },
-        ]),
   ];
 }

@@ -17,6 +17,7 @@ import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
 import { useGridLabels } from '../../hooks/useGridLabels';
 import { useDismissableLayer } from '../../hooks/useDismissableLayer';
 import { ShotColumnsMenu } from '../common/ShotColumnsMenu';
+import { ANGLE_FAMILY_KEYS, reorderForAngleMode } from '../Dialogs/newSectionRows';
 import { useAnchoredFixedMenu } from '../../hooks/useAnchoredFixedMenu';
 import { setSource } from '../../utils/telemetry';
 import { syntacticLevelAtLeast } from '../../theme/syntacticPalette';
@@ -53,8 +54,6 @@ const CHROME_OFFSET_DEFAULT = 28;
 /** Floor for the computed grid height so it never collapses below a usable size. */
 const MIN_GRID_HEIGHT = 120;
 
-/** Column keys per angle family and mode (the Avg column and the In+Out pair
- *  swap into each other's slot when the mode changes). */
 /** Header right-click hide targets: the clicked column's display name and the
  *  key group it hides with (L/R/U/D hide together as LRUD). */
 const HEADER_HIDE_GROUPS: Record<string, { nameKey: string; keys: string[] }> = {
@@ -71,11 +70,6 @@ const HEADER_HIDE_GROUPS: Record<string, { nameKey: string; keys: string[] }> = 
   section_id: { nameKey: 'sectionId', keys: ['section_id'] },
   shot_id: { nameKey: 'shotId', keys: ['shot_id'] },
 };
-
-const ANGLE_FAMILY_KEYS = {
-  azimuth: { avg: [AZIMUTH_AVG_KEY], inout: ['azimuth_in', 'azimuth_out'] },
-  inclination: { avg: [PITCH_AVG_KEY], inout: ['pitch_in', 'pitch_out'] },
-} as const;
 
 /** Stations-view column groups in the eye menu / header hide entries (plain
  *  hide - no angle modes). X/Y toggle together as "Coordinates (m)", lat/long
@@ -1432,16 +1426,14 @@ export default function DataTable({ sections }: DataTableProps) {
       const current = family === 'azimuth' ? azimuthMode : inclinationMode;
       if (next === current) return;
       if (current !== 'off' && next !== 'off') {
-        const prevKeys: readonly string[] = ANGLE_FAMILY_KEYS[family][current];
-        const nextKeys: readonly string[] = ANGLE_FAMILY_KEYS[family][next];
-        setShotColumnOrder((prev) => {
-          const base = prev.length ? [...prev] : shotColumns.map((c) => c.key);
-          for (const c of shotColumns) if (!base.includes(c.key)) base.push(c.key);
-          const without = base.filter((k) => !nextKeys.includes(k));
-          const anchor = without.indexOf(prevKeys[0]!);
-          without.splice(anchor < 0 ? without.length : anchor, 0, ...nextKeys);
-          return without;
-        });
+        setShotColumnOrder((prev) =>
+          reorderForAngleMode(
+            prev,
+            shotColumns.map((c) => c.key),
+            ANGLE_FAMILY_KEYS[family][current],
+            ANGLE_FAMILY_KEYS[family][next]
+          )
+        );
       }
       (family === 'azimuth' ? setAzimuthMode : setInclinationMode)(next);
     },

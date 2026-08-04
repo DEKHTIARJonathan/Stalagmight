@@ -24,8 +24,11 @@ import {
 import { ShotColumnsMenu } from './ShotColumnsMenu';
 import { buildShotUpdates } from '../SingleSystemView/dataTableEdits';
 import {
+  ANGLE_FAMILY_KEYS,
   applyAngleMode,
   deriveAngleMode,
+  normalizeAngleFamilies,
+  reorderForAngleMode,
   type AzimuthMode,
 } from '../Dialogs/newSectionRows';
 import type { EditableShot } from './editableShot';
@@ -269,14 +272,6 @@ export function ShotTableEditor({
     [readOnly, actualIndex, visibleShots, onShotChange]
   );
 
-  const onDeleteAt = useCallback(
-    (visibleIndex: number) => {
-      const index = actualIndex(visibleIndex);
-      if (index >= 0) onDeleteShot(index);
-    },
-    [actualIndex, onDeleteShot]
-  );
-
   // --- Column layout, persisted under the dialog's own `edit_section_*` keys --
   const [columnOrder, setColumnOrder] = useState<string[]>([]);
   // Seeded from the default, not empty: the persisted config overrides this as
@@ -292,7 +287,13 @@ export function ShotTableEditor({
     viewSetters,
     DEFAULT_EDIT_SECTION_HIDDEN_COLUMNS
   );
-  const hiddenColumnList = useMemo(() => [...hiddenColumns], [hiddenColumns]);
+  // Normalized on the way to the grid: a set stored before these columns existed
+  // can leave an average AND its legs visible at once. The stored value stays the
+  // user's; only what renders is repaired.
+  const hiddenColumnList = useMemo(
+    () => [...normalizeAngleFamilies(hiddenColumns)],
+    [hiddenColumns]
+  );
 
 
   /** Which of avg / in-out / off an angle family is currently showing, read back
@@ -304,15 +305,6 @@ export function ShotTableEditor({
   const inclinationMode = useMemo(
     () => deriveAngleMode(hiddenColumns, EDITABLE_PITCH_AVG_KEY, 'pitch_in', 'pitch_out'),
     [hiddenColumns]
-  );
-  const setAngleMode = useCallback(
-    (family: 'azimuth' | 'pitch', mode: AzimuthMode) => {
-      const avgKey = family === 'azimuth' ? EDITABLE_AZIMUTH_AVG_KEY : EDITABLE_PITCH_AVG_KEY;
-      setHiddenColumns((prev) =>
-        applyAngleMode(prev, mode, avgKey, `${family}_in`, `${family}_out`)
-      );
-    },
-    []
   );
 
   /** Show/hide a group of columns together (LRUD is one row, four keys). */
@@ -338,7 +330,6 @@ export function ShotTableEditor({
         errorsAt,
         warningsAt,
         isFrozenAt,
-        onDeleteAt,
         onCycleKindAt,
         isPhantomAt,
       }),
@@ -349,10 +340,31 @@ export function ShotTableEditor({
       errorsAt,
       warningsAt,
       isFrozenAt,
-      onDeleteAt,
       onCycleKindAt,
       isPhantomAt,
     ]
+  );
+
+  const setAngleMode = useCallback(
+    (family: 'azimuth' | 'pitch', mode: AzimuthMode) => {
+      const avgKey = family === 'azimuth' ? EDITABLE_AZIMUTH_AVG_KEY : EDITABLE_PITCH_AVG_KEY;
+      const legIn = `${family}_in`;
+      const legOut = `${family}_out`;
+      const current = deriveAngleMode(hiddenColumns, avgKey, legIn, legOut);
+      if (current === mode) return;
+      // The incoming columns take the slot the outgoing ones held, so the azimuth
+      // stays put in the table whichever way it is shown. Off has no columns to
+      // anchor to, so it leaves the order alone and the next switch back finds
+      // the slot where it was.
+      if (current !== 'off' && mode !== 'off') {
+        const keys = ANGLE_FAMILY_KEYS[family === 'azimuth' ? 'azimuth' : 'inclination'];
+        setColumnOrder((prev) =>
+          reorderForAngleMode(prev, columns.map((c) => c.key), keys[current], keys[mode])
+        );
+      }
+      setHiddenColumns((prev) => applyAngleMode(prev, mode, avgKey, legIn, legOut));
+    },
+    [hiddenColumns, columns]
   );
 
   /** One coerced cell value -> the host's field callback(s), at a resolved

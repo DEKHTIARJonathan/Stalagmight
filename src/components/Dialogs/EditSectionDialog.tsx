@@ -177,9 +177,20 @@ export default function EditSectionDialog() {
     const isSelected = selectedShotKey !== null && getShotKey(shot) === selectedShotKey;
 
     if (!shot.isNew && section) {
-      const originalIndex = section.shots.findIndex((s) => s.id === shot.id);
-      const totalShots = section.shots.length;
-      const isMidShot = totalShots >= 3 && originalIndex > 0 && originalIndex < totalShots - 1;
+      // Mid-ness is a question about the SAVED section - the split/shift preview
+      // runs against the backend's topology - but about the part of it that will
+      // survive this dialog. So: existing shots (a row added here is not in the
+      // section yet and will simply be appended) minus the ones already deleted
+      // here (soft-deleted, kept in the array so the host's indices hold).
+      //
+      // Reading section.shots directly got the second half wrong: deleting the
+      // last shot and then the one before it - now the last one on screen - was
+      // refused as "a mid-section shot", because the saved section still listed
+      // a shot after it that the user had just deleted.
+      const surviving = shots.filter((s) => !s.isDeleted && !s.isNew);
+      const position = surviving.findIndex((s) => getShotKey(s) === getShotKey(shot));
+      const isMidShot =
+        surviving.length >= 3 && position > 0 && position < surviving.length - 1;
       if (isMidShot) {
         setPendingMidDelete({ index, shotId: shot.id });
         return;

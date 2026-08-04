@@ -16,6 +16,8 @@ import {
   moveRows,
   normalizeRows,
   summarizeSubmit,
+  normalizeAngleFamilies,
+  reorderForAngleMode,
 } from '../newSectionRows';
 
 /** A row carrying `data`, keyed so assertions can follow identity across ops. */
@@ -385,5 +387,78 @@ describe('canSubmit', () => {
 
   it('is true with at least one complete row and no incomplete ones', () => {
     expect(canSubmit({ completeCount: 1, incompleteRows: [] })).toBe(true);
+  });
+});
+
+describe('normalizeAngleFamilies', () => {
+  it('drops the legs when an average and its legs are both visible', () => {
+    // What a set stored before the legs existed looks like: nothing hidden.
+    const out = normalizeAngleFamilies(new Set());
+    expect(out.has('azimuth_in')).toBe(true);
+    expect(out.has('azimuth_out')).toBe(true);
+    expect(out.has(AZIMUTH_AVG_KEY)).toBe(false);
+    expect(out.has('pitch_in')).toBe(true);
+    expect(out.has(PITCH_AVG_KEY)).toBe(false);
+  });
+
+  it('leaves a consistent in-out set alone', () => {
+    const inout = new Set([AZIMUTH_AVG_KEY, PITCH_AVG_KEY, 'pitch_in', 'pitch_out']);
+    expect([...normalizeAngleFamilies(inout)].sort()).toEqual([...inout].sort());
+  });
+
+  it('leaves an off family off', () => {
+    const off = new Set([AZIMUTH_AVG_KEY, 'azimuth_in', 'azimuth_out']);
+    const out = normalizeAngleFamilies(off);
+    for (const k of off) expect(out.has(k)).toBe(true);
+  });
+
+  it('is idempotent', () => {
+    const once = normalizeAngleFamilies(new Set());
+    expect([...normalizeAngleFamilies(once)].sort()).toEqual([...once].sort());
+  });
+
+  it('does not touch unrelated columns', () => {
+    expect(normalizeAngleFamilies(new Set(['comment'])).has('comment')).toBe(true);
+  });
+});
+
+describe('reorderForAngleMode', () => {
+  const ALL = ['length', AZIMUTH_AVG_KEY, 'azimuth_in', 'azimuth_out', 'depth_in'];
+
+  it('puts the legs where the average was', () => {
+    const out = reorderForAngleMode(
+      ['length', AZIMUTH_AVG_KEY, 'depth_in', 'azimuth_in', 'azimuth_out'],
+      ALL,
+      [AZIMUTH_AVG_KEY],
+      ['azimuth_in', 'azimuth_out']
+    );
+    expect(out).toEqual(['length', 'azimuth_in', 'azimuth_out', AZIMUTH_AVG_KEY, 'depth_in']);
+  });
+
+  it('puts the average where the legs were', () => {
+    const out = reorderForAngleMode(
+      ['length', 'azimuth_in', 'azimuth_out', 'depth_in', AZIMUTH_AVG_KEY],
+      ALL,
+      ['azimuth_in', 'azimuth_out'],
+      [AZIMUTH_AVG_KEY]
+    );
+    expect(out.indexOf(AZIMUTH_AVG_KEY)).toBe(1);
+  });
+
+  it('falls back to declaration order when nothing was customized', () => {
+    const out = reorderForAngleMode([], ALL, [AZIMUTH_AVG_KEY], ['azimuth_in', 'azimuth_out']);
+    expect(out[1]).toBe('azimuth_in');
+    expect(out[2]).toBe('azimuth_out');
+  });
+
+  it('appends columns the stored order never knew about', () => {
+    const out = reorderForAngleMode(['length'], ALL, [AZIMUTH_AVG_KEY], ['azimuth_in']);
+    expect(out).toContain('depth_in');
+    expect(new Set(out).size).toBe(out.length);
+  });
+
+  it('appends at the end when the outgoing slot cannot be found', () => {
+    const out = reorderForAngleMode(['length'], ['length', 'azimuth_in'], ['_gone'], ['azimuth_in']);
+    expect(out[out.length - 1]).toBe('azimuth_in');
   });
 });

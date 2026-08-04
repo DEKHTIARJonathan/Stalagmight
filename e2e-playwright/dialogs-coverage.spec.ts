@@ -273,8 +273,10 @@ test.describe('Dialog Coverage - Edit Section', () => {
     // convention; there is no Add button.
     await addShotByTypingInBlankRow(dialog);
 
-    const deleteButton = dialog.getByTestId('shot-delete-1');
-    await deleteButton.click();
+    // Delete goes through the grid's row context menu, like the data table's -
+    // the per-row X column is gone.
+    await dialog.getByTestId('shot-editor-cell-1-length').click({ button: 'right' });
+    await dialog.getByTestId('shot-editor-context-delete-rows').click();
 
     await dialog.getByRole('button', { name: 'Save' }).click();
     await expect(dialog).not.toBeVisible({ timeout: 5000 });
@@ -302,8 +304,10 @@ test.describe('Dialog Coverage - Edit Section', () => {
     const dialog = page.getByTestId('edit-section-dialog');
     await expect(dialog).toBeVisible();
 
-    const deleteButton = dialog.getByTestId('shot-delete-1');
-    await deleteButton.click();
+    // Delete goes through the grid's row context menu, like the data table's -
+    // the per-row X column is gone.
+    await dialog.getByTestId('shot-editor-cell-1-length').click({ button: 'right' });
+    await dialog.getByTestId('shot-editor-context-delete-rows').click();
 
     const warning = dialog.locator('text=This is a mid-section shot.');
     await expect(warning).toBeVisible();

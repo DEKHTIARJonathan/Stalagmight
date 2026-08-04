@@ -152,7 +152,10 @@ function appendShot() {
 }
 
 function deleteRow(visibleIndex: number) {
-  fireEvent.click(screen.getByTestId(`shot-delete-${visibleIndex}`));
+  // Delete goes through the grid's row context menu, like the data table's -
+  // the per-row X column is gone.
+  fireEvent.contextMenu(screen.getByTestId(`shot-editor-cell-${visibleIndex}-length`));
+  fireEvent.click(screen.getByTestId('shot-editor-context-delete-rows'));
 }
 
 function insertBeforeRow(visibleIndex: number) {

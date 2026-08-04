@@ -249,6 +249,73 @@ export function deriveAzimuthMode(hiddenColumns: ReadonlySet<string>): AzimuthMo
   return deriveAngleMode(hiddenColumns, AZIMUTH_AVG_KEY, 'azimuth_in', 'azimuth_out');
 }
 
+/** The column keys each angle family shows per mode. */
+export const ANGLE_FAMILY_KEYS = {
+  azimuth: { avg: [AZIMUTH_AVG_KEY], inout: ['azimuth_in', 'azimuth_out'], off: [] },
+  inclination: { avg: [PITCH_AVG_KEY], inout: ['pitch_in', 'pitch_out'], off: [] },
+} as const satisfies Record<string, Record<AzimuthMode, readonly string[]>>;
+
+/**
+ * The column order with an angle family's incoming columns dropped into the SLOT
+ * its outgoing ones held.
+ *
+ * Without this, switching Avg -> In+Out does not move a column so much as reveal
+ * two that were hidden wherever they happened to sit in the order - so the legs
+ * appear at the far end of the table instead of where the average just was, and
+ * switching back leaves the average somewhere else again. The user's mental model
+ * is one azimuth slot with three ways to show it, so the slot has to be the thing
+ * that persists.
+ *
+ * `allKeys` is every column the grid has, needed because an order that has never
+ * been customized is stored empty (meaning "declaration order").
+ */
+export function reorderForAngleMode(
+  order: readonly string[],
+  allKeys: readonly string[],
+  prevKeys: readonly string[],
+  nextKeys: readonly string[]
+): string[] {
+  const base = order.length > 0 ? [...order] : [...allKeys];
+  for (const key of allKeys) if (!base.includes(key)) base.push(key);
+  const without = base.filter((k) => !nextKeys.includes(k));
+  const anchor = prevKeys.length > 0 ? without.indexOf(prevKeys[0]!) : -1;
+  without.splice(anchor < 0 ? without.length : anchor, 0, ...nextKeys);
+  return without;
+}
+
+/**
+ * The hidden set forced into agreement with the mode it reports: an angle family
+ * shows its average OR its two legs, never both.
+ *
+ * A stored set can say "both", because the columns a grid has can change under a
+ * preference that was saved before they existed - which is exactly what happened
+ * when the legs and the inclination family were added to the shot editor. Every
+ * config written until then listed neither, so nothing hid them and the editor
+ * opened showing Az, Az In and Az Out at once. Toggling the menu fixed it only
+ * because that writes a mode back.
+ *
+ * Idempotent, so a set that is already consistent passes through untouched. Run
+ * it on the way to the grid rather than on the stored value: the stored one is
+ * the user's, and a repair that writes is a save they did not ask for.
+ */
+export function normalizeAngleFamilies(hiddenColumns: ReadonlySet<string>): Set<string> {
+  let next = applyAngleMode(
+    hiddenColumns,
+    deriveAngleMode(hiddenColumns, AZIMUTH_AVG_KEY, 'azimuth_in', 'azimuth_out'),
+    AZIMUTH_AVG_KEY,
+    'azimuth_in',
+    'azimuth_out'
+  );
+  next = applyAngleMode(
+    next,
+    deriveAngleMode(next, PITCH_AVG_KEY, 'pitch_in', 'pitch_out'),
+    PITCH_AVG_KEY,
+    'pitch_in',
+    'pitch_out'
+  );
+  return next;
+}
+
 /** The hidden set after switching an angle family to `mode` - the inverse of
  *  {@link deriveAngleMode}, so the menu's three-way control writes back into the
  *  same single source of truth it reads from. */
