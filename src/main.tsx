@@ -29,7 +29,15 @@ installConsoleCapture();
 // imported behind the DEV constant so it tree-shakes out of production builds,
 // and installed AFTER installConsoleCapture() so its console patch wraps that
 // one (both fire). See docs/debug-gates.md and scripts/lib/vite-agent-bridge.mjs.
-if (import.meta.env.DEV) {
+// NOT under an automation harness (#417): a Playwright page never
+// authenticates to the bridge, so its token probe just 403s (up to 8 retries)
+// - and specs that assert a clean console red on those resource errors, but
+// only on dev-server runs (CI serves the built bundle, where this DEV block
+// tree-shakes away entirely). That local-red/CI-green split was #417.
+// `navigator.webdriver` is the automation signal because the local Playwright
+// path runs plain `vite` WITHOUT VITE_E2E (the store hooks ride on DEV there);
+// the real Tauri webview never sets it, so manual dev keeps the bridge.
+if (import.meta.env.DEV && navigator.webdriver !== true) {
   void import('./dev/agentBridge')
     .then((m) => m.installAgentBridge())
     .catch(() => {});
