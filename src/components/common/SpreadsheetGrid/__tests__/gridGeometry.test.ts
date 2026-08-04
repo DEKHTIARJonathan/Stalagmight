@@ -11,6 +11,8 @@ import {
   fillTargets,
   cycleActiveInRect,
   type Rect,
+  collapseAfterRowDelete,
+  reconcileSelection,
 } from '../gridGeometry';
 
 const cols = ['id', 'a', 'b', 'c'];
@@ -185,5 +187,52 @@ describe('cycleActiveInRect (Tab/Enter within a selection)', () => {
     expect(cycleActiveInRect(rect, 1, 1, false, false)).toEqual({ row: 2, colIdx: 1 });
     expect(cycleActiveInRect(rect, 2, 1, false, false)).toEqual({ row: 1, colIdx: 2 });
     expect(cycleActiveInRect(rect, 2, 2, false, false)).toEqual({ row: 1, colIdx: 1 });
+  });
+});
+
+describe('collapseAfterRowDelete', () => {
+  const prev = { active: { colKey: 'length' } };
+
+  it('lands just above the deleted run, keeping the active column', () => {
+    expect(collapseAfterRowDelete(prev, 5)).toEqual({
+      anchor: { row: 4, colKey: 'length' },
+      focus: { row: 4, colKey: 'length' },
+      active: { row: 4, colKey: 'length' },
+    });
+  });
+
+  it('stays at the top when the run started there', () => {
+    expect(collapseAfterRowDelete(prev, 0).active.row).toBe(0);
+  });
+
+  it('always collapses to a single cell', () => {
+    const s = collapseAfterRowDelete(prev, 9);
+    expect(s.anchor).toEqual(s.focus);
+    expect(s.focus).toEqual(s.active);
+  });
+});
+
+describe('reconcileSelection', () => {
+  const sel = (row: number, colKey: string) => ({
+    anchor: { row, colKey },
+    focus: { row, colKey },
+    active: { row, colKey },
+  });
+
+  it('returns the same object when nothing had to move', () => {
+    const prev = sel(1, 'a');
+    expect(reconcileSelection(prev, 5, ['a', 'b'])).toBe(prev);
+  });
+
+  it('clamps a row past the end of a shrunken grid', () => {
+    expect(reconcileSelection(sel(9, 'a'), 3, ['a']).active.row).toBe(2);
+  });
+
+  it('re-maps a column key that no longer exists', () => {
+    expect(reconcileSelection(sel(0, 'gone'), 3, ['a', 'b']).active.colKey).toBe('a');
+  });
+
+  it('clamps to row 0 when every row is gone', () => {
+    expect(reconcileSelection(sel(4, 'a'), 0, ['a']).active.row).toBe(0);
   });
 });

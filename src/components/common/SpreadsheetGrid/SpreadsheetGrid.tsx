@@ -35,10 +35,12 @@ import {
   arrowTarget,
   clamp,
   columnOffsets,
+  collapseAfterRowDelete,
   cycleActiveInRect,
   fillTargets,
   isInRect,
   placePaste,
+  reconcileSelection,
   rectIsSingleCell,
   selectionRect,
   tabTarget,
@@ -752,24 +754,23 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
   // + keys stable). Identity-preserving when already valid.
   const structuralKey = `${rowCount}:${colCount}:${colKeys.join('')}`;
   useEffect(() => {
-    setSelection((prev) => {
-      const fix = (c: CellCoord): CellCoord => {
-        const row = clamp(c.row, 0, Math.max(0, rowCount - 1));
-        const colKey = colKeys.includes(c.colKey) ? c.colKey : (colKeys[0] ?? c.colKey);
-        return row === c.row && colKey === c.colKey ? c : { row, colKey };
-      };
-      const anchor = fix(prev.anchor);
-      const focus = fix(prev.focus);
-      const active = fix(prev.active);
-      return anchor === prev.anchor && focus === prev.focus && active === prev.active
-        ? prev
-        : { anchor, focus, active };
-    });
+    setSelection((prev) => reconcileSelection(prev, rowCount, colKeys));
     setCopiedRect(null);
     setCutRect(null);
     copyStash.current = null;
     // eslint-disable-next-line react-hooks/exhaustive-deps -- structuralKey gates re-runs
   }, [structuralKey]);
+
+  /** Delete rows and drop the row-range selection - see collapseAfterRowDelete. */
+  const deleteRowsCollapsing = useCallback(
+    (fromRow: number, toRow: number) => {
+      if (!onDeleteRows) return;
+      onDeleteRows(fromRow, toRow);
+      rowSelectIntent.current = false;
+      setSelection((prev) => collapseAfterRowDelete(prev, fromRow));
+    },
+    [onDeleteRows]
+  );
 
   // --- Clipboard ------------------------------------------------------------
   const buildRangeMatrix = useCallback((): string[][] => {
@@ -1284,7 +1285,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
           // delete-selected-entity shortcut would fire on a plain cell clear.
           e.stopPropagation();
           const fullRows = rect.c0 === 0 && rect.c1 === colCount - 1;
-          if (onDeleteRows && rowSelectIntent.current && fullRows) onDeleteRows(rect.r0, rect.r1);
+          if (onDeleteRows && rowSelectIntent.current && fullRows) deleteRowsCollapsing(rect.r0, rect.r1);
           else doClear();
           return;
         }
@@ -1315,7 +1316,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
     [
       editing, selection.focus.row, focusColIdx, colKeys, colCount, rowCount, height,
       writableColIdxs, colIndexOf, moveFocusTo, dataEdgeTarget, beginEdit, commitEdit, cancelEdit,
-      doCopy, doCut, schedulePasteFallback, doFill, doClear, onDeleteRows, colAt, cellEditable,
+      doCopy, doCut, schedulePasteFallback, doFill, doClear, onDeleteRows, deleteRowsCollapsing, colAt, cellEditable,
       rect, selection.active, onActiveCellChange, virtualizer, scrollColIntoView, copiedRect, cutRect,
     ],
   );
@@ -2394,7 +2395,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
           onClear={doClear}
           onFillDown={() => doFill(true)}
           {...(onInsertRows ? { onInsertRows } : {})}
-          {...(onDeleteRows ? { onDeleteRows } : {})}
+          {...(onDeleteRows ? { onDeleteRows: deleteRowsCollapsing } : {})}
           extraItems={ctxExtraItems}
           onClose={() => setCtxMenu(null)}
         />

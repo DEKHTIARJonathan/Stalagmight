@@ -6,7 +6,7 @@
  * unmount when scrolled off-screen, so selection, copy, paste and fill must be
  * computable for cells that aren't currently rendered. Unit-tested.
  */
-import type { GridSelection } from './types';
+import type { CellCoord, GridSelection } from './types';
 
 // Imported from the shared util (also used internally below) and re-exported so
 // existing importers (SpreadsheetGrid, tests) keep importing `clamp` from here.
@@ -209,4 +209,51 @@ export function fillTargets(
     }
   }
   return out;
+}
+
+/**
+ * Where the cursor lands after deleting rows `fromRow..toRow`, as a collapsed
+ * single-cell selection.
+ *
+ * The rows below a delete shift up, so a surviving row-range selection stops
+ * meaning what it did: after a run at the END it lands on whatever is now last,
+ * after one at the START on the next N rows - highlighting rows nobody picked,
+ * with Delete still armed on them. The grid's reconciliation only clamps a range
+ * into bounds, which is what made the wrong selection look plausible rather than
+ * dropping it.
+ *
+ * Just ABOVE the run, not at its start: after deleting a trailing run that is the
+ * last surviving row rather than any blank invitation at the end, and at the top
+ * of the table there is nowhere above to go anyway.
+ */
+export function collapseAfterRowDelete(
+  prev: { active: { colKey: string } },
+  fromRow: number,
+): { anchor: CellCoord; focus: CellCoord; active: CellCoord } {
+  const cell = { row: Math.max(0, fromRow - 1), colKey: prev.active.colKey };
+  return { anchor: cell, focus: cell, active: cell };
+}
+
+/**
+ * The selection with every coordinate pulled back into range after the host's
+ * rows or columns changed: rows clamped, a dropped column key re-mapped to a
+ * surviving column. Returns the SAME object when nothing had to move, so callers
+ * can skip a re-render.
+ */
+export function reconcileSelection<S extends { anchor: CellCoord; focus: CellCoord; active: CellCoord }>(
+  prev: S,
+  rowCount: number,
+  colKeys: readonly string[],
+): S | { anchor: CellCoord; focus: CellCoord; active: CellCoord } {
+  const fix = (c: CellCoord): CellCoord => {
+    const row = clamp(c.row, 0, Math.max(0, rowCount - 1));
+    const colKey = colKeys.includes(c.colKey) ? c.colKey : (colKeys[0] ?? c.colKey);
+    return row === c.row && colKey === c.colKey ? c : { row, colKey };
+  };
+  const anchor = fix(prev.anchor);
+  const focus = fix(prev.focus);
+  const active = fix(prev.active);
+  return anchor === prev.anchor && focus === prev.focus && active === prev.active
+    ? prev
+    : { anchor, focus, active };
 }
