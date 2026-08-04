@@ -471,6 +471,48 @@ struct MoveCtx<'a> {
     /// text of the `section_offsets` value it left behind. See the cascade
     /// classifier.
     displaced: &'a BTreeMap<SectionId, String>,
+    /// Whether the shot ids the consumed entry addresses still address the
+    /// shots they were recorded against - measured BEFORE the move ran.
+    stale: StaleTargets,
+    /// Sections finding 16 has duplicated a shot uuid in.
+    corrupted: &'a BTreeSet<SectionId>,
+    /// Section ids in the order they appear in the RECORDED snapshot, so a diff
+    /// path (`sections[3]...`, an array index) can be resolved to a section.
+    section_ids: &'a [SectionId],
+}
+
+/// What an in-session shot id an entry carries now addresses.
+///
+/// This is the fact findings 8, 12 and 13 are ABOUT: shot ids are not persisted
+/// (the loader renumbers to `section_id * FEATURE_ID_STRIDE + sequence_order`),
+/// undo entries reload as opaque JSON with no remapping, and the allocator hands
+/// out ids from the same space - so a persisted id either still names its shot,
+/// names a DIFFERENT one, or names nothing. The three outcomes are the three
+/// findings, and knowing which one holds is what lets the classifiers below say
+/// "finding 8" rather than "something about shots".
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum Staleness {
+    /// The entry carries no id of this role, or the run has never reloaded.
+    #[default]
+    Absent,
+    /// The id still addresses the shot it was recorded against.
+    Fresh,
+    /// The id addresses a DIFFERENT shot: findings 8 and 12's regime.
+    Collides,
+    /// The id addresses nothing: finding 13's regime.
+    Missing,
+}
+
+/// The staleness of every id one entry carries, by role.
+#[derive(Clone, Copy, Debug, Default)]
+struct StaleTargets {
+    /// The shot the entry's own restore names - the one a `CreateShot` undo
+    /// deletes, or the one an `UpdateShot` / `SetShotKind` undo writes to.
+    target: Staleness,
+    /// The shot a `CreateShot` REDO anchors its re-insert to
+    /// (`after_shot_id` / `before_shot_id`), which is a second, independent id
+    /// on the same entry.
+    anchor: Staleness,
 }
 
 impl MoveCtx<'_> {
@@ -489,6 +531,16 @@ impl MoveCtx<'_> {
     /// did - finding 3's exact precondition.
     fn appended_into_empty(&self) -> Option<SectionId> {
         self.entry.and_then(|entry| entry.appended_into_empty)
+    }
+
+    /// Is `diff` inside a section finding 16 duplicated a shot uuid in?
+    fn is_in_a_corrupted_section(&self, diff: &Diff) -> bool {
+        if self.corrupted.is_empty() {
+            return false;
+        }
+        let named = section_of_path(&diff.path, self.section_ids)
+            .or_else(|| offset_key_of(&diff.path).map(|(id, _)| id));
+        named.is_some_and(|id| self.corrupted.contains(&id))
     }
 
     /// Does `diff` sit on the `section_offsets` key of a section finding 3 has
@@ -517,6 +569,37 @@ impl MoveCtx<'_> {
         };
         diff.expected == leftover || diff.actual == leftover
     }
+}
+
+/// Section ids in the order they appear in a canonical snapshot, so a diff path
+/// - which carries the ARRAY INDEX, not the id - can name a section.
+fn section_ids_of(snapshot: &str) -> Vec<SectionId> {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(snapshot) else {
+        return Vec::new();
+    };
+    value
+        .get("sections")
+        .and_then(|sections| sections.as_array())
+        .map(|sections| {
+            sections
+                .iter()
+                .map(|section| {
+                    section
+                        .get("id")
+                        .and_then(serde_json::Value::as_f64)
+                        .unwrap_or(-1.0) as SectionId
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// The section a diff path names, by resolving `sections[INDEX]` against the
+/// recorded snapshot's order.
+fn section_of_path(path: &str, section_ids: &[SectionId]) -> Option<SectionId> {
+    let rest = path.strip_prefix("sections[")?;
+    let (index, _) = rest.split_once(']')?;
+    section_ids.get(index.parse::<usize>().ok()?).copied()
 }
 
 /// `(section, element)` for a diff path inside `section_offsets`.
@@ -548,6 +631,25 @@ struct EntryMeta {
     /// Set when the entry is a `CreateShot` that appended the first shot into a
     /// previously EMPTY section.
     appended_into_empty: Option<SectionId>,
+    /// The shot this entry's own restore names by id, with the uuid that id
+    /// addressed when the entry was pushed.
+    target: Option<ShotTarget>,
+    /// The shot a `CreateShot` entry's REDO anchors its re-insert to.
+    anchor: Option<ShotTarget>,
+}
+
+/// A shot an undo entry addresses by its IN-SESSION id, recorded with the uuid
+/// that id pointed at.
+///
+/// The uuid is the point. `Shot::id` is not persisted and `Shot::uuid` is, so
+/// comparing "what does this id address now" against "what did it address then"
+/// is a DIRECT measurement of the staleness findings 8, 12 and 13 describe -
+/// rather than an inference from the damage afterwards.
+#[derive(Clone, Debug)]
+struct ShotTarget {
+    section_id: SectionId,
+    shot_id: ShotId,
+    uuid: String,
 }
 
 fn is_null_or_false(text: &str) -> bool {
@@ -697,6 +799,26 @@ const CLASSIFIERS: &[Classifier] = &[
             offset_key_of(&d.path).is_some_and(|(id, _)| id == section_id)
         },
     },
+    // FINDING 12. Same root cause as finding 8, different `UndoData` variants and
+    // a much quieter symptom: no shot is lost, no uuid changes and no count
+    // moves - one shot silently keeps an edit the undo was supposed to take away
+    // and a neighbour silently gains one it never had.
+    //
+    // Narrowed by MEASUREMENT rather than by shape: the entry has to be one of
+    // the two id-bearing edit variants (`PreviousValues` for `update_shot`,
+    // `InverseCommand` for `set_shot_kind`) AND the id it carries has to
+    // PROVABLY address a different shot than the one it was recorded against
+    // (`Staleness::Collides`, measured before the move against the shot's uuid).
+    // Without that second half this would also swallow "the undo of an edit
+    // simply did not work", which is a different bug.
+    Classifier {
+        id: "finding-12-stale-id-edits-the-wrong-shot",
+        matches: |d, ctx| {
+            (ctx.command_is("update_shot") || ctx.command_is("set_shot_kind"))
+                && ctx.stale.target == Staleness::Collides
+                && shot_field_path(&d.path).is_some_and(|field| field != "uuid")
+        },
+    },
     // FINDING 3, CASCADING - and the answer to what FINDING 15 was.
     //
     // Finding 3's displacement is not undone by anything: the redo re-inserts
@@ -719,6 +841,20 @@ const CLASSIFIERS: &[Classifier] = &[
     Classifier {
         id: "finding-3-cascade-a-displaced-empty-section-persists",
         matches: |d, ctx| ctx.is_finding_3_leftover(d),
+    },
+    // FINDING 16, CASCADING. A section holding one `Shot::uuid` twice cannot
+    // match any snapshot recorded before the duplication: one shot was destroyed
+    // to make room for the copy, so every shot below it sits at a different
+    // index and every field of every one of them reads as changed. Nothing
+    // removes the copy either, so it persists until a `ProjectSnapshotPair`
+    // entry restores the whole project.
+    //
+    // Narrowed to the SECTION finding 16 corrupted - resolved through the
+    // recorded snapshot's own section order - and to its offset key. A
+    // difference anywhere else in the project is not this and still fails.
+    Classifier {
+        id: "finding-16-cascade-a-section-with-a-duplicated-uuid-cannot-match",
+        matches: |d, ctx| ctx.is_in_a_corrupted_section(d),
     },
 ];
 
@@ -915,6 +1051,130 @@ fn diffs_without_station_zero_refs(
     let mut diffs = Vec::new();
     diff_values(&left, &right, "", &mut diffs);
     Some(diffs)
+}
+
+/// The field name for a path naming one SCALAR field of one shot.
+///
+/// `uuid` is deliberately included in what this returns - callers exclude it -
+/// because identity and measurement are different claims and only the caller
+/// knows which one its bug is about.
+fn shot_field_path(path: &str) -> Option<String> {
+    let mut normalized = String::with_capacity(path.len());
+    let mut in_digits = false;
+    for ch in path.chars() {
+        if ch.is_ascii_digit() {
+            if !in_digits {
+                normalized.push('#');
+                in_digits = true;
+            }
+        } else {
+            normalized.push(ch);
+            in_digits = false;
+        }
+    }
+    let field = normalized.strip_prefix("sections[#].shots[#].")?;
+    (!field.contains('.') && !field.contains('[')).then(|| field.to_string())
+}
+
+/// Every shot uuid of one section, in order.
+fn section_shot_uuids(snapshot: &str, section_id: SectionId) -> Option<Vec<String>> {
+    let value = serde_json::from_str::<serde_json::Value>(snapshot).ok()?;
+    let sections = value.get("sections")?.as_array()?;
+    let section = sections.iter().find(|section| {
+        section.get("id").and_then(serde_json::Value::as_f64) == Some(f64::from(section_id))
+    })?;
+    Some(
+        section
+            .get("shots")?
+            .as_array()?
+            .iter()
+            .map(|shot| {
+                shot.get("uuid")
+                    .and_then(|u| u.as_str())
+                    .unwrap_or("<none>")
+                    .to_string()
+            })
+            .collect(),
+    )
+}
+
+/// Drop the shot with `uuid` from `section_id` wherever it appears.
+fn strip_shot(value: &mut serde_json::Value, section_id: SectionId, uuid: &str) {
+    let Some(sections) = value
+        .get_mut("sections")
+        .and_then(serde_json::Value::as_array_mut)
+    else {
+        return;
+    };
+    for section in sections.iter_mut() {
+        if section.get("id").and_then(serde_json::Value::as_f64) != Some(f64::from(section_id)) {
+            continue;
+        }
+        if let Some(shots) = section
+            .get_mut("shots")
+            .and_then(serde_json::Value::as_array_mut)
+        {
+            shots.retain(|shot| shot.get("uuid").and_then(|u| u.as_str()) != Some(uuid));
+        }
+    }
+}
+
+/// A NEW FINDING's structural signature (issue #413, finding 16): ONE shot sits
+/// at a different index than the model recorded, and the section is otherwise
+/// the same list of the same shots.
+///
+/// That is what a re-insert against a stale ANCHOR produces: `redo` of
+/// `CreateShot` re-runs `insert_shot_before` / `insert_shot_after` with the
+/// persisted `before_shot_id` / `after_shot_id` (core/state/undo.rs), and after
+/// a reload those ids address different shots, so the shot comes back in the
+/// wrong place.
+///
+/// Returns what is still different once that one shot is removed from BOTH
+/// sides, so the derived geometry it displaced is still classified or still
+/// fails. `None` when the shape is absent - the shot is missing from a side, or
+/// its index agrees, or the rest of the list does not.
+fn diffs_without_misplaced_shot(
+    expected: &str,
+    actual: &str,
+    section_id: SectionId,
+    uuid: &str,
+) -> Option<Vec<Diff>> {
+    let before = section_shot_uuids(expected, section_id)?;
+    let after = section_shot_uuids(actual, section_id)?;
+    let (Some(was), Some(now)) = (
+        before.iter().position(|u| u == uuid),
+        after.iter().position(|u| u == uuid),
+    ) else {
+        return None;
+    };
+    if was == now {
+        return None;
+    }
+    // The REST of the list has to be untouched, or this is not "one shot moved".
+    let rest =
+        |list: &[String]| -> Vec<String> { list.iter().filter(|u| *u != uuid).cloned().collect() };
+    if rest(&before) != rest(&after) {
+        return None;
+    }
+    let (Ok(mut left), Ok(mut right)) = (
+        serde_json::from_str::<serde_json::Value>(expected),
+        serde_json::from_str::<serde_json::Value>(actual),
+    ) else {
+        return None;
+    };
+    strip_shot(&mut left, section_id, uuid);
+    strip_shot(&mut right, section_id, uuid);
+    let mut diffs = Vec::new();
+    diff_values(&left, &right, "", &mut diffs);
+    Some(diffs)
+}
+
+/// How many shots in `section_id` carry `uuid`. More than one is impossible by
+/// construction and is finding 16's whole signature.
+fn uuid_occurrences(snapshot: &str, section_id: SectionId, uuid: &str) -> usize {
+    section_shot_uuids(snapshot, section_id)
+        .map(|uuids| uuids.iter().filter(|found| *found == uuid).count())
+        .unwrap_or(0)
 }
 
 /// FINDING 4's structural signature: `loop_closures` holds the same members in a
@@ -1241,6 +1501,19 @@ struct Fuzzer {
     /// Sections whose station-0 refs finding 3 has destroyed. Same cascade, on
     /// the data-loss half of the same branch.
     ref_dropped: BTreeSet<SectionId>,
+    /// Set once a stale persisted id has hit the wrong shot in this run
+    /// (findings 8, 12, 16). From then on the live project no longer matches any
+    /// snapshot recorded before the save, and every deeper comparison in the
+    /// same walk is re-measuring that corruption.
+    stale_corruption: bool,
+    /// Sections in which finding 16 duplicated a shot uuid. A section holding
+    /// the same `Shot::uuid` twice cannot match ANY snapshot recorded before
+    /// that happened, and no undo removes the copy.
+    corrupted: BTreeSet<SectionId>,
+    /// Gauge anchors the most recent save captured, by section. Findings 1 and
+    /// 11 both END with these gone, and comparing against what the save left is
+    /// how the cascade knows the run is past that point.
+    saved_anchors: BTreeMap<SectionId, String>,
 }
 
 impl Fuzzer {
@@ -1266,6 +1539,9 @@ impl Fuzzer {
             heal_reverted: false,
             displaced: BTreeMap::new(),
             ref_dropped: BTreeSet::new(),
+            stale_corruption: false,
+            corrupted: BTreeSet::new(),
+            saved_anchors: BTreeMap::new(),
         };
         // The builder's own commands are undoable, so the stacks are not empty.
         // Clear them: the model measures depth from a known floor, and the
@@ -1356,13 +1632,31 @@ impl Fuzzer {
     /// bug or by a save/reload heal - in which case the hit is counted and the
     /// model resyncs, so one open defect does not cascade into every later
     /// comparison. Anything else panics with the full payload.
-    fn expect_state(&mut self, depth: usize, what: &str, consumed: Option<EntryMeta>) {
+    fn expect_state(
+        &mut self,
+        depth: usize,
+        what: &str,
+        consumed: Option<EntryMeta>,
+        stale: StaleTargets,
+    ) {
         let ctx_entry = consumed;
+        // FINDING 11's consequence, measured rather than inferred: the save
+        // captured a gauge pair per section, and a restore of a pre-save
+        // `ProjectSnapshotPair` puts the pre-heal project back. Once that has
+        // happened the anchors are simply GONE, and every snapshot recorded with
+        // them disagrees - including on depths the walk down never compared,
+        // which is why arming this only on a CLASSIFIED hit left the way back up
+        // unexplained.
+        if self.anchors_reverted() {
+            self.heal_reverted = true;
+        }
         // Cloned rather than borrowed: the classification loop below records new
         // displacements into `self`, and a live borrow of the map would make
         // that a borrow error. The map holds one small entry per section finding
         // 3 has displaced.
         let displaced = self.displaced.clone();
+        let corrupted = self.corrupted.clone();
+        let section_ids = section_ids_of(&self.snapshots[depth]);
         let ctx = MoveCtx {
             entry: ctx_entry.as_ref(),
             after_save: self.outcome.saves > 0,
@@ -1370,6 +1664,9 @@ impl Fuzzer {
             epoch: self.epoch,
             heal_reverted: self.heal_reverted,
             displaced: &displaced,
+            stale,
+            corrupted: &corrupted,
+            section_ids: &section_ids,
         };
         let actual = self.snapshot();
         let expected = self.snapshots[depth].clone();
@@ -1398,6 +1695,29 @@ impl Fuzzer {
                     Some(section_id),
                 ));
                 diffs = remaining;
+            }
+        }
+        // A NEW FINDING, subtracted for the same reason: a shot that came back in
+        // the wrong PLACE shifts every shot after it, so one misplaced shot reads
+        // as every field of every shot below it having changed. Only ever applied
+        // when the consumed entry is a `create_shot` whose persisted insert
+        // ANCHOR provably addresses a different shot now than it did when the
+        // entry was pushed - which is the mechanism, measured rather than
+        // inferred.
+        if ref_drop.is_none() && ctx.stale.anchor == Staleness::Collides {
+            if let Some(target) = ctx.entry.and_then(|entry| entry.target.as_ref()) {
+                if let Some(remaining) = diffs_without_misplaced_shot(
+                    &expected,
+                    &actual,
+                    target.section_id,
+                    &target.uuid,
+                ) {
+                    ref_drop = Some((
+                        "finding-16-stale-anchor-redoes-a-create-shot-into-the-wrong-position",
+                        None,
+                    ));
+                    diffs = remaining;
+                }
             }
         }
         // ... and its cascade. Nothing restores a dropped merge, datum or
@@ -1472,6 +1792,9 @@ impl Fuzzer {
                 if *id == "finding-3-undo-of-the-first-shot-displaces-an-empty-section" {
                     self.record_displacement(ctx.appended_into_empty(), &actual);
                 }
+                if id.starts_with("finding-12-") || id.starts_with("finding-16-") {
+                    self.stale_corruption = true;
+                }
             }
             // The move log is what a reader reconstructs a failure from, and a
             // classified hit is a MOVE with consequences - it resyncs the model
@@ -1500,21 +1823,81 @@ impl Fuzzer {
             self.resync(depth, actual);
             return;
         }
-        if ctx.after_reload && is_shot_identity_swap(&expected, &actual) {
+        // A NEW FINDING (issue #413, finding 16), and the worst shape reached so
+        // far: after a reload, the REDO of a `CreateShot` re-inserts a shot that
+        // is STILL THERE, because the undo before it deleted a different one
+        // (finding 8). `redo_inner`'s `CreatedShotSnapshot` arm forces both the
+        // id and the uuid from the entry (core/state/undo.rs), so the section
+        // ends up holding the same `Shot::uuid` twice - the identity every
+        // `StationKey::AfterShot` anchor and the Ariane export resolve by.
+        //
+        // Recognised by exactly that: the entry's own uuid appears MORE than
+        // once in the live section and at most once in the recorded one, in a
+        // run where a persisted id was measured stale. Nothing else in the model
+        // can duplicate a uuid.
+        if self.stale_corruption {
+            if let Some(target) = ctx.entry.and_then(|entry| entry.target.as_ref()) {
+                let live = uuid_occurrences(&actual, target.section_id, &target.uuid);
+                let recorded = uuid_occurrences(&expected, target.section_id, &target.uuid);
+                if live > 1 && recorded <= 1 {
+                    *self
+                        .outcome
+                        .hits
+                        .entry("finding-16-redo-of-a-create-shot-duplicates-a-shot-uuid")
+                        .or_insert(0) += 1;
+                    self.corrupted.insert(target.section_id);
+                    self.resync(depth, actual);
+                    return;
+                }
+            }
+        }
+        // FINDING 8, and told apart from finding 12 by the ENTRY and the
+        // MEASUREMENT rather than by the damage. `UndoData::CreatedShotSnapshot`
+        // is the only variant whose undo is `delete_shot(section, stale_id)`, so
+        // a `create_shot` entry is the only one that can produce a MISSING shot;
+        // finding 12's two variants write a field and cannot change which shots
+        // exist. The collision is measured against the uuid the id addressed when
+        // the entry was pushed, so "the wrong shot was deleted" is a fact here
+        // rather than a hypothesis fitted to the diff.
+        if ctx.command_is("create_shot")
+            && ctx.stale.target == Staleness::Collides
+            && is_shot_identity_swap(&expected, &actual)
+        {
             *self
                 .outcome
                 .hits
-                .entry("finding-8-or-12-stale-id-hits-the-wrong-shot")
+                .entry("finding-8-stale-id-deletes-the-wrong-shot")
                 .or_insert(0) += 1;
+            self.stale_corruption = true;
             self.resync(depth, actual);
             return;
         }
 
+        // FINDING 8's CASCADE. Once a stale id has hit the wrong shot, the live
+        // project no longer matches ANY snapshot recorded before the save, so
+        // every deeper comparison in that walk re-measures the same corruption -
+        // the harness tier calls this contamination and handles it the same way.
+        // Narrowed to a run where a persisted id was MEASURED to address the
+        // wrong shot, and to the same identity-swap signature: the right number
+        // of shots with the wrong ones among them. Deliberately NOT narrowed to
+        // the consumed entry's epoch - the corruption sits in the PROJECT, not
+        // in the entry, so a perfectly sound post-reload entry restores a state
+        // that still carries it.
+        if self.stale_corruption && is_shot_identity_swap(&expected, &actual) {
+            *self
+                .outcome
+                .hits
+                .entry("finding-8-cascade-the-wrong-shot-is-already-gone")
+                .or_insert(0) += 1;
+            self.resync(depth, actual);
+            return;
+        }
         let entry_note = ctx_entry.as_ref().map_or_else(
             || "  consumed entry: (none - not a history move)".to_string(),
             |entry| {
                 format!(
-                    "  consumed entry: {} (pushed in epoch {}, run epoch {}{})",
+                    "  consumed entry: {} (pushed in epoch {}, run epoch {}{})\n  \
+                     persisted ids: target={:?} anchor={:?}",
                     entry.command,
                     entry.epoch,
                     self.epoch,
@@ -1522,7 +1905,9 @@ impl Fuzzer {
                         ", appended into an EMPTY section"
                     } else {
                         ""
-                    }
+                    },
+                    ctx.stale.target,
+                    ctx.stale.anchor,
                 )
             },
         );
@@ -1543,6 +1928,41 @@ impl Fuzzer {
             ) + "\n"
                 + entry_note.as_str()),
         );
+    }
+
+    /// Has anything the last save captured as a gauge anchor since been lost?
+    ///
+    /// `capture_missing_gauge_anchors` is a save-time heal with no undo entry of
+    /// its own, so a section that HAD an anchor at save time and has none now can
+    /// only have got there by a restore of a snapshot recorded before the save.
+    /// A section that no longer exists makes no claim.
+    fn anchors_reverted(&self) -> bool {
+        if self.saved_anchors.is_empty() {
+            return false;
+        }
+        let Some(project) = self.state.get_project_state() else {
+            return false;
+        };
+        self.saved_anchors.iter().any(|(section_id, _)| {
+            project
+                .sections
+                .iter()
+                .find(|section| section.id == *section_id)
+                .is_some_and(|section| section.gauge_shot_uuid.is_none())
+        })
+    }
+
+    /// Record what the save just captured, so the loss can be measured later.
+    fn record_saved_anchors(&mut self) {
+        self.saved_anchors.clear();
+        let Some(project) = self.state.get_project_state() else {
+            return;
+        };
+        for section in &project.sections {
+            if let Some(uuid) = section.gauge_shot_uuid.clone() {
+                self.saved_anchors.insert(section.id, uuid);
+            }
+        }
     }
 
     /// Remember what finding 3 left in `section_offsets`, so the cascade
@@ -1655,6 +2075,10 @@ struct Drawn {
     /// empty section - finding 3's precondition, recorded here because only the
     /// generator knows the section was empty.
     appended_into_empty: Option<SectionId>,
+    /// The shot this command's entry will address by id when it is restored.
+    target: Option<ShotTarget>,
+    /// The shot a `CreateShot`'s redo will anchor its re-insert to.
+    anchor: Option<ShotTarget>,
 }
 
 impl Drawn {
@@ -1663,6 +2087,8 @@ impl Drawn {
             label,
             result,
             appended_into_empty: None,
+            target: None,
+            anchor: None,
         }
     }
 }
@@ -1737,6 +2163,13 @@ impl Fuzzer {
             }
         };
         let appended_into_empty = (how == "append" && shots.is_empty()).then_some(section_id);
+        // The anchor's identity is read BEFORE the insert, because that is the
+        // shot the persisted `after_shot_id` / `before_shot_id` means. After a
+        // reload the same id may address a different one - which is what makes
+        // the REDO re-insert somewhere else.
+        let anchor = after
+            .or(before)
+            .and_then(|shot_id| self.shot_target(section_id, shot_id));
         let mut drawn = Drawn::new(
             format!("createShot(s={section_id},n={},{how})", shots.len()),
             self.state.execute(Command::CreateShot {
@@ -1750,7 +2183,38 @@ impl Fuzzer {
         // had NO shots, so the appended shot is index 0 and its undo goes through
         // `remove_shot_with_rewire`'s `pos == 0` branch.
         drawn.appended_into_empty = appended_into_empty;
+        drawn.anchor = anchor;
+        // And the shot the UNDO will delete by id, read after the insert.
+        drawn.target = drawn
+            .result
+            .shot_id
+            .and_then(|shot_id| self.shot_target(section_id, shot_id));
         Some(drawn)
+    }
+
+    /// `(section, shot, uuid)` for a live shot, or `None` when the id addresses
+    /// nothing.
+    fn shot_target(&self, section_id: SectionId, shot_id: ShotId) -> Option<ShotTarget> {
+        let uuid = self.uuid_of(section_id, shot_id)?;
+        Some(ShotTarget {
+            section_id,
+            shot_id,
+            uuid,
+        })
+    }
+
+    /// The uuid the id `shot_id` addresses in `section_id` RIGHT NOW.
+    fn uuid_of(&self, section_id: SectionId, shot_id: ShotId) -> Option<String> {
+        self.state
+            .get_project_state()?
+            .sections
+            .iter()
+            .find(|section| section.id == section_id)?
+            .shots
+            .iter()
+            .find(|shot| shot.id == shot_id)?
+            .uuid
+            .clone()
     }
 
     /// A shot picked from a section that has one, with its section.
@@ -1794,14 +2258,20 @@ impl Fuzzer {
                     .then(|| format!("c{}", self.rng.range(0, 999))),
             );
         }
-        Some(Drawn::new(
+        let target = self.shot_target(section_id, shot_id);
+        let mut drawn = Drawn::new(
             format!("updateShot(s={section_id},shot={shot_id})"),
             self.state.execute(Command::UpdateShot {
                 section_id,
                 shot_id,
                 updates,
             }),
-        ))
+        );
+        // `UndoData::PreviousValues { section_id, shot_id, .. }` - the undo calls
+        // `update_shot` with this id, and `redo_inner`'s catch-all re-executes
+        // the command with it too. Finding 12's two halves.
+        drawn.target = target;
+        Some(drawn)
     }
 
     fn gen_set_shot_kind(&mut self, targets: &Targets) -> Option<Drawn> {
@@ -1809,14 +2279,19 @@ impl Fuzzer {
         let kind = *self
             .rng
             .pick(&[ShotKind::Normal, ShotKind::Jump, ShotKind::Reference]);
-        Some(Drawn::new(
+        let target = self.shot_target(section_id, shot_id);
+        let mut drawn = Drawn::new(
             format!("setShotKind(s={section_id},shot={shot_id},{kind:?})"),
             self.state.execute(Command::SetShotKind {
                 section_id,
                 shot_id,
                 kind,
             }),
-        ))
+        );
+        // `UndoData::InverseCommand(Command::SetShotKind { shot_id, .. })`, which
+        // names the shot by its in-session id on BOTH the undo and the redo.
+        drawn.target = target;
+        Some(drawn)
     }
 
     fn gen_update_section(&mut self, targets: &Targets) -> Option<Drawn> {
@@ -2238,7 +2713,12 @@ impl Fuzzer {
                     &format!("  error: {:?}", drawn.result.error),
                 );
             }
-            self.expect_state(self.cursor, "a rejected command", None);
+            self.expect_state(
+                self.cursor,
+                "a rejected command",
+                None,
+                StaleTargets::default(),
+            );
             return;
         }
 
@@ -2271,6 +2751,8 @@ impl Fuzzer {
                 command,
                 epoch: self.epoch,
                 appended_into_empty: drawn.appended_into_empty,
+                target: drawn.target,
+                anchor: drawn.anchor,
             });
             self.outcome.mutations += 1;
             self.outcome.max_depth = self.outcome.max_depth.max(self.cursor);
@@ -2299,7 +2781,12 @@ impl Fuzzer {
                 &format!("  after {}", drawn.label),
             );
         }
-        self.expect_state(self.cursor, "a no-op command", None);
+        self.expect_state(
+            self.cursor,
+            "a no-op command",
+            None,
+            StaleTargets::default(),
+        );
     }
 
     /// Did a failed history move fail for a KNOWN, documented reason?
@@ -2325,6 +2812,36 @@ impl Fuzzer {
             return Some("finding-13-stale-id-misses-and-wedges-the-history");
         }
         None
+    }
+
+    /// What the ids on `entry` address in the LIVE project right now.
+    ///
+    /// This is the whole of findings 8, 12 and 13 reduced to one measurement.
+    /// `Staleness::Absent` when the run has never reloaded, because an id that
+    /// has not crossed the loader's renumbering cannot be stale - and saying so
+    /// keeps the classifiers from ever explaining an in-memory difference with a
+    /// persistence defect.
+    fn measure_staleness(&self, entry: Option<&EntryMeta>) -> StaleTargets {
+        if self.outcome.reloads == 0 {
+            return StaleTargets::default();
+        }
+        let Some(entry) = entry else {
+            return StaleTargets::default();
+        };
+        let measure = |target: Option<&ShotTarget>| -> Staleness {
+            let Some(target) = target else {
+                return Staleness::Absent;
+            };
+            match self.uuid_of(target.section_id, target.shot_id) {
+                None => Staleness::Missing,
+                Some(uuid) if uuid == target.uuid => Staleness::Fresh,
+                Some(_) => Staleness::Collides,
+            }
+        };
+        StaleTargets {
+            target: measure(entry.target.as_ref()),
+            anchor: measure(entry.anchor.as_ref()),
+        }
     }
 
     /// One history move. `steps` > 1 goes through `undo_to`/`redo_to`, the
@@ -2354,6 +2871,27 @@ impl Fuzzer {
         } else {
             self.entry_meta.get(self.cursor + 1).cloned()
         };
+        // Measured NOW, before the move: the ids the entry carries are about to
+        // be resolved against THIS project, and the move itself changes which
+        // shot each one addresses.
+        let stale = self.measure_staleness(consumed.as_ref());
+        // A restore that is ABOUT to address the wrong shot is a measured fact,
+        // not an inference from the damage afterwards - and it is what makes
+        // every deeper comparison in this walk a re-measurement rather than a
+        // new defect. Armed here so the cascade classifier is armed even when
+        // the first-hand diff shape is one no classifier names.
+        if matches!(stale.target, Staleness::Collides | Staleness::Missing)
+            || matches!(stale.anchor, Staleness::Collides | Staleness::Missing)
+        {
+            if !self.stale_corruption {
+                self.note(format!(
+                    "  ^ a persisted id on this entry is STALE (target={:?}, anchor={:?}): \
+                     every later comparison against a pre-save snapshot re-measures it",
+                    stale.target, stale.anchor
+                ));
+            }
+            self.stale_corruption = true;
+        }
         let result = if back {
             if jumped {
                 self.state.undo_to(steps - 1)
@@ -2400,7 +2938,7 @@ impl Fuzzer {
             self.outcome.jumps += 1;
         }
         self.expect_stacks(&label);
-        self.expect_state(self.cursor, &label, consumed);
+        self.expect_state(self.cursor, &label, consumed, stale);
         self.expect_merges_aligned(&label);
         true
     }
@@ -2427,9 +2965,10 @@ impl Fuzzer {
             );
         }
         self.outcome.saves += 1;
+        self.record_saved_anchors();
         self.note(format!("save -> ok (depth {})", self.cursor));
         self.expect_stacks("save");
-        self.expect_state(self.cursor, "save", None);
+        self.expect_state(self.cursor, "save", None, StaleTargets::default());
 
         let closed = self.state.execute(Command::CloseProject);
         if !closed.success {
@@ -2452,7 +2991,7 @@ impl Fuzzer {
         self.outcome.reloads += 1;
         self.note(format!("reload -> depth {}", self.cursor));
         self.expect_stacks("reload");
-        self.expect_state(self.cursor, "reload", None);
+        self.expect_state(self.cursor, "reload", None, StaleTargets::default());
         true
     }
 
