@@ -252,7 +252,12 @@ import {
   type KnownAsymmetry,
 } from '../lib/projectSnapshot';
 import type { TargetingDigest } from '../lib/fuzzOracleCore';
-import { drawAction } from './undoRedoFuzzActions';
+import {
+  STREAM_V2,
+  drawAction,
+  swarmProfileFor,
+  weightedNamesFor,
+} from './undoRedoFuzzActions';
 import {
   bumpEpoch,
   enableIdAgnosticModel,
@@ -490,6 +495,11 @@ export const undoRedoFuzz: Scenario = {
     let redoLen = init.redoLen;
     let digest: TargetingDigest = init.digest;
     const jumpRng = mulberry32((ctx.seed ^ JUMP_STREAM_SALT) >>> 0);
+    // Per-run generator weighting, derived from the seed on its own stream.
+    const swarm = swarmProfileFor(ctx.seed);
+    const weightedNames = weightedNamesFor(swarm);
+    ctx.setMetric(`swarm:${swarm.name}`, 1);
+    ctx.setMetric(`stream:${STREAM_V2 ? 'v2' : 'v1'}`, 1);
     const saveRng = mulberry32((ctx.seed ^ SAVE_STREAM_SALT) >>> 0);
     let savesDone = 0;
     let reloadsDone = 0;
@@ -516,8 +526,10 @@ export const undoRedoFuzz: Scenario = {
           headline,
           `  reproduce: run_scenario("undo-redo-fuzz", seed=${ctx.seed}, iterations=${iterations})` +
             `${FIXTURE === DEFAULT_FIXTURE ? '' : ` with STALAGMIGHT_FUZZ_FIXTURE=${FIXTURE}`}` +
+            `${STREAM_V2 ? '' : ' with STALAGMIGHT_FUZZ_STREAM=v1'}` +
             `${ALLOW_KNOWN_BUGS ? ' with STALAGMIGHT_FUZZ_ALLOW_KNOWN_BUGS=1' : ''}`,
-          `  fixture=${FIXTURE} depth=${cursor} modelTop=${top} baseUndo=${baseUndo}`,
+          `  fixture=${FIXTURE} stream=${STREAM_V2 ? 'v2' : 'v1'} swarm=${swarm.name} ` +
+            `depth=${cursor} modelTop=${top} baseUndo=${baseUndo}`,
           ...(detail ? [detail] : []),
           `  last ${tail.length} action(s):`,
           ...tail,
@@ -853,7 +865,7 @@ export const undoRedoFuzz: Scenario = {
         continue;
       }
 
-      const action = drawAction(ctx, digest);
+      const action = drawAction(ctx, digest, weightedNames);
       const beforeUndo = undoLen;
       const beforeRedo = redoLen;
       const res = await step('mutate', action.action, action.args);
@@ -971,7 +983,8 @@ export const undoRedoFuzz: Scenario = {
     ctx.setMetric('snapshotBytesMax', maxBytes);
     ctx.setMetric('historyLimit', historyLimit);
     ctx.log(
-      `fixture=${FIXTURE} (stripped ${strippedRows} inherited undo row(s)) seed=${ctx.seed}: ` +
+      `fixture=${FIXTURE} stream=${STREAM_V2 ? 'v2' : 'v1'} swarm=${swarm.name} ` +
+        `(stripped ${strippedRows} inherited undo row(s)) seed=${ctx.seed}: ` +
         `${ctx.metrics.mutations ?? 0} mutations, ${ctx.metrics.undos ?? 0} undos, ` +
         `${ctx.metrics.redos ?? 0} redos, ${ctx.metrics.rejected ?? 0} rejected, ` +
         `${ctx.metrics.noops ?? 0} no-ops; max depth ${deepest}; snapshot <=${maxBytes}B`,

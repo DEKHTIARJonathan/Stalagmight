@@ -17,7 +17,26 @@
  * the JSON round trip through WebDriver by construction - we never write
  * `undefined` and rely on `JSON.stringify` dropping it.
  */
-import type { ScenarioContext } from './framework';
+import { mulberry32, type ScenarioContext } from './framework';
+
+/**
+ * Generator STREAM VERSION.
+ *
+ * v2 (default) is the full action space: the delete/split family, batches,
+ * comment moves, synthetic imports, boundary-biased values and per-run swarm
+ * weights. It necessarily draws differently from v1, so v1 repro lines do not
+ * replay under it - the scenario header carries a v2 repro for every documented
+ * bug.
+ *
+ * `STALAGMIGHT_FUZZ_STREAM=v1` restores the ORIGINAL generator set, weights and
+ * value ranges exactly: the v2-only helpers below all short-circuit without
+ * consuming a draw, so a v1 run reproduces the historical stream byte for byte.
+ * It is the pinned escape for any repro that cannot be re-found under v2.
+ */
+export const STREAM_V2 = process.env.STALAGMIGHT_FUZZ_STREAM !== 'v1';
+
+/** Share of generated values that take an extreme instead of a nominal value. */
+const P_BOUNDARY = 0.15;
 
 /** Mirrors `src/types/ipc/StationRef.ts` - the arg shape the store actions take. */
 export interface StationRef {
@@ -54,6 +73,8 @@ export interface ActionGenerator {
   name: string;
   /** Relative draw weight. */
   weight: number;
+  /** Stream version this generator belongs to; v1 runs draw only from 'v1'. */
+  since?: 'v1' | 'v2';
   /** Returns null when the live project has no valid target for this action. */
   build(ctx: ScenarioContext, state: TargetingDigest): FuzzAction | null;
 }
@@ -86,6 +107,44 @@ function roundedFloat(ctx: ScenarioContext, min: number, max: number, decimals: 
   return Number((min + ctx.rng() * (max - min)).toFixed(decimals));
 }
 
+/**
+ * Values that have historically been where the bugs are: exact zero, negatives,
+ * very large and very small magnitudes. Bug 3 was literally "append the first
+ * shot into an EMPTY section", so the shapes at the edges of a range get
+ * deliberate weight rather than being left to a uniform draw to stumble on.
+ *
+ * In v1 this is `roundedFloat` and consumes exactly one draw, so the legacy
+ * stream is unchanged.
+ */
+function biasedFloat(
+  ctx: ScenarioContext,
+  min: number,
+  max: number,
+  decimals: number,
+  extremes: readonly number[] = [0, -0.0001, 1e6, -1e6, 1e-9],
+): number {
+  if (!STREAM_V2) return roundedFloat(ctx, min, max, decimals);
+  if (ctx.rng() < P_BOUNDARY) return ctx.pick(extremes);
+  return roundedFloat(ctx, min, max, decimals);
+}
+
+/** Strings that exercise encoding and emptiness, not just ASCII words. */
+const BOUNDARY_STRINGS = [
+  '',
+  ' ',
+  'Cueva del Rio \u00d1andu\u0301',
+  '\u6d1e\u7a74\u6e2c\u91cf',
+  '\ud83d\udd26\ud83e\udd3f',
+  'x'.repeat(512),
+  '"quoted", \\backslash\\ and \nnewline',
+] as const;
+
+function biasedText(ctx: ScenarioContext, nominal: string): string {
+  if (!STREAM_V2) return nominal;
+  if (ctx.rng() < P_BOUNDARY) return ctx.pick(BOUNDARY_STRINGS);
+  return nominal;
+}
+
 /** `count` distinct members of `items`, drawn deterministically without replacement. */
 function pickDistinct<T>(ctx: ScenarioContext, items: readonly T[], count: number): T[] {
   const pool = [...items];
@@ -105,6 +164,20 @@ function sortedSections(state: TargetingDigest): DigestSection[] {
 function pickSection(ctx: ScenarioContext, state: TargetingDigest): DigestSection | null {
   const sections = sortedSections(state);
   return sections.length > 0 ? ctx.pick(sections) : null;
+}
+
+/**
+ * Like `pickSection`, but biased toward EMPTY and single-shot sections. Bug 3 is
+ * "append the first shot into an empty section", and a uniform pick over 30+
+ * sections reaches that shape rarely. v2 only.
+ */
+function pickSmallSection(ctx: ScenarioContext, state: TargetingDigest): DigestSection | null {
+  if (!STREAM_V2) return pickSection(ctx, state);
+  const sections = sortedSections(state);
+  if (sections.length === 0) return null;
+  const small = sections.filter((section) => section[1].length <= 1);
+  if (small.length > 0 && ctx.rng() < 0.5) return ctx.pick(small);
+  return ctx.pick(sections);
 }
 
 function pickShot(
@@ -168,7 +241,7 @@ export function randomShotData(ctx: ScenarioContext): Record<string, unknown> {
   return {
     azimuth_in: azimuth,
     azimuth_out: Number(((azimuth + roundedFloat(ctx, -1.5, 1.5, 1) + 360) % 360).toFixed(1)),
-    length: roundedFloat(ctx, 1, 12, 2),
+    length: biasedFloat(ctx, 1, 12, 2, [0, 1e-9, 1e6, -5, 0.0001]),
     depth_in: depthIn,
     depth_out: Number(depthOut.toFixed(2)),
     pitch_in: chance(ctx, 0.5) ? roundedFloat(ctx, -60, 60, 1) : null,
@@ -177,7 +250,7 @@ export function randomShotData(ctx: ScenarioContext): Record<string, unknown> {
     right: chance(ctx, 0.7) ? roundedFloat(ctx, 0, 5, 2) : null,
     up: chance(ctx, 0.7) ? roundedFloat(ctx, 0, 5, 2) : null,
     down: chance(ctx, 0.7) ? roundedFloat(ctx, 0, 5, 2) : null,
-    comment: chance(ctx, 0.25) ? `fuzz-shot-${ctx.randInt(0, 9999)}` : null,
+    comment: chance(ctx, 0.25) ? biasedText(ctx, `fuzz-shot-${ctx.randInt(0, 9999)}`) : null,
     kind: ctx.pick(SHOT_KINDS),
     marker_index: chance(ctx, 0.15) ? ctx.randInt(0, 9) : null,
     temperature: chance(ctx, 0.3) ? roundedFloat(ctx, 4, 30, 1) : null,
@@ -190,8 +263,8 @@ export function randomSectionData(ctx: ScenarioContext): Record<string, unknown>
   const shots: Record<string, unknown>[] = [];
   for (let i = 0; i < shotCount; i++) shots.push(randomShotData(ctx));
   return {
-    name: `fuzz-${ctx.randInt(1000, 9999)}`,
-    surveyor: chance(ctx, 0.7) ? `fuzz-surveyor-${ctx.randInt(1, 9)}` : null,
+    name: biasedText(ctx, `fuzz-${ctx.randInt(1000, 9999)}`),
+    surveyor: chance(ctx, 0.7) ? biasedText(ctx, `fuzz-surveyor-${ctx.randInt(1, 9)}`) : null,
     date: `20${ctx.randInt(10, 26)}-0${ctx.randInt(1, 9)}-1${ctx.randInt(0, 9)}`,
     color: ctx.pick(COLORS),
     direction: ctx.pick(SURVEY_DIRECTIONS),
@@ -210,7 +283,7 @@ interface PatchField {
 const SHOT_PATCH_FIELDS: readonly PatchField[] = [
   { key: 'azimuth_in', nullable: false, gen: (c) => roundedFloat(c, 0, 359.9, 1) },
   { key: 'azimuth_out', nullable: false, gen: (c) => roundedFloat(c, 0, 359.9, 1) },
-  { key: 'length', nullable: false, gen: (c) => roundedFloat(c, 0.5, 20, 2) },
+  { key: 'length', nullable: false, gen: (c) => biasedFloat(c, 0.5, 20, 2, [0, 1e-9, 1e6, -3]) },
   { key: 'depth_in', nullable: false, gen: (c) => roundedFloat(c, 0, 40, 2) },
   { key: 'depth_out', nullable: false, gen: (c) => roundedFloat(c, 0, 40, 2) },
   { key: 'pitch_in', nullable: true, gen: (c) => roundedFloat(c, -60, 60, 1) },
@@ -219,15 +292,15 @@ const SHOT_PATCH_FIELDS: readonly PatchField[] = [
   { key: 'right', nullable: true, gen: (c) => roundedFloat(c, 0, 5, 2) },
   { key: 'up', nullable: true, gen: (c) => roundedFloat(c, 0, 5, 2) },
   { key: 'down', nullable: true, gen: (c) => roundedFloat(c, 0, 5, 2) },
-  { key: 'comment', nullable: true, gen: (c) => `fuzz-comment-${c.randInt(0, 9999)}` },
+  { key: 'comment', nullable: true, gen: (c) => biasedText(c, `fuzz-comment-${c.randInt(0, 9999)}`) },
   { key: 'kind', nullable: false, gen: (c) => c.pick(SHOT_KINDS) },
   { key: 'marker_index', nullable: true, gen: (c) => c.randInt(0, 9) },
   { key: 'temperature', nullable: true, gen: (c) => roundedFloat(c, 4, 30, 1) },
 ];
 
 const SECTION_PATCH_FIELDS: readonly PatchField[] = [
-  { key: 'name', nullable: true, gen: (c) => `fuzz-renamed-${c.randInt(0, 9999)}` },
-  { key: 'surveyor', nullable: true, gen: (c) => `fuzz-surveyor-${c.randInt(1, 9)}` },
+  { key: 'name', nullable: true, gen: (c) => biasedText(c, `fuzz-renamed-${c.randInt(0, 9999)}`) },
+  { key: 'surveyor', nullable: true, gen: (c) => biasedText(c, `fuzz-surveyor-${c.randInt(1, 9)}`) },
   {
     key: 'date',
     nullable: true,
@@ -264,10 +337,192 @@ function buildPatch(
 
 function randomOffset(ctx: ScenarioContext): Record<string, number> {
   return {
-    x: roundedFloat(ctx, -3, 3, 3),
-    y: roundedFloat(ctx, -3, 3, 3),
-    z: roundedFloat(ctx, -1.5, 1.5, 3),
+    x: biasedFloat(ctx, -3, 3, 3, [0, 1e6, -1e6, 1e-9]),
+    y: biasedFloat(ctx, -3, 3, 3, [0, 1e6, -1e6, 1e-9]),
+    z: biasedFloat(ctx, -1.5, 1.5, 3, [0, 1e6, -1e6, 1e-9]),
   };
+}
+
+
+/** A contiguous shot range within one section, for the range-delete family. */
+function pickShotRange(
+  ctx: ScenarioContext,
+  state: TargetingDigest,
+): { sectionId: number; startShotId: number; endShotId: number } | null {
+  const populated = sortedSections(state).filter((section) => section[1].length >= 2);
+  if (populated.length === 0) return null;
+  const section = ctx.pick(populated);
+  const shotIds = [...section[1]].sort((a, b) => a - b);
+  const first = ctx.randInt(0, shotIds.length - 1);
+  const second = ctx.randInt(0, shotIds.length - 1);
+  const lo = Math.min(first, second);
+  const hi = Math.max(first, second);
+  return {
+    sectionId: section[0],
+    startShotId: shotIds[lo] as number,
+    endShotId: shotIds[hi] as number,
+  };
+}
+
+/** A `CommentHolder`: either a station or a shot (src/types/ipc/CommentHolder.ts). */
+function pickCommentHolder(
+  ctx: ScenarioContext,
+  state: TargetingDigest,
+): { holder: Record<string, unknown>; label: string } | null {
+  if (chance(ctx, 0.5)) {
+    const ref = pickStationRef(ctx, state);
+    if (!ref) return null;
+    return { holder: { type: 'station', station_ref: toRef(ref) }, label: `st:${refLabel(ref)}` };
+  }
+  const target = pickShot(ctx, state);
+  if (!target) return null;
+  return {
+    holder: { type: 'shot', section_id: target.sectionId, shot_id: target.shotId },
+    label: `sh:${target.sectionId}/${target.shotId}`,
+  };
+}
+
+/**
+ * 2-4 nested `BatchCommand`s (src/types/commands.ts). A batch is ONE undo entry
+ * covering all of them, with all-or-nothing rollback, so it is the only way to
+ * reach `execute_batch`'s snapshot-pair path and its rollback guard.
+ *
+ * With `P_BATCH_POISON` the LAST sub-command is deliberately made invalid, which
+ * is the case the rollback exists for: the batch must fail, leave state
+ * untouched, and push nothing.
+ */
+const P_BATCH_POISON = 0.25;
+
+export function buildBatch(
+  ctx: ScenarioContext,
+  state: TargetingDigest,
+): { commands: Record<string, unknown>[]; label: string } | null {
+  const count = ctx.randInt(2, 4);
+  const commands: Record<string, unknown>[] = [];
+  const parts: string[] = [];
+  for (let i = 0; i < count; i++) {
+    const built = buildBatchCommand(ctx, state);
+    if (!built) continue;
+    commands.push(built.command);
+    parts.push(built.label);
+  }
+  if (commands.length === 0) return null;
+  if (chance(ctx, P_BATCH_POISON)) {
+    // A move_section against a section id that cannot exist: the sub-command
+    // fails, so execute_batch must roll the whole batch back.
+    commands.push({ type: 'move_section', section_id: 999999, offset: { x: 1, y: 1, z: 1 } });
+    parts.push('POISON');
+  }
+  return { commands, label: parts.join('+') };
+}
+
+/** One nested command for a batch. Shapes mirror the `BatchCommand` union. */
+function buildBatchCommand(
+  ctx: ScenarioContext,
+  state: TargetingDigest,
+): { command: Record<string, unknown>; label: string } | null {
+  const kind = ctx.pick([
+    'update_shot',
+    'move_station',
+    'move_section',
+    'reverse_section',
+    'create_section',
+    'merge_stations',
+  ] as const);
+  if (kind === 'update_shot') {
+    const target = pickShot(ctx, state);
+    if (!target) return null;
+    const { patch } = buildPatch(ctx, SHOT_PATCH_FIELDS, ctx.randInt(1, 3));
+    return {
+      command: { type: 'update_shot', section_id: target.sectionId, shot_id: target.shotId, updates: patch },
+      label: 'updShot',
+    };
+  }
+  if (kind === 'move_station') {
+    const ref = pickStationRef(ctx, state);
+    if (!ref) return null;
+    return { command: { type: 'move_station', station_ref: toRef(ref), offset: randomOffset(ctx) }, label: 'mvSt' };
+  }
+  if (kind === 'move_section') {
+    const section = pickSection(ctx, state);
+    if (!section) return null;
+    return { command: { type: 'move_section', section_id: section[0], offset: randomOffset(ctx) }, label: 'mvSec' };
+  }
+  if (kind === 'reverse_section') {
+    const section = pickSection(ctx, state);
+    if (!section) return null;
+    return {
+      command: { type: 'reverse_section', section_id: section[0], swap_left_right: chance(ctx, 0.5) },
+      label: 'revSec',
+    };
+  }
+  if (kind === 'merge_stations') {
+    const pair = pickCrossSectionPair(ctx, state);
+    if (!pair) return null;
+    return {
+      command: { type: 'merge_stations', station_a: toRef(pair[0]), station_b: toRef(pair[1]) },
+      label: 'merge',
+    };
+  }
+  const data = randomSectionData(ctx);
+  return {
+    command: {
+      type: 'create_section',
+      name: data.name,
+      surveyor: data.surveyor,
+      date: data.date,
+      color: data.color,
+      direction: data.direction,
+      shots: data.shots,
+    },
+    label: 'crtSec',
+  };
+}
+
+/**
+ * Per-run SWARM PROFILE: a deterministic weight multiplier per generator, drawn
+ * from its own stream so it cannot disturb the primary sequence.
+ *
+ * A single uniform weighting explores one shape of history. Skewing each run -
+ * merge-heavy, delete-heavy, batch-heavy - reaches states a balanced run needs
+ * far more iterations to stumble into, while staying reproducible from the seed.
+ */
+const SWARM_STREAM_SALT = 0xc2b2ae35;
+
+export interface SwarmProfile {
+  name: string;
+  multipliers: Record<string, number>;
+}
+
+const SWARM_PROFILES: readonly { name: string; boost: Record<string, number> }[] = [
+  { name: 'balanced', boost: {} },
+  {
+    name: 'merge-heavy',
+    boost: { mergeStations: 5, unmergeStationPair: 4, createLoopClosure: 4, removeLoopClosure: 3, setZeroDatum: 3 },
+  },
+  {
+    name: 'delete-heavy',
+    boost: {
+      deleteShot: 4,
+      deleteSection: 4,
+      deleteShotAndSplit: 5,
+      deleteShotRangeSplit: 5,
+      deleteShotRangeShift: 5,
+      deleteLastShotAndSection: 5,
+    },
+  },
+  { name: 'batch-heavy', boost: { executeBatch: 8, importSections: 4, createSectionAndMerge: 4 } },
+  { name: 'split-heavy', boost: { splitShotAtDistance: 8, deleteShotAndSplit: 4, createShot: 3 } },
+  { name: 'move-heavy', boost: { moveStation: 5, moveSection: 5, moveSegment: 5, moveComment: 4, reverseSection: 3 } },
+  { name: 'metadata-heavy', boost: { updateShot: 4, updateSection: 4, updateStationComment: 5, setShotKind: 4, moveComment: 3 } },
+];
+
+/** The profile a seed selects. Stable for a seed, independent of every other stream. */
+export function swarmProfileFor(seed: number): SwarmProfile {
+  if (!STREAM_V2) return { name: 'v1-legacy', multipliers: {} };
+  const rng = mulberry32((seed ^ SWARM_STREAM_SALT) >>> 0);
+  const chosen = SWARM_PROFILES[Math.floor(rng() * SWARM_PROFILES.length)] ?? SWARM_PROFILES[0];
+  return { name: chosen?.name ?? 'balanced', multipliers: { ...(chosen?.boost ?? {}) } };
 }
 
 /**
@@ -535,6 +790,170 @@ export const ACTION_GENERATORS: readonly ActionGenerator[] = [
       };
     },
   },
+  // ---------------------------------------------------------------------
+  // v2 additions. These reach the command families with the hardest undo code:
+  // the delete/split group and the import path push ProjectSnapshotPair entries,
+  // and a batch is one undo entry covering several sub-commands with all-or-
+  // nothing rollback.
+  // ---------------------------------------------------------------------
+  {
+    name: 'splitShotAtDistance',
+    weight: 5,
+    since: 'v2',
+    build(ctx, state) {
+      const target = pickShot(ctx, state);
+      if (!target) return null;
+      // Distances AT the boundaries (0 and the full shot length) are the
+      // interesting ones - a split there degenerates into a zero-length shot.
+      const distance = biasedFloat(ctx, 0.1, 8, 3, [0, 1e-9, 1e6, -1]);
+      return {
+        action: 'splitShotAtDistance',
+        args: [target.sectionId, target.shotId, distance],
+        label: `splitShotAtDistance(s=${target.sectionId},shot=${target.shotId},d=${distance})`,
+      };
+    },
+  },
+  {
+    name: 'deleteShotAndSplit',
+    weight: 3,
+    since: 'v2',
+    build(ctx, state) {
+      const target = pickShot(ctx, state);
+      if (!target) return null;
+      const nameA = biasedText(ctx, `split-a-${ctx.randInt(0, 999)}`);
+      const nameB = biasedText(ctx, `split-b-${ctx.randInt(0, 999)}`);
+      return {
+        action: 'deleteShotAndSplit',
+        args: [target.sectionId, target.shotId, nameA, nameB],
+        label: `deleteShotAndSplit(s=${target.sectionId},shot=${target.shotId})`,
+      };
+    },
+  },
+  {
+    name: 'deleteLastShotAndSection',
+    weight: 3,
+    since: 'v2',
+    build(ctx, state) {
+      // Meaningful only on a single-shot section, which is exactly the shape
+      // pickSmallSection is biased toward.
+      const section = pickSmallSection(ctx, state);
+      if (!section || section[1].length === 0) return null;
+      const shotIds = [...section[1]].sort((a, b) => a - b);
+      const shotId = ctx.pick(shotIds);
+      return {
+        action: 'deleteLastShotAndSection',
+        args: [section[0], shotId],
+        label: `deleteLastShotAndSection(s=${section[0]},n=${shotIds.length},shot=${shotId})`,
+      };
+    },
+  },
+  {
+    name: 'deleteShotRangeSplit',
+    weight: 3,
+    since: 'v2',
+    build(ctx, state) {
+      const range = pickShotRange(ctx, state);
+      if (!range) return null;
+      const nameA = biasedText(ctx, `range-a-${ctx.randInt(0, 999)}`);
+      const nameB = biasedText(ctx, `range-b-${ctx.randInt(0, 999)}`);
+      return {
+        action: 'deleteShotRangeSplit',
+        args: [range.sectionId, range.startShotId, range.endShotId, nameA, nameB],
+        label: `deleteShotRangeSplit(s=${range.sectionId},${range.startShotId}..${range.endShotId})`,
+      };
+    },
+  },
+  {
+    name: 'deleteShotRangeShift',
+    weight: 3,
+    since: 'v2',
+    build(ctx, state) {
+      const range = pickShotRange(ctx, state);
+      if (!range) return null;
+      return {
+        action: 'deleteShotRangeShift',
+        args: [range.sectionId, range.startShotId, range.endShotId],
+        label: `deleteShotRangeShift(s=${range.sectionId},${range.startShotId}..${range.endShotId})`,
+      };
+    },
+  },
+  {
+    name: 'moveComment',
+    weight: 4,
+    since: 'v2',
+    build(ctx, state) {
+      const source = pickCommentHolder(ctx, state);
+      const target = pickCommentHolder(ctx, state);
+      if (!source || !target) return null;
+      const swap = chance(ctx, 0.5);
+      return {
+        action: 'moveComment',
+        args: [source.holder, target.holder, swap],
+        label: `moveComment(${source.label}->${target.label},swap=${swap})`,
+      };
+    },
+  },
+  {
+    name: 'createSectionAndMerge',
+    weight: 3,
+    since: 'v2',
+    build(ctx, state) {
+      const ref = pickStationRef(ctx, state);
+      if (!ref) return null;
+      const data = randomSectionData(ctx);
+      const shots = data.shots as unknown[];
+      // An out-of-range import station index is a deliberate rejection case.
+      const importStationIndex = STREAM_V2 && chance(ctx, 0.15) ? ctx.randInt(50, 99) : ctx.randInt(0, shots.length);
+      const strategy = ctx.pick(CLOSURE_STRATEGIES);
+      return {
+        action: 'createSectionAndMerge',
+        args: [data, importStationIndex, toRef(ref), strategy],
+        label: `createSectionAndMerge(shots=${shots.length},i=${importStationIndex},->${refLabel(ref)})`,
+      };
+    },
+  },
+  {
+    name: 'importSections',
+    weight: 2,
+    since: 'v2',
+    build(ctx) {
+      // FULLY SYNTHETIC: shots are generated here, never taken from a fixture.
+      const data = randomSectionData(ctx);
+      const shots = data.shots as unknown[];
+      const config = {
+        section_index: 0,
+        name: data.name,
+        surveyor: data.surveyor,
+        date: data.date,
+        color: data.color,
+        direction: data.direction,
+        quality: data.quality,
+        shots,
+        placement: { type: 'origin' },
+        station_comments: chance(ctx, 0.4) ? [[0, biasedText(ctx, `imported-${ctx.randInt(0, 999)}`)]] : [],
+        reverse: chance(ctx, 0.3),
+      };
+      return {
+        action: 'importSections',
+        args: [[config], null, null, ctx.pick(['Auto', 'AllJumps', 'AllReferences'] as const), null],
+        label: `importSections(shots=${shots.length})`,
+      };
+    },
+  },
+  {
+    name: 'executeBatch',
+    weight: 5,
+    since: 'v2',
+    build(ctx, state) {
+      const batch = buildBatch(ctx, state);
+      if (!batch) return null;
+      return {
+        action: 'executeBatch',
+        args: [batch.commands],
+        label: `executeBatch(${batch.label})`,
+      };
+    },
+  },
   {
     name: 'removeLoopClosure',
     weight: 2,
@@ -550,12 +969,24 @@ export const ACTION_GENERATORS: readonly ActionGenerator[] = [
   },
 ];
 
-/** Weight-expanded generator names, built once so draws stay cheap. */
-const WEIGHTED_NAMES: readonly string[] = ACTION_GENERATORS.flatMap((generator) =>
-  Array.from({ length: generator.weight }, () => generator.name),
-);
-
 const BY_NAME = new Map(ACTION_GENERATORS.map((generator) => [generator.name, generator]));
+
+/**
+ * Weight-expanded generator names for a run.
+ *
+ * v1 uses the ORIGINAL generators at their original weights, so the legacy draw
+ * stream is reproduced exactly. v2 adds the new families and applies the seed's
+ * swarm multipliers.
+ */
+export function weightedNamesFor(profile: SwarmProfile): string[] {
+  const names: string[] = [];
+  for (const generator of ACTION_GENERATORS) {
+    if (!STREAM_V2 && generator.since === 'v2') continue;
+    const weight = Math.max(1, Math.round(generator.weight * (profile.multipliers[generator.name] ?? 1)));
+    for (let i = 0; i < weight; i++) names.push(generator.name);
+  }
+  return names;
+}
 
 /**
  * Draw a mutation the current project actually has a target for. Retries a
@@ -566,10 +997,11 @@ const BY_NAME = new Map(ACTION_GENERATORS.map((generator) => [generator.name, ge
 export function drawAction(
   ctx: ScenarioContext,
   state: TargetingDigest,
+  weightedNames: readonly string[],
   attempts = 8,
 ): FuzzAction {
   for (let i = 0; i < attempts; i++) {
-    const generator = BY_NAME.get(ctx.pick(WEIGHTED_NAMES));
+    const generator = BY_NAME.get(ctx.pick(weightedNames));
     const action = generator?.build(ctx, state);
     if (action) return action;
   }
