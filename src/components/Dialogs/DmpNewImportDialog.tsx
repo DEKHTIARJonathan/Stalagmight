@@ -65,8 +65,25 @@ import {
   rerankSuggestionsByTemporalPlan,
 } from '../../utils/dmpTemporalRerank';
 import { extractFilename } from '../../utils/path';
-import { blockedByIncompleteShots, countIncompleteShots } from '../common/incompleteShots';
-import { isEmittedShot, toEmittedStationIndex } from '../common/emittedShots';
+import {
+  fromEmittedStationIndex,
+  isEmittedShot,
+  toEmittedStationIndex,
+  visibleBefore,
+  visibleShotCount,
+} from '../common/emittedShots';
+import {
+  applyAllOverlapTreatments,
+  backendExistingShotUpdatesForSections,
+  removeExistingShotUpdatesForSections,
+  type ExistingShotUpdateLocal,
+} from '../../utils/overlapTreatment';
+import {
+  NonFiniteShotError,
+  assertSendableShots,
+  findIncompleteSections,
+} from '../../utils/importPayloadGuard';
+import { reanchorAfterRunDelete, reanchorStation } from '../../utils/stationReanchor';
 import { blankEditableShot } from '../common/editableShot';
 import { aggregateImportReceipts } from '../../utils/importReceipt';
 import type { ImportReceipt } from '../../types/ipc/ImportReceipt';
@@ -97,12 +114,18 @@ export function markSuccessfulDmpImportDirty(
 
 // SectionEditState and ConfirmedOverlapInfo imported from batchImportHelpers
 
+/** A refusal from the payload guard is already written for the user; anything
+ *  else reaching a catch here is a raw failure with no better wording. */
+function importErrorMessage(e: unknown): string {
+  return e instanceof NonFiniteShotError ? e.message : String(e);
+}
+
 // ─── Direct placement (manual_placing phase) ─────────────────────────────────
 
 /** A placement decision made during the manual_placing phase for a segment. */
 export type DirectPlacement = {
   anchorSectionIndex: number;   // DMP file section index (anchor within segment)
-  anchorStationIndex: number;   // station within that section
+  anchorStationIndex: number;   // station within that section, in EMITTED numbering
   placement: ImportPlacement;   // origin, zero_datum, manual, manual_snap, or from_existing
 };
 
@@ -253,500 +276,14 @@ function collectImportConnectedComponents(
   return result;
 }
 
-/** Check if a suggestion matches a confirmed overlap info by field comparison. */
-function matchesConfirmed(s: CrossSectionSuggestion, info: ConfirmedOverlapInfo): boolean {
-  return s.importStationIndex === info.importStationIndex
-    && s.matchedShots === info.matchedShots
-    && s.direction === info.direction
-    && s.existingStationIndex === info.existingStationIndex
-    && s.targetType === info.targetType
-    && s.existingSectionId === info.existingSectionId
-    && s.targetImportIndex === info.targetImportIndex;
-}
-
-/**
- * Apply overlap treatments for ALL known overlaps in a single pass.
- *
- * This is the single source of truth for overlap mutation. It runs once before
- * `buildBatchImport`. For confirmed suggestions, it uses the user-selected
- * merge station to determine actionable IDs. For unconfirmed suggestions,
- * it treats ALL overlap IDs.
- *
- * Mutates `sectionEdits` in-place.
- */
-interface ExistingShotUpdateLocal {
-  importSectionIndex: number;
-  section_id: number;
-  shot_id: number;
-  updates: Record<string, number | null>;
-}
-
-function backendExistingShotUpdatesForSections(
-  updates: ExistingShotUpdateLocal[],
-  sectionIndices: Set<number>,
-): Array<Omit<ExistingShotUpdateLocal, 'importSectionIndex'>> {
-  return updates
-    .filter((update) => sectionIndices.has(update.importSectionIndex))
-    .map(({ importSectionIndex: _importSectionIndex, ...update }) => update);
-}
-
-function removeExistingShotUpdatesForSections(
-  updates: ExistingShotUpdateLocal[],
-  sectionIndices: Set<number>,
-): ExistingShotUpdateLocal[] {
-  return updates.filter((update) => !sectionIndices.has(update.importSectionIndex));
-}
-
-function applyAllOverlapTreatments(
-  fullPool: CrossSectionSuggestion[],
-  confirmedOverlaps: Map<number, ConfirmedOverlapInfo>,
-  sectionEdits: Map<number, SectionEditState>,
-  dmpFile: DmpFile,
-  overlapMode: OverlapMode,
-): ExistingShotUpdateLocal[] {
-  const existingShotUpdates: ExistingShotUpdateLocal[] = [];
-  if (import.meta.env.DEV) {
-    console.warn(
-      `[applyAllOverlaps] START: pool=${fullPool.length} suggestions, confirmed=${confirmedOverlaps.size}, mode=${overlapMode}`,
-      `edits keys=[${[...sectionEdits.keys()].join(',')}]`,
-    );
-  }
-  // Track shots already treated by a previous suggestion to prevent double-treatment.
-  // Key: "sectionIndex:shotId".  This replaced the old is_reference guard which was
-  // removed so that the shot kind only has user-facing semantics (keep_both mode).
-  const treatedShots = new Set<string>();
-
-  for (const suggestion of fullPool) {
-    const {
-      importSectionIndex,
-      importStationIndex,
-      matchedShots,
-      existingMatchedShots,
-      existingStationIndex,
-      direction,
-      targetType,
-      existingSectionId,
-      targetImportIndex,
-    } = suggestion;
-
-    const allOverlapIds = computeOverlapIds(importStationIndex, matchedShots);
-    if (allOverlapIds.size === 0) continue;
-
-    const confirmed = confirmedOverlaps.get(importSectionIndex);
-    const isConfirmed = !!(confirmed && matchesConfirmed(suggestion, confirmed));
-
-    // Once a section has a confirmed suggestion, ignore all alternatives for that
-    // same import section. This ensures overlap treatment follows exactly the path
-    // the user accepted in the wizard.
-    if (confirmed && !isConfirmed) {
-      if (import.meta.env.DEV) {
-        console.warn(
-          `[applyAllOverlaps] skipping alternative for confirmed section ${importSectionIndex}`,
-        );
-      }
-      continue;
-    }
-
-    // If the opposite direction was confirmed (A->B), ignore unconfirmed reverse
-    // suggestions (B->A). Otherwise reverse candidates can pre-treat shots and
-    // prevent the confirmed direction from applying its intended deletion boundary.
-    if (!isConfirmed && targetType === 'importing' && targetImportIndex != null) {
-      const reverseConfirmed = confirmedOverlaps.get(targetImportIndex);
-      if (
-        reverseConfirmed &&
-        reverseConfirmed.targetType === 'importing' &&
-        reverseConfirmed.targetImportIndex === importSectionIndex
-      ) {
-        if (import.meta.env.DEV) {
-          console.warn(
-            `[applyAllOverlaps] skipping reverse unconfirmed candidate ${importSectionIndex}->${targetImportIndex}`,
-          );
-        }
-        continue;
-      }
-    }
-
-    // Determine actionable IDs: use merge station from confirmed info, or full overlap range
-    let actionableIds: Set<number>;
-    if (isConfirmed) {
-      actionableIds = computeActionableIds(importStationIndex, matchedShots, confirmed!.mergeImportStation);
-    } else {
-      actionableIds = allOverlapIds;
-    }
-
-    if (import.meta.env.DEV) {
-      console.warn(
-        `[applyAllOverlaps] processing suggestion: import=${importSectionIndex} impStn=${importStationIndex}`,
-        `matched=${matchedShots} dir=${direction} target=${targetType === 'importing' ? targetImportIndex : existingSectionId}`,
-        `targetType=${targetType} mode=${overlapMode}`,
-        `confirmed=${!!confirmed && matchesConfirmed(suggestion, confirmed)}`,
-        `actionableIds=[${[...actionableIds].join(',')}]`,
-      );
-    }
-
-    // --- Import side: treat untreated overlap shots on the import section ---
-    let importEdits = sectionEdits.get(importSectionIndex);
-    if (!importEdits) {
-      const section = dmpFile.sections[importSectionIndex];
-      if (section) {
-        importEdits = {
-          name: section.name,
-          surveyor: '',
-          date: section.date?.split(/[T ]/)[0] ?? '',
-          color: '',
-          direction: section.direction === 'out' ? 'out' : 'in',
-          quality: 1.0,
-          reverse: false,
-          shots: convertToEditableShots(section.shots),
-        };
-        sectionEdits.set(importSectionIndex, importEdits);
-      }
-    }
-    // Save raw import shots BEFORE import-side treatment modifies them.
-    // Target-side treatment needs original values to produce symmetric interpolation.
-    const rawImportShots = importEdits?.shots;
-
-    if (importEdits) {
-      const hasUntreated = importEdits.shots.some(
-        shot => !shot.isNew && !shot.isDeleted && actionableIds.has(shot.id)
-          && !treatedShots.has(`${importSectionIndex}:${shot.id}`)
-      );
-
-      if (hasUntreated) {
-        if (overlapMode === 'keep_both') {
-          // keep_both: mark import overlap shots as reference (no deletion, no value change)
-          const newShots = importEdits.shots.map(shot => {
-            if (shot.isNew || shot.isDeleted) return shot;
-            if (!actionableIds.has(shot.id)) return shot;
-            if (treatedShots.has(`${importSectionIndex}:${shot.id}`)) return shot;
-            treatedShots.add(`${importSectionIndex}:${shot.id}`);
-            return { ...shot, kind: 'Reference' as const };
-          });
-          if (import.meta.env.DEV) {
-            const marked = newShots.filter(s => s.kind !== 'Normal').length - importEdits.shots.filter(s => s.kind !== 'Normal').length;
-            console.warn(`[applyAllOverlaps]   import ${importSectionIndex}: keep_both marked ${marked} shots as reference`);
-          }
-          sectionEdits.set(importSectionIndex, { ...importEdits, shots: newShots });
-        } else {
-          // Build target map for interpolate/existing_data modes
-          let targetMap: Map<number, TargetShotLike> | null = null;
-          let targetMapDiag = '';
-          if (overlapMode !== 'import_data') {
-            let targetShotArray: TargetShotLike[] | null = null;
-            if (targetType === 'existing' && existingSectionId != null) {
-              const currentProject = useProjectStore.getState().project;
-              const targetSection = currentProject?.sections.find(s => s.id === existingSectionId);
-              if (targetSection) {
-                targetShotArray = targetSection.shots;
-                targetMapDiag = `existing section ${existingSectionId} (${targetSection.shots.length} shots)`;
-              } else {
-                targetMapDiag = `MISS: existing section ${existingSectionId} not found in project`;
-              }
-            } else if (targetType === 'importing' && targetImportIndex != null) {
-              const targetEdits = sectionEdits.get(targetImportIndex);
-              if (targetEdits) {
-                // Station space: the target section reaches the backend without
-                // its blank rows, so an index into this array must be counted
-                // over the same set. (Audit of the emitted-vs-visible split.)
-                targetShotArray = targetEdits.shots.filter(isEmittedShot);
-                targetMapDiag = `importing section ${targetImportIndex} from edits (${targetEdits.shots.length} total, ${targetShotArray.length} alive)`;
-              } else {
-                const targetDmpSection = dmpFile.sections[targetImportIndex];
-                if (targetDmpSection) {
-                  targetShotArray = convertToEditableShots(targetDmpSection.shots);
-                  targetMapDiag = `importing section ${targetImportIndex} from DMP (${targetShotArray.length} shots)`;
-                } else {
-                  targetMapDiag = `MISS: importing section ${targetImportIndex} not in edits or DMP`;
-                }
-              }
-            } else {
-              targetMapDiag = `MISS: targetType=${targetType} existingSectionId=${existingSectionId} targetImportIndex=${targetImportIndex}`;
-            }
-
-            if (targetShotArray) {
-              const shouldReverse = needsDirectionReversal(importStationIndex, direction);
-              const overlapParams = { importStationIndex, matchedShots, existingMatchedShots, existingStationIndex, direction };
-              targetMap = new Map<number, TargetShotLike>();
-              for (const overlapId of actionableIds) {
-                const targetIdx = computeTargetShotIndex(overlapId, overlapParams);
-                if (targetIdx >= 0 && targetIdx < targetShotArray.length) {
-                  const raw = targetShotArray[targetIdx]!;
-                  targetMap.set(overlapId, shouldReverse ? reverseTargetShot(raw) : raw);
-                } else if (import.meta.env.DEV) {
-                  console.warn(
-                    `[applyAllOverlaps]   targetIdx OUT OF RANGE: overlapId=${overlapId} → targetIdx=${targetIdx} (array len=${targetShotArray.length})`,
-                  );
-                }
-              }
-            }
-          } else {
-            targetMapDiag = 'SKIPPED (import_data mode)';
-          }
-
-          if (import.meta.env.DEV) {
-            console.warn(
-              `[applyAllOverlaps]   import ${importSectionIndex}: targetMap=${targetMap ? targetMap.size : 'null'}`,
-              `source: ${targetMapDiag}`,
-            );
-          }
-
-          let diagInterpolated = 0, diagRefOnly = 0, diagAlreadyTreated = 0, diagDeleted = 0;
-          const newShots = importEdits.shots.map(shot => {
-            if (shot.isNew || shot.isDeleted) return shot;
-            if (!actionableIds.has(shot.id)) return shot;
-            const treatKey = `${importSectionIndex}:${shot.id}`;
-            if (treatedShots.has(treatKey)) { diagAlreadyTreated++; return shot; }
-
-            // Import-to-import: always delete - target section keeps the overlap (treated below).
-            // Confirmed import-to-existing: delete - target section gets interpolated values.
-            if (targetType === 'importing' || isConfirmed) {
-              diagDeleted++;
-              treatedShots.add(treatKey);
-              return { ...shot, isDeleted: true };
-            }
-
-            const target = targetMap?.get(shot.id);
-            treatedShots.add(treatKey);
-            if (overlapMode === 'interpolate' && target) {
-              diagInterpolated++;
-              return interpolateShots(shot, target);
-            } else if (overlapMode === 'existing_data' && target) {
-              diagInterpolated++;
-              return applyTargetData(shot, target);
-            } else {
-              diagRefOnly++;
-              return shot;
-            }
-          });
-
-          if (import.meta.env.DEV) {
-            console.warn(
-              `[applyAllOverlaps]   import ${importSectionIndex} RESULT:`,
-              `interpolated=${diagInterpolated} deleted=${diagDeleted} refOnly=${diagRefOnly} alreadyTreated=${diagAlreadyTreated}`,
-            );
-            if (diagRefOnly > 0 && overlapMode !== 'import_data') {
-              console.warn(
-                `[applyAllOverlaps]   ⚠ ${diagRefOnly} shots WITHOUT target data (kept original values)`,
-                `targetMap=${targetMap ? `size=${targetMap.size} keys=[${[...targetMap.keys()].join(',')}]` : 'null'}`,
-                `actionableIds=[${[...actionableIds].join(',')}]`,
-              );
-            }
-          }
-
-          sectionEdits.set(importSectionIndex, { ...importEdits, shots: newShots });
-          if (import.meta.env.DEV) {
-            const alive = newShots.filter(s => !s.isDeleted).length;
-            const deleted = newShots.filter(s => s.isDeleted).length;
-            const refs = newShots.filter(s => s.kind !== 'Normal' && !s.isDeleted).length;
-            console.warn(
-              `[applyAllOverlaps]   import ${importSectionIndex} AFTER: ${newShots.length} total, ${alive} alive, ${deleted} deleted, ${refs} reference`,
-            );
-          }
-        }
-      }
-    }
-
-    // --- Target side (import-to-existing): collect shot updates for existing project sections ---
-    // Confirmed import-to-existing: compute interpolated values and collect as ExistingShotUpdate.
-    // These are sent to the backend as part of the atomic import transaction.
-    if (overlapMode !== 'keep_both' && isConfirmed && targetType === 'existing' && existingSectionId != null) {
-      const currentProject = useProjectStore.getState().project;
-      const targetSection = currentProject?.sections.find(s => s.id === existingSectionId);
-      if (targetSection) {
-        const overlapParams = { importStationIndex, matchedShots, existingMatchedShots, existingStationIndex, direction };
-        const shouldReverse = needsDirectionReversal(importStationIndex, direction);
-        const importShotsForInterp = rawImportShots ?? [];
-
-        for (const overlapId of actionableIds) {
-          const targetShotIdx = computeTargetShotIndex(overlapId, overlapParams);
-          if (targetShotIdx < 0 || targetShotIdx >= targetSection.shots.length) continue;
-
-          const existingShot = targetSection.shots[targetShotIdx];
-          if (!existingShot) continue;
-          const treatKey = `existing:${existingSectionId}:${existingShot.id}`;
-          if (treatedShots.has(treatKey)) continue;
-
-          const importShot = importShotsForInterp.find(
-            s => !s.isNew && !s.isDeleted && s.id === overlapId
-          );
-          if (!importShot) continue;
-
-          const importAsTarget: TargetShotLike = shouldReverse
-            ? reverseTargetShot(importShot)
-            : importShot;
-
-          let updates: Record<string, number | null> | null = null;
-          if (overlapMode === 'interpolate') {
-            const interp = interpolateShots({ ...existingShot, id: existingShot.id, comment: existingShot.comment ?? null, kind: existingShot.kind, isNew: false, isDeleted: false }, importAsTarget);
-            updates = {
-              azimuth_in: interp.azimuth_in, azimuth_out: interp.azimuth_out,
-              length: interp.length, depth_in: interp.depth_in, depth_out: interp.depth_out,
-              pitch_in: interp.pitch_in, pitch_out: interp.pitch_out,
-              left: interp.left, right: interp.right, up: interp.up, down: interp.down,
-            };
-          } else if (overlapMode === 'import_data') {
-            updates = {
-              azimuth_in: importAsTarget.azimuth_in, azimuth_out: importAsTarget.azimuth_out,
-              length: importAsTarget.length, depth_in: importAsTarget.depth_in, depth_out: importAsTarget.depth_out,
-              pitch_in: importAsTarget.pitch_in, pitch_out: importAsTarget.pitch_out,
-              left: importAsTarget.left, right: importAsTarget.right, up: importAsTarget.up, down: importAsTarget.down,
-            };
-          }
-          // existing_data: target keeps its own values - no update needed
-
-          if (updates) {
-            if (import.meta.env.DEV) {
-              console.warn(
-                `[applyAllOverlaps]   i2e update: section=${existingSectionId} shotId=${existingShot.id} shotIdx=${targetShotIdx}`,
-                `existing len=${existingShot.length.toFixed(3)} → update len=${(updates.length as number)?.toFixed(3)}`,
-                `existing az=${existingShot.azimuth_in.toFixed(1)} → update az=${(updates.azimuth_in as number)?.toFixed(1)}`,
-              );
-            }
-            existingShotUpdates.push({
-              importSectionIndex,
-              section_id: existingSectionId,
-              shot_id: existingShot.id,
-              updates,
-            });
-            treatedShots.add(treatKey);
-          }
-        }
-
-        if (import.meta.env.DEV) {
-          console.warn(
-            `[applyAllOverlaps]   existing target ${existingSectionId}: ${existingShotUpdates.length} shot updates collected`,
-          );
-        }
-      }
-    }
-
-    // --- Target side (import-to-import): treat untreated overlap shots on the target section ---
-    // keep_both: no target modification - both sections retain their original values.
-    if (overlapMode !== 'keep_both' && targetType === 'importing' && targetImportIndex != null) {
-      let targetEdits = sectionEdits.get(targetImportIndex);
-      if (!targetEdits) {
-        const section = dmpFile.sections[targetImportIndex];
-        if (section) {
-          targetEdits = {
-            name: section.name,
-            surveyor: '',
-            date: section.date?.split(/[T ]/)[0] ?? '',
-            color: '',
-            direction: section.direction === 'out' ? 'out' : 'in',
-            quality: 1.0,
-            reverse: false,
-            shots: convertToEditableShots(section.shots),
-          };
-          sectionEdits.set(targetImportIndex, targetEdits);
-        }
-      }
-      if (targetEdits) {
-        const overlapParams = { importStationIndex, matchedShots, existingMatchedShots, existingStationIndex, direction };
-        const shouldReverse = needsDirectionReversal(importStationIndex, direction);
-
-        let hasUntreatedTarget = false;
-        for (const overlapId of actionableIds) {
-          const targetShotIdx = computeTargetShotIndex(overlapId, overlapParams);
-          if (targetShotIdx >= 0 && targetShotIdx < targetEdits.shots.length) {
-            const shot = targetEdits.shots[targetShotIdx];
-            if (shot && !shot.isDeleted && !treatedShots.has(`${targetImportIndex}:${shot.id}`)) {
-              hasUntreatedTarget = true;
-              break;
-            }
-          }
-        }
-
-        if (hasUntreatedTarget) {
-          // Use raw (pre-interpolation) import shots so both sides get symmetric results.
-          // If we read from sectionEdits here, import-side treatment has already averaged
-          // the values, and averaging again biases toward the target: avg(T, avg(I,T)) = (3T+I)/4.
-          const importShotsForInterp = rawImportShots ?? [];
-          const targetShots = targetEdits.shots.map(s => ({ ...s }));
-          let treated = 0;
-          let skippedOutOfRange = 0, skippedAlreadyTreated = 0, skippedNoImport = 0;
-
-          for (const overlapId of actionableIds) {
-            const targetShotIdx = computeTargetShotIndex(overlapId, overlapParams);
-            if (targetShotIdx < 0 || targetShotIdx >= targetShots.length) { skippedOutOfRange++; continue; }
-
-            const targetShot = targetShots[targetShotIdx];
-            if (!targetShot || targetShot.isDeleted) { skippedAlreadyTreated++; continue; }
-            const targetTreatKey = `${targetImportIndex}:${targetShot.id}`;
-            if (treatedShots.has(targetTreatKey)) { skippedAlreadyTreated++; continue; }
-
-            const importShot = importShotsForInterp.find(
-              s => !s.isNew && !s.isDeleted && s.id === overlapId
-            );
-            if (!importShot) { skippedNoImport++; continue; }
-
-            const importAsTarget: TargetShotLike = shouldReverse
-              ? reverseTargetShot(importShot)
-              : importShot;
-
-            if (overlapMode === 'interpolate') {
-              const interpResult = interpolateShots(targetShot, importAsTarget);
-              if (import.meta.env.DEV) {
-                console.warn(
-                  `[applyAllOverlaps]   i2i target shot ${targetShotIdx} (id=${targetShot.id}):`,
-                  `len ${targetShot.length.toFixed(3)}→${interpResult.length.toFixed(3)}`,
-                  `az_in ${targetShot.azimuth_in.toFixed(1)}→${interpResult.azimuth_in.toFixed(1)}`,
-                  `(import: len=${importAsTarget.length.toFixed(3)} az=${importAsTarget.azimuth_in.toFixed(1)})`,
-                );
-              }
-              targetShots[targetShotIdx] = interpResult;
-              treatedShots.add(targetTreatKey);
-              treated++;
-            } else if (overlapMode === 'existing_data') {
-              // existing_data: target keeps its own values - nothing to change
-              treatedShots.add(targetTreatKey);
-            } else {
-              targetShots[targetShotIdx] = applyTargetData(targetShot, importAsTarget);
-              treatedShots.add(targetTreatKey);
-              treated++;
-            }
-          }
-
-          if (import.meta.env.DEV) {
-            console.warn(
-              `[applyAllOverlaps]   target ${targetImportIndex} RESULT: treated=${treated}`,
-              `skippedOutOfRange=${skippedOutOfRange} skippedAlreadyTreated=${skippedAlreadyTreated} skippedNoImport=${skippedNoImport}`,
-            );
-          }
-
-          if (treated > 0) {
-            sectionEdits.set(targetImportIndex, { ...targetEdits, shots: targetShots });
-          }
-        }
-      }
-    }
-  }
-
-  // Post-pass: if a section would lose ALL shots to deletion (overlaps at both
-  // ends where the section is the "import" side for both), convert the deletions
-  // to a virtual kind instead.  This prevents sections from disappearing while
-  // still avoiding un-marked duplication - adjacent target sections keep the
-  // overlap shots with treated values, and this section keeps reference copies.
-  for (const [sectionIdx, edits] of sectionEdits.entries()) {
-    const aliveCount = edits.shots.filter(s => !s.isDeleted).length;
-    const deletedCount = edits.shots.filter(s => s.isDeleted).length;
-    if (aliveCount === 0 && deletedCount > 0) {
-      const newShots = edits.shots.map(s =>
-        s.isDeleted ? { ...s, isDeleted: false, kind: 'Reference' as const } : s,
-      );
-      sectionEdits.set(sectionIdx, { ...edits, shots: newShots });
-      if (import.meta.env.DEV) {
-        console.warn(
-          `[applyAllOverlaps] Section ${sectionIdx} would have 0 shots - converted ${deletedCount} deletions to reference`,
-        );
-      }
-    }
-  }
-
-  return existingShotUpdates;
-}
 
 /**
  * Build batch import configs from virtual connections + BFS order.
+ *
+ * Throws {@link NonFiniteShotError} rather than serializing a row that holds no
+ * measurement, and reports every reachable section that produced no shots at
+ * all in `emptySections` - both are sections that used to leave here silently
+ * and fail (or vanish) somewhere the user could not read.
  *
  * Exported for tests only - the dialog is its sole production caller.
  */
@@ -761,8 +298,16 @@ export function buildBatchImport(
   alreadyImported?: Map<number, number>,
   deferImportConnectedTo?: Set<number>,
   resolvedTheme = 'dark',
-): { configs: BackendImportSectionConfig[]; unreachable: number[]; emittedDmpIndices: number[] } {
+): {
+  configs: BackendImportSectionConfig[];
+  unreachable: number[];
+  emittedDmpIndices: number[];
+  emptySections: number[];
+} {
   const palette = sectionColorPalette(resolvedTheme);
+  // Reachable, selected, and emitted nothing. A set because the emit loop makes
+  // several passes over the same order.
+  const emptySections = new Set<number>();
   // Build adjacency + connections including any fallback anchors for disconnected components
   const allConnections = [...connections];
   const adjacency = buildAdjacency(allConnections);
@@ -950,11 +495,21 @@ export function buildBatchImport(
         }
       }
       if (backendShots.length === 0) {
+        // Reported, not just logged: the `unreachable` list names what was never
+        // placed, so a section that WAS placed and then emitted nothing fell
+        // through both and disappeared between the wizard and the map. Anything
+        // anchored to it stalls the emit loop and disappears with it.
+        emptySections.add(idx);
         if (import.meta.env.DEV) {
           console.warn(`[buildBatchImport] Section ${idx} "${section.name}": SKIPPED - 0 shots after filtering deleted`);
         }
         continue;
       }
+      // The gates upstream ask the user to finish a half-filled row; this asks
+      // whether the payload can be sent at all, which has to hold for every
+      // route into this builder. A NaN here serializes to null and Rust rejects
+      // the whole batch naming nothing.
+      assertSendableShots(backendShots, idx, edits?.name ?? section.name);
 
       // Check for direct placement first (from manual_placing phase)
       const directPlacement = directPlacementMap.get(idx);
@@ -1172,7 +727,12 @@ export function buildBatchImport(
     }
   }
 
-  return { configs, unreachable, emittedDmpIndices: Array.from(emittedPosition.keys()) };
+  return {
+    configs,
+    unreachable,
+    emittedDmpIndices: Array.from(emittedPosition.keys()),
+    emptySections: Array.from(emptySections),
+  };
 }
 
 
@@ -1256,10 +816,20 @@ export default function DmpNewImportDialog({
    *  refuseIncompleteShots. */
   const editStateRef = useRef<SectionEditState | null>(null);
   editStateRef.current = editState;
+  /** Rows a mutator produced earlier in the CURRENT event, before React has
+   *  rendered them. Cleared on every render - by then `editStateRef` holds them
+   *  - so a second row change in one gesture still counts from the first's
+   *  result rather than from the array on screen. */
+  const pendingShotsRef = useRef<EditableShot[] | null>(null);
+  pendingShotsRef.current = null;
   // Tracks which import section index the current editState was loaded for.
   // Used to prevent the sync effect from writing stale editState to the wrong section
   // when currentSuggestion changes before editState catches up.
   const [editStateForSection, setEditStateForSection] = useState<number | null>(null);
+  /** Which section `editStateRef` currently holds, as a ref: the gate below has
+   *  to pair the two, and a captured pairing is the stale-closure bug again. */
+  const editStateForSectionRef = useRef<number | null>(null);
+  editStateForSectionRef.current = editStateForSection;
   const sectionEditsRef = useRef<Map<number, SectionEditState>>(
     saved ? new Map(saved.sectionEdits) : new Map()
   );
@@ -1331,6 +901,38 @@ export default function DmpNewImportDialog({
       setPreviewAnchor(segmentAnchorRef.current);
     }
   }, []);
+
+  // ─── The anchor's two station spaces ──────────────────────────────────────
+  //
+  // The pick is STORED in visible row space: that is what the station dropdowns
+  // list, what the map preview's own click handler talks in once translated, and
+  // the space the shot-table mutators re-anchor it in. Two surfaces speak
+  // emitted space instead - the payloads, which carry only the rows the import
+  // will create, and the previews, which draw those same rows - so each converts
+  // at its edge rather than storing a second number that can drift.
+
+  /** The anchor station as the BACKEND counts it. One derivation for every
+   *  payload site: the two that shipped the raw pick merged a station
+   *  downstream of the one clicked, and a pick past the emitted end made
+   *  `merge_stations` refuse the whole batch. */
+  const emittedAnchorStation = useCallback(
+    (anchor: { sectionIndex: number; stationIndex: number }): number => {
+      const edits = sectionEditsRef.current.get(anchor.sectionIndex);
+      return edits ? toEmittedStationIndex(edits.shots, anchor.stationIndex) : anchor.stationIndex;
+    },
+    []
+  );
+
+  /** The other direction, for a station the PREVIEW drew: it renders the emitted
+   *  rows, so a dot below a blank row is numbered one lower than the row the
+   *  user is looking at in the grid. */
+  const visibleAnchorStation = useCallback(
+    (sectionIndex: number, emittedStationIndex: number): number => {
+      const edits = sectionEditsRef.current.get(sectionIndex);
+      return edits ? fromEmittedStationIndex(edits.shots, emittedStationIndex) : emittedStationIndex;
+    },
+    []
+  );
 
   // Per-mode state for manual_placing
   const [fromExistingSectionId, setFromExistingSectionId] = useState<number | null>(null);
@@ -1734,6 +1336,12 @@ export default function DmpNewImportDialog({
           `deleted=${existing.shots.filter(s => s.isDeleted).length}`,
         );
       }
+      // The counter is per section, and only the initialize branch below used to
+      // seed it: coming back to a section after editing a SHORTER one handed out
+      // temp ids this section had already used, so two rows shared a key and the
+      // grid painted one row's marks on the other.
+      nextTempIdRef.current =
+        existing.shots.reduce((max, s) => Math.max(max, s.tempId ?? 0), existing.shots.length) + 1;
       setEditStateForSection(idx);
       setEditState(existing);
       return;
@@ -1907,6 +1515,35 @@ export default function DmpNewImportDialog({
     });
   }, [editState, currentSuggestion, selectedMergePair, overlapMode, dmpFile.sections]);
 
+  /**
+   * Rows the keep-both view DERIVES as Reference.
+   *
+   * Their glyph is computed, not read back from `editState`, so the kind cell on
+   * these rows never showed what a click on it wrote: the display stayed
+   * Reference while the write destroyed the Jump the user had set underneath,
+   * and the import forces Reference on them again regardless. Nothing to edit,
+   * so nothing pretends to be editable.
+   */
+  const derivedKindIndices = useMemo(() => {
+    if (
+      overlapMode !== 'keep_both' ||
+      !editState ||
+      !currentSuggestion ||
+      currentSuggestion.matchedShots === 0
+    ) {
+      return new Set<number>();
+    }
+    const overlapIds = computeOverlapIds(
+      currentSuggestion.importStationIndex,
+      currentSuggestion.matchedShots,
+    );
+    const indices = new Set<number>();
+    editState.shots.forEach((shot, idx) => {
+      if (!shot.isNew && !shot.isDeleted && overlapIds.has(shot.id)) indices.add(idx);
+    });
+    return indices;
+  }, [overlapMode, editState, currentSuggestion]);
+
   // Section edit callbacks
   const handleMetadataChange = useCallback((field: keyof SectionEditState, value: string | number | boolean) => {
     setEditState((prev) => prev ? { ...prev, [field]: value } : prev);
@@ -1914,6 +1551,7 @@ export default function DmpNewImportDialog({
 
   const handleShotChange = useCallback(
     (index: number, field: keyof EditableShot, value: number | string | boolean | null) => {
+      if (field === 'kind' && derivedKindIndices.has(index)) return;
       setEditState((prev) => {
         if (!prev) return prev;
         const newShots = [...prev.shots];
@@ -1924,93 +1562,136 @@ export default function DmpNewImportDialog({
         return { ...prev, shots: newShots };
       });
     },
+    [derivedKindIndices]
+  );
+
+  /** The rows as they stand NOW - including a change made earlier in this same
+   *  event, which React has not rendered yet. */
+  const currentShots = useCallback(
+    (): EditableShot[] => pendingShotsRef.current ?? editStateRef.current?.shots ?? [],
+    []
+  );
+
+  /**
+   * The one path a row-count change takes.
+   *
+   * `arrayIndex` is where the change lands in the FULL array and `delta` how
+   * many VISIBLE rows it adds (positive) or removes (negative) there. The
+   * segment anchor is a station index in that same visible space, so it is
+   * renumbered here, in the same step as the rows: a mutator that wrote only the
+   * rows left the pick addressing a station its own dropdown no longer offered.
+   *
+   * The transition is read from the rows as they stand now and committed OUTSIDE
+   * the state updater, which stays pure - StrictMode invokes updaters twice on
+   * purpose, and a commit in there re-anchored the pick twice for one edit.
+   */
+  const applyShotEdit = useCallback(
+    (arrayIndex: number, delta: number, mutate: (shots: EditableShot[]) => EditableShot[]) => {
+      const before = currentShots();
+      pendingShotsRef.current = mutate(before);
+      setEditState((prev) => (prev ? { ...prev, shots: mutate(prev.shots) } : prev));
+
+      const anchor = segmentAnchorRef.current;
+      if (delta === 0 || !anchor || anchor.sectionIndex !== activeEditableSectionIndex) return;
+      const at = visibleBefore(before, arrayIndex);
+      const survivorsAfter = visibleShotCount(before) + delta;
+      const stationIndex =
+        delta < 0
+          ? reanchorAfterRunDelete(anchor.stationIndex, at, -delta, survivorsAfter)
+          : reanchorStation(anchor.stationIndex, at, delta, survivorsAfter);
+      if (stationIndex !== anchor.stationIndex) {
+        commitSegmentAnchor({ sectionIndex: anchor.sectionIndex, stationIndex });
+      }
+    },
+    [activeEditableSectionIndex, commitSegmentAnchor, currentShots]
+  );
+
+  /** Blank rows to insert, each with its own temp id. */
+  const blankRows = useCallback(
+    (count: number): EditableShot[] =>
+      Array.from({ length: count }, () => {
+        const tempId = nextTempIdRef.current++;
+        return { ...blankEditableShot(-tempId), tempId };
+      }),
     []
   );
 
   /** Append `count` blank shots in ONE update, each with its own temp id. */
   const handleAddShots = useCallback((count: number) => {
-    const n = Math.max(1, count);
-    const ids = Array.from({ length: n }, () => nextTempIdRef.current++);
-    setEditState((prev) => {
-      if (!prev) return prev;
-      return {
-        ...prev,
-        shots: [
-          ...prev.shots,
-          ...ids.map((tempId) => ({ ...blankEditableShot(-tempId), tempId })),
-        ],
-      };
-    });
-  }, []);
+    const rows = blankRows(Math.max(1, count));
+    // Past every row: an append cannot renumber a station that already exists.
+    applyShotEdit(Number.POSITIVE_INFINITY, rows.length, (shots) => [...shots, ...rows]);
+  }, [applyShotEdit, blankRows]);
 
   const handleAddShot = useCallback(() => handleAddShots(1), [handleAddShots]);
 
   /** Insert `count` blank shots at `index`, in ONE update with an id per row. */
   const handleInsertShots = useCallback(
     (index: number, count: number, position: 'before' | 'after') => {
-      const n = Math.max(1, count);
       const at = position === 'after' ? index + 1 : index;
-      const ids = Array.from({ length: n }, () => nextTempIdRef.current++);
-      setEditState((prev) => {
-        if (!prev) return prev;
-        const shots = [...prev.shots];
-        shots.splice(at, 0, ...ids.map((tempId) => ({ ...blankEditableShot(-tempId), tempId })));
-        return { ...prev, shots };
+      const rows = blankRows(Math.max(1, count));
+      applyShotEdit(at, rows.length, (shots) => {
+        const next = [...shots];
+        next.splice(at, 0, ...rows);
+        return next;
       });
     },
-    []
+    [applyShotEdit, blankRows]
   );
 
+  /** Say so when a row cannot go: the wizard freezes the matched overlap rows,
+   *  and refusing them in silence left them on screen while the grid cleared the
+   *  selection as though they had been deleted. Same wording as the edit-section
+   *  grid, which refuses for the same reason. */
+  const refuseFrozenDelete = useCallback((count: number) => {
+    useUIStore
+      .getState()
+      .showToast(t('editSection.frozenNotDeleted', { count }), 'dmp-wizard-frozen-delete', 'warning');
+  }, [t]);
+
   const handleDeleteShot = useCallback((index: number) => {
-    if (frozenShotIndices.has(index)) return;
-    setEditState((prev) => {
-      if (!prev) return prev;
-      const newShots = [...prev.shots];
-      const shot = newShots[index];
-      if (shot) {
-        newShots[index] = { ...shot, isDeleted: true };
-      }
-      return { ...prev, shots: newShots };
+    const shot = currentShots()[index];
+    if (!shot || shot.isDeleted === true) return;
+    if (frozenShotIndices.has(index)) {
+      refuseFrozenDelete(1);
+      return;
+    }
+    applyShotEdit(index, -1, (shots) => {
+      const next = [...shots];
+      const row = next[index];
+      if (row) next[index] = { ...row, isDeleted: true };
+      return next;
     });
-  }, [frozenShotIndices]);
+  }, [applyShotEdit, currentShots, frozenShotIndices, refuseFrozenDelete]);
 
-  const handleInsertBefore = useCallback((index: number) => {
-    const tempId = nextTempIdRef.current++;
-    setEditState((prev) => {
-      if (!prev) return prev;
-      const newShots = [...prev.shots];
-      newShots.splice(index, 0, { ...blankEditableShot(-tempId), tempId });
-      return { ...prev, shots: newShots };
-    });
-  }, []);
+  /** Delete a selection as ONE decision. Asked one row at a time, the frozen
+   *  rows were dropped without a word and the grid collapsed the selection as
+   *  though the whole range had gone; the anchor was also re-anchored once per
+   *  row, each time against a count that no longer held. */
+  const handleDeleteShots = useCallback((indices: number[]): boolean => {
+    const shots = currentShots();
+    const requested = indices.filter((i) => shots[i] !== undefined && shots[i]!.isDeleted !== true);
+    if (requested.length === 0) return false;
+    const targets = requested.filter((i) => !frozenShotIndices.has(i));
+    if (targets.length < requested.length) refuseFrozenDelete(requested.length - targets.length);
+    if (targets.length === 0) return false;
 
-  const handleInsertAfter = useCallback((index: number) => {
-    const tempId = nextTempIdRef.current++;
-    setEditState((prev) => {
-      if (!prev) return prev;
-      const newShots = [...prev.shots];
-      newShots.splice(index + 1, 0, {
-        id: -tempId,
-        // Non-finite, NOT zero - see the blank-row note in ZeroDatumConfigDialog.
-        azimuth_in: NaN,
-        azimuth_out: NaN,
-        length: NaN,
-        depth_in: NaN,
-        depth_out: NaN,
-        pitch_in: null,
-        pitch_out: null,
-        left: null,
-        right: null,
-        up: null,
-        down: null,
-        comment: null,
-        kind: 'Normal' as const,
-        isNew: true,
-        tempId,
-      });
-      return { ...prev, shots: newShots };
-    });
-  }, []);
+    const doomed = new Set(targets);
+    applyShotEdit(Math.min(...targets), -targets.length, (rows) =>
+      rows.map((row, i) => (doomed.has(i) ? { ...row, isDeleted: true } : row)),
+    );
+    return true;
+  }, [applyShotEdit, currentShots, frozenShotIndices, refuseFrozenDelete]);
+
+  const handleInsertBefore = useCallback(
+    (index: number) => handleInsertShots(index, 1, 'before'),
+    [handleInsertShots]
+  );
+
+  const handleInsertAfter = useCallback(
+    (index: number) => handleInsertShots(index, 1, 'after'),
+    [handleInsertShots]
+  );
 
   // Persist overlap mode to config on change
   const handleOverlapModeChange = useCallback((value: OverlapMode) => {
@@ -2125,6 +1806,21 @@ export default function DmpNewImportDialog({
     return true;
   }, [computeDefaultMergeOffset, dmpFile.sections, ensureTemporalDistances]);
 
+  /** A section that reached the emit loop and produced nothing would otherwise
+   *  disappear between the wizard and the map: it is not in the `unreachable`
+   *  report either, which lists only what was never placed. */
+  const reportEmptySections = useCallback((indices: number[]) => {
+    if (indices.length === 0) return;
+    const names = indices.map(
+      (i) => sectionEditsRef.current.get(i)?.name ?? dmpFile.sections[i]?.name ?? `Section ${i}`,
+    );
+    useUIStore.getState().showToast(
+      `Not imported - no shots left to import: ${names.join(', ')}`,
+      'dmp-wizard-empty-sections',
+      'warning',
+    );
+  }, [dmpFile.sections]);
+
   // Transition from suggesting phase: import reachable sections immediately (early import),
   // then enter manual_placing for unreachable segments, or complete if none.
   const transitionToPlacingOrManual = useCallback(async () => {
@@ -2161,7 +1857,8 @@ export default function DmpNewImportDialog({
         const zeroDatumIdx = zeroDatumConfig?.sectionIndex ?? null;
         let emittedDmpIndices: number[];
         let configs: BackendImportSectionConfig[];
-        ({ configs, unreachable, emittedDmpIndices } = buildBatchImport(
+        let emptySections: number[];
+        ({ configs, unreachable, emittedDmpIndices, emptySections } = buildBatchImport(
           connectionsRef.current,
           zeroDatumIdx,
           dmpFile,
@@ -2173,6 +1870,7 @@ export default function DmpNewImportDialog({
           skippedIndicesRef.current,
           resolvedTheme,
         ));
+        reportEmptySections(emptySections);
 
         // 4. Import reachable sections immediately
         if (configs.length > 0) {
@@ -2221,7 +1919,7 @@ export default function DmpNewImportDialog({
         }
       } catch (e) {
         console.error('[earlyImport] Error during early import:', e);
-        setError(String(e));
+        setError(importErrorMessage(e));
         return;
       } finally {
         setIsImporting(false);
@@ -2239,6 +1937,10 @@ export default function DmpNewImportDialog({
           commitSegmentAnchor({ sectionIndex: chooseSegmentAnchorSection(firstSegment), stationIndex: 0 });
           setSegmentPlacementMode('manual');
           setAutoStartManualPlacementPending(true);
+          // The shot table follows the suggestion first and nothing ever cleared
+          // it, so entering manual placing with an exhausted pool left the grid
+          // editing the last SUGGESTED section while the anchor named another.
+          setCurrentSuggestion(null);
 
           setPhase('manual_placing');
           return;
@@ -2252,7 +1954,7 @@ export default function DmpNewImportDialog({
       transitionToPlacingInFlightRef.current = false;
       suggestionActionInFlightRef.current = false;
     }
-  }, [zeroDatumConfig, dmpFile, selectionConfig, overlapMode, onComplete, refreshProjectState, resolvedTheme]);
+  }, [zeroDatumConfig, dmpFile, selectionConfig, overlapMode, onComplete, refreshProjectState, reportEmptySections, resolvedTheme]);
 
   // On mount: import zero datum section and fire suggest_all_import_placements
   useEffect(() => {
@@ -2374,7 +2076,7 @@ export default function DmpNewImportDialog({
       setIsImporting(true);
       try {
         const zeroDatumIdx = zeroDatumConfig?.sectionIndex ?? null;
-        const { configs, emittedDmpIndices } = buildBatchImport(
+        const { configs, emittedDmpIndices, emptySections } = buildBatchImport(
           connectionsRef.current,
           zeroDatumIdx,
           dmpFile,
@@ -2386,6 +2088,7 @@ export default function DmpNewImportDialog({
           undefined,
           resolvedTheme,
         );
+        reportEmptySections(emptySections);
 
         // Filter to only the sections in the pending segment, remapping from_importing indices
         const pendingSet = new Set(saved.pendingSegmentImport);
@@ -2489,7 +2192,8 @@ export default function DmpNewImportDialog({
         const zeroDatumIdx = zeroDatumConfig?.sectionIndex ?? null;
         let configs: BackendImportSectionConfig[];
         let emittedDmpIndices: number[];
-        ({ configs, unreachable, emittedDmpIndices } = buildBatchImport(
+        let emptySections: number[];
+        ({ configs, unreachable, emittedDmpIndices, emptySections } = buildBatchImport(
           connectionsRef.current,
           zeroDatumIdx,
           dmpFile,
@@ -2501,6 +2205,7 @@ export default function DmpNewImportDialog({
           undefined,
           resolvedTheme,
         ));
+        reportEmptySections(emptySections);
 
         if (configs.length > 0) {
           const emittedSet = new Set(emittedDmpIndices);
@@ -2536,7 +2241,7 @@ export default function DmpNewImportDialog({
         }
       } catch (e) {
         console.error('[lateImport] Error:', e);
-        setError(String(e));
+        setError(importErrorMessage(e));
         return;
       } finally {
         setIsImporting(false);
@@ -2558,6 +2263,7 @@ export default function DmpNewImportDialog({
           setFromExistingStationIdx(0);
           setAutoStartManualPlacementPending(true);
           setError(null);
+          setCurrentSuggestion(null);
           setPhase('manual_placing');
           return;
         }
@@ -2594,6 +2300,7 @@ export default function DmpNewImportDialog({
         setFromExistingStationIdx(0);
         setAutoStartManualPlacementPending(true);
         setError(null);
+        setCurrentSuggestion(null);
         setPhase('manual_placing');
         return;
       }
@@ -2717,18 +2424,34 @@ export default function DmpNewImportDialog({
 
   // Confirm handler - records a virtual connection + overlap info (instant, no backend call).
   // Overlap treatment is deferred to applyAllOverlapTreatments which runs before batch import.
-  /** Refuse while the edited section holds a half-filled row, reading the count
-   *  FRESH. The wizard's actions suppress exhaustive-deps, so a captured count is
-   *  stale exactly when it matters: clear a cell, click Confirm without touching
-   *  anything else, and the old callback still remembers zero. */
-  const refuseIncompleteShots = useCallback(
-    () => blockedByIncompleteShots(
-      countIncompleteShots(editStateRef.current?.shots ?? []),
-      t,
-      'dmp-wizard-incomplete'
-    ),
-    [t]
-  );
+  /**
+   * Refuse while ANY section that will be sent holds a half-filled row.
+   *
+   * Every selected section's edits are serialized, not just the one on screen,
+   * so a gate on the active section alone let a cleared cell in section B walk
+   * past it (switching the active section asks nothing) and die at Rust's
+   * deserializer with an error that named nothing. The section is named here for
+   * the same reason.
+   *
+   * Read FRESH from the refs: the wizard's actions suppress exhaustive-deps, so
+   * a captured count is stale exactly when it matters - clear a cell, click
+   * Confirm without touching anything else, and the old callback still remembers
+   * zero.
+   */
+  const refuseIncompleteShots = useCallback(() => {
+    const live = new Map(sectionEditsRef.current);
+    // The active section's newest rows reach `sectionEditsRef` an effect later.
+    const active = editStateForSectionRef.current;
+    if (active != null && editStateRef.current) live.set(active, editStateRef.current);
+    const blocking = findIncompleteSections(selectedIndices, live)[0];
+    if (!blocking) return false;
+    useUIStore.getState().showToast(
+      `"${blocking.name}": ${t('editSection.incompleteBlocked', { count: blocking.count })}`,
+      'dmp-wizard-incomplete',
+      'warning',
+    );
+    return true;
+  }, [selectedIndices, t]);
 
   const handleConfirm = useCallback(async () => {
     if (!currentSuggestion) return;
@@ -3020,7 +2743,8 @@ export default function DmpNewImportDialog({
     const anchorStns = computeStationsFromDmpShots(
       anchorEntry.section.shots.filter((s) => s.shot_type === 'Standard'),
     );
-    const anchorStn = anchorStns[segmentAnchor.stationIndex];
+    // `anchorStns` comes from the effective (emitted) section - so must the index.
+    const anchorStn = anchorStns[emittedAnchorStation(segmentAnchor)];
     if (!anchorStn) return null;
 
     const gx = (anchorEntry.offsetX + anchorStn.x) - (targetEntry.offsetX + targetStn.x);
@@ -3047,7 +2771,7 @@ export default function DmpNewImportDialog({
     }
 
     return result.length > 0 ? result : null;
-  }, [segmentPlacementMode, fromExistingSectionId, fromExistingStationIdx, projectSections, projectMerges, segmentAnchor, segmentPreviewSections]);
+  }, [segmentPlacementMode, fromExistingSectionId, fromExistingStationIdx, projectSections, projectMerges, segmentAnchor, segmentPreviewSections, emittedAnchorStation]);
 
   // Current segment's skipped suggestion (if any section in the segment had one)
   const segmentSkippedSuggestion = useMemo(() => {
@@ -3083,6 +2807,7 @@ export default function DmpNewImportDialog({
   const handleSegmentPlace = useCallback(() => {
     if (refuseIncompleteShots()) return;
     if (!currentSegment || !segmentAnchor) return;
+    const anchorStation = emittedAnchorStation(segmentAnchor);
 
     let placement: ImportPlacement;
     if (segmentPlacementMode === 'suggestion' && segmentSkippedSuggestion) {
@@ -3119,7 +2844,7 @@ export default function DmpNewImportDialog({
       if (fromExistingSectionId == null) return;
       placement = {
         type: 'from_existing',
-        import_station: segmentAnchor.stationIndex,
+        import_station: anchorStation,
         existing_station: {
           section_id: fromExistingSectionId,
           station_index: fromExistingStationIdx,
@@ -3141,12 +2866,12 @@ export default function DmpNewImportDialog({
 
     const dp: DirectPlacement = {
       anchorSectionIndex: segmentAnchor.sectionIndex,
-      anchorStationIndex: segmentAnchor.stationIndex,
+      anchorStationIndex: anchorStation,
       placement,
     };
     directPlacementsRef.current = [...directPlacementsRef.current, dp];
     advanceSegmentQueue();
-  }, [currentSegment, segmentAnchor, segmentPlacementMode, segmentSkippedSuggestion, fromExistingSectionId, fromExistingStationIdx, advanceSegmentQueue]);
+  }, [currentSegment, segmentAnchor, segmentPlacementMode, segmentSkippedSuggestion, fromExistingSectionId, fromExistingStationIdx, advanceSegmentQueue, emittedAnchorStation, refuseIncompleteShots]);
 
   // Skip segment handler - appends to end of queue
   const handleSegmentSkip = useCallback(() => {
@@ -3173,14 +2898,13 @@ export default function DmpNewImportDialog({
     });
   }, [currentSegment, chooseSegmentAnchorSection, commitSegmentAnchor]);
 
-  // Station click handler for segment preview
+  // Station click handler for segment preview. The index arrives in the
+  // preview's own (emitted) numbering - see the note on the two spaces.
   const handleSegmentStationClick = useCallback((stationIndex: number, sectionIndex?: number) => {
-    if (sectionIndex != null) {
-      commitSegmentAnchor({ sectionIndex, stationIndex });
-    } else if (currentSegment && currentSegment.length > 0) {
-      commitSegmentAnchor({ sectionIndex: currentSegment[0]!, stationIndex });
-    }
-  }, [currentSegment, commitSegmentAnchor]);
+    const idx = sectionIndex ?? (currentSegment && currentSegment.length > 0 ? currentSegment[0]! : null);
+    if (idx == null) return;
+    commitSegmentAnchor({ sectionIndex: idx, stationIndex: visibleAnchorStation(idx, stationIndex) });
+  }, [currentSegment, commitSegmentAnchor, visibleAnchorStation]);
 
   const buildSegmentPlacementPayload = useCallback(
     (segment: number[], anchor: { sectionIndex: number; stationIndex: number }) => {
@@ -3193,13 +2917,7 @@ export default function DmpNewImportDialog({
       const shots: ShotData[] = edits
         ? edits.shots.filter(isEmittedShot).map(editableShotToShotData)
         : convertToEditableShots(anchorDmpSection.shots).map(editableShotToShotData);
-      // The user picked this station against the rows they can SEE, which include
-      // any blank row the filter above just dropped. Left untranslated, the
-      // placement aligned to a station one too far along - or past the end of the
-      // shortened section entirely.
-      const emittedStationIndex = edits
-        ? toEmittedStationIndex(edits.shots, anchor.stationIndex)
-        : anchor.stationIndex;
+      const emittedStationIndex = emittedAnchorStation(anchor);
 
       const sectionData = {
         name: edits?.name ?? anchorDmpSection.name,
@@ -3260,13 +2978,13 @@ export default function DmpNewImportDialog({
 
       return { sectionData, additionalSections, emittedStationIndex };
     },
-    [dmpFile.sections, selectionConfig.defaultDate, selectionConfig.defaultSurveyor, selectedIndices, sectionPalette],
+    [dmpFile.sections, emittedAnchorStation, selectionConfig.defaultDate, selectionConfig.defaultSurveyor, selectedIndices, sectionPalette],
   );
 
   const importPlacedSegmentNow = useCallback(
     async (segmentIndices: number[], directPlacements: DirectPlacement[]) => {
       const zeroDatumIdx = zeroDatumConfig?.sectionIndex ?? null;
-      const { configs, emittedDmpIndices } = buildBatchImport(
+      const { configs, emittedDmpIndices, emptySections } = buildBatchImport(
         connectionsRef.current,
         zeroDatumIdx,
         dmpFile,
@@ -3278,6 +2996,7 @@ export default function DmpNewImportDialog({
         undefined,
         resolvedTheme,
       );
+      reportEmptySections(emptySections);
 
       const pendingSet = new Set(segmentIndices);
       const segmentConfigs: BackendImportSectionConfig[] = [];
@@ -3371,7 +3090,7 @@ export default function DmpNewImportDialog({
 
       return true;
     },
-    [buildBatchImport, dmpFile, refreshProjectState, selectionConfig, zeroDatumConfig?.sectionIndex, resolvedTheme],
+    [dmpFile, refreshProjectState, reportEmptySections, selectionConfig, zeroDatumConfig?.sectionIndex, resolvedTheme],
   );
 
   // Manual map placement for a segment
@@ -3475,7 +3194,7 @@ export default function DmpNewImportDialog({
               segmentImported = await importPlacedSegmentNow(segment, nextDirectPlacements);
             } catch (e) {
               console.error('[manualPlacement] Immediate segment import failed:', e);
-              setError(String(e));
+              setError(importErrorMessage(e));
             } finally {
               setIsImporting(false);
             }
@@ -3651,6 +3370,7 @@ export default function DmpNewImportDialog({
                   onAddShots={handleAddShots}
                   onInsertShots={handleInsertShots}
                   onDeleteShot={handleDeleteShot}
+                  onDeleteShots={handleDeleteShots}
                   onInsertBefore={handleInsertBefore}
                   onInsertAfter={handleInsertAfter}
                   frozenShotIndices={frozenShotIndices}
@@ -3892,6 +3612,7 @@ export default function DmpNewImportDialog({
                   onAddShots={handleAddShots}
                   onInsertShots={handleInsertShots}
                   onDeleteShot={handleDeleteShot}
+                  onDeleteShots={handleDeleteShots}
                   onInsertBefore={handleInsertBefore}
                   onInsertAfter={handleInsertAfter}
                   frozenShotIndices={frozenShotIndices}
@@ -3911,7 +3632,7 @@ export default function DmpNewImportDialog({
                 contextSections={fromExistingContextSections}
                 size={manualPreviewSize}
                 onStationClick={handleSegmentStationClick}
-                selectedStationIndex={previewAnchor?.stationIndex ?? null}
+                selectedStationIndex={previewAnchor ? emittedAnchorStation(previewAnchor) : null}
                 selectedSectionIndex={previewAnchor?.sectionIndex ?? null}
               />
             </WizardMapPanel>

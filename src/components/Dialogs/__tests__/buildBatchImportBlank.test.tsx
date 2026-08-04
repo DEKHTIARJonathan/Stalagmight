@@ -20,6 +20,7 @@ vi.mock('../SectionPreview', async (importOriginal) => ({
 vi.mock('maplibre-gl', () => ({ default: {} }));
 
 import { buildBatchImport } from '../DmpNewImportDialog';
+import { NonFiniteShotError } from '../../../utils/importPayloadGuard';
 import type { EditableShot } from '../../common/ShotTableEditor';
 import type { SectionEditState } from '../../../utils/batchImportHelpers';
 import type { DmpFile } from '../../../types/commands';
@@ -126,9 +127,12 @@ describe('buildBatchImport with a blank new row', () => {
     expect(emitted(build([measured(0), measured(1)]))).toHaveLength(2);
   });
 
-  it('does not drop a partly filled row - the gate blocks that one', () => {
-    // Half-filled is NOT blank: it must still reach the gate, which refuses.
+  it('refuses a partly filled row rather than dropping it or sending NaN', () => {
+    // Half-filled is NOT blank - dropping it would throw away data the user
+    // typed. The UI gates ask them to finish it; this last check makes sure no
+    // route reaches IPC with the NaN, and says which section and row.
     const partial = { ...blank(2), length: 7 } as EditableShot;
-    expect(emitted(build([measured(0), partial]))).toHaveLength(2);
+    expect(() => build([measured(0), partial])).toThrow(NonFiniteShotError);
+    expect(() => build([measured(0), partial])).toThrow(/Section "S" row 2/);
   });
 });

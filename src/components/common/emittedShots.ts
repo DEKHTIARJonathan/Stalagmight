@@ -31,6 +31,27 @@ export function emittedBefore(shots: readonly EditableShot[], arrayIndex: number
   return count;
 }
 
+/** Whether the user can SEE this row. Deleted rows are hidden; a blank added row
+ *  is on screen and occupies a station, even though it never reaches the
+ *  backend - which is exactly why the two spaces need separate counts. */
+export const isVisibleShot = (s: EditableShot | undefined): boolean =>
+  s !== undefined && s.isDeleted !== true;
+
+/** How many visible rows precede this index in the FULL array. The counterpart
+ *  of {@link emittedBefore} for a pick stored in visible space. */
+export function visibleBefore(shots: readonly EditableShot[], arrayIndex: number): number {
+  let count = 0;
+  for (let i = 0; i < arrayIndex && i < shots.length; i++) {
+    if (isVisibleShot(shots[i])) count++;
+  }
+  return count;
+}
+
+/** Rows on screen. The station dropdown lists this many plus one. */
+export function visibleShotCount(shots: readonly EditableShot[]): number {
+  return shots.filter(isVisibleShot).length;
+}
+
 /**
  * A station index the user picked - counted over the rows they can SEE, blanks
  * included - expressed in the emitted section's numbering. Clamped, so a pick
@@ -51,4 +72,36 @@ export function toEmittedStationIndex(
   }
   const total = shots.filter(isEmittedShot).length;
   return Math.min(emitted, total);
+}
+
+/**
+ * The other direction: a station a PREVIEW drew, expressed over the rows on
+ * screen.
+ *
+ * The previews render the emitted rows (a blank row has no geometry to draw and
+ * a NaN there poisons every station after it), so a click on a station dot
+ * arrives numbered in emitted space while the pick is stored, listed and
+ * re-anchored in visible space. Where several visible stations map to one drawn
+ * station - a blank row occupies no distance - this answers with the first of
+ * them, so a section with no blanks answers with the index it was handed.
+ */
+export function fromEmittedStationIndex(
+  shots: readonly EditableShot[],
+  emittedStationIndex: number
+): number {
+  let emitted = 0;
+  let visible = 0;
+  let endOfEmitted = 0;
+  for (const s of shots) {
+    if (s.isDeleted === true) continue;
+    if (isEmittedShot(s)) {
+      if (emitted >= emittedStationIndex) return visible;
+      emitted++;
+      endOfEmitted = visible + 1;
+    }
+    visible++;
+  }
+  // Past the last drawn station - it is the end of the emitted run, whatever
+  // blank rows trail after it.
+  return endOfEmitted;
 }
