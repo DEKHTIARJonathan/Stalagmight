@@ -1549,9 +1549,13 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
     const root = scrollRef.current;
     if (!root) return;
     let max = 0;
-    const header = root.querySelector(`[data-testid="grid-header-${key}"] span`);
+    // Built from the grid's OWN prefix. Hardcoding `grid-` matched nothing in a
+    // grid that sets `testIdPrefix` - the new-section and shot-editor grids - so
+    // `max` stayed 0 and a double-click on the resize handle silently did
+    // nothing there while working in the data table.
+    const header = root.querySelector(`[data-testid="${testIdPrefix}-header-${key}"] span`);
     if (header) max = Math.max(max, (header as HTMLElement).scrollWidth);
-    root.querySelectorAll('[data-testid^="grid-cell-"]').forEach((el) => {
+    root.querySelectorAll(`[data-testid^="${testIdPrefix}-cell-"]`).forEach((el) => {
       const node = el as HTMLElement;
       if (node.dataset.testid?.endsWith(`-${key}`)) max = Math.max(max, node.scrollWidth);
     });
@@ -1561,7 +1565,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
         [key]: clamp(max + 18, MIN_COL_WIDTH, AUTOFIT_MAX_COL_WIDTH),
       });
     }
-  }, [commitWidths]);
+  }, [commitWidths, testIdPrefix]);
 
   // Double-click the fill handle: fill down to the data extent of the left
   // neighbour column (Google-Sheets auto-fill), or the selection's own column.

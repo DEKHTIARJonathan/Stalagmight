@@ -219,8 +219,17 @@ export default function ImportDialog() {
   const applyGridEdits = useCallback(
     (edits: CellEdit[]) => {
       if (editingBlocked) return;
-      const { rows: next, droppedPastCap } = applyEdits(drafts, edits, nextKey);
-      setDrafts(next);
+      // Functional: the grid calls this once PER cleared cell when several
+      // required cells are emptied at once, and each call computing from the
+      // same captured `drafts` meant only the last one survived - while the grid
+      // showed them all cleared, so Create could go green with a measurement the
+      // user believed they had removed.
+      let droppedPastCap = 0;
+      setDrafts((current) => {
+        const { rows: next, droppedPastCap: dropped } = applyEdits(current, edits, nextKey);
+        droppedPastCap = dropped;
+        return next;
+      });
       if (droppedPastCap > 0) {
         showToast(
           t('newSection.pasteCapped', { count: droppedPastCap }),
@@ -229,7 +238,7 @@ export default function ImportDialog() {
         );
       }
     },
-    [editingBlocked, drafts, nextKey, showToast, t]
+    [editingBlocked, nextKey, showToast, t]
   );
 
   const onEdit = useCallback(
