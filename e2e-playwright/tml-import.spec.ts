@@ -115,9 +115,10 @@ test.describe('Ariane TML import journey', () => {
     const sections = await getImportedSections(page);
     expect(sections.map((section) => section.name)).toEqual(['Main Line', 'Side Passage']);
     // Excluded shot dropped: 2 kept in Main Line, 2 in Side Passage.
+    // No kind assertions here: the default Auto mode classifies virtual shots
+    // via the backend's chain rule, which the IPC mock deliberately does not
+    // model - kinds are only asserted under the override modes below.
     expect(sections.map((section) => section.kinds.length)).toEqual([2, 2]);
-    // Ariane's VIRTUAL category resolves to a jump under the default Auto mode.
-    expect(sections[1]?.kinds).toEqual(['Normal', 'Jump']);
 
     const calls = await getTmlImportCalls(page);
     expect(calls).toHaveLength(1);
@@ -163,6 +164,24 @@ test.describe('Ariane TML import journey', () => {
 
     const sections = await getImportedSections(page);
     expect(sections[1]?.kinds).toEqual(['Normal', 'Reference']);
+  });
+
+  test('the all-jumps override imports jumps regardless of topology', async ({ page }) => {
+    await openTmlImportDialog(page, TML_PATH, 'All Jumps Import');
+
+    await page.getByTestId('tml-virtual-shot-mode').selectOption('AllJumps');
+    await page.getByTestId('tml-import-confirm').click();
+
+    const receipt = page.getByTestId('import-receipt-dialog');
+    await expect(receipt).toBeVisible({ timeout: 15000 });
+    await page.getByTestId('import-receipt-continue').click();
+
+    const calls = await getTmlImportCalls(page);
+    expect(calls).toHaveLength(1);
+    expect(calls[0].virtualShotMode).toBe('AllJumps');
+
+    const sections = await getImportedSections(page);
+    expect(sections[1]?.kinds).toEqual(['Normal', 'Jump']);
   });
 
   test('an imperial file reports the unit conversion in the dialog and the receipt', async ({ page }) => {

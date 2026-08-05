@@ -2672,8 +2672,17 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                   up: shot.up,
                   down: shot.down,
                   comment: shot.comment,
-                  // #27: Ariane's single VIRTUAL category resolves to Jump unless
-                  // the dialog's override asks for references.
+                  // DELIBERATELY UNMODELED: the real backend's Auto mode runs the
+                  // #27 chain rule (classify_virtual_shots in
+                  // src-tauri/src/models/project/classify.rs) over the merged
+                  // station graph; this mock reduces it to a ternary, so under
+                  // 'Auto' the kind below can DISAGREE with the real backend.
+                  // Specs must not assert virtual-shot kinds under Auto - only
+                  // under the unconditional overrides (AllJumps/AllReferences),
+                  // which bypass the chain rule in the real backend too. Also
+                  // unmodeled: the converter's id_to_import_loc topology remap,
+                  // so exclusion+closure interactions across sections are not
+                  // faithful here either.
                   kind:
                     shot.shot_type === 'Virtual'
                       ? virtualShotMode === 'AllReferences'
