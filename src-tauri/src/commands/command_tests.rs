@@ -1845,6 +1845,45 @@ fn test_execute_gpx_import_decorates_receipt() {
     });
 }
 
+/// #411: an import whose sections all vanished before they reached the command
+/// (every shot excluded, or every section malformed) lands NOTHING. It must
+/// still return a receipt - a zero one - because `decorate_receipt` hangs the
+/// converter's "why" on that receipt and had nothing to hang it on when the
+/// command returned a bare success. A silent, successful, empty import is the
+/// exact failure this closes.
+#[test]
+fn test_import_sections_with_nothing_to_import_still_reports_a_receipt() {
+    with_config_lock(|| {
+        let app = app_with_state();
+        state(&app).execute(Command::CreateProject {
+            name: "Test".to_string(),
+            location: None,
+        });
+
+        let result = import::import_sections(
+            state(&app),
+            Vec::new(),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        );
+
+        assert_success(&result);
+        let receipt = result
+            .import_receipt
+            .as_ref()
+            .expect("an import that landed nothing must still report a receipt");
+        assert_eq!(receipt.sections_imported, 0);
+        assert_eq!(receipt.shot_count, 0);
+        assert_eq!(receipt.closures_requested, 0);
+        assert!(receipt.warnings.is_empty());
+    });
+}
+
 // #92 / #112: the adversarial twin of the success test above. When the deferred
 // save *fails* (here: the save's parent directory is missing, so the temp
 // `.stalx.tmp` can't be created), `finalize_deferred_import` must return a PARTIAL

@@ -101,6 +101,7 @@ export * from './ipc/TmlShotType';
 export * from './ipc/TmlUnit';
 export * from './ipc/TmlGeoCoding';
 export * from './ipc/TmlClosure';
+export * from './ipc/TmlParseAnomalies';
 export * from './ipc/CompassFile';
 export * from './ipc/CompassSurveySummary';
 export * from './ipc/WallsFile';

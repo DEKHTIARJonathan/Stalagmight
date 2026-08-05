@@ -170,6 +170,12 @@ export default function WallsImportDialog({ wallsFile, filePath }: WallsImportDi
 
       // Nothing was imported - most commonly a `.wpj` whose `.srv` files aren't
       // next to it on disk. Tell the user why instead of silently "succeeding".
+      //
+      // DELIBERATE DIVERGENCE from the TML/Compass/GPX dialogs, which show the
+      // backend's empty receipt (#411) for the same outcome: Walls has a
+      // specific, actionable cause to name (missing sibling files), so it
+      // routes to the error dialog and DISCARDS `result.import_receipt` -
+      // including any converter warnings it carries. Change this knowingly.
       if (sectionIds.length === 0) {
         surfaceImportFailure('walls-import', importUi, {
           phase: 'empty',

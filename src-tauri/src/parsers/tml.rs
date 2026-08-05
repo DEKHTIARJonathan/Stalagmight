@@ -38,9 +38,40 @@ pub struct TmlFile {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub unrecognized_unit: Option<String>,
+    /// Structural damage the parser silently smoothed over, when there was any.
+    /// Nothing else records it: each of these is a shot that was dropped or
+    /// reinterpreted, and the import receipt is the only place the user can
+    /// learn it happened.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub parse_anomalies: Option<TmlParseAnomalies>,
     pub geo_coding: Option<TmlGeoCoding>,
     pub sections: Vec<TmlSection>,
     pub closures: Vec<TmlClosure>,
+}
+
+/// Counts of the file-level anomalies the parser recovers from instead of
+/// failing on. All three are recoveries, not errors: the file still imports,
+/// but with fewer or different shots than it declares.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct TmlParseAnomalies {
+    /// Shot elements with no usable `<ID>`, dropped by `build_raw_shot`.
+    pub shots_missing_id: u32,
+    /// Shots whose `<Type>` is none of REAL/VIRTUAL/START/CLOSURE and were
+    /// therefore read as REAL.
+    pub unknown_shot_types: u32,
+    /// Shots sharing an `<ID>` with an earlier shot. The topology index is
+    /// keyed by ID, so only the last shot with each ID survives it.
+    pub duplicate_shot_ids: u32,
+}
+
+impl TmlParseAnomalies {
+    /// Whether anything at all was recorded, so `parse_tml` can leave the
+    /// field off a clean file entirely.
+    fn any(self) -> bool {
+        self != Self::default()
+    }
 }
 
 /// Measurement unit in the TML file.
@@ -119,7 +150,17 @@ pub enum TmlShotType {
     Closure,
 }
 
-/// A closure linking two stations across sections.
+/// A closure linking two stations across sections, in PREVIEW coordinates.
+///
+/// The indices are positions in [`TmlSection::shots`] as parsed - CLOSURE and
+/// excluded shots included, and no `+1` shift onto the station at the end of
+/// each shot. That is deliberately NOT the convention of the
+/// [`crate::models::ImportClosure`] values `convert_tml_to_import_configs`
+/// builds, which index the filtered import shot list and DO shift (`shot i`
+/// ends at `station i + 1`). The two are not interchangeable: this type exists
+/// only so the import dialog can say how many closures the file contains
+/// before anything is imported, and the import path re-resolves every closure
+/// from the raw Ariane IDs rather than reading these.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct TmlClosure {
@@ -312,13 +353,20 @@ fn parse_raw_shots(xml: &str) -> Result<(Vec<RawShot>, FileMetadata)> {
                 match name_bytes {
                     b"SurveyData" | b"SRVD" => {
                         if in_shot {
-                            match build_raw_shot(&current_fields) {
+                            // Counted as a missing ID because that is
+                            // `build_raw_shot`'s ONLY fallible path today (the
+                            // numeric fields all coerce). A new `bail!` in
+                            // there needs its own counter, or this warning
+                            // starts naming the wrong defect.
+                            match build_raw_shot(&current_fields, &mut metadata.anomalies) {
                                 Ok(shot) => shots.push(shot),
                                 Err(e) => {
                                     tracing::warn!(
                                         reason = %e,
                                         "Skipping malformed shot element"
                                     );
+                                    metadata.anomalies.shots_missing_id =
+                                        metadata.anomalies.shots_missing_id.saturating_add(1);
                                 }
                             }
                             in_shot = false;
@@ -397,10 +445,18 @@ struct FileMetadata {
     unit: String,
     use_magnetic_azimuth: bool,
     first_start_absolute_elevation: f64,
+    /// Tallied by the raw-shot loop, not read from the file: the two anomalies
+    /// only the element-by-element pass can see (a shot with no ID, a shot with
+    /// an unknown type). `duplicate_shot_ids` is filled in later, by
+    /// `parse_tml`, once the whole shot list exists.
+    anomalies: TmlParseAnomalies,
 }
 
 /// Build a `RawShot` from parsed field map.
-fn build_raw_shot(fields: &HashMap<&str, String>) -> Result<RawShot> {
+fn build_raw_shot(
+    fields: &HashMap<&str, String>,
+    anomalies: &mut TmlParseAnomalies,
+) -> Result<RawShot> {
     let id = parse_i64(fields, "id").context("Missing or invalid ID")?;
     let from_id = parse_i64(fields, "from_id").unwrap_or(-1);
 
@@ -411,6 +467,7 @@ fn build_raw_shot(fields: &HashMap<&str, String>) -> Result<RawShot> {
         Some("CLOSURE") => TmlShotType::Closure,
         Some(other) => {
             tracing::warn!(shot_type = other, id, "Unknown shot type, treating as Real");
+            anomalies.unknown_shot_types = anomalies.unknown_shot_types.saturating_add(1);
             TmlShotType::Real
         }
         None => TmlShotType::Real,
@@ -598,6 +655,19 @@ fn propagate_start_gps(raw_shots: &mut [RawShot]) {
             shot.longitude = lng;
         }
     }
+}
+
+/// How many shots share an ID with an earlier shot.
+///
+/// `build_sections` keys its topology index (`shot_by_id`) on the Ariane ID, so
+/// every one of these is a shot the import loses: the later shot overwrites the
+/// earlier one in the index, and the earlier one's successors reattach to the
+/// survivor. Counted here rather than fixed - which shot the file MEANT is not
+/// knowable from the file.
+fn count_duplicate_shot_ids(raw_shots: &[RawShot]) -> u32 {
+    let mut seen = std::collections::HashSet::with_capacity(raw_shots.len());
+    let duplicates = raw_shots.iter().filter(|s| !seen.insert(s.id)).count();
+    u32::try_from(duplicates).unwrap_or(u32::MAX)
 }
 
 /// Build topology and linearize into sections.
@@ -1046,31 +1116,29 @@ fn extract_closures(
                         to_section_index: to_si,
                         to_station_index: to_shot_idx,
                     });
-                } else {
-                    // Target might be a START shot (not in sections). Try finding
-                    // the first shot whose from_id matches the closure target.
-                    if let Some(target_raw) = shot_by_id.get(&shot.closure_to_id) {
-                        if target_raw.shot_type == TmlShotType::Start {
-                            // Find the first shot that has from_id == closure_to_id
-                            // (i.e., the first real shot after the START)
-                            let target = id_to_location.iter().find(|(&_id, _)| {
-                                sections
-                                    .get(id_to_location.get(&_id).map_or(usize::MAX, |l| l.0))
-                                    .and_then(|s| s.shots.first())
-                                    .map_or(false, |first_shot| {
-                                        first_shot.from_id == shot.closure_to_id
-                                    })
-                            });
-                            if let Some((&_, &(to_si, _))) = target {
-                                // Station 0 of the target section (first station after START)
-                                closures.push(TmlClosure {
-                                    from_section_index,
-                                    from_station_index,
-                                    to_section_index: to_si,
-                                    to_station_index: 0,
-                                });
-                            }
-                        }
+                } else if shot_by_id
+                    .get(&shot.closure_to_id)
+                    .is_some_and(|target| target.shot_type == TmlShotType::Start)
+                {
+                    // The target is a START shot, which carries no measurement
+                    // and so is in no section. Aim at the first section that
+                    // hangs off it instead. Scanning `sections` in order (rather
+                    // than the previous scan of the `id_to_location` HashMap)
+                    // is what makes the answer the same on every run when
+                    // several sections start from the same START shot.
+                    let to_section_index = sections.iter().position(|s| {
+                        s.shots
+                            .first()
+                            .is_some_and(|first| first.from_id == shot.closure_to_id)
+                    });
+                    if let Some(to_si) = to_section_index {
+                        // Station 0 of the target section (first station after START)
+                        closures.push(TmlClosure {
+                            from_section_index,
+                            from_station_index,
+                            to_section_index: to_si,
+                            to_station_index: 0,
+                        });
                     }
                 }
             }
@@ -1140,6 +1208,9 @@ pub fn parse_tml(path: &Path) -> Result<TmlFile> {
 
     let (unit, unrecognized_unit) = classify_unit(&metadata.unit);
 
+    let mut anomalies = metadata.anomalies;
+    anomalies.duplicate_shot_ids = count_duplicate_shot_ids(&raw_shots);
+
     let (mut sections, closures) = build_sections(raw_shots);
 
     // Apply unit conversion before returning
@@ -1161,6 +1232,7 @@ pub fn parse_tml(path: &Path) -> Result<TmlFile> {
         sections = sections.len(),
         closures = closures.len(),
         unit = ?unit,
+        anomalies = ?anomalies,
         "TML parsing complete"
     );
 
@@ -1170,6 +1242,7 @@ pub fn parse_tml(path: &Path) -> Result<TmlFile> {
         use_magnetic_azimuth: metadata.use_magnetic_azimuth,
         first_start_absolute_elevation,
         unrecognized_unit,
+        parse_anomalies: anomalies.any().then_some(anomalies),
         geo_coding,
         sections,
         closures,
@@ -1216,23 +1289,93 @@ fn sanitize_unit_label(raw: &str) -> String {
 // Conversion to ImportSectionConfig
 // ============================================================================
 
+/// `""` or `"s"` for a count, so a warning reads naturally at 1.
+fn plural_s(count: u32) -> &'static str {
+    if count == 1 {
+        ""
+    } else {
+        "s"
+    }
+}
+
+/// `"was"` or `"were"` for a count.
+fn was_were(count: u32) -> &'static str {
+    if count == 1 {
+        "was"
+    } else {
+        "were"
+    }
+}
+
+/// Turn the parser's anomaly tallies into receipt-visible sentences.
+///
+/// These describe shots the file contains that the import does not, or that it
+/// holds as something other than what the file said. The parser already logs
+/// each one, but a log is not something the person doing the import ever sees.
+///
+/// The counts are PARSE-time and whole-file: they precede the exclusion filter
+/// and section selection, so a coerced shot counted here may not be in the
+/// import at all. The wording says "in the file" for exactly that reason.
+///
+/// One sentence per anomaly CLASS, never one per shot - a file with ten
+/// thousand duplicate IDs must not push ten thousand warnings through IPC.
+fn push_parse_anomaly_warnings(anomalies: TmlParseAnomalies, warnings: &mut Vec<String>) {
+    let TmlParseAnomalies {
+        shots_missing_id,
+        unknown_shot_types,
+        duplicate_shot_ids,
+    } = anomalies;
+
+    if shots_missing_id > 0 {
+        warnings.push(format!(
+            "{shots_missing_id} shot{} in the file had a missing or unreadable ID and {} skipped",
+            plural_s(shots_missing_id),
+            was_were(shots_missing_id)
+        ));
+    }
+    if unknown_shot_types > 0 {
+        warnings.push(format!(
+            "{unknown_shot_types} shot{} in the file had an unrecognized type and {} read as {}",
+            plural_s(unknown_shot_types),
+            was_were(unknown_shot_types),
+            if unknown_shot_types == 1 {
+                "a regular shot"
+            } else {
+                "regular shots"
+            }
+        ));
+    }
+    if duplicate_shot_ids > 0 {
+        warnings.push(format!(
+            "{duplicate_shot_ids} shot{} in the file reused an ID already used by another shot; \
+             only the last shot with each ID was kept",
+            plural_s(duplicate_shot_ids)
+        ));
+    }
+}
+
 /// Convert a parsed TML file into `ImportSectionConfig` values ready for
 /// `execute_import_sections`.
+///
+/// A file with no sections is NOT an early return: it still produces the
+/// warnings that say why (an unrecognized unit, shots the parser had to drop),
+/// and those are the only account the user gets of an import that landed
+/// nothing.
 pub fn convert_tml_to_import_configs(
     tml: &TmlFile,
     include_excluded: bool,
     comments_on_stations: bool,
 ) -> Result<(Vec<ImportSectionConfig>, Vec<ImportClosure>, Vec<String>)> {
-    if tml.sections.is_empty() {
-        return Ok((Vec::new(), Vec::new(), Vec::new()));
-    }
-
     let mut warnings: Vec<String> = Vec::new();
 
     if let Some(raw_unit) = &tml.unrecognized_unit {
         warnings.push(format!(
             "The file declares an unrecognized unit \"{raw_unit}\"; all measurements were read as meters"
         ));
+    }
+
+    if let Some(anomalies) = tml.parse_anomalies {
+        push_parse_anomaly_warnings(anomalies, &mut warnings);
     }
 
     // Build a mapping from Ariane shot ID → (section_index, station_index)
@@ -1363,12 +1506,31 @@ pub fn convert_tml_to_import_configs(
     // which section a given section attaches to.
     topological_sort_configs(&mut configs);
 
+    // Ariane IDs that name an ENTRANCE (a START shot): they are some section's
+    // parent but are no shot in the file, because START shots carry no
+    // measurement and never enter a section. Needed to tell the two reasons a
+    // closure endpoint fails to resolve apart - "you filtered it out" and "it
+    // is the entrance, which this importer has no station for".
+    let shot_ids: std::collections::HashSet<i64> = tml
+        .sections
+        .iter()
+        .flat_map(|s| &s.shots)
+        .map(|s| s.id)
+        .collect();
+    let entrance_ids: std::collections::HashSet<i64> = tml
+        .sections
+        .iter()
+        .map(|s| s.start_ariane_id)
+        .filter(|id| *id >= 0 && !shot_ids.contains(id))
+        .collect();
+
     // Extract loop closures by resolving CLOSURE shots through id_to_import_loc.
     // CLOSURE shots have from_id (the station the closure originates from) and
     // closure_to_id (the target station). Both must resolve to import-space
     // coordinates; closures where either endpoint was filtered out are skipped.
     let mut import_closures = Vec::new();
     let mut closures_with_excluded_endpoints: u32 = 0;
+    let mut closures_to_entrance: u32 = 0;
     for section in &tml.sections {
         for shot in &section.shots {
             if shot.shot_type != TmlShotType::Closure || shot.closure_to_id < 0 {
@@ -1383,6 +1545,18 @@ pub fn convert_tml_to_import_configs(
                     to_section_index: to_si,
                     to_station_index: to_st,
                 });
+            } else if (from.is_none() && entrance_ids.contains(&shot.from_id))
+                || (to.is_none() && entrance_ids.contains(&shot.closure_to_id))
+            {
+                // Nothing was excluded here - the closure simply ends at the
+                // entrance station, which the import does not model as a
+                // station of any section. Counted apart so the receipt stops
+                // blaming the user's exclusion filter for it.
+                tracing::warn!(
+                    section = ?section.name,
+                    "Loop closure referenced an entrance (START) station and was skipped"
+                );
+                closures_to_entrance = closures_to_entrance.saturating_add(1);
             } else {
                 tracing::warn!(
                     section = ?section.name,
@@ -1422,6 +1596,14 @@ pub fn convert_tml_to_import_configs(
             } else {
                 "were"
             }
+        ));
+    }
+    if closures_to_entrance > 0 {
+        warnings.push(format!(
+            "{closures_to_entrance} loop closure{} referenced an entrance station and {} not \
+             reconstructed",
+            plural_s(closures_to_entrance),
+            was_were(closures_to_entrance)
         ));
     }
 
@@ -2255,6 +2437,7 @@ mod tests {
             use_magnetic_azimuth: true,
             first_start_absolute_elevation: 100.0,
             unrecognized_unit: None,
+            parse_anomalies: None,
             geo_coding,
             sections,
             closures,
@@ -2680,6 +2863,267 @@ mod tests {
     }
 
     // -------------------------------------------------------------------
+    // Structural anomalies the parser recovers from (#411)
+    // -------------------------------------------------------------------
+
+    /// A shot element with no `<ID>` is dropped. Before this it was dropped
+    /// with nothing but a `tracing::warn!` - the import reported a clean
+    /// success one shot short of the file.
+    #[test]
+    fn a_shot_with_no_id_is_counted_and_named_in_the_receipt() {
+        let idless = r"<SurveyData>
+    <FromID>1</FromID>
+    <Type>REAL</Type>
+    <Section>Main</Section>
+    <Azimut>90.0</Azimut>
+    <Length>10.0</Length>
+</SurveyData>";
+        let xml = wrap_xml(
+            &[
+                tml_shot_xml(0, -1, "START", "Start"),
+                tml_shot_xml(1, 0, "REAL", "Main"),
+                idless.to_string(),
+            ]
+            .join("\n"),
+        );
+        let tml = parse_synthetic_tmlu(&xml);
+
+        let anomalies = tml
+            .parse_anomalies
+            .expect("a dropped shot must be recorded on the parse result");
+        assert_eq!(anomalies.shots_missing_id, 1);
+        // Only the ID-less shot is lost; the well-formed one still imports.
+        assert_eq!(tml.sections.iter().map(|s| s.shots.len()).sum::<usize>(), 1);
+
+        let (_, _, warnings) = convert_tml_to_import_configs(&tml, false, false).unwrap();
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("1 shot in the file had a missing or unreadable ID")),
+            "the dropped shot must reach the import receipt, got {warnings:?}"
+        );
+    }
+
+    /// An unknown `<Type>` is read as REAL. That is a defensible recovery, but
+    /// it is a reinterpretation of the file and the receipt has to say so.
+    #[test]
+    fn an_unknown_shot_type_is_counted_and_named_in_the_receipt() {
+        let xml = wrap_xml(
+            &[
+                tml_shot_xml(0, -1, "START", "Start"),
+                tml_shot_xml(1, 0, "SPLAY", "Main"),
+                tml_shot_xml(2, 1, "SPLAY", "Main"),
+            ]
+            .join("\n"),
+        );
+        let tml = parse_synthetic_tmlu(&xml);
+
+        let anomalies = tml
+            .parse_anomalies
+            .expect("coerced shot types must be recorded on the parse result");
+        assert_eq!(anomalies.unknown_shot_types, 2);
+        // Behaviour is unchanged - they are still imported as Real.
+        assert_eq!(tml.sections[0].shots[0].shot_type, TmlShotType::Real);
+
+        let (_, _, warnings) = convert_tml_to_import_configs(&tml, false, false).unwrap();
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("2 shots in the file had an unrecognized type")),
+            "the coerced types must reach the import receipt, got {warnings:?}"
+        );
+    }
+
+    /// Two shots sharing an ID collapse: the topology index is keyed by ID, so
+    /// the second silently replaces the first. Behaviour kept, silence not.
+    #[test]
+    fn duplicate_shot_ids_are_counted_and_named_in_the_receipt() {
+        let xml = wrap_xml(
+            &[
+                tml_shot_xml(0, -1, "START", "Start"),
+                tml_shot_xml(1, 0, "REAL", "Main"),
+                tml_shot_xml(1, 1, "REAL", "Main"),
+            ]
+            .join("\n"),
+        );
+        let tml = parse_synthetic_tmlu(&xml);
+
+        let anomalies = tml
+            .parse_anomalies
+            .expect("a collapsed ID must be recorded on the parse result");
+        assert_eq!(anomalies.duplicate_shot_ids, 1);
+
+        let (_, _, warnings) = convert_tml_to_import_configs(&tml, false, false).unwrap();
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("1 shot in the file reused an ID")),
+            "the collapsed ID must reach the import receipt, got {warnings:?}"
+        );
+    }
+
+    /// One sentence per anomaly CLASS, whatever the count. A per-shot warning
+    /// here would put a thousand strings on the wire for a file that damaged
+    /// itself a thousand times, and `cap_warnings` would then bury every other
+    /// warning behind them.
+    #[test]
+    fn a_thousand_duplicate_ids_still_produce_exactly_one_warning() {
+        let mut shots = vec![tml_shot_xml(0, -1, "START", "Start")];
+        shots.extend((0..1000).map(|_| tml_shot_xml(1, 0, "REAL", "Main")));
+        let tml = parse_synthetic_tmlu(&wrap_xml(&shots.join("\n")));
+
+        let anomalies = tml
+            .parse_anomalies
+            .expect("collapsed IDs must be recorded on the parse result");
+        assert_eq!(anomalies.duplicate_shot_ids, 999);
+
+        let (_, _, warnings) = convert_tml_to_import_configs(&tml, false, false).unwrap();
+        let duplicate_warnings = warnings
+            .iter()
+            .filter(|w| w.contains("reused an ID"))
+            .count();
+        assert_eq!(
+            duplicate_warnings, 1,
+            "one warning per class, got {warnings:?}"
+        );
+        assert!(warnings.iter().any(|w| w.contains("999 shots in the file")));
+    }
+
+    /// A clean file says nothing - these warnings have to stay rare enough to
+    /// be worth reading.
+    #[test]
+    fn a_clean_file_records_no_anomalies() {
+        let xml = wrap_xml(
+            &[
+                tml_shot_xml(0, -1, "START", "Start"),
+                tml_shot_xml(1, 0, "REAL", "Main"),
+                tml_shot_xml(2, 1, "VIRTUAL", "Main"),
+            ]
+            .join("\n"),
+        );
+        let tml = parse_synthetic_tmlu(&xml);
+        assert_eq!(tml.parse_anomalies, None);
+
+        let (_, _, warnings) = convert_tml_to_import_configs(&tml, false, false).unwrap();
+        assert!(warnings.is_empty(), "clean file warned: {warnings:?}");
+    }
+
+    /// A file the parser could make NO section out of used to leave
+    /// `convert_tml_to_import_configs` on the first line, dropping the very
+    /// warnings that explain the emptiness. It is the one import where the
+    /// warnings are the entire result.
+    #[test]
+    fn a_file_with_no_sections_still_reports_its_warnings() {
+        // START shots carry no measurement and form no section, so a file of
+        // nothing but a START parses to zero sections.
+        let xml = wrap_xml_with("furlongs", 0.0, &tml_shot_xml(0, -1, "START", "Start"));
+        let tml = parse_synthetic_tmlu(&xml);
+        assert!(tml.sections.is_empty(), "premise: no sections were built");
+
+        let (configs, closures, warnings) =
+            convert_tml_to_import_configs(&tml, false, false).unwrap();
+        assert!(configs.is_empty());
+        assert!(closures.is_empty());
+        assert!(
+            warnings.iter().any(|w| w.contains("furlongs")),
+            "an import that lands nothing must still say why, got {warnings:?}"
+        );
+    }
+
+    /// A closure whose target is the ENTRANCE resolves to no station: START
+    /// shots never enter a section. It was counted into "referenced excluded
+    /// stations", which sends the user looking through an exclusion filter
+    /// that had nothing to do with it.
+    #[test]
+    fn a_closure_to_the_entrance_is_not_blamed_on_excluded_stations() {
+        let make_shot = |id, from_id, shot_type, closure_to_id| TmlShot {
+            id,
+            from_id,
+            shot_type,
+            closure_to_id,
+            ..sample_tml_shot()
+        };
+
+        let tml = TmlFile {
+            cave_name: "Test".to_string(),
+            unit: TmlUnit::Metric,
+            use_magnetic_azimuth: false,
+            first_start_absolute_elevation: 0.0,
+            unrecognized_unit: None,
+            parse_anomalies: None,
+            geo_coding: None,
+            sections: vec![TmlSection {
+                name: "Main".to_string(),
+                shots: vec![
+                    make_shot(1, 99, TmlShotType::Real, -1),
+                    make_shot(2, 1, TmlShotType::Real, -1),
+                    // Closes back onto shot 99 - the START this section hangs
+                    // off, which is in no section and so in no import.
+                    make_shot(3, 2, TmlShotType::Closure, 99),
+                ],
+                surveyor: None,
+                date: None,
+                color: "#ff0000".to_string(),
+                is_branch_split: false,
+                start_ariane_id: 99,
+                end_ariane_id: 2,
+                start_depth: 0.0,
+            }],
+            closures: Vec::new(),
+        };
+
+        let (_, closures, warnings) = convert_tml_to_import_configs(&tml, false, false).unwrap();
+        assert!(closures.is_empty(), "the closure cannot be reconstructed");
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("referenced an entrance station")),
+            "expected the entrance-station reason, got {warnings:?}"
+        );
+        assert!(
+            !warnings.iter().any(|w| w.contains("excluded stations")),
+            "nothing was excluded here, so nothing may say so: {warnings:?}"
+        );
+    }
+
+    /// The preview's closure extraction aims a START-targeted closure at the
+    /// first section hanging off that START. It used to pick one by scanning a
+    /// HashMap, so the answer changed from run to run whenever more than one
+    /// section qualified. Repeated because that is what a random iteration
+    /// order looks like from the outside.
+    #[test]
+    fn a_closure_to_a_start_shot_resolves_to_the_same_section_every_run() {
+        let xml = wrap_xml(
+            &[
+                tml_shot_xml(0, -1, "START", "Start"),
+                tml_shot_xml(1, 0, "REAL", "A"),
+                tml_shot_xml(2, 0, "REAL", "B"),
+                {
+                    let mut closure = tml_shot_xml(3, 2, "CLOSURE", "B");
+                    closure = closure.replace(
+                        "<ClosureToID>-1</ClosureToID>",
+                        "<ClosureToID>0</ClosureToID>",
+                    );
+                    closure
+                },
+            ]
+            .join("\n"),
+        );
+
+        for run in 0..25 {
+            let tml = parse_synthetic_tmlu(&xml);
+            let closure =
+                tml.closures.first().copied().unwrap_or_else(|| {
+                    panic!("run {run}: the START-targeted closure must resolve")
+                });
+            assert_eq!(
+                tml.sections[closure.to_section_index].name, "A",
+                "run {run}: the target section must be the first one hanging off the START"
+            );
+        }
+    }
+
+    // -------------------------------------------------------------------
     // Branching detection
     // -------------------------------------------------------------------
 
@@ -2983,6 +3427,7 @@ mod tests {
             use_magnetic_azimuth: true,
             first_start_absolute_elevation: 100.0,
             unrecognized_unit: None,
+            parse_anomalies: None,
             geo_coding: None,
             sections,
             closures,
@@ -3042,6 +3487,7 @@ mod tests {
             use_magnetic_azimuth: false,
             first_start_absolute_elevation: 0.0,
             unrecognized_unit: None,
+            parse_anomalies: None,
             geo_coding: None,
             sections: Vec::new(),
             closures: Vec::new(),
@@ -3305,6 +3751,7 @@ mod tests {
             use_magnetic_azimuth: false,
             first_start_absolute_elevation: 0.0,
             unrecognized_unit: None,
+            parse_anomalies: None,
             geo_coding: None,
             sections: vec![
                 TmlSection {
@@ -3378,6 +3825,7 @@ mod tests {
             use_magnetic_azimuth: false,
             first_start_absolute_elevation: 0.0,
             unrecognized_unit: None,
+            parse_anomalies: None,
             geo_coding: None,
             sections: vec![
                 TmlSection {
@@ -3470,6 +3918,7 @@ mod tests {
             use_magnetic_azimuth: false,
             first_start_absolute_elevation: 0.0,
             unrecognized_unit: None,
+            parse_anomalies: None,
             geo_coding: None,
             sections: vec![
                 TmlSection {
@@ -3552,6 +4001,7 @@ mod tests {
             use_magnetic_azimuth: false,
             first_start_absolute_elevation: 0.0,
             unrecognized_unit: None,
+            parse_anomalies: None,
             geo_coding: None,
             sections: vec![
                 // Section A (index 0): shots 1,2
@@ -3720,6 +4170,7 @@ mod tests {
             use_magnetic_azimuth: true,
             first_start_absolute_elevation: 100.0,
             unrecognized_unit: None,
+            parse_anomalies: None,
             geo_coding: None,
             sections,
             closures,

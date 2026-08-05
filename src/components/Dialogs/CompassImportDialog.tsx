@@ -74,12 +74,20 @@ export default function CompassImportDialog({ compassFile, filePath }: CompassIm
         return;
       }
 
+      // `section_ids` is `skip_serializing_if = "Vec::is_empty"` in Rust, so an
+      // import that created NO section omits the key entirely - the generated
+      // type says `Array<number>` but the wire says `undefined`. A bare
+      // `.length` here threw, the catch below reported it as a transport
+      // failure, and the receipt explaining the empty import was thrown away
+      // (#411). Same guard as WallsImportDialog.
+      const sectionIds = result.section_ids ?? [];
+
       // Check for orphan placement opportunities
-      if (result.section_ids.length > 0) {
+      if (sectionIds.length > 0) {
         try {
           const suggestions = await invokeIpc<OrphanPlacementSuggestion[]>(
             'suggest_orphan_placements',
-            { newlyImportedSectionIds: result.section_ids },
+            { newlyImportedSectionIds: sectionIds },
             { purpose: 'suggest orphan placements after Compass import' }
           );
           if (suggestions.length > 0) {

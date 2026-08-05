@@ -26,6 +26,7 @@ import { invokeIpc } from '../../utils/ipc';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
 import type { CommandResult, CompassFile, ValidationWarning } from '../../types/commands';
+import type { ImportReceipt } from '../../types/ipc/ImportReceipt';
 
 const invokeIpcMock = vi.mocked(invokeIpc);
 
@@ -58,6 +59,27 @@ const compassFile: CompassFile = {
 
 const ok = (warnings: ValidationWarning[], section_ids: number[] = []): CommandResult =>
   ({ success: true, error: null, warnings, section_ids } as CommandResult);
+
+/** What the backend reports for a file whose every survey was dropped (#411). */
+const EMPTY_RECEIPT: ImportReceipt = {
+  source_format: 'Compass',
+  file_name: 'cave.dat',
+  sections_found: 3,
+  sections_imported: 0,
+  shot_count: 0,
+  closures_requested: 0,
+  closures_created: 0,
+  unit_conversion: null,
+  warnings: ['3 surveys had no shots after filtering and were dropped'],
+};
+
+/**
+ * The REAL wire shape of an import that created no section: `section_ids` is
+ * `#[serde(skip_serializing_if = "Vec::is_empty")]`, so the key is ABSENT -
+ * not present-and-empty, which is all any other mock in the repo produces.
+ */
+const okWithoutSectionIds = (receipt: ImportReceipt): CommandResult =>
+  ({ success: true, error: null, warnings: [], import_receipt: receipt } as unknown as CommandResult);
 
 let executeCompassImport: ReturnType<typeof vi.fn>;
 let openDialog: ReturnType<typeof vi.fn>;
@@ -115,5 +137,20 @@ describe('CompassImportDialog warning surfacing (#110)', () => {
 
     await waitFor(() => expect(orphanCalled()).toBe(true));
     expect(openDialog).not.toHaveBeenCalledWith('error', expect.objectContaining({ title: 'Import Warning' }));
+  });
+
+  it('shows the receipt when the import created nothing and section_ids is absent (#411)', async () => {
+    executeCompassImport.mockResolvedValue(okWithoutSectionIds(EMPTY_RECEIPT));
+    render(<CompassImportDialog compassFile={compassFile} filePath="/tmp/cave.dat" />);
+
+    await clickImport();
+
+    await waitFor(() =>
+      expect(openDialog).toHaveBeenCalledWith('import-receipt', { receipt: EMPTY_RECEIPT }),
+    );
+    // Not a transport failure: reading the absent key used to throw, and the
+    // catch reported the empty import as a broken IPC call.
+    expect(openDialog).not.toHaveBeenCalledWith('error', expect.anything());
+    expect(orphanCalled()).toBe(false);
   });
 });

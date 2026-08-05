@@ -262,6 +262,25 @@ pub struct ImportReceipt {
 }
 
 impl ImportReceipt {
+    /// The receipt for an import that landed NOTHING: zero sections, zero
+    /// shots, no closures. Every text field is a placeholder the importer's
+    /// `decorate_receipt` fills in, including the warnings that say why the
+    /// file produced nothing - which is the entire reason an empty import
+    /// still carries a receipt.
+    pub fn empty() -> Self {
+        Self {
+            source_format: String::new(),
+            file_name: String::new(),
+            sections_found: 0,
+            sections_imported: 0,
+            shot_count: 0,
+            closures_requested: 0,
+            closures_created: 0,
+            unit_conversion: None,
+            warnings: Vec::new(),
+        }
+    }
+
     /// Keep at most this many individual warnings before folding the rest
     /// into a single summary entry.
     const MAX_WARNINGS: usize = 50;
