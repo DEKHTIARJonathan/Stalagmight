@@ -1379,7 +1379,7 @@ test.describe('Gas planning', () => {
     await expect.poll(getCalls, { timeout: 2000 }).toEqual(['undo', 'redo']);
   });
 
-  test('Ctrl+I import is blocked in Plan but works in Survey (read-only-map guard, #243) @smoke', async ({
+  test('Ctrl+I in Plan opens the picker; the DMP raises import-blocked with Stay and Switch-and-continue (#243, #407) @smoke', async ({
     page,
   }) => {
     const openCount = () =>
@@ -1396,16 +1396,40 @@ test.describe('Gas planning', () => {
         window as unknown as { __MOCK_RESET_DIALOG_OPEN_COUNT__: () => void }
       ).__MOCK_RESET_DIALOG_OPEN_COUNT__(),
     );
-    // The default seed has no eligible closures, so Plan's forced closureAdjusted
-    // reverts to measured - the exact trap a geometryMode-only guard would miss.
-    await page.keyboard.press('Control+i');
-    expect(await openCount()).toBe(0);
-
-    // Survey positive control: the picker DOES open, proving the recorder is live and
-    // the 0 above is the guard, not a broken keybinding.
-    await enterMode(page, 'survey');
+    // One door (#407): Ctrl+I opens the unified picker even in Plan mode - the old
+    // pre-guard that swallowed the keystroke is gone, because a .stalx open or an
+    // import-as-new-project is legal here. The #243 read-only guard moved to the
+    // router: the mocked picker returns a .dmp (the one additive, mutating import),
+    // and THAT raises the import-blocked CHOICE dialog - not an error, and not
+    // silence. The default seed has no eligible closures, so Plan's forced
+    // closureAdjusted reverts to measured - the exact trap a geometryMode-only
+    // guard would miss.
     await page.keyboard.press('Control+i');
     await expect.poll(openCount, { timeout: 2000 }).toBeGreaterThan(0);
+    const blocked = page.getByTestId('import-blocked-dialog');
+    await expect(blocked).toBeVisible({ timeout: 5000 });
+    await expect(blocked).toContainText('Switch to Survey mode for import');
+    // Raised from Plan, so the dismiss button names Plan.
+    await expect(page.getByTestId('import-blocked-stay')).toHaveText('Stay in Plan');
+
+    // "Stay in Plan" abandons the import and leaves the mode alone.
+    await page.getByTestId('import-blocked-stay').click();
+    await expect(blocked).toBeHidden({ timeout: 5000 });
+    await expect(page.getByTestId('dmp-selection-dialog')).toHaveCount(0);
+    await expect(page.locator('[data-testid="gas-panel"]')).toBeVisible();
+
+    // Second pass: "Switch to Survey" flips the mode AND continues importing the
+    // file that was already picked - straight into the DMP flow, no re-pick, no
+    // error dialog. This is also the positive control proving the block above is
+    // the read-only guard, not a broken keybinding.
+    await page.keyboard.press('Control+i');
+    await expect(blocked).toBeVisible({ timeout: 5000 });
+    await page.getByTestId('import-blocked-switch').click();
+    await expect(blocked).toBeHidden({ timeout: 5000 });
+    await expect(page.getByTestId('dmp-selection-dialog')).toBeVisible({ timeout: 5000 });
+    await expect(page.getByTestId('error-dialog')).toHaveCount(0);
+    // Back in Survey: the Plan workspace panel is gone.
+    await expect(page.locator('[data-testid="gas-panel"]')).toHaveCount(0);
   });
 
   test('the planned route renders as a highlighted overlay @smoke', async ({ page }) => {

@@ -19,6 +19,7 @@ export { default as UnmergeStationsDialog } from './UnmergeStationsDialog';
 export { default as RemoveClosureDialog } from './RemoveClosureDialog';
 export { default as UnsavedChangesDialog } from './UnsavedChangesDialog';
 export { default as ErrorDialog } from './ErrorDialog';
+export { default as ImportBlockedDialog } from './ImportBlockedDialog';
 export { default as SavePermissionDialog } from './SavePermissionDialog';
 export { default as OverwriteConfirmDialog } from './OverwriteConfirmDialog';
 export { default as DeleteProjectDialog } from './DeleteProjectDialog';

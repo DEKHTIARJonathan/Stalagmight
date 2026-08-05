@@ -1,18 +1,13 @@
 import { afterEach, beforeEach, describe, it, expect } from 'vitest';
 import {
   ensureExtension,
-  projectOpenFilters,
   projectSaveFilters,
-  dmpOpenFilters,
-  dmpImportFilters,
-  compassOpenFilters,
-  importOpenFilters,
-  inProjectImportFilters,
-  importFiltersForContext,
+  openOrImportFilters,
   exportSaveFilters,
   PROJECT_EXTENSION,
   DMP_EXTENSION,
   COMPASS_EXTENSIONS,
+  IMPORTABLE_EXTENSIONS,
   openDialog,
   saveDialog,
   takeTestFileDialogAnswer,
@@ -71,73 +66,35 @@ describe('ensureExtension', () => {
 // ---------------------------------------------------------------------------
 
 describe('filter functions', () => {
-  it('projectOpenFilters includes project and all files', () => {
-    const filters = projectOpenFilters();
-    expect(filters).toHaveLength(2);
-    expect(filters[0]!.extensions).toContain(PROJECT_EXTENSION);
-    expect(filters[1]!.extensions).toContain('*');
-  });
-
   it('projectSaveFilters includes only project extension', () => {
     const filters = projectSaveFilters();
     expect(filters).toHaveLength(1);
     expect(filters[0]!.extensions).toContain(PROJECT_EXTENSION);
   });
 
-  it('dmpOpenFilters includes dmp and all files', () => {
-    const filters = dmpOpenFilters();
-    expect(filters).toHaveLength(2);
-    expect(filters[0]!.extensions).toContain(DMP_EXTENSION);
-    expect(filters[1]!.extensions).toContain('*');
-  });
-
-  it('dmpImportFilters is DMP-only with NO "All Files" entry', () => {
-    // With a project open, the in-project import picker must not offer "All
-    // Files": a `.stalx` (or other file) picked there would be routed to
-    // loadProject and replace the open project. Guard that property here.
-    const filters = dmpImportFilters();
-    expect(filters).toHaveLength(1);
-    expect(filters[0]!.extensions).toEqual([DMP_EXTENSION]);
-    expect(filters.some((f) => f.extensions.includes('*'))).toBe(false);
-  });
-
-  it('compassOpenFilters includes mak/dat and all files', () => {
-    const filters = compassOpenFilters();
-    expect(filters).toHaveLength(2);
-    expect(filters[0]!.extensions).toContain('mak');
-    expect(filters[0]!.extensions).toContain('dat');
-    expect(filters[1]!.extensions).toContain('*');
-  });
-
-  it('importOpenFilters includes compass extensions', () => {
-    const filters = importOpenFilters();
-    const allSurvey = filters[0]!.extensions;
-    expect(allSurvey).toContain('mak');
-    expect(allSurvey).toContain('dat');
-    expect(filters.some((f) => f.name === 'Compass Survey')).toBe(true);
-  });
-
-  it('inProjectImportFilters offers every survey import format, with NO project extension and NO "All Files"', () => {
-    // The in-project picker (hamburger "Import survey data...", Ctrl+I with a
-    // project open) must never let a .stalx (or any file via "All Files") be
-    // picked - routeOpenedFile treats a .stalx as a plain OPEN, silently
-    // replacing the current project from an entry point labeled Import (#392).
-    const filters = inProjectImportFilters();
-    const allSurvey = filters[0]!.extensions;
-    for (const ext of ['dmp', 'tml', 'tmlu', 'gpx', 'mak', 'dat', 'wpj', 'srv']) {
-      expect(allSurvey).toContain(ext);
+  // One door (#407): openOrImportFilters is the ONLY open/import picker filter
+  // set - every entry point (toolbar, hamburger Open and Import, Ctrl+O,
+  // Ctrl+I, EmptyState) offers it. These pins guard the properties that make
+  // that safe and complete.
+  it('openOrImportFilters: the combined entry accepts the project extension and every importable format', () => {
+    const combined = openOrImportFilters()[0]!.extensions;
+    expect(combined).toContain(PROJECT_EXTENSION);
+    for (const ext of IMPORTABLE_EXTENSIONS) {
+      expect(combined).toContain(ext);
     }
-    expect(filters.some((f) => f.extensions.includes(PROJECT_EXTENSION))).toBe(false);
-    expect(filters.some((f) => f.extensions.includes('*'))).toBe(false);
+    // Derived from the same source of truth the router dispatches on, so a new
+    // format added to IMPORT_EXTENSIONS is automatically pickable.
+    expect(combined).toEqual([PROJECT_EXTENSION, ...IMPORTABLE_EXTENSIONS]);
   });
 
-  it('importFiltersForContext(true) returns the in-project (survey-only) filter set', () => {
-    expect(importFiltersForContext(true)).toEqual(inProjectImportFilters());
-  });
-
-  it('importFiltersForContext(false) returns the unified picker (includes "All Files")', () => {
-    expect(importFiltersForContext(false)).toEqual(importOpenFilters());
-    expect(importFiltersForContext(false).some((f) => f.extensions.includes('*'))).toBe(true);
+  it('openOrImportFilters offers a per-format narrowing entry for each import family, plus "All Files"', () => {
+    const filters = openOrImportFilters();
+    for (const name of ['Stalagmight Project', 'mNemo DMP', 'Ariane Survey', 'Compass Survey', 'Walls Survey', 'GPX Files']) {
+      expect(filters.some((f) => f.name === name)).toBe(true);
+    }
+    // "All Files" stays: the router rejects unsupported extensions with an
+    // error dialog instead of feeding them to a parser, so it is safe here.
+    expect(filters.some((f) => f.extensions.includes('*'))).toBe(true);
   });
 
   it('exportSaveFilters creates filter with label and normalized extension', () => {

@@ -12,19 +12,16 @@ import { useTranslation } from 'react-i18next';
 import { useProject } from '../../hooks/useProject';
 import { useUIStore } from '../../store/uiStore';
 import { useSpeleoStore } from '../../store/speleoStore';
-import { useEditingBlocked } from '../../hooks/useEditingBlocked';
 import { useSpeleoMenuItems } from './useSpeleoMenuItems';
 import { SpeleoDbLogo } from '../common/SpeleoDbLogo';
 import { SpeleoBadgedIcon } from '../common/SpeleoBadgedIcon';
-import { importFiltersForContext } from '../../utils/fileDialogs';
 import { setSource } from '../../utils/telemetry';
 import { MENU_ICON_COLORS } from '../common/menuColors';
-import { leadingMenuItems, serviceMenuItems, quitMenuItem, importMenuItem, openFromSpeleoDbMenuItem } from '../common/appMenuItems';
+import { leadingMenuItems, serviceMenuItems, quitMenuItem, importMenuGroup, openFromSpeleoDbMenuItem } from '../common/appMenuItems';
 import type { AppMenuItem } from '../common/AppMenu';
 import {
   SaveIcon,
   CloseIcon,
-  DownloadIcon,
   ExportIcon,
   SlidersIcon,
   InfoIcon,
@@ -43,7 +40,6 @@ export function useProjectMenuItems({ onSave, saveFailed = false }: UseProjectMe
   const { t } = useTranslation();
   const {
     handleNewProject,
-    handleOpenProject,
     handleSaveProjectAs,
     handleCloseProject,
   } = useProject();
@@ -58,11 +54,6 @@ export function useProjectMenuItems({ onSave, saveFailed = false }: UseProjectMe
   // The submenu's rows live in their own hook - the toolbar status button's
   // right-click menu renders the very same array.
   const speleoItems = useSpeleoMenuItems();
-  // The read-only map (closure-adjusted view, Plan/Export #243, or a locked
-  // remote SpeleoDB project) rejects imports - they add sections. Disable the
-  // Import item up front (the toolbar Import button and Ctrl+I already do), so
-  // the user isn't sent through a file picker only to be rejected after choosing.
-  const editingBlocked = useEditingBlocked();
 
   return useMemo(() => {
     const sz = 18;
@@ -93,7 +84,7 @@ export function useProjectMenuItems({ onSave, saveFailed = false }: UseProjectMe
     };
 
     return [
-      ...leadingMenuItems(t, { onNewProject: handleNewProject, onOpenProject: handleOpenProject }, 'hamburger'),
+      ...leadingMenuItems(t, { onNewProject: handleNewProject }, 'hamburger'),
       // "Open from SpeleoDB" needs a signed-in session (it lists the caller's
       // remote projects), so hide it when logged out.
       ...(speleoSession?.loggedIn
@@ -161,21 +152,10 @@ export function useProjectMenuItems({ onSave, saveFailed = false }: UseProjectMe
         onClick: () => { void saveAndClose(); },
       },
       { id: 'project-menu-sep-2', label: '', separator: true },
-      {
-        id: 'global-import-menu-button',
-        label: t('globalView.actions.import'),
-        icon: <DownloadIcon size={sz} />,
-        iconColor: MENU_ICON_COLORS.import,
-        disabled: editingBlocked,
-        submenu: [
-          // Every importable format, not just DMP (#391): `.dmp` still routes
-          // additively into this project, and every other format now opens the
-          // "import as new project?" confirm dialog instead of the old
-          // close-first dead end - so there is no reason left to restrict the
-          // in-project picker to DMP only.
-          importMenuItem('global-import-dmp-button', t('globalView.actions.importSurveyData'), () => importFiltersForContext(true), 'hamburger', 'import_dmp'),
-        ],
-      },
+      // One door (#407): the shared Import group - same unified picker as Open,
+      // no editingBlocked disable (non-DMP imports close-and-create, .stalx is a
+      // plain open; the router rejects exactly the additive DMP case).
+      importMenuGroup(t),
       {
         id: 'toolbar-export-button',
         label: t('common.actions.export'),
@@ -221,5 +201,5 @@ export function useProjectMenuItems({ onSave, saveFailed = false }: UseProjectMe
       },
       quitMenuItem(t),
     ];
-  }, [t, openDialog, showDevStats, toggleDisplay, editingBlocked, onSave, saveFailed, handleNewProject, handleOpenProject, handleSaveProjectAs, handleCloseProject, speleoLink, speleoSession, speleoItems]);
+  }, [t, openDialog, showDevStats, toggleDisplay, onSave, saveFailed, handleNewProject, handleSaveProjectAs, handleCloseProject, speleoLink, speleoSession, speleoItems]);
 }

@@ -64,22 +64,8 @@ export function ensureExtension(path: string, extension: string): string {
   return `${path}.${normalizedExt}`;
 }
 
-export function projectOpenFilters() {
-  return [
-    { name: 'Stalagmight Project', extensions: [PROJECT_EXTENSION] },
-    { name: 'All Files', extensions: ['*'] },
-  ];
-}
-
 export function projectSaveFilters() {
   return [{ name: 'Stalagmight Project', extensions: [PROJECT_EXTENSION] }];
-}
-
-export function dmpOpenFilters() {
-  return [
-    { name: 'mNemo DMP', extensions: [DMP_EXTENSION] },
-    { name: 'All Files', extensions: ['*'] },
-  ];
 }
 
 export const TML_EXTENSIONS = ['tml', 'tmlu'];
@@ -119,97 +105,21 @@ export const IMPORTABLE_EXTENSIONS: readonly string[] = [
   ...IMPORT_EXTENSIONS.dmp,
 ];
 
-export function tmlOpenFilters() {
-  return [
-    { name: 'Ariane Survey', extensions: TML_EXTENSIONS },
-    { name: 'All Files', extensions: ['*'] },
-  ];
-}
-
-export function compassOpenFilters() {
-  return [
-    { name: 'Compass Survey', extensions: COMPASS_EXTENSIONS },
-    { name: 'All Files', extensions: ['*'] },
-  ];
-}
-
-export function wallsOpenFilters() {
-  return [
-    { name: 'Walls Survey', extensions: WALLS_EXTENSIONS },
-    { name: 'All Files', extensions: ['*'] },
-  ];
-}
-
-export function gpxOpenFilters() {
-  return [
-    { name: 'GPX Files', extensions: [GPX_EXTENSION] },
-    { name: 'All Files', extensions: ['*'] },
-  ];
-}
-
-/**
- * Filters for importing into an already-open project: DMP only. No "All Files"
- * entry - so a `.stalx` project (or any unrelated file) can't be picked through
- * an in-project import entry point and mis-routed by the open/import router into
- * loadProject, replacing the open project. GPX and Ariane/Compass create new
- * projects, so they aren't importable into an open one (the router rejects a GPX
- * opened/dropped while a project is open); DMP is the only additive in-project
- * import. Shared by the hamburger menu, the toolbar Import button, and Ctrl+I.
- */
-export function dmpImportFilters() {
-  return [{ name: 'mNemo DMP', extensions: [DMP_EXTENSION] }];
-}
-
-/**
- * Every importable survey format (DMP/Ariane/Compass/Walls/GPX), with NO
- * project extension and NO "All Files" entry. Every importable survey format is
- * offered regardless of whether a project is already open (#391): `.dmp` still
- * routes additively into the open project, while every other format now opens
- * the "import as new project?" confirm dialog instead of the old close-first
- * dead end. But the in-project picker must still exclude `.stalx` and "All
- * Files" - either would let the user pick a native project through an entry
- * point labeled Import, which `routeOpenedFile` treats as a plain OPEN and
- * silently replaces the current project (the bug this filter set exists to
- * prevent).
- */
-export function inProjectImportFilters() {
-  return [
-    // Combined "everything importable" entry - derived from IMPORTABLE_EXTENSIONS
-    // (the single source of truth) so it can't drift from the per-format rows
-    // below or the router's isImportable guard when a new format is added.
-    { name: 'Survey Files', extensions: [...IMPORTABLE_EXTENSIONS] },
-    { name: 'mNemo DMP', extensions: [...IMPORT_EXTENSIONS.dmp] },
-    { name: 'Ariane Survey', extensions: [...IMPORT_EXTENSIONS.tml] },
-    { name: 'Compass Survey', extensions: [...IMPORT_EXTENSIONS.compass] },
-    { name: 'Walls Survey', extensions: [...IMPORT_EXTENSIONS.walls] },
-    { name: 'GPX Files', extensions: [...IMPORT_EXTENSIONS.gpx] },
-  ];
-}
-
-/**
- * Import picker filters, scoped to whether a project is currently open.
- *
- * With a project open, the picker must offer only survey-import formats (see
- * `inProjectImportFilters`) - a `.stalx` (or any file via "All Files") picked
- * through an in-project "Import" entry point would be mis-routed by
- * `routeOpenedFile` into a native project OPEN, silently replacing the one
- * that's already open. With no project open there's nothing to accidentally
- * replace, so the unified picker (every importable format plus "All Files")
- * is unchanged.
- */
-export function importFiltersForContext(hasProject: boolean) {
-  return hasProject ? inProjectImportFilters() : importOpenFilters();
-}
-
-export function importOpenFilters() {
-  return [...inProjectImportFilters(), { name: 'All Files', extensions: ['*'] }];
-}
-
 /**
  * Filters for the unified "Open / Import" picker: every file the app can open
- * (native `.stalx` projects) or import (DMP / Ariane / Compass / GPX). The first
- * entry is the combined "everything" filter so a single selection accepts any
- * supported file; the rest narrow to one format each.
+ * (native `.stalx` projects) or import (DMP / Ariane / Compass / Walls / GPX).
+ * The first entry is the combined "everything" filter so a single selection
+ * accepts any supported file; the rest narrow to one format each.
+ *
+ * ONE DOOR (#407): this is the ONLY picker filter set for opening or importing.
+ * Every entry point - toolbar, hamburger (Open and Import rows), Ctrl+O, Ctrl+I,
+ * the EmptyState card - offers the same full set and routes the choice through
+ * `routeOpenedFile`, so "Open" and "Import" are two words for one behavior.
+ * A `.stalx` picked through an Import-labeled door is a plain project open;
+ * that's safe because the router's `.stalx` branch guards replacement behind
+ * the SpeleoDB hand-back and unsaved-changes prompts (#270) - a picker-side
+ * exclusion (the pre-#407 `inProjectImportFilters`) is not what protects data,
+ * and it made Import reject files Open accepted.
  */
 export function openOrImportFilters() {
   return [

@@ -353,10 +353,10 @@ toggle_data_table = ["Ctrl+3"]
 | Category | Action | Default | Description |
 |----------|--------|---------|-------------|
 | **File** | `new_file` | `Ctrl+N` | New project |
-| | `open_file` | `Ctrl+O` | Open project |
+| | `open_file` | `Ctrl+O` | Open / Import (any supported file) |
 | | `save` | `Ctrl+S` | Save project |
 | | `save_as` | `Ctrl+Shift+S` | Save project as |
-| | `import_dmp` | `Ctrl+I` | Import DMP file |
+| | `import_dmp` | `Ctrl+I` | Import survey data (same unified picker as Open) |
 | | `export` | `Ctrl+E` | Export project |
 | | `quit` | `Ctrl+Q` | Quit the application |
 | **Tools** | `select` | `S` | Select tool |

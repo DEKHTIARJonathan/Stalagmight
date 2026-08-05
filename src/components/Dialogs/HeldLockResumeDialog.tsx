@@ -166,7 +166,7 @@ export default function HeldLockResumeDialog() {
         // This prompt is app-wide and is raised on LOGIN as well as app-open, and
         // login is reachable from Settings with a project open. `loadProject` for a
         // DIFFERENT project closes the current one backend-side - which is exactly why
-        // `useProject.handleOpenProject` routes through the exit guards. Refuse rather
+        // `routeOpenedFile`'s `.stalx` branch routes through the exit guards. Refuse rather
         // than open a second modal over this overlay: the lock stays held and
         // resolvable, and nothing is lost.
         //

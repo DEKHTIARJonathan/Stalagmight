@@ -20,10 +20,13 @@
  * which carries its own SpeleoDB hand-back and unsaved-changes guards) rather
  * than mutating it, so the read-only guard doesn't apply to them.
  *
- * The routing is intentionally shared between the toolbar "Open / Import"
- * button, the "open it from file" hint link, and the Ctrl+I keyboard shortcut
- * so all three behave identically. Stores are read via `getState()` so this is
- * callable outside React (e.g. from a raw keydown handler).
+ * ONE DOOR (#407): every open/import entry point - the toolbar "Open / Import"
+ * button, the hamburger Open and Import rows in both views, the EmptyState
+ * card, the "open it from file" hint link, Ctrl+O, Ctrl+I, and drag-drop -
+ * offers the same unified picker (`openOrImportFilters`) and routes the chosen
+ * file through here, so "Open" and "Import" are two words for one behavior.
+ * Stores are read via `getState()` so this is callable outside React (e.g.
+ * from a raw keydown handler).
  */
 import { useProjectStore } from '../store/projectStore';
 import { useUIStore } from '../store/uiStore';
@@ -52,8 +55,18 @@ function openImportAsNewProject(ui: ReturnType<typeof useUIStore.getState>, path
  *
  * @param path       Absolute path to the selected file.
  * @param errorTitle Title for the error dialog if the flow throws.
+ * @param opts.residualReadOnlyToast  Set by ImportBlockedDialog's "Switch to
+ *   Survey" re-route: the user just confirmed intent there, so a read-only
+ *   cause that REMAINS after the switch (e.g. the restored survey view being
+ *   closure-adjusted) is reported as a non-blocking toast instead of a second
+ *   modal - informational, no click owed. Never set on first-touch routes,
+ *   where the modal (or the import-blocked choice) is the right interruption.
  */
-export async function routeOpenedFile(path: string, errorTitle = 'Open Failed'): Promise<void> {
+export async function routeOpenedFile(
+  path: string,
+  errorTitle = 'Open Failed',
+  opts?: { residualReadOnlyToast?: boolean },
+): Promise<void> {
   const lowerPath = path.toLowerCase();
   const store = useProjectStore.getState();
   const ui = useUIStore.getState();
@@ -88,19 +101,37 @@ export async function routeOpenedFile(path: string, errorTitle = 'Open Failed'):
       const speleoReadOnly = selectSpeleoReadOnly(useSpeleoStore.getState());
       const nonSurveyMode = ui.appMode !== 'survey';
       const closureAdjusted = ui.geometryMode === 'closureAdjusted';
-      let message: string;
-      if (speleoReadOnly && nonSurveyMode) {
-        message = 'Switch to Survey mode and acquire the SpeleoDB write lock to import.';
-      } else if (speleoReadOnly && closureAdjusted) {
-        message = 'Switch to the Measured view and acquire the SpeleoDB write lock to import.';
-      } else if (speleoReadOnly) {
-        message = 'Acquire the SpeleoDB write lock to import.';
-      } else if (nonSurveyMode) {
-        message = 'Switch to Survey mode to import - the Plan and Export workspaces are read-only.';
-      } else {
-        message = 'Switch to the Measured view to import - the closure-adjusted view is read-only.';
+      if (!speleoReadOnly) {
+        // Every non-SpeleoDB cause is one safe click from fixed, so it's a
+        // choice, not an error: the import-blocked prompt offers the switch
+        // (Survey mode and/or the Measured view) and CONTINUES this import,
+        // or abandons it. `cause` picks the wording; mode wins when both
+        // apply because its switch also drops the view. The dialog owns the
+        // pending telemetry source from here (complete-on-switch /
+        // cancel-on-stay).
+        ui.openDialog('import-blocked', { path, cause: nonSurveyMode ? 'mode' : 'view' });
+        handedOff = true;
+        return;
       }
-      ui.openDialog('error', { title: 'Import', message });
+      // A missing SpeleoDB write lock is the one cause no local switch can
+      // fix, so it keeps the plain error dialog (compound states included -
+      // switching mode/view alone would still leave the import blocked).
+      let message: string;
+      if (nonSurveyMode) {
+        message = 'Switch to Survey mode and acquire the SpeleoDB write lock to import.';
+      } else if (closureAdjusted) {
+        message = 'Switch to the Measured view and acquire the SpeleoDB write lock to import.';
+      } else {
+        message = 'Acquire the SpeleoDB write lock to import.';
+      }
+      if (opts?.residualReadOnlyToast) {
+        // The user just confirmed a switch on the import-blocked prompt -
+        // don't demand a second click for a cause the switch could not fix;
+        // inform and get out of the way.
+        ui.showToast(message, 'import-read-only-residual', 'warning');
+      } else {
+        ui.openDialog('error', { title: 'Import', message });
+      }
       return;
     }
 

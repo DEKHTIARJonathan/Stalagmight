@@ -1215,6 +1215,16 @@
       "hideDetails": "Hide details",
       "continue": "Continue to map"
     },
+    "importBlocked": {
+      "title": "Importing DMP",
+      "body": "Switch to Survey mode for import since Plan and Export modes are read-only.",
+      "bodyView": "Switch to the Measured view for import since the Closure-adjusted view is read-only.",
+      "switchToSurvey": "Switch to Survey",
+      "switchToMeasured": "Switch to Measured",
+      "stayInPlan": "Stay in Plan",
+      "stayInExport": "Stay in Export",
+      "stayInAdjusted": "Stay in Closure-adjusted"
+    },
     "importAsNewProject": {
       "title": "Import as new project?",
       "body": "{{fileName}} will be converted into a new Stalagmight project. Your original file is never modified.",
@@ -1771,15 +1781,9 @@
     "actions": {
       "import": "Import",
       "importSurveyData": "Import survey data...",
-      "importDmp": "Import DMP",
-      "importTml": "Import Ariane",
-      "importCompass": "Import Compass",
-      "importWalls": "Import Walls",
-      "importGpx": "Import GPX",
       "mergeProjects": "Merge {{countFormatted}} projects",
       "mergeProjectsAria": "Merge {{countFormatted}} selected projects",
       "newProject": "New project",
-      "openProject": "Open project",
       "openFromSpeleoDb": "Open from SpeleoDB",
       "openOrImport": "Open / Import",
       "settings": "Settings",
