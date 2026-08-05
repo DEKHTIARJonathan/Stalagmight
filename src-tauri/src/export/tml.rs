@@ -3029,6 +3029,37 @@ mod tests {
         );
     }
 
+    /// The `.tml` zip profile is a different code path from `.tmlu` (its own
+    /// element-name table, `LONG` vs `SHORT`), so the elevation element must
+    /// be checked there too, not just on the `.tmlu` plain-XML path above.
+    #[test]
+    fn surface_elevation_is_emitted_in_the_tml_zip_profile_too() {
+        let mut project = Project::new("Zip Elevation".to_string(), None);
+        project.add_section(SectionData {
+            name: Some("Main".to_string()),
+            color: "#ff0000".to_string(),
+            shots: vec![ShotData {
+                length: 3.0,
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+        project.surface_elevation = Some(42.5);
+
+        let file = NamedTempFile::with_suffix(".tml").unwrap();
+        export_tml(&project, file.path()).unwrap();
+
+        let zip_file = std::fs::File::open(file.path()).unwrap();
+        let mut archive = zip::ZipArchive::new(zip_file).unwrap();
+        let mut data_xml = String::new();
+        std::io::Read::read_to_string(&mut archive.by_name("Data.xml").unwrap(), &mut data_xml)
+            .unwrap();
+        assert!(
+            data_xml.contains("<firstStartAbsoluteElevation>42.5</firstStartAbsoluteElevation>"),
+            "the .tml zip profile must emit the elevation same as .tmlu: {data_xml}"
+        );
+    }
+
     /// Every Ariane consumer derives a shot's vertical change from its PARENT's
     /// `Depth`, so the whole emitted chain has to satisfy
     /// `|Depth - parent.Depth| <= Length`. A file that breaks it is not merely

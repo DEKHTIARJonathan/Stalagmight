@@ -2714,10 +2714,76 @@ mod tests {
             .map(|r| r.warnings.clone())
             .unwrap_or_default();
         assert!(
-            warnings
-                .iter()
-                .any(|w| w.contains("50") && w.contains("75")),
-            "the clobber must be surfaced naming both numbers, got {warnings:?}"
+            warnings.iter().any(|w| w.contains("kept 50.00")),
+            "the clobber must be surfaced naming the KEPT value explicitly \
+             (not just both numbers, which a reversed message would also \
+             contain), got {warnings:?}"
+        );
+    }
+
+    /// #431 tolerance: re-importing the SAME cave via its metric and
+    /// imperial twins (100.0 m vs 328.084 ft, which converts to
+    /// 100.00003... m) must not fire the no-clobber "differs" warning - the
+    /// unit round-trip's residue is far below `f64::EPSILON` (2.2e-16) but
+    /// well inside the message's own `{:.2}` precision. Red on
+    /// `f64::EPSILON` used as the tolerance, which reads this pair as
+    /// different and prints a warning naming "100.00 m" against "100.00 m".
+    #[test]
+    fn reimporting_the_metric_and_imperial_twins_of_one_elevation_warns_never() {
+        use crate::core::state::{AppState, VirtualShotMode};
+        use crate::core::Command;
+
+        let shots = [
+            tml_shot_xml_gps(0, -1, "START", "Start", 20.5, -87.3),
+            tml_shot_xml_depth(1, 0, "REAL", "Main", 10.0, -1.0),
+        ]
+        .join("\n");
+        let state = AppState::new().unwrap();
+        state.execute(Command::CreateProject {
+            name: "Unit Twins".to_string(),
+            location: None,
+        });
+
+        let metric_tml = parse_synthetic_tmlu(&wrap_xml_with("m", 100.0, &shots));
+        let (sections, closures, _) =
+            convert_tml_to_import_configs(&metric_tml, false, false).unwrap();
+        let result = state.execute_tml_import_sections(
+            sections,
+            closures,
+            None,
+            Vec::new(),
+            Vec::new(),
+            VirtualShotMode::Auto,
+            Some(metric_tml.first_start_absolute_elevation),
+        );
+        assert!(result.success, "metric import failed: {:?}", result.error);
+
+        let imperial_tml = parse_synthetic_tmlu(&wrap_xml_with("ft", 328.084, &shots));
+        let (sections, closures, _) =
+            convert_tml_to_import_configs(&imperial_tml, false, false).unwrap();
+        let result = state.execute_tml_import_sections(
+            sections,
+            closures,
+            None,
+            Vec::new(),
+            Vec::new(),
+            VirtualShotMode::Auto,
+            Some(imperial_tml.first_start_absolute_elevation),
+        );
+        assert!(result.success, "imperial import failed: {:?}", result.error);
+        assert_eq!(
+            state.get_project_state().unwrap().surface_elevation,
+            Some(100.0),
+            "the original metric value must survive unchanged"
+        );
+        let warnings = result
+            .import_receipt
+            .as_ref()
+            .map(|r| r.warnings.clone())
+            .unwrap_or_default();
+        assert!(
+            warnings.iter().all(|w| !w.contains("differs from")),
+            "a unit round-trip must not read as a conflicting elevation, got {warnings:?}"
         );
     }
 

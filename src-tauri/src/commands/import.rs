@@ -359,7 +359,12 @@ pub fn execute_tml_import(
     // Entrance elevation (#431): `firstStartAbsoluteElevation`, already
     // unit-converted. 0.0 is the file's no-data value (mirrors the export
     // side, which writes 0.0 when the project has none), so it does not
-    // overwrite an unset project.
+    // overwrite an unset project. Two consequences follow from treating 0.0
+    // as no-data: a genuine sea-level entrance can never be recorded (it
+    // only round-trips because export writes 0.0 for `None` too), and a file
+    // stating 0.0 against a project already holding a non-zero value produces
+    // no mismatch warning, because the value is dropped here before the
+    // no-clobber comparison ever sees it.
     let surface_elevation = (tml.first_start_absolute_elevation.abs() > f64::EPSILON)
         .then_some(tml.first_start_absolute_elevation);
 

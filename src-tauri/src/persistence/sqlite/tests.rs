@@ -205,6 +205,33 @@ fn surface_elevation_some_and_none_round_trip_distinctly() {
     assert_eq!(loaded.surface_elevation, None);
 }
 
+/// #431: a corrupted or hand-edited `.stalx` (untrusted, same as a `.tml`)
+/// can carry a `surface_elevation` value Rust's `f64::parse` accepts but the
+/// rest of the pipeline cannot: `"NaN"` defeats the no-clobber comparison
+/// (every NaN compare is false) and would land verbatim in a TML export; a
+/// plain non-numeric string is the ordinary "unparseable" case. Both must
+/// read as `None`, not propagate a bad value or error the load. Red before
+/// the `.filter(f64::is_finite)` guard on `load_project_surface_elevation`.
+#[test]
+fn stored_non_finite_or_unparseable_elevation_reads_as_none() {
+    for raw in ["NaN", "not-a-number"] {
+        let db = Database::in_memory().unwrap();
+        db.conn
+            .execute(
+                "INSERT INTO project_settings (key, value) VALUES ('surface_elevation', ?1)",
+                [raw],
+            )
+            .unwrap();
+        let result = db.load_project_surface_elevation();
+        assert!(result.is_ok(), "{raw:?} must not error the load");
+        assert_eq!(
+            result.unwrap(),
+            None,
+            "{raw:?} must read as unknown, not a value"
+        );
+    }
+}
+
 /// #431, the case that proves no migration is needed: a `.stalx` written
 /// before this feature existed has no `surface_elevation` row (simulated by
 /// deleting it after an ordinary save). Opening it must read `None`, not
@@ -232,6 +259,29 @@ fn a_pre_431_project_opens_with_unknown_elevation_and_saves_cleanly() {
     db.save_project(&loaded).unwrap();
     let reloaded = db.load_project().unwrap();
     assert_eq!(reloaded.surface_elevation, None);
+}
+
+/// The genuine "table doesn't exist at all" shape the doc comment on
+/// `load_project_surface_elevation` (read.rs) claims to cover - stronger
+/// than the DELETE above, which only proves the missing-KEY case (and the
+/// writer already deletes the key for `None`, so that DELETE can even be a
+/// no-op). Mirrors `load_project_validation_returns_none_when_table_absent`.
+#[test]
+fn load_project_surface_elevation_returns_none_when_table_absent() {
+    let db = Database::in_memory().unwrap();
+    db.conn
+        .execute("DROP TABLE IF EXISTS project_settings", [])
+        .unwrap();
+    let result = db.load_project_surface_elevation();
+    assert!(
+        result.is_ok(),
+        "a missing project_settings table must not error"
+    );
+    assert_eq!(
+        result.unwrap(),
+        None,
+        "absent surface_elevation resolves to None"
+    );
 }
 
 /// #431: `project_settings` is a shared key/value table, so writing

@@ -1176,6 +1176,21 @@ impl Database {
             )
             .optional()
             .unwrap_or(None);
-        Ok(text.and_then(|s| s.parse::<f64>().ok()))
+        Ok(text.and_then(|s| {
+            // `"NaN"`, `"inf"` and `1e309` all parse happily; a corrupted or
+            // hand-edited `.stalx` (same untrusted provenance as a `.tml`) can
+            // carry one, and a non-finite value would defeat the no-clobber
+            // comparison on import (every NaN compare is false) and land
+            // verbatim in a TML export. Same idiom as
+            // `parsers::tml::firstStartAbsoluteElevation`.
+            let parsed = s.parse::<f64>().ok().filter(|v: &f64| v.is_finite());
+            if parsed.is_none() {
+                tracing::warn!(
+                    raw = %s,
+                    "stored surface_elevation is present but unparseable or non-finite; reading as unknown"
+                );
+            }
+            parsed
+        }))
     }
 }

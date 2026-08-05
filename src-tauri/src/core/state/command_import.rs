@@ -1155,7 +1155,12 @@ impl AppState {
                     project.surface_elevation = Some(incoming);
                     None
                 }
-                Some(existing) if (existing - incoming).abs() > f64::EPSILON => Some(format!(
+                // 0.005 m matches the message's own `{:.2}` precision - a
+                // smaller difference (e.g. the same elevation re-imported
+                // metric then imperial: 100.0 m vs 328.084 ft -> 100.00003 m)
+                // must not fire a "differs" warning that prints the same
+                // rounded number on both sides.
+                Some(existing) if (existing - incoming).abs() > 0.005 => Some(format!(
                     "Imported file's entrance elevation ({incoming:.2} m) differs from \
                      the project's existing value ({existing:.2} m); kept {existing:.2} m"
                 )),

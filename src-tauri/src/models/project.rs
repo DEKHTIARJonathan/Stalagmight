@@ -297,8 +297,11 @@ pub struct Project {
     pub validation: crate::config::ValidationConfig,
 
     /// Entrance elevation (#431): +up, metres above mean sea level.
-    /// `None` = unknown. Project-level rather than per-entrance - see
-    /// `docs/plans/2026-08-05_431_entrance-elevation.md` for why. Set from
+    /// `None` = unknown. Project-level rather than per-entrance (#431): the
+    /// format carries one elevation per file regardless of entrance count,
+    /// and for entrances joined through the cave the relative elevation is
+    /// already derived from the survey geometry, so a per-entrance field
+    /// would be a second source of truth. Set from
     /// an Ariane import's `firstStartAbsoluteElevation` (never clobbered by a
     /// later import once set) and read back by TML export; nothing else
     /// consumes it, and the geodesy conversion (`models::geo::gps_to_local`)
