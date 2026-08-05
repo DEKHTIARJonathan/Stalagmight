@@ -32,9 +32,10 @@ pub struct TmlFile {
     pub use_magnetic_azimuth: bool,
     pub first_start_absolute_elevation: f64,
     /// The file's `<unit>` text when it is neither a known metric nor a known
-    /// imperial spelling. The file is read as metric anyway; this drives an
-    /// import warning so a silent mis-scaling is visible.
-    #[serde(default)]
+    /// imperial spelling, sanitized by `sanitize_unit_label`. The file is read
+    /// as metric anyway; this drives an import warning so a silent mis-scaling
+    /// is visible.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub unrecognized_unit: Option<String>,
     pub geo_coding: Option<TmlGeoCoding>,
@@ -351,8 +352,16 @@ fn parse_raw_shots(xml: &str) -> Result<(Vec<RawShot>, FileMetadata)> {
                                 metadata.use_magnetic_azimuth = text == "true";
                             }
                             b"firstStartAbsoluteElevation" => {
-                                metadata.first_start_absolute_elevation =
-                                    text.parse().unwrap_or(0.0);
+                                // `"NaN"`, `"inf"` and `1e309` all parse
+                                // happily. This value is scaled by the unit
+                                // conversion and handed out on `TmlFile` and
+                                // the geo-coding altitude, so a non-finite one
+                                // would poison every consumer downstream of it.
+                                metadata.first_start_absolute_elevation = text
+                                    .parse()
+                                    .ok()
+                                    .filter(|v: &f64| v.is_finite())
+                                    .unwrap_or(0.0);
                             }
                             _ => {}
                         }
@@ -1172,15 +1181,35 @@ pub fn parse_tml(path: &Path) -> Result<TmlFile> {
 /// `ft`/`imperial` mean feet, `m`/`metric` and an absent element mean meters
 /// (files with no `<unit>` at all exist). Anything else still reads as metric -
 /// that is the safe default, every observed Ariane file is metric - but the raw
-/// string comes back so the import can say so: silently scaling a whole survey
-/// by the wrong factor leaves no trace anywhere else.
+/// string comes back (sanitized) so the import can say so: silently scaling a
+/// whole survey by the wrong factor leaves no trace anywhere else.
 fn classify_unit(raw: &str) -> (TmlUnit, Option<String>) {
     let trimmed = raw.trim();
     match trimmed.to_lowercase().as_str() {
         "ft" | "imperial" => (TmlUnit::Imperial, None),
         "" | "m" | "metric" => (TmlUnit::Metric, None),
-        _ => (TmlUnit::Metric, Some(trimmed.to_string())),
+        _ => (TmlUnit::Metric, Some(sanitize_unit_label(trimmed))),
     }
+}
+
+/// The most of a file-controlled unit string worth keeping. Matches
+/// `ImportReceipt::MAX_WARNING_LEN`, the clamp the warning built from it lands
+/// under anyway.
+const MAX_UNIT_LABEL_LEN: usize = 300;
+
+/// Make a file-controlled unit string fit to cross IPC and land in a UI warning
+/// line: drop control characters and the Unicode bidi overrides (which can
+/// visually reorder the rest of the sentence around them), then clamp on a char
+/// boundary. The file is untrusted input - this app reads whatever anyone hands
+/// it.
+fn sanitize_unit_label(raw: &str) -> String {
+    raw.chars()
+        .filter(|c| {
+            !c.is_control()
+                && !matches!(c, '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}' | '\u{200e}' | '\u{200f}')
+        })
+        .take(MAX_UNIT_LABEL_LEN)
+        .collect()
 }
 
 // ============================================================================
@@ -1846,8 +1875,9 @@ mod tests {
         wrap_xml_with("m", 100.0, shots_xml)
     }
 
-    /// `wrap_xml` with the file-level unit and elevation spelled out.
-    fn wrap_xml_with(unit: &str, elevation: f64, shots_xml: &str) -> String {
+    /// `wrap_xml` with the file-level unit and elevation spelled out. The
+    /// elevation is `Display` so a test can write text a `f64` cannot hold.
+    fn wrap_xml_with(unit: &str, elevation: impl std::fmt::Display, shots_xml: &str) -> String {
         format!(
             r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <CaveFile>
@@ -2578,7 +2608,75 @@ mod tests {
             assert_eq!(unrecognized, None, "unit {raw:?} should not warn");
         }
         assert_eq!(classify_unit("ft").0, TmlUnit::Imperial);
+        // The other imperial spelling, which only this test exercises.
+        assert_eq!(classify_unit("imperial").0, TmlUnit::Imperial);
+        assert_eq!(classify_unit("  Imperial ").0, TmlUnit::Imperial);
         assert_eq!(classify_unit("").0, TmlUnit::Metric);
+    }
+
+    /// The unit string is file-controlled and ends up in an IPC field and a UI
+    /// warning line, so it is clamped and stripped of anything that can rewrite
+    /// the message around it - bidi overrides reorder the rendered text, and
+    /// control characters break the line.
+    #[test]
+    fn a_hostile_unit_string_is_clamped_and_stripped() {
+        let hostile = format!(
+            "furl\u{202e}ongs\u{7}\n{}",
+            "A".repeat(4000 /* well past the 300-char clamp */)
+        );
+        let (unit, unrecognized) = classify_unit(&hostile);
+
+        assert_eq!(unit, TmlUnit::Metric);
+        let label = unrecognized.expect("a hostile unit is still an unknown unit");
+        assert_eq!(label.chars().count(), MAX_UNIT_LABEL_LEN);
+        assert!(
+            !label.chars().any(|c| c.is_control()
+                || matches!(c, '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')),
+            "control and bidi characters must not survive"
+        );
+
+        let mut tml = parse_synthetic_tmlu(&wrap_xml_with(
+            "m",
+            0.0,
+            &[
+                tml_shot_xml_depth(0, -1, "START", "Start", 0.0, -1.0),
+                tml_shot_xml_depth(1, 0, "REAL", "Main", 10.0, -1.0),
+            ]
+            .join("\n"),
+        ));
+        tml.unrecognized_unit = Some(label);
+        let (_, _, warnings) = convert_tml_to_import_configs(&tml, false, false).unwrap();
+        assert!(
+            !warnings
+                .iter()
+                .any(|w| w.chars().any(|c| c.is_control() || c == '\u{202e}')),
+            "the warning line must stay control-free, got {warnings:?}"
+        );
+    }
+
+    /// `"NaN"` parses. The elevation is scaled by the unit conversion and handed
+    /// out on `TmlFile` and the geo-coding altitude, so a non-finite one has to
+    /// die at the parse, not downstream.
+    #[test]
+    fn a_non_finite_elevation_falls_back_to_zero() {
+        let shots = [
+            tml_shot_xml_gps(0, -1, "START", "Start", 20.5, -87.3),
+            tml_shot_xml_depth(1, 0, "REAL", "Main", 10.0, -1.0),
+        ]
+        .join("\n");
+
+        for raw in ["NaN", "inf", "-inf", "1e309"] {
+            let tml = parse_synthetic_tmlu(&wrap_xml_with("ft", raw, &shots));
+            assert!(
+                tml.first_start_absolute_elevation.abs() < f64::EPSILON,
+                "elevation {raw:?} must not survive the parse"
+            );
+            let geo = tml.geo_coding.expect("geo coding");
+            assert!(
+                geo.altitude.abs() < f64::EPSILON,
+                "altitude {raw:?} must not survive"
+            );
+        }
     }
 
     // -------------------------------------------------------------------
