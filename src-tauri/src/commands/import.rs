@@ -127,7 +127,10 @@ pub fn check_section_hashes(
 /// No-op when `result` carries no receipt (a FAILED import - the empty-import
 /// path deliberately carries one, see `ImportReceipt::empty`), so a call site
 /// never has to special-case that path.
-fn decorate_receipt(
+///
+/// Shared with the SpeleoDB Ariane adoption (#411), which is an Ariane import with
+/// no wizard in front of it and must produce the same receipt as one that has.
+pub(crate) fn decorate_receipt(
     result: &mut CommandResult,
     source_format: &str,
     path: &std::path::Path,
@@ -157,6 +160,17 @@ fn decorate_receipt(
         receipt.warnings.extend(execute_warnings);
     }
     receipt.cap_warnings();
+}
+
+/// The import receipt's unit-conversion note for an Ariane file: TML carries ONE
+/// unit for the whole file, so this is a straight read of it.
+pub(crate) fn tml_unit_conversion_note(unit: crate::parsers::tml::TmlUnit) -> Option<String> {
+    match unit {
+        crate::parsers::tml::TmlUnit::Imperial => {
+            Some("Lengths converted from feet to meters".to_string())
+        }
+        crate::parsers::tml::TmlUnit::Metric => None,
+    }
 }
 
 /// The import receipt's unit-conversion note for a Compass file, derived from
@@ -387,12 +401,7 @@ pub fn execute_tml_import(
     );
 
     let sections_found = tml.sections.len() as u32;
-    let unit_conversion = match tml.unit {
-        crate::parsers::tml::TmlUnit::Imperial => {
-            Some("Lengths converted from feet to meters".to_string())
-        }
-        crate::parsers::tml::TmlUnit::Metric => None,
-    };
+    let unit_conversion = tml_unit_conversion_note(tml.unit);
 
     // Entrance elevation (#431): `firstStartAbsoluteElevation`, already
     // unit-converted. 0.0 is the file's no-data value (mirrors the export

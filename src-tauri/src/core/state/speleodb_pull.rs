@@ -23,6 +23,7 @@ use super::speleodb_cache::{
 };
 use super::speleodb_revisions::validate_hexsha;
 use super::{AppState, VirtualShotMode};
+use crate::core::command::ImportReceipt;
 use crate::speleodb::contract::{dto_for_error, Endpoint};
 use crate::speleodb::dump::{self, DumpClassification};
 use crate::speleodb::models::{AdoptUpload, DoneResult, StartEditingResult};
@@ -83,6 +84,45 @@ fn sweep_own_staging(dir: &Path) {
             );
         }
     }
+}
+
+/// [#411] Everything the adoption's conversion has to say about the remote `.tml`:
+/// the converter's own warnings, plus the excluded shots this path drops.
+///
+/// Adoption converts with `include_excluded = false` - the same default the import
+/// dialog opens with - so a remote file's excluded shots are not imported. The import
+/// dialog is honest about that by construction (the user set the switch), and its
+/// receipt lists what the converter reported; adoption had neither, so the drop and
+/// every parse anomaly with it were invisible. Counting here rather than in the
+/// converter keeps the shared converter's contract unchanged - no other caller needs
+/// the number.
+///
+/// Uncapped: these go straight into an [`ImportReceipt`], and `decorate_receipt`
+/// caps the list it lands in. Capping twice would fold the cap's own summary line
+/// into a second summary.
+///
+/// CLOSURE shots are left out of the count deliberately: they are dropped from every
+/// import whatever their `excluded` flag says, and the converter already reports the
+/// closures it could not resolve. What this counts is measurements the file has and
+/// the adopted project does not.
+fn adopt_conversion_warnings(
+    tml: &crate::parsers::tml::TmlFile,
+    mut warnings: Vec<String>,
+) -> Vec<String> {
+    let excluded = tml
+        .sections
+        .iter()
+        .flat_map(|section| &section.shots)
+        .filter(|shot| shot.excluded && shot.shot_type != crate::parsers::tml::TmlShotType::Closure)
+        .count();
+    if excluded > 0 {
+        warnings.push(format!(
+            "{excluded} excluded shot{} in the remote file {} not imported",
+            if excluded == 1 { "" } else { "s" },
+            if excluded == 1 { "was" } else { "were" }
+        ));
+    }
+    warnings
 }
 
 /// Whether an adoption is holding the project's write mutex.
@@ -1203,10 +1243,14 @@ impl AppState {
         let tml_scratch = dest.with_file_name("adopt-source.tml");
         dump.extract_entry_to(&tml_entry, &tml_scratch)
             .map_err(local_dto)?;
-        let adopt = self.adopt_import_and_save(&tml_scratch, &dest, project_name.clone());
+        let adopt =
+            self.adopt_import_and_save(&tml_scratch, &tml_entry, &dest, project_name.clone());
         // Best-effort scratch cleanup regardless of import outcome.
         let _ = std::fs::remove_file(&tml_scratch);
-        adopt?;
+        // [#411] What the conversion actually did, carried to the return below rather
+        // than dropped here: the call site was the last place it existed, so a pulled
+        // Ariane project lost its excluded shots and every parse anomaly in silence.
+        let import_receipt = adopt?;
 
         // BASE = the commit this project was actually built from, which is the one
         // already resolved above and downloaded by hash - NOT a second lookup here.
@@ -1420,6 +1464,7 @@ impl AppState {
             type_flipped,
             concurrent_session,
             upload,
+            import_receipt,
         })
     }
 
@@ -1799,9 +1844,10 @@ impl AppState {
     fn adopt_import_and_save(
         &self,
         tml_path: &Path,
+        entry_name: &str,
         dest: &Path,
         project_name: String,
-    ) -> Result<(), SpeleoErrorDto> {
+    ) -> Result<Option<ImportReceipt>, SpeleoErrorDto> {
         // Captured BEFORE the create commits over it, so the failure path can put it
         // back rather than leaving the backend with nothing open under a shell that is
         // still drawing it.
@@ -1817,10 +1863,13 @@ impl AppState {
             sweep_own_staging(dir);
         }
 
-        if let Err(e) = self.adopt_build_into(tml_path, &staged, project_name) {
-            self.adopt_abandon_staging(&staged, previous.as_deref());
-            return Err(e);
-        }
+        let receipt = match self.adopt_build_into(tml_path, entry_name, &staged, project_name) {
+            Ok(receipt) => receipt,
+            Err(e) => {
+                self.adopt_abandon_staging(&staged, previous.as_deref());
+                return Err(e);
+            }
+        };
 
         // Close before the rename: `Database::open_existing` holds a 256 MB mmap over
         // the staging file, and on Windows SQLite opens without `FILE_SHARE_DELETE`,
@@ -1864,33 +1913,43 @@ impl AppState {
                 reopened.error.unwrap_or_else(|| "unknown error".to_owned())
             ))));
         }
-        Ok(())
+        Ok(receipt)
     }
 
     /// Create → import → save the `ariane.tml` at `tml_path` into a project saved at
     /// `staged`. The pure pipeline half of [`Self::adopt_import_and_save`], split out
     /// so its caller has ONE failure path to clean up after rather than four.
+    ///
+    /// Returns the import receipt, which travels back to the frontend on
+    /// [`SpeleoAdoptResult::import_receipt`] and is rendered by the same receipt
+    /// dialog every other foreign-format import ends in. `entry_name` is the file's
+    /// name INSIDE the dump, because that is the name the user recognises - the path
+    /// this reads is a scratch copy beside the cache.
     fn adopt_build_into(
         &self,
         tml_path: &Path,
+        entry_name: &str,
         staged: &Path,
         project_name: String,
-    ) -> Result<(), SpeleoErrorDto> {
+    ) -> Result<Option<ImportReceipt>, SpeleoErrorDto> {
         self.do_create_project_full(project_name, None, None, Some(staged.to_path_buf()), true)
             .map_err(|e| local_dto(SpeleoDbError::Io(e.to_string())))?;
 
         let tml = crate::parsers::tml::parse_tml(tml_path)
             .map_err(|e| local_dto(SpeleoDbError::Parse(e.to_string())))?;
-        let (sections, closures, _converter_warnings) =
+        let (sections, closures, converter_warnings) =
             crate::parsers::tml::convert_tml_to_import_configs(&tml, false, true)
                 .map_err(|e| local_dto(SpeleoDbError::Parse(e.to_string())))?;
+        let warnings = adopt_conversion_warnings(&tml, converter_warnings);
+        let sections_found = tml.sections.len() as u32;
+        let unit_conversion = crate::commands::import::tml_unit_conversion_note(tml.unit);
         // Auto: adoption is an ordinary Ariane import with no dialog to carry a
         // per-file override, so its virtual shots get the chain rule (#27).
         let auto = VirtualShotMode::Auto;
         // Entrance elevation (#431), same no-data convention as execute_tml_import.
         let surface_elevation = (tml.first_start_absolute_elevation.abs() > f64::EPSILON)
             .then_some(tml.first_start_absolute_elevation);
-        let imported = self.execute_tml_import_sections(
+        let mut imported = self.execute_tml_import_sections(
             sections,
             closures,
             None,
@@ -1906,6 +1965,17 @@ impl AppState {
                 imported.error.unwrap_or_else(|| "unknown error".to_owned())
             ))));
         }
+        // The same decoration `execute_tml_import` applies, through the same helper:
+        // adoption differs from that import only in having no wizard in front of it,
+        // and the receipt is what stands in for what the wizard would have shown.
+        crate::commands::import::decorate_receipt(
+            &mut imported,
+            "Ariane TML",
+            Path::new(entry_name),
+            sections_found,
+            unit_conversion,
+            warnings,
+        );
 
         let saved = crate::commands::project::save_project_impl(self, Some(staged.to_path_buf()));
         if !saved.success {
@@ -1914,7 +1984,7 @@ impl AppState {
                 saved.error.unwrap_or_else(|| "unknown error".to_owned())
             ))));
         }
-        Ok(())
+        Ok(imported.import_receipt)
     }
 
     /// Throw away a staging file the adoption is not going to promote, and put the
@@ -2122,11 +2192,13 @@ impl AppState {
 #[expect(clippy::expect_used, reason = "unit test fixtures")]
 mod tests {
     use super::{
-        classify_dump_entry, probe_inputs_valid, pull_dating, resolve_dump_entry, usable_tip,
-        AdoptLockGuard, ArianeRoute, DumpAt, PullDating, StalxAmbiguity, UnopenableDump,
+        adopt_conversion_warnings, classify_dump_entry, probe_inputs_valid, pull_dating,
+        resolve_dump_entry, usable_tip, AdoptLockGuard, ArianeRoute, DumpAt, PullDating,
+        StalxAmbiguity, UnopenableDump,
     };
     use crate::core::state::tests_support::speleodb_prod_matches;
     use crate::core::state::AppState;
+    use crate::parsers::tml::{TmlFile, TmlSection, TmlShot, TmlShotType, TmlUnit};
     use crate::speleodb::dump::Dump;
     use crate::speleodb::SpeleoDbError;
 
@@ -2778,7 +2850,8 @@ mod tests {
         std::fs::write(&not_a_tml, b"<nope/>").expect("seed the source");
 
         let state = AppState::new().expect("state");
-        let failed = state.adopt_import_and_save(&not_a_tml, &dest, "Adopted".to_owned());
+        let failed =
+            state.adopt_import_and_save(&not_a_tml, "ariane.tml", &dest, "Adopted".to_owned());
 
         assert!(
             failed.is_err(),
@@ -2837,7 +2910,8 @@ mod tests {
         );
 
         let dest = temp.path().join("project.stalx");
-        let failed = state.adopt_import_and_save(&not_a_tml, &dest, "Adopted".to_owned());
+        let failed =
+            state.adopt_import_and_save(&not_a_tml, "ariane.tml", &dest, "Adopted".to_owned());
 
         assert!(
             failed.is_err(),
@@ -2848,6 +2922,203 @@ mod tests {
             Some(previous.as_path()),
             "the backend must be back on the project the shell is still drawing, not \
              empty and not holding the stub the create committed"
+        );
+    }
+
+    /// One shot of a synthetic remote `.tml`, chained onto its predecessor.
+    fn adopt_shot(id: i64, excluded: bool, shot_type: TmlShotType) -> TmlShot {
+        TmlShot {
+            id,
+            from_id: id - 1,
+            shot_type,
+            azimuth: 90.0,
+            length: 10.0,
+            depth: 0.0,
+            depth_in: -1.0,
+            inclination: 0.0,
+            left: 0.0,
+            right: 0.0,
+            up: 0.0,
+            down: 0.0,
+            comment: None,
+            explorer: None,
+            date: None,
+            color: "#000000".to_owned(),
+            excluded,
+            latitude: 0.0,
+            longitude: 0.0,
+            closure_to_id: -1,
+            section: "S".to_owned(),
+        }
+    }
+
+    /// One section of a synthetic remote `.tml`.
+    fn adopt_section(name: &str, start_ariane_id: i64, shots: Vec<TmlShot>) -> TmlSection {
+        let end_ariane_id = shots.last().map_or(start_ariane_id, |s| s.id);
+        TmlSection {
+            name: name.to_owned(),
+            shots,
+            surveyor: None,
+            date: None,
+            color: "#ff0000".to_owned(),
+            is_branch_split: false,
+            start_ariane_id,
+            end_ariane_id,
+            start_depth: 0.0,
+        }
+    }
+
+    /// A synthetic remote `.tml` holding `sections`, with no geo-reference.
+    fn adopt_tml(sections: Vec<TmlSection>) -> TmlFile {
+        TmlFile {
+            cave_name: "Remote".to_owned(),
+            unit: TmlUnit::Metric,
+            use_magnetic_azimuth: false,
+            first_start_absolute_elevation: 0.0,
+            geo_coding: None,
+            sections,
+            closures: Vec::new(),
+        }
+    }
+
+    /// [#411] The pull -> adopt conversion bound its converter warnings to
+    /// `_converter_warnings` and dropped them on the floor. This flow has no import
+    /// dialog and no receipt anywhere in it, so that call site was the last place a
+    /// remote file's parse anomalies existed - a pulled project lost them in silence.
+    ///
+    /// Driven through the REAL converter, so what is asserted is what an adoption
+    /// would actually carry rather than a hand-made string: a section whose every
+    /// shot is excluded is dropped whole, and the converter says so.
+    #[test]
+    fn the_adoption_carries_the_converter_warnings_and_names_the_excluded_shots() {
+        let mut closure = adopt_shot(6, true, TmlShotType::Closure);
+        closure.from_id = 1;
+        closure.closure_to_id = 3;
+        let tml = adopt_tml(vec![
+            adopt_section(
+                "Kept",
+                0,
+                vec![
+                    adopt_shot(1, false, TmlShotType::Real),
+                    adopt_shot(2, true, TmlShotType::Real),
+                    adopt_shot(3, false, TmlShotType::Real),
+                    closure,
+                ],
+            ),
+            adopt_section(
+                "AllExcluded",
+                3,
+                vec![
+                    adopt_shot(4, true, TmlShotType::Real),
+                    adopt_shot(5, true, TmlShotType::Real),
+                ],
+            ),
+        ]);
+
+        // Exactly the call the adoption makes: excluded shots out, comments on stations.
+        let (configs, closures, converter_warnings) =
+            crate::parsers::tml::convert_tml_to_import_configs(&tml, false, true)
+                .expect("the conversion succeeds");
+        // The losses the warnings are ABOUT, proven rather than assumed.
+        assert_eq!(
+            configs.len(),
+            1,
+            "the all-excluded section is dropped whole"
+        );
+        assert_eq!(
+            configs[0].shots.len(),
+            2,
+            "and the excluded shot inside the surviving section goes with it"
+        );
+        assert_eq!(closures.len(), 1, "the CLOSURE shot resolves as a closure");
+        assert!(
+            !converter_warnings.is_empty(),
+            "the fixture must make the converter report something, or this test cannot \
+             see it being dropped"
+        );
+
+        let warnings = adopt_conversion_warnings(&tml, converter_warnings.clone());
+        for reported in &converter_warnings {
+            assert!(
+                warnings.contains(reported),
+                "every converter warning must survive the adoption, missing: {reported}"
+            );
+        }
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w == "3 excluded shots in the remote file were not imported"),
+            "the excluded shots this path drops must be named with their count - the \
+             CLOSURE shot is not one of them; got {warnings:?}"
+        );
+    }
+
+    /// The count is a count, and a file with nothing excluded gets no line about it -
+    /// a warning that is always there is one nobody reads.
+    #[test]
+    fn the_excluded_warning_counts_and_is_absent_when_nothing_was_excluded() {
+        let one = adopt_tml(vec![adopt_section(
+            "S",
+            0,
+            vec![
+                adopt_shot(1, false, TmlShotType::Real),
+                adopt_shot(2, true, TmlShotType::Real),
+            ],
+        )]);
+        assert_eq!(
+            adopt_conversion_warnings(&one, Vec::new()),
+            vec!["1 excluded shot in the remote file was not imported".to_owned()],
+            "one excluded shot reads in the singular"
+        );
+
+        let none = adopt_tml(vec![adopt_section(
+            "S",
+            0,
+            vec![adopt_shot(1, false, TmlShotType::Real)],
+        )]);
+        assert_eq!(
+            adopt_conversion_warnings(&none, vec!["from the converter".to_owned()]),
+            vec!["from the converter".to_owned()],
+            "nothing excluded means nothing said, and the converter's own line is \
+             still passed through untouched"
+        );
+    }
+
+    /// The source-level half: the call site must not go back to discarding what the
+    /// conversion reported, and the receipt it now returns must be decorated by the
+    /// SAME helper the wizard-driven Ariane import uses - a hand-rolled one would be
+    /// free to drift from it, which is how the two imports of one format stop
+    /// agreeing about the file.
+    ///
+    /// Reads the production text because the behavioural path needs an app handle -
+    /// `do_create_project_full` refuses without one - so `adopt_build_into` cannot be
+    /// driven offline at all.
+    #[test]
+    fn the_adopt_call_site_does_not_discard_the_conversions_warnings() {
+        let src = prod_source();
+        let start = src
+            .find("fn adopt_build_into")
+            .expect("the conversion half is present");
+        let body = &src[start..];
+        let body = &body[..body.find("\n    }\n").expect("fn body terminates")];
+
+        assert!(
+            !body.contains("_converter_warnings"),
+            "binding the converter's warnings to an underscore is how they were lost \
+             (#411); pass them on instead"
+        );
+        assert!(
+            body.contains("adopt_conversion_warnings("),
+            "the conversion's warnings must go through the helper that adds the \
+             excluded-shot count, or half the loss is still silent"
+        );
+        let decorate = body
+            .find("import::decorate_receipt(")
+            .expect("the adoption decorates its receipt with the import helper");
+        assert!(
+            body[decorate..].contains("Ok(imported.import_receipt)"),
+            "the decorated receipt is what leaves this function - decorating a value \
+             that is then dropped is the same silence with more steps"
         );
     }
 

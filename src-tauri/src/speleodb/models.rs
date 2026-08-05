@@ -16,6 +16,7 @@ use ts_rs::TS;
 
 // [Track A] #186/D-B2: the typed action carried on the IPC error DTO.
 use super::contract::{SpeleoDbAction, TransportCause};
+use crate::core::command::ImportReceipt;
 
 /// Project permission level.
 ///
@@ -645,6 +646,18 @@ pub struct SpeleoAdoptResult {
     /// this very call.
     pub concurrent_session: bool,
     pub upload: AdoptUpload,
+    /// [#411] What the `.tml` -> project conversion actually did: the same receipt
+    /// every other foreign-format import produces, carrying the converter's anomaly
+    /// warnings plus a line naming the excluded shots this path drops on purpose.
+    ///
+    /// Adoption IS an Ariane import, and import-quality warnings ride an import
+    /// receipt (docs/notifications.md). This flow used to discard both at the call
+    /// site - it has no import wizard to have shown them - so a pulled Ariane
+    /// project lost its excluded shots and every parse anomaly in silence.
+    ///
+    /// `None` only when the import produced no receipt at all, which no successful
+    /// import does today; the webview treats its absence as "nothing to report".
+    pub import_receipt: Option<ImportReceipt>,
 }
 
 /// Outcome of `speleodb_start_editing` (#194): the result of acquiring the write
