@@ -3,7 +3,11 @@ import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import OnboardingOverlay from '../OnboardingOverlay';
 import type { ActiveOnboardingStep } from '../../../hooks/useOnboarding';
 
-vi.mock('react-i18next', () => ({
+// Partial mock: the overlay reads `map.controls.show_navigation_tools` off the
+// project store, and `src/i18n/index.ts` (pulled in by that store) needs the
+// real `initReactI18next`.
+vi.mock('react-i18next', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('react-i18next')>()),
   useTranslation: () => ({ t: (key: string) => key }),
 }));
 
