@@ -51,6 +51,33 @@ function openImportAsNewProject(ui: ReturnType<typeof useUIStore.getState>, path
 }
 
 /**
+ * The dialogs that own an IN-FLIGHT import flow - one that has declared an
+ * `importContext` and has not yet reached its `saveAfterImport`. Mirrors the
+ * import-flow dialogs mounted in App.tsx, in flow order.
+ *
+ * Three import-adjacent dialogs are deliberately NOT here:
+ * - `import-receipt` is post-save (the flow's `saveAfterImport` already ran), so
+ *   re-routing behind it can lose nothing, and "finish the current import" would
+ *   be false advice for a dialog whose only action is Close.
+ * - `import-blocked` and `import-as-new-project` are PRE-flow prompts that own no
+ *   context and re-enter this router themselves; both `closeDialog()` first, so
+ *   they would pass the guard anyway, but listing them would be a trap.
+ */
+const IMPORT_FLOW_DIALOGS = new Set([
+  'new-project-for-import',
+  'dmp-selection',
+  'zero-datum-selection',
+  'zero-datum-config',
+  'dmp-import-new',
+  'tml-import',
+  'compass-import',
+  'walls-import',
+  'gpx-selection',
+  'gpx-placement',
+  'orphan-placement',
+]);
+
+/**
  * Dispatch an already-chosen path to the matching open/import flow.
  *
  * @param path       Absolute path to the selected file.
@@ -80,16 +107,31 @@ export async function routeOpenedFile(
   // command. `setView('single')` clears it on a successful open/create.
   let handedOff = false;
 
-  // `importContext` tells `saveAfterImport` whether the completion handlers must
-  // write the .stalx (a brand-new project's initial save is deferred) or only mark
-  // dirty. It has no auto-reset, so a value left behind by a previous flow -
-  // abandoned parse, cancelled dialog, or a completed import - would decide the
-  // NEXT one, making the save non-deterministic across a session (#411). Reset it
-  // here: this router is the single entry point of every import flow, and each
-  // branch below re-declares its own context once it commits to a flow.
-  ui.setImportContext(null);
-
   try {
+    // One import at a time (#411). Drag-drop routes unconditionally - the drop
+    // listener has no modal check (Ctrl+O/Ctrl+I do: useKeyboardShortcuts returns
+    // early for every non-Escape key while a dialog is open) - so a second file
+    // dropped mid-flow would re-enter here and the reset below would null the
+    // context the in-flight flow's `saveAfterImport` is about to read, losing its
+    // save. Refuse instead, and say so; the running flow keeps the screen and its
+    // context. Guarded in the router, not in the drop handler, so every present
+    // and future entry point inherits it. Inside the `try` so the abandoned
+    // route's telemetry source is dropped by the `finally`, like every other
+    // guard-rejected path.
+    if (ui.activeDialog && IMPORT_FLOW_DIALOGS.has(ui.activeDialog)) {
+      ui.showToast('Finish or cancel the current import first.', 'import-in-progress', 'warning');
+      return;
+    }
+
+    // `importContext` tells `saveAfterImport` whether the completion handlers must
+    // write the .stalx (a brand-new project's initial save is deferred) or only mark
+    // dirty. It has no auto-reset, so a value left behind by a previous flow -
+    // abandoned parse, cancelled dialog, or a completed import - would decide the
+    // NEXT one, making the save non-deterministic across a session (#411). Reset it
+    // here: this router is the single entry point of every import flow, and each
+    // branch below re-declares its own context once it commits to a flow.
+    ui.setImportContext(null);
+
     // Importing into an open project adds sections (a mutation) - but only DMP
     // does that; every other importable format instead CLOSES the current
     // project and imports as a new one (openImportAsNewProject below), which
