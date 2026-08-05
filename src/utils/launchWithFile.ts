@@ -25,18 +25,16 @@
  *    remainder is held here and re-drained when the slot clears.
  * 3. CONSENT. A forwarded launch is remote control - anything that can run a
  *    program as this user can hand the running app a file. The one case where
- *    the router would displace open work with no prompt of its own gets one
- *    here (see `needsLaunchConfirm`).
+ *    the router would displace open work with no prompt of its own - a
+ *    `.stalx` over a clean project - is gated by `routeOpenedFile` itself, so
+ *    this module doesn't need its own check: it just tags the source and
+ *    delegates.
  */
 import { useEffect, useRef } from 'react';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
-import { useProjectStore } from '../store/projectStore';
 import { useUIStore } from '../store/uiStore';
-import { useSpeleoStore } from '../store/speleoStore';
 import { invokeIpc } from './ipc';
 import { routeOpenedFile } from './openOrImport';
-import { extractFilename } from './path';
-import { needsSpeleoHandBackPrompt } from './quit';
 import { setProjectActionSource } from './telemetry';
 
 /** Payload-free nudge from the backend; mirrors `LAUNCH_FILE_EVENT` in Rust. */
@@ -74,40 +72,14 @@ function screenBusy(): boolean {
 }
 
 /**
- * Does this OS-sourced path need a confirm that `routeOpenedFile` won't raise?
- *
- * Exactly ONE case does: a `.stalx` arriving while a CLEAN, locally-owned
- * project is open. The router replaces the open project silently there, because
- * from a picker that IS the user's just-expressed intent - but from the launch
- * channel the request may come from a second process the user never watched
- * start. Every other shape already prompts on its own:
- *
- * - dirty project           -> the router's `unsaved-changes` prompt
- * - SpeleoDB hand-back owed -> the router's `speleodb-close` prompt
- * - `.tml` / `.tmlu` with a project open -> `import-as-new-project`
- * - no project open         -> nothing is displaced; this is the whole feature
- *
- * Adding a confirm on top of those would be a second click for one decision,
- * which the notification policy calls out as a defect in its own right.
+ * Route one OS-sourced path. `routeOpenedFile` raises its own confirm when
+ * this would swap out a clean, already-open project (the one case a launch
+ * channel arrival can't just barrel through) - that guard now covers every
+ * `.stalx`-open entry point, not just this one, so there's nothing to check
+ * here beyond tagging the source.
  */
-export function needsLaunchConfirm(path: string): boolean {
-  const store = useProjectStore.getState();
-  if (!store.project) return false;
-  if (!path.toLowerCase().endsWith('.stalx')) return false;
-  if (store.isDirty) return false;
-  return !needsSpeleoHandBackPrompt(useSpeleoStore.getState().link);
-}
-
-/** Route one OS-sourced path, or raise the confirm that must precede it. */
 async function routeLaunchedFile(path: string): Promise<void> {
   setProjectActionSource('os-file-association');
-  if (needsLaunchConfirm(path)) {
-    useUIStore.getState().openDialog('launch-open-confirm', {
-      path,
-      fileName: extractFilename(path) || path,
-    });
-    return;
-  }
   await routeOpenedFile(path, LAUNCH_ERROR_TITLE);
 }
 

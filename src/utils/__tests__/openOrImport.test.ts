@@ -78,6 +78,35 @@ describe('routeOpenedFile', () => {
     expect(useUIStore.getState().activeDialog).not.toBe('unsaved-changes');
   });
 
+  it('raises the swap-confirm dialog for a .stalx over a CLEAN project instead of opening directly', async () => {
+    useProjectStore.setState({ project: { name: 'X' } as never, isDirty: false });
+    await routeOpenedFile('/cave/other.stalx');
+    expect(useUIStore.getState().activeDialog).toBe('launch-open-confirm');
+    expect(useUIStore.getState().dialogData).toMatchObject({
+      path: '/cave/other.stalx',
+      fileName: 'other.stalx',
+    });
+    expect(loadProject).not.toHaveBeenCalled();
+    // Handed off to the dialog - the source must survive for confirm to complete it.
+    expect(peekProjectActionSource()).toBe('keyboard');
+  });
+
+  it('opens on confirm: swapConfirmed skips the dialog and re-enters at loadProject', async () => {
+    useProjectStore.setState({ project: { name: 'X' } as never, isDirty: false });
+    await routeOpenedFile('/cave/other.stalx', 'Open Failed', { swapConfirmed: true });
+    expect(useUIStore.getState().activeDialog).not.toBe('launch-open-confirm');
+    expect(loadProject).toHaveBeenCalledWith('/cave/other.stalx');
+  });
+
+  it('cancel (never re-invoking) leaves the current project untouched', async () => {
+    useProjectStore.setState({ project: { name: 'X' } as never, isDirty: false });
+    await routeOpenedFile('/cave/other.stalx');
+    expect(useUIStore.getState().activeDialog).toBe('launch-open-confirm');
+    // No re-route follows - a decline never calls routeOpenedFile again.
+    expect(loadProject).not.toHaveBeenCalled();
+    expect(useProjectStore.getState().project).toEqual({ name: 'X' });
+  });
+
   it('offers "import as new project?" for a GPX import while a project is open, handing off the source', async () => {
     useProjectStore.setState({ project: { name: 'X' } as never, isDirty: false });
     await routeOpenedFile('/cave/track.gpx');

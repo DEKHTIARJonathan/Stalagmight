@@ -3,23 +3,28 @@ import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
-import { trackDialogComplete, clearProjectActionSource } from '../../utils/telemetry';
+import {
+  trackDialogComplete,
+  clearProjectActionSource,
+  peekProjectActionSource,
+} from '../../utils/telemetry';
 import { routeOpenedFile } from '../../utils/openOrImport';
 
 /**
- * Consent for a file the OS handed us (#424).
+ * Consent before a `.stalx` open swaps out a clean, already-open project
+ * (#424). `routeOpenedFile` raises this for every entry point that can hit
+ * that case - the OS launch channel (a second process forwarded the file, so
+ * "the user just picked it" doesn't hold), and equally the picker, drag-drop
+ * and Ctrl+O (the user's own click still deserves a confirmation before their
+ * open work disappears, not a silent swap). Dirty and SpeleoDB-held projects
+ * raise the router's own prompts first and never reach here.
  *
- * Raised for exactly one case (see `needsLaunchConfirm`): a `.stalx` arriving
- * through the launch channel while a CLEAN, locally-owned project is open. The
- * router swaps projects silently there - correct for a file the user just
- * picked, wrong for one a second process forwarded, because on Windows and
- * Linux anything able to run a program as this user can send that forward. The
- * open project is not at risk of losing edits (dirty and SpeleoDB-held projects
- * raise the router's own prompts first), but losing your place unasked is still
- * a surprise, so it gets a click.
+ * `peekProjectActionSource()` distinguishes the two only for copy: an
+ * OS-forwarded arrival names itself as such, a user-driven one doesn't imply
+ * an outside actor.
  *
- * Confirming re-routes the same path through the ordinary router, which
- * re-checks every guard from scratch.
+ * Confirming re-routes the same path through the ordinary router with
+ * `swapConfirmed: true`, so the guard doesn't ask again on the second pass.
  */
 export default function LaunchOpenConfirmDialog() {
   const { t } = useTranslation();
@@ -30,6 +35,8 @@ export default function LaunchOpenConfirmDialog() {
   const path = dialogData.path as string | undefined;
   const fileName = dialogData.fileName as string | undefined;
   if (!path || !fileName) return null;
+
+  const isExternal = peekProjectActionSource() === 'os-file-association';
 
   // Declining abandons this open outright, so the pending entry-point source
   // must be dropped - otherwise it survives to mis-attribute a later, unrelated
@@ -42,7 +49,7 @@ export default function LaunchOpenConfirmDialog() {
   const handleConfirm = async () => {
     trackDialogComplete('launch-open-confirm');
     closeDialog();
-    await routeOpenedFile(path, 'Open Failed');
+    await routeOpenedFile(path, 'Open Failed', { swapConfirmed: true });
   };
 
   return (
@@ -54,7 +61,10 @@ export default function LaunchOpenConfirmDialog() {
     >
       <div className="space-y-3">
         <p className="text-sm text-text-secondary">
-          {t('dialogs.launchOpenConfirm.body', { fileName })}
+          {t(
+            isExternal ? 'dialogs.launchOpenConfirm.body' : 'dialogs.launchOpenConfirm.bodyDirect',
+            { fileName },
+          )}
         </p>
         {projectName && (
           <p className="text-sm text-text-secondary">

@@ -61,11 +61,15 @@ function openImportAsNewProject(ui: ReturnType<typeof useUIStore.getState>, path
  *   closure-adjusted) is reported as a non-blocking toast instead of a second
  *   modal - informational, no click owed. Never set on first-touch routes,
  *   where the modal (or the import-blocked choice) is the right interruption.
+ * @param opts.swapConfirmed  Set by LaunchOpenConfirmDialog's "Open" button
+ *   when it re-routes the same path after the user confirmed swapping out a
+ *   clean, already-open project: skips that same confirm on this second pass,
+ *   so confirming doesn't ask again.
  */
 export async function routeOpenedFile(
   path: string,
   errorTitle = 'Open Failed',
-  opts?: { residualReadOnlyToast?: boolean },
+  opts?: { residualReadOnlyToast?: boolean; swapConfirmed?: boolean },
 ): Promise<void> {
   const lowerPath = path.toLowerCase();
   const store = useProjectStore.getState();
@@ -157,6 +161,19 @@ export async function routeOpenedFile(
         handedOff = true;
       } else if (store.project && store.isDirty) {
         ui.openDialog('unsaved-changes', { pendingOpenPath: path });
+        handedOff = true;
+      } else if (store.project && !opts?.swapConfirmed) {
+        // A clean, locally-owned project is open - dirty and SpeleoDB already
+        // prompt above, but a clean project used to fall straight through to
+        // loadProject and get swapped out with no notice at all. Reuses the
+        // confirm this branch already raises for a `.stalx` the OS FORWARDS
+        // over a clean project (`launchWithFile.ts`) - it's the identical
+        // question ("swap the open project for this file?") asked by a
+        // different trigger, so every `.stalx`-open entry point (picker,
+        // drag-drop, Ctrl+O, and the launch channel) now shares one dialog.
+        // Confirming re-enters here with `swapConfirmed: true` so the second
+        // pass falls through to loadProject instead of asking again.
+        ui.openDialog('launch-open-confirm', { path, fileName: extractFilename(path) });
         handedOff = true;
       } else {
         // loadProject handles view switching and error display, and consumes the

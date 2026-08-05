@@ -12,8 +12,12 @@
  *   on its first call, which is exactly what the real router does.
  * - Two nudges arriving together must not interleave two drains through that
  *   same single slot.
- * - A `.stalx` forwarded by a second process must not swap a clean project out
- *   from under the user without a click.
+ *
+ * The "must not swap a clean project out from under the user without a click"
+ * guard itself now lives in `routeOpenedFile` (openOrImport.test.ts covers it,
+ * for every `.stalx`-open entry point, not just this one) - this file only
+ * pins that the launch channel tags its source and otherwise gets out of the
+ * way, `routeOpenedFile` being mocked below.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook, waitFor, act } from '@testing-library/react';
@@ -52,7 +56,6 @@ vi.mock('@tauri-apps/api/event', () => ({ listen: listenMock }));
 import {
   useLaunchWithFile,
   drainLaunchFiles,
-  needsLaunchConfirm,
   resetLaunchFileQueueForTest,
   LAUNCH_FILE_EVENT,
 } from './launchWithFile';
@@ -215,53 +218,30 @@ describe('drainLaunchFiles', () => {
   });
 });
 
-describe('needsLaunchConfirm', () => {
-  it('is false with no project open - nothing is displaced', () => {
-    expect(needsLaunchConfirm('/dives/one.stalx')).toBe(false);
-  });
-
-  it('is true for a .stalx over a clean, locally-owned project', () => {
+// The "swap out a clean project?" confirm itself is `routeOpenedFile`'s job
+// now (openOrImport.test.ts), for every `.stalx`-open entry point at once -
+// `routeOpenedFile` is mocked in this file, so it can't be observed asking
+// here. What this file still owns: the launch channel must delegate to
+// `routeOpenedFile` unconditionally, tagged as its own source, whether or not
+// a project is open - it no longer pre-empts that call with a local check.
+describe('routeLaunchedFile delegates unconditionally', () => {
+  it('routes a .stalx over an already-open project through routeOpenedFile, source-tagged', async () => {
     useProjectStore.setState({ project: { name: 'Open' } as never, isDirty: false });
-    expect(needsLaunchConfirm('/dives/one.stalx')).toBe(true);
-  });
-
-  it('is false when the router already prompts (dirty / SpeleoDB hand-back)', () => {
-    useProjectStore.setState({ project: { name: 'Open' } as never, isDirty: true });
-    expect(needsLaunchConfirm('/dives/one.stalx')).toBe(false);
-
-    useProjectStore.setState({ isDirty: false });
-    useSpeleoStore.setState({ link: { editState: 'editing' } as never });
-    expect(needsLaunchConfirm('/dives/one.stalx')).toBe(false);
-  });
-
-  it('is false for Ariane files - the router raises import-as-new-project', () => {
-    useProjectStore.setState({ project: { name: 'Open' } as never, isDirty: false });
-    expect(needsLaunchConfirm('/dives/one.tml')).toBe(false);
-    expect(needsLaunchConfirm('/dives/one.tmlu')).toBe(false);
-  });
-});
-
-describe('the launch-open confirm', () => {
-  it('asks before swapping a clean project, and does not route until answered', async () => {
-    useProjectStore.setState({ project: { name: 'Open' } as never, isDirty: false });
-    queued = ['/dives/one.stalx', '/dives/two.tml'];
-
-    await drainLaunchFiles();
-
-    expect(routeOpenedFileMock).not.toHaveBeenCalled();
-    const ui = useUIStore.getState();
-    expect(ui.activeDialog).toBe('launch-open-confirm');
-    expect(ui.dialogData.path).toBe('/dives/one.stalx');
-    expect(ui.dialogData.fileName).toBe('one.stalx');
-  });
-
-  it('does not ask when no project is open', async () => {
     queued = ['/dives/one.stalx'];
 
     await drainLaunchFiles();
 
-    expect(useUIStore.getState().activeDialog).toBeNull();
     expect(routed()).toEqual(['/dives/one.stalx']);
+    expect(setProjectActionSourceMock).toHaveBeenCalledWith('os-file-association');
+  });
+
+  it('routes a .stalx with no project open through routeOpenedFile the same way', async () => {
+    queued = ['/dives/one.stalx'];
+
+    await drainLaunchFiles();
+
+    expect(routed()).toEqual(['/dives/one.stalx']);
+    expect(setProjectActionSourceMock).toHaveBeenCalledWith('os-file-association');
   });
 });
 
