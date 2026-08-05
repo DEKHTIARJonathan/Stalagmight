@@ -47,7 +47,13 @@ pub struct TmlFile {
     pub parse_anomalies: Option<TmlParseAnomalies>,
     /// Set when the file's bytes were not valid UTF-8 and had to be decoded
     /// another way (see `decode_xml_bytes`). Built from a fixed vocabulary, not
-    /// from file text, so it crosses IPC into an import warning verbatim.
+    /// from file text, so it needs no sanitizing to cross IPC.
+    ///
+    /// `convert_tml_to_import_configs` copies it verbatim into the import
+    /// warnings, which reach the receipt on the import-wizard path. The
+    /// SpeleoDB adoption path in `core::state::speleodb_pull` calls the same
+    /// converter but discards its warnings, so this one is invisible there too -
+    /// a pre-existing gap, not one this field introduces.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub encoding_warning: Option<String>,
@@ -298,14 +304,28 @@ fn load_xml_from_zip_capped(path: &Path, cap: u64) -> Result<LoadedXml> {
     // archive can declare anything, and only the read is bounded by reality.
     let mut bytes = Vec::new();
     data_file
-        .take(cap + 1)
+        .take(cap.saturating_add(1))
         .read_to_end(&mut bytes)
         .context("Failed to read Data.xml from archive")?;
     if bytes.len() as u64 > cap {
-        bail!("Data.xml in this TML archive is larger than the {cap}-byte decompression limit");
+        bail!(
+            "Data.xml in this TML archive is larger than the {} decompression limit",
+            describe_byte_limit(cap)
+        );
     }
 
     Ok(decode_xml_bytes(bytes))
+}
+
+/// Render a byte limit the way the person reading the error thinks about it.
+/// Whole megabytes above 1 MB, exact bytes below (the test caps live there).
+fn describe_byte_limit(bytes: u64) -> String {
+    const MB: u64 = 1024 * 1024;
+    if bytes >= MB {
+        format!("{} MB", bytes / MB)
+    } else {
+        format!("{bytes} bytes")
+    }
 }
 
 /// Find the `Data.xml` entry, preferring the exact spelling and falling back on
@@ -343,13 +363,21 @@ const CP1252_HIGH: [char; 32] = [
 
 /// Turn file bytes into XML text.
 ///
-/// UTF-8 is what Ariane writes and the overwhelming common case, so valid UTF-8
-/// costs nothing extra. Anything else used to fail the whole import with a raw
-/// Rust decode error; instead we honour the declaration's `encoding=` when it
-/// names one of the single-byte Latin code pages (a hand-edited file from a
-/// French or Spanish Windows install is the realistic source), and otherwise
-/// decode lossily. Either way the receipt says what happened - a wrong accent
-/// beats a refused file, but not silently.
+/// The contract, in order:
+///
+/// 1. Valid UTF-8 wins unconditionally, declaration or no declaration. A file
+///    that declares ISO-8859-1 but whose bytes happen to be valid UTF-8 is read
+///    as UTF-8, with no warning - the two agree on all-ASCII content, which is
+///    almost every such file, and second-guessing valid UTF-8 would corrupt the
+///    ones where they do not.
+/// 2. Only once UTF-8 has failed is the declaration consulted, and only to pick
+///    between the single-byte Latin code pages (a hand-edited file from a French
+///    or Spanish Windows install is the realistic source).
+/// 3. Anything else decodes lossily.
+///
+/// Cases 2 and 3 both used to fail the whole import with a raw Rust decode
+/// error. Either way the receipt now says what happened, including how many
+/// characters were lost - a wrong accent beats a refused file, but not silently.
 ///
 /// The Latin decode is done here rather than through a decoder crate on
 /// purpose: nothing in the dependency tree provides one (`quick-xml` is built
@@ -368,28 +396,49 @@ fn decode_xml_bytes(bytes: Vec<u8>) -> LoadedXml {
 
     if let Some(label) = declared_encoding(&bytes) {
         if let Some((xml, name)) = decode_single_byte_latin(&bytes, &label) {
+            // Even the declared code page has holes: five bytes are undefined in
+            // Windows-1252 and decode to U+FFFD here, which the warning must own
+            // rather than read as "handled fine".
+            let warning = format!(
+                "The file is not valid UTF-8; it was read as {name}, the encoding its XML header \
+                 declares{}",
+                describe_replacements(&xml)
+            );
             return LoadedXml {
                 xml,
-                encoding_warning: Some(format!(
-                    "The file is not valid UTF-8; it was read as {name}, the encoding its XML \
-                     header declares"
-                )),
+                encoding_warning: Some(warning),
             };
         }
     }
 
     let xml = String::from_utf8_lossy(&bytes).into_owned();
+    LoadedXml {
+        encoding_warning: Some(format!(
+            "The file was not valid UTF-8 and its declared encoding (if any) could not be used{}",
+            {
+                let lost = describe_replacements(&xml);
+                if lost.is_empty() {
+                    "; it was decoded lossily".to_string()
+                } else {
+                    lost
+                }
+            }
+        )),
+        xml,
+    }
+}
+
+/// The tail of an encoding warning that accounts for undecodable input, or an
+/// empty string when nothing was lost.
+fn describe_replacements(xml: &str) -> String {
     let replaced = xml
         .chars()
         .filter(|&c| c == char::REPLACEMENT_CHARACTER)
         .count();
-    LoadedXml {
-        encoding_warning: Some(format!(
-            "The file was not valid UTF-8 and no encoding this reader knows was declared; \
-             {replaced} character{} replaced",
-            if replaced == 1 { " was" } else { "s were" }
-        )),
-        xml,
+    match replaced {
+        0 => String::new(),
+        1 => "; 1 character was replaced".to_string(),
+        n => format!("; {n} characters were replaced"),
     }
 }
 
@@ -3787,16 +3836,22 @@ mod tests {
     }
 
     fn write_tml_archive(path: &Path, entry: &str, body: &[u8]) {
+        write_tml_archive_entries(path, &[(entry, body)]);
+    }
+
+    fn write_tml_archive_entries(path: &Path, entries: &[(&str, &[u8])]) {
         use std::io::Write as _;
         let file = fs::File::create(path).unwrap();
         let mut zip = zip::ZipWriter::new(file);
-        zip.start_file(
-            entry,
-            zip::write::SimpleFileOptions::default()
-                .compression_method(zip::CompressionMethod::Deflated),
-        )
-        .unwrap();
-        zip.write_all(body).unwrap();
+        for (name, body) in entries {
+            zip.start_file(
+                *name,
+                zip::write::SimpleFileOptions::default()
+                    .compression_method(zip::CompressionMethod::Deflated),
+            )
+            .unwrap();
+            zip.write_all(body).unwrap();
+        }
         zip.finish().unwrap();
     }
 
@@ -3847,7 +3902,93 @@ mod tests {
 
         let tml = parse_synthetic_tmlu_bytes(&bytes).unwrap();
         assert_eq!(tml.cave_name, "L\u{2019}A\u{e9}ven");
-        assert!(tml.encoding_warning.unwrap().contains("windows-1252"));
+        let warning = tml.encoding_warning.unwrap();
+        assert!(warning.contains("windows-1252"));
+        assert!(
+            !warning.contains("replaced"),
+            "nothing was lost here, so the warning must not claim otherwise: {warning:?}"
+        );
+    }
+
+    /// Five bytes are undefined in Windows-1252 and decode to U+FFFD. The
+    /// declared-encoding branch must own that loss, not report a clean decode.
+    ///
+    /// Without the fix the count is only taken on the lossy branch, so this
+    /// warning ends at "declares" and never mentions the replaced character.
+    #[test]
+    fn an_undefined_windows_1252_byte_is_counted_in_the_warning() {
+        let mut bytes = latin1_bytes(&document_with_declaration(
+            r#"<?xml version="1.0" encoding="windows-1252"?>"#,
+            "PLACEHOLDER",
+        ));
+        let at = bytes.windows(11).position(|w| w == b"PLACEHOLDER").unwrap();
+        // 0x81 is one of the five undefined slots; 0xe9 is a plain accent.
+        bytes.splice(at..at + 11, [b'C', 0x81, b'v', 0xe9]);
+
+        let tml = parse_synthetic_tmlu_bytes(&bytes).unwrap();
+        assert_eq!(tml.cave_name, "C\u{fffd}v\u{e9}");
+        let warning = tml.encoding_warning.unwrap();
+        assert!(
+            warning.contains("windows-1252") && warning.contains("1 character was replaced"),
+            "the declared-encoding warning must count its own losses, got {warning:?}"
+        );
+    }
+
+    /// A single-quoted declaration is as legal as a double-quoted one.
+    ///
+    /// Without the fix (accepting only `"`) the declaration is not read, the
+    /// file falls to the lossy branch and the accent is lost.
+    #[test]
+    fn a_single_quoted_encoding_declaration_is_honoured() {
+        let bytes = latin1_bytes(&document_with_declaration(
+            "<?xml version='1.0' encoding='ISO-8859-1'?>",
+            "Rivi\u{e8}re",
+        ));
+
+        let tml = parse_synthetic_tmlu_bytes(&bytes).unwrap();
+        assert_eq!(tml.cave_name, "Rivi\u{e8}re");
+        assert!(tml.encoding_warning.unwrap().contains("ISO-8859-1"));
+    }
+
+    /// A file that declares UTF-8 and then is not UTF-8 gets the lossy path, not
+    /// a guess at what it meant. This pins the label set: widening the decoder to
+    /// "assume Latin-1 when the declaration lies" would silently change what
+    /// every such file imports as, and must be a deliberate decision.
+    #[test]
+    fn a_file_that_declares_utf8_and_lies_is_read_lossily_not_guessed() {
+        let mut bytes = latin1_bytes(&document_with_declaration(
+            r#"<?xml version="1.0" encoding="UTF-8"?>"#,
+            "PLACEHOLDER",
+        ));
+        let at = bytes.windows(11).position(|w| w == b"PLACEHOLDER").unwrap();
+        bytes.splice(at..at + 11, [b'R', b'i', b'v', 0xe8, b'r', b'e']);
+
+        let tml = parse_synthetic_tmlu_bytes(&bytes).unwrap();
+        assert_eq!(tml.cave_name, "Riv\u{fffd}re");
+        let warning = tml.encoding_warning.unwrap();
+        assert!(
+            warning.contains("declared encoding (if any) could not be used")
+                && warning.contains("1 character was replaced"),
+            "a lying declaration must read as unusable, not as honoured: {warning:?}"
+        );
+    }
+
+    /// Valid UTF-8 wins over the declaration, so a file that declares Latin-1
+    /// but is really UTF-8 keeps its characters and raises nothing.
+    #[test]
+    fn valid_utf8_beats_a_declaration_that_says_otherwise() {
+        let xml = document_with_declaration(
+            r#"<?xml version="1.0" encoding="ISO-8859-1"?>"#,
+            "Rivi\u{e8}re",
+        );
+        assert!(
+            !xml.is_ascii(),
+            "premise: the two encodings would disagree about this file"
+        );
+
+        let tml = parse_synthetic_tmlu_bytes(xml.as_bytes()).unwrap();
+        assert_eq!(tml.cave_name, "Rivi\u{e8}re");
+        assert!(tml.encoding_warning.is_none());
     }
 
     /// No usable declaration and undecodable bytes: import anyway, lossily, and
@@ -3960,12 +4101,61 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(
-            err.contains("1024-byte decompression limit"),
+            err.contains("1024 bytes decompression limit"),
             "the error must name the limit, got {err:?}"
         );
 
         let loaded = load_xml_from_zip_capped(&path, 512 * 1024).unwrap();
         assert_eq!(loaded.xml.len(), xml.len());
+    }
+
+    /// The production reader must hand the capped loader the real limit, and the
+    /// limit must read as a size a person recognises.
+    ///
+    /// A genuine 512 MB round trip is too heavy to run on every `cargo test`, so
+    /// this pins the constant and its rendering instead. `MAX_DATA_XML_BYTES` has
+    /// exactly one use - `load_xml_from_zip` - so the only mutation this leaves
+    /// uncovered is rewriting that one call site to an inline literal.
+    ///
+    /// Without the fix there is no constant and no rendering to assert.
+    #[test]
+    fn the_production_reader_caps_at_512_mb() {
+        assert_eq!(MAX_DATA_XML_BYTES, 512 * 1024 * 1024);
+        assert_eq!(describe_byte_limit(MAX_DATA_XML_BYTES), "512 MB");
+        assert_eq!(describe_byte_limit(1024), "1024 bytes");
+
+        // And the wrapper really does read a file, so the cap it passes is not
+        // so small that ordinary archives trip it.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("synthetic.tml");
+        let xml = wrap_xml(&tml_shot_xml(1, -1, "REAL", "A"));
+        write_tml_archive(&path, "Data.xml", xml.as_bytes());
+        assert_eq!(load_xml_from_zip(&path).unwrap().xml.len(), xml.len());
+    }
+
+    /// An archive holding both spellings must use the exact one. The
+    /// case-insensitive search is a fallback, not a preference - picking
+    /// whichever entry the directory happens to list first would make the import
+    /// depend on the writer's ordering.
+    ///
+    /// Without the fix (taking the first case-insensitive hit) this reads the
+    /// decoy, because the decoy is written first.
+    #[test]
+    fn the_exact_zip_entry_wins_over_a_case_variant() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("synthetic.tml");
+        let decoy = wrap_xml(&tml_shot_xml(1, -1, "REAL", "A")).replace("Test Cave", "Decoy Cave");
+        let real = wrap_xml(&tml_shot_xml(1, -1, "REAL", "A"));
+        write_tml_archive_entries(
+            &path,
+            &[
+                ("data.XML", decoy.as_bytes()),
+                ("Data.xml", real.as_bytes()),
+            ],
+        );
+
+        let tml = parse_tml(&path).unwrap();
+        assert_eq!(tml.cave_name, "Test Cave");
     }
 
     /// `-1.0` is the FORMAT's "same as the previous shot" marker, not this
