@@ -1749,6 +1749,16 @@ function MapCanvas() {
       ctrlPanMouseEventTime: ctrlPanMouseEventTimeRef,
     });
 
+    // Equalize the two scroll-zoom rates. MapLibre classifies each wheel chain
+    // as 'trackpad' (1/100 zoom per px) or 'wheel' (1/450) from the first
+    // events' timing, and on Windows precision trackpads the classifier gets a
+    // large share of chains wrong - it can even flap between the two rates
+    // WITHIN one gesture (measured ~70% 'wheel' on chains that felt sluggish,
+    // ~4.5x slower than intended). With both rates equal the verdict has no
+    // visible effect. A real mouse notch (~100 px) now zooms a full level per
+    // tick (Google Maps behavior); Shift+wheel still gives 1/4-rate precision.
+    map.current.scrollZoom.setWheelZoomRate(1 / 100);
+
     // Disable rotation (Ctrl+drag rotates by default, we want Ctrl+drag to pan)
     map.current.dragRotate.disable();
     map.current.touchPitch.disable();
