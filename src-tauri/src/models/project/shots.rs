@@ -1398,6 +1398,73 @@ impl Project {
         Ok((deleted_shot, impact))
     }
 
+    /// The exact inverse of [`Self::add_shot`] into an **empty** section:
+    /// remove the section's only shot and leave station 0 - and everything
+    /// anchored to it - exactly as the append found them.
+    ///
+    /// [`Self::remove_shot_with_rewire`] is the wrong inverse for this one
+    /// shape. Its `pos == 0` branch answers the USER's delete-the-first-shot
+    /// question: station 0 goes away, station 1 becomes the new section start,
+    /// every ref keyed to station 0 is dropped, and `adjust_section_offset`
+    /// slides the section so the surviving stations keep their world positions.
+    /// With exactly one shot the appended shot IS index 0, so there is no
+    /// survivor to keep in place: the compensation slides the whole section by
+    /// the shot's horizontal vector while the offset-neutral `add_shot` gave
+    /// nothing back, and the redo re-appends offset-neutrally, so every
+    /// undo/redo cycle slides it again (#413, finding 3, and finding 15 which
+    /// is that leftover key observed several moves later). The same branch
+    /// destroys the merges, zero datums and station comments keyed to station 0,
+    /// which in an empty section is every ref it has (finding 3's data-loss
+    /// half).
+    ///
+    /// The station this append CREATED is station 1, `AfterShot(uuid)`. That is
+    /// the one that must go, with anything anchored on it; station 0 predates
+    /// the append and must not move. Offset-neutral in both directions, exactly
+    /// as `add_shot` is, so no cascade or alignment pass is needed either.
+    ///
+    /// Errors (rather than silently doing something else) when `shot_id` is not
+    /// the section's sole shot, so a caller that mis-detects the shape gets a
+    /// refusal instead of a wrong inverse.
+    pub(crate) fn remove_appended_first_shot(
+        &mut self,
+        section_id: SectionId,
+        shot_id: ShotId,
+    ) -> Result<Shot, String> {
+        let section = self
+            .get_section(section_id)
+            .ok_or_else(|| format!("Section {section_id} not found"))?;
+        if section.shots.len() != 1 || section.shots[0].id != shot_id {
+            return Err(format!(
+                "Shot {shot_id} is not the only shot of section {section_id}"
+            ));
+        }
+        // Refs on the station the append created. There are none when the undo
+        // follows its own `CreateShot` (anything anchored there would have been
+        // pushed above this entry and undone first), but a ref whose anchoring
+        // shot is gone dangles, so drop rather than orphan.
+        let created = section
+            .shots
+            .first()
+            .and_then(|shot| shot.uuid.clone())
+            .map(|uuid| StationKey::new(section_id, StationAnchor::AfterShot(uuid)));
+        if let Some(key) = created {
+            self.station_offsets.remove(&key);
+            self.station_comments.remove(&key);
+            self.zero_datums.retain(|zd| zd.station_ref != key);
+            self.station_merges
+                .retain(|m| m.station_a != key && m.station_b != key);
+            self.loop_closures
+                .retain(|c| c.station_a != key && c.station_b != key);
+            self.merge_adjacency_cache.clear();
+        }
+        let removed = self
+            .get_section_mut(section_id)
+            .and_then(|section| section.remove_shot(shot_id))
+            .ok_or_else(|| format!("Shot {shot_id} not found in section {section_id}"))?;
+        self.touch();
+        Ok(removed)
+    }
+
     /// Remove a shot
     pub fn remove_shot(&mut self, section_id: SectionId, shot_id: ShotId) -> Option<Shot> {
         self.remove_shot_with_rewire(section_id, shot_id)

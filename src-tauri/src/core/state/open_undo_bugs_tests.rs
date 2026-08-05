@@ -1,17 +1,22 @@
-//! RED regression tests for the open undo/redo bugs the agent-harness fuzzer
-//! found (`e2e/agent/scenarios/undoRedoFuzz.ts`, whose header carries the
-//! per-bug repro commands and root causes).
+//! Regression tests for the undo/redo bugs the agent-harness fuzzer found
+//! (`e2e/agent/scenarios/undoRedoFuzz.ts`, whose header carries the per-bug
+//! repro commands and root causes).
 //!
 //! # The rule
 //!
-//! Every test here is `#[ignore]`d with the bug it pins, so the default suite
-//! stays green while `cargo test -- --ignored` runs them RED. They are not
-//! aspirational: each one fails today, on the mechanism named in its `#[ignore]`
-//! reason. **When a bug is fixed, delete the `#[ignore]` and the test becomes
-//! its regression guard** - that is the whole point of committing them failing.
+//! A test here is committed `#[ignore]`d with the bug it pins, so the default
+//! suite stays green while `cargo test -- --ignored` runs it RED. They are not
+//! aspirational: each one failed on the mechanism its `#[ignore]` reason named.
+//! **When a bug is fixed, delete the `#[ignore]` and the test becomes its
+//! regression guard** - that is the whole point of committing them failing. The
+//! doc comment then records what the fix was, so the mechanism survives even
+//! though nothing reproduces it any more.
 //!
 //! A test that starts passing while still `#[ignore]`d means the bug was fixed
 //! incidentally; un-ignore it rather than deleting it.
+//!
+//! **Nothing here is `#[ignore]`d today**: every bug this module pinned is
+//! fixed. The next red test goes in ignored, exactly as the rule says.
 //!
 //! # Data
 //!
@@ -425,8 +430,17 @@ fn undo_of_a_shot_insert_leaves_no_orphan_offset_entry() {
 /// through `remove_shot_with_rewire`, whose `pos == 0` branch unconditionally
 /// calls `adjust_section_offset`. With one shot the appended shot IS index 0, so
 /// the delete slides the section by that shot's horizontal vector.
+///
+/// FIXED: undo of `CreateShot` no longer reuses the general delete for the one
+/// shape it is not the inverse of. `AppState::remove_created_shot`
+/// (`core/state/command_shot.rs`) recognises the recorded append-into-an-empty-
+/// section shape (both anchors absent, position 0, and still the section's sole
+/// shot) and calls `Project::remove_appended_first_shot`
+/// (`models/project/shots.rs`), which removes the station the append CREATED -
+/// station 1, `AfterShot(uuid)` - and leaves `section_offsets` and station 0's
+/// refs untouched, exactly as offset-neutral in reverse as `add_shot` is
+/// forward.
 #[test]
-#[ignore = "open bug 3: undoing the first shot appended into an empty section displaces it - see e2e/agent/scenarios/undoRedoFuzz.ts header"]
 fn undo_of_the_first_shot_in_an_empty_section_does_not_move_it() {
     let _config = isolated_config();
     let state = state_with_project();
@@ -453,8 +467,10 @@ fn undo_of_the_first_shot_in_an_empty_section_does_not_move_it() {
 
 /// The displacement is not a one-off: redo re-inserts without giving the offset
 /// back, so every undo/redo cycle slides the section again.
+///
+/// FIXED with the test above: with nothing taken on the undo there is nothing
+/// for the offset-neutral redo to give back, so the cycle is the identity.
 #[test]
-#[ignore = "open bug 3 (ratchet): the displacement compounds on every undo/redo cycle - see e2e/agent/scenarios/undoRedoFuzz.ts header"]
 fn the_empty_section_displacement_does_not_ratchet() {
     let _config = isolated_config();
     let state = state_with_project();
@@ -577,8 +593,16 @@ fn undo_of_remove_loop_closure_restores_the_original_order() {
 /// `core/state/undo.rs` pushes the entry back on failure, so it fails the same
 /// way forever and every entry beneath it is unreachable - a WEDGED history,
 /// which is worse than any amount of drift.
+///
+/// FIXED: the undo arm calls `AppState::remove_created_shot`
+/// (`core/state/command_shot.rs`), which keeps only the structural rewire
+/// (`Project::remove_shot_with_rewire`) and consults NO user-intent guard.
+/// Special-casing the loop guard would not have been the fix - `delete_shot`'s
+/// frozen-shot check runs before it and wedges the history identically, and it
+/// is the one the Rust fuzzer hits most. The guards themselves are untouched
+/// and still refuse a USER delete; see
+/// `the_delete_guards_still_refuse_a_user_delete` below.
 #[test]
-#[ignore = "open bug 6: undo of CreateShot into an anchored loop fails and wedges the history - see e2e/agent/scenarios/undoRedoFuzz.ts header"]
 fn undo_of_create_shot_in_an_anchored_loop_succeeds() {
     let _config = isolated_config();
     let state = state_with_project();
@@ -628,6 +652,71 @@ fn undo_of_create_shot_in_an_anchored_loop_succeeds() {
     );
 }
 
+/// The other half of bug 6's fix: taking the guards off the UNDO path must not
+/// take them off the USER's. `Command::DeleteShot` still runs `delete_shot`,
+/// both refusals intact.
+///
+/// Both are exercised, because bug 6's write-up quoted only one and the fuzzer
+/// hits the other more often. The strategy is what separates them: a
+/// `ClosureStrategy::Move` closure is created `is_aligned`
+/// (`models/project/mutations.rs`), which rigidifies the loop, so both endpoints
+/// of a shot on it reach the datum and the shot is FROZEN; the default `Batch`
+/// closure is not aligned, so the shot is not frozen and the shift-blocked
+/// loop/datum pair behind the frozen check is what refuses.
+#[test]
+fn the_delete_guards_still_refuse_a_user_delete() {
+    for (strategy, expected) in [
+        (
+            ClosureStrategy::Move,
+            "Cannot delete a frozen shot. This shot is part of an adjusted survey network.",
+        ),
+        (ClosureStrategy::Batch, "Use split instead."),
+    ] {
+        let state = state_with_project();
+        let (a, b) = two_merged_sections(&state);
+        let closed = state.execute(Command::CreateLoopClosure {
+            station_a: StationRef::new(a, 0),
+            station_b: StationRef::new(b, 1),
+            closure_strategy: strategy,
+        });
+        assert!(
+            closed.success,
+            "setup ({strategy:?}): loop-closing closure failed: {:?}",
+            closed.error
+        );
+
+        let first_shot_of_a = shot_ids(&state, a)[0];
+        let created = state.execute(Command::CreateShot {
+            section_id: a,
+            shot: shot(45.0, 3.0),
+            after_shot_id: Some(first_shot_of_a),
+            before_shot_id: None,
+        });
+        assert!(
+            created.success,
+            "setup ({strategy:?}): CreateShot failed: {:?}",
+            created.error
+        );
+        let inserted = shot_ids(&state, a)[1];
+
+        let deleted = state.execute(Command::DeleteShot {
+            section_id: a,
+            shot_id: inserted,
+        });
+        assert!(
+            !deleted.success,
+            "a USER delete of a shot on an anchored loop ({strategy:?}) was PERMITTED; the guard \
+             undo now skips must still refuse the user"
+        );
+        let error = deleted.error.unwrap_or_default();
+        assert!(
+            error.contains(expected),
+            "the {strategy:?} delete was refused with {error:?}, which does not mention \
+             {expected:?} - the guard that fired is not the one this row pins"
+        );
+    }
+}
+
 // ===========================================================================
 // Bug 7: PINNED at last - by a seed, in the fuzz module
 // ===========================================================================
@@ -656,9 +745,11 @@ fn undo_of_create_shot_in_an_anchored_loop_succeeds() {
 // of the drift sources reachable in a small synthetic project qualifies. Each
 // was measured, not assumed:
 //
-//   * bug 3's empty-section displacement DROPS the merge it would misalign -
-//     the `pos == 0` branch removes refs keyed to station 0, and an empty
-//     section has no other station to merge on.
+//   * bug 3's empty-section displacement DROPPED the merge it would misalign -
+//     the `pos == 0` branch removed refs keyed to station 0, and an empty
+//     section has no other station to merge on. (Measured while bug 3 was open.
+//     It is fixed now and there is no displacement at all, so this route is
+//     doubly unavailable.)
 //   * `UpdateShot` on a merged section restores the offsets symmetrically: both
 //     unwind paths land on the same offset (verified by instrumenting).
 //   * an insert-before on a section merged at a SURVIVING station compensates
@@ -1232,8 +1323,10 @@ fn undo_after_reload_is_not_wedged_by_an_out_of_range_shot_id() {
 /// This test pins the CONSEQUENCE rather than the cause, because that is what a
 /// user sees and what finding 3's own tests do not cover: unwinding the whole
 /// history has to return the project to the state it started in.
+///
+/// FIXED by fixing finding 3: there is no displacement left to survive. Nothing
+/// here was specific to finding 15, which is why it was closed as a duplicate.
 #[test]
-#[ignore = "open finding 15 (= finding 3, cascading): the empty-section displacement survives every later undo - see src-tauri/src/core/state/fuzz_undo_tests.rs"]
 fn unwinding_the_history_leaves_no_displaced_section_behind() {
     let _config = isolated_config();
     let state = state_with_project();

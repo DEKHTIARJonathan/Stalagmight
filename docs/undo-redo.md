@@ -37,7 +37,7 @@ Commands go through a two-phase capture during execution:
 | `InverseCommand` | SetStationComment | Execute the inverse command | Execute the original command |
 | `PreviousValues` | UpdateShot, SetShotKind, UpdateSectionMetadata | Parse JSON, apply old values | Execute the original command |
 | `CreatedSectionSnapshot` | CreateSection | Delete the section | Restore from snapshot (preserves the original ID **and** the recorded identity - see below) |
-| `CreatedShotSnapshot` | CreateShot | Delete the shot | Restore from snapshot (preserves original ID) |
+| `CreatedShotSnapshot` | CreateShot | Remove the created shot - the exact inverse of the insert, guard-free (see below) | Restore from snapshot (preserves original ID) |
 | `ShotSnapshot` | DeleteShot | Restore shot at exact position | Re-execute the delete |
 | `MergeInfo` | MergeStations | Restore previous offsets + unmerge | Execute the original command |
 | `UnmergeInfo` | UnmergeStations | Re-merge + restore removed closures | Re-execute the unmerge |
@@ -139,6 +139,44 @@ anchors the live project already holds). The heals that DROP or REWRITE state
 are deliberately not re-applied: an undo has to be an exact inverse, and undoing
 a Repair has to restore the very state that Repair healed. The per-heal argument
 is on the function.
+
+### An inverse consults no user-intent guard (#413, findings 3 and 6)
+
+**If a forward command was permitted, its inverse must be too.** Undo of
+`CreateShot` used to run the user-facing `delete_shot`, guards and all. Those
+guards say what a USER may do - do not tear a loop apart, do not touch
+collaborator-locked geometry - and both of them refuse an undo in practice: the
+frozen-shot check, and the shift-blocked loop/datum pair behind it. A refused
+undo is not a no-op: `undo_inner`'s epilogue pushes the entry back, so it fails
+identically forever and every entry beneath it is unreachable. That is a WEDGED
+history, and through the history dropdown a multi-step `undo_to` wedges partway,
+leaving the earlier steps applied.
+
+`AppState::remove_created_shot` (`core/state/command_shot.rs`) is the undo path.
+It keeps the structural rewire (`Project::remove_shot_with_rewire`) and consults
+neither guard. `Command::DeleteShot` still runs `delete_shot` unchanged, so a
+USER delete is refused exactly as before.
+
+It also picks the right inverse per insert shape, because `remove_shot_with_rewire`
+is not the inverse of one of them:
+
+- **Append into an EMPTY section** (both recorded anchors absent, position 0, and
+  still the section's sole shot) -> `Project::remove_appended_first_shot`
+  (`models/project/shots.rs`). `remove_shot_with_rewire`'s `pos == 0` branch
+  answers the user's delete-the-first-shot question - station 0 goes away,
+  station 1 becomes the new section start, refs keyed to station 0 are dropped
+  and `adjust_section_offset` slides the section so the survivors keep their
+  world positions. With exactly one shot there is no survivor: the section slid
+  by the shot vector while the offset-neutral `Project::add_shot` gave nothing
+  back, and the redo re-appended offset-neutrally, so every cycle slid it again
+  (the RATCHET). The station the append CREATED is station 1, `AfterShot(uuid)`;
+  that is what the inverse removes, leaving `section_offsets` and station 0's
+  merges, datums and comments untouched.
+- **Everything else** -> `remove_shot_with_rewire`, which already mirrors the
+  insert exactly: an append into a non-empty section leaves no station beyond the
+  deletion point, so `anchored_sides_of_edit` sees no anchored tail and
+  compensates nothing; a mid-chain insert and a prepend are undone by the same
+  offset arithmetic that made them.
 
 ### Why Some Undos Restore Directly Instead of Re-Executing
 

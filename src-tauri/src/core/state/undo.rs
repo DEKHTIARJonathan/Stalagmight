@@ -150,15 +150,31 @@ impl AppState {
             UndoData::CreatedShotSnapshot {
                 section_id,
                 shot_id,
+                position,
+                after_shot_id,
+                before_shot_id,
                 uuid,
                 ..
             } => {
-                // Undo a CreateShot by deleting the shot it created - resolved
+                // Undo a CreateShot by removing the shot it created - resolved
                 // by uuid, because the in-session id it was recorded with
                 // addresses a DIFFERENT shot after a save/reopen (#413,
                 // finding 8) or none at all (finding 13).
+                //
+                // Through `remove_created_shot`, NOT the user-facing
+                // `delete_shot`: an inverse must not consult the guards that
+                // express what a user may do, or a permitted CreateShot becomes
+                // an undo that fails and wedges the history (#413, finding 6).
+                // The recorded anchors and position say WHICH insert is being
+                // inverted; both anchors absent at position 0 is the append
+                // into an empty section whose inverse is not the general
+                // delete (finding 3).
                 match self.resolve_undo_shot(*section_id, uuid.as_deref(), *shot_id) {
-                    Ok(target_id) => self.delete_shot(*section_id, target_id),
+                    Ok(target_id) => self.remove_created_shot(
+                        *section_id,
+                        target_id,
+                        after_shot_id.is_none() && before_shot_id.is_none() && *position == 0,
+                    ),
                     Err(e) => CommandResult::failure(e),
                 }
             }

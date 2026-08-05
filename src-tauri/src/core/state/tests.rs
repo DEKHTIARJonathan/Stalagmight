@@ -2340,6 +2340,74 @@ fn restore_snapshot_into_rebuilds_transient_caches() {
     assert!(p.get_section(a).is_some() && p.get_section(b).is_some());
 }
 
+/// A snapshot restore must return the project BIT for BIT, not to within a
+/// printed decimal.
+///
+/// `serde_json`'s default float parser is best-effort: it writes
+/// `-26.759999999999998` faithfully and reads it back as `-26.76`, one ULP away.
+/// Every snapshot-pair command (Reverse section, Delete shot, Delete section,
+/// every Batch import) stores a whole serialized `Project` and undoes by parsing
+/// it back through [`AppState::restore_snapshot_into`], so with the default
+/// parser an undo silently rewrote survey measurements in their last bit. It is
+/// not cosmetic: the closure-adjusted view is a least-squares solve whose
+/// elimination order turns on scale-relative pivot tests, so a one-ULP input
+/// change moved a station 28 microns while the stored project compared equal
+/// (issue #413, finding 25). `serde_json`'s `float_roundtrip` feature is what
+/// makes the parse exact, and this test is the guard on that feature staying on.
+#[test]
+fn a_snapshot_restore_is_bit_exact() {
+    // Doubles whose shortest round-trip decimal the best-effort parser gets
+    // wrong. `pitch_out` is the one issue #413 hit; the others are on the same
+    // ULP boundary and cover the plain (non-optional) measurement fields.
+    let pitch = -26.759_999_999_999_998_f64;
+    let length = 26.759_999_999_999_998_f64;
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "bits".to_string(),
+        location: None,
+    });
+    state.execute(Command::CreateSection {
+        name: Some("A".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#111111".to_string(),
+        direction: Some(SurveyDirection::In),
+        shots: vec![ShotData {
+            azimuth_in: 12.0,
+            azimuth_out: 12.0,
+            length,
+            depth_in: 1.0,
+            depth_out: 2.0,
+            pitch_out: Some(pitch),
+            ..Default::default()
+        }],
+    });
+    let before = state.get_project_state().unwrap();
+    assert_eq!(
+        before.sections[0].shots[0].pitch_out.map(f64::to_bits),
+        Some(pitch.to_bits()),
+        "fixture: the shot must hold the exact double under test"
+    );
+
+    let snapshot = AppState::serialize_project_snapshot(&before).unwrap();
+    let mut slot = Some(before);
+    assert!(AppState::restore_snapshot_into(&mut slot, &snapshot));
+    let after = slot.unwrap();
+
+    assert_eq!(
+        after.sections[0].shots[0].pitch_out.map(f64::to_bits),
+        Some(pitch.to_bits()),
+        "restoring a snapshot changed pitch_out by {} ULP",
+        (after.sections[0].shots[0].pitch_out.unwrap().to_bits() as i64 - pitch.to_bits() as i64)
+            .abs()
+    );
+    assert_eq!(
+        after.sections[0].shots[0].length.to_bits(),
+        length.to_bits(),
+        "restoring a snapshot changed length in its last bits"
+    );
+}
+
 #[test]
 fn undo_unmerge_restores_converted_closure_and_position() {
     // The orphan-closure conversion unmerge triggers is a structural side-effect;
