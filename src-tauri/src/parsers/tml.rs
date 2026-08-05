@@ -3769,9 +3769,9 @@ mod tests {
     /// Run the real `parse_tml` over synthetic bytes written to a throwaway
     /// `.tmlu`, so the byte-level decode path is the one under test.
     fn parse_synthetic_tmlu_bytes(bytes: &[u8]) -> Result<TmlFile> {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = tempfile::tempdir()?;
         let path = dir.path().join("synthetic.tmlu");
-        fs::write(&path, bytes).unwrap();
+        fs::write(&path, bytes)?;
         parse_tml(&path)
     }
 
