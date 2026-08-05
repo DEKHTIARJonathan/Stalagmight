@@ -9,7 +9,6 @@ import {
   useUIStore,
   isMapReadOnly,
   showsClosureAdjustedNotice,
-  type Selection,
 } from '../../store/uiStore';
 import { selectComputeGate, useGasPlanStore } from '../../store/gasPlanStore';
 import { selectActiveStations, selectActiveSurveyData } from '../../store/geometrySelectors';
@@ -56,7 +55,6 @@ import { MapTopLeftOverlay } from './MapTopLeftOverlay';
 import { useSpeleoStore, selectSpeleoReadOnly } from '../../store/speleoStore';
 import { useNetworkStore } from '../../store/networkStore';
 import { FEATURE_ID_STRIDE } from '../../utils/ids';
-import { setSource } from '../../utils/telemetry';
 import { debugLog } from '../../utils/debugLog';
 import { TOAST_KEYS } from '../../utils/toastKeys';
 
@@ -68,7 +66,7 @@ const CTRL_PAN_TOOLS = ['select', 'zoom', 'merge', 'measure', 'move_station', 'm
 // across renders - a per-render [] would defeat the rebuild-gating memo below.
 const EMPTY_WARNINGS: ProjectWarning[] = [];
 
-interface BoxSelectState {
+interface ZoomBoxState {
   start: { x: number; y: number } | null;
   end: { x: number; y: number } | null;
 }
@@ -210,8 +208,7 @@ function MapCanvas() {
   const gasOriginMarkerRef = useRef<maplibregl.Marker | null>(null);
   const scaleControlRef = useRef<maplibregl.ScaleControl | null>(null);
   const scaleControlAddedRef = useRef<boolean>(false);
-  const [boxSelect, setBoxSelect] = useState<BoxSelectState>({ start: null, end: null });
-  const [zoomBox, setZoomBox] = useState<BoxSelectState>({ start: null, end: null });
+  const [zoomBox, setZoomBox] = useState<ZoomBoxState>({ start: null, end: null });
   const [moveDrag, setMoveDrag] = useState<MoveDragState | null>(null);
   const [mapLoaded, setMapLoaded] = useState(false);
   const [ctrlHeld, setCtrlHeld] = useState(false);
@@ -420,7 +417,6 @@ function MapCanvas() {
     measureAlongLinePending,
     setMeasureSnapShot,
     clearMeasure,
-    addToSelection,
     clearSelection,
     clearSelectionByType,
     filterSelection,
@@ -1033,80 +1029,6 @@ function MapCanvas() {
     }),
     [baseToolCallbacks, noteMapInteraction, showToast],
   );
-
-  // Box select handlers
-  const handleBoxSelectStart = useCallback(
-    (e: React.PointerEvent) => {
-      if (activeTool !== 'select') return;
-      if (!mapContainer.current) return;
-
-      // Only start box select on left click and not on a feature
-      if (e.button !== 0) return;
-
-      // Don't start box select when Ctrl is held (Ctrl+drag is for panning)
-      // Use e.ctrlKey directly instead of state to avoid timing issues
-      if (e.ctrlKey) return;
-
-      const rect = mapContainer.current.getBoundingClientRect();
-      const x = e.clientX - rect.left;
-      const y = e.clientY - rect.top;
-
-      setBoxSelect({ start: { x, y }, end: { x, y } });
-    },
-    [activeTool]
-  );
-
-  const handleBoxSelectMove = useCallback(
-    (e: React.PointerEvent) => {
-      if (!boxSelect.start || !mapContainer.current) return;
-
-      const rect = mapContainer.current.getBoundingClientRect();
-      const x = e.clientX - rect.left;
-      const y = e.clientY - rect.top;
-
-      setBoxSelect((prev) => ({ ...prev, end: { x, y } }));
-    },
-    [boxSelect.start]
-  );
-
-  const handleBoxSelectEnd = useCallback(() => {
-    if (!boxSelect.start || !boxSelect.end || !map.current) {
-      setBoxSelect({ start: null, end: null });
-      return;
-    }
-
-    // Calculate selection box bounds in map coordinates
-    const minX = Math.min(boxSelect.start.x, boxSelect.end.x);
-    const maxX = Math.max(boxSelect.start.x, boxSelect.end.x);
-    const minY = Math.min(boxSelect.start.y, boxSelect.end.y);
-    const maxY = Math.max(boxSelect.start.y, boxSelect.end.y);
-
-    // Only process if box is large enough (not just a click)
-    if (maxX - minX > 5 && maxY - minY > 5) {
-      // Resolve stations in the box via SurveyLayer (#mem): the rendered
-      // hitbox query gates candidate sections and the SoA resolver applies
-      // the same circle-box hit semantics the direct queryRenderedFeatures
-      // call had - per-station identity no longer lives on bulk features.
-      const refs = surveyLayerRef.current?.queryStationsInBox(minX, minY, maxX, maxY) ?? [];
-
-      if (refs.length > 0) {
-        // Clear existing selection if not holding shift
-        clearSelection();
-        setSource('map');
-
-        // Add all stations in box to selection
-        refs.forEach((stationRef) => {
-          const sel: Selection = {
-            type: 'station',
-            stationRef,
-          };
-          addToSelection(sel);
-        });
-      }
-    }
-
-    setBoxSelect({ start: null, end: null });
-  }, [boxSelect, clearSelection, addToSelection]);
 
   // Zoom box handlers (for click-to-zoom and box zoom in task 3)
   const handleZoomBoxStart = useCallback(
@@ -2668,7 +2590,7 @@ function MapCanvas() {
     map.current.setMaxZoom(config.map.zoom_max ?? 22);
   }, [config]);
 
-  // Track Ctrl key for cursor updates and box/zoom select cancellation
+  // Track Ctrl key for cursor updates and zoom-box cancellation
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       // Recover from a genuine Ctrl release that the keyup workaround below
@@ -2683,8 +2605,7 @@ function MapCanvas() {
       if (e.key === 'Control' && !e.repeat) {
         setCtrlHeld(true);
 
-        // Cancel any active box select or zoom box when Ctrl is pressed (mid-drag Ctrl converts to pan)
-        setBoxSelect({ start: null, end: null });
+        // Cancel any active zoom box when Ctrl is pressed (mid-drag Ctrl converts to pan)
         setZoomBox({ start: null, end: null });
       }
     };
@@ -2708,8 +2629,7 @@ function MapCanvas() {
       customPanActiveRef.current = false;
       ctrlPanActiveRef.current = false;
       setCtrlHeld(false);
-      // Cancel any active box select or zoom box
-      setBoxSelect({ start: null, end: null });
+      // Cancel any active zoom box
       setZoomBox({ start: null, end: null });
     };
 
@@ -3671,16 +3591,6 @@ function MapCanvas() {
     return (placementMode || noPanTools.includes(activeTool)) ? 'none' : 'manipulation';
   }, [activeTool, placementMode]);
 
-  // Calculate box select overlay style
-  const boxSelectStyle = boxSelect.start && boxSelect.end
-    ? {
-        left: Math.min(boxSelect.start.x, boxSelect.end.x),
-        top: Math.min(boxSelect.start.y, boxSelect.end.y),
-        width: Math.abs(boxSelect.end.x - boxSelect.start.x),
-        height: Math.abs(boxSelect.end.y - boxSelect.start.y),
-      }
-    : null;
-
   // Combined pointer handlers (PointerEvent is a superset of MouseEvent)
   const handlePointerMove = useCallback(
     (e: React.PointerEvent) => {
@@ -3708,8 +3618,6 @@ function MapCanvas() {
         handleMoveDragMove(e.clientX, e.clientY);
       } else if (zoomBox.start) {
         handleZoomBoxMove(e);
-      } else if (boxSelect.start) {
-        handleBoxSelectMove(e);
       }
 
       // Always check snap when moving (snap logic internally checks if tool requires snap).
@@ -3731,7 +3639,7 @@ function MapCanvas() {
         }
       }
     },
-    [moveDrag, zoomBox.start, boxSelect.start, handleMoveDragMove, handleZoomBoxMove, handleBoxSelectMove, checkSnapToStation, placementMode, checkPlacementSnap, updatePlacementCursor, updatePlacementSnap]
+    [moveDrag, zoomBox.start, handleMoveDragMove, handleZoomBoxMove, checkSnapToStation, placementMode, checkPlacementSnap, updatePlacementCursor, updatePlacementSnap]
   );
 
   const handlePointerUp = useCallback(() => {
@@ -3743,10 +3651,8 @@ function MapCanvas() {
       handleMoveDragEnd();
     } else if (zoomBox.start) {
       handleZoomBoxEnd();
-    } else if (boxSelect.start) {
-      handleBoxSelectEnd();
     }
-  }, [moveDrag, zoomBox.start, boxSelect.start, handleMoveDragEnd, handleZoomBoxEnd, handleBoxSelectEnd]);
+  }, [moveDrag, zoomBox.start, handleMoveDragEnd, handleZoomBoxEnd]);
 
   // Pointer leave: keep all move drags alive so user can return the cursor
   const handlePointerLeave = useCallback(() => {
@@ -3815,11 +3721,9 @@ function MapCanvas() {
         handlePlacementClick(e);
       } else if (activeTool === 'zoom') {
         handleZoomBoxStart(e);
-      } else {
-        handleBoxSelectStart(e);
       }
     },
-    [placementMode, activeTool, handlePlacementClick, handleZoomBoxStart, handleBoxSelectStart]
+    [placementMode, activeTool, handlePlacementClick, handleZoomBoxStart]
   );
 
   // Pointer handlers always attached - they check e.ctrlKey internally to decide behavior
@@ -3841,15 +3745,6 @@ function MapCanvas() {
       onContextMenu={handleContextMenu}
     >
       <div ref={mapContainer} className="w-full h-full" data-testid="maplibre-container" />
-
-      {/* Box select overlay */}
-      {boxSelectStyle && (
-        <div
-          className="absolute border-2 border-accent border-dashed bg-accent-10 pointer-events-none"
-          style={boxSelectStyle}
-          data-testid="box-select-overlay"
-        />
-      )}
 
       {/* Zoom box overlay */}
       {zoomBox.start && zoomBox.end && (

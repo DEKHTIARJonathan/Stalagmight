@@ -379,43 +379,6 @@ export class SurveyGeometryIndex {
   }
 
   /**
-   * All stations of the candidate sections whose rendered hit circle
-   * (center +/- `radius` px) intersects the screen-space box. Matches the old
-   * `queryRenderedFeatures(bbox)` box-select semantics (a circle is returned
-   * when any of its pixels intersects the box).
-   */
-  stationsInBox(
-    project: ProjectFn,
-    minX: number,
-    minY: number,
-    maxX: number,
-    maxY: number,
-    sectionIds: Iterable<number>,
-    radius: number,
-    opts: ResolveOptions,
-  ): StationRef[] {
-    this.ensureBuilt();
-    const out: StationRef[] = [];
-    for (const sid of sectionIds) {
-      const idxs = this.sectionStationIdxs.get(sid);
-      if (!idxs) continue;
-      const kinds = opts.visibleKinds;
-      for (const g of idxs) {
-        if (!this.isStationVisible(sid, this.data.stationIndices[g]!, kinds)) continue;
-        const p = project(this.stationLngLat(g));
-        // Circle-rectangle intersection: clamp the center to the box, then
-        // compare the residual distance to the radius.
-        const cx = Math.min(Math.max(p.x, minX), maxX);
-        const cy = Math.min(Math.max(p.y, minY), maxY);
-        if (Math.hypot(p.x - cx, p.y - cy) <= radius) {
-          out.push({ section_id: sid, station_index: this.data.stationIndices[g]! });
-        }
-      }
-    }
-    return out;
-  }
-
-  /**
    * Sections whose geometry may intersect the screen-space box
    * `[minX, minY, maxX, maxY]` (already padded by the caller to the type's hit
    * reach). Replaces the old `queryRenderedFeatures` candidate-section prefilter
@@ -430,8 +393,8 @@ export class SurveyGeometryIndex {
    * a safe over-approximation under any affine map transform). A section is a
    * candidate iff that screen AABB overlaps the probe box. The result is a
    * superset - the per-item resolvers ({@link nearestStation} /
-   * {@link nearestShot} / {@link stationsInBox}) then trim to exact tolerance,
-   * so no in-tolerance hit is dropped and none leaks past it.
+   * {@link nearestShot}) then trim to exact tolerance, so no in-tolerance hit
+   * is dropped and none leaks past it.
    */
   sectionsIntersectingBox(
     project: ProjectFn,

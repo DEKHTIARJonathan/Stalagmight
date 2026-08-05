@@ -297,24 +297,6 @@ describe('SurveyGeometryIndex equivalence with per-feature resolvers', () => {
     expect(hit.to[0]).toBeCloseTo(30 / 111320, 9);
   });
 
-  it('stationsInBox matches circle-box intersection semantics', () => {
-    // Box around stations (1,0) and (2,0): x -2..7 m, y -2..21 m.
-    const minX = (-2 / 111320) * SCALE;
-    const maxX = (7 / 111320) * SCALE;
-    const minY = -(21 / 111320) * SCALE;
-    const maxY = (2 / 111320) * SCALE;
-    const refs = index.stationsInBox(
-      (c) => project(c), minX, minY, maxX, maxY, allSectionIds, 10, { visibleKinds: { jump: true, reference: true } },
-    );
-    const keys = refs.map((r) => `${r.section_id}:${r.station_index}`).sort();
-    expect(keys).toContain('1:0');
-    expect(keys).toContain('2:0');
-    expect(keys).not.toContain('1:2');
-    // A station just OUTSIDE the box but within the hit radius intersects:
-    // station (2,1) at (25,-10) m is far away -> not included.
-    expect(keys).not.toContain('2:1');
-  });
-
   it('shotGeometry / stationCoords resolve overlay geometry', () => {
     const g = index.shotGeometry(1, 102)!;
     expect(g.from[0]).toBeCloseTo(30 / 111320, 9);

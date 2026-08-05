@@ -1238,9 +1238,9 @@ export default class SurveyLayer {
    * geometry index for sections whose world-space bounds, projected to screen,
    * intersect the probe box padded by the type's hit reach. That padded-box query
    * is a SUPERSET of the sections whose geometry can be within tolerance; the SoA
-   * resolver (`resolveStationAt` / `resolveShotAt` / `geoIndex.stationsInBox`)
-   * then trims it to the exact pick. Per-type padding preserves the two old
-   * queries' semantics (shot vs station reach differ); the pad is the FULL reach
+   * resolver (`resolveStationAt` / `resolveShotAt`) then trims it to the exact
+   * pick. Per-type padding preserves the two old queries' semantics (shot vs
+   * station reach differ); the pad is the FULL reach
    * because we test the true geometry, not a thin rendered mark. See
    * `hitProbe.ts` (`padProbeBox`) and `geometryIndex.ts`
    * (`sectionsIntersectingBox`), both unit tested.
@@ -1332,31 +1332,6 @@ export default class SurveyLayer {
 
   /** Prefer one exact co-located feature for the next development-harness click. */
   setSemanticTargetPreference(target: SemanticMapTarget | null): void { this.semanticTargetPreference.set(target); }
-
-  /**
-   * Stations whose rendered hit circle intersects the screen-space box -
-   * MapCanvas box-select. Candidate sections come from the padded visible-layer
-   * query (visibility-aware); exact membership from the SoA resolver with
-   * the same circle-box semantics `queryRenderedFeatures(bbox)` had (#mem).
-   */
-  queryStationsInBox(minX: number, minY: number, maxX: number, maxY: number): StationRef[] {
-    if (!this.geoIndex || !hasLiveStyle(this.map)) return [];
-    const { stationSections } = this.hitCandidateSections([
-      [minX, minY],
-      [maxX, maxY],
-    ]);
-    if (stationSections.size === 0) return [];
-    return this.geoIndex.stationsInBox(
-      this.projector(),
-      minX,
-      minY,
-      maxX,
-      maxY,
-      stationSections,
-      this.getStationHitArea(),
-      { visibleKinds: this.visibleKinds() },
-    );
-  }
 
   /**
    * Handle empty click - check for hidden features before firing empty callback.
