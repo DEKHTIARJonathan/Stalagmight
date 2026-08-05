@@ -2,6 +2,7 @@ import { test, expect, Page } from './fixtures/coverage';
 import {
   setupMockedPage,
   createProject,
+  seedNavigationTools,
   waitForMapReady,
   waitForActiveTool,
   waitForMapIdle,
@@ -21,6 +22,15 @@ async function getMapCenter(page: Page): Promise<{ lng: number; lat: number } | 
     if (!map) return null;
     const center = map.getCenter();
     return { lng: center.lng, lat: center.lat };
+  });
+}
+
+async function getSelection(page: Page): Promise<unknown> {
+  return page.evaluate(() => {
+    const stores = (window as unknown as {
+      __E2E_TEST__?: { uiStore: { getState: () => { selection: unknown } } };
+    }).__E2E_TEST__;
+    return stores?.uiStore.getState().selection ?? null;
   });
 }
 
@@ -181,128 +191,39 @@ test.describe('Ctrl+Drag Panning', () => {
     }
   });
 
-  // Unsupported tools (have their own drag behaviors that conflict with Ctrl+pan)
-  // Note: zoom mode supports Ctrl+drag panning (added in box zoom feature), so it's not in this list
-  const unsupportedTools = [
-    { key: 'p', name: 'pan' },
-  ];
+  // Box select is gone (#409): plain left-drag pans instead, under every tool.
+  // What survives from the old "Ctrl+drag must not box select" case is the claim
+  // that Ctrl+drag in select mode PANS and selects nothing.
+  test('Ctrl+drag in select mode pans and changes no selection', async ({ page }) => {
+    // Switch to select mode
+    await page.keyboard.press('s');
+    await waitForActiveTool(page, 'select');
 
-  test.describe('Unsupported Tools', () => {
-    for (const tool of unsupportedTools) {
-      test(`should NOT change cursor to grab with Ctrl in ${tool.name} mode`, async ({ page }) => {
-        // Switch to the tool
-        await page.keyboard.press(tool.key);
-        await waitForActiveTool(page, tool.name);
+    const canvas = page.getByTestId('map-canvas');
+    const box = await canvas.boundingBox();
+    expect(box).not.toBeNull();
 
-        const canvas = page.getByTestId('map-canvas');
-        await expect(canvas).toBeVisible();
+    const selectionBefore = await getSelection(page);
+    const centerBefore = await getMapCenter(page);
+    expect(centerBefore).not.toBeNull();
 
-        // Hold Ctrl
-        await page.keyboard.down('Control');
-        await page.waitForFunction(() => {
-          const canvas = document.querySelector('canvas');
-          return typeof canvas?.style.cursor === 'string';
-        });
-
-        // Get the cursor
-        const cursor = await page.evaluate(() => {
-          const canvas = document.querySelector('canvas');
-          return canvas?.style.cursor || '';
-        });
-
-        // Pan tool naturally shows 'grab', so that's expected
-        // Other tools should NOT show grab cursor when Ctrl is held
-        if (tool.name === 'pan') {
-          expect(cursor).toBe('grab');
-        } else {
-          expect(cursor).not.toBe('grab');
-        }
-
-        await page.keyboard.up('Control');
-      });
-    }
-  });
-
-  // Zoom mode supports Ctrl+drag panning (shows grab cursor when Ctrl is held)
-  test('should show grab cursor with Ctrl in zoom mode for panning', async ({ page }) => {
-    // Switch to zoom tool
-    await page.keyboard.press('z');
-    await page.waitForTimeout(50);
-
-    const canvas = page.locator('canvas').first();
-    await expect(canvas).toBeVisible();
-
-    // Hold Ctrl
+    // Perform Ctrl+drag
     await page.keyboard.down('Control');
-    await page.waitForTimeout(100);
-
-    // Get the cursor - should be 'grab' for Ctrl+pan support
-    const cursor = await page.evaluate(() => {
-      const canvas = document.querySelector('canvas');
-      return canvas?.style.cursor || '';
-    });
-
-    expect(cursor).toBe('grab');
-
+    await page.mouse.move(box!.x + 50, box!.y + 50);
+    await page.mouse.down();
+    await page.mouse.move(box!.x + 200, box!.y + 200, { steps: 8 });
+    await page.mouse.up();
     await page.keyboard.up('Control');
-  });
+    await waitForMapIdle(page);
 
-  test.describe('Box Select Interactions', () => {
-    test('should not start box select when Ctrl+drag in select mode', async ({ page }) => {
-      // Switch to select mode
-      await page.keyboard.press('s');
-      await waitForActiveTool(page, 'select');
+    const centerAfter = await getMapCenter(page);
+    expect(centerAfter).not.toBeNull();
+    expect(
+      Math.abs(centerAfter!.lng - centerBefore!.lng) + Math.abs(centerAfter!.lat - centerBefore!.lat)
+    ).toBeGreaterThan(0.00001);
 
-      const canvas = page.getByTestId('map-canvas');
-      const box = await canvas.boundingBox();
-      expect(box).not.toBeNull();
-
-      // Perform Ctrl+drag
-      await page.keyboard.down('Control');
-      await page.mouse.move(box!.x + 50, box!.y + 50);
-      await page.mouse.down();
-      await page.mouse.move(box!.x + 200, box!.y + 200);
-
-      // Box select overlay should NOT be visible (uses border-dashed bg-accent/10)
-      const boxOverlay = page.getByTestId('box-select-overlay');
-      await expect(boxOverlay).not.toBeVisible();
-
-      await page.mouse.up();
-      await page.keyboard.up('Control');
-    });
-
-    test('should cancel box select when Ctrl pressed mid-drag', async ({ page }) => {
-      // Switch to select mode
-      await page.keyboard.press('s');
-      await waitForActiveTool(page, 'select');
-
-      const canvas = page.getByTestId('map-canvas');
-      const box = await canvas.boundingBox();
-      expect(box).not.toBeNull();
-
-      // Start a normal drag (no Ctrl) to begin box select
-      await page.mouse.move(box!.x + 50, box!.y + 50);
-      await page.mouse.down();
-      await page.mouse.move(box!.x + 100, box!.y + 100);
-
-      // Box select should be visible at this point
-      const boxOverlay = page.getByTestId('box-select-overlay');
-      await expect(boxOverlay).toBeVisible();
-
-      // NOW press Ctrl mid-drag - box select should cancel
-      await page.keyboard.down('Control');
-
-      // Box select should be cancelled
-      await expect(boxOverlay).toBeHidden();
-
-      // Continue drag and clean up
-      await page.mouse.move(box!.x + 200, box!.y + 200);
-      await page.mouse.up();
-      await page.keyboard.up('Control');
-
-      // Map should remain functional
-      await expect(canvas).toBeVisible();
-    });
+    // No box, so nothing to sweep into a selection.
+    expect(await getSelection(page)).toEqual(selectionBefore);
   });
 
   test.describe('Edge Cases', () => {
@@ -426,61 +347,6 @@ test.describe('Ctrl+Drag Panning', () => {
       expect(cursor).not.toBe('grab');
     });
 
-    test('should keep active tool while Ctrl is held and allow switch after release', async ({ page }) => {
-      // Start in select mode
-      await page.keyboard.press('s');
-      await waitForActiveTool(page, 'select');
-
-      // Hold Ctrl (pan modifier)
-      await page.keyboard.down('Control');
-      await page.waitForFunction(() => {
-        const canvas = document.querySelector('canvas');
-        return canvas?.style.cursor === 'grab';
-      });
-
-      // Verify cursor is grab while Ctrl is held
-      let cursor = await page.evaluate(() => {
-        const canvas = document.querySelector('canvas');
-        return canvas?.style.cursor || '';
-      });
-      expect(cursor).toBe('grab');
-
-      // Drag to pan while Ctrl is held (no tool switch expected)
-      const canvas = page.getByTestId('map-canvas');
-      const box = await canvas.boundingBox();
-      expect(box).not.toBeNull();
-      if (box) {
-        await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
-        await page.mouse.down();
-        await page.mouse.move(box.x + box.width / 2 + 80, box.y + box.height / 2 + 80, { steps: 6 });
-        await page.mouse.up();
-      }
-
-      // Active tool should remain select
-      await waitForActiveTool(page, 'select');
-
-      // Release Ctrl
-      await page.keyboard.up('Control');
-
-      // Now switch to pan tool explicitly (no modifier)
-      await page.keyboard.press('p');
-      await waitForActiveTool(page, 'pan');
-
-      // Switch to zoom tool
-      await page.keyboard.press('z');
-      await waitForActiveTool(page, 'zoom');
-
-      // Now cursor should be zoom-in
-      cursor = await page.evaluate(() => {
-        const canvas = document.querySelector('canvas');
-        return canvas?.style.cursor || '';
-      });
-      expect(cursor).toBe('zoom-in');
-
-      // Map should remain functional after all these switches
-      await expect(canvas).toBeVisible();
-    });
-
     // Both pointer listeners recover a swallowed release, and each is its own line of
     // defence: `pointerdown` covers reaching for the toolbar, `mousemove` covers simply
     // moving the mouse without clicking anything. Covering only one leaves the other
@@ -567,5 +433,138 @@ test.describe('Ctrl+Drag Panning', () => {
           .toBe('crosshair');
       });
     }
+  });
+});
+
+/**
+ * The cases that need the Pan / Zoom tools themselves. They are off the toolbar
+ * and their P/Z shortcuts are inert unless `map.controls.show_navigation_tools`
+ * is on (#409), so this is a SEPARATE top-level describe: `seedNavigationTools`
+ * registers an init script and has to run before `setupMockedPage`, which a
+ * nested `beforeEach` cannot do (outer hooks run first, and the page has already
+ * navigated by then).
+ */
+test.describe('Ctrl+Drag Panning - navigation tools enabled', () => {
+  test.beforeEach(async ({ page }) => {
+    await seedNavigationTools(page);
+    await setupMockedPage(page);
+    await createProjectWithMap(page);
+  });
+
+  // Unsupported tools (have their own drag behaviors that conflict with Ctrl+pan)
+  // Note: zoom mode supports Ctrl+drag panning (added in box zoom feature), so it's not in this list
+  const unsupportedTools = [
+    { key: 'p', name: 'pan' },
+  ];
+
+  test.describe('Unsupported Tools', () => {
+    for (const tool of unsupportedTools) {
+      test(`should NOT change cursor to grab with Ctrl in ${tool.name} mode`, async ({ page }) => {
+        // Switch to the tool
+        await page.keyboard.press(tool.key);
+        await waitForActiveTool(page, tool.name);
+
+        const canvas = page.getByTestId('map-canvas');
+        await expect(canvas).toBeVisible();
+
+        // Hold Ctrl
+        await page.keyboard.down('Control');
+        await page.waitForFunction(() => {
+          const canvas = document.querySelector('canvas');
+          return typeof canvas?.style.cursor === 'string';
+        });
+
+        // Get the cursor
+        const cursor = await page.evaluate(() => {
+          const canvas = document.querySelector('canvas');
+          return canvas?.style.cursor || '';
+        });
+
+        // Pan tool naturally shows 'grab', so that's expected
+        // Other tools should NOT show grab cursor when Ctrl is held
+        if (tool.name === 'pan') {
+          expect(cursor).toBe('grab');
+        } else {
+          expect(cursor).not.toBe('grab');
+        }
+
+        await page.keyboard.up('Control');
+      });
+    }
+  });
+
+  // Zoom mode supports Ctrl+drag panning (shows grab cursor when Ctrl is held)
+  test('should show grab cursor with Ctrl in zoom mode for panning', async ({ page }) => {
+    // Switch to zoom tool
+    await page.keyboard.press('z');
+    await waitForActiveTool(page, 'zoom');
+
+    const canvas = page.locator('canvas').first();
+    await expect(canvas).toBeVisible();
+
+    // Hold Ctrl
+    await page.keyboard.down('Control');
+
+    // The cursor should settle on 'grab' for Ctrl+pan support
+    await expect
+      .poll(() => page.evaluate(() => document.querySelector('canvas')?.style.cursor || ''))
+      .toBe('grab');
+
+    await page.keyboard.up('Control');
+  });
+
+  test('should keep active tool while Ctrl is held and allow switch after release', async ({ page }) => {
+    // Start in select mode
+    await page.keyboard.press('s');
+    await waitForActiveTool(page, 'select');
+
+    // Hold Ctrl (pan modifier)
+    await page.keyboard.down('Control');
+    await page.waitForFunction(() => {
+      const canvas = document.querySelector('canvas');
+      return canvas?.style.cursor === 'grab';
+    });
+
+    // Verify cursor is grab while Ctrl is held
+    let cursor = await page.evaluate(() => {
+      const canvas = document.querySelector('canvas');
+      return canvas?.style.cursor || '';
+    });
+    expect(cursor).toBe('grab');
+
+    // Drag to pan while Ctrl is held (no tool switch expected)
+    const canvas = page.getByTestId('map-canvas');
+    const box = await canvas.boundingBox();
+    expect(box).not.toBeNull();
+    if (box) {
+      await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+      await page.mouse.down();
+      await page.mouse.move(box.x + box.width / 2 + 80, box.y + box.height / 2 + 80, { steps: 6 });
+      await page.mouse.up();
+    }
+
+    // Active tool should remain select
+    await waitForActiveTool(page, 'select');
+
+    // Release Ctrl
+    await page.keyboard.up('Control');
+
+    // Now switch to pan tool explicitly (no modifier)
+    await page.keyboard.press('p');
+    await waitForActiveTool(page, 'pan');
+
+    // Switch to zoom tool
+    await page.keyboard.press('z');
+    await waitForActiveTool(page, 'zoom');
+
+    // Now cursor should be zoom-in
+    cursor = await page.evaluate(() => {
+      const canvas = document.querySelector('canvas');
+      return canvas?.style.cursor || '';
+    });
+    expect(cursor).toBe('zoom-in');
+
+    // Map should remain functional after all these switches
+    await expect(canvas).toBeVisible();
   });
 });

@@ -2,6 +2,7 @@ import { test, expect, Page } from './fixtures/coverage';
 import {
   setupMockedPage,
   createProject,
+  seedNavigationTools,
   seedProjectWithSections,
   waitForMapReady,
   waitForActiveTool,
@@ -42,6 +43,18 @@ async function createProjectWithSections(page: Page): Promise<void> {
   await waitForMapIdle(page);
 }
 
+/** The live map center, or null before the map instance exists. */
+async function getMapCenter(page: Page): Promise<{ lng: number; lat: number } | null> {
+  return page.evaluate(() => {
+    const map = (window as unknown as {
+      __stalagmight_map__?: { getCenter: () => { lng: number; lat: number } };
+    }).__stalagmight_map__;
+    if (!map) return null;
+    const center = map.getCenter();
+    return { lng: center.lng, lat: center.lat };
+  });
+}
+
 /**
  * Map tool tests use the two-step import flow and auto-placement helpers.
  */
@@ -78,11 +91,13 @@ test.describe('Map Tools', () => {
     await expect(canvas).toBeVisible();
 
     // Test each tool shortcut as defined in DEFAULT_SHORTCUTS:
-    // s: 'select', p: 'pan', z: 'zoom', m: 'merge', r: 'measure', v: 'move_segment', t: 'move_station'
+    // s: 'select', m: 'merge', r: 'measure', v: 'move_segment', t: 'move_station'.
+    // p ('pan') and z ('zoom') are deliberately absent: the navigate group is
+    // hidden unless `map.controls.show_navigation_tools` is on (#409), and while
+    // it is hidden those two keys are inert. Their seeded behaviour is covered by
+    // navigation-tools-setting.spec.ts and the seeded describes elsewhere.
     const toolShortcuts = [
       { key: 's', tool: 'select' },
-      { key: 'p', tool: 'pan' },
-      { key: 'z', tool: 'zoom' },
       { key: 'm', tool: 'merge' },
       { key: 'r', tool: 'measure' },
       { key: 'v', tool: 'move_segment' },
@@ -138,9 +153,10 @@ test.describe('Map Tools', () => {
       // macOS, and holding literal Control there makes Chromium emit
       // contextmenu with no click event at all, so the interaction would stop
       // reaching the app on the one platform this suite is run on by hand.
-      // NB this still does not reach multi-select: CTRL_PAN_TOOLS includes
-      // 'select' (MapCanvas.tsx:60), so the mousedown-capture handler claims
-      // ctrl+left for pan. What it covers is that the app survives that path.
+      // NB this still does not reach multi-select: the mousedown-capture handler
+      // claims ctrl+left for panning under every tool except 'pan' itself
+      // (MapCanvas.tsx, `activeTool !== 'pan'`), and 'select' is one of them.
+      // What it covers is that the app survives that path.
       await canvas.click({
         modifiers: ['ControlOrMeta'],
         position: { x: canvasBox.width / 2 + 50, y: canvasBox.height / 2 },
@@ -159,7 +175,10 @@ test.describe('Map Tools', () => {
     }
   });
 
-  test('should pan map with pan tool or middle mouse button', async ({ page }) => {
+  // #409: panning is not a tool. A plain left-drag pans under the DEFAULT tool,
+  // with no `p` press first - which is the whole point of hiding the pan tool.
+  // Middle-drag still pans too, and still leaves the active tool alone.
+  test('should pan map with a plain drag under select, or the middle mouse button', async ({ page }) => {
     // Create a project with sections
     await createProjectWithSections(page);
 
@@ -174,30 +193,43 @@ test.describe('Map Tools', () => {
       const centerX = canvasBox.x + canvasBox.width / 2;
       const centerY = canvasBox.y + canvasBox.height / 2;
 
-    // Switch to pan tool
-    await page.keyboard.press('p');
-    await waitForActiveTool(page, 'pan');
+      // The default tool, explicitly - no navigate group to switch to.
+      await page.keyboard.press('s');
+      await waitForActiveTool(page, 'select');
 
-      // Perform drag with pan tool active
-      await page.mouse.move(centerX, centerY);
+      const centerBeforeDrag = await getMapCenter(page);
+      expect(centerBeforeDrag).not.toBeNull();
+
+      // Plain left-drag on empty canvas (offset from the seeded geometry).
+      await page.mouse.move(centerX - 150, centerY - 120);
       await page.mouse.down();
-      await page.mouse.move(centerX + 100, centerY + 100, { steps: 8 });
+      await page.mouse.move(centerX - 50, centerY - 20, { steps: 8 });
       await page.mouse.up();
       await waitForMapIdle(page);
 
-      // The app should remain functional after panning
-      await expect(canvas).toBeVisible();
+      const centerAfterDrag = await getMapCenter(page);
+      expect(centerAfterDrag).not.toBeNull();
+      expect(
+        Math.abs(centerAfterDrag!.lng - centerBeforeDrag!.lng) +
+          Math.abs(centerAfterDrag!.lat - centerBeforeDrag!.lat)
+      ).toBeGreaterThan(0.00001);
 
-      // Test middle mouse button for panning (should work regardless of tool)
-      await page.keyboard.press('s'); // Switch back to select
+      // Panning did not become a tool switch.
       await waitForActiveTool(page, 'select');
 
-      // Middle mouse button pan (button: 1)
+      // Middle mouse button for panning (works regardless of tool).
       await page.mouse.move(centerX, centerY);
       await page.mouse.down({ button: 'middle' });
       await page.mouse.move(centerX - 50, centerY - 50, { steps: 6 });
       await page.mouse.up({ button: 'middle' });
       await waitForMapIdle(page);
+
+      const centerAfterMiddle = await getMapCenter(page);
+      expect(centerAfterMiddle).not.toBeNull();
+      expect(
+        Math.abs(centerAfterMiddle!.lng - centerAfterDrag!.lng) +
+          Math.abs(centerAfterMiddle!.lat - centerAfterDrag!.lat)
+      ).toBeGreaterThan(0.00001);
 
       // The app should remain functional
       await expect(canvas).toBeVisible();
@@ -268,9 +300,8 @@ test.describe('Map Tools', () => {
       await page.mouse.wheel(0, 200); // Zoom out
       await waitForMapIdle(page);
 
-      // Pan away from center
-      await page.keyboard.press('p');
-      await waitForActiveTool(page, 'pan');
+      // Pan away from center. No tool switch: a plain left-drag pans under the
+      // default tool (#409), and the navigate group is hidden by default.
       await page.mouse.move(centerX, centerY);
       await page.mouse.down();
       await page.mouse.move(centerX + 200, centerY + 200, { steps: 10 });
@@ -371,6 +402,10 @@ test.describe('Map Tools', () => {
  */
 test.describe('Zoom Tool Click Behavior', () => {
   test.beforeEach(async ({ page }) => {
+    // The Zoom tool needs `map.controls.show_navigation_tools` on (#409), and the
+    // seed must be registered BEFORE setupMockedPage so it reaches the app's
+    // first `get_config`.
+    await seedNavigationTools(page);
     await setupMockedPage(page);
   });
 

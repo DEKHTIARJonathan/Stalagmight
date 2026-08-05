@@ -2,6 +2,7 @@ import { test, expect, Page } from './fixtures/coverage';
 import {
   setupMockedPage,
   createProject,
+  seedNavigationTools,
   seedProjectWithSections,
   waitForMapReady,
   waitForActiveTool,
@@ -174,6 +175,11 @@ async function warmupMapDragHandlers(page: Page): Promise<void> {
 
 test.describe('Ctrl+Drag Pan - Content Movement Verification', () => {
   test.beforeEach(async ({ page }) => {
+    // This spec measures pan-gesture ARITHMETIC against the Pan tool as its
+    // known-good baseline, and the tool is off the toolbar (P inert) unless
+    // `map.controls.show_navigation_tools` is on (#409). Seeded before
+    // setupMockedPage so the flag reaches the app's first `get_config`.
+    await seedNavigationTools(page);
     await setupMockedPage(page);
     await createProjectWithMap(page);
     await waitForMap(page);
@@ -438,7 +444,11 @@ test.describe('Ctrl+Drag Pan - Content Movement Verification', () => {
       expect(zoomBefore).toBeCloseTo(zoomAfter!, 5);
     });
 
-    test('no box select overlay during Ctrl+drag', async ({ page }) => {
+    // Was 'no box select overlay during Ctrl+drag'. Box select is gone (#409),
+    // so the overlay it asserted the absence of cannot exist; what the case is
+    // really about - a Ctrl+drag in select mode moves the camera and picks
+    // nothing up - is asserted directly.
+    test('Ctrl+drag in select mode moves the camera and selects nothing', async ({ page }) => {
       await page.keyboard.press('s');
       await waitForActiveTool(page, 'select');
       await waitForMapIdle(page);
@@ -450,18 +460,38 @@ test.describe('Ctrl+Drag Pan - Content Movement Verification', () => {
       const centerX = box!.x + box!.width / 2;
       const centerY = box!.y + box!.height / 2;
 
+      const selectionBefore = await page.evaluate(() => {
+        const stores = (window as unknown as {
+          __E2E_TEST__?: { uiStore: { getState: () => { selection: unknown } } };
+        }).__E2E_TEST__;
+        return stores?.uiStore.getState().selection ?? null;
+      });
+      const centerBefore = await getMapCenter(page);
+      expect(centerBefore).not.toBeNull();
+
       // Ctrl+drag
       await page.keyboard.down('Control');
       await page.mouse.move(centerX, centerY);
       await page.mouse.down();
       await page.mouse.move(centerX + 100, centerY + 100, { steps: 5 });
-
-      // Check for box select overlay (should NOT exist)
-      const boxOverlay = page.getByTestId('box-select-overlay');
-      await expect(boxOverlay).not.toBeVisible();
-
       await page.mouse.up();
       await page.keyboard.up('Control');
+      await waitForMapIdle(page);
+
+      const centerAfter = await getMapCenter(page);
+      expect(centerAfter).not.toBeNull();
+      expect(
+        Math.abs(centerAfter!.lng - centerBefore!.lng) +
+          Math.abs(centerAfter!.lat - centerBefore!.lat)
+      ).toBeGreaterThan(0.00001);
+
+      const selectionAfter = await page.evaluate(() => {
+        const stores = (window as unknown as {
+          __E2E_TEST__?: { uiStore: { getState: () => { selection: unknown } } };
+        }).__E2E_TEST__;
+        return stores?.uiStore.getState().selection ?? null;
+      });
+      expect(selectionAfter).toEqual(selectionBefore);
     });
   });
 

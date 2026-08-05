@@ -948,8 +948,51 @@ export async function selectTool(
     moveShot: 'move_shot',
   };
 
+  const storeTool = storeToolNames[tool] ?? tool;
+
+  // Pan and Zoom are hidden behind `map.controls.show_navigation_tools` (#409),
+  // which is OFF by default, and while it is off the P and Z shortcuts are inert
+  // by design - a key bound to a tool that is not on the toolbar has to behave
+  // like an unbound key. Drive those two through the store so a legacy spec that
+  // asks for them still gets them, without this helper having to reach into
+  // Settings and flip the toggle first.
+  //
+  // The setting has to be flipped in the store too, not just the tool: MapCanvas
+  // force-resets a navigation tool to 'select' whenever a LOADED config says the
+  // group is hidden, so a bare setActiveTool('pan') would be undone on the next
+  // render. `setConfig` updates state without persisting to disk.
+  if (tool === 'pan' || tool === 'zoom') {
+    await browser.execute((t: string) => {
+      const e2e = (window as unknown as {
+        __E2E_TEST__?: {
+          uiStore: { getState: () => { setActiveTool: (tool: string) => void } };
+          projectStore: {
+            getState: () => {
+              config: Record<string, unknown> | null;
+              setConfig: (config: Record<string, unknown>) => void;
+            };
+          };
+        };
+      }).__E2E_TEST__;
+      if (!e2e) return;
+      const projectState = e2e.projectStore.getState();
+      const config = projectState.config;
+      if (config) {
+        const map = config.map as Record<string, unknown>;
+        const controls = map.controls as Record<string, unknown>;
+        projectState.setConfig({
+          ...config,
+          map: { ...map, controls: { ...controls, show_navigation_tools: true } },
+        });
+      }
+      e2e.uiStore.getState().setActiveTool(t);
+    }, storeTool);
+    await waitForActiveTool(storeTool);
+    return;
+  }
+
   await browser.keys(toolKeys[tool] ?? ['s']);
-  await waitForActiveTool(storeToolNames[tool] ?? tool);
+  await waitForActiveTool(storeTool);
 }
 
 function shortcutToKeys(shortcut: string): string[] {

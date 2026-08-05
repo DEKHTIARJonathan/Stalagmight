@@ -220,9 +220,12 @@ test.describe('Data table fullscreen mode', () => {
   test('blocks tool and import/export shortcuts but keeps save/undo alive', async ({ page }) => {
     await enterFullScreen(page);
 
-    // Tool shortcuts are dead: P (pan) must not switch the active tool.
+    // Tool shortcuts are dead: M (merge) must not switch the active tool.
+    // Deliberately not P: the pan tool is hidden by default (#409) and its
+    // shortcut is inert everywhere, so a P probe would pass vacuously whether
+    // or not fullscreen blocked anything.
     expect(await getActiveTool(page)).toBe('select');
-    await page.keyboard.press('p');
+    await page.keyboard.press('m');
     await page.waitForTimeout(300);
     expect(await getActiveTool(page)).toBe('select');
 
@@ -253,10 +256,10 @@ test.describe('Data table fullscreen mode', () => {
     await page.keyboard.press('Escape');
     await expectWindowed(page);
     // Click a neutral, non-input toolbar element to move focus off the table so the
-    // 'p' shortcut fires. The Survey carousel button is a no-op while already in Survey.
+    // 'm' shortcut fires. The Survey carousel button is a no-op while already in Survey.
     await page.getByTestId('mode-survey').click();
-    await page.keyboard.press('p');
-    await expect.poll(() => getActiveTool(page)).toBe('pan');
+    await page.keyboard.press('m');
+    await expect.poll(() => getActiveTool(page)).toBe('merge');
   });
 
   test('raw data: picker groups, read-only grid, dirty hint, back to Sections', async ({ page }) => {

@@ -1,6 +1,6 @@
 import { test, expect, Page } from './fixtures/coverage';
 import { setupTauriMocks } from './mocks/tauri-ipc';
-import { waitForActiveTool, waitForMapIdle } from './helpers/app';
+import { seedNavigationTools, waitForActiveTool, waitForMapIdle } from './helpers/app';
 
 /**
  * Helper to wait for the MapLibre map to be ready.
@@ -85,6 +85,10 @@ async function waitForZoomChange(page: Page, startZoom: number, direction: 'in' 
 
 test.describe('Zoom Tool', () => {
   test.beforeEach(async ({ page }) => {
+    // The Zoom tool is off the toolbar (and Z is inert) unless
+    // `map.controls.show_navigation_tools` is on (#409). Seeded BEFORE the mocks
+    // so the flag is present for the app's first `get_config` at boot.
+    await seedNavigationTools(page);
     await setupTauriMocks(page);
     await page.goto('/');
     await createProjectWithMap(page);
