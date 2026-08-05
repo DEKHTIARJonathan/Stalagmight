@@ -1,9 +1,17 @@
-import { useCallback } from 'react';
+import { useCallback, useState } from 'react';
+import { openUrl } from '@tauri-apps/plugin-opener';
 import { useUIStore } from '../../store/uiStore';
 import { isMac } from '../../utils/shortcuts';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import { trackDialogComplete } from '../../utils/telemetry';
+
+/** The Full Disk Access pane - step 1 of the written remediation below. The
+ *  scheme is granted explicitly in `src-tauri/capabilities/default.json`
+ *  (`opener:allow-open-url`); without that grant `openUrl` rejects, which the
+ *  button surfaces rather than silently no-ops. */
+const MACOS_PRIVACY_SETTINGS_URL =
+  'x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles';
 
 /**
  * Shown when the OS denies filesystem access to a project file - most often
@@ -11,11 +19,9 @@ import { trackDialogComplete } from '../../utils/telemetry';
  * actionable guidance instead of the misleading "corrupted database" / raw OS
  * error the user would otherwise see (#39).
  *
- * Intentionally no "open System Settings" deep-link button: the
- * `x-apple.systempreferences:` scheme is outside the app's `opener:default`
- * capability scope, so it would silently no-op in a packaged build. The
- * written steps are the reliable remediation; a backend-command opener could
- * be added later if desired.
+ * The fix lives outside the app (System Settings), so on macOS the dialog
+ * carries a deep-link button - the power user has already left; this button
+ * exists for the user who needs their hand held to the right pane.
  */
 export default function SavePermissionDialog() {
   const { closeDialog, dialogData } = useUIStore();
@@ -26,6 +32,14 @@ export default function SavePermissionDialog() {
     trackDialogComplete('save-permission');
     closeDialog();
   }, [closeDialog]);
+
+  const [settingsOpenFailed, setSettingsOpenFailed] = useState(false);
+  const handleOpenSettings = useCallback(() => {
+    // A user-initiated "take me there" that silently does nothing is worse
+    // than no button (same rule as useSpeleoWebLink) - fall back to naming
+    // the manual path inline; the numbered steps above it stay authoritative.
+    void openUrl(MACOS_PRIVACY_SETTINGS_URL).catch(() => setSettingsOpenFailed(true));
+  }, []);
 
   const action = context === 'open' ? 'open this project' : 'save your changes';
 
@@ -60,7 +74,18 @@ export default function SavePermissionDialog() {
           </div>
         )}
 
-        <div className="flex justify-end pt-4 border-t border-border">
+        {settingsOpenFailed && (
+          <p className="text-sm text-warning" data-testid="save-permission-open-settings-failed">
+            Couldn&apos;t open System Settings - open it from the Apple menu, then follow the steps above.
+          </p>
+        )}
+
+        <div className="flex justify-end gap-2 pt-4 border-t border-border">
+          {mac && (
+            <Button onClick={handleOpenSettings} data-testid="save-permission-open-settings">
+              Open System Settings
+            </Button>
+          )}
           <Button variant="primary" onClick={handleClose} data-testid="save-permission-close">OK</Button>
         </div>
       </div>
