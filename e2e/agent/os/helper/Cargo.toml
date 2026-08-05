@@ -1,0 +1,28 @@
+[package]
+name = "stalagmight-oshelper"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "macOS OS-level input/query helper for the Stalagmight agent harness (Tier 2)"
+
+# Standalone on purpose: this crate is NOT a member of the app's build. An empty
+# workspace table stops cargo walking up the tree and adopting (or being adopted
+# by) any future workspace root, which would drag it into the app's fmt/clippy
+# CI scope and its lockfile.
+[workspace]
+
+[[bin]]
+name = "stalagmight-oshelper"
+path = "src/main.rs"
+
+[dependencies]
+# Only two direct deps on purpose: the helper posts CGEvents and reads the
+# window list, and hand-rolls its JSON output (see src/json.rs) so nothing else
+# is needed. Fewer deps keeps the one-time cold build that ensureHelperBuilt()
+# pays as short as possible.
+core-graphics = "0.24"
+core-foundation = "0.10"
+
+[profile.release]
+opt-level = 1
+strip = true
