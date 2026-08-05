@@ -4822,4 +4822,48 @@ mod tests {
         assert_eq!(comment.as_deref(), Some("muddy water"));
         assert!(station_comments.is_empty());
     }
+
+    /// Baseline harness for #412: how many linear sections the importer
+    /// produces from a real file, and how small the fragments are.
+    ///
+    /// Run with:
+    ///   TML_MEASURE_PATH=/path/to/file.tml cargo test measure_tml_fragmentation -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn measure_tml_fragmentation() {
+        let Ok(path_str) = std::env::var("TML_MEASURE_PATH") else {
+            eprintln!("Skipping: TML_MEASURE_PATH not set");
+            return;
+        };
+        let path = Path::new(&path_str);
+        let tml = parse_tml(path).expect("parse");
+        let file_names: std::collections::BTreeSet<String> = tml
+            .sections
+            .iter()
+            .map(|s| {
+                let n = s.name.as_str();
+                match n.rfind(" (branch ") {
+                    Some(i) if n.ends_with(')') => n[..i].to_string(),
+                    _ => n.to_string(),
+                }
+            })
+            .collect();
+        let (configs, closures, warnings) =
+            convert_tml_to_import_configs(&tml, false, false).expect("convert");
+        let mut sizes: Vec<usize> = configs.iter().map(|c| c.shots.len()).collect();
+        sizes.sort_unstable();
+        let tiny = sizes.iter().filter(|&&n| n <= 2).count();
+        eprintln!(
+            "FRAG {}: file_section_names={} configs={} closures={} warnings={} shots_min={} shots_median={} shots_max={} fragments_le2={}",
+            path_str,
+            file_names.len(),
+            configs.len(),
+            closures.len(),
+            warnings.len(),
+            sizes.first().copied().unwrap_or(0),
+            sizes.get(sizes.len() / 2).copied().unwrap_or(0),
+            sizes.last().copied().unwrap_or(0),
+            tiny,
+        );
+    }
 }
