@@ -254,6 +254,27 @@ nothing in CI touches the desktop.
   `os_screenshot` showing real map pixels, and the revoked-Screen-Recording path failing
   loudly instead of shipping a wallpaper.
 
+### 5.4b Tier 2 manual verification (2026-08-05, M1, owner present)
+
+The gate no automation can run, done at the machine with both TCC permissions
+already granted to the terminal:
+
+- **preflight**: `{"ok":true,"accessibility":true,"screenRecording":true}`.
+- **`os_click`**: clicked `tool-merge` at screen point (4866, 81),
+  `frontmost_ok: true`; `activeTool` moved `select -> merge`. A real cursor
+  click changed real app state.
+- **Cmd+S, run as an A/B that isolates exactly what Tier 2 buys**: synthetic
+  `Meta+s` through WebDriver (Tier 1) produced NO new save log lines and left
+  the project file's mtime unchanged; real `cmd+s` through CGEvent produced
+  three new save log lines and moved the mtime. This is the direct measurement
+  behind the "native accelerators never fire on Tier 1" claim - previously an
+  inference from the plugin's dispatchEvent implementation.
+- **`os_screenshot`**: 295 KB PNG captured by window id (25283). Eyeballed: the
+  full WebGL survey tree renders in colour, alongside the Merge tooltip from
+  the click above and a "Saved" status bar from the Cmd+S above - so the one
+  image corroborates all three checks. The DOM capture of the same window in
+  the same session was 196 KB with the map blank.
+
 ### 5.5 Tier 2 review residue (pre-PR round, 2026-08-05)
 
 Deferred with rationale, per the one-triage-pass rule:
