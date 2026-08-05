@@ -213,12 +213,29 @@ fn finalize_deferred_import(state: &AppState, import_result: CommandResult) -> C
 ///
 /// The import's own warnings are EXTENDED, never replaced: per-shot validation
 /// warnings from `execute_import_sections` are already in there.
+///
+/// A successful save's warnings additionally go onto the RECEIPT, leading. The
+/// `CommandResult.warnings` copy alone reaches nobody: the frontend keeps only
+/// `code == "SYSTEM"` from that list (`saveFeedback.ts`), by design, so a save
+/// that reports `DATABASE_NOT_REOPENED` or `UNDO_HISTORY_DROPPED` under its own
+/// code would be surfaced nowhere at all. Leading, because the same precedent
+/// governs the deferred-save FAILURE message the frontend puts at the top of
+/// the receipt (#110/#420): "the save went wrong" outranks any format caveat.
 fn merge_deferred_save_outcome(
     mut import_result: CommandResult,
     saved: CommandResult,
 ) -> CommandResult {
     if saved.success {
-        import_result.warnings.extend(saved.warnings);
+        if !saved.warnings.is_empty() {
+            if let Some(receipt) = import_result.import_receipt.as_mut() {
+                let messages = saved.warnings.iter().map(|w| w.message.clone());
+                let existing = std::mem::take(&mut receipt.warnings);
+                receipt.warnings.extend(messages);
+                receipt.warnings.extend(existing);
+                receipt.cap_warnings();
+            }
+            import_result.warnings.extend(saved.warnings);
+        }
         return import_result;
     }
     tracing::warn!(
@@ -942,6 +959,14 @@ mod receipt_tests {
         );
     }
 
+    fn degraded_save() -> CommandResult {
+        CommandResult::success().with_warnings(vec![ValidationWarning {
+            code: "DATABASE_NOT_REOPENED".to_string(),
+            message: "File saved, but database could not be reopened.".to_string(),
+            severity: WarningSeverity::Warning,
+        }])
+    }
+
     /// #154: a deferred save that SUCCEEDS can still report a degraded state.
     /// Dropping those warnings made an import that left the database closed
     /// look perfectly clean.
@@ -952,13 +977,8 @@ mod receipt_tests {
             message: "shot 3 is unusually long".to_string(),
             severity: WarningSeverity::Warning,
         }]);
-        let saved = CommandResult::success().with_warnings(vec![ValidationWarning {
-            code: "DATABASE_NOT_REOPENED".to_string(),
-            message: "File saved, but database could not be reopened.".to_string(),
-            severity: WarningSeverity::Warning,
-        }]);
 
-        let merged = merge_deferred_save_outcome(import_result, saved);
+        let merged = merge_deferred_save_outcome(import_result, degraded_save());
         assert!(merged.success);
         let codes: Vec<&str> = merged.warnings.iter().map(|w| w.code.as_str()).collect();
         assert_eq!(
@@ -966,6 +986,47 @@ mod receipt_tests {
             vec!["LONG_SHOT", "DATABASE_NOT_REOPENED"],
             "the save's warnings must be appended to the import's own, not replace them"
         );
+    }
+
+    /// And they must reach the RECEIPT, which is the only surface that shows
+    /// them: the frontend keeps just `code == "SYSTEM"` out of
+    /// `CommandResult.warnings`, so a `DATABASE_NOT_REOPENED` there is read by
+    /// nobody. Leading, ahead of the importer's own caveats.
+    #[test]
+    fn a_degraded_deferred_save_leads_the_receipt() {
+        let import_result = CommandResult::success().with_import_receipt(ImportReceipt {
+            warnings: vec!["1 section had no shots after filtering".to_string()],
+            ..ImportReceipt::empty()
+        });
+
+        let merged = merge_deferred_save_outcome(import_result, degraded_save());
+        let receipt = merged
+            .import_receipt
+            .expect("the receipt must survive the merge");
+        assert_eq!(
+            receipt.warnings,
+            vec![
+                "File saved, but database could not be reopened.".to_string(),
+                "1 section had no shots after filtering".to_string(),
+            ]
+        );
+    }
+
+    /// The receipt cap still holds afterwards - the save's warnings are added
+    /// to a list a hostile file can already have filled.
+    #[test]
+    fn a_degraded_deferred_save_respects_the_receipt_cap() {
+        let import_result = CommandResult::success().with_import_receipt(ImportReceipt {
+            warnings: (0..60).map(|i| format!("shot {i} looks odd")).collect(),
+            ..ImportReceipt::empty()
+        });
+
+        let merged = merge_deferred_save_outcome(import_result, degraded_save());
+        let receipt = merged
+            .import_receipt
+            .expect("the receipt must survive the merge");
+        assert_eq!(receipt.warnings.len(), 51);
+        assert!(receipt.warnings[0].contains("database could not be reopened"));
     }
 
     /// The clean case must stay clean - no phantom warning from a save that had

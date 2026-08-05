@@ -353,6 +353,11 @@ fn parse_raw_shots(xml: &str) -> Result<(Vec<RawShot>, FileMetadata)> {
                 match name_bytes {
                     b"SurveyData" | b"SRVD" => {
                         if in_shot {
+                            // Counted as a missing ID because that is
+                            // `build_raw_shot`'s ONLY fallible path today (the
+                            // numeric fields all coerce). A new `bail!` in
+                            // there needs its own counter, or this warning
+                            // starts naming the wrong defect.
                             match build_raw_shot(&current_fields, &mut metadata.anomalies) {
                                 Ok(shot) => shots.push(shot),
                                 Err(e) => {
@@ -1304,10 +1309,16 @@ fn was_were(count: u32) -> &'static str {
 
 /// Turn the parser's anomaly tallies into receipt-visible sentences.
 ///
-/// These describe shots that are NOT in the import even though the file
-/// contains them (or are in it as something other than what the file said).
-/// The parser already logs each one, but a log is not something the person
-/// doing the import ever sees.
+/// These describe shots the file contains that the import does not, or that it
+/// holds as something other than what the file said. The parser already logs
+/// each one, but a log is not something the person doing the import ever sees.
+///
+/// The counts are PARSE-time and whole-file: they precede the exclusion filter
+/// and section selection, so a coerced shot counted here may not be in the
+/// import at all. The wording says "in the file" for exactly that reason.
+///
+/// One sentence per anomaly CLASS, never one per shot - a file with ten
+/// thousand duplicate IDs must not push ten thousand warnings through IPC.
 fn push_parse_anomaly_warnings(anomalies: TmlParseAnomalies, warnings: &mut Vec<String>) {
     let TmlParseAnomalies {
         shots_missing_id,
@@ -1317,22 +1328,27 @@ fn push_parse_anomaly_warnings(anomalies: TmlParseAnomalies, warnings: &mut Vec<
 
     if shots_missing_id > 0 {
         warnings.push(format!(
-            "{shots_missing_id} shot{} had a missing or unreadable ID and {} skipped",
+            "{shots_missing_id} shot{} in the file had a missing or unreadable ID and {} skipped",
             plural_s(shots_missing_id),
             was_were(shots_missing_id)
         ));
     }
     if unknown_shot_types > 0 {
         warnings.push(format!(
-            "{unknown_shot_types} shot{} had an unrecognized type and {} imported as regular shots",
+            "{unknown_shot_types} shot{} in the file had an unrecognized type and {} read as {}",
             plural_s(unknown_shot_types),
-            was_were(unknown_shot_types)
+            was_were(unknown_shot_types),
+            if unknown_shot_types == 1 {
+                "a regular shot"
+            } else {
+                "regular shots"
+            }
         ));
     }
     if duplicate_shot_ids > 0 {
         warnings.push(format!(
-            "{duplicate_shot_ids} shot{} reused an ID already used by another shot; only the last \
-             shot with each ID was kept",
+            "{duplicate_shot_ids} shot{} in the file reused an ID already used by another shot; \
+             only the last shot with each ID was kept",
             plural_s(duplicate_shot_ids)
         ));
     }
@@ -1540,7 +1556,7 @@ pub fn convert_tml_to_import_configs(
                     section = ?section.name,
                     "Loop closure referenced an entrance (START) station and was skipped"
                 );
-                closures_to_entrance += 1;
+                closures_to_entrance = closures_to_entrance.saturating_add(1);
             } else {
                 tracing::warn!(
                     section = ?section.name,
@@ -2883,7 +2899,7 @@ mod tests {
         assert!(
             warnings
                 .iter()
-                .any(|w| w.contains("1 shot had a missing or unreadable ID")),
+                .any(|w| w.contains("1 shot in the file had a missing or unreadable ID")),
             "the dropped shot must reach the import receipt, got {warnings:?}"
         );
     }
@@ -2913,7 +2929,7 @@ mod tests {
         assert!(
             warnings
                 .iter()
-                .any(|w| w.contains("2 shots had an unrecognized type")),
+                .any(|w| w.contains("2 shots in the file had an unrecognized type")),
             "the coerced types must reach the import receipt, got {warnings:?}"
         );
     }
@@ -2939,9 +2955,38 @@ mod tests {
 
         let (_, _, warnings) = convert_tml_to_import_configs(&tml, false, false).unwrap();
         assert!(
-            warnings.iter().any(|w| w.contains("1 shot reused an ID")),
+            warnings
+                .iter()
+                .any(|w| w.contains("1 shot in the file reused an ID")),
             "the collapsed ID must reach the import receipt, got {warnings:?}"
         );
+    }
+
+    /// One sentence per anomaly CLASS, whatever the count. A per-shot warning
+    /// here would put a thousand strings on the wire for a file that damaged
+    /// itself a thousand times, and `cap_warnings` would then bury every other
+    /// warning behind them.
+    #[test]
+    fn a_thousand_duplicate_ids_still_produce_exactly_one_warning() {
+        let mut shots = vec![tml_shot_xml(0, -1, "START", "Start")];
+        shots.extend((0..1000).map(|_| tml_shot_xml(1, 0, "REAL", "Main")));
+        let tml = parse_synthetic_tmlu(&wrap_xml(&shots.join("\n")));
+
+        let anomalies = tml
+            .parse_anomalies
+            .expect("collapsed IDs must be recorded on the parse result");
+        assert_eq!(anomalies.duplicate_shot_ids, 999);
+
+        let (_, _, warnings) = convert_tml_to_import_configs(&tml, false, false).unwrap();
+        let duplicate_warnings = warnings
+            .iter()
+            .filter(|w| w.contains("reused an ID"))
+            .count();
+        assert_eq!(
+            duplicate_warnings, 1,
+            "one warning per class, got {warnings:?}"
+        );
+        assert!(warnings.iter().any(|w| w.contains("999 shots in the file")));
     }
 
     /// A clean file says nothing - these warnings have to stay rare enough to
