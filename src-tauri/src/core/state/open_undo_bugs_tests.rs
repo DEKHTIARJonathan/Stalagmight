@@ -1853,3 +1853,392 @@ fn describing_a_command_with_an_out_of_range_shot_id_does_not_overflow() {
          {message}"
     );
 }
+
+// ===========================================================================
+// Finding 25: removing the PRIMARY zero datum silently redefines the origin
+// every other datum is expressed in, and nothing re-anchors - so the next
+// unrelated shot edit teleports a whole connected component
+// ===========================================================================
+
+/// Every zero datum after the first is stored as a GPS position and RESOLVED
+/// against the first one: `set_zero_datum` places it at
+/// `gps_to_local(gps, zero_datums.first().gps)` and only the first datum sits at
+/// the local origin (models/project/mutations.rs:727-760). The same rule is
+/// re-applied, from scratch, by `realign_after_shot_edit`
+/// (models/project/mutations.rs:945-956) after any geometry-changing shot edit:
+///
+/// ```text
+/// let is_first = self.zero_datums.first().map(|d| d.station_ref == datum.station_ref) ...
+/// let (target_x, target_y) = if is_first { (0.0, 0.0) }
+///                            else if let Some(first) = self.zero_datums.first() {
+///                                gps_to_local(&datum.gps, &first.gps)
+///                            } ...
+/// ```
+///
+/// So `zero_datums[0]` IS the project's coordinate origin, and removing it moves
+/// the origin onto whichever datum is now first - a change of frame for every
+/// other anchored component in the project.
+///
+/// Nothing re-solves for it. `remove_zero_datum` (core/state/command_station.rs:191)
+/// does call `resolve_offsets()`, but that solver deliberately never touches an
+/// anchor's own offset - "only the genuinely non-derivable anchors (datum
+/// sections and free-placed floating components) keep their stored offset,
+/// because the cascade never seed-adjusts them" (models/project/offsets.rs:289-296).
+/// A datum section IS such an anchor, so the surviving datum keeps the offset it
+/// was given while it was still a SECONDARY datum, and the project is left
+/// holding a placement its own rule no longer produces.
+///
+/// The bill arrives on the next unrelated edit. `realign_after_shot_edit` re-runs
+/// the rule with the CURRENT first datum, so an `UpdateShot` on a shot in (or
+/// merged to) that section rigidly translates the whole connected component onto
+/// the new origin in one move - kilometres, for two datums a few hundred metres
+/// apart in latitude/longitude.
+///
+/// Found by the Rust fuzzer's HORIZON mode, seed 2, at undo depth 1189: sections
+/// 65 and 81 both off by exactly `(22230.0946076, -10480.744175)` with 81 landing
+/// on `[0, 0]` - the offset a section gets when the surviving datum is its own
+/// station 0. `fuzz_shrink_tests.rs` minimized that 1770-move trace to seven
+/// moves, of which this is the reduction.
+#[test]
+#[ignore = "open finding 25: removing the primary zero datum leaves every other datum on a stale origin until an unrelated shot edit teleports it - see src-tauri/src/core/state/fuzz_undo_tests.rs"]
+fn removing_the_primary_zero_datum_re_anchors_the_datums_it_leaves_behind() {
+    let state = state_with_project();
+    let origin = create_section(&state, "Origin", vec![shot(10.0, 3.0), shot(20.0, 4.0)]);
+    let anchored = create_section(&state, "Anchored", vec![shot(70.0, 7.0), shot(100.0, 8.0)]);
+
+    // The FIRST datum is the project's local origin.
+    let first = state.execute(Command::SetZeroDatum {
+        station_ref: StationRef::new(origin, 0),
+        coordinates: GpsCoordinates::new(20.4, -87.3, 0.0).unwrap(),
+    });
+    assert!(
+        first.success,
+        "SetZeroDatum (first) failed: {:?}",
+        first.error
+    );
+    // The SECOND is placed relative to it - about 6.4 km away.
+    let second = state.execute(Command::SetZeroDatum {
+        station_ref: StationRef::new(anchored, 1),
+        coordinates: GpsCoordinates::new(20.4358, -87.3479, 0.0).unwrap(),
+    });
+    assert!(
+        second.success,
+        "SetZeroDatum (second) failed: {:?}",
+        second.error
+    );
+    let far = section_offset(&state, anchored).expect("the second datum should place its section");
+    assert!(
+        far.0.abs() > 1000.0,
+        "setup: the second datum should sit kilometres from the first, got {far:?}"
+    );
+
+    // The primary datum goes away. `remove_zero_datum` re-solves offsets, so
+    // whatever the project holds after this is what it believes.
+    let removed = state.execute(Command::RemoveZeroDatum {
+        station_ref: StationRef::new(origin, 0),
+    });
+    assert!(
+        removed.success,
+        "RemoveZeroDatum failed: {:?}",
+        removed.error
+    );
+    let settled = section_offset(&state, anchored);
+
+    // An edit that has nothing to do with the datum, several moves later.
+    let target = shot_ids(&state, anchored)[0];
+    let edited = state.execute(Command::UpdateShot {
+        section_id: anchored,
+        shot_id: target,
+        updates: ShotUpdates {
+            length: Some(9.0),
+            ..Default::default()
+        },
+    });
+    assert!(edited.success, "UpdateShot failed: {:?}", edited.error);
+
+    let after = section_offset(&state, anchored).expect("the anchored section lost its offset");
+    let moved = settled.map_or(f64::INFINITY, |before| {
+        (after.0 - before.0).hypot(after.1 - before.1)
+    });
+    assert!(
+        moved < 1.0,
+        "an UpdateShot moved the anchored section {moved:.1} m (from {settled:?} to {after:?}): \
+         removing the primary zero datum promoted this one to the origin without re-solving, so \
+         the whole component sat on a stale frame until an unrelated shot edit re-anchored it"
+    );
+}
+
+/// The undo half, and the one the fuzzer's roundtrip oracle actually reports:
+/// the teleport is not undone.
+///
+/// `UndoData::PreviousValues` restores the shot's fields, and the geometry
+/// epilogue then runs `realign_after_shot_edit` AGAIN - against the same
+/// (already promoted) first datum. So the undo re-derives the NEW frame rather
+/// than restoring the offsets the edit found, and one `undo()` leaves the
+/// project's geometry kilometres from where it was before the edit it undid.
+///
+/// This is what makes it an undo/redo finding rather than only a geometry one: a
+/// single `undo` of a single `UpdateShot` is not a no-op on `section_offsets`.
+#[test]
+#[ignore = "open finding 25 (undo half): the component translation an edit performs after the primary datum was removed survives its own undo - see src-tauri/src/core/state/fuzz_undo_tests.rs"]
+fn undoing_the_edit_that_re_anchored_a_component_puts_it_back() {
+    let state = state_with_project();
+    let origin = create_section(&state, "Origin", vec![shot(10.0, 3.0), shot(20.0, 4.0)]);
+    let anchored = create_section(&state, "Anchored", vec![shot(70.0, 7.0), shot(100.0, 8.0)]);
+
+    assert!(
+        state
+            .execute(Command::SetZeroDatum {
+                station_ref: StationRef::new(origin, 0),
+                coordinates: GpsCoordinates::new(20.4, -87.3, 0.0).unwrap(),
+            })
+            .success,
+        "SetZeroDatum (first) failed"
+    );
+    assert!(
+        state
+            .execute(Command::SetZeroDatum {
+                station_ref: StationRef::new(anchored, 1),
+                coordinates: GpsCoordinates::new(20.4358, -87.3479, 0.0).unwrap(),
+            })
+            .success,
+        "SetZeroDatum (second) failed"
+    );
+    assert!(
+        state
+            .execute(Command::RemoveZeroDatum {
+                station_ref: StationRef::new(origin, 0),
+            })
+            .success,
+        "RemoveZeroDatum failed"
+    );
+
+    let before = section_offset(&state, anchored);
+    let target = shot_ids(&state, anchored)[0];
+    assert!(
+        state
+            .execute(Command::UpdateShot {
+                section_id: anchored,
+                shot_id: target,
+                updates: ShotUpdates {
+                    length: Some(9.0),
+                    ..Default::default()
+                },
+            })
+            .success,
+        "UpdateShot failed"
+    );
+    assert!(state.undo().success, "undo of UpdateShot failed");
+
+    assert_eq!(
+        section_offset(&state, anchored),
+        before,
+        "undoing the UpdateShot did not restore the section offset it found: the edit re-anchored \
+         the component onto the datum that the primary datum's removal had promoted, and the undo \
+         re-derives the same new frame instead of putting the old one back"
+    );
+}
+
+/// The same defect reached the way a user reaches it, and the way the fuzzer did:
+/// nobody removed a datum, they deleted a SHOT.
+///
+/// `DeleteShot` on the first shot of a section removes that section's station 0,
+/// and the reference cleanup drops every stored ref anchored there - including a
+/// zero datum keyed `StationAnchor::SectionStart`. If that datum was the primary
+/// one, the project's origin has just moved and no command was issued that says
+/// so. Everything after is finding 25 exactly as above.
+///
+/// This is the shape the shrinker minimized the horizon failure to: an empty
+/// section, one appended shot, a second datum, `deleteShot`, a merge, and one
+/// `updateShot`.
+#[test]
+#[ignore = "open finding 25 (via DeleteShot): deleting the shot that carries the primary datum's station moves the project origin with no re-solve - see src-tauri/src/core/state/fuzz_undo_tests.rs"]
+fn deleting_the_primary_datums_station_does_not_silently_move_the_origin() {
+    let state = state_with_project();
+    let origin = create_section(&state, "Origin", vec![shot(10.0, 3.0), shot(20.0, 4.0)]);
+    let anchored = create_section(&state, "Anchored", vec![shot(70.0, 7.0), shot(100.0, 8.0)]);
+
+    assert!(
+        state
+            .execute(Command::SetZeroDatum {
+                station_ref: StationRef::new(origin, 0),
+                coordinates: GpsCoordinates::new(20.4, -87.3, 0.0).unwrap(),
+            })
+            .success,
+        "SetZeroDatum (first) failed"
+    );
+    assert!(
+        state
+            .execute(Command::SetZeroDatum {
+                station_ref: StationRef::new(anchored, 1),
+                coordinates: GpsCoordinates::new(20.4358, -87.3479, 0.0).unwrap(),
+            })
+            .success,
+        "SetZeroDatum (second) failed"
+    );
+
+    // Deleting the first shot removes station 0, and with it the datum anchored
+    // to `SectionStart`.
+    let first_shot = shot_ids(&state, origin)[0];
+    let deleted = state.execute(Command::DeleteShot {
+        section_id: origin,
+        shot_id: first_shot,
+    });
+    assert!(deleted.success, "DeleteShot failed: {:?}", deleted.error);
+    let settled = section_offset(&state, anchored);
+
+    let target = shot_ids(&state, anchored)[0];
+    assert!(
+        state
+            .execute(Command::UpdateShot {
+                section_id: anchored,
+                shot_id: target,
+                updates: ShotUpdates {
+                    length: Some(9.0),
+                    ..Default::default()
+                },
+            })
+            .success,
+        "UpdateShot failed"
+    );
+
+    let after = section_offset(&state, anchored).expect("the anchored section lost its offset");
+    let moved = settled.map_or(f64::INFINITY, |before| {
+        (after.0 - before.0).hypot(after.1 - before.1)
+    });
+    assert!(
+        moved < 1.0,
+        "a DeleteShot that removed the primary datum's station left the survey on a stale origin, \
+         and the next UpdateShot moved the anchored section {moved:.1} m (from {settled:?} to \
+         {after:?}) with no command in between that asked for it"
+    );
+}
+
+// ===========================================================================
+// Finding 12, CASCADING: the shot the stale id edited by mistake still carries
+// the edit several undos later, when the entry being consumed is unrelated and
+// its own persisted id is FRESH
+// ===========================================================================
+
+/// Finding 12 is a single move going wrong; this is what a user sees, and it is
+/// why the Rust fuzzer reported it as something else for a while.
+///
+/// After a reload, the undo of `UpdateShot` names its shot by an id the loader
+/// has since reassigned, so it writes the pre-edit values onto a NEIGHBOUR and
+/// leaves the edited shot as it was (finding 12). Nothing puts either half back:
+/// the corruption sits in the PROJECT, not in the entry, so every undo below it
+/// restores a state that still carries it - including undos of entries pushed on
+/// a completely different section, whose own persisted ids resolve perfectly.
+///
+/// That last part is what made this look like a new defect. The fuzzer measures
+/// staleness on the entry it is consuming NOW, so at the depth this fails the
+/// measurement reads `target=Fresh`: the `SetShotKind` entry below the
+/// `UpdateShot` names a shot on another section whose id did not move. The
+/// damage was done one move earlier, by an entry that measured `Collides`.
+///
+/// Root-caused from `fuzz_shrink_tests.rs`, which minimized the 59-move seed 10
+/// run (`PERSISTENCE=1 CROSSINGS=3 ITERATIONS=60`) to three moves - reproduced
+/// here directly. The insert-BEFORE is the whole setup: it makes the allocator's
+/// ids disagree with positional order, and the loader renumbers to
+/// `section_id * FEATURE_ID_STRIDE + sequence_order`
+/// (persistence/sqlite/read.rs), which swaps the two.
+///
+/// Pinned separately from the two finding 12 tests above because they assert the
+/// FIRST undo and this asserts that the second one cannot clean up after it -
+/// exactly the relationship finding 15 has to finding 3.
+#[test]
+#[ignore = "open finding 12 (cascading): the shot a stale id edited by mistake still carries the edit after later, unrelated undos - see src-tauri/src/core/state/fuzz_undo_tests.rs"]
+fn unwinding_past_a_stale_id_edit_leaves_no_shot_holding_it() {
+    let temp = TempDir::new().unwrap();
+    let save_path: PathBuf = temp.path().join("stale-cascade.stalx");
+
+    let edited_section;
+    let other_section;
+    let inserted_uuid;
+    let neighbour_uuid;
+    let inserted_length;
+    let neighbour_length;
+    {
+        let state = state_with_project();
+        edited_section = create_section(&state, "Edited", vec![shot(0.0, 5.0)]);
+        other_section = create_section(&state, "Other", vec![shot(90.0, 6.0)]);
+
+        // Move 1: insert BEFORE the existing shot, so position 0 holds the
+        // HIGHEST id the allocator handed out.
+        let existing = shot_ids(&state, edited_section)[0];
+        let created = state.execute(Command::CreateShot {
+            section_id: edited_section,
+            shot: shot(180.0, 7.0),
+            after_shot_id: None,
+            before_shot_id: Some(existing),
+        });
+        assert!(created.success, "CreateShot failed: {:?}", created.error);
+        let uuids = shot_uuids(&state, edited_section);
+        inserted_uuid = uuids[0].clone().expect("inserted shot has no uuid");
+        neighbour_uuid = uuids[1].clone().expect("neighbour shot has no uuid");
+        let lengths = shot_lengths(&state, edited_section);
+        inserted_length = lengths[0];
+        neighbour_length = lengths[1];
+
+        // Move 2: an edit on a DIFFERENT section, so the entry below the one
+        // that goes wrong is one whose persisted id will still be correct.
+        let other_shot = shot_ids(&state, other_section)[0];
+        let marked = state.execute(Command::SetShotKind {
+            section_id: other_section,
+            shot_id: other_shot,
+            kind: ShotKind::Jump,
+        });
+        assert!(marked.success, "SetShotKind failed: {:?}", marked.error);
+
+        // Move 3: the edit whose undo will use the stale id.
+        let target = shot_ids(&state, edited_section)[0];
+        let updated = state.execute(Command::UpdateShot {
+            section_id: edited_section,
+            shot_id: target,
+            updates: ShotUpdates {
+                length: Some(42.5),
+                ..Default::default()
+            },
+        });
+        assert!(updated.success, "UpdateShot failed: {:?}", updated.error);
+
+        let saved = state.save_project(Some(save_path.clone()));
+        assert!(saved.success, "save failed: {:?}", saved.error);
+    }
+
+    let reopened = AppState::new().unwrap();
+    let opened = reopened.execute(Command::OpenProject { path: save_path });
+    assert!(opened.success, "reopen failed: {:?}", opened.error);
+
+    // Undo the UpdateShot (finding 12 fires here) and then the SetShotKind,
+    // which is on the other section entirely.
+    assert!(reopened.undo().success, "undo of UpdateShot failed");
+    assert!(reopened.undo().success, "undo of SetShotKind failed");
+
+    let project = reopened.get_project_state().expect("no project after undo");
+    let section = project
+        .sections
+        .iter()
+        .find(|s| s.id == edited_section)
+        .expect("section missing");
+    let length_of = |uuid: &str| -> f64 {
+        section
+            .shots
+            .iter()
+            .find(|s| s.uuid.as_deref() == Some(uuid))
+            .expect("shot vanished")
+            .length
+    };
+
+    assert!(
+        (length_of(&inserted_uuid) - inserted_length).abs() < 1e-9
+            && (length_of(&neighbour_uuid) - neighbour_length).abs() < 1e-9,
+        "unwinding two entries past the stale-id edit left section {edited_section} holding \
+         {:?} instead of {:?}: the undo of UpdateShot wrote the pre-edit length onto the \
+         NEIGHBOUR (finding 12) and the undo below it - a SetShotKind on section \
+         {other_section}, whose own persisted id is fresh - restores a state that still carries \
+         the swap",
+        (length_of(&inserted_uuid), length_of(&neighbour_uuid)),
+        (inserted_length, neighbour_length)
+    );
+}

@@ -72,6 +72,7 @@
 //! | 22 | `finding-22-a-range-shift-delete-is-not-its-single-deletes` | metamorphic gate | 3 | n/a |
 //! | 23 | `finding-23-a-save-load-cycle-is-not-a-fixpoint` | format-property gate | 1 | n/a |
 //! | 24 | `finding-24-shot-display-position-overflows-before-validation` | adversarial gate | 4 | 120 |
+//! | 25 | UNCLASSIFIED - fails the run - see the observations section | `HORIZON=1 JUMPS=1` | 2 | 10000 |
 //!
 //! Findings 18 and 19 are ids this module's own classifiers already use and are
 //! NOT rows: 18 is the raw-versus-resolved alignment disagreement (issue #413's
@@ -124,12 +125,18 @@
 //! `unwinding_the_history_leaves_no_displaced_section_behind` in
 //! `open_undo_bugs_tests.rs` pins the consequence a user sees.
 //!
-//! ## Open observations from the HORIZON mode
+//! ## Observations, and what each one turned out to be
 //!
-//! The three that were open here have all been resolved, two into findings and
-//! one into a model fix. What replaced them is one NEW observation, stated the
-//! same way: deterministic, reproducing twice, not root-caused, and therefore
-//! FAILING the horizon run rather than classified.
+//! NOTHING IS OPEN HERE. Six observations have been through this section and all
+//! six are resolved: three into findings (20, 21, 25), one into a model fix, one
+//! into a duplicate of finding 12, and one triaged out as the measuring engine's
+//! own artifact. The record stays because the next run of this programme should
+//! start from the evidence - including the shape of the reductions that did NOT
+//! reproduce - rather than from a surprise.
+//!
+//! The bar an entry has to clear to be listed as OPEN is unchanged:
+//! deterministic, reproducing twice, not root-caused, and therefore FAILING its
+//! run rather than classified.
 //!
 //! * RESOLVED as FINDING 20. `HORIZON=1 SEEDS=1 ITERATIONS=2000` left a merged
 //!   pair 1.58 cm apart after an `updateShot`. Root cause:
@@ -151,39 +158,80 @@
 //!   `resolve_offsets`) was wrong in every clause - see `ADJUSTED_TOLERANCE_REL`,
 //!   which records both the refutation and the mechanism that replaced it.
 //!
-//! * STILL OPEN, and NEW: at horizon depths - seeds 2, 3, 4 and 5 somewhere past
-//!   depth 1000 - an `undo` translates a whole CONNECTED COMPONENT by a constant
-//!   vector. The signature is sharp and is not finding 3's: every differing
-//!   `section_offsets` entry belongs to one component and every one of them
-//!   differs by the SAME vector, so the relative geometry is preserved exactly
-//!   and only the component's absolute position moves; and the post-undo state
-//!   places one section of the component at exactly `[0, 0]`, which is what a
-//!   re-seeded cascade looks like rather than a slide. Measured on seed 2 at
-//!   depth 1189: sections 65 and 81 both off by `(22230.0946076, -10480.744175)`,
-//!   with 81 landing on the origin. Four synthetic reductions were measured NOT
-//!   to reproduce it and are recorded in the commit history: move-then-edit with
-//!   and without a datum, a datum added AFTER the displacement, and a
-//!   >5 cm edit that trips the realign gate - all restore their offsets exactly.
-//!   No classifier, because nothing here is understood well enough to write one.
+//! * RESOLVED as FINDING 25. At horizon depths - seeds 2, 3, 4 and 5 somewhere
+//!   past depth 1000 - an `undo` translates a whole CONNECTED COMPONENT by a
+//!   constant vector, with one section of it landing on exactly `[0, 0]`
+//!   (measured on seed 2 at depth 1189: sections 65 and 81 both off by
+//!   `(22230.0946076, -10480.744175)`, 81 on the origin).
 //!
-//! * STILL OPEN, and NEW: seed 10 under `crossings: 3`. Undoing a
-//!   `set_shot_kind` entry pushed two epochs earlier finds three fields of one
-//!   shot changed - `azimuth_in` 298.3571 -> 295.8378, `left` 1.25 -> null,
-//!   `length` 4.12579457236 -> 2.859 - on a shot whose persisted id is MEASURED
-//!   `Fresh`, so it is none of findings 8, 12 or 13, and `set_shot_kind`'s undo
-//!   writes only `kind`. Surveyed at 30 seeds x 60 moves x 3 crossings, 29 are
-//!   clean; seed 10 is excluded from `MULTI_CROSSING_SEEDS` BY NAME so the
-//!   exclusion is visible and reversible rather than a quietly shorter list.
+//!   `fuzz_shrink_tests.rs` took the 1770-move trace to SEVEN moves in 497
+//!   probes - `createSection(0 shots)`, `createShot(append)`,
+//!   `createSection(2 shots)`, `setZeroDatum`, `deleteShot`, `mergeStations`,
+//!   `updateShot` - and the reduction off that is four commands with no history
+//!   depth in it at all. The mechanism: `zero_datums[0]` IS the project's
+//!   coordinate origin, because every later datum is placed at
+//!   `gps_to_local(gps, zero_datums.first().gps)` and only the first sits at the
+//!   local origin (models/project/mutations.rs:727-760, re-applied from scratch
+//!   after every shot edit by `realign_after_shot_edit`,
+//!   models/project/mutations.rs:945-956). Removing the primary datum - directly,
+//!   or by deleting the shot whose station it is anchored to - therefore moves
+//!   the origin, and nothing re-solves for it: `resolve_offsets` deliberately
+//!   never touches an anchor's own offset (models/project/offsets.rs:289-296).
+//!   The survivor keeps the offset it held while it was SECONDARY, and the next
+//!   unrelated `update_shot` re-derives the rule against the new first datum and
+//!   rigidly translates the whole component - 6.4 km in the reduction. The undo
+//!   re-derives the same new frame, which is why the roundtrip oracle is where it
+//!   surfaces. `[0, 0]` is what the component gets when the surviving datum is
+//!   its own station 0. Red tests: the three
+//!   `..._primary_zero_datum...` / `..._re_anchored_a_component...` tests in
+//!   `open_undo_bugs_tests.rs`. Still no classifier: finding 25 is a geometry
+//!   defect a history move merely reveals, and a run that hits it is measuring
+//!   the app, not the model.
 //!
-//!   SHRUNK, since: 59 moves down to THREE, by `fuzz_shrink_tests.rs` matching on
-//!   the panic's own signature (105 probes). What is left is
+//! * RESOLVED as a DUPLICATE of FINDING 12, cascading. Seed 10 under
+//!   `crossings: 3` finds three fields of one shot changed when it undoes a
+//!   `set_shot_kind` entry whose own persisted id is MEASURED `Fresh` - which is
+//!   what made it look like none of findings 8, 12 or 13.
+//!
+//!   `fuzz_shrink_tests.rs` cut the 59-move run to THREE moves in 105 probes:
 //!   `createShot(s=5,before)`, `setShotKind(6:600001,Jump)`,
-//!   `updateShot(5:500001)`, then the plan's save/reload and the closing unwind -
-//!   so the `set_shot_kind` entry the undo consumes is on a DIFFERENT section
-//!   from the shot whose three fields change, and one mid-section insert is
-//!   enough to set it up. Reproduce it in 0.04 s with
+//!   `updateShot(5:500001)`, then the plan's save/reload and the closing unwind.
+//!   Replaying that with `TRACE=1` shows the whole thing: the insert-BEFORE makes
+//!   the allocator's ids disagree with positional order, the reload renumbers
+//!   them, the undo of `update_shot` is classified `finding-12-...` AT DEPTH 2 -
+//!   it writes the pre-edit values onto the neighbour - and the failure is one
+//!   move later, at depth 1, where the entry being consumed is the `set_shot_kind`
+//!   on section 6 whose id did not move. The corruption sits in the PROJECT, not
+//!   in the entry, so the later undo restores a state that still carries it and
+//!   the depth-1 comparison re-measures it against a snapshot recorded before it.
+//!   Exactly finding 15's relationship to finding 3. Reproduce in 0.04 s with
 //!   `STALAGMIGHT_RUST_FUZZ_SHRINK=10 STALAGMIGHT_RUST_FUZZ_PERSISTENCE=1
 //!   STALAGMIGHT_RUST_FUZZ_CROSSINGS=3 STALAGMIGHT_RUST_FUZZ_ITERATIONS=60`.
+//!
+//!   The MODEL GAP that made it unreadable is worth naming, because the fix is
+//!   one classifier: findings 3, 8 and 16 each have a CASCADE entry and finding
+//!   12 does not. `finding-8-cascade-...` is gated on `is_shot_identity_swap`,
+//!   which finding 12 cannot satisfy - it changes a field, it does not move a
+//!   shot - so nothing absorbs the second measurement. A
+//!   `finding-12-cascade-...` keyed on `self.stale_corruption` plus a shot-field
+//!   path would classify it and let seed 10 back into `MULTI_CROSSING_SEEDS`.
+//!   Until that lands, seed 10 stays excluded BY NAME. Red test:
+//!   `unwinding_past_a_stale_id_edit_leaves_no_shot_holding_it`.
+//!
+//! * TRIAGED OUT, and not a defect in the app: the METAMORPHIC engine's
+//!   `observation-split-routes-disagree-on-station-comment-keys` - the two
+//!   delete/split routes intermittently disagreeing about which section a station
+//!   comment is keyed to. Every reported instance turned out to hold the SAME
+//!   multiset of `(section_id, comment)` pairs on both sides with one entry - the
+//!   newly minted section B - in a different slot, i.e. a PERMUTATION rather than
+//!   a re-key. `canonical_snapshot` sorts `station_comments` by the pair's whole
+//!   JSON text, which for a `StationKey::AfterShot` anchor includes the shot
+//!   uuid; both routes mint section B's shots, and `Mask::MintedUuids` erases the
+//!   uuids only AFTER the sort has used them. Measured: 40 seeds x 6 repeats gave
+//!   7 divergences over 240 built instances before, 0 over the same 240 with a
+//!   re-sort after the mask, every other pair byte-identical. The record and the
+//!   fix are in `metamorphic_undo_tests.rs` (`resort_set_like`); the earlier
+//!   `shots.rs:772` lead stays refuted.
 //!
 //! ## Modes, and why the gate uses none of them
 //!
