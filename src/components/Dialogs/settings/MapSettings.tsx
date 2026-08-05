@@ -168,6 +168,8 @@ export function MapSettings({
     (n) => ({ map: { ...config.map, controls: { ...config.map.controls, zoom_speed: n } } }));
   const handleInvertScrollChange = createToggleHandler(onChange,
     (v) => ({ map: { ...config.map, controls: { ...config.map.controls, invert_scroll: v } } }));
+  const handleShowNavigationToolsChange = createToggleHandler(onChange,
+    (v) => ({ map: { ...config.map, controls: { ...config.map.controls, show_navigation_tools: v } } }));
 
   // --- Station settings ---
   const handleStationRadiusChange = createNumericHandler(onChange,
@@ -381,6 +383,22 @@ export function MapSettings({
       </SettingsSection>
 
       <SettingsSection title={t('settings.map.sections.controls')} data-testid="section-controls">
+        <SettingRow
+          label={t('settings.map.controls.showNavigationTools.label')}
+          helpText={t('settings.map.controls.showNavigationTools.help')}
+          isChanged={isFieldChanged(changedFields, 'map.controls.show_navigation_tools')}
+          data-testid="setting-show-navigation-tools"
+          onReset={() => onChange({ map: { ...config.map, controls: { ...config.map.controls, show_navigation_tools: defaultConfig.map.controls.show_navigation_tools } } })}
+          isDefault={config.map.controls.show_navigation_tools === defaultConfig.map.controls.show_navigation_tools}
+        >
+          <Toggle
+            checked={config.map.controls.show_navigation_tools}
+            onChange={handleShowNavigationToolsChange}
+            aria-label={t('settings.map.controls.showNavigationTools.aria')}
+            data-testid="toggle-show-navigation-tools"
+          />
+        </SettingRow>
+
         <SettingRow
           label={t('settings.map.controls.panSpeed.label')}
           helpText={t('settings.map.controls.panSpeed.help')}

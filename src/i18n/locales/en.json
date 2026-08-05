@@ -1039,9 +1039,14 @@
         }
       },
       "controls": {
+        "showNavigationTools": {
+          "label": "Show navigation tools",
+          "help": "Add the Pan and Zoom tools back to the toolbar, with their P and Z shortcuts. Hidden by default: the map pans when you drag it and zooms on the scroll wheel under every tool, so the tools are only needed if dragging or scrolling is not an option for you",
+          "aria": "Show navigation tools"
+        },
         "panSpeed": {
           "label": "Pan speed",
-          "help": "Speed multiplier for Ctrl+drag and middle-button panning (0.1-5.0). Pan-tool dragging stays 1:1 with the cursor",
+          "help": "Speed multiplier for Ctrl+drag and middle-button panning (0.1-5.0). Dragging the map stays 1:1 with the cursor",
           "aria": "Pan speed multiplier"
         },
         "zoomSpeed": {

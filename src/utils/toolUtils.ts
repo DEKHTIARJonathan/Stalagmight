@@ -1,4 +1,19 @@
 import type { ToolType } from '../store/uiStore';
+import type { Config } from '../types/config';
+
+/**
+ * Whether the Pan/Zoom tools are available (#409). Off unless the user opts in:
+ * the map pans on a plain drag and zooms on the wheel under every tool, so the
+ * tools are redundant for anyone who can do both.
+ *
+ * `config` is null until `loadConfig()` resolves, and false is the right answer
+ * there for anything that only SHOWS the tools. Anything that RESETS state off
+ * the answer must first check that config is non-null, or it will fight a user
+ * whose saved setting is on (see MapCanvas).
+ */
+export function navigationToolsEnabled(config: Config | null | undefined): boolean {
+  return config?.map.controls.show_navigation_tools ?? false;
+}
 
 /**
  * Tools that should not allow feature interactions (clicks, hovers, context menus).

@@ -3,6 +3,7 @@ import {
   TOOL_GROUPS,
   getGroupForTool,
   isGroupedTool,
+  isNavigationTool,
   getStandaloneTools,
 } from '../toolGroups';
 
@@ -80,6 +81,27 @@ describe('isGroupedTool', () => {
     expect(isGroupedTool('select')).toBe(false);
     expect(isGroupedTool('merge')).toBe(false);
     expect(isGroupedTool('measure')).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// isNavigationTool (#409)
+// ---------------------------------------------------------------------------
+
+describe('isNavigationTool', () => {
+  it('returns true for the navigate group members', () => {
+    expect(isNavigationTool('pan')).toBe(true);
+    expect(isNavigationTool('zoom')).toBe(true);
+  });
+
+  it('returns false for every other tool, grouped or standalone', () => {
+    expect(isNavigationTool('select')).toBe(false);
+    expect(isNavigationTool('measure')).toBe(false);
+    expect(isNavigationTool('merge')).toBe(false);
+    // move_station and comment ARE grouped - just not in the navigate group, which
+    // is the distinction the toolbar filter hangs on.
+    expect(isNavigationTool('move_station')).toBe(false);
+    expect(isNavigationTool('comment')).toBe(false);
   });
 });
 

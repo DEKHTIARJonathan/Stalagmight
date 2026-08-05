@@ -20,6 +20,16 @@ export function isGroupedTool(tool: ToolType): boolean {
   return TOOL_GROUPS.some((g) => g.tools.includes(tool));
 }
 
+/**
+ * Whether a tool belongs to the navigate group (Pan / Zoom) - the group hidden
+ * unless `map.controls.show_navigation_tools` is on (#409). Derived from the
+ * group table rather than listing the tools again, so a tool added to the group
+ * is covered without a second edit.
+ */
+export function isNavigationTool(tool: ToolType): boolean {
+  return getGroupForTool(tool)?.id === 'navigate';
+}
+
 export function getStandaloneTools(): ToolType[] {
   const groupedTools = new Set<ToolType>(TOOL_GROUPS.flatMap((g) => g.tools));
   const allTools: ToolType[] = [

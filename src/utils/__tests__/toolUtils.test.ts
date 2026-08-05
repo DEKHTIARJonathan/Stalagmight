@@ -3,8 +3,15 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { isNonInteractiveTool, NON_INTERACTIVE_TOOLS, toolCursor } from '../toolUtils';
+import {
+  isNonInteractiveTool,
+  navigationToolsEnabled,
+  NON_INTERACTIVE_TOOLS,
+  toolCursor,
+} from '../toolUtils';
 import type { ToolType } from '../../store/uiStore';
+import type { Config } from '../../types/config';
+import { defaultConfig } from '../../types/config';
 
 /** Every member of `ToolType`. The annotation is the guard: dropping a tool
  *  from `ToolType` reds this file, so the exhaustiveness case below cannot go
@@ -67,6 +74,33 @@ describe('toolUtils', () => {
 
     it('falls back to the arrow for a value from outside the type system', () => {
       expect(toolCursor('not_a_tool' as ToolType)).toBe('default');
+    });
+  });
+
+  describe('navigationToolsEnabled (#409)', () => {
+    const withSetting = (show: boolean): Config => ({
+      ...defaultConfig,
+      map: {
+        ...defaultConfig.map,
+        controls: { ...defaultConfig.map.controls, show_navigation_tools: show },
+      },
+    });
+
+    // config is null between mount and loadConfig() resolving. Hiding the tools is
+    // the safe answer there: showing them and yanking them away a tick later is the
+    // visible failure, and anything that RESETS state guards on config != null.
+    it('is false while the config has not loaded yet', () => {
+      expect(navigationToolsEnabled(null)).toBe(false);
+      expect(navigationToolsEnabled(undefined)).toBe(false);
+    });
+
+    it('is false by default', () => {
+      expect(navigationToolsEnabled(defaultConfig)).toBe(false);
+    });
+
+    it('reads the setting off a loaded config', () => {
+      expect(navigationToolsEnabled(withSetting(true))).toBe(true);
+      expect(navigationToolsEnabled(withSetting(false))).toBe(false);
     });
   });
 });
