@@ -2319,6 +2319,66 @@ fn a_pre_v16_file_loses_its_path_bearing_undo_history_on_open() {
     );
 }
 
+/// [#413 finding 5] A pre-v17 file's undo rows carry explicit-null
+/// `SectionUpdates` fields, so the migration must drop them.
+///
+/// v17 gave `name` / `surveyor` / `date` the `double_option` +
+/// `skip_serializing_if` pair `ShotUpdates` has carried since v7. A pre-v17
+/// writer serialized every UNTOUCHED one as an explicit `null`, and a present
+/// `null` now means "clear this field" - so replaying a stored
+/// `update_section_metadata` command, or the `PreviousValues` blob recorded
+/// against it, would wipe the name, surveyor and date off the section it names.
+/// The payload still PARSES, which is why nothing downstream can catch it and a
+/// version-gated drop is the only safe upgrade - the same reasoning, and the
+/// same remedy, as the v6 to v7 case below.
+#[test]
+fn a_pre_v17_file_loses_its_explicit_null_section_undo_history_on_open() {
+    // Sanity: the legacy payload IS the dangerous shape - under the v17
+    // deserializer its explicit nulls decode to Some(None) ("clear the field").
+    let dangerous: crate::models::SectionUpdates =
+        serde_json::from_str(r##"{"name":null,"surveyor":null,"date":null,"color":"#123456"}"##)
+            .unwrap();
+    assert_eq!(dangerous.name, Some(None));
+    assert_eq!(dangerous.surveyor, Some(None));
+    assert_eq!(dangerous.date, Some(None));
+
+    let temp_dir = TempDir::new().unwrap();
+    let path = temp_dir.path().join("pre-v17.stalx");
+    {
+        let mut db = Database::open(&path).unwrap();
+        db.save_project(&Project::new("Legacy".to_string(), None))
+            .unwrap();
+        // An entry of the shape a pre-v17 producer wrote: every untouched
+        // nullable field present and null, on BOTH halves of the entry (the
+        // command replays on redo, the `values_json` on undo).
+        db.save_undo_stack_with_timestamps(vec![(
+            r##"{"type":"update_section_metadata","section_id":0,"updates":{"name":null,"surveyor":null,"date":null,"color":"#abcdef","direction":null,"quality":null}}"##
+                .to_string(),
+            r##"{"PreviousValues":{"section_id":0,"shot_id":null,"values_json":"{\"name\":null,\"surveyor\":null,\"date\":null,\"color\":\"#123456\",\"direction\":null,\"quality\":null}"}}"##
+                .to_string(),
+            None,
+        )])
+        .unwrap();
+        let staged: i64 = db
+            .conn
+            .query_row("SELECT COUNT(*) FROM undo_stack", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(staged, 1, "the fixture must actually stage an undo entry");
+        // Rewind the stamp so the file looks exactly like one written by a v16 build.
+        db.set_user_version(16).unwrap();
+        drop(db);
+    }
+
+    let db = Database::open_existing(&path).unwrap();
+    assert!(
+        db.load_undo_stack_with_timestamps().unwrap().is_empty(),
+        "the v17 migration must drop pre-v17 undo history: its explicit nulls now read \
+         as \"clear the field\""
+    );
+    // And the file is now stamped current, so the drop happens exactly once.
+    assert_eq!(db.get_user_version().unwrap(), SCHEMA_VERSION);
+}
+
 #[test]
 fn test_legacy_v6_undo_history_dropped_on_open_existing() {
     let temp_dir = TempDir::new().unwrap();
@@ -2541,6 +2601,7 @@ fn test_new_format_undo_history_survives_reload() {
         undo_data: UndoData::PreviousValues {
             section_id,
             shot_id: Some(shot_id),
+            shot_uuid: None,
             values_json,
         },
         timestamp: None,

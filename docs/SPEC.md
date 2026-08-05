@@ -2178,6 +2178,16 @@ code:
   lazily by `CREATE TABLE IF NOT EXISTS` on first write in
   `persistence/sqlite/settings.rs`, with a `sqlite_master` probe on the read side,
   so tracing the migration alone will not find it.
+- v17 gives `SectionUpdates`' `name` / `surveyor` / `date` the `double_option` +
+  `skip_serializing_if` pair `ShotUpdates` has had since v7, so an undo can once
+  again restore a section field that was null before the edit (issue #413
+  finding 5). It is the v7 hazard one struct over - a pre-v17 writer serialized
+  every untouched nullable field as an explicit `null`, which now reads as "clear
+  this field" - so the migration drops the persisted stacks through
+  `drop_legacy_undo_history` exactly as v13, v15 and v16 do.
+  `UNDO_FORMAT_SAFE_VERSION` stays at 7: it is the floor for the pre-v7 purge
+  alone, and bumping it would make the v13 and v15 arms' own tests pass with
+  those arms removed.
 
 The dive plan lives beside the project in its own `.plnx` SQLite sidecar
 (`src-tauri/src/persistence/plnx.rs`), not in the `.stalx`.

@@ -1653,6 +1653,8 @@ fn redo_legacy_prepend_createshot_reanchors_section_start() {
             station_shift_from: 0,
             after_shot_id: None,
             before_shot_id: None,
+            after_shot_uuid: None,
+            before_shot_uuid: None,
             uuid: Some("prep-uuid".to_string()),
         },
         timestamp: None,
@@ -1737,6 +1739,7 @@ fn test_undo_fails_with_invalid_previous_values_shot() {
         UndoData::PreviousValues {
             section_id: 1,
             shot_id: Some(1),
+            shot_uuid: None,
             values_json: "not-json".to_string(),
         },
     );
@@ -1759,6 +1762,7 @@ fn test_undo_fails_with_invalid_previous_values_section() {
         UndoData::PreviousValues {
             section_id: 1,
             shot_id: None,
+            shot_uuid: None,
             values_json: "not-json".to_string(),
         },
     );
@@ -7685,6 +7689,7 @@ fn test_undo_failure_preserves_entry_on_undo_stack() {
         UndoData::PreviousValues {
             section_id: 1,
             shot_id: Some(1),
+            shot_uuid: None,
             values_json: "not-valid-json".to_string(),
         },
     );
@@ -7791,6 +7796,7 @@ fn test_undo_failure_preserves_entry_at_top_lifo_order() {
             UndoData::PreviousValues {
                 section_id: 999,
                 shot_id: Some(999),
+                shot_uuid: None,
                 values_json: "not-json".to_string(),
             },
         );
@@ -7926,6 +7932,7 @@ fn test_undo_to_partial_completion_stops_at_failed_step() {
             undo_data: UndoData::PreviousValues {
                 section_id: 999,
                 shot_id: Some(999),
+                shot_uuid: None,
                 values_json: "invalid-json".to_string(),
             },
             timestamp: None,
@@ -22426,6 +22433,7 @@ fn a_failed_undo_still_pushes_its_entry_back() {
             undo_data: UndoData::PreviousValues {
                 section_id: 1,
                 shot_id: Some(1),
+                shot_uuid: None,
                 values_json: "not-valid-json".to_string(),
             },
             timestamp: None,

@@ -5,7 +5,7 @@ use tauri::State;
 use ts_rs::TS;
 
 use crate::core::{AppState, Command, CommandResult, UndoData, UndoEntry};
-use crate::models::{SectionId, ShotKind};
+use crate::models::{SectionId, ShotKind, ShotUpdates};
 
 /// DTO for undo history item sent to frontend
 #[derive(Debug, Clone, Serialize, TS)]
@@ -597,10 +597,20 @@ fn derive_preview_data(
             additional_changes: 0,
         }),
 
-        // SetShotKind - the inverse command carries the real previous kind
-        // (#27 q12), so show it rather than guessing as the old boolean did.
+        // SetShotKind - the undo data carries the real previous kind (#27 q12),
+        // so show it rather than guessing as the old boolean did. Two shapes,
+        // one meaning: `PreviousValues` is what the capture records now (it can
+        // carry the target's uuid, which the newtype `InverseCommand` cannot -
+        // #413), and `InverseCommand` is what a persisted entry from before that
+        // change still holds.
         (Command::SetShotKind { kind, .. }, undo_data) => {
             let old_value = match undo_data {
+                UndoData::PreviousValues { values_json, .. } => {
+                    serde_json::from_str::<ShotUpdates>(values_json)
+                        .ok()
+                        .and_then(|prev| prev.kind)
+                        .map_or_else(String::new, |prev| prev.label().to_string())
+                }
                 UndoData::InverseCommand(Command::SetShotKind { kind: prev, .. }) => {
                     prev.label().to_string()
                 }
@@ -1052,6 +1062,7 @@ mod tests {
             undo_data: UndoData::PreviousValues {
                 section_id: 0,
                 shot_id: Some(0),
+                shot_uuid: None,
                 values_json: r#"{"length": 10.0, "azimuth_in": 45.0}"#.to_string(),
             },
             timestamp: None,
@@ -1346,6 +1357,7 @@ mod tests {
             undo_data: UndoData::PreviousValues {
                 section_id: 1,
                 shot_id: None,
+                shot_uuid: None,
                 values_json: r#"{"name":"Old Name"}"#.to_string(),
             },
             timestamp: None,
@@ -1377,6 +1389,7 @@ mod tests {
             undo_data: UndoData::PreviousValues {
                 section_id: 1,
                 shot_id: None,
+                shot_uuid: None,
                 values_json: r##"{"name":"Original","color":"#ff0000","direction":"in"}"##
                     .to_string(),
             },
@@ -1420,6 +1433,7 @@ mod tests {
             undo_data: UndoData::PreviousValues {
                 section_id: 1,
                 shot_id: None,
+                shot_uuid: None,
                 values_json: r##"{"name":"Old","surveyor":"Bob","date":"2025-01-01","color":"#ff0000","direction":"in","quality":1.0}"##.to_string(),
             },
             timestamp: None,

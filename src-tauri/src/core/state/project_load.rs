@@ -269,6 +269,12 @@ impl AppState {
                 undo_stack.clear();
             } else {
                 undo_stack.load_from_persisted_with_timestamps(undo_entries, redo_entries);
+                // ...and against the project they will be replayed onto: a
+                // restored entry that cannot find its shot fails and is pushed
+                // straight back, sealing off everything under it (#413).
+                if let Some(project) = proj_guard.as_ref() {
+                    undo_stack.drop_entries_addressing_a_missing_shot(project);
+                }
                 tracing::info!(
                     undo = undo_stack.len(),
                     purpose = "restore edit history",
@@ -871,6 +877,10 @@ impl AppState {
                 undo_stack.clear();
             } else {
                 undo_stack.load_from_persisted_with_timestamps(undo_entries, redo_entries);
+                // ...and against the project they will be replayed onto: a
+                // restored entry that cannot find its shot fails and is pushed
+                // straight back, sealing off everything under it (#413).
+                undo_stack.drop_entries_addressing_a_missing_shot(&project);
                 tracing::info!(
                     undo = undo_stack.len(),
                     purpose = "restore edit history",

@@ -1,5 +1,5 @@
 use crate::core::{Command, UndoData};
-use crate::models::{ClosureStrategy, SectionId, SectionUpdates, ShotUpdates};
+use crate::models::{ClosureStrategy, SectionId, SectionUpdates, ShotId, ShotUpdates};
 
 use super::AppState;
 
@@ -121,6 +121,9 @@ impl AppState {
                             UndoData::PreviousValues {
                                 section_id: *section_id,
                                 shot_id: Some(*shot_id),
+                                // The address that survives a save: the id
+                                // beside it is renumbered on load (#413).
+                                shot_uuid: shot.uuid.clone(),
                                 values_json: json,
                             }
                         } else {
@@ -153,6 +156,7 @@ impl AppState {
                         UndoData::PreviousValues {
                             section_id: *section_id,
                             shot_id: None,
+                            shot_uuid: None,
                             values_json: json,
                         }
                     } else {
@@ -166,9 +170,20 @@ impl AppState {
             // The old boolean toggle inverted from the command alone (`!flag`).
             // A 3-way kind cannot (#27 q12): "undo setting this to Reference"
             // has to know whether it was Normal or Jump before. So read the
-            // current kind out of the project and carry it in the inverse.
+            // current kind out of the project and carry the previous value.
             // Falls back to UndoData::None if the shot is gone, matching how
             // the other shot commands degrade rather than inventing a value.
+            //
+            // Recorded as `PreviousValues` rather than the
+            // `InverseCommand(SetShotKind)` it used to be, because that variant
+            // is a NEWTYPE around `Command` and so has nowhere to put the
+            // target's uuid: the inverse command names the shot by its
+            // in-session id, which the loader renumbers, so after a save/reopen
+            // the undo reset a DIFFERENT shot's kind (#413, finding 12). This
+            // is the same restore - one field put back to its previous value -
+            // through the variant that can carry the address that survives a
+            // save. Persisted `InverseCommand(SetShotKind)` entries still
+            // restore through their own arm in `undo_inner`.
             Command::SetShotKind {
                 section_id,
                 shot_id,
@@ -176,13 +191,21 @@ impl AppState {
             } => project
                 .get_section(*section_id)
                 .and_then(|section| section.get_shot(*shot_id))
-                .map_or(UndoData::None, |shot| {
-                    UndoData::InverseCommand(Command::SetShotKind {
-                        section_id: *section_id,
-                        shot_id: *shot_id,
-                        kind: shot.kind,
-                    })
-                }),
+                .and_then(|shot| {
+                    let prev_updates = ShotUpdates {
+                        kind: Some(shot.kind),
+                        ..Default::default()
+                    };
+                    serde_json::to_string(&prev_updates)
+                        .ok()
+                        .map(|json| UndoData::PreviousValues {
+                            section_id: *section_id,
+                            shot_id: Some(*shot_id),
+                            shot_uuid: shot.uuid.clone(),
+                            values_json: json,
+                        })
+                })
+                .unwrap_or(UndoData::None),
 
             // Merge can shift sections BEYOND the two merge groups: after aligning
             // the groups, cascade_connection_offsets re-anchors any section reachable
@@ -475,6 +498,15 @@ impl AppState {
                             // ensures no refs match.
                             (position + 1) as u32
                         };
+                        // The anchors' uuids alongside their ids, for the same
+                        // reason the shot's own uuid is recorded: the ids are
+                        // renumbered on load, and the anchor decides WHERE the
+                        // redo puts the shot back (#413, finding 16).
+                        let anchor_uuid = |anchor: Option<ShotId>| {
+                            anchor
+                                .and_then(|id| section.get_shot(id))
+                                .and_then(|anchor_shot| anchor_shot.uuid.clone())
+                        };
                         UndoData::CreatedShotSnapshot {
                             section_id: *section_id,
                             shot_id,
@@ -483,6 +515,8 @@ impl AppState {
                             station_shift_from,
                             after_shot_id: *after_shot_id,
                             before_shot_id: *before_shot_id,
+                            after_shot_uuid: anchor_uuid(*after_shot_id),
+                            before_shot_uuid: anchor_uuid(*before_shot_id),
                             uuid: shot.uuid.clone(),
                         }
                     } else {

@@ -34,8 +34,8 @@ Commands go through a two-phase capture during execution:
 
 | Variant | Used By | Undo | Redo |
 |---------|---------|------|------|
-| `InverseCommand` | SetShotReference, Move{Section,Station} | Execute the inverse command | Execute the original command |
-| `PreviousValues` | UpdateShot, UpdateSectionMetadata | Parse JSON, apply old values | Execute the original command |
+| `InverseCommand` | SetStationComment | Execute the inverse command | Execute the original command |
+| `PreviousValues` | UpdateShot, SetShotKind, UpdateSectionMetadata | Parse JSON, apply old values | Execute the original command |
 | `CreatedSectionSnapshot` | CreateSection | Delete the section | Restore from snapshot (preserves original ID) |
 | `CreatedShotSnapshot` | CreateShot | Delete the shot | Restore from snapshot (preserves original ID) |
 | `ShotSnapshot` | DeleteShot | Restore shot at exact position | Re-execute the delete |
@@ -46,6 +46,56 @@ Commands go through a two-phase capture during execution:
 | `SegmentMoveInfo` | MoveSegment | Restore section offsets directly | Reapply offset to affected sections |
 | `ProjectSnapshotPair` | Batch, DeleteSection | Restore "before" JSON | Restore "after" JSON |
 | `None` | Non-undoable commands | N/A | N/A |
+
+### Undo data addresses a shot by uuid, never by its in-session id (#413)
+
+`Shot::id` is regenerated on every load - the reader renumbers each shot to
+`section_id * FEATURE_ID_STRIDE + sequence_order`
+(`persistence/sqlite/read.rs`) - while undo entries are persisted and reloaded
+as opaque JSON with no remapping, and `Section::take_shot_id` hands out ids from
+that same space. So a persisted id does not miss after a reopen, it **collides**
+with whatever shot now occupies the slot (issue #413, findings 8 and 12: the
+undo deleted or edited the WRONG shot), or runs past the renumbered range and
+misses everything, failing forever because `undo_inner`'s epilogue pushes a
+failed entry back (finding 13).
+
+Every id-bearing undo payload therefore also records the target's `Shot::uuid`,
+which is the identity that survives a save (it is what `StationKey::AfterShot`
+and the Ariane export already resolve by):
+
+| field | on | addresses |
+|---|---|---|
+| `uuid` | `CreatedShotSnapshot` | the shot the `CreateShot` created |
+| `after_shot_uuid` / `before_shot_uuid` | `CreatedShotSnapshot` | the anchor the redo re-inserts against |
+| `shot_uuid` | `PreviousValues` (shot form) | the shot whose values are restored |
+
+The rules the restore paths follow:
+
+- **Resolve by uuid first.** The recorded integer id is only a fallback for a
+  LEGACY entry that carries no uuid (all the fields are `#[serde(default)]`, so
+  old persisted JSON still loads - no schema bump).
+- **A recorded uuid that no longer resolves is a loud failure**, never a
+  fall-back to the id: the id is exactly the thing that cannot be trusted.
+- **A redo of `CreatedShotSnapshot` refuses to insert a uuid the section already
+  holds** - two shots with one uuid is a corrupt project, and the next save's
+  `ensure_unique_shot_uuids` would silently re-mint one of them (finding 16).
+  The recorded in-session id is likewise only forced onto the recreated shot
+  when it is still free.
+- **Load drops what it cannot address.** `UndoStack::drop_entries_addressing_a_missing_shot`
+  runs after the restore and drops (with a warning) entries whose shot target
+  does not resolve, so a stale entry costs one undo step instead of wedging
+  every step beneath it. It scans from the top and STOPS at the first entry
+  whose undo restores recorded state wholesale (`ProjectSnapshot`,
+  `ProjectSnapshotPair`, `SectionSnapshot`, `ShotSnapshot`): such an entry puts
+  a whole project or section back in the id space it was recorded in, so
+  anything below it may become addressable again once the walk reaches it.
+
+`SetShotKind` records `PreviousValues` rather than the
+`InverseCommand(SetShotKind)` it used to, for the same reason: `InverseCommand`
+is a newtype around `Command`, so there is nowhere in it to record a uuid
+without breaking every legacy payload of that variant. Persisted
+`InverseCommand(SetShotKind)` entries still restore through their own arm, by
+id, as legacy entries.
 
 ### Why Some Undos Restore Directly Instead of Re-Executing
 

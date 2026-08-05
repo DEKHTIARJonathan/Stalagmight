@@ -1,5 +1,5 @@
 use chrono::NaiveDate;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::HashSet;
 use std::fmt;
 use std::str::FromStr;
@@ -118,16 +118,51 @@ pub struct SectionData {
     pub shots: Vec<ShotData>,
 }
 
+/// Deserialize an `Option<Option<T>>` field so JSON `null` means "clear":
+/// absent -> `None` (no update), `null` -> `Some(None)`, value -> `Some(Some(v))`.
+/// With plain `#[serde(default)]`, `null` folds into the outer `None` and a
+/// clear sent by the frontend becomes a silent no-op.
+///
+/// A local twin of the identical helper in `shot.rs`, which is private to that
+/// module; duplicated rather than widening its visibility.
+fn double_option<'de, T, D>(de: D) -> Result<Option<Option<T>>, D::Error>
+where
+    T: Deserialize<'de>,
+    D: Deserializer<'de>,
+{
+    Deserialize::deserialize(de).map(Some)
+}
+
 /// Partial updates to a section
+///
+/// The three nullable fields use `double_option` + `skip_serializing_if` so the
+/// JSON round-trip is lossless: absent <-> outer `None`, `null` <-> `Some(None)`.
+/// Undo relies on this - previous values are stored as a serialized
+/// `SectionUpdates` (`values_json`), so an un-set field must serialize as absent,
+/// not `null`. Without it (issue #413 finding 5) a capture of `Some(None)` - "this
+/// section had no surveyor, restore that" - came back as `None` and the undo left
+/// the new value in place. `ShotUpdates` has carried the same pair since v7.
 #[derive(Debug, Clone, Serialize, Deserialize, Default, TS)]
 pub struct SectionUpdates {
-    #[serde(default)]
+    #[serde(
+        default,
+        deserialize_with = "double_option",
+        skip_serializing_if = "Option::is_none"
+    )]
     #[ts(optional)]
     pub name: Option<Option<String>>,
-    #[serde(default)]
+    #[serde(
+        default,
+        deserialize_with = "double_option",
+        skip_serializing_if = "Option::is_none"
+    )]
     #[ts(optional)]
     pub surveyor: Option<Option<String>>,
-    #[serde(default)]
+    #[serde(
+        default,
+        deserialize_with = "double_option",
+        skip_serializing_if = "Option::is_none"
+    )]
     #[ts(type = "string | null")]
     #[ts(optional)]
     pub date: Option<Option<NaiveDate>>,

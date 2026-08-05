@@ -220,7 +220,6 @@ fn redo_of_create_section_preserves_gauge_anchors() {
 /// `values_json` round trip. `ShotUpdates` gets this right; `SectionUpdates` was
 /// left out.
 #[test]
-#[ignore = "open bug 5: SectionUpdates lacks double_option, so Some(None) cannot survive values_json - see e2e/agent/scenarios/undoRedoFuzz.ts header"]
 fn section_updates_round_trip_preserves_clear_to_null() {
     let _config = isolated_config();
     let clear_the_surveyor = SectionUpdates {
@@ -242,7 +241,6 @@ fn section_updates_round_trip_preserves_clear_to_null() {
 /// The end-to-end consequence of the round trip above: set a surveyor on a
 /// section that had none, undo, and the value survives the undo.
 #[test]
-#[ignore = "open bug 5: undo cannot restore a previously-null section field - see e2e/agent/scenarios/undoRedoFuzz.ts header"]
 fn undo_restores_a_previously_null_surveyor() {
     let _config = isolated_config();
     let state = state_with_project();
@@ -308,7 +306,6 @@ fn undo_restores_a_previously_null_surveyor() {
 /// An insert-BEFORE into a one-shot section is the minimal way to make the
 /// in-session ids diverge from positional order, which is the precondition.
 #[test]
-#[ignore = "open bug 8 (DATA LOSS): after save/reload, undo deletes the wrong shot - see e2e/agent/scenarios/undoRedoFuzz.ts header"]
 fn undo_after_reload_deletes_the_shot_it_created() {
     let _config = isolated_config();
     let temp = TempDir::new().unwrap();
@@ -694,22 +691,29 @@ fn undo_of_create_shot_in_an_anchored_loop_succeeds() {
 /// (`execute_delete_shot_and_split`, `execute_delete_shot_range_split`), and
 /// unconditionally on LOAD from `redrive_offsets_after_load`.
 ///
-/// It does NOT run from `execute_delete_last_shot_and_section` or
-/// `execute_delete_shot_range_shift` (command_delete_split.rs), which are
-/// separate entry points rather than `Command` variants and so never see the
-/// `execute()` epilogue either. Deleting the section that carried the loop's
-/// other path therefore leaves an orphan closure in memory, the save persists
-/// it, and the next load silently reclassifies it as a merge.
+/// It did NOT run from `execute_delete_last_shot_and_section`
+/// (command_delete_split.rs), a separate entry point rather than a `Command`
+/// variant, so it never saw the `execute()` epilogue either. Deleting the
+/// section that carried the loop's other path left an orphan closure in memory,
+/// the save persisted it, and the next load silently reclassified it as a merge:
+/// `(1 closure, 0 merges)` saved, `(0 closures, 1 merge)` reopened.
 ///
-/// This may be INTENDED - the loader is entitled to enforce the invariant. The
-/// test exists to force an explicit decision: either the two delete paths should
-/// convert like their siblings do (so memory and disk agree), or save/reopen is
-/// knowingly not state-preserving and this test should be deleted saying so.
+/// RESOLVED as option 1 of the write-up - make the four delete entry points
+/// consistent. `execute_delete_last_shot_and_section` now converts (and then
+/// reconciles, so a closure that just became a rigid merge is solved rather than
+/// left drifted), which is what its two split siblings already did.
+/// `execute_delete_shot_range_shift` needed no call of its own: it removes the
+/// range one shot at a time through `remove_shot_with_rewire_excluding_anchors`,
+/// which converts after every removal. Memory and disk now agree and the
+/// loader's pass is a no-op safety net.
+///
+/// Undo of these deletes restores from the `ProjectSnapshotPair`, which puts the
+/// PRE-conversion state back - correctly: the closure was a true loop before the
+/// delete, so restoring it as a closure is the inverse, not a missed conversion.
 ///
 /// Derived from the fuzzer's naharon seed 26 x40, whose history contains
 /// `deleteLastShotAndSection` before the reload that diverged.
 #[test]
-#[ignore = "finding 10 (may be intended): a delete path orphans a closure without converting it, so reopen reclassifies it - see e2e/agent/scenarios/undoRedoFuzz.ts header"]
 fn save_and_reopen_preserves_an_orphan_loop_closure() {
     let _config = isolated_config();
     let temp = TempDir::new().unwrap();
@@ -756,9 +760,19 @@ fn save_and_reopen_preserves_an_orphan_loop_closure() {
 
         let project = state.get_project_state().expect("no project");
         let counts = (project.loop_closures.len(), project.station_merges.len());
-        assert!(
-            counts.0 > 0,
-            "setup: the closure should still be present in memory after the delete, got {counts:?}"
+        // FINDING 10, RESOLVED as option 1 (make the four delete entry points
+        // consistent): the delete now converts the orphan closure in memory, so the
+        // precondition this line pins is the CONVERSION, not the orphan. Before the
+        // fix this read `assert!(counts.0 > 0, "setup: the closure should still be
+        // present in memory after the delete")` - the state the save then persisted
+        // and the loader silently reclassified. The comparison below is unchanged
+        // and is still the oracle: whatever the delete leaves in memory has to
+        // survive a save + reopen unchanged.
+        assert_eq!(
+            counts,
+            (0, 1),
+            "setup: the delete path must convert the orphan closure to a merge in memory \
+             (issue #413 finding 10, option 1), got {counts:?}"
         );
 
         let saved = state.save_project(Some(save_path.clone()));
@@ -944,7 +958,6 @@ fn diverged_section(state: &AppState) -> SectionId {
 ///
 /// Found by `undo-persistence-fuzz` (e2e/agent/scenarios/undoPersistenceFuzz.ts).
 #[test]
-#[ignore = "open finding 12: after save/reload, undo of SetShotKind hits the wrong shot - see e2e/agent/scenarios/undoPersistenceFuzz.ts header"]
 fn undo_of_set_shot_kind_after_reload_hits_the_shot_it_changed() {
     let _config = isolated_config();
     let temp = TempDir::new().unwrap();
@@ -1018,7 +1031,6 @@ fn undo_of_set_shot_kind_after_reload_hits_the_shot_it_changed() {
 /// carries the same stale id, which is what makes an undo/redo cycle after a
 /// reload move a measurement onto a shot that never had it.
 #[test]
-#[ignore = "open finding 12: after save/reload, undo of UpdateShot hits the wrong shot - see e2e/agent/scenarios/undoPersistenceFuzz.ts header"]
 fn undo_of_update_shot_after_reload_restores_the_shot_it_changed() {
     let _config = isolated_config();
     let temp = TempDir::new().unwrap();
@@ -1102,7 +1114,6 @@ fn undo_of_update_shot_after_reload_restores_the_shot_it_changed() {
 /// Found by `undo-persistence-fuzz` with
 /// `STALAGMIGHT_PERSIST_FUZZ_DELETE_IN_TARGET=1`.
 #[test]
-#[ignore = "open finding 13: after save/reload, an out-of-range stale shot id makes undo fail and wedges the history - see e2e/agent/scenarios/undoPersistenceFuzz.ts header"]
 fn undo_after_reload_is_not_wedged_by_an_out_of_range_shot_id() {
     let _config = isolated_config();
     let temp = TempDir::new().unwrap();
@@ -1290,7 +1301,6 @@ fn unwinding_the_history_leaves_no_displaced_section_behind() {
 ///
 /// Found by the Rust fuzzer at seed 13 x 60 with persistence.
 #[test]
-#[ignore = "open finding 16 (DATA CORRUPTION): after a reload, undo+redo of CreateShot duplicates a shot uuid - see src-tauri/src/core/state/fuzz_undo_tests.rs"]
 fn redo_after_reload_does_not_duplicate_a_shot_uuid() {
     let _config = isolated_config();
     let temp = TempDir::new().unwrap();
@@ -1631,7 +1641,6 @@ fn adjusted_bits(state: &AppState) -> Vec<(String, [u64; 3])> {
 /// before and after the whole loop and asserted equal, so "the same project"
 /// is a measurement here rather than an assumption.
 #[test]
-#[ignore = "open finding 21: adjust_least_squares numbers its unknowns in HashMap order, so the adjusted solve is not a function of the project - see src-tauri/src/core/state/fuzz_undo_tests.rs"]
 fn the_adjusted_solve_is_a_function_of_the_project() {
     let _config = isolated_config();
     let state = state_with_project();

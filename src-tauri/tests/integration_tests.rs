@@ -643,6 +643,7 @@ fn test_comprehensive_undo_types() {
         UndoData::PreviousValues {
             section_id: 0,
             shot_id: Some(0),
+            shot_uuid: None,
             values_json: "{}".to_string(),
         },
         UndoData::SectionSnapshot {

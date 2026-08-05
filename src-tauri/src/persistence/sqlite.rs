@@ -71,7 +71,16 @@ use std::path::Path;
 /// mirroring the v10/v11 pattern - and the column is carried forward by the fence.
 /// `speleo_undo_chain` is per-machine progress through history, so it is stripped
 /// from every push snapshot (`PUSH_SNAPSHOT_LOCAL_TABLES`).
-const SCHEMA_VERSION: i32 = 16;
+///
+/// v17 gives `SectionUpdates`' three nullable fields (`name`, `surveyor`, `date`)
+/// the `double_option` + `skip_serializing_if` pair `ShotUpdates` has carried
+/// since v7 (#413 finding 5). No column changes, so the carry-forward fence is
+/// unaffected - but it is a meaning-flip of a PERSISTED payload, exactly the v7
+/// hazard one struct over: a pre-v17 writer serialized every untouched nullable
+/// field as an explicit `null`, which now reads as "clear the field". The
+/// migration drops the persisted undo/redo stacks for the same reason v7 did;
+/// see the v17 arm of `ensure_schema_version`.
+const SCHEMA_VERSION: i32 = 17;
 
 /// Schema version at which persisted undo/redo payloads became safe to replay.
 ///

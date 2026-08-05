@@ -643,6 +643,21 @@ impl AppState {
             // per-shot delete skipped its own alignment check.
             project.cascade_connection_offsets(&[section_id]);
             project.debug_assert_merge_alignment("delete_shot_range_shift");
+
+            // Closures-are-loops invariant (issue #413 finding 10): a loop closure
+            // exists only for a TRUE loop, so every delete entry point converts the
+            // orphans it creates - memory and disk then agree and the loader's
+            // unconditional pass (`redrive_offsets_after_load`) is a no-op safety
+            // net rather than a silent reclassification on reopen. This path needs
+            // no call of its own: `remove_shot_with_rewire_excluding_anchors` runs
+            // `convert_orphan_closures_to_merges()` for EVERY shot it removes
+            // (`models/project/shots.rs`, "the deletion may have removed the OTHER
+            // path of a loop"), including the last one of the range, so the
+            // invariant already holds when this scope ends.
+            //
+            // Undo restores from the `ProjectSnapshotPair`, which legitimately puts
+            // the PRE-conversion state back: the closure was a true loop before the
+            // delete, so restoring it as a closure is the correct inverse.
             section_id
         };
 
@@ -708,10 +723,11 @@ impl AppState {
             Err(result) => return result,
         };
 
-        // Step 2: Validate, mutate, and capture AFTER snapshot in a single lock scope.
-        // This ensures the after snapshot is always captured atomically with the mutation,
-        // and on any failure after mutation we rollback from before_snapshot.
-        let after_snapshot = {
+        // Step 2: Validate and mutate in a single lock scope. On any failure after
+        // mutation we roll back from before_snapshot. `command_lock` is held for the
+        // whole call, so no other command can observe or interleave with the window
+        // between this scope and the after-snapshot below.
+        {
             let Ok(mut proj_guard) = self.project.lock() else {
                 return CommandResult::failure("Failed to lock project".to_string());
             };
@@ -786,47 +802,53 @@ impl AppState {
                 ));
             }
 
-            tracing::info!(
-                section_id,
-                shot_id,
-                purpose = "remove single-shot section",
-                "Deleted last shot and removed section"
-            );
-
-            // Step 5: Take AFTER snapshot while still holding the lock
-            if let Some(p) = proj_guard.as_ref() {
-                match Self::serialize_project_snapshot(p) {
-                    Ok(json) => json,
-                    Err(e) => {
-                        // Rollback: restore before_snapshot since we already mutated
-                        tracing::error!(
-                            purpose = "finalize delete_last_shot snapshot",
-                            reason = %e,
-                            "Failed to serialize after snapshot; rolling back"
-                        );
-                        if Self::restore_snapshot_into(&mut proj_guard, &before_snapshot) {
-                            tracing::info!(
-                                purpose = "restore after snapshot failure",
-                                "Successfully rolled back after snapshot failure"
-                            );
-                        }
-                        return CommandResult::failure(format!(
-                            "Failed to serialize after snapshot: {e}"
-                        ));
-                    }
-                }
-            } else {
-                // Project became None -- restore
+            // Step 5: Enforce the closures-are-loops invariant, like the two split
+            // siblings do (`execute_delete_shot_and_split`,
+            // `execute_delete_shot_range_split`) and like `execute()`'s epilogue does
+            // for every `can_orphan_closures` command. A loop closure exists only for
+            // a TRUE loop; removing the section that carried the loop's other path
+            // leaves the closure as the sole connection, which is a merge. Every
+            // delete entry point converts its orphans here so memory and disk agree
+            // and the loader's unconditional pass (`redrive_offsets_after_load`)
+            // is a no-op safety net rather than a silent reclassification on reopen
+            // (issue #413 finding 10).
+            //
+            // Undo restores this delete from its `ProjectSnapshotPair`, which
+            // legitimately puts the PRE-conversion state back: the closure existed
+            // as a true loop before the delete, so restoring it as a closure is the
+            // correct inverse, not a missed conversion.
+            let Some(project) = proj_guard.as_mut() else {
+                // Project became None -- restore.
                 tracing::error!(
                     purpose = "restore after mutation failure",
                     "Project became None after mutation; rolling back"
                 );
                 let _ = Self::restore_snapshot_into(&mut proj_guard, &before_snapshot);
                 return CommandResult::failure("No project after mutation".to_string());
-            }
+            };
+            project.convert_orphan_closures_to_merges();
+
+            tracing::info!(
+                section_id,
+                shot_id,
+                purpose = "remove single-shot section",
+                "Deleted last shot and removed section"
+            );
+        }
+
+        // This custom path bypasses execute()'s epilogue; re-derive offsets here
+        // (after the orphan-closure conversion above) so a closure that just became
+        // a rigid merge is solved immediately, and before the after-snapshot so
+        // undo/redo and the saved file reflect the normalized topology.
+        self.reconcile_geometry();
+
+        // Step 6: Take the AFTER snapshot.
+        let after_snapshot = match self.capture_after_snapshot_or_rollback(&before_snapshot) {
+            Ok(s) => s,
+            Err(result) => return result,
         };
 
-        // Step 6: Push single undo entry with ProjectSnapshotPair
+        // Step 7: Push single undo entry with ProjectSnapshotPair
         let batch_cmd = Command::Batch {
             commands: vec![
                 Command::DeleteShot {

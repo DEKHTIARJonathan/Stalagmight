@@ -157,6 +157,17 @@
  * root cause as bug 8 - no id remapping on the undo restore path - in variants
  * and directions nothing had reached before.
  *
+ * BOTH ARE FIXED, together with bugs 8 and 16, and the two tests below are no
+ * longer `#[ignore]`d. The undo data now records the target shot's `Shot::uuid`
+ * and every restore arm resolves by it, with the in-session id kept only as the
+ * legacy fallback for entries persisted before those fields existed - so an id
+ * that the loader's renumbering has reassigned can no longer decide which shot
+ * an undo hits (see `docs/undo-redo.md`, "Undo data addresses a shot by uuid").
+ * `SetShotKind` consequently records `PreviousValues` rather than
+ * `InverseCommand`, which is a newtype around `Command` and had nowhere to put a
+ * uuid. The mechanisms below are kept as the record of what the scenario found
+ * and of what it still guards against.
+ *
  * 12. DATA CORRUPTION, quiet. After a save/reload, undo (or redo) of
  *     `SetShotKind` or `UpdateShot` applies to the WRONG SHOT.
  *     `UndoData::InverseCommand(Command::SetShotKind { shot_id })` and

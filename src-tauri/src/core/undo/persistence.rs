@@ -1,6 +1,7 @@
 use chrono::{DateTime, Utc};
 
 use super::{Command, PersistStack, UndoData, UndoEntry, UndoStack};
+use crate::models::Project;
 
 impl UndoStack {
     /// [#303] Every row a save must write for one stack, in stack order and in the
@@ -101,6 +102,73 @@ impl UndoStack {
     /// True when `undo()` can actually apply this entry.
     fn is_applicable(entry: &UndoEntry) -> bool {
         !matches!(entry.undo_data, UndoData::None)
+    }
+
+    /// Drop restored entries whose shot target no longer exists, newest-first,
+    /// and return how many went.
+    ///
+    /// The companion to [`Self::is_applicable`] for the one thing that check
+    /// cannot see from the entry alone: whether the shot the restore addresses
+    /// is still there. An entry that cannot resolve its target fails, and
+    /// `undo_inner`'s epilogue pushes a failed entry straight back - so keeping
+    /// one costs every step BENEATH it, forever (#413, finding 13), while
+    /// dropping it costs exactly one. This is what makes a legacy stale-id
+    /// entry (persisted before the uuid fields existed) a lost step rather than
+    /// a wedged history.
+    ///
+    /// Deliberately a TOP-DOWN scan that STOPS at the first entry whose undo
+    /// restores recorded state wholesale
+    /// ([`UndoData::restores_recorded_state`]). Such an entry is a wall: it puts
+    /// a whole project or section back, in the id space it was recorded in, so
+    /// a target that does not resolve against the project as loaded may resolve
+    /// perfectly once the walk gets there. Above the wall the question is
+    /// answerable, because every live path that REMOVES a shot records a
+    /// `ProjectSnapshotPair` - itself a wall - so no entry above one can be
+    /// addressing a shot that something above it deleted.
+    pub fn drop_entries_addressing_a_missing_shot(&mut self, project: &Project) -> usize {
+        let mut doomed: Vec<usize> = Vec::new();
+        let mut dropped: Vec<String> = Vec::new();
+        for (index, entry) in self.undo_stack.iter().enumerate().rev() {
+            if entry.undo_data.restores_recorded_state() {
+                break;
+            }
+            let Some((section_id, uuid, recorded_id)) = entry.undo_data.shot_target() else {
+                continue;
+            };
+            let resolves = match uuid {
+                Some(uuid) => project.shot_id_by_uuid(section_id, uuid).is_some(),
+                // A legacy entry addresses by id, so that is what has to hold.
+                None => project
+                    .get_section(section_id)
+                    .is_some_and(|section| section.shots.iter().any(|s| s.id == recorded_id)),
+            };
+            if !resolves {
+                doomed.push(index);
+                dropped.push(format!(
+                    "{} (section {section_id}, shot {})",
+                    entry.command.description(),
+                    uuid.map_or_else(|| recorded_id.to_string(), str::to_string)
+                ));
+            }
+        }
+        if doomed.is_empty() {
+            return 0;
+        }
+        // Descending, because the scan ran newest-first - so each removal
+        // leaves the lower indices where they were.
+        for index in doomed {
+            if let Some(entry) = self.undo_stack.remove(index) {
+                self.undo_bytes = self.undo_bytes.saturating_sub(Self::estimated_size(&entry));
+            }
+        }
+        tracing::warn!(
+            count = dropped.len(),
+            entries = %dropped.join("; "),
+            purpose = "load persisted undo history",
+            "Dropped persisted undo entries whose shot no longer exists; each would have failed \
+             and been pushed back, blocking every older entry"
+        );
+        dropped.len()
     }
 
     fn warn_dropped_unapplicable(dropped: &[String]) {

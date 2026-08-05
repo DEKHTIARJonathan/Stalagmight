@@ -11,6 +11,29 @@ use crate::models::{
 mod budget;
 mod persistence;
 
+/// Serialize a section-offset map in KEY order rather than in `HashMap`
+/// iteration order.
+///
+/// These maps ride inside the undo/redo payloads, which are persisted as
+/// gzipped JSON in the `.stalx`. `HashMap` hands serde its entries in an order
+/// that differs per map instance, so a load-then-save re-serialized the SAME
+/// payload with the keys transposed and the file changed for no reason -
+/// measured as `{"3":null,"2":[...]}` one save and `{"2":[...],"3":null}` the
+/// next. That is what made the save/load fixpoint check RE-ROLL rather than
+/// settle (issue #413, finding 23; same class as finding 21). The map type is
+/// unchanged - only what it writes is pinned.
+fn ordered_section_offsets<S>(
+    map: &HashMap<SectionId, Option<(f64, f64)>>,
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    map.iter()
+        .collect::<std::collections::BTreeMap<_, _>>()
+        .serialize(serializer)
+}
+
 /// Default maximum number of undo entries to keep in memory
 const DEFAULT_UNDO_HISTORY_LIMIT: usize = 100;
 
@@ -152,6 +175,20 @@ pub enum UndoData {
     PreviousValues {
         section_id: SectionId,
         shot_id: Option<ShotId>,
+        /// The target shot's persistent UUID - the identity the restore path
+        /// addresses it by. `shot_id` is an IN-SESSION id: the loader
+        /// renumbers every shot to `section_id * FEATURE_ID_STRIDE +
+        /// sequence_order` (`persistence/sqlite/read.rs`) while this entry
+        /// reloads as opaque JSON, so after a save/reopen the id names
+        /// whichever shot now occupies that slot (issue #413, findings 8, 12
+        /// and 13). A uuid survives the renumbering by construction.
+        ///
+        /// FORMAT EVOLUTION (additive, no schema bump): absent in entries
+        /// written before this field existed, where `shot_id` is the only
+        /// address there is and stays the legacy fallback. Every new entry
+        /// carries it whenever the target shot has a uuid.
+        #[serde(default)]
+        shot_uuid: Option<String>,
         /// JSON serialized previous values (ShotUpdates or SectionUpdates)
         values_json: String,
     },
@@ -207,6 +244,19 @@ pub enum UndoData {
         after_shot_id: Option<ShotId>,
         #[serde(default)]
         before_shot_id: Option<ShotId>,
+        /// The anchor shots' persistent UUIDs - a SECOND, independent address
+        /// on this entry, and the one the redo re-inserts by. The anchor ids
+        /// above are in-session ids and go stale on a reload exactly as
+        /// `shot_id` does (issue #413, finding 16), which decides WHERE the
+        /// shot comes back.
+        ///
+        /// FORMAT EVOLUTION (additive, no schema bump): absent in entries
+        /// written before these fields existed; the anchor id is then the only
+        /// address there is and stays the legacy fallback.
+        #[serde(default)]
+        after_shot_uuid: Option<String>,
+        #[serde(default)]
+        before_shot_uuid: Option<String>,
         /// The shot's persistent UUID at creation. Redo restores it via
         /// `Shot::with_uuid` so the recreated shot keeps the same identity that
         /// station cross-references (`AfterShot(uuid)`) anchor on.
@@ -225,6 +275,7 @@ pub enum UndoData {
         removed_closures: Vec<LoopClosure>,
         /// Section offsets before the merge (for restoring positions on undo)
         #[serde(default)]
+        #[serde(serialize_with = "ordered_section_offsets")]
         previous_offsets: HashMap<SectionId, Option<(f64, f64)>>,
     },
 
@@ -252,6 +303,7 @@ pub enum UndoData {
         /// - None value means the key didn't exist (should be removed on undo)
         /// - Some value means the offset should be restored to that value
         #[serde(default)]
+        #[serde(serialize_with = "ordered_section_offsets")]
         previous_offsets: HashMap<SectionId, Option<(f64, f64)>>,
     },
 
@@ -262,6 +314,7 @@ pub enum UndoData {
         /// Section IDs that were moved (captured at execution time)
         affected_sections: Vec<SectionId>,
         /// Previous offsets for each affected section (None = no offset existed)
+        #[serde(serialize_with = "ordered_section_offsets")]
         previous_offsets: HashMap<SectionId, Option<(f64, f64)>>,
         /// The offset that was applied (for redo)
         offset: (f64, f64),
@@ -297,6 +350,57 @@ pub enum UndoData {
 }
 
 impl UndoData {
+    /// The shot this entry's restore path addresses, when it addresses one:
+    /// `(section, the target's uuid if the entry records it, the in-session id
+    /// it was recorded with)`.
+    ///
+    /// The uuid is the address to use; the id is only the legacy fallback for
+    /// entries written before the uuid fields existed (issue #413, findings 8,
+    /// 12, 13 and 16). `ShotSnapshot` is deliberately not here: its restore
+    /// re-creates a shot that must be ABSENT, so "does the target resolve" is
+    /// not a question about it.
+    pub fn shot_target(&self) -> Option<(SectionId, Option<&str>, ShotId)> {
+        match self {
+            UndoData::CreatedShotSnapshot {
+                section_id,
+                shot_id,
+                uuid,
+                ..
+            } => Some((*section_id, uuid.as_deref(), *shot_id)),
+            UndoData::PreviousValues {
+                section_id,
+                shot_id: Some(shot_id),
+                shot_uuid,
+                ..
+            } => Some((*section_id, shot_uuid.as_deref(), *shot_id)),
+            // Legacy only - `SetShotKind` now records `PreviousValues`, which
+            // can carry a uuid. A persisted one has nothing but the id.
+            UndoData::InverseCommand(Command::SetShotKind {
+                section_id,
+                shot_id,
+                ..
+            }) => Some((*section_id, None, *shot_id)),
+            _ => None,
+        }
+    }
+
+    /// Does undoing this entry restore recorded state WHOLESALE?
+    ///
+    /// Such an entry is a wall for any reasoning about which shots exist: it
+    /// puts back a whole project, section or shot recorded in a different id
+    /// space, so nothing below it can be judged against the project as loaded
+    /// (issue #413, finding 12's write-up calls a `ProjectSnapshotPair` "a
+    /// wall" for exactly this reason).
+    pub fn restores_recorded_state(&self) -> bool {
+        matches!(
+            self,
+            UndoData::ProjectSnapshot(_)
+                | UndoData::ProjectSnapshotPair { .. }
+                | UndoData::SectionSnapshot { .. }
+                | UndoData::ShotSnapshot { .. }
+        )
+    }
+
     /// Return a short, safe variant name for logging (no payload data)
     pub fn variant_name(&self) -> &'static str {
         match self {
@@ -1467,6 +1571,124 @@ mod tests {
         }
     }
 
+    // === [#413] Entries whose shot target no longer resolves ===
+
+    /// A one-section project whose single shot carries `uuid`.
+    fn project_holding_one_shot(uuid: &str) -> crate::models::Project {
+        let mut project = crate::models::Project::new("Addressing".to_string(), None);
+        let mut section = crate::models::Section::new(
+            0,
+            SectionData {
+                shots: vec![ShotData {
+                    length: 5.0,
+                    ..Default::default()
+                }],
+                ..test_section_data("Only")
+            },
+        );
+        section.shots[0].uuid = Some(uuid.to_string());
+        project.sections.push(section);
+        project
+    }
+
+    /// An entry whose `CreateShot` created the shot named by `uuid`, recorded
+    /// against in-session id `shot_id`.
+    fn created_shot_entry(uuid: Option<&str>, shot_id: ShotId) -> UndoEntry {
+        UndoEntry {
+            command_bytes: None,
+            command: Command::CreateShot {
+                section_id: 0,
+                shot: ShotData::default(),
+                after_shot_id: None,
+                before_shot_id: None,
+            },
+            undo_data: UndoData::CreatedShotSnapshot {
+                section_id: 0,
+                shot_id,
+                shot_data: ShotData::default(),
+                position: 0,
+                station_shift_from: 0,
+                after_shot_id: None,
+                before_shot_id: None,
+                after_shot_uuid: None,
+                before_shot_uuid: None,
+                uuid: uuid.map(str::to_string),
+            },
+            timestamp: None,
+        }
+    }
+
+    #[test]
+    fn an_entry_whose_shot_uuid_is_gone_is_dropped_and_the_history_under_it_survives() {
+        let project = project_holding_one_shot("live-uuid");
+        let mut stack = UndoStack::new();
+        stack.push_with_data(
+            test_create_section_command("Older"),
+            UndoData::InverseCommand(test_delete_section_command(1)),
+        );
+        let doomed = created_shot_entry(Some("uuid-that-is-not-there"), 0);
+        stack.push_with_data(doomed.command, doomed.undo_data);
+
+        assert_eq!(stack.drop_entries_addressing_a_missing_shot(&project), 1);
+        assert_eq!(
+            stack.len(),
+            1,
+            "the entry beneath it must still be undoable"
+        );
+        assert!(matches!(
+            stack.peek_undo(),
+            Some(Command::CreateSection { name: Some(name), .. }) if name == "Older"
+        ));
+    }
+
+    #[test]
+    fn an_entry_whose_shot_uuid_still_resolves_is_kept() {
+        let project = project_holding_one_shot("live-uuid");
+        let mut stack = UndoStack::new();
+        // The recorded in-session id is deliberately WRONG (the loader would
+        // have renumbered it); the uuid is what has to decide.
+        let entry = created_shot_entry(Some("live-uuid"), 4_242);
+        stack.push_with_data(entry.command, entry.undo_data);
+
+        assert_eq!(stack.drop_entries_addressing_a_missing_shot(&project), 0);
+        assert_eq!(stack.len(), 1);
+    }
+
+    /// A LEGACY entry carries no uuid, so the in-session id is the only address
+    /// it has - and an id past the renumbered range is what wedges the history.
+    #[test]
+    fn a_legacy_entry_with_an_out_of_range_shot_id_is_dropped() {
+        let project = project_holding_one_shot("live-uuid");
+        let mut stack = UndoStack::new();
+        let entry = created_shot_entry(None, 4_242);
+        stack.push_with_data(entry.command, entry.undo_data);
+
+        assert_eq!(stack.drop_entries_addressing_a_missing_shot(&project), 1);
+        assert!(stack.is_empty());
+    }
+
+    /// The scan stops at a wall. A `ProjectSnapshotPair` restores a whole
+    /// project recorded in ITS id space, so an entry beneath one may address a
+    /// shot that only exists once the walk gets there - dropping it would throw
+    /// away a step that works.
+    #[test]
+    fn an_unresolvable_entry_below_a_snapshot_pair_is_not_dropped() {
+        let project = project_holding_one_shot("live-uuid");
+        let mut stack = UndoStack::new();
+        let buried = created_shot_entry(Some("uuid-that-is-not-there"), 0);
+        stack.push_with_data(buried.command, buried.undo_data);
+        stack.push_with_data(
+            Command::Batch { commands: vec![] },
+            UndoData::ProjectSnapshotPair {
+                before: "{}".to_string(),
+                after: "{}".to_string(),
+            },
+        );
+
+        assert_eq!(stack.drop_entries_addressing_a_missing_shot(&project), 0);
+        assert_eq!(stack.len(), 2);
+    }
+
     #[test]
     fn load_rejects_a_malformed_undo_timestamp_instead_of_treating_it_as_legacy() {
         let mut stack = UndoStack::new();
@@ -1731,6 +1953,8 @@ mod tests {
                     station_shift_from: 1,
                     after_shot_id: None,
                     before_shot_id: None,
+                    after_shot_uuid: None,
+                    before_shot_uuid: None,
                     uuid: None,
                 },
                 timestamp: None,
@@ -1781,6 +2005,7 @@ mod tests {
                 undo_data: UndoData::PreviousValues {
                     section_id: 1,
                     shot_id: Some(100),
+                    shot_uuid: None,
                     values_json: r#"{"length":5.0}"#.to_string(),
                 },
                 timestamp: None,

@@ -424,6 +424,22 @@ impl Project {
         Ok((head_data, tail_updates))
     }
 
+    /// The in-session id of the shot `uuid` names in `section_id`, if it is
+    /// still there.
+    ///
+    /// [`Shot::id`] is regenerated on every load (`section_id *
+    /// FEATURE_ID_STRIDE + sequence_order`), so it cannot address a shot across
+    /// a save; [`Shot::uuid`] exists precisely because it can. Anything holding
+    /// a shot address longer than one session - a persisted undo entry, a
+    /// station anchor - resolves through here.
+    pub fn shot_id_by_uuid(&self, section_id: SectionId, uuid: &str) -> Option<ShotId> {
+        self.get_section(section_id)?
+            .shots
+            .iter()
+            .find(|shot| shot.uuid.as_deref() == Some(uuid))
+            .map(|shot| shot.id)
+    }
+
     /// Update a shot
     pub fn update_shot(
         &mut self,

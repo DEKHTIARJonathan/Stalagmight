@@ -627,12 +627,25 @@ fn is_finding_23(before: &str, after: &str) -> bool {
 ///
 /// **What is NOT asserted, and why.** "The drift settles after one cycle" was
 /// asserted first, on the strength of seed 1 measuring exactly that (generation
-/// 1 vs 0 differed in 7 lines, 2 vs 1 and 3 vs 2 in none). It is false. Over
-/// eight runs of the gate the assertion held four times and failed four times,
-/// on the same seeds and the same inputs - so the drift does not converge, it
-/// re-rolls, which puts it in finding 21's class. Asserting it would be a coin
-/// flip in CI, and the honest place for the fact is the finding, not a flaky
-/// gate.
+/// 1 vs 0 differed in 7 lines, 2 vs 1 and 3 vs 2 in none). It was false when it
+/// was written: over eight runs of the gate the assertion held four times and
+/// failed four times, on the same seeds and the same inputs - so the drift did
+/// not converge, it RE-ROLLED, which put it in finding 21's class. Asserting it
+/// would have been a coin flip in CI.
+///
+/// The re-roll has since been root-caused and fixed, and it was exactly that
+/// class: `UndoData`'s `previous_offsets` is a `HashMap`, so re-serializing one
+/// unchanged payload wrote its keys in a different order each time
+/// (`{"3":null,"2":[..]}` one save, `{"2":[..],"3":null}` the next). It now
+/// serializes in key order (`core/undo.rs`), and over eight runs of this gate
+/// NO generation-1-to-2 pair differs at all - the cycle converges after one
+/// generation, every time. What remains at generation 0 to 1 is deterministic
+/// and is finding 23's OTHER half: the load reparses the history payloads'
+/// decimal float text and `serde_json`'s parser is not its printer's inverse
+/// (`"right":2.7600000000000002` reads back as the double that prints `2.76`),
+/// plus the offsets settle from the incremental value to the loader's
+/// from-scratch cascade. The assertion is still not made, because a fixpoint is
+/// still not what this holds - but it is now a deterministic non-fixpoint.
 ///
 /// **What IS asserted:** no save/load cycle may change ANYTHING except bounded
 /// float dust in the derived and history tables. That is a strong property, it

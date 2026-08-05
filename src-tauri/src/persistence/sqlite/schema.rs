@@ -992,6 +992,10 @@ impl Database {
     ///   to `Jump`; replaying one after the #27 backfill settled that shot on
     ///   `Reference` would make a non-swimmable tie swimmable again, and no
     ///   classifier pass runs on an undo to correct it.
+    /// - **v14→v15**: entries naming the removed `ApplyCollabChanges` command.
+    /// - **v15→v16**: privacy - pre-v16 project snapshots carry `file_path`.
+    /// - **v16→v17**: explicit-null `SectionUpdates` fields (#413 finding 5) -
+    ///   the v6→v7 hazard below, one struct over.
     ///
     /// Pre-v7 builds serialized every untouched nullable `ShotUpdates` field as
     /// an explicit `"left": null, "pitch_in": null, ...` inside the persisted
@@ -1242,6 +1246,29 @@ impl Database {
             // The cost is the same one v13 and v15 already charged: a one-time loss of
             // local undo history at upgrade, for history that was capped and best-effort
             // anyway.
+            self.drop_legacy_undo_history()?;
+        }
+        if current < 17 {
+            // [#413 finding 5] The v7 hazard again, one struct over.
+            //
+            // `SectionUpdates`' `name` / `surveyor` / `date` gained the
+            // `double_option` + `skip_serializing_if` pair `ShotUpdates` has had
+            // since v7. Pre-v17 writers serialized every untouched one as an
+            // explicit `null` into both `command_json` (the
+            // `update_section_metadata` command carries a `SectionUpdates`) and
+            // `undo_data_json` (`PreviousValues { shot_id: None }`'s
+            // `values_json`). Those payloads still PARSE - only their meaning
+            // moved, from "leave this field alone" to "clear this field" - so
+            // replaying one would wipe the name, surveyor and date off the
+            // section it names. `UNDO_FORMAT_SAFE_VERSION` is 7 and stays there
+            // (it is the floor for the pre-v7 purge alone; bumping it would make
+            // the v13 and v15 arms' own tests pass without those arms), so a v16
+            // file arrives here with its stacks intact and needs this drop.
+            //
+            // The legacy JSON is ambiguous in exactly the way v7's was - null =
+            // "untouched" and null = "restore-to-empty" are the same six
+            // characters - so there is nothing to rewrite and the only safe
+            // option is the one v7, v13, v15 and v16 all took.
             self.drop_legacy_undo_history()?;
         }
         self.set_user_version(SCHEMA_VERSION)?;

@@ -82,7 +82,12 @@ export const VARIANT_BY_COMMAND_TYPE: Readonly<Record<string, UndoVariant>> = {
   create_shot: 'CreatedShotSnapshot',
   update_shot: 'PreviousValues(shot)',
   update_section_metadata: 'PreviousValues(section)',
-  set_shot_kind: 'InverseCommand',
+  // `PreviousValues`, not the `InverseCommand` it used to be: that variant is a
+  // newtype around `Command` with nowhere to record the target shot's uuid, and
+  // the in-session id the inverse command names is renumbered by the loader
+  // (issue #413, finding 12). `set_station_comment` still produces
+  // `InverseCommand`, so the variant is still covered.
+  set_shot_kind: 'PreviousValues(shot)',
   set_station_comment: 'InverseCommand',
   create_loop_closure: 'ClosureInfo',
   remove_loop_closure: 'ClosureInfo',
@@ -363,8 +368,11 @@ function target(memo: CoverageMemo): number | null {
 //         (bug 8's own variant, both anchor forms), two `UpdateShot`s
 //         (`PreviousValues { shot_id }`, whose undo calls
 //         `update_shot(section, stale_id)` and whose redo re-executes
-//         `Command::UpdateShot` with the same id) and a `SetShotKind`
-//         (`InverseCommand`, id-bearing on BOTH the undo and the redo).
+//         `Command::UpdateShot` with the same id) and a `SetShotKind` (also
+//         `PreviousValues` since #413, and id-bearing on the redo). Their undo
+//         data now also records the target's `shot_uuid`, which is what the
+//         restore paths address by - the ids are still written, still stale
+//         after the reload, and still what a regression would fall back to.
 //
 // `MAX_PRE_SAVE_UNDOS` is 4 and this block is 5 entries deep, so wherever the
 // pre-save undos leave the cursor, the reload lands INSIDE the block and the
@@ -740,11 +748,12 @@ export const COVERAGE_STEPS: readonly CoverageStep[] = [
   },
   {
     name: 'setShotKind',
-    variant: 'InverseCommand',
+    variant: 'PreviousValues(shot)',
     guaranteed: true,
     purpose:
-      'InverseCommand(SetShotKind { shot_id }) on the DIVERGED section: both the undo and the ' +
-      'redo re-execute a Command that names the shot by id',
+      'PreviousValues { shot_uuid } from a SetShotKind on the DIVERGED section: the undo ' +
+      'restores the previous kind by uuid, and the redo re-executes a Command that still ' +
+      'names the shot by its in-session id',
     build(ctx, digest, memo) {
       const sectionId = target(memo);
       if (sectionId === null) return null;
