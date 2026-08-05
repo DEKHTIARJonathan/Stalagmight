@@ -63,3 +63,4 @@ export { default as SpeleoStorageChoiceDialog } from './SpeleoStorageChoiceDialo
 export { default as SpeleoDumpPickerDialog } from './SpeleoDumpPickerDialog';
 export { default as ImportReceiptDialog } from './ImportReceiptDialog';
 export { default as ImportAsNewProjectDialog } from './ImportAsNewProjectDialog';
+export { default as LaunchOpenConfirmDialog } from './LaunchOpenConfirmDialog';

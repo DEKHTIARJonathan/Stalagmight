@@ -256,6 +256,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "action.dialog.speleodb-dump-picker",
     "action.dialog.import",
     "action.dialog.import-blocked",
+    "action.dialog.launch-open-confirm",
     "action.dialog.insert-station",
     "action.dialog.keyboard-shortcuts",
     "action.dialog.merge",
@@ -331,6 +332,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "dialog-cancel.speleodb-dump-picker",
     "dialog-cancel.import",
     "dialog-cancel.import-blocked",
+    "dialog-cancel.launch-open-confirm",
     "dialog-cancel.insert-station",
     "dialog-cancel.keyboard-shortcuts",
     "dialog-cancel.merge",
@@ -433,6 +435,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "dwell.dialog.speleodb-dump-picker",
     "dwell.dialog.import",
     "dwell.dialog.import-blocked",
+    "dwell.dialog.launch-open-confirm",
     "dwell.dialog.insert-station",
     "dwell.dialog.keyboard-shortcuts",
     "dwell.dialog.merge",
@@ -581,6 +584,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "active-dwell.dialog.error",
     "active-dwell.dialog.export",
     "active-dwell.dialog.import-blocked",
+    "active-dwell.dialog.launch-open-confirm",
     "active-dwell.dialog.gpx-placement",
     "active-dwell.dialog.gpx-selection",
     "active-dwell.dialog.held-lock-resume",
@@ -1111,7 +1115,11 @@ mod tests {
         //       active-dwell.dialog for import-blocked = 726.
         //   + 1 the OS file-association drain (#424):
         //       command.take_pending_launch_files = 727.
-        assert_eq!(EVENT_NAMES.len(), 727);
+        //   + 4 the launch-open confirm (#424): consent for a `.stalx` the OS
+        //       handed us while a clean project is open, so it gets the full
+        //       per-dialog set: action.dialog + dialog-cancel + dwell.dialog +
+        //       active-dwell.dialog for launch-open-confirm = 731.
+        assert_eq!(EVENT_NAMES.len(), 731);
     }
 
     /// Active-dwell mirrors every dwell state 1:1 (#31): for each `dwell.<key>` there
