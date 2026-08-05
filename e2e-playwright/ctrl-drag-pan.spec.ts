@@ -2,10 +2,16 @@ import { test, expect, Page } from './fixtures/coverage';
 import {
   setupMockedPage,
   createProject,
+  getMapCenter,
+  getSelection,
   seedNavigationTools,
+  seedProjectWithSections,
+  waitForDrawnStations,
   waitForMapReady,
   waitForActiveTool,
   waitForMapIdle,
+  type SectionSeed,
+  type StationScreenPos,
 } from './helpers/app';
 
 /**
@@ -16,29 +22,92 @@ async function createProjectWithMap(page: Page): Promise<void> {
   await waitForMapReady(page);
 }
 
-async function getMapCenter(page: Page): Promise<{ lng: number; lat: number } | null> {
-  return page.evaluate(() => {
-    const map = (window as unknown as { __stalagmight_map__?: { getCenter: () => { lng: number; lat: number } } }).__stalagmight_map__;
-    if (!map) return null;
-    const center = map.getCenter();
-    return { lng: center.lng, lat: center.lat };
-  });
-}
-
-async function getSelection(page: Page): Promise<unknown> {
-  return page.evaluate(() => {
-    const stores = (window as unknown as {
-      __E2E_TEST__?: { uiStore: { getState: () => { selection: unknown } } };
-    }).__E2E_TEST__;
-    return stores?.uiStore.getState().selection ?? null;
-  });
-}
-
 async function middleDrag(page: Page, startX: number, startY: number, endX: number, endY: number): Promise<void> {
   await page.mouse.move(startX, startY);
   await page.mouse.down({ button: 'middle' });
   await page.mouse.move(endX, endY, { steps: 8 });
   await page.mouse.up({ button: 'middle' });
+}
+
+/** Three stations, from two shots, for the Ctrl+click selection cases. */
+const SELECTION_SEEDS: SectionSeed[] = [
+  {
+    name: 'Toggler',
+    direction: 'in',
+    shots: [
+      { azimuth_in: 90, azimuth_out: 270, length: 10, depth_in: 0, depth_out: -2 },
+      { azimuth_in: 90, azimuth_out: 270, length: 10, depth_in: -2, depth_out: -4 },
+    ],
+  },
+];
+
+/**
+ * The multi-selection, as `sectionId:stationIndex` keys. `getSelection` reads the
+ * single "current" selection; Shift/Ctrl+click build the LIST beside it, which is
+ * what a toggle has to be asserted against.
+ */
+async function getMultiSelectionKeys(page: Page): Promise<string[]> {
+  return page.evaluate(() => {
+    const stores = (window as unknown as {
+      __E2E_TEST__?: {
+        uiStore: {
+          getState: () => {
+            multiSelection: Array<{
+              type: string;
+              stationRef?: { section_id: number; station_index: number };
+            }>;
+          };
+        };
+      };
+    }).__E2E_TEST__;
+    return (stores?.uiStore.getState().multiSelection ?? []).map((s) =>
+      s.type === 'station' && s.stationRef
+        ? `${s.stationRef.section_id}:${s.stationRef.station_index}`
+        : s.type,
+    );
+  });
+}
+
+/**
+ * Centre the camera on the drawn survey and zoom in.
+ *
+ * A 10m shot is about two pixels at the opening zoom, so all three seeded
+ * stations land inside one 10px hit area and a per-station click test would be
+ * clicking whichever one the resolver happened to prefer.
+ */
+async function zoomToDrawnSurvey(page: Page, zoom: number): Promise<void> {
+  await page.evaluate((z) => {
+    const w = window as unknown as {
+      __stalagmight_map__?: {
+        setZoom: (z: number) => void;
+        setCenter: (c: [number, number]) => void;
+      };
+      __stalagmight_geometry__?: () => { stations: Array<{ lngLat: [number, number] }> } | null;
+    };
+    const map = w.__stalagmight_map__;
+    const stations = w.__stalagmight_geometry__?.()?.stations ?? [];
+    if (!map || stations.length === 0) throw new Error('no drawn stations to centre on');
+    const lngs = stations.map((s) => s.lngLat[0]);
+    const lats = stations.map((s) => s.lngLat[1]);
+    map.setCenter([
+      (Math.min(...lngs) + Math.max(...lngs)) / 2,
+      (Math.min(...lats) + Math.max(...lats)) / 2,
+    ]);
+    map.setZoom(z);
+  }, zoom);
+  await waitForMapIdle(page);
+}
+
+/** Click a drawn station (canvas-relative position) with a modifier held. */
+async function clickStationWith(
+  page: Page,
+  box: { x: number; y: number },
+  station: StationScreenPos,
+  modifier: 'Shift' | 'Control',
+): Promise<void> {
+  await page.keyboard.down(modifier);
+  await page.mouse.click(box.x + station.x, box.y + station.y);
+  await page.keyboard.up(modifier);
 }
 
 test.describe('Ctrl+Drag Panning', () => {
@@ -224,6 +293,90 @@ test.describe('Ctrl+Drag Panning', () => {
 
     // No box, so nothing to sweep into a selection.
     expect(await getSelection(page)).toEqual(selectionBefore);
+  });
+
+  /**
+   * The other half of that claim: a Ctrl press that never MOVES is a click, and
+   * the click is the documented multi-select toggle (CHANGELOG #409, SPEC 6.6
+   * "Multi-select: Shift+click (add), Ctrl+click (toggle)").
+   *
+   * It was unreachable: the custom Ctrl-pan claimed every Ctrl+left press under
+   * every tool but Pan and then swallowed the click behind it, so
+   * `handleStationClick`'s `ctrlKey` branch (useMapTools) never ran. The press is
+   * now only WATCHED until it travels past MapLibre's click tolerance.
+   */
+  test.describe('Ctrl+Click Selection Toggle', () => {
+    test('Ctrl+click removes a selected station and adds an unselected one', async ({ page }) => {
+      await seedProjectWithSections(page, SELECTION_SEEDS);
+      await page.keyboard.press('s');
+      await waitForActiveTool(page, 'select');
+      await waitForDrawnStations(page, 3);
+      // Spread the stations out before clicking them one at a time.
+      await zoomToDrawnSurvey(page, 20);
+
+      const canvas = page.getByTestId('map-canvas');
+      const box = (await canvas.boundingBox())!;
+      const stations = await waitForDrawnStations(page, 3);
+      const [a, b, c] = [...stations].sort((p, q) => p.stationIndex - q.stationIndex);
+      // Guard the premise: three stations, each well outside the others' 10px hit
+      // area, all on screen. Without this a failure below could just mean the
+      // clicks all landed on the same station.
+      for (const s of [a!, b!, c!]) {
+        expect(s.x).toBeGreaterThan(20);
+        expect(s.y).toBeGreaterThan(20);
+        expect(s.x).toBeLessThan(box.width - 20);
+        expect(s.y).toBeLessThan(box.height - 20);
+      }
+      expect(Math.hypot(a!.x - b!.x, a!.y - b!.y)).toBeGreaterThan(30);
+      expect(Math.hypot(b!.x - c!.x, b!.y - c!.y)).toBeGreaterThan(30);
+
+      const key = (s: StationScreenPos) => `${s.sectionId}:${s.stationIndex}`;
+
+      // Build a two-station multi-selection with the gesture that always worked.
+      await clickStationWith(page, box, a!, 'Shift');
+      await clickStationWith(page, box, b!, 'Shift');
+      await expect.poll(() => getMultiSelectionKeys(page)).toEqual([key(a!), key(b!)]);
+
+      // Toggle OFF: Ctrl+click a station already in the selection.
+      await clickStationWith(page, box, b!, 'Control');
+      await expect.poll(() => getMultiSelectionKeys(page)).toEqual([key(a!)]);
+
+      // Toggle ON: Ctrl+click one that is not.
+      await clickStationWith(page, box, c!, 'Control');
+      await expect.poll(() => getMultiSelectionKeys(page)).toEqual([key(a!), key(c!)]);
+    });
+
+    test('a Ctrl+drag over a station still pans and toggles nothing', async ({ page }) => {
+      // The complement of the case above, and the reason the takeover is measured
+      // in travel rather than dropped altogether: pressing Ctrl ON a station and
+      // dragging must still pan, not add it to the selection.
+      await seedProjectWithSections(page, SELECTION_SEEDS);
+      await page.keyboard.press('s');
+      await waitForActiveTool(page, 'select');
+      await waitForDrawnStations(page, 3);
+      await zoomToDrawnSurvey(page, 20);
+
+      const canvas = page.getByTestId('map-canvas');
+      const box = (await canvas.boundingBox())!;
+      const stations = await waitForDrawnStations(page, 3);
+      const start = [...stations].sort((p, q) => p.stationIndex - q.stationIndex)[0]!;
+
+      const centerBefore = await getMapCenter(page);
+      await page.keyboard.down('Control');
+      await page.mouse.move(box.x + start.x, box.y + start.y);
+      await page.mouse.down();
+      await page.mouse.move(box.x + start.x + 90, box.y + start.y + 60, { steps: 8 });
+      await page.mouse.up();
+      await page.keyboard.up('Control');
+      await waitForMapIdle(page);
+
+      const centerAfter = await getMapCenter(page);
+      expect(
+        Math.abs(centerAfter.lng - centerBefore.lng) + Math.abs(centerAfter.lat - centerBefore.lat),
+      ).toBeGreaterThan(0.0000001);
+      expect(await getMultiSelectionKeys(page)).toEqual([]);
+      expect(await getSelection(page)).toBeNull();
+    });
   });
 
   test.describe('Edge Cases', () => {
@@ -491,6 +644,55 @@ test.describe('Ctrl+Drag Panning - navigation tools enabled', () => {
         await page.keyboard.up('Control');
       });
     }
+  });
+
+  /**
+   * Why the custom pan handler still exists at all, pinned as a fact about
+   * MapLibre rather than a comment: MapLibre's own dragPan REFUSES a Ctrl+left
+   * press - `generateMousePanHandler` builds its state manager with
+   * `checkCorrectEvent: (e) => mouseButton(e) === LEFT_BUTTON && !e.ctrlKey`
+   * (maplibre-gl 5.16), and `DragHandler.dragStart` returns without arming when
+   * that says no. Ctrl+left is MapLibre's rotate/pitch gesture, and this map
+   * disables all of those, so under the Pan tool - the one tool the custom
+   * handler deliberately keeps its hands off - a Ctrl+drag moves nothing.
+   *
+   * Consequence for every OTHER tool: handing Ctrl+drag to the enabled dragPan
+   * would not pan either. The custom handler has to keep taking the gesture over
+   * once it is a drag; what it must not do is take the CLICK with it.
+   */
+  test('MapLibre dragPan ignores a Ctrl+left drag (pan tool, no custom handler)', async ({ page }) => {
+    await page.keyboard.press('p');
+    await waitForActiveTool(page, 'pan');
+    await waitForMapIdle(page);
+
+    const canvas = page.getByTestId('map-canvas');
+    const box = (await canvas.boundingBox())!;
+    const cx = box.x + box.width / 2;
+    const cy = box.y + box.height / 2;
+
+    // Baseline: the SAME drag without Ctrl pans, so a null result below is about
+    // the modifier and not about the drag never reaching the map.
+    const plainBefore = await getMapCenter(page);
+    await page.mouse.move(cx, cy);
+    await page.mouse.down();
+    await page.mouse.move(cx + 120, cy, { steps: 8 });
+    await page.mouse.up();
+    await waitForMapIdle(page);
+    const plainAfter = await getMapCenter(page);
+    expect(Math.abs(plainAfter.lng - plainBefore.lng)).toBeGreaterThan(0.00001);
+
+    const ctrlBefore = await getMapCenter(page);
+    await page.keyboard.down('Control');
+    await page.mouse.move(cx, cy);
+    await page.mouse.down();
+    await page.mouse.move(cx + 120, cy, { steps: 8 });
+    await page.mouse.up();
+    await page.keyboard.up('Control');
+    await waitForMapIdle(page);
+    const ctrlAfter = await getMapCenter(page);
+
+    expect(Math.abs(ctrlAfter.lng - ctrlBefore.lng)).toBeLessThan(1e-12);
+    expect(Math.abs(ctrlAfter.lat - ctrlBefore.lat)).toBeLessThan(1e-12);
   });
 
   // Zoom mode supports Ctrl+drag panning (shows grab cursor when Ctrl is held)

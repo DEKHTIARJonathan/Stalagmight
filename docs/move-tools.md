@@ -121,24 +121,43 @@ middle-drag are the only way to pan while carrying one.**
 
 Both modifier gestures work under every tool but Pan (`activeTool !== 'pan'` in
 `handleMouseDownCapture`), and both are scaled by `map.controls.pan_speed`, where
-`dragPan` is always 1:1 with the cursor. They are implemented by hand rather than
-handed to MapLibre because its built-in `dragPan` does not work reliably with a
-modifier held in Tauri/WebKit.
+`dragPan` is always 1:1 with the cursor. They are implemented by hand because
+MapLibre cannot do either: its mouse-pan handler is built with
+`checkCorrectEvent: (e) => mouseButton(e) === LEFT_BUTTON && !e.ctrlKey`
+(maplibre-gl 5.16 `generateMousePanHandler`), so a Ctrl+left press never even
+arms `DragHandler`, and Ctrl+left's own MapLibre gestures - rotate, pitch, box
+zoom - are all disabled at map init. Handing a Ctrl+drag to the enabled `dragPan`
+pans nothing at all, which `ctrl-drag-pan.spec.ts` pins under the Pan tool (the
+one tool the custom handler keeps its hands off).
+
+### When the Ctrl press is claimed
+
+A Ctrl+left press is not the same gesture as a Ctrl+left DRAG: the press alone is
+the multi-select toggle (`handleStationClick`'s `ctrlKey` branch in
+`useMapTools`). So `handleMouseDownCapture` claims it outright only where
+MapLibre's `dragPan` is already off - the modal modes, whose own pointerdown
+handling (placement confirm, ghost drop, zoom box) must not run just because Ctrl
+was held. Everywhere else the press is only **watched**: it is left to propagate,
+and the custom pan takes over on the first `mousemove` past
+`CUSTOM_PAN_CLAIM_PX` (3px, MapLibre's own `clickTolerance`). Below that the
+gesture ends as a click and reaches the map; above it MapLibre suppresses its own
+click anyway, so only one of the two can ever fire. A middle press is always
+claimed outright - it has no click meaning to protect.
 
 ### Event Capture Strategy
 
-Capture-phase handlers on the map container intercept events **before** MapLibre's handlers on the canvas:
+Capture-phase handlers on the map container intercept events **before** MapLibre's handlers on the canvas. All of it applies to a CLAIMED gesture; a watched press is untouched until it becomes one:
 
 | Event | During Ctrl+drag | Purpose |
 |-------|-----------------|---------|
-| `pointerdown` | `stopPropagation` | Prevent MapLibre pointer tracking |
-| `mousedown` | `stopPropagation`, `preventDefault` | Start pan, prevent MapLibre click tracking |
+| `pointerdown` | `stopPropagation` | Prevent MapLibre pointer tracking (outright claims only) |
+| `mousedown` | `stopPropagation`, `preventDefault` | Start pan, prevent MapLibre click tracking (outright claims only) |
 | `mousemove` | `stopPropagation` | Pan by delta, suppress MapLibre hover updates |
 | `pointerup` | `stopPropagation` | Prevent MapLibre pointer tracking |
 | `mouseup` | `stopPropagation`, `preventDefault` | End pan, restore cursor |
 | `click` | `stopPropagation`, `preventDefault` | **Critical**: browser fires `click` as a separate DOM event after mouseup regardless of whether mousedown/mouseup were captured. Must be blocked to prevent MapLibre from processing a spurious click. |
 
-The `click` capture uses `customPanActiveRef` which stays true for 50ms after mouseup, covering the window in which the browser dispatches the click event.
+The `click` capture uses `customPanActiveRef` which stays true for 50ms after mouseup, covering the window in which the browser dispatches the click event. That ref is set by the claim, never by the press, which is what leaves a plain Ctrl+click alone.
 
 ### Spurious Keyup Filtering
 

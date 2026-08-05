@@ -66,6 +66,16 @@ import { TOAST_KEYS } from '../../utils/toastKeys';
 // across renders - a per-render [] would defeat the rebuild-gating memo below.
 const EMPTY_WARNINGS: ProjectWarning[] = [];
 
+/**
+ * How far a WATCHED Ctrl+left press has to travel before the custom pan takes
+ * it over. Equal to MapLibre's default `clickTolerance` (map init does not
+ * override it), which is the distance at which MapLibre itself stops calling a
+ * press-and-release a click: below it the press is left alone so Ctrl+click can
+ * toggle a feature's selection, above it MapLibre suppresses its own click and
+ * the gesture is unambiguously a drag.
+ */
+const CUSTOM_PAN_CLAIM_PX = 3;
+
 interface ZoomBoxState {
   start: { x: number; y: number } | null;
   end: { x: number; y: number } | null;
@@ -2548,18 +2558,28 @@ function MapCanvas() {
   const placementActive = placementMode !== null;
   const moveDragActive = moveDrag !== null;
 
+  // ONE gesture decision for the whole component, destructured to primitives so
+  // the effects below can depend on it. Three consumers read it: the dragPan
+  // effect right here, the custom modifier-pan (which claims a Ctrl+left press
+  // outright only where MapLibre's dragPan is OFF), and the container's
+  // touch-action. Sharing the decision rather than re-deriving it from the same
+  // inputs is what stops them disagreeing about who owns the drag.
+  const { dragPan: mapLibreDragPan, touchAction } = mapGestureMode({
+    activeTool,
+    placementActive,
+    moveDragActive,
+  });
+
   // Hand plain left-drag to MapLibre unless the current tool or mode owns it.
   useEffect(() => {
     if (!map.current) return;
 
-    const { dragPan } = mapGestureMode({ activeTool, placementActive, moveDragActive });
-
-    if (dragPan) {
+    if (mapLibreDragPan) {
       map.current.dragPan.enable();
     } else {
       map.current.dragPan.disable();
     }
-  }, [activeTool, placementActive, moveDragActive]);
+  }, [mapLibreDragPan]);
 
   // Toggle doubleClickZoom based on active tool (disable for zoom tool, enable otherwise)
   useEffect(() => {
@@ -2738,8 +2758,12 @@ function MapCanvas() {
   }, [moveDrag, setSnappedStation]);
 
   // Custom temporary panning implementation for Ctrl+left-drag and middle-drag.
-  // MapLibre's dragPan with modifiers is unreliable in Tauri/WebKit, so we track
-  // mouse movement directly and call panBy() ourselves.
+  // MapLibre cannot do either itself: its mouse-pan handler ignores any press
+  // that is not a bare left button - maplibre-gl 5.16 `generateMousePanHandler`
+  // uses `checkCorrectEvent: (e) => mouseButton(e) === LEFT_BUTTON && !e.ctrlKey`
+  // - and with `dragRotate`/`boxZoom` disabled (map init) nothing else claims a
+  // Ctrl+left drag either. So we track the movement and call panBy() ourselves,
+  // which is also what makes `pan_speed` a thing the modifier gestures can honour.
   const rawPanSpeed = config?.map.controls.pan_speed ?? 1.0;
   const panSpeed = Number.isFinite(rawPanSpeed) ? Math.min(5.0, Math.max(0.1, rawPanSpeed)) : 1.0;
   useEffect(() => {
@@ -2749,6 +2773,33 @@ function MapCanvas() {
     // Track drag start state for custom panning.
     let customPanStart: { x: number; y: number } | null = null;
     let customPanButtonMask: number | null = null;
+    // The press point, and whether the gesture has actually been TAKEN OVER.
+    // The two differ only for a Ctrl+left press in the modes where a plain drag
+    // already pans: there the press is merely WATCHED until it travels far
+    // enough to be a drag. Claiming it at mousedown is what made the documented
+    // Ctrl+click selection toggle unreachable - the press was swallowed and so
+    // was the click behind it, so `handleStationClick`'s `ctrlKey` branch
+    // (useMapTools) never ran under any tool.
+    let customPanOrigin: { x: number; y: number } | null = null;
+    let customPanClaimed = false;
+
+    /** Take the gesture over: suppress it, flag it, and show the pan cursor. */
+    const claimCustomPan = (e: MouseEvent, isCtrlLeftPan: boolean) => {
+      if (!map.current) return;
+      customPanClaimed = true;
+      customPanActiveRef.current = true;
+      ctrlPanActiveRef.current = isCtrlLeftPan;
+      if (isCtrlLeftPan) {
+        ctrlPanMouseEventTimeRef.current = Date.now();
+      }
+
+      // Suppress default browser behavior during custom pan
+      e.stopPropagation();
+      e.preventDefault();
+
+      // Change cursor to indicate panning
+      map.current.getCanvas().style.cursor = 'grabbing';
+    };
 
     const handleMouseDownCapture = (e: MouseEvent) => {
       const isCtrlLeftPan = e.ctrlKey && e.button === 0;
@@ -2756,26 +2807,40 @@ function MapCanvas() {
       // Every tool but pan: the pan tool owns plain left-drag itself, so the
       // modifier gesture would be redundant there.
       if ((isCtrlLeftPan || isMiddlePan) && activeTool !== 'pan' && map.current) {
-        customPanActiveRef.current = true;
-        ctrlPanActiveRef.current = isCtrlLeftPan;
-        if (isCtrlLeftPan) {
-          ctrlPanMouseEventTimeRef.current = Date.now();
-        }
         customPanStart = { x: e.clientX, y: e.clientY };
+        customPanOrigin = { x: e.clientX, y: e.clientY };
         customPanButtonMask = isMiddlePan ? 4 : 1;
+        customPanClaimed = false;
 
-        // Suppress default browser behavior during custom pan
-        e.stopPropagation();
-        e.preventDefault();
-
-        // Change cursor to indicate panning
-        map.current.getCanvas().style.cursor = 'grabbing';
+        // Claim the press outright where nothing else can want it: a middle
+        // press has no other meaning, and where MapLibre's dragPan is OFF the
+        // mode owns the press itself (placement confirms on pointerdown, a move
+        // ghost drops on pointerup, the zoom tool starts its box) - none of
+        // which may happen because Ctrl was held. Where a plain drag already
+        // pans, a Ctrl+left press is only watched: see `customPanClaimed`.
+        if (isMiddlePan || !mapLibreDragPan) {
+          claimCustomPan(e, isCtrlLeftPan);
+        }
       }
     };
 
     // Implement custom panning since modified/middle drag interactions are handled manually.
     const handleMouseMoveCapture = (e: MouseEvent) => {
       if (customPanStart && customPanButtonMask !== null && (e.buttons & customPanButtonMask) !== 0 && map.current) {
+        if (!customPanClaimed) {
+          // A watched Ctrl+left press becomes a pan the moment it stops being a
+          // click. The threshold is MapLibre's own `clickTolerance` (default 3px,
+          // map init does not override it), so the handover lands exactly where
+          // MapLibre itself stops calling the gesture a click: below it the press
+          // is left alone and the click goes through to the selection toggle,
+          // above it MapLibre would suppress its own click anyway.
+          if (!customPanOrigin) return;
+          const travel = Math.hypot(e.clientX - customPanOrigin.x, e.clientY - customPanOrigin.y);
+          if (travel < CUSTOM_PAN_CLAIM_PX) return;
+          // Pans from the PRESS point, not from here: the map follows the whole
+          // travel, so the takeover is invisible rather than a 3px jump.
+          claimCustomPan(e, true);
+        }
         const dx = e.clientX - customPanStart.x;
         const dy = e.clientY - customPanStart.y;
 
@@ -2799,8 +2864,15 @@ function MapCanvas() {
 
     const handleMouseUpCapture = (e: MouseEvent) => {
       if (customPanStart && map.current) {
+        const wasClaimed = customPanClaimed;
         customPanStart = null;
         customPanButtonMask = null;
+        customPanOrigin = null;
+        customPanClaimed = false;
+        // A watched press that never travelled is a Ctrl+CLICK, not a pan. None
+        // of the suppression below may touch it - and `customPanActiveRef`, which
+        // the click capture reads, was never set, so the click reaches MapLibre.
+        if (!wasClaimed) return;
         // Record timestamp for spurious keyup filter (Tauri/WebKit can fire one near mouseup too)
         if (ctrlPanActiveRef.current) {
           ctrlPanMouseEventTimeRef.current = Date.now();
@@ -2848,7 +2920,12 @@ function MapCanvas() {
     const handlePointerDownCapture = (e: PointerEvent) => {
       const isCtrlLeftPan = e.ctrlKey && e.button === 0;
       const isMiddlePan = e.button === 1;
-      if ((isCtrlLeftPan || isMiddlePan) && activeTool !== 'pan' && map.current && e.pointerType === 'mouse') {
+      // Mirrors the outright claim in handleMouseDownCapture. A merely WATCHED
+      // Ctrl press must reach the app's own pointerdown handling untouched - in
+      // those modes it does nothing with it anyway (placement and the zoom box
+      // are both modal), and stopping it here would be a second way to swallow
+      // the gesture behind the mousedown capture's back.
+      if ((isMiddlePan || (isCtrlLeftPan && !mapLibreDragPan)) && activeTool !== 'pan' && map.current && e.pointerType === 'mouse') {
         e.stopPropagation();
       }
     };
@@ -2856,7 +2933,7 @@ function MapCanvas() {
     const handlePointerUpCapture = (e: PointerEvent) => {
       // If we're in custom pan, stop pointer events from reaching MapLibre.
       // (customPanStart is still set here - cleared by handleMouseUpCapture which fires after)
-      if (customPanStart && e.pointerType === 'mouse') {
+      if (customPanStart && customPanClaimed && e.pointerType === 'mouse') {
         e.stopPropagation();
       }
     };
@@ -2874,6 +2951,8 @@ function MapCanvas() {
       // (handleMouseUpCapture only fires for events on the container element)
       customPanStart = null;
       customPanButtonMask = null;
+      customPanOrigin = null;
+      customPanClaimed = false;
       if (ctrlPanActiveRef.current) {
         ctrlPanMouseEventTimeRef.current = Date.now();
       }
@@ -2915,7 +2994,12 @@ function MapCanvas() {
       window.removeEventListener('mouseup', handleMouseUpGlobal);
       detachDragReleaseForwarder();
     };
-  }, [activeTool, panSpeed]);
+    // `mapLibreDragPan` decides whether a Ctrl+left press is claimed outright or
+    // only watched, so the handlers have to be re-registered when it flips. That
+    // re-registers the drag-release forwarder with them; it is attach/detach
+    // symmetric and holds no in-flight state of its own, so re-arming it between
+    // gestures is inert.
+  }, [activeTool, mapLibreDragPan, panSpeed]);
 
   // Zoom tool capture handlers - intercept clicks on the map canvas to prevent SurveyLayer selection
   // and handle right-click zoom out behavior. Attaches to the canvas element specifically to avoid
@@ -3608,11 +3692,8 @@ function MapCanvas() {
     }
   }, [placementMode, activeTool]);
 
-  // Determine touch-action: block browser gestures only where the tool or mode owns the drag
-  const touchAction = useMemo(
-    () => mapGestureMode({ activeTool, placementActive, moveDragActive }).touchAction,
-    [activeTool, placementActive, moveDragActive],
-  );
+  // `touchAction` - block browser gestures only where the tool or mode owns the
+  // drag - comes from the single `mapGestureMode` call above.
 
   // Combined pointer handlers (PointerEvent is a superset of MouseEvent)
   const handlePointerMove = useCallback(
