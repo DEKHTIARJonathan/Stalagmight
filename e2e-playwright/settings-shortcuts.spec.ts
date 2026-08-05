@@ -236,10 +236,14 @@ test.describe('Settings Dialog - Shortcuts Tab', () => {
       await openSettingsDialog(page);
       await navigateToShortcutsCategory(page);
 
+      // Records on MEASURE, not pan (#409): the Pan/Zoom rows are rendered
+      // disabled while `map.controls.show_navigation_tools` is off, so their
+      // recorders refuse to start recording at all - a reserved-key probe there
+      // would test the disabled gate, not the reserved-key check.
       // Try to assign a reserved shortcut (Escape)
-      const recorder = page.locator('[data-testid="shortcut-primary-pan"]');
+      const recorder = page.locator('[data-testid="shortcut-primary-measure"]');
       await recorder.click();
-      await waitForRecording(page, 'shortcut-primary-pan', true);
+      await waitForRecording(page, 'shortcut-primary-measure', true);
 
       // Press Escape - this should be blocked (reserved key)
       // Note: Escape cancels recording, so we try a different reserved one
@@ -366,10 +370,12 @@ test.describe('Settings Dialog - Shortcuts Tab', () => {
       await page.keyboard.press('Q');
       await waitForRecording(page, 'shortcut-primary-select', false);
 
-      const panRecorder = page.locator('[data-testid="shortcut-primary-pan"]');
-      await panRecorder.click();
+      // Second row is MEASURE, not pan (#409): the pan row is disabled while
+      // the navigation tools are hidden, so it cannot be customized here.
+      const measureRecorder = page.locator('[data-testid="shortcut-primary-measure"]');
+      await measureRecorder.click();
       await page.keyboard.press('W');
-      await waitForRecording(page, 'shortcut-primary-pan', false);
+      await waitForRecording(page, 'shortcut-primary-measure', false);
 
       // Click Reset All button
       const resetAllButton = page.locator('[data-testid="shortcuts-reset-all"]');
@@ -377,7 +383,7 @@ test.describe('Settings Dialog - Shortcuts Tab', () => {
 
       // Verify all shortcuts are back to defaults
       await expect(selectRecorder).toContainText('S');
-      await expect(panRecorder).toContainText('P');
+      await expect(measureRecorder).toContainText('R');
     });
   });
 
@@ -636,16 +642,18 @@ test.describe('Settings Dialog - Shortcuts Tab', () => {
       // No error should appear
       await expect(page.locator('[data-testid="shortcut-error"]')).not.toBeVisible();
 
-      // Assign freed Ctrl+E to pan - should NOT conflict since it was freed
-      const panRecorder = page.locator('[data-testid="shortcut-primary-pan"]');
-      await panRecorder.click();
-      await waitForRecording(page, 'shortcut-primary-pan', true);
+      // Assign freed Ctrl+E to MEASURE - should NOT conflict since it was freed.
+      // (Measure, not pan: the pan row is disabled while the navigation tools
+      // are hidden (#409) and its recorder will not accept a rebind.)
+      const measureRecorder = page.locator('[data-testid="shortcut-primary-measure"]');
+      await measureRecorder.click();
+      await waitForRecording(page, 'shortcut-primary-measure', true);
       await page.keyboard.press('Control+E');
-      await waitForRecording(page, 'shortcut-primary-pan', false);
+      await waitForRecording(page, 'shortcut-primary-measure', false);
 
       // Should show Ctrl+E without error
-      await expect(panRecorder).toContainText(KEY.Ctrl);
-      await expect(panRecorder).toContainText('E');
+      await expect(measureRecorder).toContainText(KEY.Ctrl);
+      await expect(measureRecorder).toContainText('E');
       await expect(page.locator('[data-testid="shortcut-error"]')).not.toBeVisible();
     });
 

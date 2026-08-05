@@ -941,6 +941,9 @@
       "resetOne": {
         "title": "Reset to default"
       },
+      "navigationDisabled": {
+        "note": "Pan and Zoom are hidden from the toolbar, so these shortcuts do nothing. Turn on Map > Controls > \"Show navigation tools\" to use them again; their keys stay reserved meanwhile."
+      },
       "resetAll": "Reset All Shortcuts",
       "actions": {
         "newFile": "New",
