@@ -283,8 +283,15 @@ impl AppState {
         }
 
         if sections.is_empty() {
-            // No receipt: nothing was imported, so there is nothing to report.
-            return CommandResult::success();
+            // An EMPTY receipt, not no receipt. Nothing was imported, and that
+            // is exactly what has to be said: every section of the file was
+            // dropped (all shots excluded, or malformed) and the converter's
+            // warnings explaining why are attached to the receipt by
+            // `decorate_receipt`, which has nothing to attach them to when the
+            // receipt is absent. Without this the user gets a successful,
+            // silent, empty import.
+            return CommandResult::success()
+                .with_import_receipt(crate::core::command::ImportReceipt::empty());
         }
 
         // Reject non-finite geometry in overlap-interpolation updates before

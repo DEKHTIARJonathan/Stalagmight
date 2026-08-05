@@ -124,9 +124,9 @@ pub fn check_section_hashes(
 /// conversion), and extend its warnings with the converter-phase warnings
 /// collected while turning the parsed file into `ImportSectionConfig`s.
 ///
-/// No-op when `result` carries no receipt (e.g. the `sections.is_empty()`
-/// early return in `execute_import_sections`), so a call site never has to
-/// special-case that path.
+/// No-op when `result` carries no receipt (a FAILED import - the empty-import
+/// path deliberately carries one, see `ImportReceipt::empty`), so a call site
+/// never has to special-case that path.
 fn decorate_receipt(
     result: &mut CommandResult,
     source_format: &str,
@@ -197,25 +197,46 @@ fn finalize_deferred_import(state: &AppState, import_result: CommandResult) -> C
         return import_result;
     }
     let saved = crate::commands::project::save_project_impl(state, None);
-    if !saved.success {
-        tracing::warn!(
-            error = ?saved.error,
-            purpose = "persist new project after first import",
-            "Deferred-save resolution failed after import"
-        );
-        let raw = saved.error.unwrap_or_else(|| "unknown error".to_string());
-        // Don't leak the internal permission marker into the user-facing warning.
-        let detail = if raw.starts_with(crate::core::loading::PERMISSION_DENIED_CODE) {
-            "permission denied (check folder access in Privacy & Security)".to_string()
-        } else {
-            raw
-        };
-        return import_result.with_warning(&format!(
-            "Imported, but could not save the new project to disk: {detail}. \
-             Your changes are unsaved - please save manually."
-        ));
+    merge_deferred_save_outcome(import_result, saved)
+}
+
+/// Fold the deferred save's outcome into the import's result.
+///
+/// Both outcomes have something to carry, which is the whole point:
+///
+/// * FAILED - the partial-success warning described above.
+/// * SUCCEEDED WITH WARNINGS - a save can write the file and still report a
+///   degraded state (`DATABASE_NOT_REOPENED`, a failed collaboration sibling
+///   write, dropped undo history). Those warnings are the only account of it
+///   anywhere, and attaching them only on failure (#154) meant an import that
+///   left the session half-broken reported as perfectly clean.
+///
+/// The import's own warnings are EXTENDED, never replaced: per-shot validation
+/// warnings from `execute_import_sections` are already in there.
+fn merge_deferred_save_outcome(
+    mut import_result: CommandResult,
+    saved: CommandResult,
+) -> CommandResult {
+    if saved.success {
+        import_result.warnings.extend(saved.warnings);
+        return import_result;
     }
-    import_result
+    tracing::warn!(
+        error = ?saved.error,
+        purpose = "persist new project after first import",
+        "Deferred-save resolution failed after import"
+    );
+    let raw = saved.error.unwrap_or_else(|| "unknown error".to_string());
+    // Don't leak the internal permission marker into the user-facing warning.
+    let detail = if raw.starts_with(crate::core::loading::PERMISSION_DENIED_CODE) {
+        "permission denied (check folder access in Privacy & Security)".to_string()
+    } else {
+        raw
+    };
+    import_result.with_warning(&format!(
+        "Imported, but could not save the new project to disk: {detail}. \
+         Your changes are unsaved - please save manually."
+    ))
 }
 
 /// Import multiple sections as a single atomic undo/redo unit.
@@ -815,6 +836,7 @@ pub fn execute_walls_import(
 mod receipt_tests {
     use super::*;
     use crate::core::command::ImportReceipt;
+    use crate::core::{ValidationWarning, WarningSeverity};
     use std::path::Path;
 
     fn base_result() -> CommandResult {
@@ -893,9 +915,90 @@ mod receipt_tests {
         assert_eq!(receipt.warnings.len(), 51);
     }
 
+    /// The whole point of `ImportReceipt::empty`: an import that landed nothing
+    /// still has to carry the converter's explanation of why. Before it existed
+    /// the empty path returned a bare `CommandResult::success()` and this
+    /// decoration was a no-op, so the file's warnings never reached the user.
     #[test]
-    fn decorate_receipt_is_a_no_op_without_a_receipt() {
-        let mut result = CommandResult::success();
+    fn an_empty_receipt_still_collects_the_converter_warnings() {
+        let mut result = CommandResult::success().with_import_receipt(ImportReceipt::empty());
+        decorate_receipt(
+            &mut result,
+            "Ariane TML",
+            Path::new("/tmp/cave.tml"),
+            2,
+            None,
+            vec!["2 sections had no shots after filtering and were dropped".to_string()],
+        );
+        let receipt = result
+            .import_receipt
+            .expect("an empty import must still report a receipt");
+        assert_eq!(receipt.sections_imported, 0);
+        assert_eq!(receipt.shot_count, 0);
+        assert_eq!(receipt.sections_found, 2);
+        assert_eq!(
+            receipt.warnings,
+            vec!["2 sections had no shots after filtering and were dropped".to_string()]
+        );
+    }
+
+    /// #154: a deferred save that SUCCEEDS can still report a degraded state.
+    /// Dropping those warnings made an import that left the database closed
+    /// look perfectly clean.
+    #[test]
+    fn a_successful_deferred_save_still_carries_its_warnings() {
+        let import_result = CommandResult::success().with_warnings(vec![ValidationWarning {
+            code: "LONG_SHOT".to_string(),
+            message: "shot 3 is unusually long".to_string(),
+            severity: WarningSeverity::Warning,
+        }]);
+        let saved = CommandResult::success().with_warnings(vec![ValidationWarning {
+            code: "DATABASE_NOT_REOPENED".to_string(),
+            message: "File saved, but database could not be reopened.".to_string(),
+            severity: WarningSeverity::Warning,
+        }]);
+
+        let merged = merge_deferred_save_outcome(import_result, saved);
+        assert!(merged.success);
+        let codes: Vec<&str> = merged.warnings.iter().map(|w| w.code.as_str()).collect();
+        assert_eq!(
+            codes,
+            vec!["LONG_SHOT", "DATABASE_NOT_REOPENED"],
+            "the save's warnings must be appended to the import's own, not replace them"
+        );
+    }
+
+    /// The clean case must stay clean - no phantom warning from a save that had
+    /// nothing to say.
+    #[test]
+    fn a_clean_deferred_save_adds_nothing() {
+        let merged =
+            merge_deferred_save_outcome(CommandResult::success(), CommandResult::success());
+        assert!(merged.warnings.is_empty());
+    }
+
+    /// The failure branch is unchanged: one "save manually" warning, stamped
+    /// SYSTEM, and the import still reports success.
+    #[test]
+    fn a_failed_deferred_save_warns_and_keeps_the_import_successful() {
+        let merged = merge_deferred_save_outcome(
+            CommandResult::success(),
+            CommandResult::failure("disk on fire".to_string()),
+        );
+        assert!(merged.success);
+        assert_eq!(merged.warnings.len(), 1);
+        assert_eq!(merged.warnings[0].code, "SYSTEM");
+        assert!(merged.warnings[0].message.contains("disk on fire"));
+    }
+
+    /// The no-receipt case now means one thing only: the import FAILED. It used
+    /// to also cover the empty-import path, which is exactly how a total loss
+    /// came back silent (#411); that path carries `ImportReceipt::empty()` now,
+    /// covered by the test above. A failed import still gets nothing - its
+    /// error is what the frontend shows.
+    #[test]
+    fn decorate_receipt_is_a_no_op_on_a_failed_import() {
+        let mut result = CommandResult::failure("Failed to parse Compass file".to_string());
         decorate_receipt(
             &mut result,
             "Compass",
