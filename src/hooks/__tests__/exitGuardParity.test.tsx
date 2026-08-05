@@ -103,12 +103,23 @@ const quitPrompts = (): boolean => {
  * Did opening ANOTHER `.stalx` over this project raise the prompt? This exit shares
  * the close dialog rather than having one of its own, and carries the chosen path
  * through it so the open is not swallowed by the prompt it raised.
+ *
+ * `routeOpenedFile` also raises an UNRELATED confirm before a clean, non-SpeleoDB
+ * project gets swapped out (#416) - orthogonal to this file's subject (SpeleoDB
+ * parity), but it fires on exactly the state most of these cases exercise (nothing
+ * for SpeleoDB to hand back). Answer it the way the dialog's "Open" button does, so
+ * the exit's actual outcome - the project loads, or doesn't - still shows up instead
+ * of stalling on a dialog this suite isn't about.
  */
 const openPrompts = async (): Promise<boolean> => {
   await routeOpenedFile(OTHER);
-  return openDialog.mock.calls.some(
+  const speleoPrompted = openDialog.mock.calls.some(
     (c) => c[0] === 'speleodb-close' && (c[1] as { pendingOpenPath?: string })?.pendingOpenPath === OTHER,
   );
+  if (!speleoPrompted && openDialog.mock.calls.some((c) => c[0] === 'launch-open-confirm')) {
+    await routeOpenedFile(OTHER, 'Open Failed', { swapConfirmed: true });
+  }
+  return speleoPrompted;
 };
 
 /** Did New Project over this project raise the prompt? Same dialog, same carry. */
