@@ -138,12 +138,12 @@
 //!
 //! ## Observations, and what each one turned out to be
 //!
-//! NOTHING IS OPEN HERE. Six observations have been through this section and all
-//! six are resolved: three into findings (20, 21, 25), one into a model fix, one
-//! into a duplicate of finding 12, and one triaged out as the measuring engine's
-//! own artifact. The record stays because the next run of this programme should
-//! start from the evidence - including the shape of the reductions that did NOT
-//! reproduce - rather than from a surprise.
+//! NOTHING IS OPEN HERE. Seven observations have been through this section and
+//! all seven are resolved: three into findings (20, 21, 25), TWO into model
+//! fixes, one into a duplicate of finding 12, and one triaged out as the
+//! measuring engine's own artifact. The record stays because the next run of
+//! this programme should start from the evidence - including the shape of the
+//! reductions that did NOT reproduce - rather than from a surprise.
 //!
 //! The bar an entry has to clear to be listed as OPEN is unchanged:
 //! deterministic, reproducing twice, not root-caused, and therefore FAILING its
@@ -163,6 +163,31 @@
 //!   cycle. It now follows the trajectory and requires BOTH sides to be on it,
 //!   which is narrower per diff and took the survey from 35 to 39 clean seeds
 //!   of 40 at 100 moves.
+//! * RESOLVED as a MODEL FIX, and the reason the classifier chain now COMPOSES.
+//!   `COMBINED=1 ITERATIONS=300` failed seeds 6 and 35, both halves, on
+//!   `zero_datums[#].gps.latitude` - a signature no other regime produced, which
+//!   is what made it look like a new defect. It is neither new nor finding 25's
+//!   translation: the six differences are `zero_datums[0]` and `[1]` SWAPPED,
+//!   value for value, on the undo of a `remove_zero_datum`. That is finding 17's
+//!   own signature, which `diffs_without_datum_reorder` has matched since it was
+//!   written.
+//!
+//!   What stopped it being reached is the CHAIN. Findings 4 and 17 are one defect
+//!   on two different lists, one comparison can hit BOTH - a closure reordered
+//!   and a datum reordered at the same depth - and the two subtractions sat
+//!   behind `ref_drop.is_none()`, so whichever matched first took the only slot
+//!   and the other was left in the diff with no classifier able to see it. They
+//!   are subtracted TOGETHER now ([`diffs_without_list_reorders`]), which is
+//!   byte-identical for every comparison that hits one and classifies the ones
+//!   that hit two.
+//!
+//!   Measured rather than asserted: all four gates and
+//!   `the_fuzzer_is_deterministic` print byte-identical lines to the run before
+//!   it, the 40-seed survey and its 3-crossing twin are unchanged (40 and 38
+//!   clean), `CLOSURE_SHAPES=1` goes from 9 clean of 20 to 10 - seed 5 was the
+//!   same shape - and under `COMBINED=1` seed 6 is clean while seed 35 gets past
+//!   it into the `section_offsets` family that eight other seeds of that regime
+//!   already carry at 300 moves.
 //! * RESOLVED as FINDING 21. The adjusted-geometry oracle's 28-micron
 //!   divergence over a byte-identical project is real and the recorded
 //!   hypothesis (`station_offsets` / `station_comments` hash order feeding
@@ -2042,65 +2067,109 @@ fn converted_pair(
     (ends(closure) == ends(merge)).then(|| (closure.clone(), merge.clone()))
 }
 
-/// FINDING 4's structural signature: `loop_closures` holds the same members in a
-/// different order. Undo of `RemoveLoopClosure` pushes instead of re-inserting at
-/// the removed index (core/state/undo.rs), and that order is persisted, indexed
-/// by the frontend, and the order `resolve_offsets` builds its adjacency in.
-fn diffs_without_closure_reorder(expected: &str, actual: &str) -> Option<Vec<Diff>> {
-    diffs_without_list_reorder(expected, actual, "loop_closures")
-}
-
-/// A NEW FINDING's structural signature (issue #413, finding 17), and finding
-/// 4's twin one collection over: `zero_datums` holds the same members in a
-/// different order.
+/// The two LIST-REORDER signatures, and the ids they carry.
 ///
+/// FINDING 4: `loop_closures` holds the same members in a different order. Undo
+/// of `RemoveLoopClosure` pushes instead of re-inserting at the removed index
+/// (core/state/undo.rs), and that order is persisted, indexed by the frontend,
+/// and the order `resolve_offsets` builds its adjacency in.
+///
+/// FINDING 17: the same defect one collection over.
 /// `UndoData::ZeroDatumInfo`'s restore arm ends in
-/// `project.zero_datums.push(ZeroDatum { .. })` (core/state/undo.rs) where the
-/// forward path took the datum out in place, so a datum that was not last comes
-/// back last. Invisible until a run has two datums to reorder, which is why the
-/// closure-shapes prologue - which builds a second anchored component - is what
-/// surfaced it.
-fn diffs_without_datum_reorder(expected: &str, actual: &str) -> Option<Vec<Diff>> {
-    diffs_without_list_reorder(expected, actual, "zero_datums")
-}
-
-/// `key` holds the same members in a different order on the two sides.
+/// `project.zero_datums.push(ZeroDatum { .. })` where the forward path took the
+/// datum out in place, so a datum that was not last comes back last. Invisible
+/// until a run has two datums to reorder, which is why the closure-shapes
+/// prologue - which builds a second anchored component - is what surfaced it.
 ///
-/// Returns what is still different once both are sorted, so a reorder that comes
-/// with other classified differences (a uuid re-mint, an offset heal) is still
-/// recognised and anything unexplained still fails. `None` when the two are not
-/// permutations of each other, or already agree.
-fn diffs_without_list_reorder(expected: &str, actual: &str, key: &str) -> Option<Vec<Diff>> {
+/// Order matters here and only here: it decides which id lands in `ref_drop`
+/// when a comparison hits both, and closures-then-datums is the order the two
+/// chained subtractions used before they were composed.
+const LIST_REORDER_SIGNATURES: &[(&str, &str)] = &[
+    ("loop_closures", "finding-4-closure-reordered-on-undo"),
+    ("zero_datums", "finding-17-zero-datum-reordered-on-undo"),
+];
+
+/// Both list-reorder signatures, subtracted TOGETHER, with the ids that matched.
+///
+/// They compose because they act on DIFFERENT collections, and they have to,
+/// because one comparison can hit both: the undo of a `remove_zero_datum` taken
+/// at a depth where a closure was also reordered leaves a `zero_datums`
+/// permutation AND a `loop_closures` one. Subtracting them one at a time could
+/// only ever name the first - the second was left in the diff with no classifier
+/// reachable, and the run failed on six differences that are literally finding
+/// 17's own signature. (Reproduced at `COMBINED=1 ITERATIONS=300` on seeds 6 and
+/// 35, both halves, before this; see the header's observations.)
+///
+/// `None` when neither list is a permutation of its partner. Otherwise the ids
+/// that matched, in [`LIST_REORDER_SIGNATURES`] order, and whatever is still
+/// different once every matched list has been sorted on both sides - so a
+/// reorder that comes with other classified differences (a uuid re-mint, an
+/// offset heal) is still recognised and anything unexplained still fails.
+fn diffs_without_list_reorders(
+    expected: &str,
+    actual: &str,
+) -> Option<(Vec<&'static str>, Vec<Diff>)> {
     let (Ok(mut left), Ok(mut right)) = (
         serde_json::from_str::<serde_json::Value>(expected),
         serde_json::from_str::<serde_json::Value>(actual),
     ) else {
         return None;
     };
-    let sorted = |value: &mut serde_json::Value| -> Option<Vec<String>> {
-        let list = value.get_mut(key)?.as_array_mut()?;
-        if list.len() < 2 {
-            return None;
-        }
-        let before: Vec<String> = list.iter().map(ToString::to_string).collect();
-        list.sort_by_key(ToString::to_string);
-        let after: Vec<String> = list.iter().map(ToString::to_string).collect();
-        Some(if before == after { Vec::new() } else { after })
-    };
-    let (Some(left_order), Some(right_order)) = (sorted(&mut left), sorted(&mut right)) else {
-        return None;
-    };
-    // At least one side has to have been out of order, and the two have to be
-    // the same members - a list that GAINED or LOST an entry is not a reorder.
-    if left_order.is_empty() && right_order.is_empty() {
-        return None;
-    }
-    if !left_order.is_empty() && !right_order.is_empty() && left_order != right_order {
+    let matched: Vec<&'static str> = LIST_REORDER_SIGNATURES
+        .iter()
+        .filter(|&&(key, _)| sort_if_reordered(&mut left, &mut right, key))
+        .map(|&(_, id)| id)
+        .collect();
+    if matched.is_empty() {
         return None;
     }
     let mut diffs = Vec::new();
     diff_values(&left, &right, "", &mut diffs);
-    Some(diffs)
+    Some((matched, diffs))
+}
+
+/// Is `key` the same members in a different order on the two sides? Sorts both
+/// and reports true if so, and leaves both UNTOUCHED if not.
+///
+/// Committing only on a match is what makes the two signatures composable: a
+/// list that is not a permutation must reach the diff in the order it really has,
+/// or a value that changed would be paired against the wrong neighbour.
+fn sort_if_reordered(
+    left: &mut serde_json::Value,
+    right: &mut serde_json::Value,
+    key: &str,
+) -> bool {
+    let sorted = |value: &serde_json::Value| -> Option<(Vec<serde_json::Value>, Vec<String>)> {
+        let list = value.get(key)?.as_array()?;
+        if list.len() < 2 {
+            return None;
+        }
+        let before: Vec<String> = list.iter().map(ToString::to_string).collect();
+        let mut items = list.clone();
+        items.sort_by_key(ToString::to_string);
+        let after: Vec<String> = items.iter().map(ToString::to_string).collect();
+        let order = if before == after { Vec::new() } else { after };
+        Some((items, order))
+    };
+    let (Some((left_items, left_order)), Some((right_items, right_order))) =
+        (sorted(left), sorted(right))
+    else {
+        return false;
+    };
+    // At least one side has to have been out of order, and the two have to be
+    // the same members - a list that GAINED or LOST an entry is not a reorder.
+    if left_order.is_empty() && right_order.is_empty() {
+        return false;
+    }
+    if !left_order.is_empty() && !right_order.is_empty() && left_order != right_order {
+        return false;
+    }
+    let (Some(left_slot), Some(right_slot)) = (left.get_mut(key), right.get_mut(key)) else {
+        return false;
+    };
+    *left_slot = serde_json::Value::Array(left_items);
+    *right_slot = serde_json::Value::Array(right_items);
+    true
 }
 
 // ===========================================================================
@@ -4074,15 +4143,14 @@ impl Fuzzer {
             ));
             diffs = remaining;
         }
+        // FINDINGS 4 and 17, subtracted TOGETHER rather than one or the other:
+        // they are the same defect on two different lists and one comparison can
+        // hit both. `ref_drop` holds one id, so a second one rides alongside it.
+        let mut reorders: Vec<&'static str> = Vec::new();
         if ref_drop.is_none() {
-            if let Some(remaining) = diffs_without_closure_reorder(&expected, &actual) {
-                ref_drop = Some(("finding-4-closure-reordered-on-undo", None));
-                diffs = remaining;
-            }
-        }
-        if ref_drop.is_none() {
-            if let Some(remaining) = diffs_without_datum_reorder(&expected, &actual) {
-                ref_drop = Some(("finding-17-zero-datum-reordered-on-undo", None));
+            if let Some((ids, remaining)) = diffs_without_list_reorders(&expected, &actual) {
+                ref_drop = ids.first().map(|id| (*id, None));
+                reorders = ids;
                 diffs = remaining;
             }
         }
@@ -4218,6 +4286,12 @@ impl Fuzzer {
             if let Some(section_id) = section_id {
                 self.ref_dropped.insert(section_id);
             }
+        }
+        // The second list-reorder id, when a comparison hit both. `ref_drop`
+        // already carries the first, and `or_insert` makes re-inserting it a
+        // no-op, so this is one line rather than a branch.
+        for id in reorders {
+            classified.entry(id).or_insert(0);
         }
         if unknown.is_empty() && !classified.is_empty() {
             for id in classified.keys() {
