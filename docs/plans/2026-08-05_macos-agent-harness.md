@@ -120,6 +120,13 @@ menu shortcut is evidence about DOM handlers, not about real input.
 - **StartResult on darwin**: `display: 'aqua'`, `nativePort: 0`, `appPidKnown: true`
   (wrapper records the real app pid). `headed: false` (the default) is coerced to headed
   with a warning and `headedForced: true` - callers get a session, not a lecture.
+- **Window placement**: immediately after attach (before any readiness wait), park the
+  window via `browser.setWindowRect` - verified working (the plugin's `/window/set-rect`
+  calls backend `set_position`/`set_size`, so no webview capability is involved).
+  Default on darwin: the RIGHT half of the available screen, so harness windows share
+  the desktop with whatever the human (or another GUI-driving agent) is doing on the
+  left; override with `STALAGMIGHT_AGENT_WINDOW_RECT="x,y,w,h"`. There remains a ~1-2 s
+  flash at the default centered position before the rect applies.
 - **Teardown**: bounded `deleteSession()` -> SIGTERM the `tauri-wd` pid, ~1.5 s, SIGKILL
   -> `reapPidsFromFile` over comm names `['stalagmight', 'tauri-wd']`. The pidfile holds
   the real app pid, making the reap the authoritative kill given constraint 3. Never reap
