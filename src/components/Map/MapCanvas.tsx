@@ -2888,6 +2888,37 @@ function MapCanvas() {
       }
     };
 
+    // End drags that are RELEASED outside the map canvas.
+    //
+    // MapLibre's mouse drag handlers implement `mouseup` only, and that name is
+    // dispatched from a listener bound on the canvas container; a release
+    // anywhere else in the document arrives as `mouseupWindow`, which no drag
+    // handler implements. So a plain left-drag - the default pan gesture since
+    // #409 - released over the floating chrome (the dock reveal handles, the Data
+    // tab, or MapLibre's own navigation/scale controls, which live in a sibling
+    // control container) never reaches dragEnd: the map stays "moving" until some
+    // later mousemove self-heals it. Forwarding the real mouseup ends the drag
+    // through the normal path (deferred dragend/moveend, inertia preserved).
+    const handleMouseUpOutsideCanvas = (e: MouseEvent) => {
+      const mapInstance = map.current;
+      if (!mapInstance) return;
+      // MapLibre's own container listener already ends drags released in there;
+      // forwarding those as well would dispatch `mouseup` to the handlers twice.
+      const canvasContainer = mapInstance.getCanvasContainer();
+      if (e.target instanceof Node && canvasContainer.contains(e.target)) return;
+      // Dispatching with no event name runs the plain `mouseup` handlers, i.e.
+      // dragEnd - which is idempotent (it early-returns when no drag is in
+      // flight), so a release that had nothing to do with the map is a no-op.
+      // Guarded so a future MapLibre without these public members degrades to the
+      // old (stuck drag) behavior instead of throwing.
+      const handlers = mapInstance.handlers as
+        | { handleEvent?: (event: Event) => void }
+        | undefined;
+      if (typeof handlers?.handleEvent === 'function') {
+        handlers.handleEvent(e);
+      }
+    };
+
     // Use capture: true to intercept BEFORE MapLibre's handlers
     mapElement.addEventListener('mousedown', handleMouseDownCapture, { capture: true });
     mapElement.addEventListener('mousemove', handleMouseMoveCapture, { capture: true });
@@ -2897,6 +2928,7 @@ function MapCanvas() {
     mapElement.addEventListener('pointerup', handlePointerUpCapture, { capture: true });
     window.addEventListener('mousedown', handleMouseDownGlobal, { capture: true });
     window.addEventListener('mouseup', handleMouseUpGlobal);
+    window.addEventListener('mouseup', handleMouseUpOutsideCanvas, { capture: true });
 
     return () => {
       mapElement.removeEventListener('mousedown', handleMouseDownCapture, { capture: true });
@@ -2907,6 +2939,7 @@ function MapCanvas() {
       mapElement.removeEventListener('pointerup', handlePointerUpCapture, { capture: true });
       window.removeEventListener('mousedown', handleMouseDownGlobal, { capture: true });
       window.removeEventListener('mouseup', handleMouseUpGlobal);
+      window.removeEventListener('mouseup', handleMouseUpOutsideCanvas, { capture: true });
     };
   }, [activeTool, panSpeed]);
 

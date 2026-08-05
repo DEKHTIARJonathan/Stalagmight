@@ -135,10 +135,11 @@ async function zoomInOnSurvey(page: Page, zoomDelta = 3): Promise<void> {
 /**
  * Keep-out band around the canvas edges. The map canvas runs edge to edge under
  * FLOATING chrome - the two panel-reveal handles, the +/- zoom buttons, the
- * scale bar, the "Data" tab - and a press or release that lands on one of those
- * never reaches MapLibre. A drag whose mouseup is swallowed that way leaves the
- * drag handler live forever, which is a hung `waitForMapIdle` rather than a
- * readable failure, so both ends of every gesture here stay inside this inset.
+ * scale bar, the "Data" tab - and a PRESS that lands on one of those never
+ * reaches MapLibre, so it starts no drag at all. (The release half used to hang
+ * the drag handler too; that is fixed - see "releasing a drag over floating
+ * chrome" below - but the inset stays: these gestures want clear canvas at both
+ * ends so they exercise the map and nothing else.)
  */
 const EDGE_INSET = 70;
 
@@ -443,5 +444,56 @@ test.describe('Map direct manipulation (#409)', () => {
     // Leave the ghost behind rather than committing a move the next test would
     // have to know about.
     await page.keyboard.press('Escape');
+  });
+
+  test('releasing a drag over floating chrome still ends the drag', async ({ page }) => {
+    await waitForActiveTool(page, 'select');
+
+    const zoomIn = page.locator('.maplibregl-ctrl-zoom-in');
+    await expect(zoomIn).toBeVisible();
+    const button = await zoomIn.boundingBox();
+    expect(button, 'the zoom-in control has a bounding box').not.toBeNull();
+    const release = {
+      x: button!.x + button!.width / 2,
+      y: button!.y + button!.height / 2,
+    };
+
+    const box = await canvasBox(page);
+    const centerBefore = await getMapCenter(page);
+    const zoomBefore = await getMapZoom(page);
+    // Two legs: the first stays on clear canvas, so the camera provably moves;
+    // the second carries the still-pressed button off the canvas and onto the
+    // zoom control, which is where the release happens.
+    const start = await findEmptyPoint(page, { dx: 120, dy: 90 });
+
+    await page.mouse.move(box.x + start.x, box.y + start.y);
+    await page.mouse.down();
+    await page.mouse.move(box.x + start.x + 120, box.y + start.y + 90, { steps: 10 });
+    await page.mouse.move(release.x, release.y, { steps: 10 });
+    await page.mouse.up();
+
+    // LOAD-BEARING: nothing may move the mouse from here on. MapLibre's drag
+    // handler listens for mousemove on the document, so ANY later movement ends
+    // the wedged drag by itself and makes this test vacuous. Every assertion
+    // below reads state through page.evaluate only.
+    await expect
+      .poll(
+        () =>
+          page.evaluate(() => {
+            const map = (window as unknown as {
+              __stalagmight_map__?: { isMoving: () => boolean };
+            }).__stalagmight_map__;
+            return map ? map.isMoving() : null;
+          }),
+        { message: 'the drag ended even though the release landed on the zoom control' }
+      )
+      .toBe(false);
+
+    // ...and it really was a drag, not a gesture that trivially had nothing to end.
+    expect(centerDelta(await getMapCenter(page), centerBefore)).toBeGreaterThan(0.00001);
+    // The release must not press the button underneath it: the browser fires
+    // `click` on the common ancestor of the press and release targets, which is
+    // the map container, not the control.
+    expect(await getMapZoom(page)).toBeCloseTo(zoomBefore, 6);
   });
 });

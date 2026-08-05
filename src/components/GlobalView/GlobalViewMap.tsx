@@ -543,7 +543,40 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
     };
     map.current.on('moveend', handleMoveEndPersist);
 
+    // End drags that are RELEASED outside the map canvas.
+    //
+    // MapLibre's mouse drag handlers implement `mouseup` only, and that name is
+    // dispatched from a listener bound on the canvas container; a release
+    // anywhere else in the document arrives as `mouseupWindow`, which no drag
+    // handler implements. A left-drag released over floating chrome (the
+    // navigation/scale controls in MapLibre's sibling control container, the
+    // surrounding panels) therefore never reaches dragEnd: the map stays
+    // "moving", and the moveend above - which is what persists the viewport -
+    // never fires until some later mousemove self-heals it. Forwarding the real
+    // mouseup ends the drag through the normal path.
+    const handleMouseUpOutsideCanvas = (e: MouseEvent) => {
+      const mapInstance = map.current;
+      if (!mapInstance) return;
+      // MapLibre's own container listener already ends drags released in there;
+      // forwarding those as well would dispatch `mouseup` to the handlers twice.
+      const canvasContainer = mapInstance.getCanvasContainer();
+      if (e.target instanceof Node && canvasContainer.contains(e.target)) return;
+      // Dispatching with no event name runs the plain `mouseup` handlers, i.e.
+      // dragEnd - which is idempotent (it early-returns when no drag is in
+      // flight), so a release that had nothing to do with the map is a no-op.
+      // Guarded so a future MapLibre without these public members degrades to the
+      // old (stuck drag) behavior instead of throwing.
+      const handlers = mapInstance.handlers as
+        | { handleEvent?: (event: Event) => void }
+        | undefined;
+      if (typeof handlers?.handleEvent === 'function') {
+        handlers.handleEvent(e);
+      }
+    };
+    window.addEventListener('mouseup', handleMouseUpOutsideCanvas, { capture: true });
+
     return () => {
+      window.removeEventListener('mouseup', handleMouseUpOutsideCanvas, { capture: true });
       // Clean up rubber-band handler and any pending idle listener
       if (rubberBandIdleHandler && map.current) {
         map.current.off('idle', rubberBandIdleHandler);
