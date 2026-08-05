@@ -2,9 +2,9 @@
 
 Stalagmight is a desktop app that also has an Android tablet build. Touch
 support is partial: a handful of surfaces were adapted for it, the rest inherit
-whatever the browser's compatibility mouse events give them. Nothing about touch
-is covered by automated tests. Read the gaps section before assuming a gesture
-works.
+whatever the browser's compatibility mouse events give them. Automated coverage
+reaches the map and nothing else - one Playwright spec dispatches real touch
+gestures at it. Read the gaps section before assuming a gesture works.
 
 The Android target is sideload-only (`scripts/build-android.sh`,
 `scripts/deploy-android.sh`, `src-tauri/gen/android/`, `tauri.android.conf.json`).
@@ -17,10 +17,11 @@ It is not built, run, or tested in CI.
 | `src/hooks/useLongPress.ts` | `useLongPress` | Long-press detection for React surfaces; no-op unless `pointerType === 'touch'` |
 | `src/components/SingleSystemView/SectionsPanel.tsx` | `handleLongPress` (~:699) | Long-press a section row -> section context menu |
 | `src/components/common/ShotTableEditor.tsx` | `handleLongPress` (~:326) | Long-press a shot row -> row context menu (see Gaps: this does not fire) |
-| `src/components/Map/SurveyLayer.tsx` | `boundTouchStart` / `boundTouchMove` / `boundTouchEnd` (~:985) | Raw canvas touch listeners -> survey context menu |
-| `src/components/GlobalView/GlobalSurveyLayer.ts` | same trio (~:263) | Raw canvas touch listeners -> system context menu |
+| `src/components/Map/SurveyLayer.tsx` | `boundTouchStart` / `boundTouchMove` / `boundTouchEnd` / `boundTouchCancel` (~:1016) | Raw canvas touch listeners -> survey context menu |
+| `src/components/GlobalView/GlobalSurveyLayer.ts` | same quartet (~:267) | Raw canvas touch listeners -> system context menu |
 | `src/components/GlobalView/GlobalViewMap.tsx` | per-marker listeners (~:979) | Long-press a project marker -> marker context menu |
-| `src/components/Map/MapCanvas.tsx` | `touchAction` memo (~:3772), `handlePointerDown` (~:3904) | Gesture ownership and the pan-tool bypass |
+| `src/utils/mapGestures.ts` | `mapGestureMode` | The one predicate deciding which gestures the map keeps for itself |
+| `src/components/Map/MapCanvas.tsx` | `dragPan` effect (~:2549), `touchAction` memo (~:3604) | Both consumers of that predicate |
 | `src/components/SingleSystemView/useResizeHandle.ts` | `useResizeHandle` | Pointer-capture drag for every resize handle |
 | `src/components/common/Panel.tsx`, `src/components/SingleSystemView/Dock.tsx` | `touchAction: 'none'` on the handle (`Panel.tsx:134`, `Dock.tsx:404`) | Stops the browser claiming the drag as a scroll. Without it the pointer-capture drag above never gets move events on touch |
 | `src/components/Map/PlacementOverlay.tsx` | ~:229 | Renders a Cancel button when `navigator.maxTouchPoints > 0` |
@@ -37,9 +38,10 @@ There is no single rule. Three patterns coexist:
   touch, with `e.pointerType` consulted only where the behavior must differ.
 - **Mouse-only, deliberately.** The custom Ctrl+drag / middle-drag map pan uses
   raw `mousedown`/`mousemove`/`mouseup` capture listeners on the map container
-  (`MapCanvas.tsx:2908-2990`) and its pointer-capture guard explicitly requires
-  `e.pointerType === 'mouse'` (`MapCanvas.tsx:3008`). There is no modifier key on
-  touch, so this is intentional.
+  (`MapCanvas.tsx:2751-2833`) and its pointer-capture guard explicitly requires
+  `e.pointerType === 'mouse'` (`MapCanvas.tsx:2849`). There is no modifier key on
+  touch, so this is intentional - and since #409 no loss either, because plain
+  one-finger drag pans.
 - **Mouse-only, by omission.** Most of the app was never converted. The
   in-house data grid (`src/components/common/SpreadsheetGrid/`) is entirely
   `onMouseDown` / `onContextMenu`, with drag operations (fill handle, column
@@ -66,8 +68,8 @@ desktop. Two independent implementations, same constants, no shared source:
 | Move cancel | `moveThreshold` option, default 10 px | 10 px, inline as `dx*dx + dy*dy > 100` |
 | Multi-touch | not checked | ignored unless `e.touches.length === 1` |
 
-The thresholds are duplicated at `SurveyLayer.tsx:1009`/`:1017`,
-`GlobalSurveyLayer.ts:287`/`:295` and `GlobalViewMap.tsx:992`/`:1000`. Changing
+The thresholds are duplicated at `SurveyLayer.tsx:1041`/`:1049`,
+`GlobalSurveyLayer.ts:292`/`:300` and `GlobalViewMap.tsx:994`/`:1002`. Changing
 the feel means editing all four sites.
 
 `useLongPress` returns `{ onPointerDown, onPointerMove, onPointerUp,
@@ -81,36 +83,56 @@ whether the trailing tap is actually swallowed is unverified.
 The canvas implementations synthesize a `MouseEvent('contextmenu')` at the touch
 position and feed it to the same handler the real right-click uses
 (`SurveyLayer.handleContextMenu`, `GlobalSurveyLayer.callbacks.onSystemContextMenu`),
-so the resulting menu is identical. They register with `{ passive: false }` but
-never call `preventDefault()`, so that option currently buys nothing.
+so the resulting menu is identical.
+
+The `touchend` listener's `{ passive: false }` registration is load-bearing. A
+long-press that fires sets `touchLongPressFired`, and the `touchend` ending that
+press calls `preventDefault()` on it (`SurveyLayer.tsx:1056`,
+`GlobalSurveyLayer.ts:307`), which is what suppresses the compatibility mouse
+events the browser would otherwise synthesize - so lifting the finger cannot also
+run the active tool's click underneath the open menu (#338). Deliberately no
+`stopPropagation`: MapLibre's own `touchend` still has to run or pan and pinch
+break. `touchcancel` has its own handler (`boundTouchCancel`), which clears the
+flag without preventing anything.
 
 ## Map and renderer
 
-**Gesture ownership.** `MapCanvas` sets `touch-action` on its container from an
-allowlist (`MapCanvas.tsx:3772`): `none` for every tool except `pan`, and `none`
-whenever placement mode is active. `pan` gets `manipulation` so MapLibre's own
-touch pan and pinch-zoom run. `handlePointerDown` reinforces this with an early
-return for `pointerType === 'touch' && activeTool === 'pan'`
-(`MapCanvas.tsx:3913`). The same tool list is repeated at both
-`dragPan.disable()` sites in `MapCanvas.tsx` (grep `dragPan.disable`).
-**Adding a `ToolType` means updating all three lists**, or the new tool silently
-keeps browser gesture handling.
+**Gesture ownership.** One pure predicate decides it: `mapGestureMode`
+(`src/utils/mapGestures.ts`) takes the active tool, whether placement mode is on,
+and whether a move ghost is in flight, and returns `{ dragPan, touchAction }`.
+The default answer is `dragPan: true` / `touchAction: 'manipulation'`, so
+MapLibre's own one-finger pan and pinch-zoom run under **every** tool (#409).
+Three modes take the gesture back, because in each the drag itself is the
+interaction: the zoom tool, whose drag draws the zoom box; placement mode, which
+confirms on `pointerdown`; and a move ghost in flight, which drops on
+`pointerup`. Those three get `touchAction: 'none'` and `dragPan.disable()`.
 
-**MapLibre handlers.** `dragRotate` and `touchPitch` are disabled at map
-construction (`MapCanvas.tsx:1734-1735`); `boxZoom` too. `touchZoomRotate` is
-left at its default, which includes two-finger rotation - see Gaps.
+Both consumers call the same function - the `dragPan` effect
+(`MapCanvas.tsx:2549`) and the `touchAction` memo (`MapCanvas.tsx:3604`) - so
+they cannot disagree. This replaced three hand-kept copies of one tool list plus
+a `pointerType === 'touch' && activeTool === 'pan'` early return in
+`handlePointerDown`, which is why **adding a `ToolType` no longer means updating
+any list.**
+
+**MapLibre handlers.** `dragRotate`, `touchPitch` and `boxZoom` are disabled at
+map construction (`MapCanvas.tsx:1674-1680`), and so is the rotation half of the
+pinch: `touchZoomRotate.disableRotation()` (`MapCanvas.tsx:1678`) leaves a
+two-finger twist zooming only. The survey is a top-down plan, so a bearing means
+nothing here, and a non-zero one would drop the `axisAligned` fast path in the
+hit-test/geometry index (`SurveyLayer.cameraSnapshot`, ~:1315) with no way to
+reset it from the touch UI.
 
 **Custom WebGL renderer.** Touch needs nothing renderer-specific. The survey is
 drawn by the custom WebGL layer, and the stock bulk layers were deleted rather
 than hidden, so hit-testing does not use `queryRenderedFeatures`; it goes through the SoA
 geometry index (`SurveyLayer.hitCandidateSections`, `resolveStationAt` /
-`resolveShotAt`, documented at `SurveyLayer.tsx:1201`). Long-press hit-testing
+`resolveShotAt`, documented at `SurveyLayer.tsx:1263`). Long-press hit-testing
 calls the same `handleContextMenu` as right-click, so it inherits that path for
 free. `GlobalSurveyLayer` likewise resolves via its own `pickSystemAt` index.
 
 **Placement mode** is the one map interaction explicitly written for touch:
 `handlePlacementClick` recomputes the cursor position from the event because
-`pointerdown` precedes any `pointermove` on touch (`MapCanvas.tsx:3871`), and
+`pointerdown` precedes any `pointermove` on touch (`MapCanvas.tsx:3690`), and
 `PlacementOverlay` shows a Cancel button when `navigator.maxTouchPoints > 0`
 because right-click-to-cancel is unavailable.
 
@@ -135,11 +157,16 @@ keyboard. Applied across `ShotTableEditor`, `EditShotDialog`,
 
 ## Gaps and known-broken cases
 
-- **No test coverage of any kind.** There is no unit test for `useLongPress`,
-  no Playwright project with `hasTouch`/a mobile device profile
-  (`playwright.config.ts:79` runs Desktop Chrome only), and no touch cases in
-  the legacy WebdriverIO suite. Every claim on this page about *behavior on a
-  device* is untested; the claims about code are what was read from source.
+- **Test coverage stops at the map.** `e2e-playwright/map-touch-gestures.spec.ts`
+  opts into `test.use({ hasTouch: true })` and dispatches gestures through CDP
+  `Input.dispatchTouchEvent` (Playwright's own API expresses neither a touch drag
+  nor a pinch), covering one-finger pan, the long-press menu and its swallowed
+  lift, and a two-finger twist that zooms without rotating. Nothing else: no unit
+  test for `useLongPress`, no mobile device profile in the Playwright projects
+  (`playwright.config.ts:112` runs Desktop Chrome only), and no touch cases in
+  the legacy WebdriverIO suite. Outside that one spec, every claim on this page
+  about *behavior on a device* is untested; the claims about code are what was
+  read from source.
 - **`ShotTableEditor`'s long-press context menu cannot fire.** `useLongPress`
   passes `e.currentTarget` (`useLongPress.ts:50`), the handlers are spread on
   `<tbody>` (`ShotTableEditor.tsx:472`), and the callback does
@@ -147,24 +174,14 @@ keyboard. Applied across `ShotTableEditor`, `EditShotDialog`,
   `<tbody>`. It needs `e.target` - the rows already carry the `data-row-index`
   the callback reads (`ShotTableEditor.tsx:494`). `SectionsPanel` is unaffected
   because it attaches per-row and ignores the target argument. Filed as #338.
-- **Map long-press does not suppress the following tap.** The canvas listeners
-  never `preventDefault()`, so after the 500 ms menu opens, lifting the finger
-  still produces a MapLibre `click` that runs the active tool's action
-  (select, merge, grab, ...) underneath the open menu.
 - **The main data table is mouse-only.** `SpreadsheetGrid` - the shot table in
   the dock - has no pointer or touch handling. Range drag, fill-handle drag,
   column resize and the move-edge drags all listen for `mousemove`/`mouseup`,
   which a touch drag does not produce.
-- **Two-finger rotation is live on touch but disabled for mouse.**
-  `dragRotate.disable()` covers mouse only; `touchZoomRotate` is never
-  configured, so a pinch twist can set a non-zero bearing. Beyond being
-  inconsistent, a non-zero bearing drops the `axisAligned` fast path in the
-  hit-test/geometry index (`SurveyLayer.tsx:1268`) with no way to reset it from
-  the touch UI.
 - **Move tools are untested on touch and structurally awkward.** A move drag is
   started by MapLibre's `click` (`useMapTools.ts:457`, `:469`), previews on
   `pointermove` over the container, and commits on `pointerup`
-  (`MapCanvas.tsx:3841`). With a mouse the pointer keeps moving between grab and
+  (`MapCanvas.tsx:3660`). With a mouse the pointer keeps moving between grab and
   drop; with a finger it does not, so the gesture becomes tap-to-grab followed by
   a separate touch-drag-release. Nobody has confirmed this on hardware.
 - **Popover dismissal depends on compatibility mouse events.**

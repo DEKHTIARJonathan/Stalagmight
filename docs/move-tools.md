@@ -112,7 +112,18 @@ Drag tracking uses refs (`moveDragLngLatRef`, `lastCursorClientRef`, etc.) inste
 
 ## Ctrl+Drag Panning
 
-All move tools support Ctrl+drag to pan the map (MapLibre's built-in dragPan is disabled for these tools because it doesn't work reliably with Ctrl in Tauri/WebKit).
+A plain left-drag pans the map under the move tools like it does under every
+other tool (#409): MapLibre's own `dragPan` is enabled for them. The exception is
+the moment a ghost is in flight - from the click that picks geometry up to the
+`pointerup` that drops it, `mapGestureMode` (`src/utils/mapGestures.ts`) returns
+`dragPan: false`, because that drag belongs to the ghost. **Ctrl+drag and
+middle-drag are the only way to pan while carrying one.**
+
+Both modifier gestures work under every tool but Pan (`activeTool !== 'pan'` in
+`handleMouseDownCapture`), and both are scaled by `map.controls.pan_speed`, where
+`dragPan` is always 1:1 with the cursor. They are implemented by hand rather than
+handed to MapLibre because its built-in `dragPan` does not work reliably with a
+modifier held in Tauri/WebKit.
 
 ### Event Capture Strategy
 
@@ -127,11 +138,11 @@ Capture-phase handlers on the map container intercept events **before** MapLibre
 | `mouseup` | `stopPropagation`, `preventDefault` | End pan, restore cursor |
 | `click` | `stopPropagation`, `preventDefault` | **Critical**: browser fires `click` as a separate DOM event after mouseup regardless of whether mousedown/mouseup were captured. Must be blocked to prevent MapLibre from processing a spurious click. |
 
-The `click` capture uses `ctrlDragActiveRef` which stays true for 50ms after mouseup, covering the window in which the browser dispatches the click event.
+The `click` capture uses `customPanActiveRef` which stays true for 50ms after mouseup, covering the window in which the browser dispatches the click event.
 
 ### Spurious Keyup Filtering
 
-Tauri/WebKit fires spurious Ctrl keyup events at the moment of mousedown/mouseup while Ctrl is held. These are filtered by timestamp: keyups within 50ms of a Ctrl+drag mouse event (`ctrlDragMouseEventTimeRef`) are suppressed. Genuine Ctrl releases (which occur later) go through immediately so the cursor resets without delay.
+Tauri/WebKit fires spurious Ctrl keyup events at the moment of mousedown/mouseup while Ctrl is held. These are filtered by timestamp: keyups within 50ms of a Ctrl+drag mouse event (`ctrlPanMouseEventTimeRef`) are suppressed. Genuine Ctrl releases (which occur later) go through immediately so the cursor resets without delay.
 
 ### Cursor During Ctrl+Pan
 
