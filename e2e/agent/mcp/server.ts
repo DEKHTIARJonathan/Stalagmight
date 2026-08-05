@@ -991,7 +991,7 @@ defineDarwin(
   { name: z.string().optional() },
   async (args) => {
     try {
-      const { base64, path: savedPath, meta } = await record('os_screenshot', args, async (seq) => {
+      const { base64, meta } = await record('os_screenshot', args, async (seq) => {
         const file = path.join(
           session.recorder.dir,
           'screenshots',
@@ -1007,7 +1007,7 @@ defineDarwin(
       return {
         content: [
           { type: 'image', data: base64, mimeType: 'image/png' },
-          { type: 'text', text: JSON.stringify({ path: savedPath, ...meta }) },
+          { type: 'text', text: JSON.stringify(meta) },
         ],
       };
     } catch (err) {
