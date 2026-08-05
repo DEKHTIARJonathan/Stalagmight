@@ -23,7 +23,8 @@ use super::speleodb_cache::{
 };
 use super::speleodb_revisions::validate_hexsha;
 use super::{AppState, VirtualShotMode};
-use crate::core::command::ImportReceipt;
+use crate::core::command::{CommandResult, ImportReceipt};
+use crate::models::{ImportClosure, ImportSectionConfig};
 use crate::speleodb::contract::{dto_for_error, Endpoint};
 use crate::speleodb::dump::{self, DumpClassification};
 use crate::speleodb::models::{AdoptUpload, DoneResult, StartEditingResult};
@@ -86,35 +87,47 @@ fn sweep_own_staging(dir: &Path) {
     }
 }
 
-/// [#411] Everything the adoption's conversion has to say about the remote `.tml`:
-/// the converter's own warnings, plus the excluded shots this path drops.
+/// [#411] Run the remote `.tml` through the converter the way an adoption does, and
+/// say what that cost: the converter's own warnings, led by the excluded shots this
+/// path drops.
 ///
 /// Adoption converts with `include_excluded = false` - the same default the import
 /// dialog opens with - so a remote file's excluded shots are not imported. The import
 /// dialog is honest about that by construction (the user set the switch), and its
 /// receipt lists what the converter reported; adoption had neither, so the drop and
-/// every parse anomaly with it were invisible. Counting here rather than in the
-/// converter keeps the shared converter's contract unchanged - no other caller needs
-/// the number.
+/// every parse anomaly with it were invisible.
 ///
-/// Uncapped: these go straight into an [`ImportReceipt`], and `decorate_receipt`
-/// caps the list it lands in. Capping twice would fold the cap's own summary line
-/// into a second summary.
+/// The conversion and the counting are ONE function so the warnings cannot be
+/// separated from the call that earns them: the previous shape took a warning list as
+/// an argument, which a caller could satisfy with an empty vec while still dropping
+/// the converter's own.
+///
+/// The excluded line goes FIRST, and that is load-bearing: `cap_warnings` truncates
+/// from the tail, so a file carrying 50+ per-section placement warnings - a count the
+/// file's author chooses - would otherwise fold this line into "... and N more".
+///
+/// Uncapped here: these go straight into an [`ImportReceipt`], and `decorate_receipt`
+/// caps the list they land in. Capping twice folds the cap's own summary line into a
+/// second summary.
 ///
 /// CLOSURE shots are left out of the count deliberately: they are dropped from every
 /// import whatever their `excluded` flag says, and the converter already reports the
 /// closures it could not resolve. What this counts is measurements the file has and
 /// the adopted project does not.
-fn adopt_conversion_warnings(
+fn adopt_convert(
     tml: &crate::parsers::tml::TmlFile,
-    mut warnings: Vec<String>,
-) -> Vec<String> {
+) -> Result<(Vec<ImportSectionConfig>, Vec<ImportClosure>, Vec<String>), SpeleoErrorDto> {
+    let (sections, closures, converter_warnings) =
+        crate::parsers::tml::convert_tml_to_import_configs(tml, false, true)
+            .map_err(|e| local_dto(SpeleoDbError::Parse(e.to_string())))?;
+
     let excluded = tml
         .sections
         .iter()
         .flat_map(|section| &section.shots)
         .filter(|shot| shot.excluded && shot.shot_type != crate::parsers::tml::TmlShotType::Closure)
         .count();
+    let mut warnings = Vec::with_capacity(converter_warnings.len() + 1);
     if excluded > 0 {
         warnings.push(format!(
             "{excluded} excluded shot{} in the remote file {} not imported",
@@ -122,7 +135,55 @@ fn adopt_conversion_warnings(
             if excluded == 1 { "was" } else { "were" }
         ));
     }
-    warnings
+    warnings.extend(converter_warnings);
+    Ok((sections, closures, warnings))
+}
+
+/// [#411] The receipt an adoption reports, from the result of its import.
+///
+/// `execute_import_sections` attaches no receipt when it was handed no sections -
+/// which is exactly what a `.tml` whose every shot is excluded converts to. That
+/// success with nothing in it was the silent path this whole change exists to close:
+/// no receipt meant no warnings, so an empty project was saved, pushed to the server
+/// and reported with a green toast, while the file it came from held shots. A
+/// synthesized receipt carries the warnings that explain the emptiness.
+///
+/// The synthesis is deliberately written to become dead weight, not a second source
+/// of truth: the sibling `fix/411-no-silent-success` moves the empty receipt into
+/// `execute_import_sections` itself, and once that lands `import_receipt` is always
+/// `Some` here and this arm stops being taken. Nothing needs deleting when it does.
+fn adopt_receipt(
+    imported: &mut CommandResult,
+    entry_name: &str,
+    sections_found: u32,
+    unit_conversion: Option<String>,
+    warnings: Vec<String>,
+) -> Option<ImportReceipt> {
+    if imported.import_receipt.is_none() {
+        imported.import_receipt = Some(ImportReceipt {
+            source_format: String::new(),
+            file_name: String::new(),
+            sections_found: 0,
+            sections_imported: 0,
+            shot_count: 0,
+            closures_requested: 0,
+            closures_created: 0,
+            unit_conversion: None,
+            warnings: Vec::new(),
+        });
+    }
+    // The same decoration `execute_tml_import` applies, through the same helper:
+    // adoption differs from that import only in having no wizard in front of it, and
+    // the receipt is what stands in for what the wizard would have shown.
+    crate::commands::import::decorate_receipt(
+        imported,
+        "Ariane TML",
+        Path::new(entry_name),
+        sections_found,
+        unit_conversion,
+        warnings,
+    );
+    imported.import_receipt.take()
 }
 
 /// Whether an adoption is holding the project's write mutex.
@@ -1937,10 +1998,7 @@ impl AppState {
 
         let tml = crate::parsers::tml::parse_tml(tml_path)
             .map_err(|e| local_dto(SpeleoDbError::Parse(e.to_string())))?;
-        let (sections, closures, converter_warnings) =
-            crate::parsers::tml::convert_tml_to_import_configs(&tml, false, true)
-                .map_err(|e| local_dto(SpeleoDbError::Parse(e.to_string())))?;
-        let warnings = adopt_conversion_warnings(&tml, converter_warnings);
+        let (sections, closures, warnings) = adopt_convert(&tml)?;
         let sections_found = tml.sections.len() as u32;
         let unit_conversion = crate::commands::import::tml_unit_conversion_note(tml.unit);
         // Auto: adoption is an ordinary Ariane import with no dialog to carry a
@@ -1965,13 +2023,9 @@ impl AppState {
                 imported.error.unwrap_or_else(|| "unknown error".to_owned())
             ))));
         }
-        // The same decoration `execute_tml_import` applies, through the same helper:
-        // adoption differs from that import only in having no wizard in front of it,
-        // and the receipt is what stands in for what the wizard would have shown.
-        crate::commands::import::decorate_receipt(
+        let receipt = adopt_receipt(
             &mut imported,
-            "Ariane TML",
-            Path::new(entry_name),
+            entry_name,
             sections_found,
             unit_conversion,
             warnings,
@@ -1984,7 +2038,7 @@ impl AppState {
                 saved.error.unwrap_or_else(|| "unknown error".to_owned())
             ))));
         }
-        Ok(imported.import_receipt)
+        Ok(receipt)
     }
 
     /// Throw away a staging file the adoption is not going to promote, and put the
@@ -2192,9 +2246,9 @@ impl AppState {
 #[expect(clippy::expect_used, reason = "unit test fixtures")]
 mod tests {
     use super::{
-        adopt_conversion_warnings, classify_dump_entry, probe_inputs_valid, pull_dating,
-        resolve_dump_entry, usable_tip, AdoptLockGuard, ArianeRoute, DumpAt, PullDating,
-        StalxAmbiguity, UnopenableDump,
+        adopt_convert, adopt_receipt, classify_dump_entry, probe_inputs_valid, pull_dating,
+        resolve_dump_entry, usable_tip, AdoptLockGuard, ArianeRoute, CommandResult, DumpAt,
+        PullDating, StalxAmbiguity, UnopenableDump,
     };
     use crate::core::state::tests_support::speleodb_prod_matches;
     use crate::core::state::AppState;
@@ -2975,10 +3029,23 @@ mod tests {
             unit: TmlUnit::Metric,
             use_magnetic_azimuth: false,
             first_start_absolute_elevation: 0.0,
+            unrecognized_unit: None,
             geo_coding: None,
             sections,
             closures: Vec::new(),
         }
+    }
+
+    /// The import result `execute_import_sections` returns for a conversion that
+    /// produced no sections: success, and no receipt at all (`command_import.rs`).
+    fn receiptless_success() -> CommandResult {
+        let imported = CommandResult::success();
+        assert!(
+            imported.import_receipt.is_none(),
+            "this fixture IS the no-receipt success; a receipt here means the base \
+             shape moved and the test is no longer about anything"
+        );
+        imported
     }
 
     /// [#411] The pull -> adopt conversion bound its converter warnings to
@@ -3015,10 +3082,8 @@ mod tests {
             ),
         ]);
 
-        // Exactly the call the adoption makes: excluded shots out, comments on stations.
-        let (configs, closures, converter_warnings) =
-            crate::parsers::tml::convert_tml_to_import_configs(&tml, false, true)
-                .expect("the conversion succeeds");
+        // The one call the adoption makes: the converter, plus its own counting.
+        let (configs, closures, warnings) = adopt_convert(&tml).expect("the conversion succeeds");
         // The losses the warnings are ABOUT, proven rather than assumed.
         assert_eq!(
             configs.len(),
@@ -3031,25 +3096,29 @@ mod tests {
             "and the excluded shot inside the surviving section goes with it"
         );
         assert_eq!(closures.len(), 1, "the CLOSURE shot resolves as a closure");
+
+        // What the converter itself reported, read back from a second run so the
+        // comparison is against the real thing rather than a copy of the assertion.
+        let (_, _, converter_warnings) =
+            crate::parsers::tml::convert_tml_to_import_configs(&tml, false, true)
+                .expect("the conversion succeeds");
         assert!(
             !converter_warnings.is_empty(),
             "the fixture must make the converter report something, or this test cannot \
              see it being dropped"
         );
-
-        let warnings = adopt_conversion_warnings(&tml, converter_warnings.clone());
         for reported in &converter_warnings {
             assert!(
                 warnings.contains(reported),
                 "every converter warning must survive the adoption, missing: {reported}"
             );
         }
-        assert!(
-            warnings
-                .iter()
-                .any(|w| w == "3 excluded shots in the remote file were not imported"),
-            "the excluded shots this path drops must be named with their count - the \
-             CLOSURE shot is not one of them; got {warnings:?}"
+        assert_eq!(
+            warnings.first().map(String::as_str),
+            Some("3 excluded shots in the remote file were not imported"),
+            "the excluded shots this path drops must be named with their count, and \
+             named FIRST so the cap cannot fold them away - the CLOSURE shot is not \
+             one of them; got {warnings:?}"
         );
     }
 
@@ -3065,8 +3134,9 @@ mod tests {
                 adopt_shot(2, true, TmlShotType::Real),
             ],
         )]);
+        let (_, _, warnings) = adopt_convert(&one).expect("the conversion succeeds");
         assert_eq!(
-            adopt_conversion_warnings(&one, Vec::new()),
+            warnings,
             vec!["1 excluded shot in the remote file was not imported".to_owned()],
             "one excluded shot reads in the singular"
         );
@@ -3076,11 +3146,113 @@ mod tests {
             0,
             vec![adopt_shot(1, false, TmlShotType::Real)],
         )]);
+        let (_, _, warnings) = adopt_convert(&none).expect("the conversion succeeds");
+        assert!(
+            warnings.is_empty(),
+            "nothing excluded means nothing said; got {warnings:?}"
+        );
+    }
+
+    /// [#411 blocker] The emptiest possible adoption was the quietest one. A `.tml`
+    /// whose every shot is excluded converts to NO sections, and
+    /// `execute_import_sections` attaches no receipt to a no-section import - so the
+    /// decoration no-opped, the frontend's receipt gate skipped, and an empty project
+    /// was saved, pushed to the server and reported with a green toast over a file
+    /// that had shots in it.
+    ///
+    /// Driven through the real converter and the real receipt-less success shape; the
+    /// database half of the import needs an app handle, which `AppState::new` has not
+    /// got, and is not what was silent.
+    #[test]
+    fn an_all_excluded_remote_file_still_reports_what_it_dropped() {
+        let tml = adopt_tml(vec![adopt_section(
+            "AllExcluded",
+            0,
+            vec![
+                adopt_shot(1, true, TmlShotType::Real),
+                adopt_shot(2, true, TmlShotType::Real),
+            ],
+        )]);
+
+        let (sections, _, warnings) = adopt_convert(&tml).expect("the conversion succeeds");
+        assert!(
+            sections.is_empty(),
+            "the fixture must convert to nothing at all, or it is not the silent case"
+        );
+
+        let mut imported = receiptless_success();
+        let receipt = adopt_receipt(&mut imported, "ariane.tml", 1, None, warnings)
+            .expect("an adoption that imported nothing still owes the user a receipt");
+
+        assert_eq!(receipt.source_format, "Ariane TML");
+        assert_eq!(receipt.file_name, "ariane.tml");
+        assert_eq!(receipt.sections_imported, 0);
+        assert_eq!(receipt.shot_count, 0);
         assert_eq!(
-            adopt_conversion_warnings(&none, vec!["from the converter".to_owned()]),
-            vec!["from the converter".to_owned()],
-            "nothing excluded means nothing said, and the converter's own line is \
-             still passed through untouched"
+            receipt.warnings.first().map(String::as_str),
+            Some("2 excluded shots in the remote file were not imported"),
+            "the reason the project is empty has to be IN the receipt; got {:?}",
+            receipt.warnings
+        );
+        assert!(
+            receipt
+                .warnings
+                .iter()
+                .any(|w| w.contains("no shots after filtering")),
+            "and so does the converter's own account of the dropped section; got {:?}",
+            receipt.warnings
+        );
+    }
+
+    /// The cap truncates from the tail, and the per-section placement warnings ahead
+    /// of the excluded line are a count the FILE's author chooses. Appending the line
+    /// let a hostile or merely messy file fold the one warning about lost measurements
+    /// into "... and N more".
+    #[test]
+    fn the_excluded_line_outlives_the_cap_on_a_file_full_of_warnings() {
+        let mut imported = receiptless_success();
+        let mut warnings = vec!["3 excluded shots in the remote file were not imported".to_owned()];
+        warnings.extend((0..60).map(|i| format!("placement warning {i}")));
+
+        let receipt = adopt_receipt(&mut imported, "ariane.tml", 1, None, warnings)
+            .expect("the receipt is synthesized");
+
+        assert_eq!(
+            receipt.warnings.len(),
+            51,
+            "50 warnings plus the overflow summary"
+        );
+        assert_eq!(
+            receipt.warnings.first().map(String::as_str),
+            Some("3 excluded shots in the remote file were not imported"),
+            "the excluded line must survive a file that buries it; got {:?}",
+            receipt.warnings.first()
+        );
+    }
+
+    /// The receipt's `file_name` is the entry name from inside a dump downloaded from
+    /// a SERVER, and it lands in the receipt dialog's title. A zip entry name can hold
+    /// 64 KB of whatever its author likes, including the bidi overrides that reorder
+    /// the text printed around them.
+    #[test]
+    fn a_hostile_dump_entry_name_cannot_run_riot_in_the_receipt_title() {
+        let hostile = format!("{}\u{202e}gnp.exe\u{0007}", "A".repeat(10_000));
+        let mut imported = receiptless_success();
+
+        let receipt = adopt_receipt(&mut imported, &hostile, 1, None, Vec::new())
+            .expect("the receipt is synthesized");
+
+        assert_eq!(
+            receipt.file_name.chars().count(),
+            120,
+            "clamped to the title's budget, not the archive author's"
+        );
+        assert!(
+            !receipt
+                .file_name
+                .chars()
+                .any(|c| c.is_control() || matches!(c, '\u{202a}'..='\u{202e}')),
+            "no control or bidi characters reach the dialog title"
         );
     }
 
@@ -3107,18 +3279,26 @@ mod tests {
             "binding the converter's warnings to an underscore is how they were lost \
              (#411); pass them on instead"
         );
+        // The LITERAL call: `adopt_convert` both converts and counts, so there is no
+        // warning list for a caller to satisfy with an empty vec - the previous shape
+        // took one as an argument and this assertion passed over `(&tml, Vec::new())`.
         assert!(
-            body.contains("adopt_conversion_warnings("),
-            "the conversion's warnings must go through the helper that adds the \
-             excluded-shot count, or half the loss is still silent"
+            body.contains("let (sections, closures, warnings) = adopt_convert(&tml)?;"),
+            "the conversion and its warnings must come from ONE call, or the call site \
+             is free to keep the sections and drop the account of what they cost"
         );
-        let decorate = body
-            .find("import::decorate_receipt(")
-            .expect("the adoption decorates its receipt with the import helper");
         assert!(
-            body[decorate..].contains("Ok(imported.import_receipt)"),
-            "the decorated receipt is what leaves this function - decorating a value \
-             that is then dropped is the same silence with more steps"
+            !body.contains("convert_tml_to_import_configs("),
+            "converting directly here re-opens the seam `adopt_convert` closed: the \
+             excluded-shot count is not the converter's job and would be skipped"
+        );
+        let receipt = body
+            .find("adopt_receipt(")
+            .expect("the adoption builds its receipt through the helper that guarantees one");
+        assert!(
+            body[receipt..].contains("Ok(receipt)"),
+            "the receipt is what leaves this function - building one that is then \
+             dropped is the same silence with more steps"
         );
     }
 

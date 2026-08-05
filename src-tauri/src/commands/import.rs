@@ -119,6 +119,11 @@ pub fn check_section_hashes(
         .map_err(|e| e.to_string())
 }
 
+/// The most of a file-controlled name worth keeping in the receipt. A dialog title
+/// line, not a path: longer than any real survey filename, shorter than anything that
+/// can push the rest of the title off the screen.
+const MAX_FILE_NAME_LEN: usize = 120;
+
 /// Fill in the importer-specific fields of the base `ImportReceipt` that
 /// `execute_import_sections` already attached (source/section counts, unit
 /// conversion), and extend its warnings with the converter-phase warnings
@@ -142,9 +147,16 @@ pub(crate) fn decorate_receipt(
         return;
     };
     receipt.source_format = source_format.to_string();
+    // Sanitized and clamped, because this lands in the receipt dialog's TITLE and is
+    // not always a name off this machine's disk: the SpeleoDB adoption passes the
+    // entry name from inside a dump downloaded from a server, where the whole 64 KB
+    // a zip name may hold - bidi overrides included - is the archive author's to
+    // choose. A local path is guarded by the same line at no cost.
     receipt.file_name = path
         .file_name()
-        .map(|n| n.to_string_lossy().to_string())
+        .map(|n| {
+            crate::core::command::sanitize_display_text(&n.to_string_lossy(), MAX_FILE_NAME_LEN)
+        })
         .unwrap_or_default();
     receipt.sections_found = sections_found;
     receipt.unit_conversion = unit_conversion;

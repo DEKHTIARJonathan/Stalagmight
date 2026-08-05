@@ -655,8 +655,17 @@ pub struct SpeleoAdoptResult {
     /// site - it has no import wizard to have shown them - so a pulled Ariane
     /// project lost its excluded shots and every parse anomaly in silence.
     ///
-    /// `None` only when the import produced no receipt at all, which no successful
-    /// import does today; the webview treats its absence as "nothing to report".
+    /// `None` when the import produced no receipt at all. That is reachable today,
+    /// not hypothetical: `execute_import_sections` attaches none when it is handed no
+    /// sections, which is what a `.tml` whose every shot is excluded converts to - so
+    /// the adoption synthesizes one there rather than letting the emptiest possible
+    /// result be the quietest (see `adopt_receipt`). The arm stays because a receipt
+    /// is not something this type can promise on its own.
+    ///
+    /// `#[ts(optional)]`: an older backend answers without the field at all, so the
+    /// webview's type has to admit `undefined` as well as `null` - the alternative is
+    /// a required field that is genuinely absent at runtime.
+    #[ts(optional)]
     pub import_receipt: Option<ImportReceipt>,
 }
 

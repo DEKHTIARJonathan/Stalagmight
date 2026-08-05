@@ -2,4 +2,4 @@
 import type { AdoptUpload } from "./AdoptUpload";
 import type { ImportReceipt } from "./ImportReceipt";
 
-export interface SpeleoAdoptResult { local_path: string, type_flipped: boolean, concurrent_session: boolean, upload: AdoptUpload, import_receipt: ImportReceipt | null, }
+export interface SpeleoAdoptResult { local_path: string, type_flipped: boolean, concurrent_session: boolean, upload: AdoptUpload, import_receipt?: ImportReceipt, }

@@ -1271,18 +1271,11 @@ fn classify_unit(raw: &str) -> (TmlUnit, Option<String>) {
 const MAX_UNIT_LABEL_LEN: usize = 300;
 
 /// Make a file-controlled unit string fit to cross IPC and land in a UI warning
-/// line: drop control characters and the Unicode bidi overrides (which can
-/// visually reorder the rest of the sentence around them), then clamp on a char
-/// boundary. The file is untrusted input - this app reads whatever anyone hands
-/// it.
+/// line. The file is untrusted input - this app reads whatever anyone hands it -
+/// and the rules are the receipt's, so the sanitizing itself lives with the
+/// receipt: [`crate::core::command::sanitize_display_text`].
 fn sanitize_unit_label(raw: &str) -> String {
-    raw.chars()
-        .filter(|c| {
-            !c.is_control()
-                && !matches!(c, '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}' | '\u{200e}' | '\u{200f}')
-        })
-        .take(MAX_UNIT_LABEL_LEN)
-        .collect()
+    crate::core::command::sanitize_display_text(raw, MAX_UNIT_LABEL_LEN)
 }
 
 // ============================================================================

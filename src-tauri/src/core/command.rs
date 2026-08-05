@@ -261,6 +261,28 @@ pub struct ImportReceipt {
     pub warnings: Vec<String>,
 }
 
+/// Make a file-controlled string fit to cross IPC and be rendered as UI text: drop
+/// control characters and the Unicode bidi overrides (which can visually reorder the
+/// sentence, or the dialog title, printed around them), then clamp to `max_chars` on
+/// a char boundary - never a raw byte slice.
+///
+/// Every string this guards comes from a file this app was handed, and one of them
+/// (the adoption's receipt `file_name`) comes from a zip entry inside an archive
+/// downloaded from a server, so "untrusted" is literal rather than theoretical.
+///
+/// Lives here, beside [`ImportReceipt`], because the fields it guards are that
+/// struct's: `parsers::tml::sanitize_unit_label` is one caller with its own clamp,
+/// `decorate_receipt` (every importer, not just Ariane) is the other.
+pub fn sanitize_display_text(raw: &str, max_chars: usize) -> String {
+    raw.chars()
+        .filter(|c| {
+            !c.is_control()
+                && !matches!(c, '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}' | '\u{200e}' | '\u{200f}')
+        })
+        .take(max_chars)
+        .collect()
+}
+
 impl ImportReceipt {
     /// The receipt for an import that landed NOTHING: zero sections, zero
     /// shots, no closures. Every text field is a placeholder the importer's
