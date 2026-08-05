@@ -86,13 +86,16 @@ try {
 const title = getFlag('--title') || `Agent-found issue in session ${start.sessionId ?? path.basename(sessionDir)}`;
 const summary = getFlag('--summary') || '_Describe the bug in one or two sentences._';
 
-// Compact step list: mutating actions only.
+// Compact step list: mutating actions only. os_* (Tier 2 OS-level input) are
+// always mutating - matched by prefix so new os tools cannot silently drop out
+// of repro reports.
 const MUTATING = new Set([
   'click', 'type_text', 'press_keys', 'eval', 'ipc', 'store_action', 'map_click', 'map_view',
   'seed', 'driver_script', 'run_scenario',
 ]);
+const isMutating = (tool) => MUTATING.has(tool) || (typeof tool === 'string' && tool.startsWith('os_'));
 const steps = actions
-  .filter((a) => MUTATING.has(a.tool))
+  .filter((a) => isMutating(a.tool))
   .map((a) => {
     const detail = describeAction(a);
     const flag = a.outcome?.ok === false ? ' **(failed)**' : '';
