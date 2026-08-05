@@ -256,10 +256,10 @@ describe('TmlImportDialog failure handling (#411 C2)', () => {
         expect.objectContaining({ title: 'Import Errors', message: 'Section 2 is unreadable' }),
       ),
     );
-    // The exit sequence (close -> single view -> fit) must not run on a failure.
+    // The dialog closes (its work is over), but the navigate/fit half of the
+    // exit sequence must not run - that showed the empty project first.
     expect(setView).not.toHaveBeenCalled();
     expect(triggerFitToBounds).not.toHaveBeenCalled();
-    expect(closeDialog).not.toHaveBeenCalled();
   });
 
   it('asks about the empty project it was importing into instead of a bare error', async () => {

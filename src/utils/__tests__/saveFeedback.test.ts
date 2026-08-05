@@ -147,13 +147,16 @@ describe('finalizeDeferredSaveWarnings (#110)', () => {
 });
 
 describe('surfaceImportFailure', () => {
-  it('command failure: closes the dialog via the shared exit and opens the error dialog', () => {
+  it('command failure: closes the dialog and reports WITHOUT the navigate/fit exit', () => {
     const ui = mockUi();
 
     surfaceImportFailure('tml-import', ui, { phase: 'command', error: 'Bad azimuth on shot 3' });
 
     expect(ui.closeDialog).toHaveBeenCalled();
-    expect(ui.setView).toHaveBeenCalledWith('single');
+    // #411 C2: the exit sequence dropped the user into the empty project the
+    // import had just created - and fitted the map to it - BEFORE saying why.
+    expect(ui.setView).not.toHaveBeenCalled();
+    expect(ui.triggerFitToBounds).not.toHaveBeenCalled();
     expect(ui.openDialog).toHaveBeenCalledWith('error', {
       title: 'Import Errors',
       message: 'Bad azimuth on shot 3',
