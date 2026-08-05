@@ -1590,8 +1590,24 @@ pub fn run() {
     // arm below. Off under `e2e` so the WebDriver harness can still spawn its
     // own instance while a dev build is running.
     #[cfg(all(not(feature = "e2e"), not(target_os = "macos")))]
-    let builder = builder.plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
-        commands::launch::queue_and_notify(app, commands::launch::launch_paths_from_args(argv));
+    let builder = builder.plugin(tauri_plugin_single_instance::init(|app, argv, cwd| {
+        // `cwd` is the SENDER's working directory - a relative argument there
+        // means nothing against ours, so it is what relative paths resolve
+        // against (and without it they are dropped, not guessed at).
+        let cwd = std::path::PathBuf::from(cwd);
+        let base = cwd.is_absolute().then_some(cwd.as_path());
+        let paths = commands::launch::launch_paths_from_args(
+            argv.into_iter().map(std::ffi::OsString::from),
+            base,
+        );
+        if paths.is_empty() {
+            return;
+        }
+        // Raise the window BEFORE queueing: whatever the frontend does with
+        // this - a confirm, an open - has to happen somewhere the user can see,
+        // or "Open with" on a backgrounded app reads as nothing happening.
+        commands::launch::focus_main_window(app);
+        commands::launch::queue_and_notify(app, paths);
     }));
 
     let builder = builder
@@ -1776,9 +1792,15 @@ pub fn run() {
             // frontend drains the queue once its stores are up. macOS passes
             // nothing here (Finder sends an Apple event instead - see the
             // `RunEvent::Opened` arm below), so this is simply empty there.
+            // `args_os`, not `args`: the latter PANICS on a non-Unicode
+            // argument, which would make a latin-1 filename crash the launch.
+            let launch_cwd = std::env::current_dir().ok();
             commands::launch::queue_and_notify(
                 app.handle(),
-                commands::launch::launch_paths_from_args(std::env::args()),
+                commands::launch::launch_paths_from_args(
+                    std::env::args_os(),
+                    launch_cwd.as_deref(),
+                ),
             );
 
             Ok(())
