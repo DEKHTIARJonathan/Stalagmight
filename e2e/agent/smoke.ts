@@ -7,7 +7,7 @@
  * Run: node <tsx> e2e/agent/smoke.ts   (or: pnpm agent:smoke)
  */
 import * as fs from 'fs';
-import { AppSession } from './session';
+import { createSession } from './createSession';
 import { readStore } from './lib/stores';
 import { LogCursor } from './lib/logs';
 import { invokeInApp } from './lib/page';
@@ -18,7 +18,7 @@ function log(msg: string): void {
 }
 
 async function main(): Promise<void> {
-  const session = new AppSession();
+  const session = createSession();
   let failures = 0;
   const check = (name: string, ok: boolean, detail = '') => {
     log(`${ok ? 'PASS' : 'FAIL'}: ${name}${detail ? ` (${detail})` : ''}`);

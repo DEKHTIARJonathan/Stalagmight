@@ -6,7 +6,7 @@
  *
  *   pnpm agent:scenarios
  */
-import { AppSession } from './session';
+import { createSession } from './createSession';
 import { listScenarios, runScenario } from './scenarios';
 import { runSweep, newOracleState } from './lib/oracles';
 import { callStoreAction } from './lib/stores';
@@ -25,7 +25,7 @@ const SMOKE_ITERATIONS: Record<string, number> = {
 };
 
 async function main(): Promise<void> {
-  const session = new AppSession();
+  const session = createSession();
   let failed = false;
   const started = await session.start({ build: 'auto' });
   process.stdout.write(`session ${started.state} (build ${started.buildAction})\n`);
