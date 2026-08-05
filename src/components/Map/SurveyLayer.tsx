@@ -220,6 +220,9 @@ export default class SurveyLayer {
   // Drag preview state - uses temporary layers with *-translate paint properties
   // instead of rebuilding GeoJSON on every frame
   private dragPreviewActive = false;
+  // When MapCanvas last confirmed a placement (performance.now() ms); see
+  // modalInteractionActive for why the store read alone cannot see it.
+  private lastPlacementConfirmAt = -Infinity;
   private dragSavedFilters = new Map<string, maplibregl.FilterSpecification | undefined>();
   // One-shot callback fired at end of update() - used to restore filters after
   // source data has been updated, in the same synchronous block (no paint gap).
@@ -1045,12 +1048,29 @@ export default class SurveyLayer {
    * own (`beginStationDragPreview` / `beginDragPreview` -> `endDragPreview`), and
    * placement mode is uiStore state. Note pointer events precede touch events, so
    * a placement CONFIRMED by this very touch has already cleared the store by the
-   * time the press is armed; what the placement read covers is a hold that starts
-   * while placement is still armed (a confirm that bailed, or the next section of
-   * a multi-section placement).
+   * time the press is armed; that is what {@link notePlacementConfirmed} bridges,
+   * while the store read covers a hold that starts while placement is still armed
+   * (a confirm that bailed, or the next section of a multi-section placement).
    */
   private modalInteractionActive(): boolean {
-    return this.dragPreviewActive || useUIStore.getState().placementMode !== null;
+    return (
+      this.dragPreviewActive ||
+      useUIStore.getState().placementMode !== null ||
+      performance.now() - this.lastPlacementConfirmAt < SurveyLayer.PLACEMENT_CONFIRM_GRACE_MS
+    );
+  }
+
+  /**
+   * Called by MapCanvas when a placement confirms (on `pointerdown`). The store
+   * is already cleared by the time this touch's `touchstart` arms the long-press,
+   * so without this stamp a hold that just placed a station would ALSO open the
+   * context menu over it. The grace window only needs to outlive the
+   * pointerdown->touchstart gap (microseconds plus main-thread jitter); it is kept
+   * well under the 500ms hold so it can never eat a deliberate later long-press.
+   */
+  private static readonly PLACEMENT_CONFIRM_GRACE_MS = 200;
+  notePlacementConfirmed(): void {
+    this.lastPlacementConfirmAt = performance.now();
   }
 
   /**

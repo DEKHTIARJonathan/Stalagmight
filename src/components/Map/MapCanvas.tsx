@@ -734,6 +734,10 @@ function MapCanvas() {
     // by then, so the click would be treated as an empty-click and clear selection.
     placementJustConfirmedRef.current = true;
     requestAnimationFrame(() => { placementJustConfirmedRef.current = false; });
+    // Same pointer-before-touch ordering, other consumer: the long-press gate
+    // reads placementMode at touchstart, after this confirm already cleared it,
+    // so stamp the confirm to keep the hold from also opening a context menu.
+    surveyLayerRef.current?.notePlacementConfirmed();
 
     // If there's a callback, call it with the result
     // The caller is responsible for what to do with the placement
