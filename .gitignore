@@ -63,6 +63,12 @@ wdio-logs/
 scripts/lib/slice-rs/target/
 scripts/lib/slice-rs/Cargo.lock
 
+# Tier 2 OS helper: ensureHelperBuilt() builds into CARGO_TARGET_DIR, but a
+# hand-run `cargo build` in the crate dir drops a target/ here. Cargo.lock IS
+# tracked (it pins the helper's own deps and is outside the license gate's
+# src-tauri/Cargo.lock scope).
+e2e/agent/os/helper/target/
+
 # macOS remote build artifacts
 build/
 
