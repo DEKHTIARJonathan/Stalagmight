@@ -10,7 +10,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { readBuildStamp, stampStaleReasons, type E2EBuildStamp } from './build';
+import { needsE2eFeature, readBuildStamp, stampStaleReasons, type E2EBuildStamp } from './build';
 
 const E2E_STAMP: E2EBuildStamp = {
   v: 2,
@@ -79,6 +79,38 @@ describe('stampStaleReasons', () => {
   it('accepts a matching feature-build stamp', () => {
     const stamp = { ...E2E_STAMP, e2eFeature: true };
     expect(stampStaleReasons(stamp, { ...wantMatching, e2eFeature: true })).toEqual([]);
+  });
+});
+
+// Pins the wiring between the platform selector and the freshness decision: a
+// regression hardcoding e2eFeature:false in checkBuildFreshness's `want` would
+// otherwise pass every stamp test and recreate the silent mac session-create
+// hang the v2 stamp exists to prevent.
+describe('needsE2eFeature', () => {
+  const KEY = 'STALAGMIGHT_AGENT_PLATFORM';
+  let saved: string | undefined;
+
+  beforeEach(() => {
+    saved = process.env[KEY];
+  });
+  afterEach(() => {
+    if (saved === undefined) delete process.env[KEY];
+    else process.env[KEY] = saved;
+  });
+
+  it('is true when the target platform is darwin', () => {
+    process.env[KEY] = 'darwin';
+    expect(needsE2eFeature()).toBe(true);
+  });
+
+  it('is false when the target platform is linux', () => {
+    process.env[KEY] = 'linux';
+    expect(needsE2eFeature()).toBe(false);
+  });
+
+  it('follows the real platform when no override is set', () => {
+    delete process.env[KEY];
+    expect(needsE2eFeature()).toBe(process.platform === 'darwin');
   });
 });
 

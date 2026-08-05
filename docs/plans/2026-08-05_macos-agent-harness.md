@@ -242,7 +242,21 @@ Tier 1 equivalent; the comment preserves intent.
   `os_screenshot` showing real map pixels, and the revoked-Screen-Recording path failing
   loudly instead of shipping a wallpaper.
 
-## 7. Risks
+## 7. Review residue (pre-PR round, 2026-08-05)
+
+Deferred with rationale, per the one-triage-pass rule:
+
+- The darwin arms of `pidComm`/`pidPgid` (and the reap tests' darwin behavior)
+  run only when vitest runs on a Mac - CI's check job is Linux, so keep the
+  habit of running `pnpm exec vitest run e2e/agent` locally when touching
+  procs.ts.
+- `SessionCore.stop()` leaves `recorderInstance` set, so a second `start()`
+  failing before `prepareSession` appends a duplicate `sessionEnd` to the OLD
+  session's log (pre-existing on Linux, harmless, inherited by the shared
+  core). Nulling it would change `sessionDir`-after-stop semantics consumers
+  may read; not worth the risk in this PR.
+
+## 8. Risks
 
 1. R1 fails on element-origin pointer actions or element refs through `execute` -> port
    more of the legacy overrides, or shim drags via eval. Probed before the refactor lands.
@@ -250,7 +264,7 @@ Tier 1 equivalent; the comment preserves intent.
 3. Occlusion/App Nap throttles waiters -> decide mitigation from R5 data, not
    preemptively.
 
-## 8. Probe results (Phase 0)
+## 9. Probe results (Phase 0)
 
 Run 2026-08-05 on an M1 MacBook (macOS 15 / Darwin 25.5), repo-pinned Node 24,
 `tauri-wd` from cargo, debug binary built `--debug --no-bundle -- --features e2e` with

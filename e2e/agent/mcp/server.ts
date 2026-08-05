@@ -6,6 +6,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
 import { createSession } from '../createSession';
+import { isDarwinTarget } from '../lib/platform';
 import type { AgentSession } from '../sessionTypes';
 import { readStore, callStoreAction, postDigest, type StoreName } from '../lib/stores';
 import { LogCursor, type LogLevel } from '../lib/logs';
@@ -288,7 +289,7 @@ define('screenshot', 'Capture a PNG screenshot (returned as image + saved to the
     // darwin: the in-app WebDriver plugin rasterizes the DOM (SVG foreignObject),
     // so canvas/WebGL content - the survey map - is BLANK in the capture. Honest
     // flag rather than a silent lie; real pixels are Tier 2's os_screenshot (#421).
-    const domOnly = process.platform === 'darwin';
+    const domOnly = isDarwinTarget();
     return {
       content: [
         { type: 'image', data: base64, mimeType: 'image/png' },
@@ -513,7 +514,7 @@ define('press_keys', 'Press a sequence of WebDriver keys (e.g. ["Control","z"]).
       // never reach the native menu - a "passed" Cmd shortcut here proves only
       // the DOM handler. No silent remap to Control: the app may bind both, and
       // rewriting would corrupt repro records (#421).
-      if (process.platform === 'darwin' && args.keys.some((k) => k === 'Meta' || k === 'Command')) {
+      if (isDarwinTarget() && args.keys.some((k) => k === 'Meta' || k === 'Command')) {
         return {
           result: {
             pressed: args.keys,

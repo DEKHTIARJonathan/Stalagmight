@@ -22,6 +22,7 @@ export class E2EHooksMissingError extends Error {
 export async function attachBrowser(
   port: number,
   capabilities: Record<string, unknown>,
+  driverName = 'tauri-driver',
 ): Promise<Browser> {
   try {
     return await remote({
@@ -38,14 +39,14 @@ export async function attachBrowser(
     const msg = err instanceof Error ? err.message : String(err);
     if (msg.includes('UND_ERR_INVALID_ARG')) {
       throw new Error(
-        'Failed to attach to tauri-driver (UND_ERR_INVALID_ARG), an error from webdriverio\'s ' +
+        `Failed to attach to ${driverName} (UND_ERR_INVALID_ARG), an error from webdriverio's ` +
           `undici HTTP layer. You are on Node ${process.versions.node}. Session creation is ` +
           'known to work on Node 22 and 24, so this is more likely a bad dispatcher/proxy ' +
           'option or an HTTP_PROXY/NO_PROXY in the environment than the Node version. If a ' +
           'different Node major does fix it, please record which one in docs/agent-harness.md.',
       );
     }
-    throw new Error(`Failed to attach to tauri-driver on port ${port}: ${msg}`);
+    throw new Error(`Failed to attach to ${driverName} on port ${port}: ${msg}`);
   }
 }
 

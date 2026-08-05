@@ -74,12 +74,17 @@ up in `app_start` rather than in the probe.
 
 Since #421 the harness also runs on macOS, through a different WebDriver stack:
 `createSession()` picks `MacSession` (`e2e/agent/sessionMac.ts`), which drives
-`tauri-wd` (install: see the tauri-webdriver project; the binary must be on
-PATH) against the in-app `tauri-plugin-webdriver-automation` server, compiled in
-by the darwin build arm (`pnpm tauri build --debug --no-bundle -- --features
-e2e`; the E2E build stamp records the feature so a plugin-less binary reads as
-stale). `e2e/mac-app-wrapper.mjs` sits between tauri-wd and the binary exactly
-as in the legacy WDIO suite.
+`tauri-wd` (`cargo install --git
+https://github.com/FumblingBarbell/tauri-webdriver tauri-webdriver-automation`
+installs the `tauri-wd` binary onto PATH) against the in-app
+`tauri-plugin-webdriver-automation` server, compiled in by the darwin build arm
+(`pnpm tauri build --debug --no-bundle -- --features e2e`; the E2E build stamp
+records the feature so a plugin-less binary reads as stale). The feature build
+regenerates `src-tauri/gen/schemas/*.json` with the plugin's ACL entries;
+`buildApp` restores them when they were clean before the build, and warns
+instead of clobbering when they were already modified - never commit them in
+the feature shape. `e2e/mac-app-wrapper.mjs` sits between tauri-wd and the
+binary exactly as in the legacy WDIO suite.
 
 Platform differences that are contracts, not bugs (full rationale + probe
 evidence: `docs/plans/2026-08-05_macos-agent-harness.md`):
@@ -103,8 +108,8 @@ evidence: `docs/plans/2026-08-05_macos-agent-harness.md`):
 
 `pnpm agent:smoke` and `pnpm agent:mcp:smoke` run on macOS unchanged (verified
 2026-08-05: 13/13 and full MCP pass on an M1). Real trusted input, real-pixel
-screenshots and menu-bar driving are the Tier 2 `os_*` tools (in progress,
-`e2e/agent/os/` - permission-gated, see its README).
+screenshots and menu-bar driving are the permission-gated Tier 2 `os_*` tools,
+landing separately under `e2e/agent/os/` (#421, PR 4 of the design doc).
 
 ## Architecture
 

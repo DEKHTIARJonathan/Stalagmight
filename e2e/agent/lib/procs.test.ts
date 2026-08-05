@@ -1,4 +1,5 @@
 import { spawn, spawnSync, type ChildProcess } from 'child_process';
+import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -47,9 +48,10 @@ describe('pidComm / pidPgid on a live process', () => {
   it('reports the process group, which a non-detached child shares with us', () => {
     const pgid = pidPgid(child.pid ?? 0);
     expect(pgid).toBeGreaterThan(0);
+    // Asserting on OUR pgid, not on the leader's liveness: whether the group
+    // leader is alive is a property of the test runner's process tree, not of
+    // pidPgid, and can legitimately differ across CI environments.
     expect(pgid).toBe(pidPgid(process.pid));
-    // A group kill (kill(-pgid)) is only aimable at a live leader.
-    expect(isPidAlive(pgid)).toBe(true);
   });
 });
 
@@ -69,5 +71,38 @@ describe('pidComm / pidPgid on a pid that is not running', () => {
 describe('reapPidsFromFile', () => {
   it('kills nothing when the pidfile does not exist', () => {
     expect(reapPidsFromFile(path.join(os.tmpdir(), 'no-such-agent-pidfile'), ['stalagmight'])).toEqual([]);
+  });
+
+  // The safety property the scoped reap exists for (#127): a recorded pid whose
+  // comm does not match is LEFT ALONE, even though it is in the pidfile - that
+  // is what stands between the harness and killing a user's unrelated process
+  // when a pid gets reused.
+  it('skips a live pid whose comm does not match, then kills it on a matching comm', async () => {
+    const child = await liveChild();
+    const pid = child.pid ?? 0;
+    expect(pid).toBeGreaterThan(0);
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'stalagmight-reap-'));
+    const pidFile = path.join(dir, 'pids');
+    fs.writeFileSync(pidFile, `${pid}\n`);
+    try {
+      expect(reapPidsFromFile(pidFile, ['no-such-comm-name'])).toEqual([]);
+      expect(isPidAlive(pid)).toBe(true);
+
+      const comm = path.basename(process.execPath);
+      expect(reapPidsFromFile(pidFile, [comm])).toEqual([pid]);
+      // SIGKILL delivery is async; poll briefly rather than sleeping blind.
+      const deadline = Date.now() + 2000;
+      while (isPidAlive(pid) && Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 25));
+      }
+      expect(isPidAlive(pid)).toBe(false);
+    } finally {
+      try {
+        child.kill('SIGKILL');
+      } catch {
+        // Already dead - the expected case.
+      }
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

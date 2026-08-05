@@ -10,16 +10,12 @@
 // FIRST import on purpose, before anything can pull in webdriverio: it patches
 // webdriver's undici. See the module comment for the Node >= 26 failure it fixes.
 import './lib/undici-dispatcher-pin';
+import { targetPlatform } from './lib/platform';
 import { AppSession } from './session';
 import { MacSession } from './sessionMac';
 import type { AgentSession } from './sessionTypes';
 
 const DESIGN_DOC = 'docs/plans/2026-08-05_macos-agent-harness.md';
-
-/** Override for tests and for forcing a platform path; defaults to the real OS. */
-function targetPlatform(): string {
-  return process.env.STALAGMIGHT_AGENT_PLATFORM ?? process.platform;
-}
 
 export function createSession(): AgentSession {
   const plat = targetPlatform();
@@ -28,6 +24,7 @@ export function createSession(): AgentSession {
   throw new Error(
     `the agent harness has no session backend for platform "${plat}": it requires Linux ` +
       '(tauri-driver: `cargo install tauri-driver --locked`, plus webkit2gtk-driver) or macOS ' +
-      `(tauri-wd - see issue #421 and ${DESIGN_DOC}).`,
+      '(tauri-wd: `cargo install --git https://github.com/FumblingBarbell/tauri-webdriver ' +
+      `tauri-webdriver-automation\` - see issue #421 and ${DESIGN_DOC}).`,
   );
 }

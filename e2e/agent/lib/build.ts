@@ -22,25 +22,19 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
 import { binaryPath, cargoTargetDir } from '../../lib/env';
+import { isDarwinTarget } from './platform';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
-
-/**
- * Platform the harness is building for. STALAGMIGHT_AGENT_PLATFORM is the same
- * override createSession honors, so build and session decisions cannot diverge.
- */
-function harnessPlatform(): string {
-  return process.env.STALAGMIGHT_AGENT_PLATFORM ?? process.platform;
-}
 
 /**
  * macOS has no external WebDriver daemon; the app itself must embed
  * tauri-plugin-webdriver-automation (cargo feature `e2e`) for tauri-wd to
  * attach. On Linux/Windows the plugin is not needed (and not wanted: the
- * feature adds an HTTP server to the binary).
+ * feature adds an HTTP server to the binary). Keyed on the shared
+ * targetPlatform() so build and session decisions cannot diverge.
  */
 export function needsE2eFeature(): boolean {
-  return harnessPlatform() === 'darwin';
+  return isDarwinTarget();
 }
 
 // Source inputs whose changes should invalidate the built binary.
@@ -229,15 +223,28 @@ export function checkBuildFreshness(opts: FreshnessOptions = {}): Freshness {
  * Build the debug binary with the E2E frontend hooks. Blocking (this is a slow
  * one-time cost). Throws on build failure.
  */
+// The feature build regenerates these TRACKED files with the WebDriver
+// plugin's ACL entries; the repo keeps the plain-build shape.
+const SCHEMA_PATHSPEC = 'src-tauri/gen/schemas';
+
+/** True when the tracked generated schemas have no uncommitted changes. */
+function schemasClean(): boolean {
+  try {
+    execSync(`git diff --quiet -- ${SCHEMA_PATHSPEC}`, { cwd: repoRoot, stdio: 'ignore' });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function buildApp(onLog?: (line: string) => void): void {
   const withE2eFeature = needsE2eFeature();
-  // On macOS the extra cargo feature compiles in the WebDriver plugin. Note the
-  // feature build also regenerates src-tauri/gen/schemas/*.json with the
-  // plugin's ACL entries - tracked files that must NOT be committed in that
-  // shape (the repo keeps the plain-build schemas).
   const command = withE2eFeature
     ? 'pnpm tauri build --debug --no-bundle -- --features e2e'
     : 'pnpm tauri build --debug --no-bundle';
+  // Only restore schema churn the build itself caused: a dirty-before state is
+  // someone's real in-progress work and must never be clobbered by tooling.
+  const schemasWereClean = withE2eFeature && schemasClean();
   onLog?.(`Building Tauri debug app (VITE_E2E=1, --no-bundle${withE2eFeature ? ', --features e2e' : ''})...`);
   // Build output goes to stderr (fd 2), NEVER inherited stdout: under the MCP
   // server, stdout is the JSON-RPC stream and any build chatter (pnpm/vite log
@@ -251,6 +258,22 @@ export function buildApp(onLog?: (line: string) => void): void {
       CARGO_TARGET_DIR: cargoTargetDir,
     },
   });
+  if (withE2eFeature && !schemasClean()) {
+    if (schemasWereClean) {
+      try {
+        execSync(`git checkout -- ${SCHEMA_PATHSPEC}`, { cwd: repoRoot, stdio: 'ignore' });
+        onLog?.(`Restored ${SCHEMA_PATHSPEC} (the e2e-feature build regenerates them with plugin ACL entries).`);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        onLog?.(`Warning: could not restore ${SCHEMA_PATHSPEC} (${msg}); do NOT commit them in this shape.`);
+      }
+    } else {
+      onLog?.(
+        `Warning: ${SCHEMA_PATHSPEC} was already modified before this build, so the harness left it ` +
+          `alone - it now also carries e2e-feature ACL churn. Do not commit the plugin entries.`,
+      );
+    }
+  }
   writeBuildStamp({ viteE2E: true, e2eFeature: withE2eFeature, viteMode: 'production' }, onLog);
   onLog?.('Build complete.');
 }

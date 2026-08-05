@@ -36,7 +36,11 @@ export interface StartResult {
   profileDir: string;
   buildAction: 'skipped' | 'built' | 'fresh';
   sessionDir: string;
-  /** Set on darwin when headed:false was requested: macOS has no headless. */
+  /**
+   * Set (true) on darwin whenever the caller did not explicitly ask for
+   * headed:true - macOS has no headless display, so the default headless
+   * request is coerced to a visible window. Absent on Linux.
+   */
   headedForced?: boolean;
 }
 

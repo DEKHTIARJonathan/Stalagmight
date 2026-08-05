@@ -159,7 +159,8 @@ export class MacSession extends SessionCore {
           ? `tauri-wd did not start listening on port ${this.driverPort} within 15s ` +
             `(see tauri-wd.log in the session dir)`
           : `tauri-wd exited before listening on port ${this.driverPort}. Is it installed? ` +
-            `(cargo install: see docs/agent-harness.md; the binary must be on PATH). ` +
+            '(`cargo install --git https://github.com/FumblingBarbell/tauri-webdriver ' +
+            'tauri-webdriver-automation` puts the tauri-wd binary on PATH). ' +
             `Details in tauri-wd.log in the session dir.`,
       );
     }
@@ -168,11 +169,15 @@ export class MacSession extends SessionCore {
     // "application" (it delays the port announcement past the window race and
     // records the app pid), the real binary rides STALAGMIGHT_BINARY.
     try {
-      this.browserInstance = await attachBrowser(this.driverPort, {
-        platformName: 'mac',
-        'wdio:enforceWebDriverClassic': true,
-        'tauri:options': { application: macWrapperPath },
-      });
+      this.browserInstance = await attachBrowser(
+        this.driverPort,
+        {
+          platformName: 'mac',
+          'wdio:enforceWebDriverClassic': true,
+          'tauri:options': { application: macWrapperPath },
+        },
+        'tauri-wd',
+      );
     } catch (err) {
       await this.stop('attach-failed');
       throw err;
