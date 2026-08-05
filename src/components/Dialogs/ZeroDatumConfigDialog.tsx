@@ -20,6 +20,7 @@ import type { DmpSelectionConfig } from './DmpSelectionDialog';
 import type { GpsCoordinates } from '../../types/project';
 import { sectionColorPalette } from '../../utils/colors';
 import { useUIStore } from '../../store/uiStore';
+import { TOAST_KEYS } from '../../utils/toastKeys';
 
 export interface ZeroDatumConfigResult {
   sectionIndex: number;
@@ -380,7 +381,7 @@ export default function ZeroDatumConfigDialog({
 
   const handleConfirm = useCallback(() => {
     if (!gpsCoords) return;
-    if (blockedByIncompleteShots(incompleteShots, t, 'zero-datum-incomplete')) return;
+    if (blockedByIncompleteShots(incompleteShots, t, TOAST_KEYS.ZERO_DATUM_INCOMPLETE)) return;
     onConfirm({
       sectionIndex,
       stationIndex,

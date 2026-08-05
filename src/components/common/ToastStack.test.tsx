@@ -183,7 +183,7 @@ function stubLegacyReducedMotion(reduce: boolean) {
 
 type Kind = 'info' | 'success' | 'warning' | 'error';
 
-function push(message: string, key: string, kind?: Kind) {
+function push(message: string, key: string, kind: Kind = 'info') {
   act(() => {
     useUIStore.getState().showToast(message, key, kind);
   });
@@ -198,7 +198,7 @@ function push(message: string, key: string, kind?: Kind) {
 function pushBatch(...entries: Array<[message: string, key: string, kind?: Kind]>) {
   act(() => {
     const { showToast } = useUIStore.getState();
-    for (const [message, key, kind] of entries) showToast(message, key, kind);
+    for (const [message, key, kind] of entries) showToast(message, key, kind ?? 'info');
   });
 }
 

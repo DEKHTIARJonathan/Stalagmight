@@ -90,7 +90,7 @@ describe('projectStore.loadProject tool-transient wiring (#275 B1)', () => {
       frozenShots: [],
       warnings: [],
       recentProjects: [],
-      error: null,
+      autosaveFailure: null,
       isDirty: false,
       loading: {
         loadingId: 0n,

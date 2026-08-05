@@ -1,8 +1,12 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
-import { invokeIpc, getErrorMessage } from '../../utils/ipc';
-import { completeImportToSingleView, finalizeDeferredSaveWarnings } from '../../utils/saveFeedback';
+import { invokeIpc } from '../../utils/ipc';
+import {
+  completeImportToSingleView,
+  finalizeDeferredSaveWarnings,
+  surfaceImportFailure,
+} from '../../utils/saveFeedback';
 import { extractFilename } from '../../utils/path';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
@@ -56,11 +60,7 @@ export default function CompassImportDialog({ compassFile, filePath }: CompassIm
       resetLoading();
 
       if (!result.success) {
-        completeImportToSingleView('compass-import', importUi);
-        openDialog('error', {
-          title: 'Import Errors',
-          message: result.error ?? 'Unknown error during import',
-        });
+        surfaceImportFailure('compass-import', importUi, { phase: 'command', error: result.error });
         return;
       }
 
@@ -70,7 +70,7 @@ export default function CompassImportDialog({ compassFile, filePath }: CompassIm
       // Routine per-shot validation warnings (LONG_SHOT, …) also ride along on a
       // successful import but are surfaced via the data-table UI - they must not
       // modal here or skip orphan placement (#110).
-      if (finalizeDeferredSaveWarnings(result.warnings, 'compass-import', importUi)) {
+      if (finalizeDeferredSaveWarnings(result.warnings, 'compass-import', importUi, result.import_receipt)) {
         return;
       }
 
@@ -96,10 +96,7 @@ export default function CompassImportDialog({ compassFile, filePath }: CompassIm
     } catch (e) {
       resetLoading();
       setIsImporting(false);
-      openDialog('error', {
-        title: 'Import Failed',
-        message: getErrorMessage(e, 'Failed to import Compass file'),
-      });
+      surfaceImportFailure('compass-import', importUi, { phase: 'transport', error: e, format: 'Compass' });
     }
   }, [executeCompassImport, filePath, fileHash, includeExcluded, applyCorrections, commentsOnStations, compassFile.cave_name, fileName, closeDialog, openDialog, setView, triggerFitToBounds, startLoading, setLoadingProgress, resetLoading]);
 

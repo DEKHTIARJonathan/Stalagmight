@@ -10,6 +10,7 @@ import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { useSpeleoStore } from '../../store/speleoStore';
 import { useSpeleoProjectMetadata } from '../../hooks/useSpeleoProjectMetadata';
+import { TOAST_KEYS } from '../../utils/toastKeys';
 
 type SpeleoProjectTab = 'general' | 'collaborators' | 'history' | 'admin';
 const TABS: readonly SpeleoProjectTab[] = ['general', 'collaborators', 'history', 'admin'];
@@ -85,7 +86,7 @@ export function SpeleoDbProjectDialog() {
     closeDialog();
     showToast(
       t('speleodb.projectDialog.projectChanged'),
-      'speleodb-project-dialog-stale',
+      TOAST_KEYS.SPELEODB_PROJECT_DIALOG_STALE,
       'warning',
     );
   }, [projectChanged, closeDialog, showToast, t]);

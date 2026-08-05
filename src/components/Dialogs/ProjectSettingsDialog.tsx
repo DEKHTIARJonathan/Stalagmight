@@ -13,6 +13,7 @@ import { useProjectStore } from '../../store/projectStore';
 import { useSpeleoStore } from '../../store/speleoStore';
 import { defaultConfig, type Config } from '../../types/config';
 import { isValidationConfigValid } from '../../utils/validation';
+import { TOAST_KEYS } from '../../utils/toastKeys';
 
 // A compiler-checked subset of SettingsCategory, so these tabs can never drift
 // from the shared id helpers they are paired with.
@@ -106,7 +107,7 @@ export function ProjectSettingsDialog() {
       const result = await updateProjectSettings(trimmedName, validation);
       if (!result.success) {
         setSaving(false);
-        showToast(result.error ?? t('dialogs.projectSettings.saveFailed'), 'project-settings', 'error');
+        showToast(result.error ?? t('dialogs.projectSettings.saveFailed'), TOAST_KEYS.PROJECT_SETTINGS, 'error');
         return;
       }
     }

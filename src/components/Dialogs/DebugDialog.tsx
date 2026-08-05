@@ -1,7 +1,9 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useUIStore } from '../../store/uiStore';
 import { invokeIpc, getErrorMessage } from '../../utils/ipc';
 import { trackDialogComplete } from '../../utils/telemetry';
+import { TOAST_KEYS } from '../../utils/toastKeys';
 import { DialogWrapper } from './DialogWrapper';
 import { Button } from '../common/Button';
 
@@ -90,6 +92,7 @@ function LogLine({ line }: { line: string }) {
 }
 
 export default function DebugDialog() {
+  const { t } = useTranslation();
   const closeDialog = useUIStore((s) => s.closeDialog);
   const showToast = useUIStore((s) => s.showToast);
 
@@ -119,7 +122,7 @@ export default function DebugDialog() {
   // refresh surfaces feedback. On failure the inline error already reports it, so
   // the success toast is skipped.
   const handleRefresh = useCallback(async () => {
-    if (await fetchLogs()) showToast('Logs refreshed', 'debug-refresh', 'success');
+    if (await fetchLogs()) showToast(t('debugDialog.toasts.refreshed'), TOAST_KEYS.DEBUG_REFRESH, 'success');
   }, [fetchLogs, showToast]);
 
   useEffect(() => {
@@ -146,12 +149,12 @@ export default function DebugDialog() {
   const handleCopy = useCallback(async () => {
     try {
       await navigator.clipboard.writeText(filteredLogs.join('\n'));
-      showToast('Logs copied', 'debug-copy', 'success');
+      showToast(t('debugDialog.toasts.copied'), TOAST_KEYS.DEBUG_COPY, 'success');
     } catch {
       // Surface the failure rather than swallowing it (e.g. clipboard blocked /
       // unavailable on WebKitGTK). Distinct key so it isn't throttled by a prior
       // successful copy.
-      showToast('Copy failed - clipboard unavailable', 'debug-copy-failed', 'error');
+      showToast(t('debugDialog.toasts.copyFailed'), TOAST_KEYS.DEBUG_COPY_FAILED, 'error');
     }
   }, [filteredLogs, showToast]);
 

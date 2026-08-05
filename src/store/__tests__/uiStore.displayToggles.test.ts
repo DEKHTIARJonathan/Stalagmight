@@ -726,14 +726,14 @@ describe('Toasts (display-toggle surface)', () => {
   });
 
   it('first toast shows immediately', () => {
-    useUIStore.getState().showToast('Test message', 'test-key');
+    useUIStore.getState().showToast('Test message', 'test-key', 'info');
     expect(useUIStore.getState().toasts.map((t) => t.message)).toEqual(['Test message']);
   });
 
   it('toasts with different keys coexist', () => {
     const { showToast } = useUIStore.getState();
-    showToast('Stations message', 'stations');
-    showToast('Shots message', 'shots');
+    showToast('Stations message', 'stations', 'info');
+    showToast('Shots message', 'shots', 'info');
     expect(useUIStore.getState().toasts.map((t) => t.message)).toEqual([
       'Stations message',
       'Shots message',
@@ -743,7 +743,7 @@ describe('Toasts (display-toggle surface)', () => {
   it('clearToast removes every toast', () => {
     const { showToast, clearToast } = useUIStore.getState();
 
-    showToast('Test', 'key');
+    showToast('Test', 'key', 'info');
     expect(useUIStore.getState().toasts).toHaveLength(1);
 
     clearToast();

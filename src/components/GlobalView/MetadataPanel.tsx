@@ -11,6 +11,7 @@ import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
 import { formatDate, formatFixed, formatNumber } from '../../i18n/format';
 import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
+import { TOAST_KEYS } from '../../utils/toastKeys';
 
 interface MetadataPanelProps {
   /** The selected project metadata to display (legacy single-selection) */
@@ -145,15 +146,15 @@ const MetadataPanel: FC<MetadataPanelProps> = ({
     }
     setNameBusy(true);
     try {
+      // Failure surfacing is owned by executeCommand's catch-all toast
+      // (docs/notifications.md: one event, one surface).
       const result = await setProjectNameForPath(singleProject.file_path, next);
-      if (!result.success) {
-        showToast(result.error ?? t('globalView.metadata.rename.failed'), 'rename', 'error');
-      } else {
+      if (result.success) {
         setEditingName(false);
         await loadRecentProjects();
       }
     } catch (e) {
-      showToast(String(e), 'rename', 'error');
+      showToast(String(e), TOAST_KEYS.RENAME, 'error');
     } finally {
       setNameBusy(false);
     }

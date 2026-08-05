@@ -19,8 +19,10 @@ vi.mock('../../utils/ipc', () => ({
  *      the load-bearing guard against the "shots vanish on drag" regression (a
  *      committed drag preview was left stranded because the success-only refresh
  *      never fired); this also holds on a genuine IPC throw (re-sync, then re-throw);
- *  (b) surface ONE friendly read-only toast, while NON-read-only failures stay
- *      silent here (dialogs render their own inline error - no double message).
+ *  (b) surface ONE friendly read-only toast; other failures fall to the
+ *      catch-all error toast (docs/notifications.md: success:false never dies
+ *      silently) - which yields while a dialog is open, because dialogs render
+ *      their own inline error and must not be double-messaged.
  */
 describe('projectStore executeCommand failure handling (#191 read-only gate)', () => {
   let showToast: ReturnType<typeof vi.fn>;
@@ -34,8 +36,11 @@ describe('projectStore executeCommand failure handling (#191 read-only gate)', (
       checkProjectIntegrity: vi.fn().mockResolvedValue(undefined),
     } as Partial<ReturnType<typeof useProjectStore.getState>> as never);
     showToast = vi.fn();
+    // activeDialog reset explicitly: the catch-all cases below flip it, and a
+    // leaked 'edit-shot' would silently put later tests on the yield path.
     useUIStore.setState({
       showToast,
+      activeDialog: null,
     } as Partial<ReturnType<typeof useUIStore.getState>> as never);
   });
 
@@ -51,10 +56,30 @@ describe('projectStore executeCommand failure handling (#191 read-only gate)', (
     // (a) anti-"vanishing shots": a rejected edit re-syncs to backend truth.
     expect(refreshProjectState).toHaveBeenCalled();
     // (b) one friendly read-only toast.
-    expect(showToast).toHaveBeenCalledWith(READ_ONLY_EDIT_NOTICE, 'edit-disabled', 'warning');
+    expect(showToast).toHaveBeenCalledWith(READ_ONLY_EDIT_NOTICE(), 'edit-disabled', 'warning');
   });
 
-  it('re-syncs but does NOT toast on a non-read-only failure (dialogs own inline errors)', async () => {
+  it('surfaces an unclaimed failure via the catch-all error toast when no dialog is open', async () => {
+    useUIStore.setState({ activeDialog: null } as never);
+    invokeIpcMock.mockResolvedValue({ success: false, error: 'Invalid offset' });
+
+    await useProjectStore.getState().moveSection(1, { x: 1, y: 2, z: 0 });
+
+    expect(refreshProjectState).toHaveBeenCalled();
+    expect(showToast).toHaveBeenCalledWith('Invalid offset', 'command-failed', 'error');
+  });
+
+  it('still toasts an unclaimed failure from the context menu (it renders no errors)', async () => {
+    useUIStore.setState({ activeDialog: 'context-menu' } as never);
+    invokeIpcMock.mockResolvedValue({ success: false, error: 'Invalid offset' });
+
+    await useProjectStore.getState().moveSection(1, { x: 1, y: 2, z: 0 });
+
+    expect(showToast).toHaveBeenCalledWith('Invalid offset', 'command-failed', 'error');
+  });
+
+  it('re-syncs but does NOT toast a failure while a dialog is open (it owns the inline error)', async () => {
+    useUIStore.setState({ activeDialog: 'edit-shot' } as never);
     invokeIpcMock.mockResolvedValue({ success: false, error: 'Invalid offset' });
 
     await useProjectStore.getState().moveSection(1, { x: 1, y: 2, z: 0 });
@@ -85,7 +110,7 @@ describe('projectStore executeCommand failure handling (#191 read-only gate)', (
 
     // executeUndoRedo must match executeCommand: friendly notice under the shared
     // 'edit-disabled' dedup key, never the raw coded string under the undo toastId.
-    expect(showToast).toHaveBeenCalledWith(READ_ONLY_EDIT_NOTICE, 'edit-disabled', 'warning');
+    expect(showToast).toHaveBeenCalledWith(READ_ONLY_EDIT_NOTICE(), 'edit-disabled', 'warning');
     expect(showToast).not.toHaveBeenCalledWith(
       expect.stringContaining(EDIT_DISABLED),
       expect.anything()

@@ -8,6 +8,7 @@ import {
 import { useUIStore } from '../../store/uiStore';
 import { useSpeleoActions } from '../../hooks/useSpeleoActions';
 import { humanizeSpeleoError } from '../../utils/speleoError';
+import { TOAST_KEYS } from '../../utils/toastKeys';
 
 /**
  * Thin banner slot below the toolbar for SpeleoDB status (#200/#204). It surfaces
@@ -85,6 +86,7 @@ export function SpeleoBanner() {
     return (
       <div
         className="flex items-center justify-between gap-3 px-4 py-2 bg-error-20 text-error text-sm font-medium border-b border-border"
+        role="alert"
         data-testid="speleo-banner"
         data-kind="force_edit_active"
       >
@@ -148,7 +150,7 @@ export function SpeleoBanner() {
     } catch (e) {
       showToast(
         humanizeSpeleoError(e, t('speleodb.banner.enableRenderingFailed')),
-        'speleodb-enable-rendering-error',
+        TOAST_KEYS.SPELEODB_ENABLE_RENDERING_ERROR,
         'error',
       );
     } finally {
@@ -160,6 +162,7 @@ export function SpeleoBanner() {
   return (
     <div
       className="flex items-center justify-between gap-3 px-4 py-2 bg-warning-20 text-warning text-sm border-b border-border"
+      role="status"
       data-testid="speleo-banner"
       data-kind={banner.kind}
     >

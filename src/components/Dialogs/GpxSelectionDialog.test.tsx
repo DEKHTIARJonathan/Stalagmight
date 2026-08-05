@@ -1,8 +1,8 @@
 /**
  * Component test (#110/#391) - GPX waypoints-only import must apply the same
  * deferred-save gate as the TML/Compass/Walls dialogs: a "SYSTEM" save-failure
- * warning means the import is unsaved, so the save-failure dialog is shown and
- * the receipt is NOT (the receipt describes a persisted import).
+ * warning means the import is unsaved, so it must lead the receipt's warning
+ * rows (docs/notifications.md - one event, one surface).
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
@@ -72,16 +72,23 @@ beforeEach(() => {
 });
 
 describe('GpxSelectionDialog waypoints-only import (#110/#391)', () => {
-  it('shows the save-failure dialog (not the receipt) on a deferred-save partial success', async () => {
+  it('threads the save warning into the receipt as its leading row on a deferred-save partial success', async () => {
     executeGpxImport.mockResolvedValue(ok([SAVE_WARNING], RECEIPT));
 
     render(<GpxSelectionDialog gpxFile={waypointsOnlyGpx} filePath="/tmp/waypoints.gpx" />);
     await userEvent.click(await screen.findByTestId('gpx-import-confirm'));
 
     await waitFor(() =>
-      expect(openDialog).toHaveBeenCalledWith('error', expect.objectContaining({ title: 'Import Warning' })),
+      expect(openDialog).toHaveBeenCalledWith(
+        'import-receipt',
+        expect.objectContaining({
+          receipt: expect.objectContaining({
+            warnings: [SAVE_WARNING.message, ...RECEIPT.warnings],
+          }),
+        }),
+      ),
     );
-    expect(openDialog).not.toHaveBeenCalledWith('import-receipt', expect.anything());
+    expect(openDialog).not.toHaveBeenCalledWith('error', expect.anything());
   });
 
   it('shows the receipt when the import fully succeeds with a receipt', async () => {

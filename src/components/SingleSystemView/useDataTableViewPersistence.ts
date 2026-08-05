@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
 import { invokeIpc } from '../../utils/ipc';
+import { TOAST_KEYS } from '../../utils/toastKeys';
 
 type AngleMode = 'avg' | 'inout' | 'off';
 
@@ -255,7 +256,7 @@ export function useDataTableViewPersistence(
           // own it is silent - a user who resizes a column and quits saw nothing
           // and lost the layout with no indication it had not been kept. Keyed so
           // a burst of failures refreshes one toast instead of stacking.
-          showToast(t('dataTable.viewSaveFailed'), 'data-table-view-save', 'error');
+          showToast(t('dataTable.viewSaveFailed'), TOAST_KEYS.DATA_TABLE_VIEW_SAVE, 'error');
         });
     };
     pendingViewSaveRef.current = save;

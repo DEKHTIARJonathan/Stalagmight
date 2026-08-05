@@ -1,8 +1,11 @@
 import { useState, useMemo, useCallback } from 'react';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
-import { getErrorMessage } from '../../utils/ipc';
-import { completeImportToSingleView, finalizeDeferredSaveWarnings } from '../../utils/saveFeedback';
+import {
+  completeImportToSingleView,
+  finalizeDeferredSaveWarnings,
+  surfaceImportFailure,
+} from '../../utils/saveFeedback';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import type { GpxFile, GpxSectionPlacement } from '../../types/commands';
@@ -128,6 +131,7 @@ export default function GpxPlacementDialog() {
       };
     });
 
+    const importUi = { closeDialog, setView, triggerFitToBounds, openDialog };
     try {
       const result = await executeGpxImport(
         filePath,
@@ -139,31 +143,22 @@ export default function GpxPlacementDialog() {
         depthInverted
       );
 
-      const importUi = { closeDialog, setView, triggerFitToBounds, openDialog };
-
       if (!result.success) {
-        completeImportToSingleView('gpx-placement', importUi);
-        openDialog('error', {
-          title: 'Import Errors',
-          message: result.error ?? 'Unknown error during import',
-        });
+        surfaceImportFailure('gpx-placement', importUi, { phase: 'command', error: result.error });
         return;
       }
 
       // A partial-success import (new-project deferred save failed) returns
       // success WITH a "SYSTEM" save-failure warning. Surface ONLY that instead
       // of the receipt, so "unsaved - save manually" isn't buried (#110).
-      if (finalizeDeferredSaveWarnings(result.warnings, 'gpx-placement', importUi)) {
+      if (finalizeDeferredSaveWarnings(result.warnings, 'gpx-placement', importUi, result.import_receipt)) {
         return;
       }
 
       completeImportToSingleView('gpx-placement', importUi, result.import_receipt);
     } catch (e) {
       setIsImporting(false);
-      openDialog('error', {
-        title: 'Import Failed',
-        message: getErrorMessage(e, 'Failed to import GPX file'),
-      });
+      surfaceImportFailure('gpx-placement', importUi, { phase: 'transport', error: e, format: 'GPX' });
     }
   };
 

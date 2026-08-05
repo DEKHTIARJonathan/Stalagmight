@@ -58,6 +58,7 @@ import { useNetworkStore } from '../../store/networkStore';
 import { FEATURE_ID_STRIDE } from '../../utils/ids';
 import { setSource } from '../../utils/telemetry';
 import { debugLog } from '../../utils/debugLog';
+import { TOAST_KEYS } from '../../utils/toastKeys';
 
 // Tools that support temporary panning overrides (Ctrl+drag or middle-drag)
 const CTRL_PAN_TOOLS = ['select', 'zoom', 'merge', 'measure', 'move_station', 'move_shot', 'move_segment', 'comment', 'move_comment'];
@@ -1021,14 +1022,14 @@ function MapCanvas() {
       },
       onHiddenStationClick: () => {
         noteMapInteraction();
-        showToast("Enable 'Stations' in Display menu to interact with station markers", 'stations-hidden', 'warning');
+        showToast(t('map.toasts.stationsHidden'), TOAST_KEYS.STATIONS_HIDDEN, 'warning');
       },
       onHiddenShotClick: () => {
         noteMapInteraction();
-        showToast("Enable 'Shots' in Display menu to interact with shot lines", 'shots-hidden', 'warning');
+        showToast(t('map.toasts.shotsHidden'), TOAST_KEYS.SHOTS_HIDDEN, 'warning');
       },
       // No stock fallback: surface a subsystem-specific toast (renderFatalMessage).
-      onRenderFatal: (reason: string) => showToast(renderFatalMessage(reason), 'render-fatal', 'error'),
+      onRenderFatal: (reason: string) => showToast(renderFatalMessage(reason), TOAST_KEYS.RENDER_FATAL, 'error'),
     }),
     [baseToolCallbacks, noteMapInteraction, showToast],
   );
@@ -1415,7 +1416,7 @@ function MapCanvas() {
       const { checkMergeConnectivity } = useProjectStore.getState();
       const { openDialog, showToast } = useUIStore.getState();
 
-      showToast('Checking merge compatibility...', 'snap-merge-check');
+      showToast(t('map.toasts.mergeChecking'), TOAST_KEYS.MERGE_CHECK, 'info');
       try {
         const result = await checkMergeConnectivity(originStation, targetStation);
         const extra = moveCallbacks
@@ -1432,11 +1433,11 @@ function MapCanvas() {
             ...extra,
           });
         } else {
-          showToast(result.reason ?? 'Merge not possible.', 'snap-merge-blocked', 'warning');
+          showToast(result.reason ?? t('map.toasts.mergeNotPossible'), TOAST_KEYS.MERGE_BLOCKED, 'warning');
           moveCallbacks?.onCancel?.();
         }
       } catch (e) {
-        showToast(getErrorMessage(e), 'snap-merge-error', 'error');
+        showToast(getErrorMessage(e), TOAST_KEYS.MERGE_ERROR, 'error');
         moveCallbacks?.onCancel?.();
       }
     },
@@ -2295,7 +2296,7 @@ function MapCanvas() {
         // leaving the user stuck in a read-only view showing measured geometry.
         if (!ok) {
           setGeometryMode('measured');
-          showToast(t('map.geometry.computeFailed'), 'geometry-compute-failed', 'error');
+          showToast(t('map.geometry.computeFailed'), TOAST_KEYS.GEOMETRY_COMPUTE_FAILED, 'error');
         }
       });
     }
@@ -2644,7 +2645,7 @@ function MapCanvas() {
         // Fail closed: keep anchoredIdsLoaded=false so segment drag remains blocked.
         // This prevents moving anchored segments when the IPC fails.
         setAnchoredSectionIds(new Set());
-        showToast('Failed to load anchored segments. Move Segment is temporarily blocked.', 'anchored-ids-error', 'error');
+        showToast(t('map.toasts.anchoredSegmentsError'), TOAST_KEYS.ANCHORED_IDS_ERROR, 'error');
       });
     } else {
       setAnchoredSectionIds(new Set());

@@ -9,6 +9,8 @@ import { hasLiveStyle } from '../Map/mapUtils';
 import i18n from '../../i18n';
 import { formatFixed, formatNumber } from '../../i18n/format';
 import type { DecimalPrecision } from '../../types/config';
+import { renderFatalMessage } from '../Map/surveyLayer/mapErrors';
+import { TOAST_KEYS } from '../../utils/toastKeys';
 
 // `SystemGeometry` + `generateSystemColor` moved to ./systemColor so the custom
 // render buffer builder can reuse them without importing this MapLibre-bound
@@ -140,7 +142,7 @@ export default class GlobalSurveyLayer {
    */
   private handleRenderFatal(reason: string): void {
     console.error(`[globalCustomRender] survey rendering unavailable: ${reason}`);
-    useUIStore.getState().showToast('Survey rendering unavailable (WebGL2/GPU)', 'render-fatal', 'error');
+    useUIStore.getState().showToast(renderFatalMessage(reason), TOAST_KEYS.RENDER_FATAL, 'error');
   }
 
   /**

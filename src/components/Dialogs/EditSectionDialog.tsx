@@ -19,6 +19,7 @@ import type { DeleteShotImpact } from '../../types/commands';
 import { defaultConfig } from '../../types/config';
 import DeleteShotImpactDetails from './DeleteShotImpactDetails';
 import { setSource, trackDialogComplete } from '../../utils/telemetry';
+import { TOAST_KEYS } from '../../utils/toastKeys';
 
 export default function EditSectionDialog() {
   const { t } = useTranslation();
@@ -235,7 +236,7 @@ export default function EditSectionDialog() {
     if (frozenSkipped > 0) {
       showToast(
         t('editSection.frozenNotDeleted', { count: frozenSkipped }),
-        'edit-section-frozen-delete',
+        TOAST_KEYS.EDIT_SECTION_FROZEN_DELETE,
         'warning'
       );
     }
@@ -267,7 +268,7 @@ export default function EditSectionDialog() {
         // no path here yet. Say so rather than silently dropping the gesture.
         showToast(
           t('editSection.midRunDelete'),
-          'edit-section-mid-run-delete',
+          TOAST_KEYS.EDIT_SECTION_MID_RUN_DELETE,
           'warning'
         );
         return false;

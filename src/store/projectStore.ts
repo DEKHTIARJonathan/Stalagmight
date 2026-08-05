@@ -54,6 +54,7 @@ import type { SurveyData } from '../types/survey-data';
 import { emptySurveyData, surveyDataFromLegacy, surveyDataWithAdjustedStations } from '../types/survey-data';
 import { createProjectConfigActions, type ProjectConfigActions } from './projectConfigActions';
 import { runProjectSwitch } from '../utils/projectTransition';
+import { TOAST_KEYS } from '../utils/toastKeys';
 
 type ShotUpdatesPatch = Partial<ShotUpdates>;
 
@@ -246,7 +247,14 @@ export interface ProjectStore extends ProjectConfigActions {
   config: Config | null;
   /** Structured loading state with progress tracking */
   loading: LoadingState;
-  error: string | null;
+  /**
+   * A failing background autosave (docs/notifications.md: banner-class - an
+   * ongoing "your latest changes are not on disk" condition, not a modal
+   * moment). Set by `saveProject` on an autosave failure, cleared by the next
+   * successful save, project load/close, or an explicit dismiss.
+   */
+  autosaveFailure: string | null;
+  clearAutosaveFailure: () => void;
   canUndo: boolean;
   canRedo: boolean;
   isDirty: boolean;
@@ -545,6 +553,7 @@ function clearOpenProjectState(set: (partial: Partial<ProjectStore>) => void): v
     stats: null,
     frozenShots: [],
     isDirty: false,
+    autosaveFailure: null,
     integrityIssues: [],
     integrityDismissed: false,
     integritySaveBlocked: false,
@@ -646,7 +655,20 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         if (isReverifyDivergedError(result.error)) {
           useSpeleoStore.getState().notifyReverifyDivergence();
         } else if (isEditDisabledError(result.error)) {
-          useUIStore.getState().showToast(READ_ONLY_EDIT_NOTICE, 'edit-disabled', 'warning');
+          useUIStore.getState().showToast(READ_ONLY_EDIT_NOTICE(), TOAST_KEYS.EDIT_DISABLED, 'warning');
+        } else {
+          // Catch-all (docs/notifications.md): a failure no specific handler
+          // claims must not die silently. Dialogs own their inline errors and
+          // are open when they issue commands, so the catch-all yields to them.
+          // The context menu is the exception: it issues commands but renders
+          // no errors (its actions await the command before closing), so it
+          // must not suppress.
+          const dialog = useUIStore.getState().activeDialog;
+          if (dialog === null || dialog === 'context-menu') {
+            useUIStore
+              .getState()
+              .showToast(result.error ?? i18n.t('editGate.commandFailed'), TOAST_KEYS.COMMAND_FAILED, 'error');
+          }
         }
       }
       return result;
@@ -731,14 +753,14 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         if (isReverifyDivergedError(result.error)) {
           useSpeleoStore.getState().notifyReverifyDivergence();
         } else if (isEditDisabledError(result.error)) {
-          useUIStore.getState().showToast(READ_ONLY_EDIT_NOTICE, 'edit-disabled', 'warning');
+          useUIStore.getState().showToast(READ_ONLY_EDIT_NOTICE(), TOAST_KEYS.EDIT_DISABLED, 'warning');
         } else {
-          useUIStore.getState().showToast(result.error ?? 'Unknown error', toastId, 'error');
+          useUIStore.getState().showToast(result.error ?? i18n.t('editGate.commandFailed'), toastId, 'error');
         }
       }
     } catch (e) {
       result = emptyCommandResult(false, String(e));
-      useUIStore.getState().showToast(result.error ?? 'Unknown error', toastId, 'error');
+      useUIStore.getState().showToast(result.error ?? i18n.t('editGate.commandFailed'), toastId, 'error');
     } finally {
       // #310: re-resolve the plan pins before the refetch (see executeCommandInner). In the
       // `finally` because a PARTIAL multi-step undo renumbered too, and its pins need it just
@@ -785,7 +807,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   integrityDialogOpen: false,
   config: null,
   loading: { ...initialLoadingState },
-  error: null,
+  autosaveFailure: null,
   canUndo: false,
   canRedo: false,
   isDirty: false,
@@ -809,7 +831,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         phase: 'opening_database',
         lastEventTime: Date.now(),
       },
-      error: null, // Clear any stale error state
+      autosaveFailure: null, // A new project's autosave state starts clean
     });
     return newClientOpId;
   },
@@ -1266,7 +1288,8 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
           .getState()
           .showToast(
             i18n.t('speleodb.managedFile.copySaved', { path: result.unlinked_copy_path }),
-            'speleodb-unlinked-copy'
+            TOAST_KEYS.SPELEODB_UNLINKED_COPY,
+            'warning'
           );
         // The heals above ran on the LIVE project before the pipeline decided to
         // write a copy, so the frontend's mirror is stale here too - and the
@@ -1299,7 +1322,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       // the handle and flags DATABASE_NOT_REOPENED). In that case keep
       // databaseOpen=false so DB-backed actions stay disabled (issue #57 / Codex).
       const dbNotReopened = result.warnings?.some((w) => w.code === 'DATABASE_NOT_REOPENED') ?? false;
-      set({ isDirty: false, databaseOpen: !dbNotReopened });
+      set({ isDirty: false, databaseOpen: !dbNotReopened, autosaveFailure: null });
       // If the save healed the project in memory (re-minted duplicate UUIDs,
       // dropped orphan section offsets, sanitized non-finite geometry), the
       // frontend's shots/stations are now stale vs the saved file - refresh so the
@@ -1320,13 +1343,16 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       }
     } else {
       const permission = isPermissionError(result.error);
-      // Never surface the raw "FS_PERMISSION_DENIED:" marker in error state
-      // (a status indicator/toast may render it, e.g. on autosave).
-      set({
-        error: permission
-          ? 'Folder access denied - check Privacy & Security settings'
-          : (result.error ?? 'Failed to save project'),
-      });
+      // An autosave failure is an ongoing condition, not a modal moment: feed
+      // the banner (docs/notifications.md). Never surface the raw
+      // "FS_PERMISSION_DENIED:" marker - the banner renders this string.
+      if (isAutosave) {
+        set({
+          autosaveFailure: permission
+            ? i18n.t('banners.autosave.permissionDenied')
+            : (result.error ?? i18n.t('banners.autosave.genericFailure')),
+        });
+      }
       // A filesystem permission denial (e.g. macOS forgot folder access after
       // an update) needs actionable guidance, not a raw error. Skip on autosave
       // so we don't reopen the dialog on every debounced retry.
@@ -1350,6 +1376,8 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   },
 
   markDirty: () => set({ isDirty: true }),
+
+  clearAutosaveFailure: () => set({ autosaveFailure: null }),
 
   saveAfterImport: async (): Promise<boolean> => {
     // Import into an existing project: just mark dirty so we don't silently
@@ -1376,14 +1404,13 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       result = await get().saveProject();
     } catch (e) {
       // A reject (e.g. IPC transport failure) means saveProject never ran its
-      // integrity recheck, so `integritySaveBlocked` may be stale - routing through
-      // surfaceSaveFailure could wrongly open Review & Repair. Show the generic
-      // save error directly instead, and keep the project dirty (close-guarded).
+      // integrity recheck, so `integritySaveBlocked` may be stale -
+      // skipIntegrityRouting keeps the router from wrongly opening Review &
+      // Repair. The project stays dirty (close-guarded).
       console.error('[import] save after import failed:', e);
       set({ isDirty: true });
-      useUIStore.getState().openDialog('error', {
-        message: e instanceof Error ? e.message : String(e),
-        title: 'Save Failed',
+      surfaceSaveFailure(e instanceof Error ? e.message : String(e), useUIStore.getState().openDialog, {
+        skipIntegrityRouting: true,
       });
       return false;
     }
@@ -2060,16 +2087,16 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
 
   // Undo/Redo
   undo: async () =>
-    executeUndoRedo('undo', undefined, { purpose: 'undo last action' }, 'undo-failed', false),
+    executeUndoRedo('undo', undefined, { purpose: 'undo last action' }, TOAST_KEYS.UNDO_FAILED, false),
 
   redo: async () =>
-    executeUndoRedo('redo', undefined, { purpose: 'redo last undone action' }, 'redo-failed', false),
+    executeUndoRedo('redo', undefined, { purpose: 'redo last undone action' }, TOAST_KEYS.REDO_FAILED, false),
 
   undoTo: async (index: number) =>
-    executeUndoRedo('undo_to', { index }, { purpose: 'undo to history index', fields: { index } }, 'undo-failed', true),
+    executeUndoRedo('undo_to', { index }, { purpose: 'undo to history index', fields: { index } }, TOAST_KEYS.UNDO_FAILED, true),
 
   redoTo: async (index: number) =>
-    executeUndoRedo('redo_to', { index }, { purpose: 'redo to history index', fields: { index } }, 'redo-failed', true),
+    executeUndoRedo('redo_to', { index }, { purpose: 'redo to history index', fields: { index } }, TOAST_KEYS.REDO_FAILED, true),
 
   getUndoStack: async () => {
     return await invokeIpc<UndoHistoryItem[]>('get_undo_stack', undefined, {

@@ -12,6 +12,7 @@ import { USER_LEVELS } from '../../utils/speleoPermission';
 import { validateCoordinates } from '../../utils/gps';
 import { reverseGeocodeCountry } from '../../utils/reverseGeocodeCountry';
 import { COUNTRIES } from '../../data/countries';
+import { TOAST_KEYS } from '../../utils/toastKeys';
 import type {
   Permission,
   SpeleoCollaborators,
@@ -134,7 +135,7 @@ export default function PublishToSpeleoDbDialog() {
           collaborators.length > 0
             ? t('speleodb.publish.reloadFailedWithCollaborators')
             : t('speleodb.publish.reloadFailed'),
-          'speleodb-publish',
+          TOAST_KEYS.SPELEODB_PUBLISH,
           'error',
         );
         return;
@@ -166,15 +167,15 @@ export default function PublishToSpeleoDbDialog() {
       if (failed.length > 0) {
         showToast(
           t('speleodb.publish.collaboratorsPartial', { emails: failed.join(', ') }),
-          'speleodb-publish',
+          TOAST_KEYS.SPELEODB_PUBLISH,
           'warning',
         );
       } else {
-        showToast(t('speleodb.publish.success'), 'speleodb-publish', 'success');
+        showToast(t('speleodb.publish.success'), TOAST_KEYS.SPELEODB_PUBLISH, 'success');
       }
       closeDialog();
     } catch (e) {
-      showToast(humanizeSpeleoError(e, t('speleodb.publish.failed')), 'speleodb-publish', 'error');
+      showToast(humanizeSpeleoError(e, t('speleodb.publish.failed')), TOAST_KEYS.SPELEODB_PUBLISH, 'error');
       if (speleoErrorAction(e) === 'ReLogin') {
         useSpeleoStore.getState().clearSession();
       }

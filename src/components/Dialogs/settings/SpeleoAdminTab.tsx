@@ -9,6 +9,7 @@ import { invokeIpc } from '../../../utils/ipc';
 import { humanizeSpeleoError } from '../../../utils/speleoError';
 import { permissionAtLeast } from '../../../utils/speleoPermission';
 import { holdsWriteLock } from '../../../utils/quit';
+import { TOAST_KEYS } from '../../../utils/toastKeys';
 
 const inputClass =
   'w-full px-2 py-1 bg-background border border-border rounded text-sm disabled:opacity-60';
@@ -41,9 +42,9 @@ export function SpeleoAdminTab() {
     try {
       await invokeIpc('speleodb_release_current_lock');
       await refreshLinkStatus();
-      showToast(t('speleodb.lock.released'), 'speleodb-lock', 'success');
+      showToast(t('speleodb.lock.released'), TOAST_KEYS.SPELEODB_LOCK, 'success');
     } catch (e) {
-      showToast(humanizeSpeleoError(e, t('speleodb.lock.releaseFailed')), 'speleodb-lock', 'error');
+      showToast(humanizeSpeleoError(e, t('speleodb.lock.releaseFailed')), TOAST_KEYS.SPELEODB_LOCK, 'error');
     } finally {
       setReleasing(false);
     }
@@ -63,10 +64,10 @@ export function SpeleoAdminTab() {
       // arms on `link !== null`, which delete just falsified - that stranded the
       // now-local project permanently read-only until close/reopen.
       syncProjectLink(false);
-      showToast(t('speleodb.delete.deleted'), 'speleodb-delete', 'success');
+      showToast(t('speleodb.delete.deleted'), TOAST_KEYS.SPELEODB_DELETE, 'success');
       closeDialog();
     } catch (e) {
-      showToast(humanizeSpeleoError(e, t('speleodb.delete.deleteFailed')), 'speleodb-delete', 'error');
+      showToast(humanizeSpeleoError(e, t('speleodb.delete.deleteFailed')), TOAST_KEYS.SPELEODB_DELETE, 'error');
       setDeleting(false);
     }
   }, [syncProjectLink, closeDialog, showToast, t]);

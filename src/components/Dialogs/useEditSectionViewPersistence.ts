@@ -20,6 +20,7 @@ import {
   type GridViewSetters,
   type GridViewState,
 } from './useGridViewPersistence';
+import { TOAST_KEYS } from '../../utils/toastKeys';
 
 export function useEditSectionViewPersistence(
   view: GridViewState,
@@ -32,7 +33,7 @@ export function useEditSectionViewPersistence(
     widthsField: 'edit_section_column_widths',
     command: 'update_edit_section_view',
     fallbackHidden,
-    toastKey: 'edit-section-view-save',
+    toastKey: TOAST_KEYS.EDIT_SECTION_VIEW_SAVE,
   });
 }
 
@@ -48,6 +49,6 @@ export function useImportShotsViewPersistence(
     widthsField: 'import_shots_column_widths',
     command: 'update_import_shots_view',
     fallbackHidden,
-    toastKey: 'import-shots-view-save',
+    toastKey: TOAST_KEYS.IMPORT_SHOTS_VIEW_SAVE,
   });
 }

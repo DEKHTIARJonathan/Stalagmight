@@ -21,6 +21,7 @@ import { setSource } from '../../utils/telemetry';
 import type { Section, Shot, ShotUpdates } from '../../types/project';
 import type { GeometryPreview } from '../../store/uiStore';
 import type { ProjectWarning } from '../../types/commands';
+import { TOAST_KEYS } from '../../utils/toastKeys';
 
 /** Color for the on-map resolution preview ghost (issue #57). */
 const PREVIEW_COLOR = '#38bdf8';
@@ -612,7 +613,7 @@ export function WarningResolution({
       // an error): only count it resolved if it actually persisted (#57 #1).
       const ok = await resolveWarning(warning.sectionId, warning.shotId, warning.code);
       if (!ok) {
-        showToast(t('detailPanel.warnings.resolveFailed'), 'warning-resolve', 'error');
+        showToast(t('detailPanel.warnings.resolveFailed'), TOAST_KEYS.WARNING_RESOLVE, 'error');
         return 'failed';
       }
       return 'resolved';
@@ -638,11 +639,10 @@ export function WarningResolution({
       const toRemove = refs.filter((_, i) => i !== keepIdx);
       if (toRemove.length === 0) return 'failed';
       for (const ref of toRemove) {
+        // Failure surfacing is owned by executeCommand's catch-all toast
+        // (docs/notifications.md: one event, one surface).
         const result = await removeZeroDatum({ section_id: ref.section_id, station_index: ref.station_index });
-        if (!result.success) {
-          showToast(result.error ?? t('detailPanel.warnings.resolveFailed'), 'warning-resolve', 'error');
-          return 'failed';
-        }
+        if (!result.success) return 'failed';
       }
       return 'resolved';
     }
@@ -655,9 +655,8 @@ export function WarningResolution({
         // "Selection not found" for the now-dangling shot selection.
         setSource('detail-panel');
         setSelection({ type: 'section', sectionId: warning.sectionId });
-      } else {
-        showToast(result.error ?? t('detailPanel.warnings.resolveFailed'), 'warning-resolve', 'error');
       }
+      // (failure surfacing owned by executeCommand's catch-all toast)
       return result.success ? 'resolved' : 'failed';
     }
 
@@ -675,7 +674,7 @@ export function WarningResolution({
             : raw.invalid === 'pitch'
               ? 'detailPanel.warnings.resolveInvalidPitch'
               : 'detailPanel.warnings.resolveInvalid';
-      showToast(t(key), 'warning-resolve', 'warning');
+      showToast(t(key), TOAST_KEYS.WARNING_RESOLVE, 'warning');
       return 'failed';
     }
 
@@ -705,12 +704,12 @@ export function WarningResolution({
     // Guard against a no-op (e.g. lrud-abs/clear when nothing is negative after a
     // refresh): an empty patch would still push an undo entry and report success.
     if (Object.keys(patch).length === 0) {
-      showToast(t('detailPanel.warnings.resolveInvalid'), 'warning-resolve', 'warning');
+      showToast(t('detailPanel.warnings.resolveInvalid'), TOAST_KEYS.WARNING_RESOLVE, 'warning');
       return 'failed';
     }
 
+    // Failure surfacing is owned by executeCommand's catch-all toast.
     const result = await updateShot(warning.sectionId, warning.shotId, patch);
-    if (!result.success) showToast(result.error ?? t('detailPanel.warnings.resolveFailed'), 'warning-resolve', 'error');
     return result.success ? 'resolved' : 'failed';
   };
 

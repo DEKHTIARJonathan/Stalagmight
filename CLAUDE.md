@@ -193,5 +193,6 @@ Update `CHANGELOG.md` every time a new version is tagged.
 | [Ariane export](docs/ariane-export.md) | Writing `.tml`/`.tmlu`: data mapping, topology, color conversion, station-comment co-encoding |
 | [Releasing](docs/releasing.md) | Changelog -> tag -> release: `scripts/release.sh`, the CI workflows, where version numbers live |
 | [UI style guide](docs/style-guide.md) | Design tokens, typography, buttons, panels, tables, forms, accessibility |
+| [Notifications](docs/notifications.md) | Which surface (toast, banner, dialog, log) an event gets: decision tree, severity, dedup keys, copy rules |
 | [macOS pan/zoom lockup](docs/debugging-macos-pan-zoom.md) | Postmortem of the macOS UI lockup, and how to re-enable the pan/zoom debug toolkit |
 | [Touch support](docs/touch-support.md) | What touch/pointer support exists, the long-press paths, and the verified gaps |

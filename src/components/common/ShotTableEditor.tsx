@@ -37,6 +37,7 @@ import {
 } from '../Dialogs/newSectionRows';
 import type { EditableShot } from './editableShot';
 import { missingRequiredCells } from './editableShotStatus';
+import { TOAST_KEYS } from '../../utils/toastKeys';
 
 export type { EditableShot };
 
@@ -596,7 +597,10 @@ export function ShotTableEditor({
       if (written > 0) parts.push(t('dataTable.pasteReport.written', { count: written }));
       if (clipped > 0) parts.push(t('dataTable.pasteReport.clipped', { count: clipped }));
       if (skipped > 0) parts.push(t('dataTable.pasteReport.skipped', { count: skipped }));
-      if (parts.length > 0) showToast(parts.join(' \u00b7 '), 'shot-editor-paste');
+      if (parts.length > 0) {
+        const kind = clipped > 0 || skipped > 0 ? 'warning' : 'success';
+        showToast(parts.join(' \u00b7 '), TOAST_KEYS.SHOT_EDITOR_PASTE, kind);
+      }
     },
     [t, showToast]
   );

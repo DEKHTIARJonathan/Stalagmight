@@ -29,7 +29,8 @@ export function countIncompleteShots(shots: readonly EditableShot[]): number {
 
 /**
  * Refuse to proceed while any row is half-filled, having said so. Returns true
- * when the caller must stop. `toastKey` dedupes per dialog.
+ * when the caller must stop. `toastKey` dedupes per dialog - callers must pass
+ * a value from `TOAST_KEYS` (src/utils/toastKeys.ts).
  */
 export function blockedByIncompleteShots(
   count: number,

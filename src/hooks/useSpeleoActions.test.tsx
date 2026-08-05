@@ -123,7 +123,7 @@ describe('useSpeleoActions - a failed push/unlock raises the persistent banner (
     useSpeleoStore.setState({ banner: null });
   });
 
-  it('push failure raises push_failed with the push origin + message, and still toasts', async () => {
+  it('push failure raises push_failed with the push origin + message, and does NOT also toast', async () => {
     const showToast = vi.fn();
     useUIStore.setState({ showToast });
     invokeIpcMock.mockRejectedValue(new Error('offline'));
@@ -139,7 +139,9 @@ describe('useSpeleoActions - a failed push/unlock raises the persistent banner (
       origin: 'push',
       pushMessage: 'my message',
     });
-    expect(showToast).toHaveBeenCalledWith(expect.any(String), 'speleodb-action-error', 'error');
+    // One event, one surface (docs/notifications.md): the banner is the durable
+    // surface (plus the dialogs' inline notice); the old extra toast is gone.
+    expect(showToast).not.toHaveBeenCalledWith(expect.any(String), 'speleodb-action-error', 'error');
   });
 
   it('done failure raises push_failed with the done origin', async () => {
@@ -299,7 +301,7 @@ describe('useSpeleoActions - toast kinds', () => {
     expect(showToast).toHaveBeenCalledWith(expect.any(String), 'speleodb-released', 'success');
   });
 
-  it('a failed unlock asks for an error toast (and still raises the #260 banner)', async () => {
+  it('a failed unlock raises the #260 banner without an extra toast', async () => {
     const showToast = vi.fn();
     useUIStore.setState({ showToast });
     invokeIpcMock.mockRejectedValue(new Error('offline'));
@@ -309,7 +311,7 @@ describe('useSpeleoActions - toast kinds', () => {
       await result.current.done();
     });
 
-    expect(showToast).toHaveBeenCalledWith(expect.any(String), 'speleodb-action-error', 'error');
+    expect(showToast).not.toHaveBeenCalledWith(expect.any(String), 'speleodb-action-error', 'error');
     expect(useSpeleoStore.getState().banner).toMatchObject({ kind: 'push_failed' });
   });
 });

@@ -7,6 +7,7 @@ import { invokeIpc } from '../utils/ipc';
 import { humanizeSpeleoError } from '../utils/speleoError';
 import { permissionAtLeast } from '../utils/speleoPermission';
 import { validateCoordinates } from '../utils/gps';
+import { TOAST_KEYS } from '../utils/toastKeys';
 import type {
   SpeleoProjectMetadata,
   SpeleoProjectMetadataPatch,
@@ -169,11 +170,11 @@ export function useSpeleoProjectMetadata(): SpeleoProjectMetadataState {
       }
       // Re-seed the link so any server-side follow-on (e.g. permission) stays fresh.
       void refreshLinkStatus();
-      showToast(t('speleodb.projectSettings.saved'), 'speleodb-project-settings', 'success');
+      showToast(t('speleodb.projectSettings.saved'), TOAST_KEYS.SPELEODB_PROJECT_SETTINGS, 'success');
     } catch (e) {
       showToast(
         humanizeSpeleoError(e, t('speleodb.projectSettings.saveFailed')),
-        'speleodb-project-settings',
+        TOAST_KEYS.SPELEODB_PROJECT_SETTINGS,
         'error',
       );
     } finally {
@@ -203,11 +204,11 @@ export function useSpeleoProjectMetadata(): SpeleoProjectMetadataState {
       // hook's local baseline and toast. It throws on failure.
       await useSpeleoStore.getState().enableRendering();
       setBaseline((prev) => (prev ? { ...prev, exclude_geojson: false } : prev));
-      showToast(t('speleodb.projectSettings.rendering.enabled'), 'speleodb-project-settings', 'success');
+      showToast(t('speleodb.projectSettings.rendering.enabled'), TOAST_KEYS.SPELEODB_PROJECT_SETTINGS, 'success');
     } catch (e) {
       showToast(
         humanizeSpeleoError(e, t('speleodb.banner.enableRenderingFailed')),
-        'speleodb-project-settings',
+        TOAST_KEYS.SPELEODB_ENABLE_RENDERING_ERROR,
         'error',
       );
     } finally {

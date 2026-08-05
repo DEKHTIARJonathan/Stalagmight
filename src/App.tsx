@@ -6,7 +6,8 @@ import { useProjectStore } from './store/projectStore';
 import { useUIStore } from './store/uiStore';
 import { useSpeleoStore } from './store/speleoStore';
 import { useGasPlanStore, selectIsPlanDirty } from './store/gasPlanStore';
-import { invokeIpc } from './utils/ipc';
+import { invokeIpc, getErrorMessage } from './utils/ipc';
+import { surfaceSaveFailure } from './utils/saveFeedback';
 import { extractFilename } from './utils/path';
 import { routeOpenedFile } from './utils/openOrImport';
 import { guardQuit } from './utils/quit';
@@ -27,6 +28,7 @@ import { MemoryProbe } from './components/MemoryProbe/MemoryProbe';
 import type { DmpSelectionConfig } from './components/Dialogs/DmpSelectionDialog';
 import type { ZeroDatumConfigResult } from './components/Dialogs/ZeroDatumConfigDialog';
 import type { OrphanPlacementSuggestion } from './types/commands';
+import { TOAST_KEYS } from './utils/toastKeys';
 
 function App() {
   const { t } = useTranslation();
@@ -40,6 +42,9 @@ function App() {
   const integrityDialogOpen = useProjectStore((s) => s.integrityDialogOpen);
   const openIntegrityDialog = useProjectStore((s) => s.openIntegrityDialog);
   const closeIntegrityDialog = useProjectStore((s) => s.closeIntegrityDialog);
+  const autosaveFailure = useProjectStore((s) => s.autosaveFailure);
+  const clearAutosaveFailure = useProjectStore((s) => s.clearAutosaveFailure);
+  const saveProject = useProjectStore((s) => s.saveProject);
   const [repairingIntegrity, setRepairingIntegrity] = useState(false);
   const {
     view,
@@ -435,11 +440,19 @@ function App() {
     setRepairingIntegrity(true);
     try {
       const { fixed, remaining } = await repairProjectIntegrity();
+      const issueWord = t('integrityRepair.toasts.issue', { count: fixed });
       const message =
         remaining > 0
-          ? `Fixed ${fixed} issue${fixed === 1 ? '' : 's'}; ${remaining} need${remaining === 1 ? 's' : ''} manual attention (recompute or remove drifted loop closures, fix non-finite shots). Save to keep the fix.`
-          : `Repaired ${fixed} issue${fixed === 1 ? '' : 's'}. Save to keep the fix.`;
-      useUIStore.getState().showToast(message, 'integrity-repair', remaining > 0 ? 'warning' : 'success');
+          ? t('integrityRepair.toasts.partial', {
+              fixed,
+              remaining,
+              issueWord,
+              needWord: t('integrityRepair.toasts.needWord', { count: remaining }),
+            })
+          : t('integrityRepair.toasts.full', { fixed, issueWord });
+      useUIStore
+        .getState()
+        .showToast(message, TOAST_KEYS.INTEGRITY_REPAIR, remaining > 0 ? 'warning' : 'success');
       // Close the dialog only when fully clean. Read the AUTHORITATIVE store state
       // (the same integrityIssues the banner and the dialog render-gate use) rather
       // than the point-in-time `remaining` - a command or undo that interleaved
@@ -454,7 +467,13 @@ function App() {
       // during teardown) rather than reporting a fake no-op success. Surface it and
       // keep the dialog open - integrityIssues is untouched, so the banner/save-block
       // stay correct and the user can retry.
-      useUIStore.getState().showToast('Repair failed - nothing was changed. Please try again.', 'integrity-repair', 'error');
+      useUIStore
+        .getState()
+        .showToast(
+          t('integrityRepair.toasts.failed'),
+          TOAST_KEYS.INTEGRITY_REPAIR,
+          'error',
+        );
     } finally {
       setRepairingIntegrity(false);
     }
@@ -493,6 +512,50 @@ function App() {
               Dismiss
             </button>
           )}
+        </div>
+      )}
+
+      {/* Autosave-failure banner (docs/notifications.md: an ongoing "your latest
+          changes are not on disk" condition is banner-class, not modal and not a
+          repeating toast). When saving is integrity-blocked the integrity banner
+          above already owns the "saving is paused" story, so this one yields. */}
+      {autosaveFailure !== null && !(integritySaveBlocked && integrityIssues.length > 0) && project && !loading.isLoading && (
+        <div
+          className="bg-warning-10 border-b border-warning-20 px-4 py-2 flex items-center gap-3 text-sm"
+          role="status"
+          data-testid="autosave-banner"
+        >
+          <span className="text-warning font-medium flex-1 min-w-0">
+            {t('banners.autosave.lead')} {autosaveFailure}
+          </span>
+          <button
+            onClick={() => {
+              void (async () => {
+                const result = await saveProject().catch((e: unknown) => {
+                  surfaceSaveFailure(getErrorMessage(e, t('banners.autosave.genericFailure')), openDialog, {
+                    skipIntegrityRouting: true,
+                  });
+                  return null;
+                });
+                // A manual retry that still fails gets the full user-initiated
+                // treatment (permission guidance / Review & Repair / error dialog).
+                if (result && !result.success) {
+                  surfaceSaveFailure(result.error, openDialog);
+                }
+              })();
+            }}
+            className="px-3 py-1 rounded bg-accent text-white text-xs"
+            data-testid="autosave-save-button"
+          >
+            {t('banners.autosave.saveNow')}
+          </button>
+          <button
+            onClick={clearAutosaveFailure}
+            className="px-2 py-1 text-text-secondary hover:text-text text-xs"
+            data-testid="autosave-dismiss-button"
+          >
+            {t('banners.autosave.dismiss')}
+          </button>
         </div>
       )}
 

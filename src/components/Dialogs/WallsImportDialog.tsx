@@ -1,13 +1,18 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
-import { invokeIpc, getErrorMessage } from '../../utils/ipc';
+import { invokeIpc } from '../../utils/ipc';
+import i18n from '../../i18n';
 import { extractFilename } from '../../utils/path';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import type { WallsFile, OrphanPlacementSuggestion } from '../../types/commands';
-import { setSource, trackDialogComplete } from '../../utils/telemetry';
-import { completeImportToSingleView, finalizeDeferredSaveWarnings } from '../../utils/saveFeedback';
+import { setSource } from '../../utils/telemetry';
+import {
+  completeImportToSingleView,
+  finalizeDeferredSaveWarnings,
+  surfaceImportFailure,
+} from '../../utils/saveFeedback';
 
 interface WallsImportDialogProps {
   wallsFile: WallsFile;
@@ -149,18 +154,14 @@ export default function WallsImportDialog({ wallsFile, filePath }: WallsImportDi
       resetLoading();
 
       if (!result.success) {
-        completeImportToSingleView('walls-import', importUi);
-        openDialog('error', {
-          title: 'Import Errors',
-          message: result.error ?? 'Unknown error during import',
-        });
+        surfaceImportFailure('walls-import', importUi, { phase: 'command', error: result.error });
         return;
       }
 
       // A partial-success import (new-project deferred save failed) returns
       // success WITH a "SYSTEM" save-failure warning. Surface ONLY that - before
       // the optional orphan step - so "unsaved - save manually" isn't swallowed.
-      if (finalizeDeferredSaveWarnings(result.warnings, 'walls-import', importUi)) {
+      if (finalizeDeferredSaveWarnings(result.warnings, 'walls-import', importUi, result.import_receipt)) {
         return;
       }
 
@@ -170,14 +171,14 @@ export default function WallsImportDialog({ wallsFile, filePath }: WallsImportDi
       // Nothing was imported - most commonly a `.wpj` whose `.srv` files aren't
       // next to it on disk. Tell the user why instead of silently "succeeding".
       if (sectionIds.length === 0) {
-        trackDialogComplete('walls-import');
-        closeDialog();
-        openDialog('error', {
-          title: 'Nothing imported',
+        surfaceImportFailure('walls-import', importUi, {
+          phase: 'empty',
           message:
             wallsFile.missing_file_count > 0
-              ? `No surveys were imported: ${wallsFile.missing_file_count} referenced .SRV file(s) were not found next to the project. Put the survey files in the same folder as the .wpj, or import a .srv file directly.`
-              : 'No survey shots were found to import.',
+              ? i18n.t('dialogs.importFailure.wallsMissingFiles', {
+                  count: wallsFile.missing_file_count,
+                })
+              : i18n.t('dialogs.importFailure.wallsNoShots'),
         });
         return;
       }
@@ -202,10 +203,7 @@ export default function WallsImportDialog({ wallsFile, filePath }: WallsImportDi
     } catch (e) {
       resetLoading();
       setIsImporting(false);
-      openDialog('error', {
-        title: 'Import Failed',
-        message: getErrorMessage(e, 'Failed to import Walls file'),
-      });
+      surfaceImportFailure('walls-import', importUi, { phase: 'transport', error: e, format: 'Walls' });
     }
   }, [executeWallsImport, filePath, fileHash, commentsOnStations, includeSplays, selectedSurveys, allSelected, wallsFile.project_name, fileName, closeDialog, openDialog, setView, triggerFitToBounds, startLoading, setLoadingProgress, resetLoading]);
 

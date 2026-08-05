@@ -1,3 +1,5 @@
+import i18n from '../i18n';
+
 /**
  * Marker the backend prefixes onto `CommandResult.error` when a mutation is
  * rejected because the open project is a remote SpeleoDB project opened
@@ -33,5 +35,6 @@ export function isReverifyDivergedError(error?: string | null): boolean {
 /** User-facing toast shown when a read-only project rejects an edit. Says "write
     lock" like the rest of the SpeleoDB copy: the point is that someone else has
     exclusive write access, not that the file itself is locked. */
-export const READ_ONLY_EDIT_NOTICE =
-  'This project is open read-only - click Start editing to take the write lock.';
+export function READ_ONLY_EDIT_NOTICE(): string {
+  return i18n.t('editGate.readOnlyNotice');
+}

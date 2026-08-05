@@ -50,6 +50,7 @@ in determines how you write it, and picking wrong is the most common rework.
 | [move-tools.md](move-tools.md) | Move Station / Shot / Segment: scope of each, the shared drag-preview engine, Ctrl+drag panning, immovable stations. |
 | [telemetry.md](telemetry.md) | Opt-in anonymous counters: the event registry, source tracking, and how to add events for a new feature. |
 | [style-guide.md](style-guide.md) | UI conventions: design tokens, typography, buttons, panels, tables, forms, accessibility. |
+| [notifications.md](notifications.md) | Which surface (toast, banner, dialog, log) an event gets: the decision tree, severity, dedup keys, copy rules. |
 | [touch-support.md](touch-support.md) | What touch and pointer support exists, the long-press paths, and the verified gaps. |
 
 ## Import and formats
