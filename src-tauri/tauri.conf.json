@@ -52,6 +52,7 @@
         "mimeType": "application/vnd.stalagmight.project",
         "role": "Editor",
         "rank": "Owner",
+        "contentTypes": ["com.stalagmight.desktop.stalx"],
         "exportedType": {
           "identifier": "com.stalagmight.desktop.stalx",
           "conformsTo": ["public.data", "public.database"]
@@ -61,35 +62,6 @@
         "ext": ["tml", "tmlu"],
         "name": "Ariane Survey",
         "description": "Ariane Survey",
-        "role": "Viewer",
-        "rank": "Alternate"
-      },
-      {
-        "ext": ["dmp"],
-        "name": "mNemo Dump",
-        "description": "mNemo Dump",
-        "role": "Viewer",
-        "rank": "Alternate"
-      },
-      {
-        "ext": ["mak", "dat"],
-        "name": "Compass Survey",
-        "description": "Compass Survey",
-        "role": "Viewer",
-        "rank": "Alternate"
-      },
-      {
-        "ext": ["wpj", "srv"],
-        "name": "Walls Survey",
-        "description": "Walls Survey",
-        "role": "Viewer",
-        "rank": "Alternate"
-      },
-      {
-        "ext": ["gpx"],
-        "name": "GPS Exchange",
-        "description": "GPS Exchange",
-        "mimeType": "application/gpx+xml",
         "role": "Viewer",
         "rank": "Alternate"
       }

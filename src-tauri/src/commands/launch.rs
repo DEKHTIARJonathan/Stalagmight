@@ -16,7 +16,16 @@
 //! through its own unified open/import router. The queue - rather than an event
 //! payload - is what makes a cold launch work at all: the file is known long
 //! before the webview exists to receive an event.
+//!
+//! Everything arriving here is UNTRUSTED. The forwarding path in particular is
+//! remote control: anything that can run a program as this user can hand the
+//! running app a file. So each decode step below is a filter, not a conversion,
+//! and the count is capped - the frontend then asks before it acts on anything
+//! that would displace open work.
 
+use std::collections::HashSet;
+use std::ffi::OsString;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use tauri::{AppHandle, Emitter, Manager, Runtime, Url};
 
@@ -29,14 +38,26 @@ pub const LAUNCH_FILE_EVENT: &str = "launch-file-queued";
 
 /// Extensions the OS may hand us, lowercase and without the leading dot.
 ///
-/// Must stay in sync with `bundle.fileAssociations` in `tauri.conf.json` (what
-/// the OS is told we handle) and with `PROJECT_EXTENSION` +
-/// `IMPORT_EXTENSIONS` in `src/utils/fileDialogs.ts` (what `routeOpenedFile`
-/// actually dispatches). Anything else is dropped here rather than forwarded,
-/// so a stray command-line argument can never reach the router as a file.
-pub const LAUNCHABLE_EXTENSIONS: &[&str] = &[
-    "stalx", "gpx", "tml", "tmlu", "mak", "dat", "wpj", "srv", "dmp",
-];
+/// Must stay set-equal to `bundle.fileAssociations[].ext` in `tauri.conf.json`;
+/// `associations_match_launchable_extensions` below pins that, so the OS's idea
+/// of what we handle and ours cannot drift.
+///
+/// Deliberately NARROWER than what `routeOpenedFile` can import: our own
+/// project format and Ariane's, nothing else. `role`/`rank` - the keys that say
+/// "we are only an alternate viewer of this" - are macOS-only. On Windows an
+/// association is a handler claim with no such hedge, and there `.dmp` is the
+/// system minidump extension while `.dat` is about as generic as an extension
+/// gets; claiming those would take handlers away from software that owns them.
+/// Those formats stay importable through the picker and drag-drop, which is
+/// where the user asked for them by name.
+pub const LAUNCHABLE_EXTENSIONS: &[&str] = &["stalx", "tml", "tmlu"];
+
+/// Most files we will accept from one launch or forward.
+///
+/// A "select 20000 files, press Enter" accident - or a deliberate argv flood
+/// from a second process - must not become 20000 queued open requests. The
+/// surplus is dropped with a warning rather than truncated silently.
+pub const MAX_LAUNCH_PATHS: usize = 16;
 
 fn has_launchable_extension(path: &str) -> bool {
     let Some(ext) = path.rsplit_once('.').map(|(_, ext)| ext) else {
@@ -50,59 +71,131 @@ fn has_launchable_extension(path: &str) -> bool {
     LAUNCHABLE_EXTENSIONS.contains(&ext.as_str())
 }
 
+/// Resolve to an absolute path, or reject.
+///
+/// A forwarded argv is relative to the SENDING process's working directory, not
+/// ours, so `base` is that directory (the `cwd` the single-instance plugin
+/// forwards, or our own on a cold launch). With no usable base a relative path
+/// is dropped rather than guessed at: resolving it against the wrong directory
+/// opens the wrong file, or nothing.
+fn absolutize(path: &str, base: Option<&Path>) -> Option<String> {
+    let candidate = Path::new(path);
+    let resolved: PathBuf = if candidate.is_absolute() {
+        candidate.to_path_buf()
+    } else {
+        // `join` with an absolute argument replaces the base, so this is right
+        // for both shapes; the check below catches what is left (e.g. a bare
+        // `\foo` on Windows, which has a root but no drive prefix).
+        base?.join(candidate)
+    };
+    if !resolved.is_absolute() {
+        return None;
+    }
+    resolved.to_str().map(str::to_owned)
+}
+
+/// Decode one `file://` URL into a local path.
+///
+/// Rejects a non-empty host. `Url::to_file_path` turns `file://evil.example/x`
+/// into the UNC path `\\evil.example\x` on Windows, so opening it makes an
+/// outbound SMB connection - leaking an NTLM handshake to an attacker-chosen
+/// host from nothing but a crafted argument. `localhost` is the one spelling of
+/// "this machine" the file scheme defines.
+fn file_url_to_path(url: &Url) -> Option<String> {
+    if url.scheme() != "file" {
+        return None;
+    }
+    match url.host_str() {
+        None | Some("" | "localhost") => {}
+        Some(_) => return None,
+    }
+    let path = url.to_file_path().ok()?;
+    path.to_str().map(str::to_owned)
+}
+
 /// Decode one command-line argument into a launchable absolute path.
 ///
-/// Returns `None` for flags, for unsupported extensions, and for `file://`
-/// URLs that don't resolve to a local path. Only arguments that already look
-/// like a URL are parsed as one: a Windows path (`C:\dive\cave.stalx`) parses
-/// as a URL with scheme `c`, so blanket URL parsing would mangle it.
-pub fn launch_path_from_arg(arg: &str) -> Option<String> {
+/// Returns `None` for flags, unsupported extensions, `file://` URLs that don't
+/// resolve to a local path, and anything still relative after `base`. Only an
+/// argument that already looks like a URL is parsed as one: a Windows path
+/// (`C:\dive\cave.stalx`) parses as a URL with scheme `c`, so blanket URL
+/// parsing would mangle it.
+pub fn launch_path_from_arg(arg: &str, base: Option<&Path>) -> Option<String> {
     if arg.starts_with('-') {
         return None;
     }
-    if arg.starts_with("file://") {
-        return launch_path_from_url(&Url::parse(arg).ok()?);
+    let path = if arg.starts_with("file://") {
+        file_url_to_path(&Url::parse(arg).ok()?)?
+    } else {
+        arg.to_owned()
+    };
+    if !has_launchable_extension(&path) {
+        return None;
     }
-    has_launchable_extension(arg).then(|| arg.to_owned())
+    absolutize(&path, base)
 }
 
 /// Decode one opened URL (macOS Apple event) into a launchable local path.
 pub fn launch_path_from_url(url: &Url) -> Option<String> {
-    if url.scheme() != "file" {
+    let path = file_url_to_path(url)?;
+    if !has_launchable_extension(&path) {
         return None;
     }
-    let path = url.to_file_path().ok()?;
-    let path = path.to_str()?;
-    has_launchable_extension(path).then(|| path.to_owned())
+    absolutize(&path, None)
+}
+
+/// Collect at most [`MAX_LAUNCH_PATHS`] launchable paths, first-seen order, no
+/// duplicates. The shared tail of both argv and URL decoding.
+fn collect_capped<I, F>(items: I, decode: F) -> Vec<String>
+where
+    I: IntoIterator,
+    F: Fn(I::Item) -> Option<String>,
+{
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut paths: Vec<String> = Vec::new();
+    let mut dropped = 0usize;
+    for item in items {
+        let Some(path) = decode(item) else {
+            continue;
+        };
+        if !seen.insert(path.clone()) {
+            continue;
+        }
+        if paths.len() >= MAX_LAUNCH_PATHS {
+            dropped += 1;
+            continue;
+        }
+        paths.push(path);
+    }
+    if dropped > 0 {
+        tracing::warn!(
+            dropped,
+            cap = MAX_LAUNCH_PATHS,
+            purpose = "accept files the OS asked us to open",
+            "Too many files in one launch; ignoring the surplus"
+        );
+    }
+    paths
 }
 
 /// Collect the launchable paths out of a full argv, skipping `argv[0]`.
 ///
-/// Duplicates are collapsed while preserving first-seen order so a path listed
-/// twice on one command line opens once.
-pub fn launch_paths_from_args<I: IntoIterator<Item = String>>(args: I) -> Vec<String> {
-    let mut paths: Vec<String> = Vec::new();
-    for arg in args.into_iter().skip(1) {
-        if let Some(path) = launch_path_from_arg(&arg) {
-            if !paths.contains(&path) {
-                paths.push(path);
-            }
-        }
-    }
-    paths
+/// Takes `OsString`s, not `String`s: `std::env::args()` PANICS on a non-Unicode
+/// argument, so a latin-1 filename on Linux would crash the app at launch - a
+/// one-line local denial of service. Such an argument is dropped instead; it
+/// could not survive the JSON IPC hop to the frontend in any case.
+pub fn launch_paths_from_args<I>(args: I, base: Option<&Path>) -> Vec<String>
+where
+    I: IntoIterator<Item = OsString>,
+{
+    collect_capped(args.into_iter().skip(1), |arg| {
+        launch_path_from_arg(arg.to_str()?, base)
+    })
 }
 
 /// Same, for the URL list of a macOS open event.
 pub fn launch_paths_from_urls(urls: &[Url]) -> Vec<String> {
-    let mut paths: Vec<String> = Vec::new();
-    for url in urls {
-        if let Some(path) = launch_path_from_url(url) {
-            if !paths.contains(&path) {
-                paths.push(path);
-            }
-        }
-    }
-    paths
+    collect_capped(urls, launch_path_from_url)
 }
 
 /// Files the OS asked us to open that the frontend has not consumed yet.
@@ -116,17 +209,34 @@ pub struct PendingLaunchFiles(Mutex<Vec<String>>);
 impl PendingLaunchFiles {
     /// Queue paths not already queued; returns how many were newly added.
     ///
-    /// A poisoned lock is treated as "nothing queued" rather than a panic - a
-    /// dropped open request is recoverable, a crashed event loop is not.
+    /// Capped at [`MAX_LAUNCH_PATHS`] across the whole queue, not per call: a
+    /// frontend that is slow (or waiting on the user's confirm) must not let
+    /// repeated forwards grow it without bound. A poisoned lock is treated as
+    /// "nothing queued" rather than a panic - a dropped open request is
+    /// recoverable, a crashed event loop is not.
     pub fn push_all(&self, paths: Vec<String>) -> usize {
         let Ok(mut queue) = self.0.lock() else {
             return 0;
         };
         let before = queue.len();
+        let mut dropped = 0usize;
         for path in paths {
-            if !queue.contains(&path) {
-                queue.push(path);
+            if queue.contains(&path) {
+                continue;
             }
+            if queue.len() >= MAX_LAUNCH_PATHS {
+                dropped += 1;
+                continue;
+            }
+            queue.push(path);
+        }
+        if dropped > 0 {
+            tracing::warn!(
+                dropped,
+                cap = MAX_LAUNCH_PATHS,
+                purpose = "queue files the OS asked us to open",
+                "Pending-launch queue is full; ignoring the surplus"
+            );
         }
         queue.len() - before
     }
@@ -164,6 +274,26 @@ pub fn queue_and_notify<R: Runtime>(app: &AppHandle<R>, paths: Vec<String>) {
     }
 }
 
+/// Bring the main window forward.
+///
+/// Called when a SECOND launch is folded into this one. Without it "Open with"
+/// on a backgrounded app looks like nothing happened - the prompt (and then the
+/// file) lands in a window the user cannot see. Raising the window is also what
+/// makes the forwarded open observable rather than silent, which is half of why
+/// it isn't unconsented remote control; the frontend's confirm is the other.
+pub fn focus_main_window<R: Runtime>(app: &AppHandle<R>) {
+    let Some(window) = app.get_webview_window("main") else {
+        return;
+    };
+    if let Err(e) = window.set_focus() {
+        tracing::warn!(
+            error = %e,
+            purpose = "raise the window for a forwarded file open",
+            "Could not focus the main window"
+        );
+    }
+}
+
 /// Drain the files the OS asked us to open since the last call.
 #[tauri::command]
 pub fn take_pending_launch_files(pending: tauri::State<'_, PendingLaunchFiles>) -> Vec<String> {
@@ -171,16 +301,27 @@ pub fn take_pending_launch_files(pending: tauri::State<'_, PendingLaunchFiles>) 
 }
 
 #[cfg(test)]
-#[expect(clippy::unwrap_used)]
+#[expect(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    /// An absolute directory, spelled for the running platform, so the
+    /// absolute/relative cases mean the same thing on Windows and Unix.
+    fn base() -> &'static Path {
+        Path::new(if cfg!(windows) { r"C:\dives" } else { "/dives" })
+    }
+
+    /// An absolute path under [`base`].
+    fn abs(name: &str) -> String {
+        base().join(name).to_str().unwrap().to_owned()
+    }
 
     #[test]
     fn accepts_every_associated_extension() {
         for ext in LAUNCHABLE_EXTENSIONS {
-            let arg = format!("/dives/cave.{ext}");
+            let arg = abs(&format!("cave.{ext}"));
             assert_eq!(
-                launch_path_from_arg(&arg),
+                launch_path_from_arg(&arg, None),
                 Some(arg.clone()),
                 "{ext} should be launchable"
             );
@@ -189,41 +330,53 @@ mod tests {
 
     #[test]
     fn extension_match_is_case_insensitive() {
-        assert_eq!(
-            launch_path_from_arg("/dives/Cave.STALX"),
-            Some("/dives/Cave.STALX".to_owned())
-        );
+        let arg = abs("Cave.STALX");
+        assert_eq!(launch_path_from_arg(&arg, None), Some(arg));
     }
 
     #[test]
     fn rejects_flags_and_unsupported_extensions() {
-        assert_eq!(launch_path_from_arg("--webdriver"), None);
-        assert_eq!(launch_path_from_arg("-v"), None);
-        assert_eq!(launch_path_from_arg("/dives/notes.txt"), None);
-        assert_eq!(launch_path_from_arg("/dives/cave"), None);
-        // A dot in a directory component is not an extension.
-        assert_eq!(launch_path_from_arg("/dives.stalx/cave"), None);
+        assert_eq!(launch_path_from_arg("--webdriver", None), None);
+        assert_eq!(launch_path_from_arg("-v", None), None);
+        assert_eq!(launch_path_from_arg(&abs("notes.txt"), None), None);
+        assert_eq!(launch_path_from_arg(&abs("cave"), None), None);
+    }
+
+    /// Importable, but deliberately NOT associated - so the OS never sends them
+    /// and a forwarded argv naming one is refused. See LAUNCHABLE_EXTENSIONS.
+    #[test]
+    fn rejects_importable_formats_we_do_not_claim() {
+        for ext in ["dmp", "mak", "dat", "wpj", "srv", "gpx"] {
+            assert_eq!(
+                launch_path_from_arg(&abs(&format!("cave.{ext}")), None),
+                None,
+                "{ext} is importable but must not be launchable"
+            );
+        }
     }
 
     #[test]
     fn keeps_windows_paths_intact() {
         // `C:\...` parses as a URL with scheme "c"; it must not be URL-decoded.
-        assert_eq!(
-            launch_path_from_arg(r"C:\dives\cave.stalx"),
-            Some(r"C:\dives\cave.stalx".to_owned())
-        );
+        // It is only ABSOLUTE on Windows, which is where the round trip holds.
+        let arg = r"C:\dives\cave.stalx";
+        let expected = if cfg!(windows) {
+            Some(arg.to_owned())
+        } else {
+            None
+        };
+        assert_eq!(launch_path_from_arg(arg, None), expected);
     }
 
     #[test]
     fn decodes_file_urls() {
-        let url = Url::parse("file:///dives/deep%20cave.stalx").unwrap();
+        let url = Url::from_file_path(base().join("deep cave.stalx")).unwrap();
+        // Percent-encoding really is decoded, not passed through.
+        assert!(url.as_str().contains("%20"));
+        assert_eq!(launch_path_from_url(&url), Some(abs("deep cave.stalx")));
         assert_eq!(
-            launch_path_from_url(&url),
-            Some("/dives/deep cave.stalx".to_owned())
-        );
-        assert_eq!(
-            launch_path_from_arg("file:///dives/deep%20cave.stalx"),
-            Some("/dives/deep cave.stalx".to_owned())
+            launch_path_from_arg(url.as_str(), None),
+            Some(abs("deep cave.stalx"))
         );
     }
 
@@ -233,52 +386,142 @@ mod tests {
         assert_eq!(launch_path_from_url(&url), None);
     }
 
+    /// A remote host in a `file://` URL becomes a UNC path on Windows, so
+    /// opening it makes an outbound SMB connection to a host the ARGUMENT
+    /// chose, handing over an NTLM handshake. Rejected on every platform.
+    #[test]
+    fn rejects_file_urls_with_a_remote_host() {
+        let evil = Url::parse("file://evil.example/share/cave.stalx").unwrap();
+        assert_eq!(evil.host_str(), Some("evil.example"));
+        assert_eq!(launch_path_from_url(&evil), None);
+        assert_eq!(launch_path_from_arg(evil.as_str(), None), None);
+
+        // The "this machine" spelling still works.
+        let localhost = Url::parse("file://localhost/dives/cave.stalx").unwrap();
+        assert!(launch_path_from_url(&localhost).is_some());
+    }
+
+    #[test]
+    fn resolves_a_relative_arg_against_the_forwarded_cwd() {
+        assert_eq!(
+            launch_path_from_arg("cave.stalx", Some(base())),
+            Some(abs("cave.stalx"))
+        );
+    }
+
+    #[test]
+    fn rejects_a_relative_arg_with_no_base() {
+        // Resolving against OUR cwd would open a different file than the one the
+        // sending process named.
+        assert_eq!(launch_path_from_arg("cave.stalx", None), None);
+        assert_eq!(launch_path_from_arg("./cave.stalx", None), None);
+    }
+
     #[test]
     fn skips_argv_zero() {
-        // argv[0] can itself end in a launchable extension in a test rig; it is
-        // the executable, never a file to open.
-        let args = vec![
-            "/apps/cave.stalx".to_owned(),
-            "/dives/one.tml".to_owned(),
-            "--flag".to_owned(),
-            "/dives/one.tml".to_owned(),
-            "/dives/two.dmp".to_owned(),
+        // argv[0] can itself end in a launchable extension; it is the
+        // executable, never a file to open.
+        let args: Vec<OsString> = vec![
+            abs("app.stalx").into(),
+            abs("one.tml").into(),
+            "--flag".into(),
+            abs("one.tml").into(),
+            abs("two.tmlu").into(),
         ];
         assert_eq!(
-            launch_paths_from_args(args),
-            vec!["/dives/one.tml".to_owned(), "/dives/two.dmp".to_owned()]
+            launch_paths_from_args(args, None),
+            vec![abs("one.tml"), abs("two.tmlu")]
         );
+    }
+
+    /// `std::env::args()` panics on this. A file named in latin-1 on Linux must
+    /// not be able to crash the app at launch.
+    #[cfg(unix)]
+    #[test]
+    fn a_non_unicode_arg_is_dropped_not_panicked_on() {
+        use std::os::unix::ffi::OsStringExt;
+        let args: Vec<OsString> = vec![
+            OsString::from("/apps/stalagmight"),
+            OsString::from_vec(vec![0xff, 0xfe]),
+            OsString::from_vec(b"/dives/caf\xe9.stalx".to_vec()),
+            OsString::from(abs("ok.stalx")),
+        ];
+        assert_eq!(launch_paths_from_args(args, None), vec![abs("ok.stalx")]);
     }
 
     #[test]
     fn urls_are_filtered_and_deduped() {
         let urls = vec![
-            Url::parse("file:///dives/one.stalx").unwrap(),
-            Url::parse("file:///dives/one.stalx").unwrap(),
-            Url::parse("file:///dives/notes.txt").unwrap(),
+            Url::from_file_path(base().join("one.stalx")).unwrap(),
+            Url::from_file_path(base().join("one.stalx")).unwrap(),
+            Url::from_file_path(base().join("notes.txt")).unwrap(),
         ];
-        assert_eq!(
-            launch_paths_from_urls(&urls),
-            vec!["/dives/one.stalx".to_owned()]
-        );
+        assert_eq!(launch_paths_from_urls(&urls), vec![abs("one.stalx")]);
+    }
+
+    #[test]
+    fn an_argv_flood_is_capped() {
+        let mut args: Vec<OsString> = vec![OsString::from("/apps/stalagmight")];
+        args.extend((0..10_000).map(|i| OsString::from(abs(&format!("cave{i}.stalx")))));
+        let paths = launch_paths_from_args(args, None);
+        assert_eq!(paths.len(), MAX_LAUNCH_PATHS);
+        assert_eq!(paths[0], abs("cave0.stalx"));
     }
 
     #[test]
     fn queue_holds_until_taken_and_dedupes() {
         let pending = PendingLaunchFiles::default();
-        assert_eq!(pending.push_all(vec!["/dives/one.stalx".to_owned()]), 1);
+        assert_eq!(pending.push_all(vec![abs("one.stalx")]), 1);
         // Still queued: nothing has drained it yet.
-        assert_eq!(
-            pending.push_all(vec![
-                "/dives/one.stalx".to_owned(),
-                "/dives/two.tml".to_owned()
-            ]),
-            1
-        );
-        assert_eq!(
-            pending.take(),
-            vec!["/dives/one.stalx".to_owned(), "/dives/two.tml".to_owned()]
-        );
+        assert_eq!(pending.push_all(vec![abs("one.stalx"), abs("two.tml")]), 1);
+        assert_eq!(pending.take(), vec![abs("one.stalx"), abs("two.tml")]);
         assert!(pending.take().is_empty());
+    }
+
+    #[test]
+    fn the_queue_is_capped_across_calls() {
+        let pending = PendingLaunchFiles::default();
+        let full: Vec<String> = (0..MAX_LAUNCH_PATHS)
+            .map(|i| abs(&format!("cave{i}.stalx")))
+            .collect();
+        assert_eq!(pending.push_all(full), MAX_LAUNCH_PATHS);
+        // A frontend that never drains cannot be made to accumulate.
+        assert_eq!(pending.push_all(vec![abs("overflow.stalx")]), 0);
+        assert_eq!(pending.take().len(), MAX_LAUNCH_PATHS);
+    }
+
+    /// `tauri.conf.json` tells the OS which extensions we handle; this module
+    /// decides which it will accept. If those drift we either claim a type we
+    /// then refuse to open, or accept one no OS will ever send.
+    #[test]
+    fn associations_match_launchable_extensions() {
+        let config: serde_json::Value =
+            serde_json::from_str(include_str!("../../tauri.conf.json")).unwrap();
+        let associations = config["bundle"]["fileAssociations"]
+            .as_array()
+            .expect("bundle.fileAssociations must exist");
+        let declared: HashSet<String> = associations
+            .iter()
+            .flat_map(|entry| {
+                entry["ext"]
+                    .as_array()
+                    .expect("every association needs an ext list")
+                    .iter()
+                    .map(|ext| {
+                        ext.as_str()
+                            .expect("ext entries are strings")
+                            .trim_start_matches('.')
+                            .to_ascii_lowercase()
+                    })
+            })
+            .collect();
+        let accepted: HashSet<String> = LAUNCHABLE_EXTENSIONS
+            .iter()
+            .map(|ext| (*ext).to_owned())
+            .collect();
+        assert_eq!(
+            declared, accepted,
+            "tauri.conf.json fileAssociations and LAUNCHABLE_EXTENSIONS disagree"
+        );
     }
 }
