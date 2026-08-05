@@ -135,6 +135,42 @@ pub fn tml_shot_xml(id: i64, from_id: i64, shot_type: &str, section: &str) -> St
     )
 }
 
+/// A REAL shot with explicit azimuth and length, for the #412
+/// branch-continuation and re-join tests.
+pub fn tml_shot_xml_az_len(
+    id: i64,
+    from_id: i64,
+    section: &str,
+    azimuth: f64,
+    length: f64,
+) -> String {
+    format!(
+        r"<SurveyData>
+    <ID>{id}</ID>
+    <FromID>{from_id}</FromID>
+    <ClosureToID>-1</ClosureToID>
+    <Type>REAL</Type>
+    <Section>{section}</Section>
+    <Azimut>{azimuth}</Azimut>
+    <Length>{length}</Length>
+    <Depth>5.0</Depth>
+    <DepthIn>-1.0</DepthIn>
+    <Inclination>0.0</Inclination>
+    <Left>0.0</Left>
+    <Right>0.0</Right>
+    <Up>0.0</Up>
+    <Down>0.0</Down>
+    <Comment></Comment>
+    <Explorer>Tester</Explorer>
+    <Date>2024-06-15</Date>
+    <Color>0x8f6112ff</Color>
+    <Excluded>false</Excluded>
+    <Latitude>0.0</Latitude>
+    <Longitude>0.0</Longitude>
+</SurveyData>"
+    )
+}
+
 pub fn tml_shot_xml_gps(
     id: i64,
     from_id: i64,

@@ -922,6 +922,8 @@ fn linearize_section(
         in_section_successors.insert(shot.id, succs);
     }
 
+    let downstream = downstream_lengths(shots, &shot_by_id, &in_section_successors);
+
     // Find chain roots: shots whose from_id is not in this section's shot set.
     let mut roots: Vec<i64> = shots
         .iter()
@@ -941,6 +943,8 @@ fn linearize_section(
             root_id,
             &shot_ids,
             &in_section_successors,
+            &downstream,
+            &shot_by_id,
             &mut visited,
             &mut pending_starts,
         );
@@ -955,6 +959,8 @@ fn linearize_section(
             start_id,
             &shot_ids,
             &in_section_successors,
+            &downstream,
+            &shot_by_id,
             &mut visited,
             &mut pending_starts,
         );
@@ -1009,6 +1015,8 @@ fn linearize_section(
             start,
             &shot_ids,
             &in_section_successors,
+            &downstream,
+            &shot_by_id,
             &mut visited,
             &mut pending_starts,
         );
@@ -1021,6 +1029,8 @@ fn linearize_section(
                 extra_start,
                 &shot_ids,
                 &in_section_successors,
+                &downstream,
+                &shot_by_id,
                 &mut visited,
                 &mut pending_starts,
             );
@@ -1042,6 +1052,8 @@ fn linearize_section(
             shot_id,
             &shot_ids,
             &in_section_successors,
+            &downstream,
+            &shot_by_id,
             &mut visited,
             &mut pending_starts,
         );
@@ -1074,9 +1086,13 @@ fn linearize_section(
             continue;
         }
 
+        // The first chain is the mainline (the continuation rule in
+        // `choose_continuation` keeps walking it through every junction), so
+        // it keeps the section's own name; only the deferred side chains get
+        // "(branch N)" suffixes, numbered as if the mainline were branch 1.
         let has_prior_chains = !result.is_empty();
         let branch_number = result.len() + 1;
-        let name = if needs_split || has_prior_chains {
+        let name = if has_prior_chains {
             format!("{section_name} (branch {branch_number})")
         } else {
             section_name.to_string()
@@ -1145,6 +1161,8 @@ fn collect_linear_chain(
     start_id: i64,
     shot_ids: &std::collections::HashSet<i64>,
     in_section_successors: &HashMap<i64, Vec<i64>>,
+    downstream: &HashMap<i64, f64>,
+    shot_by_id: &HashMap<i64, &RawShot>,
     visited: &mut std::collections::HashSet<i64>,
     pending_starts: &mut std::collections::VecDeque<i64>,
 ) -> Vec<i64> {
@@ -1165,7 +1183,7 @@ fn collect_linear_chain(
             break;
         };
 
-        let mut unvisited_successors = successors
+        let unvisited_successors = successors
             .iter()
             .copied()
             .filter(|id| !visited.contains(id))
@@ -1175,15 +1193,142 @@ fn collect_linear_chain(
             break;
         }
 
-        let next_id = unvisited_successors.remove(0);
+        let next_id = choose_continuation(current, &unvisited_successors, downstream, shot_by_id);
         for extra in unvisited_successors {
-            pending_starts.push_back(extra);
+            if extra != next_id {
+                pending_starts.push_back(extra);
+            }
         }
 
         current = next_id;
     }
 
     chain
+}
+
+/// Fraction of the longest candidate's downstream length a rival must reach
+/// to still count as "comparable", handing the decision to azimuth continuity.
+const COMPARABLE_LENGTH_RATIO: f64 = 0.8;
+
+/// Decide which successor continues the current chain at a branch point (#412).
+///
+/// The continuation should be the mainline; every other successor defers into
+/// its own "(branch N)" section. The rule, in order:
+/// 1. Greatest total downstream length wins outright: rivals below
+///    `COMPARABLE_LENGTH_RATIO` (80%) of the longest are eliminated.
+/// 2. Among comparable survivors, azimuth continuity: the successor whose
+///    azimuth is closest (minimum angular distance) to the current shot's
+///    azimuth continues - a mainline tends to hold its heading through a
+///    junction, while a side passage leaves at an angle.
+/// 3. Ascending shot id.
+///
+/// Deterministic by construction: `candidates` arrives in the section's
+/// sorted encounter order (never HashMap iteration order), the downstream
+/// lengths are fixed-order IEEE 754 sums of parsed values (see
+/// `downstream_lengths`), and the comparisons above are the same total order
+/// over those values on every run and platform.
+fn choose_continuation(
+    current_id: i64,
+    candidates: &[i64],
+    downstream: &HashMap<i64, f64>,
+    shot_by_id: &HashMap<i64, &RawShot>,
+) -> i64 {
+    if candidates.len() == 1 {
+        return candidates[0];
+    }
+
+    let length_of = |id: i64| downstream.get(&id).copied().unwrap_or(0.0);
+    let longest = candidates
+        .iter()
+        .map(|&id| length_of(id))
+        .fold(0.0_f64, f64::max);
+    let threshold = longest * COMPARABLE_LENGTH_RATIO;
+
+    let current_azimuth = shot_by_id.get(&current_id).map(|s| s.azimuth);
+    let turn_of = |id: i64| -> f64 {
+        match (current_azimuth, shot_by_id.get(&id)) {
+            (Some(azimuth_in), Some(shot)) => {
+                let diff = (shot.azimuth - azimuth_in).rem_euclid(360.0);
+                diff.min(360.0 - diff)
+            }
+            _ => f64::MAX,
+        }
+    };
+
+    let mut best: Option<(i64, f64)> = None;
+    for &candidate in candidates {
+        if length_of(candidate) < threshold {
+            continue;
+        }
+        let turn = turn_of(candidate);
+        let better = match best {
+            None => true,
+            Some((best_id, best_turn)) => match turn.partial_cmp(&best_turn) {
+                Some(std::cmp::Ordering::Less) => true,
+                Some(std::cmp::Ordering::Equal) => candidate < best_id,
+                _ => false,
+            },
+        };
+        if better {
+            best = Some((candidate, turn));
+        }
+    }
+    best.map_or(candidates[0], |(id, _)| id)
+}
+
+/// Total downstream traverse length (own length plus all in-section
+/// descendants) for every shot in the section.
+///
+/// Memoized via an iterative post-order walk, so the whole section costs
+/// O(V + E) - one linear pass even on 10^5-shot files, never a per-branch
+/// BFS. Children are summed in the pre-sorted successor order, so the f64
+/// accumulation order is fixed and the result is identical across runs and
+/// platforms (IEEE 754 arithmetic is deterministic given a fixed order).
+///
+/// Excluded and CLOSURE shots count toward the length: segmentation reflects
+/// the topology the file declares, and the excluded-shots import toggle
+/// (applied downstream of section building) must not change how sections
+/// split. A back-edge in a malformed cycle (guarded during chain collection)
+/// contributes 0, so each cycle member's length is counted exactly once.
+fn downstream_lengths(
+    shots: &[&RawShot],
+    shot_by_id: &HashMap<i64, &RawShot>,
+    in_section_successors: &HashMap<i64, Vec<i64>>,
+) -> HashMap<i64, f64> {
+    let empty: Vec<i64> = Vec::new();
+    let mut lengths: HashMap<i64, f64> = HashMap::with_capacity(shots.len());
+    let mut in_progress: std::collections::HashSet<i64> = std::collections::HashSet::new();
+
+    for shot in shots {
+        if lengths.contains_key(&shot.id) {
+            continue;
+        }
+        in_progress.insert(shot.id);
+        let mut stack: Vec<(i64, usize)> = vec![(shot.id, 0)];
+        while let Some(&(id, next_child)) = stack.last() {
+            let succs = in_section_successors.get(&id).unwrap_or(&empty);
+            if let Some(&child) = succs.get(next_child) {
+                if let Some(frame) = stack.last_mut() {
+                    frame.1 = next_child + 1;
+                }
+                if !lengths.contains_key(&child) && in_progress.insert(child) {
+                    stack.push((child, 0));
+                }
+            } else {
+                let own = shot_by_id.get(&id).map_or(0.0, |s| s.length);
+                let total = own
+                    + succs
+                        .iter()
+                        .map(|c| lengths.get(c).copied().unwrap_or(0.0))
+                        .sum::<f64>();
+                lengths.insert(id, total);
+                in_progress.remove(&id);
+                stack.pop();
+            }
+        }
+    }
+
+    lengths
 }
 
 /// Check if any shot in the group has multiple successors within the same group.
@@ -3196,7 +3341,11 @@ mod tests {
         // Should split into 2 branches
         assert!(sections.len() >= 2);
         assert!(sections.iter().all(|s| s.is_branch_split));
-        assert!(sections[0].name.contains("branch"));
+        // Mainline naming rule (#412): the chain the continuation heuristic
+        // keeps walking retains the section's own name; only the deferred
+        // side chains get "(branch N)" suffixes.
+        assert_eq!(sections[0].name, "Section 1");
+        assert!(sections[1].name.contains("branch"));
     }
 
     #[test]
@@ -3256,6 +3405,168 @@ mod tests {
         assert_eq!(chain_6_ids, vec![6, 7, 8], "expected preserved 6→7→8 chain");
         assert_eq!(sections[sec_6].start_ariane_id, 2);
         assert_eq!(sections[sec_5].start_ariane_id, 3);
+    }
+
+    /// #412: a short side stub written FIRST in the file must not steal the
+    /// mainline. Greatest total downstream length picks the continuation.
+    #[test]
+    fn branch_continuation_longest_downstream_wins() {
+        let xml = wrap_xml(
+            &[
+                tml_shot_xml(0, -1, "START", "Start"),
+                tml_shot_xml_az_len(1, 0, "Section 1", 90.0, 10.0),
+                // Two-shot side stub, written before the continuation.
+                tml_shot_xml_az_len(10, 1, "Section 1", 0.0, 2.0),
+                tml_shot_xml_az_len(11, 10, "Section 1", 0.0, 2.0),
+                // The continuation: far more downstream length.
+                tml_shot_xml_az_len(2, 1, "Section 1", 90.0, 10.0),
+                tml_shot_xml_az_len(3, 2, "Section 1", 90.0, 10.0),
+                tml_shot_xml_az_len(4, 3, "Section 1", 90.0, 10.0),
+            ]
+            .join("\n"),
+        );
+
+        let (raw_shots, _) =
+            parse_raw_shots(&xml).unwrap_or_else(|_| (Vec::new(), FileMetadata::default()));
+        let (sections, _) = build_sections(raw_shots);
+
+        assert_eq!(sections.len(), 2);
+        assert_eq!(sections[0].name, "Section 1");
+        let mainline_ids: Vec<i64> = sections[0].shots.iter().map(|s| s.id).collect();
+        assert_eq!(
+            mainline_ids,
+            vec![1, 2, 3, 4],
+            "mainline must continue past the stub"
+        );
+        assert_eq!(sections[1].name, "Section 1 (branch 2)");
+        let stub_ids: Vec<i64> = sections[1].shots.iter().map(|s| s.id).collect();
+        assert_eq!(stub_ids, vec![10, 11]);
+    }
+
+    /// #412: when both branches carry comparable downstream length (within
+    /// 20% of the longest), azimuth continuity decides - the successor whose
+    /// heading is closest to the incoming shot's continues, even when it is
+    /// written later in the file and has higher ids.
+    #[test]
+    fn branch_continuation_azimuth_tie_break() {
+        let xml = wrap_xml(
+            &[
+                tml_shot_xml(0, -1, "START", "Start"),
+                tml_shot_xml_az_len(1, 0, "Section 1", 90.0, 10.0),
+                // Written first, slightly longer (20 vs 18: comparable),
+                // but turns 60 degrees off the incoming heading.
+                tml_shot_xml_az_len(5, 1, "Section 1", 150.0, 10.0),
+                tml_shot_xml_az_len(6, 5, "Section 1", 150.0, 10.0),
+                // Written later, higher ids, but holds the heading.
+                tml_shot_xml_az_len(7, 1, "Section 1", 92.0, 9.0),
+                tml_shot_xml_az_len(8, 7, "Section 1", 92.0, 9.0),
+            ]
+            .join("\n"),
+        );
+
+        let (raw_shots, _) =
+            parse_raw_shots(&xml).unwrap_or_else(|_| (Vec::new(), FileMetadata::default()));
+        let (sections, _) = build_sections(raw_shots);
+
+        assert_eq!(sections.len(), 2);
+        assert_eq!(sections[0].name, "Section 1");
+        let mainline_ids: Vec<i64> = sections[0].shots.iter().map(|s| s.id).collect();
+        assert_eq!(
+            mainline_ids,
+            vec![1, 7, 8],
+            "azimuth continuity must pick the continuation"
+        );
+        let side_ids: Vec<i64> = sections[1].shots.iter().map(|s| s.id).collect();
+        assert_eq!(side_ids, vec![5, 6]);
+    }
+
+    /// #412 shape: a long mainline with side stubs written before each
+    /// continuation. File order used to cut the mainline at every T; the
+    /// downstream-length rule must keep one long mainline plus N stubs.
+    #[test]
+    fn branch_continuation_mainline_with_many_ts() {
+        let xml = wrap_xml(
+            &[
+                tml_shot_xml(0, -1, "START", "Start"),
+                tml_shot_xml_az_len(1, 0, "Main", 90.0, 10.0),
+                tml_shot_xml_az_len(2, 1, "Main", 90.0, 10.0),
+                tml_shot_xml_az_len(3, 2, "Main", 90.0, 10.0),
+                tml_shot_xml_az_len(20, 3, "Main", 0.0, 2.0),
+                tml_shot_xml_az_len(21, 20, "Main", 0.0, 2.0),
+                tml_shot_xml_az_len(4, 3, "Main", 90.0, 10.0),
+                tml_shot_xml_az_len(5, 4, "Main", 90.0, 10.0),
+                tml_shot_xml_az_len(6, 5, "Main", 90.0, 10.0),
+                tml_shot_xml_az_len(30, 6, "Main", 180.0, 2.0),
+                tml_shot_xml_az_len(31, 30, "Main", 180.0, 2.0),
+                tml_shot_xml_az_len(7, 6, "Main", 90.0, 10.0),
+                tml_shot_xml_az_len(8, 7, "Main", 90.0, 10.0),
+                tml_shot_xml_az_len(40, 8, "Main", 0.0, 2.0),
+                tml_shot_xml_az_len(41, 40, "Main", 0.0, 2.0),
+                tml_shot_xml_az_len(9, 8, "Main", 90.0, 10.0),
+            ]
+            .join("\n"),
+        );
+
+        let (raw_shots, _) =
+            parse_raw_shots(&xml).unwrap_or_else(|_| (Vec::new(), FileMetadata::default()));
+        let (sections, _) = build_sections(raw_shots);
+
+        assert_eq!(sections.len(), 4, "one mainline + three stubs");
+        assert_eq!(sections[0].name, "Main");
+        let mainline_ids: Vec<i64> = sections[0].shots.iter().map(|s| s.id).collect();
+        assert_eq!(
+            mainline_ids,
+            vec![1, 2, 3, 4, 5, 6, 7, 8, 9],
+            "the mainline must survive every T uncut"
+        );
+        for section in &sections[1..] {
+            assert!(
+                section.name.contains("(branch "),
+                "stub name: {}",
+                section.name
+            );
+            assert_eq!(section.shots.len(), 2, "each stub is two shots");
+        }
+    }
+
+    /// Same file, same sections: the continuation choice must not depend on
+    /// anything with unstable iteration order.
+    #[test]
+    fn branch_continuation_is_deterministic() {
+        let shots = [
+            tml_shot_xml(0, -1, "START", "Start"),
+            tml_shot_xml_az_len(1, 0, "Section 1", 90.0, 10.0),
+            tml_shot_xml_az_len(10, 1, "Section 1", 0.0, 2.0),
+            tml_shot_xml_az_len(2, 1, "Section 1", 92.0, 9.0),
+            tml_shot_xml_az_len(3, 2, "Section 1", 88.0, 9.0),
+            tml_shot_xml_az_len(20, 2, "Section 1", 150.0, 10.0),
+            tml_shot_xml_az_len(21, 20, "Section 1", 150.0, 10.0),
+        ]
+        .join("\n");
+        let xml = wrap_xml(&shots);
+
+        let fingerprint = |tml: &TmlFile| -> String {
+            tml.sections
+                .iter()
+                .map(|s| {
+                    format!(
+                        "{}|{}|{:?}\n",
+                        s.name,
+                        s.start_ariane_id,
+                        s.shots.iter().map(|shot| shot.id).collect::<Vec<_>>()
+                    )
+                })
+                .collect()
+        };
+
+        let first = fingerprint(&parse_synthetic_tmlu(&xml));
+        for _ in 0..5 {
+            assert_eq!(
+                fingerprint(&parse_synthetic_tmlu(&xml)),
+                first,
+                "section list must be byte-identical on every parse"
+            );
+        }
     }
 
     #[test]
