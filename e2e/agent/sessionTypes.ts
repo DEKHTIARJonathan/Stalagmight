@@ -54,6 +54,13 @@ export interface AgentSession {
   /** The app's isolated data dir (crash markers/logs live under here). */
   readonly profileDataDir: string | null;
   exclusive<T>(fn: () => Promise<T>): Promise<T>;
+  /**
+   * The launched app's own pid, when the platform can identify it. Tier 2 OS
+   * input aims at that window and only that window, so it is a hard requirement
+   * there - and optional here because the Linux tauri-driver route never learns
+   * the app pid (it only owns the driver's).
+   */
+  appPid?(): number | null;
   findCrashMarkers(): string[];
   start(opts?: StartOptions): Promise<StartResult>;
   stop(reason?: string, opts?: { keepProfile?: boolean }): Promise<void>;

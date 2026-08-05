@@ -213,7 +213,7 @@ export class MacSession extends SessionCore {
 
     return {
       state: this.state,
-      appPidKnown: this.appPidFromPidfile() !== null,
+      appPidKnown: this.appPid() !== null,
       driverPort: this.driverPort,
       nativePort: 0,
       display: 'aqua',
@@ -224,8 +224,13 @@ export class MacSession extends SessionCore {
     };
   }
 
-  /** Last stalagmight pid the wrapper appended to the session pidfile. */
-  private appPidFromPidfile(): number | null {
+  /**
+   * Last stalagmight pid the wrapper appended to the session pidfile - the
+   * app's own pid, not the driver's. Public because Tier 2 OS input needs it to
+   * aim at the app window (`e2e/agent/os/input.ts`); read from disk on every
+   * call so a relaunch inside one session cannot serve a stale pid.
+   */
+  appPid(): number | null {
     try {
       const lines = fs.readFileSync(this.pidFile(), 'utf8').trim().split('\n');
       for (let i = lines.length - 1; i >= 0; i--) {
