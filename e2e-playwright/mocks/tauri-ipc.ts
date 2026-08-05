@@ -4994,6 +4994,12 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             return mockGeometry;
           }
 
+          case 'take_pending_launch_files':
+            // #424: no OS handed this browser-hosted app a file. Present so the
+            // startup drain resolves to an empty list instead of falling through
+            // to the `null` default, which `for (const p of null)` would throw on.
+            return [];
+
           case 'take_unrecognised_shot_kinds':
             // #27: no unreadable kinds in the mocked fixtures. Present so the
             // post-load call resolves instead of throwing into the catch, which

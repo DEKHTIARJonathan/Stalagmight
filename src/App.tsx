@@ -10,6 +10,7 @@ import { invokeIpc, getErrorMessage } from './utils/ipc';
 import { surfaceSaveFailure } from './utils/saveFeedback';
 import { extractFilename } from './utils/path';
 import { routeOpenedFile } from './utils/openOrImport';
+import { useLaunchWithFile } from './utils/launchWithFile';
 import { guardQuit } from './utils/quit';
 import { IMPORTABLE_EXTENSIONS } from './utils/fileDialogs';
 import { useBeforeUnload, useLoadingProgress, useTheme, useSyntacticHighlighting, useNetworkStatus, useUiScale } from './hooks';
@@ -107,6 +108,11 @@ function App() {
 
   // Whole-UI zoom via Ctrl+= / Ctrl+- / Ctrl+0 (persisted)
   useUiScale();
+
+  // Files the OS handed us (#424): double-click / "Open with" / a second launch
+  // forwarded by the running instance. Routed through the same open/import
+  // router as every other entry point, but not before config has loaded.
+  useLaunchWithFile(config != null);
 
   // Splash screen state - visible until config loads, then fades out and unmounts
   const [showSplash, setShowSplash] = useState(true);
