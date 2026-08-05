@@ -59,7 +59,7 @@ use stalagmight_lib::parsers::gpx::{
     GpxTrackSegment, GpxWaypoint,
 };
 use stalagmight_lib::parsers::tml::{
-    TmlClosure, TmlFile, TmlGeoCoding, TmlSection, TmlShot, TmlShotType, TmlUnit,
+    TmlClosure, TmlFile, TmlGeoCoding, TmlParseAnomalies, TmlSection, TmlShot, TmlShotType, TmlUnit,
 };
 use stalagmight_lib::parsers::walls::{WallsFile, WallsSurveySummary};
 use stalagmight_lib::persistence::{BackupInfo, RawTableData, RepairResult, SalvagedData};
@@ -210,6 +210,7 @@ fn main() {
     export::<TmlUnit>(&out_dir);
     export::<TmlGeoCoding>(&out_dir);
     export::<TmlClosure>(&out_dir);
+    export::<TmlParseAnomalies>(&out_dir);
 
     // Compass import
     export::<CompassFile>(&out_dir);
@@ -462,6 +463,7 @@ fn main() {
         "TmlUnit",
         "TmlGeoCoding",
         "TmlClosure",
+        "TmlParseAnomalies",
         "CompassFile",
         "CompassSurveySummary",
         "WallsFile",
