@@ -115,7 +115,6 @@ for (let i = 0; i < actions.length; i++) {
   prevTs = a.ts ?? prevTs;
 
   const outcome = a.outcome?.ok === false ? '  (recorded: FAILED)' : '';
-  push(`    // [seq ${a.seq}] ${a.tool}${outcome}`);
 
   // Tier 2 OS-level tools (os_grant/os_click/os_keys/os_screenshot) are recorded
   // like any other action - they mutate app state and repro reports need them -
@@ -125,9 +124,11 @@ for (let i = 0; i < actions.length; i++) {
   // Tier 1 equivalent; this comment preserves the intent and the arguments.
   // Matched by prefix so a future os_* tool needs no change here.
   if (typeof a.tool === 'string' && a.tool.startsWith('os_')) {
-    push(`    // [seq ${a.seq}] ${a.tool} ${compactParams(p)} (OS-level; not replayable)`);
+    push(`    // [seq ${a.seq}] ${a.tool}${outcome} ${compactParams(p)} (OS-level; not replayable)`);
     continue;
   }
+
+  push(`    // [seq ${a.seq}] ${a.tool}${outcome}`);
 
   switch (a.tool) {
     case 'click': {

@@ -931,26 +931,17 @@ defineDarwin(
   'os_grant',
   'Grant OS-level input for this server process (real cursor + keyboard). Ask the user in chat first; this tool is deliberately un-allowlisted so calling it prompts them for real.',
   {},
-  async () => {
-    try {
+  (args) =>
+    run('os_grant', args, async () => {
+      // Preflight FIRST: a grant that reports failure must not leave the gate
+      // open. Recorded like any other action - it is the consent event every
+      // later os_* step depends on, so a repro must show when it happened.
+      const permissions = await osPreflight();
       osGrant();
-      const perms = await osPreflight();
       return {
-        content: [
-          {
-            type: 'text',
-            text: JSON.stringify({
-              granted: true,
-              note: 'valid until this MCP server exits',
-              permissions: perms,
-            }),
-          },
-        ],
+        result: { granted: true, note: 'valid until this MCP server exits', permissions },
       };
-    } catch (err) {
-      return errorResult(asMessage(err));
-    }
-  },
+    }),
 );
 
 defineDarwin(
@@ -962,6 +953,7 @@ defineDarwin(
     y: z.number().optional(),
     button: z.enum(['left', 'right']).optional(),
     double: z.boolean().optional(),
+    force: z.boolean().optional(),
   },
   (args) =>
     run(
@@ -975,12 +967,12 @@ defineDarwin(
 defineDarwin(
   'os_keys',
   'OS-level trusted key chord (real modifiers - Cmd+S fires the actual menu accelerator). Spec grammar: see e2e/agent/os/README.md, e.g. "cmd+s", "cmd+shift+z", "escape".',
-  { spec: z.string().min(1) },
+  { spec: z.string().min(1), force: z.boolean().optional() },
   (args) =>
     run(
       'os_keys',
       args,
-      async () => ({ result: await osKeys(session, args.spec) }),
+      async () => ({ result: await osKeys(session, args.spec, undefined, { force: args.force }) }),
       { digest: true, sweep: true },
     ),
 );
@@ -988,14 +980,17 @@ defineDarwin(
 defineDarwin(
   'os_screenshot',
   'Real-pixel window capture via screencapture (occlusion-immune, needs Screen Recording). The WebGL map is actually visible here, unlike the DOM-only `screenshot`.',
-  { name: z.string().optional() },
+  // The name is a LABEL, not a path: it is interpolated into a filename under
+  // the session dir, so anything path-ish would let a caller write a PNG (and
+  // mkdir) anywhere the user can write. Constrained at the schema boundary.
+  { name: z.string().regex(/^[\w.-]{1,64}$/).optional() },
   async (args) => {
     try {
       const { base64, meta } = await record('os_screenshot', args, async (seq) => {
         const file = path.join(
           session.recorder.dir,
           'screenshots',
-          `${String(seq).padStart(4, '0')}-${args.name ?? 'os-shot'}.png`,
+          `${String(seq).padStart(4, '0')}-${path.basename(args.name ?? 'os-shot')}.png`,
         );
         const shot = await osScreenshot(session, file);
         const b64 = fs.readFileSync(shot.path).toString('base64');

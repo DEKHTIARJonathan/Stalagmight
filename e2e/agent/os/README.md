@@ -53,7 +53,10 @@ Registered on darwin only, in `e2e/agent/mcp/server.ts`:
   exits. See "The grant model" below.
 - **Evidence contract.** `frontmost_ok` and `permissions` ride every os_\*
   result. `frontmost_ok: false` means discard the evidence, not investigate the
-  app. See "Evidence-quality contract" below.
+  app. See "Evidence-quality contract" below. Note the asymmetry: a CAPTURE
+  proceeds and labels itself, but INPUT refuses to post at all, because a chord
+  sent to a window that stole focus is a real mutation in someone else's app,
+  not merely a bad screenshot. Pass `force: true` to override.
 - **`os_menu` is DEFERRED.** The helper's `menu` subcommand is a stub that
   returns `unimplemented` naming the AX menu-bar walk it needs, so menu
   accelerators go through `os_keys`.
@@ -92,7 +95,24 @@ It is **deliberately never added to any tool allowlist**, so invoking it always
 raises a real harness permission prompt: the human, not the model, decides that
 this session may drive the desktop. `requireGrant()` throws an instructive
 refusal before anything touches the machine, and a fresh server starts
-ungranted.
+ungranted. Preflight runs BEFORE the flag is set, so a grant that reports
+failure never leaves the gate open.
+
+**The in-process flag is soft, and the real enforcement is not in this repo.**
+Nothing here can observe (let alone enforce) a client's permission config: an
+MCP client set to auto-approve tools, a fork that edits `permissions.ts`, or a
+user who allowlists `mcp__stalagmight-app__*` wholesale all void the prompt,
+and the server cannot tell. Treat the un-allowlisted `os_grant` as a convention
+that makes consent explicit for a cooperating client, not as a security
+boundary. The boundary that does hold is macOS TCC: without Accessibility, the
+helper refuses outright and the OS drops the events anyway.
+
+**Blast radius is the whole desktop, not the app window.** CGEvent input goes
+wherever focus is, and `os_click {x, y}` is never clamped to the app's bounds -
+a granted session can click or type into any window on the screen. Two things
+keep that from being an accident rather than a choice: the app must be
+frontmost before any input is posted (input ABORTS otherwise; `force: true` is
+the explicit opt-out), and the human grants per server process, in person.
 
 Permission (can the machine do this?) and grant (may we do this now?) are
 independent locks and both must be open.

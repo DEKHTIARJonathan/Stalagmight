@@ -254,7 +254,27 @@ nothing in CI touches the desktop.
   `os_screenshot` showing real map pixels, and the revoked-Screen-Recording path failing
   loudly instead of shipping a wallpaper.
 
-## 7. Review residue (pre-PR round, 2026-08-05)
+### 5.5 Tier 2 review residue (pre-PR round, 2026-08-05)
+
+Deferred with rationale, per the one-triage-pass rule:
+
+- The helper CLI ships `move` and `drag` subcommands (and their TS result
+  types) with no MCP tool driving them yet. Kept because a drag tool is the
+  obvious next Tier 2 addition and the Rust side is already tested; if it has
+  not landed by the next Tier 2 change, cut them.
+- `ensureHelperBuilt()` is synchronous (`execFileSync cargo build`), so the
+  FIRST os_* call after a helper source change blocks the MCP event loop for
+  the cold build (~20 s). One-time and only on darwin; making it async means
+  teaching `runHelper` a build-in-progress state for little gain.
+- `contentOriginFromFrame` derives the title-bar height from the frame/inner
+  height delta and clamps negatives, but does not cross-check `innerWidth`
+  against the frame width. A zoomed webview would skew testid coordinates
+  silently; the check is cheap and worth adding if that ever bites.
+- The helper crate's Rust `#[test]`s run under no gate (it is outside the
+  src-tauri workspace and links macOS frameworks, so Linux CI cannot run them).
+  Run `env -C e2e/agent/os/helper cargo test` locally when touching the crate.
+
+## 7. Review residue (Tier 1 pre-PR round, 2026-08-05)
 
 Deferred with rationale, per the one-triage-pass rule:
 

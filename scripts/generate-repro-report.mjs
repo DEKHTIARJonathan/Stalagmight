@@ -194,6 +194,14 @@ function describeAction(a) {
       return `${p.store}.${p.action}(${JSON.stringify(p.args ?? [])})`;
     case 'map_view':
       return p.set ? JSON.stringify(p.set) : 'read';
+    case 'os_grant':
+      return 'OS input granted for this session';
+    case 'os_click':
+      return `${p.testid ? `testid=${p.testid}` : `screen ${p.x},${p.y}`}${p.button === 'right' ? ' (right)' : ''}${p.double ? ' (double)' : ''}${p.force ? ' (forced, app was not frontmost)' : ''} [OS-level]`;
+    case 'os_keys':
+      return `${p.spec}${p.force ? ' (forced, app was not frontmost)' : ''} [OS-level]`;
+    case 'os_screenshot':
+      return `${p.name ?? 'os-shot'} [OS-level, real pixels]`;
     default:
       return '';
   }

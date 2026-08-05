@@ -126,15 +126,38 @@ export async function requireOsAccess(
 }
 
 /**
- * The pid of the app this session launched. Every os_* action needs it: input
- * is aimed at that window and only that window, so an unknown pid is a hard
- * stop rather than a click into whatever happens to be in front.
+ * Gate 3 for INPUT only: refuse to post real events when we could not prove the
+ * app is frontmost. A CGEvent is desktop-wide - it goes wherever focus is - so
+ * a lost focus check means the next chord or click lands in the human's app.
+ * `force` is the deliberate escape hatch for the rare case where the caller
+ * really does want to drive whatever is in front.
+ */
+export function requireFrontmostForInput(
+  frontmostOk: boolean,
+  force: boolean | undefined,
+  what: string,
+): void {
+  if (frontmostOk || force) return;
+  throw new Error(
+    `refusing to post os ${what}: the app could not be brought frontmost, and OS input goes to ` +
+      'whatever app IS frontmost - posting now would type into the human\'s window. Bring the app ' +
+      'forward (or close whatever stole focus) and retry; pass force: true only if you really mean ' +
+      'to drive the frontmost app, whatever it is.',
+  );
+}
+
+/**
+ * The pid of the app this session launched. Every os_* action needs it to
+ * locate the app's window and to check that the app is frontmost before
+ * posting. Note this gates EXISTENCE, not aim: CGEvent input is desktop-wide
+ * and a coordinate click is never clamped to the window, which is why
+ * requireFrontmostForInput exists.
  */
 export function requireAppPid(session: AgentSession): number {
   const pid = session.appPid?.() ?? null;
   if (pid === null || !Number.isInteger(pid) || pid <= 0) {
     throw new Error(
-      'no app pid is known for this session, so OS input cannot be aimed at the app window. ' +
+      'no app pid is known for this session, so OS input cannot target or verify the app window. ' +
         'Start a macOS session (session_start) and check that its result reports appPidKnown: true.',
     );
   }
@@ -246,11 +269,15 @@ async function frontmostPid(deps: OsDeps): Promise<number | null> {
  * Make the app frontmost if it is not already, with EXACTLY ONE attempt.
  *
  * Never loops: repeatedly stealing focus back from a human at the same keyboard
- * is always wrong. Returns whether the app is in front now, and that boolean is
- * the whole answer - callers put it in `frontmost_ok` and do NOT throw on
- * false, because "discard this evidence" is a different instruction from "this
- * action failed". An activate that could not even run means the same thing to
- * the caller as one that did not work, so the re-check decides either way.
+ * is always wrong. Returns whether the app is in front now.
+ *
+ * What the caller does with `false` differs by action, and the difference is
+ * safety, not style. A capture is harmless when focus was lost - it just
+ * photographs the wrong thing, so it proceeds and labels the evidence. REAL
+ * INPUT is not: a CGEvent goes to whatever is frontmost, so posting `cmd+s`
+ * (or a click at a point now covered by another window) after a failed focus
+ * check types into the human's editor, not into a bad screenshot. Input
+ * therefore ABORTS by default and only proceeds under an explicit `force`.
  */
 export async function ensureAppFrontmost(appPid: number, deps: OsDeps = defaultOsDeps): Promise<boolean> {
   if ((await frontmostPid(deps)) === appPid) return true;
@@ -269,12 +296,20 @@ export async function ensureAppFrontmost(appPid: number, deps: OsDeps = defaultO
  */
 export async function osClick(
   session: AgentSession,
-  opts: { testid?: string; x?: number; y?: number; button?: 'left' | 'right'; double?: boolean },
+  opts: {
+    testid?: string;
+    x?: number;
+    y?: number;
+    button?: 'left' | 'right';
+    double?: boolean;
+    force?: boolean;
+  },
   deps: OsDeps = defaultOsDeps,
 ): Promise<{ clicked: OsPoint; target: string } & OsActionEvidence> {
   const permissions = await requireOsAccess(deps, false);
   const appPid = requireAppPid(session);
   const frontmostOk = await ensureAppFrontmost(appPid, deps);
+  requireFrontmostForInput(frontmostOk, opts.force, 'click');
   // Resolved AFTER the activation: bringing a window forward can move it.
   const point = await resolveTargetPoint(session, opts, deps);
 
@@ -300,10 +335,12 @@ export async function osKeys(
   session: AgentSession,
   spec: string,
   deps: OsDeps = defaultOsDeps,
+  opts: { force?: boolean } = {},
 ): Promise<{ spec: string } & OsActionEvidence> {
   const permissions = await requireOsAccess(deps, false);
   const appPid = requireAppPid(session);
   const frontmostOk = await ensureAppFrontmost(appPid, deps);
+  requireFrontmostForInput(frontmostOk, opts.force, `keys ${spec}`);
 
   const result = await deps.runHelper<KeysResult | HelperError>(['keys', spec]);
   if (!result.ok) throw new Error(`os helper keys ${spec} failed: ${result.error}`);

@@ -321,4 +321,18 @@ describe('generate-repro-report.mjs', () => {
     const home = process.env.HOME ?? '';
     if (home) expect(md).not.toContain(`${home}/`);
   });
+
+  // OS-level steps mutate the app, so a repro that omits them is wrong. They
+  // must appear AND carry their detail: a bare "os_keys" tells a reader nothing
+  // about which chord reproduced the bug.
+  it('includes os_* steps with their detail, marked OS-level', () => {
+    execFileSync(process.execPath, [reportGen, sessionDir], { encoding: 'utf8' });
+    const md = fs.readFileSync(path.join(sessionDir, 'report.md'), 'utf8');
+
+    expect(md).toContain('os_click');
+    expect(md).toContain('testid=toolbar-save-button');
+    expect(md).toContain('os_keys');
+    expect(md).toContain('cmd+s');
+    expect(md).toContain('[OS-level]');
+  });
 });

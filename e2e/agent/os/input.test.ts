@@ -269,15 +269,32 @@ describe('osClick', () => {
     expect(helperCalls.at(-1)).toEqual(['click', '20', '30', '--right', '--double']);
   });
 
-  it('still clicks when focus was lost, and labels the evidence as untrustworthy', async () => {
+  // A CGEvent goes to whatever app is frontmost, so a lost focus check means
+  // the click would land in the human's window. Refusing to post is the only
+  // safe default; labelling the evidence is not enough for a real mutation.
+  it('refuses to click when focus was lost, and posts nothing', async () => {
     const { deps, helperCalls } = fakeOsDeps({ frontmost: [999, 999] });
 
-    await expect(osClick(fakeSession(), { x: 20, y: 30 }, deps)).resolves.toMatchObject({
+    await expect(osClick(fakeSession(), { x: 20, y: 30 }, deps)).rejects.toThrow(/frontmost/i);
+    expect(helperVerbs(helperCalls)).not.toContain('click');
+  });
+
+  it('clicks anyway under force, still labelling the evidence untrustworthy', async () => {
+    const { deps, helperCalls } = fakeOsDeps({ frontmost: [999, 999] });
+
+    await expect(osClick(fakeSession(), { x: 20, y: 30, force: true }, deps)).resolves.toMatchObject({
       clicked: { x: 20, y: 30 },
       target: 'screen 20,30',
       frontmost_ok: false,
     });
     expect(helperVerbs(helperCalls)).toContain('click');
+  });
+
+  it('refuses to post a key chord when focus was lost', async () => {
+    const { deps, helperCalls } = fakeOsDeps({ frontmost: [999, 999] });
+
+    await expect(osKeys(fakeSession(), 'cmd+s', deps)).rejects.toThrow(/frontmost/i);
+    expect(helperVerbs(helperCalls)).not.toContain('keys');
   });
 
   it('resolves the point only after the activate attempt, so a moved window is read fresh', async () => {

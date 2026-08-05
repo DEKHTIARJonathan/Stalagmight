@@ -226,6 +226,9 @@ export function checkBuildFreshness(opts: FreshnessOptions = {}): Freshness {
 // The feature build regenerates these TRACKED files with the WebDriver
 // plugin's ACL entries; the repo keeps the plain-build shape.
 const SCHEMA_PATHSPEC = 'src-tauri/gen/schemas';
+// Every ACL entry the plugin adds carries its crate name, so a diff whose added
+// lines all mention it is harness churn and nothing else.
+const PLUGIN_ACL_MARKER = 'webdriver-automation';
 
 /** True when the tracked generated schemas have no uncommitted changes. */
 function schemasClean(): boolean {
@@ -237,14 +240,42 @@ function schemasClean(): boolean {
   }
 }
 
+function schemaDiff(): string {
+  try {
+    return execSync(`git diff -- ${SCHEMA_PATHSPEC}`, { cwd: repoRoot, encoding: 'utf8' });
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * Is this schema diff nothing but the WebDriver plugin's ACL churn? Every added
+ * line must mention the plugin; a single unrelated addition makes it somebody's
+ * real work, which tooling must never discard.
+ *
+ * Pure (takes the diff text) so the classification is unit-testable without a
+ * dirty worktree.
+ */
+export function isPluginAclChurn(diff: string): boolean {
+  const added = diff
+    .split('\n')
+    .filter((line) => line.startsWith('+') && !line.startsWith('+++'))
+    .map((line) => line.slice(1).trim())
+    .filter((line) => line.length > 0);
+  return added.length > 0 && added.every((line) => line.includes(PLUGIN_ACL_MARKER));
+}
+
 export function buildApp(onLog?: (line: string) => void): void {
   const withE2eFeature = needsE2eFeature();
   const command = withE2eFeature
     ? 'pnpm tauri build --debug --no-bundle -- --features e2e'
     : 'pnpm tauri build --debug --no-bundle';
-  // Only restore schema churn the build itself caused: a dirty-before state is
-  // someone's real in-progress work and must never be clobbered by tooling.
-  const schemasWereClean = withE2eFeature && schemasClean();
+  // Restore only churn that is provably the plugin's. Timing alone is not
+  // enough: an interrupted feature build (a killed smoke, ctrl-c) leaves churn
+  // behind, and a "was it clean before?" rule would then refuse to clean up
+  // forever after. Classifying the DIFF instead recovers from that while still
+  // never discarding a real edit to these files.
+  const preBuildDirtIsOurs = withE2eFeature && (schemasClean() || isPluginAclChurn(schemaDiff()));
   onLog?.(`Building Tauri debug app (VITE_E2E=1, --no-bundle${withE2eFeature ? ', --features e2e' : ''})...`);
   // Build output goes to stderr (fd 2), NEVER inherited stdout: under the MCP
   // server, stdout is the JSON-RPC stream and any build chatter (pnpm/vite log
@@ -259,7 +290,7 @@ export function buildApp(onLog?: (line: string) => void): void {
     },
   });
   if (withE2eFeature && !schemasClean()) {
-    if (schemasWereClean) {
+    if (preBuildDirtIsOurs && isPluginAclChurn(schemaDiff())) {
       try {
         execSync(`git checkout -- ${SCHEMA_PATHSPEC}`, { cwd: repoRoot, stdio: 'ignore' });
         onLog?.(`Restored ${SCHEMA_PATHSPEC} (the e2e-feature build regenerates them with plugin ACL entries).`);
@@ -269,8 +300,9 @@ export function buildApp(onLog?: (line: string) => void): void {
       }
     } else {
       onLog?.(
-        `Warning: ${SCHEMA_PATHSPEC} was already modified before this build, so the harness left it ` +
-          `alone - it now also carries e2e-feature ACL churn. Do not commit the plugin entries.`,
+        `Warning: ${SCHEMA_PATHSPEC} carries changes beyond the plugin's ACL entries, so the ` +
+          `harness left it alone rather than discarding real work - it now ALSO carries ` +
+          `e2e-feature churn. Do not commit the plugin entries.`,
       );
     }
   }
