@@ -27,10 +27,15 @@ e2e/agent/os/
                   CI scope, like the other out-of-app crates)
   helper.ts       ensureHelperBuilt() + runHelper(args) -> parsed JSON
   permissions.ts  per-process grant flag + TCC preflight
+  input.ts        osClick / osKeys, the three gates, screen-point resolution
+  screenshot.ts   window id by pid -> `screencapture` of that window
 ```
 
-`input.ts`, `screenshot.ts` and `menu.ts` land with the MCP surface (PR 4 in the
-design doc); the helper subcommands they need already exist.
+`menu.ts` lands with the AX menu-bar walk the helper's `menu` subcommand still
+needs; use `keys` for menu accelerators until then. Every entry point in
+`input.ts` and `screenshot.ts` takes its helper runner and its `osascript` /
+`screencapture` execs as an optional injected `deps` argument, which is how the
+unit tests beside them cover the gates without posting a single real event.
 
 ## Permissions: who grants what
 
@@ -93,7 +98,9 @@ origin of the main display: the space CGEvent posts in and the space
 Retina 2x matters only when **interpreting captured pixels**: a `screencapture`
 of a 1000x700 point window is a 2000x1400 pixel image. Divide by the backing
 scale before turning a pixel coordinate into a click target, never multiply a
-point coordinate before posting.
+point coordinate before posting. That division is only sound because the capture
+passes `-o`: with the window shadow included the image would carry transparent
+margins the window never occupied, and every pixel-derived point would be off.
 
 Element coordinates come from the app in CSS points via `evalInApp`, so the
 composition is: element rect (CSS points, window-relative) + window content
