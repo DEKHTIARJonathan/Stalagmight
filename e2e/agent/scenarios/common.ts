@@ -36,19 +36,37 @@ export async function ensureProjectLoaded(ctx: ScenarioContext, fixture = DEFAUL
  * fixture's persisted undo stack gone. So the three steps are split here -
  * materialize the temp copy, strip its history, then load - with the strip
  * landing on the COPY, never on the tracked fixture.
+ *
+ * CLOSE FIRST, and not as a matter of taste. `ctx.fixturePath` always resolves
+ * to the same path (`<sessionDir>/fixtures/<name>.stalx`), so a caller that
+ * already has that very file open - `seed(mode:'fixture')` followed by
+ * `run_scenario`, which does not close anything - would have the copy TRUNCATED
+ * and then SQLite-written underneath a live read-write handle holding a 256 MB
+ * mmap. That is the SIGBUS hazard `project_io.rs` documents at its own
+ * `close_project`, and it surfaces as the app crashing or reporting "database
+ * disk image is malformed" - a fabricated app bug that is really the harness
+ * corrupting the database it had open.
  */
 export async function loadFixtureWithoutUndoHistory(
   ctx: ScenarioContext,
   fixture = DEFAULT_FIXTURE,
 ): Promise<{ path: string; stripped: StripUndoHistoryResult }> {
-  const materialized = ctx.fixturePath(fixture);
-  const stripped = stripUndoHistory(materialized);
-
-  // Same close the scenario smoke runner does between scenarios; best-effort so
-  // a project that refuses to close still surfaces as the load failing.
+  // Same close the scenario smoke runner does between scenarios. Unlike there it
+  // is NOT best-effort: the next two statements rewrite the file the backend
+  // would still have open, so a project that refuses to close has to stop the
+  // scenario rather than be written over.
   if (await hasProject(ctx)) {
     await ctx.callAction('project', 'closeProject', []).catch(() => undefined);
+    if (await hasProject(ctx)) {
+      throw new Error(
+        `a project is still open after closeProject; refusing to rewrite ${fixture} underneath ` +
+          `the backend's live SQLite handle (see loadFixtureWithoutUndoHistory)`,
+      );
+    }
   }
+
+  const materialized = ctx.fixturePath(fixture);
+  const stripped = stripUndoHistory(materialized);
 
   const res = (await ctx.callAction('project', 'loadProject', [materialized])) as {
     ok: boolean;

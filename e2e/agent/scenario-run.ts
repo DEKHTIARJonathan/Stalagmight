@@ -15,6 +15,14 @@
  * a fuzz run fails, so the usual loop is "run, fail, replay the trace it left,
  * then `pnpm agent:fuzz-shrink` it".
  *
+ * A replay RESTORES the environment the recording ran under (fixture, tolerance,
+ * stream, the persistence knobs) before the scenario modules are imported, and
+ * refuses a trace recorded by a different scenario. Both matter: the recorded
+ * steps carry RESOLVED section and shot ids, so replaying them against another
+ * fixture drives moves at ids that do not exist there and reports an invented
+ * failure - or passes green - while the operator believes they are looking at
+ * the recorded bug.
+ *
  * `--release` (or `STALAGMIGHT_AGENT_RELEASE=1`) drives the release binary
  * instead of the debug one. Opt-in on purpose: a debug build's `debug_assert!`s
  * and `debug_assertions`-gated self-checks are oracles in their own right, so
@@ -24,9 +32,7 @@
  * so it works as a one-off gate too.
  */
 import * as path from 'path';
-import { AppSession } from './session';
-import { getScenario, listScenarios, runScenario } from './scenarios';
-import { runSweep, newOracleState } from './lib/oracles';
+import { readTrace } from './lib/fuzzTrace';
 
 interface Args {
   name: string;
@@ -40,10 +46,11 @@ interface Args {
 function parseArgs(argv: string[]): Args {
   const [name, ...rest] = argv;
   if (!name) {
-    throw new Error(
-      `usage: pnpm agent:scenario <name> [--seed N] [--iterations M] [--release] [--trace FILE]\n` +
-        `known: ${listScenarios().join(', ')}`,
-    );
+    // The known-scenario list is NOT printed here: `./scenarios` is imported
+    // after the replay env is restored, and importing it early to build this
+    // message would freeze the fuzz scenarios' knobs against the wrong
+    // environment. `main` names them once the registry is loaded.
+    throw new Error('usage: pnpm agent:scenario <name> [--seed N] [--iterations M] [--release] [--trace FILE]');
   }
   const args: Args = { name, release: false };
   for (let i = 0; i < rest.length; i += 1) {
@@ -74,9 +81,6 @@ function parseArgs(argv: string[]): Args {
 
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
-  if (!getScenario(args.name)) {
-    throw new Error(`unknown scenario "${args.name}"; known: ${listScenarios().join(', ')}`);
-  }
 
   // Set BEFORE `session.start()`: `agentBuildMode()` is read at call time, which
   // is what lets a flag parsed after this module's imports still take effect.
@@ -84,7 +88,39 @@ async function main(): Promise<void> {
   // Same reason, and it is how replay reaches the scenario: the scenarios read
   // their knobs from the environment, so the flag is just a nicer spelling of
   // the env var and the two are interchangeable.
-  if (args.trace) process.env.STALAGMIGHT_FUZZ_REPLAY = path.resolve(args.trace);
+  if (args.trace) {
+    const tracePath = path.resolve(args.trace);
+    const trace = readTrace(tracePath);
+    if (trace.scenario !== args.name) {
+      throw new Error(
+        `trace ${tracePath} was recorded by "${trace.scenario}", not "${args.name}"; ` +
+          `its steps carry that scenario's resolved ids. Run it as: ` +
+          `pnpm agent:scenario ${trace.scenario} --trace ${args.trace}`,
+      );
+    }
+    // The recording's own environment is part of the repro. Restored here, i.e.
+    // before `./scenarios` is imported below, because the fuzz scenarios freeze
+    // FIXTURE / ALLOW_KNOWN_BUGS / REPAIR / DUMP_HISTORY into module-level
+    // consts at import time; a restore after that would be a no-op.
+    const restored = Object.entries(trace.env).filter(([key, value]) => process.env[key] !== value);
+    for (const [key, value] of Object.entries(trace.env)) process.env[key] = value;
+    process.env.STALAGMIGHT_FUZZ_REPLAY = tracePath;
+    process.stdout.write(
+      `replaying ${trace.steps.length} step(s) recorded by ${trace.scenario} on ${trace.fixture} ` +
+        `(seed ${trace.seed}, rev ${trace.gitRev.slice(0, 12)})\n` +
+        (restored.length > 0
+          ? `  restored from the trace: ${restored.map(([key, value]) => `${key}=${value}`).join(' ')}\n`
+          : ''),
+    );
+  }
+
+  // Imported after the replay env is in place - see the comment above.
+  const { getScenario, listScenarios, runScenario } = await import('./scenarios');
+  const { AppSession } = await import('./session');
+  const { runSweep, newOracleState } = await import('./lib/oracles');
+  if (!getScenario(args.name)) {
+    throw new Error(`unknown scenario "${args.name}"; known: ${listScenarios().join(', ')}`);
+  }
 
   const session = new AppSession();
   const started = await session.start({ build: 'auto' });

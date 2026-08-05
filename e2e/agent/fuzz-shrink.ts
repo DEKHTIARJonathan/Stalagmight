@@ -36,8 +36,6 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 
-import { AppSession } from './session';
-import { getScenario, runScenario } from './scenarios';
 import {
   describeSignature,
   describeSteps,
@@ -83,12 +81,16 @@ function parseArgs(argv: string[]): Args {
 /** Outcome of replaying one candidate: null when it passed. */
 type ReplayOutcome = { message: string; signature: FailureSignature } | null;
 
-async function main(): Promise<void> {
+/**
+ * Exit code, returned rather than taken here: an early `return` from inside the
+ * `try` used to skip a trailing `process.exit`, so the "replayed green" path -
+ * the one that means the trace does NOT reproduce - exited 0 and read as
+ * success to anything using this as a regression check. Every path now carries
+ * its own code and the caller is the only place that exits.
+ */
+async function main(): Promise<number> {
   const args = parseArgs(process.argv.slice(2));
   const trace = readTrace(args.trace);
-  if (!getScenario(trace.scenario)) {
-    throw new Error(`trace names scenario "${trace.scenario}", which this build does not have`);
-  }
   if (args.release) process.env.STALAGMIGHT_AGENT_RELEASE = '1';
 
   // The env the recording ran under is part of the repro: tolerance, fixture,
@@ -102,6 +104,19 @@ async function main(): Promise<void> {
   // does not litter the artifacts dir with one file per rejected candidate.
   process.env.STALAGMIGHT_FUZZ_TRACE = path.join(scratch, 'replay-out.json');
   process.env.STALAGMIGHT_FUZZ_REPLAY = candidatePath;
+
+  // IMPORTED HERE, not at the top of the file, and that is the whole point of
+  // the restore above: `undoRedoFuzz` / `undoPersistenceFuzz` freeze FIXTURE,
+  // ALLOW_KNOWN_BUGS, REPAIR and DUMP_HISTORY into module-level consts when
+  // they are first imported. A static import would evaluate them against the
+  // invoking shell's environment, and the restore would then be a no-op -
+  // replaying a naharon trace against the default fixture, or replaying a
+  // tolerant recording in STRICT mode, and shrinking toward the wrong defect.
+  const { getScenario, runScenario } = await import('./scenarios');
+  const { AppSession } = await import('./session');
+  if (!getScenario(trace.scenario)) {
+    throw new Error(`trace names scenario "${trace.scenario}", which this build does not have`);
+  }
 
   const session = new AppSession();
   const started = await session.start({ build: 'auto' });
@@ -143,7 +158,7 @@ async function main(): Promise<void> {
           '  Either the bug is fixed, or the failure needed something the trace does not carry.\n',
       );
       failed = true;
-      return;
+      return 1;
     }
     process.stdout.write(`baseline failure reproduced in ${replayTimesMs[0]} ms:\n${describeSignature(baseline.signature)}\n`);
     if (trace.failure && !sameSignature(trace.failure.signature, baseline.signature)) {
@@ -206,13 +221,16 @@ async function main(): Promise<void> {
     fs.rmSync(scratch, { recursive: true, force: true });
   }
 
-  process.exit(failed ? 1 : 0);
+  return failed ? 1 : 0;
 }
 
-main().catch((err) => {
-  process.stderr.write(`fatal: ${err instanceof Error ? err.stack : String(err)}\n`);
-  process.exit(1);
-});
+main().then(
+  (code) => process.exit(code),
+  (err: unknown) => {
+    process.stderr.write(`fatal: ${err instanceof Error ? err.stack : String(err)}\n`);
+    process.exit(1);
+  },
+);
 
 /** Re-exported for the type checker's benefit; the CLI is the only consumer. */
 export type { FuzzTrace };

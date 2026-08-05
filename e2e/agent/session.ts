@@ -41,12 +41,41 @@ const BASE_PORT = Number.parseInt(process.env.STALAGMIGHT_AGENT_BASE_PORT ?? '45
  * exiting inside the 250 ms probe window, so two sessions launched together can
  * both believe they own `:89`. A parallel runner gives each worker a pool of
  * exactly one display, keyed off its index, and the collision cannot happen.
- * Five is still the ceiling - that is how many displays the pool has.
+ * Five is still the ceiling - that is how many displays the DEFAULT pool has.
+ *
+ * Narrowing it also spends the retries this walk would otherwise have, so a
+ * pinned pool is validated (`parseDisplayPool`) and its failure is terminal
+ * (`start`): a session that cannot get its one display must say so, never
+ * quietly take the user's desktop instead.
  */
-const XVFB_DISPLAYS = (process.env.STALAGMIGHT_AGENT_DISPLAYS ?? ':89,:88,:87,:86,:85')
-  .split(',')
-  .map((entry) => entry.trim())
-  .filter(Boolean);
+const DEFAULT_XVFB_DISPLAYS = [':89', ':88', ':87', ':86', ':85'];
+
+/**
+ * Parse the pool, rejecting anything that would silently shrink it. A pinned
+ * pool has NO retry left - that is the point - so an entry that is not a `:N`
+ * display, or a value that filters down to nothing, must stop the session
+ * rather than leave `startXvfb` with fewer candidates than the caller thinks it
+ * gave it.
+ */
+function parseDisplayPool(raw: string | undefined): string[] {
+  if (raw === undefined) return DEFAULT_XVFB_DISPLAYS;
+  const entries = raw.split(',').map((entry) => entry.trim()).filter(Boolean);
+  if (entries.length === 0) {
+    throw new Error(`STALAGMIGHT_AGENT_DISPLAYS is set but empty ("${raw}"); unset it to use the default pool`);
+  }
+  const malformed = entries.filter((entry) => !/^:\d+$/.test(entry));
+  if (malformed.length > 0) {
+    throw new Error(
+      `STALAGMIGHT_AGENT_DISPLAYS has malformed display(s) ${JSON.stringify(malformed)}; ` +
+        `entries must look like ":87"`,
+    );
+  }
+  return entries;
+}
+
+const XVFB_DISPLAYS = parseDisplayPool(process.env.STALAGMIGHT_AGENT_DISPLAYS);
+/** True when the caller pinned the pool, i.e. there is deliberately no fallback. */
+const DISPLAY_POOL_PINNED = process.env.STALAGMIGHT_AGENT_DISPLAYS !== undefined;
 const REAP_COMM_NAMES = ['stalagmight', 'tauri-driver', 'WebKitWebDriver'];
 
 export class AppSession extends SessionCore {
@@ -104,6 +133,19 @@ export class AppSession extends SessionCore {
       this.xvfb = await startXvfb(XVFB_DISPLAYS, '1920x1080x24');
       if (this.xvfb) {
         this.display = this.xvfb.display;
+      } else if (DISPLAY_POOL_PINNED) {
+        // A pinned pool means a parallel runner handed this session ONE display
+        // and is relying on it, so there is nothing to walk on to. Falling
+        // through to the real display here would put the app window on the
+        // user's desktop and drive it with pointer and keyboard input for the
+        // whole run - the precise thing the pool exists to prevent.
+        this.state = 'idle';
+        throw new Error(
+          `Xvfb could not start on ${XVFB_DISPLAYS.join(', ')} and STALAGMIGHT_AGENT_DISPLAYS pins the ` +
+            `pool, so there is no other display to try. Usually a leaked Xvfb (or its stale lock) still ` +
+            `holds the slot: check 'ls /tmp/.X*-lock' and 'pgrep -a Xvfb', or unset ` +
+            `STALAGMIGHT_AGENT_DISPLAYS to use the default ${DEFAULT_XVFB_DISPLAYS.length}-display pool.`,
+        );
       } else if (checkDisplayAvailable()) {
         process.stderr.write(
           '[agent] WARNING: Xvfb unavailable; falling back to the real display (the app window WILL be visible).\n',

@@ -105,6 +105,20 @@ function positiveInt(flag: string, raw: string): number {
   return Number(raw);
 }
 
+/**
+ * A switch that also accepts `--flag=VALUE`. Presence alone is NOT enough:
+ * `--release=0` reads as "no release" to everyone who types it, and treating it
+ * as true would silently drive the release binary - where the `debug_assert!`s
+ * and `debug_assertions`-gated self-checks that are oracles in their own right
+ * are compiled out, so the sweep passes on seeds the debug build would fail.
+ */
+function booleanFlag(flag: string, raw: string): boolean {
+  const value = raw.trim().toLowerCase();
+  if (['1', 'true', 'yes', 'on'].includes(value)) return true;
+  if (['0', 'false', 'no', 'off'].includes(value)) return false;
+  bail(`--${flag} takes 1/0, true/false, yes/no or on/off, got "${raw}"`);
+}
+
 function parseArgs(argv: string[]): Options {
   const known = new Set(['fixtures', 'seeds', 'workers', 'iterations', 'release']);
   const raw: Record<string, string> = {};
@@ -153,7 +167,8 @@ function parseArgs(argv: string[]): Options {
 
   const seeds = raw.seeds === undefined ? [1, 2, 3, 4] : parseSeeds(raw.seeds);
   const iterations = raw.iterations === undefined ? DEFAULT_ITERATIONS : positiveInt('iterations', raw.iterations);
-  return { fixtures, seeds, iterations, workers, release: raw.release !== undefined };
+  const release = raw.release === undefined ? false : booleanFlag('release', raw.release);
+  return { fixtures, seeds, iterations, workers, release };
 }
 
 /**
@@ -170,9 +185,17 @@ function parseArgs(argv: string[]): Options {
  * That is load-bearing. The default first-that-starts walk calls a display free
  * when Xvfb has not exited within 250 ms, so two sessions launched together can
  * both conclude they own :89. One display per slot removes the race.
+ *
+ * Replay knobs: DROPPED, not inherited. A cell GENERATES moves at its own seed,
+ * so an exported STALAGMIGHT_FUZZ_REPLAY left over from triage would make every
+ * cell replay that one trace - a full pass/fail table and merged metrics for
+ * coverage nothing exercised - and an exported STALAGMIGHT_FUZZ_TRACE would
+ * point all K concurrent workers at one output file to clobber in turn.
  */
+const INHERITED_ENV_BLOCKLIST = ['STALAGMIGHT_FUZZ_REPLAY', 'STALAGMIGHT_FUZZ_TRACE'] as const;
+
 function slotEnv(slot: number, fixture: string, release: boolean): NodeJS.ProcessEnv {
-  return {
+  const env: NodeJS.ProcessEnv = {
     // Inherited wholesale, so STALAGMIGHT_FUZZ_ALLOW_KNOWN_BUGS reaches the
     // child exactly as the caller set it.
     ...process.env,
@@ -183,6 +206,8 @@ function slotEnv(slot: number, fixture: string, release: boolean): NodeJS.Proces
     // STALAGMIGHT_AGENT_RELEASE=1 already reaches them through the spread.
     ...(release ? { STALAGMIGHT_AGENT_RELEASE: '1' } : {}),
   };
+  for (const key of INHERITED_ENV_BLOCKLIST) delete env[key];
+  return env;
 }
 
 const live = new Set<ChildProcess>();
@@ -341,6 +366,13 @@ function printReport(results: RunResult[], wallMs: number): void {
 async function main(): Promise<void> {
   const opts = parseArgs(process.argv.slice(2));
   if (!fs.existsSync(TSX_BIN)) bail(`tsx not found at ${TSX_BIN}; run pnpm install`);
+  const dropped = INHERITED_ENV_BLOCKLIST.filter((key) => process.env[key] !== undefined);
+  if (dropped.length > 0) {
+    process.stdout.write(
+      `note: ${dropped.join(', ')} is set but NOT passed to the cells - a matrix run generates its ` +
+        `own moves. Use pnpm agent:scenario --trace to replay one.\n`,
+    );
+  }
   const cells = opts.fixtures.flatMap((fixture) => opts.seeds.map((seed) => ({ fixture, seed })));
   const workers = Math.min(opts.workers, cells.length);
   process.stdout.write(
