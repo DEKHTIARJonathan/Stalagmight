@@ -4096,47 +4096,58 @@ mod tests {
     // File-level parsing (TML ZIP)
     // -------------------------------------------------------------------
 
+    /// The whole `.tml` path end to end: ZIP wrapper, long element names, and
+    /// the field mapping every consumer downstream reads. Synthetic on purpose -
+    /// survey fixtures are not committed, and the two tests this replaces
+    /// returned early when their fixture was missing, which it always was.
     #[test]
-    fn test_parse_tml_fixture() {
-        let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/test_simple.tml");
-        if !fixture.exists() {
-            // Skip if fixture not yet available
-            return;
-        }
-        let result = parse_tml(&fixture);
-        assert!(
-            result.is_ok(),
-            "Failed to parse test_simple.tml: {:?}",
-            result.err()
+    fn a_zip_wrapped_tml_parses_into_the_mapped_fields() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("synthetic.tml");
+        let xml = wrap_xml(
+            &[
+                tml_shot_xml(0, -1, "START", "Start"),
+                tml_shot_xml(1, 0, "REAL", "Section A"),
+                tml_shot_xml(2, 1, "REAL", "Section A"),
+            ]
+            .join("\n"),
         );
-        let tml = result.unwrap_or_else(|_| TmlFile {
-            cave_name: String::new(),
-            unit: TmlUnit::Metric,
-            use_magnetic_azimuth: false,
-            first_start_absolute_elevation: 0.0,
-            unrecognized_unit: None,
-            parse_anomalies: None,
-            encoding_warning: None,
-            geo_coding: None,
-            sections: Vec::new(),
-            closures: Vec::new(),
-        });
-        assert!(!tml.cave_name.is_empty());
-        assert!(!tml.sections.is_empty());
+        write_tml_archive(&path, "Data.xml", xml.as_bytes());
+
+        let tml = parse_tml(&path).unwrap();
+        assert_eq!(tml.cave_name, "Test Cave");
+        assert_eq!(tml.unit, TmlUnit::Metric);
+        assert!(tml.use_magnetic_azimuth);
+        assert!((tml.first_start_absolute_elevation - 100.0).abs() < f64::EPSILON);
+        assert_eq!(tml.sections.len(), 1);
+
+        let section = &tml.sections[0];
+        assert_eq!(section.name, "Section A");
+        assert_eq!(section.shots.len(), 2);
+        assert_eq!(section.shots[0].shot_type, TmlShotType::Real);
+        assert_eq!(section.shots[0].color, "#8f6112");
+        assert_eq!(section.shots[0].explorer.as_deref(), Some("Tester"));
+        assert!((section.shots[0].azimuth - 90.0).abs() < f64::EPSILON);
+        assert!((section.shots[0].length - 10.0).abs() < f64::EPSILON);
+        assert!((section.shots[0].depth - 5.0).abs() < f64::EPSILON);
     }
 
+    /// The same document as a plain `.tmlu` on disk: the extension picks the
+    /// reader, and no ZIP is involved.
     #[test]
-    fn test_parse_tmlu_fixture() {
-        let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/test_simple.tmlu");
-        if !fixture.exists() {
-            return;
-        }
-        let result = parse_tml(&fixture);
-        assert!(
-            result.is_ok(),
-            "Failed to parse test_simple.tmlu: {:?}",
-            result.err()
-        );
+    fn a_plain_tmlu_parses_the_same_way() {
+        let tml = parse_synthetic_tmlu(&wrap_xml(
+            &[
+                tml_shot_xml(0, -1, "START", "Start"),
+                tml_shot_xml(1, 0, "REAL", "Section A"),
+            ]
+            .join("\n"),
+        ));
+
+        assert_eq!(tml.cave_name, "Test Cave");
+        assert_eq!(tml.sections.len(), 1);
+        assert_eq!(tml.sections[0].shots.len(), 1);
+        assert!((tml.sections[0].shots[0].length - 10.0).abs() < f64::EPSILON);
     }
 
     // -------------------------------------------------------------------
