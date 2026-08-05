@@ -1,11 +1,12 @@
 // hygiene MUST be first: it silences wdio + routes console.* off stdout before
-// webdriverio (imported transitively via ./session) can log there.
+// webdriverio (imported transitively via ../createSession) can log there.
 import './hygiene';
 import * as fs from 'fs';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
-import { AppSession } from '../session';
+import { createSession } from '../createSession';
+import type { AgentSession } from '../sessionTypes';
 import { readStore, callStoreAction, postDigest, type StoreName } from '../lib/stores';
 import { LogCursor, type LogLevel } from '../lib/logs';
 import { invokeInApp, evalInApp, capJson } from '../lib/page';
@@ -32,7 +33,7 @@ import { mapFeatureClick } from '../lib/mapControls';
 
 const STORE_NAMES = ['ui', 'project', 'globalView', 'gasPlan', 'speleo', 'export', 'network'] as const;
 
-const session = new AppSession();
+const session = createSession();
 let logCursor: LogCursor | null = null;
 let oracleState: OracleState = newOracleState();
 
@@ -955,7 +956,7 @@ async function withTimeout<T>(p: Promise<T>, ms: number): Promise<T | typeof TIM
 }
 
 async function clickWithOptions(
-  b: AppSession['browser'],
+  b: AgentSession['browser'],
   button: 'left' | 'right' | 'middle',
   double?: boolean,
   modifiers?: Array<'Control' | 'Shift' | 'Alt'>,

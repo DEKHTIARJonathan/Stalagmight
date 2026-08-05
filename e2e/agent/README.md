@@ -30,8 +30,14 @@ pnpm typecheck:agent    # typecheck just the agent code
 
 ## Layout
 
-- `session.ts` - AppSession: build check, isolated profile, tauri-driver, the
-  `remote()` attach, hook verification, command mutex, crash detection, teardown.
+- `createSession.ts` - picks the platform session (Linux today; an unsupported
+  platform is refused here, by name, instead of timing out on a driver).
+- `sessionTypes.ts` - `AgentSession`: the session surface every consumer uses.
+- `session.ts` - AppSession (Linux): build check, Xvfb, tauri-driver, the
+  `remote()` attach, crash detection, process-group teardown.
+- `lib/sessionCore.ts` - platform-neutral half: state machine, command mutex,
+  recorder + owner marker, isolated profile, orphan reaping, crash markers.
+- `lib/sessionShared.ts` - the attach + readiness (hook verification) steps.
 - `lib/build.ts` - build freshness (source mtimes + the E2E build stamp beside
   the binary) + `pnpm tauri build --debug` with VITE_E2E=1.
 - `lib/procs.ts` - port probing + scoped (comm-verified) process reaping.
