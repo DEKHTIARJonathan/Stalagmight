@@ -12,10 +12,15 @@
  * handler manager ends the drag through the normal path (deferred
  * dragend/moveend, inertia preserved).
  *
- * Forwarding is idempotent: dragEnd early-returns when no drag is in flight,
- * so a release that had nothing to do with the map is a no-op. That is what
- * makes several simultaneously-mounted maps safe - each attaches its own
- * forwarder, and the ones whose drag is not live simply do nothing.
+ * Forwarding is gated on a drag actually being in flight: `handleEvent` runs
+ * EVERY enabled handler's `mouseup`, not just dragEnd - including
+ * BlockableMapEventHandler, which on macOS replays a contextmenu it deferred
+ * at mousedown, and MapEventHandler, which fires a map-level `mouseup` with an
+ * lngLat unprojected from outside the canvas. The `dragPan.isActive()` guard
+ * keeps releases that had nothing to do with the map out of all of that, and
+ * is what makes several simultaneously-mounted maps safe - each attaches its
+ * own forwarder, and the ones whose drag is not live simply do nothing.
+ * (dragRotate never drags here: MapCanvas disables it on every map.)
  */
 
 import type { Map as MaplibreMap } from 'maplibre-gl';
@@ -37,6 +42,12 @@ export function attachDragReleaseForwarder(source: DragReleaseMapSource): () => 
   const handleMouseUpOutsideCanvas = (e: MouseEvent) => {
     const map = typeof source === 'function' ? source() : source;
     if (!map) return;
+    // Only a live drag needs ending; see the module doc for why forwarding
+    // unrelated releases is harmful, not just wasteful. Guarded like
+    // `handlers` below: a future MapLibre without the member degrades to the
+    // old (stuck drag) behavior instead of throwing.
+    const dragPan = map.dragPan as { isActive?: () => boolean } | undefined;
+    if (dragPan?.isActive?.() !== true) return;
     // MapLibre's own container listener already ends drags released in there;
     // forwarding those as well would dispatch `mouseup` to the handlers twice.
     const canvasContainer = map.getCanvasContainer();

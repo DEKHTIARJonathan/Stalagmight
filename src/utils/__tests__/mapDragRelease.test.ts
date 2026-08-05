@@ -8,8 +8,8 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import type { Map as MaplibreMap } from 'maplibre-gl';
 import { attachDragReleaseForwarder } from '../mapDragRelease';
 
-/** A map stand-in exposing only the two members the forwarder touches. */
-function makeFakeMap(options: { withHandlers?: boolean } = {}) {
+/** A map stand-in exposing only the members the forwarder touches. */
+function makeFakeMap(options: { withHandlers?: boolean; dragActive?: boolean } = {}) {
   const canvasContainer = document.createElement('div');
   const canvas = document.createElement('canvas');
   canvasContainer.appendChild(canvas);
@@ -18,6 +18,7 @@ function makeFakeMap(options: { withHandlers?: boolean } = {}) {
   const handleEvent = vi.fn();
   const map = {
     getCanvasContainer: () => canvasContainer,
+    dragPan: { isActive: () => options.dragActive !== false },
     ...(options.withHandlers === false ? {} : { handlers: { handleEvent } }),
   } as unknown as MaplibreMap;
 
@@ -46,6 +47,21 @@ describe('attachDragReleaseForwarder', () => {
 
     expect(handleEvent).toHaveBeenCalledTimes(1);
     expect(handleEvent).toHaveBeenCalledWith(event);
+    detach();
+  });
+
+  it('does not forward when no drag is in flight', () => {
+    // `handleEvent` runs every handler's `mouseup`, not just dragEnd - on
+    // macOS that replays a contextmenu deferred at mousedown - so releases
+    // unrelated to a live drag must never be forwarded.
+    const { map, handleEvent } = makeFakeMap({ dragActive: false });
+    const chrome = document.createElement('button');
+    document.body.appendChild(chrome);
+    const detach = attachDragReleaseForwarder(map);
+
+    releaseOver(chrome);
+
+    expect(handleEvent).not.toHaveBeenCalled();
     detach();
   });
 
@@ -82,6 +98,7 @@ describe('attachDragReleaseForwarder', () => {
     const { map } = makeFakeMap({ withHandlers: false });
     const withoutHandleEvent = {
       getCanvasContainer: map.getCanvasContainer.bind(map),
+      dragPan: { isActive: () => true },
       handlers: {},
     } as unknown as MaplibreMap;
     const chrome = document.createElement('button');
@@ -117,8 +134,8 @@ describe('attachDragReleaseForwarder', () => {
     const detachSecond = attachDragReleaseForwarder(second.map);
 
     // A release over the second map's canvas is "outside" for the first map, so
-    // it is forwarded there - harmless, because dragEnd early-returns when that
-    // map has no drag in flight.
+    // it is forwarded there when (as here) the first map's drag is live; a map
+    // whose dragPan is not active is skipped entirely by the guard above.
     releaseOver(second.canvas);
 
     expect(first.handleEvent).toHaveBeenCalledTimes(1);
