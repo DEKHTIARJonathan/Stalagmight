@@ -2242,3 +2242,280 @@ fn unwinding_past_a_stale_id_edit_leaves_no_shot_holding_it() {
         (inserted_length, neighbour_length)
     );
 }
+
+// ===========================================================================
+// Finding 5, on the COMMAND side: a reloaded UpdateSectionMetadata no longer
+// knows it was clearing a field - so the entry mis-describes itself, and its
+// redo silently under-applies
+// ===========================================================================
+
+/// `SectionUpdates::name` / `surveyor` / `date` are `Option<Option<T>>` behind a
+/// plain `#[serde(default)]` with no `double_option` (models/section.rs:122).
+/// `Some(None)` ("clear it") and `None` ("leave it alone") therefore BOTH
+/// serialize to `null`, and `null` reads back as `None` - so the distinction
+/// survives the write and dies on the read.
+///
+/// Finding 5 already pins that gap on the entry's `values_json`, where it costs
+/// an UNDO. This is the same gap on the entry's stored COMMAND, where it costs a
+/// REDO: `redo_inner` re-executes `entry.command` for a `PreviousValues` entry
+/// (its catch-all arm, core/state/undo.rs), and a reloaded command that says
+/// "leave the surveyor alone" leaves it alone.
+///
+/// The previous value here is deliberately NON-null ("Ferreira"), so the undo in
+/// the middle is one finding 5 does not touch: what this isolates is the redo.
+/// Nothing in the sequence is unusual - clear a field, save, reopen, undo, redo -
+/// and the survey silently keeps a surveyor the user removed.
+///
+/// Found by `fuzz_undo_tests.rs`'s entry-content oracle, which sees the harmless
+/// half of the same defect first: the reloaded entry's history-dropdown preview
+/// stops listing the Surveyor row (`the_history_preview_still_reports_a_cleared_field`).
+#[test]
+#[ignore = "open finding 5 (command side): a reloaded UpdateSectionMetadata cannot clear a field, so its redo under-applies - see src-tauri/src/core/state/fuzz_undo_tests.rs"]
+fn redo_after_reload_clears_the_section_field_it_cleared() {
+    let temp = TempDir::new().unwrap();
+    let save_path: PathBuf = temp.path().join("cleared-field.stalx");
+
+    let section_id;
+    {
+        let state = state_with_project();
+        let created = state.execute(Command::CreateSection {
+            name: Some("Sump".to_string()),
+            surveyor: Some("Ferreira".to_string()),
+            date: None,
+            color: "#3388FF".to_string(),
+            direction: None,
+            shots: vec![shot(0.0, 5.0)],
+        });
+        assert!(created.success, "CreateSection failed: {:?}", created.error);
+        section_id = created.section_id.expect("CreateSection returned no id");
+
+        // The edit under test: CLEAR the surveyor. `Some(None)`, not `None`.
+        let cleared = state.execute(Command::UpdateSectionMetadata {
+            section_id,
+            updates: SectionUpdates {
+                surveyor: Some(None),
+                ..Default::default()
+            },
+        });
+        assert!(cleared.success, "clearing failed: {:?}", cleared.error);
+        assert_eq!(
+            surveyor_of(&state, section_id),
+            CLEARED,
+            "setup: the clear did not take effect before the save"
+        );
+
+        let saved = state.save_project(Some(save_path.clone()));
+        assert!(saved.success, "save failed: {:?}", saved.error);
+    }
+
+    let reopened = AppState::new().unwrap();
+    let opened = reopened.execute(Command::OpenProject { path: save_path });
+    assert!(opened.success, "reopen failed: {:?}", opened.error);
+
+    let undone = reopened.undo();
+    assert!(
+        undone.success,
+        "undo after reopen failed: {:?}",
+        undone.error
+    );
+    assert_eq!(
+        surveyor_of(&reopened, section_id),
+        "Ferreira",
+        "setup: the undo did not put the surveyor back, so this test is measuring finding 5's \
+         UNDO half rather than its command half"
+    );
+
+    let redone = reopened.redo();
+    assert!(
+        redone.success,
+        "redo after reopen failed: {:?}",
+        redone.error
+    );
+
+    assert_eq!(
+        surveyor_of(&reopened, section_id),
+        CLEARED,
+        "the redo of a reloaded 'clear the surveyor' left the surveyor in place: the persisted \
+         command's `Some(None)` came back as `None`, which `update_section` reads as 'leave it \
+         alone'"
+    );
+}
+
+/// The same defect, one step earlier and visible without touching the project:
+/// the history dropdown stops saying the entry cleared anything.
+///
+/// `derive_preview_data` builds the `UpdateSectionMetadata` rows from
+/// `updates.surveyor` (commands/history.rs), so an entry whose `Some(None)` has
+/// decayed to `None` renders no Surveyor row at all - and when the cleared field
+/// was the only thing the edit changed, `preview_data` becomes `null` and the
+/// hover is empty. The entry still UNDOES correctly here; it just no longer says
+/// what it did.
+#[test]
+#[ignore = "open finding 5 (command side): a reloaded entry's preview drops the field it cleared - see src-tauri/src/core/state/fuzz_undo_tests.rs"]
+fn the_history_preview_still_reports_a_cleared_field() {
+    let temp = TempDir::new().unwrap();
+    let save_path: PathBuf = temp.path().join("cleared-preview.stalx");
+
+    let before;
+    {
+        let state = state_with_project();
+        let created = state.execute(Command::CreateSection {
+            name: Some("Sump".to_string()),
+            surveyor: Some("Ferreira".to_string()),
+            date: None,
+            color: "#3388FF".to_string(),
+            direction: None,
+            shots: vec![shot(0.0, 5.0)],
+        });
+        assert!(created.success, "CreateSection failed: {:?}", created.error);
+        let section_id = created.section_id.expect("CreateSection returned no id");
+
+        let cleared = state.execute(Command::UpdateSectionMetadata {
+            section_id,
+            updates: SectionUpdates {
+                surveyor: Some(None),
+                ..Default::default()
+            },
+        });
+        assert!(cleared.success, "clearing failed: {:?}", cleared.error);
+        before = preview_fields(&state);
+        assert!(
+            before.contains(&"Surveyor".to_string()),
+            "setup: the preview did not list the Surveyor row before the save, it listed {before:?}"
+        );
+
+        let saved = state.save_project(Some(save_path.clone()));
+        assert!(saved.success, "save failed: {:?}", saved.error);
+    }
+
+    let reopened = AppState::new().unwrap();
+    let opened = reopened.execute(Command::OpenProject { path: save_path });
+    assert!(opened.success, "reopen failed: {:?}", opened.error);
+
+    assert_eq!(
+        preview_fields(&reopened),
+        before,
+        "the reloaded entry's history preview no longer lists the field it cleared"
+    );
+}
+
+/// The newest undo entry's preview rows, by field label.
+fn preview_fields(state: &AppState) -> Vec<String> {
+    state
+        .get_undo_stack()
+        .first()
+        .and_then(|item| item.preview_data.as_ref())
+        .map(|preview| {
+            preview
+                .changes
+                .iter()
+                .map(|change| change.field.clone())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// A section's surveyor, rendered so that a CLEARED field and a missing section
+/// cannot read as the same thing.
+fn surveyor_of(state: &AppState, section_id: SectionId) -> String {
+    let project = state.get_project_state().expect("no project open");
+    let section = project
+        .sections
+        .iter()
+        .find(|section| section.id == section_id)
+        .expect("section missing");
+    section
+        .surveyor
+        .clone()
+        .unwrap_or_else(|| CLEARED.to_string())
+}
+
+/// What [`surveyor_of`] renders for a field that has been cleared.
+const CLEARED: &str = "<cleared>";
+
+// ===========================================================================
+// Finding 23, in the history dropdown: an f64 that serde_json writes and its own
+// parser cannot read back
+// ===========================================================================
+
+/// `format_property_tests.rs` records finding 23 as "a save/load cycle is not a
+/// fixpoint", with the gzipped `undo_stack` / `redo_stack` JSON blobs as one of
+/// the two places the drift lives. This is that drift with its mechanism named
+/// and a user-visible consequence attached.
+///
+/// `serde_json` writes an `f64` through ryu's shortest round-tripping form and
+/// reads it back with a parser that is not correctly rounded past 16 significant
+/// digits: `13.565000000000001` is written for the bits `0x402b2147ae147ae2`,
+/// `str::parse::<f64>` returns exactly those bits, and `serde_json::from_str`
+/// returns `0x402b2147ae147ae1` - one ULP low. (`serde_json`'s `float_roundtrip`
+/// feature switches its parser to the correctly-rounded one; this crate is built
+/// without it, so every persisted undo command carrying a 17-digit float comes
+/// back changed.)
+///
+/// One ULP is invisible until it crosses a rendering boundary. The history
+/// preview renders a shot length at two decimals, and this value sits exactly on
+/// one: `13.57` before the save, `13.56` after it, on an entry nobody touched.
+///
+/// Found by `fuzz_undo_tests.rs`'s entry-content oracle
+/// (`finding-23-history-float-dust-moves-a-displayed-value`).
+#[test]
+#[ignore = "open finding 23 (history payloads): serde_json reads back an f64 it wrote one ULP low, changing what a reloaded undo entry displays - see src-tauri/src/core/state/format_property_tests.rs"]
+fn a_reloaded_entry_displays_the_length_it_was_given() {
+    let temp = TempDir::new().unwrap();
+    let save_path: PathBuf = temp.path().join("ulp.stalx");
+
+    // The bits ryu renders as `13.565000000000001`, one ULP above the f64
+    // nearest to 13.565 - which is what serde_json's parser returns for it.
+    let length = f64::from_bits(0x402b_2147_ae14_7ae2);
+    let before;
+    {
+        let state = state_with_project();
+        let section_id = create_section(&state, "Traverse", vec![shot(0.0, 5.0)]);
+        let shot_id = shot_ids(&state, section_id)[0];
+        let updated = state.execute(Command::UpdateShot {
+            section_id,
+            shot_id,
+            updates: ShotUpdates {
+                length: Some(length),
+                ..Default::default()
+            },
+        });
+        assert!(updated.success, "UpdateShot failed: {:?}", updated.error);
+        before = preview_values(&state);
+        assert_eq!(
+            before,
+            vec!["13.57".to_string()],
+            "setup: the preview did not render the length as expected before the save"
+        );
+
+        let saved = state.save_project(Some(save_path.clone()));
+        assert!(saved.success, "save failed: {:?}", saved.error);
+    }
+
+    let reopened = AppState::new().unwrap();
+    let opened = reopened.execute(Command::OpenProject { path: save_path });
+    assert!(opened.success, "reopen failed: {:?}", opened.error);
+
+    assert_eq!(
+        preview_values(&reopened),
+        before,
+        "the reloaded entry displays a different length than the one it was created with; the \
+         value moved by one ULP on the way through serde_json's own parser"
+    );
+}
+
+/// The newest undo entry's preview rows, by rendered new value.
+fn preview_values(state: &AppState) -> Vec<String> {
+    state
+        .get_undo_stack()
+        .first()
+        .and_then(|item| item.preview_data.as_ref())
+        .map(|preview| {
+            preview
+                .changes
+                .iter()
+                .map(|change| change.new_value.clone())
+                .collect()
+        })
+        .unwrap_or_default()
+}

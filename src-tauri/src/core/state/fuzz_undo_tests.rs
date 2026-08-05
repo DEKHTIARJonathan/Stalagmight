@@ -55,6 +55,7 @@
 //! | 3 (data loss) | `finding-3-undo-of-the-first-shot-drops-station-zero-refs` | (none) | 37 | 60 |
 //! | 4 | `finding-4-closure-reordered-on-undo` | `CLOSURE_SHAPES=1` | 1 | 40 |
 //! | 5 | `finding-5-undo-cannot-restore-null-section-field` | (none) | 6 | 60 |
+//! | 5 (command) | `finding-5-a-reloaded-command-can-no-longer-clear-a-section-field` | (none), persistence half | 1 | 60 |
 //! | 6 | `finding-6-undo-refused-by-a-delete-guard` | `CLOSURES=1` | 4 | 60 |
 //! | 7 | `finding-7-a-jump-is-not-n-single-steps` | `JUMPS=1 CLOSURE_SHAPES=1`, persistence half | 6 | 150 |
 //! | 8 | `finding-8-stale-id-deletes-the-wrong-shot` | `DIVERGENCE=1` | 1 | 12 |
@@ -71,6 +72,7 @@
 //! | 21 | red test only - `the_adjusted_solve_is_a_function_of_the_project` | n/a | n/a | n/a |
 //! | 22 | `finding-22-a-range-shift-delete-is-not-its-single-deletes` | metamorphic gate | 3 | n/a |
 //! | 23 | `finding-23-a-save-load-cycle-is-not-a-fixpoint` | format-property gate | 1 | n/a |
+//! | 23 (display) | `finding-23-history-float-dust-moves-a-displayed-value` | `CROSSINGS=3`, persistence half | 16 | 60 |
 //! | 24 | `finding-24-shot-display-position-overflows-before-validation` | adversarial gate | 4 | 120 |
 //! | 25 | UNCLASSIFIED - fails the run - see the observations section | `HORIZON=1 JUMPS=1` | 2 | 10000 |
 //!
@@ -89,6 +91,15 @@
 //! compares two saves rather than two states; and 24 by the ADVERSARIAL engine
 //! (`adversarial_tests.rs`), which compares nothing at all - it asserts that a
 //! refusal is a no-op and that nothing panics.
+//!
+//! The two rows with a qualifier - 5 (command) and 23 (display) - are the SAME
+//! defects reaching a second surface, not new numbers, and they are here because
+//! the ENTRY-CONTENT oracle is the only thing that looks at that surface. Finding
+//! 5's write-up is about what an UNDO cannot restore; the command half is about
+//! what a reloaded entry can no longer say or REDO. Finding 23's is about two
+//! saves differing; the display half is about one ULP of that difference landing
+//! on a rounding boundary and changing a number the user reads. Both are cross-
+//! referenced from the file that owns the original.
 //!
 //! Environment prefix for every row: `STALAGMIGHT_RUST_FUZZ_`. So the finding-7
 //! row is
@@ -420,7 +431,7 @@
 //! and the frontend's own bookkeeping. Those are the harness's job and the
 //! reason it stays.
 //!
-//! # Four oracles, not one
+//! # Five oracles, not one
 //!
 //! | oracle | what it compares | what only it can see |
 //! |---|---|---|
@@ -428,8 +439,9 @@
 //! | ALIGNMENT | every cross-section merge, RAW and RESOLVED | a move that leaves the survey network geometrically broken, and a disagreement between the app's two measures of that |
 //! | INTEGRITY DELTA | `AppState::integrity_check`'s own verdict per depth | a state that roundtrips while the app's verdict on it does not |
 //! | ADJUSTED GEOMETRY | `get_adjusted_stations` per depth - what the map draws | a SOLVE whose result moved, including through a stale memo, while the stored inputs agree |
+//! | ENTRY CONTENT | the `UndoHistoryItem` rows themselves - what the history dropdown SAYS | an entry that misdescribes itself, whatever its effects do |
 //!
-//! The last two are ports of the harness's, and the integrity one is there
+//! The middle two are ports of the harness's, and the integrity one is there
 //! because at that tier it caught a finding 7 manifestation ALONE: the state
 //! compared equal (the geometry paths were absorbed as reload-resolved across an
 //! epoch boundary) while `check_project_integrity` reported a merge 5.00 m out.
@@ -445,6 +457,50 @@
 //! known bug resyncs the state model, the verdict and the adjusted geometry
 //! resync at the same moment. A derived model that kept the pre-bug expectation
 //! would report the same defect at every later depth as a fresh failure.
+//!
+//! ## The ENTRY-CONTENT oracle
+//!
+//! Everything above measures what a history move DOES. None of it looks at what
+//! the entry SAYS - and the entry's metadata is a user-facing artifact in its own
+//! right: `get_undo_stack` returns an `UndoHistoryItem` per entry
+//! (`commands/history.rs`), carrying the description, the timestamp, the command
+//! type and a `preview_data` tree of before/after field changes, and that list IS
+//! the history dropdown. An entry whose label is wrong sends a user to undo the
+//! wrong thing; an entry whose preview is wrong tells them a field was changed
+//! that was not.
+//!
+//! It runs in two halves, because the two things it can compare are pinnable to
+//! different degrees:
+//!
+//! * **WITHIN-RUN** (`expect_entry_prints`, every mode, on every move via
+//!   `expect_stacks`). `entry_prints[d]` records `timestamp|command_type|
+//!   description` when the app pushes the entry at depth `d`, and every later
+//!   reading of either stack has to agree with it, entry for entry, at the depth
+//!   the stack layout puts it at. All three are pure functions of the stored
+//!   `UndoEntry` - `Command::description()` reads the command and nothing else,
+//!   and `shot_display_position` is arithmetic on the ids the command carries -
+//!   so nothing a later command does to the project may change them. That is
+//!   what makes an undo/redo cycle that rewrites the metadata of an entry it
+//!   never touched, or two entries silently swapping places, a failure here.
+//! * **PERSISTENCE** (`expect_history_rows`, at every crossing). The WHOLE item,
+//!   `preview_data` included, is read before the save and compared after the
+//!   reload, on both stacks, with nothing masked - not the timestamps (they are
+//!   parsed back from a column, not re-taken, and #303's push cutoff compares
+//!   against them), and not the ids (they ride inside the serialized command, so
+//!   the loader's shot-id renumbering cannot reach them).
+//!
+//! `preview_data` is in the second half only, and that asymmetry is deliberate
+//! rather than a gap: it is a LIVE VIEW. `derive_preview_data` resolves section
+//! NAMES against the current project, so renaming a section - or undoing a
+//! rename - legitimately changes what an older entry's preview reads. It is
+//! stable exactly where the project is, which the save/reload boundary is by
+//! construction and a history move is not.
+//!
+//! It found two things on its first run, both of them existing findings reaching
+//! a surface nothing else was looking at, and both classified rather than fixed:
+//! `finding-5-a-reloaded-command-can-no-longer-clear-a-section-field` and
+//! `finding-23-history-float-dust-moves-a-displayed-value`. See their classifiers
+//! for the mechanisms and the matrix rows above for repros.
 //!
 //! # The oracle sees MORE than the harness one
 //!
@@ -487,6 +543,7 @@ use std::sync::{Mutex, OnceLock, PoisonError};
 use tempfile::TempDir;
 
 use super::AppState;
+use crate::commands::history::UndoHistoryItem;
 use crate::core::{Command, CommandResult};
 use crate::models::{
     ClosureStrategy, Coordinates, GpsCoordinates, SectionId, SectionUpdates, ShotData, ShotId,
@@ -3289,6 +3346,305 @@ pub(super) fn adjusted_geometry_of(state: &AppState) -> String {
     rows.join("\n")
 }
 
+// ===========================================================================
+// Undo-entry metadata: what the history dropdown SAYS an entry is
+// ===========================================================================
+
+/// The ENTRY-INTRINSIC half of a history item: `timestamp|command_type|description`.
+///
+/// Every one of the three is a pure function of the `UndoEntry` alone -
+/// `Command::description()` and `get_command_type()` read the stored command and
+/// nothing else, and `shot_display_position` is arithmetic on the ids the command
+/// carries rather than a lookup in the live project (models/shot.rs:16). So this
+/// triple may be pinned PER DEPTH for the life of a run: nothing a later command
+/// does to the project can legitimately change what an already-pushed entry says.
+///
+/// `preview_data` is deliberately NOT in here - see [`Fuzzer::history_rows`].
+fn entry_print(item: &UndoHistoryItem) -> String {
+    format!(
+        "{}|{}|{}",
+        item.timestamp.clone().unwrap_or_default(),
+        item.command_type,
+        item.description
+    )
+}
+
+/// EVERY field of a history item, including `preview_data`, as canonical JSON.
+///
+/// `UndoHistoryItem` is the IPC DTO the history dropdown renders
+/// (`commands/history.rs`), so serializing it is exactly what the frontend
+/// receives - `index`, `description`, `timestamp`, `commandType` and the whole
+/// `previewData` tree of field changes.
+fn history_item_text(item: &UndoHistoryItem) -> String {
+    serde_json::to_string(item).unwrap_or_else(|error| format!("<unserializable: {error}>"))
+}
+
+/// One row of the history dropdown, next to the bytes the file carries for it.
+///
+/// The pair is the point: a rendering alone cannot say WHY it changed, and the
+/// two known reasons are told apart by whether the bytes moved. See
+/// [`Fuzzer::expect_history_rows`].
+#[derive(Clone, Debug)]
+struct HistoryRow {
+    /// `undo[3]` / `redo[0]` - the row a user would be looking at.
+    label: String,
+    /// The whole `UndoHistoryItem`, as the frontend receives it.
+    item: String,
+    /// `serde_json::to_string(&entry.command)`, which is what a save writes.
+    command: String,
+    /// `serde_json::to_string(&entry.undo_data)`, likewise.
+    undo_data: String,
+}
+
+/// The field labels `derive_preview_data` emits for the three `SectionUpdates`
+/// fields that carry a NULLABLE value, paired with what it renders when that
+/// value is the cleared one.
+///
+/// `Name` renders an empty name as `unnamed` (`commands/history.rs`); the other
+/// two render it as the empty string.
+const CLEARABLE_SECTION_FIELDS: &[(&str, &str)] =
+    &[("Name", "unnamed"), ("Surveyor", ""), ("Date", "")];
+
+/// Why does this history row read differently after the reload than before the
+/// save? `None` when nothing known explains it, which fails the run.
+fn classify_history_row(before: &HistoryRow, after: &HistoryRow) -> Option<&'static str> {
+    if is_cleared_section_field_loss(before, after) {
+        return Some("finding-5-a-reloaded-command-can-no-longer-clear-a-section-field");
+    }
+    if is_history_payload_float_dust(before, after) {
+        return Some("finding-23-history-float-dust-moves-a-displayed-value");
+    }
+    None
+}
+
+/// FINDING 5, on the COMMAND side of the entry rather than the undo-data side.
+///
+/// `SectionUpdates` carries `name`, `surveyor` and `date` as `Option<Option<T>>`
+/// with a plain `#[serde(default)]` and no `double_option`
+/// (models/section.rs:122), which is the exact gap finding 5's classifier
+/// already names for `values_json`. Both `Some(None)` ("clear it") and `None`
+/// ("leave it alone") therefore serialize to `null` AND both read back as
+/// `None`, so the persisted TEXT is identical and its MEANING is not.
+///
+/// What the user loses is two things, and this is the first: the history entry
+/// stops saying it cleared the field, and once every row it listed was a cleared
+/// one, the whole hover preview goes empty. The second is worse and is not
+/// visible here - the entry's redo re-executes `entry.command` (`redo_inner`'s
+/// catch-all arm, core/state/undo.rs), so after a reload the redo of "clear the
+/// name" silently leaves the name alone. That half already lands in the roundtrip
+/// oracle as `finding-5-undo-cannot-restore-null-section-field`, which is the
+/// evidence that the two are one defect rather than two.
+///
+/// Recognised NARROWLY. The persisted bytes must be byte-identical - a lossy
+/// PARSE changes nothing on disk, which is the whole signature - everything
+/// outside the preview must agree, and the two previews must differ ONLY by rows
+/// disappearing:
+///
+/// * every row the reload lost names one of the three clearable fields AND
+///   carries that field's cleared rendering;
+/// * at least one such row was lost, so an unchanged preview is not this;
+/// * a row present on both sides is identical, in the same relative order;
+/// * a row the reload GAINED is only allowed where the pre-save preview was
+///   truncated (`derive_preview_data` shows three of them and counts the rest),
+///   which is the one way a row can surface without being new;
+/// * and the totals must have shrunk, so a preview that grew is not this.
+fn is_cleared_section_field_loss(before: &HistoryRow, after: &HistoryRow) -> bool {
+    if before.command != after.command || before.undo_data != after.undo_data {
+        return false;
+    }
+    let (Some((was_rest, was)), Some((now_rest, now))) =
+        (split_preview(&before.item), split_preview(&after.item))
+    else {
+        return false;
+    };
+    if was_rest != now_rest
+        || was_rest
+            .get("commandType")
+            .and_then(serde_json::Value::as_str)
+            != Some("update_section_metadata")
+    {
+        return false;
+    }
+    if was.total() <= now.total() {
+        return false;
+    }
+    let mut lost_a_cleared_row = false;
+    for row in &was.rows {
+        match now.row_for(row) {
+            // A row the reload kept has to have kept its values too.
+            Some(partner) if partner != row => return false,
+            Some(_) => {}
+            // A row it dropped has to be one the lost `Some(None)` explains.
+            None if is_cleared_row(row) => lost_a_cleared_row = true,
+            None => return false,
+        }
+    }
+    // A row that only the reload shows can only be one the pre-save window hid.
+    if now.rows.iter().any(|row| was.row_for(row).is_none()) && was.additional == 0 {
+        return false;
+    }
+    lost_a_cleared_row && was.order_agrees_with(&now)
+}
+
+/// Is this preview row one of the three nullable `SectionUpdates` fields, showing
+/// the value that field renders as when it is CLEARED?
+fn is_cleared_row(row: &serde_json::Value) -> bool {
+    let field = row.get("field").and_then(serde_json::Value::as_str);
+    let new_value = row.get("newValue").and_then(serde_json::Value::as_str);
+    CLEARABLE_SECTION_FIELDS
+        .iter()
+        .any(|&(label, cleared)| field == Some(label) && new_value == Some(cleared))
+}
+
+/// FINDING 23, reaching the history dropdown.
+///
+/// `format_property_tests.rs` records that a save/load cycle is not a fixpoint,
+/// and that the `undo_stack` / `redo_stack` JSON blobs are one of the two places
+/// the drift lives. The MECHANISM, measured here rather than assumed:
+/// `serde_json` WRITES an `f64` through ryu's shortest round-tripping form and
+/// READS it back with a parser that is not correctly rounded for a
+/// 17-significant-digit literal. `13.565000000000001` - which `str::parse`
+/// returns exactly, bit for bit - comes back through `serde_json` one ULP low, as
+/// plain `13.565`. (`serde_json`'s `float_roundtrip` feature is the switch that
+/// closes it; the crate is built without it.)
+///
+/// One ULP is invisible until it crosses a rendering boundary, and the preview
+/// renders a length at two decimals: that value shows as `13.57` before the save
+/// and `13.56` after it, on an entry nobody touched.
+///
+/// Recognised NARROWLY: the payload must have MOVED but stayed inside the
+/// module's own numeric tolerance (`diff_snapshots`: 1e-9 absolute + 1e-12
+/// relative), everything outside the preview rows must agree, the rows must line
+/// up one for one, and every differing rendered value must be a number that moved
+/// by at most one unit in the last place it is shown at. A payload that moved
+/// further, a row that appeared or vanished, or a non-numeric difference is not
+/// this.
+fn is_history_payload_float_dust(before: &HistoryRow, after: &HistoryRow) -> bool {
+    let moved = before.command != after.command || before.undo_data != after.undo_data;
+    if !moved {
+        return false;
+    }
+    if !diff_snapshots(&before.command, &after.command).is_empty()
+        || !diff_snapshots(&before.undo_data, &after.undo_data).is_empty()
+    {
+        return false;
+    }
+    let (Some((was_rest, was)), Some((now_rest, now))) =
+        (split_preview(&before.item), split_preview(&after.item))
+    else {
+        return false;
+    };
+    if was_rest != now_rest || was.rows.len() != now.rows.len() || was.additional != now.additional
+    {
+        return false;
+    }
+    was.rows
+        .iter()
+        .zip(&now.rows)
+        .all(|(was_row, now_row)| rows_differ_only_in_the_last_shown_place(was_row, now_row))
+}
+
+/// A rendered item's `preview_data`, lifted out so the rest of the item can be
+/// compared for equality on its own.
+struct Preview {
+    /// The rows the dropdown shows. `preview_data: null` is no rows.
+    rows: Vec<serde_json::Value>,
+    /// `additional_changes`: how many more the renderer counted but did not show.
+    additional: u64,
+}
+
+impl Preview {
+    /// How many field changes the entry HAS, shown or not.
+    fn total(&self) -> usize {
+        self.rows.len() + usize::try_from(self.additional).unwrap_or(0)
+    }
+
+    /// The row naming the same field as `row`, if this preview shows one.
+    fn row_for(&self, row: &serde_json::Value) -> Option<&serde_json::Value> {
+        let field = row.get("field")?;
+        self.rows
+            .iter()
+            .find(|other| other.get("field") == Some(field))
+    }
+
+    /// Do the rows the two previews share appear in the same relative order?
+    fn order_agrees_with(&self, other: &Self) -> bool {
+        let shared = |preview: &Self, against: &Self| -> Vec<String> {
+            preview
+                .rows
+                .iter()
+                .filter(|row| against.row_for(row).is_some())
+                .filter_map(|row| {
+                    row.get("field")
+                        .and_then(serde_json::Value::as_str)
+                        .map(ToString::to_string)
+                })
+                .collect()
+        };
+        shared(self, other) == shared(other, self)
+    }
+}
+
+/// Split a rendered `UndoHistoryItem` into everything-but-the-preview and the
+/// preview. `None` when the text is not a rendered item at all.
+fn split_preview(item: &str) -> Option<(serde_json::Value, Preview)> {
+    let mut parsed: serde_json::Value = serde_json::from_str(item).ok()?;
+    let preview = parsed.as_object_mut()?.remove("previewData")?;
+    let (rows, additional) = match preview {
+        serde_json::Value::Null => (Vec::new(), 0),
+        serde_json::Value::Object(map) => (
+            match map.get("changes") {
+                Some(serde_json::Value::Array(rows)) => rows.clone(),
+                _ => return None,
+            },
+            map.get("additionalChanges")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(0),
+        ),
+        _ => return None,
+    };
+    Some((parsed, Preview { rows, additional }))
+}
+
+/// Two preview rows that name the same field, and whose values are either equal
+/// or numbers one unit apart in the last decimal place they are shown at.
+fn rows_differ_only_in_the_last_shown_place(
+    was: &serde_json::Value,
+    now: &serde_json::Value,
+) -> bool {
+    if was == now {
+        return true;
+    }
+    if was.get("field") != now.get("field") {
+        return false;
+    }
+    ["oldValue", "newValue"].iter().all(|key| {
+        let (Some(a), Some(b)) = (
+            was.get(*key).and_then(serde_json::Value::as_str),
+            now.get(*key).and_then(serde_json::Value::as_str),
+        ) else {
+            return false;
+        };
+        a == b || rendered_numbers_are_one_place_apart(a, b)
+    })
+}
+
+/// `13.57` versus `13.56`: the same number, rendered either side of a rounding
+/// boundary it sits exactly on. Both must parse, and differ by no more than the
+/// place they are shown at.
+fn rendered_numbers_are_one_place_apart(a: &str, b: &str) -> bool {
+    let (Ok(left), Ok(right)) = (a.parse::<f64>(), b.parse::<f64>()) else {
+        return false;
+    };
+    let decimals = |text: &str| -> i32 {
+        text.split_once('.').map_or(0, |(_, fraction)| {
+            i32::try_from(fraction.len()).unwrap_or(0)
+        })
+    };
+    let place = 10f64.powi(-decimals(a).max(decimals(b)));
+    (left - right).abs() <= place * 1.5
+}
+
 struct Fuzzer {
     state: AppState,
     rng: Rng,
@@ -3305,6 +3661,15 @@ struct Fuzzer {
     /// `entry_meta[d]` describes the entry that takes depth d-1 to d. Index 0 is
     /// a placeholder so the indexing matches `snapshots`.
     entry_meta: Vec<EntryMeta>,
+    /// `entry_prints[d]` is [`entry_print`] of the entry that takes depth d-1 to
+    /// d, READ OFF THE APP the moment it was pushed. Index 0 is a placeholder, as
+    /// in `entry_meta`.
+    ///
+    /// The metadata oracle's model. Recorded once and never rewritten, because
+    /// the triple it holds is a pure function of the entry: an entry whose
+    /// description, command type or timestamp differs from this later has been
+    /// REWRITTEN, whether by a history move, a push, or a trip through the file.
+    entry_prints: Vec<String>,
     epoch: u32,
     cursor: usize,
     top: usize,
@@ -3414,6 +3779,7 @@ impl Fuzzer {
             adjusted: Vec::new(),
             epochs: Vec::new(),
             entry_meta: vec![EntryMeta::default()],
+            entry_prints: vec![String::new()],
             epoch: 0,
             cursor: 0,
             top: 0,
@@ -4297,6 +4663,192 @@ impl Fuzzer {
                     self.redo_len()
                 ),
             );
+        }
+        self.expect_entry_prints(what);
+    }
+
+    /// The ENTRY-CONTENT oracle, within-run half: every entry on either stack
+    /// still SAYS what it said when it was pushed, at the depth it belongs to.
+    ///
+    /// The stacks are a map from depth to entry - undo item `i` is the entry that
+    /// takes depth `cursor - i` to `cursor - i + 1`, redo item `j` the one that
+    /// takes `cursor + j` to `cursor + j + 1` - and `entry_prints` is what the app
+    /// said each of those was at push time. So this catches three things a length
+    /// check and a project comparison both miss: an entry whose metadata was
+    /// REWRITTEN by an unrelated move, two entries that swapped places while their
+    /// effects stayed put, and a restore that put the right state back under the
+    /// wrong label.
+    ///
+    /// Only the entry-intrinsic triple, deliberately: see [`entry_print`] for why
+    /// that is pinnable and `preview_data` is not.
+    fn expect_entry_prints(&self, what: &str) {
+        let mut wrong: Vec<String> = Vec::new();
+        let mut compare = |side: &str, depth: usize, actual: &UndoHistoryItem| {
+            let expected = self.entry_prints.get(depth);
+            let actual = entry_print(actual);
+            if expected.is_some_and(|print| *print == actual) {
+                return;
+            }
+            wrong.push(format!(
+                "  {side} entry for depth {depth}\n    expected: {}\n    actual:   {actual}",
+                expected.map_or("<no entry recorded at that depth>", String::as_str),
+            ));
+        };
+        for (index, item) in self.state.get_undo_stack().iter().enumerate() {
+            compare("undo", self.cursor.saturating_sub(index), item);
+        }
+        for (index, item) in self.state.get_redo_stack().iter().enumerate() {
+            compare("redo", self.cursor + 1 + index, item);
+        }
+        if wrong.is_empty() {
+            return;
+        }
+        let shown = if fuzz_verbose() { wrong.len() } else { 4 };
+        self.fail(
+            &format!("{what} left an undo entry describing itself differently"),
+            &format!(
+                "  {} entr{} what the app said at push time:\n{}",
+                wrong.len(),
+                if wrong.len() == 1 {
+                    "y no longer matches"
+                } else {
+                    "ies no longer match"
+                },
+                wrong
+                    .iter()
+                    .take(shown)
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            ),
+        );
+    }
+
+    /// Everything the history dropdown would render, both stacks, in stack order.
+    ///
+    /// Labelled by side and index so a difference names the row a user would be
+    /// looking at.
+    fn history_rows(&self) -> Vec<HistoryRow> {
+        let undo = self.state.get_undo_stack();
+        let redo = self.state.get_redo_stack();
+        // The bytes the save is about to write, or that the load just read, for
+        // the same entries in the same order. Read straight off the stack so the
+        // two halves of a row cannot drift apart: `serialize_entry` is what
+        // `rows_to_persist` calls (core/undo/persistence.rs).
+        let payloads: Vec<(String, String)> = self.state.undo_stack.lock().map_or_else(
+            |_| Vec::new(),
+            |stack| {
+                stack
+                    .undo_entries()
+                    .chain(stack.redo_entries())
+                    .map(|entry| {
+                        (
+                            serde_json::to_string(&entry.command).unwrap_or_default(),
+                            serde_json::to_string(&entry.undo_data).unwrap_or_default(),
+                        )
+                    })
+                    .collect()
+            },
+        );
+        undo.iter()
+            .enumerate()
+            .map(|(index, item)| (format!("undo[{index}]"), item))
+            .chain(
+                redo.iter()
+                    .enumerate()
+                    .map(|(index, item)| (format!("redo[{index}]"), item)),
+            )
+            .enumerate()
+            .map(|(position, (label, item))| {
+                let (command, undo_data) = payloads.get(position).cloned().unwrap_or_default();
+                HistoryRow {
+                    label,
+                    item: history_item_text(item),
+                    command,
+                    undo_data,
+                }
+            })
+            .collect()
+    }
+
+    /// The ENTRY-CONTENT oracle, PERSISTENCE half: a save/close/reopen restores
+    /// the history dropdown itself, not merely the entries' effects.
+    ///
+    /// Compared field for field over the WHOLE `UndoHistoryItem` - index,
+    /// description, timestamp, command type and the entire `preview_data` tree -
+    /// on both stacks, with NOTHING masked. Three reasons nothing needs to be:
+    ///
+    /// * The persisted row is the entry's own `command` and `undo_data` JSON plus
+    ///   an RFC 3339 timestamp (`UndoStack::serialize_entry_with_timestamp`), and
+    ///   the loader rebuilds the entry from exactly those - so description,
+    ///   command type and preview all re-derive from bytes that made the round
+    ///   trip. `command_bytes` is `#[serde(skip_serializing)]` and feeds nothing
+    ///   the dropdown shows.
+    /// * The timestamp is NOT wall-clock noise here, unlike the metamorphic
+    ///   engine's `merged_at`: it is not re-taken on load, it is parsed back from
+    ///   the column, and `UndoStack::next_stamp` depends on it staying exact
+    ///   (#303's push cutoff is a comparison against it). Masking it would erase
+    ///   the field a persistence bug is most likely to round off. Measured: over
+    ///   the four gates and a 40-seed survey, not one timestamp moved.
+    /// * The loader's shot-id renumbering, which `canonicalize` has to normalize
+    ///   for the project snapshot, cannot reach here: an entry's ids travel INSIDE
+    ///   its serialized command, so they come back exactly as they went in. That
+    ///   they are then STALE against the reloaded project is findings 8/12/13, and
+    ///   is a defect in what the entry DOES, not in what it says.
+    ///
+    /// The baseline is read BEFORE the save rather than after it, so a save-time
+    /// mutation of the stacks is inside the oracle rather than under it.
+    ///
+    /// Each row carries the BYTES the file would hold for it as well as the
+    /// rendering, because that pair is what tells the two known causes of a
+    /// difference apart: identical bytes with a different rendering can only be a
+    /// lossy PARSE (finding 5), and differing bytes within the module's numeric
+    /// tolerance are the history payload's float dust (finding 23).
+    fn expect_history_rows(&mut self, before: &[HistoryRow]) {
+        let after = self.history_rows();
+        if after.len() != before.len() {
+            // `expect_stacks` has already pinned both lengths by the time this
+            // runs, so reaching here means the two stacks disagree in a way the
+            // length model does not see. Report it rather than index past it.
+            self.fail(
+                "the reload restored a different NUMBER of history items than the save wrote",
+                &format!("  before {} item(s), after {}", before.len(), after.len()),
+            );
+        }
+        let mut classified: BTreeSet<&'static str> = BTreeSet::new();
+        let mut unexplained: Vec<String> = Vec::new();
+        for (was, now) in before.iter().zip(&after) {
+            if was.item == now.item {
+                continue;
+            }
+            if let Some(id) = classify_history_row(was, now) {
+                classified.insert(id);
+                continue;
+            }
+            unexplained.push(format!(
+                "  {}\n    before save:  {}\n    after reload: {}\n    payload before: {}\n    payload after:  {}",
+                was.label, was.item, now.item, was.command, now.command,
+            ));
+        }
+        if !unexplained.is_empty() {
+            let shown = if fuzz_verbose() { unexplained.len() } else { 3 };
+            self.fail(
+                "the reload restored the history entries with different METADATA",
+                &format!(
+                    "  {} history item(s) differ:\n{}",
+                    unexplained.len(),
+                    unexplained
+                        .iter()
+                        .take(shown)
+                        .cloned()
+                        .collect::<Vec<_>>()
+                        .join("\n"),
+                ),
+            );
+        }
+        for id in classified {
+            *self.outcome.hits.entry(id).or_insert(0) += 1;
+            self.note(format!("  ^ classified at the reload: {id}"));
         }
     }
 }
@@ -5441,6 +5993,7 @@ impl Fuzzer {
             self.adjusted.truncate(self.cursor);
             self.epochs.truncate(self.cursor);
             self.entry_meta.truncate(self.cursor);
+            self.entry_prints.truncate(self.cursor);
             let snapshot = self.snapshot();
             self.snapshots.push(snapshot);
             let verdict = self.verdict();
@@ -5452,12 +6005,15 @@ impl Fuzzer {
             // command that was drawn: the app is the authority on what it pushed,
             // and several entry points push an entry labelled by a different
             // command than the one the caller named.
-            let command = self
-                .state
-                .get_undo_stack()
-                .first()
+            let newest = self.state.get_undo_stack();
+            let newest = newest.first();
+            let command = newest
                 .map(|item| item.command_type.clone())
                 .unwrap_or_default();
+            // The metadata oracle's baseline for this depth, taken from the SAME
+            // read: what the app says this entry is, at the instant it pushed it.
+            let print = newest.map(entry_print).unwrap_or_default();
+            self.entry_prints.push(print);
             self.entry_meta.push(EntryMeta {
                 command,
                 epoch: self.epoch,
@@ -5490,6 +6046,7 @@ impl Fuzzer {
             self.adjusted.truncate(self.cursor + 1);
             self.epochs.truncate(self.cursor + 1);
             self.entry_meta.truncate(self.cursor + 1);
+            self.entry_prints.truncate(self.cursor + 1);
         } else if self.redo_len() != before_redo {
             self.fail(
                 "a no-op command changed the redo stack without clearing it",
@@ -5526,14 +6083,7 @@ impl Fuzzer {
     /// from the same entry still sitting on top, which a stack LENGTH cannot do
     /// once the FIFO trim is active.
     fn newest_entry(&self) -> Option<String> {
-        self.state.get_undo_stack().first().map(|item| {
-            format!(
-                "{}|{}|{}",
-                item.timestamp.clone().unwrap_or_default(),
-                item.command_type,
-                item.description
-            )
-        })
+        self.state.get_undo_stack().first().map(entry_print)
     }
 
     /// Build the state findings 8, 12 and 13 need, instead of waiting for a seed
@@ -6352,6 +6902,9 @@ impl Fuzzer {
         if self.top == 0 || self.crossing_would_truncate() {
             return false;
         }
+        // The ENTRY-CONTENT oracle's baseline, read BEFORE the save so that the
+        // save is inside the comparison too. See `expect_history_rows`.
+        let items_before = self.history_rows();
         let temp = self.temp.get_or_insert_with(|| TempDir::new().unwrap());
         let path: PathBuf = temp.path().join("fuzz.stalx");
 
@@ -6392,6 +6945,7 @@ impl Fuzzer {
         self.outcome.reloads += 1;
         self.note(format!("reload -> depth {}", self.cursor));
         self.expect_stacks("reload");
+        self.expect_history_rows(&items_before);
         self.expect_state(self.cursor, "reload", Vec::new(), StaleTargets::default());
         true
     }
