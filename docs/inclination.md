@@ -69,11 +69,11 @@ counter-example ever turns up, an Ariane file with a non-zero inclination
 alongside a known depth progression, it settles the question, and the two
 helpers named in the table above are the only places to change.
 
-**Update (2026-08-05):** the all-zero observation was true of the files the
-paragraph above was written against; current exports are not all zero - one
-measured file carries a non-zero `Inclination` on 266 of its 538 shots. The
-convention is unchanged (still the inference described here), but the flip is no
-longer a no-op on live data, so the counter-example above is now reachable.
+The all-zero observation above held for the files it was written against; it no
+longer holds in general (re-measured 2026-08-04: one file carries a non-zero
+`Inclination` on 266 of its 538 shots). The convention is unchanged - it is
+still the inference described here - but the flip is no longer a no-op on live
+data, so the counter-example that would settle the question is now reachable.
 
 ## Migrating old projects
 

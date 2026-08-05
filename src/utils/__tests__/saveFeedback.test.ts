@@ -3,11 +3,13 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import {
   surfaceSaveFailure,
   surfaceImportFailure,
+  completeImportToSingleView,
   finalizeDeferredSaveWarnings,
   deferredSaveWarnings,
   type ImportDialogUi,
 } from '../saveFeedback';
 import { useProjectStore } from '../../store/projectStore';
+import { useUIStore } from '../../store/uiStore';
 import type { ValidationWarning } from '../../types/ipc/ValidationWarning';
 import type { ImportReceipt } from '../../types/ipc/ImportReceipt';
 
@@ -191,5 +193,36 @@ describe('surfaceImportFailure', () => {
       title: 'Nothing imported',
       message: 'No survey shots were found to import.',
     });
+  });
+});
+
+/**
+ * `importContext` is read by `saveAfterImport` to decide between "write the
+ * deferred initial save" and "just mark dirty". Left set past the end of its
+ * flow, the next import whose route sets none inherits it and silently commits
+ * the user's unrelated pending edits - so both flow terminators drop it.
+ */
+describe('import-context lifetime', () => {
+  beforeEach(() => {
+    useUIStore.setState({ importContext: 'new-project' });
+  });
+
+  it('is dropped by the success funnel', () => {
+    completeImportToSingleView('tml-import', mockUi());
+
+    expect(useUIStore.getState().importContext).toBeNull();
+  });
+
+  it.each(['command', 'transport', 'empty'] as const)('is dropped by a %s failure', (phase) => {
+    const failure =
+      phase === 'command'
+        ? ({ phase, error: 'boom' } as const)
+        : phase === 'transport'
+          ? ({ phase, error: new Error('boom'), format: 'TML' } as const)
+          : ({ phase, message: 'nothing to import' } as const);
+
+    surfaceImportFailure('tml-import', mockUi(), failure);
+
+    expect(useUIStore.getState().importContext).toBeNull();
   });
 });

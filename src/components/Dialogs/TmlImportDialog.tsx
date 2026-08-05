@@ -1,8 +1,8 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
-import { invokeIpc } from '../../utils/ipc';
+import { invokeIpc, getErrorMessage } from '../../utils/ipc';
 import {
   completeImportToSingleView,
   finalizeDeferredSaveWarnings,
@@ -17,7 +17,7 @@ import { formatNumber } from '../../i18n/format';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import type { TmlFile, TmlSection, TmlShot, OrphanPlacementSuggestion } from '../../types/commands';
-import { setSource } from '../../utils/telemetry';
+import { setSource, trackDialogComplete } from '../../utils/telemetry';
 import type { VirtualShotMode } from '../../types/project';
 
 interface TmlImportDialogProps {
@@ -25,8 +25,22 @@ interface TmlImportDialogProps {
   filePath: string;
 }
 
+/**
+ * How to get rid of the just-created project, captured when the prompt is
+ * raised: `savedPath` is set only when a `.stalx` exists on disk, which is what
+ * decides delete-vs-close. Snapshotting it (rather than re-reading the store at
+ * click time) keeps the two arms from swapping under an async store update.
+ */
+interface DiscardTarget {
+  /** null while the initial save is deferred - nothing on disk, so close, don't delete. */
+  savedPath: string | null;
+  /** Project identity (the token `lostProject` uses), so a project switch between
+   *  raising the prompt and clicking Discard cannot redirect the delete. */
+  createdAt: string | null;
+}
+
 /** Why the dialog is asking what to do with the just-created empty project. */
-type Residue = { kind: 'cancel' } | { kind: 'failed'; message: string };
+type Residue = { kind: 'cancel' | 'failed'; message?: string; project: DiscardTarget };
 
 /**
  * True when the open project was created FOR this import (`importContext ===
@@ -39,6 +53,25 @@ function isEmptyImportProject(): boolean {
     useUIStore.getState().importContext === 'new-project' &&
     (useProjectStore.getState().project?.sections.length ?? 0) === 0
   );
+}
+
+/**
+ * Which discard arm the open project needs.
+ *
+ * `databaseOpen` is false exactly while the initial save is deferred - the
+ * common new-project-import case, where nothing has been written and closing the
+ * project IS the discard. It cannot go stale under a failed import: the
+ * backend's deferred-save safety net (`finalize_deferred_import`,
+ * src-tauri/src/commands/import.rs) returns early on `!result.success`, so a
+ * failing import never writes the `.stalx` behind the frontend's back, and a
+ * fresh empty project is not dirty, so autosave never fires either.
+ */
+function discardTarget(): DiscardTarget {
+  const { project, databaseOpen } = useProjectStore.getState();
+  return {
+    savedPath: databaseOpen ? (project?.file_path ?? null) : null,
+    createdAt: project?.created_at ?? null,
+  };
 }
 
 /**
@@ -61,6 +94,7 @@ export default function TmlImportDialog({ tmlFile, filePath }: TmlImportDialogPr
 
   const [isImporting, setIsImporting] = useState(false);
   const [isDiscarding, setIsDiscarding] = useState(false);
+  const [discardError, setDiscardError] = useState<string | null>(null);
   const [fileHash, setFileHash] = useState<string | null>(null);
   const [residue, setResidue] = useState<Residue | null>(null);
   const [includeExcluded, setIncludeExcluded] = useState(false);
@@ -68,6 +102,17 @@ export default function TmlImportDialog({ tmlFile, filePath }: TmlImportDialogPr
   // #27: Ariane has one VIRTUAL category, so the chain rule decides Jump vs
   // Reference by default. A user who knows the file can override it here.
   const [virtualShotMode, setVirtualShotMode] = useState<VirtualShotMode>('Auto');
+
+  // An import in flight outlives this component when something else takes the
+  // dialog slot (dropping another importable file re-routes it), so the failure
+  // path has to know whether its in-component surface can still land.
+  const isMountedRef = useRef(true);
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, []);
 
   // The hash is import PROVENANCE (it rides along to execute_tml_import), never
   // a gate: this dialog only ever opens on a brand-new project, so a duplicate
@@ -88,6 +133,7 @@ export default function TmlImportDialog({ tmlFile, filePath }: TmlImportDialogPr
   }, [filePath]);
 
   const stats = useMemo(() => {
+    let totalSections = 0;
     let totalShots = 0;
     let totalLength = 0;
     let minDepth = Infinity;
@@ -97,10 +143,14 @@ export default function TmlImportDialog({ tmlFile, filePath }: TmlImportDialogPr
     let virtualCount = 0;
 
     for (const section of tmlFile.sections) {
+      // A section left with no shots by the toggles is dropped by the converter
+      // ("no shots after filtering"), so it must not be counted as arriving.
+      let sectionShots = 0;
       for (const shot of section.shots) {
         if (shot.shot_type === 'Closure') continue;
         if (shot.excluded) excludedCount++;
         if (!includeExcluded && shot.excluded) continue;
+        sectionShots++;
         totalShots++;
         totalLength += shot.length;
         if (shot.depth < minDepth) minDepth = shot.depth;
@@ -108,9 +158,11 @@ export default function TmlImportDialog({ tmlFile, filePath }: TmlImportDialogPr
         if (shot.comment) commentCount++;
         if (shot.shot_type === 'Virtual') virtualCount++;
       }
+      if (sectionShots > 0) totalSections++;
     }
 
     return {
+      totalSections,
       totalShots,
       virtualCount,
       totalLength: Math.round(totalLength * 10) / 10,
@@ -125,6 +177,12 @@ export default function TmlImportDialog({ tmlFile, filePath }: TmlImportDialogPr
 
   const isEmptyImport = stats.totalShots === 0;
 
+  // `clamp` passes NaN through, and an unseeded/garbled progress event would
+  // then render as "NaN%" and an invalid bar width.
+  const overallProgress = Number.isFinite(loading.overallProgress)
+    ? Math.round(clamp(loading.overallProgress, 0, 100))
+    : 0;
+
   // Escape / backdrop must not silently drop the option choices the user made.
   const optionsChanged = includeExcluded || !commentsOnStations || virtualShotMode !== 'Auto';
 
@@ -138,13 +196,32 @@ export default function TmlImportDialog({ tmlFile, filePath }: TmlImportDialogPr
     /**
      * Terminal failure. The shared router owns the wording and the exit rules
      * (docs/notifications.md); the one thing it cannot do is ask about the empty
-     * project this import created, so when there is one the residue prompt below
-     * carries the message instead - only one dialog fits on screen (#411 C2).
+     * project this import created, so a BACKEND failure with such a project is
+     * reported by the residue prompt instead - only one dialog fits on screen
+     * (#411 C2).
+     *
+     * Two conditions send it back to the router anyway:
+     *  - a TRANSPORT failure. The call never landed, so the project is still a
+     *    valid retry target; the router's contract for this phase (no close, no
+     *    completion telemetry, error dialog only) keeps it that way, where a
+     *    keep/discard prompt would trade a retry for a decision nobody asked for.
+     *  - this component no longer being mounted. A drop of another importable
+     *    file replaces the dialog slot mid-import, and `setResidue` on an
+     *    unmounted component is a no-op - i.e. silence. The router is store-level
+     *    and always lands.
      */
     const reportFailure = (failure: ImportFailure) => {
       setIsImporting(false);
-      if (isEmptyImportProject()) {
-        setResidue({ kind: 'failed', message: importFailureMessage(failure) });
+      if (failure.phase === 'command' && isMountedRef.current && isEmptyImportProject()) {
+        // The residue prompt IS this dialog's completion: stamp it here so a
+        // failure reports the same way whichever surface takes it (the router
+        // stamps `trackDialogComplete` too).
+        trackDialogComplete('tml-import');
+        setResidue({
+          kind: 'failed',
+          message: importFailureMessage(failure),
+          project: discardTarget(),
+        });
         return;
       }
       surfaceImportFailure('tml-import', importUi, failure);
@@ -204,52 +281,90 @@ export default function TmlImportDialog({ tmlFile, filePath }: TmlImportDialogPr
   const handleCancel = useCallback(() => {
     if (isImporting) return;
     if (isEmptyImportProject()) {
-      setResidue({ kind: 'cancel' });
+      setResidue({ kind: 'cancel', project: discardTarget() });
       return;
     }
     closeDialog();
   }, [isImporting, closeDialog]);
 
+  /** Keep the project: the import flow is over either way, so its context goes. */
   const handleKeepProject = useCallback(() => {
+    setImportContext(null);
     closeDialog();
-  }, [closeDialog]);
+  }, [closeDialog, setImportContext]);
 
   const handleDiscardProject = useCallback(async () => {
-    setIsDiscarding(true);
-    const { project, databaseOpen, closeProject, deleteProject } = useProjectStore.getState();
-    const path = project?.file_path;
-    // A new-project import defers the initial save, so there is usually no
-    // `.stalx` yet (databaseOpen === false) and closing the project IS the
-    // discard. One created with an explicit save path was written to disk, so it
-    // goes through the same delete path the Delete Project dialog uses.
-    if (databaseOpen && path) {
-      await deleteProject(path);
-    } else {
-      await closeProject();
+    if (!residue || isDiscarding) return;
+    // This is the app's only file-deleting API, so the "created for this import
+    // and still empty" condition is re-checked HERE, at the click, not just when
+    // the prompt was raised; and the project must still be the one the snapshot
+    // was taken from, so a switch in between cannot redirect the delete at
+    // another file. (`file_path` is no identity: the backend RESERVES one for a
+    // deferred project that has never been written.)
+    if (
+      !isEmptyImportProject() ||
+      (useProjectStore.getState().project?.created_at ?? null) !== residue.project.createdAt
+    ) {
+      closeDialog();
+      return;
     }
-    setImportContext(null);
-    setView('global');
-    closeDialog();
-  }, [closeDialog, setImportContext, setView]);
+    setIsDiscarding(true);
+    try {
+      const { closeProject, deleteProject } = useProjectStore.getState();
+      // A new-project import defers the initial save, so there is usually no
+      // `.stalx` yet and closing the project IS the discard. One created with an
+      // explicit save path was written to disk, so it goes through the same
+      // delete path the Delete Project dialog uses.
+      const result = residue.project.savedPath
+        ? await deleteProject(residue.project.savedPath)
+        : await closeProject();
+      if (!result.success) {
+        // Both arms can fail with the session already torn down (the backend
+        // closes BEFORE handing the file to the OS trash), so "it failed" is not
+        // "nothing happened" - say so instead of closing success-shaped over a
+        // file that is still on disk and still in Recents.
+        setDiscardError(result.error ?? t('dialogs.tmlImport.residue.discardFailed'));
+        return;
+      }
+      setImportContext(null);
+      setView('global');
+      closeDialog();
+    } catch (e) {
+      setDiscardError(getErrorMessage(e, t('dialogs.tmlImport.residue.discardFailed')));
+    } finally {
+      setIsDiscarding(false);
+    }
+  }, [closeDialog, isDiscarding, residue, setImportContext, setView, t]);
 
   if (residue) {
     return (
       <DialogWrapper
         title={t('dialogs.tmlImport.residue.title')}
-        onClose={handleKeepProject}
+        // Escape mid-delete would otherwise run Keep while the delete is still
+        // in flight, leaving nothing watching its result.
+        onClose={isDiscarding ? () => {} : handleKeepProject}
         size="md"
         data-testid="tml-import-residue-dialog"
       >
         <div className="space-y-4">
-          {residue.kind === 'failed' && (
+          {residue.kind === 'failed' && residue.message && (
             <div
-              className="p-3 bg-error-10 border border-error-20 rounded text-error text-sm whitespace-pre-wrap"
+              className="p-3 bg-error-10 border border-error-20 rounded text-error text-sm whitespace-pre-wrap max-h-40 overflow-y-auto"
               data-testid="tml-import-residue-error"
             >
               {residue.message}
             </div>
           )}
           <p className="text-text-secondary">{t('dialogs.tmlImport.residue.body')}</p>
+
+          {discardError && (
+            <div
+              className="p-3 bg-error-10 border border-error-20 rounded text-error text-sm whitespace-pre-wrap max-h-40 overflow-y-auto"
+              data-testid="tml-import-residue-discard-error"
+            >
+              {discardError}
+            </div>
+          )}
 
           <div className="flex justify-end gap-2 pt-4 border-t border-border">
             <Button
@@ -300,7 +415,7 @@ export default function TmlImportDialog({ tmlFile, filePath }: TmlImportDialogPr
         <div className="grid grid-cols-4 gap-3 p-3 bg-surface-alt rounded">
           <div>
             <div className="text-xs text-text-tertiary">{t('dialogs.tmlImport.stats.sections')}</div>
-            <div className="text-sm font-medium" data-testid="tml-section-count">{tmlFile.sections.length}</div>
+            <div className="text-sm font-medium" data-testid="tml-section-count">{stats.totalSections}</div>
           </div>
           <div>
             <div className="text-xs text-text-tertiary">{t('dialogs.tmlImport.stats.shots')}</div>
@@ -436,15 +551,15 @@ export default function TmlImportDialog({ tmlFile, filePath }: TmlImportDialogPr
               <span data-testid="tml-import-progress-phase">
                 {formatPhaseLabel(t, loading.phase, loading.phaseIndex, loading.phaseCount)}
               </span>
-              <span>{formatNumber(Math.round(clamp(loading.overallProgress, 0, 100)))}%</span>
+              <span>{formatNumber(overallProgress)}%</span>
             </div>
             <div className="h-1.5 bg-border rounded-full overflow-hidden">
               <div
                 className="h-full bg-accent transition-all duration-300"
-                style={{ width: `${clamp(loading.overallProgress, 0, 100)}%` }}
+                style={{ width: `${overallProgress}%` }}
                 role="progressbar"
                 aria-label={t('loading.overall.aria')}
-                aria-valuenow={Math.round(clamp(loading.overallProgress, 0, 100))}
+                aria-valuenow={overallProgress}
                 aria-valuemin={0}
                 aria-valuemax={100}
               />

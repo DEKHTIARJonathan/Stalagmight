@@ -1316,7 +1316,8 @@
         "title": "Empty Project",
         "body": "This project was created for this import and is still empty. Keep it, or discard it and return to the project list?",
         "keep": "Keep empty project",
-        "discard": "Discard it"
+        "discard": "Discard it",
+        "discardFailed": "Could not discard the project - it is still on disk."
       },
       "cancel": "Cancel",
       "import": "Import",

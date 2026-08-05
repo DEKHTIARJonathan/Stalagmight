@@ -30,6 +30,7 @@ vi.mock('../../utils/ipc', async (importOriginal) => ({
 
 import TmlImportDialog from './TmlImportDialog';
 import { invokeIpc } from '../../utils/ipc';
+import { trackDialogComplete } from '../../utils/telemetry';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
 import type { CommandResult, TmlFile, TmlShot, ValidationWarning } from '../../types/commands';
@@ -37,6 +38,7 @@ import type { ImportReceipt } from '../../types/ipc/ImportReceipt';
 import type { Project } from '../../types/project';
 
 const invokeIpcMock = vi.mocked(invokeIpc);
+const trackDialogCompleteMock = vi.mocked(trackDialogComplete);
 
 const SAVE_WARNING: ValidationWarning = {
   code: 'SYSTEM',
@@ -160,19 +162,26 @@ beforeEach(() => {
     databaseOpen: false,
     project: null,
   });
+  // setImportContext is deliberately NOT mocked: the leak these tests guard is
+  // about the value left in the store, so the real setter has to run.
   useUIStore.setState({
     openDialog,
     closeDialog,
     setView,
     triggerFitToBounds,
-    setImportContext: vi.fn(),
     importContext: null,
   });
 });
 
-/** The project a new-project import created: open, and still empty. */
+const importContext = () => useUIStore.getState().importContext;
+
+/** The project a new-project import created: open, and still empty. `created_at`
+ *  is the identity token the discard guard re-checks at click time. */
+const emptyProject = (overrides: Partial<Project> = {}) =>
+  ({ sections: [], created_at: '2026-08-05T00:00:00Z', ...overrides }) as unknown as Project;
+
 function openEmptyImportProject() {
-  useProjectStore.setState({ project: { sections: [] } as unknown as Project });
+  useProjectStore.setState({ project: emptyProject() });
   useUIStore.setState({ importContext: 'new-project' });
 }
 
@@ -327,7 +336,7 @@ describe('TmlImportDialog empty-project residue (#411 C2)', () => {
     openEmptyImportProject();
     useProjectStore.setState({
       databaseOpen: true,
-      project: { sections: [], file_path: '/tmp/new.stalx' } as unknown as Project,
+      project: emptyProject({ file_path: '/tmp/new.stalx' }),
     });
     render(<TmlImportDialog tmlFile={withShots([shot()])} filePath="/tmp/cave.tml" />);
 
@@ -339,7 +348,7 @@ describe('TmlImportDialog empty-project residue (#411 C2)', () => {
   });
 
   it('closes straight out when the project already holds sections', async () => {
-    useProjectStore.setState({ project: { sections: [{}] } as unknown as Project });
+    useProjectStore.setState({ project: emptyProject({ sections: [{}] as unknown as Project['sections'] }) });
     useUIStore.setState({ importContext: 'new-project' });
     render(<TmlImportDialog tmlFile={withShots([shot()])} filePath="/tmp/cave.tml" />);
 
@@ -379,5 +388,193 @@ describe('TmlImportDialog preview honesty (#411 C4)', () => {
     await userEvent.click(screen.getByTestId('tml-include-excluded'));
     expect((screen.getByTestId('tml-import-confirm') as HTMLButtonElement).disabled).toBe(false);
     expect(screen.queryByTestId('tml-import-empty')).toBeNull();
+  });
+
+  it('drops a section the toggles empty out from the section count', async () => {
+    const file: TmlFile = {
+      ...tmlFile,
+      sections: [
+        withShots([shot({ id: 1n })]).sections[0]!,
+        { ...withShots([shot({ id: 2n, excluded: true })]).sections[0]!, name: 'All excluded' },
+      ],
+    };
+    render(<TmlImportDialog tmlFile={file} filePath="/tmp/cave.tml" />);
+
+    // The converter drops a section with no shots left after filtering, so a
+    // preview claiming 2 promises a section that never arrives.
+    expect(await screen.findByTestId('tml-section-count')).toHaveTextContent('1');
+
+    await userEvent.click(screen.getByTestId('tml-include-excluded'));
+    expect(screen.getByTestId('tml-section-count')).toHaveTextContent('2');
+  });
+});
+
+describe('TmlImportDialog import-context lifetime (#411 fix round)', () => {
+  it('drops the import context when the import succeeds', async () => {
+    openEmptyImportProject();
+    executeTmlImport.mockResolvedValue(ok([], []));
+    render(<TmlImportDialog tmlFile={withShots([shot()])} filePath="/tmp/cave.tml" />);
+
+    await clickImport();
+
+    // Left set, a later import whose route sets no context inherits it and takes
+    // saveAfterImport's full-save branch, committing unrelated pending edits.
+    await waitFor(() => expect(importContext()).toBeNull());
+  });
+
+  it('drops the import context when the user keeps the empty project', async () => {
+    openEmptyImportProject();
+    render(<TmlImportDialog tmlFile={withShots([shot()])} filePath="/tmp/cave.tml" />);
+
+    await userEvent.click(await screen.findByTestId('tml-import-cancel'));
+    await userEvent.click(await screen.findByTestId('tml-import-residue-keep'));
+
+    expect(importContext()).toBeNull();
+  });
+
+  it('drops the import context when the failure goes through the router', async () => {
+    openEmptyImportProject();
+    useUIStore.setState({ importContext: 'existing-project' }); // no residue prompt
+    executeTmlImport.mockResolvedValue({
+      success: false,
+      error: 'nope',
+      warnings: [],
+      section_ids: [],
+    } as unknown as CommandResult);
+    render(<TmlImportDialog tmlFile={withShots([shot()])} filePath="/tmp/cave.tml" />);
+
+    await clickImport();
+
+    await waitFor(() => expect(importContext()).toBeNull());
+  });
+});
+
+describe('TmlImportDialog discard failures (#411 fix round)', () => {
+  async function raiseResidueAndDiscard() {
+    render(<TmlImportDialog tmlFile={withShots([shot()])} filePath="/tmp/cave.tml" />);
+    await userEvent.click(await screen.findByTestId('tml-import-cancel'));
+    await userEvent.click(await screen.findByTestId('tml-import-residue-discard'));
+  }
+
+  it('surfaces a refused delete instead of closing success-shaped', async () => {
+    openEmptyImportProject();
+    useProjectStore.setState({
+      databaseOpen: true,
+      project: emptyProject({ file_path: '/tmp/new.stalx' }),
+    });
+    // The backend closes the session BEFORE handing the file to the OS trash, so
+    // a denied trash returns failure with the session already gone: "it failed"
+    // is not "nothing happened", and the file is still on disk and in Recents.
+    deleteProject.mockResolvedValue({
+      success: false,
+      session_closed: true,
+      error: 'Access is denied',
+    } as unknown as CommandResult);
+
+    await raiseResidueAndDiscard();
+
+    expect(await screen.findByTestId('tml-import-residue-discard-error')).toHaveTextContent(
+      'Access is denied',
+    );
+    expect(closeDialog).not.toHaveBeenCalled();
+    expect(setView).not.toHaveBeenCalled();
+    // Both buttons come back, so the user is not stuck on a dead prompt.
+    expect((screen.getByTestId('tml-import-residue-discard') as HTMLButtonElement).disabled).toBe(false);
+    expect((screen.getByTestId('tml-import-residue-keep') as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it('survives a close that throws instead of stranding the prompt', async () => {
+    openEmptyImportProject();
+    closeProject.mockRejectedValue(new Error('ipc gone'));
+
+    await raiseResidueAndDiscard();
+
+    expect(await screen.findByTestId('tml-import-residue-discard-error')).toHaveTextContent('ipc gone');
+    expect(closeDialog).not.toHaveBeenCalled();
+    expect((screen.getByTestId('tml-import-residue-discard') as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it('re-checks the delete condition at click time, not just when the prompt opened', async () => {
+    openEmptyImportProject();
+    useProjectStore.setState({
+      databaseOpen: true,
+      project: emptyProject({ file_path: '/tmp/new.stalx' }),
+    });
+    render(<TmlImportDialog tmlFile={withShots([shot()])} filePath="/tmp/cave.tml" />);
+    await userEvent.click(await screen.findByTestId('tml-import-cancel'));
+
+    // Something landed in the project between raising the prompt and the click -
+    // this arm calls the app's only file-deleting API, so it must bail.
+    useProjectStore.setState({
+      project: emptyProject({ sections: [{}] as unknown as Project['sections'], file_path: '/tmp/new.stalx' }),
+    });
+    await userEvent.click(screen.getByTestId('tml-import-residue-discard'));
+
+    expect(deleteProject).not.toHaveBeenCalled();
+    expect(closeProject).not.toHaveBeenCalled();
+    expect(closeDialog).toHaveBeenCalled();
+  });
+
+  it('bails when the open project is no longer the one the prompt was raised for', async () => {
+    openEmptyImportProject();
+    useProjectStore.setState({
+      databaseOpen: true,
+      project: emptyProject({ file_path: '/tmp/new.stalx' }),
+    });
+    render(<TmlImportDialog tmlFile={withShots([shot()])} filePath="/tmp/cave.tml" />);
+    await userEvent.click(await screen.findByTestId('tml-import-cancel'));
+
+    // A different project is open now - equally new and equally empty, so only
+    // its identity says the snapshot no longer describes it.
+    useProjectStore.setState({
+      project: emptyProject({ created_at: '2026-08-05T09:00:00Z', file_path: '/tmp/other.stalx' }),
+    });
+    await userEvent.click(screen.getByTestId('tml-import-residue-discard'));
+
+    expect(deleteProject).not.toHaveBeenCalled();
+    expect(closeProject).not.toHaveBeenCalled();
+    expect(closeDialog).toHaveBeenCalled();
+  });
+});
+
+describe('TmlImportDialog failure after unmount (#411 fix round)', () => {
+  it('falls back to the store-level router when the in-dialog surface is gone', async () => {
+    openEmptyImportProject();
+    let settle: (result: CommandResult) => void = () => {};
+    executeTmlImport.mockReturnValue(new Promise<CommandResult>((resolve) => { settle = resolve; }));
+    const view = render(<TmlImportDialog tmlFile={withShots([shot()])} filePath="/tmp/cave.tml" />);
+
+    await clickImport();
+    // A drop of another importable file re-routes the dialog slot mid-import.
+    view.unmount();
+    settle({ success: false, error: 'late failure', warnings: [], section_ids: [] } as unknown as CommandResult);
+
+    // setResidue on an unmounted component is a no-op, i.e. silence - the router
+    // is store-level and always lands.
+    await waitFor(() =>
+      expect(openDialog).toHaveBeenCalledWith(
+        'error',
+        expect.objectContaining({ title: 'Import Errors', message: 'late failure' }),
+      ),
+    );
+    expect(importContext()).toBeNull();
+  });
+
+  it('stamps the same completion telemetry whichever surface takes the failure', async () => {
+    openEmptyImportProject();
+    executeTmlImport.mockResolvedValue({
+      success: false,
+      error: 'nope',
+      warnings: [],
+      section_ids: [],
+    } as unknown as CommandResult);
+    render(<TmlImportDialog tmlFile={withShots([shot()])} filePath="/tmp/cave.tml" />);
+
+    await clickImport();
+
+    // The residue prompt IS this dialog's completion; without this it would be
+    // recorded as a cancel while the router records a complete for the same event.
+    expect(await screen.findByTestId('tml-import-residue-dialog')).toBeInTheDocument();
+    expect(trackDialogCompleteMock).toHaveBeenCalledWith('tml-import');
   });
 });

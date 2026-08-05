@@ -1,4 +1,5 @@
 import { useProjectStore } from '../store/projectStore';
+import { useUIStore } from '../store/uiStore';
 import { isPermissionError } from './saveErrors';
 import { trackDialogComplete } from './telemetry';
 import { getErrorMessage } from './ipc';
@@ -118,6 +119,10 @@ export function importFailureMessage(failure: ImportFailure): string {
  * The one router for the TML/Compass/Walls/GPX import dialogs' failure paths
  * (docs/notifications.md) - bespoke `openDialog('error', ...)` calls in import
  * dialogs are a policy defect.
+ *
+ * Every caller returns straight after calling this, in every phase, so reaching
+ * here ends the import flow - which is why `importContext` is dropped here too
+ * (see `completeImportToSingleView` for what a stale one costs).
  */
 export function surfaceImportFailure(
   dialogName: string,
@@ -125,6 +130,7 @@ export function surfaceImportFailure(
   failure: ImportFailure,
 ): void {
   const message = importFailureMessage(failure);
+  useUIStore.getState().setImportContext(null);
   switch (failure.phase) {
     case 'transport':
       ui.openDialog('error', {
@@ -159,6 +165,12 @@ export function surfaceImportFailure(
  * When `receipt` is present (a successful import that produced one), opens the
  * post-import receipt dialog (#391) right after so the user sees what landed
  * without having to open the data table.
+ *
+ * This is also where the import flow ENDS, so it is where `importContext` is
+ * dropped. Left set, it outlives its flow: `saveAfterImport` reads it, and a
+ * later import whose own route sets no context (GPX/Compass/Walls) would inherit
+ * a stale 'new-project' and take the full-save branch, committing the user's
+ * unrelated pending edits.
  */
 export function completeImportToSingleView(
   dialogName: string,
@@ -166,6 +178,7 @@ export function completeImportToSingleView(
   receipt?: ImportReceipt,
 ): void {
   trackDialogComplete(dialogName);
+  useUIStore.getState().setImportContext(null);
   ui.closeDialog();
   ui.setView('single');
   ui.triggerFitToBounds();

@@ -303,6 +303,13 @@ export default function OrphanPlacementDialog({ suggestions, receipt }: OrphanPl
     if (!(await useProjectStore.getState().saveAfterImport())) {
       return;
     }
+    // The import flow ends here on this branch (it never reaches
+    // completeImportToSingleView, which drops the context on the other one), and
+    // a context left set outlives its flow: the next import whose route sets
+    // none inherits 'new-project' and takes saveAfterImport's full-save branch,
+    // committing the user's unrelated pending edits. Cleared AFTER the save
+    // above, which reads it. (#435 tracks the duplicated exit sequence itself.)
+    useUIStore.getState().setImportContext(null);
     trackDialogComplete('orphan-placement');
     closeDialog();
     setView('single');
