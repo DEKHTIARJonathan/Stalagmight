@@ -145,7 +145,17 @@ fn decorate_receipt(
         .unwrap_or_default();
     receipt.sections_found = sections_found;
     receipt.unit_conversion = unit_conversion;
-    receipt.warnings.extend(converter_warnings);
+    // Converter warnings go FIRST, ahead of the execute-phase ones. They are
+    // whole-file statements - an unrecognized unit, a section dropped entirely -
+    // and there is a handful of them at most, while the execute phase can emit
+    // one per shot. Appending them meant `cap_warnings`' 50-entry limit dropped
+    // the highest-signal warning first on exactly the noisy file that needs it.
+    // Every importer routes through here, so the ordering is the same for
+    // Ariane, Compass, Walls, GPX and DMP.
+    if !converter_warnings.is_empty() {
+        let execute_warnings = std::mem::replace(&mut receipt.warnings, converter_warnings);
+        receipt.warnings.extend(execute_warnings);
+    }
     receipt.cap_warnings();
 }
 
@@ -846,6 +856,41 @@ mod receipt_tests {
         assert_eq!(receipt.sections_imported, 3);
         assert_eq!(receipt.shot_count, 12);
         assert_eq!(receipt.warnings.len(), 1);
+    }
+
+    /// The cap keeps the FIRST 50 warnings, and a per-shot execute phase can
+    /// blow past 50 on its own. A converter warning appended behind them - the
+    /// unrecognized unit, which says the whole survey may be mis-scaled - was
+    /// then the first thing dropped, on exactly the file that needs it most.
+    #[test]
+    fn a_converter_warning_survives_a_flood_of_execute_warnings() {
+        let mut result = base_result();
+        if let Some(receipt) = result.import_receipt.as_mut() {
+            receipt.warnings = (0..60).map(|i| format!("shot {i} looks odd")).collect();
+        }
+
+        decorate_receipt(
+            &mut result,
+            "Ariane TML",
+            Path::new("/tmp/cave.tml"),
+            5,
+            None,
+            vec![
+                "The file declares an unrecognized unit \"furlongs\"; all measurements were read as meters"
+                    .to_string(),
+            ],
+        );
+
+        let receipt = result
+            .import_receipt
+            .expect("receipt must survive decoration");
+        assert!(
+            receipt.warnings.iter().any(|w| w.contains("furlongs")),
+            "the unit warning must outrank per-shot noise, got {:?}",
+            receipt.warnings.first()
+        );
+        // And the flood is still capped, summary entry included.
+        assert_eq!(receipt.warnings.len(), 51);
     }
 
     #[test]
