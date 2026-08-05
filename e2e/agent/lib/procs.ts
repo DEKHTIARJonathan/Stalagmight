@@ -1,11 +1,31 @@
 /**
  * Process + port helpers for the agent harness. Port probing and SCOPED
- * process reaping: only PIDs recorded in a session pidfile whose /proc/<pid>/comm
- * matches an expected name are killed. Never a broad `pkill stalagmight` (that
+ * process reaping: only PIDs recorded in a session pidfile whose comm name
+ * matches an expected one are killed. Never a broad `pkill stalagmight` (that
  * lesson is baked into scripts/wdio.sh).
+ *
+ * comm/pgid come from /proc on Linux and from `ps` on macOS, which has no
+ * /proc - without the darwin arm the comm check never matches and every reap
+ * silently no-ops, leaking the app and its driver.
  */
+import { execFileSync } from 'child_process';
 import * as fs from 'fs';
 import * as net from 'net';
+import * as path from 'path';
+
+const isDarwin = process.platform === 'darwin';
+
+/** One `ps -o <field>= -p <pid>` line, or '' when the pid is gone (ps exits 1). */
+function psField(pid: number, field: string): string {
+  try {
+    return execFileSync('ps', ['-o', `${field}=`, '-p', String(pid)], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+  } catch {
+    return '';
+  }
+}
 
 /** True if `port` on 127.0.0.1 can be bound right now. */
 export function isPortFree(port: number): Promise<boolean> {
@@ -66,8 +86,14 @@ export function isPidAlive(pid: number): boolean {
   }
 }
 
-/** Read `/proc/<pid>/comm` (Linux), or '' if unavailable. */
+/** The executable name of `pid`, or '' if unavailable. */
 export function pidComm(pid: number): string {
+  if (isDarwin) {
+    // macOS `ps -o comm=` prints the path the process was exec'd with (e.g.
+    // /sbin/launchd), so it needs a basename to compare like Linux comm does.
+    const out = psField(pid, 'comm');
+    return out ? path.basename(out) : '';
+  }
   try {
     return fs.readFileSync(`/proc/${pid}/comm`, 'utf8').trim();
   } catch {
@@ -75,8 +101,12 @@ export function pidComm(pid: number): string {
   }
 }
 
-/** Read the process-group id from `/proc/<pid>/stat` (Linux), or 0. */
+/** The process-group id of `pid`, or 0 if unavailable. */
 export function pidPgid(pid: number): number {
+  if (isDarwin) {
+    const pgid = Number.parseInt(psField(pid, 'pgid'), 10);
+    return Number.isInteger(pgid) && pgid > 0 ? pgid : 0;
+  }
   try {
     const stat = fs.readFileSync(`/proc/${pid}/stat`, 'utf8');
     // The comm field is parenthesised and may itself contain spaces/parens;
