@@ -2,6 +2,21 @@ import { Page } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 import { dirname, resolve as pathResolve } from 'node:path';
 import { createRequire } from 'node:module';
+import type { TmlFile } from '../../src/types/ipc/TmlFile';
+import type { TmlShot } from '../../src/types/ipc/TmlShot';
+
+/** The wire shape of a ts-rs generated type: serde writes i64 as a JSON
+ *  number, so fields the generated interfaces declare as `bigint` arrive as
+ *  `number` at runtime. Recursive and type-only (erases at compile time) -
+ *  its purpose is that a `gen:ipc-types` regen which adds a required field
+ *  fails `typecheck:playwright` here instead of drifting silently. */
+type TmlWire<T> = T extends bigint
+  ? number
+  : T extends Array<infer U>
+    ? Array<TmlWire<U>>
+    : T extends object
+      ? { [K in keyof T]: TmlWire<T[K]> }
+      : T;
 
 declare global {
   interface Window {
@@ -732,8 +747,8 @@ export async function setupTauriMocks(page: Page): Promise<void> {
         fromId: number,
         section: string,
         depth: number,
-        overrides: Record<string, unknown> = {}
-      ) => ({
+        overrides: Partial<TmlWire<TmlShot>> = {}
+      ): TmlWire<TmlShot> => ({
         id,
         from_id: fromId,
         shot_type: 'Real',
@@ -760,7 +775,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
 
       // A path containing "imperial" yields an Imperial-unit file, so a spec can
       // drive the "converted from feet" branch of the dialog and the receipt.
-      const buildMockTmlFile = (path: string | null | undefined) => ({
+      const buildMockTmlFile = (path: string | null | undefined): TmlWire<TmlFile> => ({
         cave_name: 'Synthetic Cavern',
         unit: (path ?? '').toLowerCase().includes('imperial') ? 'Imperial' : 'Metric',
         use_magnetic_azimuth: true,
@@ -798,7 +813,15 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           },
         ],
         closures: [
-          { from_section_index: 0, from_station_index: 2, to_section_index: 1, to_station_index: 1 },
+          // Anchored between two always-real stations (end of Main Line shot 1,
+          // end of Side Passage shot 4) so that neither endpoint is the excluded
+          // shot (id 3, Main Line's terminal) nor preceded by it - the real
+          // converter's skip-and-renumber semantics (parsers/tml.rs,
+          // id_to_import_loc) and this mock provably agree under BOTH states of
+          // the excluded-shots toggle. The loop count asserted in specs is
+          // UI-plumbing coverage only, not closure-reconstruction coverage -
+          // the real resolve/skip logic never runs here.
+          { from_section_index: 0, from_station_index: 1, to_section_index: 1, to_station_index: 1 },
         ],
       });
 
@@ -2659,6 +2682,9 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 direction: 'in',
                 shots: keptShots.map((shot, index) => ({
                   id: mockShotId(sectionId, index),
+                  // Same stable-uuid idiom as create_section above: the real
+                  // backend never produces a uuid-less shot.
+                  uuid: `mock-shot-uuid-${mockShotId(sectionId, index)}`,
                   azimuth_in: shot.azimuth,
                   azimuth_out: shot.azimuth,
                   length: shot.length,

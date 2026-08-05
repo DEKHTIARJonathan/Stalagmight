@@ -38,8 +38,11 @@ async function openTmlImportDialog(page: Page, path: string, projectName: string
   await page.getByTestId('create-and-continue-button').click();
 
   await expect(page.getByTestId('tml-import-dialog')).toBeVisible({ timeout: 10000 });
-  // The Import button stays disabled until calculate_file_hash +
-  // check_duplicate_import resolve.
+  // The Import button is gated on the hash-check effect SETTLING, not
+  // succeeding: hashChecked goes true even when calculate_file_hash /
+  // check_duplicate_import throw (TmlImportDialog.tsx catches and proceeds
+  // without duplicate detection). Waiting for enabled here only guarantees
+  // the effect ran, so the click below cannot race it.
   await expect(page.getByTestId('tml-import-confirm')).toBeEnabled();
 }
 
