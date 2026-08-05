@@ -14,7 +14,7 @@ CI: the agent harness never runs there, and `open_undo_bugs_tests.rs` is
 `#[ignore]`d by design.
 
 ```bash
-# The gate. Runs with the default suite; ~1.5 s for all three tests.
+# The gate. Runs with the default suite; ~7 s for all three tests.
 TELEMETRY_ENDPOINT=http://localhost/dummy cargo test --manifest-path src-tauri/Cargo.toml \
   --features telemetry --lib fuzz_undo
 
@@ -22,6 +22,9 @@ TELEMETRY_ENDPOINT=http://localhost/dummy cargo test --manifest-path src-tauri/C
 TELEMETRY_ENDPOINT=http://localhost/dummy cargo test --manifest-path src-tauri/Cargo.toml \
   --features telemetry --lib fuzz_undo -- --nocapture --test-threads=1
 ```
+
+Three gate tests: `undo_redo_fuzz_gate` (in-memory), `_gate_persistence` (one
+save/close/reopen per seed) and `_gate_multi_crossing` (three).
 
 **Reproducing a specific known bug.** The module carries a BUG IDENTIFICATION
 MATRIX in its header: for every finding on
@@ -69,6 +72,27 @@ The mode changes the move mix while it is CLIMBING (85/8/7 mutate/undo/redo, and
 no jumps) for a measured reason: at the ordinary mix the depth random-walks
 around 25 and never reaches the limit at all, because every jump lands the
 cursor near the floor and the next mutation truncates everything above it.
+
+**Drawn config.** `STALAGMIGHT_RUST_FUZZ_CONFIG=1` fuzzes the app as well as the
+moves: each seed draws its own `undo_history_limit` (1, 2, 3, 5, 8, 13, 20, 40,
+100 = the app's default, and `iterations + 1` = unreachable) from a SECOND
+generator seeded `seed ^ CONFIG_STREAM`, so no existing stream moves and every
+repro above still reproduces. At a limit of 1 every push trims, which is the
+sliding window under maximum pressure at 60 moves instead of 10,000.
+
+```bash
+STALAGMIGHT_RUST_FUZZ_CONFIG=1 STALAGMIGHT_RUST_FUZZ_SEEDS=32 \
+  STALAGMIGHT_RUST_FUZZ_ITERATIONS=60 \
+  TELEMETRY_ENDPOINT=http://localhost/dummy cargo test --manifest-path src-tauri/Cargo.toml \
+  --features telemetry --lib fuzz_seed_survey -- --ignored --nocapture
+```
+
+The drawn value is printed at the end of every summary line and of every failure
+payload (`..., undo_history_limit=3`) - a seed alone is not a repro once the same
+moves can run against differently configured apps. `undo_persist_limit` is
+deliberately NOT drawn: it is read from the config struct at save time, and
+`save_project` writes that struct back to the real `config.toml`, so a drawn
+value would escape the run.
 
 **Soak.** Same engine, no iteration budget, and with the features the gate
 leaves off (multi-step `undo_to`/`redo_to` jumps, loop closures, and both
@@ -377,8 +401,8 @@ STALAGMIGHT_RUST_FUZZ_REPLAY=/tmp/stalagmight-shrink-seed1-3moves.json \
 
 The plan comes from the SAME knobs the survey reads (`ITERATIONS`,
 `PERSISTENCE`, `JUMPS`, `CLOSURES`, `DIVERGENCE`, `CLOSURE_SHAPES`, `CROSSINGS`,
-`HORIZON`), so a seed that failed under a sweep is shrunk under exactly the
-environment that found it. `SHRINK_TARGET` is optional - the default is whatever
+`HORIZON`, `CONFIG`), so a seed that failed under a sweep is shrunk
+under exactly the environment that found it. `SHRINK_TARGET` is optional - the default is whatever
 failure the recorded run produced. `SHRINK=<path.json>` shrinks a trace file
 further instead of a seed, `SHRINK_OUT` picks where the minimized trace is
 written (default: a temp path, printed at the end), and `SHRINK_PROBES` caps the

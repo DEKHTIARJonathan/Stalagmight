@@ -85,7 +85,7 @@
 //! | `SHRINK_OUT=<path>` | where to write the minimized trace; default is a temp path, printed |
 //! | `SHRINK_PROBES=<n>` | probe budget, default 2000 |
 //! | `REPLAY=<path.json>` | replay a trace file and assert it still reproduces its recorded target |
-//! | `ITERATIONS` `PERSISTENCE` `JUMPS` `CLOSURES` `DIVERGENCE` `CLOSURE_SHAPES` `CROSSINGS` `HORIZON` | the plan, exactly as `fuzz_seed_survey` reads them |
+//! | `ITERATIONS` `PERSISTENCE` `JUMPS` `CLOSURES` `DIVERGENCE` `CLOSURE_SHAPES` `CROSSINGS` `HORIZON` `CONFIG` | the plan, exactly as `fuzz_seed_survey` reads them |
 //! | `THREADS` | probes per round in parallel; results do not depend on it |
 //!
 //! ```text
@@ -505,6 +505,7 @@ fn plan_from_env() -> Plan {
         divergence: flag("DIVERGENCE"),
         closure_shapes: flag("CLOSURE_SHAPES"),
         horizon: flag("HORIZON"),
+        config_fuzz: flag("CONFIG"),
     }
 }
 
@@ -522,6 +523,7 @@ fn describe_plan(plan: Plan) -> String {
         (plan.divergence, "divergence"),
         (plan.closure_shapes, "closure-shapes"),
         (plan.horizon, "horizon"),
+        (plan.config_fuzz, "drawn-config"),
     ] {
         if on {
             modes.push(name.to_string());
@@ -782,6 +784,7 @@ fn a_recorded_run_matches_an_unrecorded_one() {
             divergence: false,
             closure_shapes: false,
             horizon: false,
+            config_fuzz: false,
         };
         let plain = run_fuzz(3, plan);
         let recorded = record_run(3, plan);
@@ -821,6 +824,7 @@ fn a_full_trace_replays_to_the_same_run() {
             divergence: false,
             closure_shapes: false,
             horizon: false,
+            config_fuzz: false,
         };
         let recorded = record_run(4, plan);
         let original = recorded
@@ -906,6 +910,7 @@ fn the_shrinker_minimizes_a_classified_failure() {
         divergence: true,
         closure_shapes: false,
         horizon: false,
+        config_fuzz: false,
     };
     // Through the PROGRAMMATIC entry point, which is what a future observation
     // hunt would call: record, choose the target from what the run produced,

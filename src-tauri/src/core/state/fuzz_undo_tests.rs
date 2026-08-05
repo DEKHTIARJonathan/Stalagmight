@@ -241,7 +241,7 @@
 //! | `CLOSURES=1` | a real loop closure in the starting project | findings 6 and 14 |
 //! | `DIVERGENCE=1` | the id-vs-position divergence findings 8/12/13 need, built | deliberate corruption |
 //! | `CLOSURE_SHAPES=1` | the two closure shapes findings 4 and 10 need, built | deliberate, and implies `CLOSURES` |
-//! | `HORIZON=1` | thousands of moves, past the app's own history limit: the FIFO trim and its sliding window, accumulated float dust, allocator and growth sanity | minutes per seed |
+//! | `HORIZON=1` | thousands of moves, past the app's own history limit: the FIFO trim and its sliding window, accumulated float dust, allocator and growth sanity | minutes per seed AT THE APP'S OWN LIMIT - a DRAWN limit reaches the same window in a couple of hundred moves |
 //! | `CROSSINGS=n` | n save/close/reopen boundaries per persistence run instead of one: heals stacking on heals, and a snapshot compared across two epochs | IS gated - see `undo_redo_fuzz_gate_multi_crossing` |
 //! | `Plan::prologue` | replay `(seed, moves)` as a corpus prologue, then continue with fresh randomness | measured NOT to widen coverage - see `fuzz_corpus_sweep` |
 //!
@@ -259,7 +259,56 @@
 //! | `TRACE=1` | stream every move as it happens (and pin one worker, so the stream stays a stream) | off |
 //! | `VERBOSE=1` | every differing path rather than the first eight, and the whole panic payload per seed in the survey | off |
 //! | `PERSISTENCE=1` | horizon only: cross the save boundary as well | off |
+//! | `CONFIG=1` | draw this run's undo-relevant CONFIG - see below | off |
 //! | `SHRINK=`, `REPLAY=` | the shrinker's own knobs - see below, and `fuzz_shrink_tests.rs` | off |
+//!
+//! ## The CONFIG space: fuzzing the app, not just the moves
+//!
+//! Every run before this one drove a DEFAULT app. The move stream was fuzzed and
+//! the settings the model runs against were fixed, which left one whole axis
+//! unexercised: `undo_history_limit` is a user-facing number in Settings, and at
+//! 1 it changes what an undo stack IS - every push trims, the stack length never
+//! moves, and a walk can never get more than one step back.
+//!
+//! `CONFIG=1` (or `Plan::config_fuzz`) draws it per seed from
+//! [`config_history_ladder`]: 1, 2, 3, 5, 8, 13, 20 (the persisted window), 40
+//! (the ordinary modes' depth cap), 100 (the app's own default, so the drawn
+//! regime CONTAINS the undrawn one) and `iterations + 1` (larger than the run can
+//! reach - the control). See [`DrawnConfig`] for what is NOT drawn and why:
+//! `undo_persist_limit` cannot be, because writing it into the config struct
+//! would persist it into the developer's real `config.toml`.
+//!
+//! Three properties make it safe to add to a file whose whole value is that its
+//! seeds are repros:
+//!
+//! * **The draw is ADDITIVE.** It comes from a second generator seeded
+//!   `seed ^ CONFIG_STREAM`, so no primary stream moves and every row of the
+//!   matrix above still reproduces. Measured, not asserted: with the knob
+//!   compiled in, all three gates and both spot-checked repros
+//!   (`DIVERGENCE=1 SEEDS=1 ITERATIONS=12`, `SEEDS=13 ITERATIONS=60`) print
+//!   byte-identical lines to the run before it.
+//! * **The drawn value is in the run header.** Every summary line and every
+//!   failure payload ends with `undo_history_limit=n` when the knob is on, and
+//!   nothing when it is off, because a seed alone is not a repro once the same
+//!   moves can run against differently configured apps.
+//! * **The oracles were generalized rather than special-cased.** `absorb_trim`
+//!   and `expect_stacks` were already written against `self.history_limit`;
+//!   what was NOT general is in `crossing_would_truncate` (`top` stops being the
+//!   entry count once the trim is active) and in `record_mutation`'s push
+//!   detection, whose newest-entry FINGERPRINT is the only thing that can see a
+//!   push at a limit of 1 - a length delta reads it as a no-op. That fingerprint
+//!   carries the entry's timestamp, and `UndoStack::next_stamp` keeps stamps
+//!   strictly increasing (it bumps by a nanosecond on a tie), so two consecutive
+//!   pushes of the same command cannot look like one entry sitting still.
+//!
+//! Measured at 32 seeds x 60 moves, all ten rungs drawn and all 64 runs clean;
+//! four seeds drew 1 and trimmed 19 to 26 entries each while still crossing the
+//! save boundary. At 64 seeds x 200 moves, 59 are clean and the five failures
+//! carry the same signatures the UNDRAWN survey produces at that length
+//! (`section_offsets.#[#]`, `station_comments[#][#].anchor`,
+//! `sections[#].shots[#].length`) - three of them at a drawn limit of 100, which
+//! is the default, so the knob re-shuffles the space rather than manufacturing
+//! failures of its own.
 //!
 //! ## The trace, and the shrinker
 //!
@@ -3040,6 +3089,10 @@ pub(super) struct Outcome {
     /// The topology signature of the state the run ENDED in. Corpus guidance
     /// keys on this; nothing else reads it.
     signature: String,
+    /// The undo-relevant config this run DREW, when the knob was on. Carried on
+    /// the outcome so `summarize` can put it in the run header: a failing seed
+    /// under the config knob is only a repro if the app it ran against is named.
+    config: Option<DrawnConfig>,
 }
 
 /// The part of an [`Outcome`] a REPLAY has to reproduce exactly.
@@ -3225,6 +3278,13 @@ struct Fuzzer {
     floor: usize,
     /// The app's own count limit, read from the app rather than assumed.
     history_limit: usize,
+    /// The config this run DREW, when the config knob is on. `None` is "the
+    /// app's defaults", which is every mode that existed before the knob.
+    ///
+    /// Read for two things only: the run header (so a failure names the app it
+    /// happened in), and `crossing_would_truncate`, where a drawn limit makes
+    /// the old measure meaningless rather than merely different.
+    drawn: Option<DrawnConfig>,
     /// Per depth, the largest tolerated numeric difference seen at each path.
     ///
     /// The accumulation oracle's memory: a difference that stays under
@@ -3274,7 +3334,30 @@ struct Fuzzer {
 
 impl Fuzzer {
     fn new(seed: u32, closures: bool) -> Self {
+        Self::new_with_config(seed, closures, None)
+    }
+
+    /// [`Self::new`], against an app configured the way this run drew it.
+    ///
+    /// The limit is armed through `UndoStack::set_history_limit` - the setter
+    /// `AppState::reload_config` itself calls when the user changes the setting
+    /// (core/state/config.rs) - and deliberately NOT by writing
+    /// `Config::general.undo_history_limit`. That is not a shortcut: every save
+    /// this module makes reaches `note_recent_project`, which calls
+    /// `Config::save()`, so a value written into the config struct would be
+    /// persisted into the real `config.toml` and would silently become the
+    /// default for every later run in every later process. The stack owns the
+    /// in-memory window (`use_count_limit` re-arms `Count(self.history_limit)`
+    /// on every open and close, so the drawn value survives a crossing), and
+    /// nothing re-reads the config entry during a run.
+    ///
+    /// The limit is then read BACK off the app, exactly as it always was: the
+    /// model's authority on the window is the app, not what this asked for.
+    fn new_with_config(seed: u32, closures: bool, drawn: Option<DrawnConfig>) -> Self {
         let state = AppState::new().unwrap();
+        if let (Some(config), Ok(mut stack)) = (drawn, state.undo_stack.lock()) {
+            stack.set_history_limit(config.history_limit);
+        }
         let history_limit = state
             .undo_stack
             .lock()
@@ -3295,10 +3378,14 @@ impl Fuzzer {
             top: 0,
             floor: 0,
             history_limit,
+            drawn,
             drift: BTreeMap::new(),
             log: Vec::new(),
             id_agnostic: false,
-            outcome: Outcome::default(),
+            outcome: Outcome {
+                config: drawn,
+                ..Outcome::default()
+            },
             temp: None,
             closures,
             orphan_pending: false,
@@ -3470,12 +3557,16 @@ impl Fuzzer {
             .map(|line| format!("    {line}"))
             .collect();
         panic!(
-            "{headline}\n  seed={} depth={} top={} saves={} reloads={}\n{detail}\n  last {} move(s):\n{}",
+            "{headline}\n  seed={} depth={} top={} saves={} reloads={}{}\n{detail}\n  last {} move(s):\n{}",
             self.seed,
             self.cursor,
             self.top,
             self.outcome.saves,
             self.outcome.reloads,
+            // The drawn config, when there is one: a seed alone is not a repro
+            // under the config knob, since the same moves ran against a
+            // differently configured app.
+            self.drawn.map(DrawnConfig::describe).unwrap_or_default(),
             tail.len(),
             tail.join("\n"),
         );
@@ -6181,6 +6272,33 @@ impl Fuzzer {
         }
     }
 
+    /// Would a save/close/reopen here come back holding FEWER entries than the
+    /// model still expects to reach?
+    ///
+    /// Only the newest `undo_persist_limit` rows of EACH stack survive the file
+    /// (`UndoStack::rows_to_persist`), so a crossing above that window returns a
+    /// history the model's snapshots no longer describe. The run skips such a
+    /// crossing rather than modelling the loss - which is what the one
+    /// comparison this replaces did.
+    ///
+    /// Two measures, and the second is why this is a method now. With the app's
+    /// own limit the model's whole history is in memory, so `top` - undo entries
+    /// plus redo entries - IS the count that has to fit, and the first branch is
+    /// byte-for-byte the test that was here. With a DRAWN limit it is not:
+    /// everything below `floor` was FIFO-trimmed out of the app, so `top` counts
+    /// depths that are no longer entries at all, and a limit of 3 would refuse
+    /// every crossing past move 20 while the app is holding three rows. The
+    /// window-aware measure is therefore per STACK, because `undo_persist_limit`
+    /// is applied per stack.
+    fn crossing_would_truncate(&self) -> bool {
+        if self.drawn.is_none() {
+            return self.top > UNDO_PERSIST_LIMIT;
+        }
+        let undo = (self.cursor - self.floor).min(self.history_limit);
+        let redo = (self.top - self.cursor).min(self.history_limit);
+        undo > UNDO_PERSIST_LIMIT || redo > UNDO_PERSIST_LIMIT
+    }
+
     /// Save to a temp path, close, reopen. Undo history is PERSISTED - both stacks
     /// serialize into the `.stalx` and restore on open - so nothing below a save
     /// point is exercised until a run crosses this boundary. Findings 8, 12 and 13
@@ -6190,7 +6308,7 @@ impl Fuzzer {
             self.orphan_pending = false;
             self.expose_orphan_closure();
         }
-        if self.top == 0 || self.top > UNDO_PERSIST_LIMIT {
+        if self.top == 0 || self.crossing_would_truncate() {
             return false;
         }
         let temp = self.temp.get_or_insert_with(|| TempDir::new().unwrap());
@@ -6342,6 +6460,116 @@ pub(super) struct Plan {
     /// it exists alongside needs a depth to be revisited dozens of times before
     /// tolerated dust can add up to anything.
     pub(super) horizon: bool,
+    /// Draw this run's undo-relevant CONFIG - see [`DrawnConfig`] - instead of
+    /// taking the app's defaults.
+    ///
+    /// OFF everywhere it was not asked for, and the draw comes from a SECOND
+    /// generator (`seed ^ CONFIG_STREAM`), so a run's move stream is
+    /// byte-identical with it on and off and every documented repro seed keeps
+    /// reproducing. What changes is the shape of the history the same moves walk
+    /// over: at `history_limit` 1 every push trims, which is the FIFO window
+    /// under maximum pressure at 60 moves rather than at 10,000.
+    ///
+    /// `#[serde(default)]` because a [`Trace`] carries its `Plan`: a trace file
+    /// written before this field existed still replays, and the default IS the
+    /// behaviour it was recorded under.
+    #[serde(default)]
+    pub(super) config_fuzz: bool,
+}
+
+// ===========================================================================
+// The CONFIG SPACE
+// ===========================================================================
+
+/// The offset the CONFIG stream is seeded at: `seed ^ CONFIG_STREAM`.
+///
+/// ADDITIVE, which is the whole design constraint rather than a detail. Every
+/// row of this file's identification matrix names a seed, and a run's moves are
+/// a pure function of that seed's own `Rng` - so a new draw taken from THAT
+/// generator would shift every later value and renumber every documented repro.
+/// This takes its values from a second generator seeded off the same number, so
+/// the primary stream is byte-identical whether or not config is drawn, and the
+/// only thing the knob changes is the app the same moves run against.
+const CONFIG_STREAM: u32 = 0x00C0_F167;
+
+/// The undo-relevant configuration one run drew.
+///
+/// # What is in it, and what is not
+///
+/// `undo_history_limit` is the whole of it, and the exclusions were measured
+/// rather than assumed. The config has exactly two undo-relevant entries
+/// (`config/types.rs`, `GeneralConfig`), and the second one cannot be drawn:
+///
+/// * `undo_persist_limit` is read from `Config::general` at SAVE time
+///   (`history_rows_to_persist`, core/state/project_io.rs), so drawing it means
+///   writing the config struct - and `save_project` calls
+///   `note_recent_project`, which calls `Config::save()`. A drawn value would
+///   therefore be written into the developer's real `config.toml` and become the
+///   default for every later run, in this process and every other one. (That the
+///   fuzzer's saves already write that file is visible in its
+///   `recent_projects`, which is full of `/tmp/.tmpXXXX/fuzz.stalx`.) The model
+///   keeps [`UNDO_PERSIST_LIMIT`] instead, which is what the app's default is.
+/// * The BYTE budget (`DepthLimit::Bytes`, [#303]) is not config at all: it is
+///   armed only for a SpeleoDB-linked project in Full mode (`undo_policy_for`
+///   returns `UndoPolicy::local()` without a link), and every project this
+///   module builds is local. Its eviction is also by estimated size rather than
+///   by count, which the FIFO oracle in `absorb_trim` cannot predict, so
+///   reaching it would need a second oracle rather than a second draw.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct DrawnConfig {
+    /// `general.undo_history_limit`: how many entries each in-memory stack keeps
+    /// before `UndoStack::enforce_depth_limit` FIFO-trims the oldest.
+    history_limit: usize,
+}
+
+impl DrawnConfig {
+    /// The run-header form, appended to every per-seed summary line and to a
+    /// failure payload, so a failure names the app it happened in.
+    fn describe(self) -> String {
+        format!(", undo_history_limit={}", self.history_limit)
+    }
+}
+
+/// The ladder the history limit is drawn from, and why each rung is on it.
+///
+/// | rung | what it is |
+/// |---|---|
+/// | 1 | every push trims. The one value at which a stack LENGTH cannot see a push at all - see `record_mutation`'s newest-entry fingerprint |
+/// | 2, 3, 5, 8, 13 | the window is a handful of entries: a walk reaches the floor constantly and the trim fires on most moves |
+/// | 20 | the persisted window (`UNDO_PERSIST_LIMIT`), where the in-memory and on-disk limits coincide |
+/// | 40 | [`MAX_MODEL_DEPTH`], the headroom the ordinary modes were built to stay under |
+/// | 100 | the app's own default, so the drawn regime CONTAINS the undrawn one |
+/// | `iterations + 1` | larger than the run can ever reach: no trim is possible, which is the control |
+fn config_history_ladder(iterations: usize) -> [usize; 10] {
+    [
+        1,
+        2,
+        3,
+        5,
+        8,
+        13,
+        UNDO_PERSIST_LIMIT,
+        MAX_MODEL_DEPTH,
+        DEFAULT_HISTORY_LIMIT,
+        iterations.saturating_add(1),
+    ]
+}
+
+/// What this run's config stream draws, or `None` when the knob is off.
+///
+/// A pure function of `(seed, plan)` like everything else here, which is what
+/// lets a recorded trace be replayed against the same app: `run_trace` re-runs
+/// `start_run`, so a shrunk candidate is measured under the limit its original
+/// ran under rather than under the default.
+fn draw_config(seed: u32, plan: Plan) -> Option<DrawnConfig> {
+    if !plan.config_fuzz {
+        return None;
+    }
+    let mut rng = Rng::new(seed ^ CONFIG_STREAM);
+    let ladder = config_history_ladder(plan.iterations);
+    Some(DrawnConfig {
+        history_limit: ladder[rng.below(ladder.len())],
+    })
 }
 
 /// Everything a run does BEFORE its own move stream: the starting project, the
@@ -6358,10 +6586,14 @@ fn start_run(seed: u32, plan: Plan) -> Fuzzer {
     // (the builder is part of the shape) and the RNG is re-seeded at the
     // handover, so the continuation is fresh randomness over an inherited
     // topology rather than a longer replay of the same one.
-    let mut fuzzer = Fuzzer::new(
+    // The CONFIG the run is drawn, before the app it runs against is built: the
+    // limit has to be armed before the first push, and `Fuzzer::new` reads the
+    // app's own value back afterwards rather than trusting what it set.
+    let mut fuzzer = Fuzzer::new_with_config(
         plan.prologue
             .map_or(seed, |(prologue_seed, _)| prologue_seed),
         plan.closures || plan.closure_shapes,
+        draw_config(seed, plan),
     );
     if let Some((_, moves)) = plan.prologue {
         for _ in 0..moves {
@@ -6637,7 +6869,7 @@ pub(super) fn summarize(label: &str, seed: u32, outcome: &Outcome) -> String {
         "{label} seed={seed}: {} mutations, {} rejected, {} no-ops, {} undos, {} redos, \
          {} jumps, {} saves, {} reloads, depth<={}, float-noise={}, attributed={}, \
          integrity-compared={}, adjusted-compared={}, oracle-us=(snap {} integrity {} adjusted {}), \
-         trimmed={}, peak={:?}{}{}",
+         trimmed={}, peak={:?}{}{}{}",
         outcome.mutations,
         outcome.rejected,
         outcome.noops,
@@ -6656,6 +6888,9 @@ pub(super) fn summarize(label: &str, seed: u32, outcome: &Outcome) -> String {
         outcome.oracle_us.2,
         outcome.trimmed,
         outcome.peak,
+        // Empty unless the config knob drew something, so every line this module
+        // printed before the knob existed is unchanged to the byte.
+        outcome.config.map(DrawnConfig::describe).unwrap_or_default(),
         if outcome.wedged {
             " WEDGED"
         } else if outcome.alignment_panic {
@@ -6849,6 +7084,7 @@ fn undo_redo_fuzz_gate() {
                 divergence: false,
                 closure_shapes: false,
                 horizon: false,
+                config_fuzz: false,
             },
         );
         println!("{}", summarize("in-memory", seed, &outcome));
@@ -6893,6 +7129,7 @@ fn undo_redo_fuzz_gate_persistence() {
                 divergence: false,
                 closure_shapes: false,
                 horizon: false,
+                config_fuzz: false,
             },
         );
         println!("{}", summarize("persistence", seed, &outcome));
@@ -6943,6 +7180,7 @@ fn undo_redo_fuzz_gate_multi_crossing() {
                 divergence: false,
                 closure_shapes: false,
                 horizon: false,
+                config_fuzz: false,
             },
         );
         println!("{}", summarize("multi-crossing", seed, &outcome));
@@ -6981,6 +7219,7 @@ fn the_fuzzer_is_deterministic() {
             divergence: false,
             closure_shapes: false,
             horizon: false,
+            config_fuzz: false,
         };
         let first = run_fuzz(seed, plan);
         let second = run_fuzz(seed, plan);
@@ -7006,6 +7245,10 @@ fn the_fuzzer_is_deterministic() {
         assert_eq!(
             first.hits, second.hits,
             "seed {seed} classified differently on replay"
+        );
+        assert_eq!(
+            first.config, second.config,
+            "seed {seed} drew a different config on replay"
         );
     }
 }
@@ -7046,6 +7289,7 @@ fn finding_14_no_insert_leaves_a_merge_out_of_alignment() {
             divergence: false,
             closure_shapes: false,
             horizon: false,
+            config_fuzz: false,
         },
     );
     assert!(
@@ -7084,6 +7328,7 @@ fn bug_7_a_jump_is_n_single_steps() {
             divergence: false,
             closure_shapes: true,
             horizon: false,
+            config_fuzz: false,
         },
     );
     assert_eq!(
@@ -7122,6 +7367,7 @@ fn fuzz_seed_survey() {
     let divergence = std::env::var("STALAGMIGHT_RUST_FUZZ_DIVERGENCE").is_ok();
     let closure_shapes = std::env::var("STALAGMIGHT_RUST_FUZZ_CLOSURE_SHAPES").is_ok();
     let horizon = std::env::var("STALAGMIGHT_RUST_FUZZ_HORIZON").is_ok();
+    let config_fuzz = std::env::var("STALAGMIGHT_RUST_FUZZ_CONFIG").is_ok();
     let crossings: usize = std::env::var("STALAGMIGHT_RUST_FUZZ_CROSSINGS")
         .ok()
         .and_then(|value| value.parse().ok())
@@ -7145,6 +7391,7 @@ fn fuzz_seed_survey() {
                 divergence,
                 closure_shapes,
                 horizon,
+                config_fuzz,
             },
         )
     });
@@ -7271,6 +7518,7 @@ fn fuzz_corpus_sweep() {
         divergence: false,
         closure_shapes: false,
         horizon: false,
+        config_fuzz: false,
     };
 
     // ---- UNGUIDED: `budget` fresh seeds, nothing remembered. ----
@@ -7428,6 +7676,7 @@ fn undo_redo_fuzz_horizon() {
                 divergence: false,
                 closure_shapes: false,
                 horizon: true,
+                config_fuzz: false,
             },
         )
     });
@@ -7523,6 +7772,7 @@ fn undo_redo_fuzz_soak() {
                 divergence: persistence,
                 closure_shapes: true,
                 horizon: false,
+                config_fuzz: false,
             },
         )
     });
