@@ -22,8 +22,20 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
 import { binaryPath, cargoTargetDir } from '../../lib/env';
+import { isDarwinTarget } from './platform';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
+
+/**
+ * macOS has no external WebDriver daemon; the app itself must embed
+ * tauri-plugin-webdriver-automation (cargo feature `e2e`) for tauri-wd to
+ * attach. On Linux/Windows the plugin is not needed (and not wanted: the
+ * feature adds an HTTP server to the binary). Keyed on the shared
+ * targetPlatform() so build and session decisions cannot diverge.
+ */
+export function needsE2eFeature(): boolean {
+  return isDarwinTarget();
+}
 
 // Source inputs whose changes should invalidate the built binary.
 const SOURCE_DIRS = ['src', path.join('src-tauri', 'src')];
@@ -73,9 +85,16 @@ function mtimeOf(file: string): number {
  */
 export interface E2EBuildStamp {
   /** Stamp schema version; an unknown version is treated as no stamp. */
-  v: 1;
+  v: 2;
   /** Was the build run with VITE_E2E set (i.e. does dist carry the hooks)? */
   viteE2E: boolean;
+  /**
+   * Was the binary compiled with the `e2e` cargo feature (the in-app WebDriver
+   * plugin tauri-wd needs on macOS)? mtimes cannot see this either: a
+   * plugin-less mac binary would otherwise pass freshness and then hang at
+   * session creation with no "[webdriver] listening" line ever printed.
+   */
+  e2eFeature: boolean;
   /** Vite mode the frontend leg was built in ('production' for `pnpm build`). */
   viteMode: string;
   /** mtime (ms) of the binary right after the build that wrote this stamp. */
@@ -107,12 +126,17 @@ export function readBuildStamp(file: string = buildStampPath): E2EBuildStamp | n
   }
   if (typeof parsed !== 'object' || parsed === null) return null;
   const candidate = parsed as Partial<E2EBuildStamp>;
-  if (candidate.v !== 1) return null;
+  // v1 stamps predate the e2eFeature field; treating them as no stamp forces
+  // one rebuild per machine, which beats trusting a mac binary that may lack
+  // the WebDriver plugin.
+  if (candidate.v !== 2) return null;
   if (typeof candidate.viteE2E !== 'boolean') return null;
+  if (typeof candidate.e2eFeature !== 'boolean') return null;
   if (typeof candidate.binaryMtimeMs !== 'number') return null;
   return {
-    v: 1,
+    v: 2,
     viteE2E: candidate.viteE2E,
+    e2eFeature: candidate.e2eFeature,
     viteMode: typeof candidate.viteMode === 'string' ? candidate.viteMode : 'unknown',
     binaryMtimeMs: candidate.binaryMtimeMs,
     builtAtMs: typeof candidate.builtAtMs === 'number' ? candidate.builtAtMs : 0,
@@ -127,7 +151,7 @@ export function readBuildStamp(file: string = buildStampPath): E2EBuildStamp | n
  */
 export function stampStaleReasons(
   stamp: E2EBuildStamp | null,
-  want: { viteE2E: boolean; binaryMtimeMs: number },
+  want: { viteE2E: boolean; e2eFeature: boolean; binaryMtimeMs: number },
 ): string[] {
   if (!stamp) {
     return ['no E2E build stamp: the binary was not built by this harness'];
@@ -137,6 +161,12 @@ export function stampStaleReasons(
     reasons.push(
       `build stamp says VITE_E2E=${stamp.viteE2E ? '1' : '0'} but this start needs ` +
         `VITE_E2E=${want.viteE2E ? '1' : '0'}`,
+    );
+  }
+  if (stamp.e2eFeature !== want.e2eFeature) {
+    reasons.push(
+      `build stamp says the e2e cargo feature was ${stamp.e2eFeature ? 'on' : 'off'} ` +
+        `but this platform needs it ${want.e2eFeature ? 'on' : 'off'}`,
     );
   }
   if (stamp.binaryMtimeMs !== want.binaryMtimeMs) {
@@ -169,7 +199,11 @@ export function checkBuildFreshness(opts: FreshnessOptions = {}): Freshness {
   }
 
   reasons.push(
-    ...stampStaleReasons(readBuildStamp(), { viteE2E: requireE2E, binaryMtimeMs: binMtime }),
+    ...stampStaleReasons(readBuildStamp(), {
+      viteE2E: requireE2E,
+      e2eFeature: needsE2eFeature(),
+      binaryMtimeMs: binMtime,
+    }),
   );
 
   let newestSource = 0;
@@ -189,12 +223,33 @@ export function checkBuildFreshness(opts: FreshnessOptions = {}): Freshness {
  * Build the debug binary with the E2E frontend hooks. Blocking (this is a slow
  * one-time cost). Throws on build failure.
  */
+// The feature build regenerates these TRACKED files with the WebDriver
+// plugin's ACL entries; the repo keeps the plain-build shape.
+const SCHEMA_PATHSPEC = 'src-tauri/gen/schemas';
+
+/** True when the tracked generated schemas have no uncommitted changes. */
+function schemasClean(): boolean {
+  try {
+    execSync(`git diff --quiet -- ${SCHEMA_PATHSPEC}`, { cwd: repoRoot, stdio: 'ignore' });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function buildApp(onLog?: (line: string) => void): void {
-  onLog?.('Building Tauri debug app (VITE_E2E=1, --no-bundle)...');
+  const withE2eFeature = needsE2eFeature();
+  const command = withE2eFeature
+    ? 'pnpm tauri build --debug --no-bundle -- --features e2e'
+    : 'pnpm tauri build --debug --no-bundle';
+  // Only restore schema churn the build itself caused: a dirty-before state is
+  // someone's real in-progress work and must never be clobbered by tooling.
+  const schemasWereClean = withE2eFeature && schemasClean();
+  onLog?.(`Building Tauri debug app (VITE_E2E=1, --no-bundle${withE2eFeature ? ', --features e2e' : ''})...`);
   // Build output goes to stderr (fd 2), NEVER inherited stdout: under the MCP
   // server, stdout is the JSON-RPC stream and any build chatter (pnpm/vite log
   // to stdout) would corrupt the protocol framing.
-  execSync('pnpm tauri build --debug --no-bundle', {
+  execSync(command, {
     cwd: repoRoot,
     stdio: ['ignore', 2, 2],
     env: {
@@ -203,7 +258,23 @@ export function buildApp(onLog?: (line: string) => void): void {
       CARGO_TARGET_DIR: cargoTargetDir,
     },
   });
-  writeBuildStamp({ viteE2E: true, viteMode: 'production' }, onLog);
+  if (withE2eFeature && !schemasClean()) {
+    if (schemasWereClean) {
+      try {
+        execSync(`git checkout -- ${SCHEMA_PATHSPEC}`, { cwd: repoRoot, stdio: 'ignore' });
+        onLog?.(`Restored ${SCHEMA_PATHSPEC} (the e2e-feature build regenerates them with plugin ACL entries).`);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        onLog?.(`Warning: could not restore ${SCHEMA_PATHSPEC} (${msg}); do NOT commit them in this shape.`);
+      }
+    } else {
+      onLog?.(
+        `Warning: ${SCHEMA_PATHSPEC} was already modified before this build, so the harness left it ` +
+          `alone - it now also carries e2e-feature ACL churn. Do not commit the plugin entries.`,
+      );
+    }
+  }
+  writeBuildStamp({ viteE2E: true, e2eFeature: withE2eFeature, viteMode: 'production' }, onLog);
   onLog?.('Build complete.');
 }
 
@@ -213,13 +284,14 @@ export function buildApp(onLog?: (line: string) => void): void {
  * a stamp we fail to write just means the next start rebuilds.
  */
 function writeBuildStamp(
-  info: { viteE2E: boolean; viteMode: string },
+  info: { viteE2E: boolean; e2eFeature: boolean; viteMode: string },
   onLog?: (line: string) => void,
 ): void {
   const now = Date.now();
   const stamp: E2EBuildStamp = {
-    v: 1,
+    v: 2,
     viteE2E: info.viteE2E,
+    e2eFeature: info.e2eFeature,
     viteMode: info.viteMode,
     binaryMtimeMs: mtimeOf(binaryPath),
     builtAtMs: now,

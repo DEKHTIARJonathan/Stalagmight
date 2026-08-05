@@ -3,6 +3,14 @@
  * WebKitWebDriver), so anything async in the webview goes through
  * `executeAsync` with a done-callback rather than `execute` (which does not
  * await returned promises).
+ *
+ * macOS (tauri-wd / tauri-plugin-webdriver-automation) constraints on every
+ * script that goes through here (#421):
+ * - The plugin's execute-async has a HARD 30 s server-side timeout; scripts
+ *   must resolve well inside it (poll in the harness, not in one long script).
+ * - A resolved value containing BOTH `error` and `message` keys is coerced into
+ *   a script error by the plugin. Never return that shape as data; wrap it
+ *   (e.g. {value: ...}) if an app object legitimately carries both keys.
  */
 import type { Browser } from 'webdriverio';
 

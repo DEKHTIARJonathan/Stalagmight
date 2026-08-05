@@ -70,6 +70,47 @@ fixed it here. `agent:http-probe` drops those variables for its own loopback stu
 request through the proxy, then blame the driver), so a proxy-caused failure shows
 up in `app_start` rather than in the probe.
 
+## macOS
+
+Since #421 the harness also runs on macOS, through a different WebDriver stack:
+`createSession()` picks `MacSession` (`e2e/agent/sessionMac.ts`), which drives
+`tauri-wd` (`cargo install --git
+https://github.com/FumblingBarbell/tauri-webdriver tauri-webdriver-automation`
+installs the `tauri-wd` binary onto PATH) against the in-app
+`tauri-plugin-webdriver-automation` server, compiled in by the darwin build arm
+(`pnpm tauri build --debug --no-bundle -- --features e2e`; the E2E build stamp
+records the feature so a plugin-less binary reads as stale). The feature build
+regenerates `src-tauri/gen/schemas/*.json` with the plugin's ACL entries;
+`buildApp` restores them when they were clean before the build, and warns
+instead of clobbering when they were already modified - never commit them in
+the feature shape. `e2e/mac-app-wrapper.mjs` sits between tauri-wd and the
+binary exactly as in the legacy WDIO suite.
+
+Platform differences that are contracts, not bugs (full rationale + probe
+evidence: `docs/plans/2026-08-05_macos-agent-harness.md`):
+
+- **Always headed.** macOS has no Xvfb; `headed: false` is coerced (the start
+  result carries `headedForced: true`) and the window is parked on the RIGHT
+  half of the screen so it can share the desktop with a human. Override with
+  `STALAGMIGHT_AGENT_WINDOW_RECT="x,y,w,h"`.
+- **Input is synthetic.** The plugin dispatches JS events in the webview
+  (`isTrusted: false`). Everything testid-driven works; native menu
+  accelerators do not - `press_keys` with `Meta` returns a `caveat` saying so.
+- **Screenshots are DOM-only.** The plugin rasterizes the DOM, so canvas/WebGL
+  (the survey map) is blank; the `screenshot` result carries `domOnly: true`.
+- **Teardown is pidfile-based.** tauri-wd SIGKILLs the wrapper on
+  `delete_session`, orphaning the app; the wrapper records the real app pid
+  into the session pidfile and `MacSession.stop()` reaps it (comm-verified,
+  `stalagmight`/`tauri-wd` only).
+- **Eval scripts** must finish inside the plugin's 30 s execute-async timeout
+  and never resolve to an object carrying both `error` and `message` keys (the
+  plugin coerces that shape into a script error). See `e2e/agent/lib/page.ts`.
+
+`pnpm agent:smoke` and `pnpm agent:mcp:smoke` run on macOS unchanged (verified
+2026-08-05: 13/13 and full MCP pass on an M1). Real trusted input, real-pixel
+screenshots and menu-bar driving are the permission-gated Tier 2 `os_*` tools,
+landing separately under `e2e/agent/os/` (#421, PR 4 of the design doc).
+
 ## Architecture
 
 ```

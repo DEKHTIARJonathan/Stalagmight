@@ -42,6 +42,17 @@ if (pidFile && typeof child.pid === 'number') {
 process.on('SIGTERM', () => child.kill('SIGTERM'));
 process.on('SIGINT', () => child.kill('SIGINT'));
 
+// Orphan watch: if tauri-wd (our parent) dies without signalling us - a crash,
+// not the SIGKILL of a normal delete_session, which kills this process outright -
+// we get reparented to launchpid 1. Take the app down instead of leaking it.
+// unref'd so the watch never keeps the wrapper alive on its own.
+setInterval(() => {
+  if (process.ppid === 1) {
+    child.kill('SIGKILL');
+    process.exit(1);
+  }
+}, 500).unref();
+
 const rl = createInterface({ input: child.stdout, crlfDelay: Infinity });
 
 rl.on('line', (line) => {
