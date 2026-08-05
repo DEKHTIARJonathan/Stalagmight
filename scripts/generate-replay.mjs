@@ -10,7 +10,9 @@
 // file_dialog_answer/eval/ipc/store_action/map_click/map_feature_click/seed/driver_script/
 // run_scenario) and all semantic waits emit executable code;
 // screenshot/store_state/logs/map_view/check_problems/app_* emit
-// `// [seq N] <tool>` comments. Inter-action gaps over 250ms become bounded
+// `// [seq N] <tool>` comments, and every os_* (Tier 2 trusted input) emits a
+// `(OS-level; not replayable)` comment carrying its recorded params.
+// Inter-action gaps over 250ms become bounded
 // pauses. With --assert-final, the last store_state read becomes a hard expect
 // against its recorded value (skipped, with a comment, if it was truncated).
 //
@@ -113,6 +115,19 @@ for (let i = 0; i < actions.length; i++) {
   prevTs = a.ts ?? prevTs;
 
   const outcome = a.outcome?.ok === false ? '  (recorded: FAILED)' : '';
+
+  // Tier 2 OS-level tools (os_grant/os_click/os_keys/os_screenshot) are recorded
+  // like any other action - they mutate app state and repro reports need them -
+  // but they are never replayed: trusted input would need the TCC grants, a
+  // frontmost desktop and pixel determinism, none of which are portable to
+  // another machine or to CI. A load-bearing os_* step is hand-converted to a
+  // Tier 1 equivalent; this comment preserves the intent and the arguments.
+  // Matched by prefix so a future os_* tool needs no change here.
+  if (typeof a.tool === 'string' && a.tool.startsWith('os_')) {
+    push(`    // [seq ${a.seq}] ${a.tool}${outcome} ${compactParams(p)} (OS-level; not replayable)`);
+    continue;
+  }
+
   push(`    // [seq ${a.seq}] ${a.tool}${outcome}`);
 
   switch (a.tool) {
@@ -239,6 +254,14 @@ fs.mkdirSync(path.dirname(outPath), { recursive: true });
 fs.writeFileSync(outPath, lines.join('\n'));
 process.stdout.write(`wrote ${outPath} (${actions.length} actions)\n`);
 process.stdout.write(`run: REPLAY_SPEC=${outPath} pnpm test:e2e:replay\n`);
+
+// Recorded params inlined into a one-line comment. JSON never contains a raw
+// newline, so the comment cannot break out of its line; the cap keeps a long
+// screenshot path or key spec from bloating the spec.
+function compactParams(params) {
+  const json = JSON.stringify(params ?? {});
+  return json.length > 200 ? `${json.slice(0, 197)}...` : json;
+}
 
 function storeKey(store) {
   const map = {

@@ -10,7 +10,13 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { needsE2eFeature, readBuildStamp, stampStaleReasons, type E2EBuildStamp } from './build';
+import {
+  isPluginAclChurn,
+  needsE2eFeature,
+  readBuildStamp,
+  stampStaleReasons,
+  type E2EBuildStamp,
+} from './build';
 
 const E2E_STAMP: E2EBuildStamp = {
   v: 2,
@@ -111,6 +117,48 @@ describe('needsE2eFeature', () => {
   it('follows the real platform when no override is set', () => {
     delete process.env[KEY];
     expect(needsE2eFeature()).toBe(process.platform === 'darwin');
+  });
+});
+
+// The restore guard must recover from an INTERRUPTED feature build (killed
+// smoke, ctrl-c) - which leaves churn behind with nothing to time it against -
+// while never discarding a real edit to the generated schemas.
+describe('isPluginAclChurn', () => {
+  const churn = [
+    'diff --git a/src-tauri/gen/schemas/macOS-schema.json b/src-tauri/gen/schemas/macOS-schema.json',
+    '--- a/src-tauri/gen/schemas/macOS-schema.json',
+    '+++ b/src-tauri/gen/schemas/macOS-schema.json',
+    '@@ -1,3 +1,4 @@',
+    '   "existing": true,',
+    '+  "webdriver-automation:allow-element-find",',
+    '+  "webdriver-automation:default"',
+  ].join('\n');
+
+  it('accepts a diff whose additions are all plugin ACL entries', () => {
+    expect(isPluginAclChurn(churn)).toBe(true);
+  });
+
+  it('rejects a diff carrying any unrelated addition', () => {
+    expect(isPluginAclChurn(`${churn}\n+  "someone-elses:real-permission"`)).toBe(false);
+  });
+
+  it('rejects an empty diff (nothing to restore is not churn)', () => {
+    expect(isPluginAclChurn('')).toBe(false);
+  });
+
+  // The feature build only ADDS entries, so a removal proves a human edited
+  // these files - restoring would discard their work.
+  it('rejects a diff containing any removal, even when every addition is churn', () => {
+    expect(isPluginAclChurn(`${churn}\n-  "someone-elses:deleted-permission"`)).toBe(false);
+  });
+
+  it('does not mistake the --- file header for a removal', () => {
+    expect(isPluginAclChurn(churn)).toBe(true);
+  });
+
+  it('ignores the +++ file header, which is not an added line', () => {
+    const headerOnly = ['--- a/x.json', '+++ b/x.json'].join('\n');
+    expect(isPluginAclChurn(headerOnly)).toBe(false);
   });
 });
 

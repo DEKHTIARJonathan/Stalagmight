@@ -86,13 +86,16 @@ try {
 const title = getFlag('--title') || `Agent-found issue in session ${start.sessionId ?? path.basename(sessionDir)}`;
 const summary = getFlag('--summary') || '_Describe the bug in one or two sentences._';
 
-// Compact step list: mutating actions only.
+// Compact step list: mutating actions only. os_* (Tier 2 OS-level input) are
+// always mutating - matched by prefix so new os tools cannot silently drop out
+// of repro reports.
 const MUTATING = new Set([
   'click', 'type_text', 'press_keys', 'eval', 'ipc', 'store_action', 'map_click', 'map_view',
   'seed', 'driver_script', 'run_scenario',
 ]);
+const isMutating = (tool) => MUTATING.has(tool) || (typeof tool === 'string' && tool.startsWith('os_'));
 const steps = actions
-  .filter((a) => MUTATING.has(a.tool))
+  .filter((a) => isMutating(a.tool))
   .map((a) => {
     const detail = describeAction(a);
     const flag = a.outcome?.ok === false ? ' **(failed)**' : '';
@@ -191,6 +194,14 @@ function describeAction(a) {
       return `${p.store}.${p.action}(${JSON.stringify(p.args ?? [])})`;
     case 'map_view':
       return p.set ? JSON.stringify(p.set) : 'read';
+    case 'os_grant':
+      return 'OS input granted for this session';
+    case 'os_click':
+      return `${p.testid ? `testid=${p.testid}` : `screen ${p.x},${p.y}`}${p.button === 'right' ? ' (right)' : ''}${p.double ? ' (double)' : ''}${p.force ? ' (forced, app was not frontmost)' : ''} [OS-level]`;
+    case 'os_keys':
+      return `${p.spec}${p.force ? ' (forced, app was not frontmost)' : ''} [OS-level]`;
+    case 'os_screenshot':
+      return `${p.name ?? 'os-shot'} [OS-level, real pixels]`;
     default:
       return '';
   }

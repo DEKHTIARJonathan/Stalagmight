@@ -107,9 +107,19 @@ evidence: `docs/plans/2026-08-05_macos-agent-harness.md`):
   plugin coerces that shape into a script error). See `e2e/agent/lib/page.ts`.
 
 `pnpm agent:smoke` and `pnpm agent:mcp:smoke` run on macOS unchanged (verified
-2026-08-05: 13/13 and full MCP pass on an M1). Real trusted input, real-pixel
-screenshots and menu-bar driving are the permission-gated Tier 2 `os_*` tools,
-landing separately under `e2e/agent/os/` (#421, PR 4 of the design doc).
+2026-08-05: 13/13 and full MCP pass on an M1). Real trusted input and real
+pixels come from the permission-gated Tier 2 tools under `e2e/agent/os/`,
+registered on darwin only: `os_grant`, `os_click`, `os_keys` (real modifier
+flags, so Cmd+S reaches the menu bar) and `os_screenshot` (`screencapture` of
+the app window). `os_grant` is deliberately never allowlisted, so invoking it
+raises a real permission prompt - the human, not the model, decides that a
+session may drive the desktop - and the grant lasts until the MCP server exits.
+Two TCC permissions gate the machine side: Accessibility for input, Screen
+Recording for capture. Both belong to the process that spawns the helper (your
+terminal or the editor running the MCP server), never to the helper binary or
+to the app, and both fail silently into plausible-looking evidence when denied,
+which is why preflight rides every result. Full contract:
+[`e2e/agent/os/README.md`](../e2e/agent/os/README.md).
 
 ## Architecture
 

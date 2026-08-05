@@ -2,11 +2,15 @@
 // webdriverio (imported transitively via ../createSession) can log there.
 import './hygiene';
 import * as fs from 'fs';
+import * as path from 'path';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
 import { createSession } from '../createSession';
 import { isDarwinTarget } from '../lib/platform';
+import { osClick, osKeys } from '../os/input';
+import { grant as osGrant, preflight as osPreflight } from '../os/permissions';
+import { osScreenshot } from '../os/screenshot';
 import type { AgentSession } from '../sessionTypes';
 import { readStore, callStoreAction, postDigest, type StoreName } from '../lib/stores';
 import { LogCursor, type LogLevel } from '../lib/logs';
@@ -901,6 +905,110 @@ define(
       },
       { sweep: true },
     ),
+);
+
+// ------------------------------------- Tier 2: grant-gated OS input (darwin)
+//
+// Real trusted input (CGEvent) and real-pixel window capture - everything the
+// synthetic WebDriver tier structurally cannot do. Registered only on darwin.
+// os_grant is deliberately NEVER put on any permission allowlist, so invoking
+// it always produces a real harness prompt: the human, not the model, holds
+// the grant (valid until this server process exits). Every os_* result carries
+// {frontmost_ok, permissions}; frontmost_ok false means the evidence is
+// untrustworthy (discard it), not that the app misbehaved.
+
+function defineDarwin<S extends z.ZodRawShape>(
+  name: string,
+  description: string,
+  schema: S,
+  handler: (args: z.infer<z.ZodObject<S>>) => Promise<ToolResult>,
+): void {
+  if (!isDarwinTarget()) return;
+  define(name, description, schema, handler);
+}
+
+defineDarwin(
+  'os_grant',
+  'Grant OS-level input for this server process (real cursor + keyboard). Ask the user in chat first; this tool is deliberately un-allowlisted so calling it prompts them for real.',
+  {},
+  (args) =>
+    run('os_grant', args, async () => {
+      // Preflight FIRST: a grant that reports failure must not leave the gate
+      // open. Recorded like any other action - it is the consent event every
+      // later os_* step depends on, so a repro must show when it happened.
+      const permissions = await osPreflight();
+      osGrant();
+      return {
+        result: { granted: true, note: 'valid until this MCP server exits', permissions },
+      };
+    }),
+);
+
+defineDarwin(
+  'os_click',
+  'OS-level trusted click (moves the real cursor). Target a testid or screen-point coordinates.',
+  {
+    testid: z.string().optional(),
+    x: z.number().optional(),
+    y: z.number().optional(),
+    button: z.enum(['left', 'right']).optional(),
+    double: z.boolean().optional(),
+    force: z.boolean().optional(),
+  },
+  (args) =>
+    run(
+      'os_click',
+      args,
+      async () => ({ result: await osClick(session, args) }),
+      { digest: true, sweep: true },
+    ),
+);
+
+defineDarwin(
+  'os_keys',
+  'OS-level trusted key chord (real modifiers - Cmd+S fires the actual menu accelerator). Spec grammar: see e2e/agent/os/README.md, e.g. "cmd+s", "cmd+shift+z", "escape".',
+  { spec: z.string().min(1), force: z.boolean().optional() },
+  (args) =>
+    run(
+      'os_keys',
+      args,
+      async () => ({ result: await osKeys(session, args.spec, undefined, { force: args.force }) }),
+      { digest: true, sweep: true },
+    ),
+);
+
+defineDarwin(
+  'os_screenshot',
+  'Real-pixel window capture via screencapture (occlusion-immune, needs Screen Recording). The WebGL map is actually visible here, unlike the DOM-only `screenshot`.',
+  // The name is a LABEL, not a path: it is interpolated into a filename under
+  // the session dir, so anything path-ish would let a caller write a PNG (and
+  // mkdir) anywhere the user can write. Constrained at the schema boundary.
+  { name: z.string().regex(/^[\w.-]{1,64}$/).optional() },
+  async (args) => {
+    try {
+      const { base64, meta } = await record('os_screenshot', args, async (seq) => {
+        const file = path.join(
+          session.recorder.dir,
+          'screenshots',
+          `${String(seq).padStart(4, '0')}-${path.basename(args.name ?? 'os-shot')}.png`,
+        );
+        const shot = await osScreenshot(session, file);
+        const b64 = fs.readFileSync(shot.path).toString('base64');
+        return {
+          result: { base64: b64, path: shot.path, meta: shot },
+          artifacts: { screenshot: shot.path },
+        };
+      });
+      return {
+        content: [
+          { type: 'image', data: base64, mimeType: 'image/png' },
+          { type: 'text', text: JSON.stringify(meta) },
+        ],
+      };
+    } catch (err) {
+      return errorResult(asMessage(err));
+    }
+  },
 );
 
 // ------------------------------------------------------------- oracles + scenarios

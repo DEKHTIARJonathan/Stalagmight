@@ -214,6 +214,18 @@ Trusted-input replay would need TCC grants, a frontmost desktop and pixel determ
 none portable. When an os_* step is load-bearing for a repro, it is hand-converted to a
 Tier 1 equivalent; the comment preserves intent.
 
+### 5.4 As-built notes (PR 4)
+
+`os_menu` is deferred: the helper's `menu` subcommand is a stub returning
+`unimplemented` that names the AX menu-bar walk it needs, and `os_keys` covers menu
+accelerators in the meantime, so nothing is blocked. A testid click composes the element
+rect with the window CONTENT origin, which the helper cannot report directly: `window-id`
+returns the `CGWindowList` frame (title bar included), so the content origin is the frame
+origin shifted down by `frame.h - window.innerHeight`, the only offset macOS windows have
+(no side or bottom border), clamped at 0. Tier 2 unit tests inject a fake helper runner,
+so the whole TS layer is covered without posting a real event or capturing a real screen -
+nothing in CI touches the desktop.
+
 ## 6. Phased delivery
 
 - **Phase 0 - probes** (throwaway, results recorded below):
@@ -242,7 +254,48 @@ Tier 1 equivalent; the comment preserves intent.
   `os_screenshot` showing real map pixels, and the revoked-Screen-Recording path failing
   loudly instead of shipping a wallpaper.
 
-## 7. Review residue (pre-PR round, 2026-08-05)
+### 5.4b Tier 2 manual verification (2026-08-05, M1, owner present)
+
+The gate no automation can run, done at the machine with both TCC permissions
+already granted to the terminal:
+
+- **preflight**: `{"ok":true,"accessibility":true,"screenRecording":true}`.
+- **`os_click`**: clicked `tool-merge` at screen point (4866, 81),
+  `frontmost_ok: true`; `activeTool` moved `select -> merge`. A real cursor
+  click changed real app state.
+- **Cmd+S, run as an A/B that isolates exactly what Tier 2 buys**: synthetic
+  `Meta+s` through WebDriver (Tier 1) produced NO new save log lines and left
+  the project file's mtime unchanged; real `cmd+s` through CGEvent produced
+  three new save log lines and moved the mtime. This is the direct measurement
+  behind the "native accelerators never fire on Tier 1" claim - previously an
+  inference from the plugin's dispatchEvent implementation.
+- **`os_screenshot`**: 295 KB PNG captured by window id (25283). Eyeballed: the
+  full WebGL survey tree renders in colour, alongside the Merge tooltip from
+  the click above and a "Saved" status bar from the Cmd+S above - so the one
+  image corroborates all three checks. The DOM capture of the same window in
+  the same session was 196 KB with the map blank.
+
+### 5.5 Tier 2 review residue (pre-PR round, 2026-08-05)
+
+Deferred with rationale, per the one-triage-pass rule:
+
+- The helper CLI ships `move` and `drag` subcommands (and their TS result
+  types) with no MCP tool driving them yet. Kept because a drag tool is the
+  obvious next Tier 2 addition and the Rust side is already tested; if it has
+  not landed by the next Tier 2 change, cut them.
+- `ensureHelperBuilt()` is synchronous (`execFileSync cargo build`), so the
+  FIRST os_* call after a helper source change blocks the MCP event loop for
+  the cold build (~20 s). One-time and only on darwin; making it async means
+  teaching `runHelper` a build-in-progress state for little gain.
+- `contentOriginFromFrame` derives the title-bar height from the frame/inner
+  height delta and clamps negatives, but does not cross-check `innerWidth`
+  against the frame width. A zoomed webview would skew testid coordinates
+  silently; the check is cheap and worth adding if that ever bites.
+- The helper crate's Rust `#[test]`s run under no gate (it is outside the
+  src-tauri workspace and links macOS frameworks, so Linux CI cannot run them).
+  Run `env -C e2e/agent/os/helper cargo test` locally when touching the crate.
+
+## 7. Review residue (Tier 1 pre-PR round, 2026-08-05)
 
 Deferred with rationale, per the one-triage-pass rule:
 
