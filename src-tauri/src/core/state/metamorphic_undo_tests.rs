@@ -228,6 +228,40 @@ struct Observed {
     allocators: BTreeMap<String, u32>,
 }
 
+/// Re-sort the two SET-LIKE maps after a mask has rewritten their keys.
+///
+/// `canonical_snapshot` already sorts `station_offsets` and `station_comments`,
+/// because both serialize as a `Vec` of pairs out of a `HashMap` and their order
+/// is not stable. It sorts by the pair's whole JSON text - which, for a
+/// `StationKey::AfterShot` anchor, INCLUDES the shot uuid. So the sort key of a
+/// comment on a freshly minted shot is a random number.
+///
+/// That is fine until [`mask_uuids`] replaces those uuids with a placeholder:
+/// the mask makes the two routes' keys compare equal but cannot undo the order
+/// the random uuids already imposed, so two projects holding exactly the same
+/// comments can come out of the sort in different orders. Re-sorting AFTER the
+/// mask closes it, and it is a no-op for `Mask::Strict` (where no key was
+/// rewritten and the first sort is already canonical).
+///
+/// This is what `observation-split-routes-disagree-on-station-comment-keys` was
+/// - see the triage record in `EXPLAINS` below.
+fn resort_set_like(snapshot: &str) -> String {
+    // Same shape as `replace_strings` above: a snapshot that will not parse is
+    // returned unchanged rather than panicked on, so a comparison still happens
+    // and the differ - not this helper - is what reports it.
+    let Ok(mut value) = serde_json::from_str::<serde_json::Value>(snapshot) else {
+        return snapshot.to_string();
+    };
+    if let serde_json::Value::Object(map) = &mut value {
+        for key in ["station_offsets", "station_comments"] {
+            if let Some(serde_json::Value::Array(items)) = map.get_mut(key) {
+                items.sort_by_key(ToString::to_string);
+            }
+        }
+    }
+    value.to_string()
+}
+
 fn observe(state: &AppState, mask: Mask) -> Observed {
     // The timestamp mask is UNCONDITIONAL, for both mask modes: no pair can
     // control which instant its two routes run at.
@@ -235,7 +269,7 @@ fn observe(state: &AppState, mask: Mask) -> Observed {
     Observed {
         stored: match mask {
             Mask::Strict => stored,
-            Mask::MintedUuids => mask_uuids(&stored),
+            Mask::MintedUuids => resort_set_like(&mask_uuids(&stored)),
         },
         verdict: integrity_verdict(state),
         adjusted: adjusted_geometry_of(state),
@@ -366,47 +400,35 @@ const EXPLAINS: &[Explains] = &[
         explains_geometry: true,
         only_for: Some("range-shift-is-n-single-deletes"),
     },
-    // AN OPEN OBSERVATION, not a finding: it is INTERMITTENT on identical
-    // inputs, so it has not been root-caused and naming it a finding would be
-    // guessing.
+    // `observation-split-routes-disagree-on-station-comment-keys` USED TO BE
+    // HERE, and it is gone because it was TRIAGED OUT: it was this engine's own
+    // measurement, not a defect in either split route. Kept as a record for the
+    // same reason finding 9's is.
     //
-    // `execute_delete_shot_range_split` and `execute_delete_shot_and_split` -
-    // which the second's doc comment says the first generalizes - sometimes
-    // disagree about which SECTION a station comment ends up keyed to after the
-    // split (`station_comments[i][0].section_id` 3 vs 9, with the rest of the
-    // list shifted). Same seed, same repeat, one run to the next: sometimes
-    // both routes agree and sometimes they do not, which points at an
-    // iteration-order-dependent re-key rather than at a wrong constant, and
-    // puts it in the same class as finding 21.
+    // What it looked like: the two routes disagreed about which SECTION a
+    // station comment was keyed to after the split
+    // (`station_comments[i][0].section_id` 3 vs 9, with the rest of the list
+    // shifted), intermittently, on identical inputs - which read as an
+    // iteration-order-dependent re-key.
     //
-    // It is COUNTED and printed rather than asserted, so the gate is not flaky
-    // while it is open, and it is in the module header as an open observation
-    // so the next run of this programme starts from the evidence rather than
-    // from a surprise. Narrowed to `station_comments`: any other path in the
-    // same comparison is unexplained and still fails.
+    // What it was: a PERMUTATION, not a re-key. Every reported instance held the
+    // same multiset of `(section_id, comment)` pairs on both sides, with exactly
+    // one entry - always the newly minted section B - in a different slot.
+    // `canonical_snapshot` sorts `station_comments` by the pair's whole JSON
+    // text, which for a `StationKey::AfterShot` anchor includes the shot uuid;
+    // both routes MINT section B's shots, so that one sort key was a fresh
+    // random uuid on each side, and `Mask::MintedUuids` erases the uuids only
+    // AFTER the sort has used them. See `resort_set_like` above, which sorts
+    // again once the mask has run.
     //
-    // ONE LEAD, found and not yet confirmed: the range-delete impact analysis
-    // collects an ORDER-DEPENDENT vector out of a `HashMap` -
+    // Measured, not argued: 40 seeds x 6 repeats reported 7 divergences over 240
+    // built instances with the sort as it was, and 0 over the same 240 with the
+    // re-sort, every other pair's counts byte-identical.
     //
-    //     let removed_comments: Vec<StationRef> = self
-    //         .station_comments
-    //         .keys()
-    //         .filter_map(|k| self.resolve_key(k))
-    //         .filter(|sr| removed_set.contains(sr))
-    //         .collect();
-    //
-    // (`models/project/shots.rs:772-777`). That is the right SHAPE for an
-    // intermittent re-key and it is in the right file, but it has not been
-    // shown to feed the divergence: the collection there describes the dialog's
-    // impact summary rather than performing the re-key, so the next step is to
-    // find whether anything downstream consumes its ORDER. Until that is
-    // answered this stays an observation.
-    Explains {
-        id: "observation-split-routes-disagree-on-station-comment-keys",
-        each: |diff| diff.path.starts_with("station_comments"),
-        explains_geometry: false,
-        only_for: Some("one-shot-range-split-is-delete-and-split"),
-    },
+    // The earlier lead - the order-dependent `removed_comments` vector at
+    // `models/project/shots.rs:772-777` - was already refuted (it feeds the
+    // delete dialog's impact summary and nothing consumes its order) and is not
+    // resurrected by this.
 ];
 
 /// Every way two observed states differ, as readable lines. Empty means the two
@@ -1362,14 +1384,12 @@ fn metamorphic_gate() {
 /// classification that starts firing (or stops) is a replay difference rather
 /// than something only a reviewer would notice.
 ///
-/// One pair is EXCLUDED from it, with its reason:
-/// `one-shot-range-split-is-delete-and-split` carries
-/// `observation-split-routes-disagree-on-station-comment-keys`, which is
-/// intermittent on identical inputs - that is the entire content of the
-/// observation. Including it would make this test fail for a non-determinism in
-/// the APP rather than in the engine, which is the only thing it is about. The
-/// exclusion goes away with the observation: when the two split routes agree
-/// deterministically, delete the filter and this covers all seven pairs again.
+/// It covers ALL SEVEN pairs. `one-shot-range-split-is-delete-and-split` used to
+/// be filtered out of the shape because it carried
+/// `observation-split-routes-disagree-on-station-comment-keys`, which was
+/// intermittent on identical inputs; the observation was triaged out as this
+/// engine's own sort-before-mask (see `resort_set_like` and the record in
+/// `EXPLAINS`), so the pair replays deterministically and the filter is gone.
 #[test]
 fn the_metamorphic_engine_is_deterministic() {
     for &seed in &GATE_SEEDS[..3] {
@@ -1384,7 +1404,6 @@ fn the_metamorphic_engine_is_deterministic() {
         )> {
             outcomes
                 .iter()
-                .filter(|(id, _)| **id != "one-shot-range-split-is-delete-and-split")
                 .map(|(id, outcome)| {
                     (
                         (*id).to_string(),
