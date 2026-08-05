@@ -4,6 +4,7 @@ import { useUIStore } from '../../store/uiStore';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import { trackDialogComplete } from '../../utils/telemetry';
+import { importReceiptSummaryParts } from '../../utils/importReceipt';
 import type { ImportReceipt } from '../../types/ipc/ImportReceipt';
 
 const MAX_VISIBLE_WARNINGS = 3;
@@ -14,6 +15,11 @@ const MAX_VISIBLE_WARNINGS = 3;
  * `dialogData.receipt`. Tone is a receipt, not a wizard step - it never blocks
  * the import (everything it describes already happened), it just tells the
  * user what to expect before they go looking in the data table.
+ *
+ * This dialog is reached ONLY through `presentImportReceipt` (`saveFeedback.ts`,
+ * #411/#420): a receipt that carries a warning, or reports zero sections and
+ * zero shots (#442), still opens the modal here; a clean receipt with
+ * something to show instead surfaces as a toast and never reaches this file.
  *
  * `sections_found` is the whole-file section count, not a promise every
  * section was imported - DMP/Compass/Walls wizards let the user deliberately
@@ -36,13 +42,7 @@ export default function ImportReceiptDialog() {
   const hiddenWarnings = allWarnings.slice(MAX_VISIBLE_WARNINGS);
   const hasHiddenWarnings = hiddenWarnings.length > 0;
 
-  const summaryParts = [
-    t('dialogs.importReceipt.sections', { count: receipt.sections_imported }),
-    t('dialogs.importReceipt.shots', { count: receipt.shot_count }),
-    ...(receipt.closures_requested > 0
-      ? [t('dialogs.importReceipt.loops', { count: receipt.closures_created })]
-      : []),
-  ];
+  const summaryParts = importReceiptSummaryParts(receipt, t);
 
   const handleContinue = () => {
     trackDialogComplete('import-receipt');

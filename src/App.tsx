@@ -8,7 +8,7 @@ import { useSpeleoStore } from './store/speleoStore';
 import { useGasPlanStore, selectIsPlanDirty } from './store/gasPlanStore';
 import { useShallow } from 'zustand/react/shallow';
 import { invokeIpc, getErrorMessage } from './utils/ipc';
-import { surfaceSaveFailure } from './utils/saveFeedback';
+import { surfaceSaveFailure, presentImportReceipt } from './utils/saveFeedback';
 import { extractFilename } from './utils/path';
 import { routeOpenedFile } from './utils/openOrImport';
 import { useLaunchWithFile } from './utils/launchWithFile';
@@ -766,7 +766,7 @@ function App() {
             setView('single');
             triggerFitToBounds();
             if (receipt) {
-              openDialog('import-receipt', { receipt });
+              presentImportReceipt(receipt, { openDialog, showToast: useUIStore.getState().showToast });
             }
           }}
         />

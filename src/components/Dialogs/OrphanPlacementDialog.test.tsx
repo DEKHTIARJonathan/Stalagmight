@@ -28,6 +28,7 @@ import OrphanPlacementDialog from './OrphanPlacementDialog';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
 import type { CommandResult, OrphanPlacementSuggestion } from '../../types/commands';
+import type { ImportReceipt } from '../../types/ipc/ImportReceipt';
 
 const ok = async (): Promise<CommandResult> => ({ success: true } as CommandResult);
 
@@ -111,5 +112,61 @@ describe('OrphanPlacementDialog - completion persists the import (#92 / #107)', 
     // The save failed, so the dialog must NOT close (the error dialog raised by
     // saveAfterImport stays visible instead of being dismissed).
     expect(closeDialog).not.toHaveBeenCalled();
+  });
+});
+
+describe('OrphanPlacementDialog - receipt surface routing (#411/#420)', () => {
+  const RECEIPT: ImportReceipt = {
+    source_format: 'mNemo DMP',
+    file_name: 'cave.dmp',
+    sections_found: 1,
+    sections_imported: 1,
+    shot_count: 12,
+    closures_requested: 0,
+    closures_created: 0,
+    unit_conversion: null,
+    warnings: [],
+  };
+
+  let openDialog: ReturnType<typeof vi.fn>;
+  let showToast: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    openDialog = vi.fn();
+    showToast = vi.fn();
+    useUIStore.setState({ openDialog, showToast });
+  });
+
+  it('toasts a warning-free receipt once orphan placement finishes', async () => {
+    // finish() can run twice (handleAccept + the isFinished effect, see the
+    // completion-wiring tests above) - assert "called", not a count.
+    render(<OrphanPlacementDialog suggestions={[makeSuggestion()]} receipt={RECEIPT} />);
+
+    await userEvent.click(screen.getByTestId('orphan-accept'));
+
+    await waitFor(() => expect(showToast).toHaveBeenCalled());
+    expect(openDialog).not.toHaveBeenCalledWith('import-receipt', expect.anything());
+  });
+
+  it('opens the modal when the receipt carries a warning', async () => {
+    const withWarning: ImportReceipt = { ...RECEIPT, warnings: ['1 shot skipped'] };
+    render(<OrphanPlacementDialog suggestions={[makeSuggestion()]} receipt={withWarning} />);
+
+    await userEvent.click(screen.getByTestId('orphan-accept'));
+
+    await waitFor(() =>
+      expect(openDialog).toHaveBeenCalledWith('import-receipt', { receipt: withWarning }),
+    );
+    expect(showToast).not.toHaveBeenCalled();
+  });
+
+  it('opens the modal for a zero-count receipt even with no warnings (#442)', async () => {
+    const empty: ImportReceipt = { ...RECEIPT, sections_imported: 0, shot_count: 0 };
+    render(<OrphanPlacementDialog suggestions={[makeSuggestion()]} receipt={empty} />);
+
+    await userEvent.click(screen.getByTestId('orphan-accept'));
+
+    await waitFor(() => expect(openDialog).toHaveBeenCalledWith('import-receipt', { receipt: empty }));
+    expect(showToast).not.toHaveBeenCalled();
   });
 });

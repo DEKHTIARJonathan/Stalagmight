@@ -6,6 +6,7 @@ import {
   completeImportToSingleView,
   finalizeDeferredSaveWarnings,
   deferredSaveWarnings,
+  presentImportReceipt,
   type ImportDialogUi,
 } from '../saveFeedback';
 import { useProjectStore } from '../../store/projectStore';
@@ -18,6 +19,7 @@ const mockUi = (): ImportDialogUi & { [K in keyof ImportDialogUi]: ReturnType<ty
   setView: vi.fn(),
   triggerFitToBounds: vi.fn(),
   openDialog: vi.fn(),
+  showToast: vi.fn(),
 });
 
 const receiptFixture = (warnings: string[] = []): ImportReceipt => ({
@@ -144,6 +146,63 @@ describe('finalizeDeferredSaveWarnings (#110)', () => {
       title: 'Import Warning',
       message: 'first\n\nsecond',
       hideReportHint: true,
+    });
+  });
+});
+
+describe('presentImportReceipt (#411/#420)', () => {
+  it('surfaces a warning-free receipt as a toast, never opens the modal', () => {
+    const ui = mockUi();
+
+    presentImportReceipt(receiptFixture(), ui);
+
+    expect(ui.openDialog).not.toHaveBeenCalled();
+    expect(ui.showToast).toHaveBeenCalledTimes(1);
+    expect(ui.showToast).toHaveBeenCalledWith(expect.stringContaining('Ariane TML'), 'import-receipt', 'success');
+  });
+
+  it('keeps the modal for a receipt with even one warning, never toasts', () => {
+    const ui = mockUi();
+
+    presentImportReceipt(receiptFixture(['2 zero-shot sections were skipped']), ui);
+
+    expect(ui.showToast).not.toHaveBeenCalled();
+    expect(ui.openDialog).toHaveBeenCalledWith('import-receipt', {
+      receipt: expect.objectContaining({ warnings: ['2 zero-shot sections were skipped'] }),
+    });
+  });
+
+  it('keeps the modal for a zero-count receipt even with no warnings (#442)', () => {
+    const ui = mockUi();
+    const empty: ImportReceipt = { ...receiptFixture(), sections_imported: 0, shot_count: 0 };
+
+    presentImportReceipt(empty, ui);
+
+    expect(ui.showToast).not.toHaveBeenCalled();
+    expect(ui.openDialog).toHaveBeenCalledWith('import-receipt', { receipt: empty });
+  });
+});
+
+describe('completeImportToSingleView receipt routing (#411/#420)', () => {
+  it('routes a warning-free receipt to the toast, not the receipt dialog', () => {
+    const ui = mockUi();
+
+    completeImportToSingleView('tml-import', ui, receiptFixture());
+
+    expect(ui.closeDialog).toHaveBeenCalled();
+    expect(ui.setView).toHaveBeenCalledWith('single');
+    expect(ui.openDialog).not.toHaveBeenCalled();
+    expect(ui.showToast).toHaveBeenCalledTimes(1);
+  });
+
+  it('routes a receipt carrying a warning to the receipt dialog, not a toast', () => {
+    const ui = mockUi();
+
+    completeImportToSingleView('tml-import', ui, receiptFixture(['1 shot skipped']));
+
+    expect(ui.showToast).not.toHaveBeenCalled();
+    expect(ui.openDialog).toHaveBeenCalledWith('import-receipt', {
+      receipt: expect.objectContaining({ warnings: ['1 shot skipped'] }),
     });
   });
 });

@@ -22,7 +22,7 @@ interface CompassImportDialogProps {
 export default function CompassImportDialog({ compassFile, filePath }: CompassImportDialogProps) {
   const { t } = useTranslation();
   const { executeCompassImport, calculateFileHash, checkDuplicateImport, startLoading, setLoadingProgress, resetLoading } = useProjectStore();
-  const { closeDialog, openDialog, setView, triggerFitToBounds } = useUIStore();
+  const { closeDialog, openDialog, setView, triggerFitToBounds, showToast } = useUIStore();
 
   const [isImporting, setIsImporting] = useState(false);
   const [fileHash, setFileHash] = useState<string | null>(null);
@@ -56,7 +56,7 @@ export default function CompassImportDialog({ compassFile, filePath }: CompassIm
     // Applying -> Finalizing phase ticks from the backend ProgressEmitter.
     startLoading(compassFile.cave_name || fileName, filePath);
     setLoadingProgress({ phase: 'import_parsing' });
-    const importUi = { closeDialog, setView, triggerFitToBounds, openDialog };
+    const importUi = { closeDialog, setView, triggerFitToBounds, openDialog, showToast };
     try {
       const result = await executeCompassImport(filePath, fileHash, includeExcluded, applyCorrections, commentsOnStations);
       resetLoading();

@@ -40,9 +40,9 @@ first.
 
 | Surface | Use for | Persistence | Examples in the codebase |
 |---|---|---|---|
-| Modal dialog | User must acknowledge/decide before continuing; data at risk | Until dismissed; app inert behind it | `ErrorDialog`, `ImportReceiptDialog`, corruption recovery |
+| Modal dialog | User must acknowledge/decide before continuing; data at risk | Until dismissed; app inert behind it | `ErrorDialog`, `ImportReceiptDialog` (only when the receipt has a warning or is empty, #411), corruption recovery |
 | Banner / indicator | Ongoing conditions | Until the condition clears | integrity banner (`App.tsx`), `SpeleoBanner`, `OfflineIndicator`, read-only badges (`MapTopLeftOverlay`) |
-| Toast | Transient outcome of an action whose result is off-screen or non-obvious | Auto-dismiss (5-9 s by kind) | save confirmations, blocked-edit notice, export results |
+| Toast | Transient outcome of an action whose result is off-screen or non-obvious | Auto-dismiss (5-9 s by kind) | save confirmations, blocked-edit notice, export results, warning-free import receipt (#411) |
 | Log only | Internal, recoverable, debug | n/a | `console.warn`/`console.error` |
 
 ### Decision tree
@@ -101,6 +101,18 @@ regions). Read the comment blocks in those two files plus
   before continuing. Reporting a success that needs no decision is a receipt-style
   dialog only when there are multiple facts to review (import receipt); otherwise
   it is a toast.
+- **A receipt with no warnings has no decision in it, and is not a modal
+  (#411/#420).** The import receipt (TML/Compass/Walls/GPX/DMP, all five routed
+  through `presentImportReceipt` in `saveFeedback.ts`) reports facts the user
+  already asked for by importing - counts, not a choice. When it carries no
+  `warnings`, it surfaces as a `success` toast (counts only, dedup key
+  `TOAST_KEYS.IMPORT_RECEIPT`) instead of opening `ImportReceiptDialog`. The
+  moment it carries even one warning, the modal is back: a warning means
+  something was lost or needs a look, and #411 exists precisely so that never
+  rides a dismissible toast. A receipt reporting zero sections AND zero shots
+  imported (#442) is never demoted to a toast even if `warnings` happens to be
+  empty - nothing landing is itself the fact the user needs to see, not a
+  side effect of some other warning.
 - **Warnings are not errors.** Do not dress warning-class content in `ErrorDialog`
   with `hideReportHint` as a costume; if no warning-capable surface fits, that is a
   gap to raise, not to paper over.

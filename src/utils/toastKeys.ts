@@ -87,6 +87,8 @@ export const TOAST_KEYS = {
   DMP_MANUAL_PLACEMENT_HINT: 'dmp-manual-placement-hint',
   PROJECT_SETTINGS: 'project-settings',
   DELETE_PROJECT_WARNING: 'delete-project-warning',
+  /** Warning-free import receipt, surfaced as a toast instead of a modal (#411/#420). */
+  IMPORT_RECEIPT: 'import-receipt',
 
   // Open / import routing
   IMPORT_IN_PROGRESS: 'import-in-progress',

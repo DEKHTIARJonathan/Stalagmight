@@ -56,10 +56,12 @@ const ok = (warnings: ValidationWarning[], import_receipt?: ImportReceipt): Comm
 let executeGpxImport: ReturnType<typeof vi.fn>;
 let openDialog: ReturnType<typeof vi.fn>;
 let closeDialog: ReturnType<typeof vi.fn>;
+let showToast: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
   openDialog = vi.fn();
   closeDialog = vi.fn();
+  showToast = vi.fn();
   executeGpxImport = vi.fn();
   useProjectStore.setState({ executeGpxImport });
   useUIStore.setState({
@@ -67,6 +69,7 @@ beforeEach(() => {
     closeDialog,
     setView: vi.fn(),
     triggerFitToBounds: vi.fn(),
+    showToast,
     dialogData: {
       gpxFile: emptyGpx,
       filePath: '/tmp/cave.gpx',
@@ -129,14 +132,26 @@ describe('GpxPlacementDialog warning surfacing (#110)', () => {
     expect(openDialog).not.toHaveBeenCalledWith('error', expect.anything());
   });
 
-  it('shows the receipt when the import fully succeeds with a receipt', async () => {
+  it('toasts (does not modal) a warning-free receipt with something to show (#411/#420)', async () => {
+    // Was "shows the receipt dialog" pre-#411: a receipt with counts but no
+    // warnings has no decision in it, so it is now a toast, not a modal.
     executeGpxImport.mockResolvedValue(ok([], RECEIPT));
 
     render(<GpxPlacementDialog />);
     await userEvent.click(await screen.findByTestId('gpx-import-confirm'));
 
-    await waitFor(() =>
-      expect(openDialog).toHaveBeenCalledWith('import-receipt', { receipt: RECEIPT }),
-    );
+    await waitFor(() => expect(showToast).toHaveBeenCalledTimes(1));
+    expect(openDialog).not.toHaveBeenCalledWith('import-receipt', expect.anything());
+  });
+
+  it('opens the modal for a zero-count receipt even with no warnings (#442)', async () => {
+    const empty: ImportReceipt = { ...RECEIPT, sections_imported: 0 };
+    executeGpxImport.mockResolvedValue(ok([], empty));
+
+    render(<GpxPlacementDialog />);
+    await userEvent.click(await screen.findByTestId('gpx-import-confirm'));
+
+    await waitFor(() => expect(openDialog).toHaveBeenCalledWith('import-receipt', { receipt: empty }));
+    expect(showToast).not.toHaveBeenCalled();
   });
 });

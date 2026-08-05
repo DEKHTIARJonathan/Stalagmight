@@ -79,7 +79,7 @@ export default function TmlImportDialog({ tmlFile, filePath }: TmlImportDialogPr
   const { t } = useTranslation();
   const { executeTmlImport, calculateFileHash, startLoading, setLoadingProgress, resetLoading } = useProjectStore();
   const loading = useProjectStore((state) => state.loading);
-  const { closeDialog, openDialog, setView, triggerFitToBounds, setImportContext } = useUIStore();
+  const { closeDialog, openDialog, setView, triggerFitToBounds, setImportContext, showToast } = useUIStore();
 
   const [isImporting, setIsImporting] = useState(false);
   const [isDiscarding, setIsDiscarding] = useState(false);
@@ -143,7 +143,7 @@ export default function TmlImportDialog({ tmlFile, filePath }: TmlImportDialogPr
     // Finalizing phase ticks from the backend ProgressEmitter.
     startLoading(tmlFile.cave_name || fileName, filePath);
     setLoadingProgress({ phase: 'import_parsing' });
-    const importUi = { closeDialog, setView, triggerFitToBounds, openDialog };
+    const importUi = { closeDialog, setView, triggerFitToBounds, openDialog, showToast };
     /**
      * Terminal failure. The shared router owns the wording and the exit rules
      * (docs/notifications.md); the one thing it cannot do is ask about the empty
