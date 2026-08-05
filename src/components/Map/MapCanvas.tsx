@@ -1834,14 +1834,20 @@ function MapCanvas() {
     };
   }, []);
 
-  // Scroll-zoom speed: map.controls.zoom_speed is a multiplier where 1.0 means
-  // one zoom level per 100 px of scroll. Both MapLibre rates (trackpad AND
-  // wheel) are set together, on purpose: MapLibre's per-chain wheel-vs-trackpad
-  // classifier misfires on Windows precision trackpads (measured ~70%
-  // wheel-classified events on gestures that felt sluggish, and the verdict can
-  // flap mid-gesture), and with equal rates its verdict has no visible effect.
-  // A real mouse notch (~100 px) zooms speed x 1 level per tick; Shift+wheel
-  // still applies MapLibre's built-in 1/4-rate precision modifier.
+  // Scroll-zoom speed: map.controls.zoom_speed feeds MapLibre's zoom rate as
+  // speed/100. Both MapLibre rates (trackpad AND wheel) are set together, on
+  // purpose: MapLibre's per-chain wheel-vs-trackpad classifier misfires on
+  // Windows precision trackpads (measured ~70% wheel-classified events on
+  // gestures that felt sluggish, and the verdict can flap mid-gesture), and
+  // with equal rates its verdict has no visible effect.
+  //
+  // The response is NOT linear in speed. MapLibre scales a chain by
+  // 2 / (1 + exp(-|delta * rate|)), so a 100 px mouse notch moves
+  // log2(2 / (1 + e^-speed)) zoom levels: ~0.55 at speed 1.0, ~0.82 at 2.0,
+  // ~0.99 at the 5.0 maximum. One level per notch is the sigmoid's asymptote
+  // and is unreachable at any setting, which is why the top of the range
+  // barely differs - see the "zoom-speed range saturates" follow-up issue.
+  // Shift+wheel still applies MapLibre's built-in 1/4-rate precision modifier.
   const zoomSpeed = config?.map.controls.zoom_speed ?? 1.0;
   useEffect(() => {
     if (!mapLoaded || !map.current) return;
