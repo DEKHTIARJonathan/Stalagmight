@@ -4,4 +4,4 @@ import type { TmlGeoCoding } from "./TmlGeoCoding";
 import type { TmlSection } from "./TmlSection";
 import type { TmlUnit } from "./TmlUnit";
 
-export interface TmlFile { cave_name: string, unit: TmlUnit, use_magnetic_azimuth: boolean, first_start_absolute_elevation: number, geo_coding: TmlGeoCoding | null, sections: Array<TmlSection>, closures: Array<TmlClosure>, }
+export interface TmlFile { cave_name: string, unit: TmlUnit, use_magnetic_azimuth: boolean, first_start_absolute_elevation: number, unrecognized_unit?: string, geo_coding: TmlGeoCoding | null, sections: Array<TmlSection>, closures: Array<TmlClosure>, }

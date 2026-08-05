@@ -31,6 +31,12 @@ pub struct TmlFile {
     pub unit: TmlUnit,
     pub use_magnetic_azimuth: bool,
     pub first_start_absolute_elevation: f64,
+    /// The file's `<unit>` text when it is neither a known metric nor a known
+    /// imperial spelling. The file is read as metric anyway; this drives an
+    /// import warning so a silent mis-scaling is visible.
+    #[serde(default)]
+    #[ts(optional)]
+    pub unrecognized_unit: Option<String>,
     pub geo_coding: Option<TmlGeoCoding>,
     pub sections: Vec<TmlSection>,
     pub closures: Vec<TmlClosure>,
@@ -1072,12 +1078,25 @@ fn extract_closures(
 const FEET_TO_METERS: f64 = 0.3048;
 
 /// Apply imperial→metric conversion in place if the file uses imperial units.
-fn apply_unit_conversion(sections: &mut [TmlSection], unit: TmlUnit) {
+///
+/// Every length the importer carries forward passes through here, not just the
+/// shot measurements: `start_depth` is the parent station's cumulative depth and
+/// rebases the first shot of every branch section whose `DepthIn` is the `-1`
+/// sentinel (see `resolve_tml_depth_in`), and the file-level absolute elevation
+/// is a length too.
+fn apply_unit_conversion(
+    sections: &mut [TmlSection],
+    first_start_absolute_elevation: &mut f64,
+    unit: TmlUnit,
+) {
     if unit != TmlUnit::Imperial {
         return;
     }
 
+    *first_start_absolute_elevation *= FEET_TO_METERS;
+
     for section in sections.iter_mut() {
+        section.start_depth *= FEET_TO_METERS;
         for shot in &mut section.shots {
             shot.length *= FEET_TO_METERS;
             shot.depth *= FEET_TO_METERS;
@@ -1110,15 +1129,13 @@ pub fn parse_tml(path: &Path) -> Result<TmlFile> {
         "Parsed raw shots from XML"
     );
 
-    let unit = match metadata.unit.to_lowercase().as_str() {
-        "ft" | "imperial" => TmlUnit::Imperial,
-        _ => TmlUnit::Metric,
-    };
+    let (unit, unrecognized_unit) = classify_unit(&metadata.unit);
 
     let (mut sections, closures) = build_sections(raw_shots);
 
     // Apply unit conversion before returning
-    apply_unit_conversion(&mut sections, unit);
+    let mut first_start_absolute_elevation = metadata.first_start_absolute_elevation;
+    apply_unit_conversion(&mut sections, &mut first_start_absolute_elevation, unit);
 
     // Extract geo coding from first shot with non-zero lat/lng
     let geo_coding = sections
@@ -1128,7 +1145,7 @@ pub fn parse_tml(path: &Path) -> Result<TmlFile> {
         .map(|shot| TmlGeoCoding {
             latitude: shot.latitude,
             longitude: shot.longitude,
-            altitude: metadata.first_start_absolute_elevation,
+            altitude: first_start_absolute_elevation,
         });
 
     tracing::info!(
@@ -1142,11 +1159,28 @@ pub fn parse_tml(path: &Path) -> Result<TmlFile> {
         cave_name: metadata.cave_name,
         unit,
         use_magnetic_azimuth: metadata.use_magnetic_azimuth,
-        first_start_absolute_elevation: metadata.first_start_absolute_elevation,
+        first_start_absolute_elevation,
+        unrecognized_unit,
         geo_coding,
         sections,
         closures,
     })
+}
+
+/// Map Ariane's `<unit>` text onto a `TmlUnit`.
+///
+/// `ft`/`imperial` mean feet, `m`/`metric` and an absent element mean meters
+/// (files with no `<unit>` at all exist). Anything else still reads as metric -
+/// that is the safe default, every observed Ariane file is metric - but the raw
+/// string comes back so the import can say so: silently scaling a whole survey
+/// by the wrong factor leaves no trace anywhere else.
+fn classify_unit(raw: &str) -> (TmlUnit, Option<String>) {
+    let trimmed = raw.trim();
+    match trimmed.to_lowercase().as_str() {
+        "ft" | "imperial" => (TmlUnit::Imperial, None),
+        "" | "m" | "metric" => (TmlUnit::Metric, None),
+        _ => (TmlUnit::Metric, Some(trimmed.to_string())),
+    }
 }
 
 // ============================================================================
@@ -1165,6 +1199,12 @@ pub fn convert_tml_to_import_configs(
     }
 
     let mut warnings: Vec<String> = Vec::new();
+
+    if let Some(raw_unit) = &tml.unrecognized_unit {
+        warnings.push(format!(
+            "The file declares an unrecognized unit \"{raw_unit}\"; all measurements were read as meters"
+        ));
+    }
 
     // Build a mapping from Ariane shot ID → (section_index, station_index)
     // to resolve topology connections between sections.
@@ -1633,6 +1673,20 @@ fn convert_shots_to_shot_data(
 /// `effective_start_id` is an optional fallback - the `from_id` of the first
 /// non-excluded shot, used when excluded leading shots make `start_ariane_id`
 /// unresolvable. We try both, preferring the original.
+///
+/// TODO(#411): `geo_coding.altitude` (the file's `firstStartAbsoluteElevation`,
+/// now unit-converted) is deliberately NOT written into `depth_reference`, so a
+/// non-zero entrance elevation still round-trips to 0 through
+/// `export::tml`, which reads it back from `zero_datums.first().gps`. The two
+/// fields do not mean the same thing: `depth_reference` is documented as meters
+/// BELOW the surface (`models::station::GpsCoordinates`, `docs/architecture.md`)
+/// and the UI treats it as exactly that - `EditStationDialog` sets it from the
+/// datum station's `coordinates.z`, which is +down, and `gpsToXY` reads it back
+/// as `z`. Ariane's elevation is +up from sea level. Assigning one to the other
+/// would flip the sign and change the reference surface, planting a wrong depth
+/// on every GPS-anchored TML import. Fixing this needs a decision about which
+/// convention the datum stores (and matching changes on the export side), not a
+/// cast here.
 fn determine_placement(
     section: &TmlSection,
     section_index: u32,
@@ -1789,17 +1843,68 @@ mod tests {
 
     // Helper to build minimal XML for testing
     fn wrap_xml(shots_xml: &str) -> String {
+        wrap_xml_with("m", 100.0, shots_xml)
+    }
+
+    /// `wrap_xml` with the file-level unit and elevation spelled out.
+    fn wrap_xml_with(unit: &str, elevation: f64, shots_xml: &str) -> String {
         format!(
             r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <CaveFile>
     <caveName>Test Cave</caveName>
-    <unit>m</unit>
+    <unit>{unit}</unit>
     <useMagneticAzimuth>true</useMagneticAzimuth>
-    <firstStartAbsoluteElevation>100.0</firstStartAbsoluteElevation>
+    <firstStartAbsoluteElevation>{elevation}</firstStartAbsoluteElevation>
     <Data>
         {shots_xml}
     </Data>
 </CaveFile>"#
+        )
+    }
+
+    /// Run the real `parse_tml` over synthetic XML, via a throwaway `.tmlu` in a
+    /// temp dir (the entry point takes a path, and the extension picks the
+    /// reader). Nothing survives the call.
+    fn parse_synthetic_tmlu(xml: &str) -> TmlFile {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("synthetic.tmlu");
+        fs::write(&path, xml).unwrap();
+        parse_tml(&path).unwrap()
+    }
+
+    /// A shot element with the depth fields spelled out, for the rebase tests.
+    fn tml_shot_xml_depth(
+        id: i64,
+        from_id: i64,
+        shot_type: &str,
+        section: &str,
+        depth: f64,
+        depth_in: f64,
+    ) -> String {
+        format!(
+            r"<SurveyData>
+    <ID>{id}</ID>
+    <FromID>{from_id}</FromID>
+    <ClosureToID>-1</ClosureToID>
+    <Type>{shot_type}</Type>
+    <Section>{section}</Section>
+    <Azimut>90.0</Azimut>
+    <Length>10.0</Length>
+    <Depth>{depth}</Depth>
+    <DepthIn>{depth_in}</DepthIn>
+    <Inclination>0.0</Inclination>
+    <Left>0.0</Left>
+    <Right>0.0</Right>
+    <Up>0.0</Up>
+    <Down>0.0</Down>
+    <Comment></Comment>
+    <Explorer>Tester</Explorer>
+    <Date>2024-06-15</Date>
+    <Color>0x8f6112ff</Color>
+    <Excluded>false</Excluded>
+    <Latitude>0.0</Latitude>
+    <Longitude>0.0</Longitude>
+</SurveyData>"
         )
     }
 
@@ -2119,6 +2224,7 @@ mod tests {
             unit: TmlUnit::Metric,
             use_magnetic_azimuth: true,
             first_start_absolute_elevation: 100.0,
+            unrecognized_unit: None,
             geo_coding,
             sections,
             closures,
@@ -2312,10 +2418,11 @@ mod tests {
             is_branch_split: false,
             start_ariane_id: 0,
             end_ariane_id: 1,
-            start_depth: 0.0,
+            start_depth: 12.0,
         }];
 
-        apply_unit_conversion(&mut sections, TmlUnit::Imperial);
+        let mut elevation = 150.0;
+        apply_unit_conversion(&mut sections, &mut elevation, TmlUnit::Imperial);
 
         let shot = &sections[0].shots[0];
         assert!((shot.length - 10.0 * FEET_TO_METERS).abs() < 1e-6);
@@ -2324,6 +2431,9 @@ mod tests {
         assert!((shot.right - 4.0 * FEET_TO_METERS).abs() < 1e-6);
         // depth_in == -1.0 should NOT be converted
         assert!((shot.depth_in - (-1.0)).abs() < f64::EPSILON);
+        // The branch rebase depth and the file elevation are lengths too.
+        assert!((sections[0].start_depth - 12.0 * FEET_TO_METERS).abs() < 1e-6);
+        assert!((elevation - 150.0 * FEET_TO_METERS).abs() < 1e-6);
     }
 
     #[test]
@@ -2359,14 +2469,116 @@ mod tests {
             is_branch_split: false,
             start_ariane_id: 0,
             end_ariane_id: 1,
-            start_depth: 0.0,
+            start_depth: 12.0,
         }];
 
-        apply_unit_conversion(&mut sections, TmlUnit::Metric);
+        let mut elevation = 150.0;
+        apply_unit_conversion(&mut sections, &mut elevation, TmlUnit::Metric);
 
         let shot = &sections[0].shots[0];
         assert!((shot.length - 10.0).abs() < f64::EPSILON);
         assert!((shot.depth - 5.0).abs() < f64::EPSILON);
+        assert!((sections[0].start_depth - 12.0).abs() < f64::EPSILON);
+        assert!((elevation - 150.0).abs() < f64::EPSILON);
+    }
+
+    /// A branch section's first shot carries the `-1` DepthIn sentinel, so its
+    /// entry depth comes from the parent station - a value read straight out of
+    /// the file, in FEET on an imperial one. Leave it unconverted and every
+    /// branch starts ~3.28x too deep, which is geometry, not presentation.
+    #[test]
+    fn imperial_branch_section_starts_at_the_converted_parent_depth() {
+        let shots = [
+            tml_shot_xml_depth(0, -1, "START", "Start", 0.0, -1.0),
+            tml_shot_xml_depth(1, 0, "REAL", "Main", 10.0, -1.0),
+            tml_shot_xml_depth(2, 1, "REAL", "Main", 20.0, -1.0),
+            // Second child of shot 1: branches off a station 10 ft down.
+            tml_shot_xml_depth(3, 1, "REAL", "Side", 30.0, -1.0),
+        ]
+        .join("\n");
+        let tml = parse_synthetic_tmlu(&wrap_xml_with("ft", 0.0, &shots));
+
+        let side = tml
+            .sections
+            .iter()
+            .find(|s| s.name.starts_with("Side"))
+            .expect("branch section");
+        assert!((side.start_depth - 10.0 * FEET_TO_METERS).abs() < 1e-6);
+
+        let (configs, _, _) = convert_tml_to_import_configs(&tml, false, false).unwrap();
+        let side_config = configs
+            .iter()
+            .find(|c| c.name.as_deref().is_some_and(|n| n.starts_with("Side")))
+            .expect("branch config");
+        assert!((side_config.shots[0].depth_in - 10.0 * FEET_TO_METERS).abs() < 1e-6);
+        assert!((side_config.shots[0].depth_out - 30.0 * FEET_TO_METERS).abs() < 1e-6);
+    }
+
+    /// `firstStartAbsoluteElevation` is a length, so an imperial file states it
+    /// in feet - both on `TmlFile` and on the geo-coding altitude derived from
+    /// it.
+    #[test]
+    fn imperial_elevation_is_converted() {
+        let shots = [
+            tml_shot_xml_gps(0, -1, "START", "Start", 20.5, -87.3),
+            tml_shot_xml_depth(1, 0, "REAL", "Main", 10.0, -1.0),
+        ]
+        .join("\n");
+        let tml = parse_synthetic_tmlu(&wrap_xml_with("ft", 500.0, &shots));
+
+        assert_eq!(tml.unit, TmlUnit::Imperial);
+        assert!((tml.first_start_absolute_elevation - 500.0 * FEET_TO_METERS).abs() < 1e-6);
+        let geo = tml
+            .geo_coding
+            .expect("geo coding from the GPS-bearing shot");
+        assert!((geo.altitude - 500.0 * FEET_TO_METERS).abs() < 1e-6);
+    }
+
+    /// The metric twin: nothing is scaled, so the elevation is passed through.
+    #[test]
+    fn metric_elevation_is_passed_through() {
+        let shots = [
+            tml_shot_xml_gps(0, -1, "START", "Start", 20.5, -87.3),
+            tml_shot_xml_depth(1, 0, "REAL", "Main", 10.0, -1.0),
+        ]
+        .join("\n");
+        let tml = parse_synthetic_tmlu(&wrap_xml_with("m", 500.0, &shots));
+
+        assert_eq!(tml.unit, TmlUnit::Metric);
+        assert!((tml.first_start_absolute_elevation - 500.0).abs() < f64::EPSILON);
+    }
+
+    /// An unknown `<unit>` still reads as metric - but it says so, because a
+    /// wrong scale factor leaves no other trace in the imported data.
+    #[test]
+    fn an_unrecognized_unit_warns_and_falls_back_to_metric() {
+        let shots = [
+            tml_shot_xml_depth(0, -1, "START", "Start", 0.0, -1.0),
+            tml_shot_xml_depth(1, 0, "REAL", "Main", 10.0, -1.0),
+        ]
+        .join("\n");
+        let tml = parse_synthetic_tmlu(&wrap_xml_with("furlongs", 0.0, &shots));
+
+        assert_eq!(tml.unit, TmlUnit::Metric);
+        assert_eq!(tml.unrecognized_unit.as_deref(), Some("furlongs"));
+
+        let (_, _, warnings) = convert_tml_to_import_configs(&tml, false, false).unwrap();
+        assert!(
+            warnings.iter().any(|w| w.contains("furlongs")),
+            "the raw unit string must reach the import receipt, got {warnings:?}"
+        );
+    }
+
+    /// The units we do understand, and an absent `<unit>`, stay silent - a
+    /// warning on every ordinary metric file would be noise.
+    #[test]
+    fn known_and_absent_units_do_not_warn() {
+        for raw in ["m", "M", "metric", "ft", "FT", "imperial", "", "  "] {
+            let (_, unrecognized) = classify_unit(raw);
+            assert_eq!(unrecognized, None, "unit {raw:?} should not warn");
+        }
+        assert_eq!(classify_unit("ft").0, TmlUnit::Imperial);
+        assert_eq!(classify_unit("").0, TmlUnit::Metric);
     }
 
     // -------------------------------------------------------------------
@@ -2672,6 +2884,7 @@ mod tests {
             unit: TmlUnit::Metric,
             use_magnetic_azimuth: true,
             first_start_absolute_elevation: 100.0,
+            unrecognized_unit: None,
             geo_coding: None,
             sections,
             closures,
@@ -2730,6 +2943,7 @@ mod tests {
             unit: TmlUnit::Metric,
             use_magnetic_azimuth: false,
             first_start_absolute_elevation: 0.0,
+            unrecognized_unit: None,
             geo_coding: None,
             sections: Vec::new(),
             closures: Vec::new(),
@@ -2992,6 +3206,7 @@ mod tests {
             unit: TmlUnit::Metric,
             use_magnetic_azimuth: false,
             first_start_absolute_elevation: 0.0,
+            unrecognized_unit: None,
             geo_coding: None,
             sections: vec![
                 TmlSection {
@@ -3064,6 +3279,7 @@ mod tests {
             unit: TmlUnit::Metric,
             use_magnetic_azimuth: false,
             first_start_absolute_elevation: 0.0,
+            unrecognized_unit: None,
             geo_coding: None,
             sections: vec![
                 TmlSection {
@@ -3155,6 +3371,7 @@ mod tests {
             unit: TmlUnit::Metric,
             use_magnetic_azimuth: false,
             first_start_absolute_elevation: 0.0,
+            unrecognized_unit: None,
             geo_coding: None,
             sections: vec![
                 TmlSection {
@@ -3236,6 +3453,7 @@ mod tests {
             unit: TmlUnit::Metric,
             use_magnetic_azimuth: false,
             first_start_absolute_elevation: 0.0,
+            unrecognized_unit: None,
             geo_coding: None,
             sections: vec![
                 // Section A (index 0): shots 1,2
@@ -3403,6 +3621,7 @@ mod tests {
             unit: TmlUnit::Metric,
             use_magnetic_azimuth: true,
             first_start_absolute_elevation: 100.0,
+            unrecognized_unit: None,
             geo_coding: None,
             sections,
             closures,
