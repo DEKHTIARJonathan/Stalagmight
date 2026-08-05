@@ -77,21 +77,26 @@
  * What was removed, and what replaced it:
  *
  *   - FINDING 11 (`pre-save-snapshot-undo-reverts-save-heals`, classifier
- *     deleted; fixed IN PART in 94896857). A `ProjectSnapshotPair` recorded
- *     BEFORE the save held the pre-heal project in both halves, so redoing one
- *     reverted the save's gauge-anchor capture. This scenario saves with a stack
- *     of pre-save entries under it and then redoes all of them, so it fired every
- *     iteration. The save heals are now factored into `apply_save_heals` and
- *     re-applied by every snapshot restore, so a restored project meets a saved
- *     one's standard. `undo_of_a_pre_save_entry_keeps_the_saves_gauge_anchors` is
- *     un-ignored and green, and this scenario's own iterations are clean.
+ *     deleted; fixed in 94896857, completed by b9d6b14b). A
+ *     `ProjectSnapshotPair` recorded BEFORE the save held the pre-heal project in
+ *     both halves, so redoing one reverted the save's gauge-anchor capture. This
+ *     scenario saves with a stack of pre-save entries under it and then redoes
+ *     all of them, so it fired every iteration. The save heals are factored into
+ *     `apply_save_heals` and re-applied by every snapshot restore, so a restored
+ *     project meets a saved one's standard.
+ *     `undo_of_a_pre_save_entry_keeps_the_saves_gauge_anchors` is un-ignored and
+ *     green.
  *
- *     A RESIDUE IS STILL OPEN, and `undo-redo-fuzz` is red on it: the re-apply is
- *     a CARRY-FORWARD from the live project, so it cannot restore anchors to a
- *     section the snapshot RE-CREATES (nothing live holds them). This scenario
- *     does not reach that shape - its snapshot pairs edit sections that stay put -
- *     which is why it passes while half of `undo-redo-fuzz`'s seeds do not. See
- *     entry 11 in `undoRedoFuzz.ts` for the 2-step reduction.
+ *     The re-apply is a CARRY-FORWARD from the live project, which left a residue
+ *     that `undo-redo-fuzz` found and this scenario never could: it cannot
+ *     restore anchors to a section the snapshot RE-CREATES, because nothing live
+ *     holds them. That shape is out of this plan's reach - its snapshot pairs edit
+ *     sections that stay put - which is why it passed while half of
+ *     `undo-redo-fuzz`'s seeds did not. b9d6b14b closes it by making snapshot
+ *     pairs SELF-REFRESHING walls (an undo re-records the entry's `after` half
+ *     from the live project before restoring `before`, and a redo mirrors it), so
+ *     pair undo/redo are exact inverses by construction rather than by re-healing
+ *     afterwards. Entry 11 in `undoRedoFuzz.ts` carries the 2-step reduction.
  *
  *   - BUG 8 (`bug-8-wrong-shot-delete`, classifier deleted; fixed in b9c9d649).
  *     Undo of a `CreateShot` deleted the wrong shot after a reload, because
@@ -206,10 +211,11 @@
  *     and the default arrangement is the one the plan's coverage promises are
  *     written against.
  *
- * ## Open, found by this scenario on 2026-08-05 (release, HEAD 4579f18f)
+ * ## Found by this scenario on 2026-08-05 (release, HEAD 4579f18f) - FIXED
  *
- * 27. UNDO DROPS AN EXACTLY-ZERO `section_offsets` KEY. On naharon, undoing an
- *     `update_shot` removes `project.section_offsets.0`, which the state it is
+ * 27. FIXED (b9d6b14b, and the state class removed entirely by f16c96a8).
+ *     UNDO DROPPED AN EXACTLY-ZERO `section_offsets` KEY. On naharon, undoing an
+ *     `update_shot` removed `project.section_offsets.0`, which the state it was
  *     restoring had as `[0,0]`:
  *
  *         undo did not restore the state recorded at depth 16
@@ -217,19 +223,30 @@
  *           at project.section_offsets.0
  *             expected: [0,0]   actual: <absent>
  *
- *     It fires BEFORE the save (`saves=0 reloads=0`), so it is an in-session
- *     defect, not a persistence one, and it is the exact mirror of finding 2.
+ *     It fired BEFORE the save (`saves=0 reloads=0`), so it was an in-session
+ *     defect, not a persistence one, and it was the exact mirror of finding 2.
  *     Finding 2 was "an undo LEAKS an all-zero offset key the section did not
  *     have"; a67dd1b5 fixed it by making adjust-style writes DROP a key that
- *     lands within `Project::OFFSET_DUST_M` of zero
- *     (`write_adjusted_section_offset`). An undo of `PreviousValues { shot_id }`
- *     re-executes `update_shot`, which runs that same cascade - so a key whose
- *     legitimate value IS (0,0) is now deleted by the undo instead of being left
- *     alone. Geometrically inert, exactly as finding 2 was, and just as much a
- *     non-inverse: the key is serialized into the .stalx.
+ *     lands within `Project::OFFSET_DUST_M` of zero. An undo of
+ *     `PreviousValues { shot_id }` re-executes `update_shot`, which runs that
+ *     same cascade - so a key whose legitimate value IS (0,0) was deleted by the
+ *     undo instead of being left alone. Geometrically inert, exactly as finding 2
+ *     was, and just as much a non-inverse: the key is serialized into the .stalx.
  *
- *     Repro: `STALAGMIGHT_FUZZ_FIXTURE=naharon.stalx --seed 5 --iterations 2`.
- *     `pnpm agent:fuzz-shrink` reduces it to 5 steps (1-minimal, 2 candidates
+ *     Fixed on the principle that AN INVERSE RESTORES, IT DOES NOT RE-DERIVE:
+ *     `PreviousValues` and `CreatedShotSnapshot` capture the rigid connected set's
+ *     `section_offsets` PRE-command (additive serde fields) and the undo puts them
+ *     back verbatim instead of running the cascade again (b9d6b14b). f16c96a8 then
+ *     removed the underlying state from the model altogether - a dust-zero offset
+ *     entry is unrepresentable, normalized by the single writer and re-normalized
+ *     at the two boundaries that ingest maps this app did not write (the loader's
+ *     zero-trust re-solve, and snapshot restore for legacy payloads) - so the
+ *     "was this key legitimately present?" question the two findings kept
+ *     disagreeing about no longer exists.
+ *
+ *     Repro, kept and now expected CLEAN:
+ *     `STALAGMIGHT_FUZZ_FIXTURE=naharon.stalx --seed 5 --iterations 2`.
+ *     `pnpm agent:fuzz-shrink` reduced it to 5 steps (1-minimal, 2 candidates
  *     rejected as failing differently):
  *
  *         1. createSection(spare,shots=3)          <- section 41
@@ -238,7 +255,8 @@
  *         4. updateShot(s=41,shot=4100001,...)
  *         5. undo
  *
- *     Not classified and not tolerated: it fails the run, which is the point.
+ *     It was never classified and never tolerated: it failed the run, which is
+ *     the point.
  *
  * A structural fact worth keeping, found while reaching these: a
  * `ProjectSnapshotPair` entry is a WALL. `Shot::id` is serialized inside a

@@ -16,21 +16,20 @@ import { callStoreAction } from './lib/stores';
 const SMOKE_ITERATIONS: Record<string, number> = {
   'seed-large-project': 1,
   'undo-redo-churn': 5,
-  // STRICT, and still RED - on a different bug than it used to be. This count is
-  // not arbitrary: seed 1 x40 on the v2 generator stream is the repro line for
-  // issue #413 bug 1 (a redo of CreateSection re-minting every shot uuid, plus
-  // the gauge-anchor half), so this entry is that bug's standing regression
-  // check, and bug 1 is fixed. What it hits now is finding 11's RESIDUE: a redo
-  // of a pre-save ProjectSnapshotPair that RE-CREATES a section drops the gauge
-  // anchors the save captured, because the fix's carry-forward can only copy
-  // them from a live section that still exists. `pnpm agent:fuzz-shrink` reduces
-  // this very seed to two steps - executeBatch(...+crtSec+...) then save - and
-  // the reduction is written up in the scenario header.
+  // GREEN, and STRICT. This count is not arbitrary: seed 1 x40 on the v2
+  // generator stream is the repro line for issue #413 bug 1 (a redo of
+  // CreateSection re-minting every shot uuid, plus the gauge-anchor half), so
+  // this entry is that bug's standing regression check. It is also finding 11's
+  // residue's: after bug 1 was fixed this seed went on failing, and
+  // `pnpm agent:fuzz-shrink` cut it to two steps - executeBatch(...+crtSec+...)
+  // then save - which is what identified and then closed that residue
+  // (b9d6b14b). Both reductions are written up in the scenario header.
   //
   // Every classifier and every known-bug tolerance is deleted, so
   // STALAGMIGHT_FUZZ_ALLOW_KNOWN_BUGS=1 changes nothing: a mismatch of any shape
-  // fails. Do not lower the count to make the gate green, and do not add a
-  // classifier back - the red is the app's, and it is the point.
+  // fails. Do not lower the count - a shorter run stops reaching the sequences
+  // both bugs were minimized to - and if this ever goes red again, do not add a
+  // classifier back: the red would be the app's.
   'undo-redo-fuzz': 40,
   // GREEN, and strict, for the same reasons. ONE iteration is what the entry is
   // set to - the scenario is not a random walk, so every iteration builds the
@@ -47,10 +46,11 @@ const SMOKE_ITERATIONS: Record<string, number> = {
   // a regression check. Raise it only if someone wants a longer soak here rather
   // than in `pnpm agent:scenario`.
   //
-  // The naharon fixture is NOT clean on this scenario: finding 27 (an undo
-  // dropping an exactly-zero section_offsets key) reproduces at
-  // STALAGMIGHT_FUZZ_FIXTURE=naharon.stalx --seed 5. The gate runs the default
-  // fixture, so it does not see it; the write-up is in the scenario header.
+  // Worth running on naharon by hand now and then, since the gate only ever sees
+  // the default fixture: finding 27 (an undo dropping an exactly-zero
+  // section_offsets key) was found at STALAGMIGHT_FUZZ_FIXTURE=naharon.stalx
+  // --seed 5 and nowhere else. Fixed in b9d6b14b / f16c96a8, and that seed is
+  // clean; the write-up is in the scenario header.
   'undo-persistence-fuzz': 1,
   'dialog-cycling': 8,
   'tool-switch-spam': 20,

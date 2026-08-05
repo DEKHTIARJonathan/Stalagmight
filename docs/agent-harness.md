@@ -440,16 +440,20 @@ authoritative copy of the repro commands.
 Every one of those findings is FIXED in the Rust tier, so every known-bug
 classifier and every tolerance here has been deleted per the delete-when-fixed
 contract: a mismatch of any shape, at any depth, fails the run again. The repro
-lines are kept verbatim as regression checks.
+lines are kept verbatim as regression checks, and they are GREEN.
 
-It is still RED, on one thing: finding 11's residue. The fix re-applies the save
-heals to a restored project as a CARRY-FORWARD from the live project, so a
-`ProjectSnapshotPair` recorded before a save that RE-CREATES a section (a batch
-containing a create, a range-split, ...) still comes back without the gauge
-anchors the save captured - there is no live section to carry them from.
-`pnpm agent:fuzz-shrink` reduces fractal seed 1 x40 to two steps for it:
-`executeBatch(...+crtSec+...)` then `save`. Roughly half the seeds on either
-fixture reach it. No classifier was re-added; the red is the app's.
+The last one to close was found by this tier after the earlier waves: **finding
+11's residue**. That fix re-applied the save heals to a restored project as a
+CARRY-FORWARD from the live project, so a `ProjectSnapshotPair` recorded before a
+save that RE-CREATES a section (a batch containing a create, a range-split, ...)
+still came back without the gauge anchors the save captured - there was no live
+section to carry them from, and roughly half the seeds on either fixture reached
+it. `pnpm agent:fuzz-shrink` cut fractal seed 1 x40 to two steps for it:
+`executeBatch(...+crtSec+...)` then `save`. Closed in b9d6b14b by making snapshot
+pairs self-refreshing walls - an undo re-records the entry's `after` half from
+the live project before restoring `before`, and a redo mirrors it, so pair
+undo/redo are exact inverses by construction. No classifier was ever added for
+it; the scenario stayed red until the app was fixed.
 
 ### undo-persistence-fuzz
 
@@ -514,14 +518,19 @@ a shot by `uuid` (the route `StationKey` and `CreatedShotSnapshot { uuid }`
 already took), with a load-time pass that DROPS an entry whose target no longer
 resolves rather than leaving it to wedge the stack.
 
-Open here as of 2026-08-05, on naharon only: **finding 27** - an undo of
-`update_shot` DROPS `section_offsets.0` where the state it restores had `[0,0]`.
-In-session (no save involved), and the exact mirror of finding 2: a67dd1b5 made
-adjust-style offset writes drop a key that lands within `OFFSET_DUST_M` of zero,
-and an undo re-executes the command through that same cascade, so a key whose
-legitimate value is (0,0) is deleted rather than left alone.
-`STALAGMIGHT_FUZZ_FIXTURE=naharon.stalx --seed 5 --iterations 2`; the shrinker
-reduces it to five steps.
+Found here on naharon and since FIXED (b9d6b14b, f16c96a8): **finding 27** - an
+undo of `update_shot` DROPPED `section_offsets.0` where the state it restores had
+`[0,0]`. In-session (no save involved), and the exact mirror of finding 2:
+a67dd1b5 made adjust-style offset writes drop a key that lands within
+`OFFSET_DUST_M` of zero, and an undo re-executes the command through that same
+cascade, so a key whose legitimate value is (0,0) was deleted rather than left
+alone. Fixed on the rule that an inverse RESTORES rather than RE-DERIVES (the
+undo data captures the rigid set's offsets pre-command and puts them back
+verbatim), after which f16c96a8 made a dust-zero entry unrepresentable outright -
+one normalizing writer, plus re-normalization at the loader and at snapshot
+restore, the two boundaries that ingest maps this app did not write.
+`STALAGMIGHT_FUZZ_FIXTURE=naharon.stalx --seed 5 --iterations 2` is kept as its
+regression check; the shrinker had reduced it to five steps.
 
 ### Three tiers, and which one gates CI
 
