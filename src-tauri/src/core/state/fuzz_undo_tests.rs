@@ -33,6 +33,11 @@
 //! `fuzz_shrink_tests.rs` is not a tier: it finds nothing. It MINIMIZES what
 //! this module finds - see "The trace, and the shrinker" below.
 //!
+//! `fuzz_rarity_tests.rs` is not a tier either: it is a MEASUREMENT, and its
+//! answer is the second negative result on corpus guidance. See
+//! [`fuzz_corpus_sweep`] for the first one and for what the two of them say
+//! together.
+//!
 //! # THE BUG IDENTIFICATION MATRIX
 //!
 //! Every finding the agent-harness fuzzers found is reachable HERE, and is
@@ -3207,6 +3212,33 @@ pub(super) fn topology_signature(state: &AppState) -> String {
         bucket(project.station_comments.len()),
         diverged,
     )
+}
+
+/// The topology signature at every prefix of a seed's MUTATE-ONLY walk - which
+/// is the exact trajectory [`Plan::prologue`] replays, state by state.
+///
+/// `prologue_signatures(seed, closures, n)[i - 1]` is the signature of the
+/// project a run with `prologue: Some((seed, i))` STARTS FROM, for every `i` in
+/// `1..=n`. That is what lets a corpus be keyed on what an entry actually
+/// carries rather than on what the run that suggested it happened to end with -
+/// see `fuzz_rarity_tests`, which is the only caller and which measures the gap
+/// between those two things.
+///
+/// Exact while no config is drawn: `start_run` builds the same `Fuzzer::new` in
+/// that case, and every regime that uses this has `config_fuzz` and `combined`
+/// off. The walk stops early for the same reason the prologue does - once the
+/// app's own alignment assert has fired, nothing after it measures the app.
+pub(super) fn prologue_signatures(seed: u32, closures: bool, moves: usize) -> Vec<String> {
+    let mut fuzzer = Fuzzer::new(seed, closures);
+    let mut signatures = Vec::with_capacity(moves);
+    for _ in 0..moves {
+        if fuzzer.stopped() {
+            break;
+        }
+        fuzzer.step_mutate();
+        signatures.push(topology_signature(&fuzzer.state));
+    }
+    signatures
 }
 
 // ===========================================================================
@@ -8357,6 +8389,31 @@ fn fuzz_seed_survey() {
 /// 10 needed are rare, not merely new, and `c`/`y`/`v` in the signature are
 /// exactly those bits. Guidance keyed on "has a closure" or "ids have diverged"
 /// would compound the shapes that matter instead of every shape at all.
+///
+/// # The second answer, also NO
+///
+/// That rare-feature alternative was picked up and measured -
+/// `fuzz_rarity_tests.rs`, six repetitions of this budget against three
+/// admission predicates - and it fails too, in three ways this comment could not
+/// have known:
+///
+/// * Keyed on a run's END state it is 11% FAITHFUL in the plain regime: the
+///   prologue replays `(seed, n)` as n mutations, the admitted run walked a
+///   different trajectory, and eight of nine admitted entries deliver a state
+///   carrying none of the bits they were admitted for.
+/// * Keyed on the prologue's OWN trajectory, which is exact by construction, it
+///   reaches the rare classified findings 41% sooner counted in RUNS, 17% sooner
+///   counted in MOVES, and not at all counted in WALL TIME. The lead was the
+///   metric: a continuation run is not one run's worth of compute.
+/// * The accounting above is part of the first answer too. This test gives a
+///   guided run its prologue for FREE, so "the same budget" was 9665 moves and
+///   31.6 s against 6780 and 17.6 s. Guidance lost here while being subsidised
+///   by 80%.
+///
+/// Two negative results from different directions now say the same thing: the
+/// random walk is not this tier's bottleneck, and a shape worth having is
+/// cheaper to CONSTRUCT (`Plan::closure_shapes`, `Plan::divergence`) than to
+/// rediscover.
 ///
 /// The mechanism is kept because the measurement is the deliverable and because
 /// `Plan::prologue` costs two integers; it is NOT wired into any gate, and this

@@ -381,6 +381,37 @@ guidance just spends half the budget replaying. The mechanism is kept, and
 deliberately not wired into any gate; the test's own doc comment carries the
 numbers and the two changes that would make it pay.
 
+**The second answer is also no.** One of those two changes - admission keyed on
+a RARE structural bit rather than on whole-signature novelty - was then measured
+in full: `fuzz_rarity_sweep` and `fuzz_rarity_carryover`
+(`src-tauri/src/core/state/fuzz_rarity_tests.rs`, both `#[ignore]`d), six
+repetitions of 80 runs x 60 moves per arm across four admission predicates and
+two regimes.
+
+```bash
+STALAGMIGHT_RUST_FUZZ_THREADS=8 STALAGMIGHT_RUST_FUZZ_RARITY_BUDGET=80 \
+  STALAGMIGHT_RUST_FUZZ_RARITY_REPS=6 STALAGMIGHT_RUST_FUZZ_ITERATIONS=60 \
+  TELEMETRY_ENDPOINT=http://localhost/dummy cargo test --manifest-path src-tauri/Cargo.toml \
+  --features telemetry --lib fuzz_rarity_sweep -- --ignored --nocapture
+```
+
+Three things came out of it, and the third is the one to remember:
+
+- Keyed on a finished run's END state, admission is barely faithful: a corpus
+  entry replays `(seed, n)` as n mutations, the admitted run had also undone and
+  redone, and 8 of 9 entries (plain regime) deliver a state carrying none of the
+  bits they were admitted for. `fuzz_rarity_carryover` measures exactly that.
+- Keyed on the prologue's own trajectory, which is exact, guidance reaches the
+  regime's rare classified findings 41% sooner **counted in runs**, 17% sooner
+  **counted in moves**, and no sooner at all **counted in wall time**.
+- A run is not a unit of compute. A continuation inherits a bigger project, so it
+  draws more moves, and each move costs more because every oracle canonicalizes
+  the whole project (2.87 ms per move against 2.34). Score a fuzzing heuristic
+  per run and you pay it for being expensive; the first experiment handed
+  guidance an 80% compute subsidy without noticing.
+
+Both write-ups stay next to each other; neither mechanism is wired into a gate.
+
 **Choosing gate seeds.** `fuzz_seed_survey` catches each run's panic instead of
 propagating it, so one bad seed does not hide the twenty after it, and prints
 which seeds are clean plus what the rest failed on. Re-run it as findings are
