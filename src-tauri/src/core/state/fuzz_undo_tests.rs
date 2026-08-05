@@ -24,6 +24,7 @@
 //! | this module | `AppState` directly | undo/redo model + persistence regressions | EVERY CI run |
 //! | `metamorphic_undo_tests.rs` | two `AppState`s from one file | two routes to the same edit disagreeing | EVERY CI run |
 //! | `format_property_tests.rs` | the `.stalx` on disk | a writer or reader that is not a function | EVERY CI run |
+//! | `crash_property_tests.rs` | the files a kill mid-save leaves on disk | a save whose interruption leaves a blend of old and new | EVERY CI run |
 //! | `adversarial_tests.rs` | `AppState` with hostile arguments | a refusal that mutates, and any panic | EVERY CI run |
 //! | `concurrency_tests.rs` | one `AppState` from several threads | a deadlock, a poisoned lock, a race | EVERY CI run |
 //! | agent harness | the real app over IPC | anything the frontend store or the IPC boundary breaks | on demand |
@@ -187,6 +188,50 @@
 //! hit counts say nothing about whether the model acquired a new way to be
 //! wrong, which is the only thing the gate is for.
 //!
+//! ## The knobs that are not modes
+//!
+//! | env | what it does | default |
+//! |---|---|---|
+//! | `SEEDS=n` | seeds `1..=n` (every sweep runs each seed in BOTH modes, so `n` seeds are `2n` runs) | per sweep: 40 survey, 50 soak, 2 horizon |
+//! | `ITERATIONS=n` | moves per run | per sweep: 60 survey, 1000 soak, 10000 horizon |
+//! | `THREADS=n` | workers the sweep runs its seeds on - see below | `available_parallelism` less one core |
+//! | `TRACE=1` | stream every move as it happens (and pin one worker, so the stream stays a stream) | off |
+//! | `VERBOSE=1` | every differing path rather than the first eight, and the whole panic payload per seed in the survey | off |
+//! | `PERSISTENCE=1` | horizon only: cross the save boundary as well | off |
+//!
+//! ## Parallel sweeps, and why the output does not change
+//!
+//! `undo_redo_fuzz_soak`, `fuzz_seed_survey` and `undo_redo_fuzz_horizon` run
+//! their seeds ACROSS THREADS (`run_seed_jobs`). Measured on this module at 32
+//! seeds x 300 moves x 2 modes: 13.9 s at one worker, 3.7 s at four and 2.7 s
+//! at eight, with byte-identical output at every count.
+//!
+//! It is sound for the reason the whole module is cheap to reason about: a run
+//! is a PURE FUNCTION of `(seed, Plan)`. The `Rng` is integer-only and lives in
+//! the `Fuzzer`, every `AppState` is built by the run that uses it, a
+//! persistence run saves into its own `TempDir`, and the two engine-level env
+//! knobs are latched once per process (`fuzz_verbose`, `fuzz_trace`) rather than
+//! re-read per move. Seeds therefore share NO mutable state, and the results are
+//! merged in SEED ORDER, so what gets printed is a function of the seeds and not
+//! of the scheduler. `THREADS=1` is not a separate path - it is the same runner
+//! with one worker - so a difference between one worker and eight is a bug in
+//! `run_seed_jobs`, not a mode of the fuzzer.
+//!
+//! Three consequences worth knowing before reading a parallel run:
+//!
+//! * `summarize`'s `oracle-us` triple is WALL TIME, so it inflates under
+//!   contention. The cost model above was measured at one worker and re-measuring
+//!   it needs `THREADS=1`.
+//! * A panicking seed is caught, attributed to its `(seed, mode)` and re-raised
+//!   after every other seed has finished. The soak used to stop at the first
+//!   one; at soak scale that threw away the rest of the evidence.
+//! * No sweep prints its worker count, deliberately: two runs at different
+//!   thread counts have to diff clean.
+//!
+//! The three GATES stay sequential. They are seconds, `cargo test` already runs
+//! them alongside every other test in the binary, and a gate that spawns a pool
+//! of its own would be competing with libtest's.
+//!
 //! # What it does NOT cover
 //!
 //! Everything above the `AppState` boundary: the projectStore actions, the IPC
@@ -255,6 +300,8 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Mutex, OnceLock, PoisonError};
 
 use tempfile::TempDir;
 
@@ -646,11 +693,7 @@ pub(super) fn describe_diffs(diffs: &[Diff]) -> String {
     // Eight is enough to recognise a shape and short enough to read; a triage
     // run that needs the whole list sets `STALAGMIGHT_RUST_FUZZ_VERBOSE=1`
     // rather than editing this number, which is how the eight got chosen twice.
-    let limit = if std::env::var("STALAGMIGHT_RUST_FUZZ_VERBOSE").is_ok() {
-        MAX_DIFFS
-    } else {
-        8
-    };
+    let limit = if fuzz_verbose() { MAX_DIFFS } else { 8 };
     let shown = diffs.len().min(limit);
     let mut lines: Vec<String> = diffs[..shown]
         .iter()
@@ -2553,7 +2596,7 @@ impl Fuzzer {
         // `#[cfg(test)]`, so it exists ONLY in this tier - and when one of those
         // panics it takes the process down before the payload is built. Streaming
         // the log is how those get attributed to a move.
-        if std::env::var("STALAGMIGHT_RUST_FUZZ_TRACE").is_ok() {
+        if fuzz_trace() {
             println!("  [seed {} depth {}] {line}", self.seed, self.cursor);
         }
         self.log.push(line);
@@ -5241,6 +5284,155 @@ fn summarize(label: &str, seed: u32, outcome: &Outcome) -> String {
     )
 }
 
+// ===========================================================================
+// The env knobs the ENGINE reads, and the seed-parallel runner
+// ===========================================================================
+
+/// `STALAGMIGHT_RUST_FUZZ_VERBOSE`, read ONCE per process.
+///
+/// Both engine-level knobs are LATCHED rather than re-read, and the reason is
+/// the parallel sweeps below. `std::env::var` is neither free nor race-free on
+/// a hot path: it takes the process-wide environment lock on every call, and
+/// these two sit inside `describe_diffs` (per differing path) and `note` (per
+/// MOVE), so a soak makes millions of them - from every worker at once. Other
+/// tests in this same binary call `set_var`, which against a concurrent reader
+/// is a data race in the C sense whatever the edition says about the signature.
+///
+/// Latching also buys the property the determinism contract actually needs: a
+/// run cannot change mode half way through, so what a seed does is fixed before
+/// the first move rather than re-decided at every diff.
+fn fuzz_verbose() -> bool {
+    static VERBOSE: OnceLock<bool> = OnceLock::new();
+    *VERBOSE.get_or_init(|| std::env::var("STALAGMIGHT_RUST_FUZZ_VERBOSE").is_ok())
+}
+
+/// `STALAGMIGHT_RUST_FUZZ_TRACE`, read ONCE per process. See [`fuzz_verbose`]
+/// for why it is latched.
+fn fuzz_trace() -> bool {
+    static TRACE: OnceLock<bool> = OnceLock::new();
+    *TRACE.get_or_init(|| std::env::var("STALAGMIGHT_RUST_FUZZ_TRACE").is_ok())
+}
+
+/// A caught panic's message, or a marker when the payload is not a string.
+///
+/// The same three lines were written out at every `catch_unwind` in this
+/// module; a sweep that silently reported `<non-string panic>` because one of
+/// them forgot the `&str` arm would be a failure lost, which is the one thing
+/// the sweeps must not do.
+fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
+    payload
+        .downcast_ref::<String>()
+        .cloned()
+        .or_else(|| payload.downcast_ref::<&str>().map(|s| (*s).to_string()))
+        .unwrap_or_else(|| "<non-string panic>".to_string())
+}
+
+/// Cores left alone. A sweep that saturates the machine measures the scheduler
+/// as much as the model, and the last core is what the test harness's own
+/// thread, the tracing writer and whatever else is on the box are living on.
+const THREAD_HEADROOM: usize = 1;
+
+/// Stack per worker. A spawned thread's default is 2 MiB, which is a quarter of
+/// what libtest gives the thread a `#[test]` runs on, and this engine recurses
+/// through `canonicalize`/`diff_values` over a whole serialized project. Sizing
+/// the workers UP is free (the pages are mapped on demand) and removes the one
+/// way a parallel run could fail where the sequential one does not.
+const WORKER_STACK_BYTES: usize = 16 * 1024 * 1024;
+
+/// How many workers a sweep runs its seeds on: `STALAGMIGHT_RUST_FUZZ_THREADS`,
+/// else the machine's parallelism less [`THREAD_HEADROOM`], never more than
+/// there are jobs and never less than one.
+///
+/// `TRACE=1` pins one worker unless the knob overrides it, because the trace is
+/// a STREAM: twelve seeds interleaving their moves into one stdout is not a
+/// move log, and reading that log in order is the entire point of the mode.
+fn fuzz_threads(jobs: usize) -> usize {
+    let requested = std::env::var("STALAGMIGHT_RUST_FUZZ_THREADS")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok());
+    let threads = match requested {
+        Some(count) => count,
+        None if fuzz_trace() => 1,
+        None => std::thread::available_parallelism()
+            .map_or(1, |cores| cores.get().saturating_sub(THREAD_HEADROOM)),
+    };
+    threads.clamp(1, jobs.max(1))
+}
+
+/// Run `job` once per entry of `jobs` across a pool of `threads` workers, and
+/// return the results IN INPUT ORDER whatever order they finished in.
+///
+/// # Why this is sound
+///
+/// A run is a pure function of `(seed, Plan)`: `Rng` is integer-only and lives
+/// in the `Fuzzer`, every `AppState` is built by the run that uses it, and a
+/// persistence run saves into its OWN `TempDir`. Seeds share no mutable state,
+/// so a seed's `Outcome` is the same value whichever worker computed it. The
+/// only process-global the engine touched was the environment, and
+/// [`fuzz_verbose`]/[`fuzz_trace`] latch that before any worker starts.
+///
+/// # Why the order matters more than the speed
+///
+/// Every caller merges these results SEQUENTIALLY, in this vector's order, so
+/// the printed output is a function of the seeds and not of the scheduler.
+/// `STALAGMIGHT_RUST_FUZZ_THREADS=1` is therefore not a fallback path: it is
+/// this same code with one worker, and any difference between it and eight
+/// workers is a bug in this function rather than a mode of the fuzzer. No
+/// caller prints the worker count for the same reason - two runs at different
+/// thread counts have to diff clean.
+///
+/// The one number that is NOT a pure function of the seed is `summarize`'s
+/// `oracle-us` triple. It is wall time, so it inflates under contention;
+/// measure the oracle cost at one thread.
+///
+/// # Failures
+///
+/// A panic is caught PER JOB and returned as its message, so one failing seed
+/// neither aborts its siblings nor loses its attribution - the caller pairs it
+/// back with the input that produced it and reports it after every job is in.
+/// `AssertUnwindSafe` is honest here for the reason it is honest in
+/// `fuzz_seed_survey`: a panicking run's `AppState` is dropped immediately and
+/// never observed again.
+fn run_seed_jobs<J: Sync, R: Send>(
+    jobs: &[J],
+    threads: usize,
+    job: impl Fn(&J) -> R + Sync,
+) -> Vec<Result<R, String>> {
+    let next = AtomicUsize::new(0);
+    let results: Mutex<Vec<(usize, Result<R, String>)>> =
+        Mutex::new(Vec::with_capacity(jobs.len()));
+    std::thread::scope(|scope| {
+        for worker in 0..threads {
+            std::thread::Builder::new()
+                .name(format!("fuzz-worker-{worker}"))
+                .stack_size(WORKER_STACK_BYTES)
+                .spawn_scoped(scope, || {
+                    loop {
+                        // Index-at-a-time rather than a static split: seeds cost
+                        // wildly different amounts (a wedged run stops early, a
+                        // persistence run does real SQLite I/O), so a static
+                        // split would leave the sweep waiting on one worker.
+                        let index = next.fetch_add(1, Ordering::Relaxed);
+                        let Some(item) = jobs.get(index) else {
+                            break;
+                        };
+                        let result =
+                            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| job(item)))
+                                .map_err(|payload| panic_message(&*payload));
+                        results
+                            .lock()
+                            .unwrap_or_else(PoisonError::into_inner)
+                            .push((index, result));
+                    }
+                })
+                .expect("failed to spawn a fuzz worker thread");
+        }
+    });
+    let mut collected = results.into_inner().unwrap_or_else(PoisonError::into_inner);
+    collected.sort_by_key(|(index, _)| *index);
+    collected.into_iter().map(|(_, result)| result).collect()
+}
+
 /// THE GATE. Not `#[ignore]`d, so it runs on every `cargo test` and in CI.
 ///
 /// It passes when every difference the fuzzer sees is either equal, inside the
@@ -5519,6 +5711,12 @@ fn bug_7_a_jump_is_n_single_steps() {
 /// run's panic instead of propagating it, so one bad seed does not hide the
 /// twenty after it. `catch_unwind` is used with `AssertUnwindSafe` because a
 /// panicking run's `AppState` is dropped immediately and never observed again.
+///
+/// The seeds run in PARALLEL (`run_seed_jobs`, `STALAGMIGHT_RUST_FUZZ_THREADS`)
+/// and are merged in seed order, so the summary lines, the clean list and the
+/// failure buckets are byte-identical to a one-thread run. The exception is
+/// each line's `oracle-us` triple, which is wall time and inflates under
+/// contention: measure that at `THREADS=1`.
 #[test]
 #[ignore = "survey: prints per-seed status, used to choose GATE_SEEDS"]
 fn fuzz_seed_survey() {
@@ -5539,12 +5737,16 @@ fn fuzz_seed_survey() {
         .ok()
         .and_then(|value| value.parse().ok())
         .unwrap_or(1);
-    let verbose = std::env::var("STALAGMIGHT_RUST_FUZZ_VERBOSE").is_ok();
-    let mut clean = Vec::new();
-    let mut failures: BTreeMap<String, Vec<u32>> = BTreeMap::new();
-    for seed in 1..=seeds {
-        for persistence in [false, true] {
-            let plan = Plan {
+    let verbose = fuzz_verbose();
+    // Seed-major, mode-minor: the same order the sweep used when it ran the
+    // seeds one at a time, and the order every line below is merged in.
+    let jobs: Vec<(u32, bool)> = (1..=seeds)
+        .flat_map(|seed| [(seed, false), (seed, true)])
+        .collect();
+    let results = run_seed_jobs(&jobs, fuzz_threads(jobs.len()), |&(seed, persistence)| {
+        run_fuzz(
+            seed,
+            Plan {
                 iterations,
                 persistence,
                 crossings,
@@ -5554,41 +5756,38 @@ fn fuzz_seed_survey() {
                 divergence,
                 closure_shapes,
                 horizon,
-            };
-            let outcome =
-                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run_fuzz(seed, plan)));
-            match outcome {
-                Ok(result) => {
-                    if !persistence {
-                        clean.push(seed);
-                    }
+            },
+        )
+    });
+    let mut clean = Vec::new();
+    let mut failures: BTreeMap<String, Vec<u32>> = BTreeMap::new();
+    for (&(seed, persistence), outcome) in jobs.iter().zip(results) {
+        match outcome {
+            Ok(result) => {
+                if !persistence {
+                    clean.push(seed);
+                }
+                println!(
+                    "{}",
+                    summarize(
+                        if persistence { "persist" } else { "memory " },
+                        seed,
+                        &result
+                    )
+                );
+            }
+            Err(message) => {
+                if verbose {
                     println!(
-                        "{}",
-                        summarize(
-                            if persistence { "persist" } else { "memory " },
-                            seed,
-                            &result
-                        )
+                        "--- seed {seed} ({}) panicked ---\n{message}",
+                        if persistence { "persist" } else { "memory" }
                     );
                 }
-                Err(payload) => {
-                    let message = payload
-                        .downcast_ref::<String>()
-                        .cloned()
-                        .or_else(|| payload.downcast_ref::<&str>().map(|s| (*s).to_string()))
-                        .unwrap_or_else(|| "<non-string panic>".to_string());
-                    if verbose {
-                        println!(
-                            "--- seed {seed} ({}) panicked ---\n{message}",
-                            if persistence { "persist" } else { "memory" }
-                        );
-                    }
-                    failures
-                        .entry(failure_signature(&message))
-                        .or_default()
-                        .push(seed);
-                    clean.retain(|&s| s != seed);
-                }
+                failures
+                    .entry(failure_signature(&message))
+                    .or_default()
+                    .push(seed);
+                clean.retain(|&s| s != seed);
             }
         }
     }
@@ -5793,6 +5992,13 @@ fn fuzz_corpus_sweep() {
 ///    hands the same id out twice) and the peak size of every
 ///    unbounded-in-principle collection is reported.
 ///
+/// The seeds run in PARALLEL like the other two sweeps, which is what makes
+/// "minutes per seed" affordable at all. The one thing to watch that the
+/// shorter sweeps do not have: a horizon run holds a snapshot per reachable
+/// depth for thousands of moves, so peak memory is per-worker rather than
+/// per-run. `STALAGMIGHT_RUST_FUZZ_THREADS` is the dial if a long horizon
+/// sweep starts swapping.
+///
 /// ```text
 /// STALAGMIGHT_RUST_FUZZ_HORIZON=1 STALAGMIGHT_RUST_FUZZ_SEEDS=4 \
 ///   STALAGMIGHT_RUST_FUZZ_ITERATIONS=10000 \
@@ -5815,23 +6021,29 @@ fn undo_redo_fuzz_horizon() {
     let mut total: BTreeMap<&'static str, usize> = BTreeMap::new();
     let mut trimmed = 0;
     let mut failures = Vec::new();
-    for seed in 1..=seeds {
-        let plan = Plan {
-            iterations,
-            persistence,
-            crossings: 1,
-            prologue: None,
-            jumps: true,
-            closures: false,
-            divergence: false,
-            closure_shapes: false,
-            horizon: true,
-        };
-        // Caught per seed, and RE-RAISED at the end. A long run is expensive
-        // enough that stopping the whole sweep on the first failure wastes the
-        // other seeds' evidence; hiding the failure would be worse, so every one
-        // is reported and the test still fails.
-        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run_fuzz(seed, plan))) {
+    let jobs: Vec<u32> = (1..=seeds).collect();
+    // Caught per seed, and RE-RAISED at the end. A long run is expensive enough
+    // that stopping the whole sweep on the first failure wastes the other seeds'
+    // evidence; hiding the failure would be worse, so every one is reported and
+    // the test still fails.
+    let results = run_seed_jobs(&jobs, fuzz_threads(jobs.len()), |&seed| {
+        run_fuzz(
+            seed,
+            Plan {
+                iterations,
+                persistence,
+                crossings: 1,
+                prologue: None,
+                jumps: true,
+                closures: false,
+                divergence: false,
+                closure_shapes: false,
+                horizon: true,
+            },
+        )
+    });
+    for (&seed, result) in jobs.iter().zip(results) {
+        match result {
             Ok(outcome) => {
                 println!("{}", summarize("horizon", seed, &outcome));
                 trimmed += outcome.trimmed;
@@ -5839,12 +6051,7 @@ fn undo_redo_fuzz_horizon() {
                     *total.entry(id).or_insert(0) += count;
                 }
             }
-            Err(payload) => {
-                let message = payload
-                    .downcast_ref::<String>()
-                    .cloned()
-                    .or_else(|| payload.downcast_ref::<&str>().map(|s| (*s).to_string()))
-                    .unwrap_or_else(|| "<non-string panic>".to_string());
+            Err(message) => {
                 println!("horizon seed={seed} FAILED:\n{message}");
                 failures.push(seed);
             }
@@ -5879,6 +6086,16 @@ fn undo_redo_fuzz_horizon() {
 /// re-running the seed with a smaller iteration count (the run is deterministic,
 /// so a prefix that still fails is a valid smaller repro), then pin it in
 /// `open_undo_bugs_tests.rs`.
+///
+/// The seeds run in PARALLEL - `run_seed_jobs`, sized by
+/// `STALAGMIGHT_RUST_FUZZ_THREADS` - and are merged in seed order, so the two
+/// printed lines are byte-identical to a one-thread run and a soak is worth
+/// running at a scale that used to mean leaving it overnight.
+///
+/// A panicking seed is caught, attributed and RE-RAISED at the end rather than
+/// taking the sweep down with it, which is the horizon run's rule and for the
+/// same reason: at soak scale the other seeds' evidence costs too much to
+/// throw away over the first failure.
 #[test]
 #[ignore = "soak: minutes, not seconds - run deliberately with STALAGMIGHT_RUST_FUZZ_SEEDS/ITERATIONS"]
 fn undo_redo_fuzz_soak() {
@@ -5892,38 +6109,59 @@ fn undo_redo_fuzz_soak() {
         .unwrap_or(1000);
     let mut total: BTreeMap<&'static str, usize> = BTreeMap::new();
     let mut wedges = 0;
-    for seed in 1..=seeds {
-        for persistence in [false, true] {
-            let outcome = run_fuzz(
-                seed,
-                Plan {
-                    iterations,
-                    persistence,
-                    // The soak crosses several times: heals stack on heals, and
-                    // a snapshot two epochs back is compared against a project
-                    // that has been through the loader twice.
-                    crossings: 3,
-                    prologue: None,
-                    // The soak DOES draw jumps and build closures: findings 7 and
-                    // 14 are real, and this is the tier that can afford to keep
-                    // hitting them.
-                    jumps: true,
-                    closures: true,
-                    divergence: persistence,
-                    closure_shapes: true,
-                    horizon: false,
-                },
-            );
-            if outcome.wedged {
-                wedges += 1;
+    let mut failures = Vec::new();
+    // Seed-major, mode-minor: the order the soak ran in when it ran one seed at
+    // a time, and the order the totals are merged in.
+    let jobs: Vec<(u32, bool)> = (1..=seeds)
+        .flat_map(|seed| [(seed, false), (seed, true)])
+        .collect();
+    let results = run_seed_jobs(&jobs, fuzz_threads(jobs.len()), |&(seed, persistence)| {
+        run_fuzz(
+            seed,
+            Plan {
+                iterations,
+                persistence,
+                // The soak crosses several times: heals stack on heals, and
+                // a snapshot two epochs back is compared against a project
+                // that has been through the loader twice.
+                crossings: 3,
+                prologue: None,
+                // The soak DOES draw jumps and build closures: findings 7 and
+                // 14 are real, and this is the tier that can afford to keep
+                // hitting them.
+                jumps: true,
+                closures: true,
+                divergence: persistence,
+                closure_shapes: true,
+                horizon: false,
+            },
+        )
+    });
+    for (&(seed, persistence), result) in jobs.iter().zip(results) {
+        match result {
+            Ok(outcome) => {
+                if outcome.wedged {
+                    wedges += 1;
+                }
+                for (id, count) in outcome.hits {
+                    *total.entry(id).or_insert(0) += count;
+                }
             }
-            for (id, count) in outcome.hits {
-                *total.entry(id).or_insert(0) += count;
+            Err(message) => {
+                println!(
+                    "soak seed={seed} ({}) FAILED:\n{message}",
+                    if persistence { "persist" } else { "memory" }
+                );
+                failures.push(seed);
             }
         }
     }
     println!("soak: {seeds} seed(s) x {iterations} iterations x 2 modes");
     println!("soak classified totals: {total:?} ({wedges} wedged run(s))");
+    assert!(
+        failures.is_empty(),
+        "soak seed(s) {failures:?} failed - see the payloads above"
+    );
 }
 
 /// Is the adjusted solve a FUNCTION of the project, or does it wander?

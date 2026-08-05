@@ -80,6 +80,30 @@ STALAGMIGHT_RUST_FUZZ_SEEDS=200 STALAGMIGHT_RUST_FUZZ_ITERATIONS=1000 \
   --features telemetry --lib undo_redo_fuzz_soak -- --ignored --nocapture
 ```
 
+**All three sweeps run their seeds in parallel.** The soak, the survey and the
+horizon run spread their seeds over a worker pool; the three CI gates do not
+(they are seconds, and libtest is already running them alongside every other
+test in the binary). Measured at 32 seeds x 300 moves x 2 modes: 13.9 s at one
+worker, 3.7 s at four, 2.7 s at eight.
+
+| knob | effect |
+|---|---|
+| `STALAGMIGHT_RUST_FUZZ_THREADS=n` | n workers |
+| unset | `available_parallelism` less one core, never more workers than there are runs |
+| `STALAGMIGHT_RUST_FUZZ_THREADS=1` | the sequential run, on the same code path |
+
+A run is a pure function of `(seed, plan)` - integer-only PRNG in the `Fuzzer`,
+an `AppState` per run, a `TempDir` per persistence run - and the results are
+merged in SEED order, so **the printed output is byte-identical at any thread
+count**, including the per-seed summary lines, the clean list, the failure
+buckets and the classified totals. Two things follow:
+
+- The `oracle-us` triple in each summary line is WALL time and inflates under
+  contention. Measure the oracle cost at `THREADS=1`.
+- A panicking seed is caught, attributed to its seed and mode, and re-raised
+  after every other seed has finished, so one bad seed no longer costs a soak
+  the rest of its evidence.
+
 **The red tests.** Twenty-five of them, all `#[ignore]`d, all failing today on
 the bug named in each `#[ignore]` reason. Twenty-three are reductions in
 `open_undo_bugs_tests.rs`; two are pinned to a fuzzer SEED in the fuzz module
@@ -266,7 +290,9 @@ STALAGMIGHT_RUST_FUZZ_SEEDS=40 STALAGMIGHT_RUST_FUZZ_ITERATIONS=100 \
 happens, including the line the classifier writes when a hit is explained - which
 matters, because a classified hit RESYNCS the model and can arm a cascade, so a
 later failure that looks spontaneous usually is not (that is exactly how finding
-15 came to be filed as its own defect).
+15 came to be filed as its own defect). Tracing pins the sweeps to ONE worker
+unless `STALAGMIGHT_RUST_FUZZ_THREADS` says otherwise: a dozen seeds
+interleaving their moves into one stdout is not a move log.
 `STALAGMIGHT_RUST_FUZZ_VERBOSE=1` prints the whole panic payload per seed in the
 survey, and every differing path rather than the first eight.
 
