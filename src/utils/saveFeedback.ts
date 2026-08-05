@@ -77,20 +77,42 @@ export interface ImportDialogUi {
 /**
  * A failed import, classified by where it failed:
  * - `command`: the backend returned `success: false` - the dialog's work is
- *   over, so it closes via the shared exit sequence before the error dialog.
+ *   over, so it closes (with its completion telemetry) before the error dialog.
+ *   It does NOT run the rest of the exit sequence: `setView`/fit dropped the
+ *   user into the empty project the import had just created, fitted the map to
+ *   nothing, and only THEN said why (#411 C2).
  * - `empty`: the backend succeeded but imported nothing (e.g. a `.wpj` whose
  *   `.srv` files are missing) - closes the dialog and says why, because a
  *   silent "success" with an empty map reads as breakage.
- * - `transport`: the IPC call itself threw - unlike `command`, the shared
- *   exit sequence does NOT run (no dialog-complete telemetry, no view switch);
- *   the error dialog takes the single dialog slot, so dismissing it returns
- *   the user to where they were. `format` names the source format in the
- *   fallback message.
+ * - `transport`: the IPC call itself threw - unlike the other two, the dialog is
+ *   not closed and no completion telemetry is stamped; the error dialog takes
+ *   the single dialog slot, so dismissing it returns the user to where they
+ *   were. `format` names the source format in the fallback message.
  */
 export type ImportFailure =
   | { phase: 'command'; error: string | null | undefined }
   | { phase: 'empty'; message: string }
   | { phase: 'transport'; error: unknown; format: string };
+
+/**
+ * The user-facing message for a failed import. Exported so a dialog that reports
+ * the failure on a surface of its own (TmlImportDialog's empty-project prompt,
+ * which has to ask about the project the failed import created) words it exactly
+ * as this router would, instead of minting a second set of strings.
+ */
+export function importFailureMessage(failure: ImportFailure): string {
+  switch (failure.phase) {
+    case 'transport':
+      return getErrorMessage(
+        failure.error,
+        i18n.t('dialogs.importFailure.transportFallback', { format: failure.format }),
+      );
+    case 'empty':
+      return failure.message;
+    case 'command':
+      return failure.error ?? i18n.t('dialogs.importFailure.unknown');
+  }
+}
 
 /**
  * The one router for the TML/Compass/Walls/GPX import dialogs' failure paths
@@ -102,14 +124,12 @@ export function surfaceImportFailure(
   ui: ImportDialogUi,
   failure: ImportFailure,
 ): void {
+  const message = importFailureMessage(failure);
   switch (failure.phase) {
     case 'transport':
       ui.openDialog('error', {
         title: i18n.t('dialogs.importFailure.transportTitle'),
-        message: getErrorMessage(
-          failure.error,
-          i18n.t('dialogs.importFailure.transportFallback', { format: failure.format }),
-        ),
+        message,
       });
       return;
     case 'empty':
@@ -117,14 +137,16 @@ export function surfaceImportFailure(
       ui.closeDialog();
       ui.openDialog('error', {
         title: i18n.t('dialogs.importFailure.emptyTitle'),
-        message: failure.message,
+        message,
       });
       return;
     case 'command':
-      completeImportToSingleView(dialogName, ui);
+      // Report BEFORE anything moves: no setView, no fit-to-bounds.
+      trackDialogComplete(dialogName);
+      ui.closeDialog();
       ui.openDialog('error', {
         title: i18n.t('dialogs.importFailure.commandTitle'),
-        message: failure.error ?? i18n.t('dialogs.importFailure.unknown'),
+        message,
       });
   }
 }

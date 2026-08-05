@@ -270,6 +270,9 @@ export async function routeOpenedFile(
       }
       const tmlFile = await store.parseTml(path);
       if (!tmlFile) return;
+      // Mirror the DMP branch: the project about to be created exists only for
+      // this import, and the import dialog has to know that to offer to discard
+      // it again if the import is cancelled or fails (#411 C2).
       ui.setImportContext('new-project');
       ui.openDialog('new-project-for-import', {
         tmlFile,

@@ -1280,6 +1280,48 @@
       "create": "Create & Continue",
       "creating": "Creating..."
     },
+    "tmlImport": {
+      "title": "Import Ariane Survey",
+      "unitConversion": "Converted from imperial to metric",
+      "stats": {
+        "sections": "Sections",
+        "shots": "Shots",
+        "totalLength": "Total length",
+        "lengthValue": "{{length}} m",
+        "depthRange": "Depth range",
+        "none": "-"
+      },
+      "table": {
+        "section": "Section",
+        "shots": "Shots",
+        "surveyor": "Surveyor",
+        "date": "Date",
+        "color": "Color",
+        "branch": "(branch)"
+      },
+      "empty": "This file has nothing to import under the current options.",
+      "closures_one": "{{count}} loop closure detected",
+      "closures_other": "{{count}} loop closures detected",
+      "includeExcluded_one": "Include {{count}} excluded shot",
+      "includeExcluded_other": "Include {{count}} excluded shots",
+      "keepCommentsOnShots": "Keep comments on shots",
+      "virtualShots_one": "{{count}} virtual shot:",
+      "virtualShots_other": "{{count}} virtual shots:",
+      "virtualMode": {
+        "auto": "Auto (bounded runs are jumps)",
+        "allJumps": "All jumps",
+        "allReferences": "All references"
+      },
+      "residue": {
+        "title": "Empty Project",
+        "body": "This project was created for this import and is still empty. Keep it, or discard it and return to the project list?",
+        "keep": "Keep empty project",
+        "discard": "Discard it"
+      },
+      "cancel": "Cancel",
+      "import": "Import",
+      "importing": "Importing..."
+    },
     "dmpNewImport": {
       "title": "Connection Wizard",
       "progress": "{{placed}} of {{total}} sections placed",
@@ -2084,7 +2126,11 @@
         "takingLong": "Taking longer than expected",
         "creatingDatabase": "Creating database",
         "initializingProject": "Initializing project",
-        "savingSettings": "Saving settings"
+        "savingSettings": "Saving settings",
+        "importParsing": "Reading survey file",
+        "importConverting": "Converting to project model",
+        "importApplyingChanges": "Applying sections and merges",
+        "importFinalizing": "Finalizing import"
       }
     },
     "map": {
