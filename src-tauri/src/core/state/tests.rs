@@ -22636,3 +22636,142 @@ fn test_update_config_leaves_an_explicitly_cleared_shortcut_empty() {
         "the load path must still re-seed an empty binding read from config.toml"
     );
 }
+
+// === #413 finding 26: a shot edit must not re-georeference the survey ===
+
+/// FINDING 26's reduction: removing the FIRST zero datum re-defines the world
+/// frame, and the next geometry edit in a promoted group silently translates the
+/// whole rigid group onto the new frame - unundoably.
+///
+/// `zero_datums[0]` IS the origin: `Project::set_zero_datum` places every later
+/// datum at `gps_to_local(its gps, first.gps)`. `Project::remove_zero_datum` is
+/// a bare `retain`, so dropping the first one promotes the next and moves
+/// nothing - `resolve_offsets` cannot repair it either, because the cascade
+/// marks datum sections AUTHORITATIVE and never re-derives their offsets. The
+/// promoted group is then sitting kilometres from the position its own datum
+/// implies, and nothing notices until the next shot edit, when
+/// `realign_after_shot_edit` re-derives the ABSOLUTE target and yanks the group
+/// onto it. That happens inside `update_shot`, whose `UndoData::PreviousValues`
+/// carries the shot's fields and no offsets, so the undo cannot put the survey
+/// back: it restores the shot, re-enters the same realign, and re-anchors to the
+/// origin a second time.
+///
+/// This is the horizon-mode component-translation observation at 20 lines: the
+/// fuzzer reached it at seed 2 depth 1189 (`HORIZON=1 SEEDS=2 ITERATIONS=2000`),
+/// where sections 65 and 81 were both off by `(22230.09, -10480.74)` with 81 on
+/// the origin. Four earlier synthetic reductions missed it because none of them
+/// removed the FIRST datum, which is the whole mechanism.
+///
+/// Both halves are asserted: the forward edit must not move the group, and the
+/// undo must restore every offset exactly.
+#[test]
+fn finding_26_a_shot_edit_does_not_translate_a_group_whose_first_datum_was_removed() {
+    let state = AppState::new().unwrap();
+    assert!(
+        state
+            .execute(Command::CreateProject {
+                name: "datum frame".to_string(),
+                location: None,
+            })
+            .success
+    );
+
+    let section = |name: &str| {
+        state
+            .execute(Command::CreateSection {
+                name: Some(name.to_string()),
+                surveyor: None,
+                date: None,
+                color: "#111111".to_string(),
+                direction: Some(SurveyDirection::In),
+                shots: vec![test_shot_data(5.0), test_shot_data(5.0)],
+            })
+            .section_id
+            .unwrap()
+    };
+    let anchor = section("anchor");
+    let a = section("a");
+    let b = section("b");
+
+    // {a, b} is one rigid group.
+    assert!(
+        state
+            .execute(Command::MergeStations {
+                station_a: StationRef::new(a, 2),
+                station_b: StationRef::new(b, 0),
+            })
+            .success
+    );
+
+    // The FIRST datum defines the world origin.
+    assert!(
+        state
+            .execute(Command::SetZeroDatum {
+                station_ref: StationRef::new(anchor, 0),
+                coordinates: GpsCoordinates::new(20.30, -87.45, 0.0).unwrap(),
+            })
+            .success
+    );
+    // The SECOND datum places {a, b} at gps_to_local(G2, G1) - kilometres out.
+    assert!(
+        state
+            .execute(Command::SetZeroDatum {
+                station_ref: StationRef::new(a, 0),
+                coordinates: GpsCoordinates::new(20.20, -87.24, 0.0).unwrap(),
+            })
+            .success
+    );
+    let placed = state.get_project_state().unwrap().section_offset(a);
+    assert!(
+        placed.0.abs() > 1000.0,
+        "the second datum should place the group kilometres out: {placed:?}"
+    );
+
+    // Promote a's datum to first WITHOUT moving anything.
+    assert!(
+        state
+            .execute(Command::RemoveZeroDatum {
+                station_ref: StationRef::new(anchor, 0),
+            })
+            .success
+    );
+
+    let before = state.get_project_state().unwrap().section_offsets.clone();
+    let shot_id = state
+        .get_project_state()
+        .unwrap()
+        .get_section(a)
+        .unwrap()
+        .shots[1]
+        .id;
+
+    assert!(
+        state
+            .execute(Command::UpdateShot {
+                section_id: a,
+                shot_id,
+                updates: ShotUpdates {
+                    length: Some(6.0),
+                    ..Default::default()
+                },
+            })
+            .success
+    );
+
+    let edited = state.get_project_state().unwrap().section_offset(a);
+    let placed_before = before.get(&a).copied().unwrap_or((0.0, 0.0));
+    assert!(
+        (edited.0 - placed_before.0).abs() < 1.0 && (edited.1 - placed_before.1).abs() < 1.0,
+        "a shot edit re-georeferenced the survey: {placed_before:?} -> {edited:?}"
+    );
+
+    assert!(state.undo().success);
+    let after = state.get_project_state().unwrap().section_offsets.clone();
+    for (section_id, offset) in &before {
+        let now = after.get(section_id).copied().unwrap_or((0.0, 0.0));
+        assert!(
+            (now.0 - offset.0).abs() < 1e-6 && (now.1 - offset.1).abs() < 1e-6,
+            "undo of the shot edit did not restore section {section_id}: {offset:?} -> {now:?}"
+        );
+    }
+}

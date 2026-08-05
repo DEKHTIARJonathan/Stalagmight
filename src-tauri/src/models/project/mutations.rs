@@ -911,6 +911,36 @@ impl Project {
         self.zero_datums.first()
     }
 
+    /// The world position of the anchor [`Self::realign_after_shot_edit`] will
+    /// hold, measured BEFORE the edit is applied.
+    ///
+    /// A shot edit must keep the group's datum station where it already is; it
+    /// may not re-georeference the survey. Those are the same thing for a
+    /// project whose datum sits where its GPS implies, and they part company for
+    /// one that does not - which the app can reach without any command asking
+    /// for it, because the georeference origin is `zero_datums[0]` BY POSITION.
+    /// Removing the first datum ([`Self::remove_zero_datum`]) promotes the next
+    /// one and moves nothing, so every group placed relative to the old origin
+    /// is left contradicting its own datum. Re-deriving the ABSOLUTE target on
+    /// that contradiction translates the whole rigid group by the distance
+    /// between the two GPS anchors, inside an `update_shot` whose
+    /// `UndoData::PreviousValues` records the shot's fields and no offsets - so
+    /// the translation cannot be undone (#413 finding 26).
+    ///
+    /// `None` when the group holds no resolvable datum - there is nothing
+    /// absolute to hold, and the realign anchors on the edited section.
+    pub(crate) fn datum_anchor_position(&self, section_id: SectionId) -> Option<(f64, f64)> {
+        let merge_group = self.get_merged_section_ids(section_id);
+        let datum = self.zero_datums.iter().find(|d| {
+            merge_group.contains(&d.station_ref.section_id)
+                && self.resolve_key(&d.station_ref).is_some()
+        })?;
+        let coords = self
+            .resolve_key(&datum.station_ref)
+            .and_then(|sr| self.compute_station_raw_coords(sr))?;
+        Some((coords.x, coords.y))
+    }
+
     /// After a geometry-changing shot edit in `edited_section_id`, realign the
     /// merge group's section offsets so that anchored stations (zero datums,
     /// merge points to pinned sections) remain at their correct positions.
@@ -921,9 +951,10 @@ impl Project {
     /// Algorithm:
     /// 1. Pick the group's anchor: its zero datum if it has one, else the edited
     ///    section itself
-    /// 2. Reanchor the datum section (adjust offset to keep datum at GPS target).
-    ///    Skipped for an unanchored group - there is no absolute target to hold,
-    ///    and the edited section keeps the offset it already has
+    /// 2. Reanchor the datum section (adjust offset to keep the datum where
+    ///    `hold_anchor_at` says the edit found it, or - with no held position -
+    ///    at its GPS target). Skipped for an unanchored group: there is nothing
+    ///    absolute to hold, and the edited section keeps the offset it has
     /// 3. BFS through merges from the anchor: adjust each partner section's
     ///    offset so merge points stay aligned
     ///
@@ -940,7 +971,18 @@ impl Project {
     /// (#413 finding 20).
     ///
     /// Idempotent: calling multiple times produces the same result.
-    pub(crate) fn realign_after_shot_edit(&mut self, edited_section_id: SectionId) {
+    ///
+    /// `hold_anchor_at` is the datum station's world position measured BEFORE
+    /// the edit ([`Self::datum_anchor_position`]). Passing it holds the anchor
+    /// exactly where the edit found it; `None` falls back to the datum's
+    /// GPS-implied target, which is the same position for a project whose frame
+    /// is self-consistent and a re-georeference for one whose is not (#413
+    /// finding 26).
+    pub(crate) fn realign_after_shot_edit(
+        &mut self,
+        edited_section_id: SectionId,
+        hold_anchor_at: Option<(f64, f64)>,
+    ) {
         // Find the merge group containing the edited section
         let merge_group = self.get_merged_section_ids(edited_section_id);
 
@@ -969,7 +1011,9 @@ impl Project {
                     .map(|d| d.station_ref == datum.station_ref)
                     .unwrap_or(false);
 
-                let (target_x, target_y) = if is_first {
+                let (target_x, target_y) = if let Some(held) = hold_anchor_at {
+                    held
+                } else if is_first {
                     (0.0, 0.0)
                 } else if let Some(first) = self.zero_datums.first() {
                     gps_to_local(&datum.gps, &first.gps)

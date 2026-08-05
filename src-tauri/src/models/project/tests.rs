@@ -8092,7 +8092,7 @@ fn realign_datum_section_keeps_datum_pinned() {
     );
 
     // Realign
-    project.realign_after_shot_edit(sec);
+    project.realign_after_shot_edit(sec, None);
 
     // Datum back at origin
     let fixed = project.compute_station_raw_coords(datum_station).unwrap();
@@ -8240,7 +8240,7 @@ fn realign_merged_section_keeps_merge_point_aligned() {
     );
 
     // Realign
-    project.realign_after_shot_edit(sec2);
+    project.realign_after_shot_edit(sec2, None);
 
     // After realign: 2:3 matches 1:3 again (merge point preserved)
     let fixed_2_3 = project
@@ -8294,7 +8294,7 @@ fn realign_noop_without_datums() {
         .id;
 
     let offsets_before = project.section_offsets.clone();
-    project.realign_after_shot_edit(sec);
+    project.realign_after_shot_edit(sec, None);
     assert_eq!(
         project.section_offsets, offsets_before,
         "Offsets should not change when no datums exist"
@@ -8330,10 +8330,10 @@ fn realign_is_idempotent() {
         },
     );
 
-    project.realign_after_shot_edit(sec);
+    project.realign_after_shot_edit(sec, None);
     let offsets_first = project.section_offsets.clone();
 
-    project.realign_after_shot_edit(sec);
+    project.realign_after_shot_edit(sec, None);
     let offsets_second = project.section_offsets.clone();
 
     assert_eq!(offsets_first, offsets_second, "Should be idempotent");
@@ -8420,7 +8420,7 @@ fn realign_edit_in_datum_section_propagates_to_merged() {
 
     // 1:3 has shifted north by 10m. 1:0 (datum) is before the edit, unchanged.
     // Realign from sec1 (the edited section)
-    project.realign_after_shot_edit(sec1);
+    project.realign_after_shot_edit(sec1, None);
 
     // 1:0 still at origin (datum, before edited shot)
     let datum = project
@@ -10637,7 +10637,7 @@ fn realign_after_shot_edit_ignores_dangling_datum() {
         gps: GpsCoordinates::new(45.0, -90.0, 0.0).unwrap(),
     });
     let before = project.section_offset(b);
-    project.realign_after_shot_edit(b);
+    project.realign_after_shot_edit(b, None);
     let after = project.section_offset(b);
     assert_eq!(
         before, after,

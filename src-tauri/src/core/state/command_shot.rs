@@ -175,11 +175,24 @@ impl AppState {
             }
         }
 
+        // Measured BEFORE the edit, so the realign below holds the group's datum
+        // station where this edit found it instead of re-deriving an absolute
+        // position from `zero_datums[0]`. The two are the same for a project
+        // whose frame is self-consistent; for one whose first datum was removed
+        // under it, the absolute form translates the whole rigid group by the
+        // distance between the two GPS anchors - inside a command whose undo
+        // data carries no offsets, so the translation is unundoable (#413
+        // finding 26).
+        let hold_anchor_at = if updates.touches_geometry() {
+            project.datum_anchor_position(section_id)
+        } else {
+            None
+        };
         if project.update_shot(section_id, shot_id, &updates).is_some() {
             // Realign merge group offsets if geometry changed (keeps locked
             // stations pinned: merge points, zero datums)
             if updates.touches_geometry() {
-                project.realign_after_shot_edit(section_id);
+                project.realign_after_shot_edit(section_id, hold_anchor_at);
             }
             tracing::debug!(
                 section_id,
