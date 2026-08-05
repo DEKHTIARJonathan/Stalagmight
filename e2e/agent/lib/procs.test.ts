@@ -41,7 +41,16 @@ describe('pidComm / pidPgid on a live process', () => {
     child.kill('SIGKILL');
   });
 
-  it('names the executable', () => {
+  it('returns a non-empty name for a live process', () => {
+    expect(pidComm(child.pid ?? 0)).not.toBe('');
+  });
+
+  // Only darwin guarantees WHAT the name is: `ps -o comm=` reports the exec
+  // path (basenamed by pidComm). Linux /proc comm is the THREAD name, which
+  // modern Node renames to "MainThread" - so an executable-name assertion on a
+  // node child is wrong there (caught by CI after this suite had only ever run
+  // on a Mac).
+  it.runIf(process.platform === 'darwin')('darwin: names the executable', () => {
     expect(pidComm(child.pid ?? 0)).toBe(path.basename(process.execPath));
   });
 
@@ -88,7 +97,12 @@ describe('reapPidsFromFile', () => {
       expect(reapPidsFromFile(pidFile, ['no-such-comm-name'])).toEqual([]);
       expect(isPidAlive(pid)).toBe(true);
 
-      const comm = path.basename(process.execPath);
+      // Match on the OBSERVED comm, not an assumed executable name: on Linux
+      // the comm of a node child is its thread name ("MainThread"), not "node".
+      // The property under test is match-kills / mismatch-skips, whatever the
+      // platform reports the name to be.
+      const comm = pidComm(pid);
+      expect(comm).not.toBe('');
       expect(reapPidsFromFile(pidFile, [comm])).toEqual([pid]);
       // SIGKILL delivery is async; poll briefly rather than sleeping blind.
       const deadline = Date.now() + 2000;

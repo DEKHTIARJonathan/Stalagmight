@@ -249,7 +249,14 @@ Deferred with rationale, per the one-triage-pass rule:
 - The darwin arms of `pidComm`/`pidPgid` (and the reap tests' darwin behavior)
   run only when vitest runs on a Mac - CI's check job is Linux, so keep the
   habit of running `pnpm exec vitest run e2e/agent` locally when touching
-  procs.ts.
+  procs.ts. This bit immediately, in the inverse direction: the first CI run of
+  the mac-authored tests failed on Linux because `/proc/<pid>/comm` is the
+  THREAD name and modern Node renames its main thread to "MainThread" - so a
+  node child's comm is not "node" there. Tests now assert on the observed comm
+  (the reap property is match-kills/mismatch-skips, not what the name is) and
+  the executable-name assertion is darwin-only. The production reap lists are
+  unaffected: stalagmight/tauri-driver/tauri-wd/WebKitWebDriver are Rust/C
+  binaries that do not rename their main thread.
 - `SessionCore.stop()` leaves `recorderInstance` set, so a second `start()`
   failing before `prepareSession` appends a duplicate `sessionEnd` to the OLD
   session's log (pre-existing on Linux, harmless, inherited by the shared
