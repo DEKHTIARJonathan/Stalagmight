@@ -354,6 +354,69 @@ panic is re-raised verbatim.
 Runs are deterministic: the same seed replays identically, forever, on every
 platform (integer-only PRNG, and no float is used to make a decision).
 
+**Minimizing a failure.** A failing seed is a repro in the sense that it fails
+and in no other sense - nobody reads 200 moves and says which three are the bug.
+`fuzz_shrink` (`fuzz_shrink_tests.rs`) records the run's move stream, then runs
+SIGNATURE-MATCHED ddmin over it: remove a chunk, replay the rest through the same
+engine and the same four oracles, keep the candidate only if it still fails THE
+SAME WAY, halve the chunk when nothing more can go.
+
+```bash
+# Record seed 1 under divergence mode, shrink for one named finding.
+STALAGMIGHT_RUST_FUZZ_SHRINK=1 STALAGMIGHT_RUST_FUZZ_DIVERGENCE=1 \
+  STALAGMIGHT_RUST_FUZZ_ITERATIONS=200 \
+  STALAGMIGHT_RUST_FUZZ_SHRINK_TARGET=finding-8-stale-id-deletes-the-wrong-shot \
+  TELEMETRY_ENDPOINT=http://localhost/dummy cargo test --manifest-path src-tauri/Cargo.toml \
+  --features telemetry --lib fuzz_shrink -- --ignored --nocapture
+
+# Replay the minimized trace it wrote, and ASSERT the same failure comes back.
+STALAGMIGHT_RUST_FUZZ_REPLAY=/tmp/stalagmight-shrink-seed1-3moves.json \
+  TELEMETRY_ENDPOINT=http://localhost/dummy cargo test --manifest-path src-tauri/Cargo.toml \
+  --features telemetry --lib fuzz_replay -- --ignored --nocapture
+```
+
+The plan comes from the SAME knobs the survey reads (`ITERATIONS`,
+`PERSISTENCE`, `JUMPS`, `CLOSURES`, `DIVERGENCE`, `CLOSURE_SHAPES`, `CROSSINGS`,
+`HORIZON`), so a seed that failed under a sweep is shrunk under exactly the
+environment that found it. `SHRINK_TARGET` is optional - the default is whatever
+failure the recorded run produced. `SHRINK=<path.json>` shrinks a trace file
+further instead of a seed, `SHRINK_OUT` picks where the minimized trace is
+written (default: a temp path, printed at the end), and `SHRINK_PROBES` caps the
+probe budget (default 2000).
+
+| what is being shrunk | what "the same failure" means |
+|---|---|
+| a KNOWN finding (the run completes, the hit is counted) | the finding id is in the candidate's `classified hits` |
+| anything else (the run panics) | `failure_signature` matches: the headline plus the first differing snapshot path, every run of digits collapsed to `#` |
+
+Signature matching is the whole discipline: a candidate that fails DIFFERENTLY -
+another finding, another panic, or not at all - is rejected, so the minimum is a
+repro of the failure that was asked about rather than of whatever the search
+drifted onto. Measured, on this branch:
+
+| repro | before | after | probes |
+|---|---|---|---|
+| `finding-8-stale-id-deletes-the-wrong-shot` (divergence, seed 1 x 200) | 199 moves | 0 moves - the constructed prologue and the closing walk ARE the repro | 15 |
+| the open seed-10 observation (persistence, `CROSSINGS=3`, seed 10 x 60) | 59 moves | 3 moves | 105 |
+| an unclassified `section_offsets` panic (persistence, `CROSSINGS=3`, seed 1 x 120) | 122 moves | 5 moves | 98 |
+
+Two things the mechanism guarantees, and one it does not:
+
+- A move whose target was shrunk away is SKIPPED with a note rather than fatal
+  (the trace names shots by `Shot::uuid`, which survives both the loader's
+  renumbering and the allocator; sections and closures by id, mapped through what
+  each move created). Replay has to be a total function or a candidate that kills
+  the harness looks exactly like one that reproduces the bug.
+- Probes in a ddmin round run in PARALLEL on the same worker pool the sweeps use
+  and the first reproducing complement IN INDEX ORDER is accepted, so the result
+  does not depend on `STALAGMIGHT_RUST_FUZZ_THREADS`.
+- It does not shrink the PLAN or the values inside a move. A mode is on or off,
+  and the shot data a move carries is replayed verbatim.
+
+Three tests gate the machinery on every CI run: recording does not change what a
+run does, a FULL trace replays to exactly the run it was recorded from, and the
+ddmin schedule reaches the known minimum of a synthetic predicate.
+
 ## Commands
 
 The authoritative pre-push list lives in the Pre-Push Checklist in

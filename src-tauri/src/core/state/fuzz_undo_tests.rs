@@ -30,6 +30,9 @@
 //! | agent harness | the real app over IPC | anything the frontend store or the IPC boundary breaks | on demand |
 //! | `open_undo_bugs_tests.rs` | `AppState` directly | the KNOWN open bugs, pinned | `-- --ignored` |
 //!
+//! `fuzz_shrink_tests.rs` is not a tier: it finds nothing. It MINIMIZES what
+//! this module finds - see "The trace, and the shrinker" below.
+//!
 //! # THE BUG IDENTIFICATION MATRIX
 //!
 //! Every finding the agent-harness fuzzers found is reachable HERE, and is
@@ -172,6 +175,16 @@
 //!   clean; seed 10 is excluded from `MULTI_CROSSING_SEEDS` BY NAME so the
 //!   exclusion is visible and reversible rather than a quietly shorter list.
 //!
+//!   SHRUNK, since: 59 moves down to THREE, by `fuzz_shrink_tests.rs` matching on
+//!   the panic's own signature (105 probes). What is left is
+//!   `createShot(s=5,before)`, `setShotKind(6:600001,Jump)`,
+//!   `updateShot(5:500001)`, then the plan's save/reload and the closing unwind -
+//!   so the `set_shot_kind` entry the undo consumes is on a DIFFERENT section
+//!   from the shot whose three fields change, and one mid-section insert is
+//!   enough to set it up. Reproduce it in 0.04 s with
+//!   `STALAGMIGHT_RUST_FUZZ_SHRINK=10 STALAGMIGHT_RUST_FUZZ_PERSISTENCE=1
+//!   STALAGMIGHT_RUST_FUZZ_CROSSINGS=3 STALAGMIGHT_RUST_FUZZ_ITERATIONS=60`.
+//!
 //! ## Modes, and why the gate uses none of them
 //!
 //! | env | what it adds | why it is not in the gate |
@@ -198,6 +211,36 @@
 //! | `TRACE=1` | stream every move as it happens (and pin one worker, so the stream stays a stream) | off |
 //! | `VERBOSE=1` | every differing path rather than the first eight, and the whole panic payload per seed in the survey | off |
 //! | `PERSISTENCE=1` | horizon only: cross the save boundary as well | off |
+//! | `SHRINK=`, `REPLAY=` | the shrinker's own knobs - see below, and `fuzz_shrink_tests.rs` | off |
+//!
+//! ## The trace, and the shrinker
+//!
+//! A run's move stream is RECORDABLE and REPLAYABLE, which is what
+//! `fuzz_shrink_tests.rs` minimizes a failure with. Three things in here make
+//! that work, and they are worth knowing before changing a generator:
+//!
+//! * **The generators DRAW, they do not execute.** `draw_op` returns an [`Op`] -
+//!   a value with every reference symbolic - and `apply_op` is the ONLY thing
+//!   that runs a command. A replayed `Op` goes through the same `apply_op`, so
+//!   there is no second execution path for a shrunk trace to differ from, and
+//!   the per-move metadata the classifiers key on (`appended_into_empty`,
+//!   `target`, `anchor`) is computed once, in one place.
+//! * **A trace names what survives being shrunk.** Shots travel as
+//!   `Shot::uuid`, because `Shot::id` is renumbered by the loader and re-issued
+//!   by the allocator; sections and closures travel as ids, PAIRED between the
+//!   recorded run and the replay through what each move created ([`Created`],
+//!   [`Refs`]). A reference that no longer maps makes its move inapplicable, and
+//!   an inapplicable move is skipped rather than fatal.
+//! * **A trace holds the move stream and nothing else.** The starting project,
+//!   the prologues and the closing `finish()` walk are functions of the `Plan`,
+//!   so a replay re-runs them (`start_run` / `finish_run`) and no shrink step can
+//!   delete them. Each recorded move also carries the `Rng` state it ran at, so a
+//!   crossing that draws (finding 10's orphan shape) draws the same values.
+//!
+//! Recording is OFF unless armed (`recorder_arm`), so no sweep pays for it, and
+//! `a_recorded_run_matches_an_unrecorded_one` measures that rather than asserting
+//! it in prose. `a_full_trace_replays_to_the_same_run` pins the case with a known
+//! answer: a complete trace replays to exactly the run it came from.
 //!
 //! ## Parallel sweeps, and why the output does not change
 //!
@@ -380,6 +423,23 @@ impl Rng {
 
     pub(super) fn pick<'a, T>(&mut self, items: &'a [T]) -> &'a T {
         &items[self.below(items.len())]
+    }
+
+    /// The generator's WHOLE state, which is one `u32`.
+    ///
+    /// A recorded move carries it so a replay can put the generator back where
+    /// the recorded run had it. That matters for exactly one thing today - a
+    /// boundary crossing under `Plan::closure_shapes` builds finding 10's orphan
+    /// shape and DRAWS while doing it - and it costs four bytes to be right
+    /// about every future one too: a replay makes none of the draws the recorded
+    /// run's generators made, so without this the stream at a crossing would be
+    /// whatever the prologue left behind.
+    const fn state(&self) -> u32 {
+        self.state
+    }
+
+    const fn restore(&mut self, state: u32) {
+        self.state = state;
     }
 }
 
@@ -2005,6 +2065,40 @@ pub(super) struct Targets {
     pub(super) datums: Vec<(SectionId, u32)>,
     /// Loop closure ids, ascending.
     pub(super) closures: Vec<u64>,
+    /// `(section_id, shot_id, uuid)`, ascending, for every shot that has a uuid.
+    ///
+    /// Read here rather than through a second `get_project_state()` because the
+    /// TRACE names shots by uuid: `Shot::id` is renumbered by the loader and
+    /// re-issued by the allocator, so an id is not an identity a recorded move
+    /// can carry, while `Shot::uuid` is persisted and survives both.
+    pub(super) shot_uuids: Vec<(SectionId, ShotId, String)>,
+}
+
+impl Targets {
+    /// The uuid the live shot `section_id`/`shot_id` carries, if it has one.
+    pub(super) fn uuid_of(&self, section_id: SectionId, shot_id: ShotId) -> Option<String> {
+        self.shot_uuids
+            .iter()
+            .find(|(section, shot, _)| *section == section_id && *shot == shot_id)
+            .map(|(_, _, uuid)| uuid.clone())
+    }
+
+    /// Which live shot carries `uuid`, if any.
+    pub(super) fn by_uuid(&self, uuid: &str) -> Option<(SectionId, ShotId)> {
+        self.shot_uuids
+            .iter()
+            .find(|(_, _, candidate)| candidate == uuid)
+            .map(|(section, shot, _)| (*section, *shot))
+    }
+
+    /// Shot ids of one live section, ascending, or `None` when the section is
+    /// gone.
+    pub(super) fn shots_of(&self, section_id: SectionId) -> Option<&[ShotId]> {
+        self.sections
+            .iter()
+            .find(|(id, _)| *id == section_id)
+            .map(|(_, shots)| shots.as_slice())
+    }
 }
 
 pub(super) fn read_targets(state: &AppState) -> Targets {
@@ -2058,12 +2152,25 @@ pub(super) fn read_targets(state: &AppState) -> Targets {
         .collect();
     closures.sort_unstable();
 
+    let mut shot_uuids: Vec<(SectionId, ShotId, String)> = project
+        .sections
+        .iter()
+        .flat_map(|section| {
+            section
+                .shots
+                .iter()
+                .filter_map(move |shot| shot.uuid.clone().map(|uuid| (section.id, shot.id, uuid)))
+        })
+        .collect();
+    shot_uuids.sort();
+
     Targets {
         sections,
         stations,
         merges,
         datums,
         closures,
+        shot_uuids,
     }
 }
 
@@ -2078,6 +2185,666 @@ pub(super) fn random_offset(rng: &mut Rng) -> Coordinates {
             rng.float(-1.5, 1.5),
         )
     }
+}
+
+// ===========================================================================
+// The replayable move trace
+// ===========================================================================
+
+/// A shot, named by the identity that survives BOTH a reload and the removal of
+/// the moves around it.
+///
+/// `Shot::id` is neither. The loader renumbers it (`section_id *
+/// FEATURE_ID_STRIDE + position`) and the allocator re-issues it, so a trace
+/// that named shots by id would address a DIFFERENT shot the moment a shrink
+/// step dropped a `create_shot` from in front of it. `Shot::uuid` is persisted,
+/// so it survives the loader - but it is minted fresh per RUN
+/// (`Uuid::new_v4`), so the recorded uuid and the replay's uuid for the same
+/// shot are different strings that have to be PAIRED. [`Refs`] is that pairing.
+///
+/// The id travels alongside for the log, and as the fallback for the one shape
+/// the uuid cannot cover: a shot that has none.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub(super) struct ShotRefT {
+    pub(super) section: SectionId,
+    pub(super) id: ShotId,
+    pub(super) uuid: Option<String>,
+}
+
+/// A station, named positionally - which is what a station IS. There is no
+/// stored station object to carry an identity, so a station reference is a
+/// section plus an index, and it stops resolving when the section is short.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub(super) struct StationRefT {
+    pub(super) section: SectionId,
+    pub(super) index: u32,
+}
+
+impl StationRefT {
+    const fn new(section: SectionId, index: u32) -> Self {
+        Self { section, index }
+    }
+}
+
+/// One mutation, as a value: everything a generator drew, with every reference
+/// symbolic rather than resolved.
+///
+/// This is what makes the engine replayable. A generator DRAWS an `Op` and
+/// [`Fuzzer::apply_op`] executes it; a replay hands the recorded `Op` to the
+/// SAME function, so there is no second execution path for a shrunk trace to
+/// drift from - which is the property the whole shrinker rests on.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub(super) enum Op {
+    CreateSection {
+        name: Option<String>,
+        surveyor: Option<String>,
+        color: String,
+        shots: Vec<ShotData>,
+    },
+    CreateShot {
+        section: SectionId,
+        shot: Box<ShotData>,
+        after: Option<ShotRefT>,
+        before: Option<ShotRefT>,
+    },
+    UpdateShot {
+        shot: ShotRefT,
+        updates: Box<ShotUpdates>,
+    },
+    SetShotKind {
+        shot: ShotRefT,
+        kind: ShotKind,
+    },
+    UpdateSection {
+        section: SectionId,
+        updates: Box<SectionUpdates>,
+    },
+    DeleteShot {
+        shot: ShotRefT,
+    },
+    DeleteSection {
+        section: SectionId,
+    },
+    ReverseSection {
+        section: SectionId,
+        swap_left_right: bool,
+    },
+    Move {
+        section: SectionId,
+        offset: Coordinates,
+        segment: bool,
+    },
+    MoveStation {
+        station: StationRefT,
+        offset: Coordinates,
+    },
+    StationComment {
+        station: StationRefT,
+        comment: Option<String>,
+    },
+    Merge {
+        a: StationRefT,
+        b: StationRefT,
+    },
+    Unmerge {
+        a: StationRefT,
+        b: StationRefT,
+    },
+    CreateClosure {
+        a: StationRefT,
+        b: StationRefT,
+        strategy: ClosureStrategy,
+    },
+    RemoveClosure {
+        closure: u64,
+    },
+    SetZeroDatum {
+        station: StationRefT,
+        coordinates: GpsCoordinates,
+    },
+    RemoveZeroDatum {
+        station: StationRefT,
+    },
+    SplitShotAtDistance {
+        shot: ShotRefT,
+        distance: f64,
+    },
+    DeleteShotAndSplit {
+        shot: ShotRefT,
+    },
+    DeleteLastShotAndSection {
+        shot: ShotRefT,
+    },
+    DeleteShotRange {
+        section: SectionId,
+        from: ShotRefT,
+        to: ShotRefT,
+        split: bool,
+    },
+    Batch {
+        commands: Vec<BatchOp>,
+        poisoned: bool,
+    },
+}
+
+/// The sub-commands `gen_batch` builds. A batch is one undo entry over several
+/// commands, and each of them carries its own references, so each resolves (or
+/// fails to) on its own.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub(super) enum BatchOp {
+    UpdateShotLength {
+        shot: ShotRefT,
+        length: f64,
+    },
+    MoveSection {
+        section: SectionId,
+        offset: Coordinates,
+    },
+    MoveStation {
+        station: StationRefT,
+        offset: Coordinates,
+    },
+    ReverseSection {
+        section: SectionId,
+        swap_left_right: bool,
+    },
+}
+
+/// Everything one recorded move BROUGHT INTO EXISTENCE, in project order.
+///
+/// The shrinker's map from recorded ids to live ids is built from these: a
+/// replayed move creates its own sections, shots and closures, and pairing what
+/// the recorded run created with what the replay created is what lets a later
+/// move still address the right thing after the moves before it changed.
+///
+/// A `redo` is in here for a reason rather than for symmetry: redo of a
+/// `CreateShot` re-executes the command, which MINTS A NEW UUID (findings 1 and
+/// 16 are about exactly that), and every later recorded move naming that shot
+/// names the re-minted uuid.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub(super) struct Created {
+    pub(super) sections: Vec<SectionId>,
+    pub(super) shots: Vec<String>,
+    pub(super) closures: Vec<u64>,
+}
+
+/// One move of a recorded run: what the fuzzer's main loop did, in the order it
+/// did it.
+///
+/// The closing `finish()` walk is NOT in here, and neither is any prologue: both
+/// are functions of the `Plan`, so a replay re-runs them rather than replaying
+/// them, and a shrink step can never delete them.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub(super) struct TraceMove {
+    pub(super) kind: MoveKind,
+    /// What this move brought into existence - see [`Created`]. Filled in after
+    /// the move ran, so a move that failed mid-flight carries an empty one.
+    pub(super) created: Created,
+    /// The generator's state immediately before this move. See [`Rng::state`].
+    pub(super) rng: u32,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub(super) enum MoveKind {
+    Mutate(Box<Op>),
+    Undo(usize),
+    Redo(usize),
+    Cross,
+}
+
+impl TraceMove {
+    /// One line, readable, for the minimized repro's summary.
+    pub(super) fn describe(&self) -> String {
+        match &self.kind {
+            MoveKind::Mutate(op) => op.describe(),
+            MoveKind::Undo(steps) => format!("undo x{steps}"),
+            MoveKind::Redo(steps) => format!("redo x{steps}"),
+            MoveKind::Cross => "save/close/reopen".to_string(),
+        }
+    }
+}
+
+impl Op {
+    /// One line, readable, naming the RECORDED ids - which is what the trace
+    /// carries and what a reader matches against the original run's log.
+    pub(super) fn describe(&self) -> String {
+        let station = |station: &StationRefT| format!("{}/{}", station.section, station.index);
+        let shot = |shot: &ShotRefT| format!("{}:{}", shot.section, shot.id);
+        match self {
+            Self::CreateSection { name, shots, .. } => format!(
+                "createSection(shots={},nullMeta={})",
+                shots.len(),
+                name.is_none()
+            ),
+            Self::CreateShot {
+                section,
+                after,
+                before,
+                ..
+            } => {
+                let how = match (after, before) {
+                    (Some(anchor), _) => format!("after {}", shot(anchor)),
+                    (None, Some(anchor)) => format!("before {}", shot(anchor)),
+                    (None, None) => "append".to_string(),
+                };
+                format!("createShot(s={section},{how})")
+            }
+            Self::UpdateShot { shot: target, .. } => format!("updateShot({})", shot(target)),
+            Self::SetShotKind { shot: target, kind } => {
+                format!("setShotKind({},{kind:?})", shot(target))
+            }
+            Self::UpdateSection { section, .. } => format!("updateSection(s={section})"),
+            Self::DeleteShot { shot: target } => format!("deleteShot({})", shot(target)),
+            Self::DeleteSection { section } => format!("deleteSection(s={section})"),
+            Self::ReverseSection {
+                section,
+                swap_left_right,
+            } => format!("reverseSection(s={section},swapLR={swap_left_right})"),
+            Self::Move {
+                section, segment, ..
+            } => format!(
+                "{}(s={section})",
+                if *segment {
+                    "moveSegment"
+                } else {
+                    "moveSection"
+                }
+            ),
+            Self::MoveStation { station: at, .. } => format!("moveStation({})", station(at)),
+            Self::StationComment {
+                station: at,
+                comment,
+            } => format!("stationComment({},{})", station(at), comment.is_some()),
+            Self::Merge { a, b } => format!("mergeStations({},{})", station(a), station(b)),
+            Self::Unmerge { a, b } => format!("unmergePair({},{})", station(a), station(b)),
+            Self::CreateClosure { a, b, strategy } => format!(
+                "createLoopClosure({},{},{strategy:?})",
+                station(a),
+                station(b)
+            ),
+            Self::RemoveClosure { closure } => format!("removeLoopClosure({closure})"),
+            Self::SetZeroDatum { station: at, .. } => format!("setZeroDatum({})", station(at)),
+            Self::RemoveZeroDatum { station: at } => format!("removeZeroDatum({})", station(at)),
+            Self::SplitShotAtDistance {
+                shot: target,
+                distance,
+            } => format!("splitShotAtDistance({},{distance})", shot(target)),
+            Self::DeleteShotAndSplit { shot: target } => {
+                format!("deleteShotAndSplit({})", shot(target))
+            }
+            Self::DeleteLastShotAndSection { shot: target } => {
+                format!("deleteLastShotAndSection({})", shot(target))
+            }
+            Self::DeleteShotRange {
+                section,
+                from,
+                to,
+                split,
+            } => format!(
+                "{}(s={section},{}..{})",
+                if *split {
+                    "deleteShotRangeSplit"
+                } else {
+                    "deleteShotRangeShift"
+                },
+                from.id,
+                to.id
+            ),
+            Self::Batch { commands, poisoned } => {
+                format!("batch(n={},poisoned={poisoned})", commands.len())
+            }
+        }
+    }
+}
+
+/// Every section, its shots' uuids in project order, and every closure id.
+///
+/// Taken before and after a move: the difference is that move's [`Created`].
+/// Project ORDER rather than sorted, because the pairing between the recorded
+/// run's new entities and the replay's is positional and both runs build their
+/// lists the same way.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub(super) struct Inventory {
+    pub(super) sections: Vec<(SectionId, Vec<String>)>,
+    pub(super) closures: Vec<u64>,
+}
+
+impl Inventory {
+    /// Every shot uuid, in project order.
+    fn shots(&self) -> Vec<&String> {
+        self.sections
+            .iter()
+            .flat_map(|(_, uuids)| uuids.iter())
+            .collect()
+    }
+
+    /// What `self` holds that `before` did not.
+    fn created_since(&self, before: &Self) -> Created {
+        let old_sections: BTreeSet<SectionId> = before.sections.iter().map(|(id, _)| *id).collect();
+        let old_shots: BTreeSet<&String> = before.shots().into_iter().collect();
+        let old_closures: BTreeSet<u64> = before.closures.iter().copied().collect();
+        Created {
+            sections: self
+                .sections
+                .iter()
+                .map(|(id, _)| *id)
+                .filter(|id| !old_sections.contains(id))
+                .collect(),
+            shots: self
+                .shots()
+                .into_iter()
+                .filter(|uuid| !old_shots.contains(*uuid))
+                .cloned()
+                .collect(),
+            closures: self
+                .closures
+                .iter()
+                .copied()
+                .filter(|id| !old_closures.contains(id))
+                .collect(),
+        }
+    }
+}
+
+/// What a recorded reference means in THIS run.
+///
+/// A recorded run is the identity: every reference already names a live entity,
+/// so `apply_op` resolves to exactly what the generator drew and nothing is ever
+/// skipped. That is the whole point - the recorded path and the replay path are
+/// one function, and turning recording on cannot change what a seed does.
+///
+/// A REPLAY is a mapping, because the ids differ: the run allocates its own
+/// section ids (dropping a `create_section` shifts every later one down), mints
+/// its own uuids, and numbers its own closures. Each map is seeded from the
+/// state the trace starts in and extended by every move's [`Created`].
+///
+/// A reference the maps cannot resolve - because the move that created its
+/// target was SHRUNK AWAY - makes the move inapplicable, and an inapplicable
+/// move is SKIPPED rather than fatal. ddmin needs a total replay function: a
+/// candidate that panicked in the harness rather than in the app would be
+/// indistinguishable from a candidate that reproduced the bug.
+pub(super) struct Refs {
+    identity: bool,
+    sections: BTreeMap<SectionId, SectionId>,
+    shots: BTreeMap<String, String>,
+    closures: BTreeMap<u64, u64>,
+    /// Moves skipped so far, and why - reported with the minimized repro.
+    skipped: Vec<String>,
+}
+
+impl Refs {
+    /// The recorded run's resolver: everything means itself.
+    pub(super) fn identity() -> Self {
+        Self {
+            identity: true,
+            sections: BTreeMap::new(),
+            shots: BTreeMap::new(),
+            closures: BTreeMap::new(),
+            skipped: Vec::new(),
+        }
+    }
+
+    /// A replay's resolver, seeded by pairing the state the recorded trace
+    /// starts in against the state this run starts in.
+    ///
+    /// The two are the same project - same seed, same prologues, and the trace
+    /// never contains a prologue move - so the pairing is positional and exact.
+    /// It is CHECKED rather than assumed: a mismatch means the trace was
+    /// recorded under a different plan and every later resolution would be
+    /// quietly wrong.
+    pub(super) fn replay(recorded: &Inventory, live: &Inventory) -> Result<Self, String> {
+        if recorded.sections.len() != live.sections.len() {
+            return Err(format!(
+                "the trace starts in a project with {} section(s); this run starts with {} - \
+                 the plan does not match the trace",
+                recorded.sections.len(),
+                live.sections.len()
+            ));
+        }
+        let mut refs = Self {
+            identity: false,
+            sections: BTreeMap::new(),
+            shots: BTreeMap::new(),
+            closures: BTreeMap::new(),
+            skipped: Vec::new(),
+        };
+        for ((recorded_id, recorded_shots), (live_id, live_shots)) in
+            recorded.sections.iter().zip(&live.sections)
+        {
+            refs.sections.insert(*recorded_id, *live_id);
+            if recorded_shots.len() != live_shots.len() {
+                return Err(format!(
+                    "the trace starts with {} shot(s) in section {recorded_id}; this run starts \
+                     with {} - the plan does not match the trace",
+                    recorded_shots.len(),
+                    live_shots.len()
+                ));
+            }
+            for (recorded_uuid, live_uuid) in recorded_shots.iter().zip(live_shots) {
+                refs.shots.insert(recorded_uuid.clone(), live_uuid.clone());
+            }
+        }
+        for (recorded_id, live_id) in recorded.closures.iter().zip(&live.closures) {
+            refs.closures.insert(*recorded_id, *live_id);
+        }
+        Ok(refs)
+    }
+
+    /// Pair what the recorded move created with what the replayed move created.
+    ///
+    /// Only ENTITIES NEITHER SIDE ALREADY KNOWS are paired, in order. A move
+    /// that restores something (an undo of a delete) brings back the very uuid
+    /// it removed, which is already mapped and must not be re-paired against
+    /// something else; a move that mints (a redo of a create) brings back a new
+    /// one on both sides, and those two are each other's.
+    fn learn(&mut self, recorded: &Created, live: &Created) {
+        let fresh_sections: Vec<SectionId> = live
+            .sections
+            .iter()
+            .copied()
+            .filter(|id| !self.sections.values().any(|live_id| live_id == id))
+            .collect();
+        let unknown_sections: Vec<SectionId> = recorded
+            .sections
+            .iter()
+            .copied()
+            .filter(|id| !self.sections.contains_key(id))
+            .collect();
+        for (recorded_id, live_id) in unknown_sections.iter().zip(&fresh_sections) {
+            self.sections.insert(*recorded_id, *live_id);
+        }
+        let fresh_shots: Vec<&String> = live
+            .shots
+            .iter()
+            .filter(|uuid| !self.shots.values().any(|live_uuid| live_uuid == *uuid))
+            .collect();
+        let unknown_shots: Vec<&String> = recorded
+            .shots
+            .iter()
+            .filter(|uuid| !self.shots.contains_key(*uuid))
+            .collect();
+        for (recorded_uuid, live_uuid) in unknown_shots.iter().zip(&fresh_shots) {
+            self.shots
+                .insert((*recorded_uuid).clone(), (*live_uuid).clone());
+        }
+        let fresh_closures: Vec<u64> = live
+            .closures
+            .iter()
+            .copied()
+            .filter(|id| !self.closures.values().any(|live_id| live_id == id))
+            .collect();
+        let unknown_closures: Vec<u64> = recorded
+            .closures
+            .iter()
+            .copied()
+            .filter(|id| !self.closures.contains_key(id))
+            .collect();
+        for (recorded_id, live_id) in unknown_closures.iter().zip(&fresh_closures) {
+            self.closures.insert(*recorded_id, *live_id);
+        }
+    }
+
+    /// The live section a recorded section id names, if it still exists.
+    fn section(&self, recorded: SectionId, targets: &Targets) -> Option<SectionId> {
+        if self.identity {
+            return Some(recorded);
+        }
+        let live = *self.sections.get(&recorded)?;
+        targets.shots_of(live).map(|_| live)
+    }
+
+    /// The live shot a recorded reference names, if it still exists.
+    fn shot(&self, recorded: &ShotRefT, targets: &Targets) -> Option<(SectionId, ShotId)> {
+        if self.identity {
+            return Some((recorded.section, recorded.id));
+        }
+        let Some(uuid) = recorded.uuid.as_ref() else {
+            // No uuid to pair on: fall back to the id inside the mapped
+            // section, which is right exactly when the loader has not
+            // renumbered it - and wrong loudly rather than quietly, because
+            // a wrong target changes the signature and the step is rejected.
+            let section = self.section(recorded.section, targets)?;
+            return targets
+                .shots_of(section)?
+                .contains(&recorded.id)
+                .then_some((section, recorded.id));
+        };
+        targets.by_uuid(self.shots.get(uuid)?)
+    }
+
+    /// The live station a recorded reference names, if the section is still that
+    /// long.
+    fn station(&self, recorded: StationRefT, targets: &Targets) -> Option<(SectionId, u32)> {
+        let section = self.section(recorded.section, targets)?;
+        if self.identity {
+            return Some((section, recorded.index));
+        }
+        let stations = targets.shots_of(section)?.len() as u32;
+        (recorded.index <= stations).then_some((section, recorded.index))
+    }
+
+    /// The live closure a recorded closure id names, if it still exists.
+    fn closure(&self, recorded: u64, targets: &Targets) -> Option<u64> {
+        if self.identity {
+            return Some(recorded);
+        }
+        let live = *self.closures.get(&recorded)?;
+        targets.closures.contains(&live).then_some(live)
+    }
+
+    /// Moves this replay could not apply, and why.
+    pub(super) fn skipped(&self) -> &[String] {
+        &self.skipped
+    }
+
+    fn skip(&mut self, what: &str) -> Option<Drawn> {
+        self.skipped.push(what.to_string());
+        None
+    }
+}
+
+/// A recorded run, and everything a replay of it needs.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub(super) struct Trace {
+    pub(super) seed: u32,
+    pub(super) plan: Plan,
+    /// The project the trace starts in - after the plan's prologues, before the
+    /// first recorded move. Pairing this against a replay's own starting state
+    /// is what seeds [`Refs`].
+    pub(super) prelude: Inventory,
+    pub(super) moves: Vec<TraceMove>,
+}
+
+/// The recorder, per thread.
+///
+/// A thread-local rather than a field on the `Fuzzer` for one reason: a run that
+/// FAILS unwinds, dropping the `Fuzzer` and with it every move it made - and the
+/// move that failed is the one a shrinker most needs. This survives the unwind,
+/// so `record_run` gets the trace whether the run returned or panicked.
+///
+/// Off by default and armed only by the shrinker, so no sweep pays for it: a run
+/// that is not recording never builds an `Inventory` and never clones an `Op`.
+struct Recording {
+    active: bool,
+    prelude: Inventory,
+    moves: Vec<TraceMove>,
+}
+
+thread_local! {
+    static RECORDER: std::cell::RefCell<Option<Recording>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Arm the recorder for the next run on this thread, discarding anything a
+/// previous run left.
+pub(super) fn recorder_arm() {
+    RECORDER.with_borrow_mut(|slot| {
+        *slot = Some(Recording {
+            active: false,
+            prelude: Inventory::default(),
+            moves: Vec::new(),
+        });
+    });
+}
+
+/// Is a recorder armed at all? Checked before an `Inventory` is built, so an
+/// unarmed run pays one thread-local read per move and nothing else.
+fn recorder_armed() -> bool {
+    RECORDER.with_borrow(Option::is_some)
+}
+
+/// Is the recorder recording RIGHT NOW? False during the prologues and the
+/// closing walk, which a replay re-runs from the plan rather than replaying.
+fn recorder_active() -> bool {
+    RECORDER.with_borrow(|slot| slot.as_ref().is_some_and(|recording| recording.active))
+}
+
+/// Start recording, from the state the run has reached.
+fn recorder_begin(prelude: Inventory) {
+    RECORDER.with_borrow_mut(|slot| {
+        if let Some(recording) = slot.as_mut() {
+            recording.active = true;
+            recording.prelude = prelude;
+        }
+    });
+}
+
+fn recorder_end() {
+    RECORDER.with_borrow_mut(|slot| {
+        if let Some(recording) = slot.as_mut() {
+            recording.active = false;
+        }
+    });
+}
+
+fn recorder_push(mv: TraceMove) {
+    RECORDER.with_borrow_mut(|slot| {
+        if let Some(recording) = slot.as_mut() {
+            if recording.active {
+                recording.moves.push(mv);
+            }
+        }
+    });
+}
+
+fn recorder_seal(created: Created) {
+    RECORDER.with_borrow_mut(|slot| {
+        if let Some(recording) = slot.as_mut() {
+            if recording.active {
+                if let Some(last) = recording.moves.last_mut() {
+                    last.created = created;
+                }
+            }
+        }
+    });
+}
+
+/// Take what was recorded, and disarm.
+pub(super) fn recorder_take() -> Option<(Inventory, Vec<TraceMove>)> {
+    RECORDER.with_borrow_mut(|slot| {
+        slot.take()
+            .map(|recording| (recording.prelude, recording.moves))
+    })
 }
 
 // ===========================================================================
@@ -2184,7 +2951,7 @@ pub(super) fn topology_signature(state: &AppState) -> String {
 
 /// How a run ended, for the caller to assert on.
 #[derive(Debug, Default)]
-struct Outcome {
+pub(super) struct Outcome {
     mutations: usize,
     rejected: usize,
     noops: usize,
@@ -2195,7 +2962,7 @@ struct Outcome {
     reloads: usize,
     max_depth: usize,
     /// Classified known-bug hits, by finding id.
-    hits: BTreeMap<&'static str, usize>,
+    pub(super) hits: BTreeMap<&'static str, usize>,
     /// Comparisons the numeric tolerance absorbed.
     float_noise: usize,
     /// Comparisons explained entirely by a documented save/reload heal.
@@ -2225,6 +2992,49 @@ struct Outcome {
     /// The topology signature of the state the run ENDED in. Corpus guidance
     /// keys on this; nothing else reads it.
     signature: String,
+}
+
+/// The part of an [`Outcome`] a REPLAY has to reproduce exactly.
+///
+/// Not the whole thing, and the exclusions are the point: `oracle_us` is wall
+/// time, and `float_noise` / `attributed` / the peaks are counts a shorter
+/// candidate legitimately reaches differently. What is in here is what makes a
+/// run the run it was - how much it did, how deep it went, what it hit, and the
+/// topology it ended in.
+#[derive(Debug, PartialEq, Eq)]
+pub(super) struct Shape<'a> {
+    pub(super) mutations: usize,
+    pub(super) rejected: usize,
+    pub(super) noops: usize,
+    pub(super) undos: usize,
+    pub(super) redos: usize,
+    pub(super) max_depth: usize,
+    pub(super) hits: &'a BTreeMap<&'static str, usize>,
+    pub(super) signature: &'a str,
+}
+
+impl Outcome {
+    pub(super) fn shape(&self) -> Shape<'_> {
+        Shape {
+            mutations: self.mutations,
+            rejected: self.rejected,
+            noops: self.noops,
+            undos: self.undos,
+            redos: self.redos,
+            max_depth: self.max_depth,
+            hits: &self.hits,
+            signature: &self.signature,
+        }
+    }
+
+    /// An outcome carrying nothing but classified hits, for a test that is about
+    /// what a hit MEANS rather than about a run.
+    pub(super) fn from_hits(hits: BTreeMap<&'static str, usize>) -> Self {
+        Self {
+            hits,
+            ..Self::default()
+        }
+    }
 }
 
 /// The largest each unbounded-in-principle collection got during a run.
@@ -3325,6 +4135,19 @@ struct Drawn {
     anchor: Option<ShotTarget>,
 }
 
+/// What one `Op` did to the run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StepOutcome {
+    /// The command ran (whether the app accepted it or refused it).
+    Applied,
+    /// A reference no longer resolves, because the move that created its target
+    /// is not in this candidate trace. Only ever reachable in a REPLAY.
+    Skipped,
+    /// The app's own merge-alignment assert fired. Nothing after it measures the
+    /// app - see [`Fuzzer::catching_alignment`].
+    Stopped,
+}
+
 impl Drawn {
     fn new(label: String, result: CommandResult) -> Self {
         Self {
@@ -3338,57 +4161,65 @@ impl Drawn {
 }
 
 impl Fuzzer {
-    /// Draw and apply one mutation. Returns `None` when nothing was buildable
-    /// (the project momentarily has no target of the drawn kind).
-    fn draw_mutation(&mut self) -> Option<Drawn> {
-        let targets = read_targets(&self.state);
+    /// Draw one mutation. Returns `None` when nothing was buildable (the project
+    /// momentarily has no target of the drawn kind).
+    ///
+    /// DRAWS ONLY. What the generators return is an [`Op`] - a value, with every
+    /// reference symbolic - and [`Self::apply_op`] is what executes it. The split
+    /// is what makes a run replayable: the recorded `Op` goes back through the
+    /// same `apply_op`, so a shrunk trace is executed by the same code that
+    /// executed the original.
+    fn draw_op(&mut self, targets: &Targets) -> Option<Op> {
         // Weights keep the cheap structural edits dominant while still reaching
         // the graph operations, which is where the interesting undo bugs live.
         // The delete family is held down so a long run does not empty the project.
         let kind = self.rng.below(100);
-        let drawn = match kind {
+        match kind {
             0..=9 => self.gen_create_section(),
-            10..=21 => self.gen_create_shot(&targets),
-            22..=35 => self.gen_update_shot(&targets),
-            36..=43 => self.gen_set_shot_kind(&targets),
-            44..=50 => self.gen_update_section(&targets),
-            51..=55 => self.gen_delete_shot(&targets),
-            56..=58 => self.gen_delete_section(&targets),
-            59..=63 => self.gen_reverse_section(&targets),
-            64..=69 => self.gen_move(&targets),
-            70..=74 => self.gen_move_station(&targets),
-            75..=79 => self.gen_station_comment(&targets),
-            80..=83 => self.gen_merge(&targets),
-            84..=86 => self.gen_unmerge(&targets),
-            87..=89 => self.gen_closure(&targets),
-            90..=91 => self.gen_zero_datum(&targets),
-            92..=95 => self.gen_split_family(&targets),
-            _ => self.gen_batch(&targets),
-        };
-        drawn
+            10..=21 => self.gen_create_shot(targets),
+            22..=35 => self.gen_update_shot(targets),
+            36..=43 => self.gen_set_shot_kind(targets),
+            44..=50 => self.gen_update_section(targets),
+            51..=55 => self.gen_delete_shot(targets),
+            56..=58 => self.gen_delete_section(targets),
+            59..=63 => self.gen_reverse_section(targets),
+            64..=69 => self.gen_move(targets),
+            70..=74 => self.gen_move_station(targets),
+            75..=79 => self.gen_station_comment(targets),
+            80..=83 => self.gen_merge(targets),
+            84..=86 => self.gen_unmerge(targets),
+            87..=89 => self.gen_closure(targets),
+            90..=91 => self.gen_zero_datum(targets),
+            92..=95 => self.gen_split_family(targets),
+            _ => self.gen_batch(targets),
+        }
     }
 
-    fn gen_create_section(&mut self) -> Option<Drawn> {
+    /// A live shot, as a reference the trace can carry.
+    fn shot_ref(targets: &Targets, section_id: SectionId, shot_id: ShotId) -> ShotRefT {
+        ShotRefT {
+            section: section_id,
+            id: shot_id,
+            uuid: targets.uuid_of(section_id, shot_id),
+        }
+    }
+
+    fn gen_create_section(&mut self) -> Option<Op> {
         // Includes the EMPTY section deliberately: finding 3 is literally "append
         // the first shot into an empty section", and a uniform generator reaches
         // that shape rarely.
         let count = self.rng.below(4);
         let shots: Vec<ShotData> = (0..count).map(|_| random_shot(&mut self.rng)).collect();
         let null_metadata = self.rng.chance(30);
-        Some(Drawn::new(
-            format!("createSection(shots={count},nullMeta={null_metadata})"),
-            self.state.execute(Command::CreateSection {
-                name: (!null_metadata).then(|| format!("fuzz-{}", self.rng.range(1000, 9999))),
-                surveyor: (!null_metadata).then(|| "fuzz".to_string()),
-                date: None,
-                color: (*self.rng.pick(COLORS)).to_string(),
-                direction: None,
-                shots,
-            }),
-        ))
+        Some(Op::CreateSection {
+            name: (!null_metadata).then(|| format!("fuzz-{}", self.rng.range(1000, 9999))),
+            surveyor: (!null_metadata).then(|| "fuzz".to_string()),
+            color: (*self.rng.pick(COLORS)).to_string(),
+            shots,
+        })
     }
 
-    fn gen_create_shot(&mut self, targets: &Targets) -> Option<Drawn> {
+    fn gen_create_shot(&mut self, targets: &Targets) -> Option<Op> {
         if targets.sections.is_empty() {
             return None;
         }
@@ -3397,43 +4228,21 @@ impl Fuzzer {
         let shot = random_shot(&mut self.rng);
         // A mid-section insert is what makes shot ids diverge from positional
         // order, which is the precondition for findings 8, 12 and 13.
-        let (after, before, how) = if shots.is_empty() {
-            (None, None, "append")
+        let (after, before) = if shots.is_empty() {
+            (None, None)
         } else {
             match self.rng.below(3) {
-                0 => (Some(shots[self.rng.below(shots.len())]), None, "after"),
-                1 => (None, Some(shots[self.rng.below(shots.len())]), "before"),
-                _ => (None, None, "append"),
+                0 => (Some(shots[self.rng.below(shots.len())]), None),
+                1 => (None, Some(shots[self.rng.below(shots.len())])),
+                _ => (None, None),
             }
         };
-        let appended_into_empty = (how == "append" && shots.is_empty()).then_some(section_id);
-        // The anchor's identity is read BEFORE the insert, because that is the
-        // shot the persisted `after_shot_id` / `before_shot_id` means. After a
-        // reload the same id may address a different one - which is what makes
-        // the REDO re-insert somewhere else.
-        let anchor = after
-            .or(before)
-            .and_then(|shot_id| self.shot_target(section_id, shot_id));
-        let mut drawn = Drawn::new(
-            format!("createShot(s={section_id},n={},{how})", shots.len()),
-            self.state.execute(Command::CreateShot {
-                section_id,
-                shot,
-                after_shot_id: after,
-                before_shot_id: before,
-            }),
-        );
-        // FINDING 3's precondition, and only the generator knows it: the section
-        // had NO shots, so the appended shot is index 0 and its undo goes through
-        // `remove_shot_with_rewire`'s `pos == 0` branch.
-        drawn.appended_into_empty = appended_into_empty;
-        drawn.anchor = anchor;
-        // And the shot the UNDO will delete by id, read after the insert.
-        drawn.target = drawn
-            .result
-            .shot_id
-            .and_then(|shot_id| self.shot_target(section_id, shot_id));
-        Some(drawn)
+        Some(Op::CreateShot {
+            section: section_id,
+            shot: Box::new(shot),
+            after: after.map(|shot_id| Self::shot_ref(targets, section_id, shot_id)),
+            before: before.map(|shot_id| Self::shot_ref(targets, section_id, shot_id)),
+        })
     }
 
     /// `(section, shot, uuid)` for a live shot, or `None` when the id addresses
@@ -3475,7 +4284,7 @@ impl Fuzzer {
         Some((*section_id, shots[self.rng.below(shots.len())]))
     }
 
-    fn gen_update_shot(&mut self, targets: &Targets) -> Option<Drawn> {
+    fn gen_update_shot(&mut self, targets: &Targets) -> Option<Op> {
         let (section_id, shot_id) = self.pick_shot(targets)?;
         let mut updates = ShotUpdates::default();
         // Each field independently, so both the "set" and the "clear" arms of the
@@ -3502,43 +4311,24 @@ impl Fuzzer {
                     .then(|| format!("c{}", self.rng.range(0, 999))),
             );
         }
-        let target = self.shot_target(section_id, shot_id);
-        let mut drawn = Drawn::new(
-            format!("updateShot(s={section_id},shot={shot_id})"),
-            self.state.execute(Command::UpdateShot {
-                section_id,
-                shot_id,
-                updates,
-            }),
-        );
-        // `UndoData::PreviousValues { section_id, shot_id, .. }` - the undo calls
-        // `update_shot` with this id, and `redo_inner`'s catch-all re-executes
-        // the command with it too. Finding 12's two halves.
-        drawn.target = target;
-        Some(drawn)
+        Some(Op::UpdateShot {
+            shot: Self::shot_ref(targets, section_id, shot_id),
+            updates: Box::new(updates),
+        })
     }
 
-    fn gen_set_shot_kind(&mut self, targets: &Targets) -> Option<Drawn> {
+    fn gen_set_shot_kind(&mut self, targets: &Targets) -> Option<Op> {
         let (section_id, shot_id) = self.pick_shot(targets)?;
         let kind = *self
             .rng
             .pick(&[ShotKind::Normal, ShotKind::Jump, ShotKind::Reference]);
-        let target = self.shot_target(section_id, shot_id);
-        let mut drawn = Drawn::new(
-            format!("setShotKind(s={section_id},shot={shot_id},{kind:?})"),
-            self.state.execute(Command::SetShotKind {
-                section_id,
-                shot_id,
-                kind,
-            }),
-        );
-        // `UndoData::InverseCommand(Command::SetShotKind { shot_id, .. })`, which
-        // names the shot by its in-session id on BOTH the undo and the redo.
-        drawn.target = target;
-        Some(drawn)
+        Some(Op::SetShotKind {
+            shot: Self::shot_ref(targets, section_id, shot_id),
+            kind,
+        })
     }
 
-    fn gen_update_section(&mut self, targets: &Targets) -> Option<Drawn> {
+    fn gen_update_section(&mut self, targets: &Targets) -> Option<Op> {
         if targets.sections.is_empty() {
             return None;
         }
@@ -3564,92 +4354,68 @@ impl Fuzzer {
         if self.rng.chance(30) {
             updates.quality = Some(self.rng.range(1, 5) as f64);
         }
-        Some(Drawn::new(
-            format!("updateSection(s={section_id})"),
-            self.state.execute(Command::UpdateSectionMetadata {
-                section_id,
-                updates,
-            }),
-        ))
+        Some(Op::UpdateSection {
+            section: section_id,
+            updates: Box::new(updates),
+        })
     }
 
-    fn gen_delete_shot(&mut self, targets: &Targets) -> Option<Drawn> {
+    fn gen_delete_shot(&mut self, targets: &Targets) -> Option<Op> {
         let (section_id, shot_id) = self.pick_shot(targets)?;
-        Some(Drawn::new(
-            format!("deleteShot(s={section_id},shot={shot_id})"),
-            self.state.execute(Command::DeleteShot {
-                section_id,
-                shot_id,
-            }),
-        ))
+        Some(Op::DeleteShot {
+            shot: Self::shot_ref(targets, section_id, shot_id),
+        })
     }
 
-    fn gen_delete_section(&mut self, targets: &Targets) -> Option<Drawn> {
+    fn gen_delete_section(&mut self, targets: &Targets) -> Option<Op> {
         // Keep at least two sections so cross-section merges stay reachable.
         if targets.sections.len() <= 2 {
             return None;
         }
         let section_id = targets.sections[self.rng.below(targets.sections.len())].0;
-        Some(Drawn::new(
-            format!("deleteSection(s={section_id})"),
-            self.state.execute(Command::DeleteSection { section_id }),
-        ))
+        Some(Op::DeleteSection {
+            section: section_id,
+        })
     }
 
-    fn gen_reverse_section(&mut self, targets: &Targets) -> Option<Drawn> {
+    fn gen_reverse_section(&mut self, targets: &Targets) -> Option<Op> {
         if targets.sections.is_empty() {
             return None;
         }
         let section_id = targets.sections[self.rng.below(targets.sections.len())].0;
         let swap = self.rng.chance(50);
-        Some(Drawn::new(
-            format!("reverseSection(s={section_id},swapLR={swap})"),
-            self.state.execute(Command::ReverseSection {
-                section_id,
-                swap_left_right: swap,
-            }),
-        ))
+        Some(Op::ReverseSection {
+            section: section_id,
+            swap_left_right: swap,
+        })
     }
 
-    fn gen_move(&mut self, targets: &Targets) -> Option<Drawn> {
+    fn gen_move(&mut self, targets: &Targets) -> Option<Op> {
         if targets.sections.is_empty() {
             return None;
         }
         let section_id = targets.sections[self.rng.below(targets.sections.len())].0;
         let offset = random_offset(&mut self.rng);
         let segment = self.rng.chance(50);
-        Some(Drawn::new(
-            format!(
-                "{}(s={section_id})",
-                if segment {
-                    "moveSegment"
-                } else {
-                    "moveSection"
-                }
-            ),
-            self.state.execute(if segment {
-                Command::MoveSegment { section_id, offset }
-            } else {
-                Command::MoveSection { section_id, offset }
-            }),
-        ))
+        Some(Op::Move {
+            section: section_id,
+            offset,
+            segment,
+        })
     }
 
-    fn gen_move_station(&mut self, targets: &Targets) -> Option<Drawn> {
+    fn gen_move_station(&mut self, targets: &Targets) -> Option<Op> {
         if targets.stations.is_empty() {
             return None;
         }
         let (section_id, index) = targets.stations[self.rng.below(targets.stations.len())];
-        Some(Drawn::new(
-            format!("moveStation({section_id}/{index})"),
-            self.state.execute(Command::MoveStation {
-                station_ref: StationRef::new(section_id, index),
-                offset: random_offset(&mut self.rng),
-            }),
-        ))
+        Some(Op::MoveStation {
+            station: StationRefT::new(section_id, index),
+            offset: random_offset(&mut self.rng),
+        })
     }
 
-    fn gen_station_comment(&mut self, targets: &Targets) -> Option<Drawn> {
+    fn gen_station_comment(&mut self, targets: &Targets) -> Option<Op> {
         if targets.stations.is_empty() {
             return None;
         }
@@ -3658,13 +4424,10 @@ impl Fuzzer {
             .rng
             .chance(70)
             .then(|| format!("note-{}", self.rng.range(0, 9999)));
-        Some(Drawn::new(
-            format!("stationComment({section_id}/{index},{})", comment.is_some()),
-            self.state.execute(Command::SetStationComment {
-                station_ref: StationRef::new(section_id, index),
-                comment,
-            }),
-        ))
+        Some(Op::StationComment {
+            station: StationRefT::new(section_id, index),
+            comment,
+        })
     }
 
     /// Two stations in DIFFERENT sections: merging or closing within one section
@@ -3690,42 +4453,34 @@ impl Fuzzer {
         Some((a, candidates[self.rng.below(candidates.len())]))
     }
 
-    fn gen_merge(&mut self, targets: &Targets) -> Option<Drawn> {
+    fn gen_merge(&mut self, targets: &Targets) -> Option<Op> {
         let (a, b) = self.pick_cross_pair(targets)?;
-        Some(Drawn::new(
-            format!("mergeStations({}/{},{}/{})", a.0, a.1, b.0, b.1),
-            self.state.execute(Command::MergeStations {
-                station_a: StationRef::new(a.0, a.1),
-                station_b: StationRef::new(b.0, b.1),
-            }),
-        ))
+        Some(Op::Merge {
+            a: StationRefT::new(a.0, a.1),
+            b: StationRefT::new(b.0, b.1),
+        })
     }
 
-    fn gen_unmerge(&mut self, targets: &Targets) -> Option<Drawn> {
+    fn gen_unmerge(&mut self, targets: &Targets) -> Option<Op> {
         if targets.merges.is_empty() {
             return None;
         }
         let (a, b) = targets.merges[self.rng.below(targets.merges.len())];
-        Some(Drawn::new(
-            format!("unmergePair({}/{},{}/{})", a.0, a.1, b.0, b.1),
-            self.state.execute(Command::UnmergeStationPair {
-                station_a: StationRef::new(a.0, a.1),
-                station_b: StationRef::new(b.0, b.1),
-            }),
-        ))
+        Some(Op::Unmerge {
+            a: StationRefT::new(a.0, a.1),
+            b: StationRefT::new(b.0, b.1),
+        })
     }
 
-    fn gen_closure(&mut self, targets: &Targets) -> Option<Drawn> {
+    fn gen_closure(&mut self, targets: &Targets) -> Option<Op> {
         if !self.closures {
             return None;
         }
         if !targets.closures.is_empty() && self.rng.chance(40) {
             let closure_id = targets.closures[self.rng.below(targets.closures.len())];
-            return Some(Drawn::new(
-                format!("removeLoopClosure({closure_id})"),
-                self.state
-                    .execute(Command::RemoveLoopClosure { closure_id }),
-            ));
+            return Some(Op::RemoveClosure {
+                closure: closure_id,
+            });
         }
         let (a, b) = self.pick_cross_pair(targets)?;
         // `ProportionalByLength` / `EqualDistribution` are rejected outright by
@@ -3738,25 +4493,19 @@ impl Fuzzer {
             ClosureStrategy::LeastSquaresWeighted,
             ClosureStrategy::ProportionalByLength,
         ]);
-        Some(Drawn::new(
-            format!("createLoopClosure({}/{},{}/{})", a.0, a.1, b.0, b.1),
-            self.state.execute(Command::CreateLoopClosure {
-                station_a: StationRef::new(a.0, a.1),
-                station_b: StationRef::new(b.0, b.1),
-                closure_strategy: strategy,
-            }),
-        ))
+        Some(Op::CreateClosure {
+            a: StationRefT::new(a.0, a.1),
+            b: StationRefT::new(b.0, b.1),
+            strategy,
+        })
     }
 
-    fn gen_zero_datum(&mut self, targets: &Targets) -> Option<Drawn> {
+    fn gen_zero_datum(&mut self, targets: &Targets) -> Option<Op> {
         if !targets.datums.is_empty() && self.rng.chance(50) {
             let (section_id, index) = targets.datums[self.rng.below(targets.datums.len())];
-            return Some(Drawn::new(
-                format!("removeZeroDatum({section_id}/{index})"),
-                self.state.execute(Command::RemoveZeroDatum {
-                    station_ref: StationRef::new(section_id, index),
-                }),
-            ));
+            return Some(Op::RemoveZeroDatum {
+                station: StationRefT::new(section_id, index),
+            });
         }
         if targets.stations.is_empty() {
             return None;
@@ -3768,19 +4517,16 @@ impl Fuzzer {
             self.rng.float(0.0, 5.0),
         )
         .ok()?;
-        Some(Drawn::new(
-            format!("setZeroDatum({section_id}/{index})"),
-            self.state.execute(Command::SetZeroDatum {
-                station_ref: StationRef::new(section_id, index),
-                coordinates: gps,
-            }),
-        ))
+        Some(Op::SetZeroDatum {
+            station: StationRefT::new(section_id, index),
+            coordinates: gps,
+        })
     }
 
     /// The delete/split family, which are `AppState` entry points rather than
     /// `Command` variants and so never see `execute()`'s epilogue - which is
     /// exactly what finding 10 is about.
-    fn gen_split_family(&mut self, targets: &Targets) -> Option<Drawn> {
+    fn gen_split_family(&mut self, targets: &Targets) -> Option<Op> {
         let (section_id, shot_id) = self.pick_shot(targets)?;
         let shots = targets
             .sections
@@ -3797,26 +4543,17 @@ impl Fuzzer {
                 } else {
                     self.rng.float(0.1, 8.0)
                 };
-                Some(Drawn::new(
-                    format!("splitShotAtDistance(s={section_id},shot={shot_id})"),
-                    self.state
-                        .execute_split_shot_at_distance(section_id, shot_id, distance),
-                ))
+                Some(Op::SplitShotAtDistance {
+                    shot: Self::shot_ref(targets, section_id, shot_id),
+                    distance,
+                })
             }
-            1 => Some(Drawn::new(
-                format!("deleteShotAndSplit(s={section_id},shot={shot_id})"),
-                self.state.execute_delete_shot_and_split(
-                    section_id,
-                    shot_id,
-                    "split-a".to_string(),
-                    "split-b".to_string(),
-                ),
-            )),
-            2 => Some(Drawn::new(
-                format!("deleteLastShotAndSection(s={section_id},shot={shot_id})"),
-                self.state
-                    .execute_delete_last_shot_and_section(section_id, shot_id),
-            )),
+            1 => Some(Op::DeleteShotAndSplit {
+                shot: Self::shot_ref(targets, section_id, shot_id),
+            }),
+            2 => Some(Op::DeleteLastShotAndSection {
+                shot: Self::shot_ref(targets, section_id, shot_id),
+            }),
             _ => {
                 if shots.len() < 2 {
                     return None;
@@ -3825,30 +4562,12 @@ impl Fuzzer {
                 let second = self.rng.below(shots.len());
                 let (lo, hi) = (first.min(second), first.max(second));
                 let split = self.rng.chance(50);
-                Some(Drawn::new(
-                    format!(
-                        "{}(s={section_id},{}..{})",
-                        if split {
-                            "deleteShotRangeSplit"
-                        } else {
-                            "deleteShotRangeShift"
-                        },
-                        shots[lo],
-                        shots[hi]
-                    ),
-                    if split {
-                        self.state.execute_delete_shot_range_split(
-                            section_id,
-                            shots[lo],
-                            shots[hi],
-                            "range-a".to_string(),
-                            "range-b".to_string(),
-                        )
-                    } else {
-                        self.state
-                            .execute_delete_shot_range_shift(section_id, shots[lo], shots[hi])
-                    },
-                ))
+                Some(Op::DeleteShotRange {
+                    section: section_id,
+                    from: Self::shot_ref(targets, section_id, shots[lo]),
+                    to: Self::shot_ref(targets, section_id, shots[hi]),
+                    split,
+                })
             }
         }
     }
@@ -3856,40 +4575,37 @@ impl Fuzzer {
     /// A batch is ONE undo entry covering several sub-commands, with all-or-nothing
     /// rollback - the only way to reach `execute_batch`'s snapshot-pair path and
     /// its rollback guard.
-    fn gen_batch(&mut self, targets: &Targets) -> Option<Drawn> {
+    fn gen_batch(&mut self, targets: &Targets) -> Option<Op> {
         let count = self.rng.range(2, 4);
         let mut commands = Vec::new();
         for _ in 0..count {
             let built = match self.rng.below(4) {
-                0 => self
-                    .pick_shot(targets)
-                    .map(|(section_id, shot_id)| Command::UpdateShot {
-                        section_id,
-                        shot_id,
-                        updates: ShotUpdates {
-                            length: Some(self.rng.float(1.0, 15.0)),
-                            ..ShotUpdates::default()
-                        },
-                    }),
+                0 => {
+                    self.pick_shot(targets)
+                        .map(|(section_id, shot_id)| BatchOp::UpdateShotLength {
+                            shot: Self::shot_ref(targets, section_id, shot_id),
+                            length: self.rng.float(1.0, 15.0),
+                        })
+                }
                 1 => (!targets.sections.is_empty()).then(|| {
                     let index = self.rng.below(targets.sections.len());
-                    Command::MoveSection {
-                        section_id: targets.sections[index].0,
+                    BatchOp::MoveSection {
+                        section: targets.sections[index].0,
                         offset: random_offset(&mut self.rng),
                     }
                 }),
                 2 => (!targets.stations.is_empty()).then(|| {
                     let index = self.rng.below(targets.stations.len());
                     let (section_id, station) = targets.stations[index];
-                    Command::MoveStation {
-                        station_ref: StationRef::new(section_id, station),
+                    BatchOp::MoveStation {
+                        station: StationRefT::new(section_id, station),
                         offset: random_offset(&mut self.rng),
                     }
                 }),
                 _ => (!targets.sections.is_empty()).then(|| {
                     let index = self.rng.below(targets.sections.len());
-                    Command::ReverseSection {
-                        section_id: targets.sections[index].0,
+                    BatchOp::ReverseSection {
+                        section: targets.sections[index].0,
                         swap_left_right: self.rng.chance(50),
                     }
                 }),
@@ -3905,16 +4621,467 @@ impl Fuzzer {
         // id that cannot exist, so the batch must fail, leave state untouched and
         // push nothing.
         let poisoned = self.rng.chance(20);
-        if poisoned {
-            commands.push(Command::MoveSection {
-                section_id: 999_999,
-                offset: Coordinates::new(1.0, 1.0, 1.0),
-            });
+        Some(Op::Batch { commands, poisoned })
+    }
+
+    // -----------------------------------------------------------------------
+    // The one execution path
+    // -----------------------------------------------------------------------
+
+    /// Execute one [`Op`] and gather the metadata the classifiers key on.
+    ///
+    /// EVERY mutation goes through here: a drawn one with [`Refs::identity`],
+    /// which resolves every reference to itself and can never skip, and a
+    /// replayed one with a mapping resolver, which can. That is what makes a
+    /// shrunk trace a faithful repro rather than an approximation - there is no
+    /// second implementation of any command for it to differ from.
+    ///
+    /// `None` means INAPPLICABLE: a reference the resolver could not map,
+    /// because the move that created its target is no longer in the trace. The
+    /// move is skipped and the run continues, which is what ddmin needs - a
+    /// candidate that killed the harness would be indistinguishable from one
+    /// that reproduced the bug.
+    fn apply_op(&mut self, op: &Op, refs: &mut Refs, targets: &Targets) -> Option<Drawn> {
+        match op {
+            Op::CreateSection {
+                name,
+                surveyor,
+                color,
+                shots,
+            } => Some(Drawn::new(
+                format!(
+                    "createSection(shots={},nullMeta={})",
+                    shots.len(),
+                    name.is_none()
+                ),
+                self.state.execute(Command::CreateSection {
+                    name: name.clone(),
+                    surveyor: surveyor.clone(),
+                    date: None,
+                    color: color.clone(),
+                    direction: None,
+                    shots: shots.clone(),
+                }),
+            )),
+            Op::CreateShot {
+                section,
+                shot,
+                after,
+                before,
+            } => {
+                let Some(section_id) = refs.section(*section, targets) else {
+                    return refs.skip(&op.describe());
+                };
+                let anchor = match (after, before) {
+                    (Some(anchor), _) | (None, Some(anchor)) => match refs.shot(anchor, targets) {
+                        Some((_, shot_id)) => Some(shot_id),
+                        None => return refs.skip(&op.describe()),
+                    },
+                    (None, None) => None,
+                };
+                let (after_shot_id, before_shot_id) = if after.is_some() {
+                    (anchor, None)
+                } else {
+                    (None, anchor)
+                };
+                let live = targets.shots_of(section_id).unwrap_or_default();
+                let how = if after_shot_id.is_some() {
+                    "after"
+                } else if before_shot_id.is_some() {
+                    "before"
+                } else {
+                    "append"
+                };
+                // FINDING 3's precondition, and only this knows it: the section
+                // had NO shots, so the appended shot is index 0 and its undo goes
+                // through `remove_shot_with_rewire`'s `pos == 0` branch.
+                let appended_into_empty =
+                    (how == "append" && live.is_empty()).then_some(section_id);
+                // The anchor's identity is read BEFORE the insert, because that
+                // is the shot the persisted `after_shot_id` / `before_shot_id`
+                // means. After a reload the same id may address a different one -
+                // which is what makes the REDO re-insert somewhere else.
+                let anchor_target =
+                    anchor.and_then(|shot_id| self.shot_target(section_id, shot_id));
+                let mut drawn = Drawn::new(
+                    format!("createShot(s={section_id},n={},{how})", live.len()),
+                    self.state.execute(Command::CreateShot {
+                        section_id,
+                        shot: (**shot).clone(),
+                        after_shot_id,
+                        before_shot_id,
+                    }),
+                );
+                drawn.appended_into_empty = appended_into_empty;
+                drawn.anchor = anchor_target;
+                // And the shot the UNDO will delete by id, read after the insert.
+                drawn.target = drawn
+                    .result
+                    .shot_id
+                    .and_then(|shot_id| self.shot_target(section_id, shot_id));
+                Some(drawn)
+            }
+            Op::UpdateShot { shot, updates } => {
+                let Some((section_id, shot_id)) = refs.shot(shot, targets) else {
+                    return refs.skip(&op.describe());
+                };
+                let target = self.shot_target(section_id, shot_id);
+                let mut drawn = Drawn::new(
+                    format!("updateShot(s={section_id},shot={shot_id})"),
+                    self.state.execute(Command::UpdateShot {
+                        section_id,
+                        shot_id,
+                        updates: (**updates).clone(),
+                    }),
+                );
+                // `UndoData::PreviousValues { section_id, shot_id, .. }` - the
+                // undo calls `update_shot` with this id, and `redo_inner`'s
+                // catch-all re-executes the command with it too. Finding 12's
+                // two halves.
+                drawn.target = target;
+                Some(drawn)
+            }
+            Op::SetShotKind { shot, kind } => {
+                let Some((section_id, shot_id)) = refs.shot(shot, targets) else {
+                    return refs.skip(&op.describe());
+                };
+                let target = self.shot_target(section_id, shot_id);
+                let mut drawn = Drawn::new(
+                    format!("setShotKind(s={section_id},shot={shot_id},{kind:?})"),
+                    self.state.execute(Command::SetShotKind {
+                        section_id,
+                        shot_id,
+                        kind: *kind,
+                    }),
+                );
+                // `UndoData::InverseCommand(Command::SetShotKind { shot_id, .. })`,
+                // which names the shot by its in-session id on BOTH the undo and
+                // the redo.
+                drawn.target = target;
+                Some(drawn)
+            }
+            Op::UpdateSection { section, updates } => {
+                let Some(section_id) = refs.section(*section, targets) else {
+                    return refs.skip(&op.describe());
+                };
+                Some(Drawn::new(
+                    format!("updateSection(s={section_id})"),
+                    self.state.execute(Command::UpdateSectionMetadata {
+                        section_id,
+                        updates: (**updates).clone(),
+                    }),
+                ))
+            }
+            Op::DeleteShot { shot } => {
+                let Some((section_id, shot_id)) = refs.shot(shot, targets) else {
+                    return refs.skip(&op.describe());
+                };
+                Some(Drawn::new(
+                    format!("deleteShot(s={section_id},shot={shot_id})"),
+                    self.state.execute(Command::DeleteShot {
+                        section_id,
+                        shot_id,
+                    }),
+                ))
+            }
+            Op::DeleteSection { section } => {
+                let Some(section_id) = refs.section(*section, targets) else {
+                    return refs.skip(&op.describe());
+                };
+                Some(Drawn::new(
+                    format!("deleteSection(s={section_id})"),
+                    self.state.execute(Command::DeleteSection { section_id }),
+                ))
+            }
+            Op::ReverseSection {
+                section,
+                swap_left_right,
+            } => {
+                let Some(section_id) = refs.section(*section, targets) else {
+                    return refs.skip(&op.describe());
+                };
+                Some(Drawn::new(
+                    format!("reverseSection(s={section_id},swapLR={swap_left_right})"),
+                    self.state.execute(Command::ReverseSection {
+                        section_id,
+                        swap_left_right: *swap_left_right,
+                    }),
+                ))
+            }
+            Op::Move {
+                section,
+                offset,
+                segment,
+            } => {
+                let Some(section_id) = refs.section(*section, targets) else {
+                    return refs.skip(&op.describe());
+                };
+                Some(Drawn::new(
+                    format!(
+                        "{}(s={section_id})",
+                        if *segment {
+                            "moveSegment"
+                        } else {
+                            "moveSection"
+                        }
+                    ),
+                    self.state.execute(if *segment {
+                        Command::MoveSegment {
+                            section_id,
+                            offset: *offset,
+                        }
+                    } else {
+                        Command::MoveSection {
+                            section_id,
+                            offset: *offset,
+                        }
+                    }),
+                ))
+            }
+            Op::MoveStation { station, offset } => {
+                let Some((section_id, index)) = refs.station(*station, targets) else {
+                    return refs.skip(&op.describe());
+                };
+                Some(Drawn::new(
+                    format!("moveStation({section_id}/{index})"),
+                    self.state.execute(Command::MoveStation {
+                        station_ref: StationRef::new(section_id, index),
+                        offset: *offset,
+                    }),
+                ))
+            }
+            Op::StationComment { station, comment } => {
+                let Some((section_id, index)) = refs.station(*station, targets) else {
+                    return refs.skip(&op.describe());
+                };
+                Some(Drawn::new(
+                    format!("stationComment({section_id}/{index},{})", comment.is_some()),
+                    self.state.execute(Command::SetStationComment {
+                        station_ref: StationRef::new(section_id, index),
+                        comment: comment.clone(),
+                    }),
+                ))
+            }
+            Op::Merge { a, b } => {
+                let (Some(left), Some(right)) =
+                    (refs.station(*a, targets), refs.station(*b, targets))
+                else {
+                    return refs.skip(&op.describe());
+                };
+                Some(Drawn::new(
+                    format!(
+                        "mergeStations({}/{},{}/{})",
+                        left.0, left.1, right.0, right.1
+                    ),
+                    self.state.execute(Command::MergeStations {
+                        station_a: StationRef::new(left.0, left.1),
+                        station_b: StationRef::new(right.0, right.1),
+                    }),
+                ))
+            }
+            Op::Unmerge { a, b } => {
+                let (Some(left), Some(right)) =
+                    (refs.station(*a, targets), refs.station(*b, targets))
+                else {
+                    return refs.skip(&op.describe());
+                };
+                Some(Drawn::new(
+                    format!("unmergePair({}/{},{}/{})", left.0, left.1, right.0, right.1),
+                    self.state.execute(Command::UnmergeStationPair {
+                        station_a: StationRef::new(left.0, left.1),
+                        station_b: StationRef::new(right.0, right.1),
+                    }),
+                ))
+            }
+            Op::CreateClosure { a, b, strategy } => {
+                let (Some(left), Some(right)) =
+                    (refs.station(*a, targets), refs.station(*b, targets))
+                else {
+                    return refs.skip(&op.describe());
+                };
+                Some(Drawn::new(
+                    format!(
+                        "createLoopClosure({}/{},{}/{})",
+                        left.0, left.1, right.0, right.1
+                    ),
+                    self.state.execute(Command::CreateLoopClosure {
+                        station_a: StationRef::new(left.0, left.1),
+                        station_b: StationRef::new(right.0, right.1),
+                        closure_strategy: *strategy,
+                    }),
+                ))
+            }
+            Op::RemoveClosure { closure } => {
+                let Some(closure_id) = refs.closure(*closure, targets) else {
+                    return refs.skip(&op.describe());
+                };
+                Some(Drawn::new(
+                    format!("removeLoopClosure({closure_id})"),
+                    self.state
+                        .execute(Command::RemoveLoopClosure { closure_id }),
+                ))
+            }
+            Op::SetZeroDatum {
+                station,
+                coordinates,
+            } => {
+                let Some((section_id, index)) = refs.station(*station, targets) else {
+                    return refs.skip(&op.describe());
+                };
+                Some(Drawn::new(
+                    format!("setZeroDatum({section_id}/{index})"),
+                    self.state.execute(Command::SetZeroDatum {
+                        station_ref: StationRef::new(section_id, index),
+                        coordinates: *coordinates,
+                    }),
+                ))
+            }
+            Op::RemoveZeroDatum { station } => {
+                let Some((section_id, index)) = refs.station(*station, targets) else {
+                    return refs.skip(&op.describe());
+                };
+                Some(Drawn::new(
+                    format!("removeZeroDatum({section_id}/{index})"),
+                    self.state.execute(Command::RemoveZeroDatum {
+                        station_ref: StationRef::new(section_id, index),
+                    }),
+                ))
+            }
+            Op::SplitShotAtDistance { shot, distance } => {
+                let Some((section_id, shot_id)) = refs.shot(shot, targets) else {
+                    return refs.skip(&op.describe());
+                };
+                Some(Drawn::new(
+                    format!("splitShotAtDistance(s={section_id},shot={shot_id})"),
+                    self.state
+                        .execute_split_shot_at_distance(section_id, shot_id, *distance),
+                ))
+            }
+            Op::DeleteShotAndSplit { shot } => {
+                let Some((section_id, shot_id)) = refs.shot(shot, targets) else {
+                    return refs.skip(&op.describe());
+                };
+                Some(Drawn::new(
+                    format!("deleteShotAndSplit(s={section_id},shot={shot_id})"),
+                    self.state.execute_delete_shot_and_split(
+                        section_id,
+                        shot_id,
+                        "split-a".to_string(),
+                        "split-b".to_string(),
+                    ),
+                ))
+            }
+            Op::DeleteLastShotAndSection { shot } => {
+                let Some((section_id, shot_id)) = refs.shot(shot, targets) else {
+                    return refs.skip(&op.describe());
+                };
+                Some(Drawn::new(
+                    format!("deleteLastShotAndSection(s={section_id},shot={shot_id})"),
+                    self.state
+                        .execute_delete_last_shot_and_section(section_id, shot_id),
+                ))
+            }
+            Op::DeleteShotRange {
+                section,
+                from,
+                to,
+                split,
+            } => {
+                let Some(section_id) = refs.section(*section, targets) else {
+                    return refs.skip(&op.describe());
+                };
+                let (Some((_, lo)), Some((_, hi))) =
+                    (refs.shot(from, targets), refs.shot(to, targets))
+                else {
+                    return refs.skip(&op.describe());
+                };
+                Some(Drawn::new(
+                    format!(
+                        "{}(s={section_id},{lo}..{hi})",
+                        if *split {
+                            "deleteShotRangeSplit"
+                        } else {
+                            "deleteShotRangeShift"
+                        }
+                    ),
+                    if *split {
+                        self.state.execute_delete_shot_range_split(
+                            section_id,
+                            lo,
+                            hi,
+                            "range-a".to_string(),
+                            "range-b".to_string(),
+                        )
+                    } else {
+                        self.state
+                            .execute_delete_shot_range_shift(section_id, lo, hi)
+                    },
+                ))
+            }
+            Op::Batch { commands, poisoned } => {
+                // A sub-command whose target is gone is DROPPED rather than
+                // failing the batch: a batch is one undo entry over several
+                // commands, and the shape that matters (an entry covering more
+                // than one edit) survives losing one of them.
+                let mut built = Vec::new();
+                for command in commands {
+                    match command {
+                        BatchOp::UpdateShotLength { shot, length } => {
+                            if let Some((section_id, shot_id)) = refs.shot(shot, targets) {
+                                built.push(Command::UpdateShot {
+                                    section_id,
+                                    shot_id,
+                                    updates: ShotUpdates {
+                                        length: Some(*length),
+                                        ..ShotUpdates::default()
+                                    },
+                                });
+                            }
+                        }
+                        BatchOp::MoveSection { section, offset } => {
+                            if let Some(section_id) = refs.section(*section, targets) {
+                                built.push(Command::MoveSection {
+                                    section_id,
+                                    offset: *offset,
+                                });
+                            }
+                        }
+                        BatchOp::MoveStation { station, offset } => {
+                            if let Some((section_id, index)) = refs.station(*station, targets) {
+                                built.push(Command::MoveStation {
+                                    station_ref: StationRef::new(section_id, index),
+                                    offset: *offset,
+                                });
+                            }
+                        }
+                        BatchOp::ReverseSection {
+                            section,
+                            swap_left_right,
+                        } => {
+                            if let Some(section_id) = refs.section(*section, targets) {
+                                built.push(Command::ReverseSection {
+                                    section_id,
+                                    swap_left_right: *swap_left_right,
+                                });
+                            }
+                        }
+                    }
+                }
+                if built.is_empty() {
+                    return refs.skip(&op.describe());
+                }
+                if *poisoned {
+                    built.push(Command::MoveSection {
+                        section_id: 999_999,
+                        offset: Coordinates::new(1.0, 1.0, 1.0),
+                    });
+                }
+                Some(Drawn::new(
+                    format!("batch(n={},poisoned={poisoned})", built.len()),
+                    self.state.execute(Command::Batch { commands: built }),
+                ))
+            }
         }
-        Some(Drawn::new(
-            format!("batch(n={},poisoned={poisoned})", commands.len()),
-            self.state.execute(Command::Batch { commands }),
-        ))
     }
 }
 
@@ -3937,17 +5104,88 @@ const JUMP_PERCENT: u32 = 40;
 impl Fuzzer {
     /// One mutation, with the full case analysis on what the stacks did.
     fn step_mutate(&mut self) {
+        let targets = read_targets(&self.state);
+        let Some(op) = self.draw_op(&targets) else {
+            return;
+        };
+        self.step_apply(&op, &mut Refs::identity(), &targets);
+    }
+
+    /// Execute one `Op` through the model: the oracles, the stack case analysis
+    /// and the recorder, shared by a DRAWN move and a REPLAYED one.
+    fn step_apply(&mut self, op: &Op, refs: &mut Refs, targets: &Targets) -> StepOutcome {
         let before_undo = self.undo_len();
         let before_redo = self.redo_len();
         let before_newest = self.newest_entry();
         let allocators = self.allocators();
-        let Some(Some(drawn)) = self.catching_alignment(Self::draw_mutation) else {
-            return;
+        // Recorded BEFORE the command runs, because the command that trips the
+        // app's own merge-alignment assert is the one a shrinker most needs and
+        // that assert unwinds straight out of `apply_op`.
+        let mark = self.recorder_mark(MoveKind::Mutate(Box::new(op.clone())));
+        let Some(applied) = self.catching_alignment(|fuzzer| fuzzer.apply_op(op, refs, targets))
+        else {
+            return StepOutcome::Stopped;
+        };
+        self.recorder_seal(mark);
+        let Some(drawn) = applied else {
+            return StepOutcome::Skipped;
         };
         let label = drawn.label.clone();
         self.record_mutation(drawn, before_undo, before_redo, before_newest);
         self.expect_allocators_advanced(&allocators, &label);
         self.record_growth();
+        StepOutcome::Applied
+    }
+
+    /// Every section, its shots' uuids in project order, and every closure id.
+    /// Built only while recording or replaying - see [`Inventory`].
+    fn inventory(&self) -> Inventory {
+        let Some(project) = self.state.get_project_state() else {
+            return Inventory::default();
+        };
+        Inventory {
+            sections: project
+                .sections
+                .iter()
+                .map(|section| {
+                    (
+                        section.id,
+                        section
+                            .shots
+                            .iter()
+                            .filter_map(|shot| shot.uuid.clone())
+                            .collect(),
+                    )
+                })
+                .collect(),
+            closures: project
+                .loop_closures
+                .iter()
+                .map(|closure| closure.id)
+                .collect(),
+        }
+    }
+
+    /// Push a move onto the recording, and remember the state it starts from.
+    /// `None` - and no cost at all - when nothing is recording.
+    fn recorder_mark(&self, kind: MoveKind) -> Option<Inventory> {
+        if !recorder_active() {
+            return None;
+        }
+        let before = self.inventory();
+        recorder_push(TraceMove {
+            kind,
+            created: Created::default(),
+            rng: self.rng.state(),
+        });
+        Some(before)
+    }
+
+    /// Fill in what the move just made brought into existence.
+    fn recorder_seal(&self, mark: Option<Inventory>) {
+        if let Some(before) = mark {
+            recorder_seal(self.inventory().created_since(&before));
+        }
     }
 
     /// The bookkeeping half of `step_mutate`, split out so the exposure prologue
@@ -4695,6 +5933,27 @@ impl Fuzzer {
         }
     }
 
+    /// Has something happened that makes everything after it measure the
+    /// harness rather than the app? See `catching_alignment` and
+    /// `expect_merges_aligned`.
+    const fn stopped(&self) -> bool {
+        self.outcome.alignment_panic || self.outcome.drift_stop
+    }
+
+    /// One history move, recorded. Only the main loop's history moves are in a
+    /// trace: the closing `finish()` walk is a function of the plan, so a replay
+    /// re-runs it and a shrink step can never delete it.
+    fn step_recorded_history(&mut self, back: bool, steps: usize) -> bool {
+        let mark = self.recorder_mark(if back {
+            MoveKind::Undo(steps)
+        } else {
+            MoveKind::Redo(steps)
+        });
+        let alive = self.step_history(back, steps);
+        self.recorder_seal(mark);
+        alive
+    }
+
     /// One history move. `steps` > 1 goes through `undo_to`/`redo_to`, the
     /// history dropdown's multi-step path, verified against the SAME snapshots
     /// single steps recorded - an equivalence that is not free, because
@@ -4949,11 +6208,15 @@ impl Fuzzer {
 }
 
 /// What a run is allowed to do.
-#[derive(Clone, Copy)]
-struct Plan {
-    iterations: usize,
+///
+/// Serializable because a recorded [`Trace`] carries it: a trace is only
+/// replayable against the plan it was recorded under, since the plan decides the
+/// starting project and the prologues the trace does NOT contain.
+#[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
+pub(super) struct Plan {
+    pub(super) iterations: usize,
     /// Cross the save/close/reopen boundary once, part way through.
-    persistence: bool,
+    pub(super) persistence: bool,
     /// Draw multi-step `undo_to`/`redo_to` jumps as well as single steps.
     ///
     /// OFF for the gate, ON for the soak, and the reason is finding 7, not taste.
@@ -4970,7 +6233,7 @@ struct Plan {
     ///
     /// Turn this on with finding 7 and the gate goes red - which is the point:
     /// delete this flag when it is fixed.
-    jumps: bool,
+    pub(super) jumps: bool,
     /// Put a genuine LOOP CLOSURE in the starting project, and let the generators
     /// create more.
     ///
@@ -4987,7 +6250,7 @@ struct Plan {
     /// that built closures would be red for a known finding with an unreadable
     /// message. Delete this flag when finding 14 is fixed; the gate then covers
     /// `ClosureInfo` again, which is the coverage it currently costs.
-    closures: bool,
+    pub(super) closures: bool,
     /// Build the id-vs-position divergence findings 8, 12 and 13 need, and put
     /// every id-bearing entry contiguous on top, before crossing the save
     /// boundary. See `Fuzzer::expose_stale_ids`.
@@ -4997,14 +6260,14 @@ struct Plan {
     /// construction, and its classified-hit counts then say nothing about
     /// whether the model has acquired a NEW way to be wrong, which is the only
     /// thing the gate is for.
-    divergence: bool,
+    pub(super) divergence: bool,
     /// Build the two closure shapes findings 4 and 10 need before fuzzing. See
     /// `Fuzzer::expose_closure_shapes`. Implies `closures`.
     ///
     /// OFF for the gate, for the same reason as `divergence` and for
     /// `closures`'s reason too: the shapes are built to reach known defects, so
     /// the hit counts say nothing about new ones.
-    closure_shapes: bool,
+    pub(super) closure_shapes: bool,
     /// Replay `(seed, moves)` as a PROLOGUE before this run's own stream.
     ///
     /// Corpus guidance, and the reason it costs nothing: every run in this
@@ -5012,7 +6275,7 @@ struct Plan {
     /// after n moves" is fully described by the pair `(seed, n)`. No project
     /// has to be serialized, stored or reloaded to replay a shape - which is
     /// what makes a corpus affordable inside a test binary.
-    prologue: Option<(u32, usize)>,
+    pub(super) prologue: Option<(u32, usize)>,
     /// How many times a persistence run crosses save/close/reopen.
     ///
     /// One is the historical behaviour and what the gate uses. MORE than one is
@@ -5022,7 +6285,7 @@ struct Plan {
     /// a snapshot recorded two epochs back is compared against a project that
     /// has been healed twice. Nothing exercised that: `cross_boundary` was
     /// called at most twice per run and only ever once in the gate.
-    crossings: usize,
+    pub(super) crossings: usize,
     /// Run PAST the app's `undo_history_limit`, so the FIFO trim fires and the
     /// model becomes a sliding window.
     ///
@@ -5030,10 +6293,18 @@ struct Plan {
     /// anything: the trim only starts at depth 100, and the accumulation oracle
     /// it exists alongside needs a depth to be revisited dozens of times before
     /// tolerated dust can add up to anything.
-    horizon: bool,
+    pub(super) horizon: bool,
 }
 
-fn run_fuzz(seed: u32, plan: Plan) -> Outcome {
+/// Everything a run does BEFORE its own move stream: the starting project, the
+/// corpus prologue and the two exposure prologues.
+///
+/// Split out because a REPLAY re-runs all of it rather than replaying it. All of
+/// it is a pure function of `(seed, Plan)`, so a shrunk trace starts from the
+/// same project the recorded one did - and no shrink step can delete a prologue
+/// move, which is what keeps `Plan::divergence`'s constructed shape intact while
+/// the moves that walk over it are minimized.
+fn start_run(seed: u32, plan: Plan) -> Fuzzer {
     // A corpus prologue rebuilds the shape a previous run reached, then hands
     // over to THIS run's stream. The project is built from the prologue's seed
     // (the builder is part of the shape) and the RNG is re-seeded at the
@@ -5046,7 +6317,7 @@ fn run_fuzz(seed: u32, plan: Plan) -> Outcome {
     );
     if let Some((_, moves)) = plan.prologue {
         for _ in 0..moves {
-            if fuzzer.outcome.alignment_panic || fuzzer.outcome.drift_stop {
+            if fuzzer.stopped() {
                 break;
             }
             fuzzer.step_mutate();
@@ -5064,19 +6335,49 @@ fn run_fuzz(seed: u32, plan: Plan) -> Outcome {
         fuzzer.expose_closure_shapes();
         fuzzer.orphan_pending = plan.persistence;
     }
-    // Crossing at a third of the way in leaves entries both below and above the
-    // boundary, so the closing walk covers restored UNDO entries and restored
-    // REDO entries alike. With `crossings` > 1 the rest are spread over the
-    // remaining run, so each one lands on a stack the previous crossing already
-    // restored - which is the case heals-on-heals needs.
+    fuzzer
+}
+
+/// The closing guarantee, and the one crossing a persistence run owes: run
+/// AFTER the move stream, drawn or replayed.
+fn finish_run(mut fuzzer: Fuzzer, plan: Plan) -> Outcome {
+    fuzzer.outcome.signature = topology_signature(&fuzzer.state);
+    if !fuzzer.outcome.wedged && !fuzzer.outcome.alignment_panic && !fuzzer.outcome.drift_stop {
+        // Cross the boundary at least once per persistence run, so the closing
+        // walk below runs against a RESTORED stack rather than an in-memory one.
+        if plan.persistence && fuzzer.outcome.reloads == 0 {
+            fuzzer.cross_boundary();
+        }
+        fuzzer.finish();
+    }
+    fuzzer.outcome
+}
+
+/// Which iterations of the main loop cross the save/close/reopen boundary.
+fn boundary_iterations(plan: Plan) -> Vec<usize> {
     let crossings = plan.crossings.max(1);
-    let boundaries: Vec<usize> = if plan.persistence && !plan.divergence {
+    if plan.persistence && !plan.divergence {
         (0..crossings)
             .map(|index| plan.iterations / 3 + index * (plan.iterations * 2 / 3) / crossings)
             .collect()
     } else {
         Vec::new()
-    };
+    }
+}
+
+pub(super) fn run_fuzz(seed: u32, plan: Plan) -> Outcome {
+    let mut fuzzer = start_run(seed, plan);
+    // Recording starts HERE, after the prologues: what a trace holds is the move
+    // stream and nothing else.
+    if recorder_armed() {
+        recorder_begin(fuzzer.inventory());
+    }
+    // Crossing at a third of the way in leaves entries both below and above the
+    // boundary, so the closing walk covers restored UNDO entries and restored
+    // REDO entries alike. With `crossings` > 1 the rest are spread over the
+    // remaining run, so each one lands on a stack the previous crossing already
+    // restored - which is the case heals-on-heals needs.
+    let boundaries = boundary_iterations(plan);
 
     // HORIZON mode deliberately pushes past the app's own history limit so the
     // FIFO trim fires and the sliding window gets fuzzed; every other mode stays
@@ -5094,7 +6395,9 @@ fn run_fuzz(seed: u32, plan: Plan) -> Outcome {
             break;
         }
         if boundaries.contains(&iteration) {
+            let mark = fuzzer.recorder_mark(MoveKind::Cross);
             fuzzer.cross_boundary();
+            fuzzer.recorder_seal(mark);
         }
         // 60 / 25 / 15 mutate / undo / redo, re-rolled when the stack a move
         // needs is empty. Same mix as the harness.
@@ -5122,7 +6425,7 @@ fn run_fuzz(seed: u32, plan: Plan) -> Outcome {
         }
         if !back && !forward {
             if fuzzer.cursor - fuzzer.floor >= depth_cap {
-                if !fuzzer.step_history(true, 1) {
+                if !fuzzer.step_recorded_history(true, 1) {
                     break;
                 }
                 continue;
@@ -5152,7 +6455,7 @@ fn run_fuzz(seed: u32, plan: Plan) -> Outcome {
         } else {
             1
         };
-        if !fuzzer.step_history(back, steps) {
+        if !fuzzer.step_recorded_history(back, steps) {
             break;
         }
         if fuzzer.outcome.alignment_panic || fuzzer.outcome.drift_stop {
@@ -5160,16 +6463,54 @@ fn run_fuzz(seed: u32, plan: Plan) -> Outcome {
         }
     }
 
-    fuzzer.outcome.signature = topology_signature(&fuzzer.state);
-    if !fuzzer.outcome.wedged && !fuzzer.outcome.alignment_panic && !fuzzer.outcome.drift_stop {
-        // Cross the boundary at least once per persistence run, so the closing
-        // walk below runs against a RESTORED stack rather than an in-memory one.
-        if plan.persistence && fuzzer.outcome.reloads == 0 {
-            fuzzer.cross_boundary();
+    recorder_end();
+    finish_run(fuzzer, plan)
+}
+
+/// Replay a recorded trace, or any subsequence of one, through the SAME engine.
+///
+/// This is the shrinker's probe. Everything outside the move stream - the
+/// starting project, the prologues, the closing unwind/rewind walk - is re-run
+/// from the plan, and every oracle is the one a drawn run uses, because the
+/// moves go through `step_apply` and `step_history` exactly as drawn moves do.
+///
+/// A move whose target no longer exists is SKIPPED (see [`Refs`]); a history
+/// move deeper than the candidate's history is clamped by `step_history`, which
+/// already does that for the drawn path.
+pub(super) fn run_trace(trace: &Trace, moves: &[TraceMove]) -> (Outcome, Vec<String>) {
+    let mut fuzzer = start_run(trace.seed, trace.plan);
+    let mut refs = match Refs::replay(&trace.prelude, &fuzzer.inventory()) {
+        Ok(refs) => refs,
+        Err(message) => panic!("cannot replay this trace: {message}"),
+    };
+    for mv in moves {
+        if fuzzer.stopped() {
+            break;
         }
-        fuzzer.finish();
+        // The generator, put back where the recorded run had it. Nothing in a
+        // replay draws except a crossing that builds finding 10's shape - see
+        // `Rng::state`.
+        fuzzer.rng.restore(mv.rng);
+        let before = fuzzer.inventory();
+        let alive = match &mv.kind {
+            MoveKind::Mutate(op) => {
+                let targets = read_targets(&fuzzer.state);
+                fuzzer.step_apply(op, &mut refs, &targets) != StepOutcome::Stopped
+            }
+            MoveKind::Undo(steps) => fuzzer.step_history(true, *steps),
+            MoveKind::Redo(steps) => fuzzer.step_history(false, *steps),
+            MoveKind::Cross => {
+                fuzzer.cross_boundary();
+                true
+            }
+        };
+        refs.learn(&mv.created, &fuzzer.inventory().created_since(&before));
+        if !alive {
+            break;
+        }
     }
-    fuzzer.outcome
+    let skipped = refs.skipped().to_vec();
+    (finish_run(fuzzer, trace.plan), skipped)
 }
 
 // ===========================================================================
@@ -5199,7 +6540,7 @@ const GATE_SEEDS: &[u32] = &[1, 2, 3, 4, 5, 6, 7, 9, 10, 11, 12, 19, 26];
 /// Moves per gate seed. 60 keeps the whole gate well inside a second while still
 /// reaching depth 20+, crossing the persistence boundary and walking the closing
 /// unwind/rewind over every entry.
-const GATE_ITERATIONS: usize = 60;
+pub(super) const GATE_ITERATIONS: usize = 60;
 
 /// Bucket a failure by its SHAPE rather than by its text.
 ///
@@ -5208,7 +6549,7 @@ const GATE_ITERATIONS: usize = 60;
 /// distinct things a sweep actually found. Digits are collapsed to `#` and the
 /// first differing path is appended, so two seeds that lost the same field at
 /// different depths land in the same bucket - which is what a triage read wants.
-fn failure_signature(message: &str) -> String {
+pub(super) fn failure_signature(message: &str) -> String {
     let collapse = |text: &str| -> String {
         let mut out = String::with_capacity(text.len());
         let mut in_digits = false;
@@ -5237,7 +6578,7 @@ fn failure_signature(message: &str) -> String {
     }
 }
 
-fn summarize(label: &str, seed: u32, outcome: &Outcome) -> String {
+pub(super) fn summarize(label: &str, seed: u32, outcome: &Outcome) -> String {
     let hits = outcome
         .hits
         .iter()
@@ -5319,7 +6660,7 @@ fn fuzz_trace() -> bool {
 /// module; a sweep that silently reported `<non-string panic>` because one of
 /// them forgot the `&str` arm would be a failure lost, which is the one thing
 /// the sweeps must not do.
-fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
+pub(super) fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
     payload
         .downcast_ref::<String>()
         .cloned()
@@ -5346,7 +6687,7 @@ const WORKER_STACK_BYTES: usize = 16 * 1024 * 1024;
 /// `TRACE=1` pins one worker unless the knob overrides it, because the trace is
 /// a STREAM: twelve seeds interleaving their moves into one stdout is not a
 /// move log, and reading that log in order is the entire point of the mode.
-fn fuzz_threads(jobs: usize) -> usize {
+pub(super) fn fuzz_threads(jobs: usize) -> usize {
     let requested = std::env::var("STALAGMIGHT_RUST_FUZZ_THREADS")
         .ok()
         .and_then(|value| value.parse::<usize>().ok());
@@ -5393,7 +6734,7 @@ fn fuzz_threads(jobs: usize) -> usize {
 /// `AssertUnwindSafe` is honest here for the reason it is honest in
 /// `fuzz_seed_survey`: a panicking run's `AppState` is dropped immediately and
 /// never observed again.
-fn run_seed_jobs<J: Sync, R: Send>(
+pub(super) fn run_seed_jobs<J: Sync, R: Send>(
     jobs: &[J],
     threads: usize,
     job: impl Fn(&J) -> R + Sync,
