@@ -88,6 +88,9 @@ export const TOAST_KEYS = {
   PROJECT_SETTINGS: 'project-settings',
   DELETE_PROJECT_WARNING: 'delete-project-warning',
 
+  // Open / import routing
+  IMPORT_IN_PROGRESS: 'import-in-progress',
+
   // Debug
   DEBUG_REFRESH: 'debug-refresh',
   DEBUG_COPY: 'debug-copy',

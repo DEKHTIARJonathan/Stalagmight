@@ -37,6 +37,8 @@ import { extractFilename } from './path';
 import { openDialog, openOrImportFilters, DMP_EXTENSION } from './fileDialogs';
 import { clearProjectActionSource } from './telemetry';
 import { needsSpeleoHandBackPrompt } from './quit';
+import { TOAST_KEYS } from './toastKeys';
+import i18n from '../i18n';
 
 /**
  * Open the "import as new project?" confirm dialog (#391) for a new-project-only
@@ -48,6 +50,58 @@ import { needsSpeleoHandBackPrompt } from './quit';
  */
 function openImportAsNewProject(ui: ReturnType<typeof useUIStore.getState>, path: string): void {
   ui.openDialog('import-as-new-project', { path, fileName: extractFilename(path) });
+}
+
+/**
+ * The dialogs that own an IN-FLIGHT import flow - one that has declared an
+ * `importContext` and has not yet reached its `saveAfterImport`. Mirrors the
+ * import-flow dialogs mounted in App.tsx, in flow order.
+ *
+ * Three import-adjacent dialogs are deliberately NOT here:
+ * - `import-receipt` is post-save (the flow's `saveAfterImport` already ran), so
+ *   re-routing behind it can lose nothing, and "finish the current import" would
+ *   be false advice for a dialog whose only action is Close.
+ * - `import-blocked` and `import-as-new-project` are PRE-flow prompts that own no
+ *   context and re-enter this router themselves; both `closeDialog()` first, so
+ *   they would pass the guard anyway, but listing them would be a trap.
+ */
+const IMPORT_FLOW_DIALOGS = new Set([
+  'new-project-for-import',
+  'dmp-selection',
+  'zero-datum-selection',
+  'zero-datum-config',
+  'dmp-import-new',
+  'tml-import',
+  'compass-import',
+  'walls-import',
+  'gpx-selection',
+  'gpx-placement',
+  'orphan-placement',
+]);
+
+/**
+ * True while an import flow owns the screen and still needs its `importContext`.
+ *
+ * Two shapes, because the flow is not always behind a dialog. The DMP wizard's
+ * MANUAL PLACEMENT phase hands the map to the user: it calls
+ * `startPlacementMode(...)` and then `closeDialog()` (DmpNewImportDialog.tsx,
+ * `startSegmentPlacement` -> "Close dialog so user can interact with the map"),
+ * so `activeDialog` is null for the whole phase while the flow is very much
+ * in-flight and its `saveAfterImport` is still to come. `placementMode` is the
+ * signal that covers it: `startPlacementMode` sets it (uiStore) and BOTH exits
+ * clear it - `confirmPlacement()` and `cancelPlacementMode()` each
+ * `set({ placementMode: null })` - so it is false again the moment placement
+ * ends, whether the user placed the segment or cancelled back to the wizard.
+ *
+ * It reads slightly wider than "import": the paste-sections dialog uses
+ * placement too. That is the right side to err on - the rest of the app already
+ * treats placement as modal-equivalent (the toolbar disables, SingleSystemView
+ * dims and drops pointer events, useKeyboardShortcuts allowlists a handful of
+ * actions), so routing a dropped file into it was never wanted either.
+ */
+function importFlowOwnsScreen(ui: ReturnType<typeof useUIStore.getState>): boolean {
+  if (ui.activeDialog && IMPORT_FLOW_DIALOGS.has(ui.activeDialog)) return true;
+  return ui.placementMode !== null;
 }
 
 /**
@@ -81,6 +135,30 @@ export async function routeOpenedFile(
   let handedOff = false;
 
   try {
+    // One import at a time (#411). Drag-drop routes unconditionally - the drop
+    // listener has no modal check (Ctrl+O/Ctrl+I do: useKeyboardShortcuts returns
+    // early for every non-Escape key while a dialog is open) - so a second file
+    // dropped mid-flow would re-enter here and the reset below would null the
+    // context the in-flight flow's `saveAfterImport` is about to read, losing its
+    // save. Refuse instead, and say so; the running flow keeps the screen and its
+    // context. Guarded in the router, not in the drop handler, so every present
+    // and future entry point inherits it. Inside the `try` so the abandoned
+    // route's telemetry source is dropped by the `finally`, like every other
+    // guard-rejected path.
+    if (importFlowOwnsScreen(ui)) {
+      ui.showToast(i18n.t('importGate.inProgress'), TOAST_KEYS.IMPORT_IN_PROGRESS, 'warning');
+      return;
+    }
+
+    // `importContext` tells `saveAfterImport` whether the completion handlers must
+    // write the .stalx (a brand-new project's initial save is deferred) or only mark
+    // dirty. It has no auto-reset, so a value left behind by a previous flow -
+    // abandoned parse, cancelled dialog, or a completed import - would decide the
+    // NEXT one, making the save non-deterministic across a session (#411). Reset it
+    // here: this router is the single entry point of every import flow, and each
+    // branch below re-declares its own context once it commits to a flow.
+    ui.setImportContext(null);
+
     // Importing into an open project adds sections (a mutation) - but only DMP
     // does that; every other importable format instead CLOSES the current
     // project and imports as a new one (openImportAsNewProject below), which
@@ -175,6 +253,7 @@ export async function routeOpenedFile(
       }
       const gpxFile = await store.parseGpx(path);
       if (!gpxFile) return;
+      ui.setImportContext('new-project');
       ui.openDialog('new-project-for-import', {
         gpxFile,
         filePath: path,
@@ -191,6 +270,7 @@ export async function routeOpenedFile(
       }
       const tmlFile = await store.parseTml(path);
       if (!tmlFile) return;
+      ui.setImportContext('new-project');
       ui.openDialog('new-project-for-import', {
         tmlFile,
         filePath: path,
@@ -207,6 +287,7 @@ export async function routeOpenedFile(
       }
       const compassFile = await store.parseCompass(path);
       if (!compassFile) return;
+      ui.setImportContext('new-project');
       ui.openDialog('new-project-for-import', {
         compassFile,
         filePath: path,
@@ -223,6 +304,7 @@ export async function routeOpenedFile(
       }
       const wallsFile = await store.parseWalls(path);
       if (!wallsFile) return;
+      ui.setImportContext('new-project');
       ui.openDialog('new-project-for-import', {
         wallsFile,
         filePath: path,
