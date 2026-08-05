@@ -214,6 +214,18 @@ Trusted-input replay would need TCC grants, a frontmost desktop and pixel determ
 none portable. When an os_* step is load-bearing for a repro, it is hand-converted to a
 Tier 1 equivalent; the comment preserves intent.
 
+### 5.4 As-built notes (PR 4)
+
+`os_menu` is deferred: the helper's `menu` subcommand is a stub returning
+`unimplemented` that names the AX menu-bar walk it needs, and `os_keys` covers menu
+accelerators in the meantime, so nothing is blocked. A testid click composes the element
+rect with the window CONTENT origin, which the helper cannot report directly: `window-id`
+returns the `CGWindowList` frame (title bar included), so the content origin is the frame
+origin shifted down by `frame.h - window.innerHeight`, the only offset macOS windows have
+(no side or bottom border), clamped at 0. Tier 2 unit tests inject a fake helper runner,
+so the whole TS layer is covered without posting a real event or capturing a real screen -
+nothing in CI touches the desktop.
+
 ## 6. Phased delivery
 
 - **Phase 0 - probes** (throwaway, results recorded below):

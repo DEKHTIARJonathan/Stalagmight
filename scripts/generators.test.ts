@@ -198,7 +198,29 @@ beforeAll(() => {
       resolved: { point: { x: 888, y: 666 }, clearancePx: 12 },
       outcome: { ok: true, durationMs: 20 },
     }),
-    record({ type: 'session-end', v: 1, ts: ts(18), reason: 'app_stop', actions: 16 }),
+    // Tier 2 OS-level input: recorded like any action, never replayable. Two
+    // different os_* tools, so the test pins the prefix arm rather than a
+    // per-tool case.
+    record({
+      type: 'action',
+      v: 1,
+      seq: 17,
+      ts: ts(18),
+      tool: 'os_click',
+      params: { testid: 'toolbar-save-button' },
+      resolved: { point: { x: 1440, y: 220 }, frontmost_ok: true },
+      outcome: { ok: true, durationMs: 180 },
+    }),
+    record({
+      type: 'action',
+      v: 1,
+      seq: 18,
+      ts: ts(19),
+      tool: 'os_keys',
+      params: { spec: 'cmd+s' },
+      outcome: { ok: true, durationMs: 90 },
+    }),
+    record({ type: 'session-end', v: 1, ts: ts(20), reason: 'app_stop', actions: 18 }),
   ];
   fs.writeFileSync(path.join(sessionDir, 'actions.jsonl'), `${lines.join('\n')}\n`);
 });
@@ -251,6 +273,23 @@ describe('generate-replay.mjs', () => {
     // Observation-only tools stay comments.
     expect(spec).toContain('store_state');
     expect(spec).not.toContain('await storeState');
+  });
+
+  it('comments out every os_* step as OS-level, with its params, instead of replaying it', () => {
+    const out = path.join(sessionDir, 'replay-os.spec.ts');
+    execFileSync(process.execPath, [replayGen, sessionDir, '--out', out], { encoding: 'utf8' });
+    const spec = fs.readFileSync(out, 'utf8');
+
+    expect(spec).toContain(
+      '// [seq 17] os_click {"testid":"toolbar-save-button"} (OS-level; not replayable)',
+    );
+    expect(spec).toContain('// [seq 18] os_keys {"spec":"cmd+s"} (OS-level; not replayable)');
+    // Not the generic observation arm, and not an executable click: trusted input
+    // needs TCC grants, a frontmost desktop and pixel determinism.
+    expect(spec).not.toContain('os_click (observation; not replayed)');
+    expect(spec).not.toContain('os_keys (observation; not replayed)');
+    expect(spec).not.toContain('toolbar-save-button"]');
+    expect(spec).not.toContain('browser.keys(["cmd+s"])');
   });
 });
 
