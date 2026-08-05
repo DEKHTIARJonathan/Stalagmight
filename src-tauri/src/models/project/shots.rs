@@ -152,6 +152,143 @@ impl Project {
         self.get_section(section_id)?.get_shot(shot_id)
     }
 
+    /// Can `start` reach a still-resolvable zero datum through RIGID MERGES
+    /// only, without passing through `excluded`?
+    ///
+    /// The merge-only twin of [`Self::has_datum_path_excluding`], which also
+    /// follows aligned loop closures. Both exist deliberately: the
+    /// closure-inclusive question is the right one for "is this partner pinned
+    /// to the world at all" (the import placement heuristic asks that), and this
+    /// one is the right question for "will the offset cascade refuse to move
+    /// this partner", because [`Self::cascade_connection_offsets`]'s first phase
+    /// - and the merge-alignment invariant the app asserts - are merge-only.
+    fn has_merge_datum_path_excluding(&self, start: SectionId, excluded: SectionId) -> bool {
+        let mut visited: HashSet<SectionId> = HashSet::new();
+        let mut queue = vec![start];
+        while let Some(current) = queue.pop() {
+            if current == excluded || !visited.insert(current) {
+                continue;
+            }
+            if self.zero_datums.iter().any(|zd| {
+                // A dangling datum (key no longer resolves) does not anchor (#174).
+                zd.station_ref.section_id == current && self.resolve_key(&zd.station_ref).is_some()
+            }) {
+                return true;
+            }
+            for m in &self.station_merges {
+                if m.station_a.section_id == current {
+                    queue.push(m.station_b.section_id);
+                }
+                if m.station_b.section_id == current {
+                    queue.push(m.station_a.section_id);
+                }
+            }
+        }
+        false
+    }
+
+    /// Which sides of a structural edit at `boundary` are pinned to world
+    /// coordinates, as `(head_anchored, tail_anchored)`. `doomed_anchors` are
+    /// keys a surrounding range delete will also remove, and never decide.
+    ///
+    /// A section is rigid and its offset is ONE value for the whole section, so
+    /// with `world = section-local + section_offset` an insert or delete at
+    /// `boundary` (which shifts every station of index `> boundary` in
+    /// section-local space) leaves exactly two possibilities in world space:
+    /// leave the offset alone and the HEAD keeps its position while the tail
+    /// moves, or absorb the shift into the offset and the TAIL keeps its
+    /// position while the head moves. Whichever side carries a datum constraint
+    /// is the side that must stay; the other side's merge partners are then
+    /// pulled along by [`Self::cascade_connection_offsets`] - which can only
+    /// move a partner that is NOT itself authoritative.
+    ///
+    /// Measured over the rigid merge forest plus zero datums, which is exactly
+    /// the constraint set that cascade's first phase enforces and that
+    /// [`Self::debug_assert_merge_alignment`] checks. An ALIGNED LOOP CLOSURE is
+    /// the redundant edge of a loop: its residual IS the loop misclosure, the
+    /// cascade follows it only to reach a component the merges cannot, and the
+    /// alignment assert ignores it. So a datum reachable only through a closure
+    /// is a tie-break for when the merge graph pins neither side, never a reason
+    /// to overrule a merge-side anchor.
+    ///
+    /// #413 finding 14, measured: with merges `s0:3 <-> s3:0` and `s3:5 <->
+    /// s4:0`, an aligned closure `s0:0 <-> s4:2` and the only datum on `s0`, an
+    /// insert into `s3` used to see the TAIL as anchored (`s4 -> closure -> s0`
+    /// reaches the datum) and back-shifted `s3`, which tore the HEAD merge
+    /// `s0:3 <-> s3:0` 3.97 m apart. The cascade could not repair that: `s0` is
+    /// authoritative because it holds the datum and `s3` is authoritative
+    /// because it is the seed, so the BFS skips the edge between them. Keeping
+    /// the head fixed satisfies BOTH merges and leaves the closure carrying the
+    /// misclosure the insert really created - which is the state the epilogue's
+    /// re-solve converged to anyway, one asserted-impossible intermediate later.
+    ///
+    /// Both sides anchored means the merge component holds two datums (the
+    /// subtrees behind a head merge and a tail merge are disjoint in a forest),
+    /// which is the over-anchoring [`Self::over_anchored_merge_components`]
+    /// reports and which NO choice of section offset can satisfy. The head is
+    /// kept, deterministically, rather than tearing the head merge for a tail
+    /// that cannot be satisfied either.
+    fn anchored_sides_of_edit(
+        &self,
+        section_id: SectionId,
+        boundary: u32,
+        doomed_anchors: &HashSet<StationKey>,
+    ) -> (bool, bool) {
+        // `Some(true)` = this key sits on the moving tail, `Some(false)` = on the
+        // stationary head, `None` = not ours, doomed, or no longer resolvable.
+        let side = |key: &StationKey| -> Option<bool> {
+            if key.section_id != section_id || doomed_anchors.contains(key) {
+                return None;
+            }
+            self.resolve_key(key).map(|sr| sr.station_index > boundary)
+        };
+        let (mut head, mut tail) = (false, false);
+        for zd in &self.zero_datums {
+            if let Some(is_tail) = side(&zd.station_ref) {
+                *(if is_tail { &mut tail } else { &mut head }) = true;
+            }
+        }
+        for m in &self.station_merges {
+            let (ours, theirs) = if m.station_a.section_id == section_id {
+                (&m.station_a, &m.station_b)
+            } else if m.station_b.section_id == section_id {
+                (&m.station_b, &m.station_a)
+            } else {
+                continue;
+            };
+            let Some(is_tail) = side(ours) else { continue };
+            if theirs.section_id != section_id
+                && self.has_merge_datum_path_excluding(theirs.section_id, section_id)
+            {
+                *(if is_tail { &mut tail } else { &mut head }) = true;
+            }
+        }
+        if head || tail {
+            return (head, tail);
+        }
+        // Nothing rigid pins either side: an aligned closure is then the only
+        // constraint there is, and honoring it keeps a closed loop closed.
+        for c in &self.loop_closures {
+            if !c.is_aligned {
+                continue;
+            }
+            let (ours, theirs) = if c.station_a.section_id == section_id {
+                (&c.station_a, &c.station_b)
+            } else if c.station_b.section_id == section_id {
+                (&c.station_b, &c.station_a)
+            } else {
+                continue;
+            };
+            let Some(is_tail) = side(ours) else { continue };
+            if theirs.section_id != section_id
+                && self.has_datum_path_excluding(theirs.section_id, section_id)
+            {
+                *(if is_tail { &mut tail } else { &mut head }) = true;
+            }
+        }
+        (head, tail)
+    }
+
     /// Insert a shot after a specific shot in a section. `forced_id` preserves
     /// the original id and `forced_uuid` the original persistent shot UUID when
     /// redo re-runs this exact path (see [`AppState::redo`]); pass `None`/`None`
@@ -180,46 +317,14 @@ impl Project {
         // Station keys are position-independent: no ref-shifting on insert (the
         // junction the new shot extends from keeps its anchor; shots beyond keep
         // theirs). The new shot's displacement still shifts stations > pos+1 in
-        // space - if the tail side is datum-anchored, back-shift the offset so the
-        // tail stays put. Positions are resolved from the stored keys.
+        // space - if the tail side is the anchored one, back-shift the offset so
+        // the tail stays put and the head moves instead. Positions are resolved
+        // from the stored keys. See `anchored_sides_of_edit` for why the HEAD
+        // side has to be consulted too (#413 finding 14).
         if dx != 0.0 || dy != 0.0 {
-            let boundary = (pos + 1) as u32;
-            let on_tail = |key: &StationKey| -> bool {
-                key.section_id == section_id
-                    && self
-                        .resolve_key(key)
-                        .is_some_and(|sr| sr.station_index > boundary)
-            };
-            let tail_anchored = self.zero_datums.iter().any(|zd| on_tail(&zd.station_ref))
-                || self.station_merges.iter().any(|m| {
-                    let (our, their) = if m.station_a.section_id == section_id {
-                        (&m.station_a, &m.station_b)
-                    } else if m.station_b.section_id == section_id {
-                        (&m.station_b, &m.station_a)
-                    } else {
-                        return false;
-                    };
-                    on_tail(our)
-                        && their.section_id != section_id
-                        && self.has_datum_path_excluding(their.section_id, section_id)
-                })
-                || self.loop_closures.iter().any(|c| {
-                    if !c.is_aligned {
-                        return false;
-                    }
-                    let (our, their) = if c.station_a.section_id == section_id {
-                        (&c.station_a, &c.station_b)
-                    } else if c.station_b.section_id == section_id {
-                        (&c.station_b, &c.station_a)
-                    } else {
-                        return false;
-                    };
-                    on_tail(our)
-                        && their.section_id != section_id
-                        && self.has_datum_path_excluding(their.section_id, section_id)
-                });
-
-            if tail_anchored {
+            let (head_anchored, tail_anchored) =
+                self.anchored_sides_of_edit(section_id, (pos + 1) as u32, &HashSet::new());
+            if tail_anchored && !head_anchored {
                 self.adjust_section_offset(section_id, -dx, -dy);
             }
         }
@@ -1259,45 +1364,17 @@ impl Project {
                 self.adjust_section_offset(section_id, dx, dy);
             }
         } else if dx != 0.0 || dy != 0.0 {
-            // Mid-section: check if the tail side is datum-anchored. Tail stations
-            // resolve to index > pos (after the deletion renumbered them).
-            let on_tail = |key: &StationKey| -> bool {
-                key.section_id == section_id
-                    && !doomed_anchors.contains(key)
-                    && self
-                        .resolve_key(key)
-                        .is_some_and(|sr| sr.station_index > pos as u32)
-            };
-            let tail_anchored = self.zero_datums.iter().any(|zd| on_tail(&zd.station_ref))
-                || self.station_merges.iter().any(|m| {
-                    let (our, their) = if m.station_a.section_id == section_id {
-                        (&m.station_a, &m.station_b)
-                    } else if m.station_b.section_id == section_id {
-                        (&m.station_b, &m.station_a)
-                    } else {
-                        return false;
-                    };
-                    on_tail(our)
-                        && their.section_id != section_id
-                        && self.has_datum_path_excluding(their.section_id, section_id)
-                })
-                || self.loop_closures.iter().any(|c| {
-                    if !c.is_aligned {
-                        return false;
-                    }
-                    let (our, their) = if c.station_a.section_id == section_id {
-                        (&c.station_a, &c.station_b)
-                    } else if c.station_b.section_id == section_id {
-                        (&c.station_b, &c.station_a)
-                    } else {
-                        return false;
-                    };
-                    on_tail(our)
-                        && their.section_id != section_id
-                        && self.has_datum_path_excluding(their.section_id, section_id)
-                });
-
-            if tail_anchored {
+            // Mid-section: keep whichever side of the deletion point is anchored.
+            // Tail stations resolve to index > pos (after the deletion renumbered
+            // them). The HEAD side is consulted too, for the same reason the
+            // insert consults it - see `anchored_sides_of_edit`: compensating for
+            // a tail whose "anchor" runs through a soft closure while the head is
+            // merged straight to the datum tears the head merge apart and the
+            // cascade cannot put it back (#413 finding 14's undo-side mirror,
+            // which reaches this function through undo of `CreateShot`).
+            let (head_anchored, tail_anchored) =
+                self.anchored_sides_of_edit(section_id, pos as u32, doomed_anchors);
+            if tail_anchored && !head_anchored {
                 self.adjust_section_offset(section_id, dx, dy);
             }
         }

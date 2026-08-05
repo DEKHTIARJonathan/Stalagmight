@@ -5,7 +5,8 @@ use serde::{Deserialize, Serialize};
 
 use super::Command;
 use crate::models::{
-    GpsCoordinates, LoopClosure, SectionData, SectionId, ShotData, ShotId, StationRef,
+    GpsCoordinates, LoopClosure, SectionData, SectionId, SectionIdentity, ShotData, ShotId,
+    StationRef,
 };
 
 mod budget;
@@ -206,6 +207,25 @@ pub enum UndoData {
         section_id: SectionId,
         /// Full section data including all shots
         section_data: SectionData,
+        /// What `section_data` cannot carry: the shots' persistent uuids, the
+        /// reverse parity and the least-squares gauge pair. Without it the redo
+        /// rebuilds through `Section::new` and mints a fresh uuid per shot -
+        /// dangling every `StationKey::AfterShot` anchor onto the section, the
+        /// same way a fresh uuid would in `CreatedShotSnapshot` (#413, finding
+        /// 1).
+        ///
+        /// REFRESHED BY THE UNDO, not only recorded at push: the gauge pair is
+        /// a save-time heal (`capture_missing_gauge_anchors`) with no undo entry
+        /// of its own, so a section created, saved and then undone carries
+        /// anchors that did not exist when this entry was pushed. The undo
+        /// re-reads the live section immediately before deleting it, so the redo
+        /// puts back what the undo destroyed.
+        ///
+        /// FORMAT EVOLUTION (additive, no schema bump): absent in entries
+        /// written before this field existed, where the default (no uuids,
+        /// parity false, no anchors) reproduces the pre-fix mint.
+        #[serde(default)]
+        identity: SectionIdentity,
     },
 
     /// Shot snapshot for restoring deleted shots
@@ -292,6 +312,20 @@ pub enum UndoData {
     ClosureInfo {
         /// The full loop closure data to remove on undo
         closure: LoopClosure,
+        /// Where the closure sat in `Project::loop_closures` when
+        /// `RemoveLoopClosure` took it out, so undo can put it BACK THERE.
+        /// `Vec::remove` preserves the order of the rest, so appending on undo
+        /// permutes the list (#413, finding 4) - and that order is persisted
+        /// into the `.stalx`, indexed by the frontend, and the order
+        /// `resolve_offsets` builds its adjacency lists in.
+        ///
+        /// FORMAT EVOLUTION (additive, no schema bump): `None` for a legacy
+        /// persisted entry and for a `CreateLoopClosure` entry, whose undo
+        /// REMOVES the closure and whose redo appends the one it first
+        /// appended; both keep the push, exactly as `restore_shot`'s
+        /// out-of-range `position` falls back to one.
+        #[serde(default)]
+        position: Option<usize>,
     },
 
     /// Zero datum info for restoring previous GPS and section offsets
@@ -299,6 +333,19 @@ pub enum UndoData {
         station_ref: StationRef,
         /// Previous GPS coordinates, None if there was no previous datum
         previous_gps: Option<GpsCoordinates>,
+        /// Where the datum sat in `Project::zero_datums` when it was captured,
+        /// so undo of `RemoveZeroDatum` re-inserts it there instead of
+        /// appending (#413, finding 17 - finding 4's defect one collection
+        /// over). The order is persisted, indexed by the frontend, and is the
+        /// order `resolve_offsets` walks when it picks the datum that anchors a
+        /// connected group, so a permutation can decide where the survey ends
+        /// up.
+        ///
+        /// FORMAT EVOLUTION (additive, no schema bump): `None` for a legacy
+        /// persisted entry, and for a `SetZeroDatum` on a station that had no
+        /// datum; both keep the push.
+        #[serde(default)]
+        position: Option<usize>,
         /// Previous section offsets for affected sections
         /// - None value means the key didn't exist (should be removed on undo)
         /// - Some value means the offset should be restored to that value
@@ -1253,6 +1300,7 @@ mod tests {
             UndoData::ZeroDatumInfo {
                 station_ref: StationRef::new(1, 0),
                 previous_gps: Some(GpsCoordinates::new(40.0, -70.0, 50.0).unwrap()),
+                position: Some(0),
                 previous_offsets: offsets,
             },
         );
@@ -1262,6 +1310,7 @@ mod tests {
             station_ref,
             previous_gps,
             previous_offsets,
+            ..
         } = data
         {
             assert_eq!(station_ref.section_id, 1);
@@ -1910,6 +1959,7 @@ mod tests {
                 undo_data: UndoData::CreatedSectionSnapshot {
                     section_id: 3,
                     section_data: test_section_data("Created"),
+                    identity: SectionIdentity::default(),
                 },
                 timestamp: None,
             },
@@ -1968,6 +2018,7 @@ mod tests {
                 undo_data: UndoData::ZeroDatumInfo {
                     station_ref: StationRef::new(1, 0),
                     previous_gps: None,
+                    position: None,
                     previous_offsets: HashMap::new(),
                 },
                 timestamp: None,
@@ -2831,7 +2882,10 @@ mod tests {
                 station_b: StationRef::new(2, 3),
                 closure_strategy: crate::models::ClosureStrategy::ProportionalByLength,
             },
-            undo_data: UndoData::ClosureInfo { closure },
+            undo_data: UndoData::ClosureInfo {
+                closure,
+                position: None,
+            },
             timestamp: None,
         };
 
@@ -2847,6 +2901,7 @@ mod tests {
         match &restored.undo_data {
             UndoData::ClosureInfo {
                 closure: restored_closure,
+                ..
             } => {
                 // Pure serialization roundtrip (no project / no reanchor): the
                 // transitional Index anchors survive verbatim, so compare keys directly.

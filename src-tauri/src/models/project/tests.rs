@@ -489,9 +489,16 @@ fn set_zero_datum_connected_sections_move_together() {
     let gps = GpsCoordinates::new(45.0, -90.0, 0.0).unwrap();
     project.set_zero_datum(station_ref, gps).unwrap();
 
-    // Both sections should have offsets applied
-    assert!(project.section_offsets.contains_key(&a));
-    assert!(project.section_offsets.contains_key(&b));
+    // Both sections should have the datum shift applied. Asserted on the
+    // RESOLVED offset rather than on key presence: `b` was aligned to `a:1` by
+    // an offset of (0, 10) and the datum shifts everything by (0, -10), which
+    // cancels EXACTLY - and `section_offsets` means "sections that are actually
+    // displaced", so a value of exactly (0, 0) is dropped rather than stored
+    // (#413 finding 2). Comparing the values is strictly stronger than the
+    // `contains_key` pair this replaced, which never checked what was in them.
+    assert_eq!(project.section_offset(a), (0.0, -10.0));
+    assert_eq!(project.section_offset(b), (0.0, 0.0));
+    assert!(!project.section_offsets.contains_key(&b));
 
     // Section a station 1 (datum station) should be at origin
     let coords_a1 = project
@@ -10518,8 +10525,12 @@ fn has_datum_path_excluding_ignores_dangling_datum() {
 #[test]
 fn realign_after_shot_edit_ignores_dangling_datum() {
     // With only a dangling datum in the merge group, realign must treat the group
-    // as unanchored (early return) - NOT run the Step-2 merge BFS that would
-    // realign partner offsets around the phantom-anchor section (#174).
+    // as UNANCHORED - it must not pin the group to the phantom-anchor section
+    // (#174). Unanchored no longer means "do nothing" (#413 finding 20: a group
+    // with no absolute anchor still has relative merge constraints, and skipping
+    // them left the merge drifted by exactly the edit): it means anchor on the
+    // EDITED section instead. So the edited section is the one that must not
+    // move, and the merge must come out aligned around it.
     let mut project = Project::new("DanglingRealign".to_string(), None);
     let a = project
         .add_section(SectionData {
@@ -10549,8 +10560,23 @@ fn realign_after_shot_edit_ignores_dangling_datum() {
     let after = project.section_offset(b);
     assert_eq!(
         before, after,
-        "realign must no-op when the only datum in the group is dangling \
-         (no realigning around a phantom anchor)"
+        "the EDITED section must not move when the only datum in the group is \
+         dangling - realigning around a phantom anchor would move it"
+    );
+    // ...and the group is realigned around it rather than left broken.
+    let (ax, ay) = project
+        .compute_station_raw_coords(StationRef::new(a, 1))
+        .map(|c| (c.x, c.y))
+        .expect("A:1 has no raw coordinates");
+    let (bx, by) = project
+        .compute_station_raw_coords(StationRef::new(b, 0))
+        .map(|c| (c.x, c.y))
+        .expect("B:0 has no raw coordinates");
+    let gap = ((ax - bx).powi(2) + (ay - by).powi(2)).sqrt();
+    assert!(
+        gap < Project::MERGE_ALIGNMENT_INVARIANT_M,
+        "an unanchored group must still be realigned against the edited section: \
+         the merged pair is {gap:.6} m apart"
     );
 }
 
@@ -10670,10 +10696,17 @@ fn check_merge_alignment_detects_and_realign_fixes_drift() {
 
 #[test]
 fn realign_corrects_sub_tolerance_offset_drift() {
-    // Zero-trust offsets: a sub-5cm stale offset reports NO merge-alignment
-    // violation (so the old `if before == 0` early-return skipped the cascade and
-    // the wrong offset survived load + every command), yet it IS wrong. realign
-    // must re-derive it regardless of the reported drift count.
+    // Zero-trust offsets: a stale offset too small for the per-command self-heal
+    // to act on reports NO merge-alignment violation (so the old
+    // `if before == 0` early-return skipped the cascade and the wrong offset
+    // survived load + every command), yet it IS wrong. realign must re-derive it
+    // regardless of the reported drift count.
+    //
+    // The magnitude that demonstrates it is 3 MM rather than the 3 cm this test
+    // used before #413 finding 20: the self-heal gate moved from the 5 cm
+    // REPORTING tolerance down to `MERGE_ALIGNMENT_INVARIANT_M` (1 cm), because
+    // the 1-5 cm band it used to skip is a band `debug_assert_merge_alignment`
+    // panics on. The blind spot this test is about is smaller now, not gone.
     let mut project = Project::new("SubTol".to_string(), None);
     let a = project
         .add_section(SectionData {
@@ -10696,25 +10729,26 @@ fn realign_corrects_sub_tolerance_offset_drift() {
         .unwrap();
     let b_correct = project.section_offset(b);
 
-    // Nudge B by 3 cm - under the 5 cm reporting tolerance.
-    project.adjust_section_offset(b, 0.03, 0.0);
+    // Nudge B by 3 mm - under the 1 cm invariant the self-heal gates on.
+    project.adjust_section_offset(b, 0.003, 0.0);
     assert!(
         project.check_merge_alignment().is_empty(),
-        "3 cm drift is under the 5 cm report tolerance (the early-return's blind spot)"
+        "3 mm drift is under the 5 cm report tolerance (the early-return's blind spot)"
     );
     assert!(
-        (project.section_offset(b).0 - b_correct.0).abs() > 0.02,
+        (project.section_offset(b).0 - b_correct.0).abs() > 0.002,
         "precondition: B is actually drifted"
     );
-    // The per-command self-heal still early-returns here (no reported drift)...
+    // The per-command self-heal still early-returns here (nothing past the
+    // invariant)...
     assert_eq!(
         project.realign_merges(),
         0,
         "realign_merges keeps the no-drift early-return"
     );
     assert!(
-        (project.section_offset(b).0 - b_correct.0).abs() > 0.02,
-        "...so the sub-tolerance drift survives the per-command path"
+        (project.section_offset(b).0 - b_correct.0).abs() > 0.002,
+        "...so the sub-invariant drift survives the per-command path"
     );
 
     // ...but the zero-trust load/repair re-solve corrects it despite zero drifts.
@@ -10723,6 +10757,64 @@ fn realign_corrects_sub_tolerance_offset_drift() {
     assert!(
         (b_after.0 - b_correct.0).abs() < 1e-9 && (b_after.1 - b_correct.1).abs() < 1e-9,
         "sub-tolerance drift must be corrected: correct={b_correct:?} after={b_after:?}"
+    );
+}
+
+#[test]
+fn the_self_heal_gate_is_never_looser_than_the_alignment_invariant() {
+    // #413 finding 20 IS this inequality being violated. The self-heal
+    // (`realign_merges`) gated on the 5 cm REPORTING tolerance while
+    // `debug_assert_merge_alignment` asserted at 1 cm, so the whole band between
+    // them was a state the app declares impossible and declines to repair: a
+    // release build saved it silently, and the next command in a test build
+    // panicked on a merge it had never touched.
+    //
+    // Pinned as an ORDERING rather than as two literals, because the numbers
+    // answer different questions and are allowed to move - what is not allowed
+    // is for the repair threshold to end up looser than the assert's again.
+    assert!(
+        Project::MERGE_ALIGNMENT_INVARIANT_M <= Project::MERGE_ALIGNMENT_TOLERANCE_M,
+        "the invariant the app asserts ({}) must be at least as tight as the tolerance it \
+         reports ({}) - and `realign_merges` must gate on the invariant",
+        Project::MERGE_ALIGNMENT_INVARIANT_M,
+        Project::MERGE_ALIGNMENT_TOLERANCE_M
+    );
+
+    // And the gate really is the invariant, not the tolerance: a drift inside
+    // the old blind band must be healed by the per-command path.
+    let mut project = Project::new("HealGate".to_string(), None);
+    let a = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    let b = project
+        .add_section(SectionData {
+            shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    project.ensure_shot_uuids();
+    project
+        .merge_stations(StationRef::new(a, 1), StationRef::new(b, 0))
+        .unwrap();
+    // 3 cm: past the invariant, under the reporting tolerance - the band.
+    project.adjust_section_offset(b, 0.03, 0.0);
+    assert!(
+        project.check_merge_alignment().is_empty(),
+        "precondition: 3 cm is under the 5 cm the user is told about"
+    );
+    project.realign_merges();
+    let gap = project
+        .compute_station_raw_coords(StationRef::new(a, 1))
+        .zip(project.compute_station_raw_coords(StationRef::new(b, 0)))
+        .map(|(left, right)| ((left.x - right.x).powi(2) + (left.y - right.y).powi(2)).sqrt())
+        .expect("merged stations have no raw coordinates");
+    assert!(
+        gap < Project::MERGE_ALIGNMENT_INVARIANT_M,
+        "the per-command self-heal left the pair {gap:.6} m apart - a drift the app's own \
+         assert calls a violation and its repair declined to fix (#413 finding 20)"
     );
 }
 

@@ -227,7 +227,14 @@ impl Project {
                 .get(&station_ref.section_id)
                 .copied()
                 .unwrap_or((0.0, 0.0));
-            self.section_offsets.insert(
+            // Through `write_section_offset` so a move that lands the offset back
+            // on exactly (0, 0) drops the key instead of leaving an inert entry
+            // for the next save to serialize (#413 finding 2). Can't call
+            // `self.adjust_section_offset` here: `section` above is a live &mut
+            // borrow of `self.sections`, and only the disjoint field borrow of
+            // `self.section_offsets` is available.
+            Self::write_section_offset(
+                &mut self.section_offsets,
                 station_ref.section_id,
                 (current.0 + total_dx, current.1 + total_dy),
             );

@@ -1,5 +1,5 @@
-use crate::core::{Command, CommandResult, ReversedSection, UndoData};
-use crate::models::{SectionId, SectionUpdates, Shot, ShotId, ShotUpdates};
+use crate::core::{Command, CommandResult, ReversedSection, UndoData, UndoEntry};
+use crate::models::{SectionId, SectionIdentity, SectionUpdates, Shot, ShotId, ShotUpdates};
 
 use super::AppState;
 
@@ -42,7 +42,7 @@ impl AppState {
     /// Undo implementation (caller must hold command_lock)
     fn undo_inner(&self) -> CommandResult {
         // Pop from undo stack
-        let entry = {
+        let mut entry = {
             let Ok(mut stack) = self.undo_stack.lock() else {
                 return CommandResult::failure("Failed to lock undo stack".to_string());
             };
@@ -52,6 +52,14 @@ impl AppState {
             };
             e
         };
+
+        // A `CreateSection` undo is about to DELETE the section, so this is the
+        // last moment its identity can be read. Refresh the entry from the live
+        // section first, or the redo puts back what `CreateSection` originally
+        // built rather than what the undo destroyed - which loses every heal
+        // recorded since, the gauge pair a save captured above all (#413,
+        // finding 1's second half). A no-op for every other variant.
+        self.refresh_created_section_identity(&mut entry);
 
         // Apply undo based on undo_data type
         // IMPORTANT: No early returns after this point - all paths must flow
@@ -101,8 +109,17 @@ impl AppState {
                 section_id,
                 section_data,
             } => {
-                // Restore deleted section
-                self.restore_section(*section_id, section_data.clone())
+                // Restore deleted section. LEGACY ONLY: a live `DeleteSection`
+                // captures a `ProjectSnapshotPair` (which restores the whole
+                // `Section`, identity included), so this arm serves persisted
+                // entries written before that change - and those carry no
+                // identity, so the shots come back with fresh uuids exactly as
+                // they always did.
+                self.restore_section(
+                    *section_id,
+                    section_data.clone(),
+                    &SectionIdentity::default(),
+                )
             }
 
             UndoData::CreatedSectionSnapshot { section_id, .. } => {
@@ -222,7 +239,7 @@ impl AppState {
                 }
             }
 
-            UndoData::ClosureInfo { closure } => {
+            UndoData::ClosureInfo { closure, position } => {
                 match &entry.command {
                     Command::CreateLoopClosure { .. } => {
                         // Undo create by removing the same closure ID.
@@ -245,13 +262,25 @@ impl AppState {
                         }
                     }
                     Command::RemoveLoopClosure { .. } => {
-                        // Undo remove by restoring the captured closure.
+                        // Undo remove by restoring the captured closure AT ITS
+                        // ORIGINAL INDEX. The removal was a `Vec::remove`, which
+                        // keeps the rest in order, so appending here would
+                        // permute a list that is persisted into the `.stalx`,
+                        // indexed by the frontend and traversed by
+                        // `resolve_offsets` (#413, finding 4). A legacy entry
+                        // carries no position and still appends.
                         match self.project.lock() {
                             Ok(mut proj_guard) => match proj_guard.as_mut() {
                                 Some(project) => {
                                     project.next_closure_id =
                                         project.next_closure_id.max(closure.id + 1);
-                                    project.loop_closures.push(closure.clone());
+                                    match position {
+                                        Some(index) => {
+                                            let at = (*index).min(project.loop_closures.len());
+                                            project.loop_closures.insert(at, closure.clone());
+                                        }
+                                        None => project.loop_closures.push(closure.clone()),
+                                    }
                                     project.touch();
                                     CommandResult::success()
                                 }
@@ -267,6 +296,7 @@ impl AppState {
             UndoData::ZeroDatumInfo {
                 station_ref,
                 previous_gps,
+                position,
                 previous_offsets,
             } => {
                 // Restore previous datum state directly without recomputing offsets
@@ -281,7 +311,13 @@ impl AppState {
                             // Stable stored identity for the datum's station.
                             let datum_key = project.key_for_ref(*station_ref);
 
-                            // Restore GPS datum state
+                            // Restore GPS datum state, AT ITS ORIGINAL INDEX when
+                            // the datum has to be put back: the removal was a
+                            // `Vec::remove`, so appending permutes a list that
+                            // is persisted, indexed by the frontend, and walked
+                            // by `resolve_offsets` to decide which datum anchors
+                            // a connected group (#413, finding 17). A legacy
+                            // entry carries no position and still appends.
                             if let Some(gps) = previous_gps {
                                 if let Some(existing) = project
                                     .zero_datums
@@ -290,10 +326,17 @@ impl AppState {
                                 {
                                     existing.gps = *gps;
                                 } else if let Some(key) = datum_key {
-                                    project.zero_datums.push(crate::models::ZeroDatum {
+                                    let datum = crate::models::ZeroDatum {
                                         station_ref: key,
                                         gps: *gps,
-                                    });
+                                    };
+                                    match position {
+                                        Some(index) => {
+                                            let at = (*index).min(project.zero_datums.len());
+                                            project.zero_datums.insert(at, datum);
+                                        }
+                                        None => project.zero_datums.push(datum),
+                                    }
                                 }
                             } else {
                                 project
@@ -509,9 +552,15 @@ impl AppState {
             UndoData::CreatedSectionSnapshot {
                 section_id,
                 section_data,
+                identity,
             } => {
-                // Redo CreateSection by restoring from snapshot to preserve original ID
-                self.restore_section(*section_id, section_data.clone())
+                // Redo CreateSection by restoring from the snapshot, which
+                // preserves the original id AND the identity `SectionData`
+                // cannot carry: every shot uuid (a fresh one would dangle every
+                // `StationKey::AfterShot` anchor onto this section, exactly as
+                // in `CreatedShotSnapshot`), the reverse parity, and the
+                // least-squares gauge pair (#413, finding 1).
+                self.restore_section(*section_id, section_data.clone(), identity)
             }
             UndoData::CreatedShotSnapshot {
                 section_id,
@@ -749,7 +798,17 @@ impl AppState {
                                     .copied()
                                     .unwrap_or((0.0, 0.0));
                                 let new_offset = (current.0 + offset.0, current.1 + offset.1);
-                                project.section_offsets.insert(*sid, new_offset);
+                                // Through the same normalization the FORWARD
+                                // move uses (`adjust_section_offset` ->
+                                // `write_section_offset`): a redo that lands the
+                                // offset back on exactly (0, 0) must drop the
+                                // key, not leave an inert entry the original
+                                // execute did not have (#413 finding 2).
+                                crate::models::Project::write_section_offset(
+                                    &mut project.section_offsets,
+                                    *sid,
+                                    new_offset,
+                                );
                             }
                             project.touch();
                             CommandResult::success()
@@ -759,10 +818,13 @@ impl AppState {
                     Err(_) => CommandResult::failure("Failed to lock project".to_string()),
                 }
             }
-            UndoData::ClosureInfo { closure } => {
+            UndoData::ClosureInfo { closure, .. } => {
                 match &entry.command {
                     Command::CreateLoopClosure { .. } => {
                         // Redo create by restoring the captured closure to preserve its ID.
+                        // Appended, as the create itself appended - the recorded
+                        // `position` belongs to the REMOVE direction (#413,
+                        // finding 4) and says nothing about where a create put it.
                         match self.project.lock() {
                             Ok(mut proj_guard) => match proj_guard.as_mut() {
                                 Some(project) => {
@@ -850,6 +912,40 @@ impl AppState {
         }
 
         result
+    }
+
+    // === Keeping a re-creating entry's identity current ===
+
+    /// Re-read the live section a `CreatedSectionSnapshot` entry re-creates, and
+    /// store its identity on the entry (#413, finding 1).
+    ///
+    /// Called immediately before the undo DELETES that section, which is the
+    /// last moment the identity exists. It matters because a section can be
+    /// healed after the entry was pushed and with no undo entry of its own -
+    /// `capture_missing_gauge_anchors` runs on every save, so "create a section,
+    /// save, undo, redo" would otherwise put the section back with the gauge
+    /// pair discarded, and `ensure_shot_uuids` / `ensure_unique_shot_uuids` are
+    /// the same shape one field over.
+    ///
+    /// A no-op for every other variant, and for an entry whose section is
+    /// already gone (the undo is about to fail anyway).
+    fn refresh_created_section_identity(&self, entry: &mut UndoEntry) {
+        let UndoData::CreatedSectionSnapshot {
+            section_id,
+            identity,
+            ..
+        } = &mut entry.undo_data
+        else {
+            return;
+        };
+        let guard = match self.project.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        let Some(section) = guard.as_ref().and_then(|p| p.get_section(*section_id)) else {
+            return;
+        };
+        *identity = SectionIdentity::of(section);
     }
 
     // === Addressing a shot a persisted entry names ===
@@ -1067,6 +1163,22 @@ impl AppState {
         // Dirty-bit flip (#191, D-B16): undo_to ran one or more undos. Set-only;
         // no-op for local-only.
         self.mark_remote_dirty();
+        // The SAME epilogue single-step `undo()` runs, so that a jump lands
+        // where the equivalent number of single undos lands - which is the
+        // contract the history dropdown makes and which `undo_to` was breaking
+        // by looping `undo_inner` bare (#413, finding 7). `reconcile_geometry`
+        // is what re-derives offsets for a merge a raw restore left drifted past
+        // the 5 cm tolerance, and it ran after every single step and never for a
+        // jump.
+        //
+        // ONCE, after the loop, not per step: the intermediate states of a jump
+        // are not states the user ever sees, so reconciling them is wasted work,
+        // while the FINAL state has to be as reconciled as the single-step route.
+        // (`invalidate_adjusted_cache` is deliberately not here: the adjusted
+        // cache keys on `project.modified_at`, which every undo bumps through
+        // `Project::touch`, so the next read misses and re-solves regardless -
+        // measured in the finding's write-up.)
+        self.reconcile_geometry();
         tracing::info!(index = index, count = count, "Undo to index completed");
         if reversed.is_empty() {
             CommandResult::success()
@@ -1131,6 +1243,9 @@ impl AppState {
         // Dirty-bit flip (#191, D-B16): redo_to ran one or more redos. Set-only;
         // no-op for local-only.
         self.mark_remote_dirty();
+        // The same epilogue single-step `redo()` runs, once after the loop - see
+        // `undo_to` for why (#413, finding 7).
+        self.reconcile_geometry();
         tracing::info!(index = index, count = count, "Redo to index completed");
         if reversed.is_empty() {
             CommandResult::success()

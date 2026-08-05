@@ -507,13 +507,41 @@ impl AppState {
     }
 
     /// Delete a contiguous range of shots by gap-closing (shifting) - the
-    /// survivors rejoin and the section stays single. Generalizes the
-    /// single-shot `delete_shot` (`remove_shot_with_rewire`) to a range by
-    /// deleting the range's shots in forward order within ONE
-    /// `ProjectSnapshotPair` undo unit (each step is a valid single-shot
-    /// gap-close: head/before stays for interior & suffix ranges, tail/after
-    /// stays for prefix ranges). Refuses when the range is shift-blocked or would
-    /// empty the section (use split / section delete respectively).
+    /// survivors rejoin and the section stays single. ATOMIC: the range's shots
+    /// go in forward order inside ONE project lock and ONE `ProjectSnapshotPair`
+    /// undo unit, with the geometry cascade DEFERRED to a single reconcile at the
+    /// end (each step is a valid single-shot gap-close: head/before stays for
+    /// interior & suffix ranges, tail/after stays for prefix ranges). Refuses
+    /// when the range is shift-blocked or would empty the section (use split /
+    /// section delete respectively).
+    ///
+    /// # Not a composition of `n` `Command::DeleteShot`s, on purpose
+    ///
+    /// This comment used to say the method "generalizes" the single-shot
+    /// `delete_shot` by deleting the range's shots in forward order, which reads
+    /// as a promise that the range is the same edit as the `n` singles. It is
+    /// not, and the promise was the defect (issue #413 finding 22, resolved as
+    /// intended behaviour). What holds:
+    ///
+    /// * for a range that removes NO station a merge is anchored to, the two are
+    ///   identical - measured over prefix and interior ranges, they agree to the
+    ///   last bit;
+    /// * for a range whose removed stations DO include one a merged partner
+    ///   section is anchored to (the doomed-tail-anchor shape), they deliberately
+    ///   DIVERGE. `AppState::execute` runs the geometry epilogue after every
+    ///   command, so the single-delete sequence re-anchors the partner while the
+    ///   merge is still live, drags it along as the section shrinks, and then
+    ///   deletes the merge - leaving the partner displaced with no edge to pull
+    ///   it back. Deferring to one final cascade leaves it where the surveyor put
+    ///   it, which is what this method does.
+    ///
+    /// The atomic behaviour is the reviewed intent, pinned by
+    /// `test_delete_range_shift_does_not_displace_free_floating_merged_section`
+    /// and `test_delete_range_suffix_shift_keeps_head_with_doomed_tail_anchor`
+    /// (PR #95, `core/state/tests.rs`), and asserted on random topology by the
+    /// metamorphic pair `range-shift-is-n-single-deletes`
+    /// (`core/state/metamorphic_undo_tests.rs`), which requires equality on every
+    /// other shape.
     pub fn execute_delete_shot_range_shift(
         &self,
         section_id: SectionId,

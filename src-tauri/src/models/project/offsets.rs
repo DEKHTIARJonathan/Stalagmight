@@ -1,5 +1,5 @@
 use chrono::Utc;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 // `error!` is only reached inside the `#[cfg(debug_assertions)]` block in
 // `debug_assert_merge_alignment`, so gate the import to match (else it's an
 // unused import under `--release`).
@@ -16,17 +16,56 @@ impl Project {
         self.section_offsets.get(&id).copied().unwrap_or((0.0, 0.0))
     }
 
+    /// Write one section's offset, dropping the key when the value is exactly
+    /// `(0, 0)`. THE normalization point for `section_offsets`; every write
+    /// below goes through it, as do the two sites that cannot call a `&mut
+    /// self` method because they hold a live borrow of `self.sections`
+    /// (`Project::apply_station_move_internal`, `AppState::move_station`).
+    ///
+    /// `section_offsets` means "sections that are actually displaced": every
+    /// consumer reads it through [`Self::section_offset`] or an inline
+    /// `.get(..).unwrap_or((0.0, 0.0))`, so a zero-valued entry and an absent
+    /// one are the same geometry. They are NOT the same map, though -
+    /// `HashMap::insert` is not undone by writing `0.0` back into it - so
+    /// before this normalization existed, any adjust-and-adjust-back left the
+    /// key behind and the next save serialized it into the `.stalx`
+    /// (#413 finding 2: an insert plus its undo, a `MoveSection(+d)` plus its
+    /// `-d`, a `ReverseSection` applied twice).
+    ///
+    /// EXACTLY zero, with no tolerance: a residue like `2.22e-16` is a real (if
+    /// tiny) displacement, and epsilon-rounding it away here would change
+    /// geometry rather than normalize its spelling. `-0.0 == 0.0` in IEEE, so a
+    /// negated zero drops too; a non-finite value compares false and is left
+    /// for `save_project`'s sanitize, which is where that case is handled.
+    ///
+    /// Takes the map rather than `&mut self` so a caller holding a disjoint
+    /// field borrow can still use it.
+    pub(crate) fn write_section_offset(
+        offsets: &mut HashMap<SectionId, (f64, f64)>,
+        id: SectionId,
+        value: (f64, f64),
+    ) {
+        if value.0 == 0.0 && value.1 == 0.0 {
+            offsets.remove(&id);
+        } else {
+            offsets.insert(id, value);
+        }
+    }
+
     /// Apply a delta to one section's offset. Low-level primitive -
     /// callers handle cascade and invariants.
     pub(crate) fn adjust_section_offset(&mut self, id: SectionId, dx: f64, dy: f64) {
         let current = self.section_offset(id);
-        self.section_offsets
-            .insert(id, (current.0 + dx, current.1 + dy));
+        Self::write_section_offset(
+            &mut self.section_offsets,
+            id,
+            (current.0 + dx, current.1 + dy),
+        );
     }
 
     /// Set an exact offset value (for undo restoration / initial placement).
     pub(crate) fn set_section_offset(&mut self, id: SectionId, offset: (f64, f64)) {
-        self.section_offsets.insert(id, offset);
+        Self::write_section_offset(&mut self.section_offsets, id, offset);
     }
 
     /// Remove a section's offset entry entirely.
@@ -52,12 +91,15 @@ impl Project {
         self.section_has_zero_datum(id)
     }
 
-    /// Assert that all merge points are colocated (within 1cm tolerance).
+    /// Assert that all merge points are colocated (within
+    /// [`Project::MERGE_ALIGNMENT_INVARIANT_M`]).
     /// Only active in debug builds - no-op in release.
-    /// Check that all merge points are colocated. Logs a warning for any
-    /// merge pair more than 5cm apart (allows for floating-point accumulation
-    /// across many shots in real survey data). In test builds, panics for
-    /// gaps > 1cm to catch regressions with synthetic data.
+    /// Check that all merge points are colocated. Logs an error for any merge
+    /// pair past the user-facing [`Project::MERGE_ALIGNMENT_TOLERANCE_M`]. In
+    /// test builds, panics past the tighter invariant threshold to catch
+    /// regressions with synthetic data - the SAME threshold
+    /// [`Self::realign_merges`] heals at, so nothing this asserts on can be a
+    /// state the self-heal declines to repair (#413 findings 14 and 20).
     pub(crate) fn debug_assert_merge_alignment(&self, context: &str) {
         // Despite the name, this used to run in release too - and the cost
         // is brutal: O(N) merges × 2 × O(N) `compute_station_raw_coords`
@@ -98,7 +140,7 @@ impl Project {
                     .and_then(|s| self.compute_station_raw_coords(s));
                 if let (Some(a_pos), Some(b_pos)) = (a, b) {
                     let dist = ((a_pos.x - b_pos.x).powi(2) + (a_pos.y - b_pos.y).powi(2)).sqrt();
-                    if dist >= 0.05 {
+                    if dist >= Self::MERGE_ALIGNMENT_TOLERANCE_M {
                         error!(
                             context,
                             a_ref = ?merge.station_a,
@@ -109,15 +151,16 @@ impl Project {
                             b_x = b_pos.x,
                             b_y = b_pos.y,
                             "Merge alignment violated (>{threshold}m)",
-                            threshold = 0.05,
+                            threshold = Self::MERGE_ALIGNMENT_TOLERANCE_M,
                         );
                     }
                     #[cfg(test)]
                     debug_assert!(
-                        dist < 0.01,
+                        dist < Self::MERGE_ALIGNMENT_INVARIANT_M,
                         "Merge alignment violated after {context}: stations {a_ref:?} and {b_ref:?} \
-                         are {dist:.6}m apart (threshold 0.01m). \
+                         are {dist:.6}m apart (threshold {threshold}m). \
                          A=({ax:.6}, {ay:.6}), B=({bx:.6}, {by:.6})",
+                        threshold = Self::MERGE_ALIGNMENT_INVARIANT_M,
                         a_ref = merge.station_a,
                         b_ref = merge.station_b,
                         ax = a_pos.x,
@@ -271,8 +314,7 @@ impl Project {
     /// Recompute section offsets so every merge's endpoints coincide again,
     /// anchoring each connected group at its zero datum (or, failing that, an
     /// arbitrary section). Returns the number of merges that were misaligned
-    /// before the realign. A no-op when everything is already aligned (within the
-    /// 5 cm reporting tolerance).
+    /// beyond the REPORTING tolerance before the realign.
     ///
     /// This is the per-command self-heal (via `reconcile_geometry`): it keeps the
     /// fast no-drift early-return because the in-memory offsets it sees were just
@@ -280,9 +322,20 @@ impl Project {
     /// unconditional re-solve after every command would override the exact state
     /// an undo/redo snapshot just restored. The *load*/repair paths use
     /// [`Self::resolve_offsets`] instead, which never trusts a persisted value.
+    ///
+    /// The gate is [`Self::MERGE_ALIGNMENT_INVARIANT_M`], NOT the 5 cm reporting
+    /// tolerance the return value counts against. Gating the repair on the
+    /// reporting number left the entire 1-5 cm band unhealed - a state the app's
+    /// own `debug_assert_merge_alignment` calls a violation and panics a test
+    /// build on, silently saved to the `.stalx` in a release one (#413 finding
+    /// 20: a shot edit in an unanchored merge group produced exactly that, and
+    /// the drift equalled the edit). The heal gate must stay at or below the
+    /// assert; it may never be loosened back onto the reporting threshold.
     pub fn realign_merges(&mut self) -> usize {
-        let before = self.check_merge_alignment().len();
-        if before == 0 {
+        if self
+            .merge_alignment_beyond(Self::MERGE_ALIGNMENT_INVARIANT_M)
+            .is_empty()
+        {
             return 0;
         }
         self.resolve_offsets()

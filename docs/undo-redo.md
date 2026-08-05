@@ -36,13 +36,13 @@ Commands go through a two-phase capture during execution:
 |---------|---------|------|------|
 | `InverseCommand` | SetStationComment | Execute the inverse command | Execute the original command |
 | `PreviousValues` | UpdateShot, SetShotKind, UpdateSectionMetadata | Parse JSON, apply old values | Execute the original command |
-| `CreatedSectionSnapshot` | CreateSection | Delete the section | Restore from snapshot (preserves original ID) |
+| `CreatedSectionSnapshot` | CreateSection | Delete the section | Restore from snapshot (preserves the original ID **and** the recorded identity - see below) |
 | `CreatedShotSnapshot` | CreateShot | Delete the shot | Restore from snapshot (preserves original ID) |
 | `ShotSnapshot` | DeleteShot | Restore shot at exact position | Re-execute the delete |
 | `MergeInfo` | MergeStations | Restore previous offsets + unmerge | Execute the original command |
 | `UnmergeInfo` | UnmergeStations | Re-merge + restore removed closures | Re-execute the unmerge |
-| `ClosureInfo` | CreateLoopClosure | Remove the closure | Push closure back (preserves ID) |
-| `ZeroDatumInfo` | Set/RemoveZeroDatum | Restore GPS + offsets directly | Execute the original command |
+| `ClosureInfo` | Create/RemoveLoopClosure | Remove the closure, or put it back at its recorded index | Push closure back (preserves ID) |
+| `ZeroDatumInfo` | Set/RemoveZeroDatum | Restore GPS + offsets directly, at the datum's recorded index | Execute the original command |
 | `SegmentMoveInfo` | MoveSegment | Restore section offsets directly | Reapply offset to affected sections |
 | `ProjectSnapshotPair` | Batch, DeleteSection | Restore "before" JSON | Restore "after" JSON |
 | `None` | Non-undoable commands | N/A | N/A |
@@ -96,6 +96,49 @@ is a newtype around `Command`, so there is nowhere in it to record a uuid
 without breaking every legacy payload of that variant. Persisted
 `InverseCommand(SetShotKind)` entries still restore through their own arm, by
 id, as legacy entries.
+
+### A restore puts identity and ORDER back, not just values (#413, findings 1, 4, 17)
+
+Three entries used to rebuild rather than restore, and lost something each time.
+All three fixes are additive `#[serde(default)]` fields, so old persisted JSON
+still loads and falls back to the previous behaviour - no schema bump.
+
+- **`CreatedSectionSnapshot` carries a `SectionIdentity`** next to its
+  `SectionData`: the shots' uuids, the section's `reverse_parity` and the two
+  least-squares gauge anchors. `SectionData` is the CREATE shape and holds none
+  of them, so a redo used to run `Section::new` and mint a fresh uuid per shot -
+  dangling every `StationKey::AfterShot` anchor onto the section, exactly what
+  `CreatedShotSnapshot`'s `uuid` field exists to prevent. `Section::restore_with_identity`
+  applies the recorded identity; a legacy entry with no `identity` mints as
+  before. The undo REFRESHES that identity from the live section immediately
+  before it deletes it, because a save can heal the section (see the next
+  section) after the entry was pushed.
+- **`ClosureInfo` and `ZeroDatumInfo` carry the `position`** the forward
+  `Vec::remove` took the entry out of, and the undo re-inserts THERE rather than
+  appending. `Project::loop_closures` and `Project::zero_datums` are persisted in
+  order, indexed positionally by the frontend, and walked in order by
+  `resolve_offsets` when it builds adjacency and picks the datum that anchors a
+  connected group - so a permutation is not cosmetic. `None` (a legacy entry, a
+  create, or a datum that did not exist before) still appends.
+
+### A restored snapshot is re-healed to the standard a save leaves (#413, finding 11)
+
+`save_project` mutates the live project with **no undo entry of its own** - it
+mints missing shot uuids, re-mints within-section duplicates, captures the
+least-squares gauge pair, drops orphan `section_offsets` and sanitizes non-finite
+values (`apply_save_heals`, `core/state/project_io.rs`). A `ProjectSnapshotPair`
+captured BEFORE that save holds the pre-heal project in both halves, so restoring
+one used to revert the heal as a side effect of an unrelated undo - which made
+the project at a given undo depth depend on the ROUTE taken to reach it.
+
+`restore_snapshot_into` - the single place a restored project enters the live
+slot - therefore ends in `reapply_heals_after_restore`, which re-applies the
+heals that are pure fill-in (missing uuids, and a carry-forward of the gauge
+anchors the live project already holds). The heals that DROP or REWRITE state
+(the duplicate-uuid re-mint, the orphan-offset retain, the non-finite sanitize)
+are deliberately not re-applied: an undo has to be an exact inverse, and undoing
+a Repair has to restore the very state that Repair healed. The per-heal argument
+is on the function.
 
 ### Why Some Undos Restore Directly Instead of Re-Executing
 
@@ -375,7 +418,15 @@ likewise only ever bumped while holding `project`; see the module doc in
 
 - Opens on ~300ms hover over the undo/redo toolbar button
 - Shows up to 5 items with icon, truncated description (40 chars), and relative timestamp
-- **Click item**: jumps to that stack position (`undo_to`/`redo_to`) and closes
+- **Click item**: jumps to that stack position (`undo_to`/`redo_to`) and closes.
+  A jump lands exactly where the same number of single steps lands: `undo_to` and
+  `redo_to` loop the `*_inner` variants and then run the SAME success epilogue
+  `undo()`/`redo()` run - `mark_remote_dirty()` and `reconcile_geometry()` -
+  once, after the loop. Per step would be wasted work (the intermediate states of
+  a jump are not states the user ever sees); skipping it altogether was #413's
+  finding 7, where a jump kept the drift `reconcile_geometry`'s `realign_merges`
+  heals and left sections metres from where Ctrl+Z the same number of times
+  leaves them
 - **Click button while open**: performs single undo/redo, refreshes the list, stays open
 - **Keyboard**: Arrow keys navigate, Enter selects, Escape closes
 - Actions are queued and processed sequentially (`actionQueueRef`)

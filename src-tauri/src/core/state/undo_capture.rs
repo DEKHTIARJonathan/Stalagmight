@@ -308,10 +308,17 @@ impl AppState {
             }
 
             Command::RemoveLoopClosure { closure_id } => {
-                if let Some(closure) = project.loop_closures.iter().find(|lc| lc.id == *closure_id)
+                if let Some((position, closure)) = project
+                    .loop_closures
+                    .iter()
+                    .enumerate()
+                    .find(|(_, lc)| lc.id == *closure_id)
                 {
                     UndoData::ClosureInfo {
                         closure: closure.clone(),
+                        // The removal is a `Vec::remove`, so undo has to be a
+                        // `Vec::insert` at the same index (#413, finding 4).
+                        position: Some(position),
                     }
                 } else {
                     UndoData::None
@@ -320,12 +327,13 @@ impl AppState {
 
             // For zero datum operations - capture GPS and section offsets
             Command::SetZeroDatum { station_ref, .. } => {
-                // Find if there was a previous datum for this station
-                let previous_gps = project
+                // Find if there was a previous datum for this station, and WHERE
+                // in the list it sat (#413, finding 17).
+                let previous = project
                     .zero_datums
                     .iter()
-                    .find(|zd| project.key_is_ref(&zd.station_ref, *station_ref))
-                    .map(|zd| zd.gps);
+                    .enumerate()
+                    .find(|(_, zd)| project.key_is_ref(&zd.station_ref, *station_ref));
 
                 // Capture section offsets for all connected sections
                 // This allows undo to restore exact previous state
@@ -334,18 +342,21 @@ impl AppState {
 
                 UndoData::ZeroDatumInfo {
                     station_ref: *station_ref,
-                    previous_gps,
+                    previous_gps: previous.map(|(_, zd)| zd.gps),
+                    position: previous.map(|(position, _)| position),
                     previous_offsets,
                 }
             }
 
             Command::RemoveZeroDatum { station_ref } => {
-                // Capture the current datum
-                let previous_gps = project
+                // Capture the current datum, and the index `Vec::remove` is
+                // about to take it out of - undo re-inserts THERE rather than
+                // appending (#413, finding 17).
+                let previous = project
                     .zero_datums
                     .iter()
-                    .find(|zd| project.key_is_ref(&zd.station_ref, *station_ref))
-                    .map(|zd| zd.gps);
+                    .enumerate()
+                    .find(|(_, zd)| project.key_is_ref(&zd.station_ref, *station_ref));
 
                 // Capture section offsets for all connected sections
                 // RemoveZeroDatum doesn't change offsets, but we capture for consistency
@@ -354,7 +365,8 @@ impl AppState {
 
                 UndoData::ZeroDatumInfo {
                     station_ref: *station_ref,
-                    previous_gps,
+                    previous_gps: previous.map(|(_, zd)| zd.gps),
+                    position: previous.map(|(position, _)| position),
                     previous_offsets,
                 }
             }
@@ -455,6 +467,13 @@ impl AppState {
                     UndoData::CreatedSectionSnapshot {
                         section_id: section.id,
                         section_data: section.to_section_data(),
+                        // `SectionData` carries no uuid, no reverse parity and
+                        // no gauge pair, so redo would rebuild the section with
+                        // a fresh identity (#413, finding 1). The undo refreshes
+                        // this immediately before it deletes the section, which
+                        // is what carries a gauge pair captured by a save that
+                        // happened after this push.
+                        identity: crate::models::SectionIdentity::of(section),
                     }
                 } else {
                     undo_data
@@ -554,6 +573,9 @@ impl AppState {
                     }) {
                         UndoData::ClosureInfo {
                             closure: closure.clone(),
+                            // A create APPENDS, so its redo appends too; only
+                            // `RemoveLoopClosure` has an index to restore.
+                            position: None,
                         }
                     } else {
                         undo_data

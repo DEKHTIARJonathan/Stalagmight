@@ -1026,9 +1026,37 @@ impl Project {
 }
 
 impl Project {
-    /// Tolerance (metres) within which two merged stations are considered the
-    /// same physical point. The old release-mode alignment check used 5cm.
+    /// Tolerance (metres) at which a drifted merge is REPORTED to the user by
+    /// [`Self::check_merge_alignment`] (and its closure twin). The old
+    /// release-mode alignment check used 5 cm and this keeps that: a survey
+    /// notice that fires under 5 cm would be noise next to real field accuracy.
+    ///
+    /// This is a *reporting* threshold and nothing more. It is deliberately
+    /// LOOSER than [`Self::MERGE_ALIGNMENT_INVARIANT_M`], and the ordering may
+    /// only ever be `INVARIANT <= TOLERANCE`: the self-heal is gated on the
+    /// invariant, so the app can never decline to repair something it also
+    /// asserts cannot exist.
     pub const MERGE_ALIGNMENT_TOLERANCE_M: f64 = 0.05;
+
+    /// The gap (metres) at which a merge stops being aligned as far as the CODE
+    /// is concerned: the threshold [`Self::debug_assert_merge_alignment`] panics
+    /// a test build on, and the gate [`Self::realign_merges`] self-heals at.
+    ///
+    /// One constant for both on purpose (#413 findings 14 and 20). The assert
+    /// used a hard-coded 1 cm while the heal ran off the 5 cm reporting
+    /// tolerance, so the whole 1-5 cm band was a state the app asserted could
+    /// not exist and produced on purpose - a shot edit inside an unanchored
+    /// merge group left exactly that, silently, and the next command that
+    /// asserted panicked on a merge it never touched. Tying the two together
+    /// makes "the app never leaves a merge in a state it would assert on" a
+    /// property rather than a coincidence of two literals.
+    ///
+    /// 1 cm rather than 0: float dust is ~1e-9 m per station even across
+    /// thousands of shots, so this is far above the noise floor while still
+    /// being an order of magnitude tighter than anything a user is told about.
+    /// If it ever needs to move, it must move DOWN or the assert must move with
+    /// it - never up alone.
+    pub const MERGE_ALIGNMENT_INVARIANT_M: f64 = 0.01;
 
     /// Per-section cumulative LOCAL `(x, y)` for every station index
     /// (`0..=shots.len()`), before section/station offsets are applied. Built

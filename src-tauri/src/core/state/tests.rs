@@ -995,9 +995,10 @@ fn redo_batch_preserves_double_anchored_bridge_closure() {
 fn update_shot_reconciles_datum_less_merge() {
     // Editing a shot upstream of a merge in a group with NO zero datum used to
     // leave the merge drifted: UpdateShot was misclassified INERT (skipping the
-    // reconcile epilogue) and the bespoke realign_after_shot_edit no-ops without a
-    // datum. UpdateShot is now geometry-affecting, so the reconcile heals the
-    // datum-less group in the same command.
+    // reconcile epilogue) and the bespoke realign_after_shot_edit gave up without
+    // a datum. Both are fixed - UpdateShot is geometry-affecting so the reconcile
+    // runs, and the realign anchors an unanchored group on the edited section
+    // (#413 finding 20) - so this heals in the same command by either route.
     let state = AppState::new().unwrap();
     let mut project = Project::new("NoDatum".to_string(), None);
     let a = project
@@ -8254,6 +8255,7 @@ fn test_set_zero_datum_update_captures_previous_gps_and_offsets() {
             station_ref: ref_in_entry,
             previous_gps,
             previous_offsets,
+            ..
         } => {
             assert_eq!(*ref_in_entry, station_ref, "Station ref should match");
             assert!(
@@ -8583,7 +8585,7 @@ fn test_undo_create_loop_closure_has_closure_info() {
     let stack = state.undo_stack.lock().unwrap();
     let undo_data = stack.peek_undo_data().unwrap();
     match undo_data {
-        UndoData::ClosureInfo { closure } => {
+        UndoData::ClosureInfo { closure, .. } => {
             assert!(proj.key_is_ref(&closure.station_a, StationRef::new(section_a, 0)));
             assert!(proj.key_is_ref(&closure.station_b, StationRef::new(section_b, 1)));
             assert!(closure.path_length > 0.0);
@@ -17629,19 +17631,25 @@ fn test_delete_section_cascades_closures_and_offsets() {
         .section_id
         .unwrap();
 
-    // Set a zero datum on section A
+    // Set a zero datum on section A. Station 1, NOT station 0: the first datum
+    // pins its station to the origin, and station 0 is already there, so a datum
+    // on it displaces nothing - and `section_offsets` now means "sections that
+    // are actually displaced" (#413 finding 2: an exactly-(0, 0) entry is
+    // dropped rather than stored). Anchoring station 1 gives A a REAL offset, so
+    // the delete-cascade assertion below has something to cascade.
     let datum_result = state.execute(Command::SetZeroDatum {
-        station_ref: StationRef::new(sec_a, 0),
+        station_ref: StationRef::new(sec_a, 1),
         coordinates: GpsCoordinates::new(45.0, 10.0, 0.0).unwrap(),
     });
     assert!(datum_result.success);
 
     let project = state.get_project_state().unwrap();
     assert_eq!(project.zero_datums.len(), 1);
-    // set_zero_datum creates section offsets for connected sections
+    // set_zero_datum displaced A, so it has an offset (stronger than the
+    // "the map is non-empty" this used to assert).
     assert!(
-        !project.section_offsets.is_empty(),
-        "set_zero_datum should create section offsets"
+        project.section_offsets.contains_key(&sec_a),
+        "set_zero_datum should give the displaced section an offset"
     );
 
     // Delete section A - should cascade-remove the zero datum and section offsets

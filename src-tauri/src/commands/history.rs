@@ -772,7 +772,7 @@ fn derive_preview_data(
         }),
 
         // RemoveLoopClosure - show closure id and station pair when available
-        (Command::RemoveLoopClosure { closure_id }, UndoData::ClosureInfo { closure }) => {
+        (Command::RemoveLoopClosure { closure_id }, UndoData::ClosureInfo { closure, .. }) => {
             Some(PreviewData {
                 changes: vec![
                     FieldChange {
@@ -1140,6 +1140,7 @@ mod tests {
             undo_data: UndoData::ZeroDatumInfo {
                 station_ref: StationRef::new(0, 0),
                 previous_gps: None,
+                position: None,
                 previous_offsets: HashMap::new(),
             },
             timestamp: None,
@@ -1269,6 +1270,7 @@ mod tests {
             undo_data: UndoData::ZeroDatumInfo {
                 station_ref: StationRef::new(0, 0),
                 previous_gps: Some(GpsCoordinates::new(45.0, -73.0, 0.0).unwrap()),
+                position: Some(0),
                 previous_offsets: HashMap::new(),
             },
             timestamp: None,

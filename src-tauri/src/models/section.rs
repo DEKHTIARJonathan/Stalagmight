@@ -101,6 +101,49 @@ pub struct Section {
     pub gauge_neighbour_uuid: Option<String>,
 }
 
+/// Everything about a section that [`SectionData`] cannot carry: the identity of
+/// its shots, and the two flags that decide where its least-squares gauge sits.
+///
+/// `SectionData` is the CREATE shape - what the user typed - so it holds no
+/// uuid, no [`Section::reverse_parity`] and neither gauge anchor. That makes it
+/// lossy for RESTORE: rebuilding a section from it alone mints a fresh uuid per
+/// shot (dangling every `StationKey::AfterShot` anchor and the Ariane export
+/// identity) and resets the gauge pair a save captured (issue #413, finding 1).
+/// An undo entry that re-creates a section carries this alongside the data, and
+/// [`Section::restore_with_identity`] puts both back.
+///
+/// FORMAT EVOLUTION (additive, no schema bump): an entry written before this
+/// existed deserializes to [`SectionIdentity::default`] - no uuids, parity
+/// false, no anchors - which is exactly the pre-fix behaviour (mint fresh),
+/// mirroring how `restore_shot`'s `uuid: None` is its own legacy fallback.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SectionIdentity {
+    /// The shots' persistent UUIDs, in shot order. An entry per shot, `None`
+    /// where the shot genuinely had none (a pre-v6 file loaded with a NULL uuid
+    /// column). SHORTER than the section's shots - empty, for a legacy entry -
+    /// means the rest mint fresh.
+    #[serde(default)]
+    pub shot_uuids: Vec<Option<String>>,
+    #[serde(default)]
+    pub reverse_parity: bool,
+    #[serde(default)]
+    pub gauge_shot_uuid: Option<String>,
+    #[serde(default)]
+    pub gauge_neighbour_uuid: Option<String>,
+}
+
+impl SectionIdentity {
+    /// The identity `section` carries right now.
+    pub fn of(section: &Section) -> Self {
+        Self {
+            shot_uuids: section.shots.iter().map(|shot| shot.uuid.clone()).collect(),
+            reverse_parity: section.reverse_parity,
+            gauge_shot_uuid: section.gauge_shot_uuid.clone(),
+            gauge_neighbour_uuid: section.gauge_neighbour_uuid.clone(),
+        }
+    }
+}
+
 /// Data for creating a new section
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct SectionData {
@@ -398,6 +441,37 @@ impl Section {
     /// Create a new section with a specific ID (for undo restoration)
     pub fn new_with_id(id: SectionId, data: SectionData) -> Self {
         Self::new(id, data)
+    }
+
+    /// Restore a section with a specific ID *and* the identity
+    /// [`SectionData`] cannot carry (issue #413, finding 1).
+    ///
+    /// [`Self::new`] mints a fresh uuid per shot and hardcodes
+    /// `reverse_parity: false` with both gauge anchors `None`, which is right
+    /// for a section being CREATED and wrong for one being PUT BACK: the uuid is
+    /// what `StationKey::AfterShot` anchors and the Ariane export resolve
+    /// through, and the gauge pair pins the component's absolute position.
+    ///
+    /// A shot with no recorded uuid (`identity.shot_uuids` shorter than the
+    /// section, i.e. a legacy entry) keeps the fresh mint - the pre-fix
+    /// behaviour, and the same fallback `restore_shot` takes.
+    pub fn restore_with_identity(
+        id: SectionId,
+        data: SectionData,
+        identity: &SectionIdentity,
+    ) -> Self {
+        let mut section = Self::new(id, data);
+        for (shot, uuid) in section.shots.iter_mut().zip(identity.shot_uuids.iter()) {
+            shot.uuid.clone_from(uuid);
+        }
+        section.reverse_parity = identity.reverse_parity;
+        section
+            .gauge_shot_uuid
+            .clone_from(&identity.gauge_shot_uuid);
+        section
+            .gauge_neighbour_uuid
+            .clone_from(&identity.gauge_neighbour_uuid);
+        section
     }
 
     /// Convert to SectionData (for undo snapshots)

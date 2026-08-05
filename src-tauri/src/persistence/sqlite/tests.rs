@@ -3516,8 +3516,14 @@ fn test_save_load_round_trip_all_metadata() {
     assert_eq!(loaded.station_merges.len(), 1);
     assert_eq!(loaded.zero_datums.len(), 1);
     assert!((loaded.zero_datums[0].gps.latitude - 48.8566).abs() < 1e-6);
-    // Both sections get offsets from set_zero_datum (they're merged)
-    assert_eq!(loaded.section_offsets.len(), 2);
+    // The section offsets `set_zero_datum` produced survive the round trip
+    // EXACTLY - value for value, not merely in number. Only the displaced
+    // section carries one: `section_offsets` means "sections that are actually
+    // displaced", so a section the datum leaves on exactly (0, 0) has no entry
+    // to persist (#413 finding 2). This used to assert `len() == 2`, counting
+    // that inert entry and checking no value at all.
+    assert_eq!(loaded.section_offsets, project.section_offsets);
+    assert_eq!(loaded.section_offsets.len(), 1);
     assert_eq!(loaded.station_offsets.len(), 1);
     assert_eq!(loaded.imported_file_hashes.len(), 1);
     assert_eq!(loaded.imported_file_hashes[0], "abc123def456");

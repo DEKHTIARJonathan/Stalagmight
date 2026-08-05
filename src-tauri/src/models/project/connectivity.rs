@@ -362,6 +362,14 @@ impl Project {
     ///
     /// This is used by undo to restore exact previous state (counterpart of
     /// `capture_connected_section_offsets`).
+    ///
+    /// Deliberately NOT routed through [`Project::write_section_offset`], the
+    /// normalization every *adjustment* goes through (#413 finding 2). This is a
+    /// restore, not an adjustment: it reproduces the map as it was, and the only
+    /// way a captured value can be an all-zero entry is that the project already
+    /// carried one (a file written before that normalization existed). Dropping
+    /// it here would make the undo differ from the do-nothing route that keeps
+    /// it - the opposite of the property finding 2 is about.
     pub fn restore_section_offsets(&mut self, offsets: &HashMap<SectionId, Option<(f64, f64)>>) {
         for (section_id, prev_offset) in offsets {
             match prev_offset {
