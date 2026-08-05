@@ -429,6 +429,9 @@ export async function setupTauriMocks(page: Page): Promise<void> {
       // Records execute_walls_import args (esp. selectedSurveys) so the Walls
       // import dialog spec can assert the select-all→null / explicit-index path.
       let wallsImportCalls: Array<Record<string, unknown>> = [];
+      // Records execute_tml_import args (includeExcluded, virtualShotMode, …) so
+      // the Ariane import spec can assert what the dialog's toggles actually sent.
+      let tmlImportCalls: Array<Record<string, unknown>> = [];
       // Dive-plan (.plnx) mock store (#244): an in-memory list of saved plans for the
       // open project. Reset per test via __MOCK_RESET_DIVE_PLANS__.
       let mockDivePlans: Array<{
@@ -451,6 +454,10 @@ export async function setupTauriMocks(page: Page): Promise<void> {
       (window as unknown as Record<string, unknown>).__MOCK_GET_WALLS_IMPORT_CALLS__ = () => [...wallsImportCalls];
       (window as unknown as Record<string, unknown>).__MOCK_RESET_WALLS_IMPORT_CALLS__ = () => {
         wallsImportCalls = [];
+      };
+      (window as unknown as Record<string, unknown>).__MOCK_GET_TML_IMPORT_CALLS__ = () => [...tmlImportCalls];
+      (window as unknown as Record<string, unknown>).__MOCK_RESET_TML_IMPORT_CALLS__ = () => {
+        tmlImportCalls = [];
       };
       (window as unknown as Record<string, unknown>).__MOCK_RESET_DIVE_PLANS__ = () => {
         mockDivePlans = [];
@@ -716,6 +723,84 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           ],
         };
       };
+
+      // Synthetic Ariane TML preview (#411). Fully in-memory - no .tml fixture
+      // is read - carrying one of each shot flavour the import dialog's optional
+      // controls key off: an excluded shot, a commented shot and a virtual shot.
+      const buildMockTmlShot = (
+        id: number,
+        fromId: number,
+        section: string,
+        depth: number,
+        overrides: Record<string, unknown> = {}
+      ) => ({
+        id,
+        from_id: fromId,
+        shot_type: 'Real',
+        azimuth: (id * 30) % 360,
+        length: 10,
+        depth,
+        depth_in: depth - 1,
+        inclination: 0,
+        left: 1,
+        right: 1,
+        up: 1,
+        down: 1,
+        comment: null as string | null,
+        explorer: 'Synthetic Surveyor',
+        date: '2026-01-02',
+        color: '#3b82f6',
+        excluded: false,
+        latitude: 0,
+        longitude: 0,
+        closure_to_id: 0,
+        section,
+        ...overrides,
+      });
+
+      // A path containing "imperial" yields an Imperial-unit file, so a spec can
+      // drive the "converted from feet" branch of the dialog and the receipt.
+      const buildMockTmlFile = (path: string | null | undefined) => ({
+        cave_name: 'Synthetic Cavern',
+        unit: (path ?? '').toLowerCase().includes('imperial') ? 'Imperial' : 'Metric',
+        use_magnetic_azimuth: true,
+        first_start_absolute_elevation: 0,
+        geo_coding: null,
+        sections: [
+          {
+            name: 'Main Line',
+            shots: [
+              buildMockTmlShot(1, 0, 'Main Line', 2),
+              buildMockTmlShot(2, 1, 'Main Line', 4, { comment: 'Restriction at the T' }),
+              buildMockTmlShot(3, 2, 'Main Line', 6, { excluded: true }),
+            ],
+            surveyor: 'Synthetic Surveyor',
+            date: '2026-01-02',
+            color: '#3b82f6',
+            is_branch_split: false,
+            start_ariane_id: 0,
+            end_ariane_id: 3,
+            start_depth: 0,
+          },
+          {
+            name: 'Side Passage',
+            shots: [
+              buildMockTmlShot(4, 1, 'Side Passage', 3),
+              buildMockTmlShot(5, 4, 'Side Passage', 5, { shot_type: 'Virtual' }),
+            ],
+            surveyor: 'Synthetic Surveyor',
+            date: '2026-01-03',
+            color: '#22c55e',
+            is_branch_split: true,
+            start_ariane_id: 1,
+            end_ariane_id: 5,
+            start_depth: 2,
+          },
+        ],
+        closures: [
+          { from_section_index: 0, from_station_index: 2, to_section_index: 1, to_station_index: 1 },
+        ],
+      });
 
       const toShot = (
         pointA: MockGpxPoint,
@@ -2525,6 +2610,104 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 closures_requested: 0,
                 closures_created: 0,
                 unit_conversion: null,
+                warnings: [],
+              },
+            };
+          }
+
+          case 'parse_tml':
+            return buildMockTmlFile(args?.path as string | undefined);
+
+          case 'execute_tml_import': {
+            tmlImportCalls.push({ ...(args ?? {}) });
+            const tmlPath = (args?.path as string | undefined) ?? '';
+            const includeExcluded = (args?.includeExcluded as boolean | undefined) ?? false;
+            const virtualShotMode = (args?.virtualShotMode as string | null | undefined) ?? null;
+            const tmlFile = buildMockTmlFile(tmlPath);
+
+            if (!currentProject) {
+              const now = new Date().toISOString();
+              sectionCounter = 0;
+              currentProject = {
+                id: 1,
+                name: 'Imported Project',
+                location: null,
+                created_at: now,
+                modified_at: now,
+                file_path: null,
+                sections: [],
+                station_merges: [],
+                zero_datums: [],
+                loop_closures: [],
+                section_offsets: {},
+              };
+            }
+
+            const tmlSectionIds: number[] = [];
+            let tmlShotCount = 0;
+            for (const tmlSection of tmlFile.sections) {
+              const keptShots = tmlSection.shots.filter((shot) => includeExcluded || !shot.excluded);
+              if (keptShots.length === 0) continue;
+              sectionCounter += 1;
+              const sectionId = sectionCounter;
+              currentProject?.sections.push({
+                id: sectionId,
+                name: tmlSection.name,
+                surveyor: tmlSection.surveyor,
+                date: tmlSection.date,
+                color: tmlSection.color,
+                direction: 'in',
+                shots: keptShots.map((shot, index) => ({
+                  id: mockShotId(sectionId, index),
+                  azimuth_in: shot.azimuth,
+                  azimuth_out: shot.azimuth,
+                  length: shot.length,
+                  // TML depths are positive-down; the project model is negative-down.
+                  depth_in: -shot.depth_in,
+                  depth_out: -shot.depth,
+                  pitch_in: null,
+                  pitch_out: null,
+                  left: shot.left,
+                  right: shot.right,
+                  up: shot.up,
+                  down: shot.down,
+                  comment: shot.comment,
+                  // #27: Ariane's single VIRTUAL category resolves to Jump unless
+                  // the dialog's override asks for references.
+                  kind:
+                    shot.shot_type === 'Virtual'
+                      ? virtualShotMode === 'AllReferences'
+                        ? 'Reference'
+                        : 'Jump'
+                      : 'Normal',
+                  marker_index: null,
+                  temperature: null,
+                })),
+              });
+              tmlSectionIds.push(sectionId);
+              tmlShotCount += keptShots.length;
+            }
+
+            if (currentProject) {
+              currentProject.modified_at = new Date().toISOString();
+            }
+
+            return {
+              success: true,
+              warnings: [],
+              error: null,
+              section_ids: tmlSectionIds,
+              ...(tmlSectionIds[0] != null ? { section_id: tmlSectionIds[0] } : {}),
+              import_receipt: {
+                source_format: 'Ariane TML',
+                file_name: tmlPath.split('/').pop() ?? tmlPath,
+                sections_found: tmlFile.sections.length,
+                sections_imported: tmlSectionIds.length,
+                shot_count: tmlShotCount,
+                closures_requested: tmlFile.closures.length,
+                closures_created: tmlFile.closures.length,
+                unit_conversion:
+                  tmlFile.unit === 'Imperial' ? 'Lengths converted from feet to meters' : null,
                 warnings: [],
               },
             };

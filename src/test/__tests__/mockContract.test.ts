@@ -256,8 +256,6 @@ const UNMOCKED_COMMAND_REASONS: Record<string, string> = {
   // the formats that ARE covered, e.g. execute_walls_import, are mocked).
   parse_compass: 'no mocked spec drives the compass parse+execute two-step import flow',
   execute_compass_import: 'no mocked spec drives the compass parse+execute two-step import flow',
-  parse_tml: 'no mocked spec drives the TML parse+execute two-step import flow',
-  execute_tml_import: 'no mocked spec drives the TML parse+execute two-step import flow',
   parse_walls: 'walls-import-dialog.spec.ts uses execute_walls_import directly; parse_walls is not called',
 
   // SpeleoDB collaborative write-workflow: exercised only by the env-gated
