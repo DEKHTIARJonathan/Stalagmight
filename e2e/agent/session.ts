@@ -1,221 +1,53 @@
 /**
- * AppSession owns a persistent WebdriverIO session against the real Tauri debug
- * binary: build freshness, an isolated profile, tauri-driver, the remote()
- * attach, and teardown. One session per process. All WebDriver traffic is
- * serialized through a command mutex so a heartbeat/health probe never
- * interleaves with a tool call.
+ * AppSession is the LINUX session: build freshness, Xvfb, tauri-driver, the
+ * remote() attach and a process-group teardown. Everything platform-neutral
+ * (state machine, command mutex, recorder, profile, orphan reaping) lives in
+ * SessionCore; the attach + readiness steps live in lib/sessionShared. One
+ * session per process. All WebDriver traffic is serialized through the command
+ * mutex so a heartbeat/health probe never interleaves with a tool call.
+ *
+ * Instantiate through createSession(), not directly: it picks the platform.
  */
-// FIRST import on purpose: patches webdriver's undici before webdriverio (next
-// import) links it. See the module comment for the Node >= 26 failure it fixes.
+// FIRST import on purpose: patches webdriver's undici before webdriverio (linked
+// transitively below) links it. See the module comment for the Node >= 26 failure
+// it fixes.
 import './lib/undici-dispatcher-pin';
-import { spawn, execSync, type ChildProcess } from 'child_process';
+import { spawn, type ChildProcess } from 'child_process';
 import * as fs from 'fs';
-import * as os from 'os';
 import * as path from 'path';
-import { fileURLToPath } from 'url';
-import { remote, type Browser } from 'webdriverio';
-import { binaryPath, isolatedEnv } from '../lib/env';
+import { binaryPath } from '../lib/env';
 import { checkDisplayAvailable, startXvfb, type XvfbHandle } from '../lib/display';
 import { checkBuildFreshness, buildApp } from './lib/build';
-import {
-  findFreePort,
-  isPidAlive,
-  recordPid,
-  reapPidsFromFile,
-  waitForPortListening,
-} from './lib/procs';
-import { Recorder, ARTIFACTS_ROOT } from './lib/recorder';
-import { waitForAppReady, waitForE2EHooks, disableOnboardingGuides } from './lib/waiters';
+import { findFreePort, isPidAlive, recordPid, reapPidsFromFile, waitForPortListening } from './lib/procs';
+import { SessionCore, gitHead, safeMtime } from './lib/sessionCore';
+import { attachBrowser, verifyReadiness, E2EHooksMissingError } from './lib/sessionShared';
+import type { StartOptions, StartResult } from './sessionTypes';
 
-/**
- * Warn when the running Node major differs from the repo pin in `.nvmrc`.
- *
- * Advisory only: the harness is known to work on more than one major, so this must
- * not block. It exists because the harness is the one tier a human runs by hand,
- * where nothing selects the runtime for you - CI gets it from `setup-node`.
- * Deliberately derived, never a literal, so the next toolchain bump cannot leave a
- * stale number here.
- */
-function warnIfOffPinnedNode(): void {
-  try {
-    // fileURLToPath, not __dirname: this tree is ESM ("type": "module"), where
-    // __dirname is undefined at runtime even though @types/node declares it - so
-    // the __dirname form typechecks clean and then silently never warns.
-    const here = path.dirname(fileURLToPath(import.meta.url));
-    const nvmrc = path.resolve(here, '..', '..', '.nvmrc');
-    const want = Number.parseInt(fs.readFileSync(nvmrc, 'utf8').trim().replace(/^v/, ''), 10);
-    const running = Number.parseInt(process.versions.node.split('.')[0] ?? '', 10);
-    if (Number.isInteger(want) && Number.isInteger(running) && want !== running) {
-      process.stderr.write(
-        `[agent] WARNING: running Node ${process.versions.node}, but .nvmrc pins ${want}. ` +
-          `The harness is not routinely exercised off-pin; if app_start fails oddly, ` +
-          `try \`nvm use\` first.\n`,
-      );
-    }
-  } catch {
-    // Never let a diagnostic break a session start.
-  }
-}
-
-export type SessionState =
-  | 'idle'
-  | 'building'
-  | 'launching'
-  | 'ready'
-  | 'busy'
-  | 'crashed'
-  | 'stopping';
-
-export type BuildMode = 'auto' | 'skip' | 'force';
-
-export interface StartOptions {
-  build?: BuildMode;
-  headed?: boolean;
-  freshProfile?: boolean;
-}
-
-export interface StartResult {
-  state: SessionState;
-  appPidKnown: boolean;
-  driverPort: number;
-  nativePort: number;
-  display: string;
-  profileDir: string;
-  buildAction: 'skipped' | 'built' | 'fresh';
-  sessionDir: string;
-}
+export type {
+  SessionState,
+  BuildMode,
+  StartOptions,
+  StartResult,
+  AgentSession,
+} from './sessionTypes';
 
 const BASE_PORT = Number.parseInt(process.env.STALAGMIGHT_AGENT_BASE_PORT ?? '4544', 10);
 const XVFB_DISPLAYS = [':89', ':88', ':87', ':86', ':85'];
+const REAP_COMM_NAMES = ['stalagmight', 'tauri-driver', 'WebKitWebDriver'];
 
-function timestampId(): string {
-  const now = new Date();
-  const pad = (n: number) => String(n).padStart(2, '0');
-  const stamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
-  const rand = Math.floor((now.getTime() % 100000)).toString(36).padStart(4, '0').slice(-4);
-  return `${stamp}-${rand}`;
-}
-
-function gitHead(): string {
-  try {
-    return execSync('git rev-parse --short HEAD', { encoding: 'utf8' }).trim();
-  } catch {
-    return 'unknown';
-  }
-}
-
-export class AppSession {
-  state: SessionState = 'idle';
-  private browserInstance: Browser | null = null;
+export class AppSession extends SessionCore {
   private driver: ChildProcess | null = null;
   private xvfb: XvfbHandle | null = null;
-  private profileRoot: string | null = null;
-  private profileDataHome: string | null = null;
   private display = '';
   private driverPort = 0;
   private nativePort = 0;
-  private recorderInstance: Recorder | null = null;
-  private sessionId = '';
-  private startedAtMs = 0;
-  private queue: Promise<unknown> = Promise.resolve();
   private driverLog: fs.WriteStream | null = null;
 
-  get browser(): Browser {
-    if (!this.browserInstance) throw new Error('no live session (call app_start)');
-    return this.browserInstance;
+  protected reapCommNames(): string[] {
+    return REAP_COMM_NAMES;
   }
 
-  get recorder(): Recorder {
-    if (!this.recorderInstance) throw new Error('no recorder (session not started)');
-    return this.recorderInstance;
-  }
-
-  get sessionDir(): string {
-    return this.recorderInstance?.dir ?? '';
-  }
-
-  get hasRecorder(): boolean {
-    return this.recorderInstance !== null;
-  }
-
-  /** The app's isolated XDG_DATA_HOME (crash markers/logs live under here). */
-  get profileDataDir(): string | null {
-    return this.profileDataHome;
-  }
-
-  /** Serialize a WebDriver interaction; sets state busy->ready around it. */
-  async exclusive<T>(fn: () => Promise<T>): Promise<T> {
-    const run = this.queue.then(async () => {
-      if (this.state !== 'ready' && this.state !== 'busy') {
-        throw new Error(`session not ready (state=${this.state})`);
-      }
-      this.state = 'busy';
-      try {
-        return await fn();
-      } finally {
-        if (this.state === 'busy') this.state = 'ready';
-      }
-    });
-    // Keep the queue chained even if this call rejects.
-    this.queue = run.catch(() => undefined);
-    return run;
-  }
-
-  private pidFile(): string {
-    return path.join(this.recorder.dir, 'pids');
-  }
-
-  /** Recursively find crash-*.json markers under the isolated data dir. */
-  findCrashMarkers(): string[] {
-    const root = this.profileDataHome;
-    if (!root) return [];
-    const out: string[] = [];
-    const walk = (dir: string) => {
-      let entries: fs.Dirent[];
-      try {
-        entries = fs.readdirSync(dir, { withFileTypes: true });
-      } catch {
-        return;
-      }
-      for (const e of entries) {
-        const full = path.join(dir, e.name);
-        if (e.isDirectory()) walk(full);
-        else if (e.name.startsWith('crash-') && e.name.endsWith('.json')) out.push(full);
-      }
-    };
-    walk(root);
-    return out;
-  }
-
-  async start(opts: StartOptions = {}): Promise<StartResult> {
-    if (this.state !== 'idle' && this.state !== 'crashed') {
-      throw new Error(`cannot start from state ${this.state}`);
-    }
-    // Warn when the running Node is not the pinned one. This used to hardcode 22,
-    // justified by webdriverio handing an `Agent` from its bundled undici to
-    // Node's built-in fetch so the undici majors had to agree - which is not what
-    // webdriver 9.23.0 does (it imports `fetch` from undici alongside `Agent`,
-    // build/node.js:1614, and calls that fetch at :1986). A stub-driver session
-    // succeeds identically on Node 22 and 24, so the constant was wrong.
-    //
-    // The CHECK is still worth having: "you are off-pin" is useful whichever layer
-    // breaks, and the verified envelope is only {22, 24} while node@26 already
-    // exists. So it reads .nvmrc rather than asserting a major, which also means it
-    // cannot go stale at the next bump. See docs/agent-harness.md.
-    warnIfOffPinnedNode();
-    try {
-      return await this.startInner(opts);
-    } catch (err) {
-      // Any throw after something was spawned (build, Xvfb, tauri-driver,
-      // waitForAppReady, hook/onboarding checks) must not leak the process
-      // group, the Xvfb child, or the temp profile. Failure paths that already
-      // stopped leave state 'idle', which skips the duplicate stop.
-      if (this.state !== 'idle') await this.stop('start-failed');
-      throw err;
-    }
-  }
-
-  private async startInner(opts: StartOptions): Promise<StartResult> {
+  protected async startInner(opts: StartOptions): Promise<StartResult> {
     const build = opts.build ?? 'auto';
     const freshProfile = opts.freshProfile ?? true;
 
@@ -266,29 +98,8 @@ export class AppSession {
       }
     }
 
-    // 3. Isolated profile. A profile kept alive by stop(keepProfile) is reused
-    // when freshProfile=false; a fresh start discards any kept one first.
-    this.sessionId = timestampId();
-    this.recorderInstance = new Recorder(this.sessionId);
-    // Ownership marker: reapPreviousSessions in ANOTHER harness process skips
-    // session dirs whose owning process is still alive, so starting a second
-    // agent session can never SIGKILL a live sibling's app/driver mid-run.
-    try {
-      fs.writeFileSync(path.join(this.recorderInstance.dir, 'owner'), String(process.pid));
-    } catch {
-      // Best-effort.
-    }
-    if (freshProfile && this.profileRoot) {
-      try {
-        fs.rmSync(this.profileRoot, { recursive: true, force: true });
-      } catch {
-        // Best-effort.
-      }
-      this.profileRoot = null;
-    }
-    this.profileRoot = this.profileRoot ?? fs.mkdtempSync(path.join(os.tmpdir(), 'stalagmight-agent-'));
-    const profileEnv = isolatedEnv(this.profileRoot);
-    this.profileDataHome = profileEnv.XDG_DATA_HOME ?? profileEnv.HOME ?? this.profileRoot;
+    // 3. Session dir + isolated profile.
+    const { profileRoot, profileEnv } = this.prepareSession(freshProfile);
 
     // 4. Ports.
     this.driverPort = await findFreePort(BASE_PORT);
@@ -356,47 +167,26 @@ export class AppSession {
 
     // 6. Attach. Mirror wdio.conf.ts's capabilities exactly (no browserName;
     // tauri-driver reads the non-standard tauri:options).
-    const capabilities = {
-      platformName: 'linux',
-      'wdio:enforceWebDriverClassic': true,
-      'tauri:options': { application: binaryPath },
-    };
     try {
-      this.browserInstance = await remote({
-        hostname: '127.0.0.1',
-        port: this.driverPort,
-        path: '/',
-        logLevel: 'silent',
-        connectionRetryCount: 3,
-        connectionRetryTimeout: 30000,
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        capabilities: capabilities as any,
+      this.browserInstance = await attachBrowser(this.driverPort, {
+        platformName: 'linux',
+        'wdio:enforceWebDriverClassic': true,
+        'tauri:options': { application: binaryPath },
       });
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
       await this.stop('attach-failed');
-      if (msg.includes('UND_ERR_INVALID_ARG')) {
-        throw new Error(
-          'Failed to attach to tauri-driver (UND_ERR_INVALID_ARG), an error from webdriverio\'s ' +
-            `undici HTTP layer. You are on Node ${process.versions.node}. Session creation is ` +
-            'known to work on Node 22 and 24, so this is more likely a bad dispatcher/proxy ' +
-            'option or an HTTP_PROXY/NO_PROXY in the environment than the Node version. If a ' +
-            'different Node major does fix it, please record which one in docs/agent-harness.md.',
-        );
-      }
-      throw new Error(`Failed to attach to tauri-driver on port ${this.driverPort}: ${msg}`);
+      throw err;
     }
 
     // 7. Ready + hook verification.
-    await waitForAppReady(this.browserInstance);
-    const hooksReady = await waitForE2EHooks(this.browserInstance);
-    if (!hooksReady) {
-      await this.stop('hooks-missing');
-      throw new Error(
-        'window.__E2E_TEST__ not present: the binary was built without VITE_E2E=1. Rerun app_start with build:"force".',
-      );
+    try {
+      await verifyReadiness(this.browserInstance);
+    } catch (err) {
+      // Only the hooks failure gets its own stop reason; anything else falls
+      // through to start()'s generic 'start-failed' teardown.
+      if (err instanceof E2EHooksMissingError) await this.stop('hooks-missing');
+      throw err;
     }
-    await disableOnboardingGuides(this.browserInstance);
 
     this.state = 'ready';
     this.startedAtMs = Date.now();
@@ -408,7 +198,7 @@ export class AppSession {
       binaryMtime: safeMtime(binaryPath),
       display: this.display,
       headed: Boolean(opts.headed),
-      profileDir: this.profileRoot,
+      profileDir: profileRoot,
       freshProfile,
     });
 
@@ -418,44 +208,10 @@ export class AppSession {
       driverPort: this.driverPort,
       nativePort: this.nativePort,
       display: this.display,
-      profileDir: this.profileRoot,
+      profileDir: profileRoot,
       buildAction,
       sessionDir: this.recorder.dir,
     };
-  }
-
-  private reapPreviousSessions(): void {
-    let dirs: string[];
-    try {
-      dirs = fs.readdirSync(ARTIFACTS_ROOT);
-    } catch {
-      return;
-    }
-    for (const name of dirs) {
-      const dir = path.join(ARTIFACTS_ROOT, name);
-      // Liveness guard: skip sessions whose owning harness process is still
-      // alive - that is a concurrently-running sibling, and reaping its
-      // pidfile would SIGKILL a LIVE session's app/driver mid-run. Our own
-      // pid means an earlier session of this process (we only start from
-      // idle/crashed), whose orphans are safe to reap.
-      try {
-        const owner = Number.parseInt(fs.readFileSync(path.join(dir, 'owner'), 'utf8').trim(), 10);
-        if (Number.isInteger(owner) && owner > 0 && owner !== process.pid && isPidAlive(owner)) {
-          continue;
-        }
-      } catch {
-        // No owner marker (pre-marker session dir): assume dead, reap below.
-      }
-      reapPidsFromFile(path.join(dir, 'pids'), [
-        'stalagmight',
-        'tauri-driver',
-        'WebKitWebDriver',
-      ]);
-    }
-  }
-
-  uptimeMs(): number {
-    return this.startedAtMs ? Date.now() - this.startedAtMs : 0;
   }
 
   driverAlive(): boolean {
@@ -505,7 +261,7 @@ export class AppSession {
     this.driverLog = null;
     // Backstop: scoped reap of anything this session recorded, by verified comm.
     if (this.recorderInstance) {
-      reapPidsFromFile(this.pidFile(), ['stalagmight', 'tauri-driver', 'WebKitWebDriver']);
+      reapPidsFromFile(this.pidFile(), REAP_COMM_NAMES);
     }
     if (this.xvfb) {
       const xvfbPid = this.xvfb.proc.pid;
@@ -528,24 +284,7 @@ export class AppSession {
       }
       this.xvfb = null;
     }
-    if (this.profileRoot && !opts.keepProfile) {
-      try {
-        fs.rmSync(this.profileRoot, { recursive: true, force: true });
-      } catch {
-        // Best-effort.
-      }
-      this.profileRoot = null;
-      this.profileDataHome = null;
-    }
-    this.recorderInstance?.sessionEnd(reason);
-    this.state = 'idle';
-  }
-}
-
-function safeMtime(file: string): number {
-  try {
-    return Math.floor(fs.statSync(file).mtimeMs);
-  } catch {
-    return 0;
+    this.disposeProfile(opts.keepProfile);
+    this.finishStop(reason);
   }
 }
