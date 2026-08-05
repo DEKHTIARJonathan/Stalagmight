@@ -73,7 +73,8 @@ export const defaultConfig: Config = {
     "controls": {
       "pan_speed": 1.0,
       "zoom_speed": 1.0,
-      "invert_scroll": false
+      "invert_scroll": false,
+      "show_navigation_tools": false
     },
     "station": {
       "radius": 4.0,

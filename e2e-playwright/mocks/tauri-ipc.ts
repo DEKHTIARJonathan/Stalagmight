@@ -597,6 +597,15 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           | undefined) ?? {}),
       };
 
+      // `map.controls.show_navigation_tools` (#409): the Pan/Zoom toolbar group is
+      // hidden unless the user opts in, so the mock's config reports false and a
+      // spec that needs the tools seeds `window.__E2E_SEED_SHOW_NAVIGATION_TOOLS__`
+      // via its OWN `page.addInitScript` before `setupMockedPage` (see
+      // `seedNavigationTools` in helpers/app.ts) - same reason as the view seeds
+      // above: the toolbar reads the value from the FIRST `get_config` at boot.
+      const mockShowNavigationTools =
+        (window as unknown as Record<string, unknown>).__E2E_SEED_SHOW_NAVIGATION_TOOLS__ === true;
+
       // The `[gas]` block persisted via update_gas_config, overlaid onto
       // get_config the same way. Null until something writes it, so an untouched
       // run keeps whatever gas config get_config would otherwise return.
@@ -3425,6 +3434,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                   pan_speed: 1.0,
                   zoom_speed: 1.0,
                   invert_scroll: false,
+                  show_navigation_tools: mockShowNavigationTools,
                 },
                 station: {
                   radius: 4.0,
@@ -3841,6 +3851,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                   pan_speed: 1.0,
                   zoom_speed: 1.0,
                   invert_scroll: false,
+                  show_navigation_tools: mockShowNavigationTools,
                 },
                 station: {
                   radius: 4.0,

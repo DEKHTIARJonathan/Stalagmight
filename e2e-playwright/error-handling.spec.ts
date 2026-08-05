@@ -380,6 +380,7 @@ async function setupTauriMocksWithErrorSimulation(page: Page): Promise<void> {
                 pan_speed: 1.0,
                 zoom_speed: 1.0,
                 invert_scroll: false,
+                show_navigation_tools: false,
               },
               station: {
                 radius: 4.0,

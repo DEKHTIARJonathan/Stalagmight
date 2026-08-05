@@ -30,6 +30,22 @@ export async function setupMockedPage(page: Page): Promise<void> {
   await waitForAppReady(page);
 }
 
+/**
+ * Turn on `map.controls.show_navigation_tools` (#409) for the whole page, so the
+ * Pan/Zoom toolbar group and its P/Z shortcuts exist.
+ *
+ * Registers `window.__E2E_SEED_SHOW_NAVIGATION_TOOLS__` via its own
+ * `page.addInitScript`, which the mock reads when it builds its config (see
+ * tauri-ipc.ts). Init scripts run in registration order before any app JS on every
+ * navigation, so this MUST be called BEFORE `setupMockedPage` - the toolbar reads
+ * the flag from the app's first `get_config()` at boot.
+ */
+export async function seedNavigationTools(page: Page): Promise<void> {
+  await page.addInitScript(() => {
+    (window as unknown as Record<string, unknown>).__E2E_SEED_SHOW_NAVIGATION_TOOLS__ = true;
+  });
+}
+
 export async function waitForAppReady(page: Page): Promise<void> {
   await page.waitForFunction(() => {
     return Boolean(

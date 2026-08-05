@@ -156,6 +156,7 @@ impl Default for MapControlsConfig {
             pan_speed: 1.0,
             zoom_speed: 1.0,
             invert_scroll: false,
+            show_navigation_tools: false,
         }
     }
 }
