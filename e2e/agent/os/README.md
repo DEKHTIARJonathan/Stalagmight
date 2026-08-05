@@ -29,8 +29,31 @@ e2e/agent/os/
   permissions.ts  per-process grant flag + TCC preflight
 ```
 
-`input.ts`, `screenshot.ts` and `menu.ts` land with the MCP surface (PR 4 in the
-design doc); the helper subcommands they need already exist.
+`input.ts` and `screenshot.ts` land with the MCP surface (PR 4 in the design
+doc); the helper subcommands they need already exist. `menu.ts` is deferred
+along with `os_menu`.
+
+## MCP tools
+
+Registered on darwin only, in `e2e/agent/mcp/server.ts`:
+
+| Tool | Does |
+|---|---|
+| `os_grant` | opens the grant for this MCP server process |
+| `os_click` | real CGEvent click, by screen point or by testid |
+| `os_keys` | real key event with real modifier flags, so Cmd+S reaches the menu bar |
+| `os_screenshot` | `screencapture -x -l <windowid>`: real pixels, occlusion-immune |
+
+- **Grant flow.** `os_grant` is deliberately never added to a tool allowlist, so
+  invoking it raises a real harness permission prompt: the human decides that
+  this session may drive the desktop. The grant lasts until the MCP server
+  exits. See "The grant model" below.
+- **Evidence contract.** `frontmost_ok` and `permissions` ride every os_\*
+  result. `frontmost_ok: false` means discard the evidence, not investigate the
+  app. See "Evidence-quality contract" below.
+- **`os_menu` is DEFERRED.** The helper's `menu` subcommand is a stub that
+  returns `unimplemented` naming the AX menu-bar walk it needs, so menu
+  accelerators go through `os_keys`.
 
 ## Permissions: who grants what
 
