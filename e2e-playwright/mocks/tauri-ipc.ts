@@ -2,6 +2,21 @@ import { Page } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 import { dirname, resolve as pathResolve } from 'node:path';
 import { createRequire } from 'node:module';
+import type { TmlFile } from '../../src/types/ipc/TmlFile';
+import type { TmlShot } from '../../src/types/ipc/TmlShot';
+
+/** The wire shape of a ts-rs generated type: serde writes i64 as a JSON
+ *  number, so fields the generated interfaces declare as `bigint` arrive as
+ *  `number` at runtime. Recursive and type-only (erases at compile time) -
+ *  its purpose is that a `gen:ipc-types` regen which adds a required field
+ *  fails `typecheck:playwright` here instead of drifting silently. */
+type TmlWire<T> = T extends bigint
+  ? number
+  : T extends Array<infer U>
+    ? Array<TmlWire<U>>
+    : T extends object
+      ? { [K in keyof T]: TmlWire<T[K]> }
+      : T;
 
 declare global {
   interface Window {
@@ -429,6 +444,9 @@ export async function setupTauriMocks(page: Page): Promise<void> {
       // Records execute_walls_import args (esp. selectedSurveys) so the Walls
       // import dialog spec can assert the select-all→null / explicit-index path.
       let wallsImportCalls: Array<Record<string, unknown>> = [];
+      // Records execute_tml_import args (includeExcluded, virtualShotMode, …) so
+      // the Ariane import spec can assert what the dialog's toggles actually sent.
+      let tmlImportCalls: Array<Record<string, unknown>> = [];
       // Dive-plan (.plnx) mock store (#244): an in-memory list of saved plans for the
       // open project. Reset per test via __MOCK_RESET_DIVE_PLANS__.
       let mockDivePlans: Array<{
@@ -451,6 +469,10 @@ export async function setupTauriMocks(page: Page): Promise<void> {
       (window as unknown as Record<string, unknown>).__MOCK_GET_WALLS_IMPORT_CALLS__ = () => [...wallsImportCalls];
       (window as unknown as Record<string, unknown>).__MOCK_RESET_WALLS_IMPORT_CALLS__ = () => {
         wallsImportCalls = [];
+      };
+      (window as unknown as Record<string, unknown>).__MOCK_GET_TML_IMPORT_CALLS__ = () => [...tmlImportCalls];
+      (window as unknown as Record<string, unknown>).__MOCK_RESET_TML_IMPORT_CALLS__ = () => {
+        tmlImportCalls = [];
       };
       (window as unknown as Record<string, unknown>).__MOCK_RESET_DIVE_PLANS__ = () => {
         mockDivePlans = [];
@@ -714,6 +736,145 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               ],
             },
           ],
+        };
+      };
+
+      // Synthetic Ariane TML preview (#411). Fully in-memory - no .tml fixture
+      // is read - carrying one of each shot flavour the import dialog's optional
+      // controls key off: an excluded shot, a commented shot and a virtual shot.
+      const buildMockTmlShot = (
+        id: number,
+        fromId: number,
+        section: string,
+        depth: number,
+        overrides: Partial<TmlWire<TmlShot>> = {}
+      ): TmlWire<TmlShot> => ({
+        id,
+        from_id: fromId,
+        shot_type: 'Real',
+        azimuth: (id * 30) % 360,
+        length: 10,
+        depth,
+        depth_in: depth - 1,
+        inclination: 0,
+        left: 1,
+        right: 1,
+        up: 1,
+        down: 1,
+        comment: null as string | null,
+        explorer: 'Synthetic Surveyor',
+        date: '2026-01-02',
+        color: '#3b82f6',
+        excluded: false,
+        latitude: 0,
+        longitude: 0,
+        closure_to_id: 0,
+        section,
+        ...overrides,
+      });
+
+      // Preview closures derived the way the real parser's extract_closures
+      // does (parsers/tml.rs): every Closure-type shot with closure_to_id >= 0
+      // contributes one entry; "from" is the closure shot's own RAW position,
+      // "to" is the target shot's RAW position (indices over the unfiltered
+      // shot lists, including Closure/excluded rows). The real START-target
+      // fallback is not modeled - this fixture has no START shots.
+      const deriveTmlClosures = (
+        sections: TmlWire<TmlFile>['sections']
+      ): TmlWire<TmlFile>['closures'] => {
+        const idToRawLoc = new Map<number, [number, number]>();
+        sections.forEach((section, si) =>
+          section.shots.forEach((shot, idx) => idToRawLoc.set(shot.id, [si, idx]))
+        );
+        const closures: TmlWire<TmlFile>['closures'] = [];
+        sections.forEach((section, si) =>
+          section.shots.forEach((shot, idx) => {
+            if (shot.shot_type !== 'Closure' || shot.closure_to_id < 0) return;
+            const to = idToRawLoc.get(shot.closure_to_id);
+            if (to) {
+              closures.push({
+                from_section_index: si,
+                from_station_index: idx,
+                to_section_index: to[0],
+                to_station_index: to[1],
+              });
+            }
+          })
+        );
+        return closures;
+      };
+
+      // A path containing "imperial" yields an Imperial-unit file, so a spec can
+      // drive the "converted from feet" branch of the dialog and the receipt.
+      // The real parser converts ft->m BEFORE returning the preview (see
+      // apply_unit_conversion in parsers/tml.rs: shot length/depth/depth_in and
+      // LRUD scale by 0.3048; start_depth and first_start_absolute_elevation
+      // deliberately mirror master and stay unscaled), so the imperial fixture's
+      // canonical numbers are FEET and the parse output below is metric.
+      const buildMockTmlFile = (path: string | null | undefined): TmlWire<TmlFile> => {
+        const imperial = (path ?? '').toLowerCase().includes('imperial');
+        const scale = imperial ? 0.3048 : 1;
+        const scaleShot = (shot: TmlWire<TmlShot>): TmlWire<TmlShot> => ({
+          ...shot,
+          length: shot.length * scale,
+          depth: shot.depth * scale,
+          depth_in: shot.depth_in * scale,
+          left: shot.left * scale,
+          right: shot.right * scale,
+          up: shot.up * scale,
+          down: shot.down * scale,
+        });
+        const sections: TmlWire<TmlFile>['sections'] = [
+          {
+            name: 'Main Line',
+            shots: [
+              buildMockTmlShot(1, 0, 'Main Line', 2),
+              buildMockTmlShot(2, 1, 'Main Line', 4, { comment: 'Restriction at the T' }),
+              buildMockTmlShot(3, 2, 'Main Line', 6, { excluded: true }),
+            ].map(scaleShot),
+            surveyor: 'Synthetic Surveyor',
+            date: '2026-01-02',
+            color: '#3b82f6',
+            is_branch_split: false,
+            start_ariane_id: 0,
+            end_ariane_id: 3,
+            start_depth: 0,
+          },
+          {
+            name: 'Side Passage',
+            shots: [
+              buildMockTmlShot(4, 1, 'Side Passage', 3),
+              buildMockTmlShot(5, 4, 'Side Passage', 5, { shot_type: 'Virtual' }),
+              // The loop closure, as the real format stores it: a Closure-type
+              // ROW near the end of the file. from_id=1 (Main Line station 1)
+              // and closure_to_id=4 (Side Passage station 1) keep the previous
+              // round's by-construction exclusion-safety: neither endpoint is
+              // the excluded shot (id 3, Main Line's terminal) nor preceded by
+              // it, so import-space indices agree under BOTH states of the
+              // excluded-shots toggle.
+              buildMockTmlShot(6, 1, 'Side Passage', 0, {
+                shot_type: 'Closure',
+                closure_to_id: 4,
+                length: 0,
+              }),
+            ].map(scaleShot),
+            surveyor: 'Synthetic Surveyor',
+            date: '2026-01-03',
+            color: '#22c55e',
+            is_branch_split: true,
+            start_ariane_id: 1,
+            end_ariane_id: 5,
+            start_depth: 2,
+          },
+        ];
+        return {
+          cave_name: 'Synthetic Cavern',
+          unit: imperial ? 'Imperial' : 'Metric',
+          use_magnetic_azimuth: true,
+          first_start_absolute_elevation: 0,
+          geo_coding: null,
+          sections,
+          closures: deriveTmlClosures(sections),
         };
       };
 
@@ -2525,6 +2686,245 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 closures_requested: 0,
                 closures_created: 0,
                 unit_conversion: null,
+                warnings: [],
+              },
+            };
+          }
+
+          case 'parse_tml':
+            return buildMockTmlFile(args?.path as string | undefined);
+
+          case 'execute_tml_import': {
+            tmlImportCalls.push({ ...(args ?? {}) });
+            const tmlPath = (args?.path as string | undefined) ?? '';
+            const includeExcluded = (args?.includeExcluded as boolean | undefined) ?? false;
+            const virtualShotMode = (args?.virtualShotMode as string | null | undefined) ?? null;
+            const tmlFile = buildMockTmlFile(tmlPath);
+
+            if (!currentProject) {
+              const now = new Date().toISOString();
+              sectionCounter = 0;
+              currentProject = {
+                id: 1,
+                name: 'Imported Project',
+                location: null,
+                created_at: now,
+                modified_at: now,
+                file_path: null,
+                sections: [],
+                station_merges: [],
+                zero_datums: [],
+                loop_closures: [],
+                section_offsets: {},
+              };
+            }
+
+            const commentsOnStations = (args?.commentsOnStations as boolean | undefined) ?? true;
+
+            // Import-space station index per shot ID, mirroring the real
+            // converter's id_to_import_loc (parsers/tml.rs): Closure rows and
+            // (by default) excluded shots never enter the map; the shot at kept
+            // index i ends at station i+1. Placements and closures below both
+            // resolve through this, so exclusion renumbering behaves like the
+            // real import.
+            const keptBySection: Array<{ tmlIndex: number; shots: typeof tmlFile.sections[number]['shots'] }> = [];
+            const idToImportLoc = new Map<number, [number, number]>();
+            tmlFile.sections.forEach((tmlSection, tmlIndex) => {
+              const kept = tmlSection.shots.filter(
+                (shot) => shot.shot_type !== 'Closure' && (includeExcluded || !shot.excluded)
+              );
+              keptBySection.push({ tmlIndex, shots: kept });
+              kept.forEach((shot, keptIdx) => idToImportLoc.set(shot.id, [tmlIndex, keptIdx + 1]));
+            });
+
+            // ZWSP marker split (core/comment_split.rs): lines prefixed with
+            // U+200B are shot-comment lines (marker stripped); unmarked lines
+            // are station comments routed to the shot's "to" station. A bare
+            // Ariane comment has no markers, so it peels entirely to the
+            // station when commentsOnStations is on.
+            const splitComment = (raw: string | null): { shot: string | null; station: string | null } => {
+              if (!raw) return { shot: null, station: null };
+              const shotLines: string[] = [];
+              const stationLines: string[] = [];
+              for (const line of raw.split('\n')) {
+                if (line.startsWith('\u200B')) shotLines.push(line.slice(1));
+                else stationLines.push(line);
+              }
+              return {
+                shot: shotLines.length ? shotLines.join('\n') : null,
+                station: stationLines.length ? stationLines.join('\n') : null,
+              };
+            };
+
+            const createdIdByTmlIndex = new Map<number, number>();
+            const tmlSectionIds: number[] = [];
+            let tmlShotCount = 0;
+            for (const { tmlIndex, shots: keptShots } of keptBySection) {
+              if (keptShots.length === 0) continue;
+              const tmlSection = tmlFile.sections[tmlIndex];
+              sectionCounter += 1;
+              const sectionId = sectionCounter;
+              currentProject?.sections.push({
+                id: sectionId,
+                name: tmlSection.name,
+                surveyor: tmlSection.surveyor,
+                date: tmlSection.date,
+                color: tmlSection.color,
+                direction: 'in',
+                shots: keptShots.map((shot, index) => {
+                  const split = commentsOnStations
+                    ? splitComment(shot.comment)
+                    : { shot: shot.comment, station: null };
+                  if (split.station) {
+                    // Station comments live in the mock's station-comment
+                    // store, same as set_station_comment writes - the project
+                    // state derives stations per refresh and threads these in.
+                    mockStationComments[`${sectionId}:${index + 1}`] = split.station;
+                  }
+                  return {
+                    id: mockShotId(sectionId, index),
+                    // Same stable-uuid idiom as create_section above: the real
+                    // backend never produces a uuid-less shot.
+                    uuid: `mock-shot-uuid-${mockShotId(sectionId, index)}`,
+                    azimuth_in: shot.azimuth,
+                    azimuth_out: shot.azimuth,
+                    length: shot.length,
+                    // Depths pass through UNCHANGED: the real converter stores
+                    // the parsed positive-down absolute depths verbatim in
+                    // ShotData (normalize_tml_shot in parsers/tml.rs) - no
+                    // sign flip, no rebasing.
+                    depth_in: shot.depth_in,
+                    depth_out: shot.depth,
+                    // inclination_to_pitch (parsers/tml.rs): pitch is +down,
+                    // Ariane inclination negates unless exactly zero; always
+                    // Some(...) on the real path, so never null here.
+                    pitch_in: shot.inclination === 0 ? 0 : -shot.inclination,
+                    pitch_out: null,
+                    left: shot.left,
+                    right: shot.right,
+                    up: shot.up,
+                    down: shot.down,
+                    comment: split.shot,
+                    // DELIBERATELY UNMODELED: the real backend's Auto mode runs
+                    // the #27 chain rule (classify_virtual_shots in
+                    // src-tauri/src/models/project/classify.rs) over the merged
+                    // station graph; this mock reduces it to a ternary, so under
+                    // 'Auto' the kind below can DISAGREE with the real backend.
+                    // Specs must not assert virtual-shot kinds under Auto - only
+                    // under the unconditional overrides (AllJumps/AllReferences),
+                    // which bypass the chain rule in the real backend too. Also
+                    // unmodeled: the effective_start_id fallback and the
+                    // topological re-sort of forward references (this fixture
+                    // never produces either).
+                    kind:
+                      shot.shot_type === 'Virtual'
+                        ? virtualShotMode === 'AllReferences'
+                          ? 'Reference'
+                          : 'Jump'
+                        : 'Normal',
+                    marker_index: null,
+                    temperature: null,
+                  };
+                }),
+              });
+              createdIdByTmlIndex.set(tmlIndex, sectionId);
+              tmlSectionIds.push(sectionId);
+              tmlShotCount += keptShots.length;
+            }
+
+            // Placement, as determine_placement + FromImporting do it: section
+            // 0 sits at the origin (no GPS in this fixture); every later
+            // section resolves its start_ariane_id through id_to_import_loc
+            // and, when the target lives in another section, station 0 of the
+            // new section merges with the target station
+            // (command_import.rs, ImportPlacement::FromImporting ->
+            // merge_stations).
+            for (const { tmlIndex } of keptBySection) {
+              if (tmlIndex === 0) continue;
+              const sectionId = createdIdByTmlIndex.get(tmlIndex);
+              if (sectionId == null) continue;
+              const startId = tmlFile.sections[tmlIndex].start_ariane_id;
+              const target = startId >= 0 ? idToImportLoc.get(startId) : undefined;
+              if (!target || target[0] === tmlIndex) continue;
+              const targetSectionId = createdIdByTmlIndex.get(target[0]);
+              if (targetSectionId == null) continue;
+              (currentProject?.station_merges as Array<{
+                station_a: { section_id: number; station_index: number };
+                station_b: { section_id: number; station_index: number };
+              }>).push({
+                station_a: { section_id: sectionId, station_index: 0 },
+                station_b: { section_id: targetSectionId, station_index: target[1] },
+              });
+            }
+
+            // Loop closures, as the real import scan does it (parsers/tml.rs
+            // closure extraction over id_to_import_loc): every Closure row
+            // whose from_id AND closure_to_id both resolve to kept shots
+            // becomes a loop closure; either endpoint filtered means the
+            // closure is dropped. closures_requested mirrors the converter's
+            // already-filtered list length, so requested == created here.
+            let closuresCreated = 0;
+            const loopClosures = (currentProject?.loop_closures ?? []) as Array<{
+              id: bigint;
+              station_a: { section_id: number; station_index: number };
+              station_b: { section_id: number; station_index: number };
+              path_length: number;
+              misclosure_distance: number;
+              error_percentage: number;
+              horizontal_misclosure: number;
+              vertical_misclosure: number;
+              strategy: string;
+              is_aligned: boolean;
+            }>;
+            for (const tmlSection of tmlFile.sections) {
+              for (const shot of tmlSection.shots) {
+                if (shot.shot_type !== 'Closure' || shot.closure_to_id < 0) continue;
+                const from = idToImportLoc.get(shot.from_id);
+                const to = idToImportLoc.get(shot.closure_to_id);
+                if (!from || !to) continue;
+                const fromSectionId = createdIdByTmlIndex.get(from[0]);
+                const toSectionId = createdIdByTmlIndex.get(to[0]);
+                if (fromSectionId == null || toSectionId == null) continue;
+                const maxExistingId = loopClosures.reduce(
+                  (maxId, closure) => (closure.id > maxId ? closure.id : maxId),
+                  0n
+                );
+                loopClosures.push({
+                  id: maxExistingId + 1n,
+                  station_a: { section_id: fromSectionId, station_index: from[1] },
+                  station_b: { section_id: toSectionId, station_index: to[1] },
+                  path_length: 0,
+                  misclosure_distance: 0,
+                  error_percentage: 0,
+                  horizontal_misclosure: 0,
+                  vertical_misclosure: 0,
+                  strategy: 'Batch',
+                  is_aligned: false,
+                });
+                closuresCreated += 1;
+              }
+            }
+
+            if (currentProject) {
+              currentProject.modified_at = new Date().toISOString();
+            }
+
+            return {
+              success: true,
+              warnings: [],
+              error: null,
+              section_ids: tmlSectionIds,
+              ...(tmlSectionIds[0] != null ? { section_id: tmlSectionIds[0] } : {}),
+              import_receipt: {
+                source_format: 'Ariane TML',
+                file_name: tmlPath.split('/').pop() ?? tmlPath,
+                sections_found: tmlFile.sections.length,
+                sections_imported: tmlSectionIds.length,
+                shot_count: tmlShotCount,
+                closures_requested: closuresCreated,
+                closures_created: closuresCreated,
+                unit_conversion:
+                  tmlFile.unit === 'Imperial' ? 'Lengths converted from feet to meters' : null,
                 warnings: [],
               },
             };

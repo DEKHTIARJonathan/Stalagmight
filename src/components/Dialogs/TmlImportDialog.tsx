@@ -159,11 +159,11 @@ export default function TmlImportDialog({ tmlFile, filePath }: TmlImportDialogPr
         <div className="grid grid-cols-4 gap-3 p-3 bg-surface-alt rounded">
           <div>
             <div className="text-xs text-text-tertiary">Sections</div>
-            <div className="text-sm font-medium">{tmlFile.sections.length}</div>
+            <div className="text-sm font-medium" data-testid="tml-section-count">{tmlFile.sections.length}</div>
           </div>
           <div>
             <div className="text-xs text-text-tertiary">Shots</div>
-            <div className="text-sm font-medium">{stats.totalShots}</div>
+            <div className="text-sm font-medium" data-testid="tml-shot-count">{stats.totalShots}</div>
           </div>
           <div>
             <div className="text-xs text-text-tertiary">Total length</div>
@@ -192,6 +192,7 @@ export default function TmlImportDialog({ tmlFile, filePath }: TmlImportDialogPr
                 <tr
                   key={i}
                   className="border-t border-border"
+                  data-testid={`tml-section-row-${i}`}
                 >
                   <td className="px-3 py-1.5">
                     {section.name}
@@ -216,7 +217,7 @@ export default function TmlImportDialog({ tmlFile, filePath }: TmlImportDialogPr
 
         {/* Closures info */}
         {tmlFile.closures.length > 0 && (
-          <div className="text-xs text-text-secondary">
+          <div className="text-xs text-text-secondary" data-testid="tml-closure-count">
             {tmlFile.closures.length} loop closure{tmlFile.closures.length !== 1 ? 's' : ''} detected
           </div>
         )}
