@@ -245,4 +245,45 @@ Tier 1 equivalent; the comment preserves intent.
 
 ## 8. Probe results (Phase 0)
 
-To be filled in as probes run.
+Run 2026-08-05 on an M1 MacBook (macOS 15 / Darwin 25.5), repo-pinned Node 24,
+`tauri-wd` from cargo, debug binary built `--debug --no-bundle -- --features e2e` with
+`VITE_E2E=1`.
+
+**R1 - wdio-over-tauri-wd fidelity: PASS, 15/15 checks, zero legacy overrides needed.**
+Session create/attach, sync `execute`, `executeAsync` via the harness's own `evalInApp`,
+`__E2E_TEST__` hooks present, real IPC (`get_recent_logs_since`), `waitForDisplayed`,
+element ref round-trip (`getAttribute`/`getTagName`), element `click`, element-origin
+`action('pointer')` move+down+up (drag's hardest primitive), viewport-origin pointer
+move, `browser.keys`, `takeScreenshot` (66 KB base64 PNG), and an element handle passed
+INTO `execute` (what the legacy `before()` overrides patched - the pinned
+`fix/resolve-element-refs-in-execute-sync` branch makes them unnecessary). Consequence:
+`applyMacBrowserWorkarounds` is dropped from the PR 2 scope unless something regresses.
+
+**R3 - teardown: CONFIRMED both design assumptions.** The wrapper pidfile is written
+before session creation returns and holds the real app pid; after `deleteSession()` the
+app is ORPHANED (still alive) and `tauri-wd` keeps running. Pidfile reap as the
+authoritative kill stands.
+
+**R2 - harness mapClick: PASS** (`interaction=maplibre`, interaction sequence advanced).
+The synthetic-pointer path works end to end over tauri-wd; no PointerEvent shim needed.
+Two real findings from the failures on the way there:
+- A fresh profile shows the **telemetry opt-in modal** centered over the map, and it
+  swallowed the clicks. MacSession's readiness path must account for it (and PR 2 should
+  check how the Linux smoke avoids it - feature-gated build vs. never map-clicking a
+  fresh profile).
+- The headed default window (1280x772 here) has proportionally more chrome/panel
+  overlap than the 1920x1080 Xvfb layout; probes should target points verified via
+  `elementFromPoint`, which the harness's own `mapClick` already does implicitly by
+  requiring the interaction sequence to advance.
+
+**R4 - canvas capture: NEGATIVE.** `map.getCanvas().toDataURL()` returns a uniform
+(blank) image - no `preserveDrawingBuffer`. The DOM+canvas composite screenshot is NOT
+cheap; dropped. Tier 1 screenshots ship with `domOnly: true`; Tier 2 `os_screenshot`
+is the pixel answer.
+
+**R5 - occlusion/App Nap: PARTIAL.** Visible-but-unfocused webview runs at full rate
+(61 rAF frames/s, ~1 ms timer drift), so ordinary background operation does not
+throttle waiters. The fully-occluded/minimized case could not be forced from inside:
+`window.__TAURI__.window.getCurrentWindow().minimize()` is denied by the capability
+allowlist (`core:window:allow-minimize` not granted) - itself worth knowing. Completing
+R5 (minimize by hand, or via Tier 2 once it exists) moves to PR 2 verification.
