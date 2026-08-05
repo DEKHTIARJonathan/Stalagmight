@@ -2074,7 +2074,12 @@
       "depthDiff": "Depth diff"
     },
     "move": {
-      "instructions": "Drag to move. Esc to cancel.",
+      "pickUpInstructions": {
+        "station": "Click a station to pick it up.",
+        "segment": "Click a station or shot to pick it up.",
+        "shot": "Click a shot to pick it up."
+      },
+      "dropInstructions": "Click to drop it here. Esc to cancel.",
       "station": "Station",
       "segment": "Segment",
       "shot": "Shot"

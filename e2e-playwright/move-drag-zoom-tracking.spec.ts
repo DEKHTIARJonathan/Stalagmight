@@ -454,3 +454,46 @@ test('move_station snap-to-target holds across a mid-drag zoom (snap + #79)', as
 
   await page.keyboard.press('Escape');
 });
+
+test('move-tool hint banner names the phase: pick up -> drop -> gone (#409)', async ({ page }) => {
+  // The move tools are click-to-pick-up -> ghost -> click-to-drop, and a press-drag pans
+  // the camera instead (#409), so the banner is the only thing that explains the gesture.
+  // The drop copy is asserted with a ghost PROVEN in flight (expectTracksCursor), not
+  // merely after a click, so a pick-up that silently failed cannot pass this.
+  await setupMockedPage(page);
+  await createProject(page, 'Move Hint Banner Test');
+  await waitForMapReady(page);
+  await seedProjectWithSections(page, SECTION_SEEDS);
+  await waitForMapIdle(page);
+
+  const hint = page.getByTestId('move-tool-hint');
+
+  // select (the default tool): no hint at all.
+  await waitForActiveTool(page, 'select');
+  await expect(hint).toHaveCount(0);
+
+  await activateTool(page, 't', 'move_station');
+  await expect(hint).toBeVisible();
+  await expect(hint).toContainText('Click a station to pick it up');
+
+  const box = await page.getByTestId('map-canvas').boundingBox();
+  if (!box) throw new Error('no canvas box');
+  const { screen: s, lngLat } = await centerOnStation(page, 18);
+
+  await page.mouse.click(box.x + s.x, box.y + s.y);
+  const cursor = { x: s.x + 60, y: s.y - 40 };
+  await page.mouse.move(box.x + cursor.x, box.y + cursor.y, { steps: 6 });
+  await expectTracksCursor(page, lngLat, cursor, '#409 hint: ghost really in flight');
+  await expect(hint).toContainText('Click to drop it here');
+  await expect(hint).not.toContainText('pick it up');
+
+  // Escape cancels the move drag (MapCanvas' moveDrag Escape handler), so the banner
+  // falls back to the pick-up copy - which is also what makes "Esc to cancel" honest.
+  await page.keyboard.press('Escape');
+  await expect(hint).toContainText('Click a station to pick it up');
+
+  // Back to select: gone again.
+  await page.keyboard.press('s');
+  await waitForActiveTool(page, 'select');
+  await expect(hint).toHaveCount(0);
+});

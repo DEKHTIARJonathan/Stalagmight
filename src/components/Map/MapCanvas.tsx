@@ -3830,6 +3830,19 @@ function MapCanvas() {
     [placementMode, activeTool, handlePlacementClick, handleZoomBoxStart]
   );
 
+  // What the move-tool hint banner talks about (#409), or null when there is nothing to
+  // hint at. An in-flight drag wins over the active tool: `moveDrag` outlives a mid-drag
+  // tool switch, and it is what the drop instruction is about.
+  const moveHintKind: 'station' | 'segment' | 'shot' | null =
+    moveDrag?.type ??
+    (activeTool === 'move_station'
+      ? 'station'
+      : activeTool === 'move_segment'
+        ? 'segment'
+        : activeTool === 'move_shot'
+          ? 'shot'
+          : null);
+
   // Pointer handlers always attached - they check e.ctrlKey internally to decide behavior
   return (
     <div
@@ -4031,18 +4044,37 @@ function MapCanvas() {
         </div>
       )}
 
-      {/* Move drag indicator */}
-      {moveDrag && !placementMode && (
-        <div className="absolute top-2 left-1/2 -translate-x-1/2 bg-panel border border-accent rounded px-3 py-2 text-sm">
+      {/* Move-tool hint (#409). The move tools are click-to-pick-up -> ghost follows the
+          cursor -> click-to-drop; a press-drag pans the camera by design, so nothing
+          about the interaction is discoverable without this banner. Same chrome and the
+          same `!placementMode` mutual exclusion as the placement/merge/measure
+          indicators above; it is the only one of them that can be up while a move tool
+          is idle, hence `pointer-events-none` - it covers a strip of the map for as long
+          as the tool is active, and a pick-up or drop click that lands on it has to
+          reach the canvas. (`handlePointerDown` already ignores non-canvas targets, so
+          without the pass-through such a click would be swallowed outright.)
+          Not gated on `snapMergeDialogPendingRef`: that's a ref, so it wouldn't
+          re-render the banner anyway, and the dialog it tracks is a modal overlay. */}
+      {moveHintKind !== null && !placementMode && (
+        <div
+          className="absolute top-2 left-1/2 -translate-x-1/2 bg-panel border border-accent rounded px-3 py-2 text-sm pointer-events-none"
+          data-testid="move-tool-hint"
+        >
           <span className="text-accent">
-            {moveDrag.type === 'station'
+            {moveHintKind === 'station'
               ? t('map.move.station')
-              : moveDrag.type === 'segment'
+              : moveHintKind === 'segment'
                 ? t('map.move.segment')
                 : t('map.move.shot')}
             :
           </span>{' '}
-          {t('map.move.instructions')}
+          {moveDrag
+            ? t('map.move.dropInstructions')
+            : moveHintKind === 'station'
+              ? t('map.move.pickUpInstructions.station')
+              : moveHintKind === 'segment'
+                ? t('map.move.pickUpInstructions.segment')
+                : t('map.move.pickUpInstructions.shot')}
         </div>
       )}
 

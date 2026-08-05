@@ -134,9 +134,10 @@ interaction: the zoom tool, whose drag draws the zoom box; placement mode, which
 confirms on `pointerdown`; and a move ghost in flight, which drops on
 `pointerup`. Those three get `touchAction: 'none'` and `dragPan.disable()`.
 
-Both consumers call the same function - the `dragPan` effect
-(`MapCanvas.tsx:2549`) and the `touchAction` memo (`MapCanvas.tsx:3604`) - so
-they cannot disagree. This replaced three hand-kept copies of one tool list plus
+MapCanvas makes a single `mapGestureMode` call and every consumer - the
+`dragPan` effect, the custom modifier-pan claim, and the container's
+`touchAction` - reads that one result, so they cannot disagree. This replaced
+three hand-kept copies of one tool list plus
 a `pointerType === 'touch' && activeTool === 'pan'` early return in
 `handlePointerDown`, which is why **adding a `ToolType` no longer means updating
 any list.**
