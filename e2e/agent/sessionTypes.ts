@@ -29,11 +29,15 @@ export interface StartResult {
   state: SessionState;
   appPidKnown: boolean;
   driverPort: number;
+  /** 0 on darwin: tauri-wd has no native port. */
   nativePort: number;
+  /** Xvfb/X display on Linux; the sentinel 'aqua' on darwin. */
   display: string;
   profileDir: string;
   buildAction: 'skipped' | 'built' | 'fresh';
   sessionDir: string;
+  /** Set on darwin when headed:false was requested: macOS has no headless. */
+  headedForced?: boolean;
 }
 
 export interface AgentSession {

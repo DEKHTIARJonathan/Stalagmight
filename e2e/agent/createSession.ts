@@ -11,6 +11,7 @@
 // webdriver's undici. See the module comment for the Node >= 26 failure it fixes.
 import './lib/undici-dispatcher-pin';
 import { AppSession } from './session';
+import { MacSession } from './sessionMac';
 import type { AgentSession } from './sessionTypes';
 
 const DESIGN_DOC = 'docs/plans/2026-08-05_macos-agent-harness.md';
@@ -23,17 +24,10 @@ function targetPlatform(): string {
 export function createSession(): AgentSession {
   const plat = targetPlatform();
   if (plat === 'linux') return new AppSession();
-  if (plat === 'darwin') {
-    throw new Error(
-      'the agent harness has no macOS session yet: MacSession lands in PR2 of the macOS ' +
-        `agent-harness work (issue #421, ${DESIGN_DOC}). tauri-driver, which the Linux ` +
-        'session drives, has no macOS support, so running it here would only hang and then ' +
-        'report a misleading port timeout (#422). Run the harness on Linux until PR2 lands.',
-    );
-  }
+  if (plat === 'darwin') return new MacSession();
   throw new Error(
     `the agent harness has no session backend for platform "${plat}": it requires Linux ` +
       '(tauri-driver: `cargo install tauri-driver --locked`, plus webkit2gtk-driver) or macOS ' +
-      `(tauri-wd, pending - see issue #421 and ${DESIGN_DOC}).`,
+      `(tauri-wd - see issue #421 and ${DESIGN_DOC}).`,
   );
 }
