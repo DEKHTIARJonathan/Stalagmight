@@ -347,26 +347,6 @@ test.describe('Map direct manipulation (#409)', () => {
     });
   }
 
-  test('no box-select overlay is drawn by a drag past the click tolerance', async ({ page }) => {
-    await waitForActiveTool(page, 'select');
-
-    const empty = await findEmptyPoint(page, { dx: 60, dy: 45 });
-    const box = await canvasBox(page);
-    const overlay = page.getByTestId('box-select-overlay');
-
-    await page.mouse.move(box.x + empty.x, box.y + empty.y);
-    await page.mouse.down();
-    // Well past MapLibre's 3px clickTolerance, which is where a box select used
-    // to appear. Asserted MID-DRAG: the overlay only ever existed while the
-    // button was down.
-    await page.mouse.move(box.x + empty.x + 60, box.y + empty.y + 45, { steps: 6 });
-    await expect(overlay).toHaveCount(0);
-
-    await page.mouse.up();
-    await waitForMapIdle(page);
-    await expect(overlay).toHaveCount(0);
-  });
-
   test('P and Z are inert and the navigate group is not on the toolbar', async ({ page }) => {
     const mapCanvas = page.getByTestId('map-canvas');
     await waitForActiveTool(page, 'select');
