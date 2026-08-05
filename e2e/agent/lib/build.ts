@@ -257,8 +257,14 @@ function schemaDiff(): string {
  * dirty worktree.
  */
 export function isPluginAclChurn(diff: string): boolean {
-  const added = diff
-    .split('\n')
+  const lines = diff.split('\n');
+  // A removal is never plugin churn: the feature build only ADDS ACL entries.
+  // Any removed line therefore means a human edited these files, and restoring
+  // would silently discard that edit - the exact data loss this guard exists to
+  // prevent. (Missing this was a review finding: classifying on additions alone
+  // called "your deletion + our churn" pure churn.)
+  if (lines.some((line) => line.startsWith('-') && !line.startsWith('---'))) return false;
+  const added = lines
     .filter((line) => line.startsWith('+') && !line.startsWith('+++'))
     .map((line) => line.slice(1).trim())
     .filter((line) => line.length > 0);

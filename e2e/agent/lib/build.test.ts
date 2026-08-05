@@ -146,6 +146,16 @@ describe('isPluginAclChurn', () => {
     expect(isPluginAclChurn('')).toBe(false);
   });
 
+  // The feature build only ADDS entries, so a removal proves a human edited
+  // these files - restoring would discard their work.
+  it('rejects a diff containing any removal, even when every addition is churn', () => {
+    expect(isPluginAclChurn(`${churn}\n-  "someone-elses:deleted-permission"`)).toBe(false);
+  });
+
+  it('does not mistake the --- file header for a removal', () => {
+    expect(isPluginAclChurn(churn)).toBe(true);
+  });
+
   it('ignores the +++ file header, which is not an added line', () => {
     const headerOnly = ['--- a/x.json', '+++ b/x.json'].join('\n');
     expect(isPluginAclChurn(headerOnly)).toBe(false);

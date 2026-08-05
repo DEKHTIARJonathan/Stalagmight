@@ -15,7 +15,8 @@ import type { AgentSession } from '../sessionTypes';
 import type { OsDeps } from './input';
 import { osScreenshot, type ScreenshotDeps } from './screenshot';
 
-const APP_PID = 4242;
+// This process: requireAppPid rejects a pid that is not running.
+const APP_PID = process.pid;
 const WINDOW_ID = 77;
 const FRAME = { x: 100, y: 50, w: 1000, h: 728 };
 
@@ -78,8 +79,8 @@ function fakeScreenshotDeps(options: FakeOptions = {}): {
   };
 }
 
-function fakeSession(appPid: number | null = APP_PID): AgentSession {
-  return { browser: {} as Browser, appPid: () => appPid } as unknown as AgentSession;
+function fakeSession(appPid: number | null = APP_PID, state = 'ready'): AgentSession {
+  return { browser: {} as Browser, state, appPid: () => appPid } as unknown as AgentSession;
 }
 
 beforeEach(() => {

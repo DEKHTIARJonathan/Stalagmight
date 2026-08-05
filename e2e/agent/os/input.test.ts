@@ -20,7 +20,9 @@ import {
 } from './input';
 import { GRANT_REQUIRED_MESSAGE, requireGrant } from './permissions';
 
-const APP_PID = 4242;
+// This process: requireAppPid rejects a pid that is not running, so the stand-in
+// app pid has to be a live one (a made-up number would fail liveness, not aim).
+const APP_PID = process.pid;
 const WINDOW_ID = 77;
 /** 28pt of title bar: a 728pt frame over a 700pt content area. */
 const FRAME = { x: 100, y: 50, w: 1000, h: 728 };
@@ -97,13 +99,15 @@ function fakeOsDeps(options: FakeOptions = {}): FakeDeps {
   };
 }
 
-function fakeSession(appPid: number | null = APP_PID): AgentSession {
-  return { browser: {} as Browser, appPid: () => appPid } as unknown as AgentSession;
+// APP_PID defaults to this process: requireAppPid checks the pid is actually
+// alive, so a fake session must name a live one.
+function fakeSession(appPid: number | null = APP_PID, state = 'ready'): AgentSession {
+  return { browser: {} as Browser, state, appPid: () => appPid } as unknown as AgentSession;
 }
 
 /** A Linux-shaped session: the platform never learns the app's own pid. */
 function sessionWithoutAppPid(): AgentSession {
-  return { browser: {} as Browser } as unknown as AgentSession;
+  return { browser: {} as Browser, state: 'ready' } as unknown as AgentSession;
 }
 
 function helperVerbs(calls: string[][]): string[] {
@@ -297,11 +301,44 @@ describe('osClick', () => {
     expect(helperVerbs(helperCalls)).not.toContain('keys');
   });
 
+  // The focus check must hold at POST time, not merely at entry: resolving a
+  // testid costs a window lookup plus a webview round-trip, and the human can
+  // take focus during it.
+  it('refuses to click when focus is lost DURING target resolution', async () => {
+    // frontmost: ours at entry, then someone else on the pre-post re-check.
+    const { deps, helperCalls } = fakeOsDeps({ frontmost: [APP_PID, 999] });
+
+    await expect(osClick(fakeSession(), { testid: 'save-button' }, deps)).rejects.toThrow(/frontmost/i);
+    expect(helperVerbs(helperCalls)).not.toContain('click');
+  });
+
+  it('refuses OS input when the session is not ready (a stopped session keeps its old pid)', async () => {
+    const { deps, helperCalls } = fakeOsDeps({ frontmost: [APP_PID, APP_PID] });
+
+    await expect(osClick(fakeSession(APP_PID, 'idle'), { x: 5, y: 5 }, deps)).rejects.toThrow(/not ready/i);
+    expect(helperCalls).toEqual([]);
+  });
+
+  it('refuses OS input when the recorded app pid is no longer running', async () => {
+    const { deps, helperCalls } = fakeOsDeps({ frontmost: [APP_PID, APP_PID] });
+    // PID_MAX-ish: high enough that nothing owns it on a normal machine.
+    await expect(osClick(fakeSession(0x7fffffff), { x: 5, y: 5 }, deps)).rejects.toThrow(/not running/i);
+    expect(helperCalls).toEqual([]);
+  });
+
   it('resolves the point only after the activate attempt, so a moved window is read fresh', async () => {
     const { deps, helperCalls } = fakeOsDeps({ frontmost: [999, APP_PID] });
 
     await osClick(fakeSession(), { testid: 'save-button' }, deps);
-    expect(helperVerbs(helperCalls)).toEqual(['frontmost', 'frontmost', 'window-id', 'click']);
+    // The trailing 'frontmost' is the pre-post re-check: the focus guarantee
+    // must hold when the event is posted, not merely when the call started.
+    expect(helperVerbs(helperCalls)).toEqual([
+      'frontmost',
+      'frontmost',
+      'window-id',
+      'frontmost',
+      'click',
+    ]);
   });
 
   it('surfaces a helper-level failure as an error', async () => {

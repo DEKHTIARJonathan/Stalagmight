@@ -21,6 +21,7 @@ import type { Browser } from 'webdriverio';
 
 import { testIdSelector } from '../lib/controls';
 import { evalInApp } from '../lib/page';
+import { isPidAlive } from '../lib/procs';
 import type { AgentSession } from '../sessionTypes';
 import {
   runHelper,
@@ -154,11 +155,28 @@ export function requireFrontmostForInput(
  * requireFrontmostForInput exists.
  */
 export function requireAppPid(session: AgentSession): number {
+  // A stopped or crashed session keeps its recorder (and therefore its
+  // pidfile), so appPid() still answers with the pid of an app that is gone.
+  // Posting desktop-wide input off a dead session is never right: the pid can
+  // even have been reused by an unrelated process by now.
+  if (session.state !== 'ready' && session.state !== 'busy') {
+    throw new Error(
+      `refusing OS input: the session is ${session.state}, not ready. Start (or restart) a macOS ` +
+        'session first - a stopped session still remembers its old app pid, which may since have ' +
+        'been reused by another process.',
+    );
+  }
   const pid = session.appPid?.() ?? null;
   if (pid === null || !Number.isInteger(pid) || pid <= 0) {
     throw new Error(
       'no app pid is known for this session, so OS input cannot target or verify the app window. ' +
         'Start a macOS session (session_start) and check that its result reports appPidKnown: true.',
+    );
+  }
+  if (!isPidAlive(pid)) {
+    throw new Error(
+      `refusing OS input: the recorded app pid ${pid} is not running. The app died without the ` +
+        'session noticing; restart it before driving the desktop.',
     );
   }
   return pid;
@@ -308,10 +326,16 @@ export async function osClick(
 ): Promise<{ clicked: OsPoint; target: string } & OsActionEvidence> {
   const permissions = await requireOsAccess(deps, false);
   const appPid = requireAppPid(session);
-  const frontmostOk = await ensureAppFrontmost(appPid, deps);
-  requireFrontmostForInput(frontmostOk, opts.force, 'click');
+  await ensureAppFrontmost(appPid, deps);
   // Resolved AFTER the activation: bringing a window forward can move it.
   const point = await resolveTargetPoint(session, opts, deps);
+  // Re-checked AFTER resolution and immediately before posting: resolving a
+  // testid costs a window lookup plus a webview round-trip, and focus can move
+  // during it. Checking only up front would post into whatever stole focus in
+  // that window while reporting frontmost_ok: true - a lie in the one field
+  // that exists to make the evidence trustworthy.
+  const frontmostOk = (await frontmostPid(deps)) === appPid;
+  requireFrontmostForInput(frontmostOk, opts.force, 'click');
 
   const args = ['click', String(point.x), String(point.y)];
   if (opts.button === 'right') args.push('--right');

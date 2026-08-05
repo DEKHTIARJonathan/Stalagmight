@@ -107,6 +107,12 @@ that makes consent explicit for a cooperating client, not as a security
 boundary. The boundary that does hold is macOS TCC: without Accessibility, the
 helper refuses outright and the OS drops the events anyway.
 
+The focus check is re-run **immediately before the event is posted**, not only
+on entry: resolving a testid costs a window lookup plus a webview round-trip,
+and focus can move during it. Input also requires a live session (`ready` /
+`busy`) and a still-running app pid, because a stopped session keeps its
+recorder - and therefore remembers a pid the OS may since have reused.
+
 **Blast radius is the whole desktop, not the app window.** CGEvent input goes
 wherever focus is, and `os_click {x, y}` is never clamped to the app's bounds -
 a granted session can click or type into any window on the screen. Two things
