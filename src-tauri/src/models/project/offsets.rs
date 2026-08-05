@@ -17,10 +17,12 @@ impl Project {
     }
 
     /// Write one section's offset, dropping the key when the value is exactly
-    /// `(0, 0)`. THE normalization point for `section_offsets`; every write
-    /// below goes through it, as do the two sites that cannot call a `&mut
-    /// self` method because they hold a live borrow of `self.sections`
-    /// (`Project::apply_station_move_internal`, `AppState::move_station`).
+    /// `(0, 0)`. THE write point for `section_offsets`: every write below goes
+    /// through it, as do the two sites that cannot call a `&mut self` method
+    /// because they hold a live borrow of `self.sections`
+    /// (`Project::apply_station_move_internal`, `AppState::move_station`), and
+    /// so does [`Self::write_adjusted_section_offset`], which layers the dust
+    /// rule on top for values this app COMPUTED rather than restored.
     ///
     /// `section_offsets` means "sections that are actually displaced": every
     /// consumer reads it through [`Self::section_offset`] or an inline
@@ -32,11 +34,14 @@ impl Project {
     /// (#413 finding 2: an insert plus its undo, a `MoveSection(+d)` plus its
     /// `-d`, a `ReverseSection` applied twice).
     ///
-    /// EXACTLY zero, with no tolerance: a residue like `2.22e-16` is a real (if
-    /// tiny) displacement, and epsilon-rounding it away here would change
-    /// geometry rather than normalize its spelling. `-0.0 == 0.0` in IEEE, so a
-    /// negated zero drops too; a non-finite value compares false and is left
-    /// for `save_project`'s sanitize, which is where that case is handled.
+    /// EXACTLY zero here, with no tolerance: this is the writer a RESTORE uses,
+    /// and a restore has to reproduce the value it was handed - rounding
+    /// `2.22e-16` away on the way back in would make an undo differ from the
+    /// state it is undoing. `-0.0 == 0.0` in IEEE, so a negated zero drops too;
+    /// a non-finite value compares false and is left for `save_project`'s
+    /// sanitize, which is where that case is handled. A value the app just
+    /// COMPUTED by accumulating a delta has no such history to be faithful to,
+    /// and goes through [`Self::write_adjusted_section_offset`] instead.
     ///
     /// Takes the map rather than `&mut self` so a caller holding a disjoint
     /// field borrow can still use it.
@@ -52,11 +57,63 @@ impl Project {
         }
     }
 
+    /// Write an offset that was COMPUTED by adding a delta to the current one:
+    /// [`Self::write_section_offset`] plus the dust normalization
+    /// ([`Project::OFFSET_DUST_M`]).
+    ///
+    /// The exact-zero drop above is not enough for an adjustment, because an
+    /// adjustment is not exactly invertible: `(c + d) - d == c` holds only when
+    /// `c` is 0. An adjust-and-adjust-back therefore lands a femtometre from
+    /// where it started, and the two cases are NOT the same defect:
+    ///
+    /// * on a section that ALREADY carries an offset, the residue is a VALUE
+    ///   difference and stays one. Every consumer reads the value, and a
+    ///   femtometre is nothing to any of them (the snapshot differ's own
+    ///   `TOLERANCE_ABS` is a nanometre). Nothing here touches that case.
+    /// * on a section that carries NONE, the residue lands a femtometre from
+    ///   exact zero, and the exact-zero rule KEEPS it - a `section_offsets` key
+    ///   for a section that is not displaced (#413 finding 2's dust half: a
+    ///   `ReverseSection` applied twice, an insert plus the remove that undoes
+    ///   it, a cascade "correcting" its own noise). That difference is
+    ///   STRUCTURAL, not numeric: the key outlives the state it came from, the
+    ///   next save serializes it, and the route that did nothing has no such
+    ///   key - so two routes to the same geometry stop comparing equal.
+    ///
+    /// So an ADJUSTED value within [`Project::OFFSET_DUST_M`] of the origin in
+    /// both components is written as absent, not as dust. A picometre is not a
+    /// position; see the constant for why that bound and not another.
+    ///
+    /// Deliberately NOT applied by `write_section_offset` itself: a RESTORE
+    /// (undo, `restore_section_offsets`, a loaded file) must reproduce the map
+    /// it was given, dust included, or an undo would stop being the exact
+    /// inverse of the thing it undoes. Only a value this app just computed by
+    /// accumulation is normalized.
+    ///
+    /// Takes the map, like `write_section_offset`, so the two sites that hold a
+    /// live borrow of `self.sections` (`Project::apply_station_move_internal`,
+    /// `AppState::move_station`) can normalize identically.
+    pub(crate) fn write_adjusted_section_offset(
+        offsets: &mut HashMap<SectionId, (f64, f64)>,
+        id: SectionId,
+        value: (f64, f64),
+    ) {
+        // `<=` on `abs()`, so a NaN component (which compares false against
+        // everything) falls through to `write_section_offset` unchanged - the
+        // non-finite case belongs to `save_project`'s sanitize, not here.
+        let normalized =
+            if value.0.abs() <= Self::OFFSET_DUST_M && value.1.abs() <= Self::OFFSET_DUST_M {
+                (0.0, 0.0)
+            } else {
+                value
+            };
+        Self::write_section_offset(offsets, id, normalized);
+    }
+
     /// Apply a delta to one section's offset. Low-level primitive -
     /// callers handle cascade and invariants.
     pub(crate) fn adjust_section_offset(&mut self, id: SectionId, dx: f64, dy: f64) {
         let current = self.section_offset(id);
-        Self::write_section_offset(
+        Self::write_adjusted_section_offset(
             &mut self.section_offsets,
             id,
             (current.0 + dx, current.1 + dy),

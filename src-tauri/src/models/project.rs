@@ -1058,6 +1058,32 @@ impl Project {
     /// it - never up alone.
     pub const MERGE_ALIGNMENT_INVARIANT_M: f64 = 0.01;
 
+    /// The displacement (metres) below which a *computed adjustment* to a
+    /// section offset is float dust rather than geometry, and is therefore
+    /// normalized away instead of stored.
+    ///
+    /// One constant for the three places that decide it (#413 finding 2's dust
+    /// half): [`Self::write_adjusted_section_offset`], the offset solver's
+    /// [`Self::cascade_bfs`] correction gate, and the merge-BFS gates in
+    /// `reconcile_after_edit`. They used to disagree - the merge BFS declined
+    /// below 1e-12 while `cascade_bfs` "corrected" a femtometre, CREATING a
+    /// `section_offsets` key for a section that is not displaced - and the
+    /// difference between a key and no key is structural, not numeric: it
+    /// survives into the `.stalx`, and two routes to the same geometry stopped
+    /// comparing equal.
+    ///
+    /// 1e-12 m is a picometre. It is where it is because of what it has to
+    /// swallow and what it must not: an adjust-and-adjust-back is not the
+    /// identity in IEEE (`(c + d) - d != c`), and the residue measured over
+    /// this app's fuzz corpus tops out at 1.51e-14 m (a hundredth of this),
+    /// while the smallest quantity any consumer can see is the nanometre the
+    /// snapshot differ already calls equal - a thousand times LARGER. So this
+    /// sits two decades above the noise it removes and three below the
+    /// smallest difference anything downstream can distinguish. It is a
+    /// NORMALIZATION applied when a value is written, never a tolerance on a
+    /// comparison: no oracle may be widened to this or to anything else.
+    pub const OFFSET_DUST_M: f64 = 1e-12;
+
     /// Per-section cumulative LOCAL `(x, y)` for every station index
     /// (`0..=shots.len()`), before section/station offsets are applied. Built
     /// once so callers that look up many stations - the alignment check and the

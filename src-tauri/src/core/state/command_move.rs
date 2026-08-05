@@ -198,16 +198,17 @@ impl AppState {
             // compensate for the offset shift.
             // Note: can't use project.adjust_section_offset() here because `section`
             // is a live &mut borrow from project.sections - hence the associated
-            // `write_section_offset`, which takes the map (a disjoint field borrow)
-            // and drops the key when the move lands the offset back on exactly
-            // (0, 0), instead of leaving an inert entry behind (#413 finding 2).
+            // `write_adjusted_section_offset`, which takes the map (a disjoint field
+            // borrow) and drops the key when the move lands the offset back on
+            // exactly (0, 0) or within dust of it, instead of leaving an inert entry
+            // behind (#413 finding 2).
             if idx == 0 && (total_dx != 0.0 || total_dy != 0.0) {
                 let current = project
                     .section_offsets
                     .get(&station_ref.section_id)
                     .copied()
                     .unwrap_or((0.0, 0.0));
-                crate::models::Project::write_section_offset(
+                crate::models::Project::write_adjusted_section_offset(
                     &mut project.section_offsets,
                     station_ref.section_id,
                     (current.0 + total_dx, current.1 + total_dy),

@@ -984,7 +984,9 @@ impl Project {
                 {
                     let delta_x = target_x - current.x;
                     let delta_y = target_y - current.y;
-                    if delta_x.abs() > 1e-12 || delta_y.abs() > 1e-12 {
+                    // Dust is not a displacement - the shared bound, see
+                    // `Project::OFFSET_DUST_M` and its twin in `cascade_bfs`.
+                    if delta_x.abs() > Self::OFFSET_DUST_M || delta_y.abs() > Self::OFFSET_DUST_M {
                         self.adjust_section_offset(datum_section_id, delta_x, delta_y);
                     }
                 }
@@ -1029,7 +1031,8 @@ impl Project {
                 ) {
                     let delta_x = this_pos.x - partner_pos.x;
                     let delta_y = this_pos.y - partner_pos.y;
-                    if delta_x.abs() > 1e-12 || delta_y.abs() > 1e-12 {
+                    // Same shared bound as the gate above and `cascade_bfs`.
+                    if delta_x.abs() > Self::OFFSET_DUST_M || delta_y.abs() > Self::OFFSET_DUST_M {
                         self.adjust_section_offset(partner_section, delta_x, delta_y);
                     }
                 }

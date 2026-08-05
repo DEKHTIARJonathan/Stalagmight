@@ -1451,11 +1451,12 @@ impl Project {
             self.station_offsets.remove(&key);
             self.station_comments.remove(&key);
             self.zero_datums.retain(|zd| zd.station_ref != key);
+            // `MergeTopology::retain` invalidates its own adjacency memo, so no
+            // explicit cache maintenance is needed here.
             self.station_merges
                 .retain(|m| m.station_a != key && m.station_b != key);
             self.loop_closures
                 .retain(|c| c.station_a != key && c.station_b != key);
-            self.merge_adjacency_cache.clear();
         }
         let removed = self
             .get_section_mut(section_id)

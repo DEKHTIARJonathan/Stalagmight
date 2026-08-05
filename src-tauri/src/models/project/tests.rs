@@ -10236,6 +10236,87 @@ fn cascade_solves_deep_chain_past_old_iteration_cap() {
 }
 
 #[test]
+fn an_adjustment_that_lands_on_dust_leaves_no_section_offset_key() {
+    // #413 finding 2, dust half. An adjustment is not exactly invertible, so
+    // "move it and move it back" lands a femtometre from where it started
+    // rather than on it. On a section with NO offset that femtometre is enough
+    // to CREATE a `section_offsets` key - and the key, unlike the value, is
+    // structural: it is saved, and the route that never moved has no such key,
+    // so two routes to the same geometry stop comparing equal.
+    let mut project = Project::new("Dust".to_string(), None);
+    let a = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+
+    // A round trip whose two halves do not cancel exactly: 0.1 + 0.2 - 0.3 is
+    // 5.55e-17, not 0, in IEEE double.
+    project.adjust_section_offset(a, 0.1, 0.0);
+    project.adjust_section_offset(a, 0.2, 0.0);
+    project.adjust_section_offset(a, -0.3, 0.0);
+    assert!(
+        !project.section_offsets.contains_key(&a),
+        "an adjust-and-adjust-back must leave no key, not a dust one: {:?}",
+        project.section_offsets.get(&a)
+    );
+
+    // Real geometry is untouched: a millimetre is nine decades above the bound.
+    project.adjust_section_offset(a, 0.001, 0.0);
+    assert_eq!(project.section_offsets.get(&a).copied(), Some((0.001, 0.0)));
+
+    // The bound is a normalization on WRITES of computed values, not a
+    // comparison tolerance: a RESTORE reproduces what it was handed, dust and
+    // all, or an undo would stop being the exact inverse of what it undoes.
+    project.set_section_offset(a, (1e-15, 0.0));
+    assert_eq!(
+        project.section_offsets.get(&a).copied(),
+        Some((1e-15, 0.0)),
+        "restoring a captured dust value must reproduce it verbatim"
+    );
+    let mut captured = HashMap::new();
+    captured.insert(a, Some((3e-14, -2e-14)));
+    project.restore_section_offsets(&captured);
+    assert_eq!(
+        project.section_offsets.get(&a).copied(),
+        Some((3e-14, -2e-14)),
+        "restore_section_offsets is a restore, not an adjustment"
+    );
+}
+
+#[test]
+fn reversing_a_section_twice_leaves_no_section_offset_key() {
+    // The dust half's headline route (#413 finding 2, and the metamorphic
+    // `reverse-twice-is-identity` pair): the reverse compensates the section
+    // offset by the shot run's displacement, and the second reverse sums the
+    // negated vectors in the OPPOSITE order, so the round trip lands near zero
+    // rather than on it. An un-normalized write kept that femtometre as a key.
+    let mut project = Project::new("ReverseTwice".to_string(), None);
+    let a = project
+        .add_section(SectionData {
+            shots: vec![
+                shot(37.0, 37.0, 13.7, 0.0, 1.1),
+                shot(122.0, 122.0, 7.3, 1.1, 2.9),
+                shot(281.0, 281.0, 21.9, 2.9, 0.4),
+                shot(19.0, 19.0, 5.5, 0.4, 3.3),
+            ],
+            ..Default::default()
+        })
+        .id;
+    project.ensure_shot_uuids();
+    assert!(!project.section_offsets.contains_key(&a));
+
+    assert!(project.reverse_section(a, false));
+    assert!(project.reverse_section(a, false));
+    assert!(
+        !project.section_offsets.contains_key(&a),
+        "reverse twice is the identity, so it must leave the map as it found it: {:?}",
+        project.section_offsets.get(&a)
+    );
+}
+
+#[test]
 fn insert_before_and_after_agree_on_boundary_merge_ref() {
     // insert_before(s1) and insert_after(s0) are the SAME physical insertion
     // (a new shot in the array slot between s0 and s1), so a merge anchored

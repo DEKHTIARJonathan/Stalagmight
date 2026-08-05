@@ -1418,6 +1418,11 @@ fn save_sanitizes_non_finite_section_offset() {
     // offset (corrupt/hand-edited DB, or an inf round-trip) would abort the save
     // (NaN → NULL) or persist and poison the component's world coords. It must be
     // sanitized on save, mirroring the shot sanitize and the load-boundary guard.
+    //
+    // And sanitized THE WAY the map spells (0, 0): by dropping the key. A fully
+    // non-finite offset sanitizes to no displacement at all, and this map says
+    // that with an absent key - writing a zero row instead persisted an inert
+    // entry no other route to the same project has (#413 finding 2).
     let temp_dir = TempDir::new().unwrap();
     let state = AppState::new().unwrap();
     let mut project = Project::new("NonFiniteOffset".to_string(), None);
@@ -1442,6 +1447,26 @@ fn save_sanitizes_non_finite_section_offset() {
     assert!(
         off.0.is_finite() && off.1.is_finite(),
         "section offset sanitized on save"
+    );
+    assert!(
+        !saved.section_offsets.contains_key(&a),
+        "a wholly non-finite offset sanitizes to no displacement, so the KEY must go - \
+         a (0, 0) row is an inert entry the next save serializes again: {:?}",
+        saved.section_offsets.get(&a)
+    );
+
+    // A half-non-finite offset keeps the component that IS a position: only the
+    // poisoned axis is neutralized, so the key stays with the finite value.
+    let mut project = state.get_project_state().unwrap();
+    project.section_offsets.insert(a, (7.5, f64::NAN));
+    state.set_project_for_tests(project);
+    let result = state.save_project(Some(temp_dir.path().join("nf_offset_half")));
+    assert!(result.success, "half-non-finite: {:?}", result.error);
+    let saved = state.get_project_state().unwrap();
+    assert_eq!(
+        saved.section_offsets.get(&a).copied(),
+        Some((7.5, 0.0)),
+        "only the non-finite component is neutralized; the section is still displaced"
     );
 }
 

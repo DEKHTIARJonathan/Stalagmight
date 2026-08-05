@@ -233,13 +233,26 @@ fn apply_save_heals(project: &mut Project) {
     // other finite guard, and a non-finite offset would either be coerced to NULL
     // by SQLite (a NaN, aborting the save) or persist (an inf) and poison every
     // world coordinate for that component on the next load.
-    for offset in project.section_offsets.values_mut() {
-        if !offset.0.is_finite() {
-            offset.0 = 0.0;
-        }
-        if !offset.1.is_finite() {
-            offset.1 = 0.0;
-        }
+    //
+    // Through `write_section_offset`, not by rewriting the tuple in place: a
+    // fully-sanitized offset is (0, 0), which means "not displaced", and this
+    // map spells that as an ABSENT key. Writing the zero row instead persisted
+    // an inert entry the same project reached by any other route would not have
+    // - the exact shape `write_section_offset` exists to prevent (#413 finding
+    // 2) - and the row then had to be loaded, cascaded over and re-saved.
+    let non_finite: Vec<SectionId> = project
+        .section_offsets
+        .iter()
+        .filter(|(_, offset)| !offset.0.is_finite() || !offset.1.is_finite())
+        .map(|(id, _)| *id)
+        .collect();
+    for id in non_finite {
+        let offset = project.section_offset(id);
+        let finite = (
+            if offset.0.is_finite() { offset.0 } else { 0.0 },
+            if offset.1.is_finite() { offset.1 } else { 0.0 },
+        );
+        Project::write_section_offset(&mut project.section_offsets, id, finite);
     }
 
     // Sanitize non-finite (NaN/inf) shot geometry before binding. A NaN cannot

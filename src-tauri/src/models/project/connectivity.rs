@@ -253,7 +253,16 @@ impl Project {
                     // alignment check can't see a NaN distance to catch it later.
                     // Treat it like a dangling edge - leave the neighbour alone.
                     if dx.is_finite() && dy.is_finite() {
-                        if dx != 0.0 || dy != 0.0 {
+                        // Decline a correction that is float dust, exactly as the
+                        // merge BFS in `reconcile_after_edit` does - one shared
+                        // bound (#413 finding 2's dust half). A femtometre gap
+                        // between two merged stations is the residue of summing a
+                        // survey chain, not a misalignment; "correcting" it wrote
+                        // a `section_offsets` key for a section that is not
+                        // displaced, and the key (unlike the value) is structural:
+                        // it is saved, and it makes this route differ from the
+                        // route that had nothing to correct.
+                        if dx.abs() > Self::OFFSET_DUST_M || dy.abs() > Self::OFFSET_DUST_M {
                             self.adjust_section_offset(theirs.section_id, dx, dy);
                         }
                         // Anchor + propagate ONLY when the coincidence was computable.

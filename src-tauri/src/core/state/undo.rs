@@ -816,11 +816,12 @@ impl AppState {
                                 let new_offset = (current.0 + offset.0, current.1 + offset.1);
                                 // Through the same normalization the FORWARD
                                 // move uses (`adjust_section_offset` ->
-                                // `write_section_offset`): a redo that lands the
-                                // offset back on exactly (0, 0) must drop the
-                                // key, not leave an inert entry the original
-                                // execute did not have (#413 finding 2).
-                                crate::models::Project::write_section_offset(
+                                // `write_adjusted_section_offset`): a redo that
+                                // lands the offset back on exactly (0, 0) - or
+                                // within dust of it - must drop the key, not
+                                // leave an inert entry the original execute did
+                                // not have (#413 finding 2).
+                                crate::models::Project::write_adjusted_section_offset(
                                     &mut project.section_offsets,
                                     *sid,
                                     new_offset,
