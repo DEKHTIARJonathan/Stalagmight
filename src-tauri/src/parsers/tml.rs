@@ -511,9 +511,18 @@ fn parse_raw_shots(xml: &str) -> Result<(Vec<RawShot>, FileMetadata)> {
     // shot fields and small for the file-level ones.
     let mut buf = Vec::new();
 
+    // How many elements are open right now. quick-xml's low-level reader
+    // reports a document that simply stops as a clean `Eof` (only its serde
+    // layer turns that into `MissingEndTag`), so a half-written save would
+    // otherwise parse as a perfectly successful empty survey. A counter,
+    // not a name stack: this loop runs over Data.xml files of tens of MB and
+    // the surrounding code goes out of its way to stay allocation-free.
+    let mut open_elements: usize = 0;
+
     loop {
         match reader.read_event_into(&mut buf) {
             Ok(Event::Start(e)) => {
+                open_elements += 1;
                 let name_bytes = e.name();
                 let name_bytes = name_bytes.as_ref();
 
@@ -536,6 +545,11 @@ fn parse_raw_shots(xml: &str) -> Result<(Vec<RawShot>, FileMetadata)> {
                                 reader.error_position()
                             );
                         }
+                        // `read_to_end` consumed this element's own End event,
+                        // so the End arm below will never see it. (It fails on
+                        // a truncated subtree, which is why that case already
+                        // errors today.)
+                        open_elements -= 1;
                     }
                     _ => {
                         if in_shot {
@@ -553,6 +567,10 @@ fn parse_raw_shots(xml: &str) -> Result<(Vec<RawShot>, FileMetadata)> {
                 }
             }
             Ok(Event::End(e)) => {
+                // quick-xml rejects an End with no matching Start before we see
+                // it (`check_end_names` is on by default); saturate anyway
+                // rather than wrap a good file into a false truncation report.
+                open_elements = open_elements.saturating_sub(1);
                 let name_bytes = e.name();
                 let name_bytes = name_bytes.as_ref();
 
@@ -632,7 +650,16 @@ fn parse_raw_shots(xml: &str) -> Result<(Vec<RawShot>, FileMetadata)> {
                     }
                 }
             }
-            Ok(Event::Eof) => break,
+            Ok(Event::Eof) => {
+                if open_elements > 0 {
+                    bail!(
+                        "The survey XML ends at byte {} with {open_elements} element(s) \
+                         still unclosed - the file appears truncated or damaged",
+                        reader.buffer_position()
+                    );
+                }
+                break;
+            }
             Err(e) => bail!(
                 "XML parse error at position {}: {e}",
                 reader.error_position()
@@ -3778,18 +3805,113 @@ mod tests {
         assert!(closures.is_empty());
     }
 
+    /// A document that stops mid-element - a half-written or interrupted save -
+    /// must be an error, not a survey with nothing in it.
+    ///
+    /// Without the fix `Event::Eof` just breaks the loop: this returns
+    /// `Ok(([], _))`, the import reports "0 sections - 0 shots", walks the user
+    /// into creating a project, and lands them in an empty one with no hint
+    /// that the file is damaged.
     #[test]
-    fn test_invalid_xml() {
-        // quick-xml is lenient; use unclosed tags to trigger an error
-        let result = parse_raw_shots("<CaveFile><Data><SurveyData><ID>1</ID>");
-        // Even if it doesn't error, it should produce no usable shots (missing fields)
-        match result {
-            Err(_) => {} // expected
-            Ok((shots, _)) => {
-                // If it tolerates truncated XML, we still shouldn't get valid shots
-                assert!(shots.is_empty() || shots.iter().all(|s| s.id == 0));
-            }
+    fn a_document_truncated_mid_element_is_an_error() {
+        let err = parse_raw_shots("<CaveFile><caveName>X</caveName><Data><SurveyData><ID>1</ID>")
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("truncated or damaged"),
+            "the error must say the file is damaged, got {err:?}"
+        );
+        assert!(
+            err.contains("3 element(s)"),
+            "the error must count what is still open (CaveFile, Data, SurveyData), got {err:?}"
+        );
+    }
+
+    /// The truncation can also land on an element boundary: every element seen
+    /// is well formed and the last shot is complete, yet `CaveFile` and `Data`
+    /// never close. This is why the signal is unclosed depth at EOF and not
+    /// "the last element was cut in half" or "no shots were found" - both would
+    /// wave this file through, and it can carry any number of good shots.
+    #[test]
+    fn a_document_truncated_between_elements_is_an_error() {
+        let xml = format!(
+            "<CaveFile><caveName>X</caveName><Data>\n{}",
+            tml_shot_xml(1, -1, "REAL", "A")
+        );
+        let err = parse_raw_shots(&xml).unwrap_err().to_string();
+        assert!(
+            err.contains("truncated or damaged"),
+            "the error must say the file is damaged, got {err:?}"
+        );
+        assert!(
+            err.contains("2 element(s)"),
+            "CaveFile and Data are the two left open, got {err:?}"
+        );
+    }
+
+    /// A file that genuinely holds no shots is not damaged, and must keep
+    /// reaching the zero-section receipt instead of being refused. Both
+    /// spellings of an empty `<Data>` count.
+    #[test]
+    fn a_complete_document_with_no_shots_still_parses() {
+        let self_closing_data =
+            "<CaveFile><caveName>Test Cave</caveName><unit>m</unit><Data/></CaveFile>";
+        for xml in [wrap_xml(""), self_closing_data.to_string()] {
+            let (shots, meta) = parse_raw_shots(&xml)
+                .unwrap_or_else(|e| panic!("an empty but complete file must parse, got {e}"));
+            assert!(shots.is_empty(), "no shots, but no error either");
+            assert_eq!(meta.cave_name, "Test Cave");
         }
+    }
+
+    /// The `<Shape>` subtree is skipped with `read_to_end`, which swallows its
+    /// own End event - so the depth counter has to be corrected for it.
+    ///
+    /// Without that correction every ordinary Ariane file (they all carry
+    /// per-shot Shape polygons) would come back as "truncated or damaged".
+    #[test]
+    fn shape_subtrees_do_not_read_as_truncation() {
+        let shot = tml_shot_xml(1, -1, "REAL", "A").replace(
+            "</SurveyData>",
+            "<Shape><hasProfileAzimut>false</hasProfileAzimut>\
+             <RadiusCollection><RadiusVector><angle>0.0</angle></RadiusVector>\
+             </RadiusCollection></Shape></SurveyData>",
+        );
+        assert!(
+            shot.contains("<Shape>"),
+            "premise: the shot carries a Shape"
+        );
+
+        let tml = parse_synthetic_tmlu(&wrap_xml(&shot));
+        assert_eq!(tml.sections.len(), 1);
+        assert_eq!(tml.sections[0].shots.len(), 1);
+    }
+
+    /// The whole point of the error: it has to reach the user on the same path
+    /// the truncated-ZIP error already takes - `parsers::tml::parse_tml`, which
+    /// the `parse_tml` command returns as `Err(String)` to `store.parseTml`,
+    /// before `openOrImport` opens the new-project dialog. A truncated
+    /// `Data.xml` inside a perfectly valid ZIP is the shape a killed save
+    /// leaves behind.
+    ///
+    /// Without the fix this returns `Ok`, and the caller carries on into
+    /// project creation with an empty survey.
+    #[test]
+    fn a_truncated_data_xml_in_a_valid_zip_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("synthetic.tml");
+        let full = wrap_xml(&tml_shot_xml(1, -1, "REAL", "A"));
+        let cut = full.find("<Azimut>").unwrap();
+        write_tml_archive(&path, "Data.xml", &full.as_bytes()[..cut]);
+
+        // The archive itself is intact - only its payload is short.
+        assert!(load_xml_from_zip(&path).is_ok());
+
+        let err = parse_tml(&path).unwrap_err().to_string();
+        assert!(
+            err.contains("truncated or damaged"),
+            "the error must say the file is damaged, got {err:?}"
+        );
     }
 
     #[test]
