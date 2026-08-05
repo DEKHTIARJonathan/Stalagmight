@@ -67,6 +67,7 @@ function makeProject(overrides: Partial<Project> = {}): Project {
       pitch_diff_threshold: 5,
       inclination_depth_diff_threshold: 5,
     },
+    surface_elevation: null,
     ...overrides,
   };
 }

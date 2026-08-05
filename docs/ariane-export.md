@@ -26,7 +26,7 @@ The user chooses between the two formats in the save dialog's file-type filter.
 | `project.name` | `caveName` | |
 | Always `"m"` | `unit` | Export is always metric (internal model is metric) |
 | `true` | `useMagneticAzimuth` | Default |
-| First zero datum GPS altitude | `firstStartAbsoluteElevation` | 0.0 if no GPS data |
+| `project.surface_elevation` | `firstStartAbsoluteElevation` | 0.0 if unknown |
 
 ### Section-level fields
 

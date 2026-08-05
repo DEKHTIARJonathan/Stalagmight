@@ -1124,6 +1124,8 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 // Present once `update_project_settings` has stored per-project
                 // thresholds on the mock project (#57).
                 validation?: Record<string, number>;
+                // Entrance elevation (#431); undefined until an import sets it.
+                surface_elevation?: number | null;
               };
               stations: Array<{
                 station_ref: { section_id: number; station_index: number };
@@ -1287,6 +1289,11 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                   pitch_diff_threshold: 10.0,
                   inclination_depth_diff_threshold: 15.0,
                 },
+                // Entrance elevation (#431), same provenance as `validation`
+                // above: whatever the mock project currently carries, else
+                // `null` (unknown) - what a project that never imported one
+                // has on disk.
+                surface_elevation: jsonResult.project.surface_elevation ?? null,
               },
               shot_count: totalShots,
               shots_floats: shotsFloats,

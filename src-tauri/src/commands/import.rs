@@ -356,14 +356,22 @@ pub fn execute_tml_import(
         crate::parsers::tml::TmlUnit::Metric => None,
     };
 
+    // Entrance elevation (#431): `firstStartAbsoluteElevation`, already
+    // unit-converted. 0.0 is the file's no-data value (mirrors the export
+    // side, which writes 0.0 when the project has none), so it does not
+    // overwrite an unset project.
+    let surface_elevation = (tml.first_start_absolute_elevation.abs() > f64::EPSILON)
+        .then_some(tml.first_start_absolute_elevation);
+
     emitter.start_phase(LoadingPhase::ImportApplyingChanges);
-    let mut result = state.execute_import_sections(
+    let mut result = state.execute_tml_import_sections(
         sections,
         closures,
         file_hash,
         Vec::new(),
         Vec::new(),
         virtual_shot_mode.unwrap_or_default(),
+        surface_elevation,
     );
     emitter.complete_phase(LoadingPhase::ImportApplyingChanges);
 

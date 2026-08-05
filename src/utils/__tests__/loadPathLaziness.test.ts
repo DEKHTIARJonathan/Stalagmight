@@ -118,6 +118,7 @@ function makeEnvelope(nSections: number, shotsPer: number): BinaryEnvelope {
       imported_file_hashes: [],
       imported_section_hashes: [],
       validation: {} as BinaryEnvelope['project_header']['validation'],
+      surface_elevation: null,
     },
     shot_count: shotCount,
     shots_floats: u8(shotsF32),

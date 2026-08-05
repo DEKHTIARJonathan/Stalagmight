@@ -1887,8 +1887,18 @@ impl AppState {
         // Auto: adoption is an ordinary Ariane import with no dialog to carry a
         // per-file override, so its virtual shots get the chain rule (#27).
         let auto = VirtualShotMode::Auto;
-        let imported =
-            self.execute_import_sections(sections, closures, None, Vec::new(), Vec::new(), auto);
+        // Entrance elevation (#431), same no-data convention as execute_tml_import.
+        let surface_elevation = (tml.first_start_absolute_elevation.abs() > f64::EPSILON)
+            .then_some(tml.first_start_absolute_elevation);
+        let imported = self.execute_tml_import_sections(
+            sections,
+            closures,
+            None,
+            Vec::new(),
+            Vec::new(),
+            auto,
+            surface_elevation,
+        );
 
         if !imported.success {
             return Err(local_dto(SpeleoDbError::Parse(format!(

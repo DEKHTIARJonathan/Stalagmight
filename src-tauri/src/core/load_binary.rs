@@ -155,6 +155,8 @@ pub struct ProjectHeaderBinary {
     /// Per-project validation thresholds (#57), so binary-loaded projects keep
     /// their own config instead of falling back to the global defaults.
     pub validation: crate::config::ValidationConfig,
+    /// Entrance elevation (#431), so binary-loaded projects carry it too.
+    pub surface_elevation: Option<f64>,
 }
 
 #[derive(Serialize)]
@@ -369,6 +371,7 @@ pub fn encode(result: LoadProjectFullResult) -> Result<Vec<u8>> {
         imported_file_hashes: project.imported_file_hashes,
         imported_section_hashes: project.imported_section_hashes,
         validation: project.validation,
+        surface_elevation: project.surface_elevation,
     };
 
     let result = LoadProjectFullBinaryResult {

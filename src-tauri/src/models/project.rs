@@ -296,6 +296,16 @@ pub struct Project {
     #[serde(default)]
     pub validation: crate::config::ValidationConfig,
 
+    /// Entrance elevation (#431): +up, metres above mean sea level.
+    /// `None` = unknown. Project-level rather than per-entrance - see
+    /// `docs/plans/2026-08-05_431_entrance-elevation.md` for why. Set from
+    /// an Ariane import's `firstStartAbsoluteElevation` (never clobbered by a
+    /// later import once set) and read back by TML export; nothing else
+    /// consumes it, and the geodesy conversion (`models::geo::gps_to_local`)
+    /// deliberately ignores it.
+    #[serde(default)]
+    pub surface_elevation: Option<f64>,
+
     /// Transient flag (NOT persisted) - when true,
     /// [`Self::cascade_connection_offsets`] returns immediately. Used by
     /// batch importers to skip the per-call O(N) cascade and run a
@@ -497,9 +507,9 @@ impl Serialize for ProjectIpc<'_> {
             .filter_map(|c| p.closure_to_wire(c))
             .collect();
         // Field set + order MUST stay in lockstep with the generated Project.ts
-        // (15 ts-exported fields). Adding a ts-exported field to `Project`
+        // (16 ts-exported fields). Adding a ts-exported field to `Project`
         // requires adding it here too, or it silently drops off the IPC payload.
-        let mut st = serializer.serialize_struct("Project", 15)?;
+        let mut st = serializer.serialize_struct("Project", 16)?;
         st.serialize_field("name", &p.name)?;
         st.serialize_field("location", &p.location)?;
         st.serialize_field("created_at", &p.created_at)?;
@@ -515,6 +525,7 @@ impl Serialize for ProjectIpc<'_> {
         st.serialize_field("imported_section_hashes", &p.imported_section_hashes)?;
         st.serialize_field("next_closure_id", &p.next_closure_id)?;
         st.serialize_field("validation", &p.validation)?;
+        st.serialize_field("surface_elevation", &p.surface_elevation)?;
         st.end()
     }
 }
@@ -552,6 +563,7 @@ impl Project {
             imported_section_hashes: Vec::new(),
             next_closure_id: 1,
             validation: crate::config::ValidationConfig::default(),
+            surface_elevation: None,
             cascade_deferred: false,
             section_index_cache: HashMap::new(),
             shot_uuid_index: HashMap::new(),
