@@ -4,6 +4,7 @@ import { GlobalCustomController } from './customRender/globalController';
 import { generateSystemColor, type SystemGeometry } from './systemColor';
 import { getMapThemeColors, type MapThemeColors } from '../../utils/themeColors';
 import { watchDevicePixelRatio } from '../../utils/dprWatcher';
+import { attachLongPressTouch } from '../../utils/longPressTouch';
 import { useUIStore } from '../../store/uiStore';
 import { hasLiveStyle } from '../Map/mapUtils';
 import i18n from '../../i18n';
@@ -107,16 +108,10 @@ export default class GlobalSurveyLayer {
   private boundDoubleClick: ((e: maplibregl.MapMouseEvent) => void) | null = null;
   private boundContextMenu: ((e: MouseEvent) => void) | null = null;
 
-  // Touch long-press state for context menu
-  private touchLongPressTimer: ReturnType<typeof setTimeout> | null = null;
-  private touchStartPos: { x: number; y: number } | null = null;
-  private boundTouchStart: ((e: TouchEvent) => void) | null = null;
-  private boundTouchMove: ((e: TouchEvent) => void) | null = null;
-  private boundTouchEnd: ((e: TouchEvent) => void) | null = null;
-  private boundTouchCancel: (() => void) | null = null;
-  // Set once a long-press has opened its context menu, so the touchend that
-  // ends the same press can be swallowed (#338).
-  private touchLongPressFired = false;
+  // Touch long-press -> context menu. The state machine (500 ms hold, 10 px
+  // cancel, swallowed touchend) is shared with SurveyLayer; see
+  // src/utils/longPressTouch.ts.
+  private detachLongPressTouch: (() => void) | null = null;
 
   constructor(map: MaplibreMap, callbacks: GlobalSurveyLayerCallbacks = {}) {
     this.map = map;
@@ -266,73 +261,25 @@ export default class GlobalSurveyLayer {
 
     // Touch long-press → context menu
     const canvas = this.map.getCanvas();
-    this.boundTouchStart = (e: TouchEvent) => {
-      if (e.touches.length !== 1) return;
-      const touch = e.touches[0]!;
-      this.touchStartPos = { x: touch.clientX, y: touch.clientY };
-      this.touchLongPressTimer = setTimeout(() => {
-        this.touchLongPressTimer = null;
-        if (!this.touchStartPos || !this.callbacks.onSystemContextMenu) return;
+    this.detachLongPressTouch = attachLongPressTouch(canvas, {
+      onLongPress: (touch) => {
+        if (!this.callbacks.onSystemContextMenu) return false;
         const rect = canvas.getBoundingClientRect();
-        const point: [number, number] = [
-          this.touchStartPos.x - rect.left,
-          this.touchStartPos.y - rect.top,
-        ];
+        const point: [number, number] = [touch.clientX - rect.left, touch.clientY - rect.top];
         // Resolve the system at the touch position (custom hit index).
         const hit = this.pickSystemAt(point);
-        if (hit) {
-          this.contextMenuOpen = true;
-          this.hideTooltip();
-          const fakeEvent = new MouseEvent('contextmenu', {
-            clientX: this.touchStartPos.x,
-            clientY: this.touchStartPos.y,
-          });
-          this.callbacks.onSystemContextMenu(hit.systemId, fakeEvent);
-          this.touchLongPressFired = true;
-        }
-        this.touchStartPos = null;
-      }, 500);
-    };
-    this.boundTouchMove = (e: TouchEvent) => {
-      if (!this.touchStartPos || !this.touchLongPressTimer) return;
-      const touch = e.touches[0];
-      if (!touch) return;
-      const dx = touch.clientX - this.touchStartPos.x;
-      const dy = touch.clientY - this.touchStartPos.y;
-      if (dx * dx + dy * dy > 100) {
-        clearTimeout(this.touchLongPressTimer);
-        this.touchLongPressTimer = null;
-        this.touchStartPos = null;
-        this.touchLongPressFired = false;
-      }
-    };
-    this.boundTouchEnd = (e: TouchEvent) => {
-      // A long-press that opened the menu must not ALSO tap the map underneath
-      // (#338): swallowing this touchend suppresses the compatibility mouse
-      // events the browser would otherwise synthesise from it. Deliberately no
-      // stopPropagation - MapLibre's own touchend still has to run for pan/pinch.
-      if (this.touchLongPressFired) {
-        e.preventDefault();
-        this.touchLongPressFired = false;
-      }
-      if (this.touchLongPressTimer) {
-        clearTimeout(this.touchLongPressTimer);
-        this.touchLongPressTimer = null;
-      }
-      this.touchStartPos = null;
-    };
-    this.boundTouchCancel = () => {
-      if (this.touchLongPressTimer) {
-        clearTimeout(this.touchLongPressTimer);
-        this.touchLongPressTimer = null;
-      }
-      this.touchStartPos = null;
-      this.touchLongPressFired = false;
-    };
-    canvas.addEventListener('touchstart', this.boundTouchStart, { passive: false });
-    canvas.addEventListener('touchmove', this.boundTouchMove, { passive: false });
-    canvas.addEventListener('touchend', this.boundTouchEnd, { passive: false });
-    canvas.addEventListener('touchcancel', this.boundTouchCancel);
+        // Empty map under the finger: no menu, so nothing to swallow the tap for.
+        if (!hit) return false;
+        this.contextMenuOpen = true;
+        this.hideTooltip();
+        const fakeEvent = new MouseEvent('contextmenu', {
+          clientX: touch.clientX,
+          clientY: touch.clientY,
+        });
+        this.callbacks.onSystemContextMenu(hit.systemId, fakeEvent);
+        return true;
+      },
+    });
   }
 
   /**
@@ -568,11 +515,9 @@ export default class GlobalSurveyLayer {
     this.dprWatcherDispose?.();
     this.dprWatcherDispose = undefined;
 
-    // Clean up touch long-press timer
-    if (this.touchLongPressTimer) {
-      clearTimeout(this.touchLongPressTimer);
-      this.touchLongPressTimer = null;
-    }
+    // Drop the touch long-press listeners and any pending hold
+    this.detachLongPressTouch?.();
+    this.detachLongPressTouch = null;
 
     // Remove event handlers
     if (this.boundClick) {
@@ -590,20 +535,6 @@ export default class GlobalSurveyLayer {
     if (this.boundContextMenu) {
       this.map.getCanvas().removeEventListener('contextmenu', this.boundContextMenu);
     }
-    // Remove touch listeners
-    const canvas = this.map.getCanvas();
-    if (this.boundTouchStart) {
-      canvas.removeEventListener('touchstart', this.boundTouchStart);
-    }
-    if (this.boundTouchMove) {
-      canvas.removeEventListener('touchmove', this.boundTouchMove);
-    }
-    if (this.boundTouchEnd) {
-      canvas.removeEventListener('touchend', this.boundTouchEnd);
-    }
-    if (this.boundTouchCancel) {
-      canvas.removeEventListener('touchcancel', this.boundTouchCancel);
-    }
 
     // Remove tooltip
     if (this.tooltip && this.tooltip.parentNode) {
@@ -617,9 +548,5 @@ export default class GlobalSurveyLayer {
     this.boundMouseMove = null;
     this.boundMapLeave = null;
     this.boundContextMenu = null;
-    this.boundTouchStart = null;
-    this.boundTouchMove = null;
-    this.boundTouchEnd = null;
-    this.boundTouchCancel = null;
   }
 }

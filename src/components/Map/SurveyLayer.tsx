@@ -72,6 +72,7 @@ import { trackNav } from '../../utils/telemetry';
 import { FEATURE_ID_STRIDE, sectionIdFromKey } from '../../utils/ids';
 import { MEASURE_TINT } from '../../utils/measurePath';
 import { watchDevicePixelRatio } from '../../utils/dprWatcher';
+import { attachLongPressTouch } from '../../utils/longPressTouch';
 import { clearFeatureCountsForPrefix } from '../../utils/memoryProbe';
 import { shouldSuppressMapError, type MapErrorEventLike } from './surveyLayer/mapErrors';
 import { diffRemovedSectionIds } from './surveyLayer/sectionDiff';
@@ -360,16 +361,10 @@ export default class SurveyLayer {
   private boundMouseMove: ((e: maplibregl.MapMouseEvent) => void) | null = null;
   private boundMapLeave: (() => void) | null = null;
 
-  // Touch long-press state for context menu
-  private touchLongPressTimer: ReturnType<typeof setTimeout> | null = null;
-  private touchStartPos: { x: number; y: number } | null = null;
-  private boundTouchStart: ((e: TouchEvent) => void) | null = null;
-  private boundTouchMove: ((e: TouchEvent) => void) | null = null;
-  private boundTouchEnd: ((e: TouchEvent) => void) | null = null;
-  private boundTouchCancel: (() => void) | null = null;
-  // Set once a long-press has opened its context menu, so the touchend that
-  // ends the same press can be swallowed (#338).
-  private touchLongPressFired = false;
+  // Touch long-press -> context menu. The state machine (500 ms hold, 10 px
+  // cancel, swallowed touchend) is shared with GlobalSurveyLayer; see
+  // src/utils/longPressTouch.ts.
+  private detachLongPressTouch: (() => void) | null = null;
 
   // Hover update batching - only process latest mouse position per frame
   private pendingHoverEvent: maplibregl.MapMouseEvent | null = null;
@@ -1013,77 +1008,49 @@ export default class SurveyLayer {
 
     // Touch long-press → context menu (raw touch listeners on canvas)
     const canvas = this.map.getCanvas();
-    this.boundTouchStart = (e: TouchEvent) => {
-      if (e.touches.length !== 1) return;
-      const touch = e.touches[0]!;
-      this.touchStartPos = { x: touch.clientX, y: touch.clientY };
-      this.touchLongPressTimer = setTimeout(() => {
-        this.touchLongPressTimer = null;
-        if (!this.touchStartPos) return;
+    this.detachLongPressTouch = attachLongPressTouch(canvas, {
+      onLongPress: (touch) => {
         // Hit-test at touch position
         const rect = canvas.getBoundingClientRect();
-        const point: [number, number] = [
-          this.touchStartPos.x - rect.left,
-          this.touchStartPos.y - rect.top,
-        ];
+        const point: [number, number] = [touch.clientX - rect.left, touch.clientY - rect.top];
         const fakeEvent = {
           point: { x: point[0], y: point[1] },
           lngLat: this.map.unproject(point),
           originalEvent: new MouseEvent('contextmenu', {
-            clientX: this.touchStartPos.x,
-            clientY: this.touchStartPos.y,
+            clientX: touch.clientX,
+            clientY: touch.clientY,
           }),
         } as maplibregl.MapMouseEvent;
         this.handleContextMenu(fakeEvent);
-        this.touchLongPressFired = true;
-        // Prevent subsequent click
-        this.touchStartPos = null;
-      }, 500);
-    };
-    this.boundTouchMove = (e: TouchEvent) => {
-      if (!this.touchStartPos || !this.touchLongPressTimer) return;
-      const touch = e.touches[0];
-      if (!touch) return;
-      const dx = touch.clientX - this.touchStartPos.x;
-      const dy = touch.clientY - this.touchStartPos.y;
-      if (dx * dx + dy * dy > 100) { // 10px threshold
-        clearTimeout(this.touchLongPressTimer);
-        this.touchLongPressTimer = null;
-        this.touchStartPos = null;
-        this.touchLongPressFired = false;
-      }
-    };
-    this.boundTouchEnd = (e: TouchEvent) => {
-      // A long-press that opened the menu must not ALSO tap the tool underneath
-      // (#338): swallowing this touchend suppresses the compatibility mouse
-      // events the browser would otherwise synthesise from it. Deliberately no
-      // stopPropagation - MapLibre's own touchend still has to run for pan/pinch.
-      if (this.touchLongPressFired) {
-        e.preventDefault();
-        this.touchLongPressFired = false;
-      }
-      if (this.touchLongPressTimer) {
-        clearTimeout(this.touchLongPressTimer);
-        this.touchLongPressTimer = null;
-      }
-      this.touchStartPos = null;
-    };
-    this.boundTouchCancel = () => {
-      if (this.touchLongPressTimer) {
-        clearTimeout(this.touchLongPressTimer);
-        this.touchLongPressTimer = null;
-      }
-      this.touchStartPos = null;
-      this.touchLongPressFired = false;
-    };
-    canvas.addEventListener('touchstart', this.boundTouchStart, { passive: false });
-    canvas.addEventListener('touchmove', this.boundTouchMove, { passive: false });
-    canvas.addEventListener('touchend', this.boundTouchEnd, { passive: false });
-    canvas.addEventListener('touchcancel', this.boundTouchCancel);
+        // The menu is the whole point of the press, so always swallow the tap.
+        return true;
+      },
+      isEnabled: () => !this.modalInteractionActive(),
+    });
 
     // Track user-initiated map navigation (zoom & pan) for telemetry
     this.map.on('zoomend', this.handleZoomEndTelemetry);
     this.map.on('moveend', this.handleMoveEndTelemetry);
+  }
+
+  /**
+   * True while a mutating pointer gesture owns the touch and the long-press has
+   * to stay out of it: placement mode, which MapCanvas confirms on `pointerdown`,
+   * and a move ghost in flight, which it commits on `pointerup`. Those are
+   * POINTER events, not the compatibility mouse events a fired long-press
+   * swallows at `touchend`, so they run either way - ungated, one hold would both
+   * mutate the survey and open a menu over the result.
+   *
+   * Both signals are read live rather than pushed in: the ghost is this layer's
+   * own (`beginStationDragPreview` / `beginDragPreview` -> `endDragPreview`), and
+   * placement mode is uiStore state. Note pointer events precede touch events, so
+   * a placement CONFIRMED by this very touch has already cleared the store by the
+   * time the press is armed; what the placement read covers is a hold that starts
+   * while placement is still armed (a confirm that bailed, or the next section of
+   * a multi-section placement).
+   */
+  private modalInteractionActive(): boolean {
+    return this.dragPreviewActive || useUIStore.getState().placementMode !== null;
   }
 
   /**
@@ -3615,21 +3582,17 @@ export default class SurveyLayer {
     // nothing fires on a torn-down map.
     this.dragGhost.end();
 
-    // Clean up touch long-press timer
-    if (this.touchLongPressTimer) {
-      clearTimeout(this.touchLongPressTimer);
-      this.touchLongPressTimer = null;
-    }
+    // Drop the touch long-press listeners and any pending hold. Done before the
+    // live-style guard below, not inside it: the helper holds the canvas element
+    // itself, so it detaches cleanly even once the map is gone.
+    this.detachLongPressTouch?.();
+    this.detachLongPressTouch = null;
 
     // Guard against map being destroyed (race condition on unmount)
     if (!hasLiveStyle(this.map)) {
       // Clear bound handler references even if map is destroyed
       this.boundMouseMove = null;
       this.boundMapLeave = null;
-      this.boundTouchStart = null;
-      this.boundTouchMove = null;
-      this.boundTouchEnd = null;
-      this.boundTouchCancel = null;
       return;
     }
 
@@ -3644,20 +3607,6 @@ export default class SurveyLayer {
       }
       if (this.boundMapLeave) {
         this.map.getCanvas().removeEventListener('mouseleave', this.boundMapLeave);
-      }
-      // Remove touch long-press listeners
-      const canvas = this.map.getCanvas();
-      if (this.boundTouchStart) {
-        canvas.removeEventListener('touchstart', this.boundTouchStart);
-      }
-      if (this.boundTouchMove) {
-        canvas.removeEventListener('touchmove', this.boundTouchMove);
-      }
-      if (this.boundTouchEnd) {
-        canvas.removeEventListener('touchend', this.boundTouchEnd);
-      }
-      if (this.boundTouchCancel) {
-        canvas.removeEventListener('touchcancel', this.boundTouchCancel);
       }
       this.map.off('zoomend', this.handleZoomEndTelemetry);
       this.map.off('moveend', this.handleMoveEndTelemetry);

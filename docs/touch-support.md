@@ -15,18 +15,18 @@ It is not built, run, or tested in CI.
 | File | Symbol | What it does |
 |------|--------|--------------|
 | `src/hooks/useLongPress.ts` | `useLongPress` | Long-press detection for React surfaces; no-op unless `pointerType === 'touch'` |
-| `src/components/SingleSystemView/SectionsPanel.tsx` | `handleLongPress` (~:699) | Long-press a section row -> section context menu |
-| `src/components/common/ShotTableEditor.tsx` | `handleLongPress` (~:326) | Long-press a shot row -> row context menu (see Gaps: this does not fire) |
-| `src/components/Map/SurveyLayer.tsx` | `boundTouchStart` / `boundTouchMove` / `boundTouchEnd` / `boundTouchCancel` (~:1016) | Raw canvas touch listeners -> survey context menu |
-| `src/components/GlobalView/GlobalSurveyLayer.ts` | same quartet (~:267) | Raw canvas touch listeners -> system context menu |
-| `src/components/GlobalView/GlobalViewMap.tsx` | per-marker listeners (~:979) | Long-press a project marker -> marker context menu |
+| `src/components/SingleSystemView/SectionsPanel.tsx` | `handleLongPress` / `longPressHandlers` | Long-press a section row -> section context menu. The only `useLongPress` consumer in the tree |
+| `src/utils/longPressTouch.ts` | `attachLongPressTouch` | The raw-canvas long-press machine (500 ms hold, 10 px cancel, swallowed lift), shared by both map layers |
+| `src/components/Map/SurveyLayer.tsx` | `initializeEventHandlers` (the `attachLongPressTouch` call), gated by `modalInteractionActive` | Long-press the survey canvas -> survey context menu |
+| `src/components/GlobalView/GlobalSurveyLayer.ts` | `initializeEventHandlers` (the `attachLongPressTouch` call) | Long-press the global canvas -> system context menu |
+| `src/components/GlobalView/GlobalViewMap.tsx` | per-marker `touch*` listeners, inline in the marker builder | Long-press a project marker -> marker context menu (its own copy - see Long press) |
 | `src/utils/mapGestures.ts` | `mapGestureMode` | The one predicate deciding which gestures the map keeps for itself |
-| `src/components/Map/MapCanvas.tsx` | `dragPan` effect (~:2549), `touchAction` memo (~:3604) | Both consumers of that predicate |
+| `src/components/Map/MapCanvas.tsx` | the `mapGestureMode` call site, feeding the `dragPan` effect and the container's `touchAction` | Consumes that predicate |
 | `src/components/SingleSystemView/useResizeHandle.ts` | `useResizeHandle` | Pointer-capture drag for every resize handle |
-| `src/components/common/Panel.tsx`, `src/components/SingleSystemView/Dock.tsx` | `touchAction: 'none'` on the handle (`Panel.tsx:134`, `Dock.tsx:404`) | Stops the browser claiming the drag as a scroll. Without it the pointer-capture drag above never gets move events on touch |
-| `src/components/Map/PlacementOverlay.tsx` | ~:229 | Renders a Cancel button when `navigator.maxTouchPoints > 0` |
-| `src/components/SingleSystemView/Toolbar.tsx` | `lastPointerTypeRef` (~:593, ~:708) | Tap-vs-hover behavior for tool buttons and flyouts |
-| `src/index.css` | `@media (pointer: coarse)` (~:1333) | Widens `.resize-handle-h` / `.resize-handle-v` by 12px |
+| `src/components/common/Panel.tsx`, `src/components/SingleSystemView/Dock.tsx` | `touchAction: 'none'` on the handle | Stops the browser claiming the drag as a scroll. Without it the pointer-capture drag above never gets move events on touch |
+| `src/components/Map/PlacementOverlay.tsx` | the `navigator.maxTouchPoints` guard | Renders a Cancel button when `navigator.maxTouchPoints > 0` |
+| `src/components/SingleSystemView/Toolbar.tsx` | `lastPointerTypeRef` (`ToolButton` and `ToolGroupButton` each keep one) | Tap-vs-hover behavior for tool buttons and flyouts |
+| `src/index.css` | `@media (pointer: coarse)` | Widens `.resize-handle-h` / `.resize-handle-v` by 12px |
 
 ## Pointer events vs mouse events
 
@@ -60,17 +60,26 @@ for pointer input. Touch counts as pointer input there.
 ## Long press
 
 Long press is how touch reaches the context menus that right-click opens on
-desktop. Two independent implementations, same constants, no shared source:
+desktop. Two implementations, split by world rather than by surface: React
+surfaces use the `useLongPress` hook, and the two MapLibre canvases - DOM nodes
+React never sees - share `attachLongPressTouch`
+(`src/utils/longPressTouch.ts`), which binds raw `touch*` listeners.
 
-| | `useLongPress` | Canvas listeners |
+| | `useLongPress` | `attachLongPressTouch` |
 |---|---|---|
-| Delay | `delay` option, default 500 ms (`useLongPress.ts:28`) | 500 ms, inline literal |
-| Move cancel | `moveThreshold` option, default 10 px | 10 px, inline as `dx*dx + dy*dy > 100` |
+| Delay | `delay` option, default 500 ms (`useLongPress.ts:28`) | `LONG_PRESS_MS` = 500 ms |
+| Move cancel | `moveThreshold` option, default 10 px | `MOVE_CANCEL_PX` = 10 px, compared squared |
 | Multi-touch | not checked | ignored unless `e.touches.length === 1` |
+| Events | pointer events, spread onto an element | raw `touch*` listeners on the element |
 
-The thresholds are duplicated at `SurveyLayer.tsx:1041`/`:1049`,
-`GlobalSurveyLayer.ts:292`/`:300` and `GlobalViewMap.tsx:994`/`:1002`. Changing
-the feel means editing all four sites.
+The canvas constants used to be inline literals in a state machine each map
+layer kept its own byte-identical copy of; they are one copy now (#338), so
+changing the feel of the map gesture means editing `longPressTouch.ts` and
+nothing else. The one remaining duplicate is `GlobalViewMap`'s per-marker
+listeners: same 500 ms / 10 px hold, but no fired flag and no swallowed
+`touchend`, so a marker long-press still leaves the trailing tap to run. It was
+left alone rather than folded in, because folding it in would have changed that
+behavior.
 
 `useLongPress` returns `{ onPointerDown, onPointerMove, onPointerUp,
 onPointerCancel }` to spread onto an element, and hands the callback the press
@@ -80,20 +89,38 @@ synthetic event. The Pointer Events spec suppresses compatibility
 mouse events via `preventDefault()` on `pointerdown`, not `pointerup`, so
 whether the trailing tap is actually swallowed is unverified.
 
-The canvas implementations synthesize a `MouseEvent('contextmenu')` at the touch
-position and feed it to the same handler the real right-click uses
-(`SurveyLayer.handleContextMenu`, `GlobalSurveyLayer.callbacks.onSystemContextMenu`),
-so the resulting menu is identical.
+`attachLongPressTouch(target, { onLongPress, isEnabled? })` returns a detach
+function (both layers call it from `destroy()`). Its `onLongPress` receives the
+`Touch` that started the press - a snapshot, so its client coords are still
+where the finger landed - and returns whether a menu actually opened. Both
+layers synthesize a `MouseEvent('contextmenu')` at that position and feed it to
+the same handler the real right-click uses (`SurveyLayer.handleContextMenu`,
+`GlobalSurveyLayer.callbacks.onSystemContextMenu`), so the resulting menu is
+identical. `SurveyLayer` always returns `true`; `GlobalSurveyLayer` returns
+`false` when `pickSystemAt` finds nothing under the finger, since no menu opened.
 
-The `touchend` listener's `{ passive: false }` registration is load-bearing. A
-long-press that fires sets `touchLongPressFired`, and the `touchend` ending that
-press calls `preventDefault()` on it (`SurveyLayer.tsx:1056`,
-`GlobalSurveyLayer.ts:307`), which is what suppresses the compatibility mouse
-events the browser would otherwise synthesize - so lifting the finger cannot also
-run the active tool's click underneath the open menu (#338). Deliberately no
-`stopPropagation`: MapLibre's own `touchend` still has to run or pan and pinch
-break. `touchcancel` has its own handler (`boundTouchCancel`), which clears the
+That return value is what arms the swallowed lift, and the `touchend`
+listener's `{ passive: false }` registration is what makes it possible: the
+`touchend` ending a press that opened a menu calls `preventDefault()`, which
+suppresses the compatibility mouse events the browser would otherwise
+synthesize - so lifting the finger cannot also run the active tool's click
+underneath the open menu (#338). Deliberately no `stopPropagation`: MapLibre's
+own `touchend` still has to run or pan and pinch break. `touchcancel` clears the
 flag without preventing anything.
+
+`isEnabled` is the gate, consulted when the finger lands and again before the
+menu opens (the modal state it reads can change during the hold). Only
+`SurveyLayer` passes one - `modalInteractionActive`, true while placement mode
+is armed (uiStore) or a move ghost is in flight (`dragPreviewActive`, between
+`beginStationDragPreview`/`beginDragPreview` and `endDragPreview`). Those two
+interactions commit through MapCanvas's POINTER handlers - placement on
+`pointerdown`, a move drop on `pointerup` - which are not compatibility mouse
+events, so the swallowed `touchend` cannot stop them; ungated, one hold would
+both mutate the survey and open a menu over the result. Note pointer events
+precede touch events, so a placement confirmed by that very touch has already
+cleared the store before the press is armed; the placement half of the gate
+covers holds that begin while placement is still armed. `GlobalSurveyLayer` has
+neither mode and passes no gate.
 
 ## Map and renderer
 
@@ -161,29 +188,35 @@ keyboard. Applied across `ShotTableEditor`, `EditShotDialog`,
   opts into `test.use({ hasTouch: true })` and dispatches gestures through CDP
   `Input.dispatchTouchEvent` (Playwright's own API expresses neither a touch drag
   nor a pinch), covering one-finger pan, the long-press menu and its swallowed
-  lift, and a two-finger twist that zooms without rotating. Nothing else: no unit
-  test for `useLongPress`, no mobile device profile in the Playwright projects
-  (`playwright.config.ts:112` runs Desktop Chrome only), and no touch cases in
-  the legacy WebdriverIO suite. Outside that one spec, every claim on this page
+  lift, and a two-finger twist that zooms without rotating. Below it,
+  `src/utils/__tests__/longPressTouch.test.ts` pins the shared canvas machine in
+  jsdom (hold, sub-threshold wobble, cancel, multi-touch, swallowed lift, the
+  gate). Nothing else: no unit test for `useLongPress`, no mobile device profile
+  in the Playwright projects (`playwright.config.ts:112` runs Desktop Chrome
+  only), and no touch cases in the legacy WebdriverIO suite. Outside that one spec, every claim on this page
   about *behavior on a device* is untested; the claims about code are what was
   read from source.
-- **`ShotTableEditor`'s long-press context menu cannot fire.** `useLongPress`
-  passes `e.currentTarget` (`useLongPress.ts:50`), the handlers are spread on
-  `<tbody>` (`ShotTableEditor.tsx:472`), and the callback does
-  `target.closest('tr')` (`ShotTableEditor.tsx:329`), which returns `null` from a
-  `<tbody>`. It needs `e.target` - the rows already carry the `data-row-index`
-  the callback reads (`ShotTableEditor.tsx:494`). `SectionsPanel` is unaffected
-  because it attaches per-row and ignores the target argument. Filed as #338.
+- **Only one React surface has a long press.** `SectionsPanel`'s section rows.
+  This page used to also document `ShotTableEditor`'s row long-press and the
+  `e.currentTarget`-vs-`e.target` bug that stopped it firing (filed as #338);
+  the component no longer has one - it contains no `useLongPress`, no
+  `onContextMenu` and no row context menu at all - so there is nothing left to
+  fix there. Everything else reachable by right-click on desktop is reachable on
+  touch only through the two map canvases.
 - **The main data table is mouse-only.** `SpreadsheetGrid` - the shot table in
   the dock - has no pointer or touch handling. Range drag, fill-handle drag,
   column resize and the move-edge drags all listen for `mousemove`/`mouseup`,
   which a touch drag does not produce.
 - **Move tools are untested on touch and structurally awkward.** A move drag is
-  started by MapLibre's `click` (`useMapTools.ts:457`, `:469`), previews on
+  started by MapLibre's `click` (the `move_station` / `move_shot` /
+  `move_segment` cases in `useMapTools`, via `onMoveDragStart`), previews on
   `pointermove` over the container, and commits on `pointerup`
-  (`MapCanvas.tsx:3660`). With a mouse the pointer keeps moving between grab and
-  drop; with a finger it does not, so the gesture becomes tap-to-grab followed by
-  a separate touch-drag-release. Nobody has confirmed this on hardware.
+  (`MapCanvas.handlePointerUp` -> `handleMoveDragEnd`). With a mouse the pointer
+  keeps moving between grab and drop; with a finger it does not, so the gesture
+  becomes tap-to-grab followed by a separate touch-drag-release - which is
+  exactly why the long-press gate above exists: the second touch of that
+  sequence lands with the ghost already in flight. Nobody has confirmed the
+  gesture itself on hardware.
 - **Popover dismissal depends on compatibility mouse events.**
   `useDismissableLayer` listens on `mousedown` only, so an outside tap dismisses
   a flyout or menu only if the browser synthesizes the compatibility event.
