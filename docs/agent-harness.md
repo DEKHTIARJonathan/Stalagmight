@@ -393,7 +393,7 @@ so it can only ever touch a temp copy.
 |---|---|
 | `STALAGMIGHT_FUZZ_FIXTURE` | Which `.stalx` under `e2e/fixtures/` to fuzz, by BASENAME (`fixtureSourcePath`'s `path.basename` is the containment guard). Defaults to `DEFAULT_FIXTURE`. Recorded in the metrics and the log line so a run stays attributable. |
 | `STALAGMIGHT_FUZZ_STREAM` | `v1` restores the ORIGINAL generator set, weights and value ranges, reproducing the legacy draw stream byte for byte. The default v2 stream adds the delete/split family, batches, comment moves, synthetic imports, boundary-biased values and per-run swarm weights - and necessarily draws differently, so v1-era repro lines need this variable. |
-| `STALAGMIGHT_FUZZ_ALLOW_KNOWN_BUGS` | `1` keeps going past a mismatch that is ENTIRELY a classified known bug (logged, counted, model resynced). Not the default: a green default would mean the oracle had been weakened. |
+| `STALAGMIGHT_FUZZ_ALLOW_KNOWN_BUGS` | INERT. It used to keep a run going past a mismatch that was entirely a classified known bug; every classifier is deleted now that the findings are fixed, so there is nothing left to allow. Still read, and still named in the failure's `reproduce:` line, so a tolerant-looking invocation cannot be mistaken for one that relaxed something. |
 
 Fixture choice is load-bearing, not cosmetic. The fractal fixture has no loop
 closures, no zero datums and a non-null surveyor on all 32 sections; naharon has
@@ -427,33 +427,29 @@ stream, so different seeds explore different shapes of history rather than all
 sampling the same uniform mix. The profile is recorded in the metrics and the log
 line.
 
-A 60-cell v2 sweep (both fixtures, seeds 1-30, x40, tolerant) yields 18 failures
-and a v2 repro for bugs 1, 5, 6, 7 and 8; bugs 2, 3 and 4 were not re-found and
-keep their v1 lines, executable with `STALAGMIGHT_FUZZ_STREAM=v1`. The full table
-is in the scenario header.
+A 60-cell v2 sweep (both fixtures, seeds 1-30, x40) yielded 18 failures and a v2
+repro for bugs 1, 5, 6, 7 and 8; bugs 2, 3 and 4 were not re-found and keep their
+v1 lines, executable with `STALAGMIGHT_FUZZ_STREAM=v1`. The full table is in the
+scenario header.
 
 The findings are tracked at
 <https://github.com/Stalagmight/Stalagmight/issues/413>, one comment per finding
 with its mechanism, repro and fix direction; the scenario header is the
 authoritative copy of the repro commands.
 
-It currently reproduces nine open undo bugs plus one open reload finding, enumerated with per-fixture,
-per-seed repro commands in the scenario's header comment, so it is RED by
-default. The most serious is bug 8: after a save/reload an undo DELETES THE WRONG
-SHOT, because shots are renumbered on load while persisted undo entries keep the
-pre-reload ids and nothing remaps them. Three are classified (`KNOWN_UNDO_ASYMMETRIES` plus
-`LOOP_CLOSURE_REORDER`), which makes the failure message name the bug and makes
-them tolerable under the env var above. The other four - a section displaced by
-undoing its first shot, an undo that cannot restore a previously-null section
-field, an undo that FAILS OUTRIGHT and wedges the history, and a multi-step
-`undoTo` landing metres away from the same depth reached by single undos
-(`undo_to`/`redo_to` call neither `invalidate_adjusted_cache()` nor
-`reconcile_geometry()`, which `undo()`/`redo()` both do) - are deliberately never
-tolerated. A tenth finding - a loop closure silently reclassified as a station
-merge across save/reload, `convert_orphan_closures_to_merges` in
-`redrive_offsets_after_load` - is also left failing: it looks intended, but it
-means save+reopen is not state-preserving, and whether to normalize eagerly or
-tolerate it is a maintainer's call.
+Every one of those findings is FIXED in the Rust tier, so every known-bug
+classifier and every tolerance here has been deleted per the delete-when-fixed
+contract: a mismatch of any shape, at any depth, fails the run again. The repro
+lines are kept verbatim as regression checks.
+
+It is still RED, on one thing: finding 11's residue. The fix re-applies the save
+heals to a restored project as a CARRY-FORWARD from the live project, so a
+`ProjectSnapshotPair` recorded before a save that RE-CREATES a section (a batch
+containing a create, a range-split, ...) still comes back without the gauge
+anchors the save captured - there is no live section to carry them from.
+`pnpm agent:fuzz-shrink` reduces fractal seed 1 x40 to two steps for it:
+`executeBatch(...+crtSec+...)` then `save`. Roughly half the seeds on either
+fixture reach it. No classifier was re-added; the red is the app's.
 
 ### undo-persistence-fuzz
 
@@ -498,23 +494,34 @@ left, so a project whose history was stripped can never construct one.
 | Env var | Effect |
 |---|---|
 | `STALAGMIGHT_FUZZ_FIXTURE` | Same as the main fuzzer: which `.stalx` to build on, by basename. |
-| `STALAGMIGHT_FUZZ_ALLOW_KNOWN_BUGS` | `1` walks past the classified open bugs (bug 1, bug 8, findings 11/12/13) instead of stopping at the first. Not the default. |
-| `STALAGMIGHT_PERSIST_FUZZ_DELETE_IN_TARGET` | `1` moves the plan's mid-section delete onto the section the shot entries target. That is finding 13's repro, and it is terminal: the stale id then runs past the renumbered range, the undo fails, and the unwind cannot continue. |
+| `STALAGMIGHT_FUZZ_ALLOW_KNOWN_BUGS` | INERT here too - bug 1, bug 8 and findings 11/12/13 are fixed and their classifiers deleted, so there is nothing to walk past. |
+| `STALAGMIGHT_PERSIST_FUZZ_DELETE_IN_TARGET` | `1` moves the plan's mid-section delete onto the section the shot entries target. That was finding 13's repro, and it used to be terminal: the stale id ran past the renumbered range, the undo failed, and the unwind could not continue. The wedge is fixed, so the flag now walks the whole restored stack (measured: 3 cycles x 19 entries); it stays off by default because the two arrangements are different id-space shapes and the plan's coverage promises are written against the default. |
 
-It found two new bugs, both now written up on issue #413 and pinned red in
-`open_undo_bugs_tests.rs`. **Finding 12**: after a save/reload, undo or redo of
-`SetShotKind` / `UpdateShot` edits the WRONG shot - `UndoData::InverseCommand` and
-`UndoData::PreviousValues { shot_id }` both name a shot by its in-session id, and
-`redo_inner`'s catch-all re-executes the original command with the same id. It
-needs no delete, unlike bug 8; one insert-before is enough, and nothing about the
-resulting project looks wrong. **Finding 13**: when the section HAS had a shot
-deleted, the allocator has run past the renumbered range, so the stale id misses
-instead of colliding - the undo fails outright, `undo_inner` pushes the entry
-back, and the history is WEDGED with every entry beneath it unreachable.
+It found two new bugs, both written up on issue #413 and both now FIXED
+(b9c9d649), their `open_undo_bugs_tests.rs` tests un-ignored. **Finding 12**:
+after a save/reload, undo or redo of `SetShotKind` / `UpdateShot` edited the
+WRONG shot - `UndoData::InverseCommand` and `UndoData::PreviousValues { shot_id }`
+both named a shot by its in-session id, and `redo_inner`'s catch-all re-executed
+the original command with the same id. It needed no delete, unlike bug 8; one
+insert-before was enough, and nothing about the resulting project looked wrong.
+**Finding 13**: when the section HAS had a shot deleted, the allocator has run
+past the renumbered range, so the stale id missed instead of colliding - the undo
+failed outright, `undo_inner` pushed the entry back, and the history was WEDGED
+with every entry beneath it unreachable.
 
-Both are the same root cause as bug 8 and should get the same fix; the write-ups
-argue for addressing shots by `uuid` in the persisted entries, which is the route
-`StationKey` and `CreatedShotSnapshot { uuid }` already took.
+Both were the same root cause as bug 8 and got the same fix: undo entries address
+a shot by `uuid` (the route `StationKey` and `CreatedShotSnapshot { uuid }`
+already took), with a load-time pass that DROPS an entry whose target no longer
+resolves rather than leaving it to wedge the stack.
+
+Open here as of 2026-08-05, on naharon only: **finding 27** - an undo of
+`update_shot` DROPS `section_offsets.0` where the state it restores had `[0,0]`.
+In-session (no save involved), and the exact mirror of finding 2: a67dd1b5 made
+adjust-style offset writes drop a key that lands within `OFFSET_DUST_M` of zero,
+and an undo re-executes the command through that same cascade, so a key whose
+legitimate value is (0,0) is deleted rather than left alone.
+`STALAGMIGHT_FUZZ_FIXTURE=naharon.stalx --seed 5 --iterations 2`; the shrinker
+reduces it to five steps.
 
 ### Three tiers, and which one gates CI
 
@@ -525,21 +532,21 @@ each one buys:
 |---|---|---|---|
 | `src-tauri/src/core/state/fuzz_undo_tests.rs` | `AppState` directly | undo/redo model + persistence regressions | **every CI run** |
 | this harness | the real app over IPC | anything the frontend store or the IPC boundary breaks | on demand |
-| `open_undo_bugs_tests.rs` | `AppState` directly | the known open bugs, pinned red | `-- --ignored` |
+| `open_undo_bugs_tests.rs` | `AppState` directly | one reduction per finding, kept as its regression guard | **every CI run** |
 
-Both `#[ignore]`d red suites are worth running together, since two findings are
-pinned by a SEED in the fuzz module rather than by a reduction in the red one:
+`open_undo_bugs_tests.rs` holds nothing `#[ignore]`d today: every bug it pinned is
+fixed and every test was un-ignored as the fix landed, which is what the module's
+own rule asks for. Its filters are still the way to run the whole family together,
+since two findings are pinned by a SEED in the fuzz module rather than by a
+reduction in the red one:
 
 ```bash
-# 20 red tests. libtest takes several filters and ORs them; a shell-regex
-# filter would match nothing, since cargo's filter is a plain substring.
 TELEMETRY_ENDPOINT=http://localhost/dummy cargo test --manifest-path src-tauri/Cargo.toml \
-  --features telemetry --lib -- --ignored open_undo_bugs finding_14 bug_7
+  --features telemetry --lib -- open_undo_bugs finding_14 bug_7
 ```
 
-The Rust tier exists because neither of the other two GATES anything: the harness
-needs a built desktop app and a display, and the red tests are `#[ignore]`d by
-design. It runs the same model - a canonical snapshot per undo depth, asserted
+The Rust tier exists because the harness GATES nothing: it needs a built desktop
+app and a display. It runs the same model - a canonical snapshot per undo depth, asserted
 after every move - about a thousand times cheaper per sequence, which is what
 makes it affordable as a `#[test]`. See docs/testing-recipes.md for how to run it
 and its soak.

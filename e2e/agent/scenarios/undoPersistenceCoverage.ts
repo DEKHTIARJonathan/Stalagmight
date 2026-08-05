@@ -144,18 +144,24 @@ export interface CoverageAction {
  * `STALAGMIGHT_PERSIST_FUZZ_DELETE_IN_TARGET=1` moves the plan's mid-section
  * delete onto the TARGET section instead of the spare one.
  *
- * That single change is the repro for finding 13 (the stale-id WEDGE), and it is
- * off by default because it is terminal. A section that has had a shot deleted
- * has handed out more ids than it has shots, so the newest persisted id runs PAST
- * the renumbered range: the undo does not hit the wrong shot, it hits nothing,
- * fails, and `undo_inner` pushes the entry back - after which every entry beneath
- * it is unreachable for good. The unwind then cannot continue, and the whole
- * lower two thirds of the stack goes unwalked.
+ * That single change was the repro for finding 13 (the stale-id WEDGE): a
+ * section that has had a shot deleted has handed out more ids than it has shots,
+ * so the newest persisted id ran PAST the renumbered range and the undo hit
+ * nothing, failed, and was pushed back by `undo_inner` - after which every entry
+ * beneath it was unreachable for good, and the unwind could not continue.
  *
- * With the delete on the spare section the target's ids stay inside the
- * renumbered range, so a stale id COLLIDES instead of missing: the undo succeeds
- * on the wrong shot (bug 8 / finding 12), the oracle catches it, and the walk
- * carries on through the rest of the stack. That is the more useful default.
+ * THE WEDGE IS FIXED (b9c9d649): undo data addresses a shot by `Shot::uuid`, and
+ * a load-time applicability pass drops an entry whose target no longer resolves
+ * instead of leaving it to fail forever. So the flag is no longer terminal - a
+ * run with it set walks the whole restored stack - and the repro line above is
+ * kept as a regression check that must pass CLEAN.
+ *
+ * It stays off by default because the two arrangements are different id-space
+ * shapes and the default is the one the plan's coverage promises are written
+ * against: with the delete on the SPARE section the target's ids stay inside the
+ * renumbered range (a stale id would COLLIDE), and with it on the target they
+ * run past it (a stale id would MISS). Both are worth exercising; only one can
+ * be the default.
  */
 export const DELETE_IN_TARGET = process.env.STALAGMIGHT_PERSIST_FUZZ_DELETE_IN_TARGET === '1';
 
@@ -167,9 +173,10 @@ export interface CoverageMemo {
    * Deliberately a FRESH section rather than one of the fixture's: it is
    * disconnected, has no zero datum and is in no loop, so `delete_shot`'s
    * "part of a loop / anchored to a zero datum" guard cannot refuse the undo of
-   * a shot insert. That guard is open bug 6, an in-session defect this scenario
-   * is not hunting, and letting it fire here would wedge the history before the
-   * persistence walk ever started.
+   * a shot insert. That guard was open bug 6 (fixed in 72595cc6 - an undo now
+   * routes through the guard-free `remove_created_shot`), and the choice of a
+   * fresh, unanchored section is kept: it is what makes the plan's promises hold
+   * on ANY fixture, rather than only on one whose topology happens to cooperate.
    *
    * It also never has a shot DELETED from it (unless `DELETE_IN_TARGET` is set),
    * which is what keeps every id it hands out inside the range the loader
@@ -360,11 +367,15 @@ function target(memo: CoverageMemo): number | null {
 //   1-2   the fresh target section and the spare one the delete uses.
 //   3-8   every ProjectSnapshotPair step, as LOW in the stack as their
 //         preconditions allow, so they are the last thing a walk reaches.
-//   9-13  the graph and metadata entries, whose undo data names sections and
+//   9-14  the graph and metadata entries, whose undo data names sections and
 //         uuid-anchored stations rather than shot ids (`StationKey` is
 //         `SectionStart` / `AfterShot(uuid)`, models/station.rs), so they are
-//         id-safe and belong outside the window too.
-//   14-18 EVERY id-bearing entry, contiguous, at the top: two `CreateShot`s
+//         id-safe and belong outside the window too. Two of them are the
+//         `updateSection` PAIR: one clears name/surveyor/date to explicit null,
+//         the next sets all three from null, so both directions of
+//         `SectionUpdates`' double_option cross the save/reload boundary
+//         (issue #413 finding 5).
+//   15-19 EVERY id-bearing entry, contiguous, at the top: two `CreateShot`s
 //         (bug 8's own variant, both anchor forms), two `UpdateShot`s
 //         (`PreviousValues { shot_id }`, whose undo calls
 //         `update_shot(section, stale_id)` and whose redo re-executes
@@ -588,8 +599,10 @@ export const COVERAGE_STEPS: readonly CoverageStep[] = [
       const ids = [...digest.c].sort((a, b) => a - b);
       // Prefer the closure the step above created. Removing it puts the target
       // section back to being a pendant of the survey graph, so the shot inserts
-      // that follow are not inserts INTO A LOOP - which `delete_shot` refuses,
-      // wedging their undo (open bug 6). On a fixture that shipped closures the
+      // that follow are not inserts INTO A LOOP - which `delete_shot` refused,
+      // wedging their undo (bug 6, fixed in 72595cc6; the preference is kept
+      // because it keeps the plan's shape independent of that fix). On a fixture
+      // that shipped closures the
       // fallback is any of them, which is still a real ClosureInfo entry.
       const fresh = ids.filter((id) => !memo.closureIdsBefore.includes(id));
       const pool = fresh.length > 0 ? fresh : ids;
@@ -635,31 +648,66 @@ export const COVERAGE_STEPS: readonly CoverageStep[] = [
     },
   },
   {
-    name: 'updateSection',
+    name: 'updateSectionClear',
     variant: 'PreviousValues(section)',
     guaranteed: true,
-    purpose: 'PreviousValues { section_id, shot_id: None }',
+    purpose:
+      'PreviousValues { section_id, shot_id: None } that CLEARS name/surveyor/date to explicit ' +
+      'null. Forward: Some(None) must serialize as an explicit null in the persisted command, so ' +
+      'the redo re-clears after a reload. Undo: the capture is Some(Some(old)) and must put all ' +
+      'three back. Issue #413 finding 5 broke both halves',
     build(ctx, digest, memo) {
       const sectionId = target(memo);
       if (sectionId === null) return null;
-      // Only the three NON-NULLABLE fields. `name` / `surveyor` / `date` are
-      // open bug 5 (SectionUpdates has no double_option, so undo cannot restore
-      // a previously-null value) - an in-session defect that is already pinned
-      // red and is not what this scenario hunts. Patching it here would make
-      // every iteration fail on bug 5 before the persistence walk started. This
-      // is input selection, not a relaxed oracle: an unexpected change to any of
-      // those three fields still fails.
+      // Explicit nulls, deliberately. `createSection` gave the target a
+      // non-null name/surveyor/date (`nominalSection`), so this step is the
+      // value -> null direction and the step after it is the null -> value one.
+      // Together they cover both sides of SectionUpdates' double_option.
+      return {
+        action: 'updateSection',
+        args: [sectionId, { name: null, surveyor: null, date: null, quality: ctx.randInt(1, 5) }],
+        label: `updateSection(s=${sectionId},clear name/surveyor/date)`,
+      };
+    },
+  },
+  {
+    name: 'updateSection',
+    variant: 'PreviousValues(section)',
+    guaranteed: true,
+    purpose:
+      'PreviousValues { section_id, shot_id: None } over EVERY updatable field, on a section ' +
+      'whose name/surveyor/date the step before it set to null - so the capture is Some(None) ' +
+      'and the undo has to restore a previously-null value, which is finding 5 exactly',
+    build(ctx, digest, memo) {
+      const sectionId = target(memo);
+      if (sectionId === null) return null;
+      // All six fields, including the three nullable ones. They were EXCLUDED
+      // here while issue #413 finding 5 was open: `SectionUpdates` carried only
+      // `#[serde(default)]` on name/surveyor/date, so a captured `Some(None)`
+      // ("this section had none, restore that") serialized to the same `null` as
+      // `None` ("leave it alone") and read back as the latter - the undo left the
+      // new value in place. Every iteration would have failed on that in-session
+      // defect before the persistence walk it exists to run had started.
+      //
+      // Fixed in b9c9d649 (double_option + skip_serializing_if, schema v17), so
+      // the restriction is lifted: this is the harness-tier, end-to-end proof
+      // that a Some(None) section field survives capture -> save -> reload ->
+      // undo -> redo. The oracle was never relaxed for it - an unexpected change
+      // to any of these fields always failed - only the INPUT was narrowed.
       return {
         action: 'updateSection',
         args: [
           sectionId,
           {
+            name: `persist-renamed-${ctx.randInt(1000, 9999)}`,
+            surveyor: `persist-surveyor-${ctx.randInt(1, 9)}`,
+            date: `20${ctx.randInt(10, 26)}-0${ctx.randInt(1, 9)}-1${ctx.randInt(0, 9)}`,
             color: ctx.pick(COLORS),
             direction: ctx.pick(SURVEY_DIRECTIONS),
             quality: ctx.randInt(1, 5),
           },
         ],
-        label: `updateSection(s=${sectionId},color/direction/quality)`,
+        label: `updateSection(s=${sectionId},name/surveyor/date from null + color/direction/quality)`,
       };
     },
   },

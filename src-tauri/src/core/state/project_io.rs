@@ -295,6 +295,28 @@ fn apply_save_heals(project: &mut Project) {
 ///   supposed to be restoring. Neither direction can OVERWRITE an anchor - both
 ///   the app's capture and this carry-forward skip a section that already has
 ///   one - so the pair a section is pinned to never moves.
+///
+/// # The half of finding 11 this does NOT cover, and what does
+///
+/// KEPT, not superseded, by `AppState::refresh_snapshot_pair_counterpart`
+/// (`undo.rs`) - the two cover different halves of a history move and the split
+/// is exact:
+///
+/// * THIS covers the half being RESTORED. It reaches into a payload recorded
+///   before a heal and brings it up to date, which nothing else can do: the
+///   payload is the only record of that state, so if the restore did not repair
+///   it the heal would simply be reverted.
+/// * THE REFRESH covers the half being LEFT BEHIND, by re-recording it from the
+///   live project. That is what makes the reverse move exact - and it is the only
+///   thing that can, because this carry-forward is a LIVE-SECTION LOOKUP and a
+///   snapshot pair whose halves disagree about whether a section EXISTS (a
+///   `Batch` holding a `CreateSection`, `execute_delete_shot_range_split`'s
+///   re-created tail) has no live counterpart at the moment the section comes
+///   back (#413, finding 11's re-creation residue).
+///
+/// Neither subsumes the other, and this one is also on the path of every
+/// `ProjectSnapshot`, rollback and load-time restore, where there is no pair to
+/// refresh at all.
 /// * `ensure_unique_shot_uuids` - NOT re-applied. It RE-MINTS an existing uuid,
 ///   which is not fill-in, and the pre-repair state of a `duplicate_shot_uuid`
 ///   Repair is a snapshot that intentionally holds duplicates: undoing that

@@ -3,6 +3,14 @@ use crate::models::{SectionId, SectionIdentity, SectionUpdates, Shot, ShotId, Sh
 
 use super::AppState;
 
+/// Which way through the history a step is going, for the two paths that have to
+/// treat the two halves of a `ProjectSnapshotPair` asymmetrically.
+#[derive(Clone, Copy)]
+enum HistoryMove {
+    Undo,
+    Redo,
+}
+
 impl AppState {
     // === Project operations ===
 
@@ -60,6 +68,12 @@ impl AppState {
         // recorded since, the gauge pair a save captured above all (#413,
         // finding 1's second half). A no-op for every other variant.
         self.refresh_created_section_identity(&mut entry);
+        // A snapshot pair is a WALL, and the live project is the wall's `after`
+        // side. Re-record it before stepping through, so the redo puts back what
+        // this undo is about to destroy rather than a payload that predates every
+        // undo-less heal since (#413, finding 11's re-creation residue). A no-op
+        // for every other variant.
+        self.refresh_snapshot_pair_counterpart(&mut entry, HistoryMove::Undo);
 
         // Apply undo based on undo_data type
         // IMPORTANT: No early returns after this point - all paths must flow
@@ -76,6 +90,7 @@ impl AppState {
                 shot_id,
                 shot_uuid,
                 values_json,
+                previous_offsets,
             } => {
                 // Restore previous values
                 if let Some(shot_id) = shot_id {
@@ -86,7 +101,21 @@ impl AppState {
                             if let Ok(prev_updates) =
                                 serde_json::from_str::<ShotUpdates>(values_json.as_str())
                             {
-                                self.update_shot(*section_id, target_id, prev_updates)
+                                let restored =
+                                    self.update_shot(*section_id, target_id, prev_updates);
+                                if restored.success {
+                                    // The re-execution's `realign_after_shot_edit`
+                                    // just RE-DERIVED the group's offsets. An
+                                    // inverse restores rather than re-derives, and
+                                    // the two part company on a key that lands
+                                    // back on the origin: the adjusted write drops
+                                    // it, and the pre-edit state may legitimately
+                                    // have HELD it (#413, finding 27). Hand the
+                                    // recorded map back verbatim, exactly as
+                                    // `SegmentMoveInfo` and `ZeroDatumInfo` do.
+                                    self.restore_captured_section_offsets(previous_offsets);
+                                }
+                                restored
                             } else {
                                 CommandResult::failure("Failed to parse undo data".to_string())
                             }
@@ -154,6 +183,7 @@ impl AppState {
                 after_shot_id,
                 before_shot_id,
                 uuid,
+                previous_offsets,
                 ..
             } => {
                 // Undo a CreateShot by removing the shot it created - resolved
@@ -170,11 +200,23 @@ impl AppState {
                 // into an empty section whose inverse is not the general
                 // delete (finding 3).
                 match self.resolve_undo_shot(*section_id, uuid.as_deref(), *shot_id) {
-                    Ok(target_id) => self.remove_created_shot(
-                        *section_id,
-                        target_id,
-                        after_shot_id.is_none() && before_shot_id.is_none() && *position == 0,
-                    ),
+                    Ok(target_id) => {
+                        let removed = self.remove_created_shot(
+                            *section_id,
+                            target_id,
+                            after_shot_id.is_none() && before_shot_id.is_none() && *position == 0,
+                        );
+                        if removed.success {
+                            // The removal paid the section's offset back by the
+                            // segment it took out, through the adjusted write -
+                            // which DROPS a key that lands on the origin whether
+                            // or not the pre-insert state held one. Restore the
+                            // recorded map instead of trusting that re-derivation
+                            // (#413, finding 27's second arm).
+                            self.restore_captured_section_offsets(previous_offsets);
+                        }
+                        removed
+                    }
                     Err(e) => CommandResult::failure(e),
                 }
             }
@@ -540,7 +582,7 @@ impl AppState {
     /// Redo implementation (caller must hold command_lock)
     fn redo_inner(&self) -> CommandResult {
         // Pop from redo stack
-        let entry = {
+        let mut entry = {
             let Ok(mut stack) = self.undo_stack.lock() else {
                 return CommandResult::failure("Failed to lock undo stack".to_string());
             };
@@ -550,6 +592,12 @@ impl AppState {
             };
             e
         };
+
+        // The mirror of the undo side: the live project is this wall's `before`
+        // side, so re-record it before stepping through and the undo that follows
+        // puts back what this redo destroys (#413, finding 11's re-creation
+        // residue). A no-op for every other variant.
+        self.refresh_snapshot_pair_counterpart(&mut entry, HistoryMove::Redo);
 
         // For snapshot-based undo data, restore from snapshot instead of re-executing.
         // This handles cases where re-execution would create different IDs.
@@ -963,6 +1011,100 @@ impl AppState {
             return;
         };
         *identity = SectionIdentity::of(section);
+    }
+
+    /// Put a captured `section_offsets` slice back verbatim, `None` meaning "this
+    /// section had no key" (#413, finding 27).
+    ///
+    /// The counterpart of `Project::capture_rigid_connected_section_offsets`, and
+    /// the same restore `MergeInfo` / `ZeroDatumInfo` / `SegmentMoveInfo` already
+    /// do - factored out here because the two arms that need it run their inverse
+    /// first and so cannot restore inside its project lock.
+    ///
+    /// Deliberately NOT normalized: `Project::restore_section_offsets` reproduces
+    /// the map it is handed, all-zero keys included, which is the entire point.
+    fn restore_captured_section_offsets(
+        &self,
+        offsets: &std::collections::HashMap<SectionId, Option<(f64, f64)>>,
+    ) {
+        if offsets.is_empty() {
+            return;
+        }
+        let mut guard = match self.project.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        let Some(project) = guard.as_mut() else {
+            return;
+        };
+        project.restore_section_offsets(offsets);
+    }
+
+    /// Re-record the half of a `ProjectSnapshotPair` the caller is NOT about to
+    /// restore, from the live project (#413, finding 11's re-creation residue).
+    ///
+    /// A snapshot pair is a wall: nothing above it survives a step through it, so
+    /// at the moment a step is taken the live project IS the side being left
+    /// behind - `after` when undoing, `before` when redoing. Re-recording that
+    /// side makes the pair a SELF-REFRESHING wall: the reverse move puts back
+    /// exactly the state this move destroyed, by construction, so undo and redo
+    /// of a snapshot pair are exact inverses of each other no matter what
+    /// happened to the live project since the entry was pushed.
+    ///
+    /// It exists because the recorded payload can be STALE in ways the entry
+    /// cannot know about. The save-time heals are the whole class: they mutate the
+    /// live project with no undo entry of their own (`apply_save_heals` -
+    /// uuid mints, the gauge pair `capture_missing_gauge_anchors` captures, the
+    /// orphan-offset retain), so a pair recorded before a save holds a pre-heal
+    /// project on BOTH sides.
+    ///
+    /// `reapply_heals_after_restore` (`project_io.rs`)
+    /// already covers the side being restored, but only where the restored
+    /// project and the live one hold THE SAME SECTION: it is a carry-forward, and
+    /// it copies anchors from a live section with the restored one's id. A pair
+    /// whose halves disagree about whether a section EXISTS - a `Batch` holding a
+    /// `CreateSection`, `execute_delete_shot_range_split`'s re-created tail, any
+    /// delete-and-recreate - has no such live counterpart at the moment the
+    /// section comes back, so the carry-forward covers nothing there. The refresh
+    /// does, and covers every other heal in both directions at the same time. The
+    /// two are complementary and both are kept: the refresh fixes the half being
+    /// LEFT (so the next move back is exact), the carry-forward fixes the half
+    /// being RESTORED (so this move does not revert a heal it never recorded).
+    ///
+    /// `refresh_created_section_identity` established the same pattern one variant
+    /// over, for `CreatedSectionSnapshot`.
+    ///
+    /// COST: one project serialization per snapshot-pair history move. Not a new
+    /// cost class - every command that records a pair already serializes the
+    /// project twice on the forward path, and this side of the move already
+    /// deserializes one - so it roughly matches what the step costs anyway.
+    ///
+    /// A serialization failure leaves the recorded payload alone: a stale wall is
+    /// recoverable, an empty one is not.
+    fn refresh_snapshot_pair_counterpart(&self, entry: &mut UndoEntry, direction: HistoryMove) {
+        let UndoData::ProjectSnapshotPair { before, after } = &mut entry.undo_data else {
+            return;
+        };
+        let guard = match self.project.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        let Some(project) = guard.as_ref() else {
+            return;
+        };
+        match Self::serialize_project_snapshot(project) {
+            Ok(json) => match direction {
+                HistoryMove::Undo => *after = json,
+                HistoryMove::Redo => *before = json,
+            },
+            Err(e) => {
+                tracing::error!(
+                    purpose = "refresh a snapshot pair before stepping through it",
+                    reason = %e,
+                    "Failed to serialize the live project; keeping the recorded snapshot"
+                );
+            }
+        }
     }
 
     // === Addressing a shot a persisted entry names ===

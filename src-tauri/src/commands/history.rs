@@ -1064,6 +1064,7 @@ mod tests {
                 shot_id: Some(0),
                 shot_uuid: None,
                 values_json: r#"{"length": 10.0, "azimuth_in": 45.0}"#.to_string(),
+                previous_offsets: std::collections::HashMap::new(),
             },
             timestamp: None,
         };
@@ -1361,6 +1362,7 @@ mod tests {
                 shot_id: None,
                 shot_uuid: None,
                 values_json: r#"{"name":"Old Name"}"#.to_string(),
+                previous_offsets: std::collections::HashMap::new(),
             },
             timestamp: None,
         };
@@ -1394,6 +1396,7 @@ mod tests {
                 shot_uuid: None,
                 values_json: r##"{"name":"Original","color":"#ff0000","direction":"in"}"##
                     .to_string(),
+                previous_offsets: std::collections::HashMap::new(),
             },
             timestamp: None,
         };
@@ -1437,6 +1440,7 @@ mod tests {
                 shot_id: None,
                 shot_uuid: None,
                 values_json: r##"{"name":"Old","surveyor":"Bob","date":"2025-01-01","color":"#ff0000","direction":"in","quality":1.0}"##.to_string(),
+                previous_offsets: std::collections::HashMap::new(),
             },
             timestamp: None,
         };

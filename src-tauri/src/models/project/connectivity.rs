@@ -363,6 +363,29 @@ impl Project {
         offsets
     }
 
+    /// Every `section_offsets` entry the geometry epilogue of an edit in
+    /// `section_id` can reach - `None` for a section that has no key.
+    ///
+    /// [`Self::capture_connected_section_offsets`] takes the MERGE group, which is
+    /// what `realign_after_shot_edit` walks. This one takes the RIGID connected
+    /// set ([`Self::get_rigid_connected_section_ids`] - merges plus ALIGNED loop
+    /// closures), which is what [`Self::cascade_connection_offsets`] walks, and is
+    /// therefore the superset an insert or a removal can displace. Used by the
+    /// undo entries that have to hand the map back rather than let their inverse
+    /// re-derive it (#413, finding 27), where capturing the wider set costs a few
+    /// map entries and capturing the narrower one would leave a
+    /// closure-reachable section unrestored.
+    pub(crate) fn capture_rigid_connected_section_offsets(
+        &self,
+        section_id: SectionId,
+    ) -> HashMap<SectionId, Option<(f64, f64)>> {
+        let mut offsets = HashMap::new();
+        for sid in self.get_rigid_connected_section_ids(section_id) {
+            offsets.insert(sid, self.section_offsets.get(&sid).copied());
+        }
+        offsets
+    }
+
     /// Restore section offsets from a captured snapshot.
     ///
     /// For each entry in `offsets`:

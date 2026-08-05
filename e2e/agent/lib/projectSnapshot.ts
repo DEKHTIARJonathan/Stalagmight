@@ -1,12 +1,25 @@
 /**
  * NODE-SIDE half of the undo/redo fuzzer's oracle: the diff reporter and the
- * known-asymmetry classifier.
+ * attribution classifier.
  *
  * The canonical snapshot itself is taken IN THE WEBVIEW - see
  * `fuzzOracleCore.ts`, which owns the serializer and documents what it
  * normalizes. Only the rare, slow paths live here: when two canonical strings
  * disagree, Node fetches both and works out whether the difference is real,
- * floating-point dust, or one of the open bugs listed below.
+ * floating-point dust, or one of the two DOCUMENTED, INTENDED families a save
+ * or a reload is allowed to produce (`SAVE_HEALING_MUTATIONS`,
+ * `RELOAD_RESOLVED_GEOMETRY`).
+ *
+ * ## No known-bug classifiers live here any more
+ *
+ * This file used to carry `KNOWN_UNDO_ASYMMETRIES` (issue #413 findings 1 and
+ * 2), `LOOP_CLOSURE_REORDER` (finding 4), `PRE_SAVE_SNAPSHOT_HEAL_REVERT`
+ * (finding 11) and `isShotIdentitySwap` (finding 8's tolerance gate). Every one
+ * of those findings is fixed in the Rust tier, so each classifier was DELETED
+ * per the delete-when-fixed contract the fix waves follow: a classifier that
+ * outlives its bug is a tolerance nobody re-examines. What remains is
+ * attribution for behaviour the app is designed to have, and it is narrow by
+ * path AND by direction.
  *
  * ## Why there is a tolerance at all
  *
@@ -28,12 +41,14 @@
  */
 
 /**
- * An undo/redo asymmetry that is a KNOWN OPEN APP BUG rather than expected
- * behaviour. These are NOT normalized away - a snapshot mismatch on one of
- * these paths still fails the fuzzer. The classification exists so the failure
- * message can name the bug instead of reading as a fresh mystery, and so a
- * developer working on something else can opt into tolerating it (see the
- * scenario's `STALAGMIGHT_FUZZ_ALLOW_KNOWN_BUGS` escape hatch).
+ * A named, path-and-direction-narrow rule for attributing a snapshot
+ * difference to something the app is DOCUMENTED to do without an undo entry -
+ * today only the save-time heals and the reload's offset re-solve.
+ *
+ * The name is historical: these used to double as known-open-bug classifiers,
+ * and none of those are left (see the module header). A rule here never makes a
+ * comparison green on its own - the scenarios apply them only to comparisons
+ * that CROSS a save/reload epoch, and re-baseline rather than ignore.
  */
 export interface KnownAsymmetry {
   id: string;
@@ -47,63 +62,6 @@ export interface KnownAsymmetry {
   accepts?(diff: SnapshotDiff): boolean;
   description: string;
 }
-
-/** True for `<absent>`, or for a coordinate pair whose every member is ~0. */
-function isAbsentOrZeroPair(text: string): boolean {
-  if (text === ABSENT) return true;
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(text);
-  } catch {
-    return false;
-  }
-  return (
-    Array.isArray(parsed) &&
-    parsed.length > 0 &&
-    parsed.every((value) => typeof value === 'number' && Math.abs(value) <= DEFAULT_TOLERANCE.absolute)
-  );
-}
-
-export const KNOWN_UNDO_ASYMMETRIES: readonly KnownAsymmetry[] = [
-  {
-    id: 'create-section-redo-remints-shot-uuids',
-    pathPattern: /^project\.sections\[\d+\]\.shots\[\d+\]\.uuid$/,
-    description:
-      'Redo of CreateSection re-mints every shot uuid. `UndoData::CreatedSectionSnapshot` ' +
-      'stores a `SectionData` (which has no uuid field), so redo goes ' +
-      'restore_section -> Section::new_with_id -> Shot::new -> Uuid::new_v4(). The sibling ' +
-      'CreateShot path was explicitly fixed for exactly this reason ' +
-      '(`UndoData::CreatedShotSnapshot { uuid }`, core/state/undo.rs) because a fresh uuid ' +
-      'dangles every `StationKey::AfterShot` anchor and the Ariane export identity.',
-  },
-  {
-    id: 'create-section-redo-drops-gauge-anchors',
-    pathPattern: /^project\.sections\[\d+\]\.(gauge_(shot|neighbour)_uuid|reverse_parity)$/,
-    accepts: (diff) => diff.actual === 'null' || diff.actual === 'false',
-    description:
-      'The SAME root cause as create-section-redo-remints-shot-uuids, in a second field. ' +
-      '`restore_section` rebuilds the section through `Section::new_with_id` -> `Section::new`, ' +
-      'which hardcodes `reverse_parity: false, gauge_shot_uuid: None, gauge_neighbour_uuid: None` ' +
-      '(models/section.rs:301-303), and `SectionData` carries none of them - so a redo of ' +
-      'CreateSection silently drops the least-squares gauge pair a save had captured. Only ' +
-      'observable once a run SAVES (capture_missing_gauge_anchors is a save-time heal), which is ' +
-      'why the fuzzer could not see this half until it crossed the persistence boundary. ' +
-      'Value-narrowed to value -> null/false: the anchors being LOST, not changed.',
-  },
-  {
-    id: 'undo-leaks-orphan-zero-section-offset',
-    pathPattern: /^project\.section_offsets\.\d+$/,
-    accepts: (diff) => isAbsentOrZeroPair(diff.expected) && isAbsentOrZeroPair(diff.actual),
-    description:
-      'Undoing a shot insert leaves behind a section_offsets entry the section did not have ' +
-      'before. The offset cascade INSERTS a key while solving (adjust_section_offset, ' +
-      'models/project/connectivity.rs) and nothing removes it again, so an all-zero entry ' +
-      'survives the undo. Geometrically inert (the value is 0, or 2.2e-16), but it means undo ' +
-      'is not an exact inverse and the leaked key is serialized into the .stalx. NOTE the ' +
-      'value narrowing: an offset key appearing with REAL geometry in it is a different, ' +
-      'unclassified failure and still fails the fuzzer.',
-  },
-];
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -238,17 +196,22 @@ export function diffSnapshots(
 }
 
 export interface DiffClassification {
-  /** Diffs explained by a known open app bug. */
+  /** Diffs explained by one of the rules passed in. */
   known: { diff: SnapshotDiff; asymmetry: KnownAsymmetry }[];
-  /** Diffs nothing known accounts for. */
+  /** Diffs nothing in that list accounts for. */
   unknown: SnapshotDiff[];
-  /** Distinct known asymmetries hit. */
+  /** Distinct rules hit. */
   asymmetries: KnownAsymmetry[];
 }
 
+/**
+ * `known` is REQUIRED. It used to default to `KNOWN_UNDO_ASYMMETRIES`, which is
+ * deleted (every finding it named is fixed); making the list explicit is what
+ * stops a future caller silently re-acquiring a default tolerance.
+ */
 export function classifyDiffs(
   diffs: readonly SnapshotDiff[],
-  known: readonly KnownAsymmetry[] = KNOWN_UNDO_ASYMMETRIES,
+  known: readonly KnownAsymmetry[],
 ): DiffClassification {
   const matched: DiffClassification['known'] = [];
   const unknown: SnapshotDiff[] = [];
@@ -267,6 +230,7 @@ export function classifyDiffs(
   return { known: matched, unknown, asymmetries: [...seen.values()] };
 }
 
+<<<<<<< HEAD
 /**
  * Undo of `RemoveLoopClosure` restores the closure with `loop_closures.push()`
  * (`src-tauri/src/core/state/undo.rs:244`) while the removal took it out with
@@ -477,6 +441,8 @@ export function isBug8ShotSwapOnly(
   );
 }
 
+=======
+>>>>>>> b9d6b14b (fix(undo): #413 wave 5 - finding 11 residue, finding 27; harness fully strict)
 /** Path segments to a list value inside a snapshot. */
 export type ListPath = readonly string[];
 
@@ -514,10 +480,13 @@ function sortedByCanonical(items: readonly unknown[]): unknown[] {
  * True when two snapshots hold the SAME list members at `listPath` in a
  * DIFFERENT order and are otherwise identical.
  *
- * This is a classification tool, never a comparison one: the snapshots are still
- * unequal and the fuzzer still fails. It exists so "undo reordered the closure
- * list" can be reported as exactly that, instead of as 30 unrelated-looking
- * value diffs at shifted indices.
+ * DIAGNOSTIC ONLY, and now purely so. It never made a comparison pass - the
+ * snapshots are still unequal and the fuzzer still fails - but it used to be the
+ * recognizer behind the `undo-remove-loop-closure-appends-instead-of-reinserting`
+ * classifier (issue #413 finding 4), which is deleted along with the bug. What
+ * survives is the READING of the failure: "undo reordered the closure list"
+ * reported as one sentence instead of 30 unrelated-looking value diffs at
+ * shifted indices, should anything ever reintroduce that shape.
  */
 export function isListPermutationOnly(
   expectedJson: string,

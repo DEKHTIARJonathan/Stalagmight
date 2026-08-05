@@ -192,6 +192,34 @@ pub enum UndoData {
         shot_uuid: Option<String>,
         /// JSON serialized previous values (ShotUpdates or SectionUpdates)
         values_json: String,
+        /// The `section_offsets` entries the edited section's geometry epilogue
+        /// can reach, as they stood BEFORE the command - `None` for a section that
+        /// had no key.
+        ///
+        /// The undo of this variant RE-EXECUTES `update_shot` with the previous
+        /// field values, and `realign_after_shot_edit` then re-derives the group's
+        /// offsets. An inverse RESTORES; it does not re-derive, and here the two
+        /// differ: the re-derivation adds a delta and writes it through
+        /// `Project::write_adjusted_section_offset`, which DROPS a key that lands
+        /// on the origin (#413 finding 2's dust half) - correct for an adjustment
+        /// that cancels, wrong when the pre-edit state legitimately HELD an
+        /// all-zero key, because presence is structural: it is serialized into the
+        /// `.stalx` and every oracle compares the map (#413, finding 27).
+        ///
+        /// Only the RIGID CONNECTED SET of the edited section
+        /// (`Project::capture_rigid_connected_section_offsets` - merges plus
+        /// aligned loop closures), not the whole map: that is exactly what the
+        /// geometry epilogue can displace, and this entry is written on every
+        /// keystroke-scale shot edit.
+        ///
+        /// FORMAT EVOLUTION (additive, no schema bump): empty in entries written
+        /// before this field existed and in entries for a command whose undo
+        /// re-derives nothing (a metadata-only shot edit, a section-metadata
+        /// edit); an empty map restores nothing, which is the pre-fix behaviour.
+        #[serde(default)]
+        #[serde(skip_serializing_if = "HashMap::is_empty")]
+        #[serde(serialize_with = "ordered_section_offsets")]
+        previous_offsets: HashMap<SectionId, Option<(f64, f64)>>,
     },
 
     /// Full section snapshot for restoring deleted sections
@@ -284,6 +312,31 @@ pub enum UndoData {
         /// (redo then mints a fresh UUID, the pre-fix behavior).
         #[serde(default)]
         uuid: Option<String>,
+        /// The `section_offsets` entries the insert's cascade can reach, as they
+        /// stood BEFORE it - `None` for a section that had no key. The RIGID
+        /// CONNECTED SET, which is what `Project::cascade_connection_offsets`
+        /// walks (merges plus aligned loop closures).
+        ///
+        /// Finding 27's second arm, and the same defect as
+        /// `PreviousValues::previous_offsets` one variant over. Undoing a
+        /// `CreateShot` REMOVES the shot, and a mid-section remove pays the
+        /// section's offset back by the segment it took out
+        /// (`Project::remove_shot*` -> `adjust_section_offset`), so a section
+        /// whose key was legitimately an all-zero one gets that key DROPPED by
+        /// `write_adjusted_section_offset` on the way back. The forward insert had
+        /// moved it off zero, so the value alone reads as correct; it is the
+        /// presence that is lost, and presence is serialized into the `.stalx`.
+        ///
+        /// Captured before the command runs and handed straight back after the
+        /// removal, so the undo restores rather than re-derives.
+        ///
+        /// FORMAT EVOLUTION (additive, no schema bump): empty in entries written
+        /// before this field existed; an empty map restores nothing, which is the
+        /// pre-fix behaviour.
+        #[serde(default)]
+        #[serde(skip_serializing_if = "HashMap::is_empty")]
+        #[serde(serialize_with = "ordered_section_offsets")]
+        previous_offsets: HashMap<SectionId, Option<(f64, f64)>>,
     },
 
     /// Merge info for unmerging stations
@@ -1662,6 +1715,7 @@ mod tests {
                 after_shot_uuid: None,
                 before_shot_uuid: None,
                 uuid: uuid.map(str::to_string),
+                previous_offsets: HashMap::new(),
             },
             timestamp: None,
         }
@@ -2006,6 +2060,7 @@ mod tests {
                     after_shot_uuid: None,
                     before_shot_uuid: None,
                     uuid: None,
+                    previous_offsets: HashMap::new(),
                 },
                 timestamp: None,
             },
@@ -2058,6 +2113,7 @@ mod tests {
                     shot_id: Some(100),
                     shot_uuid: None,
                     values_json: r#"{"length":5.0}"#.to_string(),
+                    previous_offsets: HashMap::new(),
                 },
                 timestamp: None,
             },

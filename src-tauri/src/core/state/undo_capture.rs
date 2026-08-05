@@ -17,7 +17,28 @@ impl AppState {
         match cmd {
             // For create commands, we'll fill in the ID after execution
             Command::CreateSection { .. } => UndoData::None, // Will be finalized after execution
-            Command::CreateShot { .. } => UndoData::None,    // Will be finalized after execution
+            // A STUB, filled in by `finalize_undo_data` once the shot exists -
+            // the same shape `ProjectSnapshotPair { after: String::new() }` uses
+            // below. It is a stub rather than `UndoData::None` because ONE of its
+            // fields can only be read BEFORE the insert: the `section_offsets` the
+            // insert's cascade can reach, as they stood, which the undo has to
+            // hand back rather than let the removal re-derive (#413, finding 27's
+            // second arm). Every other field is placeholder and is overwritten; if the
+            // finalize cannot find the created shot it yields `UndoData::None`,
+            // exactly as this arm used to.
+            Command::CreateShot { section_id, .. } => UndoData::CreatedShotSnapshot {
+                section_id: *section_id,
+                shot_id: 0,
+                shot_data: crate::models::ShotData::default(),
+                position: 0,
+                station_shift_from: 0,
+                after_shot_id: None,
+                before_shot_id: None,
+                after_shot_uuid: None,
+                before_shot_uuid: None,
+                uuid: None,
+                previous_offsets: project.capture_rigid_connected_section_offsets(*section_id),
+            },
 
             // For DeleteSection, capture full project snapshot (before/after pair)
             // because cleanup_section_references removes merges, closures, offsets, and
@@ -125,6 +146,18 @@ impl AppState {
                                 // beside it is renumbered on load (#413).
                                 shot_uuid: shot.uuid.clone(),
                                 values_json: json,
+                                // What the undo's re-execution will RE-DERIVE and
+                                // therefore has to be handed back verbatim
+                                // instead (#413, finding 27). Captured only for a
+                                // geometry edit, because that is the only one
+                                // `update_shot` realigns for - and `prev_updates`
+                                // mirrors which fields `updates` sets, so the undo
+                                // realigns exactly when the forward command did.
+                                previous_offsets: if updates.touches_geometry() {
+                                    project.capture_rigid_connected_section_offsets(*section_id)
+                                } else {
+                                    std::collections::HashMap::new()
+                                },
                             }
                         } else {
                             UndoData::None
@@ -158,6 +191,9 @@ impl AppState {
                             shot_id: None,
                             shot_uuid: None,
                             values_json: json,
+                            // `update_section` writes metadata and no geometry, so
+                            // its undo re-derives no offsets to restore.
+                            previous_offsets: std::collections::HashMap::new(),
                         }
                     } else {
                         UndoData::None
@@ -203,6 +239,10 @@ impl AppState {
                             shot_id: Some(*shot_id),
                             shot_uuid: shot.uuid.clone(),
                             values_json: json,
+                            // A kind is not geometry (`Command::affects_geometry`
+                            // says so and `set_shot_kind` realigns nothing), so
+                            // this undo re-derives no offsets to restore.
+                            previous_offsets: std::collections::HashMap::new(),
                         })
                 })
                 .unwrap_or(UndoData::None),
@@ -486,6 +526,15 @@ impl AppState {
                 before_shot_id,
                 ..
             } => {
+                // The one field that had to be read BEFORE the insert, carried
+                // across from the stub `generate_undo_data` built (#413, finding
+                // 27's second arm).
+                let previous_offsets = match &undo_data {
+                    UndoData::CreatedShotSnapshot {
+                        previous_offsets, ..
+                    } => previous_offsets.clone(),
+                    _ => std::collections::HashMap::new(),
+                };
                 // Capture full snapshot of the just-created shot so that redo can
                 // restore it with its original ID instead of re-executing CreateShot
                 // (which would assign a new ID).
@@ -537,12 +586,16 @@ impl AppState {
                             after_shot_uuid: anchor_uuid(*after_shot_id),
                             before_shot_uuid: anchor_uuid(*before_shot_id),
                             uuid: shot.uuid.clone(),
+                            previous_offsets,
                         }
                     } else {
-                        undo_data
+                        // The stub could not be completed, so it must not be
+                        // pushed: `UndoData::None`, which is what this arm
+                        // yielded before the stub existed.
+                        UndoData::None
                     }
                 } else {
-                    undo_data
+                    UndoData::None
                 }
             }
 

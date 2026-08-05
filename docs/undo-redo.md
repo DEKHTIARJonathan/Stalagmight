@@ -35,16 +35,16 @@ Commands go through a two-phase capture during execution:
 | Variant | Used By | Undo | Redo |
 |---------|---------|------|------|
 | `InverseCommand` | SetStationComment | Execute the inverse command | Execute the original command |
-| `PreviousValues` | UpdateShot, SetShotKind, UpdateSectionMetadata | Parse JSON, apply old values | Execute the original command |
+| `PreviousValues` | UpdateShot, SetShotKind, UpdateSectionMetadata | Parse JSON, apply old values, then put the recorded `section_offsets` back (see below) | Execute the original command |
 | `CreatedSectionSnapshot` | CreateSection | Delete the section | Restore from snapshot (preserves the original ID **and** the recorded identity - see below) |
-| `CreatedShotSnapshot` | CreateShot | Remove the created shot - the exact inverse of the insert, guard-free (see below) | Restore from snapshot (preserves original ID) |
+| `CreatedShotSnapshot` | CreateShot | Remove the created shot - the exact inverse of the insert, guard-free - then put the recorded `section_offsets` back (see below) | Restore from snapshot (preserves original ID) |
 | `ShotSnapshot` | DeleteShot | Restore shot at exact position | Re-execute the delete |
 | `MergeInfo` | MergeStations | Restore previous offsets + unmerge | Execute the original command |
 | `UnmergeInfo` | UnmergeStations | Re-merge + restore removed closures | Re-execute the unmerge |
 | `ClosureInfo` | Create/RemoveLoopClosure | Remove the closure, or put it back at its recorded index | Push closure back (preserves ID) |
 | `ZeroDatumInfo` | Set/RemoveZeroDatum | Restore GPS + offsets directly, at the datum's recorded index | Execute the original command |
 | `SegmentMoveInfo` | MoveSegment | Restore section offsets directly | Reapply offset to affected sections |
-| `ProjectSnapshotPair` | Batch, DeleteSection | Restore "before" JSON | Restore "after" JSON |
+| `ProjectSnapshotPair` | Batch, DeleteSection | Re-record "after" from the live project, then restore "before" JSON (see below) | Re-record "before" from the live project, then restore "after" JSON |
 | `None` | Non-undoable commands | N/A | N/A |
 
 ### Undo data addresses a shot by uuid, never by its in-session id (#413)
@@ -139,6 +139,64 @@ anchors the live project already holds). The heals that DROP or REWRITE state
 are deliberately not re-applied: an undo has to be an exact inverse, and undoing
 a Repair has to restore the very state that Repair healed. The per-heal argument
 is on the function.
+
+### A snapshot pair is a SELF-REFRESHING wall (#413, finding 11's re-creation residue)
+
+The carry-forward above repairs the half being **restored**, and it can only do so
+where the restored project and the live one hold **the same section** - it copies
+anchors from a live section with the restored one's id. A pair whose two halves
+disagree about whether a section EXISTS has no such counterpart: a `Batch`
+containing `CreateSection`, `execute_delete_shot_range_split`'s re-created tail,
+any delete-and-recreate. Undo restores a `before` in which the section is absent,
+and the redo then restores an `after` recorded before the save that minted the
+section's gauge pair - so the state at that depth still depended on the route.
+
+So `undo_inner` and `redo_inner` both call
+`AppState::refresh_snapshot_pair_counterpart` (`core/state/undo.rs`) before
+stepping through a pair. A pair is a wall - nothing above it survives the step -
+so at that moment the live project **is** the side being left behind: `after` when
+undoing, `before` when redoing. Re-recording that side from the live project makes
+undo and redo of a pair exact inverses of each other **by construction**, whatever
+undo-less change happened since the entry was pushed. `refresh_created_section_identity`
+does the same thing one variant over, for `CreatedSectionSnapshot`.
+
+The two are complementary and both are kept: the refresh fixes the half being
+LEFT, the carry-forward fixes the half being RESTORED (and is also on the path of
+every single `ProjectSnapshot`, rollback and load-time restore, where there is no
+pair to refresh). The cost is one project serialization per snapshot-pair history
+move - not a new cost class, since recording a pair already serializes the project
+twice and restoring one already deserializes it.
+
+### An inverse RESTORES offsets, it does not re-derive them (#413, finding 27)
+
+`Project::write_adjusted_section_offset` drops a `section_offsets` key whose
+COMPUTED value lands within `Project::OFFSET_DUST_M` of the origin, so an adjust
+and its cancelling adjust-back leave no key behind - the route that did nothing has
+none either (#413 finding 2's dust half).
+
+That is right for a forward adjustment and wrong for an inverse, because an
+all-zero key can be legitimately PRESENT: `Project::restore_section_offsets`
+reproduces the map it is handed, and the load path inserts whatever rows the file
+holds, so a project written before that normalization existed opens carrying one.
+An undo that re-executes or re-derives then DROPS a key the pre-edit state held.
+Presence is structural - it is serialized into the `.stalx` - so the undo stops
+being an exact inverse.
+
+Both arms therefore carry the pre-command map of the target section's merge group
+(`Project::capture_connected_section_offsets`) and hand it back verbatim after the
+inverse has run:
+
+- `UndoData::PreviousValues { previous_offsets }` - the undo re-executes
+  `update_shot`, whose `realign_after_shot_edit` re-derives the group's offsets.
+  Captured only for a geometry edit, which is the only one that realigns.
+- `UndoData::CreatedShotSnapshot { previous_offsets }` - the undo removes the shot,
+  and a mid-section removal pays the section's offset back by the segment it took
+  out.
+
+Only the undo direction needs it. A redo re-executes the forward command from a
+state the undo restored exactly, and the forward path is deterministic, so it
+reproduces the recorded post-command map including any legitimate all-zero key it
+held.
 
 ### An inverse consults no user-intent guard (#413, findings 3 and 6)
 

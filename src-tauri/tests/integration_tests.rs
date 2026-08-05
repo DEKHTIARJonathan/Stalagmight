@@ -650,6 +650,7 @@ fn test_comprehensive_undo_types() {
             shot_id: Some(0),
             shot_uuid: None,
             values_json: "{}".to_string(),
+            previous_offsets: HashMap::new(),
         },
         UndoData::SectionSnapshot {
             section_id: 0,

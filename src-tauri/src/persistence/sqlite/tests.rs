@@ -2603,6 +2603,7 @@ fn test_new_format_undo_history_survives_reload() {
             shot_id: Some(shot_id),
             shot_uuid: None,
             values_json,
+            previous_offsets: HashMap::new(),
         },
         timestamp: None,
     };

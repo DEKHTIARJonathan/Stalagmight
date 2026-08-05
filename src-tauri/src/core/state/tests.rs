@@ -1682,6 +1682,7 @@ fn redo_legacy_prepend_createshot_reanchors_section_start() {
             after_shot_uuid: None,
             before_shot_uuid: None,
             uuid: Some("prep-uuid".to_string()),
+            previous_offsets: HashMap::new(),
         },
         timestamp: None,
     };
@@ -1767,6 +1768,7 @@ fn test_undo_fails_with_invalid_previous_values_shot() {
             shot_id: Some(1),
             shot_uuid: None,
             values_json: "not-json".to_string(),
+            previous_offsets: HashMap::new(),
         },
     );
     drop(stack);
@@ -1790,6 +1792,7 @@ fn test_undo_fails_with_invalid_previous_values_section() {
             shot_id: None,
             shot_uuid: None,
             values_json: "not-json".to_string(),
+            previous_offsets: HashMap::new(),
         },
     );
     drop(stack);
@@ -7785,6 +7788,7 @@ fn test_undo_failure_preserves_entry_on_undo_stack() {
             shot_id: Some(1),
             shot_uuid: None,
             values_json: "not-valid-json".to_string(),
+            previous_offsets: HashMap::new(),
         },
     );
     assert_eq!(stack.len(), 1);
@@ -7892,6 +7896,7 @@ fn test_undo_failure_preserves_entry_at_top_lifo_order() {
                 shot_id: Some(999),
                 shot_uuid: None,
                 values_json: "not-json".to_string(),
+                previous_offsets: HashMap::new(),
             },
         );
         // undo stack: [CreateSection, InvalidUpdateShot] (top = InvalidUpdateShot)
@@ -8028,6 +8033,7 @@ fn test_undo_to_partial_completion_stops_at_failed_step() {
                 shot_id: Some(999),
                 shot_uuid: None,
                 values_json: "invalid-json".to_string(),
+                previous_offsets: HashMap::new(),
             },
             timestamp: None,
         });
@@ -22536,6 +22542,7 @@ fn a_failed_undo_still_pushes_its_entry_back() {
                 shot_id: Some(1),
                 shot_uuid: None,
                 values_json: "not-valid-json".to_string(),
+                previous_offsets: HashMap::new(),
             },
             timestamp: None,
         })

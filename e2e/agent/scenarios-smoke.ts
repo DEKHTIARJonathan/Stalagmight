@@ -16,29 +16,41 @@ import { callStoreAction } from './lib/stores';
 const SMOKE_ITERATIONS: Record<string, number> = {
   'seed-large-project': 1,
   'undo-redo-churn': 5,
-  // RED at the moment, and deliberately so: seed 1 reaches a classified known
-  // bug at this count on the v2 generator stream (it took 3 actions on v1, but
-  // v2 draws differently - see the scenario header). `undo-redo-fuzz`
-  // reproduces eight open undo bugs, so making the gate green would mean
-  // weakening its oracle. Run the whole gate with
-  // STALAGMIGHT_FUZZ_ALLOW_KNOWN_BUGS=1 to tolerate the classified ones.
-  // Lower it only if someone decides a green gate matters more than the
-  // standing reminder - and re-check that the lower count still fails.
-  'undo-redo-fuzz': 40,
-  // RED at the moment, deliberately, for the same reason as `undo-redo-fuzz`
-  // above: it reproduces open app bugs, so a green gate would mean its oracle had
-  // been weakened. ONE iteration is enough and is what the entry is set to - the
-  // scenario is not a random walk, so every iteration builds the same 18-entry
-  // covering stack and crosses the same save/reload boundary; a second iteration
-  // adds ~5 s and no new signal.
+  // STRICT, and still RED - on a different bug than it used to be. This count is
+  // not arbitrary: seed 1 x40 on the v2 generator stream is the repro line for
+  // issue #413 bug 1 (a redo of CreateSection re-minting every shot uuid, plus
+  // the gauge-anchor half), so this entry is that bug's standing regression
+  // check, and bug 1 is fixed. What it hits now is finding 11's RESIDUE: a redo
+  // of a pre-save ProjectSnapshotPair that RE-CREATES a section drops the gauge
+  // anchors the save captured, because the fix's carry-forward can only copy
+  // them from a live section that still exists. `pnpm agent:fuzz-shrink` reduces
+  // this very seed to two steps - executeBatch(...+crtSec+...) then save - and
+  // the reduction is written up in the scenario header.
   //
-  // What that one iteration hits, deterministically: finding 12 (undo of
-  // set_shot_kind / update_shot edits the wrong shot after a reload) on the first
-  // id-bearing entry the unwind reaches, which is where a STRICT run stops. With
-  // STALAGMIGHT_FUZZ_ALLOW_KNOWN_BUGS=1 it walks the whole restored stack in both
-  // directions and also reports bug 1, bug 8 and finding 11, all classified.
-  // Raise it only if someone wants a longer soak here rather than in
-  // `pnpm agent:scenario`, and re-check that the lower count still fails.
+  // Every classifier and every known-bug tolerance is deleted, so
+  // STALAGMIGHT_FUZZ_ALLOW_KNOWN_BUGS=1 changes nothing: a mismatch of any shape
+  // fails. Do not lower the count to make the gate green, and do not add a
+  // classifier back - the red is the app's, and it is the point.
+  'undo-redo-fuzz': 40,
+  // GREEN, and strict, for the same reasons. ONE iteration is what the entry is
+  // set to - the scenario is not a random walk, so every iteration builds the
+  // same 19-entry covering stack and crosses the same save/reload boundary; a
+  // second iteration adds ~5 s and no new signal.
+  //
+  // What that one iteration used to hit, deterministically: finding 12 (undo of
+  // set_shot_kind / update_shot editing the wrong shot after a reload) on the
+  // first id-bearing entry the unwind reached, which is where a strict run
+  // stopped; tolerantly it went on to report bug 1, bug 8 and finding 11 as
+  // well. All four are fixed, so the same iteration now walks the whole restored
+  // stack down and back up clean (verified on fractal seeds 1, 3 and 9, and with
+  // STALAGMIGHT_PERSIST_FUZZ_DELETE_IN_TARGET=1) - which is exactly what makes it
+  // a regression check. Raise it only if someone wants a longer soak here rather
+  // than in `pnpm agent:scenario`.
+  //
+  // The naharon fixture is NOT clean on this scenario: finding 27 (an undo
+  // dropping an exactly-zero section_offsets key) reproduces at
+  // STALAGMIGHT_FUZZ_FIXTURE=naharon.stalx --seed 5. The gate runs the default
+  // fixture, so it does not see it; the write-up is in the scenario header.
   'undo-persistence-fuzz': 1,
   'dialog-cycling': 8,
   'tool-switch-spam': 20,

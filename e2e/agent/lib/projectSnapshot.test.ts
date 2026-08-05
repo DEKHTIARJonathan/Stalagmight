@@ -1,9 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  KNOWN_UNDO_ASYMMETRIES,
   LOOP_CLOSURES_PATH,
-  LOOP_CLOSURE_REORDER,
+  RELOAD_RESOLVED_GEOMETRY,
   SAVE_HEALING_MUTATIONS,
   canonicalJson,
   classifyDiffs,
@@ -18,7 +17,14 @@ import {
 
 // The canonical serializer and its normalization rules are tested in
 // fuzzOracleCore.test.ts, which owns them. This file covers the Node-only
-// half: the tolerant diff, the classifier, and the permutation detector.
+// half: the tolerant diff, the epoch attribution, and the permutation detector.
+//
+// The known-open-bug classifiers this file used to cover
+// (`KNOWN_UNDO_ASYMMETRIES`, `LOOP_CLOSURE_REORDER`) are deleted along with the
+// issue-413 findings they named, so their tests are gone with them. What is
+// tested here is what remains: attribution for behaviour a save or a reload is
+// DESIGNED to have, which must stay narrow by path AND by direction, and must
+// never match an ordinary field.
 
 describe('diffJson', () => {
   it('names the first differing path with both values', () => {
@@ -97,59 +103,58 @@ describe('diffJson', () => {
 });
 
 describe('classifyDiffs', () => {
-  it('recognises the CreateSection-redo shot-uuid re-mint', () => {
-    const classified = classifyDiffs([
-      { path: 'project.sections[2].shots[0].uuid', expected: '"u-1"', actual: '"u-2"' },
-    ]);
+  it('leaves every diff unknown when no rule is passed', () => {
+    // The `known` argument is required precisely so this is the default shape:
+    // an empty rule list classifies nothing, which is what a strict scenario
+    // wants when a comparison does not cross a save/reload epoch.
+    const classified = classifyDiffs(
+      [
+        { path: 'project.sections[2].shots[0].uuid', expected: '"u-1"', actual: '"u-2"' },
+        { path: 'project.section_offsets.32', expected: '<absent>', actual: '[0,0]' },
+      ],
+      [],
+    );
 
-    expect(classified.unknown).toHaveLength(0);
-    expect(classified.asymmetries.map((a) => a.id)).toEqual(['create-section-redo-remints-shot-uuids']);
+    expect(classified.known).toHaveLength(0);
+    expect(classified.unknown).toHaveLength(2);
+    expect(classified.asymmetries).toHaveLength(0);
   });
 
-  it('does not swallow a neighbouring field on a known-asymmetry path', () => {
-    const classified = classifyDiffs([
-      { path: 'project.sections[2].shots[0].length', expected: '5', actual: '6' },
-    ]);
+  it('does not swallow a neighbouring field on an attributable path', () => {
+    const classified = classifyDiffs(
+      [{ path: 'project.sections[2].shots[0].length', expected: '5', actual: '6' }],
+      SAVE_HEALING_MUTATIONS,
+    );
 
     expect(classified.known).toHaveLength(0);
     expect(classified.unknown).toHaveLength(1);
   });
 
-  it('recognises the orphan zero section_offsets entry an undo leaks', () => {
-    const classified = classifyDiffs([
-      { path: 'project.section_offsets.32', expected: '<absent>', actual: '[0,0]' },
-      { path: 'project.section_offsets.7', expected: '<absent>', actual: '[2.22044604925e-16,0]' },
-    ]);
+  it('reports each matching rule once, whatever the diff count', () => {
+    const classified = classifyDiffs(
+      [
+        { path: 'project.sections[2].gauge_shot_uuid', expected: 'null', actual: '"u-1"' },
+        { path: 'project.sections[5].gauge_shot_uuid', expected: 'null', actual: '"u-2"' },
+      ],
+      SAVE_HEALING_MUTATIONS,
+    );
 
-    expect(classified.unknown).toHaveLength(0);
-    expect(classified.asymmetries.map((a) => a.id)).toEqual(['undo-leaks-orphan-zero-section-offset']);
+    expect(classified.known).toHaveLength(2);
+    expect(classified.asymmetries.map((a) => a.id)).toEqual(['save-captures-missing-gauge-anchors']);
   });
 
-  it('does NOT accept an offset entry carrying real geometry as that known bug', () => {
-    const classified = classifyDiffs([
-      { path: 'project.section_offsets.28', expected: '<absent>', actual: '[-20.6,1.2]' },
-      { path: 'project.section_offsets.28[0]', expected: '-19.47', actual: '-20.61' },
-    ]);
-
-    expect(classified.known).toHaveLength(0);
-    expect(classified.unknown).toHaveLength(2);
-  });
-
-  it('exposes the loop-closure reorder with an id and an explanation too', () => {
-    expect(LOOP_CLOSURE_REORDER.id).toMatch(/^[a-z0-9-]+$/);
-    expect(LOOP_CLOSURE_REORDER.description.length).toBeGreaterThan(40);
-    // Recognised structurally, so it must never match by path.
-    expect(LOOP_CLOSURE_REORDER.pathPattern.test('project.loop_closures[1].id')).toBe(false);
-  });
-
-  it('exposes each known asymmetry with an id and an explanation', () => {
-    for (const asymmetry of KNOWN_UNDO_ASYMMETRIES) {
+  it('exposes every attribution rule with an id and an explanation', () => {
+    for (const asymmetry of [...SAVE_HEALING_MUTATIONS, ...RELOAD_RESOLVED_GEOMETRY]) {
       expect(asymmetry.id).toMatch(/^[a-z0-9-]+$/);
       expect(asymmetry.description.length).toBeGreaterThan(40);
     }
   });
 });
 
+// DIAGNOSTIC ONLY since the finding-4 classifier was deleted: it never made a
+// comparison pass, and now it only shapes the failure message. Still tested,
+// because a message that mis-explains a failure is worse than one that does not
+// try.
 describe('isListPermutationOnly', () => {
   const withClosures = (closures: unknown[], extra: Record<string, unknown> = {}): string =>
     canonicalJson({ project: { name: 'p', loop_closures: closures, ...extra }, stations: [] });

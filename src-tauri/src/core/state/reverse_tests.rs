@@ -1536,6 +1536,7 @@ fn undo_to_reports_the_reverses_it_already_applied_when_a_later_step_fails() {
                 shot_id: None,
                 shot_uuid: None,
                 values_json: "not-valid-json".to_string(),
+                previous_offsets: HashMap::new(),
             },
         );
     }
