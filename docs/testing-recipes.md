@@ -27,6 +27,18 @@ Four gate tests: `undo_redo_fuzz_gate` (in-memory), `_gate_persistence` (one
 save/close/reopen per seed), `_gate_multi_crossing` (three), and
 `_gate_combined` (below).
 
+**Five oracles per run.** Four compare what a history move DID - the project
+snapshot per depth, every cross-section merge, the app's own integrity verdict,
+and the adjusted geometry the map draws. The fifth compares what the entry SAYS:
+the `UndoHistoryItem` rows `get_undo_stack` returns, which are the history
+dropdown. It runs in two halves - the entry-intrinsic triple
+(`timestamp|commandType|description`) is pinned per depth for the life of a run,
+and the whole item including `previewData` is compared across every save/reload
+crossing. `previewData` is left out of the first half on purpose: it resolves
+section NAMES against the live project (see
+[Undo/Redo](undo-redo.md#section-name-resolution)), so it is stable exactly
+where the project is.
+
 **Reproducing a specific known bug.** The module carries a BUG IDENTIFICATION
 MATRIX in its header: for every finding on
 [issue 413](https://github.com/Stalagmight/Stalagmight/issues/413), the mode,
@@ -175,9 +187,11 @@ point also implements.
 It builds one project, saves it, loads it into TWO `AppState`s (which is what
 makes a strict comparison possible at all - `Shot::uuid` is a v4 uuid, so two
 independently-built projects share no identity), drives each down one route, and
-compares them on five oracles: the roundtrip fuzzer's four, re-used as free
-functions so the two engines cannot disagree about what a difference is, plus
-the id ALLOCATORS.
+compares them on five oracles: the roundtrip fuzzer's four STATE oracles,
+re-used as free functions so the two engines cannot disagree about what a
+difference is, plus the id ALLOCATORS. (The fuzzer's fifth, entry content, is
+not among them: it compares one `AppState`'s stacks against what that same app
+said earlier, so there is no second route to compare it across.)
 
 ```bash
 # The gate. Runs with the default suite; ~11 s.
