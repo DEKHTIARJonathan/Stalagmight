@@ -78,6 +78,48 @@ export async function waitForActiveTool(page: Page, tool: string): Promise<void>
   await expect(mapCanvas).toHaveAttribute('data-active-tool', tool);
 }
 
+/** A map center in the map's own coordinates. */
+export interface MapCenter {
+  lng: number;
+  lat: number;
+}
+
+/**
+ * The live map center, read off the `__stalagmight_map__` E2E handle.
+ *
+ * Non-nullable on purpose: every caller reads the camera AFTER `waitForMapReady`
+ * / `createProject`, so a missing handle is a broken test rather than a state
+ * worth asserting on. It throws inside the page, which surfaces as a clear
+ * "map handle is not available" error at the call site instead of a `null`
+ * that has to be `!`-asserted six lines later.
+ */
+export async function getMapCenter(page: Page): Promise<MapCenter> {
+  return page.evaluate(() => {
+    const map = (window as unknown as {
+      __stalagmight_map__?: { getCenter: () => { lng: number; lat: number } };
+    }).__stalagmight_map__;
+    if (!map) {
+      throw new Error('window.__stalagmight_map__ is not available (map not mounted yet?)');
+    }
+    const center = map.getCenter();
+    return { lng: center.lng, lat: center.lat };
+  });
+}
+
+/**
+ * The UI store's current selection, or null when nothing is selected (and when
+ * the E2E store handle is not exposed at all, which is the same "nothing to
+ * compare" answer for the before/after assertions this feeds).
+ */
+export async function getSelection(page: Page): Promise<unknown> {
+  return page.evaluate(() => {
+    const stores = (window as unknown as {
+      __E2E_TEST__?: { uiStore: { getState: () => { selection: unknown } } };
+    }).__E2E_TEST__;
+    return stores?.uiStore.getState().selection ?? null;
+  });
+}
+
 export async function waitForDialogClosed(page: Page, testId: string): Promise<void> {
   const dialog = page.getByTestId(testId);
   await expect(dialog).toBeHidden();

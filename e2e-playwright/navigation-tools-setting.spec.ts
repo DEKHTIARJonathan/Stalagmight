@@ -2,6 +2,7 @@ import { test, expect, type Page } from './fixtures/coverage';
 import {
   setupMockedPage,
   createProject,
+  getMapCenter,
   openSettingsFromMenu,
   waitForActiveTool,
   waitForMapReady,
@@ -25,19 +26,6 @@ async function getSavedConfig(page: Page): Promise<Record<string, unknown> | nul
     }).__MOCK_GET_SAVED_CONFIG__;
     return get?.() ?? null;
   });
-}
-
-async function getMapCenter(page: Page): Promise<{ lng: number; lat: number }> {
-  const center = await page.evaluate(() => {
-    const map = (window as unknown as {
-      __stalagmight_map__?: { getCenter: () => { lng: number; lat: number } };
-    }).__stalagmight_map__;
-    if (!map) return null;
-    const c = map.getCenter();
-    return { lng: c.lng, lat: c.lat };
-  });
-  expect(center, 'map instance is available').not.toBeNull();
-  return center!;
 }
 
 /** Open Settings from the in-project hamburger and land on the Map panel. */

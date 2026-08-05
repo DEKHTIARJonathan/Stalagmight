@@ -2,6 +2,8 @@ import { test, expect, type Page } from './fixtures/coverage';
 import {
   setupMockedPage,
   createProject,
+  getMapCenter,
+  getSelection,
   seedProjectWithSections,
   waitForMapReady,
   waitForMapIdle,
@@ -10,6 +12,7 @@ import {
   waitForDrawnStations,
   getDragGhostState,
   getDrawnGeometry,
+  type MapCenter,
   type ScreenPoint,
   type SectionSeed,
 } from './helpers/app';
@@ -40,24 +43,6 @@ const sectionSeeds: SectionSeed[] = [
   },
 ];
 
-interface MapCenter {
-  lng: number;
-  lat: number;
-}
-
-async function getMapCenter(page: Page): Promise<MapCenter> {
-  const center = await page.evaluate(() => {
-    const map = (window as unknown as {
-      __stalagmight_map__?: { getCenter: () => { lng: number; lat: number } };
-    }).__stalagmight_map__;
-    if (!map) return null;
-    const c = map.getCenter();
-    return { lng: c.lng, lat: c.lat };
-  });
-  expect(center, 'map instance is available').not.toBeNull();
-  return center!;
-}
-
 async function getMapZoom(page: Page): Promise<number> {
   const zoom = await page.evaluate(() => {
     const map = (window as unknown as { __stalagmight_map__?: { getZoom: () => number } })
@@ -71,15 +56,6 @@ async function getMapZoom(page: Page): Promise<number> {
 /** Manhattan distance between two centers - "did the camera move at all". */
 function centerDelta(a: MapCenter, b: MapCenter): number {
   return Math.abs(a.lng - b.lng) + Math.abs(a.lat - b.lat);
-}
-
-async function getSelection(page: Page): Promise<unknown> {
-  return page.evaluate(() => {
-    const stores = (window as unknown as {
-      __E2E_TEST__?: { uiStore: { getState: () => { selection: unknown } } };
-    }).__E2E_TEST__;
-    return stores?.uiStore.getState().selection ?? null;
-  });
 }
 
 /** The ruler's first endpoint and the merge tool's first pick, in one read. */

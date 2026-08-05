@@ -1,6 +1,6 @@
 import { test, expect, Page } from './fixtures/coverage';
 import { setupTauriMocks } from './mocks/tauri-ipc';
-import { seedNavigationTools, waitForActiveTool, waitForMapIdle } from './helpers/app';
+import { getMapCenter, seedNavigationTools, waitForActiveTool, waitForMapIdle } from './helpers/app';
 
 /**
  * Helper to wait for the MapLibre map to be ready.
@@ -36,17 +36,6 @@ async function getMapZoom(page: Page): Promise<number | null> {
   return page.evaluate(() => {
     const map = (window as unknown as { __stalagmight_map__?: { getZoom: () => number } }).__stalagmight_map__;
     return map?.getZoom() ?? null;
-  });
-}
-
-/**
- * Helper to get the current map center. Returns null if map is not ready.
- */
-async function getMapCenter(page: Page): Promise<{ lng: number; lat: number } | null> {
-  return page.evaluate(() => {
-    const map = (window as unknown as { __stalagmight_map__?: { getCenter: () => { lng: number; lat: number } } }).__stalagmight_map__;
-    const center = map?.getCenter();
-    return center ? { lng: center.lng, lat: center.lat } : null;
   });
 }
 

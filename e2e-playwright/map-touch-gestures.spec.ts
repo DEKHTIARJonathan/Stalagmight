@@ -3,6 +3,8 @@ import type { CDPSession } from '@playwright/test';
 import {
   setupMockedPage,
   createProject,
+  getMapCenter,
+  getSelection,
   seedProjectWithSections,
   waitForMapReady,
   waitForMapIdle,
@@ -60,19 +62,6 @@ async function touch(
   });
 }
 
-async function getMapCenter(page: Page): Promise<{ lng: number; lat: number }> {
-  const center = await page.evaluate(() => {
-    const map = (window as unknown as {
-      __stalagmight_map__?: { getCenter: () => { lng: number; lat: number } };
-    }).__stalagmight_map__;
-    if (!map) return null;
-    const c = map.getCenter();
-    return { lng: c.lng, lat: c.lat };
-  });
-  expect(center, 'map instance is available').not.toBeNull();
-  return center!;
-}
-
 async function getMapCamera(page: Page): Promise<{ zoom: number; bearing: number }> {
   const camera = await page.evaluate(() => {
     const map = (window as unknown as {
@@ -83,15 +72,6 @@ async function getMapCamera(page: Page): Promise<{ zoom: number; bearing: number
   });
   expect(camera, 'map instance is available').not.toBeNull();
   return camera!;
-}
-
-async function getSelection(page: Page): Promise<unknown> {
-  return page.evaluate(() => {
-    const stores = (window as unknown as {
-      __E2E_TEST__?: { uiStore: { getState: () => { selection: unknown } } };
-    }).__E2E_TEST__;
-    return stores?.uiStore.getState().selection ?? null;
-  });
 }
 
 async function canvasBox(page: Page): Promise<{ x: number; y: number; width: number; height: number }> {

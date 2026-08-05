@@ -2,6 +2,7 @@ import { test, expect, Page } from './fixtures/coverage';
 import {
   setupMockedPage,
   createProject,
+  getMapCenter,
   seedNavigationTools,
   seedProjectWithSections,
   waitForMapReady,
@@ -41,18 +42,6 @@ async function createProjectWithSections(page: Page): Promise<void> {
   await waitForMapReady(page);
   await waitForNoDialogs(page);
   await waitForMapIdle(page);
-}
-
-/** The live map center, or null before the map instance exists. */
-async function getMapCenter(page: Page): Promise<{ lng: number; lat: number } | null> {
-  return page.evaluate(() => {
-    const map = (window as unknown as {
-      __stalagmight_map__?: { getCenter: () => { lng: number; lat: number } };
-    }).__stalagmight_map__;
-    if (!map) return null;
-    const center = map.getCenter();
-    return { lng: center.lng, lat: center.lat };
-  });
 }
 
 /**
