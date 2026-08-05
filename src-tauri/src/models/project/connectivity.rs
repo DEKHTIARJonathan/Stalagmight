@@ -395,18 +395,19 @@ impl Project {
     /// This is used by undo to restore exact previous state (counterpart of
     /// `capture_connected_section_offsets`).
     ///
-    /// Deliberately NOT routed through [`Project::write_section_offset`], the
-    /// normalization every *adjustment* goes through (#413 finding 2). This is a
-    /// restore, not an adjustment: it reproduces the map as it was, and the only
-    /// way a captured value can be an all-zero entry is that the project already
-    /// carried one (a file written before that normalization existed). Dropping
-    /// it here would make the undo differ from the do-nothing route that keeps
-    /// it - the opposite of the property finding 2 is about.
+    /// Routed through [`Project::write_section_offset`] like every other writer,
+    /// because the invariant documented there is TOTAL: a dust-zero entry does not
+    /// exist, so a captured `Some((0, 0))` cannot have come from a state this app
+    /// is allowed to reproduce. This used to be the deliberate exception - a
+    /// restore reproducing the map as it was, all-zero entries included - and that
+    /// exception is what made the present-zero key representable at all. It is
+    /// gone with the state it served; a `Some` whose value is dust restores as
+    /// ABSENT, which is the only spelling of what it meant.
     pub fn restore_section_offsets(&mut self, offsets: &HashMap<SectionId, Option<(f64, f64)>>) {
         for (section_id, prev_offset) in offsets {
             match prev_offset {
                 Some(offset) => {
-                    self.section_offsets.insert(*section_id, *offset);
+                    Project::write_section_offset(&mut self.section_offsets, *section_id, *offset);
                 }
                 None => {
                     self.section_offsets.remove(section_id);

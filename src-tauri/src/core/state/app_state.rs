@@ -769,6 +769,23 @@ impl AppState {
                 // heal-by-heal reasoning for what that includes (and what it
                 // deliberately does not) is on the function.
                 reapply_heals_after_restore(&mut restored, slot.as_ref());
+                // The `section_offsets` invariant (`Project::write_section_offset`)
+                // has to hold for a map this app did not write, and a snapshot
+                // payload is exactly that case: undo/redo history is persisted to
+                // SQLite and reloaded across sessions, so an entry recorded by a
+                // build that predates the invariant can carry a dust-zero key. The
+                // load boundary drops one out of a `.stalx`; this is the same drop
+                // one payload over. Not a heal decided per-heal like the block
+                // above - it is an invariant, and a restore may not install a state
+                // the app cannot otherwise reach.
+                let dropped = restored.normalize_section_offsets();
+                if dropped > 0 {
+                    tracing::info!(
+                        dropped,
+                        purpose = "hold the section_offsets invariant across a snapshot restore",
+                        "Dropped restored section offsets that were within dust of the origin"
+                    );
+                }
                 *slot = Some(restored);
                 true
             }

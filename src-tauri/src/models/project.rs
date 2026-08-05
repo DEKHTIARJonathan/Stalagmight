@@ -1058,12 +1058,15 @@ impl Project {
     /// it - never up alone.
     pub const MERGE_ALIGNMENT_INVARIANT_M: f64 = 0.01;
 
-    /// The displacement (metres) below which a *computed adjustment* to a
-    /// section offset is float dust rather than geometry, and is therefore
-    /// normalized away instead of stored.
+    /// The displacement (metres) below which a section offset is float dust
+    /// rather than geometry, and is therefore normalized away instead of stored.
+    ///
+    /// It is what makes "not displaced" have exactly one spelling - see the
+    /// invariant on [`Self::write_section_offset`], which no `section_offsets`
+    /// entry in memory or on disk may violate.
     ///
     /// One constant for the three places that decide it (#413 finding 2's dust
-    /// half): [`Self::write_adjusted_section_offset`], the offset solver's
+    /// half): [`Self::write_section_offset`], the offset solver's
     /// [`Self::cascade_bfs`] correction gate, and the merge-BFS gates in
     /// `reconcile_after_edit`. They used to disagree - the merge BFS declined
     /// below 1e-12 while `cascade_bfs` "corrected" a femtometre, CREATING a

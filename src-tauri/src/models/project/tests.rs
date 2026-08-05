@@ -10266,22 +10266,39 @@ fn an_adjustment_that_lands_on_dust_leaves_no_section_offset_key() {
     project.adjust_section_offset(a, 0.001, 0.0);
     assert_eq!(project.section_offsets.get(&a).copied(), Some((0.001, 0.0)));
 
-    // The bound is a normalization on WRITES of computed values, not a
-    // comparison tolerance: a RESTORE reproduces what it was handed, dust and
-    // all, or an undo would stop being the exact inverse of what it undoes.
+    // The bound is a normalization on WRITES, and it binds EVERY writer - a
+    // restore included. It used to be the other way round (a restore reproduced
+    // what it was handed, dust and all, so an undo stayed the exact inverse of
+    // what it undid), and that exception is exactly what made a present all-zero
+    // key representable: `MoveSection(+d)` then `MoveSection(-d)` then had to end
+    // ABSENT from an absent key and PRESENT from an all-zero one, which no writer
+    // can decide from its own arguments. The state is gone instead - see the
+    // invariant on `Project::write_section_offset` - so a dust value handed to a
+    // restore lands ABSENT, which is the only spelling of what it meant.
     project.set_section_offset(a, (1e-15, 0.0));
     assert_eq!(
         project.section_offsets.get(&a).copied(),
-        Some((1e-15, 0.0)),
-        "restoring a captured dust value must reproduce it verbatim"
+        None,
+        "set_section_offset must hold the invariant: a dust value is not a position"
     );
+    project.set_section_offset(a, (0.002, 0.0));
     let mut captured = HashMap::new();
     captured.insert(a, Some((3e-14, -2e-14)));
     project.restore_section_offsets(&captured);
     assert_eq!(
         project.section_offsets.get(&a).copied(),
-        Some((3e-14, -2e-14)),
-        "restore_section_offsets is a restore, not an adjustment"
+        None,
+        "restore_section_offsets must hold it too: an entry recorded by a build that predates \
+         the invariant may not reinstate the state the invariant removed"
+    );
+    // And a restore of a REAL value is untouched by any of it.
+    let mut captured = HashMap::new();
+    captured.insert(a, Some((0.25, -0.5)));
+    project.restore_section_offsets(&captured);
+    assert_eq!(
+        project.section_offsets.get(&a).copied(),
+        Some((0.25, -0.5)),
+        "a restore of a real displacement must still reproduce it verbatim"
     );
 }
 

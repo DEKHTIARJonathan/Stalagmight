@@ -167,24 +167,58 @@ pair to refresh). The cost is one project serialization per snapshot-pair histor
 move - not a new cost class, since recording a pair already serializes the project
 twice and restoring one already deserializes it.
 
-### An inverse RESTORES offsets, it does not re-derive them (#413, finding 27)
+### A dust-zero `section_offsets` entry is unrepresentable (#413, finding 27)
 
-`Project::write_adjusted_section_offset` drops a `section_offsets` key whose
-COMPUTED value lands within `Project::OFFSET_DUST_M` of the origin, so an adjust
-and its cancelling adjust-back leave no key behind - the route that did nothing has
-none either (#413 finding 2's dust half).
+`section_offsets` holds a key only for a section that is **actually displaced**,
+and "not displaced" has exactly one spelling: the key is absent. A value within
+`Project::OFFSET_DUST_M` (a picometre) of the origin in both components is not a
+position, so it is never stored - in memory or on disk, by any writer, computed or
+restored. The invariant is stated on `Project::write_section_offset`, which is the
+one write point everything routes through, and enforced on maps this app did not
+write by `Project::normalize_section_offsets`.
 
-That is right for a forward adjustment and wrong for an inverse, because an
-all-zero key can be legitimately PRESENT: `Project::restore_section_offsets`
-reproduces the map it is handed, and the load path inserts whatever rows the file
-holds, so a project written before that normalization existed opens carrying one.
-An undo that re-executes or re-derives then DROPS a key the pre-edit state held.
-Presence is structural - it is serialized into the `.stalx` - so the undo stops
-being an exact inverse.
+It has to be an invariant rather than a per-writer rule because no rule local to a
+write can satisfy both identities the app owes. `MoveSection(+d)` followed by
+`MoveSection(-d)` must leave the map it found, and a writer sees only its own
+arguments:
 
-Both arms therefore carry the pre-command map of the target section's merge group
-(`Project::capture_connected_section_offsets`) and hand it back verbatim after the
-inverse has run:
+- from an **absent** key, `(0 + d) - d` lands a femtometre off zero and the key
+  must end absent - the route that did nothing has none either (#413 finding 2's
+  dust half);
+- from a **present all-zero** key, the same arithmetic must end present.
+
+Both were real. The second is what the metamorphic pair
+`move-out-and-back-is-identity` reported once a project carrying a legacy all-zero
+row reached it, and it is the same contradiction finding 27 hit from the undo side.
+Removing the state removes the contradiction: there is no present all-zero key to
+preserve, so the first rule is the only one left, and presence can no longer differ
+between two states that agree geometrically.
+
+Two boundaries enforce it on input this app did not produce:
+
+- **the loader**, in `Project::redrive_offsets_after_load` after the zero-trust
+  re-solve. The re-solve does not reach such a row (the cascade never seed-adjusts
+  an anchor or a free-floating component), so it is dropped explicitly. A legacy
+  `.stalx` therefore opens without it, and settles on the next save.
+- **the snapshot restore**, in `AppState::restore_snapshot_into`. Undo history is
+  persisted and reloaded across sessions, so an entry written by a build predating
+  the invariant can carry one in its payload; a restore may not install a state the
+  app cannot otherwise reach.
+
+Nothing observable changes when a row is dropped: every consumer reads the map
+through `Project::section_offset` or an inline `.get(..).unwrap_or((0.0, 0.0))`, so
+an absent key and an all-zero one are the same geometry, the same coordinates and
+the same drawn position. The **file-format gate is unaffected** for the same reason
+it always was: the app never writes a dust-zero row, so a save-load-save cycle on a
+file this app wrote is a fixpoint. A legacy file sees a one-time settle - the load
+drops the row, the next save omits it - and is a fixpoint from then on.
+
+#### An inverse still RESTORES the offsets it re-derives
+
+Two undo arms re-derive the offsets their inverse recomputes, and both carry the
+pre-command map of the edited section's rigid connected set
+(`Project::capture_rigid_connected_section_offsets`) and hand it back verbatim
+afterwards:
 
 - `UndoData::PreviousValues { previous_offsets }` - the undo re-executes
   `update_shot`, whose `realign_after_shot_edit` re-derives the group's offsets.
@@ -193,10 +227,18 @@ inverse has run:
   and a mid-section removal pays the section's offset back by the segment it took
   out.
 
-Only the undo direction needs it. A redo re-executes the forward command from a
+The invariant closes the **presence** question, not the **value** one. The realign
+recomputes an offset from section-local coordinates and is self-correcting, but the
+removal above genuinely accumulates: it computes `(v + d) - d`, which is not `v` in
+IEEE. One cycle of that drift is below every oracle's tolerance, which is exactly
+why no fuzz survey reaches it, and it is the shape the horizon mode watches
+accumulate (finding 19). The captures make the undo bit-exact instead. They are
+bounded - the rigid connected component only - and elided entirely when empty, so a
+metadata-only shot edit carries none.
+
+Only the undo direction needs them. A redo re-executes the forward command from a
 state the undo restored exactly, and the forward path is deterministic, so it
-reproduces the recorded post-command map including any legitimate all-zero key it
-held.
+reproduces the recorded post-command map.
 
 ### An inverse consults no user-intent guard (#413, findings 3 and 6)
 

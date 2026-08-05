@@ -480,12 +480,20 @@ impl AppState {
                                     }
                                 }
                             }
-                            // Restore section offset
+                            // Restore section offset - through the one writer, so a
+                            // legacy entry carrying a dust-zero value restores as
+                            // ABSENT rather than installing a state the app cannot
+                            // otherwise hold (the invariant on
+                            // `Project::write_section_offset`). This arm serves
+                            // persisted entries only; a live `MoveStation` records
+                            // a `ProjectSnapshotPair`.
                             match prev_section_offset {
                                 Some(offset) => {
-                                    project
-                                        .section_offsets
-                                        .insert(station_ref.section_id, *offset);
+                                    crate::models::Project::write_section_offset(
+                                        &mut project.section_offsets,
+                                        station_ref.section_id,
+                                        *offset,
+                                    );
                                 }
                                 None => {
                                     project.section_offsets.remove(&station_ref.section_id);
@@ -862,14 +870,13 @@ impl AppState {
                                     .copied()
                                     .unwrap_or((0.0, 0.0));
                                 let new_offset = (current.0 + offset.0, current.1 + offset.1);
-                                // Through the same normalization the FORWARD
-                                // move uses (`adjust_section_offset` ->
-                                // `write_adjusted_section_offset`): a redo that
-                                // lands the offset back on exactly (0, 0) - or
-                                // within dust of it - must drop the key, not
-                                // leave an inert entry the original execute did
-                                // not have (#413 finding 2).
-                                crate::models::Project::write_adjusted_section_offset(
+                                // Through the same writer the FORWARD move uses
+                                // (`adjust_section_offset`): a redo that lands the
+                                // offset back within dust of the origin must drop
+                                // the key, not leave an inert entry the original
+                                // execute did not have (#413 finding 2, and the
+                                // invariant on `write_section_offset`).
+                                crate::models::Project::write_section_offset(
                                     &mut project.section_offsets,
                                     *sid,
                                     new_offset,
@@ -1021,8 +1028,9 @@ impl AppState {
     /// do - factored out here because the two arms that need it run their inverse
     /// first and so cannot restore inside its project lock.
     ///
-    /// Deliberately NOT normalized: `Project::restore_section_offsets` reproduces
-    /// the map it is handed, all-zero keys included, which is the entire point.
+    /// `Project::restore_section_offsets` routes every value through the one
+    /// writer, so this cannot install a dust-zero key even from an entry recorded
+    /// by a build that predates that invariant.
     fn restore_captured_section_offsets(
         &self,
         offsets: &std::collections::HashMap<SectionId, Option<(f64, f64)>>,

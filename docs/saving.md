@@ -25,6 +25,27 @@ Stalagmight uses an atomic save strategy with a SQLite `.stalx` database file. S
 
 Steps 1-6 are the critical path for data safety. Step 7 persists undo/redo stacks synchronously to avoid race conditions with concurrent readers.
 
+### `section_offsets` rows are never all-zero
+
+The `section_offsets` table records sections that are **actually displaced**. A
+value within `Project::OFFSET_DUST_M` (a picometre) of the origin is not a
+position and is never written - the invariant is stated on
+`Project::write_section_offset` and explained in
+[Undo/Redo](undo-redo.md#a-dust-zero-section_offsets-entry-is-unrepresentable-413-finding-27).
+The save writes the in-memory map as it stands, so the rule holds on disk because
+it holds in memory.
+
+A file written by a build that predates the invariant can still carry such a row.
+It is dropped at the load boundary (`Project::redrive_offsets_after_load`), so the
+project opens without it and the **next save omits it** - a one-time settle, after
+which the file is stable. Nothing observable changes: every consumer reads the map
+through `Project::section_offset` or an inline `.get(..).unwrap_or((0.0, 0.0))`, so
+an absent row and an all-zero one are the same geometry.
+
+This does not disturb the file-format fixpoint property the format gate checks: the
+app never writes such a row, so save-load-save on a file this app wrote is a
+fixpoint, and a legacy file is one from its first save onward.
+
 For a SpeleoDB-managed project given an explicit destination (Save a Copy, see
 below), the pipeline diverges after step 5: the copy is written and renamed into
 place, recorded in Recent Projects, and the function returns with

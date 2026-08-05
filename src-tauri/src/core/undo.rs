@@ -198,13 +198,15 @@ pub enum UndoData {
         ///
         /// The undo of this variant RE-EXECUTES `update_shot` with the previous
         /// field values, and `realign_after_shot_edit` then re-derives the group's
-        /// offsets. An inverse RESTORES; it does not re-derive, and here the two
-        /// differ: the re-derivation adds a delta and writes it through
-        /// `Project::write_adjusted_section_offset`, which DROPS a key that lands
-        /// on the origin (#413 finding 2's dust half) - correct for an adjustment
-        /// that cancels, wrong when the pre-edit state legitimately HELD an
-        /// all-zero key, because presence is structural: it is serialized into the
-        /// `.stalx` and every oracle compares the map (#413, finding 27).
+        /// offsets. An inverse RESTORES; it does not re-derive (#413, finding 27).
+        ///
+        /// PRESENCE is no longer the reason: a dust-zero entry is unrepresentable
+        /// now (the invariant on `Project::write_section_offset`), so the
+        /// re-derivation cannot drop a key the pre-edit state held. The VALUE
+        /// still is. The realign recomputes from section-local coordinates and is
+        /// self-correcting, but the sibling arm below genuinely accumulates, and
+        /// keeping one rule for both is what makes either readable: an inverse
+        /// hands back what it recorded.
         ///
         /// Only the RIGID CONNECTED SET of the edited section
         /// (`Project::capture_rigid_connected_section_offsets` - merges plus
@@ -317,15 +319,14 @@ pub enum UndoData {
         /// CONNECTED SET, which is what `Project::cascade_connection_offsets`
         /// walks (merges plus aligned loop closures).
         ///
-        /// Finding 27's second arm, and the same defect as
-        /// `PreviousValues::previous_offsets` one variant over. Undoing a
-        /// `CreateShot` REMOVES the shot, and a mid-section remove pays the
-        /// section's offset back by the segment it took out
-        /// (`Project::remove_shot*` -> `adjust_section_offset`), so a section
-        /// whose key was legitimately an all-zero one gets that key DROPPED by
-        /// `write_adjusted_section_offset` on the way back. The forward insert had
-        /// moved it off zero, so the value alone reads as correct; it is the
-        /// presence that is lost, and presence is serialized into the `.stalx`.
+        /// Finding 27's second arm, and the one where the re-derivation genuinely
+        /// ACCUMULATES rather than recomputing. Undoing a `CreateShot` REMOVES the
+        /// shot, and a mid-section remove pays the section's offset back by the
+        /// segment it took out (`Project::remove_shot*` -> `adjust_section_offset`),
+        /// so the undo computes `(v + d) - d` - which is not `v` in IEEE. One
+        /// cycle of that drift is below every oracle's tolerance; it is the shape
+        /// the horizon mode watches accumulate (finding 19). Handing the recorded
+        /// map back makes the undo bit-exact instead.
         ///
         /// Captured before the command runs and handed straight back after the
         /// removal, so the undo restores rather than re-derives.
