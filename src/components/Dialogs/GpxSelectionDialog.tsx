@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
 import { extractFilename } from '../../utils/path';
@@ -18,6 +19,7 @@ interface GpxSelectionDialogProps {
 }
 
 export default function GpxSelectionDialog({ gpxFile, filePath }: GpxSelectionDialogProps) {
+  const { t } = useTranslation();
   const { calculateFileHash, checkDuplicateImport, executeGpxImport } = useProjectStore();
   const { closeDialog, openDialog, setView, triggerFitToBounds } = useUIStore();
 
@@ -119,7 +121,7 @@ export default function GpxSelectionDialog({ gpxFile, filePath }: GpxSelectionDi
   };
 
   return (
-    <DialogWrapper title="Import GPX File" onClose={closeDialog} size="lg" data-testid="gpx-selection-dialog">
+    <DialogWrapper title={t('dialogs.gpxSelection.title')} onClose={closeDialog} size="lg" data-testid="gpx-selection-dialog">
       <div className="space-y-4">
         {/* Header info */}
         <div className="space-y-1">
@@ -132,24 +134,24 @@ export default function GpxSelectionDialog({ gpxFile, filePath }: GpxSelectionDi
         {/* Summary stats */}
         <div className="grid grid-cols-3 gap-3 p-3 bg-surface-alt rounded">
           <div>
-            <div className="text-xs text-text-tertiary">Waypoints</div>
+            <div className="text-xs text-text-tertiary">{t('dialogs.gpxSelection.stats.waypoints')}</div>
             <div className="text-sm font-medium">{gpxFile.waypoints.length}</div>
           </div>
           <div>
-            <div className="text-xs text-text-tertiary">Tracks</div>
+            <div className="text-xs text-text-tertiary">{t('dialogs.gpxSelection.stats.tracks')}</div>
             <div className="text-sm font-medium">
               {gpxFile.tracks.length}
               {totalTrackPoints > 0 && (
-                <span className="text-text-tertiary font-normal"> ({totalTrackPoints} pts)</span>
+                <span className="text-text-tertiary font-normal"> {t('dialogs.gpxSelection.points', { count: totalTrackPoints })}</span>
               )}
             </div>
           </div>
           <div>
-            <div className="text-xs text-text-tertiary">Routes</div>
+            <div className="text-xs text-text-tertiary">{t('dialogs.gpxSelection.stats.routes')}</div>
             <div className="text-sm font-medium">
               {gpxFile.routes.length}
               {totalRoutePoints > 0 && (
-                <span className="text-text-tertiary font-normal"> ({totalRoutePoints} pts)</span>
+                <span className="text-text-tertiary font-normal"> {t('dialogs.gpxSelection.points', { count: totalRoutePoints })}</span>
               )}
             </div>
           </div>
@@ -165,7 +167,7 @@ export default function GpxSelectionDialog({ gpxFile, filePath }: GpxSelectionDi
                 onChange={(e) => setImportWaypoints(e.target.checked)}
                 data-testid="gpx-import-waypoints"
               />
-              Import {gpxFile.waypoints.length} waypoint{gpxFile.waypoints.length !== 1 ? 's' : ''}
+              {t('dialogs.gpxSelection.importWaypoints', { count: gpxFile.waypoints.length })}
             </label>
           )}
           {gpxFile.tracks.length > 0 && (
@@ -176,7 +178,7 @@ export default function GpxSelectionDialog({ gpxFile, filePath }: GpxSelectionDi
                 onChange={(e) => setImportTracks(e.target.checked)}
                 data-testid="gpx-import-tracks"
               />
-              Import {gpxFile.tracks.length} track{gpxFile.tracks.length !== 1 ? 's' : ''}
+              {t('dialogs.gpxSelection.importTracks', { count: gpxFile.tracks.length })}
             </label>
           )}
           {gpxFile.routes.length > 0 && (
@@ -187,7 +189,7 @@ export default function GpxSelectionDialog({ gpxFile, filePath }: GpxSelectionDi
                 onChange={(e) => setImportRoutes(e.target.checked)}
                 data-testid="gpx-import-routes"
               />
-              Import {gpxFile.routes.length} route{gpxFile.routes.length !== 1 ? 's' : ''}
+              {t('dialogs.gpxSelection.importRoutes', { count: gpxFile.routes.length })}
             </label>
           )}
         </div>
@@ -202,8 +204,8 @@ export default function GpxSelectionDialog({ gpxFile, filePath }: GpxSelectionDi
               data-testid="gpx-depth-inverted"
             />
             <span>
-              Elevation values represent depth
-              <span className="text-text-tertiary ml-1">(positive = deeper)</span>
+              {t('dialogs.gpxSelection.depthLabel')}
+              <span className="text-text-tertiary ml-1">{t('dialogs.gpxSelection.depthHint')}</span>
             </span>
           </label>
         )}
@@ -217,17 +219,17 @@ export default function GpxSelectionDialog({ gpxFile, filePath }: GpxSelectionDi
               onClick={() => setShowWaypoints(!showWaypoints)}
             >
               <span className="text-xs">{showWaypoints ? '\u25BC' : '\u25B6'}</span>
-              Waypoints ({gpxFile.waypoints.length})
+              {t('dialogs.gpxSelection.waypointsSection', { count: gpxFile.waypoints.length })}
             </button>
             {showWaypoints && (
               <div className="max-h-40 overflow-y-auto border-t border-border">
                 <table className="w-full text-xs">
                   <thead className="bg-surface-alt sticky top-0">
                     <tr className="text-left text-text-tertiary">
-                      <th className="px-3 py-1">Name</th>
-                      <th className="px-3 py-1">Lat</th>
-                      <th className="px-3 py-1">Lon</th>
-                      <th className="px-3 py-1">Elev</th>
+                      <th className="px-3 py-1">{t('dialogs.gpxSelection.table.name')}</th>
+                      <th className="px-3 py-1">{t('dialogs.gpxSelection.table.lat')}</th>
+                      <th className="px-3 py-1">{t('dialogs.gpxSelection.table.lon')}</th>
+                      <th className="px-3 py-1">{t('dialogs.gpxSelection.table.elev')}</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -255,22 +257,22 @@ export default function GpxSelectionDialog({ gpxFile, filePath }: GpxSelectionDi
               onClick={() => setShowTracks(!showTracks)}
             >
               <span className="text-xs">{showTracks ? '\u25BC' : '\u25B6'}</span>
-              Tracks ({gpxFile.tracks.length})
+              {t('dialogs.gpxSelection.tracksSection', { count: gpxFile.tracks.length })}
             </button>
             {showTracks && (
               <div className="max-h-40 overflow-y-auto border-t border-border">
                 <table className="w-full text-xs">
                   <thead className="bg-surface-alt sticky top-0">
                     <tr className="text-left text-text-tertiary">
-                      <th className="px-3 py-1">Name</th>
-                      <th className="px-3 py-1">Segments</th>
-                      <th className="px-3 py-1">Points</th>
+                      <th className="px-3 py-1">{t('dialogs.gpxSelection.table.name')}</th>
+                      <th className="px-3 py-1">{t('dialogs.gpxSelection.table.segments')}</th>
+                      <th className="px-3 py-1">{t('dialogs.gpxSelection.table.points')}</th>
                     </tr>
                   </thead>
                   <tbody>
                     {gpxFile.tracks.map((trk, i) => (
                       <tr key={i} className="border-t border-border">
-                        <td className="px-3 py-1">{trk.name ?? `Track ${i + 1}`}</td>
+                        <td className="px-3 py-1">{trk.name ?? t('dialogs.gpxSelection.trackFallbackName', { index: i + 1 })}</td>
                         <td className="px-3 py-1">{trk.segments.length}</td>
                         <td className="px-3 py-1">
                           {trk.segments.reduce((s, seg) => s + seg.points.length, 0)}
@@ -293,21 +295,21 @@ export default function GpxSelectionDialog({ gpxFile, filePath }: GpxSelectionDi
               onClick={() => setShowRoutes(!showRoutes)}
             >
               <span className="text-xs">{showRoutes ? '\u25BC' : '\u25B6'}</span>
-              Routes ({gpxFile.routes.length})
+              {t('dialogs.gpxSelection.routesSection', { count: gpxFile.routes.length })}
             </button>
             {showRoutes && (
               <div className="max-h-40 overflow-y-auto border-t border-border">
                 <table className="w-full text-xs">
                   <thead className="bg-surface-alt sticky top-0">
                     <tr className="text-left text-text-tertiary">
-                      <th className="px-3 py-1">Name</th>
-                      <th className="px-3 py-1">Points</th>
+                      <th className="px-3 py-1">{t('dialogs.gpxSelection.table.name')}</th>
+                      <th className="px-3 py-1">{t('dialogs.gpxSelection.table.points')}</th>
                     </tr>
                   </thead>
                   <tbody>
                     {gpxFile.routes.map((rte, i) => (
                       <tr key={i} className="border-t border-border">
-                        <td className="px-3 py-1">{rte.name ?? `Route ${i + 1}`}</td>
+                        <td className="px-3 py-1">{rte.name ?? t('dialogs.gpxSelection.routeFallbackName', { index: i + 1 })}</td>
                         <td className="px-3 py-1">{rte.points.length}</td>
                       </tr>
                     ))}
@@ -321,13 +323,13 @@ export default function GpxSelectionDialog({ gpxFile, filePath }: GpxSelectionDi
         {/* Duplicate warning */}
         {isDuplicate && hashChecked && (
           <div className="p-3 bg-warning-10 border border-warning-20 rounded text-sm">
-            This file has already been imported to this project. Importing again will create duplicate sections.
+            {t('dialogs.gpxSelection.duplicateWarning')}
           </div>
         )}
 
         {/* Footer */}
         <div className="flex justify-end gap-2 pt-4 border-t border-border">
-          <Button onClick={closeDialog} data-testid="gpx-selection-cancel">Cancel</Button>
+          <Button onClick={closeDialog} data-testid="gpx-selection-cancel">{t('dialogs.gpxSelection.cancel')}</Button>
           {waypointsOnly ? (
             <Button
               data-primary-action=""
@@ -335,7 +337,7 @@ export default function GpxSelectionDialog({ gpxFile, filePath }: GpxSelectionDi
               onClick={handleImportWaypointsOnly}
               disabled={isImporting || !hashChecked || !hasSelection}
             >
-              {isImporting ? 'Importing...' : 'Import'}
+              {isImporting ? t('dialogs.gpxSelection.importing') : t('dialogs.gpxSelection.import')}
             </Button>
           ) : (
             <Button
@@ -344,7 +346,7 @@ export default function GpxSelectionDialog({ gpxFile, filePath }: GpxSelectionDi
               onClick={handleContinue}
               disabled={!hashChecked || !hasSelection}
             >
-              Continue
+              {t('dialogs.gpxSelection.continue')}
             </Button>
           )}
         </div>

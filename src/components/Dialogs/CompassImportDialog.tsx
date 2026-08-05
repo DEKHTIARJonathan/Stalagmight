@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
 import { invokeIpc } from '../../utils/ipc';
@@ -19,6 +20,7 @@ interface CompassImportDialogProps {
 }
 
 export default function CompassImportDialog({ compassFile, filePath }: CompassImportDialogProps) {
+  const { t } = useTranslation();
   const { executeCompassImport, calculateFileHash, checkDuplicateImport, startLoading, setLoadingProgress, resetLoading } = useProjectStore();
   const { closeDialog, openDialog, setView, triggerFitToBounds } = useUIStore();
 
@@ -101,7 +103,7 @@ export default function CompassImportDialog({ compassFile, filePath }: CompassIm
   }, [executeCompassImport, filePath, fileHash, includeExcluded, applyCorrections, commentsOnStations, compassFile.cave_name, fileName, closeDialog, openDialog, setView, triggerFitToBounds, startLoading, setLoadingProgress, resetLoading]);
 
   return (
-    <DialogWrapper title="Import Compass Survey" onClose={closeDialog} size="lg" data-testid="compass-import-dialog">
+    <DialogWrapper title={t('dialogs.compassImport.title')} onClose={closeDialog} size="lg" data-testid="compass-import-dialog">
       <div className="space-y-4">
         {/* Header info */}
         <div className="space-y-1">
@@ -111,33 +113,33 @@ export default function CompassImportDialog({ compassFile, filePath }: CompassIm
           )}
           <div className="text-xs text-text-tertiary">
             {compassFile.length_unit === 'meters'
-              ? 'Lengths kept as-is (survey is in meters)'
+              ? t('dialogs.compassImport.lengthUnit.meters')
               : compassFile.length_unit === 'mixed'
-                ? 'Surveys declare mixed length units; each is converted to meters per its own declaration'
-                : 'Lengths converted from feet to meters'}
+                ? t('dialogs.compassImport.lengthUnit.mixed')
+                : t('dialogs.compassImport.lengthUnit.feet')}
           </div>
         </div>
 
         {/* Summary stats */}
         <div className="grid grid-cols-4 gap-3 p-3 bg-surface-alt rounded">
           <div>
-            <div className="text-xs text-text-tertiary">Surveys</div>
+            <div className="text-xs text-text-tertiary">{t('dialogs.compassImport.stats.surveys')}</div>
             <div className="text-sm font-medium">{compassFile.survey_count}</div>
           </div>
           <div>
-            <div className="text-xs text-text-tertiary">Shots</div>
+            <div className="text-xs text-text-tertiary">{t('dialogs.compassImport.stats.shots')}</div>
             <div className="text-sm font-medium">{compassFile.shot_count}</div>
           </div>
           <div>
-            <div className="text-xs text-text-tertiary">Datum</div>
+            <div className="text-xs text-text-tertiary">{t('dialogs.compassImport.stats.datum')}</div>
             <div className="text-sm font-medium">{compassFile.datum ?? '-'}</div>
           </div>
           <div>
-            <div className="text-xs text-text-tertiary">Georeference</div>
+            <div className="text-xs text-text-tertiary">{t('dialogs.compassImport.stats.georeference')}</div>
             <div className="text-sm font-medium">
               {compassFile.has_georeference
                 ? `UTM ${compassFile.utm_zone ?? ''}`.trim()
-                : 'None'}
+                : t('dialogs.compassImport.stats.noGeoreference')}
             </div>
           </div>
         </div>
@@ -147,11 +149,11 @@ export default function CompassImportDialog({ compassFile, filePath }: CompassIm
           <table className="w-full text-sm">
             <thead className="bg-surface-alt sticky top-0">
               <tr className="text-left text-text-tertiary text-xs">
-                <th className="px-3 py-1.5">Survey</th>
-                <th className="px-3 py-1.5">Shots</th>
-                <th className="px-3 py-1.5">Team</th>
-                <th className="px-3 py-1.5">Date</th>
-                <th className="px-3 py-1.5">Decl.</th>
+                <th className="px-3 py-1.5">{t('dialogs.compassImport.table.survey')}</th>
+                <th className="px-3 py-1.5">{t('dialogs.compassImport.table.shots')}</th>
+                <th className="px-3 py-1.5">{t('dialogs.compassImport.table.team')}</th>
+                <th className="px-3 py-1.5">{t('dialogs.compassImport.table.date')}</th>
+                <th className="px-3 py-1.5">{t('dialogs.compassImport.table.declination')}</th>
               </tr>
             </thead>
             <tbody>
@@ -170,8 +172,8 @@ export default function CompassImportDialog({ compassFile, filePath }: CompassIm
 
         {/* Declination mode info */}
         <div className="text-xs text-text-secondary">
-          Declination mode: {compassFile.declination_mode}
-          {compassFile.has_backsights && ' · backsights present'}
+          {t('dialogs.compassImport.declinationMode', { mode: compassFile.declination_mode })}
+          {compassFile.has_backsights && ` ${t('dialogs.compassImport.backsightsPresent')}`}
         </div>
 
         {/* Parser warnings */}
@@ -186,7 +188,7 @@ export default function CompassImportDialog({ compassFile, filePath }: CompassIm
         {/* Duplicate warning */}
         {isDuplicate && hashChecked && (
           <div className="p-3 bg-warning-10 border border-warning-20 rounded text-sm">
-            This file has already been imported to this project. Importing again will create duplicate sections.
+            {t('dialogs.compassImport.duplicateWarning')}
           </div>
         )}
 
@@ -198,7 +200,7 @@ export default function CompassImportDialog({ compassFile, filePath }: CompassIm
             onChange={(e) => setApplyCorrections(e.target.checked)}
             data-testid="compass-apply-corrections"
           />
-          Apply per-survey instrument corrections (CORRECTIONS / CORRECTIONS2 lines)
+          {t('dialogs.compassImport.options.applyCorrections')}
         </label>
         <label className="flex items-center gap-2 text-sm text-text-secondary cursor-pointer">
           <input
@@ -207,7 +209,7 @@ export default function CompassImportDialog({ compassFile, filePath }: CompassIm
             onChange={(e) => setCommentsOnStations(e.target.checked)}
             data-testid="compass-comments-on-stations"
           />
-          Promote shot comments to the FROM station (Compass convention)
+          {t('dialogs.compassImport.options.commentsOnStations')}
         </label>
         <label className="flex items-center gap-2 text-sm text-text-secondary cursor-pointer">
           <input
@@ -216,19 +218,19 @@ export default function CompassImportDialog({ compassFile, filePath }: CompassIm
             onChange={(e) => setIncludeExcluded(e.target.checked)}
             data-testid="compass-include-excluded"
           />
-          Include shots flagged for exclusion (as reference shots)
+          {t('dialogs.compassImport.options.includeExcluded')}
         </label>
 
         {/* Footer */}
         <div className="flex justify-end gap-2 pt-4 border-t border-border">
-          <Button onClick={closeDialog} data-testid="compass-import-cancel">Cancel</Button>
+          <Button onClick={closeDialog} data-testid="compass-import-cancel">{t('dialogs.compassImport.cancel')}</Button>
           <Button
             data-primary-action=""
             data-testid="compass-import-confirm"
             onClick={handleImport}
             disabled={isImporting || !hashChecked}
           >
-            {isImporting ? 'Importing...' : 'Import'}
+            {isImporting ? t('dialogs.compassImport.importing') : t('dialogs.compassImport.import')}
           </Button>
         </div>
       </div>

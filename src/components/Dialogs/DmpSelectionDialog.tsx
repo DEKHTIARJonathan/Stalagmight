@@ -1,4 +1,5 @@
 import { useState, useMemo, useCallback, useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
 import { DialogWrapper } from './DialogWrapper';
 import { Button } from '../common/Button';
 import { Panel } from '../common/Panel';
@@ -102,6 +103,7 @@ export default function DmpSelectionDialog({
   onCancel,
   onContinue,
 }: DmpSelectionDialogProps) {
+  const { t } = useTranslation();
   const importSecondaryButtonClass = 'ring-1 ring-inset ring-border hover:bg-background-50';
 
   // Extract filename from path
@@ -324,7 +326,7 @@ export default function DmpSelectionDialog({
 
   return (
     <DialogWrapper
-      title="Import DMP File (Step 1)"
+      title={t('dialogs.dmpSelection.title')}
       onClose={onCancel}
       size="2xl"
       isDirty={isDirty}
@@ -334,18 +336,22 @@ export default function DmpSelectionDialog({
         {/* File metadata header */}
         <div className="bg-background-50 rounded p-3 text-sm" data-testid="dmp-file-overview">
           <div className="font-medium text-text-primary mb-1" data-testid="dmp-filename">
-            File: {fileName} (v{dmpFile.version})
+            {t('dialogs.dmpSelection.fileLine', { fileName, version: dmpFile.version })}
           </div>
           <div
             className="text-text-secondary"
             data-testid="selection-stats"
-            aria-label={`Selection statistics: ${metadata.totalShots} shots, ${formatLength(metadata.totalLength, lengthUnit)} total length, depth range ${formatDepthRange(metadata.minDepth, metadata.maxDepth, depthUnit)}`}
+            aria-label={t('dialogs.dmpSelection.statsAria', {
+              shots: metadata.totalShots,
+              length: formatLength(metadata.totalLength, lengthUnit),
+              depthRange: formatDepthRange(metadata.minDepth, metadata.maxDepth, depthUnit),
+            })}
           >
-            <span data-testid="stats-shot-count">{metadata.totalShots} shots</span>
+            <span data-testid="stats-shot-count">{t('dialogs.dmpSelection.shots', { count: metadata.totalShots })}</span>
             <span className="mx-2">|</span>
             <span data-testid="stats-total-length">{formatLength(metadata.totalLength, lengthUnit)}</span>
             <span className="mx-2">|</span>
-            <span data-testid="stats-depth-range">Depth: {formatDepthRange(metadata.minDepth, metadata.maxDepth, depthUnit)}</span>
+            <span data-testid="stats-depth-range">{t('dialogs.dmpSelection.depth', { range: formatDepthRange(metadata.minDepth, metadata.maxDepth, depthUnit) })}</span>
           </div>
         </div>
 
@@ -355,7 +361,7 @@ export default function DmpSelectionDialog({
             className="p-3 bg-warning-10 border border-warning-20 rounded text-warning text-sm"
             data-testid="duplicate-hash-warning"
           >
-            {'\u26A0'} File may have been imported before (same hash detected)
+            {'\u26A0'} {t('dialogs.dmpSelection.duplicateHashWarning')}
           </div>
         )}
 
@@ -365,29 +371,32 @@ export default function DmpSelectionDialog({
             className="p-3 bg-warning-10 border border-warning-20 rounded text-warning text-sm"
             data-testid="duplicate-sections-warning"
           >
-            {'\u26A0'} {duplicateSectionIndices.size} of {dmpFile.sections.length} sections already imported (auto-deselected)
+            {'\u26A0'} {t('dialogs.dmpSelection.duplicateSectionsWarning', {
+              duplicates: duplicateSectionIndices.size,
+              total: dmpFile.sections.length,
+            })}
           </div>
         )}
 
         {/* Default values section */}
-        <Panel title="Default Values (apply to all sections)">
+        <Panel title={t('dialogs.dmpSelection.defaultValues')}>
           <div className="flex gap-4" data-testid="dmp-default-values">
             <div className="flex-1">
               <label className="block text-sm text-text-secondary mb-1">
-                Surveyor
+                {t('dialogs.dmpSelection.surveyorLabel')}
               </label>
               <input
                 type="text"
                 value={defaultSurveyor}
                 onChange={(e) => setDefaultSurveyor(e.target.value)}
-                placeholder="Enter surveyor name..."
+                placeholder={t('dialogs.dmpSelection.surveyorPlaceholder')}
                 className="w-full"
                 data-testid="default-surveyor-input"
               />
             </div>
             <div className="flex-1">
               <label className="block text-sm text-text-secondary mb-1">
-                Date Override
+                {t('dialogs.dmpSelection.dateOverrideLabel')}
               </label>
               <input
                 type="date"
@@ -408,7 +417,7 @@ export default function DmpSelectionDialog({
             className={importSecondaryButtonClass}
             data-testid="select-all-button"
           >
-            Select All
+            {t('dialogs.dmpSelection.selectAll')}
           </Button>
           <Button
             size="sm"
@@ -416,7 +425,7 @@ export default function DmpSelectionDialog({
             className={importSecondaryButtonClass}
             data-testid="select-none-button"
           >
-            Select None
+            {t('dialogs.dmpSelection.selectNone')}
           </Button>
           <Button
             size="sm"
@@ -424,10 +433,13 @@ export default function DmpSelectionDialog({
             className={importSecondaryButtonClass}
             data-testid="invert-selection-button"
           >
-            Invert
+            {t('dialogs.dmpSelection.invert')}
           </Button>
           <span className="ml-auto text-sm text-text-secondary self-center">
-            {selectedIndices.size} of {nonEmptySectionCount} sections selected
+            {t('dialogs.dmpSelection.selectedCount', {
+              selected: selectedIndices.size,
+              total: nonEmptySectionCount,
+            })}
           </span>
         </div>
 
@@ -438,10 +450,10 @@ export default function DmpSelectionDialog({
               <thead className="bg-background-50 sticky top-0">
                 <tr>
                   <th className="w-10 px-3 py-2 text-left"></th>
-                  <th className="px-3 py-2 text-left">Name</th>
-                  <th className="px-3 py-2 text-left">Date</th>
-                  <th className="px-3 py-2 text-left">Direction</th>
-                  <th className="px-3 py-2 text-right">Shots</th>
+                  <th className="px-3 py-2 text-left">{t('dialogs.dmpSelection.table.name')}</th>
+                  <th className="px-3 py-2 text-left">{t('dialogs.dmpSelection.table.date')}</th>
+                  <th className="px-3 py-2 text-left">{t('dialogs.dmpSelection.table.direction')}</th>
+                  <th className="px-3 py-2 text-right">{t('dialogs.dmpSelection.table.shots')}</th>
                 </tr>
               </thead>
               <tbody>
@@ -470,14 +482,14 @@ export default function DmpSelectionDialog({
                           disabled={isEmpty}
                           onChange={() => handleToggleSection(index)}
                           data-testid={`section-checkbox-${index}`}
-                          aria-label={`Select section ${section.name}`}
+                          aria-label={t('dialogs.dmpSelection.selectSectionLabel', { name: section.name })}
                         />
                       </td>
                       <td className="px-3 py-2">
                         {section.name}
                         {isDupeSection && (
                           <span className="ml-2 text-xs text-warning" data-testid={`section-duplicate-${index}`}>
-                            (already imported)
+                            {t('dialogs.dmpSelection.alreadyImported')}
                           </span>
                         )}
                       </td>
@@ -485,7 +497,7 @@ export default function DmpSelectionDialog({
                       <td className="px-3 py-2 capitalize">{section.direction}</td>
                       <td className="px-3 py-2 text-right tabular-nums">
                         {isEmpty ? (
-                          <span className="text-text-secondary">(empty)</span>
+                          <span className="text-text-secondary">{t('dialogs.dmpSelection.empty')}</span>
                         ) : (
                           shotCount
                         )}
@@ -501,7 +513,7 @@ export default function DmpSelectionDialog({
         {/* Actions */}
         <div className="flex justify-end gap-2 pt-4 border-t border-border">
           <Button onClick={onCancel} className={importSecondaryButtonClass} data-testid="cancel-button">
-            Cancel
+            {t('dialogs.dmpSelection.cancel')}
           </Button>
           <Button
             variant="primary"
@@ -509,7 +521,9 @@ export default function DmpSelectionDialog({
             disabled={selectedIndices.size === 0 || !hashSettled || !sectionHashesSettled}
             data-testid="continue-button"
           >
-            {!hashSettled || !sectionHashesSettled ? 'Checking for duplicates...' : 'Continue to Section Setup'}
+            {!hashSettled || !sectionHashesSettled
+              ? t('dialogs.dmpSelection.checkingDuplicates')
+              : t('dialogs.dmpSelection.continue')}
           </Button>
         </div>
       </div>
