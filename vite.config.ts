@@ -132,10 +132,14 @@ export default defineConfig({
     // `replays/`, so a scenario named *.test.ts would have been vacuumed in here and
     // failed on missing globals. A new home for vitest suites under e2e/agent is a
     // deliberate one-line addition to this list.
+    // e2e/agent/os/**/*.test.ts: the Tier 2 OS-input layer, which takes its helper
+    // runner and its osascript/screencapture execs as injected deps precisely so
+    // these run unattended - nothing in them posts a real event or moves the cursor.
     include: [
       'src/**/*.{test,spec}.?(c|m)[jt]s?(x)',
       'scripts/**/*.{test,spec}.ts',
       'e2e/agent/lib/**/*.test.ts',
+      'e2e/agent/os/**/*.test.ts',
     ],
     exclude: [
       '**/e2e/legacy/**',
