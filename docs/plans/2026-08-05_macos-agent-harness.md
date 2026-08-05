@@ -275,9 +275,9 @@ authoritative kill stands.
 The synthetic-pointer path works end to end over tauri-wd; no PointerEvent shim needed.
 Two real findings from the failures on the way there:
 - A fresh profile shows the **telemetry opt-in modal** centered over the map, and it
-  swallowed the clicks. MacSession's readiness path must account for it (and PR 2 should
-  check how the Linux smoke avoids it - feature-gated build vs. never map-clicking a
-  fresh profile).
+  swallowed the clicks. Resolved: this is platform-neutral and already owned by CALLERS -
+  the MCP smoke client dismisses it explicitly per session
+  (`e2e/agent/mcp/smoke-client.ts`), so MacSession needs no special handling.
 - The headed default window (1280x772 here) has proportionally more chrome/panel
   overlap than the 1920x1080 Xvfb layout; probes should target points verified via
   `elementFromPoint`, which the harness's own `mapClick` already does implicitly by

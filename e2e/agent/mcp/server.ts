@@ -285,10 +285,21 @@ define('screenshot', 'Capture a PNG screenshot (returned as image + saved to the
       const p = session.recorder.writeScreenshot(seq, args.name ?? 'shot', b64);
       return { result: { base64: b64, path: p }, artifacts: { screenshot: p } };
     });
+    // darwin: the in-app WebDriver plugin rasterizes the DOM (SVG foreignObject),
+    // so canvas/WebGL content - the survey map - is BLANK in the capture. Honest
+    // flag rather than a silent lie; real pixels are Tier 2's os_screenshot (#421).
+    const domOnly = process.platform === 'darwin';
     return {
       content: [
         { type: 'image', data: base64, mimeType: 'image/png' },
-        { type: 'text', text: JSON.stringify({ path }) },
+        {
+          type: 'text',
+          text: JSON.stringify(
+            domOnly
+              ? { path, domOnly, note: 'macOS capture is DOM-only: canvas/WebGL (the map) renders blank' }
+              : { path },
+          ),
+        },
       ],
     };
   } catch (err) {
@@ -498,6 +509,20 @@ define('press_keys', 'Press a sequence of WebDriver keys (e.g. ["Control","z"]).
     args,
     async () => {
       await session.exclusive(() => session.browser.keys(args.keys));
+      // darwin: keys are synthetic KeyboardEvents in the webview, so Meta chords
+      // never reach the native menu - a "passed" Cmd shortcut here proves only
+      // the DOM handler. No silent remap to Control: the app may bind both, and
+      // rewriting would corrupt repro records (#421).
+      if (process.platform === 'darwin' && args.keys.some((k) => k === 'Meta' || k === 'Command')) {
+        return {
+          result: {
+            pressed: args.keys,
+            caveat:
+              'Meta is synthetic-only on macOS: native menu accelerators will not fire. ' +
+              'Use the in-app Control binding, or Tier 2 os_keys for a real Cmd chord.',
+          },
+        };
+      }
       return { result: { pressed: args.keys } };
     },
     { digest: true, sweep: true },

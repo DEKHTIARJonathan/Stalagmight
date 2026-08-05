@@ -23,8 +23,18 @@ sweep cadence, bug-freeze protocol). Reference: `docs/agent-harness.md`.
   Unique id per request; requests run in order. Send `{"tool":"__exit"}` when
   done (stops the app and the bridge). Bridge responses strip screenshot bytes;
   use the Read tool on `<sessionDir>/<png path>` to actually LOOK at them.
-- Sessions run invisibly on Xvfb by default. Only pass `headed: true` if the
-  user asked to watch.
+- Sessions run invisibly on Xvfb by default (Linux). Only pass `headed: true`
+  if the user asked to watch.
+- On macOS the harness ALSO drives the real app (#421, tauri-wd route), but
+  always headed - the window parks on the right half of the screen - and with
+  two hard limits you must label in findings: input is synthetic
+  (`isTrusted: false`; Meta/Cmd chords never reach the native menu - watch for
+  the `caveat` field on press_keys) and screenshots are DOM-only (the WebGL map
+  is BLANK - `domOnly: true` on the result; verify map state via store reads
+  and `map_feature_click`'s selection verification, not pixels). Label such
+  findings VERIFIED-real-backend (synthetic input) rather than plain VERIFIED;
+  anything needing real input, real pixels, or native menus goes to the Tier 2
+  os_* tools once granted, else to a human.
 - Run the harness doctor once per session (see the skill) before trusting
   oracle results.
 
