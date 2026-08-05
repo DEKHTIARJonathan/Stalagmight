@@ -14,7 +14,7 @@ CI: the agent harness never runs there, and `open_undo_bugs_tests.rs` is
 `#[ignore]`d by design.
 
 ```bash
-# The gate. Runs with the default suite; ~7 s for all three tests.
+# The gate. Runs with the default suite; ~10 s for all four tests.
 TELEMETRY_ENDPOINT=http://localhost/dummy cargo test --manifest-path src-tauri/Cargo.toml \
   --features telemetry --lib fuzz_undo
 
@@ -23,8 +23,9 @@ TELEMETRY_ENDPOINT=http://localhost/dummy cargo test --manifest-path src-tauri/C
   --features telemetry --lib fuzz_undo -- --nocapture --test-threads=1
 ```
 
-Three gate tests: `undo_redo_fuzz_gate` (in-memory), `_gate_persistence` (one
-save/close/reopen per seed) and `_gate_multi_crossing` (three).
+Four gate tests: `undo_redo_fuzz_gate` (in-memory), `_gate_persistence` (one
+save/close/reopen per seed), `_gate_multi_crossing` (three), and
+`_gate_combined` (below).
 
 **Reproducing a specific known bug.** The module carries a BUG IDENTIFICATION
 MATRIX in its header: for every finding on
@@ -93,6 +94,25 @@ moves can run against differently configured apps. `undo_persist_limit` is
 deliberately NOT drawn: it is read from the config struct at save time, and
 `save_project` writes that struct back to the real `config.toml`, so a drawn
 value would escape the run.
+
+**Combined.** `STALAGMIGHT_RUST_FUZZ_COMBINED=1` turns on horizon, closures,
+closure shapes, jumps, three crossings and the drawn config at once - the
+interactions rather than the modes. It is what `undo_redo_fuzz_gate_combined`
+runs (seeds 15 and 21 x 300 moves, ~1.8 s, in the same band as the other gates),
+and re-mining that gate's seeds means running the survey over the regime:
+
+```bash
+STALAGMIGHT_RUST_FUZZ_COMBINED=1 STALAGMIGHT_RUST_FUZZ_SEEDS=40 \
+  STALAGMIGHT_RUST_FUZZ_ITERATIONS=300 \
+  TELEMETRY_ENDPOINT=http://localhost/dummy cargo test --manifest-path src-tauri/Cargo.toml \
+  --features telemetry --lib fuzz_seed_survey -- --ignored --nocapture
+```
+
+Two facts that combining exposed, both fixed only for the combined regime so no
+existing seed moves (the module header has the detail): a horizon run could
+never draw a jump, because its climb test compares a difference the FIFO trim
+pins below the cap; and a horizon run could never cross the save boundary,
+because the crossing guard measured DEPTHS against a limit that counts ENTRIES.
 
 **Soak.** Same engine, no iteration budget, and with the features the gate
 leaves off (multi-step `undo_to`/`redo_to` jumps, loop closures, and both
@@ -358,6 +378,11 @@ STALAGMIGHT_RUST_FUZZ_SEEDS=40 STALAGMIGHT_RUST_FUZZ_ITERATIONS=100 \
   --features telemetry --lib fuzz_seed_survey -- --ignored --nocapture
 ```
 
+`COMBINED_SEEDS` is chosen the same way, from the same tool under `COMBINED=1`,
+with one extra criterion: the pair has to cover `COMBINED_CLASSIFIED` between
+them, which is the id SET that gate pins (the counts are printed, not asserted -
+a sharper classifier must not turn a gate red).
+
 **Debugging a failure.** `STALAGMIGHT_RUST_FUZZ_TRACE=1` streams every move as it
 happens, including the line the classifier writes when a hit is explained - which
 matters, because a classified hit RESYNCS the model and can arm a cascade, so a
@@ -401,7 +426,7 @@ STALAGMIGHT_RUST_FUZZ_REPLAY=/tmp/stalagmight-shrink-seed1-3moves.json \
 
 The plan comes from the SAME knobs the survey reads (`ITERATIONS`,
 `PERSISTENCE`, `JUMPS`, `CLOSURES`, `DIVERGENCE`, `CLOSURE_SHAPES`, `CROSSINGS`,
-`HORIZON`, `CONFIG`), so a seed that failed under a sweep is shrunk
+`HORIZON`, `CONFIG`, `COMBINED`), so a seed that failed under a sweep is shrunk
 under exactly the environment that found it. `SHRINK_TARGET` is optional - the default is whatever
 failure the recorded run produced. `SHRINK=<path.json>` shrinks a trace file
 further instead of a seed, `SHRINK_OUT` picks where the minimized trace is

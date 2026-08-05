@@ -241,13 +241,20 @@
 //! | `CLOSURES=1` | a real loop closure in the starting project | findings 6 and 14 |
 //! | `DIVERGENCE=1` | the id-vs-position divergence findings 8/12/13 need, built | deliberate corruption |
 //! | `CLOSURE_SHAPES=1` | the two closure shapes findings 4 and 10 need, built | deliberate, and implies `CLOSURES` |
-//! | `HORIZON=1` | thousands of moves, past the app's own history limit: the FIFO trim and its sliding window, accumulated float dust, allocator and growth sanity | minutes per seed AT THE APP'S OWN LIMIT - a DRAWN limit reaches the same window in a couple of hundred moves |
+//! | `HORIZON=1` | thousands of moves, past the app's own history limit: the FIFO trim and its sliding window, accumulated float dust, allocator and growth sanity | minutes per seed AT THE APP'S OWN LIMIT - a DRAWN limit reaches the same window in 300 moves, which is what the combined gate uses |
 //! | `CROSSINGS=n` | n save/close/reopen boundaries per persistence run instead of one: heals stacking on heals, and a snapshot compared across two epochs | IS gated - see `undo_redo_fuzz_gate_multi_crossing` |
+//! | `COMBINED=1` | every one of the above at once (bar `DIVERGENCE`), over a drawn history limit | IS gated - see `undo_redo_fuzz_gate_combined` and "The COMBINED regime" below |
 //! | `Plan::prologue` | replay `(seed, moves)` as a corpus prologue, then continue with fresh randomness | measured NOT to widen coverage - see `fuzz_corpus_sweep` |
 //!
 //! A mode that CONSTRUCTS a known defect cannot also be a regression gate: its
 //! hit counts say nothing about whether the model acquired a new way to be
 //! wrong, which is the only thing the gate is for.
+//!
+//! The combined gate does not break that rule, it applies it one level up: what
+//! it guards is the INTERACTIONS - a trimmed history being reloaded, a jump
+//! taken over a sliding window - and it pins the id SET it reaches rather than
+//! the counts, so it goes red when the regime stops combining rather than when a
+//! constructed defect fires more or fewer times.
 //!
 //! ## The knobs that are not modes
 //!
@@ -309,6 +316,40 @@
 //! `sections[#].shots[#].length`) - three of them at a drawn limit of 100, which
 //! is the default, so the knob re-shuffles the space rather than manufacturing
 //! failures of its own.
+//!
+//! ## The COMBINED regime
+//!
+//! The modes above are exercised one at a time, which is how they stay readable
+//! and is also how their INTERACTIONS went unexercised. `COMBINED=1` runs
+//! horizon, closures, closure shapes, jumps, three crossings and a drawn history
+//! limit in one run - and combining them needed three conflicts resolved. Each
+//! resolution is conditional - on `Plan::combined`, or on the drawn config it
+//! implies - so every mode that existed before is byte-identical.
+//!
+//! 1. **A horizon run could never jump.** `run_fuzz`'s climb test compares
+//!    `cursor - floor` against `history_limit * 2`, but `absorb_trim` pins
+//!    `cursor - floor` at exactly `history_limit` from the first trim onwards -
+//!    so the difference never reaches the cap, a horizon run counts as
+//!    "climbing" for its whole life, and the `plan.jumps && !climbing` guard
+//!    means `HORIZON=1 JUMPS=1` draws ZERO jumps however long it runs. (Visible
+//!    in any horizon summary line: `0 jumps`.) The combined regime ends the
+//!    climb where it was meant to end - when the window starts sliding, which is
+//!    `floor` moving off zero - and the gate's seed 21 draws 30 jumps and
+//!    reaches finding 7 because of it.
+//! 2. **A horizon run could never cross.** `cross_boundary` refused whenever
+//!    `top > UNDO_PERSIST_LIMIT`, and a horizon run passes 20 within its first
+//!    twenty mutations, so `HORIZON=1 PERSISTENCE=1 CROSSINGS=3` did nothing at
+//!    all: measured at 8 seeds x 300 moves, `0 saves, 0 reloads` on every one.
+//!    The guard is not wrong, it is stated in the wrong currency - `top` counts
+//!    DEPTHS, and the thing that has to fit through the file is ENTRIES. With a
+//!    drawn limit the two differ by everything the trim has dropped, so
+//!    `crossing_would_truncate` measures per stack, and the gate's seeds cross
+//!    three times each at depths of 75 and 127.
+//! 3. **`DIVERGENCE=1` cannot join.** Its prologue crosses the boundary itself
+//!    and `boundary_iterations` returns NO boundaries when it is on, so adding
+//!    it would silently delete the multi-crossing half of the regime. It is also
+//!    the one mode that corrupts by construction. It stays out, and
+//!    `combined_plan` says so.
 //!
 //! ## The trace, and the shrinker
 //!
@@ -6470,11 +6511,22 @@ pub(super) struct Plan {
     /// over: at `history_limit` 1 every push trims, which is the FIFO window
     /// under maximum pressure at 60 moves rather than at 10,000.
     ///
-    /// `#[serde(default)]` because a [`Trace`] carries its `Plan`: a trace file
-    /// written before this field existed still replays, and the default IS the
-    /// behaviour it was recorded under.
+    /// `#[serde(default)]` here and on `combined` because a [`Trace`] carries
+    /// its `Plan`: a trace file written before these fields existed still
+    /// replays, and the default IS the behaviour it was recorded under.
     #[serde(default)]
     pub(super) config_fuzz: bool,
+    /// The COMBINED regime: horizon, closures, closure shapes, jumps and several
+    /// crossings AT ONCE, rather than one constructed shape at a time.
+    ///
+    /// Implies [`Self::config_fuzz`] (see `start_run`), which is how it gets the
+    /// second of the three resolutions in the module header under "The COMBINED
+    /// regime" - `crossing_would_truncate` keys on the drawn config rather than
+    /// on this flag. The only other thing in the engine that branches on it is
+    /// `run_fuzz`'s climb test, the first resolution; every other mode flag
+    /// means here exactly what it means alone.
+    #[serde(default)]
+    pub(super) combined: bool,
 }
 
 // ===========================================================================
@@ -6562,7 +6614,7 @@ fn config_history_ladder(iterations: usize) -> [usize; 10] {
 /// `start_run`, so a shrunk candidate is measured under the limit its original
 /// ran under rather than under the default.
 fn draw_config(seed: u32, plan: Plan) -> Option<DrawnConfig> {
-    if !plan.config_fuzz {
+    if !plan.config_fuzz && !plan.combined {
         return None;
     }
     let mut rng = Rng::new(seed ^ CONFIG_STREAM);
@@ -6589,6 +6641,11 @@ fn start_run(seed: u32, plan: Plan) -> Fuzzer {
     // The CONFIG the run is drawn, before the app it runs against is built: the
     // limit has to be armed before the first push, and `Fuzzer::new` reads the
     // app's own value back afterwards rather than trusting what it set.
+    //
+    // `combined` implies `config_fuzz` for the same kind of reason
+    // `closure_shapes` implies `closures`: without a drawn limit the combined
+    // regime is EMPTY at its most interesting point - see the module header,
+    // "The COMBINED regime".
     let mut fuzzer = Fuzzer::new_with_config(
         plan.prologue
             .map_or(seed, |(prologue_seed, _)| prologue_seed),
@@ -6689,7 +6746,17 @@ pub(super) fn run_fuzz(seed: u32, plan: Plan) -> Outcome {
         // truncates everything above it. 85 / 8 / 7 climbs while still walking
         // the history on the way up. ONE draw either way, so no other mode's
         // stream moves.
-        let climbing = plan.horizon && fuzzer.cursor - fuzzer.floor < depth_cap;
+        // RESOLUTION 1 of the combined regime. `cursor - floor` is the number of
+        // entries the app is holding, and `absorb_trim` pins that at exactly
+        // `history_limit` from the first trim onwards - which is below
+        // `depth_cap` (twice the limit) forever, so a horizon run stays
+        // "climbing" for its whole life and NEVER draws a jump, whatever
+        // `plan.jumps` says. The combined regime ends the climb where it was
+        // meant to end: when the window starts sliding, which is what `floor`
+        // moving off zero means. Byte-identical for `combined: false`, which is
+        // every horizon run recorded in this file's open observations.
+        let sliding = plan.combined && fuzzer.floor > 0;
+        let climbing = plan.horizon && !sliding && fuzzer.cursor - fuzzer.floor < depth_cap;
         let mut back = if climbing {
             (85..93).contains(&roll)
         } else {
@@ -7085,6 +7152,7 @@ fn undo_redo_fuzz_gate() {
                 closure_shapes: false,
                 horizon: false,
                 config_fuzz: false,
+                combined: false,
             },
         );
         println!("{}", summarize("in-memory", seed, &outcome));
@@ -7130,6 +7198,7 @@ fn undo_redo_fuzz_gate_persistence() {
                 closure_shapes: false,
                 horizon: false,
                 config_fuzz: false,
+                combined: false,
             },
         );
         println!("{}", summarize("persistence", seed, &outcome));
@@ -7181,6 +7250,7 @@ fn undo_redo_fuzz_gate_multi_crossing() {
                 closure_shapes: false,
                 horizon: false,
                 config_fuzz: false,
+                combined: false,
             },
         );
         println!("{}", summarize("multi-crossing", seed, &outcome));
@@ -7200,27 +7270,192 @@ fn undo_redo_fuzz_gate_multi_crossing() {
     println!("gate (multi-crossing) classified totals: {total:?}");
 }
 
+// ===========================================================================
+// The COMBINED gate
+// ===========================================================================
+
+/// Crossings per combined run. Three for the same reason
+/// `undo_redo_fuzz_gate_multi_crossing` uses three - heals stacking on heals -
+/// and now on a history the FIFO trim is actively sliding.
+const COMBINED_CROSSINGS: usize = 3;
+/// Moves per combined seed. Enough that the drawn window slides for most of the
+/// run (a seed drawing a limit of 3 trims from move ~5 on) while the whole gate
+/// stays in the same second-or-two band as the other three.
+const COMBINED_ITERATIONS: usize = 300;
+
+/// The COMBINED regime's plan: every mode that constructs a shape, at once.
+///
+/// `persistence` is not a parameter because multi-crossing IS half of what this
+/// regime is; `divergence` is the one deliberate omission, and it is not
+/// squeamishness: `boundary_iterations` returns NO boundaries when divergence is
+/// on (its exposure prologue crosses on its own schedule instead), so combining
+/// it with `crossings: 3` would silently delete the multi-crossing half. It also
+/// builds its stale ids by construction, which is the reason the header gives
+/// for keeping it out of every gate.
+const fn combined_plan(iterations: usize) -> Plan {
+    Plan {
+        iterations,
+        persistence: true,
+        crossings: COMBINED_CROSSINGS,
+        prologue: None,
+        jumps: true,
+        closures: true,
+        divergence: false,
+        closure_shapes: true,
+        horizon: true,
+        config_fuzz: true,
+        combined: true,
+    }
+}
+
+/// The combined gate's seeds, MINED rather than chosen: `fuzz_seed_survey` under
+/// `COMBINED=1` at 40 seeds x 300 moves, of which 30 are clean, and these two are
+/// the pair whose classified hits cover the most ground while exercising every
+/// part of the regime at once.
+///
+/// | seed | drawn limit | what only it brings |
+/// |---|---|---|
+/// | 15 | 1 | the FIFO window under maximum pressure: 126 entries trimmed, every push trimming, and the newest-entry fingerprint the only way a push is visible at all |
+/// | 21 | 3 | 30 jumps and `finding-7-a-jump-is-not-n-single-steps`, which is reachable ONLY because the combined regime lets a horizon run jump - see resolution 1 |
+///
+/// Both cross three times, both trim, both are clean in BOTH halves of the
+/// survey, and between them they reach the eight ids in
+/// [`COMBINED_CLASSIFIED`]. Seed 19 (limit 3, 52 trimmed, 28 jumps) was the
+/// runner-up and adds finding 17 and finding 4 at the cost of a third of the
+/// gate's runtime; seed 3 is richer still (eight ids alone) and is NOT here
+/// because its in-memory half fails on the header's open component-translation
+/// observation.
+const COMBINED_SEEDS: &[u32] = &[15, 21];
+
+/// What the combined regime is pinned to REACH, and the form the pin takes.
+///
+/// The ids, not the counts. Counts move whenever a classifier gets sharper -
+/// that is what happened to finding 3's cascade - and a gate that went red for a
+/// better classifier would be re-pinned without being read, which is how a pin
+/// stops meaning anything. What must not change silently is the SET: if the
+/// combined regime stops reaching one of these, either a finding is fixed (say
+/// so, and drop the id) or the regime stopped combining (a resolution below has
+/// regressed). The exact counts are printed on every run, which is where a
+/// reader compares them.
+const COMBINED_CLASSIFIED: &[&str] = &[
+    "finding-1-redo-of-create-section-remints-shot-uuids",
+    "finding-10-reload-converts-an-orphan-closure-to-a-merge",
+    "finding-2-orphan-zero-section-offset",
+    "finding-3-undo-of-the-first-shot-displaces-an-empty-section",
+    "finding-3-undo-of-the-first-shot-drops-station-zero-refs",
+    "finding-4-closure-reordered-on-undo",
+    "finding-5-undo-cannot-restore-null-section-field",
+    "finding-7-a-jump-is-not-n-single-steps",
+];
+
+/// THE COMBINED GATE: horizon, closures, closure shapes, jumps, several
+/// crossings and a drawn `undo_history_limit`, all in one run.
+///
+/// Every other gate holds one variable at a time, which is what makes them
+/// readable - and what leaves the interactions unguarded. This one exists
+/// because three of the interactions are not the sum of their parts:
+///
+/// * a horizon run's FIFO window and a save/reload crossing had never met (the
+///   crossing was refused above `undo_persist_limit` and the horizon depth is
+///   hundreds), so nothing had ever reloaded a history the trim was sliding;
+/// * a horizon run had never drawn a jump, because its climb test can never
+///   finish - see resolution 1 in the module header;
+/// * the closure shapes findings 4 and 10 need had never been walked over by a
+///   trimmed history, where the entry a walk reaches is one epoch old and the
+///   entry below it no longer exists.
+///
+/// It runs in the same second-or-two band as the other three because the drawn
+/// limit is what makes the horizon regime CHEAP: at a limit of 1 or 3 the window
+/// slides from the fifth move, so 300 moves reach a state that used to take ten
+/// thousand.
+#[test]
+fn undo_redo_fuzz_gate_combined() {
+    let mut total: BTreeMap<&'static str, usize> = BTreeMap::new();
+    let (mut reloads, mut trimmed, mut jumps) = (0, 0, 0);
+    for &seed in COMBINED_SEEDS {
+        let outcome = run_fuzz(seed, combined_plan(COMBINED_ITERATIONS));
+        println!("{}", summarize("combined", seed, &outcome));
+        reloads += outcome.reloads;
+        trimmed += outcome.trimmed;
+        jumps += outcome.jumps;
+        assert!(
+            outcome.mutations > 50,
+            "seed {seed} barely mutated ({} mutations) - the combined regime stopped reaching \
+             the project",
+            outcome.mutations
+        );
+        for (id, count) in outcome.hits {
+            *total.entry(id).or_insert(0) += count;
+        }
+    }
+    // Each of the three, asserted rather than assumed: a combined run that did
+    // not trim is a horizon run that never got going, one that did not cross is
+    // the multi-crossing half missing, and one that never jumped is resolution 1
+    // regressed - and all three would still pass a hit-count check.
+    assert!(
+        trimmed > 0,
+        "no combined seed reached the drawn history limit ({trimmed} entries trimmed) - the \
+         sliding window went unfuzzed"
+    );
+    assert!(
+        reloads > COMBINED_SEEDS.len(),
+        "the combined gate crossed {reloads} time(s) over {} seed(s) - no seed crossed more \
+         than once, so nothing stacked",
+        COMBINED_SEEDS.len()
+    );
+    assert!(
+        jumps > 0,
+        "the combined gate drew no multi-step jump - a horizon run that cannot jump is the \
+         defect resolution 1 fixed"
+    );
+    let missing: Vec<&&str> = COMBINED_CLASSIFIED
+        .iter()
+        .filter(|id| !total.contains_key(**id))
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "the combined regime no longer reaches {missing:?}. Either those findings are FIXED (drop \
+         them from COMBINED_CLASSIFIED and say so) or the regime stopped combining. Reached: \
+         {total:?}"
+    );
+    println!("gate (combined) classified totals: {total:?}");
+}
+
 /// Determinism is the property every other guarantee rests on: without it a
 /// failing seed is not a repro and the shrink loop in the harness has nothing to
 /// stand on.
+///
+/// Both gated regimes are in here, and the second one is not a formality: the
+/// COMBINED plan draws its `undo_history_limit` from a second generator, saves
+/// and reloads three times, and walks a history the FIFO trim is sliding under
+/// it - three more chances for a run to depend on something that is not its
+/// seed. Its classified totals are pinned by this comparison rather than by a
+/// literal: two runs of the same seed have to agree exactly, id for id and count
+/// for count.
 #[test]
 fn the_fuzzer_is_deterministic() {
-    // The GATE's seeds, not arbitrary ones: a seed that reaches an open finding
+    // The GATES' seeds, not arbitrary ones: a seed that reaches an open finding
     // panics rather than returning an `Outcome`, and this test is about replay
     // fidelity, not about which seeds are clean (`fuzz_seed_survey` answers that).
-    for &seed in GATE_SEEDS {
-        let plan = Plan {
-            iterations: GATE_ITERATIONS,
-            persistence: false,
-            crossings: 1,
-            prologue: None,
-            jumps: false,
-            closures: false,
-            divergence: false,
-            closure_shapes: false,
-            horizon: false,
-            config_fuzz: false,
-        };
+    let plain = Plan {
+        iterations: GATE_ITERATIONS,
+        persistence: false,
+        crossings: 1,
+        prologue: None,
+        jumps: false,
+        closures: false,
+        divergence: false,
+        closure_shapes: false,
+        horizon: false,
+        config_fuzz: false,
+        combined: false,
+    };
+    let runs = GATE_SEEDS.iter().map(|&seed| (seed, plain)).chain(
+        COMBINED_SEEDS
+            .iter()
+            .map(|&seed| (seed, combined_plan(COMBINED_ITERATIONS))),
+    );
+    for (seed, plan) in runs {
         let first = run_fuzz(seed, plan);
         let second = run_fuzz(seed, plan);
         assert_eq!(
@@ -7240,11 +7475,13 @@ fn the_fuzzer_is_deterministic() {
                 second.redos,
                 second.max_depth
             ),
-            "seed {seed} did not replay identically"
+            "seed {seed} did not replay identically (combined={})",
+            plan.combined
         );
         assert_eq!(
             first.hits, second.hits,
-            "seed {seed} classified differently on replay"
+            "seed {seed} classified differently on replay (combined={})",
+            plan.combined
         );
         assert_eq!(
             first.config, second.config,
@@ -7290,6 +7527,7 @@ fn finding_14_no_insert_leaves_a_merge_out_of_alignment() {
             closure_shapes: false,
             horizon: false,
             config_fuzz: false,
+            combined: false,
         },
     );
     assert!(
@@ -7329,6 +7567,7 @@ fn bug_7_a_jump_is_n_single_steps() {
             closure_shapes: true,
             horizon: false,
             config_fuzz: false,
+            combined: false,
         },
     );
     assert_eq!(
@@ -7368,10 +7607,14 @@ fn fuzz_seed_survey() {
     let closure_shapes = std::env::var("STALAGMIGHT_RUST_FUZZ_CLOSURE_SHAPES").is_ok();
     let horizon = std::env::var("STALAGMIGHT_RUST_FUZZ_HORIZON").is_ok();
     let config_fuzz = std::env::var("STALAGMIGHT_RUST_FUZZ_CONFIG").is_ok();
+    // `COMBINED=1` is a shorthand rather than a seventh independent flag: it IS
+    // the other modes at once, so it turns them on rather than sitting beside
+    // them. Spelling them out as well is harmless (they are already true).
+    let combined = std::env::var("STALAGMIGHT_RUST_FUZZ_COMBINED").is_ok();
     let crossings: usize = std::env::var("STALAGMIGHT_RUST_FUZZ_CROSSINGS")
         .ok()
         .and_then(|value| value.parse().ok())
-        .unwrap_or(1);
+        .unwrap_or(if combined { COMBINED_CROSSINGS } else { 1 });
     let verbose = fuzz_verbose();
     // Seed-major, mode-minor: the same order the sweep used when it ran the
     // seeds one at a time, and the order every line below is merged in.
@@ -7386,12 +7629,13 @@ fn fuzz_seed_survey() {
                 persistence,
                 crossings,
                 prologue: None,
-                jumps,
-                closures,
+                jumps: jumps || combined,
+                closures: closures || combined,
                 divergence,
-                closure_shapes,
-                horizon,
+                closure_shapes: closure_shapes || combined,
+                horizon: horizon || combined,
                 config_fuzz,
+                combined,
             },
         )
     });
@@ -7519,6 +7763,7 @@ fn fuzz_corpus_sweep() {
         closure_shapes: false,
         horizon: false,
         config_fuzz: false,
+        combined: false,
     };
 
     // ---- UNGUIDED: `budget` fresh seeds, nothing remembered. ----
@@ -7677,6 +7922,7 @@ fn undo_redo_fuzz_horizon() {
                 closure_shapes: false,
                 horizon: true,
                 config_fuzz: false,
+                combined: false,
             },
         )
     });
@@ -7773,6 +8019,7 @@ fn undo_redo_fuzz_soak() {
                 closure_shapes: true,
                 horizon: false,
                 config_fuzz: false,
+                combined: false,
             },
         )
     });

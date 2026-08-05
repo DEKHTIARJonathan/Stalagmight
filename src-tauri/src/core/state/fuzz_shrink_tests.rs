@@ -85,7 +85,7 @@
 //! | `SHRINK_OUT=<path>` | where to write the minimized trace; default is a temp path, printed |
 //! | `SHRINK_PROBES=<n>` | probe budget, default 2000 |
 //! | `REPLAY=<path.json>` | replay a trace file and assert it still reproduces its recorded target |
-//! | `ITERATIONS` `PERSISTENCE` `JUMPS` `CLOSURES` `DIVERGENCE` `CLOSURE_SHAPES` `CROSSINGS` `HORIZON` `CONFIG` | the plan, exactly as `fuzz_seed_survey` reads them |
+//! | `ITERATIONS` `PERSISTENCE` `JUMPS` `CLOSURES` `DIVERGENCE` `CLOSURE_SHAPES` `CROSSINGS` `HORIZON` `CONFIG` `COMBINED` | the plan, exactly as `fuzz_seed_survey` reads them |
 //! | `THREADS` | probes per round in parallel; results do not depend on it |
 //!
 //! ```text
@@ -495,17 +495,21 @@ fn text(name: &str) -> Option<String> {
 /// The plan the survey's knobs describe, so a seed that failed under a sweep is
 /// shrunk under exactly the environment that found it.
 fn plan_from_env() -> Plan {
+    // `COMBINED=1` turns the modes it IS on, exactly as the survey reads it, so
+    // a seed that failed under the combined regime is shrunk under it too.
+    let combined = flag("COMBINED");
     Plan {
         iterations: number("ITERATIONS", GATE_ITERATIONS),
         persistence: flag("PERSISTENCE"),
         crossings: number("CROSSINGS", 1),
         prologue: None,
-        jumps: flag("JUMPS"),
-        closures: flag("CLOSURES"),
+        jumps: flag("JUMPS") || combined,
+        closures: flag("CLOSURES") || combined,
         divergence: flag("DIVERGENCE"),
-        closure_shapes: flag("CLOSURE_SHAPES"),
-        horizon: flag("HORIZON"),
+        closure_shapes: flag("CLOSURE_SHAPES") || combined,
+        horizon: flag("HORIZON") || combined,
         config_fuzz: flag("CONFIG"),
+        combined,
     }
 }
 
@@ -524,6 +528,7 @@ fn describe_plan(plan: Plan) -> String {
         (plan.closure_shapes, "closure-shapes"),
         (plan.horizon, "horizon"),
         (plan.config_fuzz, "drawn-config"),
+        (plan.combined, "combined"),
     ] {
         if on {
             modes.push(name.to_string());
@@ -785,6 +790,7 @@ fn a_recorded_run_matches_an_unrecorded_one() {
             closure_shapes: false,
             horizon: false,
             config_fuzz: false,
+            combined: false,
         };
         let plain = run_fuzz(3, plan);
         let recorded = record_run(3, plan);
@@ -825,6 +831,7 @@ fn a_full_trace_replays_to_the_same_run() {
             closure_shapes: false,
             horizon: false,
             config_fuzz: false,
+            combined: false,
         };
         let recorded = record_run(4, plan);
         let original = recorded
@@ -911,6 +918,7 @@ fn the_shrinker_minimizes_a_classified_failure() {
         closure_shapes: false,
         horizon: false,
         config_fuzz: false,
+        combined: false,
     };
     // Through the PROGRAMMATIC entry point, which is what a future observation
     // hunt would call: record, choose the target from what the run produced,
