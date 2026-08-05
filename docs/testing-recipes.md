@@ -202,6 +202,54 @@ over eight gate runs "settles after one cycle" held four times and failed four
 on the same inputs. What it asserts is that no save/load cycle changes anything
 except bounded float dust in the derived and history tables.
 
+## The crash-timing gate (Rust tier)
+
+`src-tauri/src/core/state/crash_property_tests.rs` tests the save pipeline's
+central promise - "a temp file with atomic rename to prevent data loss on crash
+or power failure" ([Saving](saving.md)) - by simulating a kill at each of its
+boundaries. Nothing else does: the file-format engine above is the only other
+thing that looks at a `.stalx`, and it only ever looks at files a save
+FINISHED writing.
+
+```bash
+TELEMETRY_ENDPOINT=http://localhost/dummy cargo test --manifest-path src-tauri/Cargo.toml \
+  --features telemetry --lib crash_property
+
+STALAGMIGHT_RUST_CRASH_SEEDS=60 STALAGMIGHT_RUST_CRASH_MOVES=26 \
+  STALAGMIGHT_RUST_CRASH_EXTRA=12 \
+  TELEMETRY_ENDPOINT=http://localhost/dummy cargo test --manifest-path src-tauri/Cargo.toml \
+  --features telemetry --lib crash_property_sweep -- --ignored --nocapture
+```
+
+The crash is SIMULATED by constructing the exact files a kill would leave -
+a truncated `<stem>.stalx.tmp` at six byte prefixes, a complete one waiting for
+a rename that never came, one caught mid-transaction with its hot rollback
+journal, the post-rename states, and a destination caught mid-transaction -
+rather than by racing a signal. `rename(2)` is atomic and the temp is a private
+file, so the reachable set is small, enumerable and copyable, which is what
+makes this deterministic and CI-fast. Both reference files are written by the
+real pipeline.
+
+The oracle: no panic, the destination is EXACTLY the old file or EXACTLY the
+new one (never a blend, and the engine names which it must be, because every
+pre-rename state leaves the destination byte-intact), it opens, and it can be
+saved again leaving no staging file behind. That last step is what walks the
+next save into the orphaned-journal hazard `project_io.rs:482` creates: the
+leftover-temp cleanup removes the temp but not its `-journal`, so the next save
+builds a fresh temp database at that name straight on top of a hot journal.
+That one is measured benign - the save succeeds and SQLite discards the stale
+journal, so it does not accumulate - and the engine fails if anything disarms
+the hazard before the recovery save reaches it.
+
+Green over 60 seeds / 720 states. The one thing it measures rather than
+asserts is what a TORN temp does when opened directly (the recovery UI lists
+`.tmp` files as restore candidates and `restore_from_backup` validates
+nothing): 306 refused, 11-13 loaded as the interrupted save, 41-43 loaded with
+the survey intact and the undo history gone. That last split is the one number
+that moves between runs, and it moves for finding 21's reason - `HashMap` order
+in the writer decides which row a fixed byte offset cuts through. The 306 does
+not move, and neither does any total.
+
 ## The adversarial gate (Rust tier)
 
 `src-tauri/src/core/state/adversarial_tests.rs` fuzzes the command layer's

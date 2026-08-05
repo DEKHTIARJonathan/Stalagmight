@@ -43,6 +43,8 @@ mod adversarial_tests;
 #[cfg(test)]
 mod concurrency_tests;
 #[cfg(test)]
+mod crash_property_tests;
+#[cfg(test)]
 mod format_property_tests;
 #[cfg(test)]
 mod fuzz_undo_tests;

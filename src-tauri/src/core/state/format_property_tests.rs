@@ -105,7 +105,7 @@ fn is_timestamp(text: &str) -> bool {
 /// SQLite's rowid allocation - and it is what makes a `HashMap`-iteration-order
 /// difference in the writer surface as a differing VALUE (which is real) rather
 /// than as a differing order (which is not).
-fn dump_database(path: &Path) -> Result<String, String> {
+pub(super) fn dump_database(path: &Path) -> Result<String, String> {
     let connection = Connection::open(path).map_err(|error| error.to_string())?;
     let mut tables: Vec<String> = {
         let mut statement = connection
@@ -194,9 +194,15 @@ fn fnv1a(bytes: &[u8]) -> u64 {
 }
 
 /// The first few differing lines between two dumps, for a failure payload.
-fn dump_differences(left: &str, right: &str) -> Vec<String> {
+///
+/// `labels` names the two sides. The crash engine
+/// ([`super::crash_property_tests`]) renders the same payload against "the old
+/// file" and "the new file" rather than two saves, and a shared differ that
+/// hard-coded one engine's nouns would mislabel the other's failures.
+pub(super) fn dump_differences(left: &str, right: &str, labels: (&str, &str)) -> Vec<String> {
     let mut out = Vec::new();
     let (mut a, mut b) = (left.lines(), right.lines());
+    let width = labels.0.chars().count().max(labels.1.chars().count());
     let mut line = 0;
     loop {
         match (a.next(), b.next()) {
@@ -205,9 +211,12 @@ fn dump_differences(left: &str, right: &str) -> Vec<String> {
                 line += 1;
                 if first != second {
                     out.push(format!(
-                        "  line {line}:\n    first save:  {}\n    second save: {}",
+                        "  line {line}:\n    {:<width$} {}\n    {:<width$} {}",
+                        format!("{}:", labels.0),
                         first.unwrap_or("<end of dump>").replace('\u{1f}', " "),
-                        second.unwrap_or("<end of dump>").replace('\u{1f}', " ")
+                        format!("{}:", labels.1),
+                        second.unwrap_or("<end of dump>").replace('\u{1f}', " "),
+                        width = width + 1
                     ));
                 }
             }
@@ -247,7 +256,7 @@ fn allocators(state: &AppState) -> BTreeMap<String, u32> {
 }
 
 /// Everything two loaded states are compared on.
-struct Loaded {
+pub(super) struct Loaded {
     stored: String,
     verdict: String,
     adjusted: String,
@@ -256,7 +265,7 @@ struct Loaded {
     redo_len: usize,
 }
 
-fn observe(state: &AppState) -> Loaded {
+pub(super) fn observe(state: &AppState) -> Loaded {
     Loaded {
         stored: canonical_snapshot(state, false),
         verdict: integrity_verdict(state).describe(),
@@ -269,7 +278,7 @@ fn observe(state: &AppState) -> Loaded {
 
 /// Every way two loaded states differ. Empty means the loader is a function of
 /// the file, as far as anything can see.
-fn load_differences(left: &Loaded, right: &Loaded) -> Vec<String> {
+pub(super) fn load_differences(left: &Loaded, right: &Loaded) -> Vec<String> {
     let mut out = Vec::new();
     let diffs = diff_snapshots(&left.stored, &right.stored);
     if !diffs.is_empty() {
@@ -317,7 +326,7 @@ fn load_differences(left: &Loaded, right: &Loaded) -> Vec<String> {
 /// the same file, they are the part of it nothing outside this programme
 /// exercises, and a run that saved an empty history would prove nothing about
 /// the tables that carry them.
-fn build_state(seed: u32, closures: bool, moves: usize) -> Option<AppState> {
+pub(super) fn build_state(seed: u32, closures: bool, moves: usize) -> Option<AppState> {
     let state = AppState::new().ok()?;
     let mut rng = Rng::new(seed);
     build_project(&state, &mut rng, closures);
@@ -335,7 +344,7 @@ fn build_state(seed: u32, closures: bool, moves: usize) -> Option<AppState> {
 /// One random command, from the same narrow set the metamorphic prelude uses -
 /// nothing with an open finding against it, so a property failure here is about
 /// the FILE rather than about a defect the project was built with.
-fn mutate(state: &AppState, rng: &mut Rng) {
+pub(super) fn mutate(state: &AppState, rng: &mut Rng) {
     let targets = read_targets(state);
     if targets.sections.is_empty() {
         return;
@@ -431,7 +440,7 @@ fn pick_shot(state: &AppState, rng: &mut Rng) -> Option<(SectionId, ShotId)> {
 }
 
 /// Open `path` into a fresh `AppState`.
-fn open_fresh(path: &Path) -> Option<AppState> {
+pub(super) fn open_fresh(path: &Path) -> Option<AppState> {
     let state = AppState::new().ok()?;
     state
         .execute(Command::OpenProject {
@@ -670,7 +679,12 @@ fn check_save_load_save(seed: u32, closures: bool, moves: usize) -> Fixpoint {
                 "seed {seed}: save/load generation {generation} differs from generation {} in a \
                  way that is NOT bounded float dust in a derived or history table:\n{}",
                 generation - 1,
-                dump_differences(&dumps[generation - 1], &dumps[generation]).join("\n")
+                dump_differences(
+                    &dumps[generation - 1],
+                    &dumps[generation],
+                    ("first save", "second save")
+                )
+                .join("\n")
             ));
         }
     }

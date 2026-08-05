@@ -52,7 +52,9 @@ All saves use a temp file with atomic rename to prevent data loss on crash or po
 2. On success: `rename(file.stalx.tmp, file.stalx)` - atomic on POSIX, nearly atomic on Windows
 3. On failure: delete `file.stalx.tmp`, original file untouched
 
-If a leftover `.stalx.tmp` file exists from a previous failed save, it is removed before starting.
+If a leftover `.stalx.tmp` file exists from a previous failed save, it is removed before starting. Its rollback journal (`.stalx.tmp-journal`) is not, so the next save's fresh temp database can meet an orphaned hot journal - a state the crash-timing gate injects deliberately.
+
+That gate (`src-tauri/src/core/state/crash_property_tests.rs`, see [Testing Recipes](testing-recipes.md)) is what holds this promise up: it constructs the exact files a kill at each pipeline boundary would leave and asserts the destination comes back as EXACTLY the old project or EXACTLY the new one, never a blend, and that the next save recovers cleanly.
 
 ## Save a Copy (SpeleoDB-managed projects)
 
