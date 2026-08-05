@@ -69,6 +69,15 @@ describe('projectStore executeCommand failure handling (#191 read-only gate)', (
     expect(showToast).toHaveBeenCalledWith('Invalid offset', 'command-failed', 'error');
   });
 
+  it('still toasts an unclaimed failure from the context menu (it renders no errors)', async () => {
+    useUIStore.setState({ activeDialog: 'context-menu' } as never);
+    invokeIpcMock.mockResolvedValue({ success: false, error: 'Invalid offset' });
+
+    await useProjectStore.getState().moveSection(1, { x: 1, y: 2, z: 0 });
+
+    expect(showToast).toHaveBeenCalledWith('Invalid offset', 'command-failed', 'error');
+  });
+
   it('re-syncs but does NOT toast a failure while a dialog is open (it owns the inline error)', async () => {
     useUIStore.setState({ activeDialog: 'edit-shot' } as never);
     invokeIpcMock.mockResolvedValue({ success: false, error: 'Invalid offset' });

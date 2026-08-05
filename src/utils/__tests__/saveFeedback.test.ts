@@ -160,7 +160,7 @@ describe('surfaceImportFailure', () => {
     });
   });
 
-  it('transport failure: keeps the dialog open so the user can retry', () => {
+  it('transport failure: skips the shared exit sequence (no complete, no view switch)', () => {
     const ui = mockUi();
 
     surfaceImportFailure('walls-import', ui, {

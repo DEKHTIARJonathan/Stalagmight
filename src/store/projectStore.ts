@@ -656,13 +656,19 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
           useSpeleoStore.getState().notifyReverifyDivergence();
         } else if (isEditDisabledError(result.error)) {
           useUIStore.getState().showToast(READ_ONLY_EDIT_NOTICE(), TOAST_KEYS.EDIT_DISABLED, 'warning');
-        } else if (useUIStore.getState().activeDialog === null) {
+        } else {
           // Catch-all (docs/notifications.md): a failure no specific handler
           // claims must not die silently. Dialogs own their inline errors and
           // are open when they issue commands, so the catch-all yields to them.
-          useUIStore
-            .getState()
-            .showToast(result.error ?? i18n.t('editGate.commandFailed'), TOAST_KEYS.COMMAND_FAILED, 'error');
+          // The context menu is the exception: it issues commands but renders
+          // no errors (its actions await the command before closing), so it
+          // must not suppress.
+          const dialog = useUIStore.getState().activeDialog;
+          if (dialog === null || dialog === 'context-menu') {
+            useUIStore
+              .getState()
+              .showToast(result.error ?? i18n.t('editGate.commandFailed'), TOAST_KEYS.COMMAND_FAILED, 'error');
+          }
         }
       }
       return result;

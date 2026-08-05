@@ -122,10 +122,11 @@ regions). Read the comment blocks in those two files plus
   yields while ANY dialog is open - dialogs own their inline errors and are open
   when they issue commands - so a panel or map flow must NOT add its own
   failure toast for an `executeCommand`-backed action; the catch-all is the
-  surface. Known accepted loss: the gate is global, so a non-dialog command
-  failing while an unrelated dialog happens to be open is still silent - the
-  cost of never double-messaging a dialog. Undo/redo keep their own equivalent
-  fallback (same localized default).
+  surface. The context menu is the one dialog that does not suppress it: it
+  issues commands but renders no errors. Known accepted loss: the gate is
+  global, so a non-dialog command failing while an unrelated dialog happens to
+  be open is still silent - the cost of never double-messaging a dialog.
+  Undo/redo keep their own equivalent fallback (same localized default).
 - **`CommandResult::with_warning` (code `"SYSTEM"`) is exclusive to the deferred-
   save contract** (#92/#104): "imported but could not save" keeps
   `success: true` + warning so data survives exit. Never route ordinary warnings

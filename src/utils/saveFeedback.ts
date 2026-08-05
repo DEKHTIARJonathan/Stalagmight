@@ -81,8 +81,11 @@ export interface ImportDialogUi {
  * - `empty`: the backend succeeded but imported nothing (e.g. a `.wpj` whose
  *   `.srv` files are missing) - closes the dialog and says why, because a
  *   silent "success" with an empty map reads as breakage.
- * - `transport`: the IPC call itself threw - the dialog stays open so the
- *   user can retry; `format` names the source format in the fallback message.
+ * - `transport`: the IPC call itself threw - unlike `command`, the shared
+ *   exit sequence does NOT run (no dialog-complete telemetry, no view switch);
+ *   the error dialog takes the single dialog slot, so dismissing it returns
+ *   the user to where they were. `format` names the source format in the
+ *   fallback message.
  */
 export type ImportFailure =
   | { phase: 'command'; error: string | null | undefined }
