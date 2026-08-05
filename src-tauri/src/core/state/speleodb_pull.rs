@@ -3017,6 +3017,7 @@ mod tests {
             sections,
             closures: Vec::new(),
             parse_anomalies: None,
+            encoding_warning: None,
         }
     }
 
