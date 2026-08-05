@@ -276,7 +276,7 @@ describe('routeOpenedFile - import context (#411)', () => {
     parseTml.mockResolvedValue(null);
     parseCompass.mockResolvedValue(null);
     parseWalls.mockResolvedValue(null);
-    useUIStore.setState({ importContext: null, showToast: realShowToast });
+    useUIStore.setState({ importContext: null, showToast: realShowToast, placementMode: null });
     useProjectStore.setState({ saveProject: realSaveProject } as never);
   });
 
@@ -361,6 +361,47 @@ describe('routeOpenedFile - import context (#411)', () => {
   it('still routes when a NON-import dialog owns the screen', async () => {
     useUIStore.setState({ activeDialog: 'error', dialogData: {} });
     await routeOpenedFile('/cave/track.tml');
+    expect(showToast).not.toHaveBeenCalled();
+    expect(useUIStore.getState().activeDialog).toBe('new-project-for-import');
+    expect(useUIStore.getState().importContext).toBe('new-project');
+  });
+
+  // The one in-flight phase with NO dialog: the DMP wizard's manual placement
+  // calls startPlacementMode() and then closeDialog() so the user can work the
+  // map, leaving activeDialog null while saveAfterImport is still to come.
+  it('refuses a file during manual placement, when no dialog is open at all', async () => {
+    importDmp.mockResolvedValue({ sections: [] });
+    await routeOpenedFile('/cave/survey.dmp');
+    expect(useUIStore.getState().importContext).toBe('new-project');
+
+    useUIStore.getState().startPlacementMode({} as never, 0);
+    useUIStore.getState().closeDialog();
+    expect(useUIStore.getState().activeDialog).toBeNull();
+
+    parseTml.mockResolvedValue(null); // a second file arrives mid-placement
+    await routeOpenedFile('/cave/track.tml');
+
+    expect(showToast).toHaveBeenCalledWith(expect.any(String), 'import-in-progress', 'warning');
+    expect(parseTml).not.toHaveBeenCalled();
+    expect(useUIStore.getState().importContext).toBe('new-project');
+    // The placing flow still reaches disk when it finishes.
+    await useProjectStore.getState().saveAfterImport();
+    expect(saveProject).toHaveBeenCalledTimes(1);
+  });
+
+  // Both placement exits must clear the signal, or the guard would wedge the
+  // router for the rest of the session.
+  it.each([
+    ['confirmed', () => useUIStore.getState().confirmPlacement()],
+    ['cancelled', () => useUIStore.getState().cancelPlacementMode()],
+  ])('routes again once placement is %s', async (_label, endPlacement) => {
+    useUIStore.getState().startPlacementMode({} as never, 0);
+    useUIStore.getState().closeDialog();
+    endPlacement();
+    expect(useUIStore.getState().placementMode).toBeNull();
+
+    await routeOpenedFile('/cave/track.tml');
+
     expect(showToast).not.toHaveBeenCalled();
     expect(useUIStore.getState().activeDialog).toBe('new-project-for-import');
     expect(useUIStore.getState().importContext).toBe('new-project');

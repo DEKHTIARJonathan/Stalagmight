@@ -37,6 +37,8 @@ import { extractFilename } from './path';
 import { openDialog, openOrImportFilters, DMP_EXTENSION } from './fileDialogs';
 import { clearProjectActionSource } from './telemetry';
 import { needsSpeleoHandBackPrompt } from './quit';
+import { TOAST_KEYS } from './toastKeys';
+import i18n from '../i18n';
 
 /**
  * Open the "import as new project?" confirm dialog (#391) for a new-project-only
@@ -76,6 +78,31 @@ const IMPORT_FLOW_DIALOGS = new Set([
   'gpx-placement',
   'orphan-placement',
 ]);
+
+/**
+ * True while an import flow owns the screen and still needs its `importContext`.
+ *
+ * Two shapes, because the flow is not always behind a dialog. The DMP wizard's
+ * MANUAL PLACEMENT phase hands the map to the user: it calls
+ * `startPlacementMode(...)` and then `closeDialog()` (DmpNewImportDialog.tsx,
+ * `startSegmentPlacement` -> "Close dialog so user can interact with the map"),
+ * so `activeDialog` is null for the whole phase while the flow is very much
+ * in-flight and its `saveAfterImport` is still to come. `placementMode` is the
+ * signal that covers it: `startPlacementMode` sets it (uiStore) and BOTH exits
+ * clear it - `confirmPlacement()` and `cancelPlacementMode()` each
+ * `set({ placementMode: null })` - so it is false again the moment placement
+ * ends, whether the user placed the segment or cancelled back to the wizard.
+ *
+ * It reads slightly wider than "import": the paste-sections dialog uses
+ * placement too. That is the right side to err on - the rest of the app already
+ * treats placement as modal-equivalent (the toolbar disables, SingleSystemView
+ * dims and drops pointer events, useKeyboardShortcuts allowlists a handful of
+ * actions), so routing a dropped file into it was never wanted either.
+ */
+function importFlowOwnsScreen(ui: ReturnType<typeof useUIStore.getState>): boolean {
+  if (ui.activeDialog && IMPORT_FLOW_DIALOGS.has(ui.activeDialog)) return true;
+  return ui.placementMode !== null;
+}
 
 /**
  * Dispatch an already-chosen path to the matching open/import flow.
@@ -118,8 +145,8 @@ export async function routeOpenedFile(
     // and future entry point inherits it. Inside the `try` so the abandoned
     // route's telemetry source is dropped by the `finally`, like every other
     // guard-rejected path.
-    if (ui.activeDialog && IMPORT_FLOW_DIALOGS.has(ui.activeDialog)) {
-      ui.showToast('Finish or cancel the current import first.', 'import-in-progress', 'warning');
+    if (importFlowOwnsScreen(ui)) {
+      ui.showToast(i18n.t('importGate.inProgress'), TOAST_KEYS.IMPORT_IN_PROGRESS, 'warning');
       return;
     }
 

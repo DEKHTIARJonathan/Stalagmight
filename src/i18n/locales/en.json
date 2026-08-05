@@ -2192,6 +2192,9 @@
     "readOnlyNotice": "This project is open read-only - click Start editing to take the write lock.",
     "commandFailed": "The change could not be applied."
   },
+  "importGate": {
+    "inProgress": "Finish or cancel the current import first."
+  },
   "newSection": {
     "collapse": "Shrink the table",
     "create": "Create Section",
