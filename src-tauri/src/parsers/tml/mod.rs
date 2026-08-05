@@ -131,6 +131,14 @@ pub struct TmlSection {
 #[ts(export)]
 pub struct TmlShot {
     pub id: i64,
+    /// Ariane's own `<UUID>`/`<UU>` for this row, verbatim - `None` when the
+    /// element is absent or empty. Carried into [`crate::models::ShotData::uuid`]
+    /// so an Ariane-authored file keeps its shot identity across a round trip;
+    /// deliberately NOT validated or coerced to a canonical v4, since coercing
+    /// would recreate the churn the carry exists to stop (#423).
+    #[serde(default)]
+    #[ts(optional)]
+    pub uuid: Option<String>,
     pub from_id: i64,
     pub shot_type: TmlShotType,
     pub azimuth: f64,
@@ -191,6 +199,7 @@ pub struct TmlClosure {
 #[derive(Debug, Clone)]
 struct RawShot {
     id: i64,
+    uuid: Option<String>,
     from_id: i64,
     closure_to_id: i64,
     shot_type: TmlShotType,
@@ -223,6 +232,10 @@ struct RawShot {
 fn normalize_key_bytes(name: &[u8]) -> Option<&'static str> {
     match name {
         b"ID" | b"Id" => Some("id"),
+        // Ariane 26+ writes a stable per-row id here and preserves it across
+        // edits; we read it so a file that leaves Ariane and comes back keeps
+        // its shot identity instead of getting a fresh mint (#423).
+        b"UUID" | b"UU" => Some("uuid"),
         b"FromID" | b"FRID" => Some("from_id"),
         b"ClosureToID" | b"CID" => Some("closure_to_id"),
         b"Type" | b"TY" => Some("type"),
@@ -518,6 +531,10 @@ fn build_raw_shot(
 
     Ok(RawShot {
         id,
+        // Verbatim, un-validated: whatever the file calls this shot IS its
+        // identity. An empty element means "no identity", matching the way
+        // `export::tml::shot_export_uuid` already treats an empty stored value.
+        uuid: fields.get("uuid").filter(|u| !u.is_empty()).cloned(),
         from_id,
         closure_to_id: parse_i64(fields, "closure_to_id").unwrap_or(-1),
         shot_type,
@@ -991,6 +1008,7 @@ fn linearize_section(
             .iter()
             .map(|s| TmlShot {
                 id: s.id,
+                uuid: s.uuid.clone(),
                 from_id: s.from_id,
                 shot_type: s.shot_type,
                 azimuth: s.azimuth,
@@ -1824,6 +1842,10 @@ pub(crate) fn normalize_tml_shot(shot: &TmlShot, depth_in: f64) -> ShotData {
     let az = crate::models::normalize_azimuth(shot.azimuth);
 
     ShotData {
+        // The file's own shot id, carried so the round trip re-emits it (#423).
+        // The TML importer is the only one that sets this; every other importer
+        // leaves it `None` and gets a fresh mint, exactly as before.
+        uuid: shot.uuid.clone(),
         azimuth_in: az,
         azimuth_out: az, // No backsight in Ariane
         length: shot.length,
@@ -2426,6 +2448,7 @@ mod tests {
         let mut sections = vec![TmlSection {
             name: "Test".to_string(),
             shots: vec![TmlShot {
+                uuid: None,
                 id: 1,
                 from_id: 0,
                 shot_type: TmlShotType::Real,
@@ -2477,6 +2500,7 @@ mod tests {
         let mut sections = vec![TmlSection {
             name: "Test".to_string(),
             shots: vec![TmlShot {
+                uuid: None,
                 id: 1,
                 from_id: 0,
                 shot_type: TmlShotType::Real,
@@ -3715,6 +3739,7 @@ mod tests {
     #[test]
     fn test_virtual_shot_in_shot_data() {
         let shots = vec![TmlShot {
+            uuid: None,
             id: 1,
             from_id: 0,
             shot_type: TmlShotType::Virtual,
@@ -3745,6 +3770,7 @@ mod tests {
     #[test]
     fn test_lrud_zero_becomes_none() {
         let shots = vec![TmlShot {
+            uuid: None,
             id: 1,
             from_id: 0,
             shot_type: TmlShotType::Real,
@@ -3780,6 +3806,7 @@ mod tests {
         // Ariane stores azimuths as arbitrary angles (negative, >360).
         // convert_shots_to_shot_data must normalize to 0..360.
         let make_shot = |az: f64| TmlShot {
+            uuid: None,
             id: 1,
             from_id: 0,
             shot_type: TmlShotType::Real,
@@ -3832,6 +3859,7 @@ mod tests {
     fn test_excluded_shots_filtered_by_default() {
         let shots = vec![
             TmlShot {
+                uuid: None,
                 id: 1,
                 from_id: 0,
                 shot_type: TmlShotType::Real,
@@ -3855,6 +3883,7 @@ mod tests {
                 section: "Test".to_string(),
             },
             TmlShot {
+                uuid: None,
                 id: 2,
                 from_id: 1,
                 shot_type: TmlShotType::Real,
@@ -3878,6 +3907,7 @@ mod tests {
                 section: "Test".to_string(),
             },
             TmlShot {
+                uuid: None,
                 id: 3,
                 from_id: 2,
                 shot_type: TmlShotType::Real,
@@ -3920,6 +3950,7 @@ mod tests {
     fn test_all_excluded_section_dropped_from_configs() {
         // Section where every shot is excluded → should be dropped entirely
         let make_shot = |id, from_id, excluded| TmlShot {
+            uuid: None,
             id,
             from_id,
             shot_type: TmlShotType::Real,
@@ -3995,6 +4026,7 @@ mod tests {
         // whose target station was excluded (and so never made it into
         // `id_to_import_loc`), exercising both converter-level warnings at once.
         let make_shot = |id, from_id, shot_type, excluded, closure_to_id| TmlShot {
+            uuid: None,
             id,
             from_id,
             shot_type,
@@ -4089,6 +4121,7 @@ mod tests {
         // Two branches of "Gallery": branch 2 is all-excluded → dropped.
         // Branch 1 should lose the "(branch 1)" suffix.
         let make_shot = |id, from_id, excluded| TmlShot {
+            uuid: None,
             id,
             from_id,
             shot_type: TmlShotType::Real,
@@ -4173,6 +4206,7 @@ mod tests {
         // (in section C), and topological sort must reorder C before B even though
         // C has a higher raw index than expected.
         let make_shot = |id: i64, from_id: i64, excluded: bool| TmlShot {
+            uuid: None,
             id,
             from_id,
             shot_type: TmlShotType::Real,

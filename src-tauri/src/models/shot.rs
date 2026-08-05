@@ -258,6 +258,21 @@ pub struct Shot {
 /// Data for creating or updating a shot
 #[derive(Debug, Clone, Serialize, Deserialize, Default, TS)]
 pub struct ShotData {
+    /// Persistent identity for the shot this data will become, or `None` to
+    /// mint a fresh one. Set by the Ariane importer from the file's `<UUID>`
+    /// (#423) and by [`Shot::to_shot_data`], so identity survives every
+    /// transform that rebuilds shots from their data - a section split, a
+    /// reverse, a project merge, an undo/redo round trip.
+    ///
+    /// **Any future clone/duplicate-shot path MUST clear this field.** The
+    /// uniqueness repair ([`crate::models::Project::ensure_unique_shot_uuids`],
+    /// and the same rule in [`crate::models::Section::new`]) keeps the FIRST
+    /// occurrence, so a copy that kept its source's identity would get the
+    /// original re-minted instead of the copy - silently moving every station
+    /// cross-reference anchored on it.
+    #[serde(default)]
+    #[ts(optional)]
+    pub uuid: Option<String>,
     pub azimuth_in: f64,
     pub azimuth_out: f64,
     pub length: f64,
@@ -547,19 +562,35 @@ impl Shot {
         true
     }
 
-    /// Create a new shot from shot data.  A fresh v4 UUID is minted for
-    /// persistent shot identity (see `Shot::uuid`); call [`Shot::with_uuid`]
-    /// instead when restoring a shot from a persisted UUID.
+    /// Create a new shot from shot data.  Identity comes from
+    /// [`ShotData::uuid`] when the data carries one (an Ariane import, a split,
+    /// a reverse); otherwise a fresh v4 is minted.  See [`Shot::with_uuid`] for
+    /// the full precedence rule.
     pub fn new(id: ShotId, data: ShotData) -> Self {
         Self::with_uuid(id, data, Some(uuid::Uuid::new_v4().to_string()))
     }
 
-    /// Construct a shot with an explicit UUID (`None` = pre-v6 .stalx
-    /// shot loaded without a recorded UUID; the next save will mint one).
+    /// Construct a shot, resolving its persistent identity.
+    ///
+    /// **This is the ONE place shot identity is decided**, and the rule is
+    /// `data.uuid.or(explicit)`: the data's own id wins, because it travels
+    /// with the record through every transform that rebuilds a shot from its
+    /// data. `explicit` is the fallback, and exists only for callers holding an
+    /// identity the payload cannot carry:
+    ///
+    /// * undo/redo entries persisted before #423, whose `ShotData` has no
+    ///   `uuid` but which stored one alongside (`core/undo.rs` `ShotInfo`,
+    ///   replayed at `core/state/undo_restore.rs`);
+    /// * `Shot::new`'s fresh mint, used when the data carries no identity.
+    ///
+    /// `None` from both means a pre-v6 `.stalx` shot with no recorded UUID;
+    /// the next save mints one. Because every `Shot`-from-`ShotData`
+    /// construction funnels through here, it is not possible to build a shot
+    /// that silently drops the identity its data was carrying.
     pub fn with_uuid(id: ShotId, data: ShotData, uuid: Option<String>) -> Self {
         Self {
             id,
-            uuid,
+            uuid: data.uuid.or(uuid),
             azimuth_in: data.azimuth_in,
             azimuth_out: data.azimuth_out,
             length: data.length,
@@ -652,6 +683,11 @@ impl Shot {
     /// Convert to ShotData (for undo snapshots)
     pub fn to_shot_data(&self) -> ShotData {
         ShotData {
+            // Identity travels with the record. This is what lets a section
+            // split, a reverse or a merge rebuild shots from their data without
+            // re-minting - see [`ShotData::uuid`] for the one path (clone /
+            // duplicate) that must clear it instead.
+            uuid: self.uuid.clone(),
             azimuth_in: self.azimuth_in,
             azimuth_out: self.azimuth_out,
             length: self.length,
@@ -715,6 +751,7 @@ impl ShotData {
 impl From<Shot> for ShotData {
     fn from(shot: Shot) -> Self {
         ShotData {
+            uuid: shot.uuid,
             azimuth_in: shot.azimuth_in,
             azimuth_out: shot.azimuth_out,
             length: shot.length,
@@ -741,6 +778,7 @@ mod tests {
 
     fn base_shot_data() -> ShotData {
         ShotData {
+            uuid: None,
             azimuth_in: 10.0,
             azimuth_out: 20.0,
             length: 30.0,

@@ -3660,6 +3660,7 @@ fn test_split_shot_at_distance_happy_path() {
             shots: vec![
                 test_shot_data(5.0),
                 ShotData {
+                    uuid: None,
                     azimuth_in: 30.0,
                     azimuth_out: 32.0,
                     length: 10.0,

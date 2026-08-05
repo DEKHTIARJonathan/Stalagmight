@@ -1,5 +1,6 @@
 use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::fmt;
 use std::str::FromStr;
 use ts_rs::TS;
@@ -303,7 +304,29 @@ impl Section {
             gauge_neighbour_uuid: None,
         };
 
-        for shot_data in data.shots {
+        // Per-section UUID uniqueness, enforced where a `Vec<ShotData>` first
+        // becomes shots - the only door into a section (import, split, project
+        // merge, undo restore all come through here).
+        //
+        // `ShotData::uuid` can now carry a foreign id (#423), and a source file
+        // is free to repeat one inside a section. A repeat makes `resolve_key`
+        // mis-resolve: it takes the FIRST match, so a merge/closure/datum
+        // anchored on the second station silently snaps to the first. Repairing
+        // here rather than after the fact means the duplicate never exists in
+        // the project, so no cross-reference can be built against it in the
+        // window between creation and repair.
+        //
+        // Policy matches `Project::ensure_unique_shot_uuids` (the pre-save
+        // backstop): the FIRST occurrence keeps the id, later ones are cleared
+        // and get a fresh mint from `Shot::new`. Cross-SECTION repeats are legal
+        // by design and untouched.
+        let mut seen: HashSet<String> = HashSet::new();
+        for mut shot_data in data.shots {
+            if let Some(u) = shot_data.uuid.as_ref() {
+                if u.is_empty() || !seen.insert(u.clone()) {
+                    shot_data.uuid = None;
+                }
+            }
             section.add_shot(shot_data);
         }
 

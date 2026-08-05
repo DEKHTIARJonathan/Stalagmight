@@ -3345,6 +3345,7 @@ fn test_save_load_round_trip_zero_values() {
         name: None, // no name
         color: "#000000".to_string(),
         shots: vec![ShotData {
+            uuid: None,
             azimuth_in: 0.0,
             azimuth_out: 0.0,
             length: 0.01, // smallest valid length
