@@ -239,6 +239,79 @@ describe('routeOpenedFile - the read-only guard is scoped to DMP only (#392)', (
   });
 });
 
+/**
+ * #411: `importContext` decides whether `saveAfterImport` WRITES the .stalx (a new
+ * project's initial save is deferred) or only marks dirty. Only the DMP branch used
+ * to set it, so a TML/Compass/Walls/GPX new-project import that reached
+ * orphan placement took the existing-project branch and never wrote the merges to
+ * disk - and because the flag has no auto-reset, whether it did depended on which
+ * import happened to run earlier in the session.
+ */
+describe('routeOpenedFile - import context (#411)', () => {
+  const realSaveProject = useProjectStore.getState().saveProject;
+  const saveProject = vi.fn().mockResolvedValue({ success: true });
+  const parseTml = vi.fn();
+  const parseCompass = vi.fn();
+  const parseWalls = vi.fn();
+
+  beforeEach(() => {
+    parseTml.mockResolvedValue({ sections: [] });
+    parseCompass.mockResolvedValue({ survey_count: 0 });
+    parseWalls.mockResolvedValue({ project_name: 'W' });
+    parseGpx.mockResolvedValue({ waypoints: [] });
+    saveProject.mockResolvedValue({ success: true });
+    useUIStore.setState({ importContext: null });
+    useProjectStore.setState({ parseTml, parseCompass, parseWalls, saveProject } as never);
+  });
+
+  afterEach(() => {
+    // `vi.clearAllMocks()` keeps implementations, so hand the shared GPX parse and
+    // the real save action back to the module-level baseline.
+    parseGpx.mockResolvedValue(null);
+    useUIStore.setState({ importContext: null });
+    useProjectStore.setState({ saveProject: realSaveProject } as never);
+  });
+
+  it.each([
+    ['/cave/track.tml', 'tml'],
+    ['/cave/track.tmlu', 'tml'],
+    ['/cave/survey.mak', 'compass'],
+    ['/cave/survey.wpj', 'walls'],
+    ['/cave/track.gpx', 'gpx'],
+  ])('declares a new-project import context for %s', async (path, importType) => {
+    await routeOpenedFile(path);
+    expect(useUIStore.getState().activeDialog).toBe('new-project-for-import');
+    expect(useUIStore.getState().dialogData).toMatchObject({ importType });
+    expect(useUIStore.getState().importContext).toBe('new-project');
+  });
+
+  it('saves to disk when an orphan placement finishes a TML new-project import', async () => {
+    await routeOpenedFile('/cave/track.tml');
+    // What OrphanPlacementDialog.finish() does once the merges are applied.
+    const proceeded = await useProjectStore.getState().saveAfterImport();
+    expect(saveProject).toHaveBeenCalledTimes(1);
+    expect(proceeded).toBe(true);
+  });
+
+  it('does not inherit an EXISTING-project context from an earlier import', async () => {
+    // A DMP import into an open project ran earlier this session.
+    useUIStore.setState({ importContext: 'existing-project' });
+    await routeOpenedFile('/cave/track.tml');
+    expect(useUIStore.getState().importContext).toBe('new-project');
+    await useProjectStore.getState().saveAfterImport();
+    expect(saveProject).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not leave a NEW-project context behind when the flow never starts', async () => {
+    // A new-project import ran earlier this session; this one abandons at the parse.
+    useUIStore.setState({ importContext: 'new-project' });
+    parseTml.mockResolvedValue(null);
+    await routeOpenedFile('/cave/track.tml');
+    expect(useUIStore.getState().activeDialog).not.toBe('new-project-for-import');
+    expect(useUIStore.getState().importContext).toBeNull();
+  });
+});
+
 describe('pickAndRoute', () => {
   it('clears the source when the picker is cancelled (null result)', async () => {
     openMock.mockResolvedValue(null);

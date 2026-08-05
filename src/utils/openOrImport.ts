@@ -80,6 +80,15 @@ export async function routeOpenedFile(
   // command. `setView('single')` clears it on a successful open/create.
   let handedOff = false;
 
+  // `importContext` tells `saveAfterImport` whether the completion handlers must
+  // write the .stalx (a brand-new project's initial save is deferred) or only mark
+  // dirty. It has no auto-reset, so a value left behind by a previous flow -
+  // abandoned parse, cancelled dialog, or a completed import - would decide the
+  // NEXT one, making the save non-deterministic across a session (#411). Reset it
+  // here: this router is the single entry point of every import flow, and each
+  // branch below re-declares its own context once it commits to a flow.
+  ui.setImportContext(null);
+
   try {
     // Importing into an open project adds sections (a mutation) - but only DMP
     // does that; every other importable format instead CLOSES the current
@@ -175,6 +184,7 @@ export async function routeOpenedFile(
       }
       const gpxFile = await store.parseGpx(path);
       if (!gpxFile) return;
+      ui.setImportContext('new-project');
       ui.openDialog('new-project-for-import', {
         gpxFile,
         filePath: path,
@@ -191,6 +201,7 @@ export async function routeOpenedFile(
       }
       const tmlFile = await store.parseTml(path);
       if (!tmlFile) return;
+      ui.setImportContext('new-project');
       ui.openDialog('new-project-for-import', {
         tmlFile,
         filePath: path,
@@ -207,6 +218,7 @@ export async function routeOpenedFile(
       }
       const compassFile = await store.parseCompass(path);
       if (!compassFile) return;
+      ui.setImportContext('new-project');
       ui.openDialog('new-project-for-import', {
         compassFile,
         filePath: path,
@@ -223,6 +235,7 @@ export async function routeOpenedFile(
       }
       const wallsFile = await store.parseWalls(path);
       if (!wallsFile) return;
+      ui.setImportContext('new-project');
       ui.openDialog('new-project-for-import', {
         wallsFile,
         filePath: path,
