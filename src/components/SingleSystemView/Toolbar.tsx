@@ -354,6 +354,9 @@ export default function Toolbar({
     editingBlocked,
     speleoLinkPresent,
     speleoUnpushedBadge,
+    // The navigate group appearing/disappearing changes the right cluster's
+    // natural width (#409), so its toggle must re-run the fit from scratch.
+    showNavigationTools,
     t,
   ]);
 
