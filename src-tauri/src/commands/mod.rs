@@ -6,6 +6,7 @@ pub mod export;
 pub mod gas;
 pub mod history;
 pub mod import;
+pub mod launch;
 pub mod logging;
 pub mod memory;
 pub mod project;
