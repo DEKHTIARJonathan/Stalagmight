@@ -113,6 +113,10 @@ export default class GlobalSurveyLayer {
   private boundTouchStart: ((e: TouchEvent) => void) | null = null;
   private boundTouchMove: ((e: TouchEvent) => void) | null = null;
   private boundTouchEnd: ((e: TouchEvent) => void) | null = null;
+  private boundTouchCancel: (() => void) | null = null;
+  // Set once a long-press has opened its context menu, so the touchend that
+  // ends the same press can be swallowed (#338).
+  private touchLongPressFired = false;
 
   constructor(map: MaplibreMap, callbacks: GlobalSurveyLayerCallbacks = {}) {
     this.map = map;
@@ -284,6 +288,7 @@ export default class GlobalSurveyLayer {
             clientY: this.touchStartPos.y,
           });
           this.callbacks.onSystemContextMenu(hit.systemId, fakeEvent);
+          this.touchLongPressFired = true;
         }
         this.touchStartPos = null;
       }, 500);
@@ -298,19 +303,36 @@ export default class GlobalSurveyLayer {
         clearTimeout(this.touchLongPressTimer);
         this.touchLongPressTimer = null;
         this.touchStartPos = null;
+        this.touchLongPressFired = false;
       }
     };
-    this.boundTouchEnd = () => {
+    this.boundTouchEnd = (e: TouchEvent) => {
+      // A long-press that opened the menu must not ALSO tap the map underneath
+      // (#338): swallowing this touchend suppresses the compatibility mouse
+      // events the browser would otherwise synthesise from it. Deliberately no
+      // stopPropagation - MapLibre's own touchend still has to run for pan/pinch.
+      if (this.touchLongPressFired) {
+        e.preventDefault();
+        this.touchLongPressFired = false;
+      }
       if (this.touchLongPressTimer) {
         clearTimeout(this.touchLongPressTimer);
         this.touchLongPressTimer = null;
       }
       this.touchStartPos = null;
     };
+    this.boundTouchCancel = () => {
+      if (this.touchLongPressTimer) {
+        clearTimeout(this.touchLongPressTimer);
+        this.touchLongPressTimer = null;
+      }
+      this.touchStartPos = null;
+      this.touchLongPressFired = false;
+    };
     canvas.addEventListener('touchstart', this.boundTouchStart, { passive: false });
     canvas.addEventListener('touchmove', this.boundTouchMove, { passive: false });
-    canvas.addEventListener('touchend', this.boundTouchEnd);
-    canvas.addEventListener('touchcancel', this.boundTouchEnd);
+    canvas.addEventListener('touchend', this.boundTouchEnd, { passive: false });
+    canvas.addEventListener('touchcancel', this.boundTouchCancel);
   }
 
   /**
@@ -578,7 +600,9 @@ export default class GlobalSurveyLayer {
     }
     if (this.boundTouchEnd) {
       canvas.removeEventListener('touchend', this.boundTouchEnd);
-      canvas.removeEventListener('touchcancel', this.boundTouchEnd);
+    }
+    if (this.boundTouchCancel) {
+      canvas.removeEventListener('touchcancel', this.boundTouchCancel);
     }
 
     // Remove tooltip
@@ -596,5 +620,6 @@ export default class GlobalSurveyLayer {
     this.boundTouchStart = null;
     this.boundTouchMove = null;
     this.boundTouchEnd = null;
+    this.boundTouchCancel = null;
   }
 }

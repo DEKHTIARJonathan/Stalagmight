@@ -366,6 +366,10 @@ export default class SurveyLayer {
   private boundTouchStart: ((e: TouchEvent) => void) | null = null;
   private boundTouchMove: ((e: TouchEvent) => void) | null = null;
   private boundTouchEnd: ((e: TouchEvent) => void) | null = null;
+  private boundTouchCancel: (() => void) | null = null;
+  // Set once a long-press has opened its context menu, so the touchend that
+  // ends the same press can be swallowed (#338).
+  private touchLongPressFired = false;
 
   // Hover update batching - only process latest mouse position per frame
   private pendingHoverEvent: maplibregl.MapMouseEvent | null = null;
@@ -1031,6 +1035,7 @@ export default class SurveyLayer {
           }),
         } as maplibregl.MapMouseEvent;
         this.handleContextMenu(fakeEvent);
+        this.touchLongPressFired = true;
         // Prevent subsequent click
         this.touchStartPos = null;
       }, 500);
@@ -1045,19 +1050,36 @@ export default class SurveyLayer {
         clearTimeout(this.touchLongPressTimer);
         this.touchLongPressTimer = null;
         this.touchStartPos = null;
+        this.touchLongPressFired = false;
       }
     };
-    this.boundTouchEnd = () => {
+    this.boundTouchEnd = (e: TouchEvent) => {
+      // A long-press that opened the menu must not ALSO tap the tool underneath
+      // (#338): swallowing this touchend suppresses the compatibility mouse
+      // events the browser would otherwise synthesise from it. Deliberately no
+      // stopPropagation - MapLibre's own touchend still has to run for pan/pinch.
+      if (this.touchLongPressFired) {
+        e.preventDefault();
+        this.touchLongPressFired = false;
+      }
       if (this.touchLongPressTimer) {
         clearTimeout(this.touchLongPressTimer);
         this.touchLongPressTimer = null;
       }
       this.touchStartPos = null;
     };
+    this.boundTouchCancel = () => {
+      if (this.touchLongPressTimer) {
+        clearTimeout(this.touchLongPressTimer);
+        this.touchLongPressTimer = null;
+      }
+      this.touchStartPos = null;
+      this.touchLongPressFired = false;
+    };
     canvas.addEventListener('touchstart', this.boundTouchStart, { passive: false });
     canvas.addEventListener('touchmove', this.boundTouchMove, { passive: false });
-    canvas.addEventListener('touchend', this.boundTouchEnd);
-    canvas.addEventListener('touchcancel', this.boundTouchEnd);
+    canvas.addEventListener('touchend', this.boundTouchEnd, { passive: false });
+    canvas.addEventListener('touchcancel', this.boundTouchCancel);
 
     // Track user-initiated map navigation (zoom & pan) for telemetry
     this.map.on('zoomend', this.handleZoomEndTelemetry);
@@ -3607,6 +3629,7 @@ export default class SurveyLayer {
       this.boundTouchStart = null;
       this.boundTouchMove = null;
       this.boundTouchEnd = null;
+      this.boundTouchCancel = null;
       return;
     }
 
@@ -3632,7 +3655,9 @@ export default class SurveyLayer {
       }
       if (this.boundTouchEnd) {
         canvas.removeEventListener('touchend', this.boundTouchEnd);
-        canvas.removeEventListener('touchcancel', this.boundTouchEnd);
+      }
+      if (this.boundTouchCancel) {
+        canvas.removeEventListener('touchcancel', this.boundTouchCancel);
       }
       this.map.off('zoomend', this.handleZoomEndTelemetry);
       this.map.off('moveend', this.handleMoveEndTelemetry);
