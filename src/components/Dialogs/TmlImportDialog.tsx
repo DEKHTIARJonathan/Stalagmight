@@ -16,9 +16,10 @@ import { clamp } from '../../utils/clamp';
 import { formatNumber } from '../../i18n/format';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
-import type { TmlFile, TmlSection, TmlShot, OrphanPlacementSuggestion } from '../../types/commands';
+import type { TmlFile, OrphanPlacementSuggestion } from '../../types/commands';
 import { setSource, trackDialogComplete } from '../../utils/telemetry';
 import type { VirtualShotMode } from '../../types/project';
+import { computeTmlImportStats, importableShots } from '../../utils/tmlImportStats';
 
 interface TmlImportDialogProps {
   tmlFile: TmlFile;
@@ -74,18 +75,6 @@ function discardTarget(): DiscardTarget {
   };
 }
 
-/**
- * The shots the backend will actually import under the current toggles: CLOSURE
- * rows are never imported (they are loop markers, not measurements) and excluded
- * rows only when the user opts in - mirrors `convert_shots_to_shot_data`
- * (src-tauri/src/parsers/tml.rs).
- */
-function importableShots(section: TmlSection, includeExcluded: boolean): TmlShot[] {
-  return section.shots.filter(
-    (shot) => shot.shot_type !== 'Closure' && (includeExcluded || !shot.excluded)
-  );
-}
-
 export default function TmlImportDialog({ tmlFile, filePath }: TmlImportDialogProps) {
   const { t } = useTranslation();
   const { executeTmlImport, calculateFileHash, startLoading, setLoadingProgress, resetLoading } = useProjectStore();
@@ -132,48 +121,10 @@ export default function TmlImportDialog({ tmlFile, filePath }: TmlImportDialogPr
     return extractFilename(filePath);
   }, [filePath]);
 
-  const stats = useMemo(() => {
-    let totalSections = 0;
-    let totalShots = 0;
-    let totalLength = 0;
-    let minDepth = Infinity;
-    let maxDepth = -Infinity;
-    let excludedCount = 0;
-    let commentCount = 0;
-    let virtualCount = 0;
-
-    for (const section of tmlFile.sections) {
-      // A section left with no shots by the toggles is dropped by the converter
-      // ("no shots after filtering"), so it must not be counted as arriving.
-      let sectionShots = 0;
-      for (const shot of section.shots) {
-        if (shot.shot_type === 'Closure') continue;
-        if (shot.excluded) excludedCount++;
-        if (!includeExcluded && shot.excluded) continue;
-        sectionShots++;
-        totalShots++;
-        totalLength += shot.length;
-        if (shot.depth < minDepth) minDepth = shot.depth;
-        if (shot.depth > maxDepth) maxDepth = shot.depth;
-        if (shot.comment) commentCount++;
-        if (shot.shot_type === 'Virtual') virtualCount++;
-      }
-      if (sectionShots > 0) totalSections++;
-    }
-
-    return {
-      totalSections,
-      totalShots,
-      virtualCount,
-      totalLength: Math.round(totalLength * 10) / 10,
-      depthRange:
-        minDepth === Infinity
-          ? null
-          : `${Math.round(minDepth * 10) / 10} - ${Math.round(maxDepth * 10) / 10}`,
-      excludedCount,
-      commentCount,
-    };
-  }, [tmlFile, includeExcluded]);
+  const stats = useMemo(
+    () => computeTmlImportStats(tmlFile, includeExcluded),
+    [tmlFile, includeExcluded]
+  );
 
   const isEmptyImport = stats.totalShots === 0;
 
