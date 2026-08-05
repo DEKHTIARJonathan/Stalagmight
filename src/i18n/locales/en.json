@@ -1595,6 +1595,17 @@
       "metadataHeading": "Section Metadata",
       "shotsHeading": "Shot Data"
     },
+    "tmlUnanchoredWarning": {
+      "titleNoDatum": "This project has no zero datum",
+      "titlePartial": "Some sections will be discarded",
+      "bodyNoDatum": "Ariane TML/TMLU exports only include sections connected to a zero datum, and this project does not have one, so every section below would be discarded. Right-click a station and choose \"Set Zero Datum\" to anchor the survey, then export again.",
+      "bodyPartial_one": "Ariane TML/TMLU exports only include sections connected to a zero datum. {{count}} of {{total}} sections is not connected and would be discarded. Right-click a station and choose \"Set Zero Datum\" to connect it, or continue to export the rest.",
+      "bodyPartial_other": "Ariane TML/TMLU exports only include sections connected to a zero datum. {{count}} of {{total}} sections are not connected and would be discarded. Right-click a station and choose \"Set Zero Datum\" to connect them, or continue to export the rest.",
+      "listHeadingNoDatum": "Sections that would be discarded",
+      "listHeadingPartial": "Potentially discarded sections",
+      "sectionFallbackName": "Section {{id}}",
+      "continueAnyway": "Continue anyway"
+    },
     "about": {
       "title": "About Stalagmight",
       "version": "Version {{version}}",
