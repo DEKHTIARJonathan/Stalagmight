@@ -1041,17 +1041,17 @@
       "controls": {
         "panSpeed": {
           "label": "Pan speed",
-          "help": "Multiplier for panning speed (0.1-5.0)",
+          "help": "Speed multiplier for Ctrl+drag and middle-button panning (0.1-5.0). Pan-tool dragging stays 1:1 with the cursor",
           "aria": "Pan speed multiplier"
         },
         "zoomSpeed": {
           "label": "Zoom speed",
-          "help": "Multiplier for scroll zoom speed (0.1-5.0)",
+          "help": "Scroll and trackpad zoom speed; higher is faster (0.1-5.0). At 1.0 a mouse-wheel notch is about half a zoom level",
           "aria": "Zoom speed multiplier"
         },
         "invertScroll": {
           "label": "Invert scroll",
-          "help": "Reverse scroll wheel zoom direction",
+          "help": "Reverse scroll wheel and trackpad zoom direction",
           "aria": "Invert scroll direction"
         }
       },

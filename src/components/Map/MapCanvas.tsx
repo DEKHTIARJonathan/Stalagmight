@@ -45,6 +45,7 @@ import { DepthLegend } from './DepthLegend';
 import { DistanceLegend } from './DistanceLegend';
 import { GasLegend } from './GasLegend';
 import { MapDevStats } from './MapDevStats';
+import { WheelChainDebugOverlay } from './WheelChainDebugOverlay';
 import CommentOverlay from './CommentOverlay';
 import MoveCommentCursorTag from './MoveCommentCursorTag';
 import { installPanZoomDebug } from './panZoomDebug';
@@ -1833,6 +1834,54 @@ function MapCanvas() {
     };
   }, []);
 
+  // Scroll-zoom speed: map.controls.zoom_speed feeds MapLibre's zoom rate as
+  // speed/100. Both MapLibre rates (trackpad AND wheel) are set together, on
+  // purpose: MapLibre's per-chain wheel-vs-trackpad classifier misfires on
+  // Windows precision trackpads (measured ~70% wheel-classified events on
+  // gestures that felt sluggish, and the verdict can flap mid-gesture), and
+  // with equal rates its verdict has no visible effect.
+  //
+  // The response is NOT linear in speed. MapLibre scales a chain by
+  // 2 / (1 + exp(-|delta * rate|)), so a 100 px mouse notch moves
+  // log2(2 / (1 + e^-speed)) zoom levels: ~0.55 at speed 1.0, ~0.82 at 2.0,
+  // ~0.99 at the 5.0 maximum. One level per notch is the sigmoid's asymptote
+  // and is unreachable at any setting, which is why the top of the range
+  // barely differs - see the "zoom-speed range saturates" follow-up issue.
+  // Shift+wheel still applies MapLibre's built-in 1/4-rate precision modifier.
+  const zoomSpeed = config?.map.controls.zoom_speed ?? 1.0;
+  useEffect(() => {
+    if (!mapLoaded || !map.current) return;
+    const clamped = Number.isFinite(zoomSpeed) ? Math.min(5.0, Math.max(0.1, zoomSpeed)) : 1.0;
+    map.current.scrollZoom.setZoomRate(clamped / 100);
+    map.current.scrollZoom.setWheelZoomRate(clamped / 100);
+  }, [mapLoaded, zoomSpeed]);
+
+  // Invert scroll: MapLibre has no public wheel-direction option, but its
+  // HandlerManager looks up `scrollZoom.wheel` at dispatch time, so replacing
+  // the method on the instance is a stable interception point. The proxy flips
+  // deltaY only; every other read (clientX/Y for the zoom anchor, deltaMode,
+  // preventDefault, the retained _lastWheelEvent) forwards to the original
+  // event, with methods bound so invocation stays legal.
+  const invertScroll = config?.map.controls.invert_scroll ?? false;
+  useEffect(() => {
+    if (!mapLoaded || !map.current || !invertScroll) return;
+    const sz = map.current.scrollZoom as unknown as { wheel: (e: WheelEvent) => void };
+    const orig = sz.wheel.bind(map.current.scrollZoom);
+    sz.wheel = (e: WheelEvent) =>
+      orig(
+        new Proxy(e, {
+          get(target, prop) {
+            if (prop === 'deltaY') return -target.deltaY;
+            const v = Reflect.get(target, prop);
+            return typeof v === 'function' ? v.bind(target) : v;
+          },
+        }) as WheelEvent
+      );
+    return () => {
+      sz.wheel = orig;
+    };
+  }, [mapLoaded, invertScroll]);
+
   // Register the custom tile protocol; the backend caches responses under the
   // provider's own Cache-Control (see src-tauri/src/cache/tiles.rs)
   // Uses ref-counted registration to safely handle multiple map instances
@@ -2747,6 +2796,8 @@ function MapCanvas() {
   // Custom temporary panning implementation for Ctrl+left-drag and middle-drag.
   // MapLibre's dragPan with modifiers is unreliable in Tauri/WebKit, so we track
   // mouse movement directly and call panBy() ourselves.
+  const rawPanSpeed = config?.map.controls.pan_speed ?? 1.0;
+  const panSpeed = Number.isFinite(rawPanSpeed) ? Math.min(5.0, Math.max(0.1, rawPanSpeed)) : 1.0;
   useEffect(() => {
     const mapElement = mapContainer.current;
     if (!mapElement) return;
@@ -2782,9 +2833,13 @@ function MapCanvas() {
         const dx = e.clientX - customPanStart.x;
         const dy = e.clientY - customPanStart.y;
 
-        // Pan the map by the delta (negative because we're dragging the "ground")
+        // Pan the map by the delta (negative because we're dragging the "ground").
+        // pan_speed scales this modifier-drag pan only: the pan TOOL's dragPan is
+        // direct manipulation (map glued to cursor), so a multiplier there would
+        // read as broken tracking, but Ctrl/middle drag is already a shortcut
+        // gesture where sensitivity is a preference.
         if (Math.abs(dx) > 1 || Math.abs(dy) > 1) {
-          map.current.panBy([-dx, -dy], { animate: false });
+          map.current.panBy([-dx * panSpeed, -dy * panSpeed], { animate: false });
           customPanStart = { x: e.clientX, y: e.clientY };
         }
         if (ctrlPanActiveRef.current) {
@@ -2908,7 +2963,7 @@ function MapCanvas() {
       window.removeEventListener('mousedown', handleMouseDownGlobal, { capture: true });
       window.removeEventListener('mouseup', handleMouseUpGlobal);
     };
-  }, [activeTool]);
+  }, [activeTool, panSpeed]);
 
   // Zoom tool capture handlers - intercept clicks on the map canvas to prevent SurveyLayer selection
   // and handle right-click zoom out behavior. Attaches to the canvas element specifically to avoid
@@ -3875,6 +3930,12 @@ function MapCanvas() {
       {/* Developer stats overlay */}
       {showDevStats && mapLoaded && map.current && (
         <MapDevStats map={map.current} />
+      )}
+
+      {/* TEMP: wheel-chain scroll/travel overlay for the zoom-choppiness
+          investigation. Dev builds only; remove with WheelChainDebugOverlay.tsx. */}
+      {import.meta.env.DEV && mapLoaded && map.current && (
+        <WheelChainDebugOverlay map={map.current} />
       )}
 
       {/* Placement mode overlay */}
