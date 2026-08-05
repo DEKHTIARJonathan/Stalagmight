@@ -531,18 +531,11 @@ struct Outcome {
 /// arm, so it exists in this tier and no other, and issue #413's finding 14 and
 /// its mirror are both open and both already pinned. A panic from ANY other
 /// site is a new finding and is reported verbatim.
-fn known_panic(message: &str, location: Option<&str>) -> Option<&'static str> {
-    // FINDING 24, matched on the panic's LOCATION rather than on its message.
-    // "attempt to add with overflow" says nothing about where, and a classifier
-    // that matched it by text would swallow every future overflow anywhere in
-    // the app - which is the opposite of what this engine is for. The location
-    // is captured by a panic hook (`install_location_hook`) precisely so this
-    // matcher can be narrow.
-    if location.is_some_and(|site| site.contains("models/shot.rs"))
-        && message.contains("attempt to add with overflow")
-    {
-        return Some("finding-24-shot-display-position-overflows-before-validation");
-    }
+fn known_panic(message: &str, _location: Option<&str>) -> Option<&'static str> {
+    // Finding 24 (shot_display_position overflowing before validation) was
+    // classified here by panic LOCATION; it is FIXED (the function saturates
+    // now), so per the delete-when-fixed contract any overflow panic - in
+    // models/shot.rs or anywhere else - is a new finding again.
     if message.contains("Merge alignment violated after insert_shot_") {
         Some("finding-14-insert-leaves-a-merge-metres-out-of-alignment")
     } else if message.contains("Merge alignment violated after remove_shot_with_rewire") {

@@ -1857,7 +1857,6 @@ fn a_range_shift_delete_is_its_single_deletes() {
 ///
 /// Found by the adversarial engine (`adversarial_tests.rs`), seeds 4 and 7.
 #[test]
-#[ignore = "open finding 24: shot_display_position overflows on a shot id near u32::MAX, and Command::description() calls it before validation - see src-tauri/src/core/state/adversarial_tests.rs"]
 fn describing_a_command_with_an_out_of_range_shot_id_does_not_overflow() {
     let _config = isolated_config();
     let state = state_with_project();
