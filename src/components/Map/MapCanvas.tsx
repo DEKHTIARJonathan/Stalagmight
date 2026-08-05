@@ -1749,16 +1749,6 @@ function MapCanvas() {
       ctrlPanMouseEventTime: ctrlPanMouseEventTimeRef,
     });
 
-    // Equalize the two scroll-zoom rates. MapLibre classifies each wheel chain
-    // as 'trackpad' (1/100 zoom per px) or 'wheel' (1/450) from the first
-    // events' timing, and on Windows precision trackpads the classifier gets a
-    // large share of chains wrong - it can even flap between the two rates
-    // WITHIN one gesture (measured ~70% 'wheel' on chains that felt sluggish,
-    // ~4.5x slower than intended). With both rates equal the verdict has no
-    // visible effect. A real mouse notch (~100 px) now zooms a full level per
-    // tick (Google Maps behavior); Shift+wheel still gives 1/4-rate precision.
-    map.current.scrollZoom.setWheelZoomRate(1 / 100);
-
     // Disable rotation (Ctrl+drag rotates by default, we want Ctrl+drag to pan)
     map.current.dragRotate.disable();
     map.current.touchPitch.disable();
@@ -1843,6 +1833,22 @@ function MapCanvas() {
       });
     };
   }, []);
+
+  // Scroll-zoom speed: map.controls.zoom_speed is a multiplier where 1.0 means
+  // one zoom level per 100 px of scroll. Both MapLibre rates (trackpad AND
+  // wheel) are set together, on purpose: MapLibre's per-chain wheel-vs-trackpad
+  // classifier misfires on Windows precision trackpads (measured ~70%
+  // wheel-classified events on gestures that felt sluggish, and the verdict can
+  // flap mid-gesture), and with equal rates its verdict has no visible effect.
+  // A real mouse notch (~100 px) zooms speed x 1 level per tick; Shift+wheel
+  // still applies MapLibre's built-in 1/4-rate precision modifier.
+  const zoomSpeed = config?.map.controls.zoom_speed ?? 1.0;
+  useEffect(() => {
+    if (!mapLoaded || !map.current) return;
+    const clamped = Number.isFinite(zoomSpeed) ? Math.min(5.0, Math.max(0.1, zoomSpeed)) : 1.0;
+    map.current.scrollZoom.setZoomRate(clamped / 100);
+    map.current.scrollZoom.setWheelZoomRate(clamped / 100);
+  }, [mapLoaded, zoomSpeed]);
 
   // Register the custom tile protocol; the backend caches responses under the
   // provider's own Cache-Control (see src-tauri/src/cache/tiles.rs)
