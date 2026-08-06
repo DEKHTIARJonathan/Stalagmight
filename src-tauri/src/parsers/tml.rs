@@ -1884,20 +1884,6 @@ fn convert_shots_to_shot_data(
 /// `effective_start_id` is an optional fallback - the `from_id` of the first
 /// non-excluded shot, used when excluded leading shots make `start_ariane_id`
 /// unresolvable. We try both, preferring the original.
-///
-/// TODO(#411): `geo_coding.altitude` (the file's `firstStartAbsoluteElevation`,
-/// now unit-converted) is deliberately NOT written into `depth_reference`, so a
-/// non-zero entrance elevation still round-trips to 0 through
-/// `export::tml`, which reads it back from `zero_datums.first().gps`. The two
-/// fields do not mean the same thing: `depth_reference` is documented as meters
-/// BELOW the surface (`models::station::GpsCoordinates`, `docs/architecture.md`)
-/// and the UI treats it as exactly that - `EditStationDialog` sets it from the
-/// datum station's `coordinates.z`, which is +down, and `gpsToXY` reads it back
-/// as `z`. Ariane's elevation is +up from sea level. Assigning one to the other
-/// would flip the sign and change the reference surface, planting a wrong depth
-/// on every GPS-anchored TML import. Fixing this needs a decision about which
-/// convention the datum stores (and matching changes on the export side), not a
-/// cast here.
 fn determine_placement(
     section: &TmlSection,
     section_index: u32,
@@ -2747,6 +2733,45 @@ mod tests {
         assert!((geo.altitude - 500.0 * FEET_TO_METERS).abs() < 1e-6);
     }
 
+    /// #431: a round elevation in metres (100.0) stated in feet (328.084)
+    /// lands in `Project.surface_elevation` correctly converted, not just on
+    /// the intermediate `TmlFile`/`TmlGeoCoding` structs.
+    #[test]
+    fn imperial_elevation_328_084_ft_lands_as_100_m_in_the_project() {
+        use crate::core::state::{AppState, VirtualShotMode};
+        use crate::core::Command;
+
+        let shots = [
+            tml_shot_xml_gps(0, -1, "START", "Start", 20.5, -87.3),
+            tml_shot_xml_depth(1, 0, "REAL", "Main", 10.0, -1.0),
+        ]
+        .join("\n");
+        let tml = parse_synthetic_tmlu(&wrap_xml_with("ft", 328.084, &shots));
+        assert!((tml.first_start_absolute_elevation - 100.0).abs() < 1e-3);
+
+        let (sections, closures, _) = convert_tml_to_import_configs(&tml, false, false).unwrap();
+        let state = AppState::new().unwrap();
+        state.execute(Command::CreateProject {
+            name: "Elevation Units".to_string(),
+            location: None,
+        });
+        let elevation = (tml.first_start_absolute_elevation.abs() > f64::EPSILON)
+            .then_some(tml.first_start_absolute_elevation);
+        let result = state.execute_tml_import_sections(
+            sections,
+            closures,
+            None,
+            Vec::new(),
+            Vec::new(),
+            VirtualShotMode::Auto,
+            elevation,
+        );
+        assert!(result.success, "import failed: {:?}", result.error);
+        let project = state.get_project_state().unwrap();
+        let got = project.surface_elevation.expect("elevation must be set");
+        assert!((got - 100.0).abs() < 1e-3, "got {got}, want 100.0 +/- 1e-3");
+    }
+
     /// The metric twin: nothing is scaled, so the elevation is passed through.
     #[test]
     fn metric_elevation_is_passed_through() {
@@ -2759,6 +2784,190 @@ mod tests {
 
         assert_eq!(tml.unit, TmlUnit::Metric);
         assert!((tml.first_start_absolute_elevation - 500.0).abs() < f64::EPSILON);
+    }
+
+    /// #431 round trip: a synthetic `.tmlu` carrying
+    /// `firstStartAbsoluteElevation = 123.5` survives import into a fresh
+    /// project and back out through export unchanged. Red before #431 (import
+    /// dropped it on the floor, the TODO(#411) this test replaces); red again
+    /// if the export side reverts to reading a zero datum's `depth_reference`.
+    #[test]
+    fn entrance_elevation_round_trips_through_import_and_export() {
+        use crate::core::state::{AppState, VirtualShotMode};
+        use crate::core::Command;
+
+        let shots = [
+            tml_shot_xml_gps(0, -1, "START", "Start", 20.5, -87.3),
+            tml_shot_xml_depth(1, 0, "REAL", "Main", 10.0, -1.0),
+        ]
+        .join("\n");
+        let tml = parse_synthetic_tmlu(&wrap_xml_with("m", 123.5, &shots));
+
+        let (sections, closures, _) = convert_tml_to_import_configs(&tml, false, false).unwrap();
+        let state = AppState::new().unwrap();
+        state.execute(Command::CreateProject {
+            name: "Round Trip".to_string(),
+            location: None,
+        });
+        let elevation = (tml.first_start_absolute_elevation.abs() > f64::EPSILON)
+            .then_some(tml.first_start_absolute_elevation);
+        let result = state.execute_tml_import_sections(
+            sections,
+            closures,
+            None,
+            Vec::new(),
+            Vec::new(),
+            VirtualShotMode::Auto,
+            elevation,
+        );
+        assert!(result.success, "import failed: {:?}", result.error);
+        let project = state.get_project_state().unwrap();
+        assert_eq!(project.surface_elevation, Some(123.5));
+
+        let out_dir = tempfile::tempdir().unwrap();
+        let out_path = out_dir.path().join("roundtrip.tmlu");
+        crate::export::tml::export_tml(&project, &out_path).unwrap();
+        let round_tripped = parse_tml(&out_path).unwrap();
+        assert!(
+            (round_tripped.first_start_absolute_elevation - 123.5).abs() < 1e-6,
+            "got {}, want 123.5",
+            round_tripped.first_start_absolute_elevation
+        );
+    }
+
+    /// #431 no-clobber: importing a second file with a DIFFERENT entrance
+    /// elevation into a project that already has one keeps the existing value
+    /// and surfaces the mismatch as a receipt warning naming both numbers,
+    /// rather than silently overwriting it.
+    #[test]
+    fn entrance_elevation_import_does_not_clobber_an_existing_value() {
+        use crate::core::state::{AppState, VirtualShotMode};
+        use crate::core::Command;
+
+        let shots = [
+            tml_shot_xml_gps(0, -1, "START", "Start", 20.5, -87.3),
+            tml_shot_xml_depth(1, 0, "REAL", "Main", 10.0, -1.0),
+        ]
+        .join("\n");
+        let state = AppState::new().unwrap();
+        state.execute(Command::CreateProject {
+            name: "No Clobber".to_string(),
+            location: None,
+        });
+
+        let first_tml = parse_synthetic_tmlu(&wrap_xml_with("m", 50.0, &shots));
+        let (sections, closures, _) =
+            convert_tml_to_import_configs(&first_tml, false, false).unwrap();
+        let result = state.execute_tml_import_sections(
+            sections,
+            closures,
+            None,
+            Vec::new(),
+            Vec::new(),
+            VirtualShotMode::Auto,
+            Some(first_tml.first_start_absolute_elevation),
+        );
+        assert!(result.success, "first import failed: {:?}", result.error);
+        assert_eq!(
+            state.get_project_state().unwrap().surface_elevation,
+            Some(50.0)
+        );
+
+        let second_tml = parse_synthetic_tmlu(&wrap_xml_with("m", 75.0, &shots));
+        let (sections, closures, _) =
+            convert_tml_to_import_configs(&second_tml, false, false).unwrap();
+        let result = state.execute_tml_import_sections(
+            sections,
+            closures,
+            None,
+            Vec::new(),
+            Vec::new(),
+            VirtualShotMode::Auto,
+            Some(second_tml.first_start_absolute_elevation),
+        );
+        assert!(result.success, "second import failed: {:?}", result.error);
+        assert_eq!(
+            state.get_project_state().unwrap().surface_elevation,
+            Some(50.0),
+            "the existing elevation must survive a conflicting import"
+        );
+        let warnings = result
+            .import_receipt
+            .as_ref()
+            .map(|r| r.warnings.clone())
+            .unwrap_or_default();
+        assert!(
+            warnings.iter().any(|w| w.contains("kept 50.00")),
+            "the clobber must be surfaced naming the KEPT value explicitly \
+             (not just both numbers, which a reversed message would also \
+             contain), got {warnings:?}"
+        );
+    }
+
+    /// #431 tolerance: re-importing the SAME cave via its metric and
+    /// imperial twins (100.0 m vs 328.084 ft, which converts to
+    /// 100.00003... m) must not fire the no-clobber "differs" warning - the
+    /// unit round-trip's residue is far below `f64::EPSILON` (2.2e-16) but
+    /// well inside the message's own `{:.2}` precision. Red on
+    /// `f64::EPSILON` used as the tolerance, which reads this pair as
+    /// different and prints a warning naming "100.00 m" against "100.00 m".
+    #[test]
+    fn reimporting_the_metric_and_imperial_twins_of_one_elevation_warns_never() {
+        use crate::core::state::{AppState, VirtualShotMode};
+        use crate::core::Command;
+
+        let shots = [
+            tml_shot_xml_gps(0, -1, "START", "Start", 20.5, -87.3),
+            tml_shot_xml_depth(1, 0, "REAL", "Main", 10.0, -1.0),
+        ]
+        .join("\n");
+        let state = AppState::new().unwrap();
+        state.execute(Command::CreateProject {
+            name: "Unit Twins".to_string(),
+            location: None,
+        });
+
+        let metric_tml = parse_synthetic_tmlu(&wrap_xml_with("m", 100.0, &shots));
+        let (sections, closures, _) =
+            convert_tml_to_import_configs(&metric_tml, false, false).unwrap();
+        let result = state.execute_tml_import_sections(
+            sections,
+            closures,
+            None,
+            Vec::new(),
+            Vec::new(),
+            VirtualShotMode::Auto,
+            Some(metric_tml.first_start_absolute_elevation),
+        );
+        assert!(result.success, "metric import failed: {:?}", result.error);
+
+        let imperial_tml = parse_synthetic_tmlu(&wrap_xml_with("ft", 328.084, &shots));
+        let (sections, closures, _) =
+            convert_tml_to_import_configs(&imperial_tml, false, false).unwrap();
+        let result = state.execute_tml_import_sections(
+            sections,
+            closures,
+            None,
+            Vec::new(),
+            Vec::new(),
+            VirtualShotMode::Auto,
+            Some(imperial_tml.first_start_absolute_elevation),
+        );
+        assert!(result.success, "imperial import failed: {:?}", result.error);
+        assert_eq!(
+            state.get_project_state().unwrap().surface_elevation,
+            Some(100.0),
+            "the original metric value must survive unchanged"
+        );
+        let warnings = result
+            .import_receipt
+            .as_ref()
+            .map(|r| r.warnings.clone())
+            .unwrap_or_default();
+        assert!(
+            warnings.iter().all(|w| !w.contains("differs from")),
+            "a unit round-trip must not read as a conflicting elevation, got {warnings:?}"
+        );
     }
 
     /// An unknown `<unit>` still reads as metric - but it says so, because a

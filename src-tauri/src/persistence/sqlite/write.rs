@@ -321,6 +321,25 @@ impl Database {
             params![serde_json::to_string(&project.validation)?],
         )?;
 
+        // Entrance elevation (#431), same key/value table as `validation`.
+        // `None` deletes the key rather than writing a sentinel, so a project
+        // that never had one round-trips through save/load without ever
+        // gaining a `surface_elevation` row.
+        match project.surface_elevation {
+            Some(elevation) => {
+                tx.execute(
+                    "INSERT OR REPLACE INTO project_settings (key, value) VALUES ('surface_elevation', ?1)",
+                    params![elevation.to_string()],
+                )?;
+            }
+            None => {
+                tx.execute(
+                    "DELETE FROM project_settings WHERE key = 'surface_elevation'",
+                    [],
+                )?;
+            }
+        }
+
         tx.commit()?;
         tracing::debug!("Transaction committed");
 

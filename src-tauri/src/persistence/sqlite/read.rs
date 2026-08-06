@@ -588,6 +588,10 @@ impl Database {
         // and seed from the user's global config instead (see project_io.rs).
         let validation = self.load_project_validation()?.unwrap_or_default();
 
+        // Entrance elevation (#431). Unlike `validation`, a missing row has no
+        // legacy-seeding fallback - `None` genuinely means "unknown".
+        let surface_elevation = self.load_project_surface_elevation()?;
+
         // Pre-populate the section_id → index lookup so callers get
         // O(1) get_section without needing rebuild_section_index().
         let mut section_index_cache = HashMap::with_capacity(sections.len());
@@ -628,6 +632,7 @@ impl Database {
             imported_section_hashes,
             next_closure_id,
             validation,
+            surface_elevation,
             cascade_deferred: false,
             section_index_cache,
             shot_uuid_index,
@@ -1154,5 +1159,38 @@ impl Database {
             .optional()
             .unwrap_or(None);
         Ok(json.and_then(|s| serde_json::from_str(&s).ok()))
+    }
+
+    /// Load the project-level entrance elevation (#431), same key/value table
+    /// as `validation`. A missing key - either no stored row, or a
+    /// `project_settings` table that doesn't exist at all (a project written
+    /// before this feature) - reads as `None`, which is the correct "unknown"
+    /// value for those files; no migration needed.
+    pub fn load_project_surface_elevation(&self) -> Result<Option<f64>> {
+        let text: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT value FROM project_settings WHERE key = 'surface_elevation'",
+                [],
+                |row| row.get(0),
+            )
+            .optional()
+            .unwrap_or(None);
+        Ok(text.and_then(|s| {
+            // `"NaN"`, `"inf"` and `1e309` all parse happily; a corrupted or
+            // hand-edited `.stalx` (same untrusted provenance as a `.tml`) can
+            // carry one, and a non-finite value would defeat the no-clobber
+            // comparison on import (every NaN compare is false) and land
+            // verbatim in a TML export. Same idiom as
+            // `parsers::tml::firstStartAbsoluteElevation`.
+            let parsed = s.parse::<f64>().ok().filter(|v: &f64| v.is_finite());
+            if parsed.is_none() {
+                tracing::warn!(
+                    raw = %s,
+                    "stored surface_elevation is present but unparseable or non-finite; reading as unknown"
+                );
+            }
+            parsed
+        }))
     }
 }

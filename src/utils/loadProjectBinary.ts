@@ -133,6 +133,7 @@ interface ProjectHeaderBinary {
   imported_file_hashes: string[];
   imported_section_hashes: string[];
   validation: ValidationConfig;
+  surface_elevation: number | null;
 }
 
 interface SectionHeaderBinary {
@@ -343,6 +344,7 @@ export function buildResult(env: BinaryEnvelope, totalBytes: number): LoadProjec
     imported_section_hashes: env.project_header.imported_section_hashes,
     next_closure_id: BigInt(env.project_header.next_closure_id as unknown as number | bigint),
     validation: env.project_header.validation,
+    surface_elevation: env.project_header.surface_elevation,
   };
 
   // Stations: typed-array views over the binary buffers.

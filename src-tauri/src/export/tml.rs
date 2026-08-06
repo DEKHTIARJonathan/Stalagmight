@@ -303,13 +303,7 @@ fn build_xml(project: &Project, n: &Names, profile: TmlProfile) -> Result<Vec<u8
     write_text_element(
         &mut writer,
         n.first_start_absolute_elevation,
-        &format_f64(
-            project
-                .zero_datums
-                .first()
-                .map(|zd| zd.gps.depth_reference)
-                .unwrap_or(0.0),
-        ),
+        &format_f64(project.surface_elevation.unwrap_or(0.0)),
     )?;
 
     // <Data>
@@ -2966,6 +2960,104 @@ mod tests {
         let shot_for_station_2 = shots.iter().find(|s| s.id == 2).unwrap();
         assert!(shot_for_station_2.latitude.abs() < f64::EPSILON);
         assert!(shot_for_station_2.longitude.abs() < f64::EPSILON);
+    }
+
+    /// #431 bug pin: a datum station 35 m deep must NOT export as 35 m of
+    /// entrance elevation. `depth_reference` is "meters below surface"
+    /// (+down); `firstStartAbsoluteElevation` is "meters above sea level"
+    /// (+up) - two different fields with no relationship, and a project with
+    /// no known elevation exports the documented no-data value, 0.0. Red on
+    /// the pre-#431 `export/tml.rs`, which read the datum's `depth_reference`
+    /// straight into this element.
+    #[test]
+    fn depth_reference_never_leaks_into_entrance_elevation() {
+        let mut project = Project::new("Datum Depth".to_string(), None);
+        project.add_section(SectionData {
+            name: Some("Main".to_string()),
+            color: "#ff0000".to_string(),
+            shots: vec![ShotData {
+                length: 3.0,
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+        project.zero_datums.push(ZeroDatum {
+            station_ref: StationRef {
+                section_id: 0,
+                station_index: 1,
+            }
+            .into(),
+            gps: GpsCoordinates::new(20.25, -87.5, 35.0).unwrap(),
+        });
+        assert_eq!(project.surface_elevation, None);
+
+        let file = NamedTempFile::with_suffix(".tmlu").unwrap();
+        export_tml(&project, file.path()).unwrap();
+        let content = std::fs::read_to_string(file.path()).unwrap();
+        assert!(
+            content.contains("<firstStartAbsoluteElevation>0.0</firstStartAbsoluteElevation>"),
+            "no known surface_elevation must export as the documented no-data value 0.0: {content}"
+        );
+        assert!(
+            !content.contains("<firstStartAbsoluteElevation>35.0</firstStartAbsoluteElevation>"),
+            "the datum's depth_reference must never leak into entrance elevation: {content}"
+        );
+    }
+
+    /// A surface below sea level (a below-sea-level cave entrance) survives its
+    /// sign through export - not flipped positive.
+    #[test]
+    fn negative_surface_elevation_survives_its_sign() {
+        let mut project = Project::new("Below Sea Level".to_string(), None);
+        project.add_section(SectionData {
+            name: Some("Main".to_string()),
+            color: "#ff0000".to_string(),
+            shots: vec![ShotData {
+                length: 3.0,
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+        project.surface_elevation = Some(-5.0);
+
+        let file = NamedTempFile::with_suffix(".tmlu").unwrap();
+        export_tml(&project, file.path()).unwrap();
+        let content = std::fs::read_to_string(file.path()).unwrap();
+        assert!(
+            content.contains("<firstStartAbsoluteElevation>-5.0</firstStartAbsoluteElevation>"),
+            "a negative surface_elevation must not be flipped positive: {content}"
+        );
+    }
+
+    /// The `.tml` zip profile is a different code path from `.tmlu` (its own
+    /// element-name table, `LONG` vs `SHORT`), so the elevation element must
+    /// be checked there too, not just on the `.tmlu` plain-XML path above.
+    #[test]
+    fn surface_elevation_is_emitted_in_the_tml_zip_profile_too() {
+        let mut project = Project::new("Zip Elevation".to_string(), None);
+        project.add_section(SectionData {
+            name: Some("Main".to_string()),
+            color: "#ff0000".to_string(),
+            shots: vec![ShotData {
+                length: 3.0,
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+        project.surface_elevation = Some(42.5);
+
+        let file = NamedTempFile::with_suffix(".tml").unwrap();
+        export_tml(&project, file.path()).unwrap();
+
+        let zip_file = std::fs::File::open(file.path()).unwrap();
+        let mut archive = zip::ZipArchive::new(zip_file).unwrap();
+        let mut data_xml = String::new();
+        std::io::Read::read_to_string(&mut archive.by_name("Data.xml").unwrap(), &mut data_xml)
+            .unwrap();
+        assert!(
+            data_xml.contains("<firstStartAbsoluteElevation>42.5</firstStartAbsoluteElevation>"),
+            "the .tml zip profile must emit the elevation same as .tmlu: {data_xml}"
+        );
     }
 
     /// Every Ariane consumer derives a shot's vertical change from its PARENT's

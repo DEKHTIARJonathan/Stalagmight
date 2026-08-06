@@ -268,6 +268,52 @@ impl AppState {
         existing_shot_updates: Vec<crate::models::ExistingShotUpdate>,
         mode: VirtualShotMode,
     ) -> CommandResult {
+        self.execute_import_sections_inner(
+            sections,
+            closures,
+            file_hash,
+            section_hashes,
+            existing_shot_updates,
+            mode,
+            None,
+        )
+    }
+
+    /// Same as [`Self::execute_import_sections`], but also merges an Ariane
+    /// file's project-level entrance elevation (#431) into `Project::surface_elevation`
+    /// atomically with the import, so undo/redo covers both. The only caller
+    /// that has this value is the Ariane TML/TMLU importer.
+    pub fn execute_tml_import_sections(
+        &self,
+        sections: Vec<crate::models::ImportSectionConfig>,
+        closures: Vec<crate::models::ImportClosure>,
+        file_hash: Option<String>,
+        section_hashes: Vec<String>,
+        existing_shot_updates: Vec<crate::models::ExistingShotUpdate>,
+        mode: VirtualShotMode,
+        surface_elevation: Option<f64>,
+    ) -> CommandResult {
+        self.execute_import_sections_inner(
+            sections,
+            closures,
+            file_hash,
+            section_hashes,
+            existing_shot_updates,
+            mode,
+            surface_elevation,
+        )
+    }
+
+    fn execute_import_sections_inner(
+        &self,
+        sections: Vec<crate::models::ImportSectionConfig>,
+        closures: Vec<crate::models::ImportClosure>,
+        file_hash: Option<String>,
+        section_hashes: Vec<String>,
+        existing_shot_updates: Vec<crate::models::ExistingShotUpdate>,
+        mode: VirtualShotMode,
+        surface_elevation: Option<f64>,
+    ) -> CommandResult {
         use crate::models::{ImportPlacement, StationRef};
         use std::collections::{HashMap, HashSet};
 
@@ -1106,6 +1152,36 @@ impl AppState {
             );
         }
 
+        // Merge an Ariane import's project-level entrance elevation (#431)
+        // before the after-snapshot, so it undoes/redoes atomically with the
+        // rest of the import - the same reason `mode`'s virtual-shot pass
+        // runs here rather than after (see the doc comment above). No-clobber:
+        // an existing different value wins, and the mismatch becomes a receipt
+        // warning naming both numbers.
+        let surface_elevation_warning = surface_elevation.and_then(|incoming| {
+            let mut proj_guard = match self.project.lock() {
+                Ok(g) => g,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            let project = proj_guard.as_mut()?;
+            match project.surface_elevation {
+                None => {
+                    project.surface_elevation = Some(incoming);
+                    None
+                }
+                // 0.005 m matches the message's own `{:.2}` precision - a
+                // smaller difference (e.g. the same elevation re-imported
+                // metric then imperial: 100.0 m vs 328.084 ft -> 100.00003 m)
+                // must not fire a "differs" warning that prints the same
+                // rounded number on both sides.
+                Some(existing) if (existing - incoming).abs() > 0.005 => Some(format!(
+                    "Imported file's entrance elevation ({incoming:.2} m) differs from \
+                     the project's existing value ({existing:.2} m); kept {existing:.2} m"
+                )),
+                Some(_) => None,
+            }
+        });
+
         // Capture after-snapshot for redo support
         let after_snapshot = match self.capture_after_snapshot_or_rollback(&before_snapshot) {
             Ok(s) => s,
@@ -1127,6 +1203,9 @@ impl AppState {
         let shot_count: u32 = sections.iter().map(|s| s.shots.len() as u32).sum();
         let closures_requested = closures.len() as u32;
         let mut receipt_warnings = Vec::new();
+        if let Some(warning) = surface_elevation_warning {
+            receipt_warnings.push(warning);
+        }
         let closures_dropped = closures_skipped + closures_failed;
         if closures_dropped > 0 {
             receipt_warnings.push(format!(

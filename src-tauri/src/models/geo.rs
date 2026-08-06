@@ -83,9 +83,14 @@ fn ecef_to_enu(dx: f64, dy: f64, dz: f64, lat0: f64, lon0: f64) -> (f64, f64, f6
 /// # Important
 /// Always uses altitude=0 for both points. The `GpsCoordinates.depth_reference`
 /// field is NOT ellipsoid height - it represents meters below surface and must
-/// not be used as altitude in the conversion.
+/// not be used as altitude in the conversion. `Project.surface_elevation`
+/// (#431, the entrance elevation above sea level) is likewise never fed into
+/// this conversion: geodesy here is purely horizontal (east/north), and
+/// station depth is tracked separately as a gauge reading against a single
+/// project-wide surface, not as ellipsoid height.
 pub fn gps_to_local(gps: &GpsCoordinates, origin: &GpsCoordinates) -> (f64, f64) {
-    // Always use alt=0 - depth_reference is not ellipsoid height
+    // Always use alt=0 - depth_reference is not ellipsoid height, and
+    // surface_elevation (#431) is project metadata, not per-station altitude
     let (x0, y0, z0) = geodetic_to_ecef(origin.latitude, origin.longitude, 0.0);
     let (x1, y1, z1) = geodetic_to_ecef(gps.latitude, gps.longitude, 0.0);
 

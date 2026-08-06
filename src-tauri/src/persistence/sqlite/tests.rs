@@ -182,6 +182,127 @@ fn load_project_validation_returns_none_when_table_absent() {
     );
 }
 
+/// #431 persistence: `Some` and `None` are distinct states, not `Some(0.0)`
+/// vs. an absent row read the same way.
+#[test]
+fn surface_elevation_some_and_none_round_trip_distinctly() {
+    let temp = TempDir::new().unwrap();
+
+    let with_elevation_path = temp.path().join("with_elevation.stalx");
+    let mut db = Database::open(&with_elevation_path).unwrap();
+    let mut project = Project::new("Has Elevation".to_string(), None);
+    project.surface_elevation = Some(123.5);
+    db.save_project(&project).unwrap();
+    let loaded = db.load_project().unwrap();
+    assert_eq!(loaded.surface_elevation, Some(123.5));
+
+    let without_elevation_path = temp.path().join("without_elevation.stalx");
+    let mut db2 = Database::open(&without_elevation_path).unwrap();
+    let project = Project::new("No Elevation".to_string(), None);
+    assert_eq!(project.surface_elevation, None, "precondition");
+    db2.save_project(&project).unwrap();
+    let loaded = db2.load_project().unwrap();
+    assert_eq!(loaded.surface_elevation, None);
+}
+
+/// #431: a corrupted or hand-edited `.stalx` (untrusted, same as a `.tml`)
+/// can carry a `surface_elevation` value Rust's `f64::parse` accepts but the
+/// rest of the pipeline cannot: `"NaN"` defeats the no-clobber comparison
+/// (every NaN compare is false) and would land verbatim in a TML export; a
+/// plain non-numeric string is the ordinary "unparseable" case. Both must
+/// read as `None`, not propagate a bad value or error the load. Red before
+/// the `.filter(f64::is_finite)` guard on `load_project_surface_elevation`.
+#[test]
+fn stored_non_finite_or_unparseable_elevation_reads_as_none() {
+    for raw in ["NaN", "not-a-number"] {
+        let db = Database::in_memory().unwrap();
+        db.conn
+            .execute(
+                "INSERT INTO project_settings (key, value) VALUES ('surface_elevation', ?1)",
+                [raw],
+            )
+            .unwrap();
+        let result = db.load_project_surface_elevation();
+        assert!(result.is_ok(), "{raw:?} must not error the load");
+        assert_eq!(
+            result.unwrap(),
+            None,
+            "{raw:?} must read as unknown, not a value"
+        );
+    }
+}
+
+/// #431, the case that proves no migration is needed: a `.stalx` written
+/// before this feature existed has no `surface_elevation` row (simulated by
+/// deleting it after an ordinary save). Opening it must read `None`, not
+/// error, and a subsequent save must succeed.
+#[test]
+fn a_pre_431_project_opens_with_unknown_elevation_and_saves_cleanly() {
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("legacy.stalx");
+    let mut db = Database::open(&path).unwrap();
+    db.save_project(&Project::new("Legacy".to_string(), None))
+        .unwrap();
+    db.conn
+        .execute(
+            "DELETE FROM project_settings WHERE key = 'surface_elevation'",
+            [],
+        )
+        .unwrap();
+
+    let loaded = db.load_project().unwrap();
+    assert_eq!(
+        loaded.surface_elevation, None,
+        "a pre-#431 project must read as unknown"
+    );
+
+    db.save_project(&loaded).unwrap();
+    let reloaded = db.load_project().unwrap();
+    assert_eq!(reloaded.surface_elevation, None);
+}
+
+/// The genuine "table doesn't exist at all" shape the doc comment on
+/// `load_project_surface_elevation` (read.rs) claims to cover - stronger
+/// than the DELETE above, which only proves the missing-KEY case (and the
+/// writer already deletes the key for `None`, so that DELETE can even be a
+/// no-op). Mirrors `load_project_validation_returns_none_when_table_absent`.
+#[test]
+fn load_project_surface_elevation_returns_none_when_table_absent() {
+    let db = Database::in_memory().unwrap();
+    db.conn
+        .execute("DROP TABLE IF EXISTS project_settings", [])
+        .unwrap();
+    let result = db.load_project_surface_elevation();
+    assert!(
+        result.is_ok(),
+        "a missing project_settings table must not error"
+    );
+    assert_eq!(
+        result.unwrap(),
+        None,
+        "absent surface_elevation resolves to None"
+    );
+}
+
+/// #431: `project_settings` is a shared key/value table, so writing
+/// `validation` and `surface_elevation` in the same save must not let either
+/// key clobber the other.
+#[test]
+fn validation_and_surface_elevation_survive_the_same_save() {
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("both_settings.stalx");
+    let mut db = Database::open(&path).unwrap();
+
+    let mut project = Project::new("Both Settings".to_string(), None);
+    project.validation.warn_shot_length_min = 99.0;
+    project.surface_elevation = Some(-12.25);
+    db.save_project(&project).unwrap();
+
+    let loaded = db.load_project().unwrap();
+    assert_eq!(loaded.validation.warn_shot_length_min, 99.0);
+    assert_eq!(loaded.surface_elevation, Some(-12.25));
+}
+
 #[test]
 fn save_resolved_warning_never_clobbers_a_different_shots_uuid_row() {
     // The legacy positional UNIQUE must not let one shot's ignore delete another
