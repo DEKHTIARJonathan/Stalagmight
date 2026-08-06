@@ -1420,7 +1420,10 @@ impl Project {
     /// The station this append CREATED is station 1, `AfterShot(uuid)`. That is
     /// the one that must go, with anything anchored on it; station 0 predates
     /// the append and must not move. Offset-neutral in both directions, exactly
-    /// as `add_shot` is, so no cascade or alignment pass is needed either.
+    /// as `add_shot` is, so no cascade or alignment pass is needed either - the
+    /// sole exception being a closure the removal turns into a merge (see the
+    /// conversion below), which is a new rigid edge and not an offset this
+    /// function chose to move.
     ///
     /// Errors (rather than silently doing something else) when `shot_id` is not
     /// the section's sole shot, so a caller that mis-detects the shape gets a
@@ -1462,6 +1465,27 @@ impl Project {
             .get_section_mut(section_id)
             .and_then(|section| section.remove_shot(shot_id))
             .ok_or_else(|| format!("Shot {shot_id} not found in section {section_id}"))?;
+
+        // Same duty `remove_shot_with_rewire` discharges after ITS retains
+        // and its shot removal, for the same reason and in the same place: dropping
+        // the merges that hung off the removed station can leave a loop closure
+        // somewhere else as the SOLE connection between its two endpoints, and a
+        // closure that is not a loop is a merge (#8, and #413 finding 10 - the
+        // invariant is enforced at every other delete entry point, so an inverse
+        // that skipped it was the one way to persist a state the app declares
+        // impossible). Must run after the shot is gone: the conversion asks whether
+        // the endpoints are still connected, and until then they are.
+        //
+        // The one thing this does NOT copy from the sibling is its unconditional
+        // cascade: this function is offset-neutral by contract (see above), and
+        // re-cascading here would undo that. A conversion turns a soft edge into a
+        // rigid one, though, which can leave the new merge drifted, so THAT case -
+        // and only that case - cascades, exactly as the sibling does. Nothing
+        // converted is the overwhelmingly common case and stays offset-neutral.
+        if self.convert_orphan_closures_to_merges() > 0 {
+            self.cascade_connection_offsets(&[section_id]);
+        }
+
         self.touch();
         Ok(removed)
     }

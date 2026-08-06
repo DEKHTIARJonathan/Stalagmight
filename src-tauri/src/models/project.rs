@@ -1,7 +1,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use ts_rs::TS;
 
@@ -262,7 +262,7 @@ pub struct Project {
     /// Next section ID to assign
     pub next_section_id: SectionId,
     /// Section offsets (x, y) applied when sections are merged/aligned
-    #[serde(default)]
+    #[serde(default, serialize_with = "serialize_section_offsets")]
     pub section_offsets: HashMap<SectionId, (f64, f64)>,
     /// Station offsets (x, y, z) applied when individual stations are moved
     #[serde(
@@ -345,6 +345,24 @@ pub struct Project {
     #[serde(skip, default)]
     #[ts(skip)]
     pub shot_uuid_index: HashMap<(SectionId, String), u32>,
+
+    /// Fingerprint of a merge residual the offset solver has already proven it
+    /// cannot reduce. Transient, NOT persisted. Read and written by exactly one
+    /// function, [`Self::realign_merges`], which skips its re-solve while the
+    /// live state still fingerprints identically - see the doc comment there for
+    /// what the fingerprint covers and why the skip cannot hide a healable drift.
+    ///
+    /// Never persisted and never compared: it is out of the derived serde (so no
+    /// snapshot, `.stalx` or IPC payload can see it), and `Project` has no
+    /// `PartialEq`, so no test or oracle compares it either. A `Clone` carries it,
+    /// which is correct rather than merely tolerable - the clone IS the state the
+    /// fingerprint was taken of, so it stays as valid for the copy as for the
+    /// original. A deserialized project starts with `None` (no skip until this
+    /// build proves a fixpoint of its own), and the load path re-derives offsets
+    /// through [`Self::resolve_offsets`], which does not consult this at all.
+    #[serde(skip, default)]
+    #[ts(skip)]
+    pub(crate) realign_fixpoint: Option<offsets::RealignFixpoint>,
 }
 
 /// Project metadata for listing
@@ -444,13 +462,58 @@ pub struct ProjectStats {
     pub penetration_distance: f64,
 }
 
+/// # THE DETERMINISTIC-SERIALIZATION RULE FOR THE THREE HASHMAPS
+///
+/// `section_offsets`, `station_offsets` and `station_comments` are `HashMap`s,
+/// and a `HashMap`'s iteration order is a function of its RandomState seed and
+/// its insertion history - NOT of its contents. Emitting them in iteration order
+/// makes the serialized `Project` a function of how the map was built rather
+/// than of what the project IS, and two things read that output as an identity:
+///
+/// * the whole-project undo snapshots (`UndoData::ProjectSnapshotPair`, written
+///   by `serde_json::to_string(project)` and regenerated on every undo/redo), so
+///   a state that returned exactly where it started produced a DIFFERENT blob;
+/// * the `.stalx` save, so a re-save of an untouched project rewrote permuted
+///   bytes and re-rolled the save/load fixpoint.
+///
+/// So every one of the three sorts its keys before it emits them. Ascending by
+/// section id for `section_offsets`; by [`station_key_order`] for the two
+/// `StationKey`-keyed maps, whose entries are emitted as a `Vec` of pairs anyway
+/// (serde_json cannot use a struct as an object key). The DESERIALIZE side is
+/// untouched: order was never load-bearing on the way in, and both shapes
+/// (object / array of pairs) are unchanged, so this is not a format change.
+fn serialize_section_offsets<S: serde::Serializer>(
+    map: &HashMap<SectionId, (f64, f64)>,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    let ordered: BTreeMap<SectionId, (f64, f64)> = map.iter().map(|(k, v)| (*k, *v)).collect();
+    ordered.serialize(serializer)
+}
+
+/// Total order over [`StationKey`], for the two maps keyed by one. Section
+/// first, then the anchor variant, then the variant's payload. Distinct keys
+/// never tie - a key IS its section plus its anchor - so this is a total order
+/// on any map's key set, which is what makes the sorted output a function of the
+/// contents alone. (`StationKey` deliberately has no `Ord` of its own: nothing
+/// else in the model ranks stations, and an order that only serialization needs
+/// belongs next to it.)
+fn station_key_order(key: &StationKey) -> (SectionId, u8, &str, u32) {
+    match &key.anchor {
+        StationAnchor::SectionStart => (key.section_id, 0, "", 0),
+        StationAnchor::AfterShot(uuid) => (key.section_id, 1, uuid.as_str(), 0),
+        StationAnchor::Index(index) => (key.section_id, 2, "", *index),
+    }
+}
+
 /// Serialize station_offsets as a Vec of (StationRef, (f64, f64, f64)) tuples
-/// to avoid serde_json's requirement that map keys be strings.
+/// to avoid serde_json's requirement that map keys be strings. Key-ordered - see
+/// [`serialize_section_offsets`].
 fn serialize_station_offsets<S: serde::Serializer>(
     map: &HashMap<StationKey, (f64, f64, f64)>,
     serializer: S,
 ) -> Result<S::Ok, S::Error> {
-    let entries: Vec<(&StationKey, &(f64, f64, f64))> = map.iter().collect();
+    let mut entries: Vec<(&StationKey, &(f64, f64, f64))> = map.iter().collect();
+    entries.sort_by(|(a, _), (b, _)| station_key_order(a).cmp(&station_key_order(b)));
     entries.serialize(serializer)
 }
 
@@ -463,11 +526,13 @@ fn deserialize_station_offsets<'de, D: serde::Deserializer<'de>>(
 }
 
 /// Serialize station_comments as a Vec of (StationRef, String) tuples.
+/// Key-ordered - see [`serialize_section_offsets`].
 fn serialize_station_comments<S: serde::Serializer>(
     map: &HashMap<StationKey, String>,
     serializer: S,
 ) -> Result<S::Ok, S::Error> {
-    let entries: Vec<(&StationKey, &String)> = map.iter().collect();
+    let mut entries: Vec<(&StationKey, &String)> = map.iter().collect();
+    entries.sort_by(|(a, _), (b, _)| station_key_order(a).cmp(&station_key_order(b)));
     entries.serialize(serializer)
 }
 
@@ -509,6 +574,12 @@ impl Serialize for ProjectIpc<'_> {
             .iter()
             .filter_map(|c| p.closure_to_wire(c))
             .collect();
+        // Key-ordered, for the same reason the stored serde is (see
+        // `serialize_section_offsets`): this writer emits the field itself rather
+        // than through the field attribute, so it would otherwise be the one path
+        // left where the same project produces two different payloads.
+        let section_offsets: BTreeMap<SectionId, (f64, f64)> =
+            p.section_offsets.iter().map(|(k, v)| (*k, *v)).collect();
         // Field set + order MUST stay in lockstep with the generated Project.ts
         // (16 ts-exported fields). Adding a ts-exported field to `Project`
         // requires adding it here too, or it silently drops off the IPC payload.
@@ -523,7 +594,7 @@ impl Serialize for ProjectIpc<'_> {
         st.serialize_field("loop_closures", &loop_closures)?;
         st.serialize_field("file_path", &p.file_path)?;
         st.serialize_field("next_section_id", &p.next_section_id)?;
-        st.serialize_field("section_offsets", &p.section_offsets)?;
+        st.serialize_field("section_offsets", &section_offsets)?;
         st.serialize_field("imported_file_hashes", &p.imported_file_hashes)?;
         st.serialize_field("imported_section_hashes", &p.imported_section_hashes)?;
         st.serialize_field("next_closure_id", &p.next_closure_id)?;
@@ -570,6 +641,7 @@ impl Project {
             cascade_deferred: false,
             section_index_cache: HashMap::new(),
             shot_uuid_index: HashMap::new(),
+            realign_fixpoint: None,
         }
     }
 

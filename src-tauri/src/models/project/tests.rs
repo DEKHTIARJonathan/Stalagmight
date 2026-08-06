@@ -136,6 +136,99 @@ fn station_key_deserializes_legacy_positional_shape() {
 }
 
 #[test]
+fn project_serialization_is_key_ordered_and_state_determined() {
+    // The three HashMap-backed collections used to serialize in iteration order,
+    // which is a function of the map's RandomState and its insertion history - NOT
+    // of the project. So the same state produced different bytes: a whole-project
+    // undo snapshot (`serde_json::to_string(project)`, regenerated on every
+    // undo/redo) differed from the one taken at the state it had returned to, and a
+    // re-save of an untouched project rewrote permuted keys and re-rolled the
+    // save/load fixpoint. Ten sections, three maps, keys inserted in DESCENDING
+    // order so "ascending output" cannot be insertion order leaking through.
+    let mut project = Project::new("Deterministic".to_string(), None);
+    let mut ids = Vec::new();
+    for _ in 0..10 {
+        ids.push(
+            project
+                .add_section(SectionData {
+                    shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)],
+                    ..Default::default()
+                })
+                .id,
+        );
+    }
+    project.ensure_shot_uuids();
+    for (i, &id) in ids.iter().enumerate().rev() {
+        project.set_section_offset(id, (i as f64 + 1.0, -(i as f64) - 1.0));
+        let start = project.key_for_ref(StationRef::new(id, 0)).unwrap();
+        let after = project.key_for_ref(StationRef::new(id, 1)).unwrap();
+        project.station_offsets.insert(after, (0.4, 0.5, 0.6));
+        project
+            .station_offsets
+            .insert(start.clone(), (0.1, 0.2, 0.3));
+        project
+            .station_comments
+            .insert(start, format!("comment {i}"));
+    }
+    assert_eq!(project.section_offsets.len(), 10);
+    assert_eq!(project.station_offsets.len(), 20);
+
+    // Every round trip rebuilds all three maps from scratch - a fresh RandomState
+    // and a fresh insertion history, the two things iteration order is a function
+    // of - so byte-identical output across several of them is the property.
+    let mut previous = serde_json::to_string(&project).unwrap();
+    for round in 0..8 {
+        let copy: Project = serde_json::from_str(&previous).unwrap();
+        let again = serde_json::to_string(&copy).unwrap();
+        assert_eq!(
+            again, previous,
+            "round {round}: the same project must serialize to the same bytes"
+        );
+        previous = again;
+    }
+
+    // Stable AND ascending: `section_offsets` keeps its object shape, so check the
+    // key order in the raw text (its values are arrays, so the object ends at the
+    // first closing brace).
+    let head = previous
+        .find("\"section_offsets\":{")
+        .expect("section_offsets in the payload");
+    let object = &previous[head..head + previous[head..].find('}').expect("object end")];
+    let mut last = 0;
+    for &id in &ids {
+        let at = object
+            .find(&format!("\"{id}\":"))
+            .unwrap_or_else(|| panic!("section {id} missing from {object}"));
+        assert!(
+            at > last,
+            "section_offsets keys must ascend; {id} came out at {at} after {last} in {object}"
+        );
+        last = at;
+    }
+
+    // The two StationKey-keyed maps are emitted as arrays of pairs (serde_json
+    // cannot key an object by a struct), ordered by section then anchor - and
+    // `SectionStart` sorts before `AfterShot`, so each section's station 0 leads.
+    let value: serde_json::Value = serde_json::from_str(&previous).unwrap();
+    for field in ["station_offsets", "station_comments"] {
+        let entries = value[field].as_array().expect("array of pairs");
+        let order: Vec<(u64, u8)> = entries
+            .iter()
+            .map(|entry| {
+                let key = &entry[0];
+                let section = key["section_id"].as_u64().expect("section id");
+                // `SectionStart` is a bare string, `AfterShot(uuid)` an object.
+                let rank = u8::from(!key["anchor"].is_string());
+                (section, rank)
+            })
+            .collect();
+        let mut ascending = order.clone();
+        ascending.sort_unstable();
+        assert_eq!(order, ascending, "{field} must be emitted in key order");
+    }
+}
+
+#[test]
 fn cascade_bfs_does_not_propagate_through_a_non_finite_section() {
     // A section with non-finite (NaN/inf) geometry must be treated like a dangling
     // edge: cascade_bfs must NOT mark it - nor anything reachable ONLY through it -
@@ -10916,6 +11009,161 @@ fn the_self_heal_gate_is_never_looser_than_the_alignment_invariant() {
     );
 }
 
+/// A merge component holding a gap the offset solver CANNOT close, plus one
+/// bystander it can move.
+///
+/// A and B are merged and each carries its own zero datum - two GPS anchors in
+/// one rigid group. `set_zero_datum`/`merge_stations` guard against building that
+/// interactively, so it is assembled by pushing the datums directly, which is how
+/// it actually arrives: a file written before the guards, or a repair. The
+/// cascade marks every datum section authoritative and therefore reaches the A=B
+/// merge from both sides and adjusts neither, so the 2 cm gap opened below
+/// survives every re-solve, forever.
+///
+/// C hangs off the same component with no datum of its own, so it IS something
+/// the cascade moves - the bystander that shows whether a re-solve ran.
+fn over_anchored_irreducible_gap() -> (Project, SectionId, SectionId, SectionId) {
+    let mut project = Project::new("Overanchored".to_string(), None);
+    let a = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    let b = project
+        .add_section(SectionData {
+            shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    let c = project
+        .add_section(SectionData {
+            shots: vec![shot(180.0, 180.0, 5.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    project.ensure_shot_uuids();
+    // Both merges start exactly aligned - merge_stations computes the offset.
+    project
+        .merge_stations(StationRef::new(a, 1), StationRef::new(b, 0))
+        .unwrap();
+    project
+        .merge_stations(StationRef::new(c, 0), StationRef::new(a, 0))
+        .unwrap();
+    project.zero_datums.push(ZeroDatum {
+        station_ref: StationRef::new(a, 0).into(),
+        gps: GpsCoordinates::new(45.0, -90.0, 0.0).unwrap(),
+    });
+    project.zero_datums.push(ZeroDatum {
+        station_ref: StationRef::new(b, 0).into(),
+        gps: GpsCoordinates::new(45.0, -90.0, 0.0).unwrap(),
+    });
+    // Pull B 2 cm off the merge: past the 1 cm invariant the self-heal gates on,
+    // under the 5 cm the user is told about.
+    project.adjust_section_offset(b, 0.0, -0.02);
+    (project, a, b, c)
+}
+
+#[test]
+fn realign_merges_skips_a_residual_the_solver_has_proven_irreducible() {
+    // `reconcile_geometry` calls `realign_merges` after EVERY command and every
+    // undo/redo. With an irreducible beyond-invariant gap in the project the gate
+    // is non-empty forever, so before the fixpoint fingerprint every keystroke-scale
+    // edit paid a full `resolve_offsets` cascade - which is also the one thing that
+    // overrides the exact offsets an undo snapshot has just restored.
+    let (mut project, _a, _b, c) = over_anchored_irreducible_gap();
+    assert_eq!(
+        project
+            .merge_alignment_beyond(Project::MERGE_ALIGNMENT_INVARIANT_M)
+            .len(),
+        1,
+        "precondition: exactly one merge is past the invariant"
+    );
+    assert!(
+        project.check_merge_alignment().is_empty(),
+        "precondition: and it is under the 5 cm reporting tolerance, so the healed \
+         count stays 0 either way"
+    );
+
+    // Pass one runs the full solve, watches it move nothing, and records the
+    // fixpoint.
+    assert_eq!(project.realign_merges(), 0);
+    assert!(
+        project.realign_fixpoint.is_some(),
+        "a solve that cleared nothing and moved nothing IS the fixpoint"
+    );
+    assert_eq!(
+        project
+            .merge_alignment_beyond(Project::MERGE_ALIGNMENT_INVARIANT_M)
+            .len(),
+        1,
+        "the gap really is irreducible - the solver has now run on it"
+    );
+
+    // Drift the bystander by less than the invariant, so the residual set and every
+    // gap bit stay exactly as fingerprinted (and nothing structural changes).
+    project.adjust_section_offset(c, 0.003, 0.0);
+    let drifted = project.section_offset(c);
+    assert!(
+        project
+            .merge_alignment_beyond(Project::MERGE_ALIGNMENT_INVARIANT_M)
+            .len()
+            == 1,
+        "3 mm keeps C out of the residual set"
+    );
+
+    assert_eq!(project.realign_merges(), 0);
+    assert_eq!(
+        project.section_offset(c),
+        drifted,
+        "the fingerprint matched, so the re-solve must have been skipped entirely"
+    );
+
+    // And the skipped work was real work: the same solve, run explicitly, pulls C
+    // back. That is what makes this a skip rather than a coincidence.
+    project.resolve_offsets();
+    assert!(
+        (project.section_offset(c).0 - drifted.0).abs() > 0.002,
+        "the solve the skip declined would have moved C: before={drifted:?} after={:?}",
+        project.section_offset(c)
+    );
+}
+
+#[test]
+fn realign_merges_re_solves_once_the_residual_becomes_healable() {
+    // The other half of the contract: a structural edit can make an irreducible
+    // residual healable WITHOUT moving a station or changing a single gap bit, so
+    // the fingerprint carries the structure too. Dropping one of the two anchors is
+    // exactly that edit - the component becomes solvable and the next realign must
+    // do the work.
+    let (mut project, _a, b, c) = over_anchored_irreducible_gap();
+    assert_eq!(project.realign_merges(), 0);
+    assert!(project.realign_fixpoint.is_some());
+    project.adjust_section_offset(c, 0.003, 0.0);
+    let drifted = project.section_offset(c);
+    assert_eq!(project.realign_merges(), 0);
+    assert_eq!(
+        project.section_offset(c),
+        drifted,
+        "precondition: the skip is armed"
+    );
+
+    assert!(project.remove_zero_datum(StationRef::new(b, 0)));
+    project.realign_merges();
+    assert!(
+        project
+            .merge_alignment_beyond(Project::MERGE_ALIGNMENT_INVARIANT_M)
+            .is_empty(),
+        "with one anchor left the cascade can pull the merge together - and must \
+         not be skipped for a fingerprint recorded while it could not"
+    );
+    assert!(
+        project.section_offset(c).0.abs() < 1e-9,
+        "the re-solve ran in full, so the bystander drift is gone too: {:?}",
+        project.section_offset(c)
+    );
+}
+
 #[test]
 fn realign_preserves_floating_section_offset() {
     // A datum-less, merge-less (floating) section's absolute position is
@@ -11082,6 +11330,116 @@ fn deleting_shot_converts_orphaned_bridge_closure_to_merge() {
         }),
         "expected a merge A0<->B1; got {:?}",
         project.station_merges
+    );
+}
+
+#[test]
+fn undoing_an_appended_first_shot_converts_a_closure_it_orphans() {
+    // A is a one-shot section, exactly as an `add_shot` append into an EMPTY
+    // section leaves it, so undoing that `CreateShot` takes
+    // `remove_appended_first_shot`. That inverse drops every relationship anchored
+    // on the station the append created (A1) - here the merge A1=C0 - and dropping
+    // it leaves the B=C closure as the SOLE connection between B and C. A closure
+    // that is not a loop is a merge (#8). Every other delete entry point converts
+    // it; #413 finding 10 is this one being the exception, which let an undo leave
+    // behind a state the app declares impossible and the save then persisted.
+    let mut project = Project::new("OrphanOnUndo".to_string(), None);
+    let a = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    let b = project
+        .add_section(SectionData {
+            shots: vec![
+                shot(90.0, 90.0, 5.0, 0.0, 0.0),
+                shot(90.0, 90.0, 5.0, 0.0, 0.0),
+            ],
+            ..Default::default()
+        })
+        .id;
+    let c = project
+        .add_section(SectionData {
+            shots: vec![
+                shot(180.0, 180.0, 5.0, 0.0, 0.0),
+                shot(270.0, 270.0, 5.0, 0.0, 0.0),
+            ],
+            ..Default::default()
+        })
+        .id;
+    project.ensure_shot_uuids();
+    // B hangs off the station that predates the append, C off the one it created.
+    project
+        .merge_stations(StationRef::new(a, 0), StationRef::new(b, 0))
+        .unwrap();
+    project
+        .merge_stations(StationRef::new(a, 1), StationRef::new(c, 0))
+        .unwrap();
+    // With both merges in place B and C are a genuine loop (shots + merges through
+    // A one way, this closure the other), so it is legitimately a closure today.
+    let closure_a = project.key_for_ref(StationRef::new(b, 2)).unwrap();
+    let closure_b = project.key_for_ref(StationRef::new(c, 2)).unwrap();
+    project.loop_closures.push(LoopClosure {
+        id: 1,
+        station_a: closure_a,
+        station_b: closure_b,
+        path_length: 0.0,
+        misclosure_distance: 0.0,
+        error_percentage: 0.0,
+        horizontal_misclosure: 0.0,
+        vertical_misclosure: 0.0,
+        strategy: ClosureStrategy::default(),
+        is_aligned: false,
+    });
+
+    let created = project.get_section(a).unwrap().shots[0].id;
+    project.remove_appended_first_shot(a, created).unwrap();
+
+    assert!(
+        project.loop_closures.is_empty(),
+        "the closure stopped being a loop when the merge on the created station \
+         went, so it must have become a merge: {:?}",
+        project.loop_closures
+    );
+    let converted = project.station_merges.iter().any(|m| {
+        let pair = (
+            project.resolve_key(&m.station_a),
+            project.resolve_key(&m.station_b),
+        );
+        pair == (Some(StationRef::new(b, 2)), Some(StationRef::new(c, 2)))
+            || pair == (Some(StationRef::new(c, 2)), Some(StationRef::new(b, 2)))
+    });
+    assert!(
+        converted,
+        "expected the orphaned closure to be replaced by a merge B2<->C2; got {:?}",
+        project.station_merges
+    );
+    // The merge on station 0 predates the append and survives it; the one on the
+    // created station is gone. Two merges, not three.
+    assert_eq!(
+        project.station_merges.len(),
+        2,
+        "{:?}",
+        project.station_merges
+    );
+    assert!(
+        project
+            .station_merges
+            .iter()
+            .any(
+                |m| project.resolve_key(&m.station_a) == Some(StationRef::new(a, 0))
+                    || project.resolve_key(&m.station_b) == Some(StationRef::new(a, 0))
+            ),
+        "the station that predates the append keeps its merge"
+    );
+    // And the conversion left no merge the app would assert on: a closure is a soft
+    // edge, the merge replacing it is rigid, so the new edge is solved.
+    assert!(
+        project
+            .merge_alignment_beyond(Project::MERGE_ALIGNMENT_INVARIANT_M)
+            .is_empty(),
+        "the new rigid edge must be aligned"
     );
 }
 

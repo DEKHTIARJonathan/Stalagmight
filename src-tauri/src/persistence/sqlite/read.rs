@@ -636,6 +636,9 @@ impl Database {
             cascade_deferred: false,
             section_index_cache,
             shot_uuid_index,
+            // Nothing loaded from disk is a proven solver fixpoint; the load path
+            // re-solves offsets from scratch anyway (`redrive_offsets_after_load`).
+            realign_fixpoint: None,
         })
     }
 

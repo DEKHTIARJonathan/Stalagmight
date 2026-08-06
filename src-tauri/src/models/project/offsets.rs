@@ -1,5 +1,7 @@
 use chrono::Utc;
+use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet};
+use std::hash::{Hash, Hasher};
 // `error!` is only reached inside the `#[cfg(debug_assertions)]` block in
 // `debug_assert_merge_alignment`, so gate the import to match (else it's an
 // unused import under `--release`).
@@ -9,6 +11,39 @@ use tracing::error;
 use crate::models::{SectionId, StationMerge};
 
 use super::Project;
+
+/// One beyond-invariant merge, as the fixpoint fingerprint records it: the two
+/// endpoints as they currently resolve, and the EXACT gap between them.
+///
+/// The gap is kept as raw bits rather than as an `f64` so the fingerprint can be
+/// compared for equality without a float comparison, and so that a gap differing
+/// by a single ULP - the smallest change any edit can make to it - misses.
+type ResidualGap = ((SectionId, u32), (SectionId, u32), u64);
+
+/// A merge residual the offset solver has already run on and failed to reduce -
+/// see [`Project::realign_merges`], which is the only producer and consumer.
+///
+/// Two parts, because two different things can turn an irreducible residual into
+/// a reducible one:
+///
+/// * `structure` hashes every input to solvability that is NOT geometry - the
+///   section set, the merge edges, the closure edges (id, endpoints, aligned
+///   flag, strategy) and the zero-datum anchors. Dropping one of two datums from
+///   an over-anchored component makes the gap healable without moving a single
+///   station, so a fingerprint blind to structure would keep skipping the heal
+///   that has just become possible;
+/// * `residual` is the beyond-invariant merge set itself. Every geometry edit
+///   that changes what the solve would produce for these merges changes one of
+///   these gaps, so geometry needs no hook of its own.
+///
+/// The structure hash is `SipHash` via `DefaultHasher` - stable within a process,
+/// which is all that is required of a field that is never persisted and never
+/// compared across runs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RealignFixpoint {
+    structure: u64,
+    residual: Vec<ResidualGap>,
+}
 
 impl Project {
     /// Read a section's offset, defaulting to (0, 0).
@@ -373,6 +408,90 @@ impl Project {
         converted
     }
 
+    /// Every merge whose endpoints are at least [`Self::MERGE_ALIGNMENT_INVARIANT_M`]
+    /// apart, with the exact gap. The geometry is [`Self::merge_alignment_beyond`]'s
+    /// (same precompute, same skips: a same-section merge is meaningless, a
+    /// dangling endpoint is a structural problem and not a gap) - what differs is
+    /// what comes out. That one reports to a human and rounds to centimetres; this
+    /// one is compared for identity, so it keeps the bits.
+    ///
+    /// Ordered by `station_merges`, whose order the structure hash pins, so two
+    /// calls on one state produce identical vectors.
+    fn residual_merge_gaps(&self) -> Vec<ResidualGap> {
+        let local = self.section_local_coords();
+        let station_offsets = self.resolved_station_offsets();
+        let mut residual = Vec::new();
+        for merge in &self.station_merges {
+            if merge.station_a.section_id == merge.station_b.section_id {
+                continue;
+            }
+            let (Some(a), Some(b)) = (
+                self.resolve_key(&merge.station_a),
+                self.resolve_key(&merge.station_b),
+            ) else {
+                continue;
+            };
+            if let (Some((ax, ay)), Some((bx, by))) = (
+                self.station_world_xy(a, &local, &station_offsets),
+                self.station_world_xy(b, &local, &station_offsets),
+            ) {
+                let gap = ((ax - bx).powi(2) + (ay - by).powi(2)).sqrt();
+                if gap >= Self::MERGE_ALIGNMENT_INVARIANT_M {
+                    residual.push((
+                        (a.section_id, a.station_index),
+                        (b.section_id, b.station_index),
+                        gap.to_bits(),
+                    ));
+                }
+            }
+        }
+        residual
+    }
+
+    /// Hash of everything the offset solve depends on that is NOT geometry: which
+    /// sections exist and how many shots each holds, the merge edges, the closure
+    /// edges, and the datum anchors. The [`RealignFixpoint`] carries it so that a
+    /// structural edit which changes what the solver CAN do - a merge or closure
+    /// added or removed, a closure converted, a datum added, moved or dropped, a
+    /// section gone - invalidates a recorded fixpoint even though it moves nothing
+    /// and leaves every gap bit-identical.
+    ///
+    /// This is a whole-project scan rather than a set of invalidation hooks on the
+    /// mutators on purpose. Those collections are mutated from many places
+    /// (including the undo restore arms, which assign whole vectors), and a hook
+    /// set that is one call site short does not degrade - it silently skips a heal
+    /// that had become possible. Deriving the answer from the state cannot be one
+    /// call site short. The scan is `O(sections + merges + closures + datums)` and
+    /// runs only when a beyond-invariant residual already exists, next to a
+    /// `merge_alignment_beyond` pass that is `O(total shots)` and a re-solve that
+    /// is more expensive still.
+    fn realign_structure_hash(&self) -> u64 {
+        let mut hasher = DefaultHasher::new();
+        self.sections.len().hash(&mut hasher);
+        for section in &self.sections {
+            section.id.hash(&mut hasher);
+            section.shots.len().hash(&mut hasher);
+        }
+        self.station_merges.len().hash(&mut hasher);
+        for merge in &self.station_merges {
+            merge.station_a.hash(&mut hasher);
+            merge.station_b.hash(&mut hasher);
+        }
+        self.loop_closures.len().hash(&mut hasher);
+        for closure in &self.loop_closures {
+            closure.id.hash(&mut hasher);
+            closure.station_a.hash(&mut hasher);
+            closure.station_b.hash(&mut hasher);
+            closure.is_aligned.hash(&mut hasher);
+            std::mem::discriminant(&closure.strategy).hash(&mut hasher);
+        }
+        self.zero_datums.len().hash(&mut hasher);
+        for datum in &self.zero_datums {
+            datum.station_ref.hash(&mut hasher);
+        }
+        hasher.finish()
+    }
+
     /// Recompute section offsets so every merge's endpoints coincide again,
     /// anchoring each connected group at its zero datum (or, failing that, an
     /// arbitrary section). Returns the number of merges that were misaligned
@@ -393,14 +512,57 @@ impl Project {
     /// 20: a shot edit in an unanchored merge group produced exactly that, and
     /// the drift equalled the edit). The heal gate must stay at or below the
     /// assert; it may never be loosened back onto the reporting threshold.
+    ///
+    /// ## The fixpoint skip
+    ///
+    /// Not every beyond-invariant gap is healable. An over-anchored component
+    /// (two zero datums in one rigid merge group) and a cyclic merge misclosure
+    /// both leave a residual the cascade cannot reduce: the solve runs, changes
+    /// nothing, and the gate is non-empty again on the next command - so this
+    /// function used to re-solve the WHOLE project after every keystroke-scale
+    /// edit, forever, and each of those re-solves also overrode the exact offsets
+    /// an undo/redo snapshot had just restored (the thing the drift gate exists
+    /// to avoid). When a solve leaves the residual and the offsets untouched, the
+    /// state is a solver fixpoint and is recorded as a [`RealignFixpoint`]; while
+    /// the live state still fingerprints identically, the re-solve is skipped.
+    ///
+    /// The invariant is not weakened by that, because the skip is not a decision
+    /// about the gap - it is a decision about the SOLVER. It fires only for a
+    /// residual this same code path has already run the full solve on and watched
+    /// it fail to move, and only while both halves of the fingerprint still
+    /// match: every geometry edit that could change the outcome changes a gap,
+    /// and every structural edit that could change it (merge, closure, datum or
+    /// section added, removed or converted) changes the structure hash. Anything
+    /// the solve could have healed therefore misses the fingerprint and gets the
+    /// solve. What the skip removes is strictly the repetition of a proven no-op.
     pub fn realign_merges(&mut self) -> usize {
-        if self
-            .merge_alignment_beyond(Self::MERGE_ALIGNMENT_INVARIANT_M)
-            .is_empty()
-        {
+        let residual = self.residual_merge_gaps();
+        if residual.is_empty() {
             return 0;
         }
-        self.resolve_offsets()
+        let fingerprint = RealignFixpoint {
+            structure: self.realign_structure_hash(),
+            residual,
+        };
+        if self.realign_fixpoint.as_ref() == Some(&fingerprint) {
+            // Observationally identical to running the solve: a recorded fixpoint
+            // is a state the cascade left byte-for-byte alone, so `resolve_offsets`
+            // would have counted the same misalignments before and after and
+            // returned the same 0 healed merges the early-return above does.
+            return 0;
+        }
+        let (healed, changed) = self.resolve_offsets_tracked();
+        self.realign_fixpoint = if changed {
+            // The solve moved something, so it is not (yet) a fixpoint - and the
+            // residual it was fingerprinted from is stale. A later call re-derives.
+            None
+        } else {
+            // Nothing moved: `resolve_offsets` only ever writes `section_offsets`,
+            // so with those identical the residual and the structure are identical
+            // too, and `fingerprint` IS the post-solve fingerprint.
+            Some(fingerprint)
+        };
+        healed
     }
 
     /// Zero-trust re-solve of section offsets, used on LOAD and explicit REPAIR.
@@ -414,6 +576,15 @@ impl Project {
     /// seed-adjusts them. Returns the number of merges that were misaligned beyond
     /// the reporting tolerance before the re-solve.
     pub fn resolve_offsets(&mut self) -> usize {
+        self.resolve_offsets_tracked().0
+    }
+
+    /// [`Self::resolve_offsets`], also reporting whether the re-solve MOVED an
+    /// offset. That flag is what lets [`Self::realign_merges`] tell a solve which
+    /// healed something from one which provably cannot: the healed COUNT cannot,
+    /// being blind to every sub-reporting-tolerance change - which is the whole
+    /// reason this function re-cascades unconditionally.
+    fn resolve_offsets_tracked(&mut self) -> (usize, bool) {
         let before = self.check_merge_alignment().len();
         // Snapshot the derived offsets so we can tell whether the re-solve actually
         // moved anything - including SUB-tolerance changes the `before`/`after`
@@ -430,9 +601,13 @@ impl Project {
         // touch()ing there would bump `modified_at` for a project the user never
         // edited - a later no-edit save would then persist a bogus timestamp, and
         // it would make a no-op integrity Repair look like a real change.
-        if self.section_offsets != offsets_before {
+        let changed = self.section_offsets != offsets_before;
+        if changed {
             self.touch();
         }
-        before.saturating_sub(self.check_merge_alignment().len())
+        (
+            before.saturating_sub(self.check_merge_alignment().len()),
+            changed,
+        )
     }
 }
