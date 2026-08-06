@@ -910,6 +910,7 @@ impl MapConfig {
         } else {
             self.zoom_step = default_zoom_step();
         }
+        self.controls.normalize();
         self.station.normalize();
         self.shot.normalize();
         self.snap.normalize();
@@ -930,6 +931,10 @@ fn default_satellite_gps_origin() -> GpsOrigin {
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct MapControlsConfig {
     pub pan_speed: f64,
+    /// Zoom LEVELS moved by one 100 px wheel notch, in
+    /// [`ZOOM_SPEED_LEVELS_MIN`]..=[`ZOOM_SPEED_LEVELS_MAX`] (#429). Files
+    /// written before the remap hold the old multiplier instead; see
+    /// `Config::migrate_legacy`.
     pub zoom_speed: f64,
     pub invert_scroll: bool,
     /// Show the Pan/Zoom toolbar group (#409). Off by default: the map pans on a
@@ -939,6 +944,40 @@ pub struct MapControlsConfig {
     /// field existed keep parsing.
     #[serde(default)]
     pub show_navigation_tools: bool,
+}
+
+/// Slowest `zoom_speed` the sigmoid delivers usefully. Mirrors
+/// `ZOOM_LEVELS_PER_NOTCH_MIN` in `src/utils/zoomRate.ts`.
+pub const ZOOM_SPEED_LEVELS_MIN: f64 = 0.1;
+
+/// Fastest `zoom_speed` the settings dialog offers, and the ceiling the
+/// frontend clamps to. Mirrors `ZOOM_LEVELS_PER_NOTCH_MAX` in
+/// `src/utils/zoomRate.ts`.
+pub const ZOOM_SPEED_LEVELS_MAX: f64 = 0.95;
+
+impl MapControlsConfig {
+    /// Repair `zoom_speed` to the range the wheel-zoom solve can deliver.
+    ///
+    /// Runs on the IPC write path as well as on load, so it only ever CLAMPS -
+    /// the settings dialog's number input does not enforce its own `max`, and
+    /// an out-of-range figure typed there has to come back as the nearest one
+    /// the range holds, not as some other number. Reading a stale multiplier as
+    /// levels is a load-time migration instead (`Config::migrate_legacy`).
+    pub fn normalize(&mut self) {
+        if self.zoom_speed.is_finite() {
+            self.zoom_speed = self
+                .zoom_speed
+                .clamp(ZOOM_SPEED_LEVELS_MIN, ZOOM_SPEED_LEVELS_MAX);
+        } else {
+            self.zoom_speed = default_zoom_speed();
+        }
+    }
+}
+
+/// The shipped `zoom_speed`. Pinned to `MapControlsConfig::default()` by
+/// `test_map_controls_normalize_non_finite_resets_to_default`.
+fn default_zoom_speed() -> f64 {
+    0.55
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
@@ -1856,5 +1895,41 @@ impl Config {
                 tracing::info!("Migrated legacy [snap] config to map.snap");
             }
         }
+
+        self.map.controls.zoom_speed = migrate_zoom_speed(self.map.controls.zoom_speed);
     }
+}
+
+/// Read a `map.controls.zoom_speed` written under the pre-#429 scheme as the
+/// zoom levels per wheel notch it actually delivered.
+///
+/// The old value was a multiplier in 0.1-5.0 handed to MapLibre as
+/// `speed / 100`, and MapLibre's sigmoid turned that into
+/// `log2(2 / (1 + e^-speed))` levels per 100 px notch - so that expression IS
+/// the conversion, and the old default of 1.0 comes out at the 0.55 the new
+/// default ships (the gesture is unchanged for anyone who never touched the
+/// setting). Left alone, a stored 1.0 would instead be read as 1.0 levels and
+/// clamped to 0.95: a 73% speed-up nobody asked for.
+///
+/// Only a value ABOVE the new maximum is unambiguously old-scheme, since that
+/// is the whole range the settings dialog offers; the two schemes overlap
+/// below it, and a value in range is taken at face value. The result is
+/// rounded to the 2 decimals the dialog's 0.05 step works in, so a migrated
+/// config reads as a number a user could have typed.
+///
+/// A non-finite value is neither scheme's; it is left for
+/// [`MapControlsConfig::normalize`] to reset, along with anything the
+/// conversion lands outside the range.
+fn migrate_zoom_speed(stored: f64) -> f64 {
+    if !stored.is_finite() || stored <= ZOOM_SPEED_LEVELS_MAX {
+        return stored;
+    }
+    let levels = (2.0 / (1.0 + (-stored).exp())).log2();
+    let migrated = (levels * 100.0).round() / 100.0;
+    tracing::info!(
+        stored,
+        migrated,
+        "Migrated legacy map.controls.zoom_speed to zoom levels per wheel notch"
+    );
+    migrated
 }

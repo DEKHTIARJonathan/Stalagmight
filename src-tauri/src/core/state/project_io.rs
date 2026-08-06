@@ -56,6 +56,23 @@ enum DirProbe {
     Other,
 }
 
+/// Create the probe file, refusing to write through anything already at that
+/// name.
+///
+/// `create_new` is what makes the probe safe to run in a directory other
+/// people can write to: a plain `File::create` FOLLOWS a symlink planted at the
+/// name and truncates whatever it points at, and the name is guessable (it
+/// carries our pid). `create_new` fails with `AlreadyExists` instead - not a
+/// permission denial and not a missing directory, so the caller reads it as the
+/// non-committal outcome, which is the honest answer: something else owns that
+/// name and this probe learned nothing about the directory.
+pub(super) fn create_write_probe(path: &Path) -> std::io::Result<std::fs::File> {
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+}
+
 /// Ask the destination directory directly, because the error chain would not
 /// say: create a file in it and delete it again.
 ///
@@ -76,10 +93,16 @@ fn probe_destination_dir(dir: &Path) -> DirProbe {
         std::process::id(),
         PROBE_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     ));
-    match std::fs::File::create(&probe) {
+    match create_write_probe(&probe) {
         Ok(file) => {
             drop(file);
-            let _ = std::fs::remove_file(&probe);
+            if let Err(e) = std::fs::remove_file(&probe) {
+                tracing::debug!(
+                    path = ?probe,
+                    error = %e,
+                    "Could not remove the write probe; it is left behind"
+                );
+            }
             DirProbe::Writable
         }
         Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => DirProbe::Denied,

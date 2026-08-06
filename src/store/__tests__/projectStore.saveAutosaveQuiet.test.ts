@@ -34,6 +34,10 @@ describe('saveProject autosave quieting', () => {
     useUIStore.setState({ openDialog: openDialogSpy } as never);
     useProjectStore.setState({
       project: { file_path: '/cave.stalx' } as never,
+      // An autosave only ever runs on a dirty project, so that is the state the
+      // failure paths below are exercised from.
+      isDirty: true,
+      autosaveFailure: null,
       integrityIssues: [],
       integritySaveBlocked: false,
       refreshUndoState: vi.fn().mockResolvedValue(undefined),
@@ -43,7 +47,7 @@ describe('saveProject autosave quieting', () => {
   });
 
   afterEach(() => {
-    useProjectStore.setState({ project: null, isDirty: false } as never);
+    useProjectStore.setState({ project: null, isDirty: false, autosaveFailure: null } as never);
   });
 
   const resolveSave = () => {
@@ -125,5 +129,30 @@ describe('saveProject autosave quieting', () => {
     expect(banner).not.toContain('FS_PATH_NOT_FOUND');
     // A missing folder is not a permission problem, so no guidance dialog.
     expect(openDialogSpy).not.toHaveBeenCalledWith('save-permission', expect.anything());
+  });
+
+  it('raises the banner when the autosave fails and the changes really are unsaved', async () => {
+    denyPermission();
+
+    await useProjectStore.getState().saveProject('/cave.stalx', true);
+
+    expect(useProjectStore.getState().autosaveFailure).toBeTruthy();
+  });
+
+  it('leaves the banner down when a manual save landed while the autosave was in flight (#429)', async () => {
+    // The manual Ctrl+S completes mid-flight: the store goes clean before this
+    // autosave's failure comes back. "Your latest changes are not on disk" would
+    // be false, and the banner has no dismiss the user could reach for.
+    invokeIpcMock.mockImplementation(async (command: string) => {
+      if (command === 'save_project') {
+        useProjectStore.setState({ isDirty: false } as never);
+        return { success: false, error: 'FS_PERMISSION_DENIED: folder access denied' };
+      }
+      return undefined;
+    });
+
+    await useProjectStore.getState().saveProject('/cave.stalx', true);
+
+    expect(useProjectStore.getState().autosaveFailure).toBeNull();
   });
 });

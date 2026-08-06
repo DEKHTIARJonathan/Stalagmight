@@ -117,16 +117,32 @@ function windowCssSize(): { width: number; height: number } {
   return { width: window.innerWidth * applied, height: window.innerHeight * applied };
 }
 
-/** Push the effective scale for the current window into the webview, if it moved. */
+/**
+ * Push the effective scale for the current window into the webview, if it moved.
+ *
+ * `appliedScale` is recorded optimistically, BEFORE the `setZoom` round trip
+ * settles, and rolled back if it rejects. It has to be that way round: `setZoom`
+ * is an IPC call, but the native side applies the zoom immediately, so the
+ * `resize` it provokes can reach the page while the promise is still in flight.
+ * That handler recovers the window as `innerSize * appliedScale` - reading an
+ * already-zoomed `innerSize` through a stale scale would understate the window,
+ * tighten the cap, and start the setZoom/resize ping-pong the deadband exists to
+ * rule out. Rolling back on rejection keeps the other half of the contract: a
+ * zoom that never happened must not be claimed, or `windowCssSize` overstates the
+ * window and the cap goes slack (#429).
+ */
 function applyEffectiveScale(preferred: number): void {
   const { width, height } = windowCssSize();
   const effective = effectiveUiScale(preferred, width, height);
   if (!shouldApplyUiScale(appliedScale, effective)) return;
+  const previous = appliedScale;
   appliedScale = effective;
   void getCurrentWebview()
     .setZoom(effective)
     .catch(() => {
-      /* zoom unsupported on this platform - ignore */
+      // Zoom unsupported on this platform, or this call lost a race with a newer
+      // apply - only undo our own write.
+      if (appliedScale === effective) appliedScale = previous;
     });
 }
 

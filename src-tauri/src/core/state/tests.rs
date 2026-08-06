@@ -5714,6 +5714,42 @@ fn save_failure_leaves_a_generic_open_failure_unclassified() {
     );
 }
 
+#[test]
+fn write_probe_refuses_a_name_something_else_already_holds() {
+    // `create_new`, so the probe can only ever create its OWN file: it never
+    // opens - and so never truncates - a file that is already there.
+    let temp_dir = TempDir::new().unwrap();
+    let taken = temp_dir.path().join("survey.stalx");
+    std::fs::write(&taken, b"survey data").unwrap();
+
+    let kind = project_io::create_write_probe(&taken)
+        .err()
+        .map(|e| e.kind());
+
+    assert_eq!(kind, Some(std::io::ErrorKind::AlreadyExists));
+    assert_eq!(std::fs::read(&taken).unwrap(), b"survey data".as_slice());
+}
+
+#[cfg(unix)]
+#[test]
+fn write_probe_does_not_write_through_a_planted_symlink() {
+    // The probe name carries our pid, so it is guessable; in a save directory
+    // other users can write to, one of them can plant a symlink at it ahead of
+    // time. `File::create` would follow the link and truncate its target.
+    let temp_dir = TempDir::new().unwrap();
+    let victim = temp_dir.path().join("victim.stalx");
+    std::fs::write(&victim, b"survey data").unwrap();
+    let planted = temp_dir.path().join(".stalagmight-write-probe-1-0");
+    std::os::unix::fs::symlink(&victim, &planted).unwrap();
+
+    let kind = project_io::create_write_probe(&planted)
+        .err()
+        .map(|e| e.kind());
+
+    assert_eq!(kind, Some(std::io::ErrorKind::AlreadyExists));
+    assert_eq!(std::fs::read(&victim).unwrap(), b"survey data".as_slice());
+}
+
 #[cfg(windows)]
 #[test]
 fn save_failure_tags_an_over_max_path_destination_as_too_long() {

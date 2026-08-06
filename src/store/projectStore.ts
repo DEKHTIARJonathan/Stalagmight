@@ -1347,7 +1347,12 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       // An autosave failure is an ongoing condition, not a modal moment: feed
       // the banner (docs/notifications.md). `autosaveFailureMessage` keeps the
       // raw "FS_*:" markers out of it - the banner renders this string.
-      if (isAutosave) {
+      // Gated on the project still being dirty for the same reason useAutoSave
+      // gates its red status: a manual Ctrl+S that landed while this autosave was
+      // in flight already put the changes on disk, and a banner saying the latest
+      // changes are not on disk on a clean project is a claim the user cannot
+      // clear by saving (#429).
+      if (isAutosave && get().isDirty) {
         set({ autosaveFailure: autosaveFailureMessage(result.error) });
       }
       // A filesystem permission denial (e.g. macOS forgot folder access after
