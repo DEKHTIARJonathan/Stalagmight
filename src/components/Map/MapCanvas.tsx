@@ -10,6 +10,7 @@ import {
   isMapReadOnly,
   showsClosureAdjustedNotice,
 } from '../../store/uiStore';
+import { pickUIKeys, type UIStoreState } from '../../store/uiSelectKeys';
 import { selectComputeGate, useGasPlanStore } from '../../store/gasPlanStore';
 import { selectActiveStations, selectActiveSurveyData } from '../../store/geometrySelectors';
 import { isMutatingTool, shouldResetNavigationTool, toolCursor } from '../../utils/toolUtils';
@@ -218,6 +219,84 @@ function MapHoverSync({
   return null;
 }
 
+/**
+ * The uiStore keys MapCanvas reads (#430). Explicit, so the subscription costs a
+ * 63-key shallow compare instead of a ~180-key one and can actually bail out
+ * while the camera moves. The hover keys (hoveredStation / hoveredShot /
+ * hoveredSectionId) are deliberately ABSENT: they change ~60x/s during mouse
+ * movement and would re-render this 4000-line component every frame - MapHoverSync
+ * subscribes to them instead. measureSnapShot is absent for the same reason (the
+ * live shot-snap `t` is rewritten on every mousemove over a shot and the cursor dot
+ * is driven imperatively via refs); the leave-tool cleanup reads it via getState().
+ */
+const MAP_CANVAS_UI_KEYS = [
+  'mapZoom',
+  'setMapZoom',
+  'activeTool',
+  'showSatellite',
+  'showShotData',
+  'showSectionNames',
+  'showStationLabels',
+  'showStationComments',
+  'showShotComments',
+  'showStations',
+  'showShots',
+  'showReferenceShots',
+  'showJumps',
+  'showDepthGradient',
+  'showDistanceGradient',
+  'appMode',
+  'showIssueSeverity',
+  'distanceGradientOrigin',
+  'distanceField',
+  'setDistanceField',
+  'setDistanceGradientOrigin',
+  'showDevStats',
+  'selection',
+  'mergeStationA',
+  'mergeStationB',
+  'measureStart',
+  'measureEnd',
+  'measureDirect',
+  'measureAlongLine',
+  'measureAlongLinePending',
+  'setMeasureSnapShot',
+  'clearMeasure',
+  'clearSelection',
+  'clearSelectionByType',
+  'filterSelection',
+  'clearMergeStations',
+  'requestFitToBounds',
+  'clearFitToBoundsRequest',
+  'snappedStation',
+  'setSnappedStation',
+  'setHoveredStation',
+  'setHoveredShot',
+  'placementMode',
+  'updatePlacementCursor',
+  'updatePlacementSnap',
+  'cancelPlacementMode',
+  'confirmPlacement',
+  'showToast',
+  'requestZoomToSection',
+  'clearZoomToSectionRequest',
+  'requestPanToShot',
+  'clearPanToShotRequest',
+  'requestCenterOnStation',
+  'clearCenterOnStationRequest',
+  'requestCenterOnShot',
+  'clearCenterOnShotRequest',
+  'requestZoomToShot',
+  'clearZoomToShotRequest',
+  'geometryPreview',
+  'resolvedTheme',
+  'moveCommentSource',
+  'detailPanelOpen',
+  'detailPanelTab',
+] as const satisfies readonly (keyof UIStoreState)[];
+
+const selectMapCanvasUI = (s: UIStoreState) => pickUIKeys(s, MAP_CANVAS_UI_KEYS);
+
 function MapCanvas() {
   const precision = useDecimalPrecision();
   const mapContainer = useRef<HTMLDivElement>(null);
@@ -407,10 +486,11 @@ function MapCanvas() {
   const zoomMin = config?.map.zoom_min ?? 0;
   const zoomMax = config?.map.zoom_max ?? 22;
 
-  // Performance: exclude hover values (hoveredStation, hoveredShot, hoveredSectionId)
-  // from the store subscription. These change ~60 times/sec during mouse movement
-  // and would cause this 2700-line component to re-render every frame.
-  // Hover sync is handled by <MapHoverSync> child component instead.
+  // Performance: subscribe to an EXPLICIT key list (MAP_CANVAS_UI_KEYS above), which
+  // excludes the hover values (hoveredStation, hoveredShot, hoveredSectionId) and
+  // measureSnapShot. Those change ~60 times/sec during mouse movement and would cause
+  // this 4000-line component to re-render every frame. Hover sync is handled by the
+  // <MapHoverSync> child component instead; measureSnapShot is read via getState().
   const {
     mapZoom,
     setMapZoom,
@@ -475,14 +555,7 @@ function MapCanvas() {
     moveCommentSource,
     detailPanelOpen,
     detailPanelTab,
-  } = useUIStore(
-    // measureSnapShot is excluded: the live shot-snap `t` is rewritten on every
-    // mousemove over a shot, and the cursor dot is driven imperatively via refs,
-    // so subscribing would re-render this large component ~60×/s (#26). The
-    // leave-tool cleanup below reads it via getState() instead.
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    useShallow(({ hoveredStation, hoveredShot, hoveredSectionId, measureSnapShot, ...rest }) => rest)
-  );
+  } = useUIStore(useShallow(selectMapCanvasUI));
 
   // The gas overlay belongs to the Plan workspace mode (the former showGasPlan
   // sub-mode). Derived so the existing showGasPlan-gated effects below are unchanged.
