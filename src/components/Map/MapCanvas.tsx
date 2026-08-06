@@ -10,6 +10,7 @@ import {
   isMapReadOnly,
   showsClosureAdjustedNotice,
 } from '../../store/uiStore';
+import { pickUIKeys, type UIStoreState } from '../../store/uiSelectKeys';
 import { selectComputeGate, useGasPlanStore } from '../../store/gasPlanStore';
 import { selectActiveStations, selectActiveSurveyData } from '../../store/geometrySelectors';
 import { isMutatingTool, shouldResetNavigationTool, toolCursor } from '../../utils/toolUtils';
@@ -46,7 +47,6 @@ import { DepthLegend } from './DepthLegend';
 import { DistanceLegend } from './DistanceLegend';
 import { GasLegend } from './GasLegend';
 import { MapDevStats } from './MapDevStats';
-import { WheelChainDebugOverlay } from './WheelChainDebugOverlay';
 import CommentOverlay from './CommentOverlay';
 import MoveCommentCursorTag from './MoveCommentCursorTag';
 import { installPanZoomDebug } from './panZoomDebug';
@@ -95,6 +95,17 @@ interface MoveDragState {
 const stationRefToId = (ref: { section_id: number; station_index: number } | null): string | null => {
   if (!ref) return null;
   return `${ref.section_id}:${ref.station_index}`;
+};
+
+// Screen pixels per meter at the map center, by projecting a 1 meter step north
+// (1 meter = 1/111320 degrees). Feeds the to-scale placement preview only, so it
+// is computed on demand rather than on every zoom frame (#430).
+const pixelsPerMeterAt = (map: maplibregl.Map): number => {
+  const center = map.getCenter();
+  const centerScreen = map.project(center);
+  const northPoint = map.project([center.lng, center.lat + 1 / 111320]);
+  const ppm = Math.abs(centerScreen.y - northPoint.y);
+  return ppm > 0 ? ppm : 1;
 };
 
 /**
@@ -206,6 +217,87 @@ function MapHoverSync({
 
   return null;
 }
+
+/**
+ * The uiStore keys MapCanvas reads (#430). Explicit, so the subscription costs a
+ * 63-key shallow compare instead of a ~180-key one and can actually bail out
+ * while the camera moves. The hover keys (hoveredStation / hoveredShot /
+ * hoveredSectionId) are deliberately ABSENT: they change ~60x/s during mouse
+ * movement and would re-render this 4000-line component every frame - MapHoverSync
+ * subscribes to them instead. measureSnapShot is absent for the same reason (the
+ * live shot-snap `t` is rewritten on every mousemove over a shot and the cursor dot
+ * is driven imperatively via refs); the leave-tool cleanup reads it via getState().
+ */
+const MAP_CANVAS_UI_KEYS = [
+  // NOTE: `mapZoom` is deliberately ABSENT. Its only read is the initial-camera
+  // restore inside the empty-dep map-creation effect, which can never observe a
+  // later store write anyway, so subscribing would only re-render this whole
+  // component on every 'zoomend'. That site reads it via getState() instead.
+  'setMapZoom',
+  'activeTool',
+  'showSatellite',
+  'showShotData',
+  'showSectionNames',
+  'showStationLabels',
+  'showStationComments',
+  'showShotComments',
+  'showStations',
+  'showShots',
+  'showReferenceShots',
+  'showJumps',
+  'showDepthGradient',
+  'showDistanceGradient',
+  'appMode',
+  'showIssueSeverity',
+  'distanceGradientOrigin',
+  'distanceField',
+  'setDistanceField',
+  'setDistanceGradientOrigin',
+  'showDevStats',
+  'selection',
+  'mergeStationA',
+  'mergeStationB',
+  'measureStart',
+  'measureEnd',
+  'measureDirect',
+  'measureAlongLine',
+  'measureAlongLinePending',
+  'setMeasureSnapShot',
+  'clearMeasure',
+  'clearSelection',
+  'clearSelectionByType',
+  'filterSelection',
+  'clearMergeStations',
+  'requestFitToBounds',
+  'clearFitToBoundsRequest',
+  'snappedStation',
+  'setSnappedStation',
+  'setHoveredStation',
+  'setHoveredShot',
+  'placementMode',
+  'updatePlacementCursor',
+  'updatePlacementSnap',
+  'cancelPlacementMode',
+  'confirmPlacement',
+  'showToast',
+  'requestZoomToSection',
+  'clearZoomToSectionRequest',
+  'requestPanToShot',
+  'clearPanToShotRequest',
+  'requestCenterOnStation',
+  'clearCenterOnStationRequest',
+  'requestCenterOnShot',
+  'clearCenterOnShotRequest',
+  'requestZoomToShot',
+  'clearZoomToShotRequest',
+  'geometryPreview',
+  'resolvedTheme',
+  'moveCommentSource',
+  'detailPanelOpen',
+  'detailPanelTab',
+] as const satisfies readonly (keyof UIStoreState)[];
+
+const selectMapCanvasUI = (s: UIStoreState) => pickUIKeys(s, MAP_CANVAS_UI_KEYS);
 
 function MapCanvas() {
   const precision = useDecimalPrecision();
@@ -396,13 +488,12 @@ function MapCanvas() {
   const zoomMin = config?.map.zoom_min ?? 0;
   const zoomMax = config?.map.zoom_max ?? 22;
 
-  // Performance: exclude hover values (hoveredStation, hoveredShot, hoveredSectionId)
-  // from the store subscription. These change ~60 times/sec during mouse movement
-  // and would cause this 2700-line component to re-render every frame.
-  // Hover sync is handled by <MapHoverSync> child component instead.
+  // Performance: subscribe to an EXPLICIT key list (MAP_CANVAS_UI_KEYS above), which
+  // excludes the hover values (hoveredStation, hoveredShot, hoveredSectionId) and
+  // measureSnapShot. Those change ~60 times/sec during mouse movement and would cause
+  // this 4000-line component to re-render every frame. Hover sync is handled by the
+  // <MapHoverSync> child component instead; measureSnapShot is read via getState().
   const {
-    mapZoom,
-    setMapCenter,
     setMapZoom,
     activeTool,
     showSatellite,
@@ -465,14 +556,7 @@ function MapCanvas() {
     moveCommentSource,
     detailPanelOpen,
     detailPanelTab,
-  } = useUIStore(
-    // measureSnapShot is excluded: the live shot-snap `t` is rewritten on every
-    // mousemove over a shot, and the cursor dot is driven imperatively via refs,
-    // so subscribing would re-render this large component ~60×/s (#26). The
-    // leave-tool cleanup below reads it via getState() instead.
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    useShallow(({ hoveredStation, hoveredShot, hoveredSectionId, measureSnapShot, ...rest }) => rest)
-  );
+  } = useUIStore(useShallow(selectMapCanvasUI));
 
   // The gas overlay belongs to the Plan workspace mode (the former showGasPlan
   // sub-mode). Derived so the existing showGasPlan-gated effects below are unchanged.
@@ -1660,7 +1744,10 @@ function MapCanvas() {
         ],
       },
       center: mapCenter,
-      zoom: mapZoom,
+      // Read at creation time rather than subscribed: this effect has an empty
+      // dep array, so a subscription could never deliver a newer value here and
+      // would only re-render MapCanvas on every 'zoomend' (#430).
+      zoom: useUIStore.getState().mapZoom,
       attributionControl: false,
       // Disable built-in keyboard zoom (handled by useKeyboardShortcuts with config.map.zoom_step)
       keyboard: false,
@@ -1711,24 +1798,26 @@ function MapCanvas() {
     // Create the scale control instance (always shown; added once on map load).
     scaleControlRef.current = new maplibregl.ScaleControl({ maxWidth: 100, unit: 'metric' });
 
-    // Track map movement
-    map.current.on('move', () => {
-      if (!map.current) return;
-      const center = map.current.getCenter();
-      setMapCenter([center.lng, center.lat]);
-    });
-
+    // Live map scale for the to-scale placement preview. <PlacementOverlay> is
+    // the only consumer and mounts only while placement mode is active, so
+    // outside placement this frame-rate handler must not touch React state
+    // (#430). The flag is read from the store rather than from a captured value
+    // on purpose: this effect has an empty dep array, so adding placement mode
+    // to the deps would tear the map down and recreate it on every toggle.
     map.current.on('zoom', () => {
       if (!map.current) return;
+      if (useUIStore.getState().placementMode === null) return;
+      setPixelsPerMeter(pixelsPerMeterAt(map.current));
+    });
+
+    // Camera zoom is mirrored into the store once per gesture, not per frame.
+    // NOTE: `mapZoom` in the store is therefore STALE mid-gesture. Its only
+    // reader is the initial-camera restore above (the `zoom:` option), which runs
+    // when the map is recreated. Any future live-zoom consumer must subscribe
+    // to the map (`map.on('zoom')`), never to the store.
+    map.current.on('zoomend', () => {
+      if (!map.current) return;
       setMapZoom(map.current.getZoom());
-      // Calculate pixels per meter at current zoom
-      // Use map center to project 1 meter difference
-      const center = map.current.getCenter();
-      const centerScreen = map.current.project(center);
-      // Point 1 meter north in map coordinates (1 meter = 1/111320 degrees)
-      const northPoint = map.current.project([center.lng, center.lat + 1 / 111320]);
-      const ppm = Math.abs(centerScreen.y - northPoint.y);
-      setPixelsPerMeter(ppm > 0 ? ppm : 1);
     });
 
     // Initialize survey layer
@@ -1738,12 +1827,8 @@ function MapCanvas() {
       // Set initial tool immediately after creating SurveyLayer
       surveyLayerRef.current.setActiveTool(useUIStore.getState().activeTool);
       setMapLoaded(true);
-      // Initialize pixels per meter
-      const center = map.current.getCenter();
-      const centerScreen = map.current.project(center);
-      const northPoint = map.current.project([center.lng, center.lat + 1 / 111320]);
-      const ppm = Math.abs(centerScreen.y - northPoint.y);
-      setPixelsPerMeter(ppm > 0 ? ppm : 1);
+      // pixelsPerMeter is seeded when placement mode activates, not here - see
+      // the placement-scale effect.
     });
 
     return () => {
@@ -1751,6 +1836,10 @@ function MapCanvas() {
       // cost vs React unmount cost on the back-button freeze. Surfaced in
       // the MemoryProbe panel.
       const t0 = performance.now();
+      // 'zoomend' never fires if we unmount mid-gesture, so capture the final
+      // zoom here - otherwise the restore path would come back one wheel chain
+      // behind.
+      if (map.current) setMapZoom(map.current.getZoom());
       if (snapRafId.current !== null) {
         cancelAnimationFrame(snapRafId.current);
         snapRafId.current = null;
@@ -2280,12 +2369,17 @@ function MapCanvas() {
     }
   }, [config, activeTool, setActiveTool]);
 
-  // Update callbacks when they change
+  // Update callbacks when they change. `mapLoaded` is a dependency on purpose:
+  // SurveyLayer is constructed in the async map 'load' handler with whatever
+  // `toolCallbacks` the map-creation effect closed over on first render, and
+  // `toolCallbacks` is memoized (#430), so it can settle to a stable identity
+  // while `surveyLayerRef.current` is still null and this effect no-ops. Re-run
+  // it on the setMapLoaded(true) render to apply the current callbacks.
   useEffect(() => {
     if (surveyLayerRef.current) {
       surveyLayerRef.current.setCallbacks(toolCallbacks);
     }
-  }, [toolCallbacks]);
+  }, [toolCallbacks, mapLoaded]);
 
   // Sync config with SurveyLayer for visual and hitbox layer updates
   useEffect(() => {
@@ -3666,6 +3760,15 @@ function MapCanvas() {
     }
   }, [mapLoaded, fitToShot]);
 
+  // Seed the to-scale placement factor the moment placement mode turns on. The
+  // map's 'zoom' handler keeps it live from there, but it does not fire until
+  // the user actually zooms, so without this the overlay would draw at whatever
+  // scale was last recorded (or the initial 1 px/m) until the first zoom.
+  useEffect(() => {
+    if (!placementActive || !mapLoaded || !map.current) return;
+    setPixelsPerMeter(pixelsPerMeterAt(map.current));
+  }, [placementActive, mapLoaded]);
+
   // Handle Escape key for placement mode
   useEffect(() => {
     if (!placementMode) return;
@@ -3994,12 +4097,6 @@ function MapCanvas() {
       {/* Developer stats overlay */}
       {showDevStats && mapLoaded && map.current && (
         <MapDevStats map={map.current} />
-      )}
-
-      {/* TEMP: wheel-chain scroll/travel overlay for the zoom-choppiness
-          investigation. Dev builds only; remove with WheelChainDebugOverlay.tsx. */}
-      {import.meta.env.DEV && mapLoaded && map.current && (
-        <WheelChainDebugOverlay map={map.current} />
       )}
 
       {/* Placement mode overlay */}

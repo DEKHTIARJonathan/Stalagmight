@@ -6,6 +6,7 @@ import { useProjectStore } from './store/projectStore';
 import { useUIStore } from './store/uiStore';
 import { useSpeleoStore } from './store/speleoStore';
 import { useGasPlanStore, selectIsPlanDirty } from './store/gasPlanStore';
+import { useShallow } from 'zustand/react/shallow';
 import { invokeIpc, getErrorMessage } from './utils/ipc';
 import { surfaceSaveFailure } from './utils/saveFeedback';
 import { extractFilename } from './utils/path';
@@ -59,7 +60,19 @@ function App() {
     initPanels,
     triggerFitToBounds,
     selectionAnnouncement,
-  } = useUIStore();
+  } = useUIStore(useShallow((s) => ({
+    view: s.view,
+    setView: s.setView,
+    activeDialog: s.activeDialog,
+    dialogData: s.dialogData,
+    dmpImportWizardPhase: s.dmpImportWizardPhase,
+    placementMode: s.placementMode,
+    closeDialog: s.closeDialog,
+    openDialog: s.openDialog,
+    initPanels: s.initPanels,
+    triggerFitToBounds: s.triggerFitToBounds,
+    selectionAnnouncement: s.selectionAnnouncement,
+  })));
 
   // #198/fix 3: whenever a SpeleoDB hand-off verb (start/update/push/done, from the
   // status button OR a close dialog) reports a divergence, surface the resolution

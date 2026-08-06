@@ -1,7 +1,8 @@
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { MapMouseEvent } from 'maplibre-gl';
 import { useUIStore, type Selection, type MeasureEndpoint } from '../store/uiStore';
+import { pickUIKeys, type UIStoreState } from '../store/uiSelectKeys';
 import { useProjectStore } from '../store/projectStore';
 import { useGasPlanStore } from '../store/gasPlanStore';
 import { useShallow } from 'zustand/react/shallow';
@@ -125,10 +126,50 @@ export function nearestReachableStationRef(
   return best;
 }
 
+/**
+ * The uiStore keys this hook reads (#430). Explicit, so the subscription costs a
+ * 25-key shallow compare instead of a ~180-key one and can actually bail out while
+ * the camera moves. The hover keys (hoveredStation / hoveredShot / hoveredSectionId)
+ * are deliberately ABSENT: this hook runs inside MapCanvas, so subscribing to them
+ * would re-render that whole component on every mousemove. measureSnapShot is absent
+ * for the same reason - it is rewritten on every mousemove over a shot (the live `t`)
+ * and is only ever read via getState() at click time (#26).
+ */
+const MAP_TOOLS_UI_KEYS = [
+  'activeTool',
+  'setSelection',
+  'addToSelection',
+  'toggleSelection',
+  'clearSelection',
+  'mergeStationA',
+  'setMergeStationA',
+  'setMergeStationB',
+  'clearMergeStations',
+  'setMeasureStart',
+  'setMeasureEnd',
+  'setMeasureDirect',
+  'setMeasureAlongLine',
+  'setMeasureAlongLinePending',
+  'clearMeasure',
+  'setHoveredStation',
+  'setHoveredShot',
+  'openDialog',
+  'snappedStation',
+  'showStations',
+  'showShots',
+  'showToast',
+  'showDistanceGradient',
+  'setDistanceGradientOrigin',
+  'appMode',
+] as const satisfies readonly (keyof UIStoreState)[];
+
+const selectMapToolsUI = (s: UIStoreState) => pickUIKeys(s, MAP_TOOLS_UI_KEYS);
+
 export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks {
   const { t } = useTranslation();
-  // Performance: exclude hover values from subscription - this hook is called
-  // from MapCanvas and would cause full re-renders on every mousemove.
+  // Performance: subscribe to an EXPLICIT key list (MAP_TOOLS_UI_KEYS above), which
+  // excludes the hover values - this hook is called from MapCanvas and would
+  // otherwise cause full re-renders on every mousemove.
   const {
     activeTool,
     setSelection,
@@ -155,11 +196,7 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
     showDistanceGradient,
     setDistanceGradientOrigin,
     appMode,
-    // measureSnapShot is excluded too: it's rewritten on every mousemove over a
-    // shot (the live `t`), and is only ever read via getState() at click time - so
-    // subscribing here would re-render MapCanvas ~60×/s for nothing (#26).
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  } = useUIStore(useShallow(({ hoveredStation, hoveredShot, hoveredSectionId, measureSnapShot, ...rest }) => rest));
+  } = useUIStore(useShallow(selectMapToolsUI));
 
   // Gas origin-pick on map click belongs to the Plan workspace mode (former showGasPlan).
   const showGasPlan = appMode === 'plan';
@@ -559,7 +596,11 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
       isCheckingConnectivity,
       mergeStationA,
       openDialog,
-      options,
+      // The individual fields this handler reads, not the `options` object: the
+      // caller builds that object fresh every render, so depending on it would
+      // rebuild the handler (and the memoized callback bundle below) each time (#430).
+      options.immovableStationKeys,
+      options.onMoveDragStart,
       project?.sections,
       setMergeStationA,
       setSelection,
@@ -755,7 +796,8 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
         }
       }
     },
-    [activeTool, activeStations, addToSelection, applyMeasureClick, buildShotPointEndpoint, clickShotParam, openDialog, options, project?.sections, setSelection, showShots, showToast, toggleSelection, showDistanceGradient, setDistanceGradientOrigin, showGasPlan]
+    // See handleStationClick: the read `options` fields, not the object (#430).
+    [activeTool, activeStations, addToSelection, applyMeasureClick, buildShotPointEndpoint, clickShotParam, openDialog, options.immovableStationKeys, options.onMoveDragStart, options.querySnapAtPoint, project?.sections, setSelection, showShots, showToast, toggleSelection, showDistanceGradient, setDistanceGradientOrigin, showGasPlan]
   );
 
   // Handle empty click (no feature) - but use snapped station if available
@@ -855,7 +897,9 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
       clearMergeStations,
       clearSelection,
       openDialog,
-      options,
+      // See handleStationClick: the read `options` fields, not the object (#430).
+      options.gpsOrigin,
+      options.querySnapAtPoint,
       setMergeStationA,
       showShots,
       showStations,
@@ -965,13 +1009,29 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
     [activeTool, openDialog, setSelection, showGasPlan, activeStations, options.gpsOrigin]
   );
 
-  return {
-    onStationClick: handleStationClick,
-    onShotClick: handleShotClick,
-    onEmptyClick: handleEmptyClick,
-    onStationHover: handleStationHover,
-    onShotHover: handleShotHover,
-    onFeatureHover: options.onFeatureHover,
-    onContextMenu: handleContextMenu,
-  };
+  // Memoized: a fresh object literal here churned `toolCallbacks` in MapCanvas on
+  // every render, which re-ran the `SurveyLayer.setCallbacks` effect each time (#430).
+  // Every member is now render-stable (the handlers are useCallback'd over narrowed
+  // deps; onFeatureHover is the caller's own callback), so this rebuilds only when a
+  // handler genuinely changes.
+  return useMemo<SurveyLayerCallbacks>(
+    () => ({
+      onStationClick: handleStationClick,
+      onShotClick: handleShotClick,
+      onEmptyClick: handleEmptyClick,
+      onStationHover: handleStationHover,
+      onShotHover: handleShotHover,
+      onFeatureHover: options.onFeatureHover,
+      onContextMenu: handleContextMenu,
+    }),
+    [
+      handleStationClick,
+      handleShotClick,
+      handleEmptyClick,
+      handleStationHover,
+      handleShotHover,
+      options.onFeatureHover,
+      handleContextMenu,
+    ]
+  );
 }
