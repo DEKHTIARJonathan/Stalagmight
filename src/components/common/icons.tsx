@@ -702,6 +702,23 @@ export function LockIcon(props: IconProps) {
   );
 }
 
+/** Open padlock: the same body as `LockIcon`, with the shackle lifted and its
+ *  right leg gone, so the two read as a locked/unlocked pair at 14px. */
+export function LockOpenIcon(props: IconProps) {
+  return (
+    <BaseIcon {...props}>
+      {/* Body (identical to LockIcon) */}
+      <Bar x1={5} y1={9} x2={15} y2={9} />
+      <Bar x1={5} y1={17} x2={15} y2={17} />
+      <Bar x1={5} y1={9} x2={5} y2={17} />
+      <Bar x1={15} y1={9} x2={15} y2={17} />
+      {/* Shackle: hinged on the left, swung up and open on the right */}
+      <Bar x1={7} y1={9} x2={7} y2={5} />
+      <ArcBand cx={10} cy={5} r={3} a1={180} a2={360} />
+    </BaseIcon>
+  );
+}
+
 export function MessageIcon(props: IconProps) {
   // Hollow speech-bubble outline (band), rendered as a fill.
   return (
