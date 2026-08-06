@@ -617,8 +617,9 @@ export default function Toolbar({
             {/* DisplayMenu is available in Survey + Plan (not Export - the Export panel's own
                 controls decide what the exported image contains, so a survey Display menu there
                 is a confusing no-op). The component keeps the survey-only concerns out of Plan
-                internally: the geometry measured/adjusted toggle (Plan forces the closure map)
-                and the color overlays (the gas reachability gradient owns the coloring there). */}
+                internally: the Raw Data View / Closures Computed View switch (Plan forces the
+                closure map) and the color overlays (the gas reachability gradient owns the
+                coloring there). */}
             {appMode !== 'export' && <DisplayMenu condensed={displayCondensed} tight={tight} />}
           </>
         )}

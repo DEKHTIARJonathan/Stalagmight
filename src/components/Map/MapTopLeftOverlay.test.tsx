@@ -2,17 +2,27 @@ import { render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { MapTopLeftOverlay } from './MapTopLeftOverlay';
 
-vi.mock('react-i18next', () => ({
-  useTranslation: () => ({
-    t: (key: string) =>
-      ({
-        'map.fitToViewTitle': 'Fit to view',
-        'map.geometry.adjustedBadge': 'Closures Computed View · read-only',
-        'map.geometry.computing': 'Computing closures…',
-        'map.geometry.computingReadOnly': 'Computing Closures - Read Only',
-      })[key] ?? key,
-  }),
-}));
+// `t` resolves against the REAL shipped locale file rather than a hand-copied
+// literal table: the assertions below quote user-visible English, and a private
+// copy of those strings would keep passing after someone reworded en.json - two
+// unlinked copies of the same copy. Imported inside the factory because
+// `vi.mock` is hoisted above the module's own imports.
+vi.mock('react-i18next', async () => {
+  const en: unknown = (await import('../../i18n/locales/en.json')).default;
+  const t = (key: string): string => {
+    const value = key
+      .split('.')
+      .reduce<unknown>(
+        (node, part) =>
+          typeof node === 'object' && node !== null
+            ? (node as Record<string, unknown>)[part]
+            : undefined,
+        en
+      );
+    return typeof value === 'string' ? value : key;
+  };
+  return { useTranslation: () => ({ t }) };
+});
 
 const baseProps = {
   focused: false,
