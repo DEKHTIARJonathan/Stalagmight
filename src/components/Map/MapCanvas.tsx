@@ -97,6 +97,17 @@ const stationRefToId = (ref: { section_id: number; station_index: number } | nul
   return `${ref.section_id}:${ref.station_index}`;
 };
 
+// Screen pixels per meter at the map center, by projecting a 1 meter step north
+// (1 meter = 1/111320 degrees). Feeds the to-scale placement preview only, so it
+// is computed on demand rather than on every zoom frame (#430).
+const pixelsPerMeterAt = (map: maplibregl.Map): number => {
+  const center = map.getCenter();
+  const centerScreen = map.project(center);
+  const northPoint = map.project([center.lng, center.lat + 1 / 111320]);
+  const ppm = Math.abs(centerScreen.y - northPoint.y);
+  return ppm > 0 ? ppm : 1;
+};
+
 /**
  * Lightweight child component that subscribes to hover state and syncs it to
  * SurveyLayer. Extracted from MapCanvas so that hover changes (~60/sec during
@@ -402,7 +413,6 @@ function MapCanvas() {
   // Hover sync is handled by <MapHoverSync> child component instead.
   const {
     mapZoom,
-    setMapCenter,
     setMapZoom,
     activeTool,
     showSatellite,
@@ -1711,24 +1721,26 @@ function MapCanvas() {
     // Create the scale control instance (always shown; added once on map load).
     scaleControlRef.current = new maplibregl.ScaleControl({ maxWidth: 100, unit: 'metric' });
 
-    // Track map movement
-    map.current.on('move', () => {
-      if (!map.current) return;
-      const center = map.current.getCenter();
-      setMapCenter([center.lng, center.lat]);
-    });
-
+    // Live map scale for the to-scale placement preview. <PlacementOverlay> is
+    // the only consumer and mounts only while placement mode is active, so
+    // outside placement this frame-rate handler must not touch React state
+    // (#430). The flag is read from the store rather than from a captured value
+    // on purpose: this effect has an empty dep array, so adding placement mode
+    // to the deps would tear the map down and recreate it on every toggle.
     map.current.on('zoom', () => {
       if (!map.current) return;
+      if (useUIStore.getState().placementMode === null) return;
+      setPixelsPerMeter(pixelsPerMeterAt(map.current));
+    });
+
+    // Camera zoom is mirrored into the store once per gesture, not per frame.
+    // NOTE: `mapZoom` in the store is therefore STALE mid-gesture. Its only
+    // reader is the initial-camera restore above (`zoom: mapZoom`), which runs
+    // when the map is recreated. Any future live-zoom consumer must subscribe
+    // to the map (`map.on('zoom')`), never to the store.
+    map.current.on('zoomend', () => {
+      if (!map.current) return;
       setMapZoom(map.current.getZoom());
-      // Calculate pixels per meter at current zoom
-      // Use map center to project 1 meter difference
-      const center = map.current.getCenter();
-      const centerScreen = map.current.project(center);
-      // Point 1 meter north in map coordinates (1 meter = 1/111320 degrees)
-      const northPoint = map.current.project([center.lng, center.lat + 1 / 111320]);
-      const ppm = Math.abs(centerScreen.y - northPoint.y);
-      setPixelsPerMeter(ppm > 0 ? ppm : 1);
     });
 
     // Initialize survey layer
@@ -1738,12 +1750,8 @@ function MapCanvas() {
       // Set initial tool immediately after creating SurveyLayer
       surveyLayerRef.current.setActiveTool(useUIStore.getState().activeTool);
       setMapLoaded(true);
-      // Initialize pixels per meter
-      const center = map.current.getCenter();
-      const centerScreen = map.current.project(center);
-      const northPoint = map.current.project([center.lng, center.lat + 1 / 111320]);
-      const ppm = Math.abs(centerScreen.y - northPoint.y);
-      setPixelsPerMeter(ppm > 0 ? ppm : 1);
+      // pixelsPerMeter is seeded when placement mode activates, not here - see
+      // the placement-scale effect.
     });
 
     return () => {
@@ -1751,6 +1759,10 @@ function MapCanvas() {
       // cost vs React unmount cost on the back-button freeze. Surfaced in
       // the MemoryProbe panel.
       const t0 = performance.now();
+      // 'zoomend' never fires if we unmount mid-gesture, so capture the final
+      // zoom here - otherwise the restore path would come back one wheel chain
+      // behind.
+      if (map.current) setMapZoom(map.current.getZoom());
       if (snapRafId.current !== null) {
         cancelAnimationFrame(snapRafId.current);
         snapRafId.current = null;
@@ -3665,6 +3677,15 @@ function MapCanvas() {
       }
     }
   }, [mapLoaded, fitToShot]);
+
+  // Seed the to-scale placement factor the moment placement mode turns on. The
+  // map's 'zoom' handler keeps it live from there, but it does not fire until
+  // the user actually zooms, so without this the overlay would draw at whatever
+  // scale was last recorded (or the initial 1 px/m) until the first zoom.
+  useEffect(() => {
+    if (!placementActive || !mapLoaded || !map.current) return;
+    setPixelsPerMeter(pixelsPerMeterAt(map.current));
+  }, [placementActive, mapLoaded]);
 
   // Handle Escape key for placement mode
   useEffect(() => {

@@ -505,9 +505,11 @@ interface UIStore {
   setFocusedSection: (sectionId: SectionId) => void;
 
   // Map state
-  mapCenter: [number, number];
+  /** Camera zoom, written once per gesture ('zoomend'), NOT per frame: the only
+   *  reader is MapCanvas restoring the initial camera when the map is recreated.
+   *  It is therefore stale mid-gesture - a live-zoom consumer must subscribe to
+   *  the map (`map.on('zoom')`), not to this field. */
   mapZoom: number;
-  setMapCenter: (center: [number, number]) => void;
   setMapZoom: (zoom: number) => void;
   requestFitToBounds: false | 'animate' | 'snap';
   triggerFitToBounds: (options?: { snap?: boolean }) => void;
@@ -1347,9 +1349,7 @@ export const useUIStore = create<UIStore>((set) => ({
   },
 
   // Map state
-  mapCenter: [0, 0],
   mapZoom: 15,
-  setMapCenter: (mapCenter) => set({ mapCenter }),
   setMapZoom: (mapZoom) => set({ mapZoom }),
   requestFitToBounds: false as false | 'animate' | 'snap',
   triggerFitToBounds: (options?) => {
