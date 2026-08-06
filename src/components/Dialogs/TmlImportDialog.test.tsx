@@ -288,6 +288,47 @@ describe('TmlImportDialog failure handling (#411 C2)', () => {
     expect(setView).not.toHaveBeenCalled();
   });
 
+  it('raises the residue prompt on a TRANSPORT failure too, instead of stranding the empty project', async () => {
+    openEmptyImportProject();
+    executeTmlImport.mockRejectedValue(new Error('network gone'));
+    render(<TmlImportDialog tmlFile={withShots([shot()])} filePath="/tmp/cave.tml" />);
+
+    await clickImport();
+
+    // NOT routed to the store-level error dialog: openDialog is a single slot
+    // (App.tsx mounts this component only while activeDialog === 'tml-import'),
+    // so that would unmount this dialog with no stack underneath it, and
+    // importContext would already be null - isEmptyImportProject could never
+    // recognise the still-open empty project as residue again.
+    expect(await screen.findByTestId('tml-import-residue-dialog')).toBeInTheDocument();
+    expect(screen.getByTestId('tml-import-residue-error')).toHaveTextContent('network gone');
+    expect(openDialog).not.toHaveBeenCalledWith('error', expect.anything());
+    expect(closeDialog).not.toHaveBeenCalled();
+    // Preserved until the user actually resolves the residue (Keep or Discard).
+    expect(importContext()).toBe('new-project');
+
+    await userEvent.click(screen.getByTestId('tml-import-residue-discard'));
+
+    await waitFor(() => expect(closeProject).toHaveBeenCalled());
+    expect(importContext()).toBeNull();
+  });
+
+  it('falls back to the store-level error dialog for a TRANSPORT failure with no empty project to protect', async () => {
+    executeTmlImport.mockRejectedValue(new Error('network gone'));
+    render(<TmlImportDialog tmlFile={withShots([shot()])} filePath="/tmp/cave.tml" />);
+
+    await clickImport();
+
+    await waitFor(() =>
+      expect(openDialog).toHaveBeenCalledWith(
+        'error',
+        expect.objectContaining({ message: 'network gone' }),
+      ),
+    );
+    expect(screen.queryByTestId('tml-import-residue-dialog')).toBeNull();
+    expect(importContext()).toBeNull();
+  });
+
   it('disables Cancel while the import is in flight', async () => {
     executeTmlImport.mockReturnValue(new Promise(() => {})); // never settles
     render(<TmlImportDialog tmlFile={withShots([shot()])} filePath="/tmp/cave.tml" />);
@@ -513,6 +554,11 @@ describe('TmlImportDialog discard failures (#411 fix round)', () => {
     expect(deleteProject).not.toHaveBeenCalled();
     expect(closeProject).not.toHaveBeenCalled();
     expect(closeDialog).toHaveBeenCalled();
+    // This bail is a flow exit too: a stale 'new-project' would make the next
+    // import that sets no context of its own (GPX/Compass/Walls) inherit it and
+    // take saveAfterImport's full-save branch, committing unrelated pending
+    // edits (#411).
+    expect(importContext()).toBeNull();
   });
 
   it('bails when the open project is no longer the one the prompt was raised for', async () => {
@@ -534,6 +580,7 @@ describe('TmlImportDialog discard failures (#411 fix round)', () => {
     expect(deleteProject).not.toHaveBeenCalled();
     expect(closeProject).not.toHaveBeenCalled();
     expect(closeDialog).toHaveBeenCalled();
+    expect(importContext()).toBeNull();
   });
 });
 

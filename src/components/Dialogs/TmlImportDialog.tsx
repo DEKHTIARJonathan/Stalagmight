@@ -147,23 +147,36 @@ export default function TmlImportDialog({ tmlFile, filePath }: TmlImportDialogPr
     /**
      * Terminal failure. The shared router owns the wording and the exit rules
      * (docs/notifications.md); the one thing it cannot do is ask about the empty
-     * project this import created, so a BACKEND failure with such a project is
-     * reported by the residue prompt instead - only one dialog fits on screen
-     * (#411 C2).
+     * project this import created, so a failure - backend OR transport - with
+     * such a project is reported by the residue prompt instead - only one
+     * dialog fits on screen (#411 C2).
      *
-     * Two conditions send it back to the router anyway:
-     *  - a TRANSPORT failure. The call never landed, so the project is still a
-     *    valid retry target; the router's contract for this phase (no close, no
-     *    completion telemetry, error dialog only) keeps it that way, where a
-     *    keep/discard prompt would trade a retry for a decision nobody asked for.
-     *  - this component no longer being mounted. A drop of another importable
+     * `openDialog` is a single slot: App.tsx mounts this component only while
+     * `activeDialog === 'tml-import'`, so routing a TRANSPORT failure to the
+     * router's error dialog unmounts THIS component - there is no dialog stack
+     * underneath it to fall back to. Dismissing that error dialog leaves
+     * `activeDialog: null` with the empty project still open and `importContext`
+     * already cleared, so `isEmptyImportProject()` can never recognise it as
+     * residue again - the keep/discard prompt becomes unreachable for the rest
+     * of the session. So a transport failure gets the SAME local handling as a
+     * backend one whenever there's an empty import project to protect.
+     *
+     * The router (`surfaceImportFailure`) still handles the failure directly
+     * when either condition below is false:
+     *  - the project already holds sections - not this dialog's residue to ask
+     *    about.
+     *  - this component is no longer mounted. A drop of another importable
      *    file replaces the dialog slot mid-import, and `setResidue` on an
      *    unmounted component is a no-op - i.e. silence. The router is store-level
      *    and always lands.
      */
     const reportFailure = (failure: ImportFailure) => {
       setIsImporting(false);
-      if (failure.phase === 'command' && isMountedRef.current && isEmptyImportProject()) {
+      if (
+        (failure.phase === 'command' || failure.phase === 'transport') &&
+        isMountedRef.current &&
+        isEmptyImportProject()
+      ) {
         // The residue prompt IS this dialog's completion: stamp it here so a
         // failure reports the same way whichever surface takes it (the router
         // stamps `trackDialogComplete` too).
@@ -256,6 +269,11 @@ export default function TmlImportDialog({ tmlFile, filePath }: TmlImportDialogPr
       !isEmptyImportProject() ||
       (useProjectStore.getState().project?.created_at ?? null) !== residue.project.createdAt
     ) {
+      // The flow is over here too: leaving `importContext` set would have the
+      // next import that sets none (GPX/Compass/Walls) inherit 'new-project'
+      // and take `saveAfterImport`'s full-save branch, committing the user's
+      // unrelated pending edits.
+      setImportContext(null);
       closeDialog();
       return;
     }
