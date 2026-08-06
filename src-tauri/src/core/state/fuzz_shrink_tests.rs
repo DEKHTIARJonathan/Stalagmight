@@ -19,8 +19,11 @@
 //! Two kinds, because this module's failures come in two kinds.
 //!
 //! * **Classified.** A known open bug does not fail the run - it is counted, by
-//!   id, in `Outcome::hits` (see the module header's bug matrix). The signature
-//!   is that id, and a candidate reproduces when the id is in its hits.
+//!   id, in `Outcome::hits`. The signature is that id, and a candidate reproduces
+//!   when the id is in its hits. There are NO classified failures today: every
+//!   #413 finding is fixed and `fuzz_undo_tests.rs`'s `CLASSIFIERS` table is
+//!   empty, so this arm is here for the next open bug rather than for a current
+//!   one - and the gate below shrinks an INJECTED failure instead, see `Fault`.
 //! * **Unclassified.** Anything else PANICS, with the fuzzer's full payload. The
 //!   signature is `failure_signature` - the headline with every run of digits
 //!   collapsed to `#`, plus the first differing snapshot path, collapsed the same
@@ -88,10 +91,13 @@
 //! | `ITERATIONS` `PERSISTENCE` `JUMPS` `CLOSURES` `DIVERGENCE` `CLOSURE_SHAPES` `CROSSINGS` `HORIZON` `CONFIG` `COMBINED` | the plan, exactly as `fuzz_seed_survey` reads them |
 //! | `THREADS` | probes per round in parallel; results do not depend on it |
 //!
+//! `SHRINK_TARGET` takes a classified id, and none exists today - leave it off
+//! and the shrinker takes the panic the run produced, which is what a hunt for a
+//! NEW defect wants anyway:
+//!
 //! ```text
-//! STALAGMIGHT_RUST_FUZZ_SHRINK=1 STALAGMIGHT_RUST_FUZZ_DIVERGENCE=1 \
-//!   STALAGMIGHT_RUST_FUZZ_ITERATIONS=200 \
-//!   STALAGMIGHT_RUST_FUZZ_SHRINK_TARGET=finding-8-stale-id-deletes-the-wrong-shot \
+//! STALAGMIGHT_RUST_FUZZ_SHRINK=1 STALAGMIGHT_RUST_FUZZ_JUMPS=1 \
+//!   STALAGMIGHT_RUST_FUZZ_CLOSURES=1 STALAGMIGHT_RUST_FUZZ_ITERATIONS=200 \
 //!   TELEMETRY_ENDPOINT=http://localhost/dummy cargo test \
 //!   --manifest-path src-tauri/Cargo.toml --features telemetry \
 //!   --lib fuzz_shrink -- --ignored --nocapture
@@ -126,7 +132,7 @@ use std::path::PathBuf;
 
 use super::fuzz_undo_tests::{
     failure_signature, fuzz_threads, panic_message, recorder_arm, recorder_take, run_fuzz,
-    run_seed_jobs, run_trace, summarize, Outcome, Plan, Trace, TraceMove, GATE_ITERATIONS,
+    run_seed_jobs, run_trace, summarize, Fault, Outcome, Plan, Trace, TraceMove, GATE_ITERATIONS,
 };
 // CONFIG ISOLATION. Every test in this module opens with
 // `let _config = isolated_config();`, and none of them may skip it:
@@ -249,6 +255,10 @@ pub(super) fn record_run(seed: u32, plan: Plan) -> Recorded {
             plan,
             prelude,
             moves,
+            // A RECORDED run never carries one: the fault injection is the
+            // shrink gate's own, applied to a replay of an already-recorded
+            // trace. See `Fault`.
+            fault: None,
         },
         probe,
     }
@@ -436,22 +446,38 @@ pub(super) fn shrink(trace: &Trace, target: &Target, budget: usize, verbose: boo
 /// Record `(seed, plan)`, pick a target, and shrink - the whole flow as one
 /// call, for a hunt that wants a minimum rather than a report.
 ///
+/// `fault` is the shrinker's own test-only injection (see `Fault` in
+/// `fuzz_undo_tests.rs`) and is `None` for every real hunt. It cannot be read by
+/// `run_fuzz`, so the RECORDED run is unaffected by it and says nothing about the
+/// failure being shrunk; when one is armed the verdict therefore comes from
+/// replaying the whole trace, which is where the injection lives.
+///
 /// `None` when the run produced no failure at all, or when `target` names a
 /// failure the run does not reach.
 pub(super) fn shrink_seed(
     seed: u32,
     plan: Plan,
+    fault: Option<Fault>,
     target: Option<Target>,
     budget: usize,
     verbose: bool,
 ) -> Option<(Trace, Target, Shrunk)> {
     let recorded = record_run(seed, plan);
-    let target = target.or_else(|| target_of(borrow(&recorded.probe)))?;
-    if !reproduces(&target, borrow(&recorded.probe)) {
+    let trace = Trace {
+        fault,
+        ..recorded.trace
+    };
+    let verdict: Probe = if fault.is_some() {
+        probe(&trace, &trace.moves)
+    } else {
+        recorded.probe
+    };
+    let target = target.or_else(|| target_of(borrow(&verdict)))?;
+    if !reproduces(&target, borrow(&verdict)) {
         return None;
     }
-    let shrunk = shrink(&recorded.trace, &target, budget, verbose);
-    Some((recorded.trace, target, shrunk))
+    let shrunk = shrink(&trace, &target, budget, verbose);
+    Some((trace, target, shrunk))
 }
 
 // ===========================================================================
@@ -711,6 +737,7 @@ fn fuzz_shrink() {
             plan: trace.plan,
             prelude: trace.prelude,
             moves: shrunk.moves,
+            fault: trace.fault,
         },
     };
     write_trace(&out, &file);
@@ -912,25 +939,44 @@ fn ddmin_reaches_the_minimum_of_a_known_predicate() {
     );
 }
 
-/// The whole flow, over a KNOWN finding, at the smallest scale that reaches one:
-/// record, shrink, and check the minimum still reproduces.
+/// The whole flow, over an INJECTED failure: record, shrink, and check the
+/// minimum still reproduces - and that it is genuinely smaller.
 ///
-/// The target is whatever the run classifies rather than a named finding, on
-/// purpose. This is a test of the SHRINKER; pinning it to `finding-8` would make
-/// it a second, weaker copy of the bug matrix that goes red when the bug is
-/// FIXED, which is `open_undo_bugs_tests.rs`'s job.
+/// It used to shrink a KNOWN finding, targeting "whatever this run classifies"
+/// rather than a named id, so that it stayed a test of the SHRINKER rather than a
+/// second, weaker copy of the bug matrix. Every #413 finding is fixed now and
+/// `CLASSIFIERS` is empty, so there is nothing left for a run to classify and
+/// that target could never be chosen again. Waiting for the next real bug would
+/// leave the shrinker unguarded until then.
+///
+/// So the failure is INJECTED into the REPLAY (see `Fault` in
+/// `fuzz_undo_tests.rs`): the trace fails once the project holds
+/// [`FAULT_AT_SECTIONS`] sections, which is a property of the moves a candidate
+/// kept rather than of the app. Everything the gate covers is unchanged - the
+/// recorder, `Refs`' reference remapping, the panic-signature match, the ddmin
+/// schedule and the verification replay - and the app is not required to be
+/// broken for any of it.
+///
+/// The starting project has SEVEN sections (`build_project`), so the threshold is
+/// above it by construction: the empty trace cannot reproduce, and a minimum has
+/// to keep the `createSection` moves that get from seven to twelve. That is what
+/// the assertions below pin - a non-empty minimum that is strictly smaller than
+/// the trace it came from.
+const FAULT_AT_SECTIONS: usize = 12;
+
 #[test]
-fn the_shrinker_minimizes_a_classified_failure() {
+fn the_shrinker_minimizes_an_injected_failure() {
     let _config = isolated_config();
-    // The module header's finding-8 row: divergence mode, seed 1, 12 moves.
+    // The in-memory gate's own seed and length, so the moves being shrunk are
+    // ordinary ones rather than a constructed shape.
     let plan = Plan {
-        iterations: 12,
+        iterations: GATE_ITERATIONS,
         persistence: false,
         crossings: 1,
         prologue: None,
         jumps: false,
         closures: false,
-        divergence: true,
+        divergence: false,
         closure_shapes: false,
         horizon: false,
         config_fuzz: false,
@@ -938,24 +984,44 @@ fn the_shrinker_minimizes_a_classified_failure() {
     };
     // Through the PROGRAMMATIC entry point, which is what a future observation
     // hunt would call: record, choose the target from what the run produced,
-    // shrink.
-    let Some((trace, target, shrunk)) = shrink_seed(1, plan, None, 400, false) else {
-        panic!("divergence seed 1 reached no classified failure, so the bug matrix has moved");
+    // shrink. The only difference from a real hunt is the armed fault.
+    let fault = Some(Fault {
+        at_sections: FAULT_AT_SECTIONS,
+    });
+    let Some((trace, target, shrunk)) = shrink_seed(1, plan, fault, None, 400, false) else {
+        panic!(
+            "the injected fault did not fire over the whole trace, so seed 1 never reaches \
+             {FAULT_AT_SECTIONS} sections - re-choose FAULT_AT_SECTIONS"
+        );
     };
     assert!(
-        shrunk.moves.len() <= shrunk.original,
-        "the shrinker GREW the trace: {} -> {}",
+        matches!(target, Target::Panic(_)),
+        "the injected fault must surface as a panic target, not as {}",
+        target.describe()
+    );
+    assert!(
+        shrunk.moves.len() < shrunk.original,
+        "the shrinker did not shrink: {} -> {} move(s)",
         shrunk.original,
         shrunk.moves.len()
     );
-    // Through `probe`, not a bare `run_trace`: a minimized trace that PANICS
-    // unclassified must report "stopped reproducing", not abort the gate -
-    // `reproduces` can only speak if the panic is caught and carried as the
-    // probe's Err arm.
-    let verified = probe(&trace, &shrunk.moves);
     assert!(
-        reproduces(&target, borrow(&verified)),
+        !shrunk.moves.is_empty(),
+        "the empty trace cannot reach {FAULT_AT_SECTIONS} sections from the seven the starting \
+         project has, so a minimum of zero moves means the predicate stopped depending on the \
+         moves"
+    );
+    assert!(
+        reproduces(&target, borrow(&probe(&trace, &shrunk.moves))),
         "the minimized trace stopped reproducing {}",
+        target.describe()
+    );
+    // ... and one move fewer does NOT, which is what makes it a MINIMUM rather
+    // than merely a smaller trace that still fails.
+    let one_shorter = &shrunk.moves[..shrunk.moves.len() - 1];
+    assert!(
+        !reproduces(&target, borrow(&probe(&trace, one_shorter))),
+        "dropping the last move of the minimum still reproduces {} - ddmin stopped early",
         target.describe()
     );
     println!(

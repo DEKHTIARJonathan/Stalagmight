@@ -5,7 +5,7 @@ use tauri::State;
 use ts_rs::TS;
 
 use crate::core::{AppState, Command, CommandResult, UndoData, UndoEntry};
-use crate::models::{SectionId, ShotKind};
+use crate::models::{SectionId, ShotKind, ShotUpdates};
 
 /// DTO for undo history item sent to frontend
 #[derive(Debug, Clone, Serialize, TS)]
@@ -190,6 +190,137 @@ fn format_station_key_with_name(
     } else {
         key.to_string()
     }
+}
+
+/// The slice of a persisted project snapshot the preview arms that read one
+/// actually use - and nothing else.
+///
+/// Both of those arms used to `serde_json::from_str::<Project>(before)`: a WHOLE
+/// project built (every shot's twenty-odd fields, the merges, the closures, the
+/// offset/comment maps, the caches) to read one section's name or one datum's
+/// coordinates. That runs once per entry, and the entries are walked inside
+/// `AppState::get_undo_stack`/`get_redo_stack` while `undo_stack` is LOCKED - so
+/// a history of snapshot-pair entries turned every dropdown refresh into N full
+/// project deserializations under the mutex.
+///
+/// The fields below are exactly what those arms read. `zero_datums` and the
+/// per-section `id`/`name` are read directly; the shots are here only as their
+/// UUIDs, because resolving a datum's stored [`crate::models::StationKey`]
+/// needs them (see [`SnapshotPreview::resolve_key`]). Everything else serde
+/// skips without materializing.
+#[derive(serde::Deserialize)]
+struct SnapshotPreview {
+    #[serde(default)]
+    sections: Vec<SnapshotSection>,
+    #[serde(default)]
+    zero_datums: Vec<crate::models::ZeroDatum>,
+}
+
+/// One section of a [`SnapshotPreview`]: its identity, its name, and the shot
+/// UUIDs a key resolution walks. Deliberately NOT `Section` - that pulls the
+/// full shot rows in with it, which is the cost this shim exists to avoid.
+#[derive(serde::Deserialize)]
+struct SnapshotSection {
+    id: SectionId,
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    shots: Vec<SnapshotShot>,
+}
+
+/// A shot, as a key resolution sees it: an identity and a position in the list.
+#[derive(serde::Deserialize)]
+struct SnapshotShot {
+    /// `Shot::uuid` is `skip_serializing_if = "Option::is_none"`, so the field
+    /// is genuinely absent for a pre-v6 shot - hence the default.
+    #[serde(default)]
+    uuid: Option<String>,
+}
+
+impl SnapshotPreview {
+    /// Parse a snapshot half, or `None` if it is not one this build can read.
+    /// A preview is decoration: an unreadable snapshot loses the extra rows,
+    /// never the entry.
+    fn parse(snapshot_json: &str) -> Option<Self> {
+        serde_json::from_str(snapshot_json).ok()
+    }
+
+    fn section(&self, id: SectionId) -> Option<&SnapshotSection> {
+        self.sections.iter().find(|s| s.id == id)
+    }
+
+    /// `Project::resolve_key`, asked of the SNAPSHOT.
+    ///
+    /// It has to be asked of the snapshot: the datum being previewed is the one
+    /// the entry REMOVED, so the live project does not hold it, and the shot
+    /// list its anchor names is the one the snapshot recorded. A deliberate
+    /// mirror of the three anchor arms rather than a call into `Project`, which
+    /// would mean building the whole project first. The cost of the two drifting
+    /// is bounded to this preview: an unresolved key loses the coordinate rows
+    /// from a dropdown entry, and can reach nothing else.
+    fn resolve_key(&self, key: &crate::models::StationKey) -> Option<crate::models::StationRef> {
+        let section = self.section(key.section_id)?;
+        let index = match &key.anchor {
+            crate::models::StationAnchor::SectionStart => 0,
+            crate::models::StationAnchor::AfterShot(uuid) => {
+                let pos = section
+                    .shots
+                    .iter()
+                    .position(|s| s.uuid.as_deref() == Some(uuid.as_str()))?;
+                u32::try_from(pos).ok()?.checked_add(1)?
+            }
+            crate::models::StationAnchor::Index(i) => {
+                if *i as usize > section.shots.len() {
+                    return None;
+                }
+                *i
+            }
+        };
+        Some(crate::models::StationRef::new(key.section_id, index))
+    }
+
+    /// The GPS of the datum standing on `station_ref`, if the snapshot holds
+    /// one. `Project::key_is_ref`'s question, one struct over.
+    fn datum_gps(
+        &self,
+        station_ref: crate::models::StationRef,
+    ) -> Option<crate::models::GpsCoordinates> {
+        self.zero_datums
+            .iter()
+            .find(|zd| self.resolve_key(&zd.station_ref) == Some(station_ref))
+            .map(|zd| zd.gps)
+    }
+}
+
+/// The preview rows for "remove zero datum": the station, plus the coordinates
+/// it is losing when they are known.
+///
+/// Shared by the two arms that render it - the live `ProjectSnapshotPair`
+/// capture reads the datum out of its `before` half, a legacy persisted
+/// `ZeroDatumInfo` carries it as a field - so the same entry renders the same
+/// way whichever shape it was recorded in.
+fn zero_datum_removal_rows(
+    station_ref: crate::models::StationRef,
+    previous_gps: Option<&crate::models::GpsCoordinates>,
+) -> Vec<FieldChange> {
+    let mut changes = vec![FieldChange {
+        field: "Station".to_string(),
+        old_value: String::new(),
+        new_value: station_ref.to_string(),
+    }];
+    if let Some(gps) = previous_gps {
+        changes.push(FieldChange {
+            field: "Latitude".to_string(),
+            old_value: format!("{:.6}", gps.latitude),
+            new_value: String::new(),
+        });
+        changes.push(FieldChange {
+            field: "Longitude".to_string(),
+            old_value: format!("{:.6}", gps.longitude),
+            new_value: String::new(),
+        });
+    }
+    changes
 }
 
 /// Truncate `s` to at most `max_chars` characters, appending an ellipsis only
@@ -537,8 +668,8 @@ fn derive_preview_data(
 
         // DeleteSection - extract section info from ProjectSnapshotPair before snapshot
         (Command::DeleteSection { section_id }, UndoData::ProjectSnapshotPair { before, .. }) => {
-            if let Ok(project) = serde_json::from_str::<crate::models::Project>(before) {
-                project.get_section(*section_id).map(|section| PreviewData {
+            if let Some(snapshot) = SnapshotPreview::parse(before) {
+                snapshot.section(*section_id).map(|section| PreviewData {
                     changes: vec![
                         FieldChange {
                             field: "Name".to_string(),
@@ -597,10 +728,20 @@ fn derive_preview_data(
             additional_changes: 0,
         }),
 
-        // SetShotKind - the inverse command carries the real previous kind
-        // (#27 q12), so show it rather than guessing as the old boolean did.
+        // SetShotKind - the undo data carries the real previous kind (#27 q12),
+        // so show it rather than guessing as the old boolean did. Two shapes,
+        // one meaning: `PreviousValues` is what the capture records now (it can
+        // carry the target's uuid, which the newtype `InverseCommand` cannot -
+        // #413), and `InverseCommand` is what a persisted entry from before that
+        // change still holds.
         (Command::SetShotKind { kind, .. }, undo_data) => {
             let old_value = match undo_data {
+                UndoData::PreviousValues { values_json, .. } => {
+                    serde_json::from_str::<ShotUpdates>(values_json)
+                        .ok()
+                        .and_then(|prev| prev.kind)
+                        .map_or_else(String::new, |prev| prev.label().to_string())
+                }
                 UndoData::InverseCommand(Command::SetShotKind { kind: prev, .. }) => {
                     prev.label().to_string()
                 }
@@ -762,7 +903,7 @@ fn derive_preview_data(
         }),
 
         // RemoveLoopClosure - show closure id and station pair when available
-        (Command::RemoveLoopClosure { closure_id }, UndoData::ClosureInfo { closure }) => {
+        (Command::RemoveLoopClosure { closure_id }, UndoData::ClosureInfo { closure, .. }) => {
             Some(PreviewData {
                 changes: vec![
                     FieldChange {
@@ -784,33 +925,33 @@ fn derive_preview_data(
             })
         }
 
-        // RemoveZeroDatum - show station and previous GPS if available
+        // RemoveZeroDatum - the live capture is a `ProjectSnapshotPair` (it has to
+        // be: the removal can convert a closure, which no `ZeroDatumInfo` can put
+        // back), so read the datum being removed out of the `before` half. Same
+        // rows the `ZeroDatumInfo` arm below renders, so the dropdown reads
+        // identically for a fresh entry and a persisted legacy one.
         (
             Command::RemoveZeroDatum { station_ref },
-            UndoData::ZeroDatumInfo { previous_gps, .. },
+            UndoData::ProjectSnapshotPair { before, .. },
         ) => {
-            let mut changes = vec![FieldChange {
-                field: "Station".to_string(),
-                old_value: String::new(),
-                new_value: station_ref.to_string(),
-            }];
-            if let Some(gps) = previous_gps {
-                changes.push(FieldChange {
-                    field: "Latitude".to_string(),
-                    old_value: format!("{:.6}", gps.latitude),
-                    new_value: String::new(),
-                });
-                changes.push(FieldChange {
-                    field: "Longitude".to_string(),
-                    old_value: format!("{:.6}", gps.longitude),
-                    new_value: String::new(),
-                });
-            }
+            let previous_gps = SnapshotPreview::parse(before)
+                .and_then(|snapshot| snapshot.datum_gps(*station_ref));
             Some(PreviewData {
-                changes,
+                changes: zero_datum_removal_rows(*station_ref, previous_gps.as_ref()),
                 additional_changes: 0,
             })
         }
+
+        // RemoveZeroDatum - show station and previous GPS if available. LEGACY
+        // entries only, since the capture above; kept because a persisted stack
+        // written before it still carries `ZeroDatumInfo`.
+        (
+            Command::RemoveZeroDatum { station_ref },
+            UndoData::ZeroDatumInfo { previous_gps, .. },
+        ) => Some(PreviewData {
+            changes: zero_datum_removal_rows(*station_ref, previous_gps.as_ref()),
+            additional_changes: 0,
+        }),
 
         // RemoveZeroDatum fallback
         (Command::RemoveZeroDatum { station_ref }, _) => Some(PreviewData {
@@ -1052,7 +1193,9 @@ mod tests {
             undo_data: UndoData::PreviousValues {
                 section_id: 0,
                 shot_id: Some(0),
+                shot_uuid: None,
                 values_json: r#"{"length": 10.0, "azimuth_in": 45.0}"#.to_string(),
+                previous_offsets: std::collections::HashMap::new(),
             },
             timestamp: None,
         };
@@ -1129,6 +1272,7 @@ mod tests {
             undo_data: UndoData::ZeroDatumInfo {
                 station_ref: StationRef::new(0, 0),
                 previous_gps: None,
+                position: None,
                 previous_offsets: HashMap::new(),
             },
             timestamp: None,
@@ -1258,6 +1402,7 @@ mod tests {
             undo_data: UndoData::ZeroDatumInfo {
                 station_ref: StationRef::new(0, 0),
                 previous_gps: Some(GpsCoordinates::new(45.0, -73.0, 0.0).unwrap()),
+                position: Some(0),
                 previous_offsets: HashMap::new(),
             },
             timestamp: None,
@@ -1269,6 +1414,121 @@ mod tests {
         assert_eq!(preview.changes[1].field, "Latitude");
         assert_eq!(preview.changes[1].old_value, "45.000000");
         assert_eq!(preview.changes[2].field, "Longitude");
+    }
+
+    /// A project with one two-shot section and a zero datum on station 1 - i.e.
+    /// a datum whose stored key is an `AfterShot(uuid)`, the shape every datum
+    /// past station 0 has, so the resolution the shim does is actually exercised.
+    fn project_with_a_datum_on_station_one() -> crate::models::Project {
+        let mut project = crate::models::Project::new("Preview".to_string(), None);
+        project.add_section(SectionData {
+            name: Some("Trunk".to_string()),
+            color: "#123456".to_string(),
+            shots: vec![ShotData::default(), ShotData::default()],
+            ..Default::default()
+        });
+        let section_id = project.sections[0].id;
+        // Station 1 anchors to the uuid of shot 0, which `add_section` minted.
+        let key = project.key_for_ref(StationRef::new(section_id, 1)).unwrap();
+        project.zero_datums.push(crate::models::ZeroDatum {
+            station_ref: key,
+            gps: GpsCoordinates::new(45.0, -73.0, 0.0).unwrap(),
+        });
+        project
+    }
+
+    /// The live `RemoveZeroDatum` capture is a `ProjectSnapshotPair`, so the
+    /// coordinates the dropdown shows come out of its `before` half - and they
+    /// have to survive the shim that reads it, including the key resolution
+    /// (station 1 is an `AfterShot(uuid)`, not a `SectionStart`).
+    #[test]
+    fn test_derive_preview_data_remove_zero_datum_reads_the_snapshot_pair() {
+        let project = project_with_a_datum_on_station_one();
+        let section_id = project.sections[0].id;
+        let entry = UndoEntry {
+            command_bytes: None,
+            command: Command::RemoveZeroDatum {
+                station_ref: StationRef::new(section_id, 1),
+            },
+            undo_data: UndoData::ProjectSnapshotPair {
+                before: serde_json::to_string(&project).unwrap(),
+                after: serde_json::to_string(&crate::models::Project::new(
+                    "Preview".to_string(),
+                    None,
+                ))
+                .unwrap(),
+            },
+            timestamp: None,
+        };
+
+        let preview = derive_preview_data(&entry, &empty_names()).unwrap();
+        assert_eq!(
+            preview
+                .changes
+                .iter()
+                .map(|c| c.field.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Station", "Latitude", "Longitude"],
+            "the datum's coordinates must be read out of the snapshot's `before` half"
+        );
+        assert_eq!(preview.changes[1].old_value, "45.000000");
+        assert_eq!(preview.changes[2].old_value, "-73.000000");
+    }
+
+    /// A `before` half this build cannot parse degrades to the station row
+    /// alone. A preview is decoration: it may lose the coordinates, never the
+    /// entry.
+    #[test]
+    fn test_derive_preview_data_remove_zero_datum_degrades_on_an_unreadable_snapshot() {
+        let entry = UndoEntry {
+            command_bytes: None,
+            command: Command::RemoveZeroDatum {
+                station_ref: StationRef::new(0, 1),
+            },
+            undo_data: UndoData::ProjectSnapshotPair {
+                before: "{not a project".to_string(),
+                after: String::new(),
+            },
+            timestamp: None,
+        };
+
+        let preview = derive_preview_data(&entry, &empty_names()).unwrap();
+        assert_eq!(
+            preview
+                .changes
+                .iter()
+                .map(|c| c.field.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Station"],
+            "an unparseable snapshot must lose the coordinate rows, not error"
+        );
+    }
+
+    /// The sibling arm on the same shim: `DeleteSection` reads the deleted
+    /// section's name and shot count out of the same `before` half.
+    #[test]
+    fn test_derive_preview_data_delete_section_reads_the_snapshot_pair() {
+        let project = project_with_a_datum_on_station_one();
+        let section_id = project.sections[0].id;
+        let entry = UndoEntry {
+            command_bytes: None,
+            command: Command::DeleteSection { section_id },
+            undo_data: UndoData::ProjectSnapshotPair {
+                before: serde_json::to_string(&project).unwrap(),
+                after: serde_json::to_string(&crate::models::Project::new(
+                    "Preview".to_string(),
+                    None,
+                ))
+                .unwrap(),
+            },
+            timestamp: None,
+        };
+
+        let preview = derive_preview_data(&entry, &empty_names()).unwrap();
+        assert_eq!(preview.changes[0].field, "Name");
+        assert_eq!(preview.changes[0].old_value, "Trunk");
+        assert_eq!(preview.changes[1].field, "Shots");
+        assert_eq!(preview.changes[1].old_value, "2");
     }
 
     #[test]
@@ -1346,7 +1606,9 @@ mod tests {
             undo_data: UndoData::PreviousValues {
                 section_id: 1,
                 shot_id: None,
+                shot_uuid: None,
                 values_json: r#"{"name":"Old Name"}"#.to_string(),
+                previous_offsets: std::collections::HashMap::new(),
             },
             timestamp: None,
         };
@@ -1377,8 +1639,10 @@ mod tests {
             undo_data: UndoData::PreviousValues {
                 section_id: 1,
                 shot_id: None,
+                shot_uuid: None,
                 values_json: r##"{"name":"Original","color":"#ff0000","direction":"in"}"##
                     .to_string(),
+                previous_offsets: std::collections::HashMap::new(),
             },
             timestamp: None,
         };
@@ -1420,7 +1684,9 @@ mod tests {
             undo_data: UndoData::PreviousValues {
                 section_id: 1,
                 shot_id: None,
+                shot_uuid: None,
                 values_json: r##"{"name":"Old","surveyor":"Bob","date":"2025-01-01","color":"#ff0000","direction":"in","quality":1.0}"##.to_string(),
+                previous_offsets: std::collections::HashMap::new(),
             },
             timestamp: None,
         };

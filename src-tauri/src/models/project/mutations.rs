@@ -911,6 +911,36 @@ impl Project {
         self.zero_datums.first()
     }
 
+    /// The world position of the anchor [`Self::realign_after_shot_edit`] will
+    /// hold, measured BEFORE the edit is applied.
+    ///
+    /// A shot edit must keep the group's datum station where it already is; it
+    /// may not re-georeference the survey. Those are the same thing for a
+    /// project whose datum sits where its GPS implies, and they part company for
+    /// one that does not - which the app can reach without any command asking
+    /// for it, because the georeference origin is `zero_datums[0]` BY POSITION.
+    /// Removing the first datum ([`Self::remove_zero_datum`]) promotes the next
+    /// one and moves nothing, so every group placed relative to the old origin
+    /// is left contradicting its own datum. Re-deriving the ABSOLUTE target on
+    /// that contradiction translates the whole rigid group by the distance
+    /// between the two GPS anchors, inside an `update_shot` whose
+    /// `UndoData::PreviousValues` records the shot's fields and no offsets - so
+    /// the translation cannot be undone (#413 finding 26).
+    ///
+    /// `None` when the group holds no resolvable datum - there is nothing
+    /// absolute to hold, and the realign anchors on the edited section.
+    pub(crate) fn datum_anchor_position(&self, section_id: SectionId) -> Option<(f64, f64)> {
+        let merge_group = self.get_merged_section_ids(section_id);
+        let datum = self.zero_datums.iter().find(|d| {
+            merge_group.contains(&d.station_ref.section_id)
+                && self.resolve_key(&d.station_ref).is_some()
+        })?;
+        let coords = self
+            .resolve_key(&datum.station_ref)
+            .and_then(|sr| self.compute_station_raw_coords(sr))?;
+        Some((coords.x, coords.y))
+    }
+
     /// After a geometry-changing shot edit in `edited_section_id`, realign the
     /// merge group's section offsets so that anchored stations (zero datums,
     /// merge points to pinned sections) remain at their correct positions.
@@ -919,19 +949,47 @@ impl Project {
     /// (including merge points and closure endpoints) remain stationary.
     ///
     /// Algorithm:
-    /// 1. Find the zero datum anchoring this merge group (if any)
-    /// 2. Reanchor the datum section (adjust offset to keep datum at GPS target)
-    /// 3. BFS through merges: adjust each partner section's offset so merge
-    ///    points stay aligned
+    /// 1. Pick the group's anchor: its zero datum if it has one, else the edited
+    ///    section itself
+    /// 2. Reanchor the datum section (adjust offset to keep the datum where
+    ///    `hold_anchor_at` says the edit found it, or - with no held position -
+    ///    at its GPS target). Skipped for an unanchored group: there is nothing
+    ///    absolute to hold, and the edited section keeps the offset it has
+    /// 3. BFS through merges from the anchor: adjust each partner section's
+    ///    offset so merge points stay aligned
+    ///
+    /// A group with NO zero datum still has RELATIVE constraints - every merge in
+    /// it must stay co-located - so it is realigned against one of its own
+    /// sections rather than skipped. The edited section is that anchor: it is the
+    /// one whose geometry the user just changed, so holding it still and moving
+    /// its partners is the least surprising reading of the edit, and it makes the
+    /// realign idempotent (a second call finds everything already aligned).
+    /// Skipping it instead left the merge drifted by exactly the edit, under the
+    /// app's own 5 cm reporting threshold and OVER the 1 cm its
+    /// `debug_assert_merge_alignment` calls a violation - so the next command
+    /// that asserted, in any section, panicked on a merge this edit broke
+    /// (#413 finding 20).
     ///
     /// Idempotent: calling multiple times produces the same result.
-    pub(crate) fn realign_after_shot_edit(&mut self, edited_section_id: SectionId) {
+    ///
+    /// `hold_anchor_at` is the datum station's world position measured BEFORE
+    /// the edit ([`Self::datum_anchor_position`]). Passing it holds the anchor
+    /// exactly where the edit found it; `None` falls back to the datum's
+    /// GPS-implied target, which is the same position for a project whose frame
+    /// is self-consistent and a re-georeference for one whose is not (#413
+    /// finding 26).
+    pub(crate) fn realign_after_shot_edit(
+        &mut self,
+        edited_section_id: SectionId,
+        hold_anchor_at: Option<(f64, f64)>,
+    ) {
         // Find the merge group containing the edited section
         let merge_group = self.get_merged_section_ids(edited_section_id);
 
         // Find the zero datum for this merge group (if any). A dangling datum
-        // (anchor key no longer resolves) is not a real anchor - skip it so we
-        // don't run a realign pass on an unanchored group (#174).
+        // (anchor key no longer resolves) is not a real anchor - skip it so the
+        // realign does not pin the group to a phantom anchor (#174); the group is
+        // then treated as unanchored and realigned against the edited section.
         let datum = self
             .zero_datums
             .iter()
@@ -941,47 +999,54 @@ impl Project {
             })
             .cloned();
 
-        let datum = match datum {
-            Some(d) => d,
-            None => return, // No anchor in this group, nothing to realign
-        };
+        // Step 1: reanchor the datum section's offset to keep the datum at its
+        // target. Nothing to do for an unanchored group - it has no absolute
+        // position to restore, only the relative merge constraints Step 2 solves.
+        let anchor_section_id = match &datum {
+            Some(datum) => {
+                // Determine the datum's target position
+                let is_first = self
+                    .zero_datums
+                    .first()
+                    .map(|d| d.station_ref == datum.station_ref)
+                    .unwrap_or(false);
 
-        // Determine the datum's target position
-        let is_first = self
-            .zero_datums
-            .first()
-            .map(|d| d.station_ref == datum.station_ref)
-            .unwrap_or(false);
+                let (target_x, target_y) = if let Some(held) = hold_anchor_at {
+                    held
+                } else if is_first {
+                    (0.0, 0.0)
+                } else if let Some(first) = self.zero_datums.first() {
+                    gps_to_local(&datum.gps, &first.gps)
+                } else {
+                    return;
+                };
 
-        let (target_x, target_y) = if is_first {
-            (0.0, 0.0)
-        } else if let Some(first) = self.zero_datums.first() {
-            gps_to_local(&datum.gps, &first.gps)
-        } else {
-            return;
-        };
-
-        // Step 1: Reanchor the datum section's offset to keep datum at target
-        let datum_section_id = datum.station_ref.section_id;
-        if let Some(current) = self
-            .resolve_key(&datum.station_ref)
-            .and_then(|sr| self.compute_station_raw_coords(sr))
-        {
-            let delta_x = target_x - current.x;
-            let delta_y = target_y - current.y;
-            if delta_x.abs() > 1e-12 || delta_y.abs() > 1e-12 {
-                self.adjust_section_offset(datum_section_id, delta_x, delta_y);
+                let datum_section_id = datum.station_ref.section_id;
+                if let Some(current) = self
+                    .resolve_key(&datum.station_ref)
+                    .and_then(|sr| self.compute_station_raw_coords(sr))
+                {
+                    let delta_x = target_x - current.x;
+                    let delta_y = target_y - current.y;
+                    // Dust is not a displacement - the shared bound, see
+                    // `Project::OFFSET_DUST_M` and its twin in `cascade_bfs`.
+                    if delta_x.abs() > Self::OFFSET_DUST_M || delta_y.abs() > Self::OFFSET_DUST_M {
+                        self.adjust_section_offset(datum_section_id, delta_x, delta_y);
+                    }
+                }
+                datum_section_id
             }
-        }
+            None => edited_section_id,
+        };
 
-        // Step 2: BFS through merges from the datum section, adjusting each
+        // Step 2: BFS through merges from the anchor section, adjusting each
         // partner section's offset so its merge station matches the already-
         // aligned station on the other side.
         let merges = self.station_merges.clone();
         let mut visited = HashSet::new();
-        visited.insert(datum_section_id);
+        visited.insert(anchor_section_id);
         let mut queue = VecDeque::new();
-        queue.push_back(datum_section_id);
+        queue.push_back(anchor_section_id);
 
         while let Some(current_section) = queue.pop_front() {
             for merge in &merges {
@@ -1010,7 +1075,8 @@ impl Project {
                 ) {
                     let delta_x = this_pos.x - partner_pos.x;
                     let delta_y = this_pos.y - partner_pos.y;
-                    if delta_x.abs() > 1e-12 || delta_y.abs() > 1e-12 {
+                    // Same shared bound as the gate above and `cascade_bfs`.
+                    if delta_x.abs() > Self::OFFSET_DUST_M || delta_y.abs() > Self::OFFSET_DUST_M {
                         self.adjust_section_offset(partner_section, delta_x, delta_y);
                     }
                 }

@@ -1,12 +1,28 @@
 /**
  * NODE-SIDE half of the undo/redo fuzzer's oracle: the diff reporter and the
- * known-asymmetry classifier.
+ * attribution classifier.
  *
  * The canonical snapshot itself is taken IN THE WEBVIEW - see
  * `fuzzOracleCore.ts`, which owns the serializer and documents what it
  * normalizes. Only the rare, slow paths live here: when two canonical strings
  * disagree, Node fetches both and works out whether the difference is real,
- * floating-point dust, or one of the open bugs listed below.
+ * floating-point dust, or one of the two DOCUMENTED, INTENDED families a save
+ * or a reload is allowed to produce (`SAVE_HEALING_MUTATIONS`,
+ * `RELOAD_RESOLVED_GEOMETRY`). Both of those are narrowed by SHAPE rather than
+ * by magnitude - `isNumericMove` rejects anything that is not a number moving
+ * to another number, and how FAR it moved is reported (`maxNumericDelta`)
+ * instead of bounded.
+ *
+ * ## No known-bug classifiers live here any more
+ *
+ * This file used to carry `KNOWN_UNDO_ASYMMETRIES` (issue #413 findings 1 and
+ * 2), `LOOP_CLOSURE_REORDER` (finding 4), `PRE_SAVE_SNAPSHOT_HEAL_REVERT`
+ * (finding 11) and `isShotIdentitySwap` (finding 8's tolerance gate). Every one
+ * of those findings is fixed in the Rust tier, so each classifier was DELETED
+ * per the delete-when-fixed contract the fix waves follow: a classifier that
+ * outlives its bug is a tolerance nobody re-examines. What remains is
+ * attribution for behaviour the app is designed to have, and it is narrow by
+ * path AND by direction.
  *
  * ## Why there is a tolerance at all
  *
@@ -28,82 +44,32 @@
  */
 
 /**
- * An undo/redo asymmetry that is a KNOWN OPEN APP BUG rather than expected
- * behaviour. These are NOT normalized away - a snapshot mismatch on one of
- * these paths still fails the fuzzer. The classification exists so the failure
- * message can name the bug instead of reading as a fresh mystery, and so a
- * developer working on something else can opt into tolerating it (see the
- * scenario's `STALAGMIGHT_FUZZ_ALLOW_KNOWN_BUGS` escape hatch).
+ * A named, path-and-direction-narrow rule for attributing a snapshot
+ * difference to something the app is DOCUMENTED to do without an undo entry -
+ * today only the save-time heals and the reload's offset re-solve.
+ *
+ * The name is historical: these used to double as known-open-bug classifiers,
+ * and none of those are left (see the module header). A rule here never makes a
+ * comparison green on its own - the scenarios apply them only to comparisons
+ * that CROSS a save/reload epoch, and re-baseline rather than ignore.
  */
 export interface KnownAsymmetry {
   id: string;
   /** Matched against a diff path such as `project.sections[3].shots[1].uuid`. */
   pathPattern: RegExp;
   /**
-   * Optional extra narrowing on the VALUES. A path pattern alone cannot tell
-   * "an all-zero offset entry appeared" from "an offset entry with real
-   * geometry appeared", and only the first is the known bug.
+   * Optional extra narrowing on the VALUES, and the reason a rule here can be
+   * trusted to subtract only what it names. A path pattern alone cannot tell
+   * "the save filled in an anchor that was null" from "an anchor the app had
+   * was LOST", nor "a reload re-solved an offset" from "an offset entry
+   * appeared or vanished" - and in each pair only the first is the documented,
+   * intended behaviour. `isNumericMove` and the per-rule `accepts` below are
+   * what draw that line; a difference on an attributable path that fails them
+   * is not attributed, and still fails the run.
    */
   accepts?(diff: SnapshotDiff): boolean;
   description: string;
 }
-
-/** True for `<absent>`, or for a coordinate pair whose every member is ~0. */
-function isAbsentOrZeroPair(text: string): boolean {
-  if (text === ABSENT) return true;
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(text);
-  } catch {
-    return false;
-  }
-  return (
-    Array.isArray(parsed) &&
-    parsed.length > 0 &&
-    parsed.every((value) => typeof value === 'number' && Math.abs(value) <= DEFAULT_TOLERANCE.absolute)
-  );
-}
-
-export const KNOWN_UNDO_ASYMMETRIES: readonly KnownAsymmetry[] = [
-  {
-    id: 'create-section-redo-remints-shot-uuids',
-    pathPattern: /^project\.sections\[\d+\]\.shots\[\d+\]\.uuid$/,
-    description:
-      'Redo of CreateSection re-mints every shot uuid. `UndoData::CreatedSectionSnapshot` ' +
-      'stores a `SectionData` (which has no uuid field), so redo goes ' +
-      'restore_section -> Section::new_with_id -> Shot::new -> Uuid::new_v4(). The sibling ' +
-      'CreateShot path was explicitly fixed for exactly this reason ' +
-      '(`UndoData::CreatedShotSnapshot { uuid }`, core/state/undo.rs) because a fresh uuid ' +
-      'dangles every `StationKey::AfterShot` anchor and the Ariane export identity.',
-  },
-  {
-    id: 'create-section-redo-drops-gauge-anchors',
-    pathPattern: /^project\.sections\[\d+\]\.(gauge_(shot|neighbour)_uuid|reverse_parity)$/,
-    accepts: (diff) => diff.actual === 'null' || diff.actual === 'false',
-    description:
-      'The SAME root cause as create-section-redo-remints-shot-uuids, in a second field. ' +
-      '`restore_section` rebuilds the section through `Section::new_with_id` -> `Section::new`, ' +
-      'which hardcodes `reverse_parity: false, gauge_shot_uuid: None, gauge_neighbour_uuid: None` ' +
-      '(models/section.rs:301-303), and `SectionData` carries none of them - so a redo of ' +
-      'CreateSection silently drops the least-squares gauge pair a save had captured. Only ' +
-      'observable once a run SAVES (capture_missing_gauge_anchors is a save-time heal), which is ' +
-      'why the fuzzer could not see this half until it crossed the persistence boundary. ' +
-      'Value-narrowed to value -> null/false: the anchors being LOST, not changed.',
-  },
-  {
-    id: 'undo-leaks-orphan-zero-section-offset',
-    pathPattern: /^project\.section_offsets\.\d+$/,
-    accepts: (diff) => isAbsentOrZeroPair(diff.expected) && isAbsentOrZeroPair(diff.actual),
-    description:
-      'Undoing a shot insert leaves behind a section_offsets entry the section did not have ' +
-      'before. The offset cascade INSERTS a key while solving (adjust_section_offset, ' +
-      'models/project/connectivity.rs) and nothing removes it again, so an all-zero entry ' +
-      'survives the undo. Geometrically inert (the value is 0, or 2.2e-16), but it means undo ' +
-      'is not an exact inverse and the leaked key is serialized into the .stalx. NOTE the ' +
-      'value narrowing: an offset key appearing with REAL geometry in it is a different, ' +
-      'unclassified failure and still fails the fuzzer.',
-  },
-];
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -238,17 +204,22 @@ export function diffSnapshots(
 }
 
 export interface DiffClassification {
-  /** Diffs explained by a known open app bug. */
+  /** Diffs explained by one of the rules passed in. */
   known: { diff: SnapshotDiff; asymmetry: KnownAsymmetry }[];
-  /** Diffs nothing known accounts for. */
+  /** Diffs nothing in that list accounts for. */
   unknown: SnapshotDiff[];
-  /** Distinct known asymmetries hit. */
+  /** Distinct rules hit. */
   asymmetries: KnownAsymmetry[];
 }
 
+/**
+ * `known` is REQUIRED. It used to default to `KNOWN_UNDO_ASYMMETRIES`, which is
+ * deleted (every finding it named is fixed); making the list explicit is what
+ * stops a future caller silently re-acquiring a default tolerance.
+ */
 export function classifyDiffs(
   diffs: readonly SnapshotDiff[],
-  known: readonly KnownAsymmetry[] = KNOWN_UNDO_ASYMMETRIES,
+  known: readonly KnownAsymmetry[],
 ): DiffClassification {
   const matched: DiffClassification['known'] = [];
   const unknown: SnapshotDiff[] = [];
@@ -265,216 +236,6 @@ export function classifyDiffs(
     }
   }
   return { known: matched, unknown, asymmetries: [...seen.values()] };
-}
-
-/**
- * Undo of `RemoveLoopClosure` restores the closure with `loop_closures.push()`
- * (`src-tauri/src/core/state/undo.rs:244`) while the removal took it out with
- * `Vec::remove(pos)`. Same closure, same id, same metrics - new position, and
- * every closure after it shifted. Detected with `isListPermutationOnly` rather
- * than a path pattern, because the signature is a property of the WHOLE
- * snapshot: identical in every respect once the list is reordered.
- */
-export const LOOP_CLOSURE_REORDER: KnownAsymmetry = {
-  id: 'undo-remove-loop-closure-appends-instead-of-reinserting',
-  // Never used: this one is recognised structurally, not by path.
-  pathPattern: /^(?!)/,
-  description:
-    'Undoing a loop-closure removal puts the closure back at the END of ' +
-    'project.loop_closures instead of its original index (undo.rs:244 pushes; the ' +
-    'removal used Vec::remove(pos)). The list is a Vec, and its order is persisted to the ' +
-    '.stalx, indexed by the frontend, and used to build the adjacency lists that ' +
-    'resolve_offsets traverses - so this is a real, if quiet, non-inverse.',
-};
-
-/**
- * FINDING 11, narrowly. A `ProjectSnapshotPair` captured BEFORE a save holds the
- * PRE-HEAL project in both halves and neither is refreshed, so undoing or
- * redoing that entry silently reverts the save's undo-less heals
- * (`capture_missing_gauge_anchors`, `core/state/project_io.rs`). Tracked at
- * <https://github.com/Stalagmight/Stalagmight/issues/413> and pinned red by
- * `undo_of_a_pre_save_entry_keeps_the_saves_gauge_anchors`
- * (src-tauri/src/core/state/open_undo_bugs_tests.rs).
- *
- * Used ONLY by `undo-persistence-fuzz`, where the shape fires by construction on
- * every iteration (the run saves with a stack of pre-save entries below it and
- * then walks all of them). It is deliberately NOT added to
- * `KNOWN_UNDO_ASYMMETRIES`: `undo-redo-fuzz` reaches finding 11 by luck rather
- * than by construction, and quietly making it tolerable there would change a
- * documented repro.
- *
- * Value-narrowed to value -> null, i.e. the anchors being LOST. A gauge anchor
- * changing from one value to a DIFFERENT one is not this bug and still fails.
- *
- * NOTE the overlap with `create-section-redo-drops-gauge-anchors`: the two are
- * indistinguishable by path and value, and are told apart by WHICH entry the
- * history move consumed (a `create_section` entry means bug 1). The caller picks
- * the order accordingly.
- */
-export const PRE_SAVE_SNAPSHOT_HEAL_REVERT: KnownAsymmetry = {
-  id: 'pre-save-snapshot-undo-reverts-save-heals',
-  pathPattern: /^project\.sections\[\d+\]\.gauge_(shot|neighbour)_uuid$/,
-  accepts: (diff) => diff.expected !== 'null' && diff.expected !== ABSENT && diff.actual === 'null',
-  description:
-    'Finding 11: a ProjectSnapshotPair recorded BEFORE a save holds the pre-heal project in ' +
-    'BOTH halves, so undoing or redoing it reverts the save-time gauge-anchor capture ' +
-    '(capture_missing_gauge_anchors, core/state/project_io.rs). The damage is not the lost ' +
-    'anchors (the next save re-captures them) but that the project at a given undo DEPTH now ' +
-    'depends on the ROUTE taken to reach it. Narrowed to value -> null: an anchor changing to a ' +
-    'DIFFERENT value is a separate, unclassified failure.',
-};
-
-/**
- * True for bug 8's exact signature: ONE section holds the right NUMBER of shots
- * but exactly one of them is the wrong shot - one uuid that should be there is
- * gone and one that should not be there is present.
- *
- * That is what "after a save/reload an undo deletes the WRONG shot" looks like
- * from the outside: `delete_shot` removed one shot instead of another, so the
- * count is right and a single identity is swapped. It is a classification tool,
- * never a comparison one - the snapshots are still unequal.
- * `undo-persistence-fuzz` uses it to walk PAST a known bug-8 instance in tolerant
- * mode, because bug 8 fires high on the restored stack and would otherwise mask
- * the sibling defects that scenario exists to find.
- *
- * Deliberately as narrow as the bug. More than one section affected, more than
- * one shot swapped, a count change, a one-sided disappearance, or a difference
- * that leaves the uuid sets equal all return false. In particular the sweeping
- * re-mint of bug 1 (`redo of CreateSection re-mints EVERY shot uuid`) swaps a
- * whole section's worth of identities at once and is correctly rejected here -
- * it is classified by path instead, which is why callers must run
- * `classifyDiffs` FIRST and only fall through to this when unknown diffs remain.
- */
-export function isShotIdentitySwap(deltas: readonly ShotSetDelta[]): boolean {
-  const only = deltas.length === 1 ? deltas[0] : undefined;
-  if (only === undefined) return false;
-  return (
-    only.expectedCount === only.actualCount && only.missing.length === 1 && only.extra.length === 1
-  );
-}
-
-/**
- * Paths OUTSIDE the swapped section that a wrong-shot delete still moves: the
- * geometry every consumer re-derives from shot data. Deleting the wrong shot
- * changes the survey chain, so station coordinates, section offsets and the
- * aggregate stats legitimately follow it.
- *
- * Counts are deliberately absent, as they are in `stale-id-wrong-shot-derived-
- * stats`: bug 8 leaves the shot COUNT unchanged - one shot swapped for another -
- * so a count moving is a different defect and must not be absorbed here.
- */
-const SHOT_SWAP_DERIVED_PATHS: readonly RegExp[] = [
-  /^stations\[\d+\]\.coordinates\.[xyz]$/,
-  /^project\.section_offsets\.\d+(\[\d+\])?$/,
-  /^stats\.(total_length|min_depth|max_depth|penetration_distance)$/,
-];
-
-/**
- * The only SECTION-level fields a wrong-shot delete can move. Both are uuid
- * anchors into the section's own shot list (`gauge_shot_uuid` /
- * `gauge_neighbour_uuid`), so deleting a shot can dangle them.
- *
- * Everything else on a section - `name`, `color`, `date`, `surveyor`,
- * `quality`, `direction`, `reverse_parity` - is untouched by a shot delete, and
- * a blanket `sections[N].*` allowance swallowed all of them.
- */
-const SHOT_SWAP_SECTION_FIELDS = 'gauge_shot_uuid|gauge_neighbour_uuid';
-
-/** Position of the section with `sectionId` in a snapshot's `project.sections`. */
-function sectionIndexById(snapshotJson: string, sectionId: number): number | null {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(snapshotJson);
-  } catch {
-    return null;
-  }
-  const project = isPlainObject(parsed) ? parsed.project : null;
-  if (!isPlainObject(project) || !Array.isArray(project.sections)) return null;
-  const index = project.sections.findIndex(
-    (section) => isPlainObject(section) && Number(section.id) === sectionId,
-  );
-  return index >= 0 ? index : null;
-}
-
-/**
- * Did the shots that SURVIVED the swap keep their relative order?
- *
- * Set difference cannot see a reorder, and order is not cosmetic here: the
- * loader renumbers `Shot::id` to `section_id * FEATURE_ID_STRIDE +
- * sequence_order` (`persistence/sqlite/read.rs`), so a reordered list comes back
- * with different ids and every persisted entry naming one addresses a different
- * shot. A reorder riding along with a genuine swap must not be absorbed by it.
- */
-function survivingShotsReordered(delta: ShotSetDelta, expectedJson: string, actualJson: string): boolean {
-  const uuidsOf = (json: string): string[] | null => {
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(json);
-    } catch {
-      return null;
-    }
-    const project = isPlainObject(parsed) ? parsed.project : null;
-    if (!isPlainObject(project) || !Array.isArray(project.sections)) return null;
-    const section = project.sections.find(
-      (candidate) => isPlainObject(candidate) && Number(candidate.id) === delta.sectionId,
-    );
-    if (!isPlainObject(section) || !Array.isArray(section.shots)) return null;
-    return section.shots.map((shot) =>
-      isPlainObject(shot) && typeof shot.uuid === 'string' ? shot.uuid : '<no-uuid>',
-    );
-  };
-  const expected = uuidsOf(expectedJson);
-  const actual = uuidsOf(actualJson);
-  // Unreadable on either side is not "unchanged" - fail closed.
-  if (expected === null || actual === null) return true;
-  const missing = new Set(delta.missing);
-  const extra = new Set(delta.extra);
-  const left = expected.filter((uuid) => !missing.has(uuid));
-  const right = actual.filter((uuid) => !extra.has(uuid));
-  return left.length !== right.length || left.some((uuid, index) => uuid !== right[index]);
-}
-
-/**
- * Is the WHOLE mismatch one wrong-shot swap, and nothing else?
- *
- * `isShotIdentitySwap` answers a question about shot uuids alone. That is not
- * enough to tolerate a mismatch: the diff list can carry damage the swap says
- * nothing about - a lost station comment in another section, a dropped loop
- * closure, a reverted section field - and gating on the uuid predicate alone
- * swallowed all of it, then resynced the model onto the corrupted state so it
- * was never reported at any later depth either.
- *
- * So the swap must also ACCOUNT for every remaining diff, and "account for" is
- * kept as narrow as the defect: the swapped section's SHOTS, its two uuid gauge
- * anchors (which a delete can dangle), and the geometry those shots feed.
- * Nothing else - not the section's own name/colour/date, not another section,
- * not a closure, not a count. This is the same standard `isListPermutationOnly`
- * holds itself to: normalize the known shape away, then require the rest to be
- * silent.
- *
- * `actualJson` is needed for the order check, which set difference cannot make.
- */
-export function isBug8ShotSwapOnly(
-  diffs: readonly SnapshotDiff[],
-  deltas: readonly ShotSetDelta[],
-  expectedJson: string,
-  actualJson: string,
-): boolean {
-  if (!isShotIdentitySwap(deltas)) return false;
-  const delta = deltas[0];
-  if (delta === undefined) return false;
-  const index = sectionIndexById(expectedJson, delta.sectionId);
-  if (index === null) return false;
-  if (survivingShotsReordered(delta, expectedJson, actualJson)) return false;
-  const section = `project\\.sections\\[${index}\\]`;
-  const inSwappedShots = new RegExp(`^${section}\\.shots(\\.|\\[|$)`);
-  const swappedSectionAnchor = new RegExp(`^${section}\\.(${SHOT_SWAP_SECTION_FIELDS})$`);
-  return diffs.every(
-    (diff) =>
-      inSwappedShots.test(diff.path) ||
-      swappedSectionAnchor.test(diff.path) ||
-      SHOT_SWAP_DERIVED_PATHS.some((pattern) => pattern.test(diff.path)),
-  );
 }
 
 /** Path segments to a list value inside a snapshot. */
@@ -514,10 +275,13 @@ function sortedByCanonical(items: readonly unknown[]): unknown[] {
  * True when two snapshots hold the SAME list members at `listPath` in a
  * DIFFERENT order and are otherwise identical.
  *
- * This is a classification tool, never a comparison one: the snapshots are still
- * unequal and the fuzzer still fails. It exists so "undo reordered the closure
- * list" can be reported as exactly that, instead of as 30 unrelated-looking
- * value diffs at shifted indices.
+ * DIAGNOSTIC ONLY, and now purely so. It never made a comparison pass - the
+ * snapshots are still unequal and the fuzzer still fails - but it used to be the
+ * recognizer behind the `undo-remove-loop-closure-appends-instead-of-reinserting`
+ * classifier (issue #413 finding 4), which is deleted along with the bug. What
+ * survives is the READING of the failure: "undo reordered the closure list"
+ * reported as one sentence instead of 30 unrelated-looking value diffs at
+ * shifted indices, should anything ever reintroduce that shape.
  */
 export function isListPermutationOnly(
   expectedJson: string,
@@ -619,9 +383,9 @@ export const SAVE_HEALING_MUTATIONS: readonly KnownAsymmetry[] = [
  * re-solve MOVES a number: an offset entry appearing or disappearing, or a
  * coordinate turning into null, is structural and is not this - `isNumericMove`
  * rejects those. What is NOT bounded is how far the number moved, because the
- * heal this family exists to absorb is measured in metres: bug 3 displaces a
+ * heal this family exists to absorb is measured in metres: bug 3 displaced a
  * whole section by a shot's horizontal vector (1.13 m in its repro) and
- * RATCHETS on every cycle, and the reload correcting that is the documented
+ * RATCHETED on every cycle, and the reload correcting that was the documented
  * case above. Any sub-metre threshold would fail on the heal; any threshold
  * loose enough to pass it would not catch what a threshold is for. So the
  * magnitude is REPORTED instead - `maxNumericDelta` puts it in the attributed

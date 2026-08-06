@@ -17,10 +17,12 @@
  *   pnpm agent:fuzz-matrix [--fixtures a.stalx,b.stalx] [--seeds 1..8|1,3,7]
  *                          [--workers K] [--iterations M]
  *
- * `STALAGMIGHT_FUZZ_ALLOW_KNOWN_BUGS` reaches every child unchanged:
- * undo-redo-fuzz reproduces open undo bugs, so a matrix run without it is
- * expected to be red on the seeds that reach them. Exits non-zero if any cell
- * failed. Run on the repo-pinned Node (`nvm use`); the children need Xvfb.
+ * Every `STALAGMIGHT_*` variable reaches the children unchanged, including
+ * `STALAGMIGHT_FUZZ_ALLOW_KNOWN_BUGS` - which is now INERT: every issue-413
+ * finding `undo-redo-fuzz` reproduced is fixed and every classifier deleted, so
+ * a matrix run is expected GREEN on every cell and there is nothing to tolerate.
+ * Exits non-zero if any cell failed. Run on the repo-pinned Node (`nvm use`);
+ * the children need Xvfb.
  */
 import { spawn, type ChildProcess } from 'child_process';
 import * as fs from 'fs';

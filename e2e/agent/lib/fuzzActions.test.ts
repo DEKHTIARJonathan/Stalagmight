@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { mulberry32 } from '../scenarios/framework';
 import {
-  STREAM_V2,
+  streamV2,
   buildBatch,
   swarmProfileFor,
   weightedNamesFor,
@@ -124,7 +124,7 @@ describe('swarm profiles', () => {
     const v2Only = ['executeBatch', 'splitShotAtDistance', 'moveComment', 'importSections'];
 
     for (const name of v2Only) {
-      expect(names.includes(name)).toBe(STREAM_V2);
+      expect(names.includes(name)).toBe(streamV2());
     }
     // The v1 generators are present on both streams.
     expect(names.includes('createShot')).toBe(true);

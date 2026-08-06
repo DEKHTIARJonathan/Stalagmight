@@ -12,16 +12,23 @@
 //!
 //! Two of those equivalences are promised in the code, in as many words:
 //!
-//! * `execute_delete_shot_range_shift` - "Generalizes the single-shot
-//!   `delete_shot` (`remove_shot_with_rewire`) to a range by deleting the
-//!   range's shots in forward order within ONE `ProjectSnapshotPair` undo unit"
-//!   (`command_delete_split.rs:503-509`);
+//! * `execute_delete_shot_range_shift` - an ATOMIC range gap-close that agrees
+//!   with `n` single `Command::DeleteShot`s for every range that removes no
+//!   station a merge is anchored to (`command_delete_split.rs`);
 //! * `execute_delete_shot_range_split` - "Generalizes
 //!   [`Self::execute_delete_shot_and_split`] from a single shot to
 //!   `[start_pos..=end_pos]`" (`command_delete_split.rs:260-267`).
 //!
 //! A generalization that does not agree with the thing it generalizes on the
 //! one-element case is a bug in one of the two, and nothing was checking.
+//!
+//! The first of those promises used to be broader - "generalizes the single-shot
+//! `delete_shot` by deleting the range's shots in forward order" - and this
+//! engine's first run caught it disagreeing with itself (issue #413 finding 22).
+//! The claim was the defect: the atomic behaviour is the reviewed one (PR #95),
+//! so the doc comment was narrowed to what the code does and the pair below
+//! ASSERTS the remaining difference on the one shape that has it, rather than
+//! classifying it away. See [`Documented`].
 //!
 //! # The twins
 //!
@@ -103,7 +110,7 @@ use super::fuzz_undo_tests::{
 };
 use super::AppState;
 use crate::core::Command;
-use crate::models::{SectionId, ShotData, ShotId, ShotUpdates, StationRef};
+use crate::models::{Project, SectionId, ShotData, ShotId, ShotUpdates, StationRef};
 // CONFIG ISOLATION. Every test in this module opens with
 // `let _config = isolated_config();`, and none of them may skip it:
 // `AppState::new()` LOADS the global config, and every save reaches
@@ -298,6 +305,12 @@ fn observe(state: &AppState, mask: Mask) -> Observed {
 struct Comparison {
     problems: Vec<String>,
     hits: BTreeMap<&'static str, usize>,
+    /// SHAPES the run reached, by name. Not defects and not differences: a pair
+    /// whose assertions depend on the generator having produced a particular
+    /// topology counts it here, so a run in which that arm was never exercised
+    /// reads as such instead of as a pass. Printed per seed and totalled by the
+    /// sweep.
+    shapes: BTreeMap<&'static str, usize>,
 }
 
 impl Comparison {
@@ -305,6 +318,9 @@ impl Comparison {
         self.problems.extend(other.problems);
         for (id, count) in other.hits {
             *self.hits.entry(id).or_insert(0) += count;
+        }
+        for (id, count) in other.shapes {
+            *self.shapes.entry(id).or_insert(0) += count;
         }
     }
 
@@ -316,6 +332,121 @@ impl Comparison {
             .map(|line| format!("{prefix}{line}"))
             .collect();
         self
+    }
+}
+
+/// The one place two routes are DOCUMENTED to disagree, and the frame that keeps
+/// that allowance honest.
+///
+/// This is not a classifier and is not a known defect: `EXPLAINS` carries open
+/// bugs and is deleted entry by entry as they are fixed, while this carries a
+/// difference the code is SUPPOSED to have. Issue #413 finding 22 was reported
+/// as the range delete not being the `n` single deletes its doc comment claimed
+/// to generalize; the claim was the defect. `execute_delete_shot_range_shift` is
+/// atomic on purpose - it defers the geometry cascade to ONE reconcile at the
+/// end - so on a range whose removed stations include one a merged partner
+/// section is anchored to, it leaves that partner where the surveyor put it,
+/// where the single-delete sequence drags the partner along while the merge is
+/// still live and then strands it displaced. Both PR #95 tests
+/// (`test_delete_range_shift_does_not_displace_free_floating_merged_section`,
+/// `test_delete_range_suffix_shift_keeps_head_with_doomed_tail_anchor`) pin the
+/// atomic behaviour, `a_doomed_anchor_range_shift_keeps_the_partner_in_place`
+/// (open_undo_bugs_tests.rs) pins it on a hand-built shape, and
+/// `command_delete_split.rs` now states it.
+///
+/// So the allowance is narrow and directional. Only the PARTNER sections' own
+/// placement may differ; every other path, every other station, both verdicts
+/// and both allocators are still compared exactly. And when the two routes do
+/// disagree about a partner, the ATOMIC route has to be the one that left it
+/// alone - a divergence the other way round is the atomic path breaking its own
+/// contract and fails.
+struct Documented {
+    /// Sections whose placement the two routes may disagree about: the far side
+    /// of every merge the delete removes, plus everything merged rigidly to
+    /// those without passing through the edited section (a displaced partner
+    /// drags its own merge group with it).
+    partners: std::collections::BTreeSet<SectionId>,
+    /// The adjusted station geometry BEFORE either route ran, keyed
+    /// `section:index`. The twins are asserted equal at that point, so one map
+    /// is both routes' starting position - which is what makes "the atomic route
+    /// is the one that did not move it" a decidable question.
+    before: BTreeMap<String, [f64; 3]>,
+}
+
+/// The adjusted geometry as a map, from the `section:index|x|y|z` rows
+/// [`adjusted_geometry_of`] emits.
+fn adjusted_positions(text: &str) -> BTreeMap<String, [f64; 3]> {
+    text.lines()
+        .filter_map(|line| {
+            let mut parts = line.split('|');
+            let key = parts.next()?.to_string();
+            let x = parts.next()?.parse().ok()?;
+            let y = parts.next()?.parse().ok()?;
+            let z = parts.next()?.parse().ok()?;
+            Some((key, [x, y, z]))
+        })
+        .collect()
+}
+
+/// The section a `section:index` adjusted-geometry key belongs to.
+fn section_of_station_key(key: &str) -> Option<SectionId> {
+    key.split(':').next()?.parse().ok()
+}
+
+/// The same bound `adjusted_diffs` uses, so "the routes differ" and "the atomic
+/// route moved it" are decided on one ruler.
+const POSITION_TOLERANCE_M: f64 = 1e-6;
+
+/// Whether two solved positions differ IN THE HORIZONTAL PLANE.
+///
+/// The plane, not the point, and not a convenience: the compensation a deferred
+/// cascade preserves is `section_offsets`, which is `(f64, f64)` - there is no
+/// stored z offset for a section. When a delete cuts a partner's merge, the
+/// partner's z falls back to its own raw layout on BOTH routes (measured: same
+/// z to the last bit), so comparing z here would report a drop neither route
+/// chose and that neither could have avoided. PR #95's
+/// `test_delete_range_shift_does_not_displace_free_floating_merged_section`
+/// asserts the same plane, through `assert_xy_close`. A z difference BETWEEN the
+/// two routes is still compared - by the adjusted-geometry oracle, which the
+/// allowance only lets through for a partner section.
+fn positions_differ_in_plane(left: [f64; 3], right: [f64; 3]) -> bool {
+    (0..2)
+        .map(|axis| (left[axis] - right[axis]).abs())
+        .fold(0.0_f64, f64::max)
+        > POSITION_TOLERANCE_M
+}
+
+impl Documented {
+    /// Whether a stored-project difference is one this allowance covers.
+    ///
+    /// `section_offsets` is a map keyed by section id, so the diff path NAMES
+    /// the section it is about - `section_offsets.7` when a whole entry is
+    /// present on one side only, `section_offsets.7[0]` when one component of
+    /// the pair differs - and the allowance can be per-section rather than
+    /// per-collection. A `section_offsets` entry for the EDITED section, or for
+    /// any section the delete did not cut a merge to, is not this and still
+    /// fails.
+    fn allows_stored(&self, diff: &Diff) -> bool {
+        diff.path
+            .strip_prefix("section_offsets.")
+            .map(|rest| {
+                rest.chars()
+                    .take_while(char::is_ascii_digit)
+                    .collect::<String>()
+            })
+            .and_then(|id| id.parse::<SectionId>().ok())
+            .is_some_and(|id| self.partners.contains(&id))
+    }
+
+    /// Whether an adjusted-geometry difference line is one this allowance
+    /// covers. `adjusted_diffs` writes every line as `station <section>:<index>
+    /// ...`; a line that does not parse is NOT allowed, so the check fails
+    /// closed if that format ever changes.
+    fn allows_geometry(&self, line: &str) -> bool {
+        line.strip_prefix("station ")
+            .and_then(|rest| rest.split_whitespace().next())
+            .and_then(section_of_station_key)
+            .is_some_and(|id| self.partners.contains(&id))
     }
 }
 
@@ -342,74 +473,52 @@ struct Explains {
     only_for: Option<&'static str>,
 }
 
-/// A coordinate pair (or one component) that is absent or within a nanometre of
-/// zero - the same "geometrically inert" test the roundtrip oracle's finding-2
-/// classifier uses, one collection over.
-fn is_inert_offset(text: &str) -> bool {
-    if text == "<absent>" {
-        return true;
-    }
-    if let Ok(single) = text.parse::<f64>() {
-        return single.abs() <= 1e-9;
-    }
-    let Ok(serde_json::Value::Array(items)) = serde_json::from_str::<serde_json::Value>(text)
-    else {
-        return false;
-    };
-    !items.is_empty()
-        && items
-            .iter()
-            .all(|item| item.as_f64().is_some_and(|value| value.abs() <= 1e-9))
-}
-
 const EXPLAINS: &[Explains] = &[
-    // FINDING 2 (issue #413), reached from a direction its own write-up does
-    // not mention. The write-up is "undo of a shot insert leaks an all-zero
-    // `section_offsets` entry"; the mechanism is `adjust_section_offset`
-    // CREATING the key and nothing removing it, so EVERY route that adjusts an
-    // offset and then adjusts it back leaves the key behind - a
-    // `MoveSection(+d)` and its `-d`, a `ReverseSection` applied twice. The
-    // route that did nothing has no key, the route that did the work has an
-    // inert one, and the two are otherwise identical.
+    // FINDING 2 (issue #413) was explained here, reached from a direction its
+    // own write-up does not mention: the mechanism is a `section_offsets` key
+    // that is CREATED by an adjustment and never removed, so every route that
+    // adjusted an offset and then adjusted it back - a `MoveSection(+d)` and
+    // its `-d`, a `ReverseSection` applied twice - left an inert key its
+    // do-nothing twin did not have.
     //
-    // Narrowed to inert on BOTH sides exactly as the roundtrip classifier is: a
-    // key carrying real geometry is finding 3's shape, not this, and still
-    // fails.
-    Explains {
-        id: "finding-2-orphan-zero-section-offset",
-        each: |diff| {
-            diff.path.starts_with("section_offsets.")
-                && is_inert_offset(&diff.expected)
-                && is_inert_offset(&diff.actual)
-        },
-        // An inert offset is by definition zero, so it moves nothing.
-        explains_geometry: false,
-        only_for: None,
-    },
-    // FINDING 22 (issue #413), which this engine found: a suffix
-    // `execute_delete_shot_range_shift` and the single deletes its own doc
-    // comment says it generalizes leave a merged partner section in two
-    // different places, because the single path re-anchors the partner from
-    // `execute`'s per-command epilogue as the section shrinks
-    // (core/state/commands.rs:646-655) and the range path reconciles once, after
-    // the merge's anchor station is already gone
-    // (core/state/command_delete_split.rs:642).
+    // FIXED, in two halves, and the entry is gone. A `section_offsets` key
+    // present on one route and absent on the other is unexplained from here on,
+    // whatever its value.
     //
-    // Narrowed to the PAIR rather than to a path shape, because the defect has
-    // two spellings and narrowing to one of them was measured to miss the other:
-    // the partner section may have had no offset (the reduced case - one side
-    // `<absent>`, the other a value) or may already have had one (seed 3 - both
-    // sides present, 10.26 m apart). Both are one route re-anchoring the partner
-    // and the other not. A `section_offsets` difference between any OTHER two
-    // routes is not this and still fails. Red test:
-    // `a_range_shift_delete_is_its_single_deletes` in open_undo_bugs_tests.rs.
-    Explains {
-        id: "finding-22-a-range-shift-delete-is-not-its-single-deletes",
-        each: |diff| diff.path.starts_with("section_offsets."),
-        // The mis-placed offset IS the station displacement the solve reports.
-        explains_geometry: true,
-        only_for: Some("range-shift-is-n-single-deletes"),
-    },
+    // * The EXACT zero. `Project::write_section_offset`
+    //   (models/project/offsets.rs) is THE write point for the map and drops
+    //   the key when the value is exactly (0, 0). `MoveSection(+d)` and its
+    //   `-d` DO land there (0 + d - d == 0 in IEEE for the same d), which is
+    //   why `move-out-and-back-is-identity` went clean first.
+    // * The float DUST. `ReverseSection` applied twice does NOT cancel: the
+    //   compensation is `shot_run_displacement` summed over the shots, and the
+    //   second reverse sums the negated vectors in the OPPOSITE order, so the
+    //   round trip lands on a femtometre residue rather than on zero.
+    //   `Project::write_section_offset` normalizes an offset within
+    //   `Project::OFFSET_DUST_M` of the origin to absent, and `cascade_bfs`
+    //   (models/project/connectivity.rs) declines to "correct" a sub-bound gap
+    //   at all, matching the merge-BFS gates in `reconcile_after_edit`.
+    //
+    // The rule binds EVERY writer, a restore included: a dust-zero
+    // `section_offsets` entry is UNREPRESENTABLE (the invariant on
+    // `Project::write_section_offset`), which is what closed the second half of
+    // this pair - `move-out-and-back-is-identity` failed again the moment a
+    // project carrying a legacy all-zero row reached it, because `+d` then `-d`
+    // landed the key absent while the do-nothing route still held it.
+    // `plant_legacy_zero_offset_rows` below feeds exactly that project to every
+    // pair, so the property is now proved on the shape that broke it.
+    // `is_inert_offset` went with the entry.
+    //
+    // FINDING 22 (issue #413) HAD an entry here - "a range shift-delete is not
+    // its single deletes" - and it is gone rather than fixed-and-deleted: the
+    // divergence is INTENDED (see `Documented` and the `range-shift-is-n-single-
+    // deletes` pair, which now asserts it instead of tolerating it; the
+    // hand-built version of the same claim is
+    // `a_doomed_anchor_range_shift_keeps_the_partner_in_place` in
+    // open_undo_bugs_tests.rs). Nothing classifies a range-vs-singles difference
+    // any more; one outside the documented doomed-anchor shape is unexplained
+    // and fails.
+    //
     // `observation-split-routes-disagree-on-station-comment-keys` USED TO BE
     // HERE, and it is gone because it was TRIAGED OUT: it was this engine's own
     // measurement, not a defect in either split route. Kept as a record for the
@@ -443,24 +552,43 @@ const EXPLAINS: &[Explains] = &[
 
 /// Every way two observed states differ, as readable lines. Empty means the two
 /// routes agree on all five oracles.
-fn differences(pair: &'static str, left: &Observed, right: &Observed) -> Comparison {
+///
+/// `documented` is the one narrow, per-section allowance a pair may carry for a
+/// difference the code is SUPPOSED to have - see [`Documented`]. `None` (every
+/// pair but one shape of one pair) means every difference is a problem.
+fn differences(
+    pair: &'static str,
+    left: &Observed,
+    right: &Observed,
+    documented: Option<&Documented>,
+) -> Comparison {
     let mut out = Comparison::default();
     let diffs = diff_snapshots(&left.stored, &right.stored);
     let mut geometry_explained = false;
     if !diffs.is_empty() {
-        match EXPLAINS.iter().find(|explains| {
+        if let Some(explains) = EXPLAINS.iter().find(|explains| {
             explains.only_for.is_none_or(|only| only == pair)
                 && diffs.iter().all(|diff| (explains.each)(diff))
         }) {
-            Some(explains) => {
-                *out.hits.entry(explains.id).or_insert(0) += 1;
-                geometry_explained = explains.explains_geometry;
+            *out.hits.entry(explains.id).or_insert(0) += 1;
+            geometry_explained = explains.explains_geometry;
+        } else {
+            // Per-path rather than all-or-nothing, unlike the classifiers
+            // above: the documented divergence names the sections it may
+            // touch, so a run that shows it AND something else must still
+            // report the something else.
+            let unexpected: Vec<Diff> = diffs
+                .iter()
+                .filter(|diff| !documented.is_some_and(|doc| doc.allows_stored(diff)))
+                .cloned()
+                .collect();
+            if !unexpected.is_empty() {
+                out.problems.push(format!(
+                    "the stored projects differ in {} path(s):\n{}",
+                    unexpected.len(),
+                    describe_diffs(&unexpected)
+                ));
             }
-            None => out.problems.push(format!(
-                "the stored projects differ in {} path(s):\n{}",
-                diffs.len(),
-                describe_diffs(&diffs)
-            )),
         }
     }
     if left.verdict != right.verdict {
@@ -470,7 +598,10 @@ fn differences(pair: &'static str, left: &Observed, right: &Observed) -> Compari
             right.verdict.describe()
         ));
     }
-    let geometry = adjusted_diffs(&left.adjusted, &right.adjusted);
+    let geometry: Vec<String> = adjusted_diffs(&left.adjusted, &right.adjusted)
+        .into_iter()
+        .filter(|line| !documented.is_some_and(|doc| doc.allows_geometry(line)))
+        .collect();
     if !geometry.is_empty() && !geometry_explained {
         out.problems.push(format!(
             "the ADJUSTED geometry differs:\n    {}",
@@ -526,6 +657,40 @@ enum Side {
     Right,
 }
 
+/// Give every section that has no `section_offsets` key one whose value is
+/// exactly `(0, 0)`, on the project about to be SAVED.
+///
+/// This is what a build predating the invariant on
+/// `Project::write_section_offset` left in a `.stalx`, and it is planted directly
+/// on the map because there is no longer any API that can produce it - every
+/// writer drops it. It is planted here, into the file both twins load from, so
+/// every pair in this engine runs against the exact input that used to break one
+/// of them: `move-out-and-back-is-identity` failed on a project carrying such a
+/// row, because `MoveSection(+d)` then `MoveSection(-d)` computes the offset back
+/// to the origin and drops the key that the do-nothing route still held.
+///
+/// It changes nothing about what the twins see, which is the point: the load
+/// drops the rows (asserted at the call site), so both sides start from the same
+/// project they always did, every seed's trajectory is unchanged, and the pair
+/// holds BY CONSTRUCTION rather than by luck of never meeting the input.
+///
+/// FILL, never overwrite: a section that carries a real offset needs it, and
+/// zeroing it would displace the section from its merge partner and make the next
+/// reconcile look like an app defect.
+fn plant_legacy_zero_offset_rows(state: &AppState) {
+    let mut guard = match state.project.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    let Some(project) = guard.as_mut() else {
+        return;
+    };
+    let ids: Vec<SectionId> = project.sections.iter().map(|section| section.id).collect();
+    for id in ids {
+        project.section_offsets.entry(id).or_insert((0.0, 0.0));
+    }
+}
+
 impl Twins {
     /// Build a project from `seed`, run `prelude` random commands over it, then
     /// load it into both twins from one file.
@@ -542,6 +707,7 @@ impl Twins {
         }
         let temp = TempDir::new().ok()?;
         let path: PathBuf = temp.path().join("twins.stalx");
+        plant_legacy_zero_offset_rows(&source);
         if !source.save_project(Some(path.clone())).success {
             return None;
         }
@@ -563,6 +729,27 @@ impl Twins {
             if let Ok(mut stack) = side.undo_stack.lock() {
                 stack.clear();
             }
+            // The zero rows planted above must not have come back. This is what
+            // makes feeding them worth anything: if the boundary ever stops
+            // dropping them, every pair below is being run on a project the app
+            // is not allowed to hold, and `move-out-and-back-is-identity` is
+            // measuring the wrong thing.
+            let project = side.get_project_state()?;
+            let survivors: Vec<(SectionId, (f64, f64))> = project
+                .section_offsets
+                .iter()
+                .filter(|(_, offset)| {
+                    offset.0.abs() <= Project::OFFSET_DUST_M
+                        && offset.1.abs() <= Project::OFFSET_DUST_M
+                })
+                .map(|(id, offset)| (*id, *offset))
+                .collect();
+            assert!(
+                survivors.is_empty(),
+                "seed {seed}: a planted all-zero section_offsets row survived the load: \
+                 {survivors:?}. A dust-zero entry is unrepresentable (see the invariant on \
+                 Project::write_section_offset), so the load boundary has to drop it"
+            );
         }
 
         let baseline = mask_timestamps(&canonical_snapshot(&left, false));
@@ -594,10 +781,23 @@ impl Twins {
 
     /// How the two twins differ right now.
     fn compare(&self, pair: &'static str, mask: Mask) -> Comparison {
+        self.compare_allowing(pair, mask, None)
+    }
+
+    /// How the two twins differ right now, minus the one difference this shape
+    /// is DOCUMENTED to have. See [`Documented`] - `None` for every pair that
+    /// promises plain equality.
+    fn compare_allowing(
+        &self,
+        pair: &'static str,
+        mask: Mask,
+        documented: Option<&Documented>,
+    ) -> Comparison {
         differences(
             pair,
             &observe(&self.left, mask),
             &observe(&self.right, mask),
+            documented,
         )
     }
 
@@ -609,6 +809,19 @@ impl Twins {
     /// paths each side still differs from its own starting state in - measured
     /// and reported, never asserted.
     fn unwind_and_compare(&self, pair: &'static str, mask: Mask) -> (Comparison, (usize, usize)) {
+        self.unwind_and_compare_allowing(pair, mask, None)
+    }
+
+    /// [`Self::unwind_and_compare`], carrying the same documented allowance the
+    /// forward half used: a difference the two routes are supposed to have is
+    /// still supposed to be there after both of them are undone, and everything
+    /// else is still a problem.
+    fn unwind_and_compare_allowing(
+        &self,
+        pair: &'static str,
+        mask: Mask,
+        documented: Option<&Documented>,
+    ) -> (Comparison, (usize, usize)) {
         let mut refused = Vec::new();
         for (name, side) in [("left", Side::Left), ("right", Side::Right)] {
             let state = self.state(side);
@@ -643,7 +856,7 @@ impl Twins {
             .len()
         };
         (
-            self.compare(pair, mask),
+            self.compare_allowing(pair, mask, documented),
             (distance(&self.left), distance(&self.right)),
         )
     }
@@ -810,6 +1023,10 @@ struct PairOutcome {
     /// Differences a KNOWN open defect explains, by id. Counted and printed,
     /// never asserted - see `EXPLAINS`.
     hits: BTreeMap<&'static str, usize>,
+    /// Generated shapes a pair's assertions depend on, by name - see
+    /// `Comparison::shapes`. The gate asserts on one of these, because an arm
+    /// the generator stopped reaching passes without asserting anything.
+    shapes: BTreeMap<&'static str, usize>,
     /// Topology signatures the pair was built on, for coverage reporting.
     signatures: std::collections::BTreeSet<String>,
     /// Paths each unwound twin still differs from its own baseline in, summed.
@@ -821,9 +1038,10 @@ const PAIRS: &[Pair] = &[
     // ---------------------------------------------------------------------
     Pair {
         id: "range-shift-is-n-single-deletes",
-        promise: "command_delete_split.rs:503-509 - \"Generalizes the single-shot delete_shot \
-                  (remove_shot_with_rewire) to a range by deleting the range's shots in forward \
-                  order\"",
+        promise: "command_delete_split.rs execute_delete_shot_range_shift - an ATOMIC range \
+                  gap-close: identical to the n single deletes on every range that removes no \
+                  merge, and on a range that removes one it keeps the partner section in place \
+                  where the singles drag it (issue #413 finding 22; PR #95 tests)",
         run: pair_range_shift_vs_singles,
     },
     // ---------------------------------------------------------------------
@@ -880,6 +1098,27 @@ const PAIRS: &[Pair] = &[
 /// single-step route deletes the shot AT the start position, `n` times - the id
 /// is re-read each round because the ids do not shift but the positions do.
 ///
+/// # Two arms, because the two routes are equal on all shapes but one
+///
+/// The range path is ATOMIC: one project lock, one undo unit, and the geometry
+/// cascade deferred to a single reconcile at the end. On a range that removes no
+/// merge that alone changes nothing, and the two routes are compared for exact
+/// equality on all five oracles - measured over prefix and interior ranges, they
+/// agree to the last bit.
+///
+/// On a range whose removed stations include one a merged partner section is
+/// anchored to, they are supposed to differ, and this asserts the difference
+/// rather than tolerating it (issue #413 finding 22, resolved as intended
+/// behaviour - the doc comment that claimed a composition was the defect). The
+/// singles route re-anchors the partner from `execute`'s per-command epilogue
+/// while the merge is still live, drags it as the section shrinks and then
+/// deletes the merge, stranding it displaced; the atomic route leaves it where
+/// the surveyor put it. So on that shape three things are asserted: every
+/// difference is confined to the PARTNER sections' placement, the atomic route
+/// is the one that left the partner alone, and a partner the delete cut loose
+/// entirely is exactly where it was. See [`Documented`] and the PR #95 tests it
+/// names.
+///
 /// A single delete that the guards refuse is a SKIP, not a failure: `delete_shot`
 /// has three guards the range path does not consult (the loop/datum pair and the
 /// frozen check, issue #413 finding 6), and a route that was refused has not
@@ -899,6 +1138,11 @@ fn pair_range_shift_vs_singles(
     if start > end {
         return None;
     }
+    // Read BEFORE either route runs, off the left twin - the twins are asserted
+    // equal at this point, so this is both routes' starting position.
+    let partners = doomed_anchor_partners(&twins.left, section_id, ids[start], ids[end]);
+    let before = adjusted_positions(&adjusted_geometry_of(&twins.left));
+
     let ranged = twins
         .left
         .execute_delete_shot_range_shift(section_id, ids[start], ids[end]);
@@ -916,10 +1160,135 @@ fn pair_range_shift_vs_singles(
             return None;
         }
     }
-    let mut found = twins.compare(pair, Mask::Strict);
-    let (unwound, _) = twins.unwind_and_compare(pair, Mask::Strict);
+
+    let documented = partners.map(|partners| Documented { partners, before });
+    let mut found = twins.compare_allowing(pair, Mask::Strict, documented.as_ref());
+    if let Some(documented) = documented.as_ref() {
+        // Counted, so a generator that stopped producing the doomed-anchor shape
+        // shows up as an arm that asserted nothing instead of as a green run -
+        // the gate asserts this counter is non-zero.
+        *found.shapes.entry(DOOMED_ANCHOR_SHAPE).or_insert(0) += 1;
+        found
+            .problems
+            .extend(documented_divergence_problems(twins, documented));
+    }
+    let (unwound, _) = twins.unwind_and_compare_allowing(pair, Mask::Strict, documented.as_ref());
     found.absorb(unwound.prefixed("AFTER UNWIND: "));
     Some(found)
+}
+
+/// The name the doomed-anchor arm is counted under. See `Comparison::shapes`.
+const DOOMED_ANCHOR_SHAPE: &str = "doomed-anchor-range";
+
+/// The sections a gap-close of `[start_shot..=end_shot]` may move by cutting a
+/// merge, or `None` when it cuts none - which is the shape where the two delete
+/// routes have to agree exactly.
+///
+/// The removed set comes from the app's own `preview_delete_shot_range` rather
+/// than from a second copy of the "which stations does a gap-close remove" rule,
+/// so a change to that rule cannot leave this oracle allowing the wrong sections.
+/// It is then closed over the merge graph WITHOUT passing through the edited
+/// section: a partner that the delete cuts loose drags whatever is merged to it.
+fn doomed_anchor_partners(
+    state: &AppState,
+    section_id: SectionId,
+    start_shot: ShotId,
+    end_shot: ShotId,
+) -> Option<std::collections::BTreeSet<SectionId>> {
+    let project = state.get_project_state()?;
+    let impact = project
+        .preview_delete_shot_range(section_id, start_shot, end_shot)
+        .ok()?;
+    if impact.removed_merges.is_empty() {
+        return None;
+    }
+    let mut partners: std::collections::BTreeSet<SectionId> = impact
+        .removed_merges
+        .iter()
+        .flat_map(|merge| [merge.station_a.section_id, merge.station_b.section_id])
+        .filter(|id| *id != section_id)
+        .collect();
+    // A merge wholly inside the edited section (a loop) removes no partner, and
+    // is not the documented shape: nothing is allowed to differ.
+    if partners.is_empty() {
+        return None;
+    }
+    let merges = read_targets(state).merges;
+    loop {
+        let mut grew = false;
+        for (a, b) in &merges {
+            for (near, far) in [(a, b), (b, a)] {
+                if partners.contains(&near.0) && far.0 != section_id && partners.insert(far.0) {
+                    grew = true;
+                }
+            }
+        }
+        if !grew {
+            break;
+        }
+    }
+    Some(partners)
+}
+
+/// The two positive assertions the documented divergence carries, on top of the
+/// confinement [`Documented`] applies to the five oracles.
+///
+/// 1. DIRECTION. Where the two routes disagree about a partner station, the
+///    ATOMIC route (left) must be the one holding it at its pre-delete position.
+///    The divergence the other way round - the atomic path being the one that
+///    moved the partner - is that path breaking the contract this pair now
+///    documents, and is reported.
+/// 2. THE CUT-LOOSE PARTNER. A partner section the delete left with no merge and
+///    no datum has nothing to hold it anywhere; the atomic route must have left
+///    it exactly where it was. This is the PR #95 property
+///    (`test_delete_range_shift_does_not_displace_free_floating_merged_section`)
+///    asserted on random topology, and it fires whether or not the singles route
+///    diverged, so the arm is never vacuous.
+fn documented_divergence_problems(twins: &Twins, documented: &Documented) -> Vec<String> {
+    let atomic = adjusted_positions(&adjusted_geometry_of(&twins.left));
+    let singles = adjusted_positions(&adjusted_geometry_of(&twins.right));
+    let anchors = read_targets(&twins.left);
+    let mut problems = Vec::new();
+    for (key, was) in &documented.before {
+        let Some(section_id) = section_of_station_key(key) else {
+            continue;
+        };
+        if !documented.partners.contains(&section_id) {
+            continue;
+        }
+        let (Some(&now), Some(&other)) = (atomic.get(key), singles.get(key)) else {
+            // A partner section is not the one being edited, so none of its
+            // stations may disappear on either side.
+            problems.push(format!(
+                "partner station {key} is missing from one route's solve: atomic {:?}, singles {:?}",
+                atomic.get(key),
+                singles.get(key)
+            ));
+            continue;
+        };
+        if positions_differ_in_plane(now, other) && positions_differ_in_plane(now, *was) {
+            problems.push(format!(
+                "the two routes disagree about partner station {key} AND the ATOMIC route is the \
+                 one that moved it: was {was:?}, atomic {now:?}, singles {other:?} - the \
+                 documented divergence is the single deletes dragging the partner, not the range \
+                 delete"
+            ));
+        }
+        let held = anchors
+            .merges
+            .iter()
+            .any(|(a, b)| a.0 == section_id || b.0 == section_id)
+            || anchors.datums.iter().any(|(id, _)| *id == section_id);
+        if !held && positions_differ_in_plane(now, *was) {
+            problems.push(format!(
+                "the range delete cut section {section_id} loose (no merge, no datum) and MOVED \
+                 it: station {key} was {was:?}, atomic {now:?} - a deferred cascade must leave a \
+                 free-floating partner where it was (PR #95, \
+                 test_delete_range_shift_does_not_displace_free_floating_merged_section)"
+            ));
+        }
+    }
+    problems
 }
 
 /// PAIR 2. A ONE-SHOT range split against the single-shot split it generalizes.
@@ -962,6 +1331,7 @@ fn pair_range_split_of_one_vs_delete_and_split(
                 single.error.unwrap_or_default()
             )],
             hits: BTreeMap::new(),
+            shapes: BTreeMap::new(),
         });
     }
     // Both routes MINT a section, so the new section's uuids cannot agree and
@@ -1004,6 +1374,7 @@ fn pair_batch_vs_sequential(
                     "a command the batch accepted was refused when run on its own".to_string(),
                 ],
                 hits: BTreeMap::new(),
+                shapes: BTreeMap::new(),
             });
         }
     }
@@ -1041,6 +1412,7 @@ fn pair_poisoned_batch_is_a_no_op(
         return Some(Comparison {
             problems: vec!["a batch containing an impossible command reported success".to_string()],
             hits: BTreeMap::new(),
+            shapes: BTreeMap::new(),
         });
     }
     let after = mask_timestamps(&canonical_snapshot(&twins.left, false));
@@ -1081,6 +1453,7 @@ fn pair_poisoned_batch_is_a_no_op(
     Some(Comparison {
         problems,
         hits: BTreeMap::new(),
+        shapes: BTreeMap::new(),
     })
 }
 
@@ -1261,6 +1634,7 @@ fn run_pairs(
             skipped: 0,
             problems: Vec::new(),
             hits: BTreeMap::new(),
+            shapes: BTreeMap::new(),
             signatures: std::collections::BTreeSet::new(),
             baseline_distance: 0,
         });
@@ -1286,6 +1660,9 @@ fn run_pairs(
                     for (id, count) in found.hits {
                         *entry.hits.entry(id).or_insert(0) += count;
                     }
+                    for (id, count) in found.shapes {
+                        *entry.shapes.entry(id).or_insert(0) += count;
+                    }
                     for problem in found.problems {
                         entry.problems.push(format!(
                             "seed {seed} repeat {repeat} [{}]\n  promise: {}\n  {problem}",
@@ -1302,14 +1679,17 @@ fn run_pairs(
 fn summarize(seed: u32, outcomes: &BTreeMap<&'static str, PairOutcome>) -> String {
     let mut parts = Vec::new();
     for (id, outcome) in outcomes {
-        let hits = outcome
-            .hits
-            .iter()
-            .map(|(id, count)| format!("{id}={count}"))
-            .collect::<Vec<_>>()
-            .join(" ");
+        let join = |counts: &BTreeMap<&'static str, usize>| -> String {
+            counts
+                .iter()
+                .map(|(id, count)| format!("{id}={count}"))
+                .collect::<Vec<_>>()
+                .join(" ")
+        };
+        let hits = join(&outcome.hits);
+        let shapes = join(&outcome.shapes);
         parts.push(format!(
-            "{id}: {} built, {} skipped, {} problem(s), baseline-distance {}{}",
+            "{id}: {} built, {} skipped, {} problem(s), baseline-distance {}{}{}",
             outcome.built,
             outcome.skipped,
             outcome.problems.len(),
@@ -1318,6 +1698,11 @@ fn summarize(seed: u32, outcomes: &BTreeMap<&'static str, PairOutcome>) -> Strin
                 String::new()
             } else {
                 format!("; classified: {hits}")
+            },
+            if shapes.is_empty() {
+                String::new()
+            } else {
+                format!("; shapes: {shapes}")
             }
         ));
     }
@@ -1359,6 +1744,7 @@ fn metamorphic_gate() {
     let mut problems = Vec::new();
     let mut built = 0;
     let mut total: BTreeMap<&'static str, usize> = BTreeMap::new();
+    let mut shapes: BTreeMap<&'static str, usize> = BTreeMap::new();
     for &seed in GATE_SEEDS {
         let outcomes = run_pairs(seed, GATE_REPEATS, false, GATE_PRELUDE);
         println!("{}", summarize(seed, &outcomes));
@@ -1368,9 +1754,13 @@ fn metamorphic_gate() {
             for (id, count) in &outcome.hits {
                 *total.entry(id).or_insert(0) += count;
             }
+            for (id, count) in &outcome.shapes {
+                *shapes.entry(id).or_insert(0) += count;
+            }
         }
     }
     println!("metamorphic gate classified totals: {total:?}");
+    println!("metamorphic gate shape totals: {shapes:?}");
     // A run that built nothing passes vacuously, which is the failure mode a
     // skip-heavy generator invites. Every pair has to have been reached.
     assert!(
@@ -1379,6 +1769,17 @@ fn metamorphic_gate() {
          the generators are not reaching the shapes the pairs need",
         GATE_SEEDS.len(),
         PAIRS.len()
+    );
+    // Same argument, one level down. `range-shift-is-n-single-deletes` asserts
+    // one thing on a range that removes a merge and a different thing on a range
+    // that does not; a run that only ever drew the second half never exercised
+    // the documented divergence at all, and would go green while saying nothing
+    // about the property this pair exists for.
+    assert!(
+        shapes.get(DOOMED_ANCHOR_SHAPE).copied().unwrap_or(0) > 0,
+        "no gate seed produced a range whose removed stations carry a merge, so the doomed-anchor \
+         arm of range-shift-is-n-single-deletes asserted nothing: re-choose GATE_SEEDS or widen \
+         the prelude until the shape is reached again"
     );
     assert!(
         problems.is_empty(),
@@ -1413,6 +1814,7 @@ fn the_metamorphic_engine_is_deterministic() {
             usize,
             usize,
             BTreeMap<&'static str, usize>,
+            BTreeMap<&'static str, usize>,
         )> {
             outcomes
                 .iter()
@@ -1423,6 +1825,10 @@ fn the_metamorphic_engine_is_deterministic() {
                         outcome.skipped,
                         outcome.problems.len(),
                         outcome.hits.clone(),
+                        // The generated SHAPES too: an arm that stops being
+                        // reached is a replay difference, and it is the one that
+                        // would otherwise be silent.
+                        outcome.shapes.clone(),
                     )
                 })
                 .collect()
@@ -1470,6 +1876,7 @@ fn metamorphic_fuzz() {
 
     let mut totals: BTreeMap<&'static str, (usize, usize, usize, usize)> = BTreeMap::new();
     let mut classified: BTreeMap<&'static str, usize> = BTreeMap::new();
+    let mut shapes: BTreeMap<&'static str, usize> = BTreeMap::new();
     let mut signatures: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     let mut dirty = Vec::new();
     for seed in 1..=seeds {
@@ -1491,6 +1898,9 @@ fn metamorphic_fuzz() {
             seed_problems += outcome.problems.len();
             for (hit, count) in &outcome.hits {
                 *classified.entry(hit).or_insert(0) += count;
+            }
+            for (shape, count) in &outcome.shapes {
+                *shapes.entry(shape).or_insert(0) += count;
             }
             signatures.extend(outcome.signatures.iter().cloned());
             if verbose {
@@ -1516,6 +1926,7 @@ fn metamorphic_fuzz() {
         signatures.len()
     );
     println!("classified totals: {classified:?}");
+    println!("generated shape totals: {shapes:?}");
     println!(
         "seeds with at least one UNEXPLAINED divergence ({}): {dirty:?}",
         dirty.len()

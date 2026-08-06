@@ -41,7 +41,16 @@ tauri-plugin-fs = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+# `float_roundtrip` is REQUIRED, not a preference. serde_json's default float
+# parser is best-effort and lands up to 1 ULP away from the value the writer
+# emitted: it writes `-26.759999999999998` faithfully and reads it back as
+# `-26.76`. Every undo/redo snapshot is a serialized `Project`
+# (`AppState::restore_snapshot_into`), so without this an undo silently rewrites
+# survey measurements in their last bit - and the closure-adjusted geometry, which
+# is what the map draws and every export writes, moved by 28 microns on a shot
+# whose stored value never changed (issue #413, finding 25). Costs ~2x on float
+# parsing only.
+serde_json = { version = "1", features = ["float_roundtrip"] }
 rusqlite = { version = "0.31", features = ["bundled"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }

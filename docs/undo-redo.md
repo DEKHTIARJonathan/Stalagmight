@@ -34,18 +34,263 @@ Commands go through a two-phase capture during execution:
 
 | Variant | Used By | Undo | Redo |
 |---------|---------|------|------|
-| `InverseCommand` | SetShotReference, Move{Section,Station} | Execute the inverse command | Execute the original command |
-| `PreviousValues` | UpdateShot, UpdateSectionMetadata | Parse JSON, apply old values | Execute the original command |
-| `CreatedSectionSnapshot` | CreateSection | Delete the section | Restore from snapshot (preserves original ID) |
-| `CreatedShotSnapshot` | CreateShot | Delete the shot | Restore from snapshot (preserves original ID) |
+| `InverseCommand` | SetStationComment | Execute the inverse command | Execute the original command |
+| `PreviousValues` | UpdateShot, SetShotKind, UpdateSectionMetadata | Parse JSON, apply old values, then put the recorded `section_offsets` back (see below) | Execute the original command |
+| `CreatedSectionSnapshot` | CreateSection | Delete the section | Restore from snapshot (preserves the original ID **and** the recorded identity - see below) |
+| `CreatedShotSnapshot` | CreateShot | Remove the created shot - the exact inverse of the insert, guard-free - then put the recorded `section_offsets` back (see below) | Restore from snapshot (preserves original ID) |
 | `ShotSnapshot` | DeleteShot | Restore shot at exact position | Re-execute the delete |
 | `MergeInfo` | MergeStations | Restore previous offsets + unmerge | Execute the original command |
 | `UnmergeInfo` | UnmergeStations | Re-merge + restore removed closures | Re-execute the unmerge |
-| `ClosureInfo` | CreateLoopClosure | Remove the closure | Push closure back (preserves ID) |
-| `ZeroDatumInfo` | Set/RemoveZeroDatum | Restore GPS + offsets directly | Execute the original command |
+| `ClosureInfo` | Create/RemoveLoopClosure | Remove the closure, or put it back at its recorded index | Push closure back (preserves ID) |
+| `ZeroDatumInfo` | SetZeroDatum (and legacy persisted RemoveZeroDatum entries) | Restore GPS + offsets directly, at the datum's recorded index | Execute the original command |
 | `SegmentMoveInfo` | MoveSegment | Restore section offsets directly | Reapply offset to affected sections |
-| `ProjectSnapshotPair` | Batch, DeleteSection | Restore "before" JSON | Restore "after" JSON |
+| `ProjectSnapshotPair` | Batch, DeleteSection, RemoveZeroDatum (see below) | Re-record "after" from the live project, then restore "before" JSON (see below) | Re-record "before" from the live project, then restore "after" JSON |
 | `None` | Non-undoable commands | N/A | N/A |
+
+### Undo data addresses a shot by uuid, never by its in-session id (#413)
+
+`Shot::id` is regenerated on every load - the reader renumbers each shot to
+`section_id * FEATURE_ID_STRIDE + sequence_order`
+(`persistence/sqlite/read.rs`) - while undo entries are persisted and reloaded
+as opaque JSON with no remapping, and `Section::take_shot_id` hands out ids from
+that same space. So a persisted id does not miss after a reopen, it **collides**
+with whatever shot now occupies the slot (issue #413, findings 8 and 12: the
+undo deleted or edited the WRONG shot), or runs past the renumbered range and
+misses everything, failing forever because `undo_inner`'s epilogue pushes a
+failed entry back (finding 13).
+
+Every id-bearing undo payload therefore also records the target's `Shot::uuid`,
+which is the identity that survives a save (it is what `StationKey::AfterShot`
+and the Ariane export already resolve by):
+
+| field | on | addresses |
+|---|---|---|
+| `uuid` | `CreatedShotSnapshot` | the shot the `CreateShot` created |
+| `after_shot_uuid` / `before_shot_uuid` | `CreatedShotSnapshot` | the anchor the redo re-inserts against |
+| `shot_uuid` | `PreviousValues` (shot form) | the shot whose values are restored |
+
+The rules the restore paths follow:
+
+- **Resolve by uuid first.** The recorded integer id is only a fallback for a
+  LEGACY entry that carries no uuid (all the fields are `#[serde(default)]`, so
+  old persisted JSON still loads - no schema bump).
+- **A recorded uuid that no longer resolves is a loud failure**, never a
+  fall-back to the id: the id is exactly the thing that cannot be trusted.
+- **A redo of `CreatedShotSnapshot` refuses to insert a uuid the section already
+  holds** - two shots with one uuid is a corrupt project, and the next save's
+  `ensure_unique_shot_uuids` would silently re-mint one of them (finding 16).
+  The recorded in-session id is likewise only forced onto the recreated shot
+  when it is still free.
+- **Load drops what it cannot address.** `UndoStack::drop_entries_addressing_a_missing_shot`
+  runs after the restore and drops (with a warning) entries whose shot target
+  does not resolve, so a stale entry costs one undo step instead of wedging
+  every step beneath it. It scans from the top and STOPS at the first entry
+  whose undo restores recorded state wholesale (`ProjectSnapshot`,
+  `ProjectSnapshotPair`, `SectionSnapshot`, `ShotSnapshot`): such an entry puts
+  a whole project or section back in the id space it was recorded in, so
+  anything below it may become addressable again once the walk reaches it.
+
+`SetShotKind` records `PreviousValues` rather than the
+`InverseCommand(SetShotKind)` it used to, for the same reason: `InverseCommand`
+is a newtype around `Command`, so there is nowhere in it to record a uuid
+without breaking every legacy payload of that variant. Persisted
+`InverseCommand(SetShotKind)` entries still restore through their own arm, by
+id, as legacy entries.
+
+### A restore puts identity and ORDER back, not just values (#413, findings 1, 4, 17)
+
+Three entries used to rebuild rather than restore, and lost something each time.
+All three fixes are additive `#[serde(default)]` fields, so old persisted JSON
+still loads and falls back to the previous behaviour - no schema bump.
+
+- **`CreatedSectionSnapshot` carries a `SectionIdentity`** next to its
+  `SectionData`: the shots' uuids, the section's `reverse_parity` and the two
+  least-squares gauge anchors. `SectionData` is the CREATE shape and holds none
+  of them, so a redo used to run `Section::new` and mint a fresh uuid per shot -
+  dangling every `StationKey::AfterShot` anchor onto the section, exactly what
+  `CreatedShotSnapshot`'s `uuid` field exists to prevent. `Section::restore_with_identity`
+  applies the recorded identity; a legacy entry with no `identity` mints as
+  before. The undo REFRESHES that identity from the live section immediately
+  before it deletes it, because a save can heal the section (see the next
+  section) after the entry was pushed.
+- **`RemoveZeroDatum` records a whole `ProjectSnapshotPair`**, not the
+  `ZeroDatumInfo` its sibling `SetZeroDatum` still records. Removing a GPS anchor
+  can CONVERT a loop closure to a station merge: a sole-bridge closure between
+  two independently anchored groups is left alone by
+  `convert_orphan_closures_to_merges` (a merge there would put two anchors in one
+  rigid component), and dropping one anchor lifts that refusal, so the command is
+  classified `can_orphan_closures` and `execute()`'s epilogue converts - in
+  session, exactly as the loader would on the next open. `ZeroDatumInfo` can put
+  back a datum and a map of offsets; it cannot put back a closure that has become
+  a merge. The pair restores both directions verbatim and is self-refreshing, so
+  the conversion lands in the `after` half by construction. It is the expensive
+  capture, and affordable here because removing an anchor is a rare deliberate
+  act rather than a per-keystroke edit. Entries persisted before this change
+  still carry `ZeroDatumInfo` and still restore through its arm.
+- **`ClosureInfo` and `ZeroDatumInfo` carry the `position`** the forward
+  `Vec::remove` took the entry out of, and the undo re-inserts THERE rather than
+  appending. `Project::loop_closures` and `Project::zero_datums` are persisted in
+  order, indexed positionally by the frontend, and walked in order by
+  `resolve_offsets` when it builds adjacency and picks the datum that anchors a
+  connected group - so a permutation is not cosmetic. `None` (a legacy entry, a
+  create, or a datum that did not exist before) still appends.
+
+### A restored snapshot is re-healed to the standard a save leaves (#413, finding 11)
+
+`save_project` mutates the live project with **no undo entry of its own** - it
+mints missing shot uuids, re-mints within-section duplicates, captures the
+least-squares gauge pair, drops orphan `section_offsets` and sanitizes non-finite
+values (`apply_save_heals`, `core/state/project_io.rs`). A `ProjectSnapshotPair`
+captured BEFORE that save holds the pre-heal project in both halves, so restoring
+one used to revert the heal as a side effect of an unrelated undo - which made
+the project at a given undo depth depend on the ROUTE taken to reach it.
+
+`restore_snapshot_into` - the single place a restored project enters the live
+slot - therefore ends in `reapply_heals_after_restore`, which re-applies the
+heals that are pure fill-in (missing uuids, and a carry-forward of the gauge
+anchors the live project already holds). The heals that DROP or REWRITE state
+(the duplicate-uuid re-mint, the orphan-offset retain, the non-finite sanitize)
+are deliberately not re-applied: an undo has to be an exact inverse, and undoing
+a Repair has to restore the very state that Repair healed. The per-heal argument
+is on the function.
+
+### A snapshot pair is a SELF-REFRESHING wall (#413, finding 11's re-creation residue)
+
+The carry-forward above repairs the half being **restored**, and it can only do so
+where the restored project and the live one hold **the same section** - it copies
+anchors from a live section with the restored one's id. A pair whose two halves
+disagree about whether a section EXISTS has no such counterpart: a `Batch`
+containing `CreateSection`, `execute_delete_shot_range_split`'s re-created tail,
+any delete-and-recreate. Undo restores a `before` in which the section is absent,
+and the redo then restores an `after` recorded before the save that minted the
+section's gauge pair - so the state at that depth still depended on the route.
+
+So `undo_inner` and `redo_inner` both call
+`AppState::refresh_snapshot_pair_counterpart` (`core/state/undo.rs`) before
+stepping through a pair. A pair is a wall - nothing above it survives the step -
+so at that moment the live project **is** the side being left behind: `after` when
+undoing, `before` when redoing. Re-recording that side from the live project makes
+undo and redo of a pair exact inverses of each other **by construction**, whatever
+undo-less change happened since the entry was pushed. `refresh_created_section_identity`
+does the same thing one variant over, for `CreatedSectionSnapshot`.
+
+The two are complementary and both are kept: the refresh fixes the half being
+LEFT, the carry-forward fixes the half being RESTORED (and is also on the path of
+every single `ProjectSnapshot`, rollback and load-time restore, where there is no
+pair to refresh). The cost is one project serialization per snapshot-pair history
+move - not a new cost class, since recording a pair already serializes the project
+twice and restoring one already deserializes it.
+
+### A dust-zero `section_offsets` entry is unrepresentable (#413, finding 27)
+
+`section_offsets` holds a key only for a section that is **actually displaced**,
+and "not displaced" has exactly one spelling: the key is absent. A value within
+`Project::OFFSET_DUST_M` (a picometre) of the origin in both components is not a
+position, so it is never stored - in memory or on disk, by any writer, computed or
+restored. The invariant is stated on `Project::write_section_offset`, which is the
+one write point everything routes through, and enforced on maps this app did not
+write by `Project::normalize_section_offsets`.
+
+It has to be an invariant rather than a per-writer rule because no rule local to a
+write can satisfy both identities the app owes. `MoveSection(+d)` followed by
+`MoveSection(-d)` must leave the map it found, and a writer sees only its own
+arguments:
+
+- from an **absent** key, `(0 + d) - d` lands a femtometre off zero and the key
+  must end absent - the route that did nothing has none either (#413 finding 2's
+  dust half);
+- from a **present all-zero** key, the same arithmetic must end present.
+
+Both were real. The second is what the metamorphic pair
+`move-out-and-back-is-identity` reported once a project carrying a legacy all-zero
+row reached it, and it is the same contradiction finding 27 hit from the undo side.
+Removing the state removes the contradiction: there is no present all-zero key to
+preserve, so the first rule is the only one left, and presence can no longer differ
+between two states that agree geometrically.
+
+Two boundaries enforce it on input this app did not produce:
+
+- **the loader**, in `Project::redrive_offsets_after_load` after the zero-trust
+  re-solve. The re-solve does not reach such a row (the cascade never seed-adjusts
+  an anchor or a free-floating component), so it is dropped explicitly. A legacy
+  `.stalx` therefore opens without it, and settles on the next save.
+- **the snapshot restore**, in `AppState::restore_snapshot_into`. Undo history is
+  persisted and reloaded across sessions, so an entry written by a build predating
+  the invariant can carry one in its payload; a restore may not install a state the
+  app cannot otherwise reach.
+
+Nothing observable changes when a row is dropped: every consumer reads the map
+through `Project::section_offset` or an inline `.get(..).unwrap_or((0.0, 0.0))`, so
+an absent key and an all-zero one are the same geometry, the same coordinates and
+the same drawn position. The **file-format gate is unaffected** for the same reason
+it always was: the app never writes a dust-zero row, so a save-load-save cycle on a
+file this app wrote is a fixpoint. A legacy file sees a one-time settle - the load
+drops the row, the next save omits it - and is a fixpoint from then on.
+
+#### An inverse still RESTORES the offsets it re-derives
+
+Two undo arms re-derive the offsets their inverse recomputes, and both carry the
+pre-command map of the edited section's rigid connected set
+(`Project::capture_rigid_connected_section_offsets`) and hand it back verbatim
+afterwards:
+
+- `UndoData::PreviousValues { previous_offsets }` - the undo re-executes
+  `update_shot`, whose `realign_after_shot_edit` re-derives the group's offsets.
+  Captured only for a geometry edit, which is the only one that realigns.
+- `UndoData::CreatedShotSnapshot { previous_offsets }` - the undo removes the shot,
+  and a mid-section removal pays the section's offset back by the segment it took
+  out.
+
+The invariant closes the **presence** question, not the **value** one. The realign
+recomputes an offset from section-local coordinates and is self-correcting, but the
+removal above genuinely accumulates: it computes `(v + d) - d`, which is not `v` in
+IEEE. One cycle of that drift is below every oracle's tolerance, which is exactly
+why no fuzz survey reaches it, and it is the shape the horizon mode watches
+accumulate (finding 19). The captures make the undo bit-exact instead. They are
+bounded - the rigid connected component only - and elided entirely when empty, so a
+metadata-only shot edit carries none.
+
+Only the undo direction needs them. A redo re-executes the forward command from a
+state the undo restored exactly, and the forward path is deterministic, so it
+reproduces the recorded post-command map.
+
+### An inverse consults no user-intent guard (#413, findings 3 and 6)
+
+**If a forward command was permitted, its inverse must be too.** Undo of
+`CreateShot` used to run the user-facing `delete_shot`, guards and all. Those
+guards say what a USER may do - do not tear a loop apart, do not touch
+collaborator-locked geometry - and both of them refuse an undo in practice: the
+frozen-shot check, and the shift-blocked loop/datum pair behind it. A refused
+undo is not a no-op: `undo_inner`'s epilogue pushes the entry back, so it fails
+identically forever and every entry beneath it is unreachable. That is a WEDGED
+history, and through the history dropdown a multi-step `undo_to` wedges partway,
+leaving the earlier steps applied.
+
+`AppState::remove_created_shot` (`core/state/command_shot.rs`) is the undo path.
+It keeps the structural rewire (`Project::remove_shot_with_rewire`) and consults
+neither guard. `Command::DeleteShot` still runs `delete_shot` unchanged, so a
+USER delete is refused exactly as before.
+
+It also picks the right inverse per insert shape, because `remove_shot_with_rewire`
+is not the inverse of one of them:
+
+- **Append into an EMPTY section** (both recorded anchors absent, position 0, and
+  still the section's sole shot) -> `Project::remove_appended_first_shot`
+  (`models/project/shots.rs`). `remove_shot_with_rewire`'s `pos == 0` branch
+  answers the user's delete-the-first-shot question - station 0 goes away,
+  station 1 becomes the new section start, refs keyed to station 0 are dropped
+  and `adjust_section_offset` slides the section so the survivors keep their
+  world positions. With exactly one shot there is no survivor: the section slid
+  by the shot vector while the offset-neutral `Project::add_shot` gave nothing
+  back, and the redo re-appended offset-neutrally, so every cycle slid it again
+  (the RATCHET). The station the append CREATED is station 1, `AfterShot(uuid)`;
+  that is what the inverse removes, leaving `section_offsets` and station 0's
+  merges, datums and comments untouched.
+- **Everything else** -> `remove_shot_with_rewire`, which already mirrors the
+  insert exactly: an append into a non-empty section leaves no station beyond the
+  deletion point, so `anchored_sides_of_edit` sees no anchored tail and
+  compensates nothing; a mid-chain insert and a prepend are undone by the same
+  offset arithmetic that made them.
 
 ### Why Some Undos Restore Directly Instead of Re-Executing
 
@@ -325,7 +570,15 @@ likewise only ever bumped while holding `project`; see the module doc in
 
 - Opens on ~300ms hover over the undo/redo toolbar button
 - Shows up to 5 items with icon, truncated description (40 chars), and relative timestamp
-- **Click item**: jumps to that stack position (`undo_to`/`redo_to`) and closes
+- **Click item**: jumps to that stack position (`undo_to`/`redo_to`) and closes.
+  A jump lands exactly where the same number of single steps lands: `undo_to` and
+  `redo_to` loop the `*_inner` variants and then run the SAME success epilogue
+  `undo()`/`redo()` run - `mark_remote_dirty()` and `reconcile_geometry()` -
+  once, after the loop. Per step would be wasted work (the intermediate states of
+  a jump are not states the user ever sees); skipping it altogether was #413's
+  finding 7, where a jump kept the drift `reconcile_geometry`'s `realign_merges`
+  heals and left sections metres from where Ctrl+Z the same number of times
+  leaves them
 - **Click button while open**: performs single undo/redo, refreshes the list, stays open
 - **Keyboard**: Arrow keys navigate, Enter selects, Escape closes
 - Actions are queued and processed sequentially (`actionQueueRef`)

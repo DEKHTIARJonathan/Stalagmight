@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 
 use crate::config::ClosureAdjustmentConfig;
 use crate::models::{Coordinates, LoopClosure, SectionId, StationRef};
@@ -23,6 +23,15 @@ impl Project {
     ///
     /// `adj[i]` holds symmetric off-diagonal entries `(j, off_x, off_y)` (the
     /// negative edge weights). Returns `(sol_x, sol_y)`, each length `n`.
+    ///
+    /// **Determinism.** The working adjacency is a `BTreeMap` per node, not a
+    /// `HashMap`. Every neighbour walk here feeds a floating-point SUM - the
+    /// Schur complement fill, the back-substitution dot product, the core
+    /// `spmv` - and float addition is not associative, so a hashed walk order
+    /// makes the result a function of the process's `RandomState` rather than of
+    /// the system. Ordering by node index costs a few comparisons on rows of
+    /// degree ≤ 3 and makes the solve reproducible bit for bit (issue #413,
+    /// finding 21).
     pub(super) fn solve_reduced_laplacian(
         n: usize,
         diag_x: &[f64],
@@ -48,7 +57,7 @@ impl Project {
         let mut dy = diag_y.to_vec();
         let mut cx = atb_x.to_vec();
         let mut cy = atb_y.to_vec();
-        let mut nbr: Vec<HashMap<usize, (f64, f64)>> = vec![HashMap::new(); n];
+        let mut nbr: Vec<BTreeMap<usize, (f64, f64)>> = vec![BTreeMap::new(); n];
         for (i, row) in adj.iter().enumerate() {
             for &(j, ox, oy) in row {
                 let e = nbr[i].entry(j).or_insert((0.0, 0.0));
@@ -400,8 +409,20 @@ impl Project {
             fixed_coords.insert(anchor_root, coords);
         }
 
-        let mut unknown_index: HashMap<StationRef, usize> = HashMap::new();
-        for root in groups.keys() {
+        // Number the unknowns from a SORTED sequence of group roots. Walking
+        // `groups.keys()` numbered them in `HashMap` order, and `groups` is built
+        // fresh inside this call - so its `RandomState`, and with it the whole
+        // numbering, was a new random permutation on every invocation. The
+        // numbering is not cosmetic: `solve_reduced_laplacian` peels nodes in
+        // ascending index order and sums each node's neighbours, and float
+        // addition is not associative, so the permutation reached the answer's
+        // last bits (and, through the relative CG stop, its iteration count). The
+        // adjusted geometry is what the map draws and every export writes, so it
+        // has to be a function of the project (issue #413, finding 21).
+        let mut roots: Vec<StationRef> = groups.keys().copied().collect();
+        roots.sort_unstable();
+        let mut unknown_index: HashMap<StationRef, usize> = HashMap::with_capacity(roots.len());
+        for root in &roots {
             if !fixed_groups.contains(root) {
                 let next = unknown_index.len();
                 unknown_index.insert(*root, next);
@@ -631,7 +652,7 @@ impl Project {
         }
 
         let mut group_coords: HashMap<StationRef, Coordinates> = HashMap::new();
-        for root in groups.keys() {
+        for root in &roots {
             let raw_z = group_raw_z.get(root).copied().unwrap_or(0.0);
             if let Some(coords) = fixed_coords.get(root) {
                 // Fixed groups keep their original coords but Z is always original
@@ -793,7 +814,10 @@ impl Project {
         // Align each section's absolute position to solved coordinates (rigid XY translation).
         // This prevents merged stations in different sections from drifting apart.
         // Only X and Y are compared/applied; Z (depth) is not adjusted.
-        let mut section_deltas: HashMap<SectionId, (f64, f64)> = HashMap::new();
+        // Keyed order, so the offsets are applied in section order rather than in
+        // hash order. Each entry targets a distinct section today, but pinning the
+        // order keeps that from being load-bearing (issue #413, finding 21).
+        let mut section_deltas: BTreeMap<SectionId, (f64, f64)> = BTreeMap::new();
         for section in self.sections.iter().filter(|s| component.contains(&s.id)) {
             let mut delta_xy: Option<(f64, f64)> = None;
             for idx in 0..=section.shots.len() {

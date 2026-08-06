@@ -1,5 +1,5 @@
 use crate::core::{Command, CommandResult};
-use crate::models::{Section, SectionData, SectionId, Shot, ShotData, ShotId};
+use crate::models::{Section, SectionData, SectionId, SectionIdentity, Shot, ShotData, ShotId};
 
 use super::AppState;
 
@@ -131,11 +131,17 @@ impl AppState {
         }
     }
 
-    /// Restore a deleted section with its original ID
+    /// Restore a deleted section with its original ID and its original identity.
+    ///
+    /// `identity` carries what `SectionData` cannot: the shots' uuids, the
+    /// reverse parity and the gauge pair. A default `identity` (a legacy
+    /// persisted entry, which has no such field) mints fresh uuids and resets
+    /// the pair, which is the pre-fix behaviour (#413, finding 1).
     pub(super) fn restore_section(
         &self,
         original_id: SectionId,
         data: SectionData,
+        identity: &SectionIdentity,
     ) -> CommandResult {
         let Ok(mut proj_guard) = self.project.lock() else {
             return CommandResult::failure("Failed to lock project".to_string());
@@ -146,7 +152,7 @@ impl AppState {
         };
 
         // Create section with original ID
-        let section = Section::new_with_id(original_id, data);
+        let section = Section::restore_with_identity(original_id, data, identity);
         // Keep section_index_cache in step.  The matching
         // `remove_section` cleared the cache; without this insert
         // every subsequent `get_section` would fall back to the O(N)
@@ -155,6 +161,12 @@ impl AppState {
             .section_index_cache
             .insert(section.id, project.sections.len());
         project.sections.push(section);
+        // The restored shots keep the uuids the entry recorded, so the
+        // `(section, uuid) -> index` cache `add_section` maintains incrementally
+        // has to be refreshed for them too; a missing entry is not wrong (
+        // `resolve_key` falls back to a linear scan) but every AfterShot lookup
+        // into this section would pay for it.
+        project.reindex_section_shot_uuids(original_id);
         project.touch();
 
         // Update next_section_id if needed
@@ -228,9 +240,12 @@ impl AppState {
             );
         }
 
-        // Update next_shot_id if needed to avoid collisions
+        // Update next_shot_id if needed to avoid collisions. SATURATING: the id
+        // arrives verbatim from a persisted entry, so ShotId::MAX must park the
+        // counter rather than panic a debug build or wrap a release one into
+        // colliding ids (#413 finding 24's class, same as the redo append arm).
         if original_shot_id >= section.next_shot_id {
-            section.next_shot_id = original_shot_id + 1;
+            section.next_shot_id = original_shot_id.saturating_add(1);
         }
 
         if position <= section.shots.len() {

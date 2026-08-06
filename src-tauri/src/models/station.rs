@@ -4,7 +4,13 @@ use ts_rs::TS;
 use super::SectionId;
 
 /// Reference to a station using section_id:station_index format
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+///
+/// Ordered lexicographically by `(section_id, station_index)` - the field order
+/// the derive uses. The order is load-bearing, not cosmetic: the closure solve
+/// numbers its unknowns from a SORTED sequence of station refs so the adjusted
+/// geometry is a function of the project rather than of `HashMap` iteration
+/// order (see `Project::adjust_least_squares`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, TS)]
 pub struct StationRef {
     pub section_id: SectionId,
     pub station_index: u32,

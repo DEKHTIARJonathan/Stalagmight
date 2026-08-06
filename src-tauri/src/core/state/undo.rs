@@ -1,7 +1,15 @@
-use crate::core::{Command, CommandResult, ReversedSection, UndoData};
-use crate::models::{SectionId, SectionUpdates, Shot, ShotUpdates};
+use crate::core::{Command, CommandResult, ReversedSection, UndoData, UndoEntry};
+use crate::models::{SectionId, SectionIdentity, SectionUpdates, Shot, ShotId, ShotUpdates};
 
 use super::AppState;
+
+/// Which way through the history a step is going, for the two paths that have to
+/// treat the two halves of a `ProjectSnapshotPair` asymmetrically.
+#[derive(Clone, Copy)]
+enum HistoryMove {
+    Undo,
+    Redo,
+}
 
 impl AppState {
     // === Project operations ===
@@ -42,7 +50,7 @@ impl AppState {
     /// Undo implementation (caller must hold command_lock)
     fn undo_inner(&self) -> CommandResult {
         // Pop from undo stack
-        let entry = {
+        let mut entry = {
             let Ok(mut stack) = self.undo_stack.lock() else {
                 return CommandResult::failure("Failed to lock undo stack".to_string());
             };
@@ -52,6 +60,20 @@ impl AppState {
             };
             e
         };
+
+        // A `CreateSection` undo is about to DELETE the section, so this is the
+        // last moment its identity can be read. Refresh the entry from the live
+        // section first, or the redo puts back what `CreateSection` originally
+        // built rather than what the undo destroyed - which loses every heal
+        // recorded since, the gauge pair a save captured above all (#413,
+        // finding 1's second half). A no-op for every other variant.
+        self.refresh_created_section_identity(&mut entry);
+        // A snapshot pair is a WALL, and the live project is the wall's `after`
+        // side. Re-record it before stepping through, so the redo puts back what
+        // this undo is about to destroy rather than a payload that predates every
+        // undo-less heal since (#413, finding 11's re-creation residue). A no-op
+        // for every other variant.
+        self.refresh_snapshot_pair_counterpart(&mut entry, HistoryMove::Undo);
 
         // Apply undo based on undo_data type
         // IMPORTANT: No early returns after this point - all paths must flow
@@ -66,17 +88,39 @@ impl AppState {
             UndoData::PreviousValues {
                 section_id,
                 shot_id,
+                shot_uuid,
                 values_json,
+                previous_offsets,
             } => {
                 // Restore previous values
                 if let Some(shot_id) = shot_id {
-                    // Restore shot values
-                    if let Ok(prev_updates) =
-                        serde_json::from_str::<ShotUpdates>(values_json.as_str())
-                    {
-                        self.update_shot(*section_id, *shot_id, prev_updates)
-                    } else {
-                        CommandResult::failure("Failed to parse undo data".to_string())
+                    // Restore shot values - onto the shot this entry was
+                    // recorded against, resolved by uuid (#413, finding 12).
+                    match self.resolve_undo_shot(*section_id, shot_uuid.as_deref(), *shot_id) {
+                        Ok(target_id) => {
+                            if let Ok(prev_updates) =
+                                serde_json::from_str::<ShotUpdates>(values_json.as_str())
+                            {
+                                let restored =
+                                    self.update_shot(*section_id, target_id, prev_updates);
+                                if restored.success {
+                                    // The re-execution's `realign_after_shot_edit`
+                                    // just RE-DERIVED the group's offsets. An
+                                    // inverse restores rather than re-derives, and
+                                    // the two part company on a key that lands
+                                    // back on the origin: the adjusted write drops
+                                    // it, and the pre-edit state may legitimately
+                                    // have HELD it (#413, finding 27). Hand the
+                                    // recorded map back verbatim, exactly as
+                                    // `SegmentMoveInfo` and `ZeroDatumInfo` do.
+                                    self.restore_captured_section_offsets(previous_offsets);
+                                }
+                                restored
+                            } else {
+                                CommandResult::failure("Failed to parse undo data".to_string())
+                            }
+                        }
+                        Err(e) => CommandResult::failure(e),
                     }
                 } else {
                     // Restore section values
@@ -94,8 +138,17 @@ impl AppState {
                 section_id,
                 section_data,
             } => {
-                // Restore deleted section
-                self.restore_section(*section_id, section_data.clone())
+                // Restore deleted section. LEGACY ONLY: a live `DeleteSection`
+                // captures a `ProjectSnapshotPair` (which restores the whole
+                // `Section`, identity included), so this arm serves persisted
+                // entries written before that change - and those carry no
+                // identity, so the shots come back with fresh uuids exactly as
+                // they always did.
+                self.restore_section(
+                    *section_id,
+                    section_data.clone(),
+                    &SectionIdentity::default(),
+                )
             }
 
             UndoData::CreatedSectionSnapshot { section_id, .. } => {
@@ -126,10 +179,46 @@ impl AppState {
             UndoData::CreatedShotSnapshot {
                 section_id,
                 shot_id,
+                position,
+                after_shot_id,
+                before_shot_id,
+                uuid,
+                previous_offsets,
                 ..
             } => {
-                // Undo a CreateShot by deleting the shot
-                self.delete_shot(*section_id, *shot_id)
+                // Undo a CreateShot by removing the shot it created - resolved
+                // by uuid, because the in-session id it was recorded with
+                // addresses a DIFFERENT shot after a save/reopen (#413,
+                // finding 8) or none at all (finding 13).
+                //
+                // Through `remove_created_shot`, NOT the user-facing
+                // `delete_shot`: an inverse must not consult the guards that
+                // express what a user may do, or a permitted CreateShot becomes
+                // an undo that fails and wedges the history (#413, finding 6).
+                // The recorded anchors and position say WHICH insert is being
+                // inverted; both anchors absent at position 0 is the append
+                // into an empty section whose inverse is not the general
+                // delete (finding 3).
+                match self.resolve_undo_shot(*section_id, uuid.as_deref(), *shot_id) {
+                    Ok(target_id) => {
+                        let removed = self.remove_created_shot(
+                            *section_id,
+                            target_id,
+                            after_shot_id.is_none() && before_shot_id.is_none() && *position == 0,
+                        );
+                        if removed.success {
+                            // The removal paid the section's offset back by the
+                            // segment it took out, through the adjusted write -
+                            // which DROPS a key that lands on the origin whether
+                            // or not the pre-insert state held one. Restore the
+                            // recorded map instead of trusting that re-derivation
+                            // (#413, finding 27's second arm).
+                            self.restore_captured_section_offsets(previous_offsets);
+                        }
+                        removed
+                    }
+                    Err(e) => CommandResult::failure(e),
+                }
             }
 
             UndoData::MergeInfo {
@@ -208,7 +297,7 @@ impl AppState {
                 }
             }
 
-            UndoData::ClosureInfo { closure } => {
+            UndoData::ClosureInfo { closure, position } => {
                 match &entry.command {
                     Command::CreateLoopClosure { .. } => {
                         // Undo create by removing the same closure ID.
@@ -231,13 +320,25 @@ impl AppState {
                         }
                     }
                     Command::RemoveLoopClosure { .. } => {
-                        // Undo remove by restoring the captured closure.
+                        // Undo remove by restoring the captured closure AT ITS
+                        // ORIGINAL INDEX. The removal was a `Vec::remove`, which
+                        // keeps the rest in order, so appending here would
+                        // permute a list that is persisted into the `.stalx`,
+                        // indexed by the frontend and traversed by
+                        // `resolve_offsets` (#413, finding 4). A legacy entry
+                        // carries no position and still appends.
                         match self.project.lock() {
                             Ok(mut proj_guard) => match proj_guard.as_mut() {
                                 Some(project) => {
                                     project.next_closure_id =
                                         project.next_closure_id.max(closure.id + 1);
-                                    project.loop_closures.push(closure.clone());
+                                    match position {
+                                        Some(index) => {
+                                            let at = (*index).min(project.loop_closures.len());
+                                            project.loop_closures.insert(at, closure.clone());
+                                        }
+                                        None => project.loop_closures.push(closure.clone()),
+                                    }
                                     project.touch();
                                     CommandResult::success()
                                 }
@@ -253,6 +354,7 @@ impl AppState {
             UndoData::ZeroDatumInfo {
                 station_ref,
                 previous_gps,
+                position,
                 previous_offsets,
             } => {
                 // Restore previous datum state directly without recomputing offsets
@@ -267,7 +369,13 @@ impl AppState {
                             // Stable stored identity for the datum's station.
                             let datum_key = project.key_for_ref(*station_ref);
 
-                            // Restore GPS datum state
+                            // Restore GPS datum state, AT ITS ORIGINAL INDEX when
+                            // the datum has to be put back: the removal was a
+                            // `Vec::remove`, so appending permutes a list that
+                            // is persisted, indexed by the frontend, and walked
+                            // by `resolve_offsets` to decide which datum anchors
+                            // a connected group (#413, finding 17). A legacy
+                            // entry carries no position and still appends.
                             if let Some(gps) = previous_gps {
                                 if let Some(existing) = project
                                     .zero_datums
@@ -276,10 +384,17 @@ impl AppState {
                                 {
                                     existing.gps = *gps;
                                 } else if let Some(key) = datum_key {
-                                    project.zero_datums.push(crate::models::ZeroDatum {
+                                    let datum = crate::models::ZeroDatum {
                                         station_ref: key,
                                         gps: *gps,
-                                    });
+                                    };
+                                    match position {
+                                        Some(index) => {
+                                            let at = (*index).min(project.zero_datums.len());
+                                            project.zero_datums.insert(at, datum);
+                                        }
+                                        None => project.zero_datums.push(datum),
+                                    }
                                 }
                             } else {
                                 project
@@ -365,12 +480,20 @@ impl AppState {
                                     }
                                 }
                             }
-                            // Restore section offset
+                            // Restore section offset - through the one writer, so a
+                            // legacy entry carrying a dust-zero value restores as
+                            // ABSENT rather than installing a state the app cannot
+                            // otherwise hold (the invariant on
+                            // `Project::write_section_offset`). This arm serves
+                            // persisted entries only; a live `MoveStation` records
+                            // a `ProjectSnapshotPair`.
                             match prev_section_offset {
                                 Some(offset) => {
-                                    project
-                                        .section_offsets
-                                        .insert(station_ref.section_id, *offset);
+                                    crate::models::Project::write_section_offset(
+                                        &mut project.section_offsets,
+                                        station_ref.section_id,
+                                        *offset,
+                                    );
                                 }
                                 None => {
                                     project.section_offsets.remove(&station_ref.section_id);
@@ -467,7 +590,7 @@ impl AppState {
     /// Redo implementation (caller must hold command_lock)
     fn redo_inner(&self) -> CommandResult {
         // Pop from redo stack
-        let entry = {
+        let mut entry = {
             let Ok(mut stack) = self.undo_stack.lock() else {
                 return CommandResult::failure("Failed to lock undo stack".to_string());
             };
@@ -477,6 +600,12 @@ impl AppState {
             };
             e
         };
+
+        // The mirror of the undo side: the live project is this wall's `before`
+        // side, so re-record it before stepping through and the undo that follows
+        // puts back what this redo destroys (#413, finding 11's re-creation
+        // residue). A no-op for every other variant.
+        self.refresh_snapshot_pair_counterpart(&mut entry, HistoryMove::Redo);
 
         // For snapshot-based undo data, restore from snapshot instead of re-executing.
         // This handles cases where re-execution would create different IDs.
@@ -495,9 +624,15 @@ impl AppState {
             UndoData::CreatedSectionSnapshot {
                 section_id,
                 section_data,
+                identity,
             } => {
-                // Redo CreateSection by restoring from snapshot to preserve original ID
-                self.restore_section(*section_id, section_data.clone())
+                // Redo CreateSection by restoring from the snapshot, which
+                // preserves the original id AND the identity `SectionData`
+                // cannot carry: every shot uuid (a fresh one would dangle every
+                // `StationKey::AfterShot` anchor onto this section, exactly as
+                // in `CreatedShotSnapshot`), the reverse parity, and the
+                // least-squares gauge pair (#413, finding 1).
+                self.restore_section(*section_id, section_data.clone(), identity)
             }
             UndoData::CreatedShotSnapshot {
                 section_id,
@@ -506,11 +641,13 @@ impl AppState {
                 position,
                 after_shot_id,
                 before_shot_id,
+                after_shot_uuid,
+                before_shot_uuid,
                 uuid,
                 ..
             } => {
                 // Redo by re-running the SAME insert the forward command did, with
-                // the original id AND uuid forced - so the ref-shift, offset and
+                // the original uuid forced - so the ref-shift, offset and
                 // cascade are identical to the forward path and can't drift (this
                 // is the single-source-of-truth that prevents the redo-misalignment
                 // bug), and the shot keeps its persistent identity (a fresh uuid
@@ -520,107 +657,195 @@ impl AppState {
                 // fresh mint, matching the old behavior.
                 // Append (no anchor) does no geometry maintenance, so a plain
                 // restore is exact there.
+                //
+                // Every id on this entry is an IN-SESSION id and cannot be
+                // trusted after a reload (#413, finding 16): the anchor decides
+                // WHERE the shot goes back, and the forced id decides what the
+                // recreated shot is called. Both are resolved below - anchors by
+                // uuid, the forced id only when it is still free.
                 let mut guard = match self.project.lock() {
                     Ok(g) => g,
                     Err(poisoned) => poisoned.into_inner(),
                 };
-                let Some(project) = guard.as_mut() else {
-                    return CommandResult::failure("No project open".to_string());
-                };
-                let ok = if let Some(before_id) = before_shot_id {
-                    project
-                        .insert_shot_before(
-                            *section_id,
-                            *before_id,
-                            shot_data.clone(),
-                            Some(*shot_id),
-                            uuid.clone(),
-                        )
-                        .is_some()
-                } else if let Some(after_id) = after_shot_id {
-                    project
-                        .insert_shot_after(
-                            *section_id,
-                            *after_id,
-                            shot_data.clone(),
-                            Some(*shot_id),
-                            uuid.clone(),
-                        )
-                        .is_some()
-                } else {
-                    // Both anchors absent. For a CURRENT entry this is an append to an
-                    // empty section (exact via a raw insert). But a LEGACY persisted
-                    // entry (written by a pre-anchor build, reloaded after upgrade) has
-                    // both anchors None even for a prepend / mid-section insert, so route
-                    // through the proper insert helper using the captured position - which
-                    // re-anchors SectionStart on a prepend and cascades offsets on a
-                    // mid-insert - instead of a raw insert that would mis-place anchored
-                    // tails or start-station refs.
-                    let section_len = project
-                        .get_section(*section_id)
-                        .map_or(0, |s| s.shots.len());
-                    let pos = (*position).min(section_len);
-                    if pos == 0 && section_len > 0 {
-                        // Prepend before the current first shot.
-                        let first_id = project
-                            .get_section(*section_id)
-                            .and_then(|s| s.shots.first().map(|sh| sh.id));
-                        match first_id {
-                            Some(fid) => project
-                                .insert_shot_before(
-                                    *section_id,
-                                    fid,
-                                    shot_data.clone(),
-                                    Some(*shot_id),
-                                    uuid.clone(),
-                                )
-                                .is_some(),
-                            None => false,
-                        }
-                    } else if pos < section_len {
-                        // Mid-section: insert after the shot currently at pos-1.
-                        let prev_id = project
-                            .get_section(*section_id)
-                            .and_then(|s| s.shots.get(pos - 1).map(|sh| sh.id));
-                        match prev_id {
-                            Some(pid) => project
-                                .insert_shot_after(
-                                    *section_id,
-                                    pid,
-                                    shot_data.clone(),
-                                    Some(*shot_id),
-                                    uuid.clone(),
-                                )
-                                .is_some(),
-                            None => false,
-                        }
-                    } else {
-                        // True append (pos == len) or empty section: a raw insert is
-                        // exact - no station shift or SectionStart re-anchor is needed.
-                        let id = *shot_id;
-                        if let Some(section) = project.get_section_mut(*section_id) {
-                            if id >= section.next_shot_id {
-                                section.next_shot_id = id + 1;
-                            }
-                            section.shots.insert(
-                                pos,
-                                Shot::with_uuid(
-                                    id,
-                                    shot_data.clone(),
-                                    Some(Shot::uuid_or_mint(uuid.clone())),
-                                ),
-                            );
-                            project.touch();
-                            true
+                match guard.as_mut() {
+                    None => CommandResult::failure("No project open".to_string()),
+                    Some(project) => {
+                        // A shot with this uuid is ALREADY in the section, so the
+                        // insert would give it the same identity twice - the
+                        // identity every `StationKey::AfterShot` anchor and the
+                        // Ariane export resolve by, and one `ensure_unique_shot_uuids`
+                        // re-mints on the next save. That is a corrupt project, so
+                        // refuse loudly instead of writing it (#413, finding 16).
+                        let duplicate = uuid
+                            .as_deref()
+                            .and_then(|u| project.shot_id_by_uuid(*section_id, u));
+                        if let Some(existing_id) = duplicate {
+                            CommandResult::failure(format!(
+                                "Refusing to redo the creation of shot {} in section {section_id}: \
+                                 the section already holds that uuid (as shot {existing_id}), so \
+                                 redoing would duplicate a shot identity",
+                                uuid.as_deref().unwrap_or_default()
+                            ))
                         } else {
-                            false
+                            let resolve_anchor = |project: &crate::models::Project,
+                                                  recorded_id: Option<ShotId>,
+                                                  anchor_uuid: Option<&str>|
+                             -> Option<ShotId> {
+                                let Some(anchor_uuid) = anchor_uuid else {
+                                    // Legacy entry: the recorded id is the
+                                    // only address it has.
+                                    return recorded_id;
+                                };
+                                let resolved = project.shot_id_by_uuid(*section_id, anchor_uuid);
+                                if resolved.is_none() {
+                                    tracing::warn!(
+                                        section_id = *section_id,
+                                        anchor_uuid,
+                                        purpose = "redo a shot insert",
+                                        "The shot this insert was anchored to is gone; \
+                                             falling back to the recorded position rather than \
+                                             to its stale id"
+                                    );
+                                }
+                                resolved
+                            };
+                            let before_anchor = resolve_anchor(
+                                project,
+                                *before_shot_id,
+                                before_shot_uuid.as_deref(),
+                            );
+                            let after_anchor =
+                                resolve_anchor(project, *after_shot_id, after_shot_uuid.as_deref());
+                            // Forcing an id the section already uses would give
+                            // two shots one id. The id is in-session only (the
+                            // loader renumbers it anyway), so minting a fresh one
+                            // costs nothing that a collision would not cost more.
+                            let id_taken =
+                                project.get_section(*section_id).is_some_and(|section| {
+                                    section.shots.iter().any(|s| s.id == *shot_id)
+                                });
+                            let forced_id = (!id_taken).then_some(*shot_id);
+                            let ok = if let Some(before_id) = before_anchor {
+                                project
+                                    .insert_shot_before(
+                                        *section_id,
+                                        before_id,
+                                        shot_data.clone(),
+                                        forced_id,
+                                        uuid.clone(),
+                                    )
+                                    .is_some()
+                            } else if let Some(after_id) = after_anchor {
+                                project
+                                    .insert_shot_after(
+                                        *section_id,
+                                        after_id,
+                                        shot_data.clone(),
+                                        forced_id,
+                                        uuid.clone(),
+                                    )
+                                    .is_some()
+                            } else {
+                                // Both anchors absent. For a CURRENT entry this is an append to an
+                                // empty section (exact via a raw insert). But a LEGACY persisted
+                                // entry (written by a pre-anchor build, reloaded after upgrade) has
+                                // both anchors None even for a prepend / mid-section insert, so route
+                                // through the proper insert helper using the captured position - which
+                                // re-anchors SectionStart on a prepend and cascades offsets on a
+                                // mid-insert - instead of a raw insert that would mis-place anchored
+                                // tails or start-station refs. An anchor whose uuid no longer
+                                // resolves lands here too, for the same reason: a recorded
+                                // position is a better guess than an id that now names a
+                                // different shot.
+                                let section_len = project
+                                    .get_section(*section_id)
+                                    .map_or(0, |s| s.shots.len());
+                                let pos = (*position).min(section_len);
+                                if pos == 0 && section_len > 0 {
+                                    // Prepend before the current first shot.
+                                    let first_id = project
+                                        .get_section(*section_id)
+                                        .and_then(|s| s.shots.first().map(|sh| sh.id));
+                                    match first_id {
+                                        Some(fid) => project
+                                            .insert_shot_before(
+                                                *section_id,
+                                                fid,
+                                                shot_data.clone(),
+                                                forced_id,
+                                                uuid.clone(),
+                                            )
+                                            .is_some(),
+                                        None => false,
+                                    }
+                                } else if pos < section_len {
+                                    // Mid-section: insert after the shot currently at pos-1.
+                                    let prev_id = project
+                                        .get_section(*section_id)
+                                        .and_then(|s| s.shots.get(pos - 1).map(|sh| sh.id));
+                                    match prev_id {
+                                        Some(pid) => project
+                                            .insert_shot_after(
+                                                *section_id,
+                                                pid,
+                                                shot_data.clone(),
+                                                forced_id,
+                                                uuid.clone(),
+                                            )
+                                            .is_some(),
+                                        None => false,
+                                    }
+                                } else {
+                                    // True append (pos == len) or empty section: a raw insert is
+                                    // exact - no station shift or SectionStart re-anchor is needed.
+                                    if let Some(section) = project.get_section_mut(*section_id) {
+                                        // SATURATING, because `shot_id` arrives
+                                        // verbatim from a persisted entry and
+                                        // nothing between the `.stalx` and here
+                                        // bounds it: `ShotId::MAX` panics a debug
+                                        // build on the `+ 1` and wraps a release
+                                        // one, after which `Section::take_shot_id`
+                                        // hands the wrapped value straight back
+                                        // out as a colliding id. Total for every
+                                        // value the type admits, exactly as
+                                        // `shot_display_position` is for the same
+                                        // reason (#413 finding 24).
+                                        //
+                                        // Monotonicity is preserved without a
+                                        // `max`: the assignment is guarded by
+                                        // `id >= next_shot_id`, so the saturated
+                                        // `ShotId::MAX` is still >= the counter it
+                                        // replaces.
+                                        let id = forced_id.unwrap_or_else(|| {
+                                            let next = section.next_shot_id;
+                                            section.next_shot_id = next.saturating_add(1);
+                                            next
+                                        });
+                                        if id >= section.next_shot_id {
+                                            section.next_shot_id = id.saturating_add(1);
+                                        }
+                                        section.shots.insert(
+                                            pos,
+                                            Shot::with_uuid(
+                                                id,
+                                                shot_data.clone(),
+                                                Some(Shot::uuid_or_mint(uuid.clone())),
+                                            ),
+                                        );
+                                        project.touch();
+                                        true
+                                    } else {
+                                        false
+                                    }
+                                }
+                            };
+                            if ok {
+                                CommandResult::success()
+                            } else {
+                                CommandResult::failure("Failed to redo shot creation".to_string())
+                            }
                         }
                     }
-                };
-                if ok {
-                    CommandResult::success()
-                } else {
-                    CommandResult::failure("Failed to redo shot creation".to_string())
                 }
             }
             UndoData::SegmentMoveInfo {
@@ -645,7 +870,17 @@ impl AppState {
                                     .copied()
                                     .unwrap_or((0.0, 0.0));
                                 let new_offset = (current.0 + offset.0, current.1 + offset.1);
-                                project.section_offsets.insert(*sid, new_offset);
+                                // Through the same writer the FORWARD move uses
+                                // (`adjust_section_offset`): a redo that lands the
+                                // offset back within dust of the origin must drop
+                                // the key, not leave an inert entry the original
+                                // execute did not have (#413 finding 2, and the
+                                // invariant on `write_section_offset`).
+                                crate::models::Project::write_section_offset(
+                                    &mut project.section_offsets,
+                                    *sid,
+                                    new_offset,
+                                );
                             }
                             project.touch();
                             CommandResult::success()
@@ -655,10 +890,13 @@ impl AppState {
                     Err(_) => CommandResult::failure("Failed to lock project".to_string()),
                 }
             }
-            UndoData::ClosureInfo { closure } => {
+            UndoData::ClosureInfo { closure, .. } => {
                 match &entry.command {
                     Command::CreateLoopClosure { .. } => {
                         // Redo create by restoring the captured closure to preserve its ID.
+                        // Appended, as the create itself appended - the recorded
+                        // `position` belongs to the REMOVE direction (#413,
+                        // finding 4) and says nothing about where a create put it.
                         match self.project.lock() {
                             Ok(mut proj_guard) => match proj_guard.as_mut() {
                                 Some(project) => {
@@ -697,8 +935,14 @@ impl AppState {
                 }
             }
             _ => {
-                // Re-execute the original command for other undo data types
-                self.execute_without_undo(entry.command.clone())
+                // Re-execute the original command for other undo data types.
+                // The command names its shot by an in-session id, which a reload
+                // renumbers, so re-address it through the uuid the entry
+                // recorded first (#413, finding 12's redo half).
+                match self.command_with_resolved_shot(&entry.command, &entry.undo_data) {
+                    Ok(command) => self.execute_without_undo(command),
+                    Err(e) => CommandResult::failure(e),
+                }
             }
         };
 
@@ -740,6 +984,227 @@ impl AppState {
         }
 
         result
+    }
+
+    // === Keeping a re-creating entry's identity current ===
+
+    /// Re-read the live section a `CreatedSectionSnapshot` entry re-creates, and
+    /// store BOTH halves of it - the shots and their identity - on the entry
+    /// (#413, finding 1).
+    ///
+    /// Called immediately before the undo DELETES that section, which is the
+    /// last moment either half exists. It matters because a section can be
+    /// healed after the entry was pushed and with no undo entry of its own -
+    /// `capture_missing_gauge_anchors` runs on every save, so "create a section,
+    /// save, undo, redo" would otherwise put the section back with the gauge
+    /// pair discarded, and `ensure_shot_uuids` / `ensure_unique_shot_uuids` are
+    /// the same shape one field over.
+    ///
+    /// The two halves are re-read TOGETHER because `Section::restore_with_identity`
+    /// pairs them POSITIONALLY (it zips `section_data.shots` against
+    /// `identity.shot_uuids`). Refreshing only the identity mixes an old shot list
+    /// with current uuids, so a section whose shots grew, shrank or moved since it
+    /// was created comes back as the ORIGINAL shots wearing whichever uuids now sit
+    /// at those indices - the identity every `StationKey::AfterShot` anchor and the
+    /// Ariane export resolve by, silently re-pointed. Re-snapshotting both makes
+    /// the redo put back exactly what the undo destroyed, the same
+    /// self-refreshing-wall property `refresh_snapshot_pair_counterpart` gives a
+    /// `ProjectSnapshotPair`.
+    ///
+    /// A no-op for every other variant, and for an entry whose section is
+    /// already gone (the undo is about to fail anyway), which keeps the recorded
+    /// payload rather than degrading it.
+    fn refresh_created_section_identity(&self, entry: &mut UndoEntry) {
+        let UndoData::CreatedSectionSnapshot {
+            section_id,
+            section_data,
+            identity,
+        } = &mut entry.undo_data
+        else {
+            return;
+        };
+        let guard = match self.project.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        let Some(section) = guard.as_ref().and_then(|p| p.get_section(*section_id)) else {
+            return;
+        };
+        *section_data = section.to_section_data();
+        *identity = SectionIdentity::of(section);
+    }
+
+    /// Put a captured `section_offsets` slice back verbatim, `None` meaning "this
+    /// section had no key" (#413, finding 27).
+    ///
+    /// The counterpart of `Project::capture_rigid_connected_section_offsets`, and
+    /// the same restore `MergeInfo` / `ZeroDatumInfo` / `SegmentMoveInfo` already
+    /// do - factored out here because the two arms that need it run their inverse
+    /// first and so cannot restore inside its project lock.
+    ///
+    /// `Project::restore_section_offsets` routes every value through the one
+    /// writer, so this cannot install a dust-zero key even from an entry recorded
+    /// by a build that predates that invariant.
+    fn restore_captured_section_offsets(
+        &self,
+        offsets: &std::collections::HashMap<SectionId, Option<(f64, f64)>>,
+    ) {
+        if offsets.is_empty() {
+            return;
+        }
+        let mut guard = match self.project.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        let Some(project) = guard.as_mut() else {
+            return;
+        };
+        project.restore_section_offsets(offsets);
+    }
+
+    /// Re-record the half of a `ProjectSnapshotPair` the caller is NOT about to
+    /// restore, from the live project (#413, finding 11's re-creation residue).
+    ///
+    /// A snapshot pair is a wall: nothing above it survives a step through it, so
+    /// at the moment a step is taken the live project IS the side being left
+    /// behind - `after` when undoing, `before` when redoing. Re-recording that
+    /// side makes the pair a SELF-REFRESHING wall: the reverse move puts back
+    /// exactly the state this move destroyed, by construction, so undo and redo
+    /// of a snapshot pair are exact inverses of each other no matter what
+    /// happened to the live project since the entry was pushed.
+    ///
+    /// It exists because the recorded payload can be STALE in ways the entry
+    /// cannot know about. The save-time heals are the whole class: they mutate the
+    /// live project with no undo entry of their own (`apply_save_heals` -
+    /// uuid mints, the gauge pair `capture_missing_gauge_anchors` captures, the
+    /// orphan-offset retain), so a pair recorded before a save holds a pre-heal
+    /// project on BOTH sides.
+    ///
+    /// `reapply_heals_after_restore` (`project_io.rs`)
+    /// already covers the side being restored, but only where the restored
+    /// project and the live one hold THE SAME SECTION: it is a carry-forward, and
+    /// it copies anchors from a live section with the restored one's id. A pair
+    /// whose halves disagree about whether a section EXISTS - a `Batch` holding a
+    /// `CreateSection`, `execute_delete_shot_range_split`'s re-created tail, any
+    /// delete-and-recreate - has no such live counterpart at the moment the
+    /// section comes back, so the carry-forward covers nothing there. The refresh
+    /// does, and covers every other heal in both directions at the same time. The
+    /// two are complementary and both are kept: the refresh fixes the half being
+    /// LEFT (so the next move back is exact), the carry-forward fixes the half
+    /// being RESTORED (so this move does not revert a heal it never recorded).
+    ///
+    /// `refresh_created_section_identity` established the same pattern one variant
+    /// over, for `CreatedSectionSnapshot`.
+    ///
+    /// COST: one project serialization per snapshot-pair history move. Not a new
+    /// cost class - every command that records a pair already serializes the
+    /// project twice on the forward path, and this side of the move already
+    /// deserializes one - so it roughly matches what the step costs anyway.
+    ///
+    /// A serialization failure leaves the recorded payload alone: a stale wall is
+    /// recoverable, an empty one is not.
+    fn refresh_snapshot_pair_counterpart(&self, entry: &mut UndoEntry, direction: HistoryMove) {
+        let UndoData::ProjectSnapshotPair { before, after } = &mut entry.undo_data else {
+            return;
+        };
+        let guard = match self.project.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        let Some(project) = guard.as_ref() else {
+            return;
+        };
+        match Self::serialize_project_snapshot(project) {
+            Ok(json) => match direction {
+                HistoryMove::Undo => *after = json,
+                HistoryMove::Redo => *before = json,
+            },
+            Err(e) => {
+                tracing::error!(
+                    purpose = "refresh a snapshot pair before stepping through it",
+                    reason = %e,
+                    "Failed to serialize the live project; keeping the recorded snapshot"
+                );
+            }
+        }
+    }
+
+    // === Addressing a shot a persisted entry names ===
+
+    /// The LIVE id of the shot an undo entry addresses.
+    ///
+    /// `Shot::id` is an in-session id: the loader renumbers every shot to
+    /// `section_id * FEATURE_ID_STRIDE + sequence_order`
+    /// (`persistence/sqlite/read.rs`) while undo entries reload as opaque JSON,
+    /// and `Section::take_shot_id` hands out ids from that same space - so a
+    /// persisted id does not miss, it COLLIDES with whatever shot now occupies
+    /// the slot (#413, findings 8 and 12), or runs past the range and misses
+    /// everything (finding 13). `Shot::uuid` is the address that survives a
+    /// save, so it is the one used whenever the entry carries it.
+    ///
+    /// A recorded uuid that no longer resolves is an ERROR rather than a
+    /// fallback to the id: the id is exactly the thing that cannot be trusted,
+    /// and hitting the wrong shot silently is the defect this exists to
+    /// prevent. `UndoStack::drop_entries_addressing_a_missing_shot` drops such
+    /// entries at load so the failure costs one undo step rather than wedging
+    /// the history under it.
+    fn resolve_undo_shot(
+        &self,
+        section_id: SectionId,
+        uuid: Option<&str>,
+        recorded_id: ShotId,
+    ) -> Result<ShotId, String> {
+        // A legacy entry (written before the uuid was recorded) has nothing but
+        // the id, so the id is what it gets - the pre-fix behavior.
+        let Some(uuid) = uuid else {
+            return Ok(recorded_id);
+        };
+        let guard = match self.project.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        let Some(project) = guard.as_ref() else {
+            return Err("No project open".to_string());
+        };
+        // Spelled distinctly from the id-addressed "Shot {id} not found in
+        // section {s}": this one says the shot's persistent IDENTITY is gone,
+        // which is a different fact from an id that no longer resolves, and the
+        // fuzz gate tells the two apart by exactly this wording.
+        project.shot_id_by_uuid(section_id, uuid).ok_or_else(|| {
+            format!("Shot {uuid} (addressed by uuid) not found in section {section_id}")
+        })
+    }
+
+    /// `command` with the shot it addresses re-resolved through the uuid its
+    /// undo entry recorded, so a redo edits the shot the forward command edited.
+    ///
+    /// A no-op for a command that names no shot, and for a legacy entry that
+    /// records no uuid.
+    fn command_with_resolved_shot(
+        &self,
+        command: &Command,
+        undo_data: &UndoData,
+    ) -> Result<Command, String> {
+        let Some((target_section, Some(uuid), recorded_id)) = undo_data.shot_target() else {
+            return Ok(command.clone());
+        };
+        let mut resolved = command.clone();
+        match &mut resolved {
+            Command::UpdateShot {
+                section_id,
+                shot_id,
+                ..
+            }
+            | Command::SetShotKind {
+                section_id,
+                shot_id,
+                ..
+            } if *section_id == target_section && *shot_id == recorded_id => {
+                *shot_id = self.resolve_undo_shot(target_section, Some(uuid), recorded_id)?;
+            }
+            _ => {}
+        }
+        Ok(resolved)
     }
 
     // === State queries ===
@@ -865,6 +1330,14 @@ impl AppState {
                     count,
                     result.error.unwrap_or_else(|| "Unknown error".to_string())
                 ));
+                // The FAILED step can have mutated too: an arm reports its
+                // failure only after running its inverse, and the inverse
+                // mutates as it goes (`remove_created_shot` ->
+                // `Project::remove_shot_with_rewire` drops the removed station's
+                // offsets and rewires closures and merges before it can report).
+                // The user is left holding that state, so it gets the same
+                // reconcile every completed step gets.
+                self.reconcile_geometry();
                 return if reversed.is_empty() {
                     failure
                 } else {
@@ -874,6 +1347,29 @@ impl AppState {
             if let Some(entries) = result.reversed_sections {
                 reversed.extend(entries);
             }
+            // The SAME epilogue single-step `undo()` runs, after EVERY step, so
+            // that a jump lands where the equivalent number of single undos
+            // lands - which is the contract the history dropdown makes and which
+            // `undo_to` was breaking by looping `undo_inner` bare (#413,
+            // finding 7). `reconcile_geometry` is what re-derives offsets for a
+            // merge a raw restore left drifted past the alignment invariant.
+            //
+            // PER STEP, not once after the loop: an intermediate state is not
+            // one the user ever SEES, but it is one the steps above it READ.
+            // The arms that re-derive rather than restore read the live offsets
+            // at the moment they run (`PreviousValues` -> `update_shot` ->
+            // `realign_after_shot_edit`, `CreatedShotSnapshot` ->
+            // `remove_created_shot`), so a drifted intermediate state is an
+            // input, and a jump that carries one lands somewhere the single
+            // presses do not. The cost of asking is trivial in the common case:
+            // `realign_merges` returns immediately unless some merge is beyond
+            // the 1 cm invariant, which a state a step just restored normally is
+            // not.
+            // (`invalidate_adjusted_cache` is deliberately not here: the
+            // adjusted cache keys on `project.modified_at`, which every undo
+            // bumps through `Project::touch`, so the next read misses and
+            // re-solves regardless - measured in the finding's write-up.)
+            self.reconcile_geometry();
         }
 
         // Dirty-bit flip (#191, D-B16): undo_to ran one or more undos. Set-only;
@@ -922,13 +1418,15 @@ impl AppState {
             let result = self.redo_inner();
             if !result.success {
                 // Same reasoning as `undo_to`: the steps that already ran are not
-                // rolled back, so the failure carries their entries.
+                // rolled back, so the failure carries their entries - and the
+                // failed step's own partial mutation is reconciled with them.
                 let failure = CommandResult::failure(format!(
                     "Redo failed at step {} of {}: {}",
                     i + 1,
                     count,
                     result.error.unwrap_or_else(|| "Unknown error".to_string())
                 ));
+                self.reconcile_geometry();
                 return if reversed.is_empty() {
                     failure
                 } else {
@@ -938,6 +1436,10 @@ impl AppState {
             if let Some(entries) = result.reversed_sections {
                 reversed.extend(entries);
             }
+            // The same epilogue single-step `redo()` runs, after every step -
+            // see `undo_to` for why it is per step and not once after the loop
+            // (#413, finding 7).
+            self.reconcile_geometry();
         }
 
         // Dirty-bit flip (#191, D-B16): redo_to ran one or more redos. Set-only;

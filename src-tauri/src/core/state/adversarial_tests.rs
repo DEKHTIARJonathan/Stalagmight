@@ -27,10 +27,12 @@
 //! down in a build where they are enabled, and a fuzzer that only checks
 //! results would report the run as "the command failed" and move on.
 //!
-//! Two panic sites are KNOWN and are classified rather than re-reported:
-//! `Project::debug_assert_merge_alignment` firing after an insert or a removal
-//! is issue #413's finding 14 and its mirror, both open and both already
-//! pinned. Any other panic, from any other site, is a new finding.
+//! No panic site is exempt. Three were classified rather than re-reported while
+//! their findings were open - `Project::debug_assert_merge_alignment` firing
+//! after an insert or a removal (issue #413's finding 14 and its mirror), the
+//! same assert from any other site (finding 20), and an arithmetic overflow in
+//! `models/shot.rs` (finding 24). All three are fixed and the classifier is
+//! deleted, so ANY panic, from ANY site, is a reportable problem again.
 //!
 //! # What "adversarial" means here
 //!
@@ -524,38 +526,27 @@ struct Outcome {
     hits: BTreeMap<&'static str, usize>,
 }
 
-/// Is this panic one of the two KNOWN alignment asserts?
-///
-/// The same rule the roundtrip fuzzer's `catching_alignment` uses, and for the
-/// same reason: `Project::debug_assert_merge_alignment` has a `#[cfg(test)]`
-/// arm, so it exists in this tier and no other, and issue #413's finding 14 and
-/// its mirror are both open and both already pinned. A panic from ANY other
-/// site is a new finding and is reported verbatim.
-fn known_panic(message: &str, location: Option<&str>) -> Option<&'static str> {
-    // FINDING 24, matched on the panic's LOCATION rather than on its message.
-    // "attempt to add with overflow" says nothing about where, and a classifier
-    // that matched it by text would swallow every future overflow anywhere in
-    // the app - which is the opposite of what this engine is for. The location
-    // is captured by a panic hook (`install_location_hook`) precisely so this
-    // matcher can be narrow.
-    if location.is_some_and(|site| site.contains("models/shot.rs"))
-        && message.contains("attempt to add with overflow")
-    {
-        return Some("finding-24-shot-display-position-overflows-before-validation");
-    }
-    if message.contains("Merge alignment violated after insert_shot_") {
-        Some("finding-14-insert-leaves-a-merge-metres-out-of-alignment")
-    } else if message.contains("Merge alignment violated after remove_shot_with_rewire") {
-        Some("finding-14-variant-a-shot-removal-leaves-a-merge-out-of-alignment")
-    } else if message.contains("Merge alignment violated after") {
-        // Finding 20 leaves a pair drifted under the app's own heal gate; the
-        // next asserting call site trips on it, and here that site can be any
-        // of the eight. Named rather than swallowed.
-        Some("finding-20-an-unanchored-merge-group-is-never-realigned")
-    } else {
-        None
-    }
-}
+// There WAS a `known_panic` classifier here, and it carried three ids. All three
+// are FIXED, so per the delete-when-fixed contract it is gone and EVERY panic
+// this engine sees is a reportable problem again:
+//
+// * finding 24 (`shot_display_position` overflowing before validation), matched
+//   by panic LOCATION - the function saturates now, so an overflow panic in
+//   models/shot.rs or anywhere else is a new finding;
+// * finding 14 (`insert_shot_after`) and its `remove_shot_with_rewire` mirror,
+//   matched by the merge-alignment assert's context string. Both sites now
+//   decide which side of a structural edit is anchored over the rigid merge
+//   forest (`Project::anchored_sides_of_edit`, models/project/shots.rs);
+// * finding 20, matched by that same assert from any of the other six sites -
+//   the drift an unanchored shot edit left behind, tripped later by an
+//   unrelated command. The edit realigns its own group now, and the self-heal
+//   gate is the assert's own threshold, so there is no drift left to arm it.
+//
+// `Project::debug_assert_merge_alignment` has a `#[cfg(test)]` arm, so it exists
+// in this tier and no other - which is exactly why this engine must not swallow
+// it. `Outcome::hits` stays, empty, as the channel a future classified finding
+// would use; the replay comparison over it is then trivially true, which is the
+// correct statement when nothing is classified.
 
 // Where the last panic came from, captured by a hook.
 //
@@ -634,18 +625,16 @@ fn run_adversarial(seed: u32, moves: usize, closures: bool) -> Outcome {
                     })
                     .unwrap_or_else(|| "<non-string panic>".to_string());
                 let site = last_panic_site();
-                if let Some(id) = known_panic(&message, site.as_deref()) {
-                    *outcome.hits.entry(id).or_insert(0) += 1;
-                } else {
-                    outcome.problems.push(format!(
-                        "seed {seed} step {step}: a command PANICKED at {}\n  {}",
-                        site.unwrap_or_else(|| "<unknown site>".to_string()),
-                        message.lines().take(3).collect::<Vec<_>>().join("\n  ")
-                    ));
-                }
-                // Either way the run STOPS: the unwind went through the project
-                // mutex, so it is poisoned and nothing after this measures the
-                // app rather than a crippled `AppState`.
+                // No panic is tolerated here any more - see the note where
+                // `known_panic` used to be.
+                outcome.problems.push(format!(
+                    "seed {seed} step {step}: a command PANICKED at {}\n  {}",
+                    site.unwrap_or_else(|| "<unknown site>".to_string()),
+                    message.lines().take(3).collect::<Vec<_>>().join("\n  ")
+                ));
+                // The run STOPS: the unwind went through the project mutex, so
+                // it is poisoned and nothing after this measures the app rather
+                // than a crippled `AppState`.
                 break;
             }
         };

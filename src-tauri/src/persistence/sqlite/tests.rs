@@ -2319,6 +2319,139 @@ fn a_pre_v16_file_loses_its_path_bearing_undo_history_on_open() {
     );
 }
 
+/// [#413 finding 5] A pre-v17 file's undo rows carry explicit-null
+/// `SectionUpdates` fields, so the migration must drop them.
+///
+/// v17 gave `name` / `surveyor` / `date` the `double_option` +
+/// `skip_serializing_if` pair `ShotUpdates` has carried since v7. A pre-v17
+/// writer serialized every UNTOUCHED one as an explicit `null`, and a present
+/// `null` now means "clear this field" - so replaying a stored
+/// `update_section_metadata` command, or the `PreviousValues` blob recorded
+/// against it, would wipe the name, surveyor and date off the section it names.
+/// The payload still PARSES, which is why nothing downstream can catch it and a
+/// version-gated drop is the only safe upgrade - the same reasoning, and the
+/// same remedy, as the v6 to v7 case below.
+#[test]
+fn a_pre_v17_file_loses_its_explicit_null_section_undo_history_on_open() {
+    // Sanity: the legacy payload IS the dangerous shape - under the v17
+    // deserializer its explicit nulls decode to Some(None) ("clear the field").
+    let dangerous: crate::models::SectionUpdates =
+        serde_json::from_str(r##"{"name":null,"surveyor":null,"date":null,"color":"#123456"}"##)
+            .unwrap();
+    assert_eq!(dangerous.name, Some(None));
+    assert_eq!(dangerous.surveyor, Some(None));
+    assert_eq!(dangerous.date, Some(None));
+
+    let temp_dir = TempDir::new().unwrap();
+    let path = temp_dir.path().join("pre-v17.stalx");
+    {
+        let mut db = Database::open(&path).unwrap();
+        db.save_project(&Project::new("Legacy".to_string(), None))
+            .unwrap();
+        // An entry of the shape a pre-v17 producer wrote: every untouched
+        // nullable field present and null, on BOTH halves of the entry (the
+        // command replays on redo, the `values_json` on undo).
+        db.save_undo_stack_with_timestamps(vec![(
+            r##"{"type":"update_section_metadata","section_id":0,"updates":{"name":null,"surveyor":null,"date":null,"color":"#abcdef","direction":null,"quality":null}}"##
+                .to_string(),
+            r##"{"PreviousValues":{"section_id":0,"shot_id":null,"values_json":"{\"name\":null,\"surveyor\":null,\"date\":null,\"color\":\"#123456\",\"direction\":null,\"quality\":null}"}}"##
+                .to_string(),
+            None,
+        )])
+        .unwrap();
+        let staged: i64 = db
+            .conn
+            .query_row("SELECT COUNT(*) FROM undo_stack", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(staged, 1, "the fixture must actually stage an undo entry");
+        // Rewind the stamp so the file looks exactly like one written by a v16 build.
+        db.set_user_version(16).unwrap();
+        drop(db);
+    }
+
+    let db = Database::open_existing(&path).unwrap();
+    assert!(
+        db.load_undo_stack_with_timestamps().unwrap().is_empty(),
+        "the v17 migration must drop pre-v17 undo history: its explicit nulls now read \
+         as \"clear the field\""
+    );
+    // And the file is now stamped current, so the drop happens exactly once.
+    assert_eq!(db.get_user_version().unwrap(), SCHEMA_VERSION);
+}
+
+/// A `PRAGMA user_version` ABOVE `SCHEMA_VERSION` must not be a way to keep the
+/// payloads every migration arm exists to drop.
+///
+/// `ensure_schema_version` runs no arm for a file from the future - there is
+/// nothing sensible it could run - so a stamp of 99 used to walk straight past
+/// the v7, v13, v15, v16 and v17 drops with the stacks intact. That is a
+/// one-pragma bypass of the v17 arm in particular, whose payloads still PARSE
+/// and whose replay wipes a section's name, surveyor and date. The history goes
+/// instead; the project data is left exactly as the file holds it.
+#[test]
+fn a_file_claiming_a_future_schema_loses_its_undo_history_but_keeps_its_project() {
+    let temp_dir = TempDir::new().unwrap();
+    let path = temp_dir.path().join("from-the-future.stalx");
+    {
+        let mut db = Database::open(&path).unwrap();
+        let mut project = Project::new("Future".to_string(), None);
+        project.add_section(SectionData {
+            name: Some("A".to_string()),
+            color: "#123456".to_string(),
+            shots: vec![],
+            ..Default::default()
+        });
+        db.save_project(&project).unwrap();
+        // The same pre-v17 shape the test above stages, on both stacks: the one
+        // the v17 arm drops, and the one this file's forged stamp would keep.
+        db.save_undo_stack_with_timestamps(vec![(
+            r##"{"type":"update_section_metadata","section_id":0,"updates":{"name":null,"surveyor":null,"date":null,"color":"#abcdef","direction":null,"quality":null}}"##
+                .to_string(),
+            r##"{"PreviousValues":{"section_id":0,"shot_id":null,"values_json":"{\"name\":null,\"surveyor\":null,\"date\":null,\"color\":\"#123456\",\"direction\":null,\"quality\":null}"}}"##
+                .to_string(),
+            None,
+        )])
+        .unwrap();
+        db.save_redo_stack_with_timestamps(vec![(
+            r##"{"type":"update_section_metadata","section_id":0,"updates":{"name":null,"surveyor":null,"date":null,"color":"#abcdef","direction":null,"quality":null}}"##
+                .to_string(),
+            r##"{"PreviousValues":{"section_id":0,"shot_id":null,"values_json":"{\"name\":null,\"surveyor\":null,\"date\":null,\"color\":\"#123456\",\"direction\":null,\"quality\":null}"}}"##
+                .to_string(),
+            None,
+        )])
+        .unwrap();
+        assert_eq!(
+            db.load_undo_stack_with_timestamps().unwrap().len(),
+            1,
+            "the fixture must actually stage an undo entry"
+        );
+        assert_eq!(
+            db.load_redo_stack_with_timestamps().unwrap().len(),
+            1,
+            "the fixture must actually stage a redo entry"
+        );
+        // Forge the stamp: a file claiming a schema this build has never heard of.
+        db.set_user_version(SCHEMA_VERSION + 82).unwrap();
+        drop(db);
+    }
+
+    let db = Database::open_existing(&path).unwrap();
+    assert!(
+        db.load_undo_stack_with_timestamps().unwrap().is_empty(),
+        "a forged future user_version kept undo payloads no migration arm could vet"
+    );
+    assert!(
+        db.load_redo_stack_with_timestamps().unwrap().is_empty(),
+        "a forged future user_version kept redo payloads no migration arm could vet"
+    );
+    // The stamp itself is left alone - this build has not migrated anything and
+    // must not claim it has - and the project still loads.
+    assert_eq!(db.get_user_version().unwrap(), SCHEMA_VERSION + 82);
+    let project = db.load_project().unwrap();
+    assert_eq!(project.name, "Future");
+    assert_eq!(project.sections.len(), 1);
+}
+
 #[test]
 fn test_legacy_v6_undo_history_dropped_on_open_existing() {
     let temp_dir = TempDir::new().unwrap();
@@ -2541,7 +2674,9 @@ fn test_new_format_undo_history_survives_reload() {
         undo_data: UndoData::PreviousValues {
             section_id,
             shot_id: Some(shot_id),
+            shot_uuid: None,
             values_json,
+            previous_offsets: HashMap::new(),
         },
         timestamp: None,
     };
@@ -3455,8 +3590,14 @@ fn test_save_load_round_trip_all_metadata() {
     assert_eq!(loaded.station_merges.len(), 1);
     assert_eq!(loaded.zero_datums.len(), 1);
     assert!((loaded.zero_datums[0].gps.latitude - 48.8566).abs() < 1e-6);
-    // Both sections get offsets from set_zero_datum (they're merged)
-    assert_eq!(loaded.section_offsets.len(), 2);
+    // The section offsets `set_zero_datum` produced survive the round trip
+    // EXACTLY - value for value, not merely in number. Only the displaced
+    // section carries one: `section_offsets` means "sections that are actually
+    // displaced", so a section the datum leaves on exactly (0, 0) has no entry
+    // to persist (#413 finding 2). This used to assert `len() == 2`, counting
+    // that inert entry and checking no value at all.
+    assert_eq!(loaded.section_offsets, project.section_offsets);
+    assert_eq!(loaded.section_offsets.len(), 1);
     assert_eq!(loaded.station_offsets.len(), 1);
     assert_eq!(loaded.imported_file_hashes.len(), 1);
     assert_eq!(loaded.imported_file_hashes[0], "abc123def456");

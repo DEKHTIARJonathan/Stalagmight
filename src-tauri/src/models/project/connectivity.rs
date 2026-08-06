@@ -253,7 +253,16 @@ impl Project {
                     // alignment check can't see a NaN distance to catch it later.
                     // Treat it like a dangling edge - leave the neighbour alone.
                     if dx.is_finite() && dy.is_finite() {
-                        if dx != 0.0 || dy != 0.0 {
+                        // Decline a correction that is float dust, exactly as the
+                        // merge BFS in `reconcile_after_edit` does - one shared
+                        // bound (#413 finding 2's dust half). A femtometre gap
+                        // between two merged stations is the residue of summing a
+                        // survey chain, not a misalignment; "correcting" it wrote
+                        // a `section_offsets` key for a section that is not
+                        // displaced, and the key (unlike the value) is structural:
+                        // it is saved, and it makes this route differ from the
+                        // route that had nothing to correct.
+                        if dx.abs() > Self::OFFSET_DUST_M || dy.abs() > Self::OFFSET_DUST_M {
                             self.adjust_section_offset(theirs.section_id, dx, dy);
                         }
                         // Anchor + propagate ONLY when the coincidence was computable.
@@ -354,6 +363,29 @@ impl Project {
         offsets
     }
 
+    /// Every `section_offsets` entry the geometry epilogue of an edit in
+    /// `section_id` can reach - `None` for a section that has no key.
+    ///
+    /// [`Self::capture_connected_section_offsets`] takes the MERGE group, which is
+    /// what `realign_after_shot_edit` walks. This one takes the RIGID connected
+    /// set ([`Self::get_rigid_connected_section_ids`] - merges plus ALIGNED loop
+    /// closures), which is what [`Self::cascade_connection_offsets`] walks, and is
+    /// therefore the superset an insert or a removal can displace. Used by the
+    /// undo entries that have to hand the map back rather than let their inverse
+    /// re-derive it (#413, finding 27), where capturing the wider set costs a few
+    /// map entries and capturing the narrower one would leave a
+    /// closure-reachable section unrestored.
+    pub(crate) fn capture_rigid_connected_section_offsets(
+        &self,
+        section_id: SectionId,
+    ) -> HashMap<SectionId, Option<(f64, f64)>> {
+        let mut offsets = HashMap::new();
+        for sid in self.get_rigid_connected_section_ids(section_id) {
+            offsets.insert(sid, self.section_offsets.get(&sid).copied());
+        }
+        offsets
+    }
+
     /// Restore section offsets from a captured snapshot.
     ///
     /// For each entry in `offsets`:
@@ -362,11 +394,20 @@ impl Project {
     ///
     /// This is used by undo to restore exact previous state (counterpart of
     /// `capture_connected_section_offsets`).
+    ///
+    /// Routed through [`Project::write_section_offset`] like every other writer,
+    /// because the invariant documented there is TOTAL: a dust-zero entry does not
+    /// exist, so a captured `Some((0, 0))` cannot have come from a state this app
+    /// is allowed to reproduce. This used to be the deliberate exception - a
+    /// restore reproducing the map as it was, all-zero entries included - and that
+    /// exception is what made the present-zero key representable at all. It is
+    /// gone with the state it served; a `Some` whose value is dust restores as
+    /// ABSENT, which is the only spelling of what it meant.
     pub fn restore_section_offsets(&mut self, offsets: &HashMap<SectionId, Option<(f64, f64)>>) {
         for (section_id, prev_offset) in offsets {
             match prev_offset {
                 Some(offset) => {
-                    self.section_offsets.insert(*section_id, *offset);
+                    Project::write_section_offset(&mut self.section_offsets, *section_id, *offset);
                 }
                 None => {
                     self.section_offsets.remove(section_id);

@@ -1,24 +1,28 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  KNOWN_UNDO_ASYMMETRIES,
   LOOP_CLOSURES_PATH,
-  LOOP_CLOSURE_REORDER,
+  RELOAD_RESOLVED_GEOMETRY,
   SAVE_HEALING_MUTATIONS,
   canonicalJson,
   classifyDiffs,
   describeDiffs,
   diffJson,
   diffSnapshots,
-  isBug8ShotSwapOnly,
   isListPermutationOnly,
-  isShotIdentitySwap,
   shotSetDelta,
 } from './projectSnapshot';
 
 // The canonical serializer and its normalization rules are tested in
 // fuzzOracleCore.test.ts, which owns them. This file covers the Node-only
-// half: the tolerant diff, the classifier, and the permutation detector.
+// half: the tolerant diff, the epoch attribution, and the permutation detector.
+//
+// The known-open-bug classifiers this file used to cover
+// (`KNOWN_UNDO_ASYMMETRIES`, `LOOP_CLOSURE_REORDER`) are deleted along with the
+// issue-413 findings they named, so their tests are gone with them. What is
+// tested here is what remains: attribution for behaviour a save or a reload is
+// DESIGNED to have, which must stay narrow by path AND by direction, and must
+// never match an ordinary field.
 
 describe('diffJson', () => {
   it('names the first differing path with both values', () => {
@@ -97,59 +101,58 @@ describe('diffJson', () => {
 });
 
 describe('classifyDiffs', () => {
-  it('recognises the CreateSection-redo shot-uuid re-mint', () => {
-    const classified = classifyDiffs([
-      { path: 'project.sections[2].shots[0].uuid', expected: '"u-1"', actual: '"u-2"' },
-    ]);
+  it('leaves every diff unknown when no rule is passed', () => {
+    // The `known` argument is required precisely so this is the default shape:
+    // an empty rule list classifies nothing, which is what a strict scenario
+    // wants when a comparison does not cross a save/reload epoch.
+    const classified = classifyDiffs(
+      [
+        { path: 'project.sections[2].shots[0].uuid', expected: '"u-1"', actual: '"u-2"' },
+        { path: 'project.section_offsets.32', expected: '<absent>', actual: '[0,0]' },
+      ],
+      [],
+    );
 
-    expect(classified.unknown).toHaveLength(0);
-    expect(classified.asymmetries.map((a) => a.id)).toEqual(['create-section-redo-remints-shot-uuids']);
+    expect(classified.known).toHaveLength(0);
+    expect(classified.unknown).toHaveLength(2);
+    expect(classified.asymmetries).toHaveLength(0);
   });
 
-  it('does not swallow a neighbouring field on a known-asymmetry path', () => {
-    const classified = classifyDiffs([
-      { path: 'project.sections[2].shots[0].length', expected: '5', actual: '6' },
-    ]);
+  it('does not swallow a neighbouring field on an attributable path', () => {
+    const classified = classifyDiffs(
+      [{ path: 'project.sections[2].shots[0].length', expected: '5', actual: '6' }],
+      SAVE_HEALING_MUTATIONS,
+    );
 
     expect(classified.known).toHaveLength(0);
     expect(classified.unknown).toHaveLength(1);
   });
 
-  it('recognises the orphan zero section_offsets entry an undo leaks', () => {
-    const classified = classifyDiffs([
-      { path: 'project.section_offsets.32', expected: '<absent>', actual: '[0,0]' },
-      { path: 'project.section_offsets.7', expected: '<absent>', actual: '[2.22044604925e-16,0]' },
-    ]);
+  it('reports each matching rule once, whatever the diff count', () => {
+    const classified = classifyDiffs(
+      [
+        { path: 'project.sections[2].gauge_shot_uuid', expected: 'null', actual: '"u-1"' },
+        { path: 'project.sections[5].gauge_shot_uuid', expected: 'null', actual: '"u-2"' },
+      ],
+      SAVE_HEALING_MUTATIONS,
+    );
 
-    expect(classified.unknown).toHaveLength(0);
-    expect(classified.asymmetries.map((a) => a.id)).toEqual(['undo-leaks-orphan-zero-section-offset']);
+    expect(classified.known).toHaveLength(2);
+    expect(classified.asymmetries.map((a) => a.id)).toEqual(['save-captures-missing-gauge-anchors']);
   });
 
-  it('does NOT accept an offset entry carrying real geometry as that known bug', () => {
-    const classified = classifyDiffs([
-      { path: 'project.section_offsets.28', expected: '<absent>', actual: '[-20.6,1.2]' },
-      { path: 'project.section_offsets.28[0]', expected: '-19.47', actual: '-20.61' },
-    ]);
-
-    expect(classified.known).toHaveLength(0);
-    expect(classified.unknown).toHaveLength(2);
-  });
-
-  it('exposes the loop-closure reorder with an id and an explanation too', () => {
-    expect(LOOP_CLOSURE_REORDER.id).toMatch(/^[a-z0-9-]+$/);
-    expect(LOOP_CLOSURE_REORDER.description.length).toBeGreaterThan(40);
-    // Recognised structurally, so it must never match by path.
-    expect(LOOP_CLOSURE_REORDER.pathPattern.test('project.loop_closures[1].id')).toBe(false);
-  });
-
-  it('exposes each known asymmetry with an id and an explanation', () => {
-    for (const asymmetry of KNOWN_UNDO_ASYMMETRIES) {
+  it('exposes every attribution rule with an id and an explanation', () => {
+    for (const asymmetry of [...SAVE_HEALING_MUTATIONS, ...RELOAD_RESOLVED_GEOMETRY]) {
       expect(asymmetry.id).toMatch(/^[a-z0-9-]+$/);
       expect(asymmetry.description.length).toBeGreaterThan(40);
     }
   });
 });
 
+// DIAGNOSTIC ONLY since the finding-4 classifier was deleted: it never made a
+// comparison pass, and now it only shapes the failure message. Still tested,
+// because a message that mis-explains a failure is worse than one that does not
+// try.
 describe('isListPermutationOnly', () => {
   const withClosures = (closures: unknown[], extra: Record<string, unknown> = {}): string =>
     canonicalJson({ project: { name: 'p', loop_closures: closures, ...extra }, stations: [] });
@@ -305,152 +308,10 @@ describe('shotSetDelta', () => {
   });
 });
 
-describe('isBug8ShotSwapOnly', () => {
-  // Section id 4 sits at index 1, so its diffs are `project.sections[1]....`.
-  const snapshot = (sections: { id: number; uuids: string[]; extra?: Record<string, unknown> }[]): string =>
-    canonicalJson({
-      project: {
-        sections: sections.map((section) => ({
-          id: section.id,
-          shots: section.uuids.map((uuid) => ({ uuid })),
-          ...section.extra,
-        })),
-      },
-      stations: [],
-    });
-
-  const expected = snapshot([
-    { id: 2, uuids: ['p'] },
-    { id: 4, uuids: ['a', 'b'] },
-  ]);
-  // One shot swapped for another: 'b' gone, 'c' present, count unchanged.
-  const actual = snapshot([
-    { id: 2, uuids: ['p'] },
-    { id: 4, uuids: ['a', 'c'] },
-  ]);
-  const deltas = shotSetDelta(expected, actual);
-  // A diff has to be present for the predicate to have anything to account for;
-  // an empty list makes `.every()` vacuously true and tests nothing.
-  const theSwapItself = { path: 'project.sections[1].shots[1].uuid', expected: '"b"', actual: '"c"' };
-
-  it('agrees with isShotIdentitySwap on the uuid shape', () => {
-    expect(isShotIdentitySwap(deltas)).toBe(true);
-  });
-
-  it('is true when every remaining diff is in the swapped section SHOTS', () => {
-    const diffs = [
-      theSwapItself,
-      { path: 'project.sections[1].shots[1].length', expected: '5', actual: '6' },
-      { path: 'project.sections[1].shots[0].comment', expected: 'null', actual: '"x"' },
-    ];
-
-    expect(isBug8ShotSwapOnly(diffs, deltas, expected, actual)).toBe(true);
-  });
-
-  it('is true for the swapped section gauge anchors a delete can dangle', () => {
-    const diffs = [
-      theSwapItself,
-      { path: 'project.sections[1].gauge_shot_uuid', expected: '"b"', actual: 'null' },
-      { path: 'project.sections[1].gauge_neighbour_uuid', expected: '"a"', actual: 'null' },
-    ];
-
-    expect(isBug8ShotSwapOnly(diffs, deltas, expected, actual)).toBe(true);
-  });
-
-  it('is true for the geometry the swapped section feeds', () => {
-    const diffs = [
-      theSwapItself,
-      { path: 'stations[3].coordinates.x', expected: '1', actual: '2' },
-      { path: 'project.section_offsets.4', expected: '[0,0]', actual: '[1,1]' },
-      { path: 'stats.total_length', expected: '10', actual: '9' },
-    ];
-
-    expect(isBug8ShotSwapOnly(diffs, deltas, expected, actual)).toBe(true);
-  });
-
-  it('is FALSE for another SECTION-level field of the swapped section', () => {
-    // A shot delete moves the section's shots and its uuid anchors. It does not
-    // rename the section, recolour it or flip its parity - a blanket
-    // `sections[N].*` allowance swallowed all of those.
-    for (const field of ['name', 'color', 'date', 'surveyor', 'quality', 'direction', 'reverse_parity']) {
-      expect(
-        isBug8ShotSwapOnly(
-          [theSwapItself, { path: `project.sections[1].${field}`, expected: '"before"', actual: '"after"' }],
-          deltas,
-          expected,
-          actual,
-        ),
-      ).toBe(false);
-    }
-  });
-
-  it('is FALSE when something outside the swapped section also differs', () => {
-    // The whole point: a lost comment in ANOTHER section rode along with a
-    // genuine swap, was reported as bug 8, and was resynced away unseen.
-    expect(
-      isBug8ShotSwapOnly(
-        [theSwapItself, { path: 'project.sections[0].shots[0].comment', expected: '"note"', actual: 'null' }],
-        deltas,
-        expected,
-        actual,
-      ),
-    ).toBe(false);
-    expect(
-      isBug8ShotSwapOnly(
-        [theSwapItself, { path: 'project.loop_closures.length', expected: '2', actual: '1' }],
-        deltas,
-        expected,
-        actual,
-      ),
-    ).toBe(false);
-    // A count moving is structural, and bug 8 does not move counts.
-    expect(
-      isBug8ShotSwapOnly(
-        [theSwapItself, { path: 'stats.total_shots', expected: '9', actual: '8' }],
-        deltas,
-        expected,
-        actual,
-      ),
-    ).toBe(false);
-  });
-
-  it('is FALSE when the surviving shots were REORDERED as well', () => {
-    // Set difference cannot see a reorder, and order decides the ids the loader
-    // hands out (section_id * FEATURE_ID_STRIDE + sequence_order), so a reorder
-    // riding along with a swap must not be absorbed by it. Three shots, because
-    // a swap that leaves only one survivor has no order to change.
-    const before = snapshot([
-      { id: 2, uuids: ['p'] },
-      { id: 4, uuids: ['a', 'b', 'd'] },
-    ]);
-    // 'b' -> 'c' (the swap) AND 'a'/'d' exchanged (the reorder riding along).
-    const reordered = snapshot([
-      { id: 2, uuids: ['p'] },
-      { id: 4, uuids: ['d', 'c', 'a'] },
-    ]);
-    const reorderDeltas = shotSetDelta(before, reordered);
-    // Same swap, survivors left in place: the tolerance still applies.
-    const inOrder = snapshot([
-      { id: 2, uuids: ['p'] },
-      { id: 4, uuids: ['a', 'c', 'd'] },
-    ]);
-
-    expect(isShotIdentitySwap(reorderDeltas)).toBe(true);
-    expect(isBug8ShotSwapOnly([theSwapItself], reorderDeltas, before, reordered)).toBe(false);
-    expect(isBug8ShotSwapOnly([theSwapItself], shotSetDelta(before, inOrder), before, inOrder)).toBe(true);
-  });
-
-  it('is false when the uuid shape is not a single swap', () => {
-    const lost = shotSetDelta(expected, snapshot([{ id: 2, uuids: ['p'] }, { id: 4, uuids: ['a'] }]));
-
-    expect(isBug8ShotSwapOnly([theSwapItself], lost, expected, actual)).toBe(false);
-    expect(isBug8ShotSwapOnly([theSwapItself], [], expected, actual)).toBe(false);
-  });
-
-  it('is false when the swapped section is not in the snapshot it was given', () => {
-    expect(isBug8ShotSwapOnly([theSwapItself], deltas, '{"project":{"sections":[]}}', actual)).toBe(false);
-    expect(isBug8ShotSwapOnly([theSwapItself], deltas, 'not json', actual)).toBe(false);
-    // Unreadable ACTUAL is not "unchanged order" either - fail closed.
-    expect(isBug8ShotSwapOnly([theSwapItself], deltas, expected, 'not json')).toBe(false);
-  });
-});
+// The bug-8 shot-swap tolerance (`isBug8ShotSwapOnly` and its `isShotIdentitySwap`
+// uuid predicate) was tested here, at length, because it was the one place a
+// mismatch could be walked past. It was deleted with the bug it tolerated - issue
+// #413 finding 8, an undo after a save/reload deleting the WRONG shot - so there
+// is nothing left to cover: a swapped shot identity is now an ordinary,
+// unattributable failure, and `shotSetDelta` above is all that survives of it (it
+// names which shot went missing, which is reporting, not tolerating).

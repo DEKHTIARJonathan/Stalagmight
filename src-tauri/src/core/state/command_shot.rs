@@ -146,24 +146,37 @@ impl AppState {
             );
         }
 
-        // Validate resulting length (disallow zero/negative)
+        // Validate the length this update SETS - and ONLY when it sets one.
+        //
+        // The guard used to fall back to the stored length
+        // (`updates.length.unwrap_or(existing.length)`), which made a shot whose
+        // STORED length is already zero or negative reject every update, kind and
+        // comment included. That state is loadable: `Validator::validate_shot`
+        // reports ZERO_LENGTH/NEGATIVE_LENGTH on a legacy or collaborator file as
+        // a validation ERROR, it does not refuse the file - so the fallback locked
+        // the invalid value out of the very edits that could correct it, and
+        // wedged undo on top of that. `SetShotKind` records `PreviousValues`,
+        // whose undo re-enters here with only `kind` set; the fallback failed it,
+        // `undo_inner`'s epilogue pushed the entry straight back, and every older
+        // entry was sealed off forever (#413).
         if let Some(section) = project.sections.iter().find(|s| s.id == section_id) {
-            if let Some(existing) = section.shots.iter().find(|s| s.id == shot_id) {
-                let new_length = updates.length.unwrap_or(existing.length);
-                if new_length == 0.0 {
-                    return CommandResult::failure(format!(
-                        "Shot {}:{} has zero length",
-                        section_id,
-                        shot_display_position(shot_id, section_id)
-                    ));
-                }
-                if new_length < 0.0 {
-                    return CommandResult::failure(format!(
-                        "Shot {}:{} has negative length: {:.1}m",
-                        section_id,
-                        shot_display_position(shot_id, section_id),
-                        new_length
-                    ));
+            if section.shots.iter().any(|s| s.id == shot_id) {
+                if let Some(new_length) = updates.length {
+                    if new_length == 0.0 {
+                        return CommandResult::failure(format!(
+                            "Shot {}:{} has zero length",
+                            section_id,
+                            shot_display_position(shot_id, section_id)
+                        ));
+                    }
+                    if new_length < 0.0 {
+                        return CommandResult::failure(format!(
+                            "Shot {}:{} has negative length: {:.1}m",
+                            section_id,
+                            shot_display_position(shot_id, section_id),
+                            new_length
+                        ));
+                    }
                 }
 
                 // Reject geometry edits on frozen shots
@@ -175,11 +188,24 @@ impl AppState {
             }
         }
 
+        // Measured BEFORE the edit, so the realign below holds the group's datum
+        // station where this edit found it instead of re-deriving an absolute
+        // position from `zero_datums[0]`. The two are the same for a project
+        // whose frame is self-consistent; for one whose first datum was removed
+        // under it, the absolute form translates the whole rigid group by the
+        // distance between the two GPS anchors - inside a command whose undo
+        // data carries no offsets, so the translation is unundoable (#413
+        // finding 26).
+        let hold_anchor_at = if updates.touches_geometry() {
+            project.datum_anchor_position(section_id)
+        } else {
+            None
+        };
         if project.update_shot(section_id, shot_id, &updates).is_some() {
             // Realign merge group offsets if geometry changed (keeps locked
             // stations pinned: merge points, zero datums)
             if updates.touches_geometry() {
-                project.realign_after_shot_edit(section_id);
+                project.realign_after_shot_edit(section_id, hold_anchor_at);
             }
             tracing::debug!(
                 section_id,
@@ -232,6 +258,79 @@ impl AppState {
                     shot_id,
                     purpose = "remove shot and rewire geometry",
                     "Shot deleted"
+                );
+                CommandResult::success()
+            }
+            Err(e) => CommandResult::failure(e),
+        }
+    }
+
+    /// Remove the shot a `CreateShot` created, as the exact inverse of the
+    /// insert that made it. Undo's path - NEVER a user's.
+    ///
+    /// This deliberately does not go through [`Self::delete_shot`]. That
+    /// function's guards encode USER INTENT: refuse to tear a loop apart,
+    /// refuse to touch collaborator-locked geometry. An inverse must not
+    /// consult them, because **if a forward command was permitted, its inverse
+    /// must be too** - and the shot being removed is one that did not exist
+    /// before the command being undone, so removing it cannot break anything
+    /// the insert did not already build. Routing undo through the user-facing
+    /// delete produced an undo that FAILS outright, and `undo_inner` pushes a
+    /// failed entry back onto the stack, so it fails identically forever and
+    /// every entry beneath it becomes permanently unreachable - a wedged
+    /// history (#413, finding 6). Both of `delete_shot`'s refusals fire in
+    /// practice: the frozen-shot check and the shift-blocked loop/datum pair,
+    /// so special-casing either one is not a fix.
+    ///
+    /// The guards keep applying to a USER delete: `Command::DeleteShot` still
+    /// runs `delete_shot`, guards and all.
+    ///
+    /// `appended_into_empty_section` is the recorded shape of the insert being
+    /// undone (both anchors absent and position 0 - an `add_shot` append into a
+    /// section that had no shots); it is re-checked against the live section
+    /// before it is honored.
+    pub(super) fn remove_created_shot(
+        &self,
+        section_id: SectionId,
+        shot_id: ShotId,
+        appended_into_empty_section: bool,
+    ) -> CommandResult {
+        let Ok(mut proj_guard) = self.project.lock() else {
+            return CommandResult::failure("Failed to lock project".to_string());
+        };
+
+        let Some(project) = proj_guard.as_mut() else {
+            return CommandResult::failure("No project open".to_string());
+        };
+
+        // The one insert `remove_shot_with_rewire` is not the inverse of: an
+        // append into an EMPTY section, whose `pos == 0` compensation displaces
+        // the section and drops its station-0 refs (#413, finding 3). Every
+        // other shape it mirrors exactly - an append into a non-empty section
+        // leaves no station beyond the deletion point, so `anchored_sides_of_edit`
+        // sees no anchored tail and compensates nothing; a mid-chain insert and a
+        // prepend are undone by the same offset arithmetic that made them.
+        let sole_shot = project
+            .get_section(section_id)
+            .is_some_and(|section| section.shots.len() == 1 && section.shots[0].id == shot_id);
+        let removed = if appended_into_empty_section && sole_shot {
+            project
+                .remove_appended_first_shot(section_id, shot_id)
+                .map(|_| ())
+        } else {
+            project
+                .remove_shot_with_rewire(section_id, shot_id)
+                .map(|_| ())
+        };
+
+        match removed {
+            Ok(()) => {
+                tracing::debug!(
+                    section_id,
+                    shot_id,
+                    appended_into_empty_section = appended_into_empty_section && sole_shot,
+                    purpose = "undo a shot creation",
+                    "Created shot removed"
                 );
                 CommandResult::success()
             }

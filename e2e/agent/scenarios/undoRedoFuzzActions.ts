@@ -32,8 +32,15 @@ import { mulberry32, type ScenarioContext } from './framework';
  * value ranges exactly: the v2-only helpers below all short-circuit without
  * consuming a draw, so a v1 run reproduces the historical stream byte for byte.
  * It is the pinned escape for any repro that cannot be re-found under v2.
+ *
+ * Read at CALL time, never cached: `pnpm agent:fuzz-shrink` restores the env the
+ * recording ran under from inside its own `main()`, which is after this module
+ * was imported, and a frozen const would label a v1 replay's trace and repro
+ * line as v2. Same rule as the knobs in `undoRedoFuzz.ts`.
  */
-export const STREAM_V2 = process.env.STALAGMIGHT_FUZZ_STREAM !== 'v1';
+export function streamV2(): boolean {
+  return process.env.STALAGMIGHT_FUZZ_STREAM !== 'v1';
+}
 
 /** Share of generated values that take an extreme instead of a nominal value. */
 const P_BOUNDARY = 0.15;
@@ -152,7 +159,7 @@ function biasedFloat(
   decimals: number,
   extremes: readonly number[] = [0, -0.0001, GEOMETRY_EXTREME, -GEOMETRY_EXTREME, 1e-9],
 ): number {
-  if (!STREAM_V2) return roundedFloat(ctx, min, max, decimals);
+  if (!streamV2()) return roundedFloat(ctx, min, max, decimals);
   if (ctx.rng() < P_BOUNDARY) return ctx.pick(extremes);
   return roundedFloat(ctx, min, max, decimals);
 }
@@ -169,7 +176,7 @@ const BOUNDARY_STRINGS = [
 ] as const;
 
 function biasedText(ctx: ScenarioContext, nominal: string): string {
-  if (!STREAM_V2) return nominal;
+  if (!streamV2()) return nominal;
   if (ctx.rng() < P_BOUNDARY) return ctx.pick(BOUNDARY_STRINGS);
   return nominal;
 }
@@ -201,7 +208,7 @@ function pickSection(ctx: ScenarioContext, state: TargetingDigest): DigestSectio
  * sections reaches that shape rarely. v2 only.
  */
 function pickSmallSection(ctx: ScenarioContext, state: TargetingDigest): DigestSection | null {
-  if (!STREAM_V2) return pickSection(ctx, state);
+  if (!streamV2()) return pickSection(ctx, state);
   const sections = sortedSections(state);
   if (sections.length === 0) return null;
   const small = sections.filter((section) => section[1].length <= 1);
@@ -548,7 +555,7 @@ const SWARM_PROFILES: readonly { name: string; boost: Record<string, number> }[]
 
 /** The profile a seed selects. Stable for a seed, independent of every other stream. */
 export function swarmProfileFor(seed: number): SwarmProfile {
-  if (!STREAM_V2) return { name: 'v1-legacy', multipliers: {} };
+  if (!streamV2()) return { name: 'v1-legacy', multipliers: {} };
   const rng = mulberry32((seed ^ SWARM_STREAM_SALT) >>> 0);
   const chosen = SWARM_PROFILES[Math.floor(rng() * SWARM_PROFILES.length)] ?? SWARM_PROFILES[0];
   return { name: chosen?.name ?? 'balanced', multipliers: { ...(chosen?.boost ?? {}) } };
@@ -932,7 +939,7 @@ export const ACTION_GENERATORS: readonly ActionGenerator[] = [
       const data = randomSectionData(ctx);
       const shots = data.shots as unknown[];
       // An out-of-range import station index is a deliberate rejection case.
-      const importStationIndex = STREAM_V2 && chance(ctx, 0.15) ? ctx.randInt(50, 99) : ctx.randInt(0, shots.length);
+      const importStationIndex = streamV2() && chance(ctx, 0.15) ? ctx.randInt(50, 99) : ctx.randInt(0, shots.length);
       const strategy = ctx.pick(CLOSURE_STRATEGIES);
       return {
         action: 'createSectionAndMerge',
@@ -1010,7 +1017,7 @@ const BY_NAME = new Map(ACTION_GENERATORS.map((generator) => [generator.name, ge
 export function weightedNamesFor(profile: SwarmProfile): string[] {
   const names: string[] = [];
   for (const generator of ACTION_GENERATORS) {
-    if (!STREAM_V2 && generator.since === 'v2') continue;
+    if (!streamV2() && generator.since === 'v2') continue;
     const weight = Math.max(1, Math.round(generator.weight * (profile.multipliers[generator.name] ?? 1)));
     for (let i = 0; i < weight; i++) names.push(generator.name);
   }

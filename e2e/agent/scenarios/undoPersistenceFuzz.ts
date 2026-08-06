@@ -66,96 +66,89 @@
  *   - STACK SURVIVAL. `undoLen` and `redoLen` after the reopen must equal what
  *     they were at save time.
  *
- * ## Known bugs that fire here by construction
+ * ## The known bugs that used to fire here by construction - all fixed, all strict
  *
- * Two, and both are handled by classification rather than by weakening anything.
- * Neither is tolerated unless `STALAGMIGHT_FUZZ_ALLOW_KNOWN_BUGS=1` is set;
- * strict mode still fails on the first hit of either.
+ * This scenario carried four tolerances, because the defects it hunted fired
+ * near the TOP of the restored stack and would otherwise have masked everything
+ * beneath them. Every one of those defects is fixed, so every tolerance is
+ * DELETED and the whole walk is strict: any mismatch, any wedge, any integrity
+ * divergence fails the run outright.
  *
- *   - FINDING 11 (`pre-save-snapshot-undo-reverts-save-heals`). A
- *     `ProjectSnapshotPair` recorded BEFORE the save holds the pre-heal project
- *     in both halves, so redoing one reverts the save's gauge-anchor capture.
- *     This scenario saves with a stack of pre-save entries under it and then
- *     redoes all of them, so it fires every iteration. The classifier is narrow:
- *     `gauge_shot_uuid` / `gauge_neighbour_uuid` going value -> null and nothing
- *     else. Documented at
- *     <https://github.com/Stalagmight/Stalagmight/issues/413> and pinned red by
- *     `undo_of_a_pre_save_entry_keeps_the_saves_gauge_anchors`.
+ * The one subtraction still in the file is not a tolerance: the documented
+ * save/reload attribution, which names on the record every change it absorbs and
+ * the largest numeric move among them, resyncs the model at that depth (so the
+ * integrity verdict the resync superseded is skipped rather than compared), and
+ * is refused outright when the diff came back CAPPED, because a prefix cannot be
+ * spoken for.
  *
- *     It shares its path and value shape with bug 1's second half
- *     (`create-section-redo-drops-gauge-anchors`), and the two are told apart by
- *     WHICH entry the move consumed: a `create_section` entry is bug 1, anything
- *     else is finding 11. `classifierFor` does exactly that, so the failure
- *     message names the right one.
+ * What was removed, and what replaced it:
  *
- *   - BUG 8 itself (`bug-8-wrong-shot-delete`). It is deliberately NOT in
- *     `KNOWN_UNDO_ASYMMETRIES` - it is data corruption, and the main fuzzer
- *     should stop dead on it. Here that would defeat the point: bug 8 fires on
- *     the unwind, near the top of the stack, and everything beneath it - the
- *     siblings this scenario exists to find - would never be reached. So a
- *     bug-8-SHAPED mismatch is counted, logged, resynced and walked past, under
- *     three conditions that are checked, not assumed:
+ *   - FINDING 11 (`pre-save-snapshot-undo-reverts-save-heals`, classifier
+ *     deleted; fixed in 94896857, completed by b9d6b14b). A
+ *     `ProjectSnapshotPair` recorded BEFORE the save held the pre-heal project in
+ *     both halves, so redoing one reverted the save's gauge-anchor capture. This
+ *     scenario saves with a stack of pre-save entries under it and then redoes
+ *     all of them, so it fired every iteration. The save heals are factored into
+ *     `apply_save_heals` and re-applied by every snapshot restore, so a restored
+ *     project meets a saved one's standard.
+ *     `undo_of_a_pre_save_entry_keeps_the_saves_gauge_anchors` is un-ignored and
+ *     green.
  *
- *       a. tolerant mode only (`STALAGMIGHT_FUZZ_ALLOW_KNOWN_BUGS=1`);
- *       b. the comparison is after a reload (`reloadsDone > 0`); and
- *       c. the entry the move consumed is a `create_shot`, which is the only
- *          command whose undo is `delete_shot(section_id, stale_shot_id)`
- *          (`UndoData::CreatedShotSnapshot`, core/state/undo.rs:126-133) - the
- *          exact mechanism bug 8 names.
+ *     The re-apply is a CARRY-FORWARD from the live project, which left a residue
+ *     that `undo-redo-fuzz` found and this scenario never could: it cannot
+ *     restore anchors to a section the snapshot RE-CREATES, because nothing live
+ *     holds them. That shape is out of this plan's reach - its snapshot pairs edit
+ *     sections that stay put - which is why it passed while half of
+ *     `undo-redo-fuzz`'s seeds did not. b9d6b14b closes it by making snapshot
+ *     pairs SELF-REFRESHING walls (an undo re-records the entry's `after` half
+ *     from the live project before restoring `before`, and a redo mirrors it), so
+ *     pair undo/redo are exact inverses by construction rather than by re-healing
+ *     afterwards. Entry 11 in `undoRedoFuzz.ts` carries the 2-step reduction.
  *
- *     and only for the exact SIGNATURE `isBug8ShotSwapOnly` recognises: ONE
- *     section holding the right NUMBER of shots with exactly one of them the
- *     wrong shot, AND every remaining unexplained diff accounted for by that
- *     swap (inside the swapped section, or in the geometry its shots feed). A
- *     count change, a one-sided loss, more than one section, more than one swap,
- *     a difference that leaves the uuid sets equal, or ANY unrelated damage
- *     riding along is NOT bug 8 and still fails. A wrong-shot swap on any other
- *     entry type is a NEW finding, by construction.
+ *   - BUG 8 (`bug-8-wrong-shot-delete`, classifier deleted; fixed in b9c9d649).
+ *     Undo of a `CreateShot` deleted the wrong shot after a reload, because
+ *     `UndoData::CreatedShotSnapshot { shot_id }` addressed a shot by an
+ *     in-session id the loader had renumbered. Undo data now carries the target
+ *     shot's `Shot::uuid` and every restore arm resolves by it.
  *
- *   - FINDINGS 12 and 13, this scenario's own (see below). Same treatment and
- *     the same three conditions: 12 (`stale-id-writes-to-the-wrong-shot` plus its
- *     three derived-geometry siblings) applies only to a `set_shot_kind` or
- *     `update_shot` entry after a reload, and only over the SCALAR shot fields
- *     and the geometry derived from them - a shot count change, a uuid change or
- *     anything structural is not covered and still fails. 13 is an undo that
- *     FAILS OUTRIGHT with the exact error `Shot N not found in section S`; it is
- *     counted and the unwind stops there, because the entry is pushed back and
- *     the history really is wedged.
+ *   - FINDINGS 12 and 13, this scenario's own (see below; both fixed in
+ *     b9c9d649). Their classifiers - `stale-id-writes-to-the-wrong-shot` plus
+ *     its three derived-geometry siblings, and the
+ *     `Shot N not found in section S` wedge signature - are deleted with them.
  *
- *   - CONTAMINATION. Once a stale-id defect has fired, the live project no longer
- *     matches any snapshot recorded before the save, so every remaining
- *     comparison in that walk is re-measuring the same defect. From that point
- *     the finding-12 classifiers apply regardless of entry type
- *     (`classifierFor`'s `contaminated` argument) and, if a mismatch still cannot
- *     be classified, the ROUNDTRIP and INTEGRITY-DELTA oracles are downgraded to
- *     counters for the rest of that walk.
- *
- *     That is a real reduction in what the walk can prove, and the alternative -
- *     stopping at the first defect - proves strictly less, because these oracles
- *     stay HARD throughout: the ABSOLUTE INVARIANT suite, an undo or redo that
- *     fails outright (bar the one documented wedge signature), a stack-shape
- *     change, and every crash / error-log oracle the sweep runs afterwards. So
- *     the walk still exercises every restore path in the stack, against a project
- *     the app itself corrupted - which is a harder input than any it would see
- *     otherwise.
- *
- *     How much it actually gives up is measured, not guessed. Over 60 iterations
- *     on the fractal fixture the roundtrip downgrade fired ZERO times
- *     (`contaminatedMismatch` = 0): every one of the 1054 tolerated mismatches
- *     was still explained by a NAMED classifier. The integrity downgrade fired
- *     twice per iteration (`contaminatedIntegrityDelta` = 120), always on the
- *     closure entries, because a wrongly-deleted shot dangles the merge anchored
- *     to it and the checker rightly says so. Those two counters are the thing to
- *     watch: if `contaminatedMismatch` ever climbs, the classifiers have stopped
- *     covering what the walk is seeing and something new is hiding in it.
+ *   - CONTAMINATION, deleted with the defects that motivated it. Once a stale-id
+ *     defect had fired, the live project no longer matched any snapshot recorded
+ *     before the save, so the finding-12 classifiers were extended to the rest of
+ *     the walk and, failing those, the ROUNDTRIP and INTEGRITY-DELTA oracles were
+ *     downgraded to counters. That was a real reduction in what a walk could
+ *     prove, taken because stopping at the first defect proved strictly less.
+ *     With nothing corrupting the project mid-walk, both oracles are hard for
+ *     every depth in both directions, which is what this scenario should always
+ *     have been able to say. The `contaminatedMismatch` /
+ *     `contaminatedIntegrityDelta` counters are gone with the mechanism; if a
+ *     future defect needs the same treatment, note that the measurement that
+ *     justified it was "`contaminatedMismatch` = 0 over 60 fractal iterations" -
+ *     i.e. the downgrade never actually fired, every one of the 1054 tolerated
+ *     mismatches was still explained by a named classifier.
  *
  * ## Findings
  *
- * Two, both new, both root-caused and pinned red in
+ * Two, both new, both root-caused and now pinned GREEN in
  * `src-tauri/src/core/state/open_undo_bugs_tests.rs`, both written up at
  * <https://github.com/Stalagmight/Stalagmight/issues/413>. They are the same
  * root cause as bug 8 - no id remapping on the undo restore path - in variants
  * and directions nothing had reached before.
+ *
+ * BOTH ARE FIXED (b9c9d649), together with bugs 8 and 16, and the two tests
+ * below are no longer `#[ignore]`d. The undo data now records the target shot's `Shot::uuid`
+ * and every restore arm resolves by it, with the in-session id kept only as the
+ * legacy fallback for entries persisted before those fields existed - so an id
+ * that the loader's renumbering has reassigned can no longer decide which shot
+ * an undo hits (see `docs/undo-redo.md`, "Undo data addresses a shot by uuid").
+ * `SetShotKind` consequently records `PreviousValues` rather than
+ * `InverseCommand`, which is a newtype around `Command` and had nowhere to put a
+ * uuid. The mechanisms below are kept as the record of what the scenario found
+ * and of what it still guards against.
  *
  * 12. DATA CORRUPTION, quiet. After a save/reload, undo (or redo) of
  *     `SetShotKind` or `UpdateShot` applies to the WRONG SHOT.
@@ -170,9 +163,9 @@
  *
  *     Needs no delete, unlike bug 8 - one insert-before is enough.
  *
- *     STRICT repro: `--seed 1 --iterations 1` on fractal (what the
- *     `agent:scenarios` smoke entry runs), which fails on the first id-bearing
- *     entry it unwinds:
+ *     Repro, kept as the regression check and now expected CLEAN:
+ *     `--seed 1 --iterations 1` on fractal (what the `agent:scenarios` smoke
+ *     entry runs). It used to fail on the first id-bearing entry it unwound:
  *
  *         undo did not restore the state recorded at depth 16
  *           (the entry it consumed was set_shot_kind)
@@ -188,22 +181,78 @@
  *
  * 13. WEDGED HISTORY. Same mechanism, opposite outcome. A section that has had a
  *     shot DELETED has handed out more ids than it has shots, so the newest
- *     persisted id runs PAST `section_id * STRIDE + (len - 1)` and misses
- *     everything: `delete_shot` / `update_shot` / `set_shot_kind` return
- *     "Shot N not found in section S", the undo fails, and `undo_inner`'s
- *     epilogue (undo.rs:439-444) pushes the entry back - so it fails identically
- *     forever and every entry beneath it is unreachable for good.
+ *     persisted id ran PAST `section_id * STRIDE + (len - 1)` and missed
+ *     everything: `delete_shot` / `update_shot` / `set_shot_kind` returned
+ *     "Shot N not found in section S", the undo failed, and `undo_inner`'s
+ *     epilogue pushed the entry back - so it failed identically forever and
+ *     every entry beneath it was unreachable for good.
  *
  *     Bug 8's write-up says a stale id "does not miss - it COLLIDES". True only
  *     while the section still has as many shots as ids were handed out; a delete
- *     breaks that and switches the whole defect into this regime.
+ *     breaks that and switched the whole defect into this regime.
  *
- *     Repro: `STALAGMIGHT_PERSIST_FUZZ_DELETE_IN_TARGET=1 --seed 1 --iterations 3`
- *     on fractal. That flag is off by default because the wedge is terminal - the
- *     unwind cannot get past it, so the lower two thirds of the stack goes
- *     unwalked. With the delete on the plan's SPARE section instead, the target's
- *     ids stay in range, a stale id collides rather than misses, and the walk
- *     runs to the bottom.
+ *     Beyond addressing shots by uuid, the wedge itself is now structurally
+ *     impossible on a restored stack: a load-time applicability pass DROPS an
+ *     entry whose target no longer resolves instead of leaving it to fail
+ *     forever, so a history that cannot be applied can no longer be a history
+ *     that cannot be got past.
+ *
+ *     Repro, kept and now expected CLEAN:
+ *     `STALAGMIGHT_PERSIST_FUZZ_DELETE_IN_TARGET=1 --seed 1 --iterations 3`
+ *     on fractal. That flag is still off by default, but no longer because the
+ *     wedge it used to construct was terminal - that wedge is fixed, and a run
+ *     with the flag set now walks the whole stack like any other. It stays
+ *     opt-in because it is a DIFFERENT id-space shape (the target section's ids
+ *     run past the renumbered range, so a stale id misses rather than collides),
+ *     and the default arrangement is the one the plan's coverage promises are
+ *     written against.
+ *
+ * ## Found by this scenario on 2026-08-05 (release, HEAD 4579f18f) - FIXED
+ *
+ * 27. FIXED (b9d6b14b, and the state class removed entirely by f16c96a8).
+ *     UNDO DROPPED AN EXACTLY-ZERO `section_offsets` KEY. On naharon, undoing an
+ *     `update_shot` removed `project.section_offsets.0`, which the state it was
+ *     restoring had as `[0,0]`:
+ *
+ *         undo did not restore the state recorded at depth 16
+ *           (the entry it consumed was update_shot)
+ *           at project.section_offsets.0
+ *             expected: [0,0]   actual: <absent>
+ *
+ *     It fired BEFORE the save (`saves=0 reloads=0`), so it was an in-session
+ *     defect, not a persistence one, and it was the exact mirror of finding 2.
+ *     Finding 2 was "an undo LEAKS an all-zero offset key the section did not
+ *     have"; a67dd1b5 fixed it by making adjust-style writes DROP a key that
+ *     lands within `Project::OFFSET_DUST_M` of zero. An undo of
+ *     `PreviousValues { shot_id }` re-executes `update_shot`, which runs that
+ *     same cascade - so a key whose legitimate value IS (0,0) was deleted by the
+ *     undo instead of being left alone. Geometrically inert, exactly as finding 2
+ *     was, and just as much a non-inverse: the key is serialized into the .stalx.
+ *
+ *     Fixed on the principle that AN INVERSE RESTORES, IT DOES NOT RE-DERIVE:
+ *     `PreviousValues` and `CreatedShotSnapshot` capture the rigid connected set's
+ *     `section_offsets` PRE-command (additive serde fields) and the undo puts them
+ *     back verbatim instead of running the cascade again (b9d6b14b). f16c96a8 then
+ *     removed the underlying state from the model altogether - a dust-zero offset
+ *     entry is unrepresentable, normalized by the single writer and re-normalized
+ *     at the two boundaries that ingest maps this app did not write (the loader's
+ *     zero-trust re-solve, and snapshot restore for legacy payloads) - so the
+ *     "was this key legitimately present?" question the two findings kept
+ *     disagreeing about no longer exists.
+ *
+ *     Repro, kept and now expected CLEAN:
+ *     `STALAGMIGHT_FUZZ_FIXTURE=naharon.stalx --seed 5 --iterations 2`.
+ *     `pnpm agent:fuzz-shrink` reduced it to 5 steps (1-minimal, 2 candidates
+ *     rejected as failing differently):
+ *
+ *         1. createSection(spare,shots=3)          <- section 41
+ *         2. mergeStations(41/3,5/3)               <- join it to the graph
+ *         3. removeZeroDatum(0/0)                  <- section 0 loses its datum
+ *         4. updateShot(s=41,shot=4100001,...)
+ *         5. undo
+ *
+ *     It was never classified and never tolerated: it failed the run, which is
+ *     the point.
  *
  * A structural fact worth keeping, found while reaching these: a
  * `ProjectSnapshotPair` entry is a WALL. `Shot::id` is serialized inside a
@@ -242,8 +291,6 @@ import * as path from 'path';
 import type { Scenario, ScenarioContext } from './framework';
 import { DEFAULT_FIXTURE, disableAutoSave, loadFixtureWithoutUndoHistory } from './common';
 import {
-  KNOWN_UNDO_ASYMMETRIES,
-  PRE_SAVE_SNAPSHOT_HEAL_REVERT,
   RELOAD_RESOLVED_GEOMETRY,
   SAVE_HEALING_MUTATIONS,
   classifyDiffs,
@@ -251,7 +298,6 @@ import {
   describeShotSetDelta,
   diffSnapshots,
   maxNumericDelta,
-  isBug8ShotSwapOnly,
   shotSetDelta,
   type KnownAsymmetry,
   type SnapshotDiff,
@@ -291,11 +337,28 @@ import {
   type StepResponse,
 } from './undoRedoFuzzBridge';
 
-/** Opt in to surviving a mismatch that is entirely a documented open app bug. */
-const ALLOW_KNOWN_BUGS = process.env.STALAGMIGHT_FUZZ_ALLOW_KNOWN_BUGS === '1';
+/**
+ * EVERY env knob below is read at CALL time, never frozen into a module-level
+ * const - the rule, and the reason, are spelled out in `undoRedoFuzz.ts`:
+ * `pnpm agent:scenario --trace` and `pnpm agent:fuzz-shrink` both set these
+ * variables from inside their own `main()`, after this module was imported.
+ */
+
+/**
+ * INERT, and kept for the same reason the main fuzzer keeps it: every finding
+ * this scenario reproduced (bug 1, bug 8, findings 11/12/13) is fixed and every
+ * classifier is deleted, so there is nothing left to tolerate. Still read, and
+ * still named in the `reproduce:` line, so a tolerant-looking invocation cannot
+ * be mistaken for one that actually relaxed anything.
+ */
+function allowKnownBugs(): boolean {
+  return process.env.STALAGMIGHT_FUZZ_ALLOW_KNOWN_BUGS === '1';
+}
 
 /** Which `.stalx` under `e2e/fixtures/` to fuzz. Basename only, as the main fuzzer. */
-const FIXTURE = process.env.STALAGMIGHT_FUZZ_FIXTURE || DEFAULT_FIXTURE;
+function fuzzFixture(): string {
+  return process.env.STALAGMIGHT_FUZZ_FIXTURE || DEFAULT_FIXTURE;
+}
 
 /** Diffs shown in a failure message (more are counted, not printed). */
 const SHOWN_DIFFS = 6;
@@ -303,14 +366,17 @@ const SHOWN_DIFFS = 6;
  * Differences the slow re-compare collects before it gives up.
  *
  * A capped list can only ever support a NEGATIVE conclusion. `checkSnapshot`
- * asks for one more than this and refuses to tolerate anything - including a
- * bug-8-shaped swap - when the extra one comes back.
+ * asks for one more than this and lets nothing speak for the mismatch - not even
+ * the epoch attribution that would otherwise RESYNC - when the extra one comes
+ * back.
  */
 const DIFF_LIMIT = 400;
 /** Actions shown in the failure message's history tail. */
 const HISTORY_TAIL = 14;
 /** `STALAGMIGHT_FUZZ_DUMP_HISTORY=1` prints the WHOLE iteration history instead. */
-const DUMP_FULL_HISTORY = process.env.STALAGMIGHT_FUZZ_DUMP_HISTORY === '1';
+function dumpFullHistory(): boolean {
+  return process.env.STALAGMIGHT_FUZZ_DUMP_HISTORY === '1';
+}
 
 /** Most entries undone before the save, so the redo stack is non-empty there. */
 const MAX_PRE_SAVE_UNDOS = 4;
@@ -324,8 +390,7 @@ const MAX_PRE_SAVE_UNDOS = 4;
  * would capture the empty string and silently fall back to generating.
  *
  * Replay is a MODE of this scenario, never a separate one - the fused step, the
- * three oracles, the classification and the contamination rules are all the same
- * code on both paths.
+ * three oracles and the epoch attribution are all the same code on both paths.
  */
 function replayTracePath(): string {
   return process.env.STALAGMIGHT_FUZZ_REPLAY ?? '';
@@ -335,79 +400,11 @@ function traceOutPath(): string {
   return process.env.STALAGMIGHT_FUZZ_TRACE ?? '';
 }
 
-/** The bug-8 signature, as a classifier so it can be named in a message. */
-const BUG_8_WRONG_SHOT: KnownAsymmetry = {
-  id: 'bug-8-wrong-shot-delete',
-  // Recognised structurally (shot identity), never by path.
-  pathPattern: /^(?!)/,
-  description:
-    'Bug 8 (DATA CORRUPTION): after a save/reload, undo of a CreateShot deletes the WRONG shot. ' +
-    'UndoData::CreatedShotSnapshot { section_id, shot_id } undoes via delete_shot with the ' +
-    'PERSISTED id, which the loaders renumbering has since reassigned to a different shot. ' +
-    'Walked past here (tolerant mode only) because this scenario exists to find the SIBLINGS ' +
-    'underneath it; undo-redo-fuzz still stops dead on it.',
-};
-
-/**
- * FINDING 12: bug 8's mechanism is not confined to `CreatedShotSnapshot`. The
- * same stale id in an `InverseCommand(SetShotKind)` or a
- * `PreviousValues { shot_id }` entry makes the undo (and the redo, through
- * `redo_inner`'s catch-all re-execution of `entry.command`) write to the WRONG
- * SHOT after a reload. Nothing is deleted, no uuid changes and no count moves:
- * one shot silently keeps an edit it should have lost, and another silently
- * gains one it never had.
- *
- * Applied ONLY when the entry the move consumed is a `set_shot_kind` or an
- * `update_shot`, which are exactly the two commands whose undo data names a shot
- * by id and whose restore path re-executes against the live project. The path
- * list is the SCALAR shot fields plus the geometry derived from them - so a shot
- * COUNT change, a uuid change, or anything structural is not covered and still
- * fails, which is what keeps this from becoming a general "shots differ"
- * tolerance.
- */
-const SHOT_SCALAR_FIELDS =
-  'azimuth_in|azimuth_out|length|depth_in|depth_out|pitch_in|pitch_out|left|right|up|down|' +
-  'comment|kind|marker_index|temperature';
-
-const STALE_ID_WRONG_SHOT_WRITE: readonly KnownAsymmetry[] = [
-  {
-    id: 'stale-id-writes-to-the-wrong-shot',
-    pathPattern: new RegExp(`^project\\.sections\\[\\d+\\]\\.shots\\[\\d+\\]\\.(${SHOT_SCALAR_FIELDS})$`),
-    description:
-      'Finding 12: after a save/reload, undo or redo of SetShotKind / UpdateShot applies to the ' +
-      'WRONG shot. UndoData::InverseCommand and UndoData::PreviousValues { shot_id } both name a ' +
-      'shot by its in-session id; the loader renumbers to section_id * FEATURE_ID_STRIDE + ' +
-      'sequence_order (persistence/sqlite/read.rs) and nothing remaps the persisted entries, so ' +
-      'the id addresses whichever shot now occupies that slot. Same root cause as bug 8, ' +
-      'different variants and a quieter symptom: no shot is lost, one just keeps an edit it ' +
-      'should have lost while another gains one it never had.',
-  },
-  {
-    id: 'stale-id-wrong-shot-derived-coordinates',
-    pathPattern: /^stations\[\d+\]\.coordinates\.[xyz]$/,
-    description: 'Station coordinates are derived from shot geometry, so they move with finding 12s write.',
-  },
-  {
-    id: 'stale-id-wrong-shot-derived-offsets',
-    pathPattern: /^project\.section_offsets\.\d+(\[\d+\])?$/,
-    description: 'Section offsets are re-solved from shot geometry, so they move with finding 12s write.',
-  },
-  {
-    id: 'stale-id-wrong-shot-derived-stats',
-    // Counts are NOT here: a shot/section/station count change is structural and
-    // is not what a wrong-target field write does.
-    pathPattern: /^stats\.(total_length|min_depth|max_depth|penetration_distance)$/,
-    description: 'Aggregate stats are derived from shot geometry, so they move with finding 12s write.',
-  },
-];
-
 interface SnapshotCheck {
   equal: boolean;
   floatNoise: boolean;
   attributed: KnownAsymmetry[];
   text: string;
-  onlyKnown: boolean;
-  asymmetries: KnownAsymmetry[];
 }
 
 const EQUAL: SnapshotCheck = {
@@ -415,64 +412,30 @@ const EQUAL: SnapshotCheck = {
   floatNoise: false,
   attributed: [],
   text: '',
-  onlyKnown: false,
-  asymmetries: [],
 };
-
-/**
- * Which classifiers apply to a mismatch produced by consuming `entryType`.
- *
- * Finding 11 and bug 1's second half are indistinguishable by path and value -
- * both are a gauge anchor going value -> null - and are separated only by the
- * entry the move consumed. `create_section` is bug 1 (`restore_section` rebuilds
- * through `Section::new`, which hardcodes the anchors to None); every other entry
- * type reaching that shape is a pre-save snapshot pair reverting the save's heal,
- * which is finding 11. Ordering the list decides which one `classifyDiffs`
- * reports, since it takes the first match.
- */
-function classifierFor(
-  entryType: string | null,
-  afterReload: boolean,
-  contaminated: boolean,
-): readonly KnownAsymmetry[] {
-  // Finding 12's paths are in scope once the loader has renumbered AND either the
-  // entry being consumed is one of the two whose undo data names a shot by id, or
-  // a stale-id defect has ALREADY fired in this walk.
-  //
-  // The second half is CONTAMINATION, and it is not a loosening. A wrong-target
-  // write is not undone by continuing to unwind: the value landed on a shot no
-  // entry below knows about, so from that moment the live project disagrees with
-  // every snapshot recorded before the save and every remaining comparison is
-  // re-measuring the same defect. Reporting each of them as a fresh mystery would
-  // be noise. What stays strict is the SHAPE: only the scalar shot fields and the
-  // geometry derived from them are absorbed, so anything structural still fails.
-  const staleId = afterReload
-    ? entryType === 'set_shot_kind' || entryType === 'update_shot' || contaminated
-      ? STALE_ID_WRONG_SHOT_WRITE
-      : []
-    : [];
-  if (entryType === 'create_section') return [...KNOWN_UNDO_ASYMMETRIES, ...staleId];
-  return [PRE_SAVE_SNAPSHOT_HEAL_REVERT, ...KNOWN_UNDO_ASYMMETRIES, ...staleId];
-}
 
 /**
  * The SLOW path, reached only after the page reported a mismatch: re-compare with
  * numeric tolerance, subtract the documented save/reload families when the
- * comparison crosses an epoch, then classify what is left.
+ * comparison crosses an epoch, and render whatever is left as a failure.
+ *
+ * No `known` list and no bug-8 gate any more. This function used to take both,
+ * because bug 1, bug 8 and findings 11/12/13 all fired here by construction;
+ * they are fixed, their classifiers are deleted, and a mismatch the epoch
+ * attribution does not explain now ends the run.
  */
 function checkSnapshot(
   expected: string,
   actual: string,
   attributable: readonly KnownAsymmetry[],
-  known: readonly KnownAsymmetry[],
-  bug8Allowed: boolean,
 ): SnapshotCheck {
   if (expected === actual) return EQUAL;
   // ONE MORE than we report: `truncated` is what tells "exactly DIFF_LIMIT
   // differences" from "at least that many, and the rest were never looked at".
   // The walk visits root keys in sorted order, so a wide `project.*` difference
   // can spend the whole budget before `stations` or `stats` is examined once -
-  // and every tolerance below reads "nothing unexplained is left" off this list.
+  // and the ATTRIBUTED resync below reads "nothing unexplained is left" off this
+  // list.
   const all = diffSnapshots(expected, actual, DIFF_LIMIT + 1);
   if (all.length === 0) return { ...EQUAL, floatNoise: true };
   const truncated = all.length > DIFF_LIMIT;
@@ -501,8 +464,6 @@ function checkSnapshot(
         text:
           `  every path in the first ${DIFF_LIMIT} was a documented save/reload change, but the\n` +
           '  diff was CAPPED there - so this is a statement about a PREFIX, not about the mismatch.',
-        onlyKnown: false,
-        asymmetries: [],
       };
     }
     // The absorbed MAGNITUDE goes on the record. The re-derived-geometry
@@ -517,8 +478,6 @@ function checkSnapshot(
         .map((entry) => `  ATTRIBUTED [${entry.id}]: ${entry.description}`)
         .concat(worst === null ? [] : [`  largest absorbed numeric change: ${worst.toExponential(3)}`])
         .join('\n'),
-      onlyKnown: false,
-      asymmetries: [],
     };
   }
 
@@ -542,50 +501,11 @@ function checkSnapshot(
     lines.push(`  (plus attributable change(s) [${entry.id}], subtracted before this diff)`);
   }
 
-  const classified = classifyDiffs(diffs, known);
-  for (const asymmetry of classified.asymmetries) {
-    lines.push(`  KNOWN OPEN APP BUG [${asymmetry.id}]: ${asymmetry.description}`);
-  }
-
-  // Bug 8 LAST, and only over what the path classifiers could not explain. It is
-  // recognised STRUCTURALLY (one shot swapped for another in one section), never
-  // by path, because the wrong shot being deleted rewrites every derived
-  // coordinate and a path rule broad enough to cover that would hide real drift.
-  //
-  // Order matters and was found the hard way: bug 1 re-mints EVERY shot uuid in
-  // the section it redoes, which also reads as "different shots are present", so
-  // a structural check running first swallowed bug 1 and reported it as bug 8.
-  // `isShotIdentitySwap` is now narrow enough to reject that shape on its own,
-  // and this ordering makes the classification unambiguous regardless.
-  //
-  // `isBug8ShotSwapOnly`, not `isShotIdentitySwap`: the swap has to explain the
-  // WHOLE remaining mismatch. The uuid predicate alone says nothing about the
-  // other unknown diffs, so a lost comment in another section riding along with
-  // a genuine swap was tolerated, resynced away and never seen again.
-  if (
-    bug8Allowed &&
-    !truncated &&
-    classified.unknown.length > 0 &&
-    isBug8ShotSwapOnly(classified.unknown, deltas, expected, actual)
-  ) {
-    lines.push(`  KNOWN OPEN APP BUG [${BUG_8_WRONG_SHOT.id}]: ${BUG_8_WRONG_SHOT.description}`);
-    return {
-      equal: false,
-      floatNoise: false,
-      attributed,
-      text: lines.join('\n'),
-      onlyKnown: true,
-      asymmetries: [...classified.asymmetries, BUG_8_WRONG_SHOT],
-    };
-  }
-
   return {
     equal: false,
     floatNoise: false,
     attributed,
     text: lines.join('\n'),
-    onlyKnown: !truncated && classified.unknown.length === 0,
-    asymmetries: classified.asymmetries,
   };
 }
 
@@ -608,7 +528,9 @@ export const undoPersistenceFuzz: Scenario = {
     'walks the whole restored history down and back up - hunting bug 8s stale-id siblings.',
   defaultIterations: 12,
   async run(ctx, { iterations }) {
-    ctx.setMetric(`fixture:${FIXTURE}`, 1);
+    // Resolved once per RUN, not once per process - see the env-knob rule above.
+    const fixture = fuzzFixture();
+    ctx.setMetric(`fixture:${fixture}`, 1);
     ctx.setMetric('plannedVariants', PLANNED_VARIANTS.length);
     const saveDir = fs.mkdtempSync(path.join(os.tmpdir(), 'stalagmight-persist-fuzz-'));
 
@@ -643,7 +565,7 @@ export const undoPersistenceFuzz: Scenario = {
 
     for (const [variant, count] of seen) ctx.setMetric(`variant:${variant}`, count);
     ctx.log(
-      `fixture=${FIXTURE} seed=${ctx.seed}: ${iterations} save/reload cycle(s), ` +
+      `fixture=${fixture} seed=${ctx.seed}: ${iterations} save/reload cycle(s), ` +
         `${totalEntries} persisted undo entries walked in both directions; variant coverage ` +
         `${[...seen.entries()].map(([v, c]) => `${v}=${c}`).sort().join(' ')}`,
     );
@@ -661,6 +583,7 @@ async function runIteration(
   saveDir: string,
 ): Promise<Map<UndoVariant, number>> {
   const tag = `#${iteration}`;
+  const fixture = fuzzFixture();
   const history: string[] = [];
   const note = (line: string): void => {
     history.push(line);
@@ -687,9 +610,9 @@ async function runIteration(
   // The recorded steps carry RESOLVED section and shot ids, so replaying them
   // against a different project drives moves at ids that do not exist there:
   // an invented failure, or a green run, either way not the recorded bug.
-  if (replay && replay.fixture !== FIXTURE) {
+  if (replay && replay.fixture !== fixture) {
     throw new Error(
-      `trace ${replayPath} was recorded on ${replay.fixture} but this run is on ${FIXTURE}; ` +
+      `trace ${replayPath} was recorded on ${replay.fixture} but this run is on ${fixture}; ` +
         `its steps carry ids resolved against that project. Re-run with ` +
         `STALAGMIGHT_FUZZ_FIXTURE=${replay.fixture} (pnpm agent:scenario --trace restores it for you).`,
     );
@@ -707,7 +630,7 @@ async function runIteration(
           scenario: 'undo-persistence-fuzz',
           seed: ctx.seed,
           iterations,
-          fixture: FIXTURE,
+          fixture,
           stream: 'plan',
           failure,
         }),
@@ -717,7 +640,7 @@ async function runIteration(
     }
   };
 
-  const { stripped } = await loadFixtureWithoutUndoHistory(ctx, FIXTURE);
+  const { stripped } = await loadFixtureWithoutUndoHistory(ctx, fixture);
   if (!(await disableAutoSave(ctx))) {
     throw new Error(
       'could not disable auto-save; a save mutates live state with no undo entry and would ' +
@@ -745,13 +668,6 @@ async function runIteration(
   let savesDone = 0;
   let reloadsDone = 0;
   /**
-   * Set once a stale-id defect (bug 8 or finding 12) has been tolerated in this
-   * walk. From then on the live project no longer matches any snapshot recorded
-   * before the save, so the same tolerance is extended to the rest of the walk -
-   * see `classifierFor`.
-   */
-  let staleIdContaminated = false;
-  /**
    * `entryType[d]` is the commandType of the entry whose execution took the
    * project from depth d-1 to depth d. Read once off both restored stacks, so a
    * failure can name the entry the move consumed - which is what separates bug 1
@@ -773,15 +689,15 @@ async function runIteration(
   // never-returning and narrows what follows it (an inferred `never` return on a
   // const arrow does not).
   const fail: (headline: string, detail?: string) => never = (headline, detail = '') => {
-    const tail = (DUMP_FULL_HISTORY ? history : history.slice(-HISTORY_TAIL)).map((line) => `    ${line}`);
+    const tail = (dumpFullHistory() ? history : history.slice(-HISTORY_TAIL)).map((line) => `    ${line}`);
     const message = [
       headline,
       `  reproduce: pnpm agent:scenario undo-persistence-fuzz --seed ${ctx.seed} ` +
         `--iterations ${iterations} --release` +
-        `${FIXTURE === DEFAULT_FIXTURE ? '' : ` (STALAGMIGHT_FUZZ_FIXTURE=${FIXTURE})`}` +
-        `${ALLOW_KNOWN_BUGS ? ' (STALAGMIGHT_FUZZ_ALLOW_KNOWN_BUGS=1)' : ''}` +
+        `${fixture === DEFAULT_FIXTURE ? '' : ` (STALAGMIGHT_FUZZ_FIXTURE=${fixture})`}` +
+        `${allowKnownBugs() ? ' (STALAGMIGHT_FUZZ_ALLOW_KNOWN_BUGS=1 - INERT: nothing left to allow)' : ''}` +
         `${replayPath ? ` (REPLAY of ${replayPath})` : ''}`,
-      `  iteration=${iteration} fixture=${FIXTURE} depth=${cursor} top=${top} ` +
+      `  iteration=${iteration} fixture=${fixture} depth=${cursor} top=${top} ` +
         `saves=${savesDone} reloads=${reloadsDone}`,
       ...(detail ? [detail] : []),
       `  last ${tail.length} action(s) this iteration:`,
@@ -793,14 +709,14 @@ async function runIteration(
 
   if (init.undoLen !== 0 || init.redoLen !== 0) {
     fail(
-      `${FIXTURE} opened with inherited history after stripping ${strippedRows} row(s)`,
+      `${fixture} opened with inherited history after stripping ${strippedRows} row(s)`,
       `  undoLen=${init.undoLen} redoLen=${init.redoLen} ` +
         `(cleared ${JSON.stringify(stripped.cleared)}, absent ${JSON.stringify(stripped.missing)})`,
     );
   }
   if (init.invariants.length > 0) {
     fail(
-      `${FIXTURE} violates project invariants BEFORE any mutation`,
+      `${fixture} violates project invariants BEFORE any mutation`,
       init.invariants.map((violation) => `  INVARIANT: ${violation}`).join('\n'),
     );
   }
@@ -871,13 +787,6 @@ async function runIteration(
     }
     ctx.metric('integrityCompared');
     if (sameIntegrity(expected, res.integrity)) return;
-    // See `staleIdContaminated`: past the first stale-id defect the project no
-    // longer matches any pre-save snapshot, so its integrity verdict does not
-    // either. Counted rather than asserted, and only in tolerant mode.
-    if (ALLOW_KNOWN_BUGS && staleIdContaminated) {
-      ctx.metric('contaminatedIntegrityDelta');
-      return;
-    }
     const format = (verdict: IntegrityVerdict): string =>
       `saveBlocked=${verdict.saveBlocked} messages=${JSON.stringify(verdict.messages)}`;
     fail(
@@ -888,8 +797,8 @@ async function runIteration(
 
   /**
    * Resolve a mismatch the page reported. `consumed` is the commandType of the
-   * entry the move applied (null for a save, a reload or a mutation), and it is
-   * what picks the classifier order and gates the bug-8 tolerance.
+   * entry the move applied (null for a save, a reload or a mutation); it is now
+   * only ever reported, never used to pick a tolerance - there are none left.
    *
    * Returns true when the model was RESYNCED, which the caller has to know:
    * every expectation the page computed for this step - the integrity verdict
@@ -909,15 +818,7 @@ async function runIteration(
           ...(reloadsDone > 0 ? RELOAD_RESOLVED_GEOMETRY : []),
         ]
       : [];
-    const bug8Allowed =
-      ALLOW_KNOWN_BUGS && reloadsDone > 0 && (consumed === 'create_shot' || staleIdContaminated);
-    const check = checkSnapshot(
-      pair.expected ?? '',
-      pair.actual ?? '',
-      attributable,
-      classifierFor(consumed, reloadsDone > 0, staleIdContaminated),
-      bug8Allowed,
-    );
+    const check = checkSnapshot(pair.expected ?? '', pair.actual ?? '', attributable);
     if (check.equal) {
       if (check.floatNoise) ctx.metric('floatNoise');
       return false;
@@ -925,40 +826,6 @@ async function runIteration(
     if (check.attributed.length > 0 && check.text.startsWith('  ATTRIBUTED')) {
       ctx.metric('resyncs');
       for (const entry of check.attributed) ctx.metric(`resync:${entry.id}`);
-      top = await resyncModel(ctx, pair.index, res.integrity);
-      return true;
-    }
-    if (ALLOW_KNOWN_BUGS && check.onlyKnown) {
-      ctx.metric('knownAsymmetry');
-      for (const asymmetry of check.asymmetries) ctx.metric(`known:${asymmetry.id}`);
-      const staleId = check.asymmetries.some(
-        (asymmetry) => asymmetry.id.startsWith('stale-id-') || asymmetry.id === BUG_8_WRONG_SHOT.id,
-      );
-      if (staleId && !staleIdContaminated) {
-        staleIdContaminated = true;
-        ctx.setMetric('firstContaminationDepth', cursor);
-      } else if (staleId) {
-        ctx.metric('staleIdContaminationInherited');
-      }
-      ctx.log(
-        `${tag} tolerated known asymmetry at depth ${cursor} (entry ${consumed ?? 'n/a'}): ` +
-          check.asymmetries.map((a) => a.id).join(', '),
-      );
-      top = await resyncModel(ctx, pair.index, res.integrity);
-      return true;
-    }
-    // CONTAMINATED. A stale-id defect has already fired in this walk, so the live
-    // project is not the project any pre-save snapshot describes and the
-    // roundtrip comparison can no longer make a meaningful statement about the
-    // depths beneath it. Two ways to handle that: stop the walk, or carry on with
-    // the roundtrip oracle downgraded. Carrying on is strictly MORE coverage than
-    // stopping - the oracles that do not depend on history stay HARD, namely the
-    // absolute invariant suite, an undo/redo that fails outright (bar the one
-    // documented wedge signature), a stack-shape change and every crash/log
-    // oracle the sweep runs afterwards - so the walk still exercises every
-    // restore path in the stack against a project the app itself corrupted.
-    if (ALLOW_KNOWN_BUGS && staleIdContaminated) {
-      ctx.metric('contaminatedMismatch');
       top = await resyncModel(ctx, pair.index, res.integrity);
       return true;
     }
@@ -1123,10 +990,18 @@ async function runIteration(
 
   /**
    * One history move, verified against the snapshot recorded at the depth it
-   * lands on. Returns false when the move FAILED OUTRIGHT and was tolerated as
-   * the known stale-id wedge (finding 12); it throws on anything else.
+   * lands on. Throws on anything that is not a clean move.
+   *
+   * It used to return false for one tolerated case: finding 13's WEDGE, where a
+   * persisted shot id ran past the renumbered range, `delete_shot` /
+   * `update_shot` / `set_shot_kind` returned "Shot N not found in section S",
+   * `undo_inner` pushed the entry back, and every entry beneath it was
+   * unreachable for good. That is fixed (undo data addresses shots by uuid, and
+   * a load-time applicability pass drops an entry whose target no longer
+   * resolves), so the signature match and the early return are deleted: a
+   * refused history move fails the run.
    */
-  const walk = async (direction: 'undo' | 'redo', label: string): Promise<boolean> => {
+  const walk = async (direction: 'undo' | 'redo', label: string): Promise<void> => {
     const back = direction === 'undo';
     const consumed = entryType[back ? cursor : cursor + 1] ?? null;
     const beforeUndo = undoLen;
@@ -1135,30 +1010,6 @@ async function runIteration(
     if (!res.actionOk || res.commandSuccess === false) {
       const error = res.commandError ?? res.actionError ?? 'unknown';
       note(`${tag} ${label} ${direction}[${consumed ?? '?'}] -> FAILED [${error}]`);
-      // FINDING 12, the same root cause as bug 8 with the opposite outcome. When
-      // a section has had a shot deleted, the ids the allocator handed out run
-      // PAST the renumbered range, so a persisted id does not collide - it
-      // misses. `delete_shot` / `update_shot` / `set_shot_kind` then return
-      // "Shot N not found in section S", the undo fails, `undo_inner`'s epilogue
-      // pushes the entry back (core/state/undo.rs), and the history is WEDGED:
-      // every entry beneath it is unreachable for the rest of the project's life.
-      //
-      // It is walked past for the same reason bug 8 is - this scenario is here
-      // to find what lies underneath - but only in tolerant mode, only after a
-      // reload, and only for that exact error shape. The unwind cannot continue
-      // (the entry will fail identically forever), so the caller stops descending
-      // and rewinds from here, which still exercises the restored redo entries.
-      const staleIdMiss = /^Shot \d+ not found in section \d+$/.test(error);
-      if (ALLOW_KNOWN_BUGS && reloadsDone > 0 && staleIdMiss) {
-        ctx.metric('knownAsymmetry');
-        ctx.metric('known:stale-id-miss-wedges-history');
-        ctx.log(
-          `${tag} tolerated a WEDGED history at depth ${cursor} (entry ${consumed ?? 'unknown'}): ${error}`,
-        );
-        assertStacks('a failed undo changed the history stacks', res);
-        record(res);
-        return false;
-      }
       fail(
         `${direction} at depth ${cursor} failed outright (entry ${consumed ?? 'unknown'})`,
         `  error: ${error}`,
@@ -1183,7 +1034,6 @@ async function runIteration(
     assertIntegrityDelta(res, direction, resynced);
     record(res);
     ctx.metric(direction === 'undo' ? 'undos' : 'redos');
-    return true;
   };
 
   for (let i = 0; i < wanted; i++) {
@@ -1381,7 +1231,7 @@ async function runIteration(
   for (const variant of PLANNED_VARIANTS) {
     if (covered.has(variant)) continue;
     ctx.metric(`variantMissing:${variant}`);
-    ctx.log(`${tag} variant ${variant} was not reachable on ${FIXTURE} this iteration`);
+    ctx.log(`${tag} variant ${variant} was not reachable on ${fixture} this iteration`);
   }
   note(
     `${tag} restored stacks: undo=${restoredUndo.length} redo=${restoredRedo.length}, ` +
@@ -1391,28 +1241,17 @@ async function runIteration(
   // -----------------------------------------------------------------------
   // 6. Walk the whole RESTORED history: all the way down, all the way back up.
   // -----------------------------------------------------------------------
+  // No wedge escape any more: `walk` throws on a refused move, so the unwind
+  // reaches depth 0 and the rewind reaches the summit, or the run fails. The
+  // `unwindWedged` / `deepestWedge` / `rewindWedged` metrics went with finding
+  // 13's tolerance.
   const summit = top;
-  while (cursor > 0) {
-    if (!(await walk('undo', 'unwind'))) {
-      // The history wedged (finding 12). Nothing below is reachable any more, so
-      // record how far the unwind got and go straight to the rewind, which still
-      // walks every restored REDO entry.
-      ctx.metric('unwindWedged');
-      ctx.setMetric('deepestWedge', cursor);
-      break;
-    }
-  }
-  const floor = cursor;
-  while (cursor < summit) {
-    if (!(await walk('redo', 'rewind'))) {
-      ctx.metric('rewindWedged');
-      break;
-    }
-  }
-  if (cursor !== summit && ctx.metrics.rewindWedged === undefined) {
+  while (cursor > 0) await walk('undo', 'unwind');
+  while (cursor < summit) await walk('redo', 'rewind');
+  if (cursor !== summit) {
     fail(`the roundtrip ended at depth ${cursor}, expected ${summit}`);
   }
-  ctx.metric('entriesUnwound', top - floor);
+  ctx.metric('entriesUnwound', summit);
   ctx.metric('cycles');
   ctx.setMetric('traceSteps', recorder.length);
   // A cycle that PASSED only writes a trace when asked for by name. The path is

@@ -285,6 +285,16 @@ impl Project {
     /// repaired by re-cascading offsets via [`Self::realign_merges`] rather than
     /// by dropping data.
     pub fn check_merge_alignment(&self) -> Vec<IntegrityViolation> {
+        self.merge_alignment_beyond(Self::MERGE_ALIGNMENT_TOLERANCE_M)
+    }
+
+    /// [`Self::check_merge_alignment`] with the threshold made explicit, so the
+    /// SELF-HEAL can gate on the tighter [`Self::MERGE_ALIGNMENT_INVARIANT_M`]
+    /// while the user-facing report stays at the 5 cm survey tolerance. The two
+    /// numbers answer different questions - "is this worth telling the user
+    /// about" and "is this a state the code considers valid" - and #413 finding
+    /// 20 is what happens when one is used for both.
+    pub(crate) fn merge_alignment_beyond(&self, threshold: f64) -> Vec<IntegrityViolation> {
         let local = self.section_local_coords();
         let station_offsets = self.resolved_station_offsets();
         let mut violations = Vec::new();
@@ -298,7 +308,7 @@ impl Project {
             else {
                 continue;
             };
-            if dist >= Self::MERGE_ALIGNMENT_TOLERANCE_M {
+            if dist >= threshold {
                 violations.push(IntegrityViolation {
                     severity: ViolationSeverity::Critical,
                     category: "merge_misaligned".to_string(),

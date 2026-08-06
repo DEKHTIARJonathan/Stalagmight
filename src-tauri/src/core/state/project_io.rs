@@ -175,6 +175,214 @@ pub(super) fn save_failure(context: &str, target: &Path, err: &anyhow::Error) ->
     }
 }
 
+/// The undo-less heals a save applies to the LIVE project, in one place.
+///
+/// Every one of them mutates the open project with **no undo entry of its own**,
+/// which is what makes them interesting: a `ProjectSnapshotPair` captured before
+/// a save holds the pre-heal project in both halves, so undoing (or redoing) an
+/// unrelated entry recorded before the save would otherwise revert the heal and
+/// make the project at a given undo depth depend on the route taken to reach it
+/// (issue #413, finding 11). [`reapply_heals_after_restore`] is the other half
+/// of that fix and documents, heal by heal, which of these a restore re-applies.
+///
+/// Called AFTER the unresolvable-cross-reference gate in [`AppState::save_project`],
+/// deliberately: two of these (the non-finite sanitize above all) are destructive,
+/// and a REFUSED save must leave the open project byte-for-byte unchanged.
+fn apply_save_heals(project: &mut Project) {
+    // Mint UUIDs for any shot still missing one (pre-v6 .stalx
+    // files loaded today come back with NULL uuid columns). The UUID
+    // is the station identity every cross-reference anchors to
+    // (`StationKey::AfterShot`), and it is what keeps the `.tml`
+    // SpeleoDB renders byte-stable across re-exports, so it has to be
+    // settled BEFORE the SQLite write rather than minted per-consumer.
+    project.ensure_shot_uuids();
+    // Re-mint any within-section duplicate shot UUID before refs are resolved
+    // to positional form for persistence. resolve_key snaps AfterShot(uuid) to
+    // the FIRST matching shot, so a ref anchored on a later duplicate would be
+    // written to the wrong station - duplicate_shot_uuid is a Critical violation
+    // that the unresolvable-cross-reference save gate does NOT catch (the
+    // ref still resolves, just to the wrong shot). Re-minting is lossless and
+    // non-destructive: the kept (first) occurrence keeps its UUID so refs
+    // anchored on it stay faithful, and it clears the Critical so the heal isn't
+    // re-detected on the next load. (Mirrors the load-path dedup in
+    // redrive_offsets_after_load; non-destructive, unlike dropping a dangling
+    // ref, so unlike those it is safe to auto-heal on save rather than block.)
+    project.ensure_unique_shot_uuids();
+
+    // Capture the least-squares gauge pair for any section that lacks one (#24), now that
+    // every shot is guaranteed a UUID. Recording the station the section is ALREADY using
+    // means capturing never moves anybody's coordinates; from here on the gauge is named by
+    // a pair of shots rather than re-derived from an index that a later append can shift.
+    project.capture_missing_gauge_anchors();
+
+    // Drop section_offsets for sections that no longer exist. An orphan entry
+    // (a section removed via a path that bypassed cleanup) is dead data, and the
+    // SQLite section_offsets row carries a FOREIGN KEY to sections(id) - writing
+    // it aborts the ENTIRE save with a generic FK error rather than routing the
+    // user to Repair. Lossless (matches repair_structural_integrity), so heal on
+    // save. (orphan_section_offset is Critical but the save gate only sees
+    // station cross-refs, not section_offsets.)
+    let existing_sections: std::collections::HashSet<SectionId> =
+        project.sections.iter().map(|s| s.id).collect();
+    project
+        .section_offsets
+        .retain(|sid, _| existing_sections.contains(sid));
+
+    // Sanitize non-finite (NaN/inf) section offsets before persisting, mirroring
+    // the load-boundary guard and the shot sanitize below. section_offsets has no
+    // other finite guard, and a non-finite offset would either be coerced to NULL
+    // by SQLite (a NaN, aborting the save) or persist (an inf) and poison every
+    // world coordinate for that component on the next load.
+    //
+    // Through `write_section_offset`, not by rewriting the tuple in place: a
+    // fully-sanitized offset is (0, 0), which means "not displaced", and this
+    // map spells that as an ABSENT key. Writing the zero row instead persisted
+    // an inert entry the same project reached by any other route would not have
+    // - the exact shape `write_section_offset` exists to prevent (#413 finding
+    // 2) - and the row then had to be loaded, cascaded over and re-saved.
+    let non_finite: Vec<SectionId> = project
+        .section_offsets
+        .iter()
+        .filter(|(_, offset)| !offset.0.is_finite() || !offset.1.is_finite())
+        .map(|(id, _)| *id)
+        .collect();
+    for id in non_finite {
+        let offset = project.section_offset(id);
+        let finite = (
+            if offset.0.is_finite() { offset.0 } else { 0.0 },
+            if offset.1.is_finite() { offset.1 } else { 0.0 },
+        );
+        Project::write_section_offset(&mut project.section_offsets, id, finite);
+    }
+
+    // Sanitize non-finite (NaN/inf) shot geometry before binding. A NaN cannot
+    // be stored in a `REAL NOT NULL` column (SQLite coerces it to NULL → the
+    // INSERT aborts the whole save), and an inf would persist and only be
+    // neutralized on the next load. The load path already sanitizes, so mirror
+    // it here so a save can neither abort nor write unusable geometry.
+    // (non_finite_geometry is a detect-only Critical that Repair can't auto-fix,
+    // so blocking the save would strand the user; neutralizing matches the load
+    // round-trip - the value was already unusable.)
+    for section in &mut project.sections {
+        for shot in &mut section.shots {
+            shot.sanitize_non_finite();
+        }
+    }
+}
+
+/// Bring a project restored from an undo/redo snapshot up to the standard a
+/// saved project is held to, so a history move cannot revert a save's heal
+/// (issue #413, finding 11).
+///
+/// `live` is the project being replaced - what the heals have already been
+/// applied to.
+///
+/// The full save-time set is [`apply_save_heals`]; this is the subset a RESTORE
+/// may re-apply, decided per heal rather than wholesale, because a restore that
+/// changes more than the save changed is a new route-dependence rather than a
+/// fix:
+///
+/// * `ensure_shot_uuids` - RE-APPLIED. Pure fill-in: it only touches a shot with
+///   no uuid, and it cannot alter one that has it. (A no-op in practice today -
+///   `Section::new` mints, and the load path mints - which is exactly why it is
+///   safe to keep as a guarantee.)
+/// * `capture_missing_gauge_anchors` - RE-APPLIED AS A CARRY-FORWARD, not as a
+///   fresh capture. The anchors `live` holds are copied onto any restored
+///   section that has none AND CAN RESOLVE THEM, so the pair a save recorded
+///   survives the undo. It is deliberately NOT the unconditional capture:
+///   minting anchors for a project that has never been saved would have a
+///   restore invent state no save authorised, and the restored project would
+///   then differ from the state it is supposed to be restoring. Neither
+///   direction can OVERWRITE an anchor - both the app's capture and this
+///   carry-forward skip a section that already has one - so the pair a section
+///   is pinned to never moves.
+///
+/// # The half of finding 11 this does NOT cover, and what does
+///
+/// KEPT, not superseded, by `AppState::refresh_snapshot_pair_counterpart`
+/// (`undo.rs`) - the two cover different halves of a history move and the split
+/// is exact:
+///
+/// * THIS covers the half being RESTORED. It reaches into a payload recorded
+///   before a heal and brings it up to date, which nothing else can do: the
+///   payload is the only record of that state, so if the restore did not repair
+///   it the heal would simply be reverted.
+/// * THE REFRESH covers the half being LEFT BEHIND, by re-recording it from the
+///   live project. That is what makes the reverse move exact - and it is the only
+///   thing that can, because this carry-forward is a LIVE-SECTION LOOKUP and a
+///   snapshot pair whose halves disagree about whether a section EXISTS (a
+///   `Batch` holding a `CreateSection`, `execute_delete_shot_range_split`'s
+///   re-created tail) has no live counterpart at the moment the section comes
+///   back (#413, finding 11's re-creation residue).
+///
+/// Neither subsumes the other, and this one is also on the path of every
+/// `ProjectSnapshot`, rollback and load-time restore, where there is no pair to
+/// refresh at all.
+/// * `ensure_unique_shot_uuids` - NOT re-applied. It RE-MINTS an existing uuid,
+///   which is not fill-in, and the pre-repair state of a `duplicate_shot_uuid`
+///   Repair is a snapshot that intentionally holds duplicates: undoing that
+///   Repair has to restore them exactly (`restore_snapshot_into` says the same
+///   thing about its legacy-canonicalization block, and
+///   `undo_of_duplicate_uuid_repair_restores_the_duplicates` pins it).
+/// * the orphan `section_offsets` retain - NOT re-applied. It DROPS state rather
+///   than filling it in, and an orphan key is inert until the next save: every
+///   consumer looks offsets up by an id in `sections`, and the save runs its own
+///   retain before the FK-bearing write. Restoring it faithfully keeps undo an
+///   exact inverse.
+/// * the non-finite sanitize - NOT re-applied. It is destructive, which is why
+///   the save runs it only after the save gate and why a refused save
+///   deliberately leaves it undone. An undo must not rewrite the user's values;
+///   the load and save boundaries neutralize them where it matters.
+pub(super) fn reapply_heals_after_restore(restored: &mut Project, live: Option<&Project>) {
+    restored.ensure_shot_uuids();
+    let Some(live) = live else {
+        return;
+    };
+    for section in &mut restored.sections {
+        if section.gauge_shot_uuid.is_some() {
+            continue;
+        }
+        let Some(healed) = live
+            .sections
+            .iter()
+            .find(|candidate| candidate.id == section.id)
+        else {
+            continue;
+        };
+        let Some(gauge_shot) = healed.gauge_shot_uuid.as_deref() else {
+            continue;
+        };
+        // Matched by id, but the pair names shots BY UUID - and the section this
+        // is being copied onto is a DIFFERENT state of that id, which need not
+        // hold them. `DeleteShot` records a snapshot pair; save while the undo
+        // has the deleted shot back, and the pair a save captures names a shot
+        // the `after` half never had.
+        //
+        // A pair that does not resolve is not a weaker pin, it is no pin at all,
+        // and it is worse than none: `Project::gauge_index` silently falls back
+        // to the index rule, and `capture_missing_gauge_anchors` skips every
+        // section whose `gauge_shot_uuid.is_some()` - so the section stays on the
+        // fallback, and the gauge walks onto a new far station the next time the
+        // section is extended, which is the whole defect the pair exists to
+        // prevent (#24). Leaving the anchors as the snapshot had them (unset) is
+        // what lets the next save capture a pair the section can actually
+        // resolve.
+        let holds = |uuid: &str| {
+            section
+                .shots
+                .iter()
+                .any(|s| s.uuid.as_deref() == Some(uuid))
+        };
+        // The neighbour is legitimately absent for a single-shot section, so
+        // "unset" passes and only a RECORDED one has to resolve.
+        if !holds(gauge_shot) || !healed.gauge_neighbour_uuid.as_deref().is_none_or(holds) {
+            continue;
+        }
+        section.gauge_shot_uuid = healed.gauge_shot_uuid.clone();
+        section.gauge_neighbour_uuid = healed.gauge_neighbour_uuid.clone();
+    }
+}
+
 impl AppState {
     /// True when the open project's initial save is still deferred - it was created
     /// with no save path and has never been written to disk, so it has no `.stalx`
@@ -241,72 +449,10 @@ impl AppState {
             ));
         }
 
-        // Mint UUIDs for any shot still missing one (pre-v6 .stalx
-        // files loaded today come back with NULL uuid columns). The UUID
-        // is the station identity every cross-reference anchors to
-        // (`StationKey::AfterShot`), and it is what keeps the `.tml`
-        // SpeleoDB renders byte-stable across re-exports, so it has to be
-        // settled BEFORE the SQLite write rather than minted per-consumer.
-        project.ensure_shot_uuids();
-        // Re-mint any within-section duplicate shot UUID before refs are resolved
-        // to positional form for persistence. resolve_key snaps AfterShot(uuid) to
-        // the FIRST matching shot, so a ref anchored on a later duplicate would be
-        // written to the wrong station - duplicate_shot_uuid is a Critical violation
-        // that the unresolvable-cross-reference save gate below does NOT catch (the
-        // ref still resolves, just to the wrong shot). Re-minting is lossless and
-        // non-destructive: the kept (first) occurrence keeps its UUID so refs
-        // anchored on it stay faithful, and it clears the Critical so the heal isn't
-        // re-detected on the next load. (Mirrors the load-path dedup in
-        // redrive_offsets_after_load; non-destructive, unlike dropping a dangling
-        // ref, so unlike those it is safe to auto-heal on save rather than block.)
-        project.ensure_unique_shot_uuids();
-
-        // Capture the least-squares gauge pair for any section that lacks one (#24), now that
-        // every shot is guaranteed a UUID. Recording the station the section is ALREADY using
-        // means capturing never moves anybody's coordinates; from here on the gauge is named by
-        // a pair of shots rather than re-derived from an index that a later append can shift.
-        project.capture_missing_gauge_anchors();
-
-        // Drop section_offsets for sections that no longer exist. An orphan entry
-        // (a section removed via a path that bypassed cleanup) is dead data, and the
-        // SQLite section_offsets row carries a FOREIGN KEY to sections(id) - writing
-        // it aborts the ENTIRE save with a generic FK error rather than routing the
-        // user to Repair. Lossless (matches repair_structural_integrity), so heal on
-        // save. (orphan_section_offset is Critical but the save gate below only sees
-        // station cross-refs, not section_offsets.)
-        let existing_sections: std::collections::HashSet<SectionId> =
-            project.sections.iter().map(|s| s.id).collect();
-        project
-            .section_offsets
-            .retain(|sid, _| existing_sections.contains(sid));
-
-        // Sanitize non-finite (NaN/inf) section offsets before persisting, mirroring
-        // the load-boundary guard and the shot sanitize below. section_offsets has no
-        // other finite guard, and a non-finite offset would either be coerced to NULL
-        // by SQLite (a NaN, aborting the save) or persist (an inf) and poison every
-        // world coordinate for that component on the next load.
-        for offset in project.section_offsets.values_mut() {
-            if !offset.0.is_finite() {
-                offset.0 = 0.0;
-            }
-            if !offset.1.is_finite() {
-                offset.1 = 0.0;
-            }
-        }
-
-        // Sanitize non-finite (NaN/inf) shot geometry before binding. A NaN cannot
-        // be stored in a `REAL NOT NULL` column (SQLite coerces it to NULL → the
-        // INSERT aborts the whole save), and an inf would persist and only be
-        // neutralized on the next load. The load path already sanitizes, so mirror
-        // it here so a save can neither abort nor write unusable geometry.
-        // (non_finite_geometry is a detect-only Critical that Repair can't auto-fix,
-        // so blocking the save would strand the user; neutralizing matches the load
-        // round-trip - the value was already unusable.)
-        for section in &mut project.sections {
-            for shot in &mut section.shots {
-                shot.sanitize_non_finite();
-            }
-        }
+        // The undo-less heals, all of them, in `apply_save_heals` - which is
+        // also what a snapshot restore consults so an undo of an entry recorded
+        // BEFORE this save cannot revert them (#413, finding 11).
+        apply_save_heals(project);
 
         // Don't let geometric corruption persist silently: a release-mode warning
         // when drifted merges are about to be written. (The frontend re-checks

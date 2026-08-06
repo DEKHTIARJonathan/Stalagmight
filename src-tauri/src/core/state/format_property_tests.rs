@@ -468,6 +468,11 @@ pub(super) fn open_fresh(path: &Path) -> Option<AppState> {
 struct Fixpoint {
     checked: bool,
     problems: Vec<String>,
+    /// Classified (known-defect) differences, by id. EMPTY as of finding 23's
+    /// fix - this check has no classifier left, so every difference lands in
+    /// `problems`. The field and the sweep's `classified: {...}` line stay
+    /// because they are the reporting shape all three fuzz gates share, and
+    /// because the next open finding is classified here or nowhere.
     hits: BTreeMap<&'static str, usize>,
 }
 
@@ -481,164 +486,65 @@ impl Fixpoint {
     }
 }
 
-/// One dump, split into `table -> sorted rows`.
-fn tables_of(dump: &str) -> BTreeMap<String, Vec<String>> {
-    let mut out: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    let mut current = String::new();
-    for line in dump.lines() {
-        if let Some(rest) = line.strip_prefix("== ") {
-            current = rest.split(' ').next().unwrap_or_default().to_string();
-            out.entry(current.clone()).or_default();
-        } else if !current.is_empty() {
-            out.entry(current.clone())
-                .or_default()
-                .push(line.to_string());
-        }
-    }
-    out
-}
-
-/// Split a rendered row into `name=value` cells.
-fn cells_of(row: &str) -> Vec<(String, String)> {
-    row.split('\u{1f}')
-        .filter_map(|cell| {
-            cell.split_once('=')
-                .map(|(name, value)| (name.to_string(), value.to_string()))
-        })
-        .collect()
-}
-
-/// May this rendered value legitimately move by float dust?
-///
-/// A blob may (it is gzipped decimal-text JSON) and so may a REAL column - but
-/// an INTEGER may not, and telling them apart matters more than it looks:
-/// treating `id` and `sequence` as drifty collapsed every history row into one
-/// match bucket, so rows were paired arbitrarily and nothing ever classified.
-/// The renderer writes REALs through `{value:?}`, which always emits a decimal
-/// point, and INTEGERs through `to_string()`, which never does.
-fn may_drift(value: &str) -> bool {
-    value.starts_with("blob[") || (value.contains('.') && value.parse::<f64>().is_ok())
-}
-
-/// The row with every value that may legitimately move replaced by a
-/// placeholder, so two rows can be MATCHED before being compared.
-fn row_key(row: &str) -> String {
-    cells_of(row)
-        .into_iter()
-        .map(|(name, value)| {
-            if may_drift(&value) {
-                format!("{name}=<value>")
-            } else {
-                format!("{name}={value}")
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("\u{1f}")
-}
-
-/// Two numbers that differ by at most a few units in the last place.
-///
-/// 1e-12 relative is four orders below the millimetre any real geometry change
-/// is, and two orders above the single-ULP spread actually observed - so a value
-/// that moved for a REASON still fails.
-fn within_a_few_ulps(left: &str, right: &str) -> bool {
-    let (Ok(a), Ok(b)) = (left.parse::<f64>(), right.parse::<f64>()) else {
-        return false;
-    };
-    (a - b).abs() <= 1e-12 * a.abs().max(b.abs())
-}
-
-/// FINDING 23's signature: the two dumps agree everywhere except in float dust,
-/// and only in the two places the first save/load cycle can legitimately move
-/// one - the gzipped JSON history payloads and the DERIVED offset tables.
-///
-/// Narrowed hard on purpose:
-///
-/// * only `undo_stack`, `redo_stack`, `section_offsets` and `station_offsets`
-///   may differ - a differing `shots`, `sections`, `station_merges` or
-///   `station_comments` row is a real change and still fails;
-/// * every differing table must hold the SAME NUMBER of rows, so a row
-///   appearing or vanishing is not this;
-/// * each row must MATCH a partner on every field that is not a float or a
-///   blob, so a row that changed its `sequence`, its `command_type` or its
-///   station key is not this;
-/// * every differing float must be within 1e-12 RELATIVE of its partner.
-fn is_finding_23(before: &str, after: &str) -> bool {
-    const MAY_DRIFT: &[&str] = &[
-        "undo_stack",
-        "redo_stack",
-        "section_offsets",
-        "station_offsets",
-    ];
-    let (left, right) = (tables_of(before), tables_of(after));
-    if left.keys().ne(right.keys()) {
-        return false;
-    }
-    let mut any = false;
-    for (table, rows) in &left {
-        let Some(other) = right.get(table) else {
-            return false;
-        };
-        if rows == other {
-            continue;
-        }
-        any = true;
-        if !MAY_DRIFT.contains(&table.as_str()) || rows.len() != other.len() {
-            return false;
-        }
-        // Match by the row's non-drifting identity, then compare what is left.
-        let mut partners: BTreeMap<String, Vec<&String>> = BTreeMap::new();
-        for row in other {
-            partners.entry(row_key(row)).or_default().push(row);
-        }
-        for row in rows {
-            let Some(candidates) = partners.get_mut(&row_key(row)) else {
-                return false;
-            };
-            let Some(partner) = candidates.pop() else {
-                return false;
-            };
-            for ((name, mine), (other_name, theirs)) in
-                cells_of(row).into_iter().zip(cells_of(partner))
-            {
-                if name != other_name {
-                    return false;
-                }
-                if mine == theirs {
-                    continue;
-                }
-                // A blob is gzipped JSON: its bytes cannot be compared
-                // numerically, and the history tables are the one place a
-                // decimal-text float roundtrip lives.
-                let is_blob = mine.starts_with("blob[") && theirs.starts_with("blob[");
-                let history = table == "undo_stack" || table == "redo_stack";
-                let blob_in_history = is_blob && history;
-                if !blob_in_history && !within_a_few_ulps(&mine, &theirs) {
-                    return false;
-                }
-            }
-        }
-    }
-    any
-}
+// FINDING 23 was classified here, by `is_finding_23`: "the two dumps agree
+// everywhere except in float dust, and only in the two places the first
+// save/load cycle can legitimately move one - the gzipped JSON history payloads
+// and the DERIVED offset tables". FIXED, in two steps, and the classifier is
+// deleted per the delete-when-fixed contract along with the dump-matching
+// helpers it was the only caller of (`tables_of`, `cells_of`, `may_drift`,
+// `row_key`, `within_a_few_ulps`). From here on ANY difference between two
+// generations is a problem and fails the gate; see `check_save_load_save` for
+// the two mechanisms and the measurement.
 
 /// Save, load, save - three generations - and assert the one thing that is
 /// actually true of them.
 ///
 /// **What is NOT asserted, and why.** "The drift settles after one cycle" was
 /// asserted first, on the strength of seed 1 measuring exactly that (generation
-/// 1 vs 0 differed in 7 lines, 2 vs 1 and 3 vs 2 in none). It is false. Over
-/// eight runs of the gate the assertion held four times and failed four times,
-/// on the same seeds and the same inputs - so the drift does not converge, it
-/// re-rolls, which puts it in finding 21's class. Asserting it would be a coin
-/// flip in CI, and the honest place for the fact is the finding, not a flaky
-/// gate.
+/// 1 vs 0 differed in 7 lines, 2 vs 1 and 3 vs 2 in none). It was false when it
+/// was written: over eight runs of the gate the assertion held four times and
+/// failed four times, on the same seeds and the same inputs - so the drift did
+/// not converge, it RE-ROLLED, which put it in finding 21's class. Asserting it
+/// would have been a coin flip in CI.
 ///
-/// **What IS asserted:** no save/load cycle may change ANYTHING except bounded
-/// float dust in the derived and history tables. That is a strong property, it
-/// is green, and it is what would catch a save/load cycle starting to move a
-/// shot, drop a merge or renumber a section - which is what this exists for.
-/// Every generation pair is classified or fails.
+/// The re-roll has since been root-caused and fixed, and it was exactly that
+/// class: `UndoData`'s `previous_offsets` is a `HashMap`, so re-serializing one
+/// unchanged payload wrote its keys in a different order each time
+/// (`{"3":null,"2":[..]}` one save, `{"2":[..],"3":null}` the next). It now
+/// serializes in key order (`core/undo.rs`), and over eight runs of this gate
+/// NO generation-1-to-2 pair differs at all - the cycle converges after one
+/// generation, every time.
+///
+/// Finding 23's remaining generation-0-to-1 drift is fixed too, in two steps,
+/// and this gate now records ZERO classified hits per run:
+///
+/// * the history payloads' decimal float text - the load reparsed it and
+///   `serde_json`'s parser is not its printer's inverse
+///   (`"right":2.7600000000000002` read back as the double that prints `2.76`)
+///   - went with the `float_roundtrip` feature (src-tauri/Cargo.toml);
+/// * the last one was a `section_offsets` value settling on reload: the
+///   loader's from-scratch cascade did not bit-reproduce what the incremental
+///   path had accumulated (`offset_y=2.58` saved, `2.579999999999999` after the
+///   reload re-solved it, then stable). `cascade_bfs`
+///   (models/project/connectivity.rs) now DECLINES a correction below
+///   `Project::OFFSET_DUST_M` rather than applying a picometre one, so the
+///   re-solve leaves an already-correct offset exactly where the file put it.
+///
+/// **What IS asserted:** no save/load cycle may change ANYTHING in the file's
+/// logical content. That was already the shape of the property - "nothing may
+/// change except bounded float dust in the derived and history tables" - and the
+/// `except` clause is what has gone, because nothing lands in it any more:
+/// `is_finding_23` is deleted per the delete-when-fixed contract, so a
+/// generation pair that differs at all is now a problem and fails.
+///
+/// Deleting a tolerance is a strengthening, so it was measured before it was
+/// made rather than assumed: consecutive runs of this gate classify nothing -
+/// each run is a fresh process, so each re-rolls the `HashMap` seeds that made
+/// the FIRST version of this a coin flip - and the sweep classifies nothing over
+/// its seeds with closures and without. What is still NOT done is asserting
+/// convergence as a separate claim ("the drift settles after one cycle"): there
+/// is no drift left to settle, so the claim has no content, and the equality
+/// check above already says everything true about it.
 fn check_save_load_save(seed: u32, closures: bool, moves: usize) -> Fixpoint {
     let Some(state) = build_state(seed, closures, moves) else {
         return Fixpoint::skipped();
@@ -675,28 +581,21 @@ fn check_save_load_save(seed: u32, closures: bool, moves: usize) -> Fixpoint {
     }
 
     let mut problems = Vec::new();
-    let mut hits = BTreeMap::new();
+    let hits = BTreeMap::new();
     for generation in 1..dumps.len() {
         if dumps[generation - 1] == dumps[generation] {
             continue;
         }
-        if is_finding_23(&dumps[generation - 1], &dumps[generation]) {
-            *hits
-                .entry("finding-23-a-save-load-cycle-is-not-a-fixpoint")
-                .or_insert(0) += 1;
-        } else {
-            problems.push(format!(
-                "seed {seed}: save/load generation {generation} differs from generation {} in a \
-                 way that is NOT bounded float dust in a derived or history table:\n{}",
-                generation - 1,
-                dump_differences(
-                    &dumps[generation - 1],
-                    &dumps[generation],
-                    ("first save", "second save")
-                )
-                .join("\n")
-            ));
-        }
+        problems.push(format!(
+            "seed {seed}: save/load generation {generation} differs from generation {}:\n{}",
+            generation - 1,
+            dump_differences(
+                &dumps[generation - 1],
+                &dumps[generation],
+                ("first save", "second save")
+            )
+            .join("\n")
+        ));
     }
     Fixpoint {
         checked: true,

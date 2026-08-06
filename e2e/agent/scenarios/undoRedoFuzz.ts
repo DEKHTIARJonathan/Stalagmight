@@ -63,153 +63,172 @@
  * two canonical strings still disagree, `projectSnapshot.ts` re-compares them
  * with a 1e-9 absolute tolerance and classifies the result.
  *
- * ## Open app bugs this reproduces
+ * ## The app bugs this found - ALL FIXED, and this scenario is now STRICT
  *
  * Tracked at https://github.com/Stalagmight/Stalagmight/issues/413, one comment
  * per finding with mechanism and fix direction.
  *
- * None of these are normalized away. The oracle fails on all of them; 1, 2 and 4
- * are classified (`KNOWN_UNDO_ASYMMETRIES` plus `LOOP_CLOSURE_REORDER`) so the
- * message names them rather than reading as a mystery.
+ * Nothing here is open. The last one to close was finding 11's residue
+ * (b9d6b14b), which this scenario found after the earlier waves and which is
+ * written up under entry 11 - read it before concluding that a gauge-anchor
+ * failure is new. No classifier was ever re-added for it: the oracle stayed
+ * strict and the runs stayed red until the app was fixed, which is the whole
+ * discipline this file is built on.
  *
- * EVERY repro line below is executable against the CURRENT default (v2) stream.
- * Where a finding was not re-found under v2 the line carries an explicit
- * `STALAGMIGHT_FUZZ_STREAM=v1`, which reproduces the legacy draw stream byte for
- * byte. Do not shorten these lines: dropping the stream selector, the fixture or
- * the tolerance flag turns most of them green, which reads as "fixed".
+ * EVERY classifier and every known-bug tolerance is GONE, per the
+ * delete-when-fixed contract the fix waves follow: a mismatch of any shape, at
+ * any depth, is an outright failure again, and `STALAGMIGHT_FUZZ_ALLOW_KNOWN_BUGS=1`
+ * has nothing left to allow (the variable is still read, and still named in the
+ * `reproduce:` line, so a stale invocation is visible rather than silently
+ * meaningless). The only differences this scenario still ATTRIBUTES are the two
+ * documented, intended families a save or a reload produces
+ * (`SAVE_HEALING_MUTATIONS`, `RELOAD_RESOLVED_GEOMETRY`), and only across an
+ * epoch boundary.
  *
- * The template every line below plugs into (the `...` stands for the two env
- * vars plus the command):
+ * The table below is the RECORD, not a to-do list. Every repro line is kept
+ * verbatim and stays runnable: each one is now a REGRESSION CHECK that must pass
+ * clean. Do not shorten them - dropping the stream selector or the fixture makes
+ * a line stop exercising what it was minimized to exercise. Each entry names the
+ * commit that fixed it (`git show <hash>`), which is where the mechanism, the
+ * fix and its Rust-tier regression test live.
  *
- *     STALAGMIGHT_FUZZ_ALLOW_KNOWN_BUGS=1 \
+ * The template every line below plugs into:
+ *
  *     STALAGMIGHT_FUZZ_FIXTURE=<fractal_plant_iter3|naharon>.stalx \
  *     pnpm agent:scenario undo-redo-fuzz --seed N --iterations M --release
- *
- * `ALLOW_KNOWN_BUGS=1` is wanted on all of them EXCEPT 1, which is verified
- * strict; it stops an earlier classified bug masking the one you are after.
  *
  * 4, 5 and 6 need `STALAGMIGHT_FUZZ_FIXTURE=naharon.stalx`: they need loop
  * closures, zero datums and null section metadata present AT LOAD, and the
  * fractal fixture has none of those (all 32 of its sections have a non-null
  * surveyor; naharon has 13 null ones). Fixture diversity is what found them.
  *
- * 1. `--seed 1 --iterations 40` on fractal, STRICT (no ALLOW_KNOWN_BUGS) - this
+ * 1. FIXED (94896857). `--seed 1 --iterations 40` on fractal - this
  *    is what the `agent:scenarios` smoke entry hits. Create a section, undo,
- *    redo: every shot uuid is re-minted. SECOND MANIFESTATION, only
- *    observable now that runs save (`naharon`, seed 23 x60): the same
- *    `restore_section` path also resets `reverse_parity` and BOTH gauge anchors
- *    (`Section::new`, models/section.rs:301-303), so a redo silently discards the
- *    least-squares gauge pair a save had captured.
- *    `UndoData::CreatedSectionSnapshot` stores a `SectionData`, which has no
- *    uuid field, so redo goes `restore_section` -> `Section::new_with_id` ->
- *    `Shot::new` -> `Uuid::new_v4()`. The sibling `CreateShot` path was
- *    explicitly fixed for this exact reason (a fresh uuid dangles every
- *    `StationKey::AfterShot` anchor and the Ariane export identity).
- * 2. `STALAGMIGHT_FUZZ_STREAM=v1 ... --seed 11 --iterations 150` on fractal
- *    (not re-found under v2) - undoing a shot INSERT leaves
+ *    redo: every shot uuid was re-minted. SECOND MANIFESTATION, only
+ *    observable once runs save (`naharon`, seed 23 x60): the same
+ *    `restore_section` path also reset `reverse_parity` and BOTH gauge anchors
+ *    (`Section::new`), so a redo silently discarded the least-squares gauge pair
+ *    a save had captured.
+ *    `UndoData::CreatedSectionSnapshot` stored a `SectionData`, which has no
+ *    uuid field, so redo went `restore_section` -> `Section::new_with_id` ->
+ *    `Shot::new` -> `Uuid::new_v4()`. Fixed by giving the entry a
+ *    `SectionIdentity` (shot uuids, parity, both anchors) that
+ *    `Section::restore_with_identity` puts back, with the undo refreshing that
+ *    identity from the live section so save-captured anchors survive; legacy
+ *    entries still mint.
+ * 2. FIXED (94896857 exact-zero half, a67dd1b5 float-dust half, f16c96a8 the
+ *    whole state class).
+ *    `STALAGMIGHT_FUZZ_STREAM=v1 ... --seed 11 --iterations 150` on fractal
+ *    (not re-found under v2) - undoing a shot INSERT left
  *    behind an all-zero `section_offsets` entry the section did not have.
- *    `adjust_section_offset` creates the key while compensating; the undo puts
- *    the value back to 0 but nothing removes the key. Geometrically inert, and
- *    it is serialized into the .stalx.
- * 3. `STALAGMIGHT_FUZZ_STREAM=v1 ... --seed 2 --iterations 36` on fractal (not
- *    re-found under v2; fails at #36, depth 11) - appending the FIRST shot into an EMPTY
- *    section and undoing displaces the whole section by that shot's horizontal
- *    vector (1.13 m in the repro), and the displacement RATCHETS on every
- *    further undo/redo cycle. `Project::add_shot` (the append path) is
- *    offset-neutral, but the undo routes through `remove_shot_with_rewire`,
- *    whose `pos == 0` branch unconditionally calls `adjust_section_offset`.
- *    Deliberately NOT classified as tolerable: it is a geometry bug, and the
- *    same branch drops merges / zero datums / station comments keyed to that
- *    section's station 0.
- * 4. `STALAGMIGHT_FUZZ_STREAM=v1 ... --seed 4 --iterations 19` on naharon (not
- *    re-found under v2) - undoing a loop-closure removal
- *    puts the closure back at the END of `project.loop_closures` instead of its
- *    original index (`core/state/undo.rs:244` pushes; the removal used
- *    `Vec::remove(pos)`). Order-only, but the order is persisted, indexed by the
- *    frontend, and feeds `resolve_offsets`' adjacency lists.
- * 5. `--seed 16 --iterations 40` on naharon - undoing `updateSection` CANNOT
- *    restore a `name` / `surveyor` / `date` that was previously null; the new
- *    value silently survives the undo. The capture is right
- *    (`undo_capture.rs:144-146` builds `Some(None)`), but `SectionUpdates`
- *    (`models/section.rs:122-142`) has only `#[serde(default)]` on those three
- *    fields, so `Some(None)` and `None` BOTH serialize to `null` in
- *    `values_json` and both read back as `None` = "leave it alone". `ShotUpdates`
- *    has `deserialize_with = "double_option"` + `skip_serializing_if` on exactly
- *    these grounds; `SectionUpdates` was left out. Not classified: silent,
- *    persistable data loss.
- * 6. `--seed 1 --iterations 40` on naharon - undo FAILS OUTRIGHT: "This shot is
- *    part of a loop ... Both sides are anchored to a zero datum. Use split
- *    instead." Undo of `CreateShot` runs the user-facing `delete_shot`, guards
- *    and all, so an insert into an anchored loop is an action that CANNOT be
- *    undone - and `undo.rs:439-444` pushes the entry back, so it fails the same
- *    way forever and everything beneath it is unreachable. A wedged history is
- *    the worst outcome here; the forward command was permitted, so its inverse
- *    must be too (raw-remove what was inserted, or capture a snapshot pair).
- *    Since jumps were added this seed reaches it through `undoTo(2)` and fails
- *    at "step 2 of 3" - i.e. the multi-step path applies the first undo, then
- *    wedges PARTWAY, which is strictly worse than the single-step case.
- * 7. NOTE the mechanism correction recorded in
- *    `src-tauri/src/core/state/open_undo_bugs_tests.rs`: the missing
- *    `invalidate_adjusted_cache()` is NOT observable (the adjusted cache is
- *    keyed on `modified_at`, which every undo bumps via `touch()`), so only the
- *    missing `reconcile_geometry()` is a real defect - and a fix only needs to
- *    add that one call.
- *    `--seed 12 --iterations 40` on fractal - a jump through the history
- *    dropdown's path lands on a DIFFERENT state than the same depth reached by
- *    single undos: `section_offsets` out by 2.4 m, and the stations with it.
+ *    `adjust_section_offset` created the key while compensating; the undo put
+ *    the value back to 0 but nothing removed the key. The end state is that a
+ *    dust-zero entry is UNREPRESENTABLE: `write_section_offset` is the single
+ *    normalizing writer (a value within `Project::OFFSET_DUST_M` of the origin is
+ *    removed rather than written), and two boundaries enforce it on maps this app
+ *    did not write - the loader after its zero-trust re-solve, and snapshot
+ *    restore for legacy undo payloads. No write-local rule could satisfy both
+ *    identities at once (+d/-d from ABSENT must end absent, from PRESENT-ZERO
+ *    must end present-zero), which is why the state itself was removed from the
+ *    model rather than the writes being tuned again - see finding 27 in
+ *    `undoPersistenceFuzz.ts` for the other end of the same argument.
+ * 3. FIXED (72595cc6). `STALAGMIGHT_FUZZ_STREAM=v1 ... --seed 2 --iterations 36`
+ *    on fractal (not re-found under v2; failed at #36, depth 11) - appending the
+ *    FIRST shot into an EMPTY section and undoing displaced the whole section by
+ *    that shot's horizontal vector (1.13 m in the repro), and the displacement
+ *    RATCHETED on every further undo/redo cycle. `Project::add_shot` (the append
+ *    path) is offset-neutral, but the undo routed through
+ *    `remove_shot_with_rewire`, whose `pos == 0` branch unconditionally called
+ *    `adjust_section_offset`. The empty-section append now has its exact inverse
+ *    (`remove_appended_first_shot`): offsets untouched, station-0 refs kept.
+ *    (Finding 15 was this bug re-measured, and is fixed with it.)
+ * 4. FIXED (94896857). `STALAGMIGHT_FUZZ_STREAM=v1 ... --seed 4 --iterations 19`
+ *    on naharon (not re-found under v2) - undoing a loop-closure removal
+ *    put the closure back at the END of `project.loop_closures` instead of its
+ *    original index (`undo.rs` pushed; the removal used `Vec::remove(pos)`).
+ *    Order-only, but the order is persisted, indexed by the frontend, and feeds
+ *    `resolve_offsets`' adjacency lists. `ClosureInfo` (and `ZeroDatumInfo`, the
+ *    same shape, finding 17) now capture their index and reinsert at it, with a
+ *    push fallback for legacy entries.
+ * 5. FIXED (b9c9d649). `--seed 16 --iterations 40` on naharon - undoing
+ *    `updateSection` COULD NOT restore a `name` / `surveyor` / `date` that was
+ *    previously null; the new value silently survived the undo. The capture was
+ *    right (`undo_capture.rs` builds `Some(None)`), but `SectionUpdates` had only
+ *    `#[serde(default)]` on those three fields, so `Some(None)` and `None` BOTH
+ *    serialized to `null` in `values_json` and both read back as `None` = "leave
+ *    it alone". They now carry `deserialize_with = "double_option"` +
+ *    `skip_serializing_if`, exactly as `ShotUpdates` always did; schema v17 drops
+ *    pre-v17 undo history because the meaning of an explicit null changed.
+ * 6. FIXED (72595cc6). `--seed 1 --iterations 40` on naharon - undo FAILED
+ *    OUTRIGHT: "This shot is part of a loop ... Both sides are anchored to a zero
+ *    datum. Use split instead." Undo of `CreateShot` ran the user-facing
+ *    `delete_shot`, guards and all, so an insert into an anchored loop was an
+ *    action that COULD NOT be undone - and `undo_inner` pushed the entry back, so
+ *    it failed the same way forever and everything beneath it was unreachable.
+ *    Since jumps were added this seed reached it through `undoTo(2)` and failed
+ *    at "step 2 of 3" - the multi-step path applied the first undo, then wedged
+ *    PARTWAY. Fixed by routing the undo through the guard-free
+ *    `AppState::remove_created_shot`: an inverse consults no user-intent guard,
+ *    while `Command::DeleteShot` keeps every guard (pinned by its own test).
+ * 7. FIXED (94896857). `--seed 12 --iterations 40` on fractal - a jump through
+ *    the history dropdown's path landed on a DIFFERENT state than the same depth
+ *    reached by single undos: `section_offsets` out by 2.4 m, and the stations
+ *    with it.
  *    `--seed 15 --iterations 40` on fractal is the same bug reached through the
  *    INTEGRITY oracle instead - the state compared equal (the geometry paths
  *    were absorbed as reload-resolved across a save boundary) while
- *    `check_project_integrity` reported a merge 5.00 m apart.
+ *    `check_project_integrity` reported a merge 5.00 m apart. Both lines are kept
+ *    because they exercise two different oracles.
  *
  *    `undo()`/`redo()` call `invalidate_adjusted_cache()` before and
- *    `reconcile_geometry()` after (src-tauri/src/core/state/undo.rs:23,37 and
- *    :460,466). `undo_to()`/`redo_to()` loop `undo_inner`/`redo_inner` directly
- *    (:854-876, :920-940) and call NEITHER. So the merge realignment that runs
- *    after every single step - `realign_merges()`, which fires once a merge is
- *    more than MERGE_ALIGNMENT_TOLERANCE_M (5 cm) out - never runs for a jump,
- *    and the closure-adjusted cache is left stale on top. N single undos and one
- *    N-wide jump are not the same operation. Deliberately NOT classified as
- *    tolerable: it is metres of geometry, reachable by clicking an entry in the
- *    history dropdown. The fix is to give undo_to/redo_to the same epilogue
- *    undo/redo have (once, after the loop - not per step).
+ *    `reconcile_geometry()` after. `undo_to()`/`redo_to()` looped
+ *    `undo_inner`/`redo_inner` directly and called NEITHER, so `realign_merges()`
+ *    never ran for a jump and the closure-adjusted cache was left stale on top.
+ *    They now run `mark_remote_dirty` + `reconcile_geometry` ONCE after the loop,
+ *    and a synthetic jump-equivalence contract test pins N single steps == one
+ *    N-wide jump. (The missing `invalidate_adjusted_cache()` was measured NOT to
+ *    be observable - the adjusted cache is keyed on `modified_at`, which every
+ *    undo bumps via `touch()` - so only the missing `reconcile_geometry()` was
+ *    ever the defect.)
  *
- * 8. DATA CORRUPTION. `--seed 14 --iterations 6` on fractal - after a
- *    save/reload, an `undo` DELETES THE WRONG SHOT. Six iterations: a
+ * 8. FIXED (b9c9d649). DATA CORRUPTION. `--seed 14 --iterations 6` on fractal -
+ *    after a save/reload, an `undo` DELETED THE WRONG SHOT. Six iterations: a
  *    `createShot(before=)` into a one-shot section makes the ids diverge from
- *    positional order, the save/reload renumbers, and the undo hits the wrong
- *    slot. The shot the user still had is gone and one they deleted is back -
- *    silent, and it persists on the next save.
+ *    positional order, the save/reload renumbers, and the undo hit the wrong
+ *    slot. The shot the user still had was gone and one they deleted was back -
+ *    silent, and it persisted on the next save.
  *
  *    The chain: shots are RENUMBERED on load to
- *    `section_id * FEATURE_ID_STRIDE + sequence_order` (read.rs:372); undo entries
- *    are persisted and reloaded as OPAQUE JSON (`load_undo_stack`,
- *    persistence/sqlite/undo.rs:138-158) with NO remapping anywhere on the
- *    restore path; and `UndoData::CreatedShotSnapshot { section_id, shot_id }`
- *    undoes by calling `delete_shot(section_id, shot_id)`
- *    (core/state/undo.rs:126-133). Because the in-session allocator
+ *    `section_id * FEATURE_ID_STRIDE + sequence_order` (read.rs); undo entries
+ *    are persisted and reloaded as OPAQUE JSON (`load_undo_stack`) with NO
+ *    remapping anywhere on the restore path; and
+ *    `UndoData::CreatedShotSnapshot { section_id, shot_id }` undid by calling
+ *    `delete_shot(section_id, shot_id)`. Because the in-session allocator
  *    (`take_shot_id`) hands out ids from the SAME `section_id * STRIDE + n` space
- *    the loader renumbers into, a stale id does not miss - it COLLIDES with
- *    whatever shot now occupies that slot. A section only diverges from positional
- *    order after a mid-section insert or delete, which is why this needs a fuzzer
+ *    the loader renumbers into, a stale id did not miss - it COLLIDED with
+ *    whatever shot now occupied that slot. A section only diverges from positional
+ *    order after a mid-section insert or delete, which is why this needed a fuzzer
  *    to reach.
  *
- *    `test_undo_actually_works_after_project_reopen` (core/state/tests.rs:18911)
- *    covers the happy case only: one section, one shot, save, reopen, undo the
- *    CreateSection. No `CreatedShotSnapshot`, no renumbering divergence, no
- *    identity check.
+ *    Fixed by addressing shots by `Shot::uuid` in the persisted entries (additive
+ *    serde fields, in-session id kept only as the legacy fallback), plus a
+ *    load-time applicability pass that DROPS an entry whose target no longer
+ *    resolves rather than wedging the history, and a redo that refuses to
+ *    duplicate a shot uuid. Findings 12, 13 and 16 are the same root cause and
+ *    the same fix; see `undoPersistenceFuzz.ts`.
  *
- *    NOT classified as tolerable, and the absolute invariant suite correctly does
- *    NOT fire: the resulting state is perfectly well-formed - right shot count,
- *    unique ids, no dangling refs. Only the ROUNDTRIP oracle can see that it is
- *    the wrong state, which is exactly what that oracle is for.
+ *    Note what did NOT fire while this was open, and correctly: the absolute
+ *    invariant suite. The resulting state was perfectly well-formed - right shot
+ *    count, unique ids, no dangling refs. Only the ROUNDTRIP oracle could see
+ *    that it was the wrong state, which is exactly what that oracle is for.
  *
- * Set `STALAGMIGHT_FUZZ_ALLOW_KNOWN_BUGS=1` to keep going past a mismatch that is
- * ENTIRELY a classified asymmetry (1, 2 and 4; it is logged, counted as the
- * `knownAsymmetry` metric, and the model resyncs). That exists so the rest of
- * the fuzzer can be exercised while those are open - it is deliberately NOT the
- * default, because a green default here would mean the oracle had been weakened.
- * 3, 5, 6 and 7 are never tolerated.
+ * `STALAGMIGHT_FUZZ_ALLOW_KNOWN_BUGS=1` is now INERT. It used to let a run
+ * continue past a mismatch that was entirely a classified asymmetry (1, 2 and 4),
+ * logging it, counting the `knownAsymmetry` metric and resyncing the model. There
+ * are no classifiers left, so it tolerates nothing; the plumbing stays because
+ * the day a new open bug needs the same treatment, the escape hatch and its
+ * "deliberately not the default" rule should be re-derived from the same place
+ * rather than reinvented.
  *
  * ## The persistence boundary
  *
@@ -224,7 +243,7 @@
  * Two documented families of undo-less state change live here, and BOTH are
  * subtracted only from comparisons that cross an epoch boundary (a save or a
  * reload bumps the epoch); within an epoch the oracle stays strict, which is what
- * keeps bugs 3 and 7 visible:
+ * kept bugs 3 and 7 visible and is now the whole of what this scenario tolerates:
  *
  *   - `SAVE_HEALING_MUTATIONS` - `save_project` mints missing shot uuids, dedupes
  *     within-section duplicates, captures missing gauge anchors, drops orphan
@@ -234,6 +253,14 @@
  *     derivable offset", offsets.rs:186-188), so a reload RECOMPUTES
  *     `section_offsets` and the station coordinates derived from them rather than
  *     restoring them.
+ *
+ * That subtraction stays honest by two guards `checkSnapshot` keeps: the slow
+ * re-compare collects at most `DIFF_LIMIT` paths, and a CAPPED list can only
+ * support a negative conclusion - so "everything was attributable" is refused
+ * outright on a truncated diff, and a truncated failure says so in the message
+ * rather than reading as a complete one. The MAGNITUDE of what the attribution
+ * did absorb is printed with it, because both families are bounded by shape and
+ * not by size.
  *
  * `Shot::id` is not persisted either - the loader renumbers to
  * `section_id * FEATURE_ID_STRIDE + sequence_order` (read.rs:372) - so from the
@@ -267,52 +294,72 @@
  * 60671-byte snapshot it always has). EVERY repro line numbered 1-8 above runs
  * verbatim with that variable set.
  *
- * V2 REPRO TABLE, mined from a 60-cell sweep (both fixtures, seeds 1-30, x40,
- * tolerant, release; 18 failures). Every line below is `--release` with
- * `STALAGMIGHT_FUZZ_ALLOW_KNOWN_BUGS=1` unless marked STRICT:
+ * V2 REGRESSION TABLE, mined from a 60-cell sweep (both fixtures, seeds 1-30,
+ * x40, release) back when it yielded 18 failures. Every line runs STRICT - there
+ * is no tolerance flag to pass - and every one is expected CLEAN, verified on
+ * b9d6b14b + f16c96a8:
  *
- *   bug 1  fractal seed 1  x40  STRICT   (gauge-anchor half; the smoke entry)
+ *   bug 1  fractal seed 1  x40       (the smoke entry; the shrink of this very
+ *                                    seed is what identified finding 11's
+ *                                    residue after bug 1 itself was fixed)
  *   bug 2  -- v1 escape --           not re-found in the sweep
  *   bug 3  -- v1 escape --           not re-found in the sweep
  *   bug 4  -- v1 escape --           not re-found in the sweep
  *   bug 5  naharon seed 16 x40       sections[20].surveyor null -> kept
  *   bug 6  naharon seed 1  x40       "undo at depth 2 failed outright"
+ *          naharon seed 21 x60       the same wedge reached through undoTo; its
+ *                                    6-move sequence later became the clearest
+ *                                    statement of finding 11's residue (entry 11)
  *   bug 7  fractal seed 12 x40       undoTo(0) 2.4 m section_offsets divergence
  *          fractal seed 15 x40       same bug via the INTEGRITY oracle instead:
- *                                    undoTo skips reconcile_geometry, so
- *                                    realign_merges never runs and the reloaded
- *                                    project reports "Merged stations 6:0 and
+ *                                    undoTo skipped reconcile_geometry, so
+ *                                    realign_merges never ran and the reloaded
+ *                                    project reported "Merged stations 6:0 and
  *                                    3:2 are 5.00 m apart". The state compare
  *                                    had absorbed the geometry paths as
  *                                    reload-resolved across the epoch, so ONLY
  *                                    the integrity delta caught it - which is
  *                                    the argument for having three oracles.
  *   bug 8  fractal seed 14 x6        createShot(before=) into a 1-shot section,
- *                                    save/reload, undo -> the WRONG shot is
+ *                                    save/reload, undo -> the WRONG shot was
  *                                    deleted. Six iterations, the cleanest
  *                                    repro of the worst bug.
+ *   bug 1  naharon seed 23 x60       bug 1's gauge-anchor half, needing a save
+ *   fnd 10 naharon seed 26 x40       closure reclassified as a merge on reload
+ *   fnd 11 fractal seed 4  x60       a pre-save snapshot pair reverting a heal.
+ *                                    This seed stayed clean while the residue was
+ *                                    open, because its snapshot pairs re-create
+ *                                    nothing and the carry-forward covered them -
+ *                                    which is exactly where the boundary between
+ *                                    the two halves of finding 11 ran.
+ *
+ * Fresh-seed spread, x40, both fixtures, strict: fractal 31, 47, 63 and naharon
+ * 31, 47, 63 all clean. (47 and 63 on fractal and 31 and 63 on naharon were red
+ * on finding 11's residue before b9d6b14b - they are kept in the list as its
+ * extra regression cover.) Nothing else was found, on any seed, in either stream.
  *
  * Bugs 2, 3 and 4 were not re-found across those 60 cells. Their v1 lines above
  * remain exact and executable with `STALAGMIGHT_FUZZ_STREAM=v1`, which
- * reproduces the legacy stream byte for byte - so no repro has been lost, and
- * the fallback is a stream selector rather than a weakened assertion.
+ * reproduces the legacy stream byte for byte - so no repro was lost, and the
+ * fallback was a stream selector rather than a weakened assertion.
  *
- * ALL OF THEM ALSO REPRODUCE IN THE RUST TIER NOW, classified by finding id
- * rather than merely hit, and about a thousand times cheaper per sequence. See
- * the BUG IDENTIFICATION MATRIX in the header of
+ * ALL OF THEM ALSO REPRODUCE IN THE RUST TIER, classified by finding id rather
+ * than merely hit, and about a thousand times cheaper per sequence - which is
+ * where they are now pinned as green regression tests. See the BUG
+ * IDENTIFICATION MATRIX in the header of
  * `src-tauri/src/core/state/fuzz_undo_tests.rs` for the mode, seed and move
- * count per finding. Two things changed there that matter to this file:
+ * count per finding. Two things there matter to this file:
  *
  *   - BUG 7 IS PINNED. It had no unit test anywhere ("left uncovered
  *     deliberately rather than covered by a test that passes"), because every
- *     synthetic reduction was measured not to diverge. The Rust fuzzer now
- *     PROVES the inequality instead of recognising a shape: on a jump that
- *     diverges it replays the same distance in single steps and records the
- *     finding only when the single-step path lands where the model says and the
- *     jump did not. `bug_7_a_jump_is_n_single_steps`, seed-pinned and red.
- *   - FINDING 15 WAS FINDING 3. Its displacement is never put back, so the
- *     leftover is still there several undos later when the consumed entry is
- *     unrelated - which is what 15 described.
+ *     synthetic reduction was measured not to diverge. The Rust fuzzer PROVES
+ *     the inequality instead of recognising a shape: on a jump that diverges it
+ *     replays the same distance in single steps and records the finding only
+ *     when the single-step path lands where the model says and the jump did not.
+ *     `bug_7_a_jump_is_n_single_steps` is un-ignored and green since 94896857.
+ *   - FINDING 15 WAS FINDING 3. Its displacement was never put back, so the
+ *     leftover was still there several undos later when the consumed entry was
+ *     unrelated - which is what 15 described. Fixed with 3 (72595cc6).
  *
  * 9. RESOLVED - not an app bug. The micron-scale drift seen at fractal seed 12
  *    was the fuzzer's OWN 1e6-metre boundary offsets: absolute error tracked the
@@ -322,13 +369,16 @@
  *    the INPUT (`GEOMETRY_EXTREME`, undoRedoFuzzActions.ts) rather than by
  *    loosening the oracle, which would have blinded it to real sub-centimetre
  *    drift.
- * 11. ROOT-CAUSED, REAL. A save HEALS live state with no undo entry
+ * 11. FIXED (94896857, completed by b9d6b14b).
+ *    A save HEALS live state with no undo entry
  *    (`ensure_shot_uuids`, `ensure_unique_shot_uuids`,
  *    `capture_missing_gauge_anchors`, the orphan `section_offsets` retain -
  *    core/state/project_io.rs). A `ProjectSnapshotPair` captured BEFORE that
- *    save holds the pre-heal project in BOTH halves and neither is refreshed,
+ *    save held the pre-heal project in BOTH halves and neither was refreshed,
  *    so undoing or redoing an UNRELATED command recorded before the save
- *    silently reverts the heal.
+ *    silently reverted the heal. The heals are now factored into
+ *    `apply_save_heals`, which every snapshot restore re-applies (the fill-in
+ *    half of it), so a restored project meets a saved one's standard.
  *
  *    The real damage is not the lost anchors (the next save re-captures them):
  *    it is that the project at a given undo DEPTH now depends on the ROUTE
@@ -337,30 +387,64 @@
  *    is the fuzzer's roundtrip oracle doing exactly its job - a depth whose
  *    state is not well-defined breaks the promise the history feature makes.
  *
- *    Fuzzer: `--seed 4 --iterations 60` on fractal, STRICT (a save at depth 1
+ *    Fuzzer: `--seed 4 --iterations 60` on fractal (a save at depth 1
  *    followed by a redo/undo of a `moveStation` recorded before it).
  *    Unit test: `undo_of_a_pre_save_entry_keeps_the_saves_gauge_anchors` -
- *    four commands, fully synthetic.
+ *    four commands, fully synthetic, un-ignored and green.
  *
- *    NOT an oracle gap. The model's save attribution deliberately allows
- *    null -> value ACROSS a save epoch (the heal itself); this is
+ *    NOT an oracle gap, then or now. The model's save attribution deliberately
+ *    allows null -> value ACROSS a save epoch (the heal itself); this was
  *    value -> null WITHIN the post-save epoch, which is the app losing state
- *    it had, and it is right to fail.
- * 10. NEW, open. A loop closure BECOMES a station merge across save/reload:
- *    naharon seed 26 x40 gives `loop_closures.length` 5 -> 4 with
+ *    it had, and it was right to fail.
+ *
+ *    THE RESIDUE, found by this scenario after wave 2 and closed by b9d6b14b.
+ *    94896857 re-applied the heals to a restored project as a CARRY-FORWARD:
+ *    `reapply_heals_after_restore` (core/state/project_io.rs) copies an anchor
+ *    onto a restored section only from a LIVE section with the same id that
+ *    already has one. That could not cover a snapshot that RE-CREATES a section
+ *    the live project does not currently have - nothing to carry forward from, so
+ *    the anchors the save captured were lost. (The `CreateSection` path never had
+ *    the problem: its entry carries a `SectionIdentity` refreshed from the live
+ *    section at undo time, finding 1. It was specifically the snapshot-pair path.)
+ *    Fixed by making snapshot pairs SELF-REFRESHING WALLS: an undo re-records the
+ *    entry's `after` half from the live project before restoring `before`, and a
+ *    redo does the mirror, so pair undo/redo are exact inverses by construction
+ *    rather than by re-healing afterwards.
+ *
+ *    Kept as the regression check, ddmin'd from fractal seed 1 x40 by
+ *    `pnpm agent:fuzz-shrink` (43 steps -> 2, 1-minimal, no classifier involved):
+ *
+ *        1. executeBatch(revSec+crtSec+updShot)   <- pushes a ProjectSnapshotPair
+ *                                                    whose `after` holds a NEW section
+ *        2. save                                  <- captures that section's gauge pair
+ *        (then the replayer's own unwind/rewind: undo to 0, redo back)
+ *
+ *        redo did not restore the state recorded at depth 2
+ *          at project.sections[32].gauge_neighbour_uuid
+ *            expected: "3178f6da-..."   actual: null
+ *
+ *    Six-move variant on naharon (seed 21 x60), a different command reaching the
+ *    same place - `deleteShotRangeSplit` also produces a snapshot pair that
+ *    re-creates a section: reverseSection, deleteShotRangeSplit, save+reload,
+ *    updateShot, undo, undo, redo -> `sections[37].gauge_shot_uuid` null.
+ *
+ *    It was RED at fractal seeds 1, 12, 15, 47, 63 (x40) and naharon seeds 1, 21,
+ *    31, 63 - roughly half of all seeds, because "a snapshot pair, then a save"
+ *    is a common shape. All nine re-run CLEAN on b9d6b14b + f16c96a8.
+ * 10. FIXED (b9c9d649). A loop closure BECAME a station merge across
+ *    save/reload: naharon seed 26 x40 gave `loop_closures.length` 5 -> 4 with
  *    `station_merges.length` 34 -> 35. `redrive_offsets_after_load` calls
  *    `convert_orphan_closures_to_merges` unconditionally
- *    (models/project/offsets.rs:185, helper at :191-198), which normalizes a
- *    closure whose endpoints are no longer independently connected into the
- *    merge it really is. That looks INTENDED - the app's stated invariant is
- *    that a closure exists only for a true loop - but it means save+reopen is
- *    not state-preserving, and the same conversion is not applied after every
- *    command, so an in-session project can hold a closure the next reload will
- *    silently reclassify. naharon seed 14 x40 shows the same count drop on a
- *    plain UNDO. Left FAILING and unclassified: a tolerance here would have to
- *    match a paired length change across two collections, and whether the fix is
- *    "normalize eagerly" or "tolerate in the oracle" is a maintainer's call, not
- *    the fuzzer's.
+ *    (models/project/offsets.rs), which normalizes a closure whose endpoints are
+ *    no longer independently connected into the merge it really is. That is
+ *    INTENDED - the app's stated invariant is that a closure exists only for a
+ *    true loop - but it meant save+reopen was not state-preserving, because the
+ *    same conversion did not run after every command that can orphan a closure.
+ *    The resolution was to normalize EAGERLY rather than tolerate:
+ *    `execute_delete_last_shot_and_section` converts orphan closures and
+ *    reconciles, and the range-shift path already converted per shot. naharon
+ *    seed 14 x40 showed the same count drop on a plain UNDO and is covered by
+ *    the same fix.
  *
  * ## Trace record / replay
  *
@@ -398,7 +482,6 @@ import { mulberry32, type Scenario, type ScenarioContext } from './framework';
 import { DEFAULT_FIXTURE, disableAutoSave, loadFixtureWithoutUndoHistory } from './common';
 import {
   LOOP_CLOSURES_PATH,
-  LOOP_CLOSURE_REORDER,
   RELOAD_RESOLVED_GEOMETRY,
   SAVE_HEALING_MUTATIONS,
   describeShotSetDelta,
@@ -413,7 +496,7 @@ import {
 } from '../lib/projectSnapshot';
 import type { TargetingDigest } from '../lib/fuzzOracleCore';
 import {
-  STREAM_V2,
+  streamV2,
   drawAction,
   swarmProfileFor,
   weightedNamesFor,
@@ -441,8 +524,35 @@ import {
   type StepResponse,
 } from './undoRedoFuzzBridge';
 
-/** Opt in to surviving a mismatch that is entirely a documented open app bug. */
-const ALLOW_KNOWN_BUGS = process.env.STALAGMIGHT_FUZZ_ALLOW_KNOWN_BUGS === '1';
+/**
+ * EVERY env knob below is read at CALL time, never frozen into a module-level
+ * const.
+ *
+ * Two runners set these variables from inside their own `main()`, long after
+ * this module was imported: `pnpm agent:scenario --trace` parses its flags
+ * there, and `pnpm agent:fuzz-shrink` restores the env the RECORDING ran under
+ * there. A module-level const would capture whatever shell the runner was
+ * started from instead - so a trace recorded against one fixture would silently
+ * replay against another, and the shrink would report the trace as green. Same
+ * rule, and the same reason, as `agentBuildMode()` in `e2e/lib/env.ts`.
+ */
+
+/**
+ * INERT, and kept deliberately. Every issue-413 finding this scenario reproduced
+ * is fixed, every classifier is deleted, and there is nothing left for this flag
+ * to tolerate - a mismatch of any shape fails the run.
+ *
+ * It is still READ, and still reported in the `reproduce:` line, for two
+ * reasons: a repro line copied from the issue history still runs (it just no
+ * longer changes the verdict), and a failure message that names the flag makes
+ * "this run was tolerant" impossible to assume when it was not. If a future
+ * open bug ever needs the same escape hatch, re-derive it here - including its
+ * rule, which is that it must never be the default, because a green default
+ * would mean the oracle had been weakened.
+ */
+function allowKnownBugs(): boolean {
+  return process.env.STALAGMIGHT_FUZZ_ALLOW_KNOWN_BUGS === '1';
+}
 
 /**
  * Replay a recorded trace instead of drawing moves (`STALAGMIGHT_FUZZ_REPLAY`,
@@ -453,11 +563,6 @@ const ALLOW_KNOWN_BUGS = process.env.STALAGMIGHT_FUZZ_ALLOW_KNOWN_BUGS === '1';
  * classification and the failure payload - is the same code on both paths, so a
  * replayed failure is the same failure and not a lookalike. Only the source of
  * the decisions changes.
- *
- * Read at RUN time, not at import time: `pnpm agent:scenario --trace` parses its
- * flags inside `main()`, which is after this module has been imported, so a
- * module-level const would capture the empty string and silently fall back to
- * generating - a replay that quietly was not one. Same for the trace-out path.
  */
 function replayTracePath(): string {
   return process.env.STALAGMIGHT_FUZZ_REPLAY ?? '';
@@ -473,7 +578,9 @@ function traceOutPath(): string {
  * flattened by `fixtureSourcePath`'s `path.basename`, which is the containment
  * guard and stays the only one.
  */
-const FIXTURE = process.env.STALAGMIGHT_FUZZ_FIXTURE || DEFAULT_FIXTURE;
+function fuzzFixture(): string {
+  return process.env.STALAGMIGHT_FUZZ_FIXTURE || DEFAULT_FIXTURE;
+}
 
 /** Move mix. Undo/redo are re-rolled when the stack they need is empty. */
 const P_MUTATE = 0.6;
@@ -534,7 +641,9 @@ const SAVE_STREAM_SALT = 0x85ebca6b;
  * every run's counts, changing the metrics the faithfulness checks compare
  * byte-for-byte. Opt in when hunting; leave off when verifying.
  */
-const REPAIR_ENABLED = process.env.STALAGMIGHT_FUZZ_REPAIR === '1';
+function repairEnabled(): boolean {
+  return process.env.STALAGMIGHT_FUZZ_REPAIR === '1';
+}
 
 /** Diffs shown in a failure message (more are counted, not printed). */
 const SHOWN_DIFFS = 6;
@@ -554,7 +663,9 @@ const HISTORY_TAIL = 12;
  * instead of the tail. The tail is right for reading a failure; the full
  * sequence is what you need to transcribe a repro into a Rust test.
  */
-const DUMP_FULL_HISTORY = process.env.STALAGMIGHT_FUZZ_DUMP_HISTORY === '1';
+function dumpFullHistory(): boolean {
+  return process.env.STALAGMIGHT_FUZZ_DUMP_HISTORY === '1';
+}
 /** Headroom kept below the undo history limit so FIFO trimming can never fire. */
 const DEPTH_HEADROOM = 5;
 
@@ -562,13 +673,10 @@ interface SnapshotCheck {
   equal: boolean;
   /** Equal only once floating-point tolerance was applied. */
   floatNoise: boolean;
-  /** Save/reload changes subtracted before classifying the rest (empty = none). */
+  /** Save/reload changes subtracted before reporting the rest (empty = none). */
   attributed: KnownAsymmetry[];
   /** Rendered diff block (empty when equal). */
   text: string;
-  /** True when every difference is explained by a known open app bug. */
-  onlyKnown: boolean;
-  asymmetries: KnownAsymmetry[];
 }
 
 const EQUAL: SnapshotCheck = {
@@ -576,14 +684,17 @@ const EQUAL: SnapshotCheck = {
   floatNoise: false,
   attributed: [],
   text: '',
-  onlyKnown: false,
-  asymmetries: [],
 };
 
 /**
  * The SLOW path, reached only after the page has already reported a mismatch:
- * re-compare with numeric tolerance, then work out whether the difference is
- * one of the known open bugs.
+ * re-compare with numeric tolerance, subtract what a save or a reload is
+ * documented to change, and render whatever is left.
+ *
+ * There is no third outcome any more. This used to end in a known-open-bug
+ * classification that `STALAGMIGHT_FUZZ_ALLOW_KNOWN_BUGS=1` could walk past;
+ * every one of those bugs is fixed, so anything that survives the attribution
+ * subtraction is a failure.
  */
 function checkSnapshot(expected: string, actual: string, attributable: readonly KnownAsymmetry[]): SnapshotCheck {
   if (expected === actual) return EQUAL;
@@ -592,11 +703,11 @@ function checkSnapshot(expected: string, actual: string, attributable: readonly 
   //
   // ONE MORE than we report, so `truncated` can tell "exactly SHOWN_DIFF_LIMIT
   // differences" from "at least that many, and the rest were never looked at".
-  // The distinction decides whether this mismatch may be tolerated at all: the
-  // walk visits root keys in sorted order, so a wide `project.*` difference can
-  // spend the whole budget before `stations` or `stats` is examined once, and
-  // "classifyDiffs left nothing unknown" would then be a statement about a
-  // prefix rather than about the mismatch.
+  // The distinction decides whether the attribution may speak for this mismatch
+  // at all: the walk visits root keys in sorted order, so a wide `project.*`
+  // difference can spend the whole budget before `stations` or `stats` is
+  // examined once, and "every path was a documented save/reload change" would
+  // then be a statement about a prefix rather than about the mismatch.
   const all = diffSnapshots(expected, actual, DIFF_LIMIT + 1);
   if (all.length === 0) return { ...EQUAL, floatNoise: true };
   const truncated = all.length > DIFF_LIMIT;
@@ -628,8 +739,6 @@ function checkSnapshot(expected: string, actual: string, attributable: readonly 
         text:
           `  every path in the first ${DIFF_LIMIT} was a documented save/reload change, but the\n` +
           '  diff was CAPPED there - so this is a statement about a PREFIX, not about the mismatch.',
-        onlyKnown: false,
-        asymmetries: [],
       };
     }
     // The absorbed MAGNITUDE goes on the record. The re-derived-geometry
@@ -644,8 +753,6 @@ function checkSnapshot(expected: string, actual: string, attributable: readonly 
         .map((entry) => `  ATTRIBUTED [${entry.id}]: ${entry.description}`)
         .concat(worst === null ? [] : [`  largest absorbed numeric change: ${worst.toExponential(3)}`])
         .join('\n'),
-      onlyKnown: false,
-      asymmetries: [],
     };
   }
 
@@ -654,7 +761,7 @@ function checkSnapshot(expected: string, actual: string, attributable: readonly 
   if (truncated) {
     lines.push(
       `  THE DIFF WAS CAPPED at ${DIFF_LIMIT} path(s): everything above is a PREFIX and nothing`,
-      '  past it was examined, so no classifier can speak for this mismatch and none is allowed to.',
+      '  past it was examined, so no attribution can speak for this mismatch and none is allowed to.',
     );
   }
   // A shot list that differs field-by-field cannot say whether the same shots
@@ -674,33 +781,22 @@ function checkSnapshot(expected: string, actual: string, attributable: readonly 
   }
 
   // A shifted list reads as dozens of unrelated value diffs at every index past
-  // the move. Prove that shape structurally before falling back to per-path
-  // classification, so it is reported as the one thing it is.
+  // the move, so say so in one sentence. DIAGNOSTIC ONLY: the run fails either
+  // way. This used to be finding 4's classifier (undo of RemoveLoopClosure
+  // pushed instead of reinserting); the classifier is deleted with the bug, and
+  // what is kept is the READING of a failure that ever looks like it again.
+  // Still gated on `!truncated`, because a capped diff cannot support that
+  // sentence either - it would be describing a prefix.
   if (!truncated && attributed.length === 0 && isListPermutationOnly(expected, actual, LOOP_CLOSURES_PATH)) {
     lines.push('  (every difference above is explained by project.loop_closures being REORDERED:');
     lines.push('   same closures, same ids, same metrics, different positions)');
-    lines.push(`  KNOWN OPEN APP BUG [${LOOP_CLOSURE_REORDER.id}]: ${LOOP_CLOSURE_REORDER.description}`);
-    return {
-      equal: false,
-      floatNoise: false,
-      attributed,
-      text: lines.join('\n'),
-      onlyKnown: true,
-      asymmetries: [LOOP_CLOSURE_REORDER],
-    };
   }
 
-  const classified = classifyDiffs(diffs);
-  for (const asymmetry of classified.asymmetries) {
-    lines.push(`  KNOWN OPEN APP BUG [${asymmetry.id}]: ${asymmetry.description}`);
-  }
   return {
     equal: false,
     floatNoise: false,
     attributed,
     text: lines.join('\n'),
-    onlyKnown: !truncated && classified.unknown.length === 0,
-    asymmetries: classified.asymmetries,
   };
 }
 
@@ -713,10 +809,10 @@ export const undoRedoFuzz: Scenario = {
   async run(ctx, opts) {
     // The temp dir the save/reload boundary writes into is held HERE, one
     // level above the run body, so a FAILING run cleans it up too. That is
-    // not a corner case: this scenario is deliberately RED by default (it
-    // reproduces open undo bugs), and `pnpm agent:fuzz-shrink` replays it
-    // hundreds of times per shrink with most candidates failing - each one
-    // used to leave a saved copy of the fixture project behind in /tmp.
+    // not a corner case even now that a clean run is the expectation: `pnpm
+    // agent:fuzz-shrink` replays this scenario hundreds of times per shrink
+    // with most candidates failing - each one used to leave a saved copy of
+    // the fixture project behind in /tmp.
     const saveDir = fs.mkdtempSync(path.join(os.tmpdir(), 'stalagmight-fuzz-save-'));
     try {
       await runFuzz(ctx, opts, saveDir);
@@ -739,9 +835,11 @@ async function runFuzz(
   { iterations }: { iterations: number },
   saveDir: string,
 ): Promise<void> {
-  const { stripped } = await loadFixtureWithoutUndoHistory(ctx, FIXTURE);
+  // Resolved once per RUN, not once per process - see the env-knob rule above.
+  const fixture = fuzzFixture();
+  const { stripped } = await loadFixtureWithoutUndoHistory(ctx, fixture);
   const strippedRows = Object.values(stripped.cleared).reduce((sum, n) => sum + n, 0);
-  ctx.setMetric(`fixture:${FIXTURE}`, 1);
+  ctx.setMetric(`fixture:${fixture}`, 1);
   ctx.setMetric('strippedUndoRows', strippedRows);
 
   if (!(await disableAutoSave(ctx))) {
@@ -769,7 +867,7 @@ async function runFuzz(
   const baseUndo = init.undoLen;
   if (baseUndo !== 0 || init.redoLen !== 0) {
     throw new Error(
-      `${FIXTURE} opened with inherited history after stripping ` +
+      `${fixture} opened with inherited history after stripping ` +
         `${strippedRows} row(s): undoLen=${baseUndo} redoLen=${init.redoLen} ` +
         `(cleared ${JSON.stringify(stripped.cleared)}, absent ${JSON.stringify(stripped.missing)})`,
     );
@@ -777,7 +875,7 @@ async function runFuzz(
 
   if (init.invariants.length > 0) {
     throw new Error(
-      `${FIXTURE} violates project invariants BEFORE any fuzzing:\n` +
+      `${fixture} violates project invariants BEFORE any fuzzing:\n` +
         init.invariants.map((violation) => `  INVARIANT: ${violation}`).join('\n'),
     );
   }
@@ -800,9 +898,9 @@ async function runFuzz(
   // The recorded steps carry RESOLVED section and shot ids, so replaying them
   // against a different project drives moves at ids that do not exist there:
   // an invented failure, or a green run, either way not the recorded bug.
-  if (replay && replay.fixture !== FIXTURE) {
+  if (replay && replay.fixture !== fixture) {
     throw new Error(
-      `trace ${replayPath} was recorded on ${replay.fixture} but this run is on ${FIXTURE}; ` +
+      `trace ${replayPath} was recorded on ${replay.fixture} but this run is on ${fixture}; ` +
         `its steps carry ids resolved against that project. Re-run with ` +
         `STALAGMIGHT_FUZZ_FIXTURE=${replay.fixture} (pnpm agent:scenario --trace restores it for you).`,
     );
@@ -822,7 +920,7 @@ async function runFuzz(
   const swarm = swarmProfileFor(ctx.seed);
   const weightedNames = weightedNamesFor(swarm);
   ctx.setMetric(`swarm:${swarm.name}`, 1);
-  ctx.setMetric(`stream:${STREAM_V2 ? 'v2' : 'v1'}`, 1);
+  ctx.setMetric(`stream:${streamV2() ? 'v2' : 'v1'}`, 1);
   const saveRng = mulberry32((ctx.seed ^ SAVE_STREAM_SALT) >>> 0);
   let savesDone = 0;
   let reloadsDone = 0;
@@ -877,8 +975,8 @@ async function runFuzz(
           scenario: 'undo-redo-fuzz',
           seed: ctx.seed,
           iterations,
-          fixture: FIXTURE,
-          stream: STREAM_V2 ? 'v2' : 'v1',
+          fixture,
+          stream: streamV2() ? 'v2' : 'v1',
           failure,
         }),
       );
@@ -891,17 +989,17 @@ async function runFuzz(
   // treat a `fail(...)` call as never-returning, so a caller ending in one does
   // not need a dead `return` after it. Same form as undoPersistenceFuzz.
   const fail: (headline: string, detail?: string) => never = (headline, detail = '') => {
-    const tail = (DUMP_FULL_HISTORY ? history : history.slice(-HISTORY_TAIL)).map(
+    const tail = (dumpFullHistory() ? history : history.slice(-HISTORY_TAIL)).map(
       (line) => `    ${line}`,
     );
     const message = [
       headline,
       `  reproduce: run_scenario("undo-redo-fuzz", seed=${ctx.seed}, iterations=${iterations})` +
-        `${FIXTURE === DEFAULT_FIXTURE ? '' : ` with STALAGMIGHT_FUZZ_FIXTURE=${FIXTURE}`}` +
-        `${STREAM_V2 ? '' : ' with STALAGMIGHT_FUZZ_STREAM=v1'}` +
-        `${ALLOW_KNOWN_BUGS ? ' with STALAGMIGHT_FUZZ_ALLOW_KNOWN_BUGS=1' : ''}` +
+        `${fixture === DEFAULT_FIXTURE ? '' : ` with STALAGMIGHT_FUZZ_FIXTURE=${fixture}`}` +
+        `${streamV2() ? '' : ' with STALAGMIGHT_FUZZ_STREAM=v1'}` +
+        `${allowKnownBugs() ? ' with STALAGMIGHT_FUZZ_ALLOW_KNOWN_BUGS=1 (INERT: nothing left to allow)' : ''}` +
         `${replayPath ? ` (REPLAY of ${replayPath})` : ''}`,
-      `  fixture=${FIXTURE} stream=${STREAM_V2 ? 'v2' : 'v1'} swarm=${swarm.name} ` +
+      `  fixture=${fixture} stream=${streamV2() ? 'v2' : 'v1'} swarm=${swarm.name} ` +
         `depth=${cursor} modelTop=${top} baseUndo=${baseUndo}`,
       ...(detail ? [detail] : []),
       `  last ${tail.length} action(s):`,
@@ -983,9 +1081,10 @@ async function runFuzz(
     // its documented job. `expected` was computed IN THE PAGE at step time,
     // against the snapshot that has since been superseded, so comparing it
     // now would fail on precisely the difference the resync accepted. That is
-    // how a run under STALAGMIGHT_FUZZ_ALLOW_KNOWN_BUGS could log "tolerated
-    // known asymmetry at depth N" and then immediately fail naming a
-    // different oracle.
+    // how a run could log a documented save/reload re-baseline and then
+    // immediately fail naming a different oracle. (The only resync left is
+    // that one: `STALAGMIGHT_FUZZ_ALLOW_KNOWN_BUGS` is inert and tolerates
+    // nothing.)
     if (resynced) {
       ctx.metric('integrityResynced');
       return;
@@ -1015,8 +1114,9 @@ async function runFuzz(
 
   /**
    * Resolve a mismatch the page reported. Fetches both canonical strings (the
-   * only time they cross the bridge) and either tolerates the difference or
-   * fails with the full diff.
+   * only time they cross the bridge) and either RE-BASELINES a documented
+   * save/reload change or fails with the full diff. Those two outcomes are all
+   * there are - no known-bug tolerance survives.
    *
    * Returns true when the model was RESYNCED, which the caller has to know:
    * every expectation the page computed for this step - the integrity verdict
@@ -1053,14 +1153,8 @@ async function runFuzz(
       top = await resyncModel(ctx, pair.index, resyncIntegrity);
       return true;
     }
-    if (ALLOW_KNOWN_BUGS && check.onlyKnown) {
-      ctx.metric('knownAsymmetry');
-      for (const asymmetry of check.asymmetries) ctx.metric(`known:${asymmetry.id}`);
-      ctx.log(`tolerated known asymmetry at depth ${cursor}: ${check.asymmetries.map((a) => a.id).join(', ')}`);
-      // Resync so one open bug does not cascade into every later comparison.
-      top = await resyncModel(ctx, pair.index, resyncIntegrity);
-      return true;
-    }
+    // No known-bug branch: every issue-413 finding is fixed and every
+    // classifier deleted, so anything the attribution did not explain fails.
     fail(headline, check.text);
   };
 
@@ -1514,7 +1608,7 @@ async function runFuzz(
   // Repair once, before the boundary crossing, so its entry is both persisted
   // and walked by the final roundtrip. Skipped on a replay: the trace already
   // contains whatever Repair the recorded run did, in the place it did it.
-  if (REPAIR_ENABLED && !replay) {
+  if (repairEnabled() && !replay) {
     recorder.record({ kind: 'repair' });
     await runRepair('repair');
   }
@@ -1552,7 +1646,7 @@ async function runFuzz(
   ctx.setMetric('historyLimit', historyLimit);
   ctx.log(
     `${replay ? `REPLAY of ${replayPath} (${replay.steps.length} recorded step(s)) ` : ''}` +
-    `fixture=${FIXTURE} stream=${STREAM_V2 ? 'v2' : 'v1'} swarm=${swarm.name} ` +
+    `fixture=${fixture} stream=${streamV2() ? 'v2' : 'v1'} swarm=${swarm.name} ` +
       `(stripped ${strippedRows} inherited undo row(s)) seed=${ctx.seed}: ` +
       `${ctx.metrics.mutations ?? 0} mutations, ${ctx.metrics.undos ?? 0} undos, ` +
       `${ctx.metrics.redos ?? 0} redos, ${ctx.metrics.rejected ?? 0} rejected, ` +

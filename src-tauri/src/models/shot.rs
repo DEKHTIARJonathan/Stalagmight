@@ -13,12 +13,17 @@ use super::{normalize_azimuth, SectionId, FEATURE_ID_STRIDE};
 /// sequential integers (0, 1, 2, …).
 ///
 /// Returns a 1-indexed position suitable for user display (e.g., "13:5").
+///
+/// Total for every value the type admits: `Command::description()` calls this
+/// on every command path BEFORE the id is validated against the section, so an
+/// out-of-range id (e.g. `ShotId::MAX`) must saturate rather than overflow
+/// (#413 finding 24).
 pub fn shot_display_position(shot_id: ShotId, section_id: SectionId) -> u32 {
     let base = section_id.saturating_mul(FEATURE_ID_STRIDE);
     if shot_id >= base {
-        shot_id - base + 1
+        (shot_id - base).saturating_add(1)
     } else {
-        shot_id + 1
+        shot_id.saturating_add(1)
     }
 }
 

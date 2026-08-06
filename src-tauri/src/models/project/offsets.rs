@@ -1,14 +1,54 @@
 use chrono::Utc;
-use std::collections::HashSet;
+use std::collections::hash_map::DefaultHasher;
+use std::collections::{HashMap, HashSet};
+use std::hash::{Hash, Hasher};
 // `error!` is only reached inside the `#[cfg(debug_assertions)]` block in
 // `debug_assert_merge_alignment`, so gate the import to match (else it's an
 // unused import under `--release`).
 #[cfg(debug_assertions)]
 use tracing::error;
 
-use crate::models::{SectionId, StationMerge};
+use crate::models::{LoopClosure, SectionId, StationMerge};
 
 use super::Project;
+
+/// One beyond-invariant merge, as the fixpoint fingerprint records it: the two
+/// endpoints as they currently resolve, and the EXACT gap between them.
+///
+/// The gap is kept as raw bits rather than as an `f64` so the fingerprint can be
+/// compared for equality without a float comparison, and so that a gap differing
+/// by a single ULP - the smallest change any edit can make to it - misses.
+type ResidualGap = ((SectionId, u32), (SectionId, u32), u64);
+
+/// A merge residual the offset solver has already run on and failed to reduce -
+/// see [`Project::realign_merges`], which is the only producer and consumer.
+///
+/// Two parts, because two different things can turn an irreducible residual into
+/// a reducible one:
+///
+/// * `structure` hashes every input to solvability that is NOT geometry - the
+///   section set, the merge edges, the closure edges (id, endpoints, aligned
+///   flag, strategy) and the zero-datum anchors. Dropping one of two datums from
+///   an over-anchored component makes the gap healable without moving a single
+///   station, so a fingerprint blind to structure would keep skipping the heal
+///   that has just become possible;
+/// * `residual` is the beyond-invariant merge set itself, compared by identity:
+///   a pair that appears, a pair that goes, or a gap that differs by one ULP all
+///   miss. That is what stands in for a geometry hook - not the stronger claim
+///   that every geometry edit changes one of these gaps, which is false. What it
+///   does buy is exactly the property the invariant is stated in: drift cannot
+///   CROSS [`Project::MERGE_ALIGNMENT_INVARIANT_M`] without entering this set.
+///   See the argument on [`Project::realign_merges`] for what that leaves and
+///   why it is bounded.
+///
+/// The structure hash is `SipHash` via `DefaultHasher` - stable within a process,
+/// which is all that is required of a field that is never persisted and never
+/// compared across runs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RealignFixpoint {
+    structure: u64,
+    residual: Vec<ResidualGap>,
+}
 
 impl Project {
     /// Read a section's offset, defaulting to (0, 0).
@@ -16,17 +56,100 @@ impl Project {
         self.section_offsets.get(&id).copied().unwrap_or((0.0, 0.0))
     }
 
+    /// # THE `section_offsets` INVARIANT
+    ///
+    /// **A dust-zero entry does not exist.** `section_offsets` holds a key only
+    /// for a section that is ACTUALLY DISPLACED, and "not displaced" has exactly
+    /// one spelling: the key is absent. A value within [`Project::OFFSET_DUST_M`]
+    /// of the origin in both components is not a position, so it is not written -
+    /// it is removed. That holds for every writer, computed or restored, in memory
+    /// and on disk, with no exceptions:
+    ///
+    /// * this function is THE write point, and everything routes through it -
+    ///   [`Self::adjust_section_offset`], [`Self::set_section_offset`],
+    ///   [`Self::restore_section_offsets`], the offset solver, the closure solve,
+    ///   the move tools, the undo restore arms, and the two sites that cannot call
+    ///   a `&mut self` method because they hold a live borrow of `self.sections`
+    ///   (`Project::apply_station_move_internal`, `AppState::move_station`);
+    /// * [`Self::normalize_section_offsets`] enforces it on a map this app did not
+    ///   write - a `.stalx` from a build that predates the invariant, and the
+    ///   snapshot payload of an undo entry persisted by one.
+    ///
+    /// ## Why it has to be an invariant and not a per-writer rule
+    ///
+    /// Because no write-local rule can satisfy both of the identities the app
+    /// owes. `MoveSection(+d)` followed by `MoveSection(-d)` must leave the map it
+    /// found, and a writer that sees only its own arguments cannot tell the two
+    /// starting points apart:
+    ///
+    /// * from an ABSENT key, `(0 + d) - d` lands a femtometre off zero and the
+    ///   key must end ABSENT - the route that did nothing has none either
+    ///   (#413 finding 2's dust half: a `ReverseSection` applied twice, an insert
+    ///   plus the remove that undoes it, a cascade "correcting" its own noise);
+    /// * from a PRESENT all-zero key, the same arithmetic must end PRESENT.
+    ///
+    /// The two demands are contradictory, and both were real: the second is the
+    /// defect the metamorphic pair `move-out-and-back-is-identity` reported once
+    /// a project carrying a legacy all-zero row was fed to it. Making the state
+    /// UNREPRESENTABLE dissolves the contradiction - there is no present all-zero
+    /// key to preserve, so the first rule is the only one left. The undo/redo
+    /// exactness that #413 finding 27 was about follows for free: presence cannot
+    /// differ between two states that agree geometrically.
+    ///
+    /// ## Notes on the comparison
+    ///
+    /// `<=` on `abs()`, so a NaN component (which compares false against
+    /// everything) is INSERTED rather than dropped: the non-finite case belongs to
+    /// `save_project`'s sanitize and the load boundary, not here. `-0.0 == 0.0` in
+    /// IEEE, so a negated zero drops too.
+    ///
+    /// Takes the map rather than `&mut self` so a caller holding a disjoint field
+    /// borrow can still use it.
+    pub(crate) fn write_section_offset(
+        offsets: &mut HashMap<SectionId, (f64, f64)>,
+        id: SectionId,
+        value: (f64, f64),
+    ) {
+        if value.0.abs() <= Self::OFFSET_DUST_M && value.1.abs() <= Self::OFFSET_DUST_M {
+            offsets.remove(&id);
+        } else {
+            offsets.insert(id, value);
+        }
+    }
+
+    /// Drop every `section_offsets` entry that violates the invariant on
+    /// [`Self::write_section_offset`], and report how many went.
+    ///
+    /// For a map this app did not write through that function: a `.stalx` from a
+    /// build that predates the invariant (the load path inserts whatever rows the
+    /// file holds), and the snapshot payload of an undo entry persisted by one.
+    /// Both are legacy debris - a key for a section that is not displaced - and
+    /// the app is free to drop it: every consumer reads the map through
+    /// [`Self::section_offset`] or an inline `.get(..).unwrap_or((0.0, 0.0))`, so
+    /// dropping changes no geometry, no coordinate and no rendered position. What
+    /// it changes is that the two spellings of "not displaced" stop coexisting.
+    pub(crate) fn normalize_section_offsets(&mut self) -> usize {
+        let before = self.section_offsets.len();
+        self.section_offsets.retain(|_, value| {
+            !(value.0.abs() <= Self::OFFSET_DUST_M && value.1.abs() <= Self::OFFSET_DUST_M)
+        });
+        before - self.section_offsets.len()
+    }
+
     /// Apply a delta to one section's offset. Low-level primitive -
     /// callers handle cascade and invariants.
     pub(crate) fn adjust_section_offset(&mut self, id: SectionId, dx: f64, dy: f64) {
         let current = self.section_offset(id);
-        self.section_offsets
-            .insert(id, (current.0 + dx, current.1 + dy));
+        Self::write_section_offset(
+            &mut self.section_offsets,
+            id,
+            (current.0 + dx, current.1 + dy),
+        );
     }
 
     /// Set an exact offset value (for undo restoration / initial placement).
     pub(crate) fn set_section_offset(&mut self, id: SectionId, offset: (f64, f64)) {
-        self.section_offsets.insert(id, offset);
+        Self::write_section_offset(&mut self.section_offsets, id, offset);
     }
 
     /// Remove a section's offset entry entirely.
@@ -52,12 +175,15 @@ impl Project {
         self.section_has_zero_datum(id)
     }
 
-    /// Assert that all merge points are colocated (within 1cm tolerance).
+    /// Assert that all merge points are colocated (within
+    /// [`Project::MERGE_ALIGNMENT_INVARIANT_M`]).
     /// Only active in debug builds - no-op in release.
-    /// Check that all merge points are colocated. Logs a warning for any
-    /// merge pair more than 5cm apart (allows for floating-point accumulation
-    /// across many shots in real survey data). In test builds, panics for
-    /// gaps > 1cm to catch regressions with synthetic data.
+    /// Check that all merge points are colocated. Logs an error for any merge
+    /// pair past the user-facing [`Project::MERGE_ALIGNMENT_TOLERANCE_M`]. In
+    /// test builds, panics past the tighter invariant threshold to catch
+    /// regressions with synthetic data - the SAME threshold
+    /// [`Self::realign_merges`] heals at, so nothing this asserts on can be a
+    /// state the self-heal declines to repair (#413 findings 14 and 20).
     pub(crate) fn debug_assert_merge_alignment(&self, context: &str) {
         // Despite the name, this used to run in release too - and the cost
         // is brutal: O(N) merges × 2 × O(N) `compute_station_raw_coords`
@@ -98,7 +224,7 @@ impl Project {
                     .and_then(|s| self.compute_station_raw_coords(s));
                 if let (Some(a_pos), Some(b_pos)) = (a, b) {
                     let dist = ((a_pos.x - b_pos.x).powi(2) + (a_pos.y - b_pos.y).powi(2)).sqrt();
-                    if dist >= 0.05 {
+                    if dist >= Self::MERGE_ALIGNMENT_TOLERANCE_M {
                         error!(
                             context,
                             a_ref = ?merge.station_a,
@@ -109,15 +235,16 @@ impl Project {
                             b_x = b_pos.x,
                             b_y = b_pos.y,
                             "Merge alignment violated (>{threshold}m)",
-                            threshold = 0.05,
+                            threshold = Self::MERGE_ALIGNMENT_TOLERANCE_M,
                         );
                     }
                     #[cfg(test)]
                     debug_assert!(
-                        dist < 0.01,
+                        dist < Self::MERGE_ALIGNMENT_INVARIANT_M,
                         "Merge alignment violated after {context}: stations {a_ref:?} and {b_ref:?} \
-                         are {dist:.6}m apart (threshold 0.01m). \
+                         are {dist:.6}m apart (threshold {threshold}m). \
                          A=({ax:.6}, {ay:.6}), B=({bx:.6}, {by:.6})",
+                        threshold = Self::MERGE_ALIGNMENT_INVARIANT_M,
                         a_ref = merge.station_a,
                         b_ref = merge.station_b,
                         ax = a_pos.x,
@@ -188,7 +315,64 @@ impl Project {
         self.convert_orphan_closures_to_merges();
         // Zero-trust: never honor a persisted derivable offset - re-solve
         // unconditionally so a sub-tolerance stale offset can't survive the load.
-        self.resolve_offsets()
+        let healed = self.resolve_offsets();
+        // The same doctrine, one step further: a persisted DUST-ZERO row is not a
+        // derivable offset the re-solve rewrites - the cascade never seed-adjusts
+        // an anchor or a free-floating component, so such a row survives it
+        // untouched - and it is a state the app may not hold (see the invariant on
+        // `write_section_offset`). A `.stalx` from a build that predates the
+        // invariant therefore stops carrying one HERE, at the boundary, rather
+        // than being carried into memory for every downstream rule to special-case.
+        // Nothing observable changes: an absent key and an all-zero one are the
+        // same geometry to every consumer. The file settles on the next save.
+        let dropped = self.normalize_section_offsets();
+        if dropped > 0 {
+            tracing::info!(
+                dropped,
+                purpose = "hold the section_offsets invariant at the load boundary",
+                "Dropped persisted section offsets that were within dust of the origin"
+            );
+        }
+        healed
+    }
+
+    /// The orphanhood question [`Self::convert_orphan_closures_to_merges`] asks of
+    /// one closure: are its two endpoints still connected through the survey
+    /// (shots + merges) independently of the closure itself? If not, the closure
+    /// is their *sole* bridge - a merge, not a loop.
+    ///
+    /// A same-section closure is never an orphan (the section itself connects the
+    /// endpoints), and neither is one whose endpoint no longer resolves (there is
+    /// nothing to ask the connectivity walk about; a dangling ref is integrity's
+    /// problem, not this one).
+    ///
+    /// The single definition of the predicate: the sweep below scans with it, and
+    /// [`Self::orphan_closure_ids`] snapshots with it, so a mutation path's
+    /// before-set and the sweep that follows can never disagree about what an
+    /// orphan is.
+    fn is_orphan_closure(&self, closure: &LoopClosure) -> bool {
+        if closure.station_a.section_id == closure.station_b.section_id {
+            return false;
+        }
+        let (Some(a), Some(b)) = (
+            self.resolve_key(&closure.station_a),
+            self.resolve_key(&closure.station_b),
+        ) else {
+            return false;
+        };
+        !self.are_stations_connected_excluding_shot(a, b, None, false)
+    }
+
+    /// The ids of every closure that is orphaned RIGHT NOW. A mutation path takes
+    /// this before it mutates and hands it to
+    /// [`Self::convert_closures_orphaned_since`] afterwards; see that function for
+    /// why an inverse needs the distinction.
+    pub(crate) fn orphan_closure_ids(&self) -> HashSet<u64> {
+        self.loop_closures
+            .iter()
+            .filter(|c| self.is_orphan_closure(c))
+            .map(|c| c.id)
+            .collect()
     }
 
     /// Enforce the invariant that a loop closure exists only for a TRUE loop. If
@@ -200,7 +384,32 @@ impl Project {
     /// merge and the second is then a genuine (redundant) loop and is kept.
     /// Returns the number converted. (Issue #8 - a shot deletion can strand a
     /// section so its only attachment is a closure.)
+    ///
+    /// Whole-project sweep: every orphan it finds is converted, no matter what
+    /// made it one. That is right for a load, a Repair and a forward command -
+    /// and wrong inside an inverse, which is what
+    /// [`Self::convert_closures_orphaned_since`] exists for.
     pub fn convert_orphan_closures_to_merges(&mut self) -> usize {
+        self.convert_closures_orphaned_since(&HashSet::new())
+    }
+
+    /// [`Self::convert_orphan_closures_to_merges`] restricted to the orphans a
+    /// mutation JUST created: `preexisting` is the [`Self::orphan_closure_ids`]
+    /// snapshot the caller took before mutating, and every id in it is left as a
+    /// closure.
+    ///
+    /// An inverse must not do more than invert (#413, the orphan-closure
+    /// observation in `fuzz_undo_tests.rs`'s header). A
+    /// closure can be orphaned by a command whose own path never converts it -
+    /// `removeZeroDatum` un-anchors one side, and the sweep's double-anchor guard
+    /// stops refusing it - and that un-converted closure is part of the state the
+    /// history RECORDED. Sweeping the whole project from inside an undo would
+    /// convert it as a side effect of removing an unrelated shot, landing on a
+    /// state no snapshot ever held. Scoping by *what this mutation orphaned*
+    /// keeps the pre-existing orphan exactly as recorded while still converting
+    /// the closures the removal genuinely stranded - including ones nowhere near
+    /// the removed station, whose loop-ness hung off a merge that was.
+    pub(crate) fn convert_closures_orphaned_since(&mut self, preexisting: &HashSet<u64>) -> usize {
         let mut converted = 0;
         // Sole-bridge closures left UNCONVERTED because turning them into a rigid
         // merge would fuse two independently zero-datum-anchored groups. Tracked by
@@ -209,19 +418,10 @@ impl Project {
         let mut left_as_closure: HashSet<u64> = HashSet::new();
         loop {
             let orphan = self.loop_closures.iter().position(|c| {
-                if left_as_closure.contains(&c.id) {
+                if left_as_closure.contains(&c.id) || preexisting.contains(&c.id) {
                     return false;
                 }
-                if c.station_a.section_id == c.station_b.section_id {
-                    return false;
-                }
-                let (Some(a), Some(b)) = (
-                    self.resolve_key(&c.station_a),
-                    self.resolve_key(&c.station_b),
-                ) else {
-                    return false;
-                };
-                !self.are_stations_connected_excluding_shot(a, b, None, false)
+                self.is_orphan_closure(c)
             });
             let Some(idx) = orphan else { break };
 
@@ -268,11 +468,94 @@ impl Project {
         converted
     }
 
+    /// Every merge whose endpoints are at least [`Self::MERGE_ALIGNMENT_INVARIANT_M`]
+    /// apart, with the exact gap. The geometry is [`Self::merge_alignment_beyond`]'s
+    /// (same precompute, same skips: a same-section merge is meaningless, a
+    /// dangling endpoint is a structural problem and not a gap) - what differs is
+    /// what comes out. That one reports to a human and rounds to centimetres; this
+    /// one is compared for identity, so it keeps the bits.
+    ///
+    /// Ordered by `station_merges`, whose order the structure hash pins, so two
+    /// calls on one state produce identical vectors.
+    fn residual_merge_gaps(&self) -> Vec<ResidualGap> {
+        let local = self.section_local_coords();
+        let station_offsets = self.resolved_station_offsets();
+        let mut residual = Vec::new();
+        for merge in &self.station_merges {
+            if merge.station_a.section_id == merge.station_b.section_id {
+                continue;
+            }
+            let (Some(a), Some(b)) = (
+                self.resolve_key(&merge.station_a),
+                self.resolve_key(&merge.station_b),
+            ) else {
+                continue;
+            };
+            if let (Some((ax, ay)), Some((bx, by))) = (
+                self.station_world_xy(a, &local, &station_offsets),
+                self.station_world_xy(b, &local, &station_offsets),
+            ) {
+                let gap = ((ax - bx).powi(2) + (ay - by).powi(2)).sqrt();
+                if gap >= Self::MERGE_ALIGNMENT_INVARIANT_M {
+                    residual.push((
+                        (a.section_id, a.station_index),
+                        (b.section_id, b.station_index),
+                        gap.to_bits(),
+                    ));
+                }
+            }
+        }
+        residual
+    }
+
+    /// Hash of everything the offset solve depends on that is NOT geometry: which
+    /// sections exist and how many shots each holds, the merge edges, the closure
+    /// edges, and the datum anchors. The [`RealignFixpoint`] carries it so that a
+    /// structural edit which changes what the solver CAN do - a merge or closure
+    /// added or removed, a closure converted, a datum added, moved or dropped, a
+    /// section gone - invalidates a recorded fixpoint even though it moves nothing
+    /// and leaves every gap bit-identical.
+    ///
+    /// This is a whole-project scan rather than a set of invalidation hooks on the
+    /// mutators on purpose. Those collections are mutated from many places
+    /// (including the undo restore arms, which assign whole vectors), and a hook
+    /// set that is one call site short does not degrade - it silently skips a heal
+    /// that had become possible. Deriving the answer from the state cannot be one
+    /// call site short. The scan is `O(sections + merges + closures + datums)` and
+    /// runs only when a beyond-invariant residual already exists, next to a
+    /// `merge_alignment_beyond` pass that is `O(total shots)` and a re-solve that
+    /// is more expensive still.
+    fn realign_structure_hash(&self) -> u64 {
+        let mut hasher = DefaultHasher::new();
+        self.sections.len().hash(&mut hasher);
+        for section in &self.sections {
+            section.id.hash(&mut hasher);
+            section.shots.len().hash(&mut hasher);
+        }
+        self.station_merges.len().hash(&mut hasher);
+        for merge in &self.station_merges {
+            merge.station_a.hash(&mut hasher);
+            merge.station_b.hash(&mut hasher);
+        }
+        self.loop_closures.len().hash(&mut hasher);
+        for closure in &self.loop_closures {
+            closure.id.hash(&mut hasher);
+            closure.station_a.hash(&mut hasher);
+            closure.station_b.hash(&mut hasher);
+            closure.is_aligned.hash(&mut hasher);
+            std::mem::discriminant(&closure.strategy).hash(&mut hasher);
+        }
+        self.zero_datums.len().hash(&mut hasher);
+        for datum in &self.zero_datums {
+            datum.station_ref.hash(&mut hasher);
+        }
+        hasher.finish()
+    }
+
     /// Recompute section offsets so every merge's endpoints coincide again,
     /// anchoring each connected group at its zero datum (or, failing that, an
     /// arbitrary section). Returns the number of merges that were misaligned
-    /// before the realign. A no-op when everything is already aligned (within the
-    /// 5 cm reporting tolerance).
+    /// beyond the REPORTING tolerance before the realign.
     ///
     /// This is the per-command self-heal (via `reconcile_geometry`): it keeps the
     /// fast no-drift early-return because the in-memory offsets it sees were just
@@ -280,12 +563,91 @@ impl Project {
     /// unconditional re-solve after every command would override the exact state
     /// an undo/redo snapshot just restored. The *load*/repair paths use
     /// [`Self::resolve_offsets`] instead, which never trusts a persisted value.
+    ///
+    /// The gate is [`Self::MERGE_ALIGNMENT_INVARIANT_M`], NOT the 5 cm reporting
+    /// tolerance the return value counts against. Gating the repair on the
+    /// reporting number left the entire 1-5 cm band unhealed - a state the app's
+    /// own `debug_assert_merge_alignment` calls a violation and panics a test
+    /// build on, silently saved to the `.stalx` in a release one (#413 finding
+    /// 20: a shot edit in an unanchored merge group produced exactly that, and
+    /// the drift equalled the edit). The heal gate must stay at or below the
+    /// assert; it may never be loosened back onto the reporting threshold.
+    ///
+    /// ## The fixpoint skip
+    ///
+    /// Not every beyond-invariant gap is healable. An over-anchored component
+    /// (two zero datums in one rigid merge group) and a cyclic merge misclosure
+    /// both leave a residual the cascade cannot reduce: the solve runs, changes
+    /// nothing, and the gate is non-empty again on the next command - so this
+    /// function used to re-solve the WHOLE project after every keystroke-scale
+    /// edit, forever, and each of those re-solves also overrode the exact offsets
+    /// an undo/redo snapshot had just restored (the thing the drift gate exists
+    /// to avoid). When a solve leaves the residual and the offsets untouched, the
+    /// state is a solver fixpoint and is recorded as a [`RealignFixpoint`]; while
+    /// the live state still fingerprints identically, the re-solve is skipped.
+    ///
+    /// The invariant is not weakened by that, but the reason is narrower than
+    /// the one this comment used to give ("every geometry edit that could change
+    /// the outcome changes a gap"), which is simply false - the test below that
+    /// drifts a bystander by 3 mm is a geometry edit the solve WOULD act on and
+    /// no gap records. Two properties carry the guarantee instead:
+    ///
+    /// * any drift that CROSSES the invariant enters the residual set, and that
+    ///   set is compared by identity - a pair appearing, a pair going, or one
+    ///   gap changing by a single ULP all miss the fingerprint and get the full
+    ///   solve. The state the heal gate and `debug_assert_merge_alignment` are
+    ///   written in terms of - "a merge is at least
+    ///   [`Self::MERGE_ALIGNMENT_INVARIANT_M`] out" - therefore cannot be
+    ///   reached while the skip is armed;
+    /// * any structural edit that could turn an irreducible residual into a
+    ///   reducible one without moving anything (a merge, closure, datum or
+    ///   section added, removed or converted) changes the structure hash and
+    ///   misses too.
+    ///
+    /// What the skip does leave alone is a SUB-invariant offset change inside a
+    /// component that already holds a residual: the solve would pull it back and
+    /// the skip does not. That is bounded by the first bullet - it is drift the
+    /// heal gate itself declines to act on until it crosses, at which point the
+    /// solve runs - and it is the optimization, not a leak: without it, one
+    /// irreducible gap anywhere in the project makes every keystroke-scale edit
+    /// pay a whole-project re-solve again.
+    ///
+    /// A whole-rigid-group translation is NOT in that category, despite looking
+    /// like it should be (it leaves every gap and the structure bit-identical).
+    /// The cascade derives each non-authoritative section from an authoritative
+    /// one's STORED offset and never re-derives an authoritative section from
+    /// anything, so it is translation-invariant: after a group move the full
+    /// solve provably changes nothing, and a skip that hides nothing hides
+    /// nothing (`a_whole_rigid_group_translation_is_a_solver_no_op` below runs
+    /// the move through `adjust_rigid_group_offsets` and compares).
     pub fn realign_merges(&mut self) -> usize {
-        let before = self.check_merge_alignment().len();
-        if before == 0 {
+        let residual = self.residual_merge_gaps();
+        if residual.is_empty() {
             return 0;
         }
-        self.resolve_offsets()
+        let fingerprint = RealignFixpoint {
+            structure: self.realign_structure_hash(),
+            residual,
+        };
+        if self.realign_fixpoint.as_ref() == Some(&fingerprint) {
+            // Observationally identical to running the solve: a recorded fixpoint
+            // is a state the cascade left byte-for-byte alone, so `resolve_offsets`
+            // would have counted the same misalignments before and after and
+            // returned the same 0 healed merges the early-return above does.
+            return 0;
+        }
+        let (healed, changed) = self.resolve_offsets_tracked();
+        self.realign_fixpoint = if changed {
+            // The solve moved something, so it is not (yet) a fixpoint - and the
+            // residual it was fingerprinted from is stale. A later call re-derives.
+            None
+        } else {
+            // Nothing moved: `resolve_offsets` only ever writes `section_offsets`,
+            // so with those identical the residual and the structure are identical
+            // too, and `fingerprint` IS the post-solve fingerprint.
+            Some(fingerprint)
+        };
+        healed
     }
 
     /// Zero-trust re-solve of section offsets, used on LOAD and explicit REPAIR.
@@ -299,6 +661,15 @@ impl Project {
     /// seed-adjusts them. Returns the number of merges that were misaligned beyond
     /// the reporting tolerance before the re-solve.
     pub fn resolve_offsets(&mut self) -> usize {
+        self.resolve_offsets_tracked().0
+    }
+
+    /// [`Self::resolve_offsets`], also reporting whether the re-solve MOVED an
+    /// offset. That flag is what lets [`Self::realign_merges`] tell a solve which
+    /// healed something from one which provably cannot: the healed COUNT cannot,
+    /// being blind to every sub-reporting-tolerance change - which is the whole
+    /// reason this function re-cascades unconditionally.
+    fn resolve_offsets_tracked(&mut self) -> (usize, bool) {
         let before = self.check_merge_alignment().len();
         // Snapshot the derived offsets so we can tell whether the re-solve actually
         // moved anything - including SUB-tolerance changes the `before`/`after`
@@ -315,9 +686,13 @@ impl Project {
         // touch()ing there would bump `modified_at` for a project the user never
         // edited - a later no-edit save would then persist a bogus timestamp, and
         // it would make a no-op integrity Repair look like a real change.
-        if self.section_offsets != offsets_before {
+        let changed = self.section_offsets != offsets_before;
+        if changed {
             self.touch();
         }
-        before.saturating_sub(self.check_merge_alignment().len())
+        (
+            before.saturating_sub(self.check_merge_alignment().len()),
+            changed,
+        )
     }
 }

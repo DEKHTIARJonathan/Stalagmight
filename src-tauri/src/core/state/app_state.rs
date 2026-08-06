@@ -17,6 +17,8 @@ use crate::TileFetchStats;
 
 use crate::core::{CommandResult, UndoStack};
 
+use super::project_io::reapply_heals_after_restore;
+
 /// Trait for types that can represent project lock errors.
 /// Enables `with_project_mut` and `with_project` to work with different return types.
 pub(super) trait FromProjectLockError {
@@ -757,6 +759,32 @@ impl AppState {
                     restored.ensure_shot_uuids();
                     restored.ensure_unique_shot_uuids();
                     restored.reanchor_station_refs();
+                }
+                // A save heals the live project with no undo entry of its own,
+                // and a snapshot recorded BEFORE that save holds the pre-heal
+                // project - so restoring one reverts the heal and makes the
+                // project at a given undo depth depend on the route taken to
+                // reach it (#413, finding 11). Bring the restored project back
+                // up to the standard the live one is already held to; the
+                // heal-by-heal reasoning for what that includes (and what it
+                // deliberately does not) is on the function.
+                reapply_heals_after_restore(&mut restored, slot.as_ref());
+                // The `section_offsets` invariant (`Project::write_section_offset`)
+                // has to hold for a map this app did not write, and a snapshot
+                // payload is exactly that case: undo/redo history is persisted to
+                // SQLite and reloaded across sessions, so an entry recorded by a
+                // build that predates the invariant can carry a dust-zero key. The
+                // load boundary drops one out of a `.stalx`; this is the same drop
+                // one payload over. Not a heal decided per-heal like the block
+                // above - it is an invariant, and a restore may not install a state
+                // the app cannot otherwise reach.
+                let dropped = restored.normalize_section_offsets();
+                if dropped > 0 {
+                    tracing::info!(
+                        dropped,
+                        purpose = "hold the section_offsets invariant across a snapshot restore",
+                        "Dropped restored section offsets that were within dust of the origin"
+                    );
                 }
                 *slot = Some(restored);
                 true

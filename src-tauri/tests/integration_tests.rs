@@ -612,6 +612,9 @@ fn test_undo_zero_datum() {
     let undo_data = UndoData::ZeroDatumInfo {
         station_ref: StationRef::new(0, 0),
         previous_gps: None,
+        // The index the datum sat at in `Project::zero_datums`, so undo of a
+        // removal puts it back THERE instead of appending (#413, finding 17).
+        position: Some(1),
         previous_offsets: offsets,
     };
 
@@ -623,10 +626,12 @@ fn test_undo_zero_datum() {
         UndoData::ZeroDatumInfo {
             station_ref,
             previous_gps,
+            position,
             previous_offsets,
         } => {
             assert_eq!(station_ref, StationRef::new(0, 0));
             assert!(previous_gps.is_none());
+            assert_eq!(position, Some(1));
             assert_eq!(previous_offsets.get(&0), Some(&Some((10.0, 20.0))));
         }
         _ => panic!("Wrong undo data type"),
@@ -643,7 +648,9 @@ fn test_comprehensive_undo_types() {
         UndoData::PreviousValues {
             section_id: 0,
             shot_id: Some(0),
+            shot_uuid: None,
             values_json: "{}".to_string(),
+            previous_offsets: HashMap::new(),
         },
         UndoData::SectionSnapshot {
             section_id: 0,
@@ -669,6 +676,7 @@ fn test_comprehensive_undo_types() {
                 longitude: -122.0,
                 depth_reference: 5.0,
             }),
+            position: None,
             previous_offsets: HashMap::new(),
         },
         UndoData::ProjectSnapshot("{}".to_string()),

@@ -1,5 +1,5 @@
 use crate::core::{Command, UndoData};
-use crate::models::{ClosureStrategy, SectionId, SectionUpdates, ShotUpdates};
+use crate::models::{ClosureStrategy, SectionId, SectionUpdates, ShotId, ShotUpdates};
 
 use super::AppState;
 
@@ -17,7 +17,28 @@ impl AppState {
         match cmd {
             // For create commands, we'll fill in the ID after execution
             Command::CreateSection { .. } => UndoData::None, // Will be finalized after execution
-            Command::CreateShot { .. } => UndoData::None,    // Will be finalized after execution
+            // A STUB, filled in by `finalize_undo_data` once the shot exists -
+            // the same shape `ProjectSnapshotPair { after: String::new() }` uses
+            // below. It is a stub rather than `UndoData::None` because ONE of its
+            // fields can only be read BEFORE the insert: the `section_offsets` the
+            // insert's cascade can reach, as they stood, which the undo has to
+            // hand back rather than let the removal re-derive (#413, finding 27's
+            // second arm). Every other field is placeholder and is overwritten; if the
+            // finalize cannot find the created shot it yields `UndoData::None`,
+            // exactly as this arm used to.
+            Command::CreateShot { section_id, .. } => UndoData::CreatedShotSnapshot {
+                section_id: *section_id,
+                shot_id: 0,
+                shot_data: crate::models::ShotData::default(),
+                position: 0,
+                station_shift_from: 0,
+                after_shot_id: None,
+                before_shot_id: None,
+                after_shot_uuid: None,
+                before_shot_uuid: None,
+                uuid: None,
+                previous_offsets: project.capture_rigid_connected_section_offsets(*section_id),
+            },
 
             // For DeleteSection, capture full project snapshot (before/after pair)
             // because cleanup_section_references removes merges, closures, offsets, and
@@ -121,7 +142,22 @@ impl AppState {
                             UndoData::PreviousValues {
                                 section_id: *section_id,
                                 shot_id: Some(*shot_id),
+                                // The address that survives a save: the id
+                                // beside it is renumbered on load (#413).
+                                shot_uuid: shot.uuid.clone(),
                                 values_json: json,
+                                // What the undo's re-execution will RE-DERIVE and
+                                // therefore has to be handed back verbatim
+                                // instead (#413, finding 27). Captured only for a
+                                // geometry edit, because that is the only one
+                                // `update_shot` realigns for - and `prev_updates`
+                                // mirrors which fields `updates` sets, so the undo
+                                // realigns exactly when the forward command did.
+                                previous_offsets: if updates.touches_geometry() {
+                                    project.capture_rigid_connected_section_offsets(*section_id)
+                                } else {
+                                    std::collections::HashMap::new()
+                                },
                             }
                         } else {
                             UndoData::None
@@ -153,7 +189,11 @@ impl AppState {
                         UndoData::PreviousValues {
                             section_id: *section_id,
                             shot_id: None,
+                            shot_uuid: None,
                             values_json: json,
+                            // `update_section` writes metadata and no geometry, so
+                            // its undo re-derives no offsets to restore.
+                            previous_offsets: std::collections::HashMap::new(),
                         }
                     } else {
                         UndoData::None
@@ -166,9 +206,20 @@ impl AppState {
             // The old boolean toggle inverted from the command alone (`!flag`).
             // A 3-way kind cannot (#27 q12): "undo setting this to Reference"
             // has to know whether it was Normal or Jump before. So read the
-            // current kind out of the project and carry it in the inverse.
+            // current kind out of the project and carry the previous value.
             // Falls back to UndoData::None if the shot is gone, matching how
             // the other shot commands degrade rather than inventing a value.
+            //
+            // Recorded as `PreviousValues` rather than the
+            // `InverseCommand(SetShotKind)` it used to be, because that variant
+            // is a NEWTYPE around `Command` and so has nowhere to put the
+            // target's uuid: the inverse command names the shot by its
+            // in-session id, which the loader renumbers, so after a save/reopen
+            // the undo reset a DIFFERENT shot's kind (#413, finding 12). This
+            // is the same restore - one field put back to its previous value -
+            // through the variant that can carry the address that survives a
+            // save. Persisted `InverseCommand(SetShotKind)` entries still
+            // restore through their own arm in `undo_inner`.
             Command::SetShotKind {
                 section_id,
                 shot_id,
@@ -176,13 +227,25 @@ impl AppState {
             } => project
                 .get_section(*section_id)
                 .and_then(|section| section.get_shot(*shot_id))
-                .map_or(UndoData::None, |shot| {
-                    UndoData::InverseCommand(Command::SetShotKind {
-                        section_id: *section_id,
-                        shot_id: *shot_id,
-                        kind: shot.kind,
-                    })
-                }),
+                .and_then(|shot| {
+                    let prev_updates = ShotUpdates {
+                        kind: Some(shot.kind),
+                        ..Default::default()
+                    };
+                    serde_json::to_string(&prev_updates)
+                        .ok()
+                        .map(|json| UndoData::PreviousValues {
+                            section_id: *section_id,
+                            shot_id: Some(*shot_id),
+                            shot_uuid: shot.uuid.clone(),
+                            values_json: json,
+                            // A kind is not geometry (`Command::affects_geometry`
+                            // says so and `set_shot_kind` realigns nothing), so
+                            // this undo re-derives no offsets to restore.
+                            previous_offsets: std::collections::HashMap::new(),
+                        })
+                })
+                .unwrap_or(UndoData::None),
 
             // Merge can shift sections BEYOND the two merge groups: after aligning
             // the groups, cascade_connection_offsets re-anchors any section reachable
@@ -285,10 +348,17 @@ impl AppState {
             }
 
             Command::RemoveLoopClosure { closure_id } => {
-                if let Some(closure) = project.loop_closures.iter().find(|lc| lc.id == *closure_id)
+                if let Some((position, closure)) = project
+                    .loop_closures
+                    .iter()
+                    .enumerate()
+                    .find(|(_, lc)| lc.id == *closure_id)
                 {
                     UndoData::ClosureInfo {
                         closure: closure.clone(),
+                        // The removal is a `Vec::remove`, so undo has to be a
+                        // `Vec::insert` at the same index (#413, finding 4).
+                        position: Some(position),
                     }
                 } else {
                     UndoData::None
@@ -297,12 +367,13 @@ impl AppState {
 
             // For zero datum operations - capture GPS and section offsets
             Command::SetZeroDatum { station_ref, .. } => {
-                // Find if there was a previous datum for this station
-                let previous_gps = project
+                // Find if there was a previous datum for this station, and WHERE
+                // in the list it sat (#413, finding 17).
+                let previous = project
                     .zero_datums
                     .iter()
-                    .find(|zd| project.key_is_ref(&zd.station_ref, *station_ref))
-                    .map(|zd| zd.gps);
+                    .enumerate()
+                    .find(|(_, zd)| project.key_is_ref(&zd.station_ref, *station_ref));
 
                 // Capture section offsets for all connected sections
                 // This allows undo to restore exact previous state
@@ -311,28 +382,49 @@ impl AppState {
 
                 UndoData::ZeroDatumInfo {
                     station_ref: *station_ref,
-                    previous_gps,
+                    previous_gps: previous.map(|(_, zd)| zd.gps),
+                    position: previous.map(|(position, _)| position),
                     previous_offsets,
                 }
             }
 
+            // A whole-project pair rather than the `ZeroDatumInfo` this used to
+            // record, because removing the anchor is no longer the only thing
+            // this command does: it is flagged `can_orphan_closures`, so
+            // `execute()`'s epilogue converts the sole-bridge closure the removal
+            // just made convertible (see `command_integrity`), and the reconcile
+            // then re-solves around the new rigid merge. `ZeroDatumInfo` can put
+            // back a datum and a map of offsets; it cannot put back a closure that
+            // has become a merge. The pair restores both directions verbatim, and
+            // it is SELF-REFRESHING (`refresh_snapshot_pair_counterpart`), so the
+            // conversion lands in the `after` half by construction rather than by
+            // anyone remembering to record it.
+            //
+            // Two whole snapshots is the expensive capture in this file, and it is
+            // affordable HERE specifically: removing a GPS anchor is a rare,
+            // deliberate act on a handful of datums, not a per-keystroke edit like
+            // `UpdateShot`. `SetZeroDatum` keeps `ZeroDatumInfo` - it adds an
+            // anchor, which converts nothing.
+            //
+            // Guarded on the datum existing so a doomed command (the station is
+            // not a datum - `remove_zero_datum` fails) serializes nothing; the
+            // resulting `None` never reaches the stack, as `execute()` only pushes
+            // on success.
             Command::RemoveZeroDatum { station_ref } => {
-                // Capture the current datum
-                let previous_gps = project
+                if project
                     .zero_datums
                     .iter()
-                    .find(|zd| project.key_is_ref(&zd.station_ref, *station_ref))
-                    .map(|zd| zd.gps);
-
-                // Capture section offsets for all connected sections
-                // RemoveZeroDatum doesn't change offsets, but we capture for consistency
-                let previous_offsets =
-                    project.capture_connected_section_offsets(station_ref.section_id);
-
-                UndoData::ZeroDatumInfo {
-                    station_ref: *station_ref,
-                    previous_gps,
-                    previous_offsets,
+                    .any(|zd| project.key_is_ref(&zd.station_ref, *station_ref))
+                {
+                    match AppState::serialize_project_snapshot(project) {
+                        Ok(before) => UndoData::ProjectSnapshotPair {
+                            before,
+                            after: String::new(), // Filled by finalize_undo_data
+                        },
+                        Err(_) => UndoData::None,
+                    }
+                } else {
+                    UndoData::None
                 }
             }
 
@@ -432,6 +524,13 @@ impl AppState {
                     UndoData::CreatedSectionSnapshot {
                         section_id: section.id,
                         section_data: section.to_section_data(),
+                        // `SectionData` carries no uuid, no reverse parity and
+                        // no gauge pair, so redo would rebuild the section with
+                        // a fresh identity (#413, finding 1). The undo refreshes
+                        // this immediately before it deletes the section, which
+                        // is what carries a gauge pair captured by a save that
+                        // happened after this push.
+                        identity: crate::models::SectionIdentity::of(section),
                     }
                 } else {
                     undo_data
@@ -444,6 +543,15 @@ impl AppState {
                 before_shot_id,
                 ..
             } => {
+                // The one field that had to be read BEFORE the insert, carried
+                // across from the stub `generate_undo_data` built (#413, finding
+                // 27's second arm).
+                let previous_offsets = match &undo_data {
+                    UndoData::CreatedShotSnapshot {
+                        previous_offsets, ..
+                    } => previous_offsets.clone(),
+                    _ => std::collections::HashMap::new(),
+                };
                 // Capture full snapshot of the just-created shot so that redo can
                 // restore it with its original ID instead of re-executing CreateShot
                 // (which would assign a new ID).
@@ -475,6 +583,15 @@ impl AppState {
                             // ensures no refs match.
                             (position + 1) as u32
                         };
+                        // The anchors' uuids alongside their ids, for the same
+                        // reason the shot's own uuid is recorded: the ids are
+                        // renumbered on load, and the anchor decides WHERE the
+                        // redo puts the shot back (#413, finding 16).
+                        let anchor_uuid = |anchor: Option<ShotId>| {
+                            anchor
+                                .and_then(|id| section.get_shot(id))
+                                .and_then(|anchor_shot| anchor_shot.uuid.clone())
+                        };
                         UndoData::CreatedShotSnapshot {
                             section_id: *section_id,
                             shot_id,
@@ -483,13 +600,19 @@ impl AppState {
                             station_shift_from,
                             after_shot_id: *after_shot_id,
                             before_shot_id: *before_shot_id,
+                            after_shot_uuid: anchor_uuid(*after_shot_id),
+                            before_shot_uuid: anchor_uuid(*before_shot_id),
                             uuid: shot.uuid.clone(),
+                            previous_offsets,
                         }
                     } else {
-                        undo_data
+                        // The stub could not be completed, so it must not be
+                        // pushed: `UndoData::None`, which is what this arm
+                        // yielded before the stub existed.
+                        UndoData::None
                     }
                 } else {
-                    undo_data
+                    UndoData::None
                 }
             }
 
@@ -520,6 +643,9 @@ impl AppState {
                     }) {
                         UndoData::ClosureInfo {
                             closure: closure.clone(),
+                            // A create APPENDS, so its redo appends too; only
+                            // `RemoveLoopClosure` has an index to restore.
+                            position: None,
                         }
                     } else {
                         undo_data
@@ -527,16 +653,18 @@ impl AppState {
                 }
             }
 
-            // DeleteSection/DeleteShot/ReverseSection/Merge/Unmerge/MoveStation:
-            // fill in the "after" snapshot now that the mutation (and any cascade
-            // re-anchoring, orphan-closure conversion, and offset reconcile triggered
-            // in execute()) is done.
+            // DeleteSection/DeleteShot/ReverseSection/Merge/Unmerge/MoveStation/
+            // RemoveZeroDatum: fill in the "after" snapshot now that the mutation
+            // (and any cascade re-anchoring, orphan-closure conversion, and offset
+            // reconcile triggered in execute()) is done. `RemoveZeroDatum` is here
+            // FOR the conversion - it is the whole reason it records a pair.
             Command::DeleteSection { .. }
             | Command::DeleteShot { .. }
             | Command::ReverseSection { .. }
             | Command::MergeStations { .. }
             | Command::UnmergeStations { .. }
             | Command::UnmergeStationPair { .. }
+            | Command::RemoveZeroDatum { .. }
             | Command::MoveStation { .. } => {
                 if let UndoData::ProjectSnapshotPair { before, .. } = undo_data {
                     match AppState::serialize_project_snapshot(project) {

@@ -197,14 +197,19 @@ impl AppState {
             // rest of the geometry stays in place. Shot 0 is adjusted below to
             // compensate for the offset shift.
             // Note: can't use project.adjust_section_offset() here because `section`
-            // is a live &mut borrow from project.sections.
+            // is a live &mut borrow from project.sections - hence the associated
+            // `write_section_offset`, which takes the map (a disjoint field borrow)
+            // and drops the key when the move lands the offset back within dust of
+            // the origin, instead of leaving an inert entry behind (#413 finding 2,
+            // and the invariant on that function).
             if idx == 0 && (total_dx != 0.0 || total_dy != 0.0) {
                 let current = project
                     .section_offsets
                     .get(&station_ref.section_id)
                     .copied()
                     .unwrap_or((0.0, 0.0));
-                project.section_offsets.insert(
+                crate::models::Project::write_section_offset(
+                    &mut project.section_offsets,
                     station_ref.section_id,
                     (current.0 + total_dx, current.1 + total_dy),
                 );

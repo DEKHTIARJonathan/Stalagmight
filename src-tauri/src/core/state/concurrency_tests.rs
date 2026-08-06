@@ -241,20 +241,21 @@ fn drain_panics(mine: &[std::thread::ThreadId]) -> Vec<String> {
     ours.into_iter().map(|(_, text)| text).collect()
 }
 
-/// The two panic sites issue #413 already documents, so a run that trips one is
-/// naming a known open finding rather than reporting a race.
-fn known_panic(text: &str) -> Option<&'static str> {
-    if text.contains("Merge alignment violated after insert_shot_") {
-        Some("finding-14-insert-leaves-a-merge-metres-out-of-alignment")
-    } else if text.contains("Merge alignment violated after remove_shot_with_rewire") {
-        Some("finding-14-variant-a-shot-removal-leaves-a-merge-out-of-alignment")
-    } else if text.contains("Merge alignment violated after") {
-        Some("finding-20-an-unanchored-merge-group-is-never-realigned")
-    } else if text.contains("attempt to add with overflow") && text.contains("models/shot.rs") {
-        Some("finding-24-shot-display-position-overflows-before-validation")
-    } else {
-        None
-    }
+/// The panic sites issue #413 documents, so a run that trips one is naming a
+/// known open finding rather than reporting a race.
+///
+/// Every arm is GONE, per the delete-when-fixed contract. The merge-alignment
+/// arms went when findings 14 (insert), its mirror (remove) and 20 (the
+/// unanchored-group drift) were fixed - the structural edits now measure which
+/// side is anchored over the rigid merge forest
+/// (`Project::anchored_sides_of_edit`), an unanchored merge group is realigned
+/// against the edited section, and the self-heal gate is the assert's own
+/// `Project::MERGE_ALIGNMENT_INVARIANT_M`. The finding-24 overflow arm went
+/// when `shot_display_position` was made saturating. ANY panic, from ANY site,
+/// is a reportable problem again; the function stays so the next open finding
+/// with a live panic site has somewhere to be named.
+fn known_panic(_text: &str) -> Option<&'static str> {
+    None
 }
 
 // ===========================================================================
@@ -491,9 +492,12 @@ fn run_concurrent(seed: u32, threads: usize, operations: usize, deadline_secs: u
     };
     {
         let mut rng = Rng::new(seed);
-        // No closures in the starting project: that topology is finding 14's,
+        // No closures in the starting project: that topology was finding 14's,
         // and a run that trips the app's own assert on move one measures
-        // nothing about concurrency.
+        // nothing about concurrency. Finding 14 is FIXED, so turning closures on
+        // here is now an option - but it widens what this gate constructs, and
+        // nobody has measured the wider gate's stability, so it stays off until
+        // someone does.
         build_project(&state, &mut rng, false);
     }
     let Ok(temp) = TempDir::new() else {
@@ -619,7 +623,8 @@ fn run_concurrent(seed: u32, threads: usize, operations: usize, deadline_secs: u
             None => outcome.problems.push(format!("a worker PANICKED: {panic}")),
         }
     }
-    // A KNOWN app panic (findings 14, 20, 24 all have live sites) unwound
+    // A KNOWN app panic - there is none left to classify, so this arm is dormant
+    // and is kept for the next open finding with a live panic site - unwound
     // through the project mutex, which POISONS it - and from that instant every
     // lock site in the app reads "no project open". So the poison check and the
     // post-run walk below would both be re-reporting one already-classified
@@ -652,10 +657,13 @@ fn run_concurrent(seed: u32, threads: usize, operations: usize, deadline_secs: u
     // about the state that survived, not about how it got there.
     //
     // Inside `catch_unwind`, and NOT because a post-run check is expected to
-    // panic: the walk drives real commands, and findings 14 and 20 have live
-    // `#[cfg(test)]` assert sites that any of them can trip. On the main thread
-    // that is an immediate test abort with no classification at all - which is
-    // how this gate failed one run in thirteen before the guard went in.
+    // panic: the walk drives real commands, and a `#[cfg(test)]` assert in any
+    // of them takes the whole process down. On the main thread that is an
+    // immediate test abort with no attribution at all - which is how this gate
+    // failed one run in thirteen before the guard went in, when findings 14 and
+    // 20 still had live merge-alignment assert sites. The guard stays now that
+    // they are fixed: it turns a future assert into this gate's own reported
+    // problem instead of an unattributable abort.
     if outcome.problems.is_empty() {
         let mut walked = 0;
         let checked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -845,10 +853,12 @@ fn concurrency_gate() {
         GATE_SEEDS.len()
     );
     // A run whose threads all no-op'd proves nothing about a lock.
-    // Not "every operation completed": a worker that trips one of the KNOWN
-    // asserts (findings 14, 20, 24 all have live panic sites) unwinds and
-    // stops early, which is legitimate and is already accounted for by the
-    // classifier. What must not happen is the workers not running at all.
+    // Not "every operation completed": a worker that trips a KNOWN assert
+    // unwinds and stops early, which would be legitimate and accounted for by
+    // the classifier. NOTHING is classified today - finding 24's overflow site
+    // and the merge-alignment ones are all fixed, and every panic is a reported
+    // problem again - so `total` is empty and the high floor is the one that
+    // applies. What must not happen is the workers not running at all.
     let floor = if total.is_empty() {
         GATE_SEEDS.len() * GATE_THREADS * GATE_OPERATIONS
     } else {
