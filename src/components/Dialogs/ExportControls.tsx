@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useId } from 'react';
+import { useTranslation } from 'react-i18next';
 import { listen } from '@tauri-apps/api/event';
 import { saveDialog } from '../../utils/fileDialogs';
 import { useProjectStore } from '../../store/projectStore';
@@ -63,6 +64,7 @@ export default function ExportControls({
 }: ExportControlsProps) {
   const { project, exportCsv, exportJson, exportTml, exportImage, getAnchoredSectionIds } =
     useProjectStore();
+  const { t } = useTranslation();
 
   const [isExporting, setIsExporting] = useState(false);
   const [labelsOptionsExpanded, setLabelsOptionsExpanded] = useState(false);
@@ -71,9 +73,15 @@ export default function ExportControls({
   const labelsRegionId = useId();
   const [exportProgress, setExportProgress] = useState<LoadingProgressPayload | null>(null);
   const [showTmlUnanchoredWarning, setShowTmlUnanchoredWarning] = useState(false);
-  const [tmlDiscardedSections, setTmlDiscardedSections] = useState<
+  const [tmlUnanchoredSections, setTmlUnanchoredSections] = useState<
     Array<{ id: number; name: string | null }>
   >([]);
+  // Whether NO section in the project is connected to a zero datum (every
+  // section will export as its own separate entrance) vs. only some are
+  // (#411). Compared by section count, not `zero_datums.length`: a datum
+  // whose station no longer resolves also leaves every section unanchored.
+  const [tmlAllSectionsUnanchored, setTmlAllSectionsUnanchored] = useState(false);
+  const [tmlTotalSectionCount, setTmlTotalSectionCount] = useState(0);
   // Track the loadingId we're expecting (to filter out events from other operations)
   const exportLoadingIdRef = useRef<bigint | null>(null);
 
@@ -97,12 +105,15 @@ export default function ExportControls({
     [onExportingChange],
   );
 
-  const formatSectionLabel = useCallback((section: { id: number; name: string | null }): string => {
-    const trimmedName = section.name?.trim();
-    return trimmedName && trimmedName.length > 0
-      ? `${trimmedName} (#${section.id})`
-      : `Section ${section.id}`;
-  }, []);
+  const formatSectionLabel = useCallback(
+    (section: { id: number; name: string | null }): string => {
+      const trimmedName = section.name?.trim();
+      return trimmedName && trimmedName.length > 0
+        ? `${trimmedName} (#${section.id})`
+        : t('dialogs.tmlUnanchoredWarning.sectionFallbackName', { id: section.id });
+    },
+    [t],
+  );
 
   const handleExport = async (options?: { skipTmlAnchorCheck?: boolean }) => {
     try {
@@ -116,7 +127,9 @@ export default function ExportControls({
                 .filter((section) => !anchoredSectionIds.has(section.id))
                 .map((section) => ({ id: section.id, name: section.name }));
               if (unanchoredSections.length > 0) {
-                setTmlDiscardedSections(unanchoredSections);
+                setTmlUnanchoredSections(unanchoredSections);
+                setTmlAllSectionsUnanchored(unanchoredSections.length === project.sections.length);
+                setTmlTotalSectionCount(project.sections.length);
                 setShowTmlUnanchoredWarning(true);
                 return;
               }
@@ -575,9 +588,22 @@ export default function ExportControls({
         </Button>
       </div>
 
+      {/* Nothing here is ever discarded: `build_export_shots` (src-tauri/src/export/tml.rs)
+          emits every section. The copy deliberately claims only "not georeferenced", never
+          entrance topology: entrance-hood is decided by STATION MERGES (`build_parent_map`
+          walks project.station_merges only), while this dialog's classifier is zero-datum
+          reachability (`get_anchored_section_ids` = merges + aligned closures from each
+          datum) - the two predicates disagree in both directions (merged-but-undatumed
+          exports as ONE system; a closure-only-anchored section still exports as its own
+          entrance), so any entrance claim keyed on this list would lie for some project.
+          This is informational, not a risk warning - see ExportControls.test.tsx. */}
       <AlertDialog
         open={showTmlUnanchoredWarning}
-        title="Some sections will be discarded"
+        title={t(
+          tmlAllSectionsUnanchored
+            ? 'dialogs.tmlUnanchoredWarning.titleAllUnanchored'
+            : 'dialogs.tmlUnanchoredWarning.titlePartial',
+        )}
         onClose={() => setShowTmlUnanchoredWarning(false)}
         data-testid="tml-unanchored-warning-dialog"
         actions={
@@ -586,7 +612,7 @@ export default function ExportControls({
               onClick={() => setShowTmlUnanchoredWarning(false)}
               data-testid="tml-unanchored-warning-cancel"
             >
-              Cancel
+              {t('common.actions.cancel')}
             </Button>
             <Button
               variant="primary"
@@ -596,22 +622,30 @@ export default function ExportControls({
               }}
               data-testid="tml-unanchored-warning-continue"
             >
-              Continue anyway
+              {t('common.actions.continue')}
             </Button>
           </>
         }
       >
         <div className="space-y-3">
+          {/* `bodyAllUnanchored`/`bodyPartial` (en.json) quote "Set Zero Datum" - the literal
+              English label at ContextMenu.tsx:426, which `iconForLabel` switches on by exact
+              string. Translating that menu item later will desync these quotes; update both
+              together. */}
           <p>
-            Ariane TML/TMLU exports only include sections connected to a zero datum. The sections
-            below are not connected and may be discarded.
+            {tmlAllSectionsUnanchored
+              ? t('dialogs.tmlUnanchoredWarning.bodyAllUnanchored')
+              : t('dialogs.tmlUnanchoredWarning.bodyPartial', {
+                  count: tmlUnanchoredSections.length,
+                  total: tmlTotalSectionCount,
+                })}
           </p>
           <div className="rounded border border-border bg-panel p-3">
             <p className="text-xs font-medium text-text-secondary mb-2">
-              Potentially discarded sections
+              {t('dialogs.tmlUnanchoredWarning.listHeading')}
             </p>
             <ul className="list-disc pl-5 space-y-1 text-sm max-h-40 overflow-y-auto">
-              {tmlDiscardedSections.map((section) => (
+              {tmlUnanchoredSections.map((section) => (
                 <li key={section.id} data-testid={`tml-unanchored-section-item-${section.id}`}>
                   {formatSectionLabel(section)}
                 </li>
