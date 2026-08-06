@@ -1293,3 +1293,179 @@ fn an_entity_escaped_uuid_is_stored_whole_and_a_split_one_stays_exportable() {
         "the ampersand must survive re-escaping: {out:?}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// 14. The export-character gate is the XML rule, not just the control range
+// ---------------------------------------------------------------------------
+
+/// U+FFFF is excluded by XML 1.0's `Char` production but is NOT a control
+/// character, so a gate written as `char::is_control` adopted it, stored it, and
+/// let `BytesText::new` (which escapes only `<>&"'`) write it raw into element
+/// content - producing the ill-formed document the gate exists to prevent.
+///
+/// The asymmetry is what makes this worth a hard check rather than a shrug: a
+/// rejected id costs ONE shot its foreign identity, an accepted bad byte costs
+/// the WHOLE file, because a strict consumer rejects the document rather than
+/// the row.
+///
+/// Asserted on the emitted BYTES: our own quick-xml reader is lenient enough to
+/// read such a document straight back, so a re-parse would pin nothing.
+#[test]
+fn a_uuid_outside_the_xml_char_set_falls_back_to_a_mint() {
+    const GOOD: &str = "beefbeef-0000-4000-8000-000000000001";
+    // Neither of these is a control character; both are outside `Char`.
+    const NONCHAR_FFFF: &str = "a\u{FFFF}b";
+    const NONCHAR_FFFE: &str = "a\u{FFFE}b";
+
+    // The gate itself is unit-tested next to it, in `parsers::tml`
+    // (`foreign_shot_uuid_rejects_characters_xml_forbids`); this is the
+    // end-to-end consequence.
+    let dir = tempfile::tempdir().unwrap();
+    let source = write_tmlu(
+        dir.path(),
+        "nonchar.tmlu",
+        &cave_file_xml(&[
+            Row::new(1, 0, Some(GOOD)),
+            Row::new(2, 1, Some(NONCHAR_FFFF)),
+            Row::new(3, 2, Some(NONCHAR_FFFE)),
+        ]),
+    );
+
+    let state = state_with_project();
+    import_ariane_file(&state, &source);
+
+    let project = state.get_project_state().unwrap();
+    let uuids = section_uuids(&project, 0);
+    assert_eq!(uuids.len(), 3);
+    assert_eq!(uuids[0], GOOD);
+    for (i, u) in uuids.iter().enumerate().skip(1) {
+        assert!(
+            !u.contains('\u{FFFF}') && !u.contains('\u{FFFE}') && !u.is_empty(),
+            "shot {i} adopted a non-Char identity: {u:?}"
+        );
+    }
+
+    let exported = dir.path().join("nonchar-out.tmlu");
+    export_tml(&project, &exported).unwrap();
+    let raw = std::fs::read(&exported).unwrap();
+    let text = String::from_utf8(raw).expect("the export must be valid UTF-8");
+    let forbidden: Vec<u32> = text
+        .chars()
+        .filter(|c| {
+            !matches!(c,
+                '\u{9}' | '\u{A}' | '\u{D}'
+                | '\u{20}'..='\u{D7FF}'
+                | '\u{E000}'..='\u{FFFD}'
+                | '\u{10000}'..='\u{10FFFF}')
+        })
+        .map(u32::from)
+        .collect();
+    assert!(
+        forbidden.is_empty(),
+        "the export must contain only characters XML 1.0 allows: {forbidden:x?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 15. A legacy undo entry must not restore a shot with no identity
+// ---------------------------------------------------------------------------
+
+/// An undo entry serialised before #423 carries neither a `ShotData::uuid` nor a
+/// `ShotInfo`-side `uuid`. `Shot::with_uuid` resolves `data.uuid.or(explicit)`
+/// and never mints, so replaying one used to restore a shot with `uuid: None`:
+/// absent from `shot_uuid_index`, unnameable by any `StationKey::AfterShot`, and
+/// left that way until some later save happened to mint one.
+///
+/// `restore_shot` goes through `Shot::uuid_or_mint`, so the restored shot always
+/// has an identity and a cross-reference can be anchored on it immediately.
+#[test]
+fn a_legacy_undo_entry_with_no_recorded_identity_restores_a_usable_shot() {
+    let state = state_with_project();
+    let section_id = state
+        .execute(Command::CreateSection {
+            name: Some("Legacy".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#4ecdc4".to_string(),
+            direction: None,
+            shots: vec![
+                ShotData {
+                    azimuth_in: 90.0,
+                    azimuth_out: 90.0,
+                    length: 10.0,
+                    depth_in: 5.0,
+                    depth_out: 5.0,
+                    ..Default::default()
+                },
+                ShotData {
+                    azimuth_in: 90.0,
+                    azimuth_out: 90.0,
+                    length: 11.0,
+                    depth_in: 5.0,
+                    depth_out: 5.0,
+                    ..Default::default()
+                },
+            ],
+        })
+        .section_id
+        .unwrap();
+
+    // The pre-#423 payload shape: no uuid on the ShotData, and none recorded
+    // beside it. Pushed straight onto the stack, exactly as a persisted entry
+    // written by an older build deserialises.
+    {
+        let mut stack = state.undo_stack.lock().unwrap();
+        stack.push_with_data(
+            Command::DeleteShot {
+                section_id,
+                shot_id: 0,
+            },
+            crate::core::undo::UndoData::ShotSnapshot {
+                section_id,
+                shot_id: 9_999,
+                shot_data: ShotData {
+                    azimuth_in: 45.0,
+                    azimuth_out: 45.0,
+                    length: 7.0,
+                    depth_in: 5.0,
+                    depth_out: 5.0,
+                    ..Default::default()
+                },
+                position: 1,
+                uuid: None,
+            },
+        );
+    }
+
+    let undone = state.undo();
+    assert!(undone.success, "{:?}", undone.error);
+
+    let project = state.get_project_state().unwrap();
+    let restored = project
+        .get_section(section_id)
+        .unwrap()
+        .shots
+        .iter()
+        .find(|s| s.id == 9_999)
+        .expect("the legacy entry restored its shot");
+    let uuid = restored
+        .uuid
+        .clone()
+        .expect("a restored shot must have an identity, or no anchor can name it");
+    assert!(!uuid.is_empty());
+
+    // The point of having one: an AfterShot anchor on it resolves.
+    let key = project
+        .key_for_ref(StationRef::new(section_id, 2))
+        .expect("the station after the restored shot must be nameable");
+    assert_eq!(
+        key.anchor,
+        crate::models::StationAnchor::AfterShot(uuid),
+        "the anchor must be keyed on the restored shot's own identity"
+    );
+    assert_eq!(
+        project.resolve_key(&key),
+        Some(StationRef::new(section_id, 2)),
+        "and it must resolve back to the same station"
+    );
+}

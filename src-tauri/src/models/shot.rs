@@ -567,7 +567,20 @@ impl Shot {
     /// a reverse); otherwise a fresh v4 is minted.  See [`Shot::with_uuid`] for
     /// the full precedence rule.
     pub fn new(id: ShotId, data: ShotData) -> Self {
-        Self::with_uuid(id, data, Some(uuid::Uuid::new_v4().to_string()))
+        Self::with_uuid(id, data, Some(Self::uuid_or_mint(None)))
+    }
+
+    /// A recorded identity, or a fresh v4 - the fallback half of the precedence
+    /// rule documented on [`Shot::with_uuid`].
+    ///
+    /// Every path that INSERTS a shot goes through this rather than handing
+    /// `with_uuid` a bare `None`, so "the caller had nothing recorded" can never
+    /// become "this shot has no identity". The distinction is not cosmetic: a
+    /// `None` uuid is invisible to `shot_uuid_index` and unnameable by any
+    /// `StationKey::AfterShot`, so a station cross-reference cannot be made to
+    /// the shot at all until some later save mints one.
+    pub fn uuid_or_mint(recorded: Option<String>) -> String {
+        recorded.unwrap_or_else(|| uuid::Uuid::new_v4().to_string())
     }
 
     /// Construct a shot, resolving its persistent identity.
@@ -583,10 +596,15 @@ impl Shot {
     ///   replayed at `core/state/undo_restore.rs`);
     /// * `Shot::new`'s fresh mint, used when the data carries no identity.
     ///
-    /// `None` from both means a pre-v6 `.stalx` shot with no recorded UUID;
-    /// the next save mints one. Because every `Shot`-from-`ShotData`
-    /// construction funnels through here, it is not possible to build a shot
-    /// that silently drops the identity its data was carrying.
+    /// `None` from both leaves the shot with NO identity, which is a real state
+    /// (a pre-v6 `.stalx` row, minted on the next save) but a poor one to create
+    /// on purpose: until something mints it, the shot is absent from
+    /// `shot_uuid_index` and no `AfterShot` anchor can name it. Any INSERT path
+    /// must therefore pass [`Shot::uuid_or_mint`] rather than a bare `None`.
+    ///
+    /// Because every `Shot`-from-`ShotData` construction funnels through here,
+    /// it is not possible to build a shot that silently drops the identity its
+    /// data was carrying.
     pub fn with_uuid(id: ShotId, data: ShotData, uuid: Option<String>) -> Self {
         Self {
             id,

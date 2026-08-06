@@ -311,12 +311,16 @@ impl Section {
         // single-shot inserts ([`Self::add_shot`],
         // [`Self::insert_shot_after_with_id`], [`Self::insert_shot_before_with_id`])
         // and the per-shot undo restore (`core::state::undo_restore`) build a
-        // `Shot` and push it directly, bypassing this loop. Those paths are safe
-        // for a different reason: none of them takes a caller-supplied identity
-        // (the IPC `create_shot` clears `uuid` at the boundary), and undo replays
-        // an identity the project already held. A NEW path that admits a foreign
-        // id one shot at a time would need its own answer - do not read this as
-        // blanket cover.
+        // `Shot` and push it directly, bypassing this loop.
+        //
+        // What keeps those safe is a property of this function, not of them: a
+        // FOREIGN id can only enter a section HERE, so every identity they can
+        // introduce is either a fresh v4 (no collision possible) or one this
+        // section already de-duped. The IPC `create_shot` clears `uuid` at the
+        // boundary so a caller cannot smuggle one in, and `restore_shot` asserts
+        // the identity it replays is absent before inserting it. A NEW path that
+        // admits a foreign id one shot at a time would break that property and
+        // needs its own answer - do not read this as blanket cover.
         //
         // `ShotData::uuid` can now carry a foreign id (#423), and a source file
         // is free to repeat one inside a section. A repeat makes `resolve_key`
@@ -399,16 +403,9 @@ impl Section {
     ) -> Option<&Shot> {
         let pos = self.shots.iter().position(|s| s.id == after_id)?;
         let id = self.take_shot_id(forced_id);
-        let shot = Shot::with_uuid(id, data, Some(Self::fallback_uuid(forced_uuid)));
+        let shot = Shot::with_uuid(id, data, Some(Shot::uuid_or_mint(forced_uuid)));
         self.shots.insert(pos + 1, shot);
         Some(&self.shots[pos + 1])
-    }
-
-    /// `forced_uuid` or a fresh mint - the fallback half of the identity
-    /// precedence documented on [`Shot::with_uuid`]. Kept as a named helper so
-    /// the two inserts cannot drift apart on it.
-    fn fallback_uuid(forced_uuid: Option<String>) -> String {
-        forced_uuid.unwrap_or_else(|| uuid::Uuid::new_v4().to_string())
     }
 
     /// Insert a shot before a specific shot ID, forcing the new shot's id when
@@ -425,7 +422,7 @@ impl Section {
     ) -> Option<&Shot> {
         let pos = self.shots.iter().position(|s| s.id == before_id)?;
         let id = self.take_shot_id(forced_id);
-        let shot = Shot::with_uuid(id, data, Some(Self::fallback_uuid(forced_uuid)));
+        let shot = Shot::with_uuid(id, data, Some(Shot::uuid_or_mint(forced_uuid)));
         self.shots.insert(pos, shot);
         Some(&self.shots[pos])
     }

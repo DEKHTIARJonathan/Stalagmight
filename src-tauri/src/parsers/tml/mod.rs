@@ -485,22 +485,49 @@ const MAX_FOREIGN_UUID_LEN: usize = 128;
 /// churn #423 exists to stop - but its SHAPE is checked, because two classes of
 /// input are not merely odd, they are unstorable:
 ///
-/// * **Control characters.** `unescape` resolves `&#1;` to a real U+0001, and
-///   `BytesText::new` escapes only `<>&"'`, so the byte would be written into
-///   the export RAW. Measured: exporting a shot whose uuid holds U+0001 emits a
-///   document with that byte in element content, which XML 1.0 forbids. Our own
-///   quick-xml reader is lenient and reads it straight back, so nothing on this
-///   side complains - the cost lands on the strict consumers, Ariane and
-///   SpeleoDB's `openspeleo_lib`, which reject the whole file. A `\0`
-///   additionally risks truncation on SQLite TEXT read-back, which would make
-///   the saved and reloaded identity differ. `char::is_control` is the right
-///   gate: it covers the C0/C1 ranges XML 1.0 excludes, and no legitimate
-///   identifier contains one.
+/// True if `c` cannot be written into TML element content and read back as
+/// itself. Two overlapping rules, both needed:
+///
+/// * **Outside XML 1.0's `Char` production**, which is
+///   `#x9 | #xA | #xD | [#x20-#xD7FF] | [#xE000-#xFFFD] | [#x10000-#x10FFFF]`.
+///   `BytesText::new` escapes only `<>&"'`, so anything else is emitted as a
+///   RAW byte and the document simply stops being XML. This half is what catches
+///   U+FFFE and U+FFFF, which are excluded by the production but are NOT control
+///   characters - a `char::is_control` gate let them straight through.
+///   Surrogates are the production's other exclusion and cannot occur in a Rust
+///   `char`.
+/// * **Any remaining control character.** Tab, LF and CR are perfectly legal
+///   XML, and the C1 range (U+0080-U+009F) is legal XML 1.0 text, but none of
+///   them belongs in an identifier and a `\0` additionally risks truncation on
+///   SQLite TEXT read-back - which would make the saved and the reloaded
+///   identity differ with nothing to show for it.
+fn is_unexportable_in_xml(c: char) -> bool {
+    let in_xml_char_set = matches!(c,
+        '\u{9}' | '\u{A}' | '\u{D}'
+        | '\u{20}'..='\u{D7FF}'
+        | '\u{E000}'..='\u{FFFD}'
+        | '\u{10000}'..='\u{10FFFF}');
+    !in_xml_char_set || c.is_control()
+}
+
+/// The file's `<UUID>`/`<UU>` as an identity we are willing to store, or `None`
+/// to mint a fresh one.
+///
+/// The VALUE is never coerced - canonicalising it would recreate the identity
+/// churn #423 exists to stop - but its SHAPE is checked, because two classes of
+/// input are not merely odd, they are unstorable:
+///
+/// * **Characters we cannot re-emit.** See [`is_unexportable_in_xml`]. Measured:
+///   exporting a shot whose uuid holds U+0001 writes that byte into element
+///   content. Our own quick-xml reader is lenient and reads it straight back, so
+///   nothing on this side complains; the strict consumers - Ariane and
+///   SpeleoDB's `openspeleo_lib` - reject the file.
 /// * **Unbounded length.** See [`MAX_FOREIGN_UUID_LEN`].
 ///
-/// Fail-safe by construction: a rejected value costs that shot its foreign
-/// identity and nothing else - it gets the same fresh mint an uncovered row
-/// gets.
+/// Rejecting is the fail-safe direction and the asymmetry is stark: a rejected
+/// value costs THAT SHOT its foreign identity and nothing else (it gets the same
+/// fresh mint an uncovered row gets), while one accepted bad byte costs the
+/// WHOLE exported document - a strict consumer fails the file, not the row.
 fn foreign_shot_uuid(shot_id: i64, raw: Option<&str>) -> Option<String> {
     let raw = raw?;
     // Empty (or whitespace-only) means "no identity", matching the way
@@ -518,12 +545,12 @@ fn foreign_shot_uuid(shot_id: i64, raw: Option<&str>) -> Option<String> {
         );
         return None;
     }
-    if raw.chars().any(char::is_control) {
+    if raw.chars().any(is_unexportable_in_xml) {
         tracing::warn!(
             shot_id,
             purpose = "bound foreign shot identity (#423)",
-            "Shot UUID contains control characters and could not be re-exported as \
-             well-formed XML; minting a fresh identity instead"
+            "Shot UUID holds a character that cannot be re-exported as well-formed \
+             XML; minting a fresh identity instead"
         );
         return None;
     }
@@ -2109,6 +2136,58 @@ mod tests {
             shot.azimuth = input;
             assert_eq!(normalize_tml_shot(&shot, 0.0).azimuth_in, expected);
         }
+    }
+
+    // -------------------------------------------------------------------
+    // Foreign shot identity (#423)
+    // -------------------------------------------------------------------
+
+    /// The gate is XML 1.0's `Char` production, not the control range. U+FFFE and
+    /// U+FFFF are excluded by the production and are NOT control characters, so a
+    /// `char::is_control` gate adopted them - and `BytesText::new` escapes only
+    /// `<>&"'`, so they went into element content raw and the document stopped
+    /// being XML. One accepted bad byte costs the WHOLE exported file (a strict
+    /// consumer rejects the document, not the row), so this rejects rather than
+    /// repairs, and the shot gets an ordinary fresh mint.
+    #[test]
+    fn foreign_shot_uuid_rejects_characters_xml_forbids() {
+        const GOOD: &str = "beefbeef-0000-4000-8000-000000000001";
+        assert_eq!(
+            foreign_shot_uuid(1, Some(GOOD)),
+            Some(GOOD.to_owned()),
+            "a well-formed id is adopted verbatim, never coerced"
+        );
+
+        // Excluded by `Char`, but NOT control characters - the gap this closes.
+        assert_eq!(foreign_shot_uuid(1, Some("a\u{FFFF}b")), None);
+        assert_eq!(foreign_shot_uuid(1, Some("a\u{FFFE}b")), None);
+        // C0, C1, and NUL: control characters, rejected as before.
+        assert_eq!(foreign_shot_uuid(1, Some("a\u{1}b")), None);
+        assert_eq!(foreign_shot_uuid(1, Some("a\u{9F}b")), None);
+        assert_eq!(foreign_shot_uuid(1, Some("a\u{0}b")), None);
+        // Tab/LF/CR are legal XML but not legal in an identifier.
+        assert_eq!(foreign_shot_uuid(1, Some("a\tb")), None);
+        // Absent, empty and whitespace-only all mean "no identity".
+        assert_eq!(foreign_shot_uuid(1, None), None);
+        assert_eq!(foreign_shot_uuid(1, Some("")), None);
+        assert_eq!(foreign_shot_uuid(1, Some("   ")), None);
+        // Length is bounded: at the cap is fine, one past it is not.
+        let at_cap = "a".repeat(MAX_FOREIGN_UUID_LEN);
+        assert_eq!(foreign_shot_uuid(1, Some(&at_cap)), Some(at_cap.clone()));
+        assert_eq!(
+            foreign_shot_uuid(1, Some(&"a".repeat(MAX_FOREIGN_UUID_LEN + 1))),
+            None
+        );
+        // U+FFFD and astral characters ARE in `Char` and stay adopted, so the
+        // gate cannot quietly widen into "reject anything unusual".
+        assert_eq!(
+            foreign_shot_uuid(1, Some("a\u{FFFD}b")),
+            Some("a\u{FFFD}b".to_owned())
+        );
+        assert_eq!(
+            foreign_shot_uuid(1, Some("a\u{1F300}b")),
+            Some("a\u{1F300}b".to_owned())
+        );
     }
 
     // -------------------------------------------------------------------
