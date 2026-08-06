@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { MapMouseEvent } from 'maplibre-gl';
 import { useUIStore, type Selection, type MeasureEndpoint } from '../store/uiStore';
@@ -596,7 +596,11 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
       isCheckingConnectivity,
       mergeStationA,
       openDialog,
-      options,
+      // The individual fields this handler reads, not the `options` object: the
+      // caller builds that object fresh every render, so depending on it would
+      // rebuild the handler (and the memoized callback bundle below) each time (#430).
+      options.immovableStationKeys,
+      options.onMoveDragStart,
       project?.sections,
       setMergeStationA,
       setSelection,
@@ -792,7 +796,8 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
         }
       }
     },
-    [activeTool, activeStations, addToSelection, applyMeasureClick, buildShotPointEndpoint, clickShotParam, openDialog, options, project?.sections, setSelection, showShots, showToast, toggleSelection, showDistanceGradient, setDistanceGradientOrigin, showGasPlan]
+    // See handleStationClick: the read `options` fields, not the object (#430).
+    [activeTool, activeStations, addToSelection, applyMeasureClick, buildShotPointEndpoint, clickShotParam, openDialog, options.immovableStationKeys, options.onMoveDragStart, options.querySnapAtPoint, project?.sections, setSelection, showShots, showToast, toggleSelection, showDistanceGradient, setDistanceGradientOrigin, showGasPlan]
   );
 
   // Handle empty click (no feature) - but use snapped station if available
@@ -892,7 +897,9 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
       clearMergeStations,
       clearSelection,
       openDialog,
-      options,
+      // See handleStationClick: the read `options` fields, not the object (#430).
+      options.gpsOrigin,
+      options.querySnapAtPoint,
       setMergeStationA,
       showShots,
       showStations,
@@ -1002,13 +1009,29 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
     [activeTool, openDialog, setSelection, showGasPlan, activeStations, options.gpsOrigin]
   );
 
-  return {
-    onStationClick: handleStationClick,
-    onShotClick: handleShotClick,
-    onEmptyClick: handleEmptyClick,
-    onStationHover: handleStationHover,
-    onShotHover: handleShotHover,
-    onFeatureHover: options.onFeatureHover,
-    onContextMenu: handleContextMenu,
-  };
+  // Memoized: a fresh object literal here churned `toolCallbacks` in MapCanvas on
+  // every render, which re-ran the `SurveyLayer.setCallbacks` effect each time (#430).
+  // Every member is now render-stable (the handlers are useCallback'd over narrowed
+  // deps; onFeatureHover is the caller's own callback), so this rebuilds only when a
+  // handler genuinely changes.
+  return useMemo<SurveyLayerCallbacks>(
+    () => ({
+      onStationClick: handleStationClick,
+      onShotClick: handleShotClick,
+      onEmptyClick: handleEmptyClick,
+      onStationHover: handleStationHover,
+      onShotHover: handleShotHover,
+      onFeatureHover: options.onFeatureHover,
+      onContextMenu: handleContextMenu,
+    }),
+    [
+      handleStationClick,
+      handleShotClick,
+      handleEmptyClick,
+      handleStationHover,
+      handleShotHover,
+      options.onFeatureHover,
+      handleContextMenu,
+    ]
+  );
 }
