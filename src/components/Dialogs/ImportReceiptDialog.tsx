@@ -17,8 +17,9 @@ const MAX_VISIBLE_WARNINGS = 3;
  * the import (everything it describes already happened), it just tells the
  * user what to expect before they go looking in the data table.
  *
- * This dialog is reached ONLY through `presentImportReceipt` (`saveFeedback.ts`,
- * #411/#420): a receipt that carries a warning, reports zero sections
+ * Every PRODUCTION producer reaches this dialog through `presentImportReceipt`
+ * (`saveFeedback.ts`, #411/#420 - tests may open it directly by injecting
+ * `openDialog('import-receipt', ...)`): a receipt that carries a warning, reports zero sections
  * imported (#442), or performed a unit conversion (`unit_conversion` != null
  * - a silent transformation notice with no room in a toast's one-line budget)
  * still opens the modal here; a clean, unconverted receipt with something to
