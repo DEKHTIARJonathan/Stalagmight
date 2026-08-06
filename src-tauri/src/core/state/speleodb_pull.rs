@@ -141,17 +141,13 @@ fn adopt_convert(
 
 /// [#411] The receipt an adoption reports, from the result of its import.
 ///
-/// `execute_import_sections` attaches no receipt when it was handed no sections -
-/// which is exactly what a `.tml` whose every shot is excluded converts to. That
-/// success with nothing in it was the silent path this whole change exists to close:
-/// no receipt meant no warnings, so an empty project was saved, pushed to the server
-/// and reported with a green toast, while the file it came from held shots. A
-/// synthesized receipt carries the warnings that explain the emptiness.
-///
-/// The synthesis is deliberately written to become dead weight, not a second source
-/// of truth: the sibling `fix/411-no-silent-success` moves the empty receipt into
-/// `execute_import_sections` itself, and once that lands `import_receipt` is always
-/// `Some` here and this arm stops being taken. Nothing needs deleting when it does.
+/// `execute_import_sections` (`command_import.rs`) attaches a receipt to every
+/// success it returns, including the all-excluded case - an empty
+/// `ImportReceipt::empty()` when it was handed no sections, a filled-in one
+/// otherwise. `adopt_build_into` only reaches this call after checking
+/// `imported.success`, so by the time this runs the receipt is always `Some`;
+/// this just decorates it with the converter's own warnings the same way
+/// `execute_tml_import` does.
 fn adopt_receipt(
     imported: &mut CommandResult,
     entry_name: &str,
@@ -159,19 +155,6 @@ fn adopt_receipt(
     unit_conversion: Option<String>,
     warnings: Vec<String>,
 ) -> Option<ImportReceipt> {
-    if imported.import_receipt.is_none() {
-        imported.import_receipt = Some(ImportReceipt {
-            source_format: String::new(),
-            file_name: String::new(),
-            sections_found: 0,
-            sections_imported: 0,
-            shot_count: 0,
-            closures_requested: 0,
-            closures_created: 0,
-            unit_conversion: None,
-            warnings: Vec::new(),
-        });
-    }
     // The same decoration `execute_tml_import` applies, through the same helper:
     // adoption differs from that import only in having no wizard in front of it, and
     // the receipt is what stands in for what the wizard would have shown.
@@ -2246,9 +2229,9 @@ impl AppState {
 #[expect(clippy::expect_used, reason = "unit test fixtures")]
 mod tests {
     use super::{
-        adopt_convert, adopt_receipt, classify_dump_entry, probe_inputs_valid, pull_dating,
-        resolve_dump_entry, usable_tip, AdoptLockGuard, ArianeRoute, CommandResult, DumpAt,
-        PullDating, StalxAmbiguity, UnopenableDump,
+        adopt_convert, classify_dump_entry, probe_inputs_valid, pull_dating, resolve_dump_entry,
+        usable_tip, AdoptLockGuard, ArianeRoute, DumpAt, PullDating, StalxAmbiguity,
+        UnopenableDump,
     };
     use crate::core::state::tests_support::speleodb_prod_matches;
     use crate::core::state::AppState;
@@ -3033,19 +3016,8 @@ mod tests {
             geo_coding: None,
             sections,
             closures: Vec::new(),
+            parse_anomalies: None,
         }
-    }
-
-    /// The import result `execute_import_sections` returns for a conversion that
-    /// produced no sections: success, and no receipt at all (`command_import.rs`).
-    fn receiptless_success() -> CommandResult {
-        let imported = CommandResult::success();
-        assert!(
-            imported.import_receipt.is_none(),
-            "this fixture IS the no-receipt success; a receipt here means the base \
-             shape moved and the test is no longer about anything"
-        );
-        imported
     }
 
     /// [#411] The pull -> adopt conversion bound its converter warnings to
@@ -3150,109 +3122,6 @@ mod tests {
         assert!(
             warnings.is_empty(),
             "nothing excluded means nothing said; got {warnings:?}"
-        );
-    }
-
-    /// [#411 blocker] The emptiest possible adoption was the quietest one. A `.tml`
-    /// whose every shot is excluded converts to NO sections, and
-    /// `execute_import_sections` attaches no receipt to a no-section import - so the
-    /// decoration no-opped, the frontend's receipt gate skipped, and an empty project
-    /// was saved, pushed to the server and reported with a green toast over a file
-    /// that had shots in it.
-    ///
-    /// Driven through the real converter and the real receipt-less success shape; the
-    /// database half of the import needs an app handle, which `AppState::new` has not
-    /// got, and is not what was silent.
-    #[test]
-    fn an_all_excluded_remote_file_still_reports_what_it_dropped() {
-        let tml = adopt_tml(vec![adopt_section(
-            "AllExcluded",
-            0,
-            vec![
-                adopt_shot(1, true, TmlShotType::Real),
-                adopt_shot(2, true, TmlShotType::Real),
-            ],
-        )]);
-
-        let (sections, _, warnings) = adopt_convert(&tml).expect("the conversion succeeds");
-        assert!(
-            sections.is_empty(),
-            "the fixture must convert to nothing at all, or it is not the silent case"
-        );
-
-        let mut imported = receiptless_success();
-        let receipt = adopt_receipt(&mut imported, "ariane.tml", 1, None, warnings)
-            .expect("an adoption that imported nothing still owes the user a receipt");
-
-        assert_eq!(receipt.source_format, "Ariane TML");
-        assert_eq!(receipt.file_name, "ariane.tml");
-        assert_eq!(receipt.sections_imported, 0);
-        assert_eq!(receipt.shot_count, 0);
-        assert_eq!(
-            receipt.warnings.first().map(String::as_str),
-            Some("2 excluded shots in the remote file were not imported"),
-            "the reason the project is empty has to be IN the receipt; got {:?}",
-            receipt.warnings
-        );
-        assert!(
-            receipt
-                .warnings
-                .iter()
-                .any(|w| w.contains("no shots after filtering")),
-            "and so does the converter's own account of the dropped section; got {:?}",
-            receipt.warnings
-        );
-    }
-
-    /// The cap truncates from the tail, and the per-section placement warnings ahead
-    /// of the excluded line are a count the FILE's author chooses. Appending the line
-    /// let a hostile or merely messy file fold the one warning about lost measurements
-    /// into "... and N more".
-    #[test]
-    fn the_excluded_line_outlives_the_cap_on_a_file_full_of_warnings() {
-        let mut imported = receiptless_success();
-        let mut warnings = vec!["3 excluded shots in the remote file were not imported".to_owned()];
-        warnings.extend((0..60).map(|i| format!("placement warning {i}")));
-
-        let receipt = adopt_receipt(&mut imported, "ariane.tml", 1, None, warnings)
-            .expect("the receipt is synthesized");
-
-        assert_eq!(
-            receipt.warnings.len(),
-            51,
-            "50 warnings plus the overflow summary"
-        );
-        assert_eq!(
-            receipt.warnings.first().map(String::as_str),
-            Some("3 excluded shots in the remote file were not imported"),
-            "the excluded line must survive a file that buries it; got {:?}",
-            receipt.warnings.first()
-        );
-    }
-
-    /// The receipt's `file_name` is the entry name from inside a dump downloaded from
-    /// a SERVER, and it lands in the receipt dialog's title. A zip entry name can hold
-    /// 64 KB of whatever its author likes, including the bidi overrides that reorder
-    /// the text printed around them.
-    #[test]
-    fn a_hostile_dump_entry_name_cannot_run_riot_in_the_receipt_title() {
-        let hostile = format!("{}\u{202e}gnp.exe\u{0007}", "A".repeat(10_000));
-        let mut imported = receiptless_success();
-
-        let receipt = adopt_receipt(&mut imported, &hostile, 1, None, Vec::new())
-            .expect("the receipt is synthesized");
-
-        assert_eq!(
-            receipt.file_name.chars().count(),
-            120,
-            "clamped to the title's budget, not the archive author's"
-        );
-        assert!(
-            !receipt
-                .file_name
-                .chars()
-                .any(|c| c.is_control() || matches!(c, '\u{202a}'..='\u{202e}')),
-            "no control or bidi characters reach the dialog title"
         );
     }
 
