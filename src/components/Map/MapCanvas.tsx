@@ -47,7 +47,7 @@ import GridOverlay from './GridOverlay';
 import { DepthLegend } from './DepthLegend';
 import { DistanceLegend } from './DistanceLegend';
 import { GasLegend } from './GasLegend';
-import { MapDevStats } from './MapDevStats';
+import { MapDevStatsPanels } from './MapDevStatsPanels';
 import CommentOverlay from './CommentOverlay';
 import MoveCommentCursorTag from './MoveCommentCursorTag';
 import { installPanZoomDebug } from './panZoomDebug';
@@ -255,6 +255,8 @@ const MAP_CANVAS_UI_KEYS = [
   'setDistanceField',
   'setDistanceGradientOrigin',
   'showDevStats',
+  'showMapStats',
+  'showZoomStats',
   'selection',
   'mergeStationA',
   'mergeStationB',
@@ -516,6 +518,8 @@ function MapCanvas() {
     setDistanceField,
     setDistanceGradientOrigin,
     showDevStats,
+    showMapStats,
+    showZoomStats,
     selection,
     mergeStationA,
     mergeStationB,
@@ -4115,9 +4119,14 @@ function MapCanvas() {
         </div>
       )}
 
-      {/* Developer stats overlay */}
-      {showDevStats && mapLoaded && map.current && (
-        <MapDevStats map={map.current} />
+      {/* Developer stats overlays (hamburger menu ▸ Debug) */}
+      {(showDevStats || showMapStats || showZoomStats) && mapLoaded && map.current && (
+        <MapDevStatsPanels
+          map={map.current}
+          showDevStats={showDevStats}
+          showMapStats={showMapStats}
+          showZoomStats={showZoomStats}
+        />
       )}
 
       {/* Placement mode overlay */}

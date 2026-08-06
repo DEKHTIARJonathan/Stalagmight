@@ -212,10 +212,13 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "action.nav.zoom-in",
     "action.nav.zoom-out",
     "action.nav.zoom-to-section",
-    // ── Action: display toggles (114-128) ──
+    // ── Action: display toggles (114-131) ──
     "action.toggle.gridSpacing",
     "action.toggle.showDepthGradient",
     "action.toggle.showDevStats",
+    "action.toggle.showMemoryStats",
+    "action.toggle.showMapStats",
+    "action.toggle.showZoomStats",
     "action.toggle.showGrid",
     "action.toggle.showReferenceShots",
     "action.toggle.showJumps",
@@ -228,13 +231,13 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "action.toggle.showStationLabels",
     "action.toggle.showStations",
     "action.toggle.showZeroDatum",
-    // ── Action: selection (129-133) ──
+    // ── Action: selection (132-136) ──
     "action.select.section",
     "action.select.shot",
     "action.select.station",
     "action.select-add.shot",
     "action.select-add.station",
-    // ── Action: dialogs (134-167) ──
+    // ── Action: dialogs (137-170) ──
     "action.dialog.adjust-closures",
     "action.dialog.closure",
     "action.dialog.confirm-delete",
@@ -305,12 +308,12 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "action.panel-unpin.data-table",
     "action.panel-unpin.detail",
     "action.panel-unpin.sections",
-    // ── Action: context menu (174-176) ──
+    // ── Action: context menu (177-179) ──
     "action.remove-closure",
     "action.set-shot-kind",
     "action.cycle-shot-kind",
     "action.unmerge",
-    // ── Dialog cancellations (177-210) ──
+    // ── Dialog cancellations (180-213) ──
     "dialog-cancel.adjust-closures",
     "dialog-cancel.closure",
     "dialog-cancel.confirm-delete",
@@ -368,7 +371,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "dialog-cancel.unsaved-changes",
     "dialog-cancel.zero-datum-config",
     "dialog-cancel.zero-datum-selection",
-    // ── Undo regret (211-237) ──
+    // ── Undo regret (214-240) ──
     "undo-after.adjust_loop_closures",
     "undo-after.create_loop_closure",
     "undo-after.create_section",
@@ -400,7 +403,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "undo-after.unmerge_stations",
     "undo-after.update_section",
     "undo-after.update_shot",
-    // ── Dwell: tools (238-249) ──
+    // ── Dwell: tools (241-252) ──
     "dwell.tool.comment",
     "dwell.tool.delete",
     "dwell.tool.draw",
@@ -413,7 +416,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "dwell.tool.pan",
     "dwell.tool.select",
     "dwell.tool.zoom",
-    // ── Dwell: dialogs (250-283) ──
+    // ── Dwell: dialogs (253-286) ──
     "dwell.dialog.adjust-closures",
     "dwell.dialog.closure",
     "dwell.dialog.confirm-delete",
@@ -471,7 +474,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "dwell.dialog.unsaved-changes",
     "dwell.dialog.zero-datum-config",
     "dwell.dialog.zero-datum-selection",
-    // ── Dwell: other (284-285) ──
+    // ── Dwell: other (287-288) ──
     "dwell.global-view",
     "dwell.placement",
     "command.track_imported_file",
@@ -1119,7 +1122,10 @@ mod tests {
         //       handed us while a clean project is open, so it gets the full
         //       per-dialog set: action.dialog + dialog-cancel + dwell.dialog +
         //       active-dwell.dialog for launch-open-confirm = 731.
-        assert_eq!(EVENT_NAMES.len(), 731);
+        //   + 3 the hamburger menu's Debug submenu split the single showDevStats
+        //       overlay toggle into four independent ones:
+        //       action.toggle.{showMemoryStats,showMapStats,showZoomStats} = 734.
+        assert_eq!(EVENT_NAMES.len(), 734);
     }
 
     /// Active-dwell mirrors every dwell state 1:1 (#31): for each `dwell.<key>` there

@@ -47,6 +47,12 @@ const getCleanTestState = () => ({
   distanceGradientOrigin: null,
   distanceField: null,
   showIssueSeverity: false,
+  // The Debug submenu's four toggles too - setState merges partials, so a test
+  // that flips one would otherwise leak it into every later test in the file.
+  showDevStats: false,
+  showMemoryStats: false,
+  showMapStats: false,
+  showZoomStats: false,
   gridSpacing: 10,
   toasts: [],
   selection: null,
@@ -245,6 +251,24 @@ describe('Display Toggle State', () => {
         });
       });
     });
+
+    // The Debug submenu's four toggles are session-only (reset on every project
+    // load, never restored from the backend - see applyDisplaySettings), so
+    // persisting them would only ever write orphan rows into the project's
+    // display-settings table. toggleDisplay must skip the IPC call for them.
+    it.each(['showDevStats', 'showMemoryStats', 'showMapStats', 'showZoomStats'] as const)(
+      'does not persist the session-only %s toggle',
+      async (key) => {
+        const { toggleDisplay } = useUIStore.getState();
+
+        toggleDisplay(key);
+
+        expect(useUIStore.getState()[key]).toBe(true);
+        // Give any (incorrect) async persistence call a chance to fire before asserting absence.
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        expect(invoke).not.toHaveBeenCalledWith('save_display_setting', expect.objectContaining({ key }));
+      }
+    );
   });
 
   // Depth and distance gradients both paint the shots layer; showing both at once
@@ -959,20 +983,32 @@ describe('Geometry Mode', () => {
     expect('geometryMode' in DISPLAY_DEFAULTS).toBe(false);
   });
 
-  it('applyDisplaySettings resets showDevStats so it never leaks across project loads', () => {
-    // Dev stats (memory probe + map dev overlay) is session-only and absent from
-    // the backend payload; a project load must reset it, not inherit it.
-    useUIStore.setState({ showDevStats: true });
+  it('applyDisplaySettings resets the Debug submenu toggles so they never leak across project loads', () => {
+    // The Debug submenu toggles (Dev/Memory/Map/Zoom Stats) are session-only and
+    // absent from the backend payload; a project load must reset them, not inherit them.
+    useUIStore.setState({ showDevStats: true, showMemoryStats: true, showMapStats: true, showZoomStats: true });
     useUIStore.getState().applyDisplaySettings({ geometryMode: 'measured' } as never);
     expect(useUIStore.getState().showDevStats).toBe(false);
+    expect(useUIStore.getState().showMemoryStats).toBe(false);
+    expect(useUIStore.getState().showMapStats).toBe(false);
+    expect(useUIStore.getState().showZoomStats).toBe(false);
   });
 
-  it('setView(global) resets showDevStats so the probe cannot strand over GlobalView', () => {
-    // The Display toggle lives only in SingleSystemView, so leaving for GlobalView
-    // must clear it - otherwise the app-mounted probe lingers with no way to hide.
-    useUIStore.setState({ view: 'single', showDevStats: true });
+  it('setView(global) resets the Debug submenu toggles so the overlays cannot strand over GlobalView', () => {
+    // The Debug submenu lives only in SingleSystemView, so leaving for GlobalView
+    // must clear its toggles - otherwise the app-mounted probe lingers with no way to hide.
+    useUIStore.setState({
+      view: 'single',
+      showDevStats: true,
+      showMemoryStats: true,
+      showMapStats: true,
+      showZoomStats: true,
+    });
     useUIStore.getState().setView('global');
     expect(useUIStore.getState().showDevStats).toBe(false);
+    expect(useUIStore.getState().showMemoryStats).toBe(false);
+    expect(useUIStore.getState().showMapStats).toBe(false);
+    expect(useUIStore.getState().showZoomStats).toBe(false);
     expect(useUIStore.getState().view).toBe('global');
   });
 });

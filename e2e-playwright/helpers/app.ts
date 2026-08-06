@@ -234,6 +234,26 @@ export async function openImportFromMenu(page: Page, itemTestId: string): Promis
   await page.getByTestId(itemTestId).click();
 }
 
+/**
+ * Open the hamburger Debug submenu (Dev/Memory/Map/Zoom Stats toggles) and
+ * click a specific item in it. Not to be confused with `openDebugFromMenu`,
+ * which opens the unrelated Debug Logs dialog.
+ *
+ * Its toggle rows are checkable, so the submenu stays open after a click
+ * (see AppMenu's activateLeaf) - clicking the "Debug" parent row again would
+ * then CLOSE it instead of opening it, so this only clicks the parent row
+ * when the submenu isn't already open.
+ */
+export async function openDebugStatsMenu(page: Page, itemTestId: string): Promise<void> {
+  await openAppMenu(page);
+  const submenu = page.getByTestId('app-menu-submenu-debug-menu');
+  if ((await submenu.count()) === 0) {
+    await page.getByTestId('debug-menu').click();
+  }
+  await expect(submenu).toBeVisible({ timeout: 5000 });
+  await page.getByTestId(itemTestId).click();
+}
+
 /** Switch the recent-projects view (global view) between list and map. */
 export async function switchRecentView(page: Page, view: 'list' | 'map'): Promise<void> {
   await page.getByTestId(`globalview-view-toggle-${view}`).click();

@@ -6,8 +6,8 @@
  * counters published from SurveyLayer/GlobalSurveyLayer/the Zustand stores.
  * Renders a compact bottom-left panel summarizing each retention bucket.
  *
- * Visibility is driven by the Display ▸ "Dev stats" toggle (`showDevStats`),
- * or forced on via `config.debug.memory_probe`.
+ * Visibility is driven by the hamburger menu's Debug ▸ "Memory Stats" toggle
+ * (`showMemoryStats`), or forced on via `config.debug.memory_probe`.
  *
  * The "Dump" button writes a JSON snapshot to the system temp dir via the
  * Tauri fs plugin, with a console.log fallback if the user denied fs.
@@ -93,8 +93,8 @@ function takeSnapshot(memory: MemoryStats | null): Snapshot {
 
 export function MemoryProbe(): JSX.Element | null {
   const configEnabled = useProjectStore((s) => s.config?.debug?.memory_probe ?? false);
-  const showDevStats = useUIStore((s) => s.showDevStats);
-  const visible = showDevStats || configEnabled;
+  const showMemoryStats = useUIStore((s) => s.showMemoryStats);
+  const visible = showMemoryStats || configEnabled;
 
   const [memory, setMemory] = useState<MemoryStats | null>(null);
   const [snapshot, setSnapshot] = useState<Snapshot>(() => takeSnapshot(null));
@@ -278,7 +278,7 @@ export function MemoryProbe(): JSX.Element | null {
           )}
 
           <div style={{ fontSize: 10, color: '#888', marginTop: 6 }}>
-            Display ▸ Dev stats toggles · estimates ±2× - see backend RSS for truth
+            Debug ▸ Memory Stats toggles · estimates ±2× - see backend RSS for truth
           </div>
         </>
       )}

@@ -3,7 +3,7 @@ import { setupTauriMocks } from './mocks/tauri-ipc';
 import {
   seedProjectWithSections,
   waitForMapReady,
-  openAppMenu,
+  openDebugStatsMenu,
   getStationScreenPositions,
   waitForDrawnStations,
   waitForDrawnShots,
@@ -778,7 +778,7 @@ test.describe('Display Menu State Persistence', () => {
   });
 });
 
-test.describe('Developer Stats Overlay (memory probe)', () => {
+test.describe('Debug submenu (Dev/Memory/Map/Zoom Stats)', () => {
   test.beforeEach(async ({ page }) => {
     await setupTauriMocks(page);
     await page.goto('/');
@@ -789,21 +789,20 @@ test.describe('Developer Stats Overlay (memory probe)', () => {
 
   // The memory probe used to be a hidden Ctrl+Shift+M toggle, which collided
   // with rebound global shortcuts. It is now revealed by the hamburger menu's
-  // "Dev Stats" toggle instead (showDevStats), with no keyboard side effects.
-  test('Dev stats toggle reveals and hides the memory probe panel', async ({ page }) => {
+  // Debug ▸ "Memory Stats" toggle instead (showMemoryStats), with no keyboard
+  // side effects.
+  test('Memory Stats toggle reveals and hides the memory probe panel', async ({ page }) => {
     const probe = page.locator('[data-testid="memory-probe-panel"]');
 
     // Hidden by default.
     await expect(probe).toHaveCount(0);
 
-    // Enabling "Dev Stats" from the hamburger menu reveals the probe.
-    await openAppMenu(page);
-    await page.getByTestId('display-toggle-showDevStats').click();
+    // Enabling "Memory Stats" from the hamburger Debug submenu reveals the probe.
+    await openDebugStatsMenu(page, 'display-toggle-showMemoryStats');
     await expect(probe).toBeVisible({ timeout: 2000 });
 
     // Disabling it removes the probe again.
-    await openAppMenu(page);
-    await page.getByTestId('display-toggle-showDevStats').click();
+    await openDebugStatsMenu(page, 'display-toggle-showMemoryStats');
     await expect(probe).toHaveCount(0);
   });
 
@@ -815,5 +814,47 @@ test.describe('Developer Stats Overlay (memory probe)', () => {
     await page.keyboard.press('Control+Shift+M');
     // Give any (now-removed) handler a chance to react before asserting absence.
     await expect(probe).toHaveCount(0);
+  });
+
+  // The four Debug submenu items are independent flags: each is off by
+  // default and toggling one must not affect the others.
+  test('Dev Stats, Map Stats, and Zoom Stats toggle independently and are off by default', async ({ page }) => {
+    const devPanel = page.locator('[data-testid="map-dev-stats"]');
+    const mapPanel = page.locator('[data-testid="map-stats-panel"]');
+    const zoomPanel = page.locator('[data-testid="map-zoom-stats"]');
+    const probe = page.locator('[data-testid="memory-probe-panel"]');
+
+    await expect(devPanel).toHaveCount(0);
+    await expect(mapPanel).toHaveCount(0);
+    await expect(zoomPanel).toHaveCount(0);
+    await expect(probe).toHaveCount(0);
+    // The wheel-chain diagnostics used to be a separate overlay left on
+    // screen at all times in dev builds - it must not appear on its own.
+    await expect(page.getByTestId('zoom-stats-wheel-chain')).toHaveCount(0);
+
+    // Enable Map Stats only - the others must stay off.
+    await openDebugStatsMenu(page, 'display-toggle-showMapStats');
+    await expect(mapPanel).toBeVisible({ timeout: 2000 });
+    await expect(devPanel).toHaveCount(0);
+    await expect(zoomPanel).toHaveCount(0);
+    await expect(probe).toHaveCount(0);
+
+    // Enable Zoom Stats too - both panels stack without hiding each other.
+    // Its wheel-chain diagnostics (folded in from the old always-on dev
+    // overlay) must render only now, inside the panel - not before.
+    await openDebugStatsMenu(page, 'display-toggle-showZoomStats');
+    await expect(zoomPanel).toBeVisible({ timeout: 2000 });
+    await expect(page.getByTestId('zoom-stats-wheel-chain')).toBeVisible();
+    await expect(mapPanel).toBeVisible();
+    await expect(devPanel).toHaveCount(0);
+
+    // Disable Map Stats - Zoom Stats stays up.
+    await openDebugStatsMenu(page, 'display-toggle-showMapStats');
+    await expect(mapPanel).toHaveCount(0);
+    await expect(zoomPanel).toBeVisible();
+
+    // Enable Dev Stats - independent of the other two.
+    await openDebugStatsMenu(page, 'display-toggle-showDevStats');
+    await expect(devPanel).toBeVisible({ timeout: 2000 });
   });
 });
