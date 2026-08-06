@@ -139,6 +139,13 @@ impl AppState {
             can_dangle_refs: false,
             can_orphan_closures: true,
         };
+        // Same flags as UNMERGE, kept apart because the reason is different and
+        // less obvious: removing a GPS anchor changes no topology at all. What it
+        // changes is whether the conversion is ALLOWED to run - see the arm below.
+        const REMOVE_DATUM: CommandIntegrity = CommandIntegrity {
+            can_dangle_refs: false,
+            can_orphan_closures: true,
+        };
         match cmd {
             // Lifecycle + pure metadata edits: touch no geometry and no refs.
             // RepairIntegrity never runs through execute() (it records its own
@@ -189,6 +196,20 @@ impl AppState {
             // dangling reference.
             UnmergeStations { .. } | UnmergeStationPair { .. } => UNMERGE,
 
+            // Removing a GPS anchor strands nothing - it changes no shot and no
+            // merge, so the set of sole-bridge closures is exactly what it was.
+            // What it changes is the conversion's own DOUBLE-ANCHOR GUARD: a
+            // sole-bridge closure between two independently anchored groups is
+            // left as a closure (converting it would put two GPS anchors in one
+            // rigid merge component), and dropping one of the two anchors is
+            // precisely what stops that refusal. The closure becomes convertible
+            // at this instant, and `redrive_offsets_after_load` WILL convert it on
+            // the next open - so unless this command converts it too, memory and
+            // disk disagree from here on and a reload silently reclassifies
+            // (#413, the orphan-closure observation; the same convergence
+            // argument as finding 10, one command further out).
+            RemoveZeroDatum { .. } => REMOVE_DATUM,
+
             // Everything else keeps references valid and cannot strand a closure.
             // Whether it also needs geometry reconciliation is the separate,
             // exhaustive Command::affects_geometry classification.
@@ -198,8 +219,10 @@ impl AppState {
             | MergeStations { .. }
             | CreateLoopClosure { .. }
             | RemoveLoopClosure { .. }
+            // ADDING an anchor moves the guard the other way - it can only turn a
+            // convertible orphan into a refused one, and a refused orphan is what
+            // the loader leaves alone too, so session and disk already agree.
             | SetZeroDatum { .. }
-            | RemoveZeroDatum { .. }
             | MoveSection { .. }
             | MoveSegment { .. }
             | MoveStation { .. } => SAFE_REFS,

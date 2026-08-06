@@ -2940,3 +2940,337 @@ fn preview_values(state: &AppState) -> Vec<String> {
         })
         .unwrap_or_default()
 }
+
+// ===========================================================================
+// The orphan-closure observation (FIXED, both halves): a closure orphaned by
+// one command, converted by an unrelated undo and by the next load
+// ===========================================================================
+
+/// HALF ONE, the FORWARD half. `RemoveZeroDatum` un-anchors one side of a
+/// closure that bridges two otherwise unconnected groups. That changes no
+/// topology, so the closure was already a sole bridge - what changes is that the
+/// conversion's double-anchor guard stops refusing it, because there is no
+/// longer a second GPS anchor to fuse into one rigid component. The command was
+/// classified `can_orphan_closures: false` and converted nothing, while
+/// `redrive_offsets_after_load` converts unconditionally, so from this move on
+/// memory said "1 closure, 0 merges" and the next open of the same file said
+/// "0 closures, 1 merge" (#413, the orphan-closure observation; the same
+/// disagreement finding 10 fixed for the delete entry points, one command
+/// further out).
+///
+/// FIXED by classifying `RemoveZeroDatum` as `can_orphan_closures` (the
+/// `REMOVE_DATUM` profile in core/state/commands.rs), so `execute()`'s epilogue
+/// converts at the instant the closure becomes convertible - exactly what the
+/// loader would do, in session. `SetZeroDatum` needs no such change: ADDING an
+/// anchor can only move the guard the other way, and a refused orphan is one the
+/// loader leaves alone too.
+///
+/// The conversion is not a thing `ZeroDatumInfo` can invert, so the command's
+/// undo capture moved to a `ProjectSnapshotPair` - the assertions below are as
+/// much about that as about the conversion: undo has to put the closure AND the
+/// datum back, and redo has to land on the converted state again.
+#[test]
+fn removing_a_zero_datum_converts_the_closure_it_makes_convertible() {
+    let _config = isolated_config();
+    let (state, _a, b) = detached_anchored_closure();
+    let before = closure_and_merge_counts(&state);
+    assert_eq!(
+        before,
+        (1, 0),
+        "setup: while both groups are anchored the closure must survive as a closure"
+    );
+    let datums_before = datum_stations(&state);
+
+    let removed = state.execute(Command::RemoveZeroDatum {
+        station_ref: StationRef::new(b, 0),
+    });
+    assert!(
+        removed.success,
+        "RemoveZeroDatum failed: {:?}",
+        removed.error
+    );
+    assert_eq!(
+        closure_and_merge_counts(&state),
+        (0, 1),
+        "removing the second anchor made the sole-bridge closure convertible, so the command \
+         must convert it in session - the next load will"
+    );
+
+    assert!(state.undo().success, "undo of RemoveZeroDatum failed");
+    assert_eq!(
+        closure_and_merge_counts(&state),
+        before,
+        "the undo has to put the CLOSURE back, not just the datum"
+    );
+    assert_eq!(
+        datum_stations(&state),
+        datums_before,
+        "the undo has to put the datum back, at the index it was removed from (#413, finding 17)"
+    );
+
+    assert!(state.redo().success, "redo of RemoveZeroDatum failed");
+    assert_eq!(
+        closure_and_merge_counts(&state),
+        (0, 1),
+        "the redo has to land on the converted state the forward command produced"
+    );
+}
+
+/// HALF ONE's consequence, stated the way a user meets it: what the session
+/// holds after the removal is what the file gives back. This is the 14-move
+/// fuzzer repro's essence - its `save/close/reopen` is where the divergence was
+/// measured - and it was RED before the classification above, `(1, 0)` in memory
+/// reopening as `(0, 1)`.
+#[test]
+fn removing_a_zero_datum_leaves_nothing_for_the_next_load_to_reclassify() {
+    let _config = isolated_config();
+    let temp = TempDir::new().unwrap();
+    let save_path: PathBuf = temp.path().join("converged-orphan.stalx");
+
+    let before = {
+        let (state, _a, b) = detached_anchored_closure();
+        let removed = state.execute(Command::RemoveZeroDatum {
+            station_ref: StationRef::new(b, 0),
+        });
+        assert!(
+            removed.success,
+            "RemoveZeroDatum failed: {:?}",
+            removed.error
+        );
+        let counts = closure_and_merge_counts(&state);
+        let saved = state.save_project(Some(save_path.clone()));
+        assert!(saved.success, "save failed: {:?}", saved.error);
+        counts
+    };
+
+    let reopened = AppState::new().unwrap();
+    let opened = reopened.execute(Command::OpenProject { path: save_path });
+    assert!(opened.success, "reopen failed: {:?}", opened.error);
+
+    assert_eq!(
+        closure_and_merge_counts(&reopened),
+        before,
+        "save + reopen reclassified a loop closure as a station merge: the session that removed \
+         the zero datum did not run the conversion the loader runs"
+    );
+}
+
+/// HALF TWO, the UNDO half. `Project::convert_orphan_closures_to_merges` is a
+/// WHOLE-PROJECT sweep, and both shot-removal paths ran it - including when they
+/// run as the inverse of `CreateShot` (`remove_created_shot`). With a closure
+/// left orphaned two moves earlier by an unrelated command, the undo of the shot
+/// converted it and landed on a state the history never recorded: seeds 20 and
+/// 35 of `COMBINED=1 SEEDS=40 ITERATIONS=300` failed on `undo x# did not restore
+/// the state recorded at depth # | at loop_closures.length` with no save and no
+/// reload involved.
+///
+/// FIXED by scoping the two removal paths to the orphans they THEMSELVES create
+/// (`Project::convert_closures_orphaned_since`, models/project/offsets.rs): the
+/// caller snapshots the already-orphaned ids before mutating and only closures
+/// that are orphans afterwards and were not orphans before convert. The forward
+/// user delete is unchanged (`execute()`'s epilogue still sweeps the project),
+/// and the load-time and Repair sweeps still convert everything they find, which
+/// is what finding 10's load-boundary fix rests on.
+///
+/// What this test can still pin, now that HALF ONE has converged the forward
+/// path: the undo lands on the RECORDED state exactly. It cannot reach the
+/// original red - a project holding a pre-existing convertible orphan is no
+/// longer constructible through the command API, which IS half one's invariant -
+/// so the scoping's own red/green guard is at the model level, where the state
+/// can be built directly:
+/// `removing_a_shot_converts_the_closure_it_orphans_and_not_an_older_one` and
+/// its `remove_appended_first_shot` sibling in models/project/tests.rs.
+///
+/// The undo of `CreateShot` picks its inverse by shape, so both are pinned: this
+/// one is the append into an EMPTY section (`remove_appended_first_shot`).
+#[test]
+fn undo_of_an_appended_first_shot_restores_the_recorded_closure_state() {
+    let _config = isolated_config();
+    let state = converged_orphan_state();
+    let empty = create_section(&state, "Elsewhere", vec![]);
+    let recorded = closure_and_merge_counts(&state);
+
+    let created = state.execute(Command::CreateShot {
+        section_id: empty,
+        shot: shot(180.0, 4.0),
+        after_shot_id: None,
+        before_shot_id: None,
+    });
+    assert!(created.success, "CreateShot failed: {:?}", created.error);
+    assert!(state.undo().success, "undo of CreateShot failed");
+
+    assert_eq!(
+        closure_and_merge_counts(&state),
+        recorded,
+        "the undo of a shot creation moved an entry between loop_closures and station_merges: \
+         the recorded state had {recorded:?} (closures, merges)"
+    );
+}
+
+/// The other shape of the same undo: an append into a section that already has
+/// a shot, whose inverse is `remove_shot_with_rewire`. Same requirement - the
+/// undo puts the shot back and touches nothing else.
+#[test]
+fn undo_of_an_appended_shot_restores_the_recorded_closure_state() {
+    let _config = isolated_config();
+    let state = converged_orphan_state();
+    let elsewhere = create_section(&state, "Elsewhere", vec![shot(270.0, 6.0)]);
+    let first = shot_ids(&state, elsewhere)[0];
+    let recorded = closure_and_merge_counts(&state);
+
+    let created = state.execute(Command::CreateShot {
+        section_id: elsewhere,
+        shot: shot(180.0, 4.0),
+        after_shot_id: Some(first),
+        before_shot_id: None,
+    });
+    assert!(created.success, "CreateShot failed: {:?}", created.error);
+    assert!(state.undo().success, "undo of CreateShot failed");
+
+    assert_eq!(
+        closure_and_merge_counts(&state),
+        recorded,
+        "the undo of a shot creation moved an entry between loop_closures and station_merges: \
+         the recorded state had {recorded:?} (closures, merges)"
+    );
+}
+
+/// The undo arm a stack persisted BEFORE the capture change still lands on, kept
+/// working and kept honest about what it can do.
+///
+/// A legacy entry carries `ZeroDatumInfo`, so its undo restores the datum and the
+/// offsets and cannot put back a closure that was converted - that is the defect
+/// the pair fixed, and an old entry does not retroactively acquire the fix. What
+/// it must still do is what it always did, and finding 17 is the part that is
+/// easy to lose: the datum goes back at the INDEX it was removed from, not
+/// appended, because `zero_datums` is persisted in order, indexed by the
+/// frontend, and walked in order by `resolve_offsets` when it picks the datum
+/// that anchors a connected group. The removal here takes the FIRST of the two
+/// datums, so an append would be visible.
+#[test]
+fn a_legacy_remove_zero_datum_entry_still_restores_the_datum_at_its_index() {
+    let _config = isolated_config();
+    let (state, a, _b) = detached_anchored_closure();
+    let station = StationRef::new(a, 0);
+    let datums_before = datum_stations(&state);
+
+    // Exactly what the pre-pair capture recorded for this command.
+    let legacy = {
+        let project = state.get_project_state().expect("no project open");
+        let (position, gps) = project
+            .zero_datums
+            .iter()
+            .enumerate()
+            .find(|(_, zd)| project.resolve_key(&zd.station_ref) == Some(station))
+            .map(|(position, zd)| (position, zd.gps))
+            .expect("setup: the datum being removed must exist");
+        assert_eq!(position, 0, "setup: the removal must take the FIRST datum");
+        crate::core::UndoData::ZeroDatumInfo {
+            station_ref: station,
+            previous_gps: Some(gps),
+            position: Some(position),
+            previous_offsets: project.capture_connected_section_offsets(a),
+        }
+    };
+
+    let removed = state.execute(Command::RemoveZeroDatum {
+        station_ref: station,
+    });
+    assert!(
+        removed.success,
+        "RemoveZeroDatum failed: {:?}",
+        removed.error
+    );
+
+    // Swap the live pair for the shape a persisted stack still carries.
+    {
+        let mut stack = state.undo_stack.lock().unwrap();
+        stack.clear();
+        stack.push_with_data(
+            Command::RemoveZeroDatum {
+                station_ref: station,
+            },
+            legacy,
+        );
+    }
+
+    assert!(state.undo().success, "undo of the legacy entry failed");
+    assert_eq!(
+        datum_stations(&state),
+        datums_before,
+        "the legacy arm put the datum back in the wrong place: it re-inserts at the recorded \
+         index rather than appending (#413, finding 17)"
+    );
+}
+
+/// Two sections with no path between them, each with its own GPS anchor, and a
+/// loop closure bridging them - which `create_loop_closure` allows only because
+/// both are anchored. The closure is a sole bridge from the moment it exists and
+/// survives as a closure only because converting it would put two anchors in one
+/// rigid merge component. Returns the state and both section ids - the tests
+/// take an anchor off one or the other.
+fn detached_anchored_closure() -> (AppState, SectionId, SectionId) {
+    let state = state_with_project();
+    let a = create_section(&state, "A", vec![shot(0.0, 5.0)]);
+    let b = create_section(&state, "B", vec![shot(90.0, 5.0)]);
+
+    for (section, latitude) in [(a, 10.0), (b, 11.0)] {
+        let datum = state.execute(Command::SetZeroDatum {
+            station_ref: StationRef::new(section, 0),
+            coordinates: GpsCoordinates::new(latitude, 20.0, 0.0).unwrap(),
+        });
+        assert!(datum.success, "SetZeroDatum failed: {:?}", datum.error);
+    }
+
+    let closure = state.execute(Command::CreateLoopClosure {
+        station_a: StationRef::new(a, 1),
+        station_b: StationRef::new(b, 1),
+        closure_strategy: ClosureStrategy::default(),
+    });
+    assert!(
+        closure.success,
+        "CreateLoopClosure failed: {:?}",
+        closure.error
+    );
+    (state, a, b)
+}
+
+/// [`detached_anchored_closure`] with the second anchor removed - the fuzzer's
+/// first two moves - so the closure has been converted and the project is
+/// converged with what a load would produce. Asserted here so a test that stops
+/// reproducing the shape fails instead of passing vacuously.
+fn converged_orphan_state() -> AppState {
+    let (state, _a, b) = detached_anchored_closure();
+    let removed = state.execute(Command::RemoveZeroDatum {
+        station_ref: StationRef::new(b, 0),
+    });
+    assert!(
+        removed.success,
+        "RemoveZeroDatum failed: {:?}",
+        removed.error
+    );
+    assert_eq!(
+        closure_and_merge_counts(&state),
+        (0, 1),
+        "setup: the datum removal must have converted the closure it made convertible"
+    );
+    state
+}
+
+/// `(loop_closures, station_merges)` - the pair that moved by one in each
+/// direction across the failing undo, and across the failing reload.
+fn closure_and_merge_counts(state: &AppState) -> (usize, usize) {
+    let project = state.get_project_state().expect("no project open");
+    (project.loop_closures.len(), project.station_merges.len())
+}
+
+/// The stations carrying a zero datum, IN ORDER - the order is what finding 17
+/// is about, so a restore that appends instead of re-inserting has to fail here.
+fn datum_stations(state: &AppState) -> Vec<StationRef> {
+    let project = state.get_project_state().expect("no project open");
+    project
+        .zero_datums
+        .iter()
+        .filter_map(|zd| project.resolve_key(&zd.station_ref))
+        .collect()
+}

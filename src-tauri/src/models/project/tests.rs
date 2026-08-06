@@ -11443,6 +11443,245 @@ fn undoing_an_appended_first_shot_converts_a_closure_it_orphans() {
     );
 }
 
+/// Two closures, one project, and only ONE of them is this removal's business.
+///
+/// B2=C2 is a true loop today - shots and merges through A one way, the closure
+/// the other - and stops being one when the merge on the deleted station goes.
+/// Converting it is what the call exists for, and it is converted whether or not
+/// its endpoints are anywhere near the removed station.
+///
+/// D1=E1 bridges two sections that nothing else connects, so it is ALREADY an
+/// orphan when the removal starts. Nothing about this delete made it one (the
+/// fuzzer's route there is a `removeZeroDatum` two moves back, which orphans a
+/// closure and converts nothing), so it is part of the state the history
+/// recorded - and both removal paths also run as the inverse of `CreateShot`, an
+/// inverse must not do more than invert, and converting it here would land the
+/// undo on a state no snapshot ever held (#413, the open observation).
+#[test]
+fn removing_a_shot_converts_the_closure_it_orphans_and_not_an_older_one() {
+    let mut project = Project::new("ScopedConversion".to_string(), None);
+    let a = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0), shot(0.0, 0.0, 5.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    let b = project
+        .add_section(SectionData {
+            shots: vec![
+                shot(90.0, 90.0, 5.0, 0.0, 0.0),
+                shot(90.0, 90.0, 5.0, 0.0, 0.0),
+            ],
+            ..Default::default()
+        })
+        .id;
+    let c = project
+        .add_section(SectionData {
+            shots: vec![
+                shot(180.0, 180.0, 5.0, 0.0, 0.0),
+                shot(270.0, 270.0, 5.0, 0.0, 0.0),
+            ],
+            ..Default::default()
+        })
+        .id;
+    // D and E touch nothing else in the project.
+    let d = project
+        .add_section(SectionData {
+            shots: vec![shot(45.0, 45.0, 5.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    let e = project
+        .add_section(SectionData {
+            shots: vec![shot(135.0, 135.0, 5.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    project.ensure_shot_uuids();
+    project
+        .merge_stations(StationRef::new(a, 0), StationRef::new(b, 0))
+        .unwrap();
+    // The merge that carries the loop's other path, on the station the delete
+    // below removes.
+    project
+        .merge_stations(StationRef::new(a, 2), StationRef::new(c, 0))
+        .unwrap();
+    push_closure(
+        &mut project,
+        1,
+        StationRef::new(b, 2),
+        StationRef::new(c, 2),
+    );
+    push_closure(
+        &mut project,
+        2,
+        StationRef::new(d, 1),
+        StationRef::new(e, 1),
+    );
+    assert_eq!(
+        project.orphan_closure_ids(),
+        HashSet::from([2]),
+        "setup: D1=E1 must already be an orphan and B2=C2 must not"
+    );
+
+    let last = project.get_section(a).unwrap().shots.last().unwrap().id;
+    project.remove_shot_with_rewire(a, last).unwrap();
+
+    assert_eq!(
+        project
+            .loop_closures
+            .iter()
+            .map(|c| c.id)
+            .collect::<Vec<_>>(),
+        vec![2],
+        "the closure this delete orphaned had to become a merge and the one that arrived \
+         orphaned had to be left alone; got {:?}",
+        project.loop_closures
+    );
+    let converted = project.station_merges.iter().any(|m| {
+        let pair = (
+            project.resolve_key(&m.station_a),
+            project.resolve_key(&m.station_b),
+        );
+        pair == (Some(StationRef::new(b, 2)), Some(StationRef::new(c, 2)))
+            || pair == (Some(StationRef::new(c, 2)), Some(StationRef::new(b, 2)))
+    });
+    assert!(
+        converted,
+        "expected the orphaned closure to be replaced by a merge B2<->C2; got {:?}",
+        project.station_merges
+    );
+    assert!(
+        !project.station_merges.iter().any(|m| {
+            m.station_a.section_id == d
+                || m.station_b.section_id == d
+                || m.station_a.section_id == e
+                || m.station_b.section_id == e
+        }),
+        "the pre-existing orphan must not have become a merge: {:?}",
+        project.station_merges
+    );
+}
+
+/// The same scoping on the other removal path, which is the one that is ONLY
+/// ever an inverse. The loop and the merge that carries it are
+/// `undoing_an_appended_first_shot_converts_a_closure_it_orphans`'s (that test
+/// still pins the conversion itself); what is added is the older orphan the
+/// undo must not touch.
+#[test]
+fn removing_an_appended_first_shot_converts_the_closure_it_orphans_and_not_an_older_one() {
+    let mut project = Project::new("ScopedConversionOnUndo".to_string(), None);
+    let a = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    let b = project
+        .add_section(SectionData {
+            shots: vec![
+                shot(90.0, 90.0, 5.0, 0.0, 0.0),
+                shot(90.0, 90.0, 5.0, 0.0, 0.0),
+            ],
+            ..Default::default()
+        })
+        .id;
+    let c = project
+        .add_section(SectionData {
+            shots: vec![
+                shot(180.0, 180.0, 5.0, 0.0, 0.0),
+                shot(270.0, 270.0, 5.0, 0.0, 0.0),
+            ],
+            ..Default::default()
+        })
+        .id;
+    let d = project
+        .add_section(SectionData {
+            shots: vec![shot(45.0, 45.0, 5.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    let e = project
+        .add_section(SectionData {
+            shots: vec![shot(135.0, 135.0, 5.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    project.ensure_shot_uuids();
+    // B hangs off the station that predates the append, C off the one it created.
+    project
+        .merge_stations(StationRef::new(a, 0), StationRef::new(b, 0))
+        .unwrap();
+    project
+        .merge_stations(StationRef::new(a, 1), StationRef::new(c, 0))
+        .unwrap();
+    push_closure(
+        &mut project,
+        1,
+        StationRef::new(b, 2),
+        StationRef::new(c, 2),
+    );
+    push_closure(
+        &mut project,
+        2,
+        StationRef::new(d, 1),
+        StationRef::new(e, 1),
+    );
+    assert_eq!(
+        project.orphan_closure_ids(),
+        HashSet::from([2]),
+        "setup: D1=E1 must already be an orphan and B2=C2 must not"
+    );
+
+    let created = project.get_section(a).unwrap().shots[0].id;
+    project.remove_appended_first_shot(a, created).unwrap();
+
+    assert_eq!(
+        project
+            .loop_closures
+            .iter()
+            .map(|c| c.id)
+            .collect::<Vec<_>>(),
+        vec![2],
+        "the undo had to convert the closure it orphaned and leave the one that arrived \
+         orphaned alone; got {:?}",
+        project.loop_closures
+    );
+    assert!(
+        !project.station_merges.iter().any(|m| {
+            m.station_a.section_id == d
+                || m.station_b.section_id == d
+                || m.station_a.section_id == e
+                || m.station_b.section_id == e
+        }),
+        "the pre-existing orphan must not have become a merge: {:?}",
+        project.station_merges
+    );
+}
+
+/// A closure between two stations, with the metrics zeroed: these tests care
+/// about the closure/merge classification, never about misclosure.
+fn push_closure(project: &mut Project, id: u64, station_a: StationRef, station_b: StationRef) {
+    let (Some(key_a), Some(key_b)) = (
+        project.key_for_ref(station_a),
+        project.key_for_ref(station_b),
+    ) else {
+        panic!("closure endpoint {station_a} or {station_b} has no stable anchor");
+    };
+    project.loop_closures.push(LoopClosure {
+        id,
+        station_a: key_a,
+        station_b: key_b,
+        path_length: 0.0,
+        misclosure_distance: 0.0,
+        error_percentage: 0.0,
+        horizontal_misclosure: 0.0,
+        vertical_misclosure: 0.0,
+        strategy: ClosureStrategy::default(),
+        is_aligned: false,
+    });
+}
+
 #[test]
 fn deleting_shot_converts_broken_loop_closure_to_merge() {
     // Section A: A0-A1-A2 (2 shots); Section B: B0-B1 (1 shot).

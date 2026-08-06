@@ -8,7 +8,7 @@ use std::hash::{Hash, Hasher};
 #[cfg(debug_assertions)]
 use tracing::error;
 
-use crate::models::{SectionId, StationMerge};
+use crate::models::{LoopClosure, SectionId, StationMerge};
 
 use super::Project;
 
@@ -331,6 +331,45 @@ impl Project {
         healed
     }
 
+    /// The orphanhood question [`Self::convert_orphan_closures_to_merges`] asks of
+    /// one closure: are its two endpoints still connected through the survey
+    /// (shots + merges) independently of the closure itself? If not, the closure
+    /// is their *sole* bridge - a merge, not a loop.
+    ///
+    /// A same-section closure is never an orphan (the section itself connects the
+    /// endpoints), and neither is one whose endpoint no longer resolves (there is
+    /// nothing to ask the connectivity walk about; a dangling ref is integrity's
+    /// problem, not this one).
+    ///
+    /// The single definition of the predicate: the sweep below scans with it, and
+    /// [`Self::orphan_closure_ids`] snapshots with it, so a mutation path's
+    /// before-set and the sweep that follows can never disagree about what an
+    /// orphan is.
+    fn is_orphan_closure(&self, closure: &LoopClosure) -> bool {
+        if closure.station_a.section_id == closure.station_b.section_id {
+            return false;
+        }
+        let (Some(a), Some(b)) = (
+            self.resolve_key(&closure.station_a),
+            self.resolve_key(&closure.station_b),
+        ) else {
+            return false;
+        };
+        !self.are_stations_connected_excluding_shot(a, b, None, false)
+    }
+
+    /// The ids of every closure that is orphaned RIGHT NOW. A mutation path takes
+    /// this before it mutates and hands it to
+    /// [`Self::convert_closures_orphaned_since`] afterwards; see that function for
+    /// why an inverse needs the distinction.
+    pub(crate) fn orphan_closure_ids(&self) -> HashSet<u64> {
+        self.loop_closures
+            .iter()
+            .filter(|c| self.is_orphan_closure(c))
+            .map(|c| c.id)
+            .collect()
+    }
+
     /// Enforce the invariant that a loop closure exists only for a TRUE loop. If
     /// a closure's two endpoints are no longer connected through the survey
     /// (shots + merges) independently of the closure, the closure is the *sole*
@@ -340,7 +379,32 @@ impl Project {
     /// merge and the second is then a genuine (redundant) loop and is kept.
     /// Returns the number converted. (Issue #8 - a shot deletion can strand a
     /// section so its only attachment is a closure.)
+    ///
+    /// Whole-project sweep: every orphan it finds is converted, no matter what
+    /// made it one. That is right for a load, a Repair and a forward command -
+    /// and wrong inside an inverse, which is what
+    /// [`Self::convert_closures_orphaned_since`] exists for.
     pub fn convert_orphan_closures_to_merges(&mut self) -> usize {
+        self.convert_closures_orphaned_since(&HashSet::new())
+    }
+
+    /// [`Self::convert_orphan_closures_to_merges`] restricted to the orphans a
+    /// mutation JUST created: `preexisting` is the [`Self::orphan_closure_ids`]
+    /// snapshot the caller took before mutating, and every id in it is left as a
+    /// closure.
+    ///
+    /// An inverse must not do more than invert (#413, the orphan-closure
+    /// observation in `fuzz_undo_tests.rs`'s header). A
+    /// closure can be orphaned by a command whose own path never converts it -
+    /// `removeZeroDatum` un-anchors one side, and the sweep's double-anchor guard
+    /// stops refusing it - and that un-converted closure is part of the state the
+    /// history RECORDED. Sweeping the whole project from inside an undo would
+    /// convert it as a side effect of removing an unrelated shot, landing on a
+    /// state no snapshot ever held. Scoping by *what this mutation orphaned*
+    /// keeps the pre-existing orphan exactly as recorded while still converting
+    /// the closures the removal genuinely stranded - including ones nowhere near
+    /// the removed station, whose loop-ness hung off a merge that was.
+    pub(crate) fn convert_closures_orphaned_since(&mut self, preexisting: &HashSet<u64>) -> usize {
         let mut converted = 0;
         // Sole-bridge closures left UNCONVERTED because turning them into a rigid
         // merge would fuse two independently zero-datum-anchored groups. Tracked by
@@ -349,19 +413,10 @@ impl Project {
         let mut left_as_closure: HashSet<u64> = HashSet::new();
         loop {
             let orphan = self.loop_closures.iter().position(|c| {
-                if left_as_closure.contains(&c.id) {
+                if left_as_closure.contains(&c.id) || preexisting.contains(&c.id) {
                     return false;
                 }
-                if c.station_a.section_id == c.station_b.section_id {
-                    return false;
-                }
-                let (Some(a), Some(b)) = (
-                    self.resolve_key(&c.station_a),
-                    self.resolve_key(&c.station_b),
-                ) else {
-                    return false;
-                };
-                !self.are_stations_connected_excluding_shot(a, b, None, false)
+                self.is_orphan_closure(c)
             });
             let Some(idx) = orphan else { break };
 

@@ -192,6 +192,37 @@ fn format_station_key_with_name(
     }
 }
 
+/// The preview rows for "remove zero datum": the station, plus the coordinates
+/// it is losing when they are known.
+///
+/// Shared by the two arms that render it - the live `ProjectSnapshotPair`
+/// capture reads the datum out of its `before` half, a legacy persisted
+/// `ZeroDatumInfo` carries it as a field - so the same entry renders the same
+/// way whichever shape it was recorded in.
+fn zero_datum_removal_rows(
+    station_ref: crate::models::StationRef,
+    previous_gps: Option<&crate::models::GpsCoordinates>,
+) -> Vec<FieldChange> {
+    let mut changes = vec![FieldChange {
+        field: "Station".to_string(),
+        old_value: String::new(),
+        new_value: station_ref.to_string(),
+    }];
+    if let Some(gps) = previous_gps {
+        changes.push(FieldChange {
+            field: "Latitude".to_string(),
+            old_value: format!("{:.6}", gps.latitude),
+            new_value: String::new(),
+        });
+        changes.push(FieldChange {
+            field: "Longitude".to_string(),
+            old_value: format!("{:.6}", gps.longitude),
+            new_value: String::new(),
+        });
+    }
+    changes
+}
+
 /// Truncate `s` to at most `max_chars` characters, appending an ellipsis only
 /// when characters were actually dropped. Counts by character (not byte) so the
 /// cut never lands inside a multi-byte UTF-8 codepoint - `&s[..n]` byte-slicing
@@ -794,33 +825,40 @@ fn derive_preview_data(
             })
         }
 
-        // RemoveZeroDatum - show station and previous GPS if available
+        // RemoveZeroDatum - the live capture is a `ProjectSnapshotPair` (it has to
+        // be: the removal can convert a closure, which no `ZeroDatumInfo` can put
+        // back), so read the datum being removed out of the `before` half. Same
+        // rows the `ZeroDatumInfo` arm below renders, so the dropdown reads
+        // identically for a fresh entry and a persisted legacy one.
         (
             Command::RemoveZeroDatum { station_ref },
-            UndoData::ZeroDatumInfo { previous_gps, .. },
+            UndoData::ProjectSnapshotPair { before, .. },
         ) => {
-            let mut changes = vec![FieldChange {
-                field: "Station".to_string(),
-                old_value: String::new(),
-                new_value: station_ref.to_string(),
-            }];
-            if let Some(gps) = previous_gps {
-                changes.push(FieldChange {
-                    field: "Latitude".to_string(),
-                    old_value: format!("{:.6}", gps.latitude),
-                    new_value: String::new(),
+            let previous_gps = serde_json::from_str::<crate::models::Project>(before)
+                .ok()
+                .and_then(|project| {
+                    project
+                        .zero_datums
+                        .iter()
+                        .find(|zd| project.key_is_ref(&zd.station_ref, *station_ref))
+                        .map(|zd| zd.gps)
                 });
-                changes.push(FieldChange {
-                    field: "Longitude".to_string(),
-                    old_value: format!("{:.6}", gps.longitude),
-                    new_value: String::new(),
-                });
-            }
             Some(PreviewData {
-                changes,
+                changes: zero_datum_removal_rows(*station_ref, previous_gps.as_ref()),
                 additional_changes: 0,
             })
         }
+
+        // RemoveZeroDatum - show station and previous GPS if available. LEGACY
+        // entries only, since the capture above; kept because a persisted stack
+        // written before it still carries `ZeroDatumInfo`.
+        (
+            Command::RemoveZeroDatum { station_ref },
+            UndoData::ZeroDatumInfo { previous_gps, .. },
+        ) => Some(PreviewData {
+            changes: zero_datum_removal_rows(*station_ref, previous_gps.as_ref()),
+            additional_changes: 0,
+        }),
 
         // RemoveZeroDatum fallback
         (Command::RemoveZeroDatum { station_ref }, _) => Some(PreviewData {

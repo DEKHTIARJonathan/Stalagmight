@@ -42,9 +42,9 @@ Commands go through a two-phase capture during execution:
 | `MergeInfo` | MergeStations | Restore previous offsets + unmerge | Execute the original command |
 | `UnmergeInfo` | UnmergeStations | Re-merge + restore removed closures | Re-execute the unmerge |
 | `ClosureInfo` | Create/RemoveLoopClosure | Remove the closure, or put it back at its recorded index | Push closure back (preserves ID) |
-| `ZeroDatumInfo` | Set/RemoveZeroDatum | Restore GPS + offsets directly, at the datum's recorded index | Execute the original command |
+| `ZeroDatumInfo` | SetZeroDatum (and legacy persisted RemoveZeroDatum entries) | Restore GPS + offsets directly, at the datum's recorded index | Execute the original command |
 | `SegmentMoveInfo` | MoveSegment | Restore section offsets directly | Reapply offset to affected sections |
-| `ProjectSnapshotPair` | Batch, DeleteSection | Re-record "after" from the live project, then restore "before" JSON (see below) | Re-record "before" from the live project, then restore "after" JSON |
+| `ProjectSnapshotPair` | Batch, DeleteSection, RemoveZeroDatum (see below) | Re-record "after" from the live project, then restore "before" JSON (see below) | Re-record "before" from the live project, then restore "after" JSON |
 | `None` | Non-undoable commands | N/A | N/A |
 
 ### Undo data addresses a shot by uuid, never by its in-session id (#413)
@@ -113,6 +113,20 @@ still loads and falls back to the previous behaviour - no schema bump.
   before. The undo REFRESHES that identity from the live section immediately
   before it deletes it, because a save can heal the section (see the next
   section) after the entry was pushed.
+- **`RemoveZeroDatum` records a whole `ProjectSnapshotPair`**, not the
+  `ZeroDatumInfo` its sibling `SetZeroDatum` still records. Removing a GPS anchor
+  can CONVERT a loop closure to a station merge: a sole-bridge closure between
+  two independently anchored groups is left alone by
+  `convert_orphan_closures_to_merges` (a merge there would put two anchors in one
+  rigid component), and dropping one anchor lifts that refusal, so the command is
+  classified `can_orphan_closures` and `execute()`'s epilogue converts - in
+  session, exactly as the loader would on the next open. `ZeroDatumInfo` can put
+  back a datum and a map of offsets; it cannot put back a closure that has become
+  a merge. The pair restores both directions verbatim and is self-refreshing, so
+  the conversion lands in the `after` half by construction. It is the expensive
+  capture, and affordable here because removing an anchor is a rare deliberate
+  act rather than a per-keystroke edit. Entries persisted before this change
+  still carry `ZeroDatumInfo` and still restore through its arm.
 - **`ClosureInfo` and `ZeroDatumInfo` carry the `position`** the forward
   `Vec::remove` took the entry out of, and the undo re-inserts THERE rather than
   appending. `Project::loop_closures` and `Project::zero_datums` are persisted in

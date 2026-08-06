@@ -1224,6 +1224,11 @@ impl Project {
             .ok_or_else(|| format!("Shot {shot_id} not found in section {section_id}"))?;
 
         let impact = self.preview_delete_shot(section_id, shot_id)?;
+        // Which closures are orphans ALREADY, before this removal touches
+        // anything - see the conversion below for what that is for. Must be taken
+        // here, ahead of the first mutation (the retains just below), or a closure
+        // this removal orphans would be mistaken for one that arrived orphaned.
+        let preexisting_orphans = self.orphan_closure_ids();
         let removed_station = impact.removed_station;
         // The deleted station's canonical key (still resolvable - the shot is
         // removed below). Stored refs are canonical, so key equality is sound.
@@ -1342,7 +1347,21 @@ impl Project {
         // closure as the sole bridge to a section - that is no longer a loop, so
         // turn any such closure into a merge before the offsets are recomputed
         // (issue #8, beyond the closure-touched-the-deleted-station case above).
-        self.convert_orphan_closures_to_merges();
+        //
+        // Scoped to the orphans THIS removal created, not a whole-project sweep,
+        // because this function also runs as an inverse (undo of `CreateShot`, via
+        // `remove_created_shot`) and an inverse must not do more than invert
+        // (#413, the orphan-closure observation in `fuzz_undo_tests.rs`'s header).
+        // A closure orphaned EARLIER by a command
+        // that does not convert - `removeZeroDatum` un-anchors one side and the
+        // sweep's double-anchor guard stops refusing it - is part of the state the
+        // history recorded; converting it here would land the undo on a state no
+        // snapshot ever held. Everything this removal genuinely stranded still
+        // converts, including a closure nowhere near the deleted station whose
+        // loop-ness hung off a merge that was. The forward user delete loses
+        // nothing: `execute()`'s `can_orphan_closures` epilogue still sweeps the
+        // whole project after `Command::DeleteShot`.
+        self.convert_closures_orphaned_since(&preexisting_orphans);
 
         // After removing a shot, stations after the deletion point (index > pos)
         // shift by -displacement in section-local coordinates.  We must decide
@@ -1441,6 +1460,10 @@ impl Project {
                 "Shot {shot_id} is not the only shot of section {section_id}"
             ));
         }
+        // Which closures are orphans ALREADY, before this inverse touches
+        // anything - see the conversion below. Taken ahead of the retains, which
+        // are this function's first mutation.
+        let preexisting_orphans = self.orphan_closure_ids();
         // Refs on the station the append created. There are none when the undo
         // follows its own `CreateShot` (anything anchored there would have been
         // pushed above this entry and undone first), but a ref whose anchoring
@@ -1476,13 +1499,24 @@ impl Project {
         // impossible). Must run after the shot is gone: the conversion asks whether
         // the endpoints are still connected, and until then they are.
         //
+        // Scoped exactly as the sibling scopes its own call, and for a reason that
+        // binds harder here because this function is ONLY ever an inverse: an
+        // inverse must not do more than invert (#413, the orphan-closure
+        // observation in `fuzz_undo_tests.rs`'s header). A
+        // closure that was already an orphan when this undo started - orphaned
+        // moves earlier by a command that does not convert, `removeZeroDatum`
+        // un-anchoring one side so the sweep's double-anchor guard stops refusing
+        // it - is part of the state the history recorded, and converting it here
+        // would land the undo on a state no snapshot ever held. What this removal
+        // itself stranded still converts.
+        //
         // The one thing this does NOT copy from the sibling is its unconditional
         // cascade: this function is offset-neutral by contract (see above), and
         // re-cascading here would undo that. A conversion turns a soft edge into a
         // rigid one, though, which can leave the new merge drifted, so THAT case -
         // and only that case - cascades, exactly as the sibling does. Nothing
         // converted is the overwhelmingly common case and stays offset-neutral.
-        if self.convert_orphan_closures_to_merges() > 0 {
+        if self.convert_closures_orphaned_since(&preexisting_orphans) > 0 {
             self.cascade_connection_offsets(&[section_id]);
         }
 

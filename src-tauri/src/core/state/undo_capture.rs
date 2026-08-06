@@ -388,26 +388,43 @@ impl AppState {
                 }
             }
 
+            // A whole-project pair rather than the `ZeroDatumInfo` this used to
+            // record, because removing the anchor is no longer the only thing
+            // this command does: it is flagged `can_orphan_closures`, so
+            // `execute()`'s epilogue converts the sole-bridge closure the removal
+            // just made convertible (see `command_integrity`), and the reconcile
+            // then re-solves around the new rigid merge. `ZeroDatumInfo` can put
+            // back a datum and a map of offsets; it cannot put back a closure that
+            // has become a merge. The pair restores both directions verbatim, and
+            // it is SELF-REFRESHING (`refresh_snapshot_pair_counterpart`), so the
+            // conversion lands in the `after` half by construction rather than by
+            // anyone remembering to record it.
+            //
+            // Two whole snapshots is the expensive capture in this file, and it is
+            // affordable HERE specifically: removing a GPS anchor is a rare,
+            // deliberate act on a handful of datums, not a per-keystroke edit like
+            // `UpdateShot`. `SetZeroDatum` keeps `ZeroDatumInfo` - it adds an
+            // anchor, which converts nothing.
+            //
+            // Guarded on the datum existing so a doomed command (the station is
+            // not a datum - `remove_zero_datum` fails) serializes nothing; the
+            // resulting `None` never reaches the stack, as `execute()` only pushes
+            // on success.
             Command::RemoveZeroDatum { station_ref } => {
-                // Capture the current datum, and the index `Vec::remove` is
-                // about to take it out of - undo re-inserts THERE rather than
-                // appending (#413, finding 17).
-                let previous = project
+                if project
                     .zero_datums
                     .iter()
-                    .enumerate()
-                    .find(|(_, zd)| project.key_is_ref(&zd.station_ref, *station_ref));
-
-                // Capture section offsets for all connected sections
-                // RemoveZeroDatum doesn't change offsets, but we capture for consistency
-                let previous_offsets =
-                    project.capture_connected_section_offsets(station_ref.section_id);
-
-                UndoData::ZeroDatumInfo {
-                    station_ref: *station_ref,
-                    previous_gps: previous.map(|(_, zd)| zd.gps),
-                    position: previous.map(|(position, _)| position),
-                    previous_offsets,
+                    .any(|zd| project.key_is_ref(&zd.station_ref, *station_ref))
+                {
+                    match AppState::serialize_project_snapshot(project) {
+                        Ok(before) => UndoData::ProjectSnapshotPair {
+                            before,
+                            after: String::new(), // Filled by finalize_undo_data
+                        },
+                        Err(_) => UndoData::None,
+                    }
+                } else {
+                    UndoData::None
                 }
             }
 
@@ -636,16 +653,18 @@ impl AppState {
                 }
             }
 
-            // DeleteSection/DeleteShot/ReverseSection/Merge/Unmerge/MoveStation:
-            // fill in the "after" snapshot now that the mutation (and any cascade
-            // re-anchoring, orphan-closure conversion, and offset reconcile triggered
-            // in execute()) is done.
+            // DeleteSection/DeleteShot/ReverseSection/Merge/Unmerge/MoveStation/
+            // RemoveZeroDatum: fill in the "after" snapshot now that the mutation
+            // (and any cascade re-anchoring, orphan-closure conversion, and offset
+            // reconcile triggered in execute()) is done. `RemoveZeroDatum` is here
+            // FOR the conversion - it is the whole reason it records a pair.
             Command::DeleteSection { .. }
             | Command::DeleteShot { .. }
             | Command::ReverseSection { .. }
             | Command::MergeStations { .. }
             | Command::UnmergeStations { .. }
             | Command::UnmergeStationPair { .. }
+            | Command::RemoveZeroDatum { .. }
             | Command::MoveStation { .. } => {
                 if let UndoData::ProjectSnapshotPair { before, .. } = undo_data {
                     match AppState::serialize_project_snapshot(project) {
