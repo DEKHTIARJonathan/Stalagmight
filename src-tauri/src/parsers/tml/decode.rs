@@ -11,6 +11,8 @@ use std::path::Path;
 
 use anyhow::{anyhow, bail, Context, Result};
 
+use crate::parsers::encoding::strip_bom_owned;
+
 // ============================================================================
 // XML loading
 // ============================================================================
@@ -34,7 +36,7 @@ pub(super) fn load_xml(path: &Path) -> Result<LoadedXml> {
         "tml" => load_xml_from_zip(path),
         "tmlu" => {
             let bytes = fs::read(path).context("Failed to read TMLU file")?;
-            Ok(decode_xml_bytes(bytes))
+            decode_xml_bytes(bytes)
         }
         _ => bail!("Unsupported file extension '.{ext}'. Expected .tml or .tmlu"),
     }
@@ -77,7 +79,7 @@ fn load_xml_from_zip_capped(path: &Path, cap: u64) -> Result<LoadedXml> {
         );
     }
 
-    Ok(decode_xml_bytes(bytes))
+    decode_xml_bytes(bytes)
 }
 
 /// Render a byte limit the way the person reading the error thinks about it.
@@ -146,13 +148,16 @@ const CP1252_HIGH: [char; 32] = [
 /// purpose: nothing in the dependency tree provides one (`quick-xml` is built
 /// without its `encoding` feature), and two code pages do not justify adding
 /// one.
-fn decode_xml_bytes(bytes: Vec<u8>) -> LoadedXml {
-    let bytes = match String::from_utf8(bytes) {
+///
+/// A leading UTF-8 byte-order mark is dropped before any of that, and a UTF-16
+/// one is refused outright - see [`crate::parsers::encoding`].
+fn decode_xml_bytes(bytes: Vec<u8>) -> Result<LoadedXml> {
+    let bytes = match String::from_utf8(strip_bom_owned(bytes)?) {
         Ok(xml) => {
-            return LoadedXml {
+            return Ok(LoadedXml {
                 xml,
                 encoding_warning: None,
-            }
+            })
         }
         Err(e) => e.into_bytes(),
     };
@@ -167,15 +172,15 @@ fn decode_xml_bytes(bytes: Vec<u8>) -> LoadedXml {
                  declares{}",
                 describe_replacements(&xml)
             );
-            return LoadedXml {
+            return Ok(LoadedXml {
                 xml,
                 encoding_warning: Some(warning),
-            };
+            });
         }
     }
 
     let xml = String::from_utf8_lossy(&bytes).into_owned();
-    LoadedXml {
+    Ok(LoadedXml {
         encoding_warning: Some(format!(
             "The file was not valid UTF-8 and its declared encoding (if any) could not be used{}",
             {
@@ -188,7 +193,7 @@ fn decode_xml_bytes(bytes: Vec<u8>) -> LoadedXml {
             }
         )),
         xml,
-    }
+    })
 }
 
 /// The tail of an encoding warning that accounts for undecodable input, or an
@@ -479,6 +484,43 @@ mod tests {
     fn a_utf8_file_carries_no_encoding_warning() {
         let tml = parse_synthetic_tmlu(&wrap_xml(&tml_shot_xml(1, -1, "REAL", "A")));
         assert!(tml.encoding_warning.is_none());
+    }
+
+    /// Ariane writes UTF-8, but a `.tmlu` that has been through a Windows
+    /// editor comes back with a BOM ahead of the XML declaration. `quick-xml`
+    /// tolerates one, so this pins that a marked file still imports whole - and
+    /// that dropping the mark is not itself worth an encoding warning.
+    #[test]
+    fn a_utf8_bom_does_not_break_a_tmlu_file() {
+        let xml = wrap_xml(&tml_shot_xml(1, -1, "REAL", "A"));
+        let mut bytes = vec![0xef, 0xbb, 0xbf];
+        bytes.extend_from_slice(xml.as_bytes());
+
+        let tml = parse_synthetic_tmlu_bytes(&bytes).unwrap();
+        assert_eq!(tml.cave_name, "Test Cave");
+        assert_eq!(tml.sections.len(), 1);
+        assert!(tml.encoding_warning.is_none());
+    }
+
+    /// UTF-16 bytes are neither valid UTF-8 nor a Latin code page, so they
+    /// would fall to the lossy branch and import as nothing with only a
+    /// generic warning. Refuse them by name instead.
+    #[test]
+    fn a_utf16_tmlu_is_refused_by_name() {
+        let xml = wrap_xml(&tml_shot_xml(1, -1, "REAL", "A"));
+        let mut bytes = vec![0xff, 0xfe];
+        for unit in xml.encode_utf16() {
+            bytes.extend_from_slice(&unit.to_le_bytes());
+        }
+
+        let err = parse_synthetic_tmlu_bytes(&bytes)
+            .err()
+            .map(|e| e.to_string())
+            .unwrap_or_default();
+        assert!(
+            err.contains("UTF-16"),
+            "the error must name the encoding, got {err:?}"
+        );
     }
 
     /// An archive written on a case-insensitive filesystem can hold `data.XML`.

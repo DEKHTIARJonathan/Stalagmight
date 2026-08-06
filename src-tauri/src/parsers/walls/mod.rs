@@ -31,7 +31,7 @@
 use std::collections::HashSet;
 use std::path::Path;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, Result};
 use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
@@ -463,17 +463,6 @@ pub struct ParsedWalls {
     pub(crate) missing_files: Vec<String>,
     pub(crate) skipped_attachments: u32,
     pub(crate) warnings: Vec<String>,
-}
-
-// ---------------------------------------------------------------------------
-// Encoding
-// ---------------------------------------------------------------------------
-
-/// Read a Walls file as ISO-8859-1/Latin-1 (Walls's encoding); decoding each
-/// byte as a code point avoids panics on accented surveyor names and comments.
-pub(crate) fn read_latin1(path: &Path) -> Result<String> {
-    let bytes = std::fs::read(path).with_context(|| format!("reading {}", path.display()))?;
-    Ok(bytes.iter().map(|&b| b as char).collect())
 }
 
 // ---------------------------------------------------------------------------

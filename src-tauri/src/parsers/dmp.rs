@@ -10,6 +10,8 @@ use sha2::{Digest, Sha256};
 use std::path::Path;
 use ts_rs::TS;
 
+use crate::parsers::encoding::read_utf8;
+
 // ============================================================================
 // Constants
 // ============================================================================
@@ -564,7 +566,7 @@ pub fn parse_dmp(path: &Path) -> Result<DmpFile> {
     }
 
     // Read and parse file content
-    let content = std::fs::read_to_string(path).context("Failed to read DMP file")?;
+    let content = read_utf8(path)?;
 
     // Parse semicolon-separated integers
     let data: Vec<u8> = content
@@ -1269,6 +1271,24 @@ mod tests {
         // But basic shot data should be parsed
         assert!(shot.heading_in > 0.0, "Should have heading_in");
         assert!(shot.length > 0.0, "Should have length");
+    }
+
+    /// A `.dmp` is semicolon-separated integers, and the version is the first
+    /// of them. A UTF-8 BOM glues U+FEFF onto that integer, so a file saved
+    /// through a Windows text editor fails to import at all.
+    #[test]
+    fn a_utf8_bom_does_not_break_a_dmp_file() {
+        let content = build_v3_section_data();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("bom.dmp");
+        let mut bytes = vec![0xEF, 0xBB, 0xBF];
+        bytes.extend_from_slice(content.as_bytes());
+        std::fs::write(&path, bytes).unwrap();
+
+        let dmp = parse_dmp(&path).expect("a marked DMP must import like an unmarked one");
+        assert_eq!(dmp.version, 3);
+        assert_eq!(dmp.sections.len(), 1);
+        assert_eq!(dmp.sections[0].name, "TST");
     }
 
     /// Test 4.2: Verify DMP version 4 files (29-byte shots) correctly extract LRUD data and direction field

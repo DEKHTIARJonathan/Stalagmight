@@ -13,6 +13,7 @@ use ts_rs::TS;
 
 use crate::models::geo::{haversine_distance, initial_bearing};
 use crate::models::{GpsCoordinates, ImportPlacement, ImportSectionConfig, ShotData, ShotKind};
+use crate::parsers::encoding::read_utf8;
 
 // ============================================================================
 // IPC-visible types
@@ -116,9 +117,7 @@ fn local_name(e: &quick_xml::events::BytesStart<'_>) -> Vec<u8> {
 
 /// Parse a GPX file from the given path.
 pub fn parse_gpx(path: &Path) -> Result<GpxFile> {
-    let contents = std::fs::read_to_string(path)
-        .with_context(|| format!("Failed to read {}", path.display()))?;
-    parse_gpx_str(&contents)
+    parse_gpx_str(&read_utf8(path)?)
 }
 
 /// Parse GPX from a string (for testing).
@@ -1448,5 +1447,47 @@ mod tests {
         assert_eq!(configs[0].name.as_deref(), Some("Custom Name"));
         assert_eq!(configs[0].color, "#ff0000");
         assert!(matches!(configs[0].placement, ImportPlacement::Origin));
+    }
+
+    /// A GPX exported by a Windows tool can carry a UTF-8 BOM ahead of its XML
+    /// declaration. `quick-xml` tolerates one (it skips text before the root),
+    /// so this pins that tolerance rather than repairing a break: a marked file
+    /// must keep importing exactly like the same file without the mark.
+    #[test]
+    fn a_utf8_bom_does_not_break_a_gpx_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("bom.gpx");
+        let mut bytes = vec![0xEF, 0xBB, 0xBF];
+        bytes.extend_from_slice(SIMPLE_GPX.as_bytes());
+        std::fs::write(&path, bytes).unwrap();
+
+        let expected = parse_gpx_str(SIMPLE_GPX).unwrap();
+        let parsed = parse_gpx(&path).unwrap();
+        assert_eq!(parsed.name, expected.name);
+        assert_eq!(parsed.waypoints.len(), expected.waypoints.len());
+        assert_eq!(parsed.tracks.len(), expected.tracks.len());
+        assert_eq!(parsed.routes.len(), expected.routes.len());
+    }
+
+    /// UTF-16 is not GPX in practice, and reading it as bytes produces a
+    /// document made of NULs. Say what is wrong instead.
+    #[test]
+    fn a_utf16_gpx_is_refused_by_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("u16.gpx");
+        let mut bytes = vec![0xFF, 0xFE];
+        for unit in SIMPLE_GPX.encode_utf16() {
+            bytes.extend_from_slice(&unit.to_le_bytes());
+        }
+        std::fs::write(&path, bytes).unwrap();
+
+        let err = parse_gpx(&path)
+            .err()
+            .map(|e| e.to_string())
+            .unwrap_or_default();
+        assert!(
+            err.contains("UTF-16"),
+            "the error must name the encoding, got {err:?}"
+        );
     }
 }
