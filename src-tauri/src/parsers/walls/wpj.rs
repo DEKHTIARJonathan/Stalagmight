@@ -3,10 +3,12 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 
+use crate::parsers::encoding::read_latin1;
+
 use super::{
-    apply_units_options, parse_srv_contents, read_latin1, split_first_token, ParsedSurvey,
-    ParsedWalls, WallsRef, WallsUnits, STATUS_DERIVE_DECL, STATUS_DETACHED,
-    STATUS_DONT_DERIVE_DECL, STATUS_GRID_RELATIVE, STATUS_NOT_GRID_RELATIVE, STATUS_TYPE_OTHER,
+    apply_units_options, parse_srv_contents, split_first_token, ParsedSurvey, ParsedWalls,
+    WallsRef, WallsUnits, STATUS_DERIVE_DECL, STATUS_DETACHED, STATUS_DONT_DERIVE_DECL,
+    STATUS_GRID_RELATIVE, STATUS_NOT_GRID_RELATIVE, STATUS_TYPE_OTHER,
 };
 
 /// Parse a bare `.SRV` file as a one-survey project (no `.WPJ` tree).

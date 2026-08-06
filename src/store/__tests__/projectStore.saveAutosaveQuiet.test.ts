@@ -10,9 +10,10 @@ vi.mock('../../utils/ipc', () => ({
 }));
 
 /**
- * `saveProject(path, isAutosave)`'s second argument is FRONTEND-ONLY - it never
- * crosses IPC, and the backend save is identical either way. It exists solely to
- * keep the 30-second debounced background save quiet:
+ * `saveProject(path, isAutosave)`'s second argument leaves the backend save
+ * identical either way - it crosses IPC only to name the trigger in the Rust
+ * log line (#429). Its real job is keeping the 30-second debounced background
+ * save quiet:
  *
  *  1. a folder-access denial must NOT reopen the save-permission dialog on every
  *     retry (the user would be unable to do anything else while access is denied), and
@@ -33,6 +34,10 @@ describe('saveProject autosave quieting', () => {
     useUIStore.setState({ openDialog: openDialogSpy } as never);
     useProjectStore.setState({
       project: { file_path: '/cave.stalx' } as never,
+      // An autosave only ever runs on a dirty project, so that is the state the
+      // failure paths below are exercised from.
+      isDirty: true,
+      autosaveFailure: null,
       integrityIssues: [],
       integritySaveBlocked: false,
       refreshUndoState: vi.fn().mockResolvedValue(undefined),
@@ -42,7 +47,7 @@ describe('saveProject autosave quieting', () => {
   });
 
   afterEach(() => {
-    useProjectStore.setState({ project: null, isDirty: false } as never);
+    useProjectStore.setState({ project: null, isDirty: false, autosaveFailure: null } as never);
   });
 
   const resolveSave = () => {
@@ -97,12 +102,57 @@ describe('saveProject autosave quieting', () => {
     expect(checkIntegritySpy).toHaveBeenCalled();
   });
 
-  it('never sends isAutosave over IPC - the backend save is identical either way', async () => {
+  it('sends isAutosave over IPC so the backend log can name the trigger (#429)', async () => {
     resolveSave();
 
     await useProjectStore.getState().saveProject('/cave.stalx', true);
+    await useProjectStore.getState().saveProject('/cave.stalx');
 
-    const call = invokeIpcMock.mock.calls.find((c) => c[0] === 'save_project');
-    expect(call?.[1]).toEqual({ path: '/cave.stalx' });
+    const calls = invokeIpcMock.mock.calls.filter((c) => c[0] === 'save_project');
+    // Always a boolean, never undefined: the Rust side reads it as "manual"
+    // when absent, and a manual save should say so rather than default to it.
+    expect(calls[0]?.[1]).toEqual({ path: '/cave.stalx', isAutosave: true });
+    expect(calls[1]?.[1]).toEqual({ path: '/cave.stalx', isAutosave: false });
+  });
+
+  it('feeds the banner a destination failure without leaking the marker (#429)', async () => {
+    invokeIpcMock.mockImplementation(async (command: string) =>
+      command === 'save_project'
+        ? { success: false, error: 'FS_PATH_NOT_FOUND: Cannot save to Z:\\cave.stalx' }
+        : undefined
+    );
+
+    await useProjectStore.getState().saveProject('/cave.stalx', true);
+
+    const banner = useProjectStore.getState().autosaveFailure;
+    expect(banner).toBeTruthy();
+    expect(banner).not.toContain('FS_PATH_NOT_FOUND');
+    // A missing folder is not a permission problem, so no guidance dialog.
+    expect(openDialogSpy).not.toHaveBeenCalledWith('save-permission', expect.anything());
+  });
+
+  it('raises the banner when the autosave fails and the changes really are unsaved', async () => {
+    denyPermission();
+
+    await useProjectStore.getState().saveProject('/cave.stalx', true);
+
+    expect(useProjectStore.getState().autosaveFailure).toBeTruthy();
+  });
+
+  it('leaves the banner down when a manual save landed while the autosave was in flight (#429)', async () => {
+    // The manual Ctrl+S completes mid-flight: the store goes clean before this
+    // autosave's failure comes back. "Your latest changes are not on disk" would
+    // be false, and the banner has no dismiss the user could reach for.
+    invokeIpcMock.mockImplementation(async (command: string) => {
+      if (command === 'save_project') {
+        useProjectStore.setState({ isDirty: false } as never);
+        return { success: false, error: 'FS_PERMISSION_DENIED: folder access denied' };
+      }
+      return undefined;
+    });
+
+    await useProjectStore.getState().saveProject('/cave.stalx', true);
+
+    expect(useProjectStore.getState().autosaveFailure).toBeNull();
   });
 });

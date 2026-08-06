@@ -5,6 +5,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -131,10 +132,48 @@ impl LoadError {
 /// guidance instead of a misleading "corrupted"/raw-OS message.
 pub(crate) const PERMISSION_DENIED_CODE: &str = "FS_PERMISSION_DENIED";
 
-/// True if `err` (or any error in its chain) is a filesystem permission
-/// denial. macOS forgets previously-granted folder access after an OS or
-/// app update, which surfaces as EPERM (os error 1) / EACCES (os error 13),
-/// a `PermissionDenied` io error, or a SQLite "unable to open database file".
+/// Prefix stamped onto a save `CommandResult` error when the destination is not
+/// reachable at all - the folder was deleted or renamed, or the drive it lives
+/// on is not connected. Distinct from [`PERMISSION_DENIED_CODE`] because the two
+/// have no remediation in common: no amount of granting folder access brings
+/// back a `Z:` that is not plugged in (#429).
+pub(crate) const PATH_NOT_FOUND_CODE: &str = "FS_PATH_NOT_FOUND";
+
+/// Prefix stamped onto a save `CommandResult` error when the destination path is
+/// longer than the OS will open. SQLite's win32 VFS opens files through a plain
+/// `CreateFileW` bounded by `MAX_PATH`, while Rust's own std calls go through
+/// `\\?\` verbatim paths and are not - so an over-long destination fails to open
+/// while its parent directory stats perfectly fine, which is exactly the shape
+/// that used to be answered with macOS Privacy & Security steps (#429).
+pub(crate) const PATH_TOO_LONG_CODE: &str = "FS_PATH_TOO_LONG";
+
+/// Windows' `MAX_PATH`: the character budget a path gets INCLUDING its
+/// terminating NUL, so 259 usable characters.
+const LEGACY_PATH_LIMIT: usize = 260;
+
+/// True when `path` is at or over the legacy Windows `MAX_PATH` budget.
+///
+/// A plain character count with no platform gate of its own - callers gate it on
+/// `cfg!(windows)`, which keeps the arithmetic testable on every platform
+/// instead of only on the one where it matters.
+pub(crate) fn over_legacy_path_limit(path: &Path) -> bool {
+    path.to_string_lossy().encode_utf16().count() >= LEGACY_PATH_LIMIT
+}
+
+/// True if `err` (or any error in its chain) is a CORROBORATED filesystem
+/// permission denial: a typed `PermissionDenied` io error, or a message that
+/// says so in as many words. macOS forgets previously-granted folder access
+/// after an OS or app update, which surfaces as EPERM (os error 1) / EACCES
+/// (os error 13) or a `PermissionDenied` io error.
+///
+/// SQLite's "unable to open database file" is deliberately NOT on that list.
+/// It is `SQLITE_CANTOPEN` with no errno behind it, and Windows raises it just
+/// as readily for a missing folder, a disconnected drive or an over-`MAX_PATH`
+/// path - which is how a 335-character save destination came to be answered
+/// with macOS folder-permission instructions (#429). A caller that sees it must
+/// corroborate it against the filesystem itself: [`read_access_denied`] on the
+/// read side, `classify_save_failure` (`core::state::project_io`) on the write
+/// side.
 ///
 /// Deliberately conservative on the string side: it must NOT classify a
 /// genuine corruption ("integrity check failed") as a permission problem,
@@ -149,13 +188,9 @@ pub(crate) fn is_permission_denied(err: &anyhow::Error) -> bool {
                 return true;
             }
         }
-        // String fallback for causes that don't reach us as a typed io error
-        // (e.g. SQLite reporting it cannot open the database file).
+        // String fallback for causes that don't reach us as a typed io error.
         let msg = cause.to_string().to_ascii_lowercase();
-        if msg.contains("permission denied")
-            || msg.contains("operation not permitted")
-            || msg.contains("unable to open database file")
-        {
+        if msg.contains("permission denied") || msg.contains("operation not permitted") {
             return true;
         }
         // Unix errno text that can show up in a stringified (non-typed) cause.
@@ -167,6 +202,61 @@ pub(crate) fn is_permission_denied(err: &anyhow::Error) -> bool {
         }
     }
     false
+}
+
+/// True if `err` (or any error in its chain) says the path itself is not there:
+/// a typed `NotFound` io error, or a platform message naming a missing
+/// file/path or an unreachable device (a removed stick, a dropped share).
+pub(crate) fn is_path_not_found(err: &anyhow::Error) -> bool {
+    for cause in err.chain() {
+        if let Some(io) = cause.downcast_ref::<std::io::Error>() {
+            if io.kind() == std::io::ErrorKind::NotFound {
+                return true;
+            }
+        }
+        let msg = cause.to_string().to_ascii_lowercase();
+        if msg.contains("no such file or directory")
+            || msg.contains("cannot find the file")
+            || msg.contains("cannot find the path")
+            || msg.contains("the network path was not found")
+            || msg.contains("the device is not ready")
+        {
+            return true;
+        }
+    }
+    false
+}
+
+/// True if any cause carries SQLite's errno-free `SQLITE_CANTOPEN` message -
+/// the ambiguous one that means "the OS would not give me this file" and
+/// nothing more. See [`is_permission_denied`] for why it needs corroborating.
+pub(crate) fn mentions_unopenable_database(err: &anyhow::Error) -> bool {
+    err.chain().any(|cause| {
+        cause
+            .to_string()
+            .to_ascii_lowercase()
+            .contains("unable to open database file")
+    })
+}
+
+/// Corroborate the ambiguous message on a READ: the file is there (the caller
+/// has already established that) but the OS refuses to hand it over. That is
+/// the macOS lost-folder-access case, where SQLite reports `SQLITE_CANTOPEN`
+/// with nothing else to go on.
+pub(crate) fn read_access_denied(path: &Path) -> bool {
+    matches!(
+        std::fs::File::open(path),
+        Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied
+    )
+}
+
+/// The whole `anyhow` chain on one line, outermost cause first. What a failing
+/// save writes to the log, so a bug report can be read without a repro (#429).
+pub(crate) fn error_chain(err: &anyhow::Error) -> String {
+    err.chain()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(" <- ")
 }
 
 /// Escape a string for JSON, handling quotes, backslashes, and control characters.

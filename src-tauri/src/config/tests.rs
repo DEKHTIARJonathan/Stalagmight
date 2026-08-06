@@ -32,7 +32,9 @@ fn test_map_snap_config_defaults() {
 fn test_map_controls_config_defaults() {
     let config = MapControlsConfig::default();
     assert_eq!(config.pan_speed, 1.0);
-    assert_eq!(config.zoom_speed, 1.0);
+    // #429: zoom_speed is zoom LEVELS per wheel notch, and 0.55 is what the old
+    // 1.0 multiplier delivered through MapLibre's sigmoid.
+    assert_eq!(config.zoom_speed, 0.55);
     assert!(!config.invert_scroll);
     // #409: the Pan/Zoom toolbar group is hidden unless the user opts in.
     assert!(!config.show_navigation_tools);
@@ -2577,6 +2579,97 @@ fn test_map_config_normalize_zoom_step_at_bounds_unchanged() {
     };
     max_config.normalize();
     assert_eq!(max_config.zoom_step, 5.0);
+}
+
+// ========================================================================
+// zoom_speed: pre-#429 multiplier -> levels per wheel notch
+// ========================================================================
+
+/// Write `stored` into a real config file and read back what the app would use.
+fn zoom_speed_after_load(stored: f64) -> f64 {
+    use tempfile::tempdir;
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+
+    let mut config = Config::default();
+    config.map.controls.zoom_speed = stored;
+    // `save_to_path` deliberately does not normalize, so the legacy value
+    // reaches the file exactly as an older build would have written it.
+    config.save_to_path(&path).unwrap();
+
+    Config::load_from_path(&path)
+        .unwrap()
+        .map
+        .controls
+        .zoom_speed
+}
+
+#[test]
+fn test_legacy_zoom_speed_multiplier_is_migrated_on_load() {
+    // #429: the setting used to be a 0.1-5.0 multiplier that MapLibre's sigmoid
+    // turned into log2(2 / (1 + e^-speed)) levels per notch. Read as levels
+    // instead, the old DEFAULT of 1.0 would clamp to 0.95 - a 73% speed-up for
+    // users who never touched it - so load converts anything above the new
+    // maximum back into the levels it actually delivered.
+    assert_eq!(zoom_speed_after_load(1.0), 0.55);
+    assert_eq!(zoom_speed_after_load(3.0), 0.93);
+    // 5.0 solves to 0.99 levels, past the top of the new range.
+    assert_eq!(zoom_speed_after_load(5.0), 0.95);
+}
+
+#[test]
+fn test_migrated_zoom_speed_is_stable_across_a_second_load() {
+    // The migrated value is inside the new range, so re-saving and re-loading
+    // must not convert it again.
+    assert_eq!(zoom_speed_after_load(zoom_speed_after_load(1.0)), 0.55);
+}
+
+#[test]
+fn test_in_range_zoom_speed_is_left_alone_on_load() {
+    // The two schemes overlap below the new maximum, so a value the settings
+    // dialog could have produced is taken at face value.
+    assert_eq!(zoom_speed_after_load(0.55), 0.55);
+    assert_eq!(zoom_speed_after_load(0.3), 0.3);
+    assert_eq!(zoom_speed_after_load(0.1), 0.1);
+    assert_eq!(zoom_speed_after_load(0.95), 0.95);
+}
+
+#[test]
+fn test_map_controls_normalize_clamps_zoom_speed_to_the_usable_range() {
+    let mut config = MapControlsConfig {
+        zoom_speed: 0.02,
+        ..Default::default()
+    };
+    config.normalize();
+    assert_eq!(config.zoom_speed, 0.1);
+}
+
+#[test]
+fn test_map_controls_normalize_non_finite_resets_to_default() {
+    for junk in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+        let mut config = MapControlsConfig {
+            zoom_speed: junk,
+            ..Default::default()
+        };
+        config.normalize();
+        assert_eq!(
+            config.zoom_speed,
+            MapControlsConfig::default().zoom_speed,
+            "{junk} should fall back to the shipped default"
+        );
+    }
+}
+
+#[test]
+fn test_zoom_speed_write_path_clamps_rather_than_migrating() {
+    // The Settings dialog's number input does not enforce its own max, so an
+    // out-of-range figure typed there arrives over IPC. That is a NEW-scheme
+    // value the user just entered, not a legacy multiplier: it has to come back
+    // as the nearest value the range holds. Only file loads migrate.
+    let mut config = Config::default();
+    config.map.controls.zoom_speed = 1.2;
+    config.normalize_except_shortcuts();
+    assert_eq!(config.map.controls.zoom_speed, 0.95);
 }
 
 // ========================================================================

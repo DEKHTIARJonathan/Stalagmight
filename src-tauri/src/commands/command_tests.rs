@@ -173,7 +173,7 @@ fn project_with_section(shots: Vec<ShotData>) -> Project {
 
 fn save_project_to_temp(app: &tauri::App<MockRuntime>, dir: &TempDir) -> PathBuf {
     let path = dir.path().join("project");
-    let result = project::save_project(state(app), Some(path.clone()));
+    let result = project::save_project(state(app), Some(path.clone()), None);
     assert_success(&result);
     path.with_extension("stalx")
 }
@@ -1292,7 +1292,7 @@ fn test_close_project_clears_state() {
 #[test]
 fn test_save_project_fails_when_no_project() {
     let app = app_with_state();
-    let result = project::save_project(state(&app), Some(PathBuf::from("/tmp/nope.stalx")));
+    let result = project::save_project(state(&app), Some(PathBuf::from("/tmp/nope.stalx")), None);
     assert_failure_contains(&result, "No project open");
 }
 
@@ -1310,7 +1310,7 @@ fn test_save_project_creates_stalx_extension() {
         create_project(&app);
         let dir = TempDir::new().unwrap();
         let raw_path = dir.path().join("project_data");
-        let result = project::save_project(state(&app), Some(raw_path));
+        let result = project::save_project(state(&app), Some(raw_path), None);
         assert_success(&result);
         let saved_path = dir.path().join("project_data.stalx");
         assert!(saved_path.exists());
@@ -1614,7 +1614,7 @@ fn test_save_project_fails_when_output_is_directory() {
             let blocked = dir.path().join("blocked.stalx");
             fs::create_dir_all(&blocked).unwrap();
 
-            let result = project::save_project(state(&app), Some(blocked.clone()));
+            let result = project::save_project(state(&app), Some(blocked.clone()), None);
             assert_failure_contains(&result, "Failed to finalize save");
 
             let temp_path = blocked.with_extension("stalx.tmp");
@@ -2011,26 +2011,31 @@ fn test_import_sections_deferred_save_failure_warns_no_phantom() {
 // it ("permission denied (check folder access ...)") and must NOT leak the internal
 // `FS_PERMISSION_DENIED` marker into the user-facing warning (import.rs:143-152).
 //
-// We can't induce a literal EACCES root-safely (container-root holds
-// CAP_DAC_OVERRIDE, so mode bits don't bite), so we drive the same branch via the
-// classifier's documented string fallback: a directory squatting the `.stalx.tmp`
-// temp path makes SQLite report "unable to open database file", which
-// `is_permission_denied` (loading.rs) treats as permission-denied - and because the
-// parent dir is present, `save_failure` keeps the marker prefix. The partial-success
-// invariants (no phantom, in-memory survival, still-deferred) are already covered by
-// the generic-failure twin above; this test focuses on the message mapping.
+// A real EACCES is the only route to that branch since #429: SQLite's generic
+// "unable to open database file" is no longer read as a denial on its own (a
+// directory squatting the temp path produces it too, and that is not a
+// permission problem). So this is unix-only, and skips itself when the mode bits
+// don't bite (container-root holds CAP_DAC_OVERRIDE) rather than false-failing -
+// the same idiom as `save_into_unwritable_dir_reports_permission_code`. The
+// partial-success invariants (no phantom, in-memory survival, still-deferred) are
+// already covered by the generic-failure twin above; this test focuses on the
+// message mapping.
+#[cfg(unix)]
 #[test]
 fn test_import_sections_deferred_save_permission_denied_humanizes_no_marker_leak() {
+    use std::os::unix::fs::PermissionsExt;
     with_config_lock(|| {
         let app = app_with_state();
         let dir = TempDir::new().unwrap();
-        let project_path = dir.path().join("new-import.stalx");
-        // Squat a DIRECTORY at the atomic-save temp path (`<stem>.stalx.tmp`). The
-        // reserved `.stalx` path itself stays absent (so no collision auto-rename),
-        // but `Database::open` on the temp dir fails with "unable to open database
-        // file" - classified as permission-denied - while the parent dir exists.
-        let temp_squat = dir.path().join("new-import.stalx.tmp");
-        fs::create_dir_all(&temp_squat).unwrap();
+        let locked = dir.path().join("locked");
+        fs::create_dir_all(&locked).unwrap();
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
+        // Restore perms first so TempDir cleanup can remove the directory.
+        if fs::File::create(locked.join(".probe")).is_ok() {
+            let _ = fs::set_permissions(&locked, fs::Permissions::from_mode(0o755));
+            return;
+        }
+        let project_path = locked.join("new-import.stalx");
 
         let mut project = Project::new("New Import".to_string(), None);
         project.file_path = Some(project_path.clone());
@@ -2068,6 +2073,8 @@ fn test_import_sections_deferred_save_permission_denied_humanizes_no_marker_leak
             None,
         );
 
+        let _ = fs::set_permissions(&locked, fs::Permissions::from_mode(0o755));
+
         // Partial success carrying a HUMANIZED permission warning...
         assert_success(&result);
         assert!(
@@ -2086,6 +2093,82 @@ fn test_import_sections_deferred_save_permission_denied_humanizes_no_marker_leak
             "the internal FS_PERMISSION_DENIED marker must be stripped, not leaked: {:?}",
             result.warnings
         );
+    });
+}
+
+// #429: the scenario the test above used to run on - a DIRECTORY squatting the
+// atomic-save temp path (`<stem>.stalx.tmp`), which makes `Database::open`
+// report SQLite's generic "unable to open database file" while the destination
+// folder exists and is perfectly writable. That is not a denial, and calling it
+// one is what put Windows users in front of macOS folder-access instructions.
+// The deferred-import warning must therefore carry the plain failure, with no
+// marker of any kind in it.
+#[test]
+fn test_import_sections_deferred_save_generic_open_failure_is_not_a_denial() {
+    with_config_lock(|| {
+        let app = app_with_state();
+        let dir = TempDir::new().unwrap();
+        let project_path = dir.path().join("new-import.stalx");
+        // The reserved `.stalx` path itself stays absent (so no collision
+        // auto-rename); only the temp path is occupied.
+        fs::create_dir_all(dir.path().join("new-import.stalx.tmp")).unwrap();
+
+        let mut project = Project::new("New Import".to_string(), None);
+        project.file_path = Some(project_path.clone());
+        state(&app).inner().set_project_for_tests(project);
+        state(&app)
+            .inner()
+            .set_initial_save_deferred_for_tests(true);
+
+        let sections = vec![crate::models::ImportSectionConfig {
+            reverse: false,
+            section_index: 0,
+            name: Some("Imported".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#ff0000".to_string(),
+            direction: None,
+            quality: 1.0,
+            shots: vec![shot_data(5.0)],
+            station_comments: Vec::new(),
+            placement: crate::models::ImportPlacement::Origin,
+        }];
+        let result = import::import_sections(
+            state(&app),
+            sections,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        );
+
+        assert_success(&result);
+        assert!(
+            !result.warnings.is_empty(),
+            "the deferred save failed, so the import must say it is unsaved"
+        );
+        assert!(
+            result
+                .warnings
+                .iter()
+                .all(|w| !w.message.contains("permission denied")),
+            "a writable destination folder is denying nothing: {:?}",
+            result.warnings
+        );
+        for marker in [
+            crate::core::loading::PERMISSION_DENIED_CODE,
+            crate::core::loading::PATH_NOT_FOUND_CODE,
+            crate::core::loading::PATH_TOO_LONG_CODE,
+        ] {
+            assert!(
+                result.warnings.iter().all(|w| !w.message.contains(marker)),
+                "no internal marker may reach the user: {marker} in {:?}",
+                result.warnings
+            );
+        }
     });
 }
 
@@ -3001,6 +3084,7 @@ fn test_delete_project_through_a_symlinked_parent_dir_matches_by_identity() {
             assert_success(&project::save_project(
                 state(&app),
                 Some(real_dir.join("project")),
+                None,
             ));
             let saved_path = real_dir.join("project.stalx");
             assert!(
@@ -3077,8 +3161,15 @@ fn test_save_project_fails_when_directory_missing() {
         let missing_dir = dir.path().join("missing");
         let path = missing_dir.join("project");
 
-        let result = project::save_project(state(&app), Some(path));
-        assert_failure_contains(&result, "Failed to create save file");
+        let result = project::save_project(state(&app), Some(path), None);
+        // #429: refused up front, naming the destination as the problem, rather
+        // than relaying SQLite's "Failed to open database" from an attempt that
+        // never had a folder to write into.
+        assert_failure_contains(
+            &result,
+            "the folder no longer exists or the drive is not connected",
+        );
+        assert_failure_contains(&result, crate::core::loading::PATH_NOT_FOUND_CODE);
         assert!(!missing_dir.exists());
     });
 }

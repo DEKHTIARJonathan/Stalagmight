@@ -48,8 +48,11 @@ export default function SavePermissionDialog() {
       <div className="space-y-4">
         <p className="text-text-secondary">
           Stalagmight couldn&apos;t {action} because the system denied access to the folder.
-          This usually happens after a macOS or app update, which can reset previously-granted
-          folder permissions. <span className="text-text-primary">Your data is not corrupted.</span>
+          {' '}
+          {mac
+            ? 'This usually happens after a macOS or app update, which can reset previously-granted folder permissions.'
+            : 'This usually happens when the folder is read-only, is owned by another account, or is held by security software.'}
+          {' '}<span className="text-text-primary">Your data is not corrupted.</span>
         </p>
 
         {mac ? (

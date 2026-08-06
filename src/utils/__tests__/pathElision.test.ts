@@ -63,11 +63,81 @@ describe('pathElisionCandidates', () => {
   it('handles Windows-style backslash paths', () => {
     const candidates = pathElisionCandidates('C:\\Users\\user\\spring.stalx');
     expect(candidates[0]).toBe('C:\\Users\\user\\spring.stalx');
-    // Backslash is preserved as the separator throughout.
+    // Backslash is preserved as the separator throughout, and the drive with it.
     for (const c of candidates) {
       expect(c.includes('/')).toBe(false);
+      expect(c.startsWith('C:\\')).toBe(true);
       expect(c.endsWith('spring.stalx')).toBe(true);
     }
+    expect(candidates[candidates.length - 1]).toBe('C:\\…\\spring.stalx');
+  });
+
+  it('renders forward-slash-stored Windows paths with backslashes', () => {
+    const candidates = pathElisionCandidates('C:/Users/user/caves/spring.stalx');
+    expect(candidates[0]).toBe('C:\\Users\\user\\caves\\spring.stalx');
+    for (const c of candidates) {
+      expect(c.includes('/')).toBe(false);
+      expect(c.startsWith('C:\\')).toBe(true);
+    }
+  });
+
+  it('middle-truncates deep Windows paths instead of abbreviating segments', () => {
+    const path = 'C:/Users/Alice/AppData/Local/Temp/claude/Foo/0/scratchpad/win/work/project-copy.stalx';
+    const candidates = pathElisionCandidates(path);
+
+    expect(candidates[1]).toBe(
+      'C:\\…\\Alice\\AppData\\Local\\Temp\\claude\\Foo\\0\\scratchpad\\win\\work\\project-copy.stalx'
+    );
+    expect(candidates).toContain('C:\\…\\win\\work\\project-copy.stalx');
+    expect(candidates[candidates.length - 1]).toBe('C:\\…\\project-copy.stalx');
+    // The drive, the ellipsis once elided, and the filename always survive.
+    for (const c of candidates) {
+      expect(c.startsWith('C:\\')).toBe(true);
+      expect(c.endsWith('\\project-copy.stalx')).toBe(true);
+      expect(/[A-Za-z]:\\[A-Za-z]\\/.test(c)).toBe(false);
+    }
+    for (const c of candidates.slice(1)) {
+      expect(c.includes('…')).toBe(true);
+    }
+  });
+
+  it('fits a deep Windows path into a tight width without letter soup', () => {
+    const path = 'C:/Users/Alice/AppData/Local/Temp/claude/Foo/0/scratchpad/win/work/project-copy.stalx';
+    const candidates = pathElisionCandidates(path);
+    // Mirrors ElidedPath: first candidate that fits, else the most-elided one.
+    const fitted =
+      candidates.find((c) => c.length <= 40) ?? (candidates[candidates.length - 1] as string);
+
+    expect(fitted).toBe('C:\\…\\win\\work\\project-copy.stalx');
+  });
+
+  it('keeps the UNC host and share out of the elision', () => {
+    const candidates = pathElisionCandidates('\\\\server\\share\\caves\\orda\\spring.stalx');
+    expect(candidates).toEqual([
+      '\\\\server\\share\\caves\\orda\\spring.stalx',
+      '\\\\server\\share\\…\\orda\\spring.stalx',
+      '\\\\server\\share\\…\\spring.stalx',
+    ]);
+  });
+
+  it('normalises mixed separators on a Windows path', () => {
+    const candidates = pathElisionCandidates('C:/Users\\Alice/caves\\orda/spring.stalx');
+    expect(candidates[0]).toBe('C:\\Users\\Alice\\caves\\orda\\spring.stalx');
+    expect(candidates[candidates.length - 1]).toBe('C:\\…\\spring.stalx');
+  });
+
+  it('orders Windows candidates from longest to shortest', () => {
+    const candidates = pathElisionCandidates('C:/Users/Alice/caves/orda/main-line/spring.stalx');
+    for (let i = 1; i < candidates.length; i++) {
+      const current = candidates[i] as string;
+      const previous = candidates[i - 1] as string;
+      expect(current.length).toBeLessThanOrEqual(previous.length);
+    }
+  });
+
+  it('leaves a Windows path with no folders alone (separator aside)', () => {
+    expect(pathElisionCandidates('C:/spring.stalx')).toEqual(['C:\\spring.stalx']);
+    expect(pathElisionCandidates('C:\\spring.stalx')).toEqual(['C:\\spring.stalx']);
   });
 
   it('drops consecutive duplicate renderings (already single-char folders)', () => {

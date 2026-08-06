@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 import {
+  autosaveFailureMessage,
   surfaceSaveFailure,
   surfaceImportFailure,
   completeImportToSingleView,
@@ -9,6 +10,7 @@ import {
   presentImportReceipt,
   type ImportDialogUi,
 } from '../saveFeedback';
+import { FS_PATH_NOT_FOUND, FS_PATH_TOO_LONG, FS_PERMISSION_DENIED } from '../saveErrors';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
 import type { ValidationWarning } from '../../types/ipc/ValidationWarning';
@@ -69,6 +71,63 @@ describe('surfaceSaveFailure', () => {
 
     expect(openDialog).not.toHaveBeenCalled();
     expect(useProjectStore.getState().integrityDialogOpen).toBe(false);
+  });
+
+  it('leaves a permission denial to the folder-access guidance dialog', () => {
+    const openDialog = vi.fn();
+
+    surfaceSaveFailure(`${FS_PERMISSION_DENIED}: Failed to create save file: ...`, openDialog);
+
+    expect(openDialog).not.toHaveBeenCalled();
+  });
+
+  it('says the folder is gone instead of relaying SQLite (#429)', () => {
+    const openDialog = vi.fn();
+
+    surfaceSaveFailure(
+      `${FS_PATH_NOT_FOUND}: Cannot save to Z:\\surveys\\cave.stalx: the folder no longer exists or the drive is not connected`,
+      openDialog
+    );
+
+    const [dialog, data] = openDialog.mock.calls[0] as [string, { message: string }];
+    expect(dialog).toBe('error');
+    expect(data.message).not.toContain(FS_PATH_NOT_FOUND);
+    expect(data.message).toContain('the folder no longer exists or the drive is not connected');
+  });
+
+  it('names the path length for an over-MAX_PATH destination (#429)', () => {
+    const openDialog = vi.fn();
+
+    surfaceSaveFailure(
+      `${FS_PATH_TOO_LONG}: Failed to create save file: Failed to open database`,
+      openDialog
+    );
+
+    const [, data] = openDialog.mock.calls[0] as [string, { message: string }];
+    expect(data.message).not.toContain(FS_PATH_TOO_LONG);
+    expect(data.message).not.toContain('Failed to open database');
+    expect(data.message).toContain('too long');
+  });
+});
+
+describe('autosaveFailureMessage (#429)', () => {
+  it('gives each destination failure its own banner line, never the raw marker', () => {
+    const gone = autosaveFailureMessage(`${FS_PATH_NOT_FOUND}: Cannot save to Z:\\cave.stalx`);
+    const tooLong = autosaveFailureMessage(`${FS_PATH_TOO_LONG}: Failed to create save file`);
+    const denied = autosaveFailureMessage(`${FS_PERMISSION_DENIED}: denied`);
+
+    for (const line of [gone, tooLong, denied]) {
+      expect(line).toBeTruthy();
+      expect(line).not.toContain('FS_');
+    }
+    expect(new Set([gone, tooLong, denied]).size).toBe(3);
+  });
+
+  it('relays an unmarked failure as the backend wrote it', () => {
+    expect(autosaveFailureMessage('Disk full: no space left on device')).toBe(
+      'Disk full: no space left on device'
+    );
+    expect(autosaveFailureMessage(null)).toBeTruthy();
   });
 });
 

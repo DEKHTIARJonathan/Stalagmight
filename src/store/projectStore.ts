@@ -14,7 +14,7 @@ import {
 import { hasEligibleClosures } from '../utils/closures';
 import { applyReverseAftermath, composeReverseTransforms, flushPlanAnchors, remapPlanPins } from '../utils/reverseAftermath';
 import { useUIStore } from './uiStore';
-import { surfaceSaveFailure } from '../utils/saveFeedback';
+import { autosaveFailureMessage, surfaceSaveFailure } from '../utils/saveFeedback';
 import { useGlobalViewStore } from './globalViewStore';
 import { useSpeleoStore } from './speleoStore';
 import type {
@@ -280,14 +280,16 @@ export interface ProjectStore extends ProjectConfigActions {
   /** Create a new project (legacy, still supported) */
   createProject: (name: string, projectLocation?: string, options?: CreateProjectOptions) => Promise<CommandResult>;
   /**
-   * Save the project. `isAutosave` is FRONTEND-ONLY - it is not sent over IPC and
-   * the backend save is identical either way. Since it never reaches the backend,
-   * this comment is its whole specification: it marks a QUIET, BACKGROUND save -
-   * one the user did not ask for and is not waiting on - and suppresses two bits
-   * of UI churn for it: the save-permission dialog (which would otherwise reopen
-   * on every retry while folder access is denied) and the post-save integrity
-   * re-check (skipped unless the project entered the save already flagged, since
-   * the save path auto-heals some issues).
+   * Save the project. `isAutosave` marks a QUIET, BACKGROUND save - one the user
+   * did not ask for and is not waiting on - and suppresses two bits of UI churn
+   * for it: the save-permission dialog (which would otherwise reopen on every
+   * retry while folder access is denied) and the post-save integrity re-check
+   * (skipped unless the project entered the save already flagged, since the save
+   * path auto-heals some issues).
+   *
+   * It also crosses IPC, where it does exactly one thing: name the trigger in
+   * the backend's log line (#429). The save itself is byte-for-byte identical
+   * either way - the flag never reaches the pipeline.
    *
    * Read it as "background save", NOT literally "the auto-save timer fired":
    * `useAutoSave`'s debounced write is one caller, and `flushToDiskAfterPush` in
@@ -1276,8 +1278,8 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     const hadIntegrityIssues = get().integrityIssues.length > 0;
     const result = await invokeIpc<CommandResult>(
       'save_project',
-      { path },
-      { purpose: 'persist project changes', fields: { path } }
+      { path, isAutosave: isAutosave === true },
+      { purpose: 'persist project changes', fields: { path, isAutosave } }
     );
     if (result.success) {
       // A detached copy was written; the OPEN project was not saved. Do not
@@ -1343,14 +1345,15 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     } else {
       const permission = isPermissionError(result.error);
       // An autosave failure is an ongoing condition, not a modal moment: feed
-      // the banner (docs/notifications.md). Never surface the raw
-      // "FS_PERMISSION_DENIED:" marker - the banner renders this string.
-      if (isAutosave) {
-        set({
-          autosaveFailure: permission
-            ? i18n.t('banners.autosave.permissionDenied')
-            : (result.error ?? i18n.t('banners.autosave.genericFailure')),
-        });
+      // the banner (docs/notifications.md). `autosaveFailureMessage` keeps the
+      // raw "FS_*:" markers out of it - the banner renders this string.
+      // Gated on the project still being dirty for the same reason useAutoSave
+      // gates its red status: a manual Ctrl+S that landed while this autosave was
+      // in flight already put the changes on disk, and a banner saying the latest
+      // changes are not on disk on a clean project is a claim the user cannot
+      // clear by saving (#429).
+      if (isAutosave && get().isDirty) {
+        set({ autosaveFailure: autosaveFailureMessage(result.error) });
       }
       // A filesystem permission denial (e.g. macOS forgot folder access after
       // an update) needs actionable guidance, not a raw error. Skip on autosave

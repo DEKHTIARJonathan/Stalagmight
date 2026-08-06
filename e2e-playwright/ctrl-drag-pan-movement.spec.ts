@@ -566,6 +566,55 @@ test.describe('Ctrl+Drag Pan - Content Movement Verification', () => {
       expect(atTwo.dx / atOne.dx).toBeGreaterThan(1.6);
       expect(atTwo.dx / atOne.dx).toBeLessThan(2.4);
     });
+
+    /**
+     * The gesture is a DRAG, so it ends at mouseup, not at the container border.
+     * With the move listener on the map element it ended at the border instead:
+     * the element stops receiving moves the moment the cursor leaves it, and a
+     * 300px gesture delivered exactly the distance to the edge (#429). The map
+     * sits inside the app chrome, so there is real page outside it to cross into.
+     */
+    test('a Ctrl+drag that leaves the map keeps panning to the mouseup', async ({ page }) => {
+      await page.keyboard.press('z');
+      await waitForActiveTool(page, 'zoom');
+      await waitForMapIdle(page);
+
+      const box = (await page.getByTestId('map-canvas').boundingBox())!;
+      const y = box.y + box.height / 2;
+      // Start well inside, finish well outside: only a fifth of the travel is
+      // spent before the cursor crosses the right border.
+      const startX = box.x + box.width - 50;
+      const endX = box.x + box.width + 200;
+      const travel = endX - startX;
+      expect(endX, 'the drag has to end inside the page to be dispatched at all')
+        .toBeLessThan(page.viewportSize()!.width);
+
+      const mapCursor = () => page.evaluate(() => {
+        const c = document.querySelector('[data-testid="maplibre-container"] canvas');
+        return c ? getComputedStyle(c).cursor : null;
+      });
+
+      let cursorMidDrag: string | null = null;
+      const slide = await measureCameraSlide(page, async () => {
+        await page.keyboard.down('Control');
+        await page.mouse.move(startX, y);
+        await page.mouse.down();
+        cursorMidDrag = await mapCursor();
+        await page.mouse.move(endX, y, { steps: 10 });
+        await page.mouse.up();
+        await page.keyboard.up('Control');
+      });
+      console.log(`[edge] requested ${travel}px, in-bounds ${box.x + box.width - startX}px, slide dx=${slide.dx.toFixed(1)}`);
+
+      // The whole gesture, at pan_speed 1.0 - not the 50px to the border.
+      expect(slide.dx).toBeGreaterThan(travel * 0.8);
+      expect(slide.dx).toBeLessThan(travel * 1.2);
+
+      // Releasing outside the container is the only mouseup this gesture gets,
+      // so it also has to be what puts the grabbing cursor back.
+      expect(cursorMidDrag, 'the press showed the pan cursor').toBe('grabbing');
+      await expect.poll(mapCursor).not.toBe('grabbing');
+    });
   });
 
   test.describe('Movement Proportionality', () => {

@@ -19,7 +19,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::path::Path;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
@@ -31,6 +31,7 @@ use compass_data::{
 use crate::models::section::{ImportClosure, ImportPlacement, ImportSectionConfig};
 use crate::models::shot::{ShotData, ShotKind};
 use crate::models::station::GpsCoordinates;
+use crate::parsers::encoding::{read_latin1, reject_bom};
 use crate::parsers::geo::{non_empty, FEET_TO_METERS};
 
 /// Distances/LRUD at or above this are Compass "missing data" sentinels.
@@ -187,6 +188,13 @@ pub fn parse_compass(path: &Path) -> Result<ParsedCompass> {
 }
 
 fn parse_mak(path: &Path) -> Result<ParsedCompass> {
+    // The `.MAK` and every `.DAT` it links are read inside the vendored crate,
+    // from their paths - so unlike `parse_dat` there is no boundary here at
+    // which a byte-order mark could be stripped. Name the mark instead of
+    // letting the vendored lexer report an invisible character (#429). A `.DAT`
+    // reached through a `.MAK` keeps the residue: a mark there lands in that
+    // file's cave name, which is only reachable by fixing the vendored reader.
+    reject_bom(path)?;
     let project =
         Project::read(path).map_err(|e| anyhow!("Failed to read Compass project: {e}"))?;
     let loaded = project
@@ -337,13 +345,6 @@ fn parse_dat(path: &Path) -> Result<ParsedCompass> {
         surveys,
         warnings: Vec::new(),
     })
-}
-
-/// Read a Compass file as Windows-1252/latin1 (Compass's encoding); decoding each
-/// byte as a code point avoids panics on accented surveyor names and comments.
-fn read_latin1(path: &Path) -> Result<String> {
-    let bytes = std::fs::read(path).with_context(|| format!("reading {}", path.display()))?;
-    Ok(bytes.iter().map(|&b| b as char).collect())
 }
 
 /// Build the import-dialog preview from parsed data.
@@ -2122,6 +2123,91 @@ mod tests {
         assert!(
             (pitch_in + 90.0).abs() < 0.01,
             "pitch_in should be -90° after Grads→degrees + +down; got {pitch_in}"
+        );
+    }
+
+    /// A `.DAT` whose first line is the cave name, in the smallest shape the
+    /// vendored parser accepts. Synthetic - no fixture data.
+    fn synthetic_dat(cave_name: &str) -> String {
+        format!(
+            "{cave_name}\r\n\
+             SURVEY NAME: A\r\n\
+             SURVEY DATE: 7 10 1979\r\n\
+             SURVEY TEAM:\r\n\
+             Nobody\r\n\
+             DECLINATION: 0.00  FORMAT: DMMDLRUDLADN  CORRECTIONS: 0.00 0.00 0.00\r\n\
+             \r\n\
+             FROM TO LENGTH BEARING INC LEFT UP DOWN RIGHT FLAGS COMMENTS\r\n\
+             \r\n\
+             A1 A2 10.00 90.00 0.00 1.00 2.00 3.00 4.00\r\n"
+        )
+    }
+
+    /// Compass files are read one byte per code point, so a "UTF-8 with BOM"
+    /// `.DAT` carries three Latin-1 characters into whatever line 1 means -
+    /// here the cave name, which becomes the imported project's name.
+    #[test]
+    fn a_utf8_bom_does_not_corrupt_the_dat_cave_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let dat = synthetic_dat("Synthetic Cave");
+
+        let plain = dir.path().join("plain.dat");
+        std::fs::write(&plain, &dat).unwrap();
+        let marked = dir.path().join("bom.dat");
+        let mut bytes = vec![0xEF, 0xBB, 0xBF];
+        bytes.extend_from_slice(dat.as_bytes());
+        std::fs::write(&marked, bytes).unwrap();
+
+        let expected = parse_compass(&plain).unwrap();
+        assert_eq!(expected.cave_name, "Synthetic Cave");
+        assert_eq!(expected.surveys.len(), 1);
+
+        let parsed = parse_compass(&marked).unwrap();
+        assert_eq!(parsed.cave_name, expected.cave_name);
+        assert_eq!(parsed.surveys.len(), expected.surveys.len());
+    }
+
+    /// A `.MAK` is read from its path inside the vendored crate, so the mark
+    /// cannot be stripped for it. What we can do is say so: the vendored lexer
+    /// otherwise reports an unexpected character that renders as nothing.
+    #[test]
+    fn a_utf8_bom_on_a_mak_is_refused_by_name() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("s.dat"), synthetic_dat("Synthetic Cave")).unwrap();
+
+        // A `#file` entry needs a base location and a datum ahead of it.
+        let mak = "@100.0,200.0,300.0,13,0.5;\r\n&North American 1983;\r\n#s.dat;\r\n";
+        let plain = dir.path().join("plain.mak");
+        std::fs::write(&plain, mak).unwrap();
+        let marked = dir.path().join("bom.mak");
+        let mut bytes = vec![0xEF, 0xBB, 0xBF];
+        bytes.extend_from_slice(mak.as_bytes());
+        std::fs::write(&marked, bytes).unwrap();
+
+        assert_eq!(
+            parse_compass(&plain).unwrap().cave_name,
+            "Synthetic Cave",
+            "premise: the same project without a mark imports"
+        );
+
+        // Premise for the pre-flight: left to the vendored reader, the mark is
+        // an unexpected character whose name is an empty-looking glyph.
+        let vendor = Project::read(&marked)
+            .err()
+            .map(|e| e.to_string())
+            .unwrap_or_default();
+        assert!(
+            vendor.contains("Unexpected character"),
+            "the vendored lexer is expected to choke on the mark, got {vendor:?}"
+        );
+
+        let err = parse_compass(&marked)
+            .err()
+            .map(|e| e.to_string())
+            .unwrap_or_default();
+        assert!(
+            err.contains("byte-order mark"),
+            "the error must name the mark, got {err:?}"
         );
     }
 }

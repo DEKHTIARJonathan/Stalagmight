@@ -378,7 +378,7 @@ async function setupTauriMocksWithErrorSimulation(page: Page): Promise<void> {
               zoom_step: 1.0,
               controls: {
                 pan_speed: 1.0,
-                zoom_speed: 1.0,
+                zoom_speed: 0.55,
                 invert_scroll: false,
                 show_navigation_tools: false,
               },

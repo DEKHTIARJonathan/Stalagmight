@@ -41,7 +41,9 @@ export function EntityBlob({ entity, children, title, className = '', testId }: 
       data-testid={testId}
       title={title}
     >
-      <EntitySymbol entity={entity} size={14} />
+      <span className="flex shrink-0 items-center">
+        <EntitySymbol entity={entity} size={14} />
+      </span>
       {children}
     </span>
   );

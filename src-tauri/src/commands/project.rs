@@ -21,8 +21,27 @@ pub fn update_project_settings(
 }
 
 /// Save the current project.
+///
+/// `is_autosave` changes NOTHING about the save - it only names who asked for
+/// it, so a background write is distinguishable from a Ctrl+S in the log
+/// (#429). Absent means manual: every other Rust caller reaches the save
+/// through [`save_project_impl`].
 #[tauri::command]
-pub fn save_project(state: State<AppState>, path: Option<PathBuf>) -> CommandResult {
+pub fn save_project(
+    state: State<AppState>,
+    path: Option<PathBuf>,
+    is_autosave: Option<bool>,
+) -> CommandResult {
+    tracing::info!(
+        trigger = if is_autosave.unwrap_or(false) {
+            "autosave"
+        } else {
+            "manual"
+        },
+        path = ?path,
+        purpose = "persist edits safely",
+        "Save requested"
+    );
     save_project_impl(state.inner(), path)
 }
 

@@ -18,9 +18,30 @@
  *   /h/u/s/o/…/spring.stalx
  *   …
  *   /…/spring.stalx
+ *
+ * Windows-rooted paths (a `C:` drive or a `\\server\share` UNC root) skip step
+ * 2: the root is kept verbatim, `\` is used throughout however the path was
+ * stored, and interior folders are dropped straight away. A deep path elides to
+ * `C:\…\work\spring.stalx` instead of a run of single letters that is neither a
+ * valid path nor enough to tell two same-named projects apart.
  */
 
 const ELLIPSIS = '…';
+
+/** `C:\` or `C:/` - the drive is a root, not an abbreviatable segment. */
+const DRIVE_PREFIX = /^[A-Za-z]:[\\/]/;
+/** `\\server\share` - host and share are both part of the root. */
+const UNC_PREFIX = /^\\\\/;
+
+interface SplitPath {
+  /** Root rendered verbatim, trailing separator included (may be empty). */
+  prefix: string;
+  sep: string;
+  /** Segments below the root, empty ones dropped. */
+  parts: string[];
+  /** Windows root: middle-truncate rather than abbreviate segments. */
+  windowsRoot: boolean;
+}
 
 /** Pick the separator the path uses (Windows backslash vs POSIX slash). */
 function detectSeparator(path: string): string {
@@ -32,6 +53,37 @@ function abbreviate(segment: string): string {
   return segment.slice(0, 1);
 }
 
+/** Split on either separator - Windows accepts (and stores) both. */
+function splitEither(rest: string): string[] {
+  return rest.split(/[\\/]+/).filter((p) => p.length > 0);
+}
+
+/** Separate the root that must survive elision from the segments below it. */
+function splitPath(path: string): SplitPath {
+  if (UNC_PREFIX.test(path)) {
+    const parts = splitEither(path.slice(2));
+    const root = parts.splice(0, 2);
+    return { prefix: `\\\\${root.join('\\')}\\`, sep: '\\', parts, windowsRoot: true };
+  }
+
+  if (DRIVE_PREFIX.test(path)) {
+    return {
+      prefix: `${path.slice(0, 2)}\\`,
+      sep: '\\',
+      parts: splitEither(path.slice(2)),
+      windowsRoot: true,
+    };
+  }
+
+  const sep = detectSeparator(path);
+  return {
+    prefix: path.startsWith(sep) ? sep : '',
+    sep,
+    parts: path.split(sep).filter((p) => p.length > 0),
+    windowsRoot: false,
+  };
+}
+
 /**
  * Returns path renderings from longest (full) to shortest, with no consecutive
  * duplicates. Always returns at least one element. Single-segment paths (a bare
@@ -40,32 +92,39 @@ function abbreviate(segment: string): string {
 export function pathElisionCandidates(path: string): string[] {
   if (!path) return [''];
 
-  const sep = detectSeparator(path);
-  const leading = path.startsWith(sep) ? sep : '';
-  const trimmed = leading ? path.slice(sep.length) : path;
-  const parts = trimmed.split(sep).filter((p) => p.length > 0);
+  const { prefix, sep, parts, windowsRoot } = splitPath(path);
+  const join = (segments: string[]): string => prefix + segments.join(sep);
+
+  // Windows roots are re-rendered with `\`; other paths are shown as stored.
+  const full = windowsRoot ? join(parts) : path;
 
   // Nothing to elide: just a filename (optionally rooted).
-  if (parts.length <= 1) return [path];
+  if (parts.length <= 1) return [full];
 
   const filename = parts[parts.length - 1] as string;
   const folders = parts.slice(0, -1);
 
-  const join = (segments: string[]): string => leading + segments.join(sep);
+  const candidates: string[] = [full];
 
-  const candidates: string[] = [path];
+  if (windowsRoot) {
+    // Middle-truncate only: keep the root, the last k folders and the (whole)
+    // filename. k counts down so each step is shorter than the last.
+    for (let k = folders.length - 1; k >= 0; k--) {
+      candidates.push(join([ELLIPSIS, ...folders.slice(folders.length - k), filename]));
+    }
+  } else {
+    // Abbreviate leading folders one at a time, left → right.
+    const abbrev = [...folders];
+    for (let i = 0; i < folders.length; i++) {
+      abbrev[i] = abbreviate(folders[i] as string);
+      candidates.push(join([...abbrev, filename]));
+    }
 
-  // Abbreviate leading folders one at a time, left → right.
-  const abbrev = [...folders];
-  for (let i = 0; i < folders.length; i++) {
-    abbrev[i] = abbreviate(folders[i] as string);
-    candidates.push(join([...abbrev, filename]));
-  }
-
-  // Middle-truncate: keep the first k abbreviated folders, then `…`, then the
-  // (whole) filename. k counts down so each step is shorter than the last.
-  for (let k = folders.length - 1; k >= 0; k--) {
-    candidates.push(join([...abbrev.slice(0, k), ELLIPSIS, filename]));
+    // Middle-truncate: keep the first k abbreviated folders, then `…`, then the
+    // (whole) filename. k counts down so each step is shorter than the last.
+    for (let k = folders.length - 1; k >= 0; k--) {
+      candidates.push(join([...abbrev.slice(0, k), ELLIPSIS, filename]));
+    }
   }
 
   // Drop consecutive duplicates (e.g. already-single-char folders).

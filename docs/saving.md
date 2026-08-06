@@ -9,7 +9,8 @@ Stalagmight uses an atomic save strategy with a SQLite `.stalx` database file. S
 ### Backend (`save_project` in `project_io.rs`)
 
 ```
-1. Lock project, resolve save path, ensure .stalx extension
+1. Lock project, resolve save path, ensure .stalx extension, refuse early if the
+   destination folder is not reachable (see Failure classification below)
 2. Load display settings from current database or in-memory cache
 3. Write project data to temp file (file.stalx.tmp)
 4. Copy display settings to temp database
@@ -55,6 +56,27 @@ All saves use a temp file with atomic rename to prevent data loss on crash or po
 If a leftover `.stalx.tmp` file exists from a previous failed save, it is removed before starting. Its rollback journal (`.stalx.tmp-journal`) is not, so the next save's fresh temp database can meet an orphaned hot journal - a state the crash-timing gate injects deliberately.
 
 That gate (`src-tauri/src/core/state/crash_property_tests.rs`, see [Testing Recipes](testing-recipes.md)) is what holds this promise up: it constructs the exact files a kill at each pipeline boundary would leave and asserts the destination comes back as EXACTLY the old project or EXACTLY the new one, never a blend, and that the next save recovers cleanly.
+
+## Failure classification
+
+Every failing save goes through `save_failure` (`project_io.rs`), which logs the
+whole `anyhow` chain at WARN and prefixes the `CommandResult.error` with the
+marker that tells the frontend which remediation to show. `src/utils/saveErrors.ts`
+mirrors the three markers; `saveFeedback.ts` turns them into copy.
+
+| Marker | Means | Surface |
+|---|---|---|
+| `FS_PERMISSION_DENIED` | The OS refuses a destination that IS there | `SavePermissionDialog` (folder-access guidance) |
+| `FS_PATH_NOT_FOUND` | The folder is gone, or its drive is not connected | Error dialog, "the folder no longer exists or the drive is not connected" |
+| `FS_PATH_TOO_LONG` | The path is past what the OS will open (Windows `MAX_PATH`) | Error dialog, "save to a shorter path" |
+| (none) | Everything else - disk full, corruption | Error dialog, backend message verbatim |
+
+SQLite reports ALL of these as the same errno-free "unable to open database
+file" (`SQLITE_CANTOPEN`), so that message alone classifies nothing (#429). It is
+corroborated instead: by the destination folder's own answer (gone, refuses a
+probe file, or accepts one) and, on Windows, by the destination's length -
+`MAX_PATH` binds SQLite's `CreateFileW` while Rust's std calls go through `\\?\`
+verbatim paths and stat the parent perfectly happily.
 
 ## Save a Copy (SpeleoDB-managed projects)
 

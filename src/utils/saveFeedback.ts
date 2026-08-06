@@ -1,6 +1,6 @@
 import { useProjectStore } from '../store/projectStore';
 import { useUIStore } from '../store/uiStore';
-import { isPermissionError } from './saveErrors';
+import { classifySaveError, type SaveErrorKind } from './saveErrors';
 import { trackDialogComplete } from './telemetry';
 import { getErrorMessage } from './ipc';
 import i18n from '../i18n';
@@ -13,14 +13,17 @@ import type { ToastKind } from '../store/uiStore';
 /**
  * Surface a failed (non-throwing) save to the user.
  *
- * Three classes of failure, in priority order:
+ * Four classes of failure, in priority order:
  *  1. Unresolvable cross-references - NOT an error, an integrity problem the
  *     user can fix. Route them straight to the Review & Repair dialog instead
  *     of a scary "Save Failed" error window.
  *  2. Filesystem permission denial (e.g. macOS forgot folder access) - already
  *     surfaced by `saveProject` itself via the folder-access guidance dialog,
  *     so don't double up with a generic error window.
- *  3. Anything else (a real I/O error) - show the error dialog as before.
+ *  3. A destination that is gone or unopenable (#429) - the error dialog, but
+ *     saying what is actually wrong with the folder instead of relaying
+ *     SQLite's "Failed to open database".
+ *  4. Anything else (a real I/O error) - show the error dialog as before.
  *
  * Reads `integritySaveBlocked`, which `saveProject` refreshes (awaited) on
  * failure, so it is current by the time this runs. On an IPC-transport reject
@@ -38,11 +41,48 @@ export function surfaceSaveFailure(
     useProjectStore.getState().openIntegrityDialog();
     return;
   }
-  if (error && !isPermissionError(error)) {
-    openDialog('error', {
-      message: error,
-      title: opts?.title ?? i18n.t('dialogs.saveFailure.title'),
-    });
+  if (!error) return;
+  const kind = classifySaveError(error);
+  // Already surfaced by `saveProject` through the folder-access guidance dialog.
+  if (kind === 'permission') return;
+  openDialog('error', {
+    message: saveFailureMessage(kind, error),
+    title: opts?.title ?? i18n.t('dialogs.saveFailure.title'),
+  });
+}
+
+/**
+ * The line a failed save gets on a user-facing surface. A marked destination
+ * failure is reworded - the backend's own text for one is SQLite's "Failed to
+ * open database", which tells the user nothing about the folder being gone
+ * (#429) - and everything else is relayed as the backend wrote it.
+ */
+function saveFailureMessage(kind: SaveErrorKind, error: string): string {
+  switch (kind) {
+    case 'path-not-found':
+      return i18n.t('dialogs.saveFailure.pathNotFound');
+    case 'path-too-long':
+      return i18n.t('dialogs.saveFailure.pathTooLong');
+    default:
+      return error;
+  }
+}
+
+/**
+ * The autosave banner's line for a failed background save (banner-class, per
+ * docs/notifications.md). Same rewording as the dialog, one line shorter, and
+ * it must never leak a raw `FS_*` marker - the banner renders this string.
+ */
+export function autosaveFailureMessage(error?: string | null): string {
+  switch (classifySaveError(error)) {
+    case 'permission':
+      return i18n.t('banners.autosave.permissionDenied');
+    case 'path-not-found':
+      return i18n.t('banners.autosave.pathNotFound');
+    case 'path-too-long':
+      return i18n.t('banners.autosave.pathTooLong');
+    default:
+      return error ?? i18n.t('banners.autosave.genericFailure');
   }
 }
 

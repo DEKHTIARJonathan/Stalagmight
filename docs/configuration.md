@@ -107,7 +107,7 @@ zoom_step = 1.0                     # Zoom delta per +/- keypress
 [map.controls]
 show_navigation_tools = false       # Put the Pan/Zoom tools back on the toolbar, with their P/Z shortcuts
 pan_speed = 1.0                     # Ctrl+drag and middle-drag pan multiplier (0.1-5.0); plain drag stays 1:1
-zoom_speed = 1.0                    # Wheel/pinch zoom multiplier (0.1-5.0)
+zoom_speed = 0.55                   # Zoom levels per wheel notch (0.1-0.95); 0.95 is the engine's practical ceiling
 invert_scroll = false               # Reverse wheel zoom direction
 
 [map.station]

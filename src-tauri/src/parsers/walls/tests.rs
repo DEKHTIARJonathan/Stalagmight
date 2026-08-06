@@ -12,6 +12,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use chrono::Datelike;
 
 use crate::models::section::{ImportClosure, ImportPlacement, ImportSectionConfig};
+use crate::parsers::encoding::read_latin1;
 
 use super::*;
 
@@ -2347,4 +2348,105 @@ fn parse_ref_rejects_infinite_field() {
     // into NaN azimuths downstream.
     let line = "0 0 16 1e400 0 0 20 25 42 87 18 44";
     assert!(parse_ref(line).is_err());
+}
+
+// ----- byte-order marks -----------------------------------------------
+
+/// The `EF BB BF` a Windows editor writes at the head of a "UTF-8 with BOM"
+/// file - Notepad's default, PowerShell 5.1 `Out-File`, a common VS Code
+/// setting.
+const UTF8_BOM: [u8; 3] = [0xEF, 0xBB, 0xBF];
+
+fn write_prefixed(path: &Path, prefix: &[u8], text: &str) {
+    let mut bytes = prefix.to_vec();
+    bytes.extend_from_slice(text.as_bytes());
+    std::fs::write(path, bytes).unwrap();
+}
+
+fn utf16le(text: &str) -> Vec<u8> {
+    let mut bytes = vec![0xFF, 0xFE];
+    for unit in text.encode_utf16() {
+        bytes.extend_from_slice(&unit.to_le_bytes());
+    }
+    bytes
+}
+
+/// `read_latin1` maps each byte to a code point, so a BOM arrives as three
+/// Latin-1 chars glued to line 1 and its directive stops being one. Without
+/// the strip the `#DATE` here is dropped with no warning at all, and a file
+/// whose line 1 is `#UNITS` or `#FIX` silently imports in the wrong units or
+/// at the wrong place.
+#[test]
+fn a_utf8_bom_does_not_void_the_first_srv_directive() {
+    let dir = temp_dir("srvbom");
+    let srv = "#DATE 2026-08-05\r\n#UNITS meters ORDER=DA Tape=SS\r\nA\tB\t100.0\t90\t0\t0\r\n";
+
+    let plain = dir.join("plain.srv");
+    std::fs::write(&plain, srv).unwrap();
+    let marked = dir.join("bom.srv");
+    write_prefixed(&marked, &UTF8_BOM, srv);
+
+    let expected = parse_walls(&plain).unwrap();
+    assert_eq!(
+        expected.surveys[0].date,
+        NaiveDate::from_ymd_opt(2026, 8, 5),
+        "premise: the same file without a BOM parses its date"
+    );
+    assert_eq!(expected.surveys[0].vectors.len(), 1);
+
+    let parsed = parse_walls(&marked).unwrap();
+    assert_eq!(
+        parsed.surveys[0].date, expected.surveys[0].date,
+        "the BOM must not swallow the first directive"
+    );
+    assert_eq!(parsed.surveys[0].vectors.len(), 1);
+    assert!(
+        parsed.warnings.is_empty(),
+        "a stripped BOM is not worth a warning: {:?}",
+        parsed.warnings
+    );
+}
+
+/// The `.WPJ` reader splits the same Latin-1 text, so its line-1 `.BOOK` is
+/// lost the same way, taking the project name and the book count with it.
+#[test]
+fn a_utf8_bom_does_not_void_the_first_wpj_directive() {
+    let dir = temp_dir("wpjbom");
+    std::fs::write(dir.join("S.SRV"), "#UNITS meters order=DAV\nA B 10 90 0\n").unwrap();
+    let wpj = ".BOOK Test Project\n.NAME TESTPROJ\n.STATUS 8\n\
+               .SURVEY First Survey\n.NAME S\n.STATUS 8\n\
+               .ENDBOOK\n";
+
+    let plain = dir.join("plain.wpj");
+    std::fs::write(&plain, wpj).unwrap();
+    let marked = dir.join("bom.wpj");
+    write_prefixed(&marked, &UTF8_BOM, wpj);
+
+    let expected = parse_walls(&plain).unwrap();
+    assert_eq!(expected.project_name, "Test Project");
+    assert_eq!(expected.book_count, 1);
+
+    let parsed = parse_walls(&marked).unwrap();
+    assert_eq!(parsed.project_name, expected.project_name);
+    assert_eq!(parsed.book_count, expected.book_count);
+    assert_eq!(parsed.surveys.len(), expected.surveys.len());
+}
+
+/// A UTF-16 file decodes to NUL-separated bytes that match no directive at
+/// all, so every line is skipped and the import comes back empty and silent.
+/// Refuse it by name instead.
+#[test]
+fn a_utf16_srv_is_refused_by_name() {
+    let dir = temp_dir("srvutf16");
+    let p = dir.join("u16.srv");
+    std::fs::write(&p, utf16le("#DATE 2026-08-05\r\nA B 10 90 0\r\n")).unwrap();
+
+    let err = parse_walls(&p)
+        .err()
+        .map(|e| e.to_string())
+        .unwrap_or_default();
+    assert!(
+        err.contains("UTF-16"),
+        "the error must name the encoding, got {err:?}"
+    );
 }
