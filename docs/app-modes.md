@@ -26,6 +26,13 @@ map itself is the same map in all three.
 (dangling separators collapsed), so mutating tools are **hidden, not disabled**
 and the two lists cannot drift.
 
+Whichever base layout the mode picks then goes through a second pass, dropping
+the navigate group unless `map.controls.show_navigation_tools` is on (#409). So
+Plan and Export are `select | navigate group | measure` with navigation tools on,
+and `select | measure` with them off - the default. Both passes run through
+`filterToolbarItems` (`Toolbar.tsx`), whose separator cleanup is what makes them
+composable: each pass re-tidies the dividers the previous one stranded.
+
 ## The contract
 
 The predicate is `isMapReadOnly` in `src/store/uiStore.ts`:

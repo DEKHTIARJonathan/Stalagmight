@@ -158,8 +158,13 @@ it:
    tolerance exactly);
 2. ask `surveyLayer/geometryIndex.ts::sectionsIntersectingBox` for sections
    whose projected world-space AABB overlaps that box - a deliberate superset;
-3. trim to the exact pick with `nearestStation` / `nearestShot` /
-   `stationsInBox`, using true endpoints rather than tile-clipped geometry.
+3. trim to the exact pick with the index's `nearestStation` / `nearestShot`
+   (reached through `SurveyLayer.resolveStationAt` / `resolveShotAt`), using true
+   endpoints rather than tile-clipped geometry.
+
+Every pick is a single nearest-within-tolerance resolve; the box in step 2 is
+only the candidate prefilter. The index's multi-hit box resolver went away with
+box select (#409), so there is no "everything inside this rectangle" query left.
 
 The index caches its projected AABBs against a camera snapshot
 (`SurveyLayer.cameraSnapshot`), so a static hover reprojects the sections once per

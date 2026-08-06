@@ -2,7 +2,15 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <!-- user-scalable=no / maximum-scale=1: this is an application shell, not a
+         page - browser pinch/page zoom would scale the whole UI (reachable via
+         a pinch landing on map overlay chrome on touch builds, #409 review).
+         The app has its own zoom for the map and a UI-scale setting. -->
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover"
+    />
+
     <title>Stalagmight</title>
     <!-- Remote origin is why style-src in src-tauri/tauri.conf.json's CSP lists
          https://unpkg.com explicitly (#357 item 12). The <style> block below

@@ -421,6 +421,65 @@ test('move_station grabbed off-center snaps + tracks across a mid-drag zoom (#79
   await expectCommitLandsAtCursor(page, lngLat, cursor, '#20 move_station commit');
 });
 
+test('a press-drag while CARRYING pans the map and keeps the ghost (#409)', async ({ page }) => {
+  // The drop is click-gated, so a press that travels is a pan like any other and
+  // the ghost stays in flight. That makes the map move UNDER a ghost that is
+  // glued to the cursor - the same per-frame re-apply as the mid-drag zoom above,
+  // reached through MapLibre's own dragPan rather than a programmatic setZoom.
+  await setupMockedPage(page);
+  await createProject(page, 'Carry Pan Test');
+  await waitForMapReady(page);
+  await seedProjectWithSections(page, SECTION_SEEDS);
+  await waitForMapIdle(page);
+  await activateTool(page, 't', 'move_station');
+
+  const box = await page.getByTestId('map-canvas').boundingBox();
+  if (!box) throw new Error('no canvas box');
+
+  const { screen: s, lngLat } = await centerOnStation(page, 18);
+
+  await page.mouse.click(box.x + s.x, box.y + s.y);
+  const cursor = { x: s.x + 60, y: s.y - 40 };
+  await page.mouse.move(box.x + cursor.x, box.y + cursor.y, { steps: 6 });
+  await expectTracksCursor(page, lngLat, cursor, '#409 carry-pan: ghost in flight before the pan');
+
+  // Press-drag on the map. The camera must move, and the ghost must survive the
+  // release - on the old modal behaviour this release WAS the drop.
+  const centerBefore = await page.evaluate(() => {
+    const map = (window as unknown as { __stalagmight_map__?: import('maplibre-gl').Map }).__stalagmight_map__;
+    const c = map!.getCenter();
+    return { lng: c.lng, lat: c.lat };
+  });
+  const panned = { x: cursor.x + 110, y: cursor.y + 70 };
+  await page.mouse.down();
+  await page.mouse.move(box.x + panned.x, box.y + panned.y, { steps: 10 });
+  await page.mouse.up();
+  await waitForMapIdle(page);
+
+  const centerAfter = await page.evaluate(() => {
+    const map = (window as unknown as { __stalagmight_map__?: import('maplibre-gl').Map }).__stalagmight_map__;
+    const c = map!.getCenter();
+    return { lng: c.lng, lat: c.lat };
+  });
+  expect(
+    Math.abs(centerAfter.lng - centerBefore.lng) + Math.abs(centerAfter.lat - centerBefore.lat),
+    '#409 carry-pan: the drag panned the camera',
+  ).toBeGreaterThan(0.00001);
+  expect(
+    await page.evaluate(() => ((window as unknown as { __MOCK_MOVE_CALLS__?: unknown[] }).__MOCK_MOVE_CALLS__ ?? []).length),
+    '#409 carry-pan: the release committed nothing',
+  ).toBe(0);
+
+  // Still glued to the cursor, on the camera the pan just moved.
+  await expectTracksCursor(page, lngLat, panned, '#409 carry-pan: ghost tracks across the pan');
+
+  // And the still click that follows is the drop, landing where the cursor is.
+  await page.mouse.click(box.x + panned.x, box.y + panned.y);
+  await waitForMapIdle(page);
+  await expectCommitLandsAtCursor(page, lngLat, panned, '#409 carry-pan commit');
+  await expect.poll(() => getDragGhostState(page), { timeout: 5000 }).toBeNull();
+});
+
 test('move_station snap-to-target holds across a mid-drag zoom (snap + #79)', async ({ page }) => {
   // Guards the M2 split: the per-frame zoom re-apply skips the O(all-stations) snap SCAN
   // but must still re-ALIGN a held snap at the new zoom. Grab one station, drag onto
@@ -453,4 +512,47 @@ test('move_station snap-to-target holds across a mid-drag zoom (snap + #79)', as
   await expectTracksCursor(page, origin.lngLat, targetAfter, 'snap: origin still on target after zoom', 2);
 
   await page.keyboard.press('Escape');
+});
+
+test('move-tool hint banner names the phase: pick up -> drop -> gone (#409)', async ({ page }) => {
+  // The move tools are click-to-pick-up -> ghost -> click-to-drop, and a press-drag pans
+  // the camera instead (#409), so the banner is the only thing that explains the gesture.
+  // The drop copy is asserted with a ghost PROVEN in flight (expectTracksCursor), not
+  // merely after a click, so a pick-up that silently failed cannot pass this.
+  await setupMockedPage(page);
+  await createProject(page, 'Move Hint Banner Test');
+  await waitForMapReady(page);
+  await seedProjectWithSections(page, SECTION_SEEDS);
+  await waitForMapIdle(page);
+
+  const hint = page.getByTestId('move-tool-hint');
+
+  // select (the default tool): no hint at all.
+  await waitForActiveTool(page, 'select');
+  await expect(hint).toHaveCount(0);
+
+  await activateTool(page, 't', 'move_station');
+  await expect(hint).toBeVisible();
+  await expect(hint).toContainText('Click a station to pick it up');
+
+  const box = await page.getByTestId('map-canvas').boundingBox();
+  if (!box) throw new Error('no canvas box');
+  const { screen: s, lngLat } = await centerOnStation(page, 18);
+
+  await page.mouse.click(box.x + s.x, box.y + s.y);
+  const cursor = { x: s.x + 60, y: s.y - 40 };
+  await page.mouse.move(box.x + cursor.x, box.y + cursor.y, { steps: 6 });
+  await expectTracksCursor(page, lngLat, cursor, '#409 hint: ghost really in flight');
+  await expect(hint).toContainText('Click to drop it here');
+  await expect(hint).not.toContainText('pick it up');
+
+  // Escape cancels the move drag (MapCanvas' moveDrag Escape handler), so the banner
+  // falls back to the pick-up copy - which is also what makes "Esc to cancel" honest.
+  await page.keyboard.press('Escape');
+  await expect(hint).toContainText('Click a station to pick it up');
+
+  // Back to select: gone again.
+  await page.keyboard.press('s');
+  await waitForActiveTool(page, 'select');
+  await expect(hint).toHaveCount(0);
 });

@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useLayoutEffect, useCallback } from 'react';
+import { useState, useRef, useEffect, useLayoutEffect, useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useUIStore, type ToolType } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
@@ -23,8 +23,8 @@ import { SpeleoStatusButton } from './SpeleoStatusButton';
 import { useSpeleoStore } from '../../store/speleoStore';
 import { useEditingBlocked } from '../../hooks/useEditingBlocked';
 import UndoHistoryDropdown from './UndoHistoryDropdown';
-import { TOOL_GROUPS, type ToolGroupDef } from '../../utils/toolGroups';
-import { isMutatingTool } from '../../utils/toolUtils';
+import { TOOL_GROUPS, isNavigationTool, type ToolGroupDef } from '../../utils/toolGroups';
+import { isMutatingTool, navigationToolsEnabled } from '../../utils/toolUtils';
 import { setSource } from '../../utils/telemetry';
 import { defaultConfig } from '../../types/config';
 
@@ -127,16 +127,31 @@ export const TOOLBAR_ITEMS: ToolbarItem[] = [
   { kind: 'standalone', id: 'measure', shortcut: 'R' },
 ];
 
-// Plan/Export are read-only workspaces (#38): the mutating tools (merge, comment,
-// move) make no sense there, so they're HIDDEN - not merely disabled - leaving only
-// the non-mutating Select / Pan / Zoom / Measure. Filtered once from TOOLBAR_ITEMS so
-// it stays in sync, with separators left dangling by the removals cleaned up.
-export const READ_ONLY_TOOLBAR_ITEMS: ToolbarItem[] = (() => {
-  const kept = TOOLBAR_ITEMS.filter((item) => {
+/**
+ * Drop every tool `keepTool` rejects from a toolbar layout, then tidy the
+ * separators the removals left behind.
+ *
+ * A GROUP survives if ANY of its members is kept - the group button itself picks
+ * the subtool, so a half-kept group is still a usable button.
+ *
+ * The separator cleanup is the subtle half (#241): removing a whole cluster
+ * leaves two ADJACENT separators, and dropping every separator with a separator
+ * neighbour deletes both (each sees the other), rendering a toolbar with no
+ * divider at all. So: collapse runs of separators to one, and drop any leading or
+ * trailing separator.
+ *
+ * Composable on purpose - the read-only and hide-navigation filters both run
+ * through here, in either order, and each pass re-tidies what the previous left.
+ */
+export function filterToolbarItems(
+  items: ToolbarItem[],
+  keepTool: (tool: ToolType) => boolean
+): ToolbarItem[] {
+  const kept = items.filter((item) => {
     if (item.kind === 'separator') return true;
-    if (item.kind === 'standalone') return !isMutatingTool(item.id);
+    if (item.kind === 'standalone') return keepTool(item.id);
     const group = TOOL_GROUPS.find((g) => g.id === item.groupId);
-    return group ? group.tools.some((tool) => !isMutatingTool(tool)) : false;
+    return group ? group.tools.some((tool) => keepTool(tool)) : false;
   });
   const collapsed: ToolbarItem[] = [];
   for (const item of kept) {
@@ -148,7 +163,16 @@ export const READ_ONLY_TOOLBAR_ITEMS: ToolbarItem[] = (() => {
   }
   if (collapsed[collapsed.length - 1]?.kind === 'separator') collapsed.pop();
   return collapsed;
-})();
+}
+
+// Plan/Export are read-only workspaces (#38): the mutating tools (merge, comment,
+// move) make no sense there, so they're HIDDEN - not merely disabled - leaving only
+// the non-mutating Select / Pan / Zoom / Measure. Filtered once from TOOLBAR_ITEMS so
+// it stays in sync, with separators left dangling by the removals cleaned up.
+export const READ_ONLY_TOOLBAR_ITEMS: ToolbarItem[] = filterToolbarItems(
+  TOOLBAR_ITEMS,
+  (tool) => !isMutatingTool(tool)
+);
 
 /** What one condense stage turns off, and the classes that stage implies. */
 export interface ToolbarCondenseLayout {
@@ -231,7 +255,18 @@ export default function Toolbar({
   // backend edit gate is the real enforcement; this is the visual parity.
   const editingBlocked = useEditingBlocked();
   // Survey shows the full toolbar; Plan/Export show only the non-mutating tools.
-  const toolbarItems = appMode === 'survey' ? TOOLBAR_ITEMS : READ_ONLY_TOOLBAR_ITEMS;
+  // On top of that, the navigate group (Pan/Zoom) is hidden unless the user opted
+  // in (#409) - the map pans on a plain drag and zooms on the wheel under every
+  // tool, so the tools are redundant for anyone who can do both. Filtering the
+  // ALREADY-filtered read-only layout is why filterToolbarItems re-tidies
+  // separators on every pass: Plan/Export with navigation off is Select | Measure.
+  const config = useProjectStore((s) => s.config);
+  const showNavigationTools = navigationToolsEnabled(config);
+  const toolbarItems = useMemo(() => {
+    const base = appMode === 'survey' ? TOOLBAR_ITEMS : READ_ONLY_TOOLBAR_ITEMS;
+    if (showNavigationTools) return base;
+    return filterToolbarItems(base, (tool) => !isNavigationTool(tool));
+  }, [appMode, showNavigationTools]);
 
   // Progressive condensation when the left (file/history) and right (tools/display)
   // clusters can't clear the absolutely-centered mode carousel. Because the carousel
@@ -319,6 +354,9 @@ export default function Toolbar({
     editingBlocked,
     speleoLinkPresent,
     speleoUnpushedBadge,
+    // The navigate group appearing/disappearing changes the right cluster's
+    // natural width (#409), so its toggle must re-run the fit from scratch.
+    showNavigationTools,
     t,
   ]);
 

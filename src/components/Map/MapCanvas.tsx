@@ -9,11 +9,12 @@ import {
   useUIStore,
   isMapReadOnly,
   showsClosureAdjustedNotice,
-  type Selection,
 } from '../../store/uiStore';
 import { selectComputeGate, useGasPlanStore } from '../../store/gasPlanStore';
 import { selectActiveStations, selectActiveSurveyData } from '../../store/geometrySelectors';
-import { isMutatingTool, toolCursor } from '../../utils/toolUtils';
+import { isMutatingTool, shouldResetNavigationTool, toolCursor } from '../../utils/toolUtils';
+import { mapGestureMode } from '../../utils/mapGestures';
+import { attachDragReleaseForwarder } from '../../utils/mapDragRelease';
 import { hasEligibleClosures } from '../../utils/closures';
 import { useShallow } from 'zustand/react/shallow';
 import {
@@ -56,19 +57,25 @@ import { MapTopLeftOverlay } from './MapTopLeftOverlay';
 import { useSpeleoStore, selectSpeleoReadOnly } from '../../store/speleoStore';
 import { useNetworkStore } from '../../store/networkStore';
 import { FEATURE_ID_STRIDE } from '../../utils/ids';
-import { setSource } from '../../utils/telemetry';
 import { debugLog } from '../../utils/debugLog';
 import { TOAST_KEYS } from '../../utils/toastKeys';
-
-// Tools that support temporary panning overrides (Ctrl+drag or middle-drag)
-const CTRL_PAN_TOOLS = ['select', 'zoom', 'merge', 'measure', 'move_station', 'move_shot', 'move_segment', 'comment', 'move_comment'];
 
 // Stable empty warnings array fed to the survey-layer rebuild effect when
 // Issue-severity coloring is OFF. Module-level so its identity never changes
 // across renders - a per-render [] would defeat the rebuild-gating memo below.
 const EMPTY_WARNINGS: ProjectWarning[] = [];
 
-interface BoxSelectState {
+/**
+ * How far a WATCHED Ctrl+left press has to travel before the custom pan takes
+ * it over. Equal to MapLibre's default `clickTolerance` (map init does not
+ * override it), which is the distance at which MapLibre itself stops calling a
+ * press-and-release a click: below it the press is left alone so Ctrl+click can
+ * toggle a feature's selection, above it MapLibre suppresses its own click and
+ * the gesture is unambiguously a drag.
+ */
+const CUSTOM_PAN_CLAIM_PX = 3;
+
+interface ZoomBoxState {
   start: { x: number; y: number } | null;
   end: { x: number; y: number } | null;
 }
@@ -210,8 +217,7 @@ function MapCanvas() {
   const gasOriginMarkerRef = useRef<maplibregl.Marker | null>(null);
   const scaleControlRef = useRef<maplibregl.ScaleControl | null>(null);
   const scaleControlAddedRef = useRef<boolean>(false);
-  const [boxSelect, setBoxSelect] = useState<BoxSelectState>({ start: null, end: null });
-  const [zoomBox, setZoomBox] = useState<BoxSelectState>({ start: null, end: null });
+  const [zoomBox, setZoomBox] = useState<ZoomBoxState>({ start: null, end: null });
   const [moveDrag, setMoveDrag] = useState<MoveDragState | null>(null);
   const [mapLoaded, setMapLoaded] = useState(false);
   const [ctrlHeld, setCtrlHeld] = useState(false);
@@ -278,6 +284,14 @@ function MapCanvas() {
   const snapMergeDialogPendingRef = useRef(false);
   // Co-located station refs for station drag (includes merged/closured stations)
   const stationDragColocatedRefsRef = useRef<StationRef[]>([]);
+  // Where the live press landed (client coords), or null once that press has
+  // travelled far enough to be a drag rather than a click. This is what
+  // click-gates the move ghost's drop (#409): a plain drag pans the map, so only
+  // a press that stays put may commit. Set on every pointerdown that reaches the
+  // canvas, cleared by the release that ends it - and by the first pointermove
+  // past the threshold, which latches the decision exactly as the custom pan's
+  // own claim does (coming back to the press point cannot revive the drop).
+  const pressClientRef = useRef<{ x: number; y: number } | null>(null);
   const { t } = useTranslation();
 
   const { project, stations, surveyData, stationsAdjusted, surveyDataAdjusted, adjustedLoading, loadAdjustedGeometry, config, warnings, moveStation, moveSegment, getConnectedSectionIds, getAnchoredSectionIds, executeBatch } = useProjectStore();
@@ -420,7 +434,6 @@ function MapCanvas() {
     measureAlongLinePending,
     setMeasureSnapShot,
     clearMeasure,
-    addToSelection,
     clearSelection,
     clearSelectionByType,
     filterSelection,
@@ -728,6 +741,10 @@ function MapCanvas() {
     // by then, so the click would be treated as an empty-click and clear selection.
     placementJustConfirmedRef.current = true;
     requestAnimationFrame(() => { placementJustConfirmedRef.current = false; });
+    // Same pointer-before-touch ordering, other consumer: the long-press gate
+    // reads placementMode at touchstart, after this confirm already cleared it,
+    // so stamp the confirm to keep the hold from also opening a context menu.
+    surveyLayerRef.current?.notePlacementConfirmed();
 
     // If there's a callback, call it with the result
     // The caller is responsible for what to do with the placement
@@ -1033,80 +1050,6 @@ function MapCanvas() {
     }),
     [baseToolCallbacks, noteMapInteraction, showToast],
   );
-
-  // Box select handlers
-  const handleBoxSelectStart = useCallback(
-    (e: React.PointerEvent) => {
-      if (activeTool !== 'select') return;
-      if (!mapContainer.current) return;
-
-      // Only start box select on left click and not on a feature
-      if (e.button !== 0) return;
-
-      // Don't start box select when Ctrl is held (Ctrl+drag is for panning)
-      // Use e.ctrlKey directly instead of state to avoid timing issues
-      if (e.ctrlKey) return;
-
-      const rect = mapContainer.current.getBoundingClientRect();
-      const x = e.clientX - rect.left;
-      const y = e.clientY - rect.top;
-
-      setBoxSelect({ start: { x, y }, end: { x, y } });
-    },
-    [activeTool]
-  );
-
-  const handleBoxSelectMove = useCallback(
-    (e: React.PointerEvent) => {
-      if (!boxSelect.start || !mapContainer.current) return;
-
-      const rect = mapContainer.current.getBoundingClientRect();
-      const x = e.clientX - rect.left;
-      const y = e.clientY - rect.top;
-
-      setBoxSelect((prev) => ({ ...prev, end: { x, y } }));
-    },
-    [boxSelect.start]
-  );
-
-  const handleBoxSelectEnd = useCallback(() => {
-    if (!boxSelect.start || !boxSelect.end || !map.current) {
-      setBoxSelect({ start: null, end: null });
-      return;
-    }
-
-    // Calculate selection box bounds in map coordinates
-    const minX = Math.min(boxSelect.start.x, boxSelect.end.x);
-    const maxX = Math.max(boxSelect.start.x, boxSelect.end.x);
-    const minY = Math.min(boxSelect.start.y, boxSelect.end.y);
-    const maxY = Math.max(boxSelect.start.y, boxSelect.end.y);
-
-    // Only process if box is large enough (not just a click)
-    if (maxX - minX > 5 && maxY - minY > 5) {
-      // Resolve stations in the box via SurveyLayer (#mem): the rendered
-      // hitbox query gates candidate sections and the SoA resolver applies
-      // the same circle-box hit semantics the direct queryRenderedFeatures
-      // call had - per-station identity no longer lives on bulk features.
-      const refs = surveyLayerRef.current?.queryStationsInBox(minX, minY, maxX, maxY) ?? [];
-
-      if (refs.length > 0) {
-        // Clear existing selection if not holding shift
-        clearSelection();
-        setSource('map');
-
-        // Add all stations in box to selection
-        refs.forEach((stationRef) => {
-          const sel: Selection = {
-            type: 'station',
-            stationRef,
-          };
-          addToSelection(sel);
-        });
-      }
-    }
-
-    setBoxSelect({ start: null, end: null });
-  }, [boxSelect, clearSelection, addToSelection]);
 
   // Zoom box handlers (for click-to-zoom and box zoom in task 3)
   const handleZoomBoxStart = useCallback(
@@ -1753,6 +1696,9 @@ function MapCanvas() {
     // Disable rotation (Ctrl+drag rotates by default, we want Ctrl+drag to pan)
     map.current.dragRotate.disable();
     map.current.touchPitch.disable();
+    // Two-finger twist rotates by default; the survey is a top-down plan, so a
+    // pinch must zoom only.
+    map.current.touchZoomRotate.disableRotation();
     // Disable box zoom (Ctrl+drag draws selection box by default, we want Ctrl+drag to pan)
     map.current.boxZoom.disable();
 
@@ -2322,6 +2268,18 @@ function MapCanvas() {
     }
   }, [geometryMode, appMode, speleoReadOnly, activeTool, setActiveTool]);
 
+  // Turning the navigate group off (#409) has to take Pan/Zoom off the MAP too, not
+  // just out of the toolbar: the tool is persisted UI state, so a user who was on Pan
+  // when they flipped the setting would otherwise be stuck with a tool that has no
+  // button to leave it with. The predicate is pure and lives in toolUtils so its
+  // null-config boot semantics are pinned by unit tests (kicking a restored Pan/Zoom
+  // tool before the real config arrives is the regression they guard).
+  useEffect(() => {
+    if (shouldResetNavigationTool(config, activeTool)) {
+      setActiveTool('select');
+    }
+  }, [config, activeTool, setActiveTool]);
+
   // Update callbacks when they change
   useEffect(() => {
     if (surveyLayerRef.current) {
@@ -2580,7 +2538,7 @@ function MapCanvas() {
     if (placementMode) return;
 
     // In supported tools with Ctrl held, show grab cursor for panning
-    const ctrlPan = CTRL_PAN_TOOLS.includes(activeTool) && ctrlHeld;
+    const ctrlPan = activeTool !== 'pan' && ctrlHeld;
     const base = ctrlPan ? 'grab' : toolCursor(activeTool);
 
     // If hovering over a feature, SurveyLayer sets cursor to 'pointer'
@@ -2602,19 +2560,34 @@ function MapCanvas() {
     // SurveyLayer at all.
   }, [activeTool, ctrlHeld, isHoveringFeature, placementMode, mapLoaded]);
 
-  // Disable map drag pan for tools that need custom interaction
-  // (Ctrl+drag panning is handled by custom implementation, not dragPan)
+  // Narrowed to a boolean before the gesture effects consume it: `placementMode`
+  // is replaced wholesale on every cursor update, so depending on the object
+  // itself would re-run them on each pointer move during placement.
+  const placementActive = placementMode !== null;
+
+  // ONE gesture decision for the whole component, destructured to primitives so
+  // the effects below can depend on it. Three consumers read it: the dragPan
+  // effect right here, the custom modifier-pan (which claims a Ctrl+left press
+  // outright only where MapLibre's dragPan is OFF), and the container's
+  // touch-action. Sharing the decision rather than re-deriving it from the same
+  // inputs is what stops them disagreeing about who owns the drag. An in-flight
+  // move ghost is deliberately NOT an input: carrying one leaves the drag to
+  // MapLibre and click-gates the drop instead (see `handlePointerUp`).
+  const { dragPan: mapLibreDragPan, touchAction } = mapGestureMode({
+    activeTool,
+    placementActive,
+  });
+
+  // Hand plain left-drag to MapLibre unless the current tool or mode owns it.
   useEffect(() => {
     if (!map.current) return;
 
-    const noPanTools = ['select', 'zoom', 'merge', 'measure', 'move_station', 'move_segment', 'move_shot', 'comment', 'move_comment'];
-
-    if (noPanTools.includes(activeTool)) {
-      map.current.dragPan.disable();
-    } else {
+    if (mapLibreDragPan) {
       map.current.dragPan.enable();
+    } else {
+      map.current.dragPan.disable();
     }
-  }, [activeTool]);
+  }, [mapLibreDragPan]);
 
   // Toggle doubleClickZoom based on active tool (disable for zoom tool, enable otherwise)
   useEffect(() => {
@@ -2668,7 +2641,7 @@ function MapCanvas() {
     map.current.setMaxZoom(config.map.zoom_max ?? 22);
   }, [config]);
 
-  // Track Ctrl key for cursor updates and box/zoom select cancellation
+  // Track Ctrl key for cursor updates and zoom-box cancellation
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       // Recover from a genuine Ctrl release that the keyup workaround below
@@ -2683,8 +2656,7 @@ function MapCanvas() {
       if (e.key === 'Control' && !e.repeat) {
         setCtrlHeld(true);
 
-        // Cancel any active box select or zoom box when Ctrl is pressed (mid-drag Ctrl converts to pan)
-        setBoxSelect({ start: null, end: null });
+        // Cancel any active zoom box when Ctrl is pressed (mid-drag Ctrl converts to pan)
         setZoomBox({ start: null, end: null });
       }
     };
@@ -2708,8 +2680,7 @@ function MapCanvas() {
       customPanActiveRef.current = false;
       ctrlPanActiveRef.current = false;
       setCtrlHeld(false);
-      // Cancel any active box select or zoom box
-      setBoxSelect({ start: null, end: null });
+      // Cancel any active zoom box
       setZoomBox({ start: null, end: null });
     };
 
@@ -2795,8 +2766,12 @@ function MapCanvas() {
   }, [moveDrag, setSnappedStation]);
 
   // Custom temporary panning implementation for Ctrl+left-drag and middle-drag.
-  // MapLibre's dragPan with modifiers is unreliable in Tauri/WebKit, so we track
-  // mouse movement directly and call panBy() ourselves.
+  // MapLibre cannot do either itself: its mouse-pan handler ignores any press
+  // that is not a bare left button - maplibre-gl 5.16 `generateMousePanHandler`
+  // uses `checkCorrectEvent: (e) => mouseButton(e) === LEFT_BUTTON && !e.ctrlKey`
+  // - and with `dragRotate`/`boxZoom` disabled (map init) nothing else claims a
+  // Ctrl+left drag either. So we track the movement and call panBy() ourselves,
+  // which is also what makes `pan_speed` a thing the modifier gestures can honour.
   const rawPanSpeed = config?.map.controls.pan_speed ?? 1.0;
   const panSpeed = Number.isFinite(rawPanSpeed) ? Math.min(5.0, Math.max(0.1, rawPanSpeed)) : 1.0;
   useEffect(() => {
@@ -2806,31 +2781,77 @@ function MapCanvas() {
     // Track drag start state for custom panning.
     let customPanStart: { x: number; y: number } | null = null;
     let customPanButtonMask: number | null = null;
+    // The press point, and whether the gesture has actually been TAKEN OVER.
+    // The two differ only for a Ctrl+left press in the modes where a plain drag
+    // already pans: there the press is merely WATCHED until it travels far
+    // enough to be a drag. Claiming it at mousedown is what made the documented
+    // Ctrl+click selection toggle unreachable - the press was swallowed and so
+    // was the click behind it, so `handleStationClick`'s `ctrlKey` branch
+    // (useMapTools) never ran under any tool.
+    let customPanOrigin: { x: number; y: number } | null = null;
+    let customPanClaimed = false;
+
+    /** Take the gesture over: suppress it, flag it, and show the pan cursor. */
+    const claimCustomPan = (e: MouseEvent, isCtrlLeftPan: boolean) => {
+      if (!map.current) return;
+      customPanClaimed = true;
+      customPanActiveRef.current = true;
+      ctrlPanActiveRef.current = isCtrlLeftPan;
+      if (isCtrlLeftPan) {
+        ctrlPanMouseEventTimeRef.current = Date.now();
+      }
+
+      // Suppress default browser behavior during custom pan
+      e.stopPropagation();
+      e.preventDefault();
+
+      // Change cursor to indicate panning
+      map.current.getCanvas().style.cursor = 'grabbing';
+    };
 
     const handleMouseDownCapture = (e: MouseEvent) => {
       const isCtrlLeftPan = e.ctrlKey && e.button === 0;
       const isMiddlePan = e.button === 1;
-      if ((isCtrlLeftPan || isMiddlePan) && CTRL_PAN_TOOLS.includes(activeTool) && map.current) {
-        customPanActiveRef.current = true;
-        ctrlPanActiveRef.current = isCtrlLeftPan;
-        if (isCtrlLeftPan) {
-          ctrlPanMouseEventTimeRef.current = Date.now();
-        }
+      // Every tool but pan: the pan tool owns plain left-drag itself, so the
+      // modifier gesture would be redundant there.
+      if ((isCtrlLeftPan || isMiddlePan) && activeTool !== 'pan' && map.current) {
         customPanStart = { x: e.clientX, y: e.clientY };
+        customPanOrigin = { x: e.clientX, y: e.clientY };
         customPanButtonMask = isMiddlePan ? 4 : 1;
+        customPanClaimed = false;
 
-        // Suppress default browser behavior during custom pan
-        e.stopPropagation();
-        e.preventDefault();
-
-        // Change cursor to indicate panning
-        map.current.getCanvas().style.cursor = 'grabbing';
+        // Claim the press outright where nothing else can want it: a middle
+        // press has no other meaning, and where MapLibre's dragPan is OFF the
+        // mode owns the press itself (placement confirms on pointerdown, the
+        // zoom tool starts its box) - neither of which may happen because Ctrl
+        // was held. Where a plain drag already pans, a Ctrl+left press is only
+        // watched: see `customPanClaimed`. Carrying a move ghost is in that
+        // second group since #409 - the drop is click-gated, so a Ctrl press
+        // that travels becomes a pan on the same 3px threshold as everywhere
+        // else, and one that does not travel drops the ghost.
+        if (isMiddlePan || !mapLibreDragPan) {
+          claimCustomPan(e, isCtrlLeftPan);
+        }
       }
     };
 
     // Implement custom panning since modified/middle drag interactions are handled manually.
     const handleMouseMoveCapture = (e: MouseEvent) => {
       if (customPanStart && customPanButtonMask !== null && (e.buttons & customPanButtonMask) !== 0 && map.current) {
+        if (!customPanClaimed) {
+          // A watched Ctrl+left press becomes a pan the moment it stops being a
+          // click. The threshold is MapLibre's own `clickTolerance` (default 3px,
+          // map init does not override it), so the handover lands exactly where
+          // MapLibre itself stops calling the gesture a click: below it the press
+          // is left alone and the click goes through to the selection toggle,
+          // above it MapLibre would suppress its own click anyway.
+          if (!customPanOrigin) return;
+          const travel = Math.hypot(e.clientX - customPanOrigin.x, e.clientY - customPanOrigin.y);
+          if (travel < CUSTOM_PAN_CLAIM_PX) return;
+          // Pans from the PRESS point, not from here: the map follows the whole
+          // travel, so the takeover is invisible rather than a 3px jump.
+          claimCustomPan(e, true);
+        }
         const dx = e.clientX - customPanStart.x;
         const dy = e.clientY - customPanStart.y;
 
@@ -2854,8 +2875,15 @@ function MapCanvas() {
 
     const handleMouseUpCapture = (e: MouseEvent) => {
       if (customPanStart && map.current) {
+        const wasClaimed = customPanClaimed;
         customPanStart = null;
         customPanButtonMask = null;
+        customPanOrigin = null;
+        customPanClaimed = false;
+        // A watched press that never travelled is a Ctrl+CLICK, not a pan. None
+        // of the suppression below may touch it - and `customPanActiveRef`, which
+        // the click capture reads, was never set, so the click reaches MapLibre.
+        if (!wasClaimed) return;
         // Record timestamp for spurious keyup filter (Tauri/WebKit can fire one near mouseup too)
         if (ctrlPanActiveRef.current) {
           ctrlPanMouseEventTimeRef.current = Date.now();
@@ -2877,7 +2905,7 @@ function MapCanvas() {
         // Station/Shot's arrow fallback, which a raw `move` write here would
         // defeat with nothing to correct it (hover only re-derives when the
         // hovered id CHANGES, so a pointer resting on empty map keeps it).
-        const ctrlStillPanning = e.ctrlKey && CTRL_PAN_TOOLS.includes(activeTool);
+        const ctrlStillPanning = e.ctrlKey && activeTool !== 'pan';
         const restored = ctrlStillPanning ? 'grab' : toolCursor(activeTool);
         if (surveyLayerRef.current) {
           surveyLayerRef.current.setBaseCursor(restored, ctrlStillPanning);
@@ -2903,7 +2931,12 @@ function MapCanvas() {
     const handlePointerDownCapture = (e: PointerEvent) => {
       const isCtrlLeftPan = e.ctrlKey && e.button === 0;
       const isMiddlePan = e.button === 1;
-      if ((isCtrlLeftPan || isMiddlePan) && CTRL_PAN_TOOLS.includes(activeTool) && map.current && e.pointerType === 'mouse') {
+      // Mirrors the outright claim in handleMouseDownCapture. A merely WATCHED
+      // Ctrl press must reach the app's own pointerdown handling untouched - in
+      // those modes it does nothing with it anyway (placement and the zoom box
+      // are both modal), and stopping it here would be a second way to swallow
+      // the gesture behind the mousedown capture's back.
+      if ((isMiddlePan || (isCtrlLeftPan && !mapLibreDragPan)) && activeTool !== 'pan' && map.current && e.pointerType === 'mouse') {
         e.stopPropagation();
       }
     };
@@ -2911,7 +2944,7 @@ function MapCanvas() {
     const handlePointerUpCapture = (e: PointerEvent) => {
       // If we're in custom pan, stop pointer events from reaching MapLibre.
       // (customPanStart is still set here - cleared by handleMouseUpCapture which fires after)
-      if (customPanStart && e.pointerType === 'mouse') {
+      if (customPanStart && customPanClaimed && e.pointerType === 'mouse') {
         e.stopPropagation();
       }
     };
@@ -2929,6 +2962,8 @@ function MapCanvas() {
       // (handleMouseUpCapture only fires for events on the container element)
       customPanStart = null;
       customPanButtonMask = null;
+      customPanOrigin = null;
+      customPanClaimed = false;
       if (ctrlPanActiveRef.current) {
         ctrlPanMouseEventTimeRef.current = Date.now();
       }
@@ -2953,6 +2988,11 @@ function MapCanvas() {
     mapElement.addEventListener('pointerup', handlePointerUpCapture, { capture: true });
     window.addEventListener('mousedown', handleMouseDownGlobal, { capture: true });
     window.addEventListener('mouseup', handleMouseUpGlobal);
+    // A plain left-drag - the default pan gesture since #409 - released over the
+    // floating chrome (dock reveal handles, the Data tab, MapLibre's own
+    // navigation/scale controls) would otherwise leave the map stuck "moving";
+    // src/utils/mapDragRelease.ts has why MapLibre needs the help.
+    const detachDragReleaseForwarder = attachDragReleaseForwarder(() => map.current);
 
     return () => {
       mapElement.removeEventListener('mousedown', handleMouseDownCapture, { capture: true });
@@ -2963,8 +3003,14 @@ function MapCanvas() {
       mapElement.removeEventListener('pointerup', handlePointerUpCapture, { capture: true });
       window.removeEventListener('mousedown', handleMouseDownGlobal, { capture: true });
       window.removeEventListener('mouseup', handleMouseUpGlobal);
+      detachDragReleaseForwarder();
     };
-  }, [activeTool, panSpeed]);
+    // `mapLibreDragPan` decides whether a Ctrl+left press is claimed outright or
+    // only watched, so the handlers have to be re-registered when it flips. That
+    // re-registers the drag-release forwarder with them; it is attach/detach
+    // symmetric and holds no in-flight state of its own, so re-arming it between
+    // gestures is inert.
+  }, [activeTool, mapLibreDragPan, panSpeed]);
 
   // Zoom tool capture handlers - intercept clicks on the map canvas to prevent SurveyLayer selection
   // and handle right-click zoom out behavior. Attaches to the canvas element specifically to avoid
@@ -3641,14 +3687,7 @@ function MapCanvas() {
 
     if (placementMode) {
       map.current.getCanvas().style.cursor = 'crosshair';
-      // Disable drag pan during placement
-      map.current.dragPan.disable();
     } else {
-      // Re-enable drag pan when placement mode ends (unless current tool should disable it)
-      const noPanTools = ['select', 'zoom', 'merge', 'measure', 'move_station', 'move_segment', 'move_shot', 'comment', 'move_comment'];
-      if (!noPanTools.includes(activeTool)) {
-        map.current.dragPan.enable();
-      }
       // Reset cursor based on current tool. This effect keys on `activeTool` as
       // well as `placementMode`, so it also runs on an ordinary tool switch,
       // AFTER the passive effect above (effects run in declaration order) - a
@@ -3664,22 +3703,8 @@ function MapCanvas() {
     }
   }, [placementMode, activeTool]);
 
-  // Determine touch-action: block browser gestures for interactive tools, allow pan/zoom for pan tool
-  const touchAction = useMemo(() => {
-    const noPanTools = ['select', 'zoom', 'merge', 'measure',
-      'move_station', 'move_segment', 'move_shot', 'comment', 'move_comment'];
-    return (placementMode || noPanTools.includes(activeTool)) ? 'none' : 'manipulation';
-  }, [activeTool, placementMode]);
-
-  // Calculate box select overlay style
-  const boxSelectStyle = boxSelect.start && boxSelect.end
-    ? {
-        left: Math.min(boxSelect.start.x, boxSelect.end.x),
-        top: Math.min(boxSelect.start.y, boxSelect.end.y),
-        width: Math.abs(boxSelect.end.x - boxSelect.start.x),
-        height: Math.abs(boxSelect.end.y - boxSelect.start.y),
-      }
-    : null;
+  // `touchAction` - block browser gestures only where the tool or mode owns the
+  // drag - comes from the single `mapGestureMode` call above.
 
   // Combined pointer handlers (PointerEvent is a superset of MouseEvent)
   const handlePointerMove = useCallback(
@@ -3704,12 +3729,22 @@ function MapCanvas() {
         return;
       }
 
+      // A live press that travels past the click threshold stops being a
+      // possible drop and becomes a pan, permanently for this gesture: forget
+      // the press point so the release cannot commit even if the cursor comes
+      // back to it. Latching mirrors the custom pan's `customPanClaimed`, which
+      // also never un-claims. Moves with no button down (the ghost simply
+      // following the cursor) cannot reach this with a press in flight - a
+      // press is only live between its own pointerdown and pointerup.
+      const press = pressClientRef.current;
+      if (press && Math.hypot(e.clientX - press.x, e.clientY - press.y) >= CUSTOM_PAN_CLAIM_PX) {
+        pressClientRef.current = null;
+      }
+
       if (moveDrag) {
         handleMoveDragMove(e.clientX, e.clientY);
       } else if (zoomBox.start) {
         handleZoomBoxMove(e);
-      } else if (boxSelect.start) {
-        handleBoxSelectMove(e);
       }
 
       // Always check snap when moving (snap logic internally checks if tool requires snap).
@@ -3731,27 +3766,51 @@ function MapCanvas() {
         }
       }
     },
-    [moveDrag, zoomBox.start, boxSelect.start, handleMoveDragMove, handleZoomBoxMove, handleBoxSelectMove, checkSnapToStation, placementMode, checkPlacementSnap, updatePlacementCursor, updatePlacementSnap]
+    [moveDrag, zoomBox.start, handleMoveDragMove, handleZoomBoxMove, checkSnapToStation, placementMode, checkPlacementSnap, updatePlacementCursor, updatePlacementSnap]
   );
 
-  const handlePointerUp = useCallback(() => {
+  const handlePointerUp = useCallback((e: React.PointerEvent) => {
+    // The press this release ends, if there was one on the canvas. Consumed
+    // here either way, so a later release can never reuse it.
+    const press = pressClientRef.current;
+    pressClientRef.current = null;
+
     if (moveDrag) {
       // Block while snap-to-merge dialog is open
       if (snapMergeDialogPendingRef.current) {
         return;
       }
+      // The drop is CLICK-gated (#409): a plain drag pans the map now, so only
+      // a press that stayed put commits. Anything else leaves the ghost in
+      // flight, still following the cursor, and lets MapLibre's dragPan own the
+      // gesture - including a release that lands outside the canvas, which
+      // never reaches this handler at all.
+      //
+      // `press === null` means the gesture did not start on the canvas (a press
+      // on the floating chrome, or none at all) or has already travelled past
+      // the threshold (handlePointerMove forgets it). Neither is a drop.
+      //
+      // The threshold is the one the custom pan claims on, so the two agree on
+      // one boundary with one meaning: under CUSTOM_PAN_CLAIM_PX the gesture is
+      // a click - which is also where MapLibre stops calling it one - at or
+      // above it, it is a drag.
+      //
+      // Nothing here consults `ctrlKey`, deliberately: a still Ctrl+click drops
+      // exactly like a plain one. Ctrl+click's other meaning is the selection
+      // toggle, which `SurveyLayer.handleMapClick` already ignores under the
+      // move tools, so there is nothing for the modifier to protect here.
+      if (press === null) return;
+      if (Math.hypot(e.clientX - press.x, e.clientY - press.y) >= CUSTOM_PAN_CLAIM_PX) return;
       handleMoveDragEnd();
     } else if (zoomBox.start) {
       handleZoomBoxEnd();
-    } else if (boxSelect.start) {
-      handleBoxSelectEnd();
     }
-  }, [moveDrag, zoomBox.start, boxSelect.start, handleMoveDragEnd, handleZoomBoxEnd, handleBoxSelectEnd]);
+  }, [moveDrag, zoomBox.start, handleMoveDragEnd, handleZoomBoxEnd]);
 
   // Pointer leave: keep all move drags alive so user can return the cursor
-  const handlePointerLeave = useCallback(() => {
+  const handlePointerLeave = useCallback((e: React.PointerEvent) => {
     if (moveDrag) return;
-    handlePointerUp();
+    handlePointerUp(e);
   }, [moveDrag, handlePointerUp]);
 
   // Handle placement mode click
@@ -3807,20 +3866,33 @@ function MapCanvas() {
       if (!canvas || !canvas.contains(e.target as Node)) {
         return;
       }
-      // Let MapLibre handle touch pan/zoom when pan tool is active
-      if (e.pointerType === 'touch' && activeTool === 'pan') {
-        return;
-      }
+      // Remember where the press landed, for the click gate in
+      // `handlePointerUp`. Recorded for every canvas press rather than only
+      // while carrying a ghost: a press cannot outlive its own release, so a
+      // fresh press always overwrites, and there is no stale value for a later
+      // gesture to inherit.
+      pressClientRef.current = { x: e.clientX, y: e.clientY };
       if (placementMode) {
         handlePlacementClick(e);
       } else if (activeTool === 'zoom') {
         handleZoomBoxStart(e);
-      } else {
-        handleBoxSelectStart(e);
       }
     },
-    [placementMode, activeTool, handlePlacementClick, handleZoomBoxStart, handleBoxSelectStart]
+    [placementMode, activeTool, handlePlacementClick, handleZoomBoxStart]
   );
+
+  // What the move-tool hint banner talks about (#409), or null when there is nothing to
+  // hint at. An in-flight drag wins over the active tool: `moveDrag` outlives a mid-drag
+  // tool switch, and it is what the drop instruction is about.
+  const moveHintKind: 'station' | 'segment' | 'shot' | null =
+    moveDrag?.type ??
+    (activeTool === 'move_station'
+      ? 'station'
+      : activeTool === 'move_segment'
+        ? 'segment'
+        : activeTool === 'move_shot'
+          ? 'shot'
+          : null);
 
   // Pointer handlers always attached - they check e.ctrlKey internally to decide behavior
   return (
@@ -3841,15 +3913,6 @@ function MapCanvas() {
       onContextMenu={handleContextMenu}
     >
       <div ref={mapContainer} className="w-full h-full" data-testid="maplibre-container" />
-
-      {/* Box select overlay */}
-      {boxSelectStyle && (
-        <div
-          className="absolute border-2 border-accent border-dashed bg-accent-10 pointer-events-none"
-          style={boxSelectStyle}
-          data-testid="box-select-overlay"
-        />
-      )}
 
       {/* Zoom box overlay */}
       {zoomBox.start && zoomBox.end && (
@@ -4032,18 +4095,37 @@ function MapCanvas() {
         </div>
       )}
 
-      {/* Move drag indicator */}
-      {moveDrag && !placementMode && (
-        <div className="absolute top-2 left-1/2 -translate-x-1/2 bg-panel border border-accent rounded px-3 py-2 text-sm">
+      {/* Move-tool hint (#409). The move tools are click-to-pick-up -> ghost follows the
+          cursor -> click-to-drop; a press-drag pans the camera by design, so nothing
+          about the interaction is discoverable without this banner. Same chrome and the
+          same `!placementMode` mutual exclusion as the placement/merge/measure
+          indicators above; it is the only one of them that can be up while a move tool
+          is idle, hence `pointer-events-none` - it covers a strip of the map for as long
+          as the tool is active, and a pick-up or drop click that lands on it has to
+          reach the canvas. (`handlePointerDown` already ignores non-canvas targets, so
+          without the pass-through such a click would be swallowed outright.)
+          Not gated on `snapMergeDialogPendingRef`: that's a ref, so it wouldn't
+          re-render the banner anyway, and the dialog it tracks is a modal overlay. */}
+      {moveHintKind !== null && !placementMode && (
+        <div
+          className="absolute top-2 left-1/2 -translate-x-1/2 bg-panel border border-accent rounded px-3 py-2 text-sm pointer-events-none"
+          data-testid="move-tool-hint"
+        >
           <span className="text-accent">
-            {moveDrag.type === 'station'
+            {moveHintKind === 'station'
               ? t('map.move.station')
-              : moveDrag.type === 'segment'
+              : moveHintKind === 'segment'
                 ? t('map.move.segment')
                 : t('map.move.shot')}
             :
           </span>{' '}
-          {t('map.move.instructions')}
+          {moveDrag
+            ? t('map.move.dropInstructions')
+            : moveHintKind === 'station'
+              ? t('map.move.pickUpInstructions.station')
+              : moveHintKind === 'segment'
+                ? t('map.move.pickUpInstructions.segment')
+                : t('map.move.pickUpInstructions.shot')}
         </div>
       )}
 

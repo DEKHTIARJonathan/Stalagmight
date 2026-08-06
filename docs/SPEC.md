@@ -780,14 +780,14 @@ defaults from `src-tauri/src/config/defaults.rs` and are all rebindable.
 
 | Tool | Shortcut | Click Station | Click Shot | Click Empty | Drag |
 |------|----------|---------------|------------|-------------|------|
-| **Select** | S | Open detail panel | Open shot details | Deselect | Box select |
-| **Pan** | P | Pan | Pan | Pan | Pan map |
-| **Zoom** | Z | Zoom in | Zoom in | Zoom in | Zoom area |
+| **Select** | S | Open detail panel | Open shot details | Deselect | Pan map |
+| **Pan** *(hidden by default; `map.controls.show_navigation_tools`)* | P | Pan | Pan | Pan | Pan map |
+| **Zoom** *(hidden by default; `map.controls.show_navigation_tools`)* | Z | Zoom in | Zoom in | Zoom in | Zoom area |
 | **Merge** | M | Select for merge | - | - | - |
 | **Measure** | R | Start measurement | - | Start measurement | - |
-| **Move Station** | T | - | - | - | Drag unanchored station |
-| **Move Shot** | G | - | - | - | Drag one shot: both endpoints plus any co-located stations |
-| **Move Segment** | V | - | - | Deselect | Drag the whole connected branch (sections joined by merges and aligned closures) |
+| **Move Station** | T | Pick up an unanchored station | - | Drop what is being carried | Pan map |
+| **Move Shot** | G | - | Pick up one shot: both endpoints plus any co-located stations | Drop what is being carried | Pan map |
+| **Move Segment** | V | Pick up the whole connected branch (sections joined by merges and aligned closures) | Same, grabbed on a shot | Drop what is being carried, else deselect | Pan map |
 | **Comment** | C | Open the comment editor on the station | Open the comment editor on the shot | Close the editor | - |
 | **Move Comment** | Shift+C | Pick up the comment; second click moves it (swap dialog if the target already has one) | Same, for shot comments | Cancel | - |
 
@@ -795,6 +795,19 @@ There is no Draw or Delete tool. Shots are added from the map context menu:
 **Add Shot Before/After** at the ends of a section, or **Insert Station...** on
 any shot, which splits it in two (also available from the data table's row
 menu). Deletion is select plus Delete/Backspace, or the context menu.
+
+Panning is not a tool either. A plain left-click-drag pans the map under every
+tool in the table except **Zoom**, whose drag draws its zoom box, and in
+placement mode, which confirms on press rather than on release. The single
+predicate is `mapGestureMode` in `src/utils/mapGestures.ts`. The move tools are
+click-to-pick-up and click-to-drop throughout: a drag pans even while geometry is
+being carried, leaving the ghost on the cursor, and only a press that stays put
+drops it. **Pan** and **Zoom** survive as
+an accessibility fallback for anyone who cannot drag or scroll: they are hidden
+from the toolbar, and their P/Z shortcuts inert, unless
+`map.controls.show_navigation_tools` is on (Settings -> Map -> Controls).
+Turning that setting off while one of them is active drops the map back to
+Select.
 
 The three move tools are documented in detail in [move-tools.md](move-tools.md).
 
@@ -813,10 +826,10 @@ The three move tools are documented in detail in [move-tools.md](move-tools.md).
 - LRUD passage walls (future)
 
 #### Map Interactions
-- Pan: Middle mouse drag, Pan tool, or Space+drag
-- Zoom: Scroll wheel, +/- keys, Zoom tool
+- Pan: Click-hold-drag anywhere, middle mouse drag, or Ctrl+drag
+- Zoom: Scroll wheel, pinch, double-click, +/- keys, F to fit
 - Select: Left click
-- Multi-select: Shift+click (add), Ctrl+click (toggle), drag box
+- Multi-select: Shift+click (add), Ctrl+click (toggle)
 - Context menu: Right click
 - Snap to station: Automatic when within threshold (configurable)
 
@@ -1730,6 +1743,10 @@ All shortcuts are configurable and can be cleared:
 - T: Move Station, G: Move Shot, V: Move Segment
 - C: Comment, Shift+C: Move Comment
 
+P and Z act only when `map.controls.show_navigation_tools` is on; the Pan and
+Zoom tools are hidden by default, and while they are hidden those two keys do
+nothing at all.
+
 #### Skip Links
 - "Skip to main content"
 - "Skip to data table"
@@ -2396,6 +2413,8 @@ not live co-editing), and floating/dockable panels.
 | Keyboard Shortcuts Overlay | ? |
 
 **Note**: Import (Ctrl+I) and Export (Ctrl+E) shortcuts are user-configurable via the Settings dialog. Open (Ctrl+O) and Import (Ctrl+I) open the same unified picker - any supported file routes to the right open/import flow by extension (#407). The defaults shown above can be reassigned to any available key combination.
+
+**Note**: P and Z act only when `map.controls.show_navigation_tools` is on (Settings -> Map -> Controls). The Pan and Zoom tools are hidden by default, and while they are hidden both keys behave like unbound keys. The map still pans on a plain drag and zooms on the wheel under every tool.
 
 **Note**: When Pan (P) or Zoom (Z) tools are active, selection-related shortcuts (Ctrl+A, Delete/Backspace) are disabled to prevent accidental modifications while navigating the map. Hover effects and click selection are also disabled.
 

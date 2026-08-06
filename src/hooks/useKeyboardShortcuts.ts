@@ -4,7 +4,7 @@ import { useUIStore } from '../store/uiStore';
 import { useProjectStore } from '../store/projectStore';
 import { useGasPlanStore } from '../store/gasPlanStore';
 import { isEditingBlockedNow } from './useEditingBlocked';
-import { isNonInteractiveTool } from '../utils/toolUtils';
+import { isNonInteractiveTool, navigationToolsEnabled } from '../utils/toolUtils';
 import { normalizeShortcut, parseKeyEvent } from '../utils/shortcuts';
 import { surfaceSaveFailure } from '../utils/saveFeedback';
 import { runFileShortcutAction } from '../utils/fileShortcutActions';
@@ -564,6 +564,11 @@ export function useKeyboardShortcuts() {
         case 'move_shot':
         case 'comment_tool':
         case 'move_comment_tool': {
+          // P does nothing while the navigate group is hidden (#409). The guard is
+          // BEFORE preventDefault and the toast on purpose: a key bound to a tool
+          // that does not exist has to behave exactly like an unbound key, not like
+          // a key that was pressed and swallowed.
+          if (action === 'pan' && !navigationToolsEnabled(currentConfig)) break;
           const tool = TOOL_ACTIONS[action];
           if (tool) {
             event.preventDefault();
@@ -574,6 +579,8 @@ export function useKeyboardShortcuts() {
         }
 
         case 'zoom':
+          // Same as 'pan' above: hidden tool, unbound key.
+          if (!navigationToolsEnabled(currentConfig)) break;
           // Regular toggle to zoom tool
           event.preventDefault();
           setActiveTool('zoom');

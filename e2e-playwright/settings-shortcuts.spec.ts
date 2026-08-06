@@ -236,10 +236,14 @@ test.describe('Settings Dialog - Shortcuts Tab', () => {
       await openSettingsDialog(page);
       await navigateToShortcutsCategory(page);
 
+      // Records on MEASURE, not pan (#409): the Pan/Zoom rows are rendered
+      // disabled while `map.controls.show_navigation_tools` is off, so their
+      // recorders refuse to start recording at all - a reserved-key probe there
+      // would test the disabled gate, not the reserved-key check.
       // Try to assign a reserved shortcut (Escape)
-      const recorder = page.locator('[data-testid="shortcut-primary-pan"]');
+      const recorder = page.locator('[data-testid="shortcut-primary-measure"]');
       await recorder.click();
-      await waitForRecording(page, 'shortcut-primary-pan', true);
+      await waitForRecording(page, 'shortcut-primary-measure', true);
 
       // Press Escape - this should be blocked (reserved key)
       // Note: Escape cancels recording, so we try a different reserved one
@@ -366,10 +370,12 @@ test.describe('Settings Dialog - Shortcuts Tab', () => {
       await page.keyboard.press('Q');
       await waitForRecording(page, 'shortcut-primary-select', false);
 
-      const panRecorder = page.locator('[data-testid="shortcut-primary-pan"]');
-      await panRecorder.click();
+      // Second row is MEASURE, not pan (#409): the pan row is disabled while
+      // the navigation tools are hidden, so it cannot be customized here.
+      const measureRecorder = page.locator('[data-testid="shortcut-primary-measure"]');
+      await measureRecorder.click();
       await page.keyboard.press('W');
-      await waitForRecording(page, 'shortcut-primary-pan', false);
+      await waitForRecording(page, 'shortcut-primary-measure', false);
 
       // Click Reset All button
       const resetAllButton = page.locator('[data-testid="shortcuts-reset-all"]');
@@ -377,7 +383,7 @@ test.describe('Settings Dialog - Shortcuts Tab', () => {
 
       // Verify all shortcuts are back to defaults
       await expect(selectRecorder).toContainText('S');
-      await expect(panRecorder).toContainText('P');
+      await expect(measureRecorder).toContainText('R');
     });
   });
 
@@ -447,17 +453,23 @@ test.describe('Settings Dialog - Shortcuts Tab', () => {
   });
 
   test.describe('Shortcut Functionality After Save', () => {
+    // Rebinds MERGE, not pan (#409): the pan tool is off the toolbar unless
+    // `map.controls.show_navigation_tools` is on, and while it is hidden the
+    // shortcut handler ignores the pan action entirely - so a rebind-to-Q test
+    // on pan would prove nothing about rebinding, only about the gate. The pan
+    // ROW still exists in Settings (the config is unconditional), which is why
+    // the conflict cases elsewhere in this file still key on it.
     test('customized shortcut works after save', async ({ page }) => {
       // beforeEach has already created a project and we're in project view
       // Open settings from GlobalView (need to go back first)
       await openSettingsDialog(page);
       await navigateToShortcutsCategory(page);
 
-      // Change the pan tool shortcut from P to Q
-      const recorder = page.locator('[data-testid="shortcut-primary-pan"]');
+      // Change the merge tool shortcut from M to Q
+      const recorder = page.locator('[data-testid="shortcut-primary-merge"]');
       await recorder.click();
       await page.keyboard.press('Q');
-      await waitForRecording(page, 'shortcut-primary-pan', false);
+      await waitForRecording(page, 'shortcut-primary-merge', false);
 
       // Save
       await page.locator('[data-testid="settings-save-button"]').click();
@@ -467,35 +479,27 @@ test.describe('Settings Dialog - Shortcuts Tab', () => {
       // (we're now in GlobalView after Settings closed)
       await createProject(page, 'Shortcut Test Project');
 
-      // Get the current tool from store
-      const toolBefore = await page.evaluate(() => {
+      const activeTool = () => page.evaluate(() => {
         const stores = (window as unknown as { __E2E_TEST__?: { uiStore: { getState: () => { activeTool: string } } } }).__E2E_TEST__;
         return stores?.uiStore?.getState()?.activeTool ?? 'unknown';
       });
 
-      // Press Q (new pan shortcut)
+      // Press Q (new merge shortcut)
       await page.keyboard.press('Q');
 
-      // Verify pan tool is now active (poll the store rather than sleeping)
-      await expect.poll(() => page.evaluate(() => {
-        const stores = (window as unknown as { __E2E_TEST__?: { uiStore: { getState: () => { activeTool: string } } } }).__E2E_TEST__;
-        return stores?.uiStore?.getState()?.activeTool ?? 'unknown';
-      })).toBe('pan');
+      // Verify merge tool is now active (poll the store rather than sleeping)
+      await expect.poll(activeTool).toBe('merge');
 
-      // Verify old shortcut (P) no longer activates pan
+      // Verify old shortcut (M) no longer activates merge
       // Switch to select first
       await page.keyboard.press('S');
-      await page.waitForTimeout(100);
+      await expect.poll(activeTool).toBe('select');
 
-      await page.keyboard.press('P');
+      await page.keyboard.press('M');
+      // A settle, not a poll: this proves the tool does NOT change, and a poll
+      // would accept the pre-update value.
       await page.waitForTimeout(100);
-
-      // Tool should NOT change to pan (P is now unassigned for pan)
-      const toolAfterP = await page.evaluate(() => {
-        const stores = (window as unknown as { __E2E_TEST__?: { uiStore: { getState: () => { activeTool: string } } } }).__E2E_TEST__;
-        return stores?.uiStore?.getState()?.activeTool ?? 'unknown';
-      });
-      expect(toolAfterP).toBe('select'); // Should stay as select
+      expect(await activeTool()).toBe('select'); // Should stay as select
     });
   });
 
@@ -638,16 +642,18 @@ test.describe('Settings Dialog - Shortcuts Tab', () => {
       // No error should appear
       await expect(page.locator('[data-testid="shortcut-error"]')).not.toBeVisible();
 
-      // Assign freed Ctrl+E to pan - should NOT conflict since it was freed
-      const panRecorder = page.locator('[data-testid="shortcut-primary-pan"]');
-      await panRecorder.click();
-      await waitForRecording(page, 'shortcut-primary-pan', true);
+      // Assign freed Ctrl+E to MEASURE - should NOT conflict since it was freed.
+      // (Measure, not pan: the pan row is disabled while the navigation tools
+      // are hidden (#409) and its recorder will not accept a rebind.)
+      const measureRecorder = page.locator('[data-testid="shortcut-primary-measure"]');
+      await measureRecorder.click();
+      await waitForRecording(page, 'shortcut-primary-measure', true);
       await page.keyboard.press('Control+E');
-      await waitForRecording(page, 'shortcut-primary-pan', false);
+      await waitForRecording(page, 'shortcut-primary-measure', false);
 
       // Should show Ctrl+E without error
-      await expect(panRecorder).toContainText(KEY.Ctrl);
-      await expect(panRecorder).toContainText('E');
+      await expect(measureRecorder).toContainText(KEY.Ctrl);
+      await expect(measureRecorder).toContainText('E');
       await expect(page.locator('[data-testid="shortcut-error"]')).not.toBeVisible();
     });
 

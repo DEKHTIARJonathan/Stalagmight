@@ -29,6 +29,16 @@ fn test_map_snap_config_defaults() {
 }
 
 #[test]
+fn test_map_controls_config_defaults() {
+    let config = MapControlsConfig::default();
+    assert_eq!(config.pan_speed, 1.0);
+    assert_eq!(config.zoom_speed, 1.0);
+    assert!(!config.invert_scroll);
+    // #409: the Pan/Zoom toolbar group is hidden unless the user opts in.
+    assert!(!config.show_navigation_tools);
+}
+
+#[test]
 fn test_map_config_defaults() {
     let config = MapConfig::default();
     assert_eq!(config.station.radius, 4.0);
@@ -764,6 +774,7 @@ zoom_step = 1.5
 pan_speed = 1.0
 zoom_speed = 1.0
 invert_scroll = false
+show_navigation_tools = true
 
 [map.station]
 radius = 6.0
@@ -825,6 +836,7 @@ log_hit_detection = true
     assert!(!config.map.snap.enabled_merge);
     assert!(config.map.snap.enabled_measure);
     assert_eq!(config.map.zoom_step, 1.5);
+    assert!(config.map.controls.show_navigation_tools);
 
     // Verify debug values
     assert!(config.debug.map.show_hitboxes);
@@ -917,6 +929,10 @@ save = "Ctrl+S"
     assert!(config.map.snap.enabled_measure); // default
     assert_eq!(config.map.zoom_step, 1.0); // default
 
+    // A [map.controls] table written before #409 has no show_navigation_tools key:
+    // it must still parse, with the tools hidden.
+    assert!(!config.map.controls.show_navigation_tools); // default
+
     // Debug section defaults
     assert!(!config.debug.map.show_hitboxes);
     assert!(!config.debug.map.log_hit_detection);
@@ -1006,6 +1022,24 @@ save = "Ctrl+S"
     assert_eq!(config.map.station.radius, 8.0);
     // Missing field uses default
     assert_eq!(config.map.station.hit_area, 10.0);
+}
+
+#[test]
+fn test_map_controls_show_navigation_tools_opt_in_parses_and_round_trips() {
+    // #409: the setting is what puts the Pan/Zoom tools back, so an explicit
+    // `true` has to survive both directions - reading the user's file, and
+    // rewriting it when any other setting is saved.
+    let controls: MapControlsConfig = toml::from_str(
+        "pan_speed = 1.0\nzoom_speed = 1.0\ninvert_scroll = false\nshow_navigation_tools = true\n",
+    )
+    .expect("a [map.controls] table with show_navigation_tools should parse");
+    assert!(controls.show_navigation_tools);
+
+    let mut config = Config::default();
+    config.map.controls.show_navigation_tools = true;
+    let serialized = toml::to_string_pretty(&config).expect("Config should serialize");
+    let deserialized: Config = toml::from_str(&serialized).expect("Serialized config should parse");
+    assert!(deserialized.map.controls.show_navigation_tools);
 }
 
 // ========================================================================

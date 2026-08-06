@@ -3,6 +3,7 @@ import type { Page, Locator } from './fixtures/coverage';
 import {
   setupMockedPage,
   createProject,
+  seedNavigationTools,
   seedProjectWithSections,
   waitForMapReady,
   waitForActiveTool,
@@ -169,6 +170,12 @@ async function zoomInOnSurvey(page: Page, zoomDelta = 4): Promise<void> {
 
 test.describe('Toolbar Tool Groups', () => {
   test.beforeEach(async ({ page }) => {
+    // The navigate group is one of the two groups this spec exercises, and it is
+    // hidden unless `map.controls.show_navigation_tools` is on (#409). Seeded
+    // before setupMockedPage: the toolbar reads the flag from the app's first
+    // `get_config` at boot. The default-config toolbar is covered by the
+    // describe at the bottom of this file.
+    await seedNavigationTools(page);
     await setupMockedPage(page);
   });
 
@@ -586,5 +593,32 @@ test.describe('Toolbar Tool Groups', () => {
         { timeout: 10000 }
       )
       .toBe('pointer');
+  });
+});
+
+/**
+ * The default toolbar - no `seedNavigationTools`, so the mock's config reports
+ * `map.controls.show_navigation_tools: false` exactly like a fresh install.
+ *
+ * Its own top-level describe rather than a nested one: the seed registers an
+ * init script and must run BEFORE `setupMockedPage`, so a nested `beforeEach`
+ * (which runs after the outer one has already navigated) cannot opt out of it.
+ */
+test.describe('Toolbar Tool Groups - default config (#409)', () => {
+  test.beforeEach(async ({ page }) => {
+    await setupMockedPage(page);
+  });
+
+  test('the navigate group is absent while the other tools stay', async ({ page }) => {
+    await createProjectWithSections(page);
+
+    // Gone from the DOM, not merely hidden - the toolbar filters the item out.
+    await expect(page.getByTestId('tool-group-navigate')).toHaveCount(0);
+
+    // Everything else the survey toolbar offers is untouched.
+    await expect(page.getByTestId('tool-select')).toBeVisible();
+    await expect(page.getByTestId('tool-merge')).toBeVisible();
+    await expect(page.getByTestId('tool-measure')).toBeVisible();
+    await expect(page.getByTestId('tool-group-move')).toBeVisible();
   });
 });

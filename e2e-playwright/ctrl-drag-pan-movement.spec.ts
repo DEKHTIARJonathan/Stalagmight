@@ -2,6 +2,9 @@ import { test, expect, Page } from './fixtures/coverage';
 import {
   setupMockedPage,
   createProject,
+  getMapCenter,
+  getSelection,
+  seedNavigationTools,
   seedProjectWithSections,
   waitForMapReady,
   waitForActiveTool,
@@ -10,6 +13,7 @@ import {
   waitForDrawnStations,
   readCanvasPixel,
   countCanvasInk,
+  type MapCenter,
   type SectionSeed,
   type ScreenPoint,
 } from './helpers/app';
@@ -25,11 +29,6 @@ import {
  * 2. Verify Ctrl+drag in Select mode produces same behavior
  * 3. Use logging with tolerances to diagnose issues
  */
-
-interface MapCenter {
-  lng: number;
-  lat: number;
-}
 
 /** Geometry for the drawn-content check (a project is created empty by the mocks). */
 const SECTION_SEEDS: SectionSeed[] = [
@@ -51,18 +50,6 @@ const SECTION_SEEDS: SectionSeed[] = [
 async function createProjectWithMap(page: Page): Promise<void> {
   await createProject(page, 'Pan Movement Test');
   await waitForMapReady(page);
-}
-
-/**
- * Get map center coordinates via exposed map instance.
- */
-async function getMapCenter(page: Page): Promise<MapCenter | null> {
-  return page.evaluate(() => {
-    const map = (window as unknown as { __stalagmight_map__?: { getCenter: () => { lng: number; lat: number } } }).__stalagmight_map__;
-    if (!map) return null;
-    const center = map.getCenter();
-    return { lng: center.lng, lat: center.lat };
-  });
 }
 
 /**
@@ -174,6 +161,11 @@ async function warmupMapDragHandlers(page: Page): Promise<void> {
 
 test.describe('Ctrl+Drag Pan - Content Movement Verification', () => {
   test.beforeEach(async ({ page }) => {
+    // This spec measures pan-gesture ARITHMETIC against the Pan tool as its
+    // known-good baseline, and the tool is off the toolbar (P inert) unless
+    // `map.controls.show_navigation_tools` is on (#409). Seeded before
+    // setupMockedPage so the flag reaches the app's first `get_config`.
+    await seedNavigationTools(page);
     await setupMockedPage(page);
     await createProjectWithMap(page);
     await waitForMap(page);
@@ -438,7 +430,11 @@ test.describe('Ctrl+Drag Pan - Content Movement Verification', () => {
       expect(zoomBefore).toBeCloseTo(zoomAfter!, 5);
     });
 
-    test('no box select overlay during Ctrl+drag', async ({ page }) => {
+    // Was 'no box select overlay during Ctrl+drag'. Box select is gone (#409),
+    // so the overlay it asserted the absence of cannot exist; what the case is
+    // really about - a Ctrl+drag in select mode moves the camera and picks
+    // nothing up - is asserted directly.
+    test('Ctrl+drag in select mode moves the camera and selects nothing', async ({ page }) => {
       await page.keyboard.press('s');
       await waitForActiveTool(page, 'select');
       await waitForMapIdle(page);
@@ -450,18 +446,125 @@ test.describe('Ctrl+Drag Pan - Content Movement Verification', () => {
       const centerX = box!.x + box!.width / 2;
       const centerY = box!.y + box!.height / 2;
 
+      const selectionBefore = await getSelection(page);
+      const centerBefore = await getMapCenter(page);
+      expect(centerBefore).not.toBeNull();
+
       // Ctrl+drag
       await page.keyboard.down('Control');
       await page.mouse.move(centerX, centerY);
       await page.mouse.down();
       await page.mouse.move(centerX + 100, centerY + 100, { steps: 5 });
-
-      // Check for box select overlay (should NOT exist)
-      const boxOverlay = page.getByTestId('box-select-overlay');
-      await expect(boxOverlay).not.toBeVisible();
-
       await page.mouse.up();
       await page.keyboard.up('Control');
+      await waitForMapIdle(page);
+
+      const centerAfter = await getMapCenter(page);
+      expect(centerAfter).not.toBeNull();
+      expect(
+        Math.abs(centerAfter!.lng - centerBefore!.lng) +
+          Math.abs(centerAfter!.lat - centerBefore!.lat)
+      ).toBeGreaterThan(0.00001);
+
+      const selectionAfter = await getSelection(page);
+      expect(selectionAfter).toEqual(selectionBefore);
+    });
+  });
+
+  /**
+   * The modal modes - the zoom tool's box and placement, the only two left -
+   * are where MapLibre's dragPan is turned OFF entirely (`mapGestureMode`), so
+   * ANY camera movement here is the custom handler's doing and nothing else's.
+   * That makes this the place to pin the two things that are only true of the
+   * custom handler: it claims the press outright (no travel threshold, because
+   * the mode would otherwise act on the press itself), and it scales the pan by
+   * `map.controls.pan_speed`, which MapLibre's own 1:1 dragPan has no notion of.
+   */
+  test.describe('Ctrl+Drag with the Zoom tool (dragPan disabled)', () => {
+    test.describe.configure({ retries: 2 });
+
+    /** Camera slide, in screen pixels, produced by `drag`. */
+    async function measureCameraSlide(
+      page: Page,
+      drag: () => Promise<void>,
+    ): Promise<{ dx: number; dy: number }> {
+      const anchor = await getMapCenter(page);
+      const before = await projectLngLat(page, anchor);
+      await drag();
+      await waitForMapIdle(page);
+      const after = await projectLngLat(page, anchor);
+      return { dx: after.x - before.x, dy: after.y - before.y };
+    }
+
+    test('Ctrl+drag pans, and pan_speed scales it', async ({ page }) => {
+      await page.keyboard.press('z');
+      await waitForActiveTool(page, 'zoom');
+      await waitForMapIdle(page);
+
+      const canvas = page.getByTestId('map-canvas');
+      const box = (await canvas.boundingBox())!;
+      const centerX = box.x + box.width / 2;
+      const centerY = box.y + box.height / 2;
+
+      const ctrlDrag = async () => {
+        await page.keyboard.down('Control');
+        await page.mouse.move(centerX, centerY);
+        await page.mouse.down();
+        await page.mouse.move(centerX + 100, centerY, { steps: 5 });
+        await page.mouse.up();
+        await page.keyboard.up('Control');
+      };
+
+      // pan_speed 1.0 (the mocked config's value): the world follows the cursor.
+      const atOne = await measureCameraSlide(page, ctrlDrag);
+      console.log(`[zoom tool] pan_speed 1.0 slide: dx=${atOne.dx.toFixed(1)}`);
+      expect(atOne.dx).toBeGreaterThan(80);
+      expect(atOne.dx).toBeLessThan(120);
+      expect(Math.abs(atOne.dy)).toBeLessThan(10);
+
+      // Nothing else moved the camera: the zoom box must not have run, and the
+      // tool must have survived its own pan gesture.
+      await expect(canvas).toHaveAttribute('data-active-tool', 'zoom');
+
+      // Double it in the live config the effect reads.
+      await page.evaluate(() => {
+        const store = (window as unknown as {
+          __E2E_TEST__: {
+            projectStore: {
+              getState: () => { config: { map: { controls: Record<string, unknown> } } };
+              setState: (partial: Record<string, unknown>) => void;
+            };
+          };
+        }).__E2E_TEST__.projectStore;
+        const config = store.getState().config;
+        store.setState({
+          config: {
+            ...config,
+            map: { ...config.map, controls: { ...config.map.controls, pan_speed: 2.0 } },
+          },
+        });
+      });
+      await expect
+        .poll(() =>
+          page.evaluate(
+            () =>
+              (window as unknown as {
+                __E2E_TEST__: {
+                  projectStore: {
+                    getState: () => { config: { map: { controls: { pan_speed: number } } } };
+                  };
+                };
+              }).__E2E_TEST__.projectStore.getState().config.map.controls.pan_speed,
+          ),
+        )
+        .toBe(2.0);
+
+      const atTwo = await measureCameraSlide(page, ctrlDrag);
+      console.log(`[zoom tool] pan_speed 2.0 slide: dx=${atTwo.dx.toFixed(1)}`);
+      // Twice the travel for the same 100px of cursor. Compared as a ratio so the
+      // claim is about the multiplier, not about a pixel budget.
+      expect(atTwo.dx / atOne.dx).toBeGreaterThan(1.6);
+      expect(atTwo.dx / atOne.dx).toBeLessThan(2.4);
     });
   });
 

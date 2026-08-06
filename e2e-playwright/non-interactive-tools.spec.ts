@@ -2,6 +2,7 @@ import { test, expect, Page } from './fixtures/coverage';
 import {
   setupMockedPage,
   createProject,
+  seedNavigationTools,
   seedProjectWithSections,
   waitForMapReady,
   waitForActiveTool,
@@ -97,6 +98,11 @@ async function getCanvasBoundingBox(page: Page): Promise<{
 
 test.describe('Non-interactive tools', () => {
   test.beforeEach(async ({ page }) => {
+    // Pan and Zoom ARE the non-interactive tools, and both are off the toolbar
+    // (P/Z inert) unless `map.controls.show_navigation_tools` is on (#409).
+    // Seeded BEFORE setupMockedPage: the flag has to be present for the app's
+    // first `get_config` at boot.
+    await seedNavigationTools(page);
     await setupMockedPage(page);
     await createProjectWithStations(page);
   });

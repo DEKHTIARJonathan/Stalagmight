@@ -11,6 +11,8 @@ import {
 import { ToolGlyph } from '../common/toolIcons';
 import { clamp } from '../../utils/clamp';
 import { publishOnboardingStep } from '../../hooks/useOnboardingStep';
+import { useProjectStore } from '../../store/projectStore';
+import { navigationToolsEnabled } from '../../utils/toolUtils';
 
 interface OnboardingOverlayProps {
   step: ActiveOnboardingStep;
@@ -277,15 +279,21 @@ function renderMouseIcon(className: string, highlight: 'left' | 'wheel' | 'right
   );
 }
 
+/**
+ * `showNavigationTools` mirrors `map.controls.show_navigation_tools` (#409): the
+ * Pan/Zoom tools are off the toolbar unless the user opts in, so the tour must
+ * not point at a group that is not on screen.
+ */
 function renderStepIllustration(
   illustration: OnboardingIllustration | undefined,
-  t: (key: string) => string
+  t: (key: string) => string,
+  showNavigationTools: boolean
 ): JSX.Element | null {
   if (illustration === 'map-with-pan-zoom') {
     return (
       <>
-        {renderStepIllustration('mouse-pan-zoom', t)}
-        {renderStepIllustration('map-controls', t)}
+        {renderStepIllustration('mouse-pan-zoom', t, showNavigationTools)}
+        {renderStepIllustration('map-controls', t, showNavigationTools)}
       </>
     );
   }
@@ -344,7 +352,7 @@ function renderStepIllustration(
       },
     };
 
-    const groups: { id: string; title: string; items: Array<keyof typeof toolItems> }[] = [
+    const allGroups: { id: string; title: string; items: Array<keyof typeof toolItems> }[] = [
       {
         id: 'select',
         title: t('onboarding.illustrations.tools.groups.select'),
@@ -371,6 +379,12 @@ function renderStepIllustration(
         items: ['moveStation', 'moveShot', 'moveSegment'],
       },
     ];
+    // Drop the navigate group when the toolbar drops it (#409). `groupColumns`
+    // still names it; the lookup below already skips a column entry with no
+    // group, so the first column degrades to Select alone rather than breaking.
+    const groups = showNavigationTools
+      ? allGroups
+      : allGroups.filter((group) => group.id !== 'navigate');
 
     const groupById = Object.fromEntries(groups.map((group) => [group.id, group]));
     const groupIcons: Record<string, JSX.Element | null> = {
@@ -509,22 +523,41 @@ function renderStepIllustration(
           </svg>
           {t('onboarding.illustrations.mouse.panTitle')}
         </div>
-        <div className="grid grid-cols-[1fr_auto_1fr] items-end pt-2 text-xs text-text-secondary">
-          <div className="col-start-1 flex items-end justify-center gap-2">
-            <span className="inline-flex h-7 min-w-[2.7rem] items-center justify-center rounded-md border border-border bg-background-50 px-2 font-semibold text-text-primary">
-              CTRL
-            </span>
-            <span className="mb-2">+</span>
+        <div className="pt-2 text-xs text-text-secondary">
+          {/*
+            The primary gesture (#409): the map pans on a plain left-drag under
+            every tool, which is why the Pan tool is off the toolbar by default.
+          */}
+          <div className="flex items-end justify-center gap-2">
             <div className="flex w-6 flex-col items-center">
               <span className="mb-1.5 whitespace-nowrap text-center text-[11px] leading-none">Left click</span>
               {renderMouseIcon('h-8 w-7', 'left')}
             </div>
+            <span className="mb-2 whitespace-nowrap">+ drag</span>
           </div>
-          <span className="col-start-2 mb-2 px-1 text-text-secondary">or</span>
-          <div className="col-start-3 flex items-end justify-start gap-2 translate-x-5">
-            <div className="flex w-6 flex-col items-center">
-              <span className="mb-1.5 whitespace-nowrap text-center text-[11px] leading-none">Middle click</span>
-              {renderMouseIcon('h-8 w-7', 'wheel')}
+          {/* The alternatives still work, and still pan while a tool owns the left button. */}
+          <div className="my-1 flex items-center gap-2">
+            <span className="h-0 flex-1 border-t border-border" />
+            <span>or</span>
+            <span className="h-0 flex-1 border-t border-border" />
+          </div>
+          <div className="grid grid-cols-[1fr_auto_1fr] items-end">
+            <div className="col-start-1 flex items-end justify-center gap-2">
+              <span className="inline-flex h-7 min-w-[2.7rem] items-center justify-center rounded-md border border-border bg-background-50 px-2 font-semibold text-text-primary">
+                CTRL
+              </span>
+              <span className="mb-2">+</span>
+              <div className="flex w-6 flex-col items-center">
+                <span className="mb-1.5 whitespace-nowrap text-center text-[11px] leading-none">Left click</span>
+                {renderMouseIcon('h-8 w-7', 'left')}
+              </div>
+            </div>
+            <span className="col-start-2 mb-2 px-1 text-text-secondary">or</span>
+            <div className="col-start-3 flex items-end justify-start gap-2 translate-x-5">
+              <div className="flex w-6 flex-col items-center">
+                <span className="mb-1.5 whitespace-nowrap text-center text-[11px] leading-none">Middle click</span>
+                {renderMouseIcon('h-8 w-7', 'wheel')}
+              </div>
             </div>
           </div>
         </div>
@@ -673,7 +706,16 @@ export default function OnboardingOverlay({
     const raw = t(step.descriptionItemsKey, { returnObjects: true }) as unknown;
     return Array.isArray(raw) ? raw.filter((item): item is string => typeof item === 'string') : [];
   })();
-  const illustration = renderStepIllustration(step.illustration, t);
+  // The tool reference must show the toolbar the user actually has: the
+  // navigate group is hidden unless `map.controls.show_navigation_tools` is on
+  // (#409), and `navigationToolsEnabled(null)` is false, which is the right
+  // answer while config is still loading - the tour cannot run before it is.
+  const config = useProjectStore((state) => state.config);
+  const illustration = renderStepIllustration(
+    step.illustration,
+    t,
+    navigationToolsEnabled(config)
+  );
   const targetSelectorList = useMemo(() => {
     if (step.targetSelectors && step.targetSelectors.length > 0) {
       return step.targetSelectors;

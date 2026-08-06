@@ -1,6 +1,6 @@
 import { test, expect, Page } from './fixtures/coverage';
 import { setupTauriMocks } from './mocks/tauri-ipc';
-import { waitForActiveTool, waitForMapIdle } from './helpers/app';
+import { getMapCenter, seedNavigationTools, waitForActiveTool, waitForMapIdle } from './helpers/app';
 
 /**
  * Helper to wait for the MapLibre map to be ready.
@@ -40,17 +40,6 @@ async function getMapZoom(page: Page): Promise<number | null> {
 }
 
 /**
- * Helper to get the current map center. Returns null if map is not ready.
- */
-async function getMapCenter(page: Page): Promise<{ lng: number; lat: number } | null> {
-  return page.evaluate(() => {
-    const map = (window as unknown as { __stalagmight_map__?: { getCenter: () => { lng: number; lat: number } } }).__stalagmight_map__;
-    const center = map?.getCenter();
-    return center ? { lng: center.lng, lat: center.lat } : null;
-  });
-}
-
-/**
  * Helper to assert the zoom stays pinned at `expectedZoom` across a short
  * settle window (~400ms, 4x100ms samples). waitForMapIdle resolves near-
  * instantly when the map is already idle, so a single read right after it
@@ -85,6 +74,10 @@ async function waitForZoomChange(page: Page, startZoom: number, direction: 'in' 
 
 test.describe('Zoom Tool', () => {
   test.beforeEach(async ({ page }) => {
+    // The Zoom tool is off the toolbar (and Z is inert) unless
+    // `map.controls.show_navigation_tools` is on (#409). Seeded BEFORE the mocks
+    // so the flag is present for the app's first `get_config` at boot.
+    await seedNavigationTools(page);
     await setupTauriMocks(page);
     await page.goto('/');
     await createProjectWithMap(page);

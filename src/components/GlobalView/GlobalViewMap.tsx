@@ -7,6 +7,7 @@ import type { SurveyGeometry } from '../../types/survey';
 import { useGlobalViewStore, type SystemGeometryState } from '../../store/globalViewStore';
 import { ViewModeToggle, useViewMode, type ViewMode } from './ViewModeToggle';
 import { getTileConfig } from '../../utils/tileConfig';
+import { attachDragReleaseForwarder } from '../../utils/mapDragRelease';
 import { getMapThemeColors, getThemeColor } from '../../utils/themeColors';
 import { useUIStore } from '../../store/uiStore';
 import { useNetworkStore } from '../../store/networkStore';
@@ -543,7 +544,14 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
     };
     map.current.on('moveend', handleMoveEndPersist);
 
+    // A drag released over floating chrome (the navigation/scale controls, the
+    // surrounding panels) would otherwise leave the map stuck "moving" - so the
+    // moveend above, which is what persists the viewport, would never fire;
+    // src/utils/mapDragRelease.ts has why MapLibre needs the help.
+    const detachDragReleaseForwarder = attachDragReleaseForwarder(() => map.current);
+
     return () => {
+      detachDragReleaseForwarder();
       // Clean up rubber-band handler and any pending idle listener
       if (rubberBandIdleHandler && map.current) {
         map.current.off('idle', rubberBandIdleHandler);

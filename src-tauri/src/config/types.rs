@@ -932,6 +932,13 @@ pub struct MapControlsConfig {
     pub pan_speed: f64,
     pub zoom_speed: f64,
     pub invert_scroll: bool,
+    /// Show the Pan/Zoom toolbar group (#409). Off by default: the map pans on a
+    /// plain drag and zooms on the wheel under every tool, so the two navigation
+    /// tools are redundant. Kept as an opt-in accessibility fallback for users who
+    /// cannot drag or scroll. `serde(default)` so config files written before the
+    /// field existed keep parsing.
+    #[serde(default)]
+    pub show_navigation_tools: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]

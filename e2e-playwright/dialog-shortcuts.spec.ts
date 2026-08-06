@@ -52,7 +52,10 @@ test.describe('Dialog Shortcut Guards', () => {
     const mapCanvas = page.getByTestId('map-canvas');
     const beforeTool = await mapCanvas.getAttribute('data-active-tool');
 
-    await page.keyboard.press('P');
+    // M (merge), not P: the pan tool is hidden by default (#409) and its
+    // shortcut is inert with no dialog open either, so a P probe would pass
+    // whether or not the dialog guard existed.
+    await page.keyboard.press('M');
 
     await expect(mapCanvas).toHaveAttribute('data-active-tool', beforeTool ?? 'select');
     await expect(page.getByTestId('edit-section-dialog')).toBeVisible();

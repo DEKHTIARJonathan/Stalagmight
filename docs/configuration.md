@@ -104,13 +104,11 @@ zoom_min = 0                        # Zoom range clamp
 zoom_max = 22
 zoom_step = 1.0                     # Zoom delta per +/- keypress
 
-# The whole [map.controls] block is currently inert: it parses and persists,
-# but no runtime code reads these keys (panning and wheel zoom use MapLibre's
-# defaults). Changing them has no effect.
 [map.controls]
-pan_speed = 1.0                     # Keyboard/edge pan multiplier (unwired)
-zoom_speed = 1.0                    # Wheel zoom multiplier (unwired)
-invert_scroll = false               # Reverse wheel zoom direction (unwired)
+show_navigation_tools = false       # Put the Pan/Zoom tools back on the toolbar, with their P/Z shortcuts
+pan_speed = 1.0                     # Ctrl+drag and middle-drag pan multiplier (0.1-5.0); plain drag stays 1:1
+zoom_speed = 1.0                    # Wheel/pinch zoom multiplier (0.1-5.0)
+invert_scroll = false               # Reverse wheel zoom direction
 
 [map.station]
 radius = 4                          # Visual circle radius in pixels (1-50)
@@ -360,8 +358,8 @@ toggle_data_table = ["Ctrl+3"]
 | | `export` | `Ctrl+E` | Export project |
 | | `quit` | `Ctrl+Q` | Quit the application |
 | **Tools** | `select` | `S` | Select tool |
-| | `pan` | `P` | Pan/hand tool |
-| | `zoom` | `Z` | Zoom tool |
+| | `pan` | `P` | Pan/hand tool (acts only when `map.controls.show_navigation_tools` is on) |
+| | `zoom` | `Z` | Zoom tool (acts only when `map.controls.show_navigation_tools` is on) |
 | | `merge` | `M` | Merge tool |
 | | `measure` | `R` | Measure tool |
 | | `move_station` | `T` | Move station tool |

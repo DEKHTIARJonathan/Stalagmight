@@ -24,7 +24,7 @@ Click a station to begin dragging it. If the station shares coordinates with oth
 1. Click on station &rarr; `handleMoveDragStart` (MapCanvas) &rarr; immovable guard check
 2. `beginStationDragPreview()` (SurveyLayer) &rarr; BFS to find co-located stations, create temp layers + dynamic sources for connected shots
 3. Per-mousemove: `updateStationDragPreview(dx, dy)` updates *-translate and rebuilds connected shot geometry. Snap-to-merge detection runs each frame (see [Snap-to-Merge](#snap-to-merge)).
-4. On mouseup: if snapped, opens merge/closure dialog. Otherwise if movement > 1mm, `commitDragPreview()` + `moveStation()` backend call (batched for co-located stations)
+4. On the release of a press that stayed put (see [The drop is click-gated](#the-drop-is-click-gated)): if snapped, opens merge/closure dialog. Otherwise if movement > 1mm, `commitDragPreview()` + `moveStation()` backend call (batched for co-located stations)
 
 ## Move Shot
 
@@ -48,7 +48,7 @@ Click any station or shot in a section to drag the entire connected branch. Conn
 3. Connected sections filtered to exclude anchored ones
 4. `beginDragPreview(connectedSet)` creates temp layers with section inclusion filters
 5. Per-mousemove: `updateDragPreview(dx, dy)` updates *-translate on all temp layers (GPU uniform, no GeoJSON rebuild)
-6. On mouseup: `commitDragPreview()` + `moveSection()` backend call for each connected section
+6. On the release of a press that stayed put (see [The drop is click-gated](#the-drop-is-click-gated)): `commitDragPreview()` + `moveSection()` backend call for each connected section
 
 ### Anchored Sections
 
@@ -60,7 +60,7 @@ During station or segment drag, the user can drop onto another station to merge 
 
 1. **Detection**: Origin station's screen position is tracked + offset by drag amount. For station drag, co-located stations (being dragged together) are excluded from candidates. For segment drag, stations in the dragged segment are excluded.
 2. **Preview**: When a snap target is found, drag preview offset is adjusted so origin station lands exactly on the target. A visual snap indicator is shown.
-3. **Drop**: On mouseup with snap target, `promptSnapMerge()` checks connectivity via the backend (`checkMergeConnectivity`) and opens the appropriate merge or closure dialog (`snapMergeDialogPendingRef` set to block further interactions).
+3. **Drop**: On a drop (a release that passed the click gate) with a snap target, `promptSnapMerge()` checks connectivity via the backend (`checkMergeConnectivity`) and opens the appropriate merge or closure dialog (`snapMergeDialogPendingRef` set to block further interactions). While that dialog is up the drag is *paused*, not ended: `moveDrag` is held alive so Cancel resumes it, and `handlePointerUp` returns on `snapMergeDialogPendingRef` before it reaches the click gate at all.
 4. **Cancel**: Restores preview to raw offset; user can continue dragging.
 
 ### Segment Hover Resolution
@@ -110,28 +110,86 @@ Drag tracking uses refs (`moveDragLngLatRef`, `lastCursorClientRef`, etc.) inste
 
 ---
 
+## The drop is click-gated
+
+A plain left-drag pans the map under the move tools like it does under every
+other tool (#409): MapLibre's own `dragPan` is enabled for them, and it stays
+enabled while a ghost is in flight - `mapGestureMode`
+(`src/utils/mapGestures.ts`) cannot even see the ghost. What distinguishes a
+drop from a pan is not who owns the button but how far the press travelled:
+
+| Gesture while carrying | What happens |
+|------------------------|--------------|
+| Press and release under `CUSTOM_PAN_CLAIM_PX` (3px) of travel - a **click** | The drop: commit, or the snap-merge dialog |
+| Press, travel, release - a **drag** | MapLibre pans; nothing commits, the ghost stays in flight and keeps following the cursor |
+| Release outside the canvas | Never reaches `handlePointerUp`; the drag-release forwarder ends MapLibre's pan, the ghost survives |
+| Escape | Cancels the ghost outright (the `moveDrag` Escape effect), pan or no pan |
+
+`handlePointerUp` (MapCanvas) implements it against `pressClientRef`, the
+client-coordinate press point recorded by `handlePointerDown` for every press
+that reaches the canvas. The decision **latches**: the first `pointermove` past
+the threshold nulls the ref, so a drag that wanders out and comes back cannot
+drop on release - exactly how the custom pan's own `customPanClaimed` never
+un-claims. A null ref at release also covers a press that started off-canvas, so
+neither of those is a drop.
+
+The threshold is the same `CUSTOM_PAN_CLAIM_PX` constant the custom pan claims
+on, deliberately: under it a gesture is a click on both sides of the boundary
+(and to MapLibre, whose `clickTolerance` it equals), at or above it a drag. One
+consequence worth stating: a *still* Ctrl+click drops the ghost like a plain one.
+Nothing on the release path consults `ctrlKey`, and Ctrl+click's other meaning -
+the selection toggle - is already ignored under the move tools by
+`SurveyLayer.handleMapClick`, so there is nothing for the modifier to protect.
+
+On touch this falls out for free: `touchAction: 'manipulation'`, so one finger
+pans, a tap drops, and a pinch moves both fingers far past the threshold and
+therefore cannot drop anything.
+
 ## Ctrl+Drag Panning
 
-All move tools support Ctrl+drag to pan the map (MapLibre's built-in dragPan is disabled for these tools because it doesn't work reliably with Ctrl in Tauri/WebKit).
+Both modifier gestures work under every tool but Pan (`activeTool !== 'pan'` in
+`handleMouseDownCapture`), and both are scaled by `map.controls.pan_speed`, where
+`dragPan` is always 1:1 with the cursor. They are implemented by hand because
+MapLibre cannot do either: its mouse-pan handler is built with
+`checkCorrectEvent: (e) => mouseButton(e) === LEFT_BUTTON && !e.ctrlKey`
+(maplibre-gl 5.16 `generateMousePanHandler`), so a Ctrl+left press never even
+arms `DragHandler`, and Ctrl+left's own MapLibre gestures - rotate, pitch, box
+zoom - are all disabled at map init. Handing a Ctrl+drag to the enabled `dragPan`
+pans nothing at all, which `ctrl-drag-pan.spec.ts` pins under the Pan tool (the
+one tool the custom handler keeps its hands off).
+
+### When the Ctrl press is claimed
+
+A Ctrl+left press is not the same gesture as a Ctrl+left DRAG: the press alone is
+the multi-select toggle (`handleStationClick`'s `ctrlKey` branch in
+`useMapTools`). So `handleMouseDownCapture` claims it outright only where
+MapLibre's `dragPan` is already off - the two modal modes, whose own pointerdown
+handling (placement confirm, zoom box) must not run just because Ctrl was held.
+Everywhere else the press is only **watched**: it is left to propagate,
+and the custom pan takes over on the first `mousemove` past
+`CUSTOM_PAN_CLAIM_PX` (3px, MapLibre's own `clickTolerance`). Below that the
+gesture ends as a click and reaches the map; above it MapLibre suppresses its own
+click anyway, so only one of the two can ever fire. A middle press is always
+claimed outright - it has no click meaning to protect.
 
 ### Event Capture Strategy
 
-Capture-phase handlers on the map container intercept events **before** MapLibre's handlers on the canvas:
+Capture-phase handlers on the map container intercept events **before** MapLibre's handlers on the canvas. All of it applies to a CLAIMED gesture; a watched press is untouched until it becomes one:
 
 | Event | During Ctrl+drag | Purpose |
 |-------|-----------------|---------|
-| `pointerdown` | `stopPropagation` | Prevent MapLibre pointer tracking |
-| `mousedown` | `stopPropagation`, `preventDefault` | Start pan, prevent MapLibre click tracking |
+| `pointerdown` | `stopPropagation` | Prevent MapLibre pointer tracking (outright claims only) |
+| `mousedown` | `stopPropagation`, `preventDefault` | Start pan, prevent MapLibre click tracking (outright claims only) |
 | `mousemove` | `stopPropagation` | Pan by delta, suppress MapLibre hover updates |
 | `pointerup` | `stopPropagation` | Prevent MapLibre pointer tracking |
 | `mouseup` | `stopPropagation`, `preventDefault` | End pan, restore cursor |
 | `click` | `stopPropagation`, `preventDefault` | **Critical**: browser fires `click` as a separate DOM event after mouseup regardless of whether mousedown/mouseup were captured. Must be blocked to prevent MapLibre from processing a spurious click. |
 
-The `click` capture uses `ctrlDragActiveRef` which stays true for 50ms after mouseup, covering the window in which the browser dispatches the click event.
+The `click` capture uses `customPanActiveRef` which stays true for 50ms after mouseup, covering the window in which the browser dispatches the click event. That ref is set by the claim, never by the press, which is what leaves a plain Ctrl+click alone.
 
 ### Spurious Keyup Filtering
 
-Tauri/WebKit fires spurious Ctrl keyup events at the moment of mousedown/mouseup while Ctrl is held. These are filtered by timestamp: keyups within 50ms of a Ctrl+drag mouse event (`ctrlDragMouseEventTimeRef`) are suppressed. Genuine Ctrl releases (which occur later) go through immediately so the cursor resets without delay.
+Tauri/WebKit fires spurious Ctrl keyup events at the moment of mousedown/mouseup while Ctrl is held. These are filtered by timestamp: keyups within 50ms of a Ctrl+drag mouse event (`ctrlPanMouseEventTimeRef`) are suppressed. Genuine Ctrl releases (which occur later) go through immediately so the cursor resets without delay.
 
 ### Cursor During Ctrl+Pan
 

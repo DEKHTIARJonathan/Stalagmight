@@ -51,8 +51,7 @@ test.describe('UI Components', () => {
         const centerX = box.x + box.width / 2;
         const centerY = box.y + box.height / 2;
 
-        // Switch to pan tool
-        await page.keyboard.press('p');
+        // No tool switch: a plain left-drag pans under the default tool (#409).
 
         // Perform drag
         await page.mouse.move(centerX, centerY);

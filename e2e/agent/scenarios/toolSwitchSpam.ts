@@ -27,6 +27,26 @@ export const toolSwitchSpam: Scenario = {
   async run(ctx, { iterations }) {
     await ensureProjectLoaded(ctx);
 
+    // Pan and Zoom are hidden unless `map.controls.show_navigation_tools` is on
+    // (#409), and MapCanvas force-resets a hidden navigation tool back to
+    // 'select' on the next render. Without flipping the setting first, every
+    // pan/zoom iteration below would race that effect. `setConfig` updates the
+    // in-memory config only - nothing is written to the user's config file.
+    await ctx.eval(`
+      const project = window.__E2E_TEST__.projectStore.getState();
+      const config = project.config;
+      if (config) {
+        project.setConfig({
+          ...config,
+          map: {
+            ...config.map,
+            controls: { ...config.map.controls, show_navigation_tools: true },
+          },
+        });
+      }
+      return true;
+    `);
+
     for (let i = 0; i < iterations; i++) {
       const tool = TOOLS[i % TOOLS.length];
       const active = await ctx.eval<string>(

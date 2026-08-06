@@ -8,6 +8,7 @@ import { useUIStore } from '../../store/uiStore';
 import { useNetworkStore } from '../../store/networkStore';
 import { getMapThemeColors, getThemeColor } from '../../utils/themeColors';
 import { getTileConfig } from '../../utils/tileConfig';
+import { attachDragReleaseForwarder } from '../../utils/mapDragRelease';
 import { MapAttribution } from '../Map/MapAttribution';
 import type { GpsOrigin } from '../../types/config';
 
@@ -281,6 +282,11 @@ export default function SectionPreview({
     map.dragRotate.disable();
     map.touchPitch.disable();
 
+    // The preview is a small map inside a dialog, so a pan is easily released
+    // over the dialog chrome around it - which would leave it stuck "moving";
+    // src/utils/mapDragRelease.ts has why MapLibre needs the help.
+    const detachDragReleaseForwarder = attachDragReleaseForwarder(map);
+
     map.on('load', () => {
       // Check if map was removed during async load
       if (!mapRef.current) return;
@@ -475,6 +481,7 @@ export default function SectionPreview({
     });
 
     return () => {
+      detachDragReleaseForwarder();
       mapRef.current = null;
       setMapLoaded(false);
       map.remove();

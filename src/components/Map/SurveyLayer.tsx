@@ -72,6 +72,7 @@ import { trackNav } from '../../utils/telemetry';
 import { FEATURE_ID_STRIDE, sectionIdFromKey } from '../../utils/ids';
 import { MEASURE_TINT } from '../../utils/measurePath';
 import { watchDevicePixelRatio } from '../../utils/dprWatcher';
+import { attachLongPressTouch } from '../../utils/longPressTouch';
 import { clearFeatureCountsForPrefix } from '../../utils/memoryProbe';
 import { shouldSuppressMapError, type MapErrorEventLike } from './surveyLayer/mapErrors';
 import { diffRemovedSectionIds } from './surveyLayer/sectionDiff';
@@ -219,6 +220,9 @@ export default class SurveyLayer {
   // Drag preview state - uses temporary layers with *-translate paint properties
   // instead of rebuilding GeoJSON on every frame
   private dragPreviewActive = false;
+  // When MapCanvas last confirmed a placement (performance.now() ms); see
+  // modalInteractionActive for why the store read alone cannot see it.
+  private lastPlacementConfirmAt = -Infinity;
   private dragSavedFilters = new Map<string, maplibregl.FilterSpecification | undefined>();
   // One-shot callback fired at end of update() - used to restore filters after
   // source data has been updated, in the same synchronous block (no paint gap).
@@ -360,12 +364,10 @@ export default class SurveyLayer {
   private boundMouseMove: ((e: maplibregl.MapMouseEvent) => void) | null = null;
   private boundMapLeave: (() => void) | null = null;
 
-  // Touch long-press state for context menu
-  private touchLongPressTimer: ReturnType<typeof setTimeout> | null = null;
-  private touchStartPos: { x: number; y: number } | null = null;
-  private boundTouchStart: ((e: TouchEvent) => void) | null = null;
-  private boundTouchMove: ((e: TouchEvent) => void) | null = null;
-  private boundTouchEnd: ((e: TouchEvent) => void) | null = null;
+  // Touch long-press -> context menu. The state machine (500 ms hold, 10 px
+  // cancel, swallowed touchend) is shared with GlobalSurveyLayer; see
+  // src/utils/longPressTouch.ts.
+  private detachLongPressTouch: (() => void) | null = null;
 
   // Hover update batching - only process latest mouse position per frame
   private pendingHoverEvent: maplibregl.MapMouseEvent | null = null;
@@ -1009,59 +1011,69 @@ export default class SurveyLayer {
 
     // Touch long-press → context menu (raw touch listeners on canvas)
     const canvas = this.map.getCanvas();
-    this.boundTouchStart = (e: TouchEvent) => {
-      if (e.touches.length !== 1) return;
-      const touch = e.touches[0]!;
-      this.touchStartPos = { x: touch.clientX, y: touch.clientY };
-      this.touchLongPressTimer = setTimeout(() => {
-        this.touchLongPressTimer = null;
-        if (!this.touchStartPos) return;
+    this.detachLongPressTouch = attachLongPressTouch(canvas, {
+      onLongPress: (pressPoint) => {
         // Hit-test at touch position
         const rect = canvas.getBoundingClientRect();
-        const point: [number, number] = [
-          this.touchStartPos.x - rect.left,
-          this.touchStartPos.y - rect.top,
-        ];
+        const point: [number, number] = [pressPoint.clientX - rect.left, pressPoint.clientY - rect.top];
         const fakeEvent = {
           point: { x: point[0], y: point[1] },
           lngLat: this.map.unproject(point),
           originalEvent: new MouseEvent('contextmenu', {
-            clientX: this.touchStartPos.x,
-            clientY: this.touchStartPos.y,
+            clientX: pressPoint.clientX,
+            clientY: pressPoint.clientY,
           }),
         } as maplibregl.MapMouseEvent;
         this.handleContextMenu(fakeEvent);
-        // Prevent subsequent click
-        this.touchStartPos = null;
-      }, 500);
-    };
-    this.boundTouchMove = (e: TouchEvent) => {
-      if (!this.touchStartPos || !this.touchLongPressTimer) return;
-      const touch = e.touches[0];
-      if (!touch) return;
-      const dx = touch.clientX - this.touchStartPos.x;
-      const dy = touch.clientY - this.touchStartPos.y;
-      if (dx * dx + dy * dy > 100) { // 10px threshold
-        clearTimeout(this.touchLongPressTimer);
-        this.touchLongPressTimer = null;
-        this.touchStartPos = null;
-      }
-    };
-    this.boundTouchEnd = () => {
-      if (this.touchLongPressTimer) {
-        clearTimeout(this.touchLongPressTimer);
-        this.touchLongPressTimer = null;
-      }
-      this.touchStartPos = null;
-    };
-    canvas.addEventListener('touchstart', this.boundTouchStart, { passive: false });
-    canvas.addEventListener('touchmove', this.boundTouchMove, { passive: false });
-    canvas.addEventListener('touchend', this.boundTouchEnd);
-    canvas.addEventListener('touchcancel', this.boundTouchEnd);
+        // handleContextMenu dispatches a menu for every target, including the
+        // empty map - but only through `callbacks.onContextMenu`, which is
+        // optional. Swallow the tap exactly when a menu could actually open
+        // (the helper's contract); with no consumer wired, the tap stays live.
+        return this.callbacks.onContextMenu !== undefined;
+      },
+      isEnabled: () => !this.modalInteractionActive(),
+    });
 
     // Track user-initiated map navigation (zoom & pan) for telemetry
     this.map.on('zoomend', this.handleZoomEndTelemetry);
     this.map.on('moveend', this.handleMoveEndTelemetry);
+  }
+
+  /**
+   * True while a mutating pointer gesture owns the touch and the long-press has
+   * to stay out of it: placement mode, which MapCanvas confirms on `pointerdown`,
+   * and a move ghost in flight, which it commits on `pointerup`. Those are
+   * POINTER events, not the compatibility mouse events a fired long-press
+   * swallows at `touchend`, so they run either way - ungated, one hold would both
+   * mutate the survey and open a menu over the result.
+   *
+   * Both signals are read live rather than pushed in: the ghost is this layer's
+   * own (`beginStationDragPreview` / `beginDragPreview` -> `endDragPreview`), and
+   * placement mode is uiStore state. Note pointer events precede touch events, so
+   * a placement CONFIRMED by this very touch has already cleared the store by the
+   * time the press is armed; that is what {@link notePlacementConfirmed} bridges,
+   * while the store read covers a hold that starts while placement is still armed
+   * (a confirm that bailed, or the next section of a multi-section placement).
+   */
+  private modalInteractionActive(): boolean {
+    return (
+      this.dragPreviewActive ||
+      useUIStore.getState().placementMode !== null ||
+      performance.now() - this.lastPlacementConfirmAt < SurveyLayer.PLACEMENT_CONFIRM_GRACE_MS
+    );
+  }
+
+  /**
+   * Called by MapCanvas when a placement confirms (on `pointerdown`). The store
+   * is already cleared by the time this touch's `touchstart` arms the long-press,
+   * so without this stamp a hold that just placed a station would ALSO open the
+   * context menu over it. The grace window only needs to outlive the
+   * pointerdown->touchstart gap (microseconds plus main-thread jitter); it is kept
+   * well under the 500ms hold so it can never eat a deliberate later long-press.
+   */
+  private static readonly PLACEMENT_CONFIRM_GRACE_MS = 200;
+  notePlacementConfirmed(): void {
+    this.lastPlacementConfirmAt = performance.now();
   }
 
   /**
@@ -1238,9 +1250,9 @@ export default class SurveyLayer {
    * geometry index for sections whose world-space bounds, projected to screen,
    * intersect the probe box padded by the type's hit reach. That padded-box query
    * is a SUPERSET of the sections whose geometry can be within tolerance; the SoA
-   * resolver (`resolveStationAt` / `resolveShotAt` / `geoIndex.stationsInBox`)
-   * then trims it to the exact pick. Per-type padding preserves the two old
-   * queries' semantics (shot vs station reach differ); the pad is the FULL reach
+   * resolver (`resolveStationAt` / `resolveShotAt`) then trims it to the exact
+   * pick. Per-type padding preserves the two old queries' semantics (shot vs
+   * station reach differ); the pad is the FULL reach
    * because we test the true geometry, not a thin rendered mark. See
    * `hitProbe.ts` (`padProbeBox`) and `geometryIndex.ts`
    * (`sectionsIntersectingBox`), both unit tested.
@@ -1289,7 +1301,7 @@ export default class SurveyLayer {
    *  quantizing it to pixel bins let two centers in one bin differ by ~1px (Web
    *  Mercator amplifies the latitude error away from the equator), exceeding the
    *  probe's 0.5px margin, so a feature near the hit-radius boundary then missed
-   *  hover/click/box-select until the camera crossed a bin. */
+   *  hover/click until the camera crossed a bin. */
   private cameraSnapshot(): { key: string; axisAligned: boolean } {
     const c = this.map.getCenter();
     const cv = this.map.getCanvas();
@@ -1332,31 +1344,6 @@ export default class SurveyLayer {
 
   /** Prefer one exact co-located feature for the next development-harness click. */
   setSemanticTargetPreference(target: SemanticMapTarget | null): void { this.semanticTargetPreference.set(target); }
-
-  /**
-   * Stations whose rendered hit circle intersects the screen-space box -
-   * MapCanvas box-select. Candidate sections come from the padded visible-layer
-   * query (visibility-aware); exact membership from the SoA resolver with
-   * the same circle-box semantics `queryRenderedFeatures(bbox)` had (#mem).
-   */
-  queryStationsInBox(minX: number, minY: number, maxX: number, maxY: number): StationRef[] {
-    if (!this.geoIndex || !hasLiveStyle(this.map)) return [];
-    const { stationSections } = this.hitCandidateSections([
-      [minX, minY],
-      [maxX, maxY],
-    ]);
-    if (stationSections.size === 0) return [];
-    return this.geoIndex.stationsInBox(
-      this.projector(),
-      minX,
-      minY,
-      maxX,
-      maxY,
-      stationSections,
-      this.getStationHitArea(),
-      { visibleKinds: this.visibleKinds() },
-    );
-  }
 
   /**
    * Handle empty click - check for hidden features before firing empty callback.
@@ -3618,20 +3605,17 @@ export default class SurveyLayer {
     // nothing fires on a torn-down map.
     this.dragGhost.end();
 
-    // Clean up touch long-press timer
-    if (this.touchLongPressTimer) {
-      clearTimeout(this.touchLongPressTimer);
-      this.touchLongPressTimer = null;
-    }
+    // Drop the touch long-press listeners and any pending hold. Done before the
+    // live-style guard below, not inside it: the helper holds the canvas element
+    // itself, so it detaches cleanly even once the map is gone.
+    this.detachLongPressTouch?.();
+    this.detachLongPressTouch = null;
 
     // Guard against map being destroyed (race condition on unmount)
     if (!hasLiveStyle(this.map)) {
       // Clear bound handler references even if map is destroyed
       this.boundMouseMove = null;
       this.boundMapLeave = null;
-      this.boundTouchStart = null;
-      this.boundTouchMove = null;
-      this.boundTouchEnd = null;
       return;
     }
 
@@ -3646,18 +3630,6 @@ export default class SurveyLayer {
       }
       if (this.boundMapLeave) {
         this.map.getCanvas().removeEventListener('mouseleave', this.boundMapLeave);
-      }
-      // Remove touch long-press listeners
-      const canvas = this.map.getCanvas();
-      if (this.boundTouchStart) {
-        canvas.removeEventListener('touchstart', this.boundTouchStart);
-      }
-      if (this.boundTouchMove) {
-        canvas.removeEventListener('touchmove', this.boundTouchMove);
-      }
-      if (this.boundTouchEnd) {
-        canvas.removeEventListener('touchend', this.boundTouchEnd);
-        canvas.removeEventListener('touchcancel', this.boundTouchEnd);
       }
       this.map.off('zoomend', this.handleZoomEndTelemetry);
       this.map.off('moveend', this.handleMoveEndTelemetry);

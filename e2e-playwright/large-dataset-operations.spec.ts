@@ -116,11 +116,13 @@ test.describe('Large Dataset Operations', () => {
     await page.keyboard.press('Control+3');
     await expect(page.getByTestId('data-table')).toBeVisible({ timeout: 10000 });
 
-    await page.keyboard.press('z');
-    await waitForActiveTool(page, 'zoom');
+    // Merge / measure rather than zoom / pan: the navigate group is hidden by
+    // default (#409), so Z and P are inert and would prove nothing here.
+    await page.keyboard.press('m');
+    await waitForActiveTool(page, 'merge');
 
-    await page.keyboard.press('p');
-    await waitForActiveTool(page, 'pan');
+    await page.keyboard.press('r');
+    await waitForActiveTool(page, 'measure');
 
     await page.keyboard.press('f');
     await waitForMapIdle(page);

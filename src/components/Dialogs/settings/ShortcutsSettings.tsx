@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback, useEffect, useRef } from 'react';
+import { Fragment, useState, useMemo, useCallback, useEffect, useId, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Button } from '../../common/Button';
 import { ShortcutRecorder } from '../../Settings/ShortcutRecorder';
@@ -6,6 +6,7 @@ import { getPanelId, getTabId } from '../SettingsSidebar';
 import type { SettingsCategoryProps } from './types';
 import type { Config, ShortcutsConfig } from '../../../types/config';
 import { defaultConfig } from '../../../types/config';
+import type { ToolType } from '../../../store/uiStore';
 import {
   normalizeShortcut,
   checkReservedConflict,
@@ -18,12 +19,32 @@ import {
   SHORTCUT_CATEGORIES,
   RESERVED_DISPLAY_ENTRIES,
 } from '../../../utils/shortcutCategories';
+import { navigationToolsEnabled } from '../../../utils/toolUtils';
+import { isNavigationTool } from '../../../utils/toolGroups';
+
+/**
+ * Shortcut actions that select a tool from the navigate group (Pan / Zoom) -
+ * the group hidden unless `map.controls.show_navigation_tools` is on (#409).
+ *
+ * Derived from the category table crossed with the tool-group table rather than
+ * naming Pan/Zoom a third time: a tool that joins or leaves the navigate group
+ * is picked up here with no edit. Actions that are not tools (`save`,
+ * `toggle_grid`, ...) never match a group and drop out.
+ */
+const NAVIGATION_TOOL_ACTIONS: ReadonlySet<keyof ShortcutsConfig> = new Set(
+  SHORTCUT_CATEGORIES.flatMap((category) => category.actions).filter((action) =>
+    isNavigationTool(action as ToolType)
+  )
+);
 
 /**
  * Action name label with hover tooltip for truncated names.
  * Uses a custom tooltip (not native title) for keyboard accessibility and consistent styling.
+ *
+ * `dimmed` is the disabled presentation for a row whose tool is currently hidden
+ * (#409); the controls next to it dim themselves through their own `disabled`.
  */
-function ShortcutNameLabel({ name }: { name: string }) {
+function ShortcutNameLabel({ name, dimmed = false }: { name: string; dimmed?: boolean }) {
   const [showTooltip, setShowTooltip] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const [isTruncated, setIsTruncated] = useState(false);
@@ -37,7 +58,7 @@ function ShortcutNameLabel({ name }: { name: string }) {
   }, []);
 
   return (
-    <div className="relative flex-1 min-w-[8rem]">
+    <div className={`relative flex-1 min-w-[8rem] ${dimmed ? 'opacity-60' : ''}`}>
       <div
         ref={containerRef}
         className="text-sm truncate"
@@ -77,6 +98,21 @@ export function ShortcutsSettings({
   const [shortcutSearch, setShortcutSearch] = useState('');
   const [collapsedCategories, setCollapsedCategories] = useState<Set<string>>(new Set());
   const [shortcutError, setShortcutError] = useState<string | null>(null);
+  const noteIdBase = useId();
+
+  /**
+   * Pan/Zoom rows stay listed and stay in the registry below - their keys remain
+   * reserved, so re-enabling the tools needs no migration - but while the tools
+   * are hidden (#409) the rows are shown disabled and cannot be rebound. Read
+   * through the same helper the toolbar and the shortcut handler use; never
+   * re-derive the flag.
+   */
+  const navigationEnabled = navigationToolsEnabled(config);
+  const isActionDisabled = useCallback(
+    (action: keyof ShortcutsConfig): boolean =>
+      !navigationEnabled && NAVIGATION_TOOL_ACTIONS.has(action),
+    [navigationEnabled]
+  );
 
   // Track error state for parent
   const hasErrorRef = useRef(false);
@@ -144,6 +180,10 @@ export function ShortcutsSettings({
   // Handle shortcut change
   const handleShortcutChange = useCallback(
     (action: keyof ShortcutsConfig, slot: 'primary' | 'secondary', newValue: string | null) => {
+      // A disabled row's controls are inert, so this is belt-and-braces: no path
+      // may rebind or clear a hidden tool's binding while it is hidden (#409).
+      if (isActionDisabled(action)) return;
+
       setShortcutError(null);
 
       if (newValue) {
@@ -213,12 +253,14 @@ export function ShortcutsSettings({
 
       onChange({ shortcuts: newShortcuts } as Partial<Config>);
     },
-    [config.shortcuts, onChange, shortcutRegistry, t]
+    [config.shortcuts, isActionDisabled, onChange, shortcutRegistry, t]
   );
 
   // Reset single action to defaults
   const handleResetAction = useCallback(
     (action: keyof ShortcutsConfig) => {
+      if (isActionDisabled(action)) return;
+
       setShortcutError(null);
 
       const newShortcuts: ShortcutsConfig = {
@@ -228,7 +270,7 @@ export function ShortcutsSettings({
 
       onChange({ shortcuts: newShortcuts } as Partial<Config>);
     },
-    [config.shortcuts, onChange]
+    [config.shortcuts, isActionDisabled, onChange]
   );
 
   // Reset all shortcuts to defaults
@@ -322,6 +364,14 @@ export function ShortcutsSettings({
             if (filteredActions.length === 0) return null;
 
             const isCollapsed = collapsedCategories.has(category.id);
+            // The disabled-tools note is rendered directly under the LAST
+            // disabled row, so the explanation sits with the rows it explains
+            // instead of at the foot of the category. -1 when the search filter
+            // left no disabled row on screen, which drops the note with them.
+            const lastDisabledIndex = filteredActions.reduce(
+              (last, action, index) => (isActionDisabled(action) ? index : last),
+              -1
+            );
 
             return (
               <div key={category.id} data-testid={`shortcut-category-${category.id}`}>
@@ -359,62 +409,87 @@ export function ShortcutsSettings({
                       const hasChanges =
                         JSON.stringify(bindings) !== JSON.stringify(defaultConfig.shortcuts[action]);
                       const isOdd = idx % 2 === 1;
+                      // Hidden tool (#409): the row stays (and stays in the
+                      // conflict registry) but reads and behaves as disabled.
+                      const rowDisabled = isActionDisabled(action);
+                      const canReset = hasChanges && !rowDisabled;
 
                       return (
-                        <div
-                          key={action}
-                          className={`flex items-center gap-3 py-0.5 rounded ${isOdd ? 'bg-panel-20' : 'bg-transparent'}`}
-                          data-testid={`shortcut-row-${action}`}
-                        >
-                          {/* Action name */}
-                          <ShortcutNameLabel name={full} />
-
-                          {/* Primary slot */}
-                          <ShortcutRecorder
-                            value={primary}
-                            onChange={(value) => handleShortcutChange(action, 'primary', value)}
-                            onBlockedKey={handleBlockedKey}
-                            ariaLabel={t('settings.shortcuts.slots.primaryAria', { action: full })}
-                            data-testid={`shortcut-primary-${action}`}
-                          />
-
-                          {/* Secondary slot */}
-                          <ShortcutRecorder
-                            value={secondary}
-                            onChange={(value) => handleShortcutChange(action, 'secondary', value)}
-                            onBlockedKey={handleBlockedKey}
-                            ariaLabel={t('settings.shortcuts.slots.secondaryAria', { action: full })}
-                            data-testid={`shortcut-secondary-${action}`}
-                          />
-
-                          {/* Reset button */}
-                          <button
-                            type="button"
-                            onClick={() => handleResetAction(action)}
-                            disabled={!hasChanges}
-                            className={`p-1 rounded hover:bg-panel transition-colors ${
-                              hasChanges
-                                ? 'text-text-secondary hover:text-text'
-                                : 'text-border cursor-not-allowed'
-                            }`}
-                            title={t('settings.shortcuts.resetOne.title')}
-                            data-testid={`shortcut-reset-${action}`}
+                        <Fragment key={action}>
+                          <div
+                            className={`flex items-center gap-3 py-0.5 rounded ${isOdd ? 'bg-panel-20' : 'bg-transparent'}`}
+                            data-testid={`shortcut-row-${action}`}
+                            aria-disabled={rowDisabled || undefined}
+                            data-disabled={rowDisabled ? 'true' : undefined}
+                            aria-describedby={
+                              rowDisabled ? `${noteIdBase}-${category.id}` : undefined
+                            }
                           >
-                            <svg
-                              className="w-4 h-4"
-                              fill="none"
-                              stroke="currentColor"
-                              viewBox="0 0 24 24"
+                            {/* Action name */}
+                            <ShortcutNameLabel name={full} dimmed={rowDisabled} />
+
+                            {/* Primary slot */}
+                            <ShortcutRecorder
+                              value={primary}
+                              onChange={(value) => handleShortcutChange(action, 'primary', value)}
+                              onBlockedKey={handleBlockedKey}
+                              ariaLabel={t('settings.shortcuts.slots.primaryAria', { action: full })}
+                              disabled={rowDisabled}
+                              data-testid={`shortcut-primary-${action}`}
+                            />
+
+                            {/* Secondary slot */}
+                            <ShortcutRecorder
+                              value={secondary}
+                              onChange={(value) => handleShortcutChange(action, 'secondary', value)}
+                              onBlockedKey={handleBlockedKey}
+                              ariaLabel={t('settings.shortcuts.slots.secondaryAria', { action: full })}
+                              disabled={rowDisabled}
+                              data-testid={`shortcut-secondary-${action}`}
+                            />
+
+                            {/* Reset button */}
+                            <button
+                              type="button"
+                              onClick={() => handleResetAction(action)}
+                              disabled={!canReset}
+                              aria-disabled={!canReset}
+                              className={`p-1 rounded hover:bg-panel transition-colors ${
+                                canReset
+                                  ? 'text-text-secondary hover:text-text'
+                                  : 'text-border cursor-not-allowed'
+                              }`}
+                              title={t('settings.shortcuts.resetOne.title')}
+                              data-testid={`shortcut-reset-${action}`}
                             >
-                              <path
-                                strokeLinecap="round"
-                                strokeLinejoin="round"
-                                strokeWidth={2}
-                                d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
-                              />
-                            </svg>
-                          </button>
-                        </div>
+                              <svg
+                                className="w-4 h-4"
+                                fill="none"
+                                stroke="currentColor"
+                                viewBox="0 0 24 24"
+                              >
+                                <path
+                                  strokeLinecap="round"
+                                  strokeLinejoin="round"
+                                  strokeWidth={2}
+                                  d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
+                                />
+                              </svg>
+                            </button>
+                          </div>
+
+                          {/* Why the rows above are disabled, and where to turn
+                              the tools back on. */}
+                          {idx === lastDisabledIndex && (
+                            <p
+                              id={`${noteIdBase}-${category.id}`}
+                              className="text-xs text-text-secondary py-1"
+                              data-testid={`shortcut-navigation-note-${category.id}`}
+                            >
+                              {t('settings.shortcuts.navigationDisabled.note')}
+                            </p>
+                          )}
+                        </Fragment>
                       );
                     })}
                   </div>

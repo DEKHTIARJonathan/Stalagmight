@@ -5,7 +5,7 @@
  * center to pixel bins as a perf micro-optimization; two centers in one bin can
  * differ by ~1px (Web Mercator amplifies the latitude error away from the
  * equator), exceeding the probe's 0.5px margin, so a feature near the hit-radius
- * boundary could miss hover/click/box-select until the camera crossed a bin.
+ * boundary could miss hover/click until the camera crossed a bin.
  * The quantization was reverted; this pins the exact-center behavior.
  *
  * `cameraSnapshot` reads only `this.map`, so `Object.create` + a fake map
