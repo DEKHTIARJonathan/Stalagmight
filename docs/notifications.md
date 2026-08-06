@@ -102,8 +102,10 @@ regions). Read the comment blocks in those two files plus
   dialog only when there are multiple facts to review (import receipt); otherwise
   it is a toast.
 - **A receipt with no warnings has no decision in it, and is not a modal
-  (#411/#420).** The import receipt (TML/Compass/Walls/GPX/DMP, all five routed
-  through `presentImportReceipt` in `saveFeedback.ts`) reports facts the user
+  (#411/#420).** The import receipt (TML/Compass/Walls/GPX/DMP and the SpeleoDB
+  adoption pull, all routed
+  through `presentImportReceipt` in `saveFeedback.ts` - a receipt producer that
+  bypasses it is a policy defect) reports facts the user
   already asked for by importing - counts, not a choice. When it carries no
   `warnings`, no unit conversion, and something actually landed, it surfaces
   as a `success` toast (counts only, dedup key `TOAST_KEYS.IMPORT_RECEIPT`)
@@ -118,6 +120,11 @@ regions). Read the comment blocks in those two files plus
     number in the data. It is a transformation notice, not a decision, but it
     does not fit the toast's one-line budget, so it keeps the modal rather
     than being dropped or given a second, lesser surface.
+
+  The toast path emits no dialog telemetry, deliberately (toasts carry no
+  events and the registry is untouched) - so from this change on,
+  `dwell.dialog.import-receipt` counts only warning/empty/converted imports,
+  not "imports happened". Read dashboards accordingly.
 - **Warnings are not errors.** Do not dress warning-class content in `ErrorDialog`
   with `hideReportHint` as a costume; if no warning-capable surface fits, that is a
   gap to raise, not to paper over.

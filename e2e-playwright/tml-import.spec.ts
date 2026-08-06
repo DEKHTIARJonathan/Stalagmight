@@ -100,19 +100,19 @@ test.describe('Ariane TML import journey', () => {
     await page.getByTestId('tml-import-confirm').click();
     await expect(dialog).toBeHidden({ timeout: 15000 });
 
-    const receipt = page.getByTestId('import-receipt-dialog');
-    await expect(receipt).toBeVisible({ timeout: 10000 });
-    await expect(receipt).toContainText('Ariane TML');
-    await expect(receipt).toContainText('synthetic-cavern.tml');
-    // 2 of 2 sections and 4 shots - the excluded shot is left out by default -
-    // plus the file's single loop closure.
-    await expect(page.getByTestId('import-receipt-summary')).toHaveText(
-      '2 sections - 4 shots - 1 loop reconstructed'
-    );
-    await expect(page.getByTestId('import-receipt-unit-conversion')).toBeHidden();
-
-    await page.getByTestId('import-receipt-continue').click();
-    await expect(receipt).toBeHidden();
+    // Warning-free, unconverted receipt: #411/#420 downgrade it to a toast, not
+    // the modal. Assert the toast FIRST (it waits for the receipt to actually
+    // resolve) so the modal check after it isn't a same-instant false pass. The
+    // exact summary string - 2 of 2 sections, 4 shots (excluded out by
+    // default), the file's single loop closure - keeps its e2e contract here,
+    // moved from the old modal assertion. `.filter` because the toast testid is
+    // per-toast and strict mode errors on a second concurrent toast.
+    await expect(
+      page.getByTestId('toast').filter({ hasText: 'Ariane TML import' })
+    ).toContainText('Ariane TML import: 2 sections - 4 shots - 1 loop reconstructed', {
+      timeout: 10000,
+    });
+    await expect(page.getByTestId('import-receipt-dialog')).toBeHidden();
     await expect(page.getByTestId('single-system-view')).toBeVisible();
 
     const sections = await getImportedSections(page);
@@ -138,12 +138,14 @@ test.describe('Ariane TML import journey', () => {
     await expect(page.getByTestId('tml-shot-count')).toHaveText('5');
     await page.getByTestId('tml-import-confirm').click();
 
-    const receipt = page.getByTestId('import-receipt-dialog');
-    await expect(receipt).toBeVisible({ timeout: 15000 });
-    await expect(page.getByTestId('import-receipt-summary')).toHaveText(
-      '2 sections - 5 shots - 1 loop reconstructed'
-    );
-    await page.getByTestId('import-receipt-continue').click();
+    // Toast, not modal (warning-free receipt, #411/#420) - and the summary
+    // must count the opted-in excluded shot.
+    await expect(
+      page.getByTestId('toast').filter({ hasText: 'Ariane TML import' })
+    ).toContainText('Ariane TML import: 2 sections - 5 shots - 1 loop reconstructed', {
+      timeout: 15000,
+    });
+    await expect(page.getByTestId('import-receipt-dialog')).toBeHidden();
 
     const calls = await getTmlImportCalls(page);
     expect(calls).toHaveLength(1);
@@ -159,9 +161,11 @@ test.describe('Ariane TML import journey', () => {
     await page.getByTestId('tml-virtual-shot-mode').selectOption('AllReferences');
     await page.getByTestId('tml-import-confirm').click();
 
-    const receipt = page.getByTestId('import-receipt-dialog');
-    await expect(receipt).toBeVisible({ timeout: 15000 });
-    await page.getByTestId('import-receipt-continue').click();
+    // Toast, not modal (warning-free receipt, #411/#420).
+    await expect(
+      page.getByTestId('toast').filter({ hasText: 'Ariane TML import' })
+    ).toBeVisible({ timeout: 15000 });
+    await expect(page.getByTestId('import-receipt-dialog')).toBeHidden();
 
     const calls = await getTmlImportCalls(page);
     expect(calls).toHaveLength(1);
@@ -177,9 +181,11 @@ test.describe('Ariane TML import journey', () => {
     await page.getByTestId('tml-virtual-shot-mode').selectOption('AllJumps');
     await page.getByTestId('tml-import-confirm').click();
 
-    const receipt = page.getByTestId('import-receipt-dialog');
-    await expect(receipt).toBeVisible({ timeout: 15000 });
-    await page.getByTestId('import-receipt-continue').click();
+    // Toast, not modal (warning-free receipt, #411/#420).
+    await expect(
+      page.getByTestId('toast').filter({ hasText: 'Ariane TML import' })
+    ).toBeVisible({ timeout: 15000 });
+    await expect(page.getByTestId('import-receipt-dialog')).toBeHidden();
 
     const calls = await getTmlImportCalls(page);
     expect(calls).toHaveLength(1);

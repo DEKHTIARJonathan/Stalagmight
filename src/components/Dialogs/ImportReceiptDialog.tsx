@@ -11,7 +11,8 @@ const MAX_VISIBLE_WARNINGS = 3;
 
 /**
  * Post-import receipt (#391): a short "what landed" summary shown after a
- * foreign-format import (TML/Compass/Walls/GPX/DMP), read from
+ * foreign-format import (TML/Compass/Walls/GPX/DMP, plus the SpeleoDB
+ * adoption pull), read from
  * `dialogData.receipt`. Tone is a receipt, not a wizard step - it never blocks
  * the import (everything it describes already happened), it just tells the
  * user what to expect before they go looking in the data table.

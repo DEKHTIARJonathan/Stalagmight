@@ -45,7 +45,12 @@ test.describe('GPX Import Workflow', () => {
     // the toast FIRST (it waits for the receipt to actually resolve) so the
     // modal check that follows isn't a same-instant false pass that would let
     // a regression opening BOTH surfaces through green.
-    await expect(page.getByTestId('toast')).toContainText('GPX', { timeout: 10000 });
+    // `.filter` because the toast testid is per-toast and strict mode errors
+    // on a second concurrent toast.
+    await expect(page.getByTestId('toast').filter({ hasText: 'GPX' })).toContainText(
+      'GPX import:',
+      { timeout: 10000 }
+    );
     await expect(page.getByTestId('import-receipt-dialog')).toBeHidden();
 
     await expect(page.getByTestId('single-system-view')).toBeVisible();

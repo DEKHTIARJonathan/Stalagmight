@@ -76,7 +76,12 @@ test.describe('Walls import dialog - survey selection gating', () => {
     // Assert the toast FIRST (it waits for the receipt to resolve) so the
     // modal check after it isn't a same-instant false pass that would let a
     // regression opening BOTH surfaces through green.
-    await expect(page.getByTestId('toast')).toContainText('Walls', { timeout: 10000 });
+    // `.filter` because the toast testid is per-toast and strict mode errors
+    // on a second concurrent toast.
+    await expect(page.getByTestId('toast').filter({ hasText: 'Walls' })).toContainText(
+      'Walls import:',
+      { timeout: 10000 }
+    );
     await expect(page.getByTestId('import-receipt-dialog')).toBeHidden();
 
     const calls = await getWallsImportCalls(page);
