@@ -704,14 +704,20 @@ fn adoption_still_builds_through_the_pipeline_the_idempotence_test_drives() {
     );
     let src = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {path}: {e}"));
     let body_of = |name: &str| -> String {
+        // Anchor on a line-start definition, not a bare substring - a doc
+        // comment MENTIONING the fn name would otherwise shift the match
+        // earlier and make the assertions over-accept.
+        let needle = format!("\nfn {name}");
         let start = src
-            .find(name)
+            .find(&needle)
+            .or_else(|| src.find(&format!("\npub fn {name}")))
+            .or_else(|| src.find(&format!("\n    fn {name}")))
             .unwrap_or_else(|| panic!("{name} is still defined in speleodb_pull.rs"));
         let rest = &src[start..];
         rest[..rest.find("\n}\n").unwrap_or(rest.len())].to_owned()
     };
 
-    let adopt = body_of("fn adopt_build_into");
+    let adopt = body_of("adopt_build_into");
     for call in [
         "parsers::tml::parse_tml",
         "adopt_convert",
@@ -724,7 +730,7 @@ fn adoption_still_builds_through_the_pipeline_the_idempotence_test_drives() {
         );
     }
     assert!(
-        body_of("fn adopt_convert").contains("convert_tml_to_import_configs"),
+        body_of("adopt_convert").contains("convert_tml_to_import_configs"),
         "adopt_convert no longer runs the TML converter; the adoption-idempotence \
          test is driving a pipeline the shipped path does not use"
     );
@@ -908,6 +914,164 @@ fn create_shot_cannot_name_an_existing_shots_identity() {
         victim.uuid.as_deref(),
         Some(IDS[1]),
         "the original shot must keep the identity its anchors resolve through"
+    );
+}
+
+/// The same attack through the doors that skip `create_shot_impl` entirely
+/// (pre-PR review, #423). `execute_batch` is a `#[tauri::command]` taking
+/// `Vec<Command>` verbatim from the webview; the batch allowlist
+/// (`is_batch_allowed`) refuses `CreateShot` today, and this pins that refusal
+/// - but `CreateSection` IS batch-allowed, and `state.execute` itself is
+/// reachable by any internal caller holding a constructed command. So the
+/// identity rule cannot live in one IPC wrapper: the executor
+/// (`AppState::create_shot`) and the two `CreateSection` dispatch arms clear
+/// it, and each surface is pinned here. Same already-critical fixture as
+/// above: a batch takes no integrity snapshot (`finalize_structural_edit`
+/// skips `Command::Batch`), so nothing downstream would roll an injection
+/// back.
+#[test]
+fn client_named_identities_are_stripped_at_every_command_door() {
+    const IDS: [&str; 2] = [
+        "ffffffff-0000-4000-8000-000000000011",
+        "ffffffff-0000-4000-8000-000000000012",
+    ];
+
+    let dir = tempfile::tempdir().unwrap();
+    let source = write_tmlu(
+        dir.path(),
+        "batch-boundary.tmlu",
+        &cave_file_xml(&[Row::new(1, 0, Some(IDS[0])), Row::new(2, 1, Some(IDS[1]))]),
+    );
+
+    let state = state_with_project();
+    import_ariane_file(&state, &source);
+
+    let (section_id, victim_shot_id) = {
+        let mut p = state.get_project_state().unwrap();
+        let ids = (p.sections[0].id, p.sections[0].shots[1].id);
+        p.add_section(SectionData {
+            name: Some("Corrupt".to_string()),
+            shots: vec![ShotData {
+                length: f64::NAN,
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+        assert!(
+            p.has_critical_integrity_violations(),
+            "the fixture must start out critical or the epilogue masks the hazard"
+        );
+        state.set_project_for_tests(p);
+        ids
+    };
+
+    let smuggling_shot = ShotData {
+        uuid: Some(IDS[1].to_string()),
+        azimuth_in: 90.0,
+        azimuth_out: 90.0,
+        length: 4.0,
+        depth_in: 5.0,
+        depth_out: 5.0,
+        ..Default::default()
+    };
+
+    // Surface 1: the batch allowlist refuses CreateShot outright. If someone
+    // ever allowlists it, the executor clear below still holds.
+    let result = state.execute(Command::Batch {
+        commands: vec![Command::CreateShot {
+            section_id,
+            shot: smuggling_shot.clone(),
+            after_shot_id: None,
+            before_shot_id: Some(victim_shot_id),
+        }],
+    });
+    assert!(
+        !result.success,
+        "CreateShot inside a batch is refused by the allowlist"
+    );
+
+    // Surface 2: `state.execute(Command::CreateShot ...)` directly - the
+    // dispatch arm any internal caller lands on. The executor clears the
+    // identity, so the victim keeps it and the new shot gets a mint.
+    let result = state.execute(Command::CreateShot {
+        section_id,
+        shot: smuggling_shot.clone(),
+        after_shot_id: None,
+        before_shot_id: Some(victim_shot_id),
+    });
+    assert!(result.success, "{:?}", result.error);
+
+    let project = state.get_project_state().unwrap();
+    let claimants: Vec<u32> = project.sections[0]
+        .shots
+        .iter()
+        .filter(|s| s.uuid.as_deref() == Some(IDS[1]))
+        .map(|s| s.id)
+        .collect();
+    assert_eq!(
+        claimants,
+        vec![victim_shot_id],
+        "a directly executed CreateShot must not smuggle an identity past the executor clear"
+    );
+
+    // Surface 3: CreateSection IS batch-allowed, so the batched section door is
+    // live. The strip at the `execute_without_undo` dispatch arm must hold.
+    let batched = state.execute(Command::Batch {
+        commands: vec![Command::CreateSection {
+            name: Some("Batched smuggler".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#4ecdc4".to_string(),
+            direction: None,
+            shots: vec![smuggling_shot.clone()],
+        }],
+    });
+    assert!(batched.success, "{:?}", batched.error);
+    let project = state.get_project_state().unwrap();
+    let batched_section = project
+        .sections
+        .iter()
+        .find(|s| s.name.as_deref() == Some("Batched smuggler"))
+        .unwrap();
+    assert_ne!(
+        batched_section.shots[0].uuid.as_deref(),
+        Some(IDS[1]),
+        "a batched CreateSection must not adopt a client-named identity"
+    );
+
+    // The section-shaped door too: `Command::CreateSection` carries a whole
+    // `Vec<ShotData>` off IPC. Its executor is shared with the importers (whose
+    // identities are legitimate), so the strip lives at the dispatch arms - a
+    // client-named identity must not land through it either. Cross-section
+    // repeats are legal in the model, so the assertion is on the NEW section:
+    // its shot must come back with a fresh mint, not the named identity.
+    let created = state.execute(Command::CreateSection {
+        name: Some("Smuggler".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#4ecdc4".to_string(),
+        direction: None,
+        shots: vec![ShotData {
+            uuid: Some(IDS[1].to_string()),
+            azimuth_in: 90.0,
+            azimuth_out: 90.0,
+            length: 4.0,
+            depth_in: 5.0,
+            depth_out: 5.0,
+            ..Default::default()
+        }],
+    });
+    assert!(created.success, "{:?}", created.error);
+    let project = state.get_project_state().unwrap();
+    let new_section = project.get_section(created.section_id.unwrap()).unwrap();
+    assert_ne!(
+        new_section.shots[0].uuid.as_deref(),
+        Some(IDS[1]),
+        "CreateSection must not adopt a client-named identity"
+    );
+    assert!(
+        new_section.shots[0].uuid.is_some(),
+        "and it still mints one"
     );
 }
 

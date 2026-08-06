@@ -471,20 +471,14 @@ struct FileMetadata {
     anomalies: TmlParseAnomalies,
 }
 
-/// The longest foreign shot id we will adopt. A UUID is 36 characters; 128
-/// leaves room for a `urn:uuid:` prefix or a braced form and still bounds the
-/// amplification, because the value is cloned into the project-wide
+/// The longest foreign shot id we will adopt, in BYTES (`str::len`, so a
+/// multibyte value hits the cap sooner in characters). A hyphenated UUID is 36
+/// bytes; 128 leaves room for a `urn:uuid:` prefix or a braced form and still
+/// bounds the amplification, because the value is cloned into the project-wide
 /// `shot_uuid_index` AND into every undo snapshot (`Shot::to_shot_data` copies
 /// it), i.e. shots x length x undo depth.
 const MAX_FOREIGN_UUID_LEN: usize = 128;
 
-/// The file's `<UUID>`/`<UU>` as an identity we are willing to store, or `None`
-/// to mint a fresh one.
-///
-/// The VALUE is never coerced - canonicalising it would recreate the identity
-/// churn #423 exists to stop - but its SHAPE is checked, because two classes of
-/// input are not merely odd, they are unstorable:
-///
 /// True if `c` cannot be written into TML element content and read back as
 /// itself. Two overlapping rules, both needed:
 ///
@@ -529,10 +523,15 @@ fn is_unexportable_in_xml(c: char) -> bool {
 /// fresh mint an uncovered row gets), while one accepted bad byte costs the
 /// WHOLE exported document - a strict consumer fails the file, not the row.
 fn foreign_shot_uuid(shot_id: i64, raw: Option<&str>) -> Option<String> {
-    let raw = raw?;
+    // Surrounding whitespace is trimmed BEFORE adoption - the one normalisation
+    // "never coerced" does not cover. Identity is compared byte-verbatim
+    // everywhere downstream, and XML readers routinely whitespace-normalise
+    // element content, so storing " x " would hand back a different identity on
+    // the very first round trip through a normalising consumer.
+    let raw = raw?.trim();
     // Empty (or whitespace-only) means "no identity", matching the way
     // `export::tml::shot_export_uuid` already treats an empty stored value.
-    if raw.trim().is_empty() {
+    if raw.is_empty() {
         return None;
     }
     if raw.len() > MAX_FOREIGN_UUID_LEN {
@@ -2171,6 +2170,14 @@ mod tests {
         assert_eq!(foreign_shot_uuid(1, None), None);
         assert_eq!(foreign_shot_uuid(1, Some("")), None);
         assert_eq!(foreign_shot_uuid(1, Some("   ")), None);
+        // Surrounding whitespace is trimmed, not adopted: identity compares
+        // byte-verbatim downstream, and a whitespace-normalising XML consumer
+        // would hand " x " back as "x" - a different identity - on the first
+        // round trip.
+        assert_eq!(
+            foreign_shot_uuid(1, Some(&format!("  {GOOD}\n"))),
+            Some(GOOD.to_owned())
+        );
         // Length is bounded: at the cap is fine, one past it is not.
         let at_cap = "a".repeat(MAX_FOREIGN_UUID_LEN);
         assert_eq!(foreign_shot_uuid(1, Some(&at_cap)), Some(at_cap.clone()));

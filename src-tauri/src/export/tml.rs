@@ -577,6 +577,14 @@ fn shot_export_uuid(shot: &Shot) -> String {
 /// is byte-identical copies of one imported id, and anchors resolve on the stored
 /// string too - two spellings of one v4 are two identities everywhere else in the
 /// model, so treating them as one here would be the inconsistency.
+///
+/// The fidelity guarantee is scoped: it holds for the FIRST occurrence only,
+/// and only that copy is stable across exports - a later repeat draws a fresh
+/// v4 per export (only the `ExportShot` is touched, never the project), so a
+/// project holding a cross-section duplicate does not re-export byte-identical.
+/// Accepted: the sidecar profile has no such repeats (it drops them), and the
+/// user-facing byte-stability claim (`shot_export_uuid`) was always conditional
+/// on the project having been saved, i.e. on identities being settled.
 fn remint_duplicate_uuids(shots: &mut [ExportShot]) {
     let mut seen: HashSet<String> = HashSet::new();
     for shot in shots.iter_mut() {

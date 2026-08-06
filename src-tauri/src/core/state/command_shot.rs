@@ -8,10 +8,19 @@ impl AppState {
     pub(super) fn create_shot(
         &self,
         section_id: SectionId,
-        data: ShotData,
+        mut data: ShotData,
         after_shot_id: Option<ShotId>,
         before_shot_id: Option<ShotId>,
     ) -> CommandResult {
+        // Identity is not the caller's to name (#423) - see create_shot_impl
+        // (commands/shot.rs) for the full rationale. Cleared HERE, at the
+        // executor, and not only at the IPC wrapper, so the rule holds for any
+        // caller that constructs `Command::CreateShot` itself rather than by
+        // grace of the batch allowlist (which refuses CreateShot today - a
+        // separate mechanism maintained for a different reason). Undo/redo
+        // does not lose identity to this line - it replays through the
+        // `UndoData::CreatedShotSnapshot` arms, never through this command.
+        data.uuid = None;
         // Reject ambiguous input: both after and before cannot be specified
         if after_shot_id.is_some() && before_shot_id.is_some() {
             return CommandResult::failure(

@@ -52,7 +52,18 @@ impl AppState {
                 color: color.clone(),
                 direction: *direction,
                 quality: 1.0,
-                shots: shots.clone(),
+                // Batch sub-commands arrive verbatim off IPC (#423): strip
+                // uuids here like `execute`'s own CreateSection arm does -
+                // never in `AppState::create_section`, which the importers
+                // share with legitimately-adopted identities.
+                shots: shots
+                    .iter()
+                    .cloned()
+                    .map(|mut s| {
+                        s.uuid = None;
+                        s
+                    })
+                    .collect(),
             }),
             Command::DeleteSection { section_id } => self.delete_section(*section_id),
             Command::UpdateSectionMetadata {
@@ -199,18 +210,15 @@ impl AppState {
         // argued, because the cheap repairs are both wrong here: clearing or
         // re-minting the restored shot would defeat the restore, whose entire
         // purpose is to bring that anchor back.
-        debug_assert!(
-            !section
-                .shots
-                .iter()
-                .any(|s| s.uuid.is_some() && s.uuid == shot.uuid),
-            "restore_shot: section {section_id} already holds the identity being restored"
-        );
-        if section
+        let identity_already_present = section
             .shots
             .iter()
-            .any(|s| s.uuid.is_some() && s.uuid == shot.uuid)
-        {
+            .any(|s| s.uuid.is_some() && s.uuid == shot.uuid);
+        debug_assert!(
+            !identity_already_present,
+            "restore_shot: section {section_id} already holds the identity being restored"
+        );
+        if identity_already_present {
             tracing::warn!(
                 section_id,
                 shot_id = original_shot_id,

@@ -816,6 +816,23 @@ mod tests {
     }
 
     #[test]
+    fn with_uuid_prefers_the_datas_own_identity_over_the_explicit_fallback() {
+        // The precedence rule `data.uuid.or(explicit)` is load-bearing (every
+        // transform that rebuilds a shot from its data relies on the data's id
+        // winning), yet on most live paths the two inputs are equal - so a
+        // flipped `.or()` would survive those tests. Pin it where they differ.
+        let data = ShotData {
+            uuid: Some("data-owned".to_string()),
+            ..base_shot_data()
+        };
+        let shot = Shot::with_uuid(7, data, Some("explicit-fallback".to_string()));
+        assert_eq!(shot.uuid.as_deref(), Some("data-owned"));
+
+        let shot = Shot::with_uuid(7, base_shot_data(), Some("explicit-fallback".to_string()));
+        assert_eq!(shot.uuid.as_deref(), Some("explicit-fallback"));
+    }
+
+    #[test]
     fn apply_updates_changes_only_provided_fields() {
         let mut shot = Shot::new(1, base_shot_data());
         let updates = ShotUpdates {
