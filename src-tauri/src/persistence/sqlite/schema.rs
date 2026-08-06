@@ -12,6 +12,15 @@ use super::{Database, SCHEMA_VERSION, UNDO_FORMAT_SAFE_VERSION};
 /// asserts this with `pragma_table_info` so no later migration silently rewrites
 /// the SpeleoDB hand-off identity or drops the dirty bit. `(name, decl_type,
 /// notnull)`.
+///
+/// TEST-ONLY, and always has been: the fence is the assertion in
+/// `tests::preserved_speleolink_columns_match_head_schema`, and this is the
+/// expected schema it compares the live table against. Nothing at runtime reads
+/// it - a bump that rewrote the table fails that test before it can ship, which
+/// is where the guarantee comes from - so it is `cfg(test)` rather than dead
+/// weight the release build carries and warns about. It stays HERE, beside the
+/// DDL it fences, because that is what the two DDL comments below point at.
+#[cfg(test)]
 pub(super) const PRESERVED_SPELEOLINK_COLUMNS: &[(&str, &str, bool)] = &[
     // `id INTEGER PRIMARY KEY` is a rowid alias: SQLite reports notnull=0 for it
     // in pragma_table_info even though a rowid PK can never be NULL. The fence

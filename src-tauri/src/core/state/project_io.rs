@@ -288,13 +288,14 @@ fn apply_save_heals(project: &mut Project) {
 ///   safe to keep as a guarantee.)
 /// * `capture_missing_gauge_anchors` - RE-APPLIED AS A CARRY-FORWARD, not as a
 ///   fresh capture. The anchors `live` holds are copied onto any restored
-///   section that has none, so the pair a save recorded survives the undo. It is
-///   deliberately NOT the unconditional capture: minting anchors for a project
-///   that has never been saved would have a restore invent state no save
-///   authorised, and the restored project would then differ from the state it is
-///   supposed to be restoring. Neither direction can OVERWRITE an anchor - both
-///   the app's capture and this carry-forward skip a section that already has
-///   one - so the pair a section is pinned to never moves.
+///   section that has none AND CAN RESOLVE THEM, so the pair a save recorded
+///   survives the undo. It is deliberately NOT the unconditional capture:
+///   minting anchors for a project that has never been saved would have a
+///   restore invent state no save authorised, and the restored project would
+///   then differ from the state it is supposed to be restoring. Neither
+///   direction can OVERWRITE an anchor - both the app's capture and this
+///   carry-forward skip a section that already has one - so the pair a section
+///   is pinned to never moves.
 ///
 /// # The half of finding 11 this does NOT cover, and what does
 ///
@@ -348,7 +349,33 @@ pub(super) fn reapply_heals_after_restore(restored: &mut Project, live: Option<&
         else {
             continue;
         };
-        if healed.gauge_shot_uuid.is_none() {
+        let Some(gauge_shot) = healed.gauge_shot_uuid.as_deref() else {
+            continue;
+        };
+        // Matched by id, but the pair names shots BY UUID - and the section this
+        // is being copied onto is a DIFFERENT state of that id, which need not
+        // hold them. `DeleteShot` records a snapshot pair; save while the undo
+        // has the deleted shot back, and the pair a save captures names a shot
+        // the `after` half never had.
+        //
+        // A pair that does not resolve is not a weaker pin, it is no pin at all,
+        // and it is worse than none: `Project::gauge_index` silently falls back
+        // to the index rule, and `capture_missing_gauge_anchors` skips every
+        // section whose `gauge_shot_uuid.is_some()` - so the section stays on the
+        // fallback, and the gauge walks onto a new far station the next time the
+        // section is extended, which is the whole defect the pair exists to
+        // prevent (#24). Leaving the anchors as the snapshot had them (unset) is
+        // what lets the next save capture a pair the section can actually
+        // resolve.
+        let holds = |uuid: &str| {
+            section
+                .shots
+                .iter()
+                .any(|s| s.uuid.as_deref() == Some(uuid))
+        };
+        // The neighbour is legitimately absent for a single-shot section, so
+        // "unset" passes and only a RECORDED one has to resolve.
+        if !holds(gauge_shot) || !healed.gauge_neighbour_uuid.as_deref().is_none_or(holds) {
             continue;
         }
         section.gauge_shot_uuid = healed.gauge_shot_uuid.clone();

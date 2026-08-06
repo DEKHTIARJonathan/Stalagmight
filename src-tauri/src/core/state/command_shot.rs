@@ -146,24 +146,37 @@ impl AppState {
             );
         }
 
-        // Validate resulting length (disallow zero/negative)
+        // Validate the length this update SETS - and ONLY when it sets one.
+        //
+        // The guard used to fall back to the stored length
+        // (`updates.length.unwrap_or(existing.length)`), which made a shot whose
+        // STORED length is already zero or negative reject every update, kind and
+        // comment included. That state is loadable: `Validator::validate_shot`
+        // reports ZERO_LENGTH/NEGATIVE_LENGTH on a legacy or collaborator file as
+        // a validation ERROR, it does not refuse the file - so the fallback locked
+        // the invalid value out of the very edits that could correct it, and
+        // wedged undo on top of that. `SetShotKind` records `PreviousValues`,
+        // whose undo re-enters here with only `kind` set; the fallback failed it,
+        // `undo_inner`'s epilogue pushed the entry straight back, and every older
+        // entry was sealed off forever (#413).
         if let Some(section) = project.sections.iter().find(|s| s.id == section_id) {
-            if let Some(existing) = section.shots.iter().find(|s| s.id == shot_id) {
-                let new_length = updates.length.unwrap_or(existing.length);
-                if new_length == 0.0 {
-                    return CommandResult::failure(format!(
-                        "Shot {}:{} has zero length",
-                        section_id,
-                        shot_display_position(shot_id, section_id)
-                    ));
-                }
-                if new_length < 0.0 {
-                    return CommandResult::failure(format!(
-                        "Shot {}:{} has negative length: {:.1}m",
-                        section_id,
-                        shot_display_position(shot_id, section_id),
-                        new_length
-                    ));
+            if section.shots.iter().any(|s| s.id == shot_id) {
+                if let Some(new_length) = updates.length {
+                    if new_length == 0.0 {
+                        return CommandResult::failure(format!(
+                            "Shot {}:{} has zero length",
+                            section_id,
+                            shot_display_position(shot_id, section_id)
+                        ));
+                    }
+                    if new_length < 0.0 {
+                        return CommandResult::failure(format!(
+                            "Shot {}:{} has negative length: {:.1}m",
+                            section_id,
+                            shot_display_position(shot_id, section_id),
+                            new_length
+                        ));
+                    }
                 }
 
                 // Reject geometry edits on frozen shots

@@ -17515,6 +17515,173 @@ fn test_update_shot_rejects_zero_resulting_length() {
     assert!(result.error.unwrap_or_default().contains("zero length"));
 }
 
+/// A negative length is refused the same way, and refusing it is still keyed on
+/// the update SETTING one.
+#[test]
+fn test_update_shot_rejects_an_explicitly_negative_length() {
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Test".to_string(),
+        location: None,
+    });
+    let section_id = state
+        .execute(Command::CreateSection {
+            name: None,
+            surveyor: None,
+            date: None,
+            color: "#ff0000".to_string(),
+            direction: None,
+            shots: vec![test_shot_data(5.0)],
+        })
+        .section_id
+        .unwrap();
+    let shot_id = state
+        .get_project_state()
+        .unwrap()
+        .sections
+        .iter()
+        .find(|s| s.id == section_id)
+        .unwrap()
+        .shots[0]
+        .id;
+
+    let result = state.execute(Command::UpdateShot {
+        section_id,
+        shot_id,
+        updates: ShotUpdates {
+            length: Some(-1.0),
+            ..Default::default()
+        },
+    });
+    assert!(!result.success);
+    assert!(result.error.unwrap_or_default().contains("negative length"));
+}
+
+/// Plant a zero-length shot at index 1 of a fresh two-shot section and return
+/// `(section_id, [normal_shot_id, zero_length_shot_id])`.
+///
+/// Written onto the model directly because no command path can produce it -
+/// `create_shot` and `update_shot` both refuse the value. It is a state that
+/// LOADS, though: `Validator::validate_shot` reports ZERO_LENGTH as a validation
+/// error on a legacy or collaborator file, it does not refuse the file.
+fn section_holding_a_zero_length_shot(state: &AppState) -> (SectionId, [ShotId; 2]) {
+    let section_id = state
+        .execute(Command::CreateSection {
+            name: None,
+            surveyor: None,
+            date: None,
+            color: "#ff0000".to_string(),
+            direction: None,
+            shots: vec![test_shot_data(5.0), test_shot_data(4.0)],
+        })
+        .section_id
+        .unwrap();
+    let mut guard = state.project.lock().unwrap();
+    let project = guard.as_mut().unwrap();
+    let section = project.get_section_mut(section_id).unwrap();
+    section.shots[1].length = 0.0;
+    (section_id, [section.shots[0].id, section.shots[1].id])
+}
+
+/// The stored length is not the update's length: an edit that does not touch it
+/// must not be judged by it.
+///
+/// Falling back to the stored value made every edit on such a shot fail, which
+/// locked the invalid length out of the very edits that could correct it (#413).
+#[test]
+fn test_update_shot_allows_a_kind_only_edit_on_a_zero_length_shot() {
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Test".to_string(),
+        location: None,
+    });
+    let (section_id, [_, zero_length]) = section_holding_a_zero_length_shot(&state);
+
+    let result = state.execute(Command::UpdateShot {
+        section_id,
+        shot_id: zero_length,
+        updates: ShotUpdates {
+            kind: Some(ShotKind::Jump),
+            ..Default::default()
+        },
+    });
+    assert!(
+        result.success,
+        "a kind-only edit must not be refused for a length it does not set: {:?}",
+        result.error
+    );
+}
+
+/// ...and the reason that matters most: `SetShotKind` records `PreviousValues`,
+/// whose undo re-enters `update_shot` with only `kind` set. While the guard
+/// judged that by the stored length, the undo failed forever - `undo_inner`'s
+/// epilogue pushes a failed entry straight back, so the step never retires and
+/// every older entry underneath it is sealed off.
+#[test]
+fn test_undo_of_a_kind_change_on_a_zero_length_shot_leaves_the_history_usable() {
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Test".to_string(),
+        location: None,
+    });
+    let (section_id, [normal, zero_length]) = section_holding_a_zero_length_shot(&state);
+
+    // The older entry, so a wedge is visible as the step BENEATH the failed one.
+    assert!(
+        state
+            .execute(Command::SetShotKind {
+                section_id,
+                shot_id: normal,
+                kind: ShotKind::Jump,
+            })
+            .success
+    );
+    assert!(
+        state
+            .execute(Command::SetShotKind {
+                section_id,
+                shot_id: zero_length,
+                kind: ShotKind::Reference,
+            })
+            .success
+    );
+
+    let kind_of = |shot_id: ShotId| {
+        state
+            .get_project_state()
+            .unwrap()
+            .sections
+            .iter()
+            .find(|s| s.id == section_id)
+            .unwrap()
+            .shots
+            .iter()
+            .find(|s| s.id == shot_id)
+            .unwrap()
+            .kind
+    };
+
+    let undone = state.undo();
+    assert!(
+        undone.success,
+        "undo of a kind change on a zero-length shot failed: {:?}",
+        undone.error
+    );
+    assert_eq!(kind_of(zero_length), ShotKind::Normal);
+
+    let older = state.undo();
+    assert!(
+        older.success,
+        "the entry beneath it must still be undoable: {:?}",
+        older.error
+    );
+    assert_eq!(kind_of(normal), ShotKind::Normal);
+
+    // ...all the way down: the `CreateSection` under both of them drains too.
+    assert!(state.undo().success, "the whole history must drain");
+    assert!(!state.can_undo());
+}
+
 // ============================================================================
 // Coverage gap tests: commands.rs - auto-save
 // ============================================================================

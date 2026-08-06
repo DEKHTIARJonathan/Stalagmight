@@ -485,6 +485,28 @@ impl UndoData {
         }
     }
 
+    /// The shot this entry's REDO addresses and needs to still be there.
+    ///
+    /// A SUBSET of [`Self::shot_target`], because the two directions do not ask
+    /// the same question. What is left re-executes its command through
+    /// `AppState::command_with_resolved_shot` (an `UpdateShot` or a
+    /// `SetShotKind`), which resolves the target first and fails the redo if it
+    /// cannot - so for those, "is the shot still there" decides the redo exactly
+    /// as it decides the undo.
+    ///
+    /// `CreatedShotSnapshot` is excluded, and the rule is INVERTED for it: its
+    /// entry only sits on the redo stack because the create was undone, so the
+    /// shot is ABSENT by construction and the redo puts it back. Its redo path
+    /// refuses precisely when the uuid DOES resolve (that would duplicate a shot
+    /// identity, #413 finding 16). Filtering the redo stack by resolvability
+    /// would therefore drop every persisted create-a-shot redo there is.
+    pub fn redo_shot_target(&self) -> Option<(SectionId, Option<&str>, ShotId)> {
+        if matches!(self, UndoData::CreatedShotSnapshot { .. }) {
+            return None;
+        }
+        self.shot_target()
+    }
+
     /// Does undoing this entry restore recorded state WHOLESALE?
     ///
     /// Such an entry is a wall for any reasoning about which shots exist: it
@@ -1793,6 +1815,124 @@ mod tests {
         assert_eq!(stack.len(), 2);
     }
 
+    /// An entry whose `SetShotKind` edited the shot named by `uuid`, recorded
+    /// against in-session id `shot_id`. This is the shape a REDO re-executes
+    /// through `AppState::command_with_resolved_shot`, so it is the shape whose
+    /// target has to still be there.
+    fn kind_edit_entry(uuid: Option<&str>, shot_id: ShotId) -> UndoEntry {
+        UndoEntry {
+            command_bytes: None,
+            command: Command::SetShotKind {
+                section_id: 0,
+                shot_id,
+                kind: crate::models::ShotKind::Jump,
+            },
+            undo_data: UndoData::PreviousValues {
+                section_id: 0,
+                shot_id: Some(shot_id),
+                shot_uuid: uuid.map(str::to_string),
+                values_json: "{}".to_string(),
+                previous_offsets: HashMap::new(),
+            },
+            timestamp: None,
+        }
+    }
+
+    /// The undo-side wedge, one stack over: a redo entry that cannot resolve its
+    /// shot fails, `redo_inner`'s epilogue pushes it back onto the redo stack,
+    /// and every redo beneath it is sealed off.
+    #[test]
+    fn a_redo_entry_whose_shot_uuid_is_gone_is_dropped_and_the_redo_under_it_survives() {
+        let project = project_holding_one_shot("live-uuid");
+        let mut stack = UndoStack::new();
+        stack.push_redo(kind_edit_entry(Some("live-uuid"), 7));
+        stack.push_redo(kind_edit_entry(Some("uuid-that-is-not-there"), 9));
+
+        assert_eq!(stack.drop_entries_addressing_a_missing_shot(&project), 1);
+        assert_eq!(
+            stack.redo_len(),
+            1,
+            "the redo beneath it must still be redoable"
+        );
+        assert!(matches!(
+            stack.peek_redo(),
+            Some(Command::SetShotKind { shot_id: 7, .. })
+        ));
+        assert_eq!(
+            stack.estimated_redo_bytes(),
+            UndoStack::estimated_size(&kind_edit_entry(Some("live-uuid"), 7)),
+            "the dropped entry's bytes must leave the running total with it"
+        );
+    }
+
+    #[test]
+    fn a_redo_entry_whose_shot_uuid_still_resolves_is_kept() {
+        let project = project_holding_one_shot("live-uuid");
+        let mut stack = UndoStack::new();
+        // The recorded in-session id is deliberately WRONG, exactly as on the
+        // undo side: the uuid is what has to decide.
+        stack.push_redo(kind_edit_entry(Some("live-uuid"), 4_242));
+
+        assert_eq!(stack.drop_entries_addressing_a_missing_shot(&project), 0);
+        assert_eq!(stack.redo_len(), 1);
+    }
+
+    /// A LEGACY redo entry has only its in-session id, and an id past the
+    /// renumbered range is what wedges the redo.
+    #[test]
+    fn a_legacy_redo_entry_with_an_out_of_range_shot_id_is_dropped() {
+        let project = project_holding_one_shot("live-uuid");
+        let mut stack = UndoStack::new();
+        stack.push_redo(kind_edit_entry(None, 4_242));
+
+        assert_eq!(stack.drop_entries_addressing_a_missing_shot(&project), 1);
+        assert_eq!(stack.redo_len(), 0);
+    }
+
+    /// The rule INVERTS for a `CreatedShotSnapshot` on the redo stack: that entry
+    /// is there because the create was undone, so its shot is absent by
+    /// construction and the redo puts it back. Filtering it by resolvability
+    /// would drop every persisted create-a-shot redo there is.
+    #[test]
+    fn a_redo_entry_that_re_creates_its_shot_is_never_dropped() {
+        let project = project_holding_one_shot("live-uuid");
+        let mut stack = UndoStack::new();
+        stack.push_redo(created_shot_entry(Some("not-there-until-the-redo"), 0));
+
+        assert_eq!(stack.drop_entries_addressing_a_missing_shot(&project), 0);
+        assert_eq!(stack.redo_len(), 1);
+    }
+
+    /// ...and it is a wall as well as an exception: a redo that re-creates a
+    /// shot changes which shots exist, so nothing beneath it can be judged
+    /// against the project as loaded.
+    #[test]
+    fn an_unresolvable_redo_entry_below_a_re_created_shot_is_not_dropped() {
+        let project = project_holding_one_shot("live-uuid");
+        let mut stack = UndoStack::new();
+        stack.push_redo(kind_edit_entry(Some("uuid-that-is-not-there"), 9));
+        stack.push_redo(created_shot_entry(Some("uuid-that-is-not-there"), 0));
+
+        assert_eq!(stack.drop_entries_addressing_a_missing_shot(&project), 0);
+        assert_eq!(stack.redo_len(), 2);
+    }
+
+    /// Both stacks in one pass, and the count is the total: a project reloaded
+    /// after its shot went away can carry a doomed entry on each side.
+    #[test]
+    fn a_reload_drops_the_dead_entry_from_both_stacks() {
+        let project = project_holding_one_shot("live-uuid");
+        let mut stack = UndoStack::new();
+        let doomed = created_shot_entry(Some("uuid-that-is-not-there"), 0);
+        stack.push_with_data(doomed.command, doomed.undo_data);
+        stack.push_redo(kind_edit_entry(Some("uuid-that-is-not-there"), 9));
+        stack.push_redo(kind_edit_entry(Some("live-uuid"), 7));
+
+        assert_eq!(stack.drop_entries_addressing_a_missing_shot(&project), 2);
+        assert!(stack.is_empty());
+        assert_eq!(stack.redo_len(), 1);
+    }
+
     #[test]
     fn load_rejects_a_malformed_undo_timestamp_instead_of_treating_it_as_legacy() {
         let mut stack = UndoStack::new();
@@ -2588,6 +2728,64 @@ mod tests {
             ..small
         };
         assert_eq!(UndoStack::estimated_size(&payload), 2_048 + 512);
+    }
+
+    /// EVERY variant that owns a `previous_offsets` map charges for it.
+    ///
+    /// `PreviousValues` and `CreatedShotSnapshot` gained theirs late (#413,
+    /// finding 27) and were charged as if they had none. The map is the one
+    /// field on those two that grows with the SURVEY rather than with the edit -
+    /// the rigid connected set of the edited section - and a shot edit records
+    /// one per keystroke, so leaving it uncounted let a Full-mode history grow
+    /// past its budget while the estimate said it had not.
+    #[test]
+    fn the_estimate_counts_a_previous_offsets_map_on_the_two_variants_that_gained_one() {
+        let offsets: HashMap<SectionId, Option<(f64, f64)>> =
+            (0..4).map(|id| (id, Some((1.0, 2.0)))).collect();
+
+        let previous_values =
+            |previous_offsets: HashMap<SectionId, Option<(f64, f64)>>| UndoEntry {
+                command_bytes: None,
+                command: test_create_section_command("S0"),
+                undo_data: UndoData::PreviousValues {
+                    section_id: 0,
+                    shot_id: Some(1),
+                    shot_uuid: None,
+                    values_json: "x".repeat(64),
+                    previous_offsets,
+                },
+                timestamp: None,
+            };
+        assert_eq!(
+            UndoStack::estimated_size(&previous_values(HashMap::new())),
+            64 + 512
+        );
+        assert_eq!(
+            UndoStack::estimated_size(&previous_values(offsets.clone())),
+            64 + 512 + 4 * 64,
+            "a shot edit's recorded offsets are 64 bytes apiece, as on MergeInfo"
+        );
+
+        let created_shot = |previous_offsets: HashMap<SectionId, Option<(f64, f64)>>| {
+            let mut entry = created_shot_entry(Some("uuid"), 1);
+            if let UndoData::CreatedShotSnapshot {
+                previous_offsets: slot,
+                ..
+            } = &mut entry.undo_data
+            {
+                *slot = previous_offsets;
+            }
+            entry
+        };
+        assert_eq!(
+            UndoStack::estimated_size(&created_shot(HashMap::new())),
+            420 + 512
+        );
+        assert_eq!(
+            UndoStack::estimated_size(&created_shot(offsets)),
+            420 + 512 + 4 * 64,
+            "an insert's recorded offsets count on top of the shot itself"
+        );
     }
 
     /// [#303] A load whose stamps are not in time order is refused, not sorted.
