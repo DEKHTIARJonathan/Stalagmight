@@ -25,17 +25,26 @@ const LONG_PRESS_MS = 500;
 const MOVE_CANCEL_PX = 10;
 const MOVE_CANCEL_PX_SQUARED = MOVE_CANCEL_PX * MOVE_CANCEL_PX;
 
+/** Where the finger landed, copied out of the starting `Touch` at touchstart. */
+export interface LongPressPoint {
+  clientX: number;
+  clientY: number;
+}
+
 export interface LongPressTouchOptions {
   /**
-   * The hold completed. Receives the `Touch` that started it - a `Touch` is a
-   * snapshot rather than a live handle, so its `clientX`/`clientY` are still
-   * where the finger landed, which is the position the menu belongs at.
+   * The hold completed. Receives the position where the finger landed - which
+   * is the position the menu belongs at. The coordinates are copied at
+   * touchstart rather than read off the `Touch` later: the spec says a `Touch`
+   * is a snapshot, but both implementations this helper replaced kept a
+   * defensive copy, and a webview that reused `Touch` objects would otherwise
+   * silently break the wobble-cancel whose whole job is "did the finger move".
    *
    * Return whether a menu actually opened. `true` arms the `touchend`
    * suppression described in the module doc; `false` (nothing under the
    * finger) leaves the trailing tap alone, so it behaves like any other tap.
    */
-  onLongPress: (touch: Touch) => boolean;
+  onLongPress: (point: LongPressPoint) => boolean;
   /**
    * Gate: `false` keeps the press inert. Consulted both when the finger lands
    * and again before the menu would open, because what it reads (a modal
@@ -54,8 +63,8 @@ export function attachLongPressTouch(
   options: LongPressTouchOptions
 ): () => void {
   let timer: ReturnType<typeof setTimeout> | null = null;
-  /** The touch that started the pending press, or null when none is pending. */
-  let pending: Touch | null = null;
+  /** Where the pending press landed, or null when none is pending. */
+  let pending: LongPressPoint | null = null;
   /** Set once a press opened a menu, so the `touchend` ending it is swallowed. */
   let fired = false;
 
@@ -71,13 +80,14 @@ export function attachLongPressTouch(
     if (e.touches.length !== 1) return;
     if (options.isEnabled?.() === false) return;
     const touch = e.touches[0]!;
-    pending = touch;
+    const point: LongPressPoint = { clientX: touch.clientX, clientY: touch.clientY };
+    pending = point;
     timer = setTimeout(() => {
       timer = null;
       if (!pending) return;
       pending = null;
       if (options.isEnabled?.() === false) return;
-      fired = options.onLongPress(touch);
+      fired = options.onLongPress(point);
     }, LONG_PRESS_MS);
   };
 

@@ -7,6 +7,7 @@ import {
   isNonInteractiveTool,
   navigationToolsEnabled,
   NON_INTERACTIVE_TOOLS,
+  shouldResetNavigationTool,
   toolCursor,
 } from '../toolUtils';
 import type { ToolType } from '../../store/uiStore';
@@ -101,6 +102,27 @@ describe('toolUtils', () => {
     it('reads the setting off a loaded config', () => {
       expect(navigationToolsEnabled(withSetting(true))).toBe(true);
       expect(navigationToolsEnabled(withSetting(false))).toBe(false);
+    });
+
+    describe('shouldResetNavigationTool', () => {
+      it('kicks a navigation tool once a loaded config hides the group', () => {
+        expect(shouldResetNavigationTool(withSetting(false), 'pan')).toBe(true);
+        expect(shouldResetNavigationTool(withSetting(false), 'zoom')).toBe(true);
+      });
+
+      // The boot-kick regression this predicate exists to prevent: config is null
+      // until loadConfig() resolves, and a user whose SAVED setting is on may have
+      // Pan/Zoom as their restored tool. Resetting on the null placeholder would
+      // kick them off it before the real config ever arrived.
+      it('never fires while the config has not loaded, whatever the tool', () => {
+        expect(shouldResetNavigationTool(null, 'pan')).toBe(false);
+        expect(shouldResetNavigationTool(undefined, 'zoom')).toBe(false);
+      });
+
+      it('leaves the tool alone when the group is shown or the tool is not navigation', () => {
+        expect(shouldResetNavigationTool(withSetting(true), 'pan')).toBe(false);
+        expect(shouldResetNavigationTool(withSetting(false), 'select')).toBe(false);
+      });
     });
   });
 });

@@ -262,10 +262,10 @@ export default class GlobalSurveyLayer {
     // Touch long-press → context menu
     const canvas = this.map.getCanvas();
     this.detachLongPressTouch = attachLongPressTouch(canvas, {
-      onLongPress: (touch) => {
+      onLongPress: (pressPoint) => {
         if (!this.callbacks.onSystemContextMenu) return false;
         const rect = canvas.getBoundingClientRect();
-        const point: [number, number] = [touch.clientX - rect.left, touch.clientY - rect.top];
+        const point: [number, number] = [pressPoint.clientX - rect.left, pressPoint.clientY - rect.top];
         // Resolve the system at the touch position (custom hit index).
         const hit = this.pickSystemAt(point);
         // Empty map under the finger: no menu, so nothing to swallow the tap for.
@@ -273,8 +273,8 @@ export default class GlobalSurveyLayer {
         this.contextMenuOpen = true;
         this.hideTooltip();
         const fakeEvent = new MouseEvent('contextmenu', {
-          clientX: touch.clientX,
-          clientY: touch.clientY,
+          clientX: pressPoint.clientX,
+          clientY: pressPoint.clientY,
         });
         this.callbacks.onSystemContextMenu(hit.systemId, fakeEvent);
         return true;

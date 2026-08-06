@@ -12,8 +12,7 @@ import {
 } from '../../store/uiStore';
 import { selectComputeGate, useGasPlanStore } from '../../store/gasPlanStore';
 import { selectActiveStations, selectActiveSurveyData } from '../../store/geometrySelectors';
-import { isMutatingTool, navigationToolsEnabled, toolCursor } from '../../utils/toolUtils';
-import { isNavigationTool } from '../../utils/toolGroups';
+import { isMutatingTool, shouldResetNavigationTool, toolCursor } from '../../utils/toolUtils';
 import { mapGestureMode } from '../../utils/mapGestures';
 import { attachDragReleaseForwarder } from '../../utils/mapDragRelease';
 import { hasEligibleClosures } from '../../utils/closures';
@@ -2272,14 +2271,11 @@ function MapCanvas() {
   // Turning the navigate group off (#409) has to take Pan/Zoom off the MAP too, not
   // just out of the toolbar: the tool is persisted UI state, so a user who was on Pan
   // when they flipped the setting would otherwise be stuck with a tool that has no
-  // button to leave it with.
-  //
-  // The `config &&` guard is load-bearing: config is null until loadConfig() resolves,
-  // and navigationToolsEnabled(null) is false - without it, every boot would kick a
-  // user whose SAVED setting is on off their restored Pan/Zoom tool before the real
-  // config ever arrived.
+  // button to leave it with. The predicate is pure and lives in toolUtils so its
+  // null-config boot semantics are pinned by unit tests (kicking a restored Pan/Zoom
+  // tool before the real config arrives is the regression they guard).
   useEffect(() => {
-    if (config && !navigationToolsEnabled(config) && isNavigationTool(activeTool)) {
+    if (shouldResetNavigationTool(config, activeTool)) {
       setActiveTool('select');
     }
   }, [config, activeTool, setActiveTool]);

@@ -1,5 +1,6 @@
 import type { ToolType } from '../store/uiStore';
 import type { Config } from '../types/config';
+import { isNavigationTool } from './toolGroups';
 
 /**
  * Whether the Pan/Zoom tools are available (#409). Off unless the user opts in:
@@ -13,6 +14,22 @@ import type { Config } from '../types/config';
  */
 export function navigationToolsEnabled(config: Config | null | undefined): boolean {
   return config?.map.controls.show_navigation_tools ?? false;
+}
+
+/**
+ * Whether the active tool must be kicked back to Select because the navigate
+ * group was turned off (#409). This is the RESET case navigationToolsEnabled's
+ * doc warns about: it must stay false while config is still null (boot), or the
+ * reset would fight a user whose SAVED setting is on by kicking them off their
+ * restored Pan/Zoom tool before the real config arrives. Pure so that null-config
+ * semantics can be pinned by a unit test; MapCanvas's effect is just this plus
+ * `setActiveTool('select')`.
+ */
+export function shouldResetNavigationTool(
+  config: Config | null | undefined,
+  activeTool: ToolType
+): boolean {
+  return config != null && !navigationToolsEnabled(config) && isNavigationTool(activeTool);
 }
 
 /**

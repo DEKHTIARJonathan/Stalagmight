@@ -1012,21 +1012,24 @@ export default class SurveyLayer {
     // Touch long-press → context menu (raw touch listeners on canvas)
     const canvas = this.map.getCanvas();
     this.detachLongPressTouch = attachLongPressTouch(canvas, {
-      onLongPress: (touch) => {
+      onLongPress: (pressPoint) => {
         // Hit-test at touch position
         const rect = canvas.getBoundingClientRect();
-        const point: [number, number] = [touch.clientX - rect.left, touch.clientY - rect.top];
+        const point: [number, number] = [pressPoint.clientX - rect.left, pressPoint.clientY - rect.top];
         const fakeEvent = {
           point: { x: point[0], y: point[1] },
           lngLat: this.map.unproject(point),
           originalEvent: new MouseEvent('contextmenu', {
-            clientX: touch.clientX,
-            clientY: touch.clientY,
+            clientX: pressPoint.clientX,
+            clientY: pressPoint.clientY,
           }),
         } as maplibregl.MapMouseEvent;
         this.handleContextMenu(fakeEvent);
-        // The menu is the whole point of the press, so always swallow the tap.
-        return true;
+        // handleContextMenu dispatches a menu for every target, including the
+        // empty map - but only through `callbacks.onContextMenu`, which is
+        // optional. Swallow the tap exactly when a menu could actually open
+        // (the helper's contract); with no consumer wired, the tap stays live.
+        return this.callbacks.onContextMenu !== undefined;
       },
       isEnabled: () => !this.modalInteractionActive(),
     });
@@ -1298,7 +1301,7 @@ export default class SurveyLayer {
    *  quantizing it to pixel bins let two centers in one bin differ by ~1px (Web
    *  Mercator amplifies the latitude error away from the equator), exceeding the
    *  probe's 0.5px margin, so a feature near the hit-radius boundary then missed
-   *  hover/click/box-select until the camera crossed a bin. */
+   *  hover/click until the camera crossed a bin. */
   private cameraSnapshot(): { key: string; axisAligned: boolean } {
     const c = this.map.getCenter();
     const cv = this.map.getCanvas();

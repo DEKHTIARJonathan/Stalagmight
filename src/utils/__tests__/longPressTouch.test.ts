@@ -35,8 +35,8 @@ afterEach(() => {
 });
 
 describe('attachLongPressTouch', () => {
-  it('fires the long press after a 500 ms hold, with the touch that started it', () => {
-    const onLongPress = vi.fn((_touch: Touch) => true);
+  it('fires the long press after a 500 ms hold, with the point it started at', () => {
+    const onLongPress = vi.fn((_point: { clientX: number; clientY: number }) => true);
     const detach = attachLongPressTouch(target, { onLongPress });
 
     dispatch(target, 'touchstart', [touchAt(120, 80)]);
