@@ -1,3 +1,4 @@
+import type { TFunction } from 'i18next';
 import type { ImportReceipt } from '../types/ipc/ImportReceipt';
 
 /**
@@ -30,4 +31,39 @@ export function aggregateImportReceipts(receipts: ImportReceipt[]): ImportReceip
     }),
     first,
   );
+}
+
+/**
+ * The three "what landed" facts shared by the receipt dialog and the receipt
+ * toast (docs/notifications.md): sections imported, shots imported, and loops
+ * reconstructed (only when the receipt actually requested a closure). `t` is
+ * either the component `useTranslation()` hook's `t`, or `i18n.t` directly
+ * when called outside React (the toast path in `saveFeedback.ts`).
+ */
+export function importReceiptSummaryParts(receipt: ImportReceipt, t: TFunction): string[] {
+  return [
+    t('dialogs.importReceipt.sections', { count: receipt.sections_imported }),
+    t('dialogs.importReceipt.shots', { count: receipt.shot_count }),
+    ...(receipt.closures_requested > 0
+      ? [t('dialogs.importReceipt.loops', { count: receipt.closures_created })]
+      : []),
+  ];
+}
+
+/**
+ * Nothing landed. #442's case: an import that silently produces nothing must
+ * never be demoted to a toast, even if it happens to carry no `warnings` of
+ * its own (the absence of any data IS the thing the user needs to see).
+ *
+ * Gated on `sections_imported` alone, NOT `shot_count`: `shot_count` is
+ * summed from the sections the import *attempted* (`command_import.rs`,
+ * computed before the per-section outcome is known), while
+ * `sections_imported` counts what actually landed. They only agree today
+ * because the import loop is all-or-nothing - the day a partial-drop path
+ * exists, a zero-sections receipt could carry a nonzero `shot_count`, and a
+ * `shot_count`-inclusive check would wrongly let that case through as a
+ * toast.
+ */
+export function isEmptyImportReceipt(receipt: ImportReceipt): boolean {
+  return receipt.sections_imported === 0;
 }

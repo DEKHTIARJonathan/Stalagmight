@@ -1234,6 +1234,7 @@
       "shots_other": "{{count}} shots",
       "loops_one": "{{count}} loop reconstructed",
       "loops_other": "{{count}} loops reconstructed",
+      "toast": "{{source}} import: {{summary}}",
       "viewDetails": "View details",
       "hideDetails": "Hide details",
       "continue": "Continue to map"

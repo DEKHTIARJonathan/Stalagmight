@@ -21,7 +21,8 @@ import { setSource } from '../../utils/telemetry';
  */
 export default function GpxPlacementDialog() {
   const { executeGpxImport } = useProjectStore();
-  const { closeDialog, openDialog, dialogData, setView, triggerFitToBounds, resolvedTheme } = useUIStore();
+  const { closeDialog, openDialog, dialogData, setView, triggerFitToBounds, resolvedTheme, showToast } =
+    useUIStore();
 
   const gpxFile = dialogData.gpxFile as GpxFile;
   const filePath = dialogData.filePath as string;
@@ -131,7 +132,7 @@ export default function GpxPlacementDialog() {
       };
     });
 
-    const importUi = { closeDialog, setView, triggerFitToBounds, openDialog };
+    const importUi = { closeDialog, setView, triggerFitToBounds, openDialog, showToast };
     try {
       const result = await executeGpxImport(
         filePath,

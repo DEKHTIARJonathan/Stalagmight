@@ -21,7 +21,7 @@ interface GpxSelectionDialogProps {
 export default function GpxSelectionDialog({ gpxFile, filePath }: GpxSelectionDialogProps) {
   const { t } = useTranslation();
   const { calculateFileHash, checkDuplicateImport, executeGpxImport } = useProjectStore();
-  const { closeDialog, openDialog, setView, triggerFitToBounds } = useUIStore();
+  const { closeDialog, openDialog, setView, triggerFitToBounds, showToast } = useUIStore();
 
   const [importWaypoints, setImportWaypoints] = useState(gpxFile.waypoints.length > 0);
   const [importTracks, setImportTracks] = useState(gpxFile.tracks.length > 0);
@@ -89,7 +89,7 @@ export default function GpxSelectionDialog({ gpxFile, filePath }: GpxSelectionDi
 
   const handleImportWaypointsOnly = async () => {
     setIsImporting(true);
-    const importUi = { closeDialog, setView, triggerFitToBounds, openDialog };
+    const importUi = { closeDialog, setView, triggerFitToBounds, openDialog, showToast };
     try {
       const result = await executeGpxImport(
         filePath,

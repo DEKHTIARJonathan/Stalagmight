@@ -4,8 +4,11 @@ import { isPermissionError } from './saveErrors';
 import { trackDialogComplete } from './telemetry';
 import { getErrorMessage } from './ipc';
 import i18n from '../i18n';
+import { importReceiptSummaryParts, isEmptyImportReceipt } from './importReceipt';
+import { TOAST_KEYS } from './toastKeys';
 import type { ValidationWarning } from '../types/ipc/ValidationWarning';
 import type { ImportReceipt } from '../types/ipc/ImportReceipt';
+import type { ToastKind } from '../store/uiStore';
 
 /**
  * Surface a failed (non-throwing) save to the user.
@@ -73,6 +76,38 @@ export interface ImportDialogUi {
   setView: (view: 'single') => void;
   triggerFitToBounds: () => void;
   openDialog: (dialog: string, data?: Record<string, unknown>) => void;
+  showToast: (message: string, key: string, kind: ToastKind) => void;
+}
+
+/**
+ * The surface for a post-import receipt (docs/notifications.md, #411/#420): a
+ * receipt with no decision in it - no warnings, and something actually
+ * landed - is a toast, not a modal (there's nothing to acknowledge, just a
+ * click to continue). Three things keep the modal:
+ *  - `warnings` is non-empty (something needs a look).
+ *  - Nothing landed (#442, `isEmptyImportReceipt`) - the absence of data IS
+ *    the fact the user needs to see.
+ *  - `unit_conversion` is set: a length-unit conversion (e.g. feet -> meters)
+ *    silently changes every number in the imported data. That is a
+ *    transformation notice, not a decision, but the toast auto-dismisses in
+ *    5-9s and its one-line budget (docs/notifications.md) has no room for it
+ *    without truncating the summary - so it rides the modal instead of being
+ *    dropped or getting a second, second-class surface.
+ */
+export function presentImportReceipt(
+  receipt: ImportReceipt,
+  ui: Pick<ImportDialogUi, 'openDialog' | 'showToast'>,
+): void {
+  if (receipt.warnings.length > 0 || isEmptyImportReceipt(receipt) || receipt.unit_conversion != null) {
+    ui.openDialog('import-receipt', { receipt });
+    return;
+  }
+  const summary = importReceiptSummaryParts(receipt, i18n.t).join(' - ');
+  ui.showToast(
+    i18n.t('dialogs.importReceipt.toast', { source: receipt.source_format, summary }),
+    TOAST_KEYS.IMPORT_RECEIPT,
+    'success',
+  );
 }
 
 /**
@@ -162,9 +197,10 @@ export function surfaceImportFailure(
  * the dialog-complete telemetry event first. Shared exit sequence for the TML,
  * Compass, Walls and GPX new-project import dialogs.
  *
- * When `receipt` is present (a successful import that produced one), opens the
- * post-import receipt dialog (#391) right after so the user sees what landed
- * without having to open the data table.
+ * When `receipt` is present (a successful import that produced one), surfaces
+ * the post-import receipt (#391) right after so the user sees what landed
+ * without having to open the data table - as a toast when it carries no
+ * decision, or the modal when it does (#411/#420, `presentImportReceipt`).
  *
  * This is also where the import flow ENDS, so it is where `importContext` is
  * dropped. Left set, it outlives its flow: `saveAfterImport` reads it, and a
@@ -183,7 +219,7 @@ export function completeImportToSingleView(
   ui.setView('single');
   ui.triggerFitToBounds();
   if (receipt) {
-    ui.openDialog('import-receipt', { receipt });
+    presentImportReceipt(receipt, ui);
   }
 }
 

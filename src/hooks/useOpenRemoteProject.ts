@@ -9,6 +9,7 @@ import {
   speleoSessionStillCurrent,
 } from '../store/speleoStore';
 import { invokeIpc } from '../utils/ipc';
+import { presentImportReceipt } from '../utils/saveFeedback';
 import { applySpeleoTreeReplacement } from '../utils/speleoTreeReplacement';
 import {
   speleoErrorAction,
@@ -946,9 +947,13 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
        * lives; one surface each. Only on a load that actually opened the project -
        * a receipt for a project not on screen describes nothing the user can look at,
        * and the failed load has already surfaced itself.
+       *
+       * Routed through `presentImportReceipt` like every file-import dialog, so a
+       * warning-free, unconverted adoption gets the toast and only a receipt with
+       * something to decide keeps the modal (#411/#420).
        */
       if (outcome.status === 'opened' && result.import_receipt) {
-        openDialog('import-receipt', { receipt: result.import_receipt });
+        presentImportReceipt(result.import_receipt, { openDialog, showToast });
       }
       return outcome;
     },
@@ -959,6 +964,7 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
       onAdoptAfterPick,
       failReplay,
       openDialog,
+      showToast,
       t,
     ],
   );

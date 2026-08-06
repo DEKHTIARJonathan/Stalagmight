@@ -12,6 +12,7 @@ import type { Section } from '../../types/project';
 import type { DmpSection } from '../../types/ipc/DmpSection';
 import type { OverlapMode } from '../../types/ipc/OverlapMode';
 import { trackDialogComplete } from '../../utils/telemetry';
+import { presentImportReceipt } from '../../utils/saveFeedback';
 import {
   computeMergeOptions,
   computeActionableIds,
@@ -94,7 +95,7 @@ export default function OrphanPlacementDialog({ suggestions, receipt }: OrphanPl
     keep_both: t('dialogs.orphanPlacement.overlapModes.keep_both'),
   };
   const { mergeStations, updateShot, setShotKind, refreshProjectState, project } = useProjectStore();
-  const { closeDialog, setView, triggerFitToBounds, openDialog } = useUIStore();
+  const { closeDialog, setView, triggerFitToBounds, openDialog, showToast } = useUIStore();
 
   const [processing, setProcessing] = useState(false);
   const [currentEndIndex, setCurrentEndIndex] = useState(0);
@@ -315,9 +316,9 @@ export default function OrphanPlacementDialog({ suggestions, receipt }: OrphanPl
     setView('single');
     triggerFitToBounds();
     if (receipt) {
-      openDialog('import-receipt', { receipt });
+      presentImportReceipt(receipt, { openDialog, showToast });
     }
-  }, [refreshProjectState, closeDialog, setView, triggerFitToBounds, receipt, openDialog]);
+  }, [refreshProjectState, closeDialog, setView, triggerFitToBounds, receipt, openDialog, showToast]);
 
   // Auto-close when all suggestions have been processed
   useEffect(() => {

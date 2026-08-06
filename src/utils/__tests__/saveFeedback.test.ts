@@ -6,6 +6,7 @@ import {
   completeImportToSingleView,
   finalizeDeferredSaveWarnings,
   deferredSaveWarnings,
+  presentImportReceipt,
   type ImportDialogUi,
 } from '../saveFeedback';
 import { useProjectStore } from '../../store/projectStore';
@@ -18,6 +19,7 @@ const mockUi = (): ImportDialogUi & { [K in keyof ImportDialogUi]: ReturnType<ty
   setView: vi.fn(),
   triggerFitToBounds: vi.fn(),
   openDialog: vi.fn(),
+  showToast: vi.fn(),
 });
 
 const receiptFixture = (warnings: string[] = []): ImportReceipt => ({
@@ -144,6 +146,102 @@ describe('finalizeDeferredSaveWarnings (#110)', () => {
       title: 'Import Warning',
       message: 'first\n\nsecond',
       hideReportHint: true,
+    });
+  });
+});
+
+describe('presentImportReceipt (#411/#420)', () => {
+  it('surfaces a warning-free receipt as a toast, never opens the modal', () => {
+    const ui = mockUi();
+
+    presentImportReceipt(receiptFixture(), ui);
+
+    expect(ui.openDialog).not.toHaveBeenCalled();
+    expect(ui.showToast).toHaveBeenCalledTimes(1);
+    expect(ui.showToast).toHaveBeenCalledWith(expect.stringContaining('Ariane TML'), 'import-receipt', 'success');
+  });
+
+  it('keeps the modal for a receipt with even one warning, never toasts', () => {
+    const ui = mockUi();
+
+    presentImportReceipt(receiptFixture(['2 zero-shot sections were skipped']), ui);
+
+    expect(ui.showToast).not.toHaveBeenCalled();
+    expect(ui.openDialog).toHaveBeenCalledWith('import-receipt', {
+      receipt: expect.objectContaining({ warnings: ['2 zero-shot sections were skipped'] }),
+    });
+  });
+
+  it('keeps the modal for a zero-count receipt even with no warnings (#442)', () => {
+    const ui = mockUi();
+    const empty: ImportReceipt = { ...receiptFixture(), sections_imported: 0, shot_count: 0 };
+
+    presentImportReceipt(empty, ui);
+
+    expect(ui.showToast).not.toHaveBeenCalled();
+    expect(ui.openDialog).toHaveBeenCalledWith('import-receipt', { receipt: empty });
+  });
+
+  it('keeps the modal when sections_imported is zero even if shot_count disagrees (#442)', () => {
+    // shot_count is summed from the sections the import ATTEMPTED
+    // (command_import.rs), sections_imported from what actually landed - they
+    // only agree today because the import loop is all-or-nothing. Pin the
+    // guard on sections_imported alone so a future partial-drop path can't
+    // slip a "nothing landed" receipt through as a toast just because
+    // shot_count is stale/nonzero.
+    const ui = mockUi();
+    const disagreeing: ImportReceipt = { ...receiptFixture(), sections_imported: 0, shot_count: 40 };
+
+    presentImportReceipt(disagreeing, ui);
+
+    expect(ui.showToast).not.toHaveBeenCalled();
+    expect(ui.openDialog).toHaveBeenCalledWith('import-receipt', { receipt: disagreeing });
+  });
+
+  it('keeps the modal for a unit-converted receipt even with no warnings', () => {
+    const ui = mockUi();
+    const converted: ImportReceipt = {
+      ...receiptFixture(),
+      unit_conversion: 'Lengths converted from feet to meters',
+    };
+
+    presentImportReceipt(converted, ui);
+
+    expect(ui.showToast).not.toHaveBeenCalled();
+    expect(ui.openDialog).toHaveBeenCalledWith('import-receipt', { receipt: converted });
+  });
+
+  it('toasts a warning-free, non-converted receipt (control case)', () => {
+    const ui = mockUi();
+    const plain: ImportReceipt = { ...receiptFixture(), unit_conversion: null };
+
+    presentImportReceipt(plain, ui);
+
+    expect(ui.openDialog).not.toHaveBeenCalled();
+    expect(ui.showToast).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('completeImportToSingleView receipt routing (#411/#420)', () => {
+  it('routes a warning-free receipt to the toast, not the receipt dialog', () => {
+    const ui = mockUi();
+
+    completeImportToSingleView('tml-import', ui, receiptFixture());
+
+    expect(ui.closeDialog).toHaveBeenCalled();
+    expect(ui.setView).toHaveBeenCalledWith('single');
+    expect(ui.openDialog).not.toHaveBeenCalled();
+    expect(ui.showToast).toHaveBeenCalledTimes(1);
+  });
+
+  it('routes a receipt carrying a warning to the receipt dialog, not a toast', () => {
+    const ui = mockUi();
+
+    completeImportToSingleView('tml-import', ui, receiptFixture(['1 shot skipped']));
+
+    expect(ui.showToast).not.toHaveBeenCalled();
+    expect(ui.openDialog).toHaveBeenCalledWith('import-receipt', {
+      receipt: expect.objectContaining({ warnings: ['1 shot skipped'] }),
     });
   });
 });

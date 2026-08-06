@@ -23,7 +23,7 @@ interface WallsImportDialogProps {
 export default function WallsImportDialog({ wallsFile, filePath }: WallsImportDialogProps) {
   const { t } = useTranslation();
   const { executeWallsImport, calculateFileHash, checkDuplicateImport, startLoading, setLoadingProgress, resetLoading } = useProjectStore();
-  const { closeDialog, openDialog, setView, triggerFitToBounds } = useUIStore();
+  const { closeDialog, openDialog, setView, triggerFitToBounds, showToast } = useUIStore();
 
   const [isImporting, setIsImporting] = useState(false);
   const [fileHash, setFileHash] = useState<string | null>(null);
@@ -139,7 +139,7 @@ export default function WallsImportDialog({ wallsFile, filePath }: WallsImportDi
     setIsImporting(true);
     startLoading(wallsFile.project_name || fileName, filePath);
     setLoadingProgress({ phase: 'import_parsing' });
-    const importUi = { closeDialog, setView, triggerFitToBounds, openDialog };
+    const importUi = { closeDialog, setView, triggerFitToBounds, openDialog, showToast };
     try {
       // Pass the selection as the original survey indices; omit (null) when
       // everything resolved is selected so a full import stays unfiltered.
