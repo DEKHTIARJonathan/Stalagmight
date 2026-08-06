@@ -187,7 +187,12 @@ export function useAutoSave(): AutoSaveState {
               clearTimeout(flashRef.current);
               flashRef.current = null;
             }
-            setStatus('error');
+            // A save that landed WHILE this one was in flight (a manual Ctrl+S,
+            // a Save As to a working folder) already put the changes on disk,
+            // so this failure is moot - and painting it red anyway leaves the
+            // Save menu item red with nothing to save, for as long as the
+            // project stays clean (#429).
+            setStatus(useProjectStore.getState().isDirty ? 'error' : 'idle');
           }
         }, seconds * 1000);
       }

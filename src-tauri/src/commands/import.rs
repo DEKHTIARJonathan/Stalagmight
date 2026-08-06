@@ -270,9 +270,13 @@ fn merge_deferred_save_outcome(
         "Deferred-save resolution failed after import"
     );
     let raw = saved.error.unwrap_or_else(|| "unknown error".to_string());
-    // Don't leak the internal permission marker into the user-facing warning.
+    // Don't leak the internal classification markers into the user-facing warning.
     let detail = if raw.starts_with(crate::core::loading::PERMISSION_DENIED_CODE) {
         "permission denied (check folder access in Privacy & Security)".to_string()
+    } else if raw.starts_with(crate::core::loading::PATH_NOT_FOUND_CODE) {
+        "the folder no longer exists or the drive is not connected".to_string()
+    } else if raw.starts_with(crate::core::loading::PATH_TOO_LONG_CODE) {
+        "the path is too long for the system to open".to_string()
     } else {
         raw
     };

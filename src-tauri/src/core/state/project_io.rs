@@ -4,29 +4,151 @@ use crate::models::{Project, SectionId};
 use crate::persistence::Database;
 use std::path::{Path, PathBuf};
 
-/// Build a save-failure `CommandResult`, tagging filesystem permission
-/// denials with `PERMISSION_DENIED_CODE` so the frontend can surface
-/// folder-access guidance instead of a misleading message. macOS drops
-/// previously-granted folder access after OS/app updates, which otherwise
-/// reaches the user as a bogus "corrupted database"/raw-OS error.
+/// What a failed save actually was, once the error chain and the destination
+/// have both been consulted. Each variant except `Other` carries a marker the
+/// frontend keys on to pick the remediation it shows.
+#[derive(Clone, Copy)]
+enum SaveFailureKind {
+    /// The OS refuses a destination that IS there (macOS forgetting a granted
+    /// folder, a read-only mount).
+    PermissionDenied,
+    /// The destination is not reachable: the folder was deleted or renamed, or
+    /// its drive is not connected.
+    PathNotFound,
+    /// The destination path is longer than the OS will open.
+    PathTooLong,
+    /// Anything else - disk full, corruption, a SQLite error of its own. The
+    /// backend message is the best thing to show.
+    Other,
+}
+
+impl SaveFailureKind {
+    /// The marker prefixed onto the `CommandResult` error, or `None` when the
+    /// message stands on its own.
+    fn code(self) -> Option<&'static str> {
+        match self {
+            Self::PermissionDenied => Some(crate::core::loading::PERMISSION_DENIED_CODE),
+            Self::PathNotFound => Some(crate::core::loading::PATH_NOT_FOUND_CODE),
+            Self::PathTooLong => Some(crate::core::loading::PATH_TOO_LONG_CODE),
+            Self::Other => None,
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::PermissionDenied => "permission_denied",
+            Self::PathNotFound => "path_not_found",
+            Self::PathTooLong => "path_too_long",
+            Self::Other => "other",
+        }
+    }
+}
+
+/// What the destination directory has to say for itself.
+enum DirProbe {
+    /// It accepted a file, so it is denying us nothing.
+    Writable,
+    /// It refused - the corroboration a permission denial needs.
+    Denied,
+    /// It is not there, or cannot be reached at all.
+    Unreachable,
+    /// It is there and the probe failed for some other reason (a full disk).
+    Other,
+}
+
+/// Ask the destination directory directly, because the error chain would not
+/// say: create a file in it and delete it again.
 ///
-/// `target` is the destination file. We only treat the failure as a
-/// permission problem when its parent directory still exists: a
-/// deleted/renamed save folder yields SQLite's same generic "unable to open
-/// database file", but that's a vanished-location error, not a denial, and
-/// should stay an ordinary failure rather than show Privacy & Security steps.
+/// Only ever called on a save that has ALREADY failed, so the transient probe
+/// file costs nothing on the happy path.
+fn probe_destination_dir(dir: &Path) -> DirProbe {
+    match dir.try_exists() {
+        Ok(true) => {}
+        Ok(false) => return DirProbe::Unreachable,
+        Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => return DirProbe::Denied,
+        // A directory whose metadata cannot be read for any other reason (a
+        // removed stick, a dropped share, a name the OS will not resolve) is
+        // not somewhere a file can be written either.
+        Err(_) => return DirProbe::Unreachable,
+    }
+    let probe = dir.join(format!(
+        ".stalagmight-write-probe-{}-{}",
+        std::process::id(),
+        PROBE_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
+    match std::fs::File::create(&probe) {
+        Ok(file) => {
+            drop(file);
+            let _ = std::fs::remove_file(&probe);
+            DirProbe::Writable
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => DirProbe::Denied,
+        Err(_) => DirProbe::Other,
+    }
+}
+
+/// Distinguishes concurrent probes in the same process.
+static PROBE_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Classify a failed save of `target`.
+///
+/// Three signals, in order:
+///
+/// 1. the error chain itself, when it is explicit (a typed `PermissionDenied`
+///    or `NotFound`, or a message that names one);
+/// 2. the destination being longer than SQLite's win32 VFS can open - which its
+///    parent directory stat-ing perfectly fine does NOT rule out, because Rust's
+///    own std calls go through `\\?\` verbatim paths and SQLite's do not;
+/// 3. SQLite's ambiguous `SQLITE_CANTOPEN` message, resolved by probing the
+///    destination directory. A directory that accepts a file is denying us
+///    nothing, so ONLY a probe that is itself refused makes this a permission
+///    denial - the corroboration that stops an over-`MAX_PATH` Windows path
+///    being answered with macOS Privacy & Security steps (#429).
+fn classify_save_failure(target: &Path, err: &anyhow::Error) -> SaveFailureKind {
+    if crate::core::loading::is_permission_denied(err) {
+        return SaveFailureKind::PermissionDenied;
+    }
+    if crate::core::loading::is_path_not_found(err) {
+        return SaveFailureKind::PathNotFound;
+    }
+    if !crate::core::loading::mentions_unopenable_database(err) {
+        return SaveFailureKind::Other;
+    }
+    // The temp file the pipeline opens FIRST is `<name>.stalx.tmp`, four
+    // characters longer than the destination, so measure that one.
+    if cfg!(windows)
+        && crate::core::loading::over_legacy_path_limit(&target.with_extension("stalx.tmp"))
+    {
+        return SaveFailureKind::PathTooLong;
+    }
+    let Some(dir) = target.parent().filter(|p| !p.as_os_str().is_empty()) else {
+        return SaveFailureKind::Other;
+    };
+    match probe_destination_dir(dir) {
+        DirProbe::Denied => SaveFailureKind::PermissionDenied,
+        DirProbe::Unreachable => SaveFailureKind::PathNotFound,
+        DirProbe::Writable | DirProbe::Other => SaveFailureKind::Other,
+    }
+}
+
+/// Build a save-failure `CommandResult`, tagging it with the marker that tells
+/// the frontend which remediation to show, and logging the full error chain -
+/// the one place every failing save passes through, so a failure that only ever
+/// happens on a user's machine is still diagnosable from their log (#429).
 pub(super) fn save_failure(context: &str, target: &Path, err: &anyhow::Error) -> CommandResult {
     let detail = format!("{context}: {err}");
-    let dir_present = target
-        .parent()
-        .is_none_or(|p| p.try_exists().unwrap_or(true));
-    if dir_present && crate::core::loading::is_permission_denied(err) {
-        CommandResult::failure(format!(
-            "{}: {detail}",
-            crate::core::loading::PERMISSION_DENIED_CODE
-        ))
-    } else {
-        CommandResult::failure(detail)
+    let kind = classify_save_failure(target, err);
+    tracing::warn!(
+        path = ?target,
+        stage = context,
+        classification = kind.as_str(),
+        chain = %crate::core::loading::error_chain(err),
+        purpose = "persist edits safely",
+        "Save failed"
+    );
+    match kind.code() {
+        Some(code) => CommandResult::failure(format!("{code}: {detail}")),
+        None => CommandResult::failure(detail),
     }
 }
 
@@ -206,6 +328,37 @@ impl AppState {
                     "Implicit first save path already exists; using auto-renamed path"
                 );
                 save_path = candidate_path;
+            }
+        }
+
+        // The destination folder has to be there before anything is opened.
+        // SQLite answers a deleted folder or an unmapped drive with the same
+        // errno-free "unable to open database file" as a genuine denial, so
+        // asking first is what lets the user be told which one it is instead of
+        // being handed a raw database error (#429).
+        if let Some(parent) = save_path.parent().filter(|p| !p.as_os_str().is_empty()) {
+            let reachable = match parent.try_exists() {
+                Ok(present) => present,
+                // A folder whose metadata cannot be read at all - a removed
+                // stick, a dropped share - cannot host the save either. A
+                // permission error is the one exception: the folder IS there,
+                // and the pipeline below classifies that denial with its own
+                // guidance.
+                Err(e) => e.kind() == std::io::ErrorKind::PermissionDenied,
+            };
+            if !reachable {
+                tracing::warn!(
+                    path = ?save_path,
+                    parent = ?parent,
+                    purpose = "persist edits safely",
+                    "Save refused: the destination folder is not reachable"
+                );
+                return CommandResult::failure(format!(
+                    "{}: Cannot save to {}: the folder no longer exists or the drive is not \
+                     connected",
+                    crate::core::loading::PATH_NOT_FOUND_CODE,
+                    save_path.display()
+                ));
             }
         }
 

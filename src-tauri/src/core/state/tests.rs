@@ -809,10 +809,11 @@ fn save_blocks_on_dangling_refs() {
     // and restores integrity via Repair, after which saves resume.
     //
     // This covers autosave too, and there is nothing extra to assert for it: the
-    // backend has no manual-vs-auto distinction any more. `Command::SaveProject`
-    // carries only a path, and the frontend's `isAutosave` never crosses IPC (it
-    // only quiets UI churn - see projectStore.saveAutosaveQuiet.test.ts), so the
-    // debounced autosave reaches exactly the code exercised below.
+    // backend save has no manual-vs-auto distinction. `Command::SaveProject`
+    // carries only a path; the frontend's `isAutosave` reaches the backend for
+    // the log line alone (`commands::project::save_project`) and never touches
+    // the pipeline, so the debounced autosave reaches exactly the code exercised
+    // below.
     let temp_dir = TempDir::new().unwrap();
     let state = AppState::new().unwrap();
 
@@ -5539,9 +5540,9 @@ fn is_permission_denied_classifies_os_errors() {
     // EACCES/EPERM on unix without hardcoding platform errnos.
     let kind_err = std::io::Error::new(std::io::ErrorKind::PermissionDenied, "denied");
     assert!(is_permission_denied(&anyhow::Error::from(kind_err)));
-    // SQLite's wording when it can't open the file (what Database::open emits).
+    // A denial that only reaches us as text still counts.
     assert!(is_permission_denied(&anyhow::anyhow!(
-        "unable to open database file: /Users/x/cave.stalx"
+        "Failed to create save file: Permission denied"
     )));
     // EPERM (the "os error 1" from the bug report) and EACCES decode to
     // PermissionDenied on unix; the libc constants keep this portable.
@@ -5573,6 +5574,168 @@ fn is_permission_denied_rejects_unrelated_errors() {
     assert!(!is_permission_denied(&anyhow::Error::from(
         std::io::Error::from_raw_os_error(libc::ENOENT)
     )));
+}
+
+#[test]
+fn sqlite_cannot_open_alone_is_not_a_permission_denial() {
+    // #429: SQLite's `SQLITE_CANTOPEN` message carries no errno, and on Windows
+    // it is what a missing folder, a disconnected drive and an over-MAX_PATH
+    // path all produce. Treating it as a denial on its own is what showed a
+    // Windows user macOS folder-permission instructions, so the predicate must
+    // refuse to answer on the string alone - the callers corroborate it.
+    use crate::core::loading::{is_permission_denied, mentions_unopenable_database};
+    let err = anyhow::anyhow!("unable to open database file: C:\\surveys\\cave.stalx");
+    assert!(!is_permission_denied(&err));
+    assert!(mentions_unopenable_database(&err));
+    // ...including when it is buried in an anyhow context chain, which is how
+    // `Database::open` reports it ("Failed to open database" on top).
+    let chained = anyhow::Error::from(anyhow::anyhow!("unable to open database file"))
+        .context("Failed to open database");
+    assert!(!is_permission_denied(&chained));
+    assert!(mentions_unopenable_database(&chained));
+}
+
+#[test]
+fn is_path_not_found_classifies_missing_and_unreachable_paths() {
+    use crate::core::loading::is_path_not_found;
+    assert!(is_path_not_found(&anyhow::Error::from(
+        std::io::Error::new(std::io::ErrorKind::NotFound, "gone")
+    )));
+    // Windows wording for an unmapped drive / deleted folder, and the unix one.
+    assert!(is_path_not_found(&anyhow::anyhow!(
+        "The system cannot find the path specified. (os error 3)"
+    )));
+    assert!(is_path_not_found(&anyhow::anyhow!(
+        "No such file or directory (os error 2)"
+    )));
+    assert!(is_path_not_found(&anyhow::anyhow!(
+        "The device is not ready. (os error 21)"
+    )));
+    // A denial is not a missing path, and neither is corruption.
+    assert!(!is_path_not_found(&anyhow::Error::from(
+        std::io::Error::new(std::io::ErrorKind::PermissionDenied, "denied")
+    )));
+    assert!(!is_path_not_found(&anyhow::anyhow!(
+        "database disk image is malformed"
+    )));
+}
+
+#[test]
+fn over_legacy_path_limit_measures_the_windows_max_path_budget() {
+    // The 260-character budget INCLUDES the terminating NUL, so 259 characters
+    // is the longest name SQLite's win32 VFS can open. Pure arithmetic, so it
+    // is pinned on every platform even though only Windows consults it.
+    use crate::core::loading::over_legacy_path_limit;
+    let root = "C:\\s\\";
+    let make = |len: usize| PathBuf::from(format!("{root}{}", "a".repeat(len - root.len())));
+    assert!(!over_legacy_path_limit(&make(259)));
+    assert!(over_legacy_path_limit(&make(260)));
+    assert!(over_legacy_path_limit(&make(335)));
+    assert!(!over_legacy_path_limit(&PathBuf::from(
+        "C:\\surveys\\cave.stalx"
+    )));
+}
+
+// The save-failure classification matrix (#429 items 2 + 3). Each arm decides
+// which remediation the user is shown, so each gets an explicit case.
+
+#[test]
+fn save_failure_tags_a_corroborated_denial_with_the_permission_code() {
+    use crate::core::loading::PERMISSION_DENIED_CODE;
+    let temp_dir = TempDir::new().unwrap();
+    let target = temp_dir.path().join("cave.stalx");
+    let err = anyhow::Error::from(std::io::Error::new(
+        std::io::ErrorKind::PermissionDenied,
+        "denied",
+    ))
+    .context("Failed to create save file");
+
+    let result = project_io::save_failure("Failed to create save file", &target, &err);
+
+    let msg = result.error.unwrap_or_default();
+    assert!(
+        msg.starts_with(PERMISSION_DENIED_CODE),
+        "a typed PermissionDenied chain is a denial, got: {msg}"
+    );
+}
+
+#[test]
+fn save_failure_tags_a_vanished_folder_with_the_path_code() {
+    use crate::core::loading::{PATH_NOT_FOUND_CODE, PERMISSION_DENIED_CODE};
+    let temp_dir = TempDir::new().unwrap();
+    // Nothing was ever created at `gone/`, so the destination folder is absent.
+    let target = temp_dir.path().join("gone").join("cave.stalx");
+    let err = anyhow::Error::from(anyhow::anyhow!("unable to open database file"))
+        .context("Failed to open database");
+
+    let result = project_io::save_failure("Failed to create save file", &target, &err);
+
+    let msg = result.error.unwrap_or_default();
+    assert!(
+        msg.starts_with(PATH_NOT_FOUND_CODE),
+        "a missing destination folder is a path error, got: {msg}"
+    );
+    assert!(!msg.starts_with(PERMISSION_DENIED_CODE));
+}
+
+#[test]
+fn save_failure_leaves_a_generic_open_failure_unclassified() {
+    use crate::core::loading::{PATH_NOT_FOUND_CODE, PERMISSION_DENIED_CODE};
+    // The regression that started #429: the folder exists AND accepts files, so
+    // SQLite's ambiguous "unable to open database file" is corroborated by
+    // nothing. It must stay an ordinary failure rather than send the user to
+    // Privacy & Security (or claim their drive is unplugged).
+    let temp_dir = TempDir::new().unwrap();
+    let target = temp_dir.path().join("cave.stalx");
+    let err = anyhow::Error::from(anyhow::anyhow!("unable to open database file"))
+        .context("Failed to open database");
+
+    let result = project_io::save_failure("Failed to create save file", &target, &err);
+
+    let msg = result.error.unwrap_or_default();
+    assert!(
+        !msg.starts_with(PERMISSION_DENIED_CODE),
+        "a writable destination folder is denying nothing, got: {msg}"
+    );
+    assert!(!msg.starts_with(PATH_NOT_FOUND_CODE), "got: {msg}");
+    assert_eq!(
+        msg, "Failed to create save file: Failed to open database",
+        "the backend message is passed through unmarked"
+    );
+    // The write probe must leave nothing behind.
+    let leftovers: Vec<_> = std::fs::read_dir(temp_dir.path())
+        .unwrap()
+        .filter_map(Result::ok)
+        .map(|e| e.file_name())
+        .collect();
+    assert!(
+        leftovers.is_empty(),
+        "probe file left behind: {leftovers:?}"
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn save_failure_tags_an_over_max_path_destination_as_too_long() {
+    use crate::core::loading::{PATH_TOO_LONG_CODE, PERMISSION_DENIED_CODE};
+    // #429 item 2's repro: a ~335-character destination whose folders all
+    // exist. Rust stats the parent fine (std uses `\\?\` verbatim paths) while
+    // SQLite's win32 VFS cannot open the file, so the parent probe alone would
+    // still call this a denial.
+    let temp_dir = TempDir::new().unwrap();
+    let long_name = format!("{}.stalx", "n".repeat(300));
+    let target = temp_dir.path().join(long_name);
+    let err = anyhow::Error::from(anyhow::anyhow!("unable to open database file"))
+        .context("Failed to open database");
+
+    let result = project_io::save_failure("Failed to create save file", &target, &err);
+
+    let msg = result.error.unwrap_or_default();
+    assert!(
+        msg.starts_with(PATH_TOO_LONG_CODE),
+        "an over-MAX_PATH destination is a path-length error, got: {msg}"
+    );
+    assert!(!msg.starts_with(PERMISSION_DENIED_CODE));
 }
 
 #[cfg(unix)]
@@ -5655,12 +5818,13 @@ fn open_project_into_unreadable_dir_reports_permission_code() {
 
 #[test]
 fn save_into_missing_dir_is_not_a_permission_error() {
-    use crate::core::loading::PERMISSION_DENIED_CODE;
+    use crate::core::loading::{PATH_NOT_FOUND_CODE, PERMISSION_DENIED_CODE};
 
     // A deleted/renamed save folder yields SQLite's generic "unable to open
     // database file" too - but that's a vanished location, not a permission
     // denial, so it must NOT be stamped with the permission code (which would
-    // wrongly show the user Privacy & Security guidance).
+    // wrongly show the user Privacy & Security guidance). It is refused up
+    // front instead, with the code that says the folder is gone (#429).
     let temp_dir = TempDir::new().unwrap();
     let missing = temp_dir.path().join("gone").join("p.stalx");
 
@@ -5678,8 +5842,18 @@ fn save_into_missing_dir_is_not_a_permission_error() {
     let err = result.error.unwrap_or_default();
     assert!(
         !err.starts_with(PERMISSION_DENIED_CODE),
-        "missing dir should be an ordinary failure, got: {err}"
+        "missing dir should not be a permission failure, got: {err}"
     );
+    assert!(
+        err.starts_with(PATH_NOT_FOUND_CODE),
+        "missing dir should be reported as a missing destination, got: {err}"
+    );
+    assert!(
+        err.contains("the folder no longer exists or the drive is not connected"),
+        "the user needs to be told what is wrong with the destination, got: {err}"
+    );
+    // Refused before anything is opened: no temp file, no stray folder.
+    assert!(!temp_dir.path().join("gone").exists());
 }
 
 #[test]

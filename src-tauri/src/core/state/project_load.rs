@@ -435,7 +435,14 @@ impl AppState {
                 let msg = e.to_string();
                 // A permission denial (e.g. macOS forgot folder access after an
                 // update) otherwise masquerades as corruption - check it first.
-                if crate::core::loading::is_permission_denied(&e) {
+                // SQLite says only "unable to open database file" for a denial,
+                // so that message is corroborated by re-opening the file
+                // ourselves: it is a denial when the OS refuses US too, and an
+                // ordinary database error otherwise (#429).
+                if crate::core::loading::is_permission_denied(&e)
+                    || (crate::core::loading::mentions_unopenable_database(&e)
+                        && crate::core::loading::read_access_denied(&path))
+                {
                     early_return_err!(LoadError::permission(msg, &path.display().to_string()));
                 }
                 // Detect corruption-specific errors and return CORRUPT code

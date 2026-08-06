@@ -63,4 +63,18 @@ describe('SavePermissionDialog - Open System Settings', () => {
 
     expect(screen.queryByTestId('save-permission-open-settings')).toBeNull();
   });
+
+  it('blames macOS only on macOS (#429)', () => {
+    // The intro used to tell every user, on every platform, that an OS update
+    // had reset their folder permissions - remediation a Windows user cannot
+    // act on and an explanation that is not true there.
+    isMacMock.mockReturnValue(false);
+    const { unmount } = render(<SavePermissionDialog />);
+    expect(screen.getByTestId('save-permission-dialog').textContent).not.toContain('macOS');
+    unmount();
+
+    isMacMock.mockReturnValue(true);
+    render(<SavePermissionDialog />);
+    expect(screen.getByTestId('save-permission-dialog').textContent).toContain('macOS');
+  });
 });
