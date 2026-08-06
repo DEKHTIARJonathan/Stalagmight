@@ -128,6 +128,16 @@ use super::fuzz_undo_tests::{
     failure_signature, fuzz_threads, panic_message, recorder_arm, recorder_take, run_fuzz,
     run_seed_jobs, run_trace, summarize, Outcome, Plan, Trace, TraceMove, GATE_ITERATIONS,
 };
+// CONFIG ISOLATION. Every test in this module opens with
+// `let _config = isolated_config();`, and none of them may skip it:
+// `AppState::new()` LOADS the global config, and every save reaches
+// `note_recent_project` -> `Config::save()`, which WRITES it. Unguarded that
+// is the developer's real ~/.config/stalagmight/config.toml - recent_projects
+// fills with dead /tmp paths - and the write also races the process-global
+// override the config tests set, so it can land inside a sibling test's
+// isolated config and fail it. The guard redirects the path and serializes
+// against them; it is held for the whole test because the saves are.
+use crate::test_helpers::isolated_config;
 
 // ===========================================================================
 // What "the same failure" means
@@ -564,6 +574,7 @@ fn print_moves(moves: &[TraceMove]) {
 #[test]
 #[ignore = "shrinker: set STALAGMIGHT_RUST_FUZZ_SHRINK=<seed|trace.json> - see the module header"]
 fn fuzz_shrink() {
+    let _config = isolated_config();
     let Some(spec) = text("SHRINK") else {
         println!(
             "fuzz_shrink does nothing without STALAGMIGHT_RUST_FUZZ_SHRINK=<seed|trace.json>.\n\
@@ -721,6 +732,7 @@ fn fuzz_shrink() {
 #[test]
 #[ignore = "replay: set STALAGMIGHT_RUST_FUZZ_REPLAY=<trace.json> - see the module header"]
 fn fuzz_replay() {
+    let _config = isolated_config();
     let Some(path) = text("REPLAY").map(PathBuf::from) else {
         println!(
             "fuzz_replay does nothing without STALAGMIGHT_RUST_FUZZ_REPLAY=<trace.json>, which \
@@ -778,6 +790,7 @@ fn fuzz_replay() {
 /// modes.
 #[test]
 fn a_recorded_run_matches_an_unrecorded_one() {
+    let _config = isolated_config();
     for persistence in [false, true] {
         let plan = Plan {
             iterations: GATE_ITERATIONS,
@@ -819,6 +832,7 @@ fn a_recorded_run_matches_an_unrecorded_one() {
 /// smoke test.
 #[test]
 fn a_full_trace_replays_to_the_same_run() {
+    let _config = isolated_config();
     for persistence in [false, true] {
         let plan = Plan {
             iterations: GATE_ITERATIONS,
@@ -862,6 +876,7 @@ fn a_full_trace_replays_to_the_same_run() {
 /// 1-minimal subsequence is `[3, 7]`.
 #[test]
 fn ddmin_reaches_the_minimum_of_a_known_predicate() {
+    let _config = isolated_config();
     let holds = |candidate: &[usize]| candidate.contains(&3) && candidate.contains(&7);
 
     let mut best: Vec<usize> = (0..24).collect();
@@ -906,6 +921,7 @@ fn ddmin_reaches_the_minimum_of_a_known_predicate() {
 /// FIXED, which is `open_undo_bugs_tests.rs`'s job.
 #[test]
 fn the_shrinker_minimizes_a_classified_failure() {
+    let _config = isolated_config();
     // The module header's finding-8 row: divergence mode, seed 1, 12 moves.
     let plan = Plan {
         iterations: 12,
@@ -955,6 +971,7 @@ fn the_shrinker_minimizes_a_classified_failure() {
 /// only matches the hits it is actually in.
 #[test]
 fn a_different_signature_is_not_a_match() {
+    let _config = isolated_config();
     let mut hits: BTreeMap<&'static str, usize> = BTreeMap::new();
     hits.insert("finding-8-stale-id-deletes-the-wrong-shot", 1);
     let completed: Probe = Ok(Outcome::from_hits(hits));

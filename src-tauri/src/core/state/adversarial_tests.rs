@@ -66,6 +66,16 @@ use crate::models::{
     ClosureStrategy, Coordinates, GpsCoordinates, SectionId, SectionUpdates, ShotData, ShotId,
     ShotKind, ShotUpdates, StationRef,
 };
+// CONFIG ISOLATION. Every test in this module opens with
+// `let _config = isolated_config();`, and none of them may skip it:
+// `AppState::new()` LOADS the global config, and every save reaches
+// `note_recent_project` -> `Config::save()`, which WRITES it. Unguarded that
+// is the developer's real ~/.config/stalagmight/config.toml - recent_projects
+// fills with dead /tmp paths - and the write also races the process-global
+// override the config tests set, so it can land inside a sibling test's
+// isolated config and fail it. The guard redirects the path and serializes
+// against them; it is held for the whole test because the saves are.
+use crate::test_helpers::isolated_config;
 
 // ===========================================================================
 // Hostile values
@@ -673,6 +683,7 @@ const GATE_MOVES: usize = 120;
 /// way this test would rot.
 #[test]
 fn adversarial_gate() {
+    let _config = isolated_config();
     let mut problems = Vec::new();
     let mut total: BTreeMap<&'static str, usize> = BTreeMap::new();
     let (mut attempted, mut rejected) = (0, 0);
@@ -702,6 +713,7 @@ fn adversarial_gate() {
 /// Determinism, so a failing seed is a repro.
 #[test]
 fn the_adversarial_engine_is_deterministic() {
+    let _config = isolated_config();
     for &seed in &GATE_SEEDS[..3] {
         let first = run_adversarial(seed, 60, false);
         let second = run_adversarial(seed, 60, false);
@@ -737,6 +749,7 @@ fn the_adversarial_engine_is_deterministic() {
 #[test]
 #[ignore = "sweep: prints per-seed status, used to choose the adversarial GATE_SEEDS"]
 fn adversarial_sweep() {
+    let _config = isolated_config();
     let seeds: u32 = std::env::var("STALAGMIGHT_RUST_ADV_SEEDS")
         .ok()
         .and_then(|value| value.parse().ok())

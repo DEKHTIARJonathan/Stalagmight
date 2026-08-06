@@ -74,6 +74,16 @@ use super::fuzz_undo_tests::{
 use super::AppState;
 use crate::core::Command;
 use crate::models::{SectionId, ShotData, ShotId, ShotUpdates, StationRef};
+// CONFIG ISOLATION. Every test in this module opens with
+// `let _config = isolated_config();`, and none of them may skip it:
+// `AppState::new()` LOADS the global config, and every save reaches
+// `note_recent_project` -> `Config::save()`, which WRITES it. Unguarded that
+// is the developer's real ~/.config/stalagmight/config.toml - recent_projects
+// fills with dead /tmp paths - and the write also races the process-global
+// override the config tests set, so it can land inside a sibling test's
+// isolated config and fail it. The guard redirects the path and serializes
+// against them; it is held for the whole test because the saves are.
+use crate::test_helpers::isolated_config;
 
 // ===========================================================================
 // Reading a .stalx as data
@@ -924,6 +934,7 @@ const GATE_LOADS: usize = 4;
 /// THE FILE-FORMAT GATE. Not `#[ignore]`d.
 #[test]
 fn format_properties_gate() {
+    let _config = isolated_config();
     let mut problems = Vec::new();
     let mut checked = (0, 0, 0);
     let mut total: BTreeMap<&'static str, usize> = BTreeMap::new();
@@ -977,6 +988,7 @@ fn format_properties_gate() {
 /// are compared exactly. When finding 23 is fixed, compare the counts too.
 #[test]
 fn the_format_properties_are_deterministic() {
+    let _config = isolated_config();
     for &seed in &GATE_SEEDS[..3] {
         let first = check_save_load_save(seed, false, GATE_MOVES);
         let second = check_save_load_save(seed, false, GATE_MOVES);
@@ -1001,6 +1013,7 @@ fn the_format_properties_are_deterministic() {
 #[test]
 #[ignore = "sweep: prints per-seed status, used to choose the format-property GATE_SEEDS"]
 fn format_property_sweep() {
+    let _config = isolated_config();
     let seeds: u32 = std::env::var("STALAGMIGHT_RUST_FORMAT_SEEDS")
         .ok()
         .and_then(|value| value.parse().ok())

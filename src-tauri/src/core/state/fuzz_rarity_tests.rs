@@ -216,6 +216,16 @@ use super::fuzz_undo_tests::{
     failure_signature, fuzz_threads, panic_message, prologue_signatures, run_fuzz, run_seed_jobs,
     Outcome, Plan, Rng, GATE_ITERATIONS,
 };
+// CONFIG ISOLATION. Every test in this module opens with
+// `let _config = isolated_config();`, and none of them may skip it:
+// `AppState::new()` LOADS the global config, and every save reaches
+// `note_recent_project` -> `Config::save()`, which WRITES it. Unguarded that
+// is the developer's real ~/.config/stalagmight/config.toml - recent_projects
+// fills with dead /tmp paths - and the write also races the process-global
+// override the config tests set, so it can land inside a sibling test's
+// isolated config and fail it. The guard redirects the path and serializes
+// against them; it is held for the whole test because the saves are.
+use crate::test_helpers::isolated_config;
 
 // ===========================================================================
 // The bits
@@ -879,6 +889,7 @@ fn calibrate(
 #[test]
 #[ignore = "measurement: compares rarity-keyed corpus admission against unguided and novelty"]
 fn fuzz_rarity_sweep() {
+    let _config = isolated_config();
     let budget = usize_env("STALAGMIGHT_RUST_FUZZ_RARITY_BUDGET", 80);
     let reps = usize_env("STALAGMIGHT_RUST_FUZZ_RARITY_REPS", 3);
     let threshold = usize_env("STALAGMIGHT_RUST_FUZZ_RARITY_THRESHOLD", 25);
@@ -1115,6 +1126,7 @@ fn report(
 #[test]
 #[ignore = "measurement: how often a corpus entry replays the bit it was admitted for"]
 fn fuzz_rarity_carryover() {
+    let _config = isolated_config();
     let budget = usize_env("STALAGMIGHT_RUST_FUZZ_RARITY_BUDGET", 80);
     let threshold = usize_env("STALAGMIGHT_RUST_FUZZ_RARITY_THRESHOLD", 25);
     let iterations = usize_env("STALAGMIGHT_RUST_FUZZ_ITERATIONS", GATE_ITERATIONS);
@@ -1178,6 +1190,7 @@ fn fuzz_rarity_carryover() {
 /// measurement into a comparison of four identical arms.
 #[test]
 fn the_rarity_bits_read_the_topology_signature() {
+    let _config = isolated_config();
     let outcome = run_fuzz(1, plan_for(Regime::Plain, 20, None));
     let signature = outcome.shape().signature.to_string();
     assert!(

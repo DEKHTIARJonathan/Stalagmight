@@ -579,6 +579,16 @@ use crate::models::{
     ClosureStrategy, Coordinates, GpsCoordinates, SectionId, SectionUpdates, ShotData, ShotId,
     ShotKind, ShotUpdates, StationRef, SurveyDirection,
 };
+// CONFIG ISOLATION. Every test in this module opens with
+// `let _config = isolated_config();`, and none of them may skip it:
+// `AppState::new()` LOADS the global config, and every save reaches
+// `note_recent_project` -> `Config::save()`, which WRITES it. Unguarded that
+// is the developer's real ~/.config/stalagmight/config.toml - recent_projects
+// fills with dead /tmp paths - and the write also races the process-global
+// override the config tests set, so it can land inside a sibling test's
+// isolated config and fail it. The guard redirects the path and serializes
+// against them; it is held for the whole test because the saves are.
+use crate::test_helpers::isolated_config;
 
 // ===========================================================================
 // Deterministic PRNG
@@ -815,8 +825,15 @@ fn numbers_equal(a: f64, b: f64) -> bool {
 
 fn show(value: &serde_json::Value) -> String {
     let text = value.to_string();
-    if text.len() > 120 {
-        format!("{}...[{} chars]", &text[..120], text.len())
+    // CHARS, not bytes. `adversarial_tests::hostile_string` deliberately puts
+    // multi-byte UTF-8 (U+FFFD, U+202E, U+200B) into shot comments, and a byte
+    // slice at 120 lands mid-character and panics - from the helper that was
+    // about to PRINT the finding, so the seed's actual defect is lost and
+    // reported as an unrelated crash in the harness.
+    let chars = text.chars().count();
+    if chars > 120 {
+        let head: String = text.chars().take(120).collect();
+        format!("{head}...[{chars} chars]")
     } else {
         text
     }
@@ -7797,6 +7814,7 @@ pub(super) fn run_seed_jobs<J: Sync, R: Send>(
 /// does not acquire a NEW way to be wrong without someone noticing.
 #[test]
 fn undo_redo_fuzz_gate() {
+    let _config = isolated_config();
     let mut total: BTreeMap<&'static str, usize> = BTreeMap::new();
     for &seed in GATE_SEEDS {
         let outcome = run_fuzz(
@@ -7842,6 +7860,7 @@ fn undo_redo_fuzz_gate() {
 /// meaning: it is about what survives the file, not about the model.
 #[test]
 fn undo_redo_fuzz_gate_persistence() {
+    let _config = isolated_config();
     let mut total: BTreeMap<&'static str, usize> = BTreeMap::new();
     let mut crossings = 0;
     for &seed in GATE_SEEDS {
@@ -7894,6 +7913,7 @@ const MULTI_CROSSING_SEEDS: &[u32] = &[1, 2, 3, 4, 5, 6, 7, 9, 11, 12, 19, 26];
 
 #[test]
 fn undo_redo_fuzz_gate_multi_crossing() {
+    let _config = isolated_config();
     let mut total: BTreeMap<&'static str, usize> = BTreeMap::new();
     let mut reloads = 0;
     for &seed in MULTI_CROSSING_SEEDS {
@@ -8030,6 +8050,7 @@ const COMBINED_CLASSIFIED: &[&str] = &[
 /// thousand.
 #[test]
 fn undo_redo_fuzz_gate_combined() {
+    let _config = isolated_config();
     let mut total: BTreeMap<&'static str, usize> = BTreeMap::new();
     let (mut reloads, mut trimmed, mut jumps) = (0, 0, 0);
     for &seed in COMBINED_SEEDS {
@@ -8094,6 +8115,7 @@ fn undo_redo_fuzz_gate_combined() {
 /// for count.
 #[test]
 fn the_fuzzer_is_deterministic() {
+    let _config = isolated_config();
     // The GATES' seeds, not arbitrary ones: a seed that reaches an open finding
     // panics rather than returning an `Outcome`, and this test is about replay
     // fidelity, not about which seeds are clean (`fuzz_seed_survey` answers that).
@@ -8174,6 +8196,7 @@ fn the_fuzzer_is_deterministic() {
 #[test]
 #[ignore = "open finding 14: a mid-chain insert leaves a merged partner metres out of alignment"]
 fn finding_14_no_insert_leaves_a_merge_out_of_alignment() {
+    let _config = isolated_config();
     let outcome = run_fuzz(
         6,
         Plan {
@@ -8214,6 +8237,7 @@ fn finding_14_no_insert_leaves_a_merge_out_of_alignment() {
 #[test]
 #[ignore = "open bug 7: undo_to/redo_to skip the reconcile epilogue, so a jump is not N single steps"]
 fn bug_7_a_jump_is_n_single_steps() {
+    let _config = isolated_config();
     let outcome = run_fuzz(
         6,
         Plan {
@@ -8253,6 +8277,7 @@ fn bug_7_a_jump_is_n_single_steps() {
 #[test]
 #[ignore = "survey: prints per-seed status, used to choose GATE_SEEDS"]
 fn fuzz_seed_survey() {
+    let _config = isolated_config();
     let seeds: u32 = std::env::var("STALAGMIGHT_RUST_FUZZ_SEEDS")
         .ok()
         .and_then(|value| value.parse().ok())
@@ -8428,6 +8453,7 @@ fn fuzz_seed_survey() {
 #[test]
 #[ignore = "measurement: compares signature coverage with corpus guidance on and off"]
 fn fuzz_corpus_sweep() {
+    let _config = isolated_config();
     let budget: usize = std::env::var("STALAGMIGHT_RUST_FUZZ_CORPUS_BUDGET")
         .ok()
         .and_then(|value| value.parse().ok())
@@ -8576,6 +8602,7 @@ fn fuzz_corpus_sweep() {
 #[test]
 #[ignore = "horizon: thousands of moves per seed - run deliberately with STALAGMIGHT_RUST_FUZZ_SEEDS/ITERATIONS"]
 fn undo_redo_fuzz_horizon() {
+    let _config = isolated_config();
     let seeds: u32 = std::env::var("STALAGMIGHT_RUST_FUZZ_SEEDS")
         .ok()
         .and_then(|value| value.parse().ok())
@@ -8668,6 +8695,7 @@ fn undo_redo_fuzz_horizon() {
 #[test]
 #[ignore = "soak: minutes, not seconds - run deliberately with STALAGMIGHT_RUST_FUZZ_SEEDS/ITERATIONS"]
 fn undo_redo_fuzz_soak() {
+    let _config = isolated_config();
     let seeds: u32 = std::env::var("STALAGMIGHT_RUST_FUZZ_SEEDS")
         .ok()
         .and_then(|value| value.parse().ok())
@@ -8754,6 +8782,7 @@ fn undo_redo_fuzz_soak() {
 #[test]
 #[ignore = "measurement: prints the solve-to-solve spread, used to justify ADJUSTED_TOLERANCE_M"]
 fn measure_adjusted_solve_determinism() {
+    let _config = isolated_config();
     // PATH ONE: no closure, so the "solve" is a deterministic coordinate walk.
     // Closures are also excluded because the starting topology with one is
     // finding 14's and the app's own assert would stop this before it measured

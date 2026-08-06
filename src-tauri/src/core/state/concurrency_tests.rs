@@ -82,6 +82,16 @@ use super::fuzz_undo_tests::{
 use super::AppState;
 use crate::core::Command;
 use crate::models::{SectionId, ShotData, ShotId, ShotUpdates, StationRef};
+// CONFIG ISOLATION. Every test in this module opens with
+// `let _config = isolated_config();`, and none of them may skip it:
+// `AppState::new()` LOADS the global config, and every save reaches
+// `note_recent_project` -> `Config::save()`, which WRITES it. Unguarded that
+// is the developer's real ~/.config/stalagmight/config.toml - recent_projects
+// fills with dead /tmp paths - and the write also races the process-global
+// override the config tests set, so it can land inside a sibling test's
+// isolated config and fail it. The guard redirects the path and serializes
+// against them; it is held for the whole test because the saves are.
+use crate::test_helpers::isolated_config;
 
 // ===========================================================================
 // What a thread was doing
@@ -534,6 +544,9 @@ fn run_concurrent(seed: u32, threads: usize, operations: usize, deadline_secs: u
     let started = std::time::Instant::now();
     let mut last_total = 0;
     let mut last_progress_at = started;
+    // Set when the wait gives up on a thread that never came back. It decides
+    // whether the join below is safe to do at all.
+    let mut stalled = false;
     loop {
         if handles.iter().all(std::thread::JoinHandle::is_finished) {
             break;
@@ -550,6 +563,7 @@ fn run_concurrent(seed: u32, threads: usize, operations: usize, deadline_secs: u
             || last_progress_at.elapsed().as_secs() >= deadline_secs / 2 + 5
         {
             stop.store(true, Ordering::Relaxed);
+            stalled = true;
             outcome.problems.push(format!(
                 "the run did not finish: {total} of {target} operation(s) completed in {:?}, and \
                  no thread advanced for {:?}, while {} thread(s) were still running. This is what \
@@ -566,15 +580,34 @@ fn run_concurrent(seed: u32, threads: usize, operations: usize, deadline_secs: u
         }
         std::thread::sleep(std::time::Duration::from_millis(20));
     }
-    // Even after a stall the workers are asked to stop and joined, so the test
-    // process does not leak threads into the rest of the suite.
+    // Joined so the test process does not leak threads into the rest of the
+    // suite - but ONLY the threads that actually came back.
+    //
+    // A worker wedged on the project mutex never reaches the top of its loop,
+    // so it never observes `stop` and `join()` on it blocks forever. Doing that
+    // here would hang `cargo test` on precisely the run that just detected a
+    // deadlock, and CI would kill the job at its wall-clock timeout without
+    // ever printing the message composed above - the entire point of the
+    // liveness poll. So a stuck worker is left detached: the process is about
+    // to fail the gate anyway, and reporting beats tidying.
     let worker_threads: Vec<std::thread::ThreadId> =
         handles.iter().map(|handle| handle.thread().id()).collect();
     let mut died = 0;
+    let mut abandoned = 0;
     for handle in handles {
+        if stalled && !handle.is_finished() {
+            abandoned += 1;
+            continue;
+        }
         if handle.join().is_err() {
             died += 1;
         }
+    }
+    if abandoned > 0 {
+        outcome.problems.push(format!(
+            "{abandoned} worker thread(s) never returned and were left detached rather than \
+             joined; joining a wedged thread would have hung this test instead of failing it."
+        ));
     }
     outcome.operations = progress.total_done();
     outcome.died = died;
@@ -789,6 +822,7 @@ const GATE_DEADLINE_SECS: u64 = 60;
 /// THE CONCURRENCY GATE. Not `#[ignore]`d.
 #[test]
 fn concurrency_gate() {
+    let _config = isolated_config();
     let mut problems = Vec::new();
     let mut total: std::collections::BTreeMap<&'static str, usize> =
         std::collections::BTreeMap::new();
@@ -844,6 +878,7 @@ fn concurrency_gate() {
 #[test]
 #[ignore = "soak: minutes, not seconds - run deliberately with STALAGMIGHT_RUST_CONC_SEEDS/THREADS/OPS"]
 fn concurrency_soak() {
+    let _config = isolated_config();
     let seeds: u32 = std::env::var("STALAGMIGHT_RUST_CONC_SEEDS")
         .ok()
         .and_then(|value| value.parse().ok())

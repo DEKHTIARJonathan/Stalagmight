@@ -34,6 +34,16 @@ use crate::models::{
     ClosureStrategy, Coordinates, GpsCoordinates, SectionId, SectionUpdates, ShotData, ShotId,
     ShotKind, ShotUpdates, StationRef,
 };
+// CONFIG ISOLATION. Every test in this module opens with
+// `let _config = isolated_config();`, and none of them may skip it:
+// `AppState::new()` LOADS the global config, and every save reaches
+// `note_recent_project` -> `Config::save()`, which WRITES it. Unguarded that
+// is the developer's real ~/.config/stalagmight/config.toml - recent_projects
+// fills with dead /tmp paths - and the write also races the process-global
+// override the config tests set, so it can land inside a sibling test's
+// isolated config and fail it. The guard redirects the path and serializes
+// against them; it is held for the whole test because the saves are.
+use crate::test_helpers::isolated_config;
 
 /// A shot with distinct, easily-recognised geometry.
 fn shot(azimuth: f64, length: f64) -> ShotData {
@@ -115,6 +125,7 @@ fn shot_ids(state: &AppState, section_id: SectionId) -> Vec<ShotId> {
 #[test]
 #[ignore = "open bug 1: redo of CreateSection re-mints shot uuids - see e2e/agent/scenarios/undoRedoFuzz.ts header"]
 fn redo_of_create_section_preserves_shot_uuids() {
+    let _config = isolated_config();
     let state = state_with_project();
     let section_id = create_section(&state, "Main", vec![shot(0.0, 5.0), shot(90.0, 4.0)]);
 
@@ -146,6 +157,7 @@ fn redo_of_create_section_preserves_shot_uuids() {
 #[test]
 #[ignore = "open bug 1 (second half): redo of CreateSection discards captured gauge anchors - see e2e/agent/scenarios/undoRedoFuzz.ts header"]
 fn redo_of_create_section_preserves_gauge_anchors() {
+    let _config = isolated_config();
     let temp = TempDir::new().unwrap();
     let state = state_with_project();
     let section_id = create_section(&state, "Gauged", vec![shot(0.0, 5.0), shot(90.0, 4.0)]);
@@ -210,6 +222,7 @@ fn redo_of_create_section_preserves_gauge_anchors() {
 #[test]
 #[ignore = "open bug 5: SectionUpdates lacks double_option, so Some(None) cannot survive values_json - see e2e/agent/scenarios/undoRedoFuzz.ts header"]
 fn section_updates_round_trip_preserves_clear_to_null() {
+    let _config = isolated_config();
     let clear_the_surveyor = SectionUpdates {
         surveyor: Some(None),
         ..Default::default()
@@ -231,6 +244,7 @@ fn section_updates_round_trip_preserves_clear_to_null() {
 #[test]
 #[ignore = "open bug 5: undo cannot restore a previously-null section field - see e2e/agent/scenarios/undoRedoFuzz.ts header"]
 fn undo_restores_a_previously_null_surveyor() {
+    let _config = isolated_config();
     let state = state_with_project();
     let section_id = create_section(&state, "NoSurveyor", vec![shot(0.0, 5.0)]);
 
@@ -296,6 +310,7 @@ fn undo_restores_a_previously_null_surveyor() {
 #[test]
 #[ignore = "open bug 8 (DATA LOSS): after save/reload, undo deletes the wrong shot - see e2e/agent/scenarios/undoRedoFuzz.ts header"]
 fn undo_after_reload_deletes_the_shot_it_created() {
+    let _config = isolated_config();
     let temp = TempDir::new().unwrap();
     let save_path: PathBuf = temp.path().join("renumbered.stalx");
 
@@ -380,6 +395,7 @@ fn section_offset(state: &AppState, section_id: SectionId) -> Option<(f64, f64)>
 #[test]
 #[ignore = "open bug 2: undo of a shot insert leaks an all-zero section_offsets key - see e2e/agent/scenarios/undoRedoFuzz.ts header"]
 fn undo_of_a_shot_insert_leaves_no_orphan_offset_entry() {
+    let _config = isolated_config();
     let state = state_with_project();
     let section_id = create_section(&state, "Inserted", vec![shot(0.0, 5.0), shot(90.0, 4.0)]);
     let first_shot = shot_ids(&state, section_id)[0];
@@ -415,6 +431,7 @@ fn undo_of_a_shot_insert_leaves_no_orphan_offset_entry() {
 #[test]
 #[ignore = "open bug 3: undoing the first shot appended into an empty section displaces it - see e2e/agent/scenarios/undoRedoFuzz.ts header"]
 fn undo_of_the_first_shot_in_an_empty_section_does_not_move_it() {
+    let _config = isolated_config();
     let state = state_with_project();
     let section_id = create_section(&state, "Empty", vec![]);
 
@@ -442,6 +459,7 @@ fn undo_of_the_first_shot_in_an_empty_section_does_not_move_it() {
 #[test]
 #[ignore = "open bug 3 (ratchet): the displacement compounds on every undo/redo cycle - see e2e/agent/scenarios/undoRedoFuzz.ts header"]
 fn the_empty_section_displacement_does_not_ratchet() {
+    let _config = isolated_config();
     let state = state_with_project();
     let section_id = create_section(&state, "Ratchet", vec![]);
 
@@ -502,6 +520,7 @@ fn two_merged_sections(state: &AppState) -> (SectionId, SectionId) {
 #[test]
 #[ignore = "open bug 4: undo of RemoveLoopClosure appends instead of reinserting at its index - see e2e/agent/scenarios/undoRedoFuzz.ts header"]
 fn undo_of_remove_loop_closure_restores_the_original_order() {
+    let _config = isolated_config();
     let state = state_with_project();
     let (a, b) = two_merged_sections(&state);
 
@@ -564,6 +583,7 @@ fn undo_of_remove_loop_closure_restores_the_original_order() {
 #[test]
 #[ignore = "open bug 6: undo of CreateShot into an anchored loop fails and wedges the history - see e2e/agent/scenarios/undoRedoFuzz.ts header"]
 fn undo_of_create_shot_in_an_anchored_loop_succeeds() {
+    let _config = isolated_config();
     let state = state_with_project();
     let (a, b) = two_merged_sections(&state);
 
@@ -691,6 +711,7 @@ fn undo_of_create_shot_in_an_anchored_loop_succeeds() {
 #[test]
 #[ignore = "finding 10 (may be intended): a delete path orphans a closure without converting it, so reopen reclassifies it - see e2e/agent/scenarios/undoRedoFuzz.ts header"]
 fn save_and_reopen_preserves_an_orphan_loop_closure() {
+    let _config = isolated_config();
     let temp = TempDir::new().unwrap();
     let save_path: PathBuf = temp.path().join("orphan-closure.stalx");
 
@@ -786,6 +807,7 @@ fn save_and_reopen_preserves_an_orphan_loop_closure() {
 #[test]
 #[ignore = "open finding 11: undoing a snapshot-pair entry recorded before a save reverts the save's heals - see e2e/agent/scenarios/undoRedoFuzz.ts header"]
 fn undo_of_a_pre_save_entry_keeps_the_saves_gauge_anchors() {
+    let _config = isolated_config();
     let temp = TempDir::new().unwrap();
     let state = state_with_project();
     let section_id = create_section(&state, "Gauged", vec![shot(0.0, 5.0), shot(90.0, 4.0)]);
@@ -924,6 +946,7 @@ fn diverged_section(state: &AppState) -> SectionId {
 #[test]
 #[ignore = "open finding 12: after save/reload, undo of SetShotKind hits the wrong shot - see e2e/agent/scenarios/undoPersistenceFuzz.ts header"]
 fn undo_of_set_shot_kind_after_reload_hits_the_shot_it_changed() {
+    let _config = isolated_config();
     let temp = TempDir::new().unwrap();
     let save_path: PathBuf = temp.path().join("wrong-shot-kind.stalx");
 
@@ -997,6 +1020,7 @@ fn undo_of_set_shot_kind_after_reload_hits_the_shot_it_changed() {
 #[test]
 #[ignore = "open finding 12: after save/reload, undo of UpdateShot hits the wrong shot - see e2e/agent/scenarios/undoPersistenceFuzz.ts header"]
 fn undo_of_update_shot_after_reload_restores_the_shot_it_changed() {
+    let _config = isolated_config();
     let temp = TempDir::new().unwrap();
     let save_path: PathBuf = temp.path().join("wrong-shot-length.stalx");
 
@@ -1080,6 +1104,7 @@ fn undo_of_update_shot_after_reload_restores_the_shot_it_changed() {
 #[test]
 #[ignore = "open finding 13: after save/reload, an out-of-range stale shot id makes undo fail and wedges the history - see e2e/agent/scenarios/undoPersistenceFuzz.ts header"]
 fn undo_after_reload_is_not_wedged_by_an_out_of_range_shot_id() {
+    let _config = isolated_config();
     let temp = TempDir::new().unwrap();
     let save_path: PathBuf = temp.path().join("wedged.stalx");
 
@@ -1199,6 +1224,7 @@ fn undo_after_reload_is_not_wedged_by_an_out_of_range_shot_id() {
 #[test]
 #[ignore = "open finding 15 (= finding 3, cascading): the empty-section displacement survives every later undo - see src-tauri/src/core/state/fuzz_undo_tests.rs"]
 fn unwinding_the_history_leaves_no_displaced_section_behind() {
+    let _config = isolated_config();
     let state = state_with_project();
     let keeper = create_section(&state, "Keeper", vec![shot(0.0, 5.0)]);
     let empty = create_section(&state, "Empty", vec![]);
@@ -1266,6 +1292,7 @@ fn unwinding_the_history_leaves_no_displaced_section_behind() {
 #[test]
 #[ignore = "open finding 16 (DATA CORRUPTION): after a reload, undo+redo of CreateShot duplicates a shot uuid - see src-tauri/src/core/state/fuzz_undo_tests.rs"]
 fn redo_after_reload_does_not_duplicate_a_shot_uuid() {
+    let _config = isolated_config();
     let temp = TempDir::new().unwrap();
     let save_path: PathBuf = temp.path().join("duplicated.stalx");
 
@@ -1320,6 +1347,7 @@ fn redo_after_reload_does_not_duplicate_a_shot_uuid() {
 #[test]
 #[ignore = "open finding 17: undo of RemoveZeroDatum appends instead of reinserting at its index - see src-tauri/src/core/state/fuzz_undo_tests.rs"]
 fn undo_of_remove_zero_datum_restores_the_original_order() {
+    let _config = isolated_config();
     let state = state_with_project();
     // Two INDEPENDENT components, so both may carry a datum: a second datum in
     // one component is refused.
@@ -1447,6 +1475,7 @@ fn two_unanchored_merged_sections(state: &AppState) -> (SectionId, SectionId) {
 #[test]
 #[ignore = "open finding 20: a shot edit in an unanchored merge group leaves the merge drifted under the 5 cm heal gate - see src-tauri/src/core/state/fuzz_undo_tests.rs"]
 fn a_shot_edit_keeps_an_unanchored_merge_aligned() {
+    let _config = isolated_config();
     let state = state_with_project();
     let (a, b) = two_unanchored_merged_sections(&state);
 
@@ -1489,6 +1518,7 @@ fn a_shot_edit_keeps_an_unanchored_merge_aligned() {
 #[test]
 #[ignore = "open finding 20: the drift an unanchored shot edit leaves trips the app's own alignment assert in a later unrelated command"]
 fn a_shot_edit_does_not_arm_an_alignment_assert_for_a_later_command() {
+    let _config = isolated_config();
     let state = state_with_project();
     let (a, _b) = two_unanchored_merged_sections(&state);
     let elsewhere = create_section(&state, "Elsewhere", vec![shot(45.0, 5.0)]);
@@ -1603,6 +1633,7 @@ fn adjusted_bits(state: &AppState) -> Vec<(String, [u64; 3])> {
 #[test]
 #[ignore = "open finding 21: adjust_least_squares numbers its unknowns in HashMap order, so the adjusted solve is not a function of the project - see src-tauri/src/core/state/fuzz_undo_tests.rs"]
 fn the_adjusted_solve_is_a_function_of_the_project() {
+    let _config = isolated_config();
     let state = state_with_project();
     let a = create_section(
         &state,
@@ -1753,6 +1784,7 @@ fn merged_chain_for_range_delete(state: &AppState) -> (SectionId, SectionId) {
 #[test]
 #[ignore = "open finding 22: a range shift-delete is not the single deletes it generalizes - see src-tauri/src/core/state/metamorphic_undo_tests.rs"]
 fn a_range_shift_delete_is_its_single_deletes() {
+    let _config = isolated_config();
     let ranged_state = state_with_project();
     let (ranged_a, _) = merged_chain_for_range_delete(&ranged_state);
     let ids = shot_ids(&ranged_state, ranged_a);
@@ -1818,6 +1850,7 @@ fn a_range_shift_delete_is_its_single_deletes() {
 #[test]
 #[ignore = "open finding 24: shot_display_position overflows on a shot id near u32::MAX, and Command::description() calls it before validation - see src-tauri/src/core/state/adversarial_tests.rs"]
 fn describing_a_command_with_an_out_of_range_shot_id_does_not_overflow() {
+    let _config = isolated_config();
     let state = state_with_project();
     let section_id = create_section(&state, "A", vec![shot(0.0, 5.0)]);
 
@@ -1902,6 +1935,7 @@ fn describing_a_command_with_an_out_of_range_shot_id_does_not_overflow() {
 #[test]
 #[ignore = "open finding 25: removing the primary zero datum leaves every other datum on a stale origin until an unrelated shot edit teleports it - see src-tauri/src/core/state/fuzz_undo_tests.rs"]
 fn removing_the_primary_zero_datum_re_anchors_the_datums_it_leaves_behind() {
+    let _config = isolated_config();
     let state = state_with_project();
     let origin = create_section(&state, "Origin", vec![shot(10.0, 3.0), shot(20.0, 4.0)]);
     let anchored = create_section(&state, "Anchored", vec![shot(70.0, 7.0), shot(100.0, 8.0)]);
@@ -1982,6 +2016,7 @@ fn removing_the_primary_zero_datum_re_anchors_the_datums_it_leaves_behind() {
 #[test]
 #[ignore = "open finding 25 (undo half): the component translation an edit performs after the primary datum was removed survives its own undo - see src-tauri/src/core/state/fuzz_undo_tests.rs"]
 fn undoing_the_edit_that_re_anchored_a_component_puts_it_back() {
+    let _config = isolated_config();
     let state = state_with_project();
     let origin = create_section(&state, "Origin", vec![shot(10.0, 3.0), shot(20.0, 4.0)]);
     let anchored = create_section(&state, "Anchored", vec![shot(70.0, 7.0), shot(100.0, 8.0)]);
@@ -2054,6 +2089,7 @@ fn undoing_the_edit_that_re_anchored_a_component_puts_it_back() {
 #[test]
 #[ignore = "open finding 25 (via DeleteShot): deleting the shot that carries the primary datum's station moves the project origin with no re-solve - see src-tauri/src/core/state/fuzz_undo_tests.rs"]
 fn deleting_the_primary_datums_station_does_not_silently_move_the_origin() {
+    let _config = isolated_config();
     let state = state_with_project();
     let origin = create_section(&state, "Origin", vec![shot(10.0, 3.0), shot(20.0, 4.0)]);
     let anchored = create_section(&state, "Anchored", vec![shot(70.0, 7.0), shot(100.0, 8.0)]);
@@ -2149,6 +2185,7 @@ fn deleting_the_primary_datums_station_does_not_silently_move_the_origin() {
 #[test]
 #[ignore = "open finding 12 (cascading): the shot a stale id edited by mistake still carries the edit after later, unrelated undos - see src-tauri/src/core/state/fuzz_undo_tests.rs"]
 fn unwinding_past_a_stale_id_edit_leaves_no_shot_holding_it() {
+    let _config = isolated_config();
     let temp = TempDir::new().unwrap();
     let save_path: PathBuf = temp.path().join("stale-cascade.stalx");
 
@@ -2272,6 +2309,7 @@ fn unwinding_past_a_stale_id_edit_leaves_no_shot_holding_it() {
 #[test]
 #[ignore = "open finding 5 (command side): a reloaded UpdateSectionMetadata cannot clear a field, so its redo under-applies - see src-tauri/src/core/state/fuzz_undo_tests.rs"]
 fn redo_after_reload_clears_the_section_field_it_cleared() {
+    let _config = isolated_config();
     let temp = TempDir::new().unwrap();
     let save_path: PathBuf = temp.path().join("cleared-field.stalx");
 
@@ -2353,6 +2391,7 @@ fn redo_after_reload_clears_the_section_field_it_cleared() {
 #[test]
 #[ignore = "open finding 5 (command side): a reloaded entry's preview drops the field it cleared - see src-tauri/src/core/state/fuzz_undo_tests.rs"]
 fn the_history_preview_still_reports_a_cleared_field() {
+    let _config = isolated_config();
     let temp = TempDir::new().unwrap();
     let save_path: PathBuf = temp.path().join("cleared-preview.stalx");
 
@@ -2461,6 +2500,7 @@ const CLEARED: &str = "<cleared>";
 #[test]
 #[ignore = "open finding 23 (history payloads): serde_json reads back an f64 it wrote one ULP low, changing what a reloaded undo entry displays - see src-tauri/src/core/state/format_property_tests.rs"]
 fn a_reloaded_entry_displays_the_length_it_was_given() {
+    let _config = isolated_config();
     let temp = TempDir::new().unwrap();
     let save_path: PathBuf = temp.path().join("ulp.stalx");
 

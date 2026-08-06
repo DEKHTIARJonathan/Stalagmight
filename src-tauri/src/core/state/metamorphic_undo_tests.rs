@@ -104,6 +104,16 @@ use super::fuzz_undo_tests::{
 use super::AppState;
 use crate::core::Command;
 use crate::models::{SectionId, ShotData, ShotId, ShotUpdates, StationRef};
+// CONFIG ISOLATION. Every test in this module opens with
+// `let _config = isolated_config();`, and none of them may skip it:
+// `AppState::new()` LOADS the global config, and every save reaches
+// `note_recent_project` -> `Config::save()`, which WRITES it. Unguarded that
+// is the developer's real ~/.config/stalagmight/config.toml - recent_projects
+// fills with dead /tmp paths - and the write also races the process-global
+// override the config tests set, so it can land inside a sibling test's
+// isolated config and fail it. The guard redirects the path and serializes
+// against them; it is held for the whole test because the saves are.
+use crate::test_helpers::isolated_config;
 
 // ===========================================================================
 // Comparison
@@ -1345,6 +1355,7 @@ const GATE_REPEATS: usize = 3;
 /// the summary line without being a false failure today.
 #[test]
 fn metamorphic_gate() {
+    let _config = isolated_config();
     let mut problems = Vec::new();
     let mut built = 0;
     let mut total: BTreeMap<&'static str, usize> = BTreeMap::new();
@@ -1392,6 +1403,7 @@ fn metamorphic_gate() {
 /// `EXPLAINS`), so the pair replays deterministically and the filter is gone.
 #[test]
 fn the_metamorphic_engine_is_deterministic() {
+    let _config = isolated_config();
     for &seed in &GATE_SEEDS[..3] {
         let first = run_pairs(seed, 2, false, GATE_PRELUDE);
         let second = run_pairs(seed, 2, false, GATE_PRELUDE);
@@ -1440,6 +1452,7 @@ fn the_metamorphic_engine_is_deterministic() {
 #[test]
 #[ignore = "sweep: prints per-seed status, used to choose the metamorphic GATE_SEEDS"]
 fn metamorphic_fuzz() {
+    let _config = isolated_config();
     let seeds: u32 = std::env::var("STALAGMIGHT_RUST_META_SEEDS")
         .ok()
         .and_then(|value| value.parse().ok())
