@@ -146,8 +146,8 @@ fn write_tmlu(dir: &Path, name: &str, xml: &str) -> std::path::PathBuf {
 fn import_ariane_file(state: &AppState, path: &Path) {
     let tml = parse_tml(path).unwrap();
     let (sections, closures, _warnings) = convert_tml_to_import_configs(&tml, false, true).unwrap();
-    let surface_elevation = (tml.first_start_absolute_elevation.abs() > f64::EPSILON)
-        .then_some(tml.first_start_absolute_elevation);
+    let surface_elevation =
+        crate::models::ariane_elevation_or_absent(tml.first_start_absolute_elevation);
     let result = state.execute_tml_import_sections(
         sections,
         closures,
