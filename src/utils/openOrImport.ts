@@ -202,7 +202,7 @@ export async function routeOpenedFile(
       if (nonSurveyMode) {
         message = 'Switch to Survey mode and acquire the SpeleoDB write lock to import.';
       } else if (closureAdjusted) {
-        message = 'Switch to the Measured view and acquire the SpeleoDB write lock to import.';
+        message = 'Switch to the Raw Data View and acquire the SpeleoDB write lock to import.';
       } else {
         message = 'Acquire the SpeleoDB write lock to import.';
       }

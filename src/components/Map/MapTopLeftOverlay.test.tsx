@@ -7,7 +7,7 @@ vi.mock('react-i18next', () => ({
     t: (key: string) =>
       ({
         'map.fitToViewTitle': 'Fit to view',
-        'map.geometry.adjustedBadge': 'Closure-adjusted · read-only',
+        'map.geometry.adjustedBadge': 'Closures Computed View · read-only',
         'map.geometry.computing': 'Computing closures…',
         'map.geometry.computingReadOnly': 'Computing Closures - Read Only',
       })[key] ?? key,
@@ -34,7 +34,7 @@ describe('MapTopLeftOverlay', () => {
 
     expect(screen.getByRole('status')).toHaveTextContent('Computing Closures - Read Only');
     expect(screen.getByTestId('geometry-computing-spinner')).toHaveClass('animate-spin');
-    expect(screen.queryByText('Closure-adjusted · read-only')).not.toBeInTheDocument();
+    expect(screen.queryByText('Closures Computed View · read-only')).not.toBeInTheDocument();
     // The role must NOT ride on the chip: the chip is mounted by the very state
     // change it would have to announce, which is the unreliable case.
     expect(screen.getByTestId('geometry-readonly-banner')).not.toHaveAttribute('role');
@@ -52,7 +52,7 @@ describe('MapTopLeftOverlay', () => {
     render(<MapTopLeftOverlay {...baseProps} showClosureReadOnly />);
 
     expect(screen.getByTestId('geometry-readonly-banner')).toHaveTextContent(
-      'Closure-adjusted · read-only'
+      'Closures Computed View · read-only'
     );
     expect(screen.queryByTestId('geometry-computing-spinner')).not.toBeInTheDocument();
   });
