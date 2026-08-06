@@ -4677,6 +4677,229 @@ mod tests {
         let (comment, station_comments) = import_comment(Some("muddy water".to_string()), false);
         assert_eq!(comment.as_deref(), Some("muddy water"));
         assert!(station_comments.is_empty());
+
+    /// Why each emitted chain starts where it does (#412).
+    ///
+    /// The point of the split is that only ONE of these classes could ever be
+    /// merged away into a neighbouring config: a chain whose parent shot is the
+    /// LAST shot of the chain that contains it. Every other class attaches
+    /// mid-chain, and a `models::Section` is a strictly linear polyline
+    /// (`Section::shots` is consumed positionally; every cross-reference into a
+    /// section is a single `station_index`), so a mid-chain attachment has no
+    /// representation inside one config.
+    #[derive(Default, Debug, PartialEq, Eq)]
+    struct ChainOrigins {
+        /// Parent is a START shot, so there is no parent chain at all.
+        entrance_root: usize,
+        /// Parent shot is in a DIFFERENT declared section.
+        cross_section_root: usize,
+        /// Parent shot is in the same declared section AND ends its chain -
+        /// the only in-section merge a linear config could express.
+        in_section_parent_is_chain_end: usize,
+        /// Parent shot is in the same declared section but sits mid-chain.
+        in_section_parent_mid_chain: usize,
+        /// Of `cross_section_root`, those whose parent ends its chain.
+        cross_root_at_parent_chain_end: usize,
+        /// Chains that share a start station with an earlier chain: a "V" that
+        /// one reversed-then-concatenated linear run could express.
+        sibling_v_merge_savings: usize,
+    }
+
+    fn classify_chain_origins(tml: &TmlFile) -> ChainOrigins {
+        let base_of = |n: &str| match n.rfind(" (branch ") {
+            Some(i) if n.ends_with(')') => n[..i].to_string(),
+            _ => n.to_string(),
+        };
+        let mut shot_section: HashMap<i64, String> = HashMap::new();
+        let mut ends_a_chain: std::collections::HashSet<i64> = std::collections::HashSet::new();
+        let mut chains_per_start: HashMap<i64, usize> = HashMap::new();
+        for section in &tml.sections {
+            for shot in &section.shots {
+                shot_section.insert(shot.id, shot.section.clone());
+            }
+            if let Some(last) = section.shots.last() {
+                ends_a_chain.insert(last.id);
+            }
+            *chains_per_start.entry(section.start_ariane_id).or_insert(0) += 1;
+        }
+
+        let mut out = ChainOrigins {
+            sibling_v_merge_savings: chains_per_start
+                .values()
+                .filter(|&&n| n >= 2)
+                .sum::<usize>()
+                - chains_per_start.values().filter(|&&n| n >= 2).count(),
+            ..ChainOrigins::default()
+        };
+        for section in &tml.sections {
+            let parent_ends_chain = ends_a_chain.contains(&section.start_ariane_id);
+            match shot_section.get(&section.start_ariane_id) {
+                None => out.entrance_root += 1,
+                Some(parent_section) if *parent_section != base_of(&section.name) => {
+                    out.cross_section_root += 1;
+                    if parent_ends_chain {
+                        out.cross_root_at_parent_chain_end += 1;
+                    }
+                }
+                Some(_) if parent_ends_chain => out.in_section_parent_is_chain_end += 1,
+                Some(_) => out.in_section_parent_mid_chain += 1,
+            }
+        }
+        out
+    }
+
+    /// The structural reason #412 cannot be fixed by merging deferred branch
+    /// chains back into their parent's config.
+    ///
+    /// Synthetic multi-root, multi-T topology, entirely in-code:
+    ///
+    /// ```text
+    ///   section "Main":   1 -> 2 -> 3 -> 4 -> 5      (mainline, from entrance)
+    ///                          |         `-> 8 -> 9  (T at 4)
+    ///                          `-> 6 -> 7            (T at 2)
+    ///   section "Side":  10 -> 11                    (root parented into Main)
+    /// ```
+    ///
+    /// The continuation rule sends the walk through the LONGER downstream leg
+    /// at each T, so shot 2 and shot 4 both stay mid-mainline. That is not an
+    /// accident of this fixture: `collect_linear_chain` only defers a successor
+    /// when it continues into a sibling of that successor, so the junction shot
+    /// always has a chain step after it. Hence, for EVERY deferred chain, the
+    /// parent shot is mid-chain - and a config is a linear polyline, so there
+    /// is nowhere in the parent config to put it.
+    ///
+    /// This test fails the moment that stops being true, which is exactly when
+    /// a contiguous re-join becomes implementable.
+    #[test]
+    fn every_deferred_branch_attaches_mid_chain_so_no_config_can_absorb_it() {
+        let shots = [
+            tml_shot_xml_az_len(1, -1, "Main", 90.0, 10.0),
+            tml_shot_xml_az_len(2, 1, "Main", 90.0, 10.0),
+            tml_shot_xml_az_len(3, 2, "Main", 90.0, 10.0),
+            tml_shot_xml_az_len(4, 3, "Main", 90.0, 10.0),
+            tml_shot_xml_az_len(5, 4, "Main", 90.0, 40.0),
+            tml_shot_xml_az_len(6, 2, "Main", 180.0, 5.0),
+            tml_shot_xml_az_len(7, 6, "Main", 180.0, 5.0),
+            tml_shot_xml_az_len(8, 4, "Main", 0.0, 5.0),
+            tml_shot_xml_az_len(9, 8, "Main", 0.0, 5.0),
+            tml_shot_xml_az_len(10, 3, "Side", 270.0, 8.0),
+            tml_shot_xml_az_len(11, 10, "Side", 270.0, 8.0),
+        ]
+        .join("\n");
+        let tml = parse_synthetic_tmlu(&wrap_xml(&shots));
+
+        let origins = classify_chain_origins(&tml);
+        assert_eq!(
+            origins.in_section_parent_is_chain_end, 0,
+            "a deferred in-section branch never attaches at a chain END, so the \
+             'merge into the parent chain's config' rule has zero candidates; \
+             origins were {origins:?}"
+        );
+        assert_eq!(
+            origins.in_section_parent_mid_chain, 2,
+            "both Ts (at shot 2 and shot 4) defer a chain that hangs off a \
+             mid-mainline shot; origins were {origins:?}"
+        );
+        assert_eq!(
+            origins.cross_section_root, 1,
+            "\"Side\" is parented into \"Main\", the boundary #412 leaves alone"
+        );
+
+        // The mainline really did survive both junctions: that is what the
+        // continuation heuristic buys, and it is what keeps the parent shot
+        // mid-chain rather than at a chain end.
+        let mainline = tml
+            .sections
+            .iter()
+            .find(|s| s.name == "Main")
+            .expect("the mainline keeps the section's own name");
+        assert_eq!(
+            mainline.shots.iter().map(|s| s.id).collect::<Vec<_>>(),
+            vec![1, 2, 3, 4, 5],
+            "the walk takes the longest downstream leg at each T"
+        );
+
+        // Every shot is emitted exactly once across the fragments, and the
+        // fragment count is exactly the linear-chain count - there is no
+        // representation that could make it smaller without changing
+        // `models::Section` from a polyline into a tree.
+        let mut ids: Vec<i64> = tml
+            .sections
+            .iter()
+            .flat_map(|s| &s.shots)
+            .map(|s| s.id)
+            .collect();
+        ids.sort_unstable();
+        assert_eq!(ids, (1..=11).collect::<Vec<_>>());
+        assert_eq!(tml.sections.len(), 4, "Main + 2 deferred Ts + Side");
+    }
+
+    /// Re-joining must not silently break the two things every emitted config
+    /// carries besides its shots: the closure indices and the depth rebase.
+    ///
+    /// Locks them against the topology above, so a future merge attempt that
+    /// moves shots between configs has to keep both correct.
+    #[test]
+    fn closures_and_depth_rebasing_are_keyed_to_the_emitting_fragment() {
+        let shots = [
+            tml_shot_xml_az_len(1, -1, "Main", 90.0, 10.0),
+            tml_shot_xml_az_len(2, 1, "Main", 90.0, 10.0),
+            tml_shot_xml_az_len(3, 2, "Main", 90.0, 40.0),
+            tml_shot_xml_az_len(4, 2, "Main", 180.0, 5.0),
+            // A closure from the deferred branch's tip back to the mainline.
+            format!(
+                r"<SurveyData>
+    <ID>5</ID>
+    <FromID>4</FromID>
+    <ClosureToID>3</ClosureToID>
+    <Type>CLOSURE</Type>
+    <Section>Main</Section>
+    <Azimut>0.0</Azimut>
+    <Length>0.0</Length>
+    <Depth>5.0</Depth>
+    <DepthIn>-1.0</DepthIn>
+    <Inclination>0.0</Inclination>
+    <Left>0.0</Left>
+    <Right>0.0</Right>
+    <Up>0.0</Up>
+    <Down>0.0</Down>
+    <Comment></Comment>
+    <Explorer>Tester</Explorer>
+    <Date>2024-06-15</Date>
+    <Color>0x8f6112ff</Color>
+    <Excluded>false</Excluded>
+    <Latitude>0.0</Latitude>
+    <Longitude>0.0</Longitude>
+</SurveyData>"
+            ),
+        ]
+        .join("\n");
+        let tml = parse_synthetic_tmlu(&wrap_xml(&shots));
+
+        let branch = tml
+            .sections
+            .iter()
+            .find(|s| s.name != "Main")
+            .expect("the T defers one branch");
+        assert_eq!(
+            branch.start_ariane_id, 2,
+            "the branch records the mid-mainline shot it hangs off"
+        );
+        assert_eq!(
+            branch.start_depth, 5.0,
+            "start_depth rebases onto the PARENT shot's cumulative depth, not 0"
+        );
+
+        let (configs, closures, _) =
+            convert_tml_to_import_configs(&tml, false, false).expect("convert");
+        assert_eq!(configs.len(), 2, "mainline + the deferred branch");
+        assert_eq!(closures.len(), 1, "the CLOSURE shot resolves to both ends");
+        let closure = &closures[0];
+        assert_ne!(
+            (closure.from_section_index, closure.from_station_index),
+            (closure.to_section_index, closure.to_station_index),
+            "a closure spanning two fragments must keep two distinct endpoints"
+        );
     }
 
     /// Baseline harness for #412: how many linear sections the importer
@@ -4704,6 +4927,20 @@ mod tests {
                 }
             })
             .collect();
+        let origins = classify_chain_origins(&tml);
+        eprintln!(
+            "ORIGIN sections={} entrance_root={} cross_section_root={} \
+             in_section_parent_is_chain_end={} in_section_parent_mid_chain={} \
+             cross_root_at_parent_chain_end={} sibling_v_merge_savings={}",
+            tml.sections.len(),
+            origins.entrance_root,
+            origins.cross_section_root,
+            origins.in_section_parent_is_chain_end,
+            origins.in_section_parent_mid_chain,
+            origins.cross_root_at_parent_chain_end,
+            origins.sibling_v_merge_savings,
+        );
+
         let (configs, closures, warnings) =
             convert_tml_to_import_configs(&tml, false, false).expect("convert");
         let mut sizes: Vec<usize> = configs.iter().map(|c| c.shots.len()).collect();
