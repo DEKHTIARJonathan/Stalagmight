@@ -17,9 +17,11 @@ const MAX_VISIBLE_WARNINGS = 3;
  * user what to expect before they go looking in the data table.
  *
  * This dialog is reached ONLY through `presentImportReceipt` (`saveFeedback.ts`,
- * #411/#420): a receipt that carries a warning, or reports zero sections and
- * zero shots (#442), still opens the modal here; a clean receipt with
- * something to show instead surfaces as a toast and never reaches this file.
+ * #411/#420): a receipt that carries a warning, reports zero sections
+ * imported (#442), or performed a unit conversion (`unit_conversion` != null
+ * - a silent transformation notice with no room in a toast's one-line budget)
+ * still opens the modal here; a clean, unconverted receipt with something to
+ * show instead surfaces as a toast and never reaches this file.
  *
  * `sections_found` is the whole-file section count, not a promise every
  * section was imported - DMP/Compass/Walls wizards let the user deliberately

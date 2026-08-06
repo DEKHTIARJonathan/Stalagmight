@@ -28,16 +28,29 @@ const SAVE_WARNING: ValidationWarning = {
   severity: 'warning',
 };
 
+// A real waypoints-only GPX import lands one section per waypoint and zero
+// shots (parsers/gpx.rs) - it is NOT the #442 zero-count case (that needs
+// sections_imported: 0, which this shape never produces).
 const RECEIPT: ImportReceipt = {
   source_format: 'GPX',
   file_name: 'waypoints.gpx',
-  sections_found: 0,
-  sections_imported: 0,
+  sections_found: 1,
+  sections_imported: 1,
   shot_count: 0,
   closures_requested: 0,
   closures_created: 0,
   unit_conversion: null,
   warnings: [],
+};
+
+// Synthetic: nothing landed at all. Not a shape a waypoints-only GPX import
+// produces on its own (that always yields >=1 section per waypoint) - this
+// stands in for whatever upstream path can report a fully empty receipt,
+// exercising the #442 guard in isolation from the waypoints-only fixture.
+const EMPTY_RECEIPT: ImportReceipt = {
+  ...RECEIPT,
+  sections_found: 0,
+  sections_imported: 0,
 };
 
 const waypointsOnlyGpx: GpxFile = {
@@ -95,25 +108,35 @@ describe('GpxSelectionDialog waypoints-only import (#110/#391)', () => {
   });
 
   it('opens the modal for a zero-count receipt even with no warnings (#442)', async () => {
-    executeGpxImport.mockResolvedValue(ok([], RECEIPT));
+    executeGpxImport.mockResolvedValue(ok([], EMPTY_RECEIPT));
 
     render(<GpxSelectionDialog gpxFile={waypointsOnlyGpx} filePath="/tmp/waypoints.gpx" />);
     await userEvent.click(await screen.findByTestId('gpx-import-confirm'));
 
     await waitFor(() =>
-      expect(openDialog).toHaveBeenCalledWith('import-receipt', { receipt: RECEIPT }),
+      expect(openDialog).toHaveBeenCalledWith('import-receipt', { receipt: EMPTY_RECEIPT }),
     );
     expect(showToast).not.toHaveBeenCalled();
   });
 
-  it('toasts a warning-free, non-empty receipt instead of opening the modal (#411/#420)', async () => {
-    const nonEmptyReceipt: ImportReceipt = { ...RECEIPT, sections_imported: 1, shot_count: 3 };
-    executeGpxImport.mockResolvedValue(ok([], nonEmptyReceipt));
+  it('toasts a warning-free receipt for a realistic waypoints-only import (#411/#420)', async () => {
+    executeGpxImport.mockResolvedValue(ok([], RECEIPT));
 
     render(<GpxSelectionDialog gpxFile={waypointsOnlyGpx} filePath="/tmp/waypoints.gpx" />);
     await userEvent.click(await screen.findByTestId('gpx-import-confirm'));
 
     await waitFor(() => expect(showToast).toHaveBeenCalledTimes(1));
     expect(openDialog).not.toHaveBeenCalledWith('import-receipt', expect.anything());
+  });
+
+  it('keeps the modal for a unit-converted receipt even with no warnings', async () => {
+    const converted: ImportReceipt = { ...RECEIPT, unit_conversion: 'Lengths converted from feet to meters' };
+    executeGpxImport.mockResolvedValue(ok([], converted));
+
+    render(<GpxSelectionDialog gpxFile={waypointsOnlyGpx} filePath="/tmp/waypoints.gpx" />);
+    await userEvent.click(await screen.findByTestId('gpx-import-confirm'));
+
+    await waitFor(() => expect(openDialog).toHaveBeenCalledWith('import-receipt', { receipt: converted }));
+    expect(showToast).not.toHaveBeenCalled();
   });
 });

@@ -41,9 +41,12 @@ test.describe('GPX Import Workflow', () => {
     await expect(page.getByTestId('gpx-placement-dialog')).toBeHidden({ timeout: 15000 });
 
     // Warning-free receipt: #411/#420 downgrade it to a toast, not the modal -
-    // it carries the same counts but never blocks continuing to the map.
-    await expect(page.getByTestId('import-receipt-dialog')).toBeHidden();
+    // it carries the same counts but never blocks continuing to the map. Assert
+    // the toast FIRST (it waits for the receipt to actually resolve) so the
+    // modal check that follows isn't a same-instant false pass that would let
+    // a regression opening BOTH surfaces through green.
     await expect(page.getByTestId('toast')).toContainText('GPX', { timeout: 10000 });
+    await expect(page.getByTestId('import-receipt-dialog')).toBeHidden();
 
     await expect(page.getByTestId('single-system-view')).toBeVisible();
 

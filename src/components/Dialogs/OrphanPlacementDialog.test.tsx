@@ -169,4 +169,28 @@ describe('OrphanPlacementDialog - receipt surface routing (#411/#420)', () => {
     await waitFor(() => expect(openDialog).toHaveBeenCalledWith('import-receipt', { receipt: empty }));
     expect(showToast).not.toHaveBeenCalled();
   });
+
+  it('opens the modal when sections_imported is zero even if shot_count disagrees (#442)', async () => {
+    const disagreeing: ImportReceipt = { ...RECEIPT, sections_imported: 0, shot_count: 12 };
+    render(<OrphanPlacementDialog suggestions={[makeSuggestion()]} receipt={disagreeing} />);
+
+    await userEvent.click(screen.getByTestId('orphan-accept'));
+
+    await waitFor(() =>
+      expect(openDialog).toHaveBeenCalledWith('import-receipt', { receipt: disagreeing }),
+    );
+    expect(showToast).not.toHaveBeenCalled();
+  });
+
+  it('keeps the modal for a unit-converted receipt even with no warnings', async () => {
+    const converted: ImportReceipt = { ...RECEIPT, unit_conversion: 'Lengths converted from feet to meters' };
+    render(<OrphanPlacementDialog suggestions={[makeSuggestion()]} receipt={converted} />);
+
+    await userEvent.click(screen.getByTestId('orphan-accept'));
+
+    await waitFor(() =>
+      expect(openDialog).toHaveBeenCalledWith('import-receipt', { receipt: converted }),
+    );
+    expect(showToast).not.toHaveBeenCalled();
+  });
 });

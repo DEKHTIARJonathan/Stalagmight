@@ -83,15 +83,22 @@ export interface ImportDialogUi {
  * The surface for a post-import receipt (docs/notifications.md, #411/#420): a
  * receipt with no decision in it - no warnings, and something actually
  * landed - is a toast, not a modal (there's nothing to acknowledge, just a
- * click to continue). A receipt that carries a warning, OR reports zero
- * sections and zero shots (#442 - nothing landing IS a decision the user
- * needs to see), keeps the modal.
+ * click to continue). Three things keep the modal:
+ *  - `warnings` is non-empty (something needs a look).
+ *  - Nothing landed (#442, `isEmptyImportReceipt`) - the absence of data IS
+ *    the fact the user needs to see.
+ *  - `unit_conversion` is set: a length-unit conversion (e.g. feet -> meters)
+ *    silently changes every number in the imported data. That is a
+ *    transformation notice, not a decision, but the toast auto-dismisses in
+ *    5-9s and its one-line budget (docs/notifications.md) has no room for it
+ *    without truncating the summary - so it rides the modal instead of being
+ *    dropped or getting a second, second-class surface.
  */
 export function presentImportReceipt(
   receipt: ImportReceipt,
   ui: Pick<ImportDialogUi, 'openDialog' | 'showToast'>,
 ): void {
-  if (receipt.warnings.length > 0 || isEmptyImportReceipt(receipt)) {
+  if (receipt.warnings.length > 0 || isEmptyImportReceipt(receipt) || receipt.unit_conversion != null) {
     ui.openDialog('import-receipt', { receipt });
     return;
   }

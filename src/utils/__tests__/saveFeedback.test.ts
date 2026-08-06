@@ -181,6 +181,45 @@ describe('presentImportReceipt (#411/#420)', () => {
     expect(ui.showToast).not.toHaveBeenCalled();
     expect(ui.openDialog).toHaveBeenCalledWith('import-receipt', { receipt: empty });
   });
+
+  it('keeps the modal when sections_imported is zero even if shot_count disagrees (#442)', () => {
+    // shot_count is summed from the sections the import ATTEMPTED
+    // (command_import.rs), sections_imported from what actually landed - they
+    // only agree today because the import loop is all-or-nothing. Pin the
+    // guard on sections_imported alone so a future partial-drop path can't
+    // slip a "nothing landed" receipt through as a toast just because
+    // shot_count is stale/nonzero.
+    const ui = mockUi();
+    const disagreeing: ImportReceipt = { ...receiptFixture(), sections_imported: 0, shot_count: 40 };
+
+    presentImportReceipt(disagreeing, ui);
+
+    expect(ui.showToast).not.toHaveBeenCalled();
+    expect(ui.openDialog).toHaveBeenCalledWith('import-receipt', { receipt: disagreeing });
+  });
+
+  it('keeps the modal for a unit-converted receipt even with no warnings', () => {
+    const ui = mockUi();
+    const converted: ImportReceipt = {
+      ...receiptFixture(),
+      unit_conversion: 'Lengths converted from feet to meters',
+    };
+
+    presentImportReceipt(converted, ui);
+
+    expect(ui.showToast).not.toHaveBeenCalled();
+    expect(ui.openDialog).toHaveBeenCalledWith('import-receipt', { receipt: converted });
+  });
+
+  it('toasts a warning-free, non-converted receipt (control case)', () => {
+    const ui = mockUi();
+    const plain: ImportReceipt = { ...receiptFixture(), unit_conversion: null };
+
+    presentImportReceipt(plain, ui);
+
+    expect(ui.openDialog).not.toHaveBeenCalled();
+    expect(ui.showToast).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('completeImportToSingleView receipt routing (#411/#420)', () => {

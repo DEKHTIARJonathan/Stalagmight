@@ -154,4 +154,15 @@ describe('GpxPlacementDialog warning surfacing (#110)', () => {
     await waitFor(() => expect(openDialog).toHaveBeenCalledWith('import-receipt', { receipt: empty }));
     expect(showToast).not.toHaveBeenCalled();
   });
+
+  it('keeps the modal for a unit-converted receipt even with no warnings', async () => {
+    const converted: ImportReceipt = { ...RECEIPT, unit_conversion: 'Lengths converted from feet to meters' };
+    executeGpxImport.mockResolvedValue(ok([], converted));
+
+    render(<GpxPlacementDialog />);
+    await userEvent.click(await screen.findByTestId('gpx-import-confirm'));
+
+    await waitFor(() => expect(openDialog).toHaveBeenCalledWith('import-receipt', { receipt: converted }));
+    expect(showToast).not.toHaveBeenCalled();
+  });
 });

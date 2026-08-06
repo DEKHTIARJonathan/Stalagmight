@@ -51,11 +51,19 @@ export function importReceiptSummaryParts(receipt: ImportReceipt, t: TFunction):
 }
 
 /**
- * Nothing landed - zero sections AND zero shots. #442's case: an import that
- * silently produces nothing must never be demoted to a toast, even if it
- * happens to carry no `warnings` of its own (the absence of any data IS the
- * thing the user needs to see).
+ * Nothing landed. #442's case: an import that silently produces nothing must
+ * never be demoted to a toast, even if it happens to carry no `warnings` of
+ * its own (the absence of any data IS the thing the user needs to see).
+ *
+ * Gated on `sections_imported` alone, NOT `shot_count`: `shot_count` is
+ * summed from the sections the import *attempted* (`command_import.rs`,
+ * computed before the per-section outcome is known), while
+ * `sections_imported` counts what actually landed. They only agree today
+ * because the import loop is all-or-nothing - the day a partial-drop path
+ * exists, a zero-sections receipt could carry a nonzero `shot_count`, and a
+ * `shot_count`-inclusive check would wrongly let that case through as a
+ * toast.
  */
 export function isEmptyImportReceipt(receipt: ImportReceipt): boolean {
-  return receipt.sections_imported === 0 && receipt.shot_count === 0;
+  return receipt.sections_imported === 0;
 }
