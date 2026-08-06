@@ -516,7 +516,9 @@ pub fn convert_walls_to_import_configs(
             // readings and declare the result true north. That is lossy for the
             // measured reading, which is why it is announced.
             let azimuth_reference = {
-                let mut corrections = chain.iter().map(|&idx| survey.vectors[idx].azimuth_correction);
+                let mut corrections = chain
+                    .iter()
+                    .map(|&idx| survey.vectors[idx].azimuth_correction);
                 let first = corrections.next().unwrap_or(0.0);
                 let uniform = corrections.all(|c| (c - first).abs() < 1e-9);
                 if uniform {

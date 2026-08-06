@@ -952,6 +952,13 @@ fn auto_declination_gated_on_derive_flag() {
         approx(off[0].shots[0].azimuth_in, 90.0),
         "no flag -> no auto declination"
     );
+    assert!(
+        off[0]
+            .azimuth_reference
+            .expect("the importer records a reference")
+            .is_identity(),
+        "no flag -> no correction recorded either"
+    );
 
     let on = convert_survey_with(
         parse_srv_geo(srv, georef.clone(), true),
@@ -959,9 +966,32 @@ fn auto_declination_gated_on_derive_flag() {
         &WallsImportOptions::default(),
     )
     .0;
+    // #438: the READING is untouched - what the derive flag changes is the
+    // correction recorded on the section, not the number in the shot.
     assert!(
-        (on[0].shots[0].azimuth_in - 90.0).abs() > 1.0,
-        "derive flag -> IGRF declination shifts the azimuth"
+        approx(on[0].shots[0].azimuth_in, 90.0),
+        "the measured azimuth must survive the import verbatim, got {}",
+        on[0].shots[0].azimuth_in
+    );
+    let reference = on[0]
+        .azimuth_reference
+        .expect("the importer records a reference");
+    assert!(
+        reference.applied_correction().abs() > 1.0,
+        "derive flag -> IGRF declination lands on the section, got {}",
+        reference.applied_correction()
+    );
+    assert!(
+        matches!(
+            reference.source,
+            crate::models::CorrectionSource::IgrfAuto { epoch_year: 2020 }
+        ),
+        "the provenance must name the model and the epoch, got {:?}",
+        reference.source
+    );
+    assert!(
+        (reference.to_true(90.0) - (90.0 + reference.correction)).abs() < 1e-9,
+        "the recorded correction is what geometry adds"
     );
 }
 
@@ -978,7 +1008,17 @@ fn convergence_applied_from_survey_georef() {
         georef.clone(),
         &WallsImportOptions::default(),
     );
-    assert!(approx(configs[0].shots[0].azimuth_in, 98.0));
+    // #438: measured reading in the shot, convergence on the section.
+    assert!(approx(configs[0].shots[0].azimuth_in, 100.0));
+    let reference = configs[0]
+        .azimuth_reference
+        .expect("the importer records a reference");
+    assert!(
+        approx(reference.applied_correction(), -2.0),
+        "convergence rotates true north to grid north, so it is SUBTRACTED, got {}",
+        reference.applied_correction()
+    );
+    assert!(approx(reference.to_true(100.0), 98.0));
 }
 
 #[test]
@@ -1726,11 +1766,21 @@ fn units_grid_convergence_subtracted_from_ct() {
     let srv = "#UNITS meters order=DAV Grid=2\n\
                A B 10 100 0\n";
     let (configs, _c, _w) = convert_one(parse_srv(srv));
+    // #438: stored measured, corrected at compute time.
     assert!(
-        approx(configs[0].shots[0].azimuth_in, 98.0),
-        "#Units Grid=2 must subtract 2° of convergence, got {}",
+        approx(configs[0].shots[0].azimuth_in, 100.0),
+        "the measured reading must survive the import, got {}",
         configs[0].shots[0].azimuth_in
     );
+    let reference = configs[0]
+        .azimuth_reference
+        .expect("the importer records a reference");
+    assert!(
+        approx(reference.applied_correction(), -2.0),
+        "#Units Grid=2 must subtract 2° of convergence, got {}",
+        reference.applied_correction()
+    );
+    assert!(approx(reference.to_true(100.0), 98.0));
 }
 
 #[test]
@@ -1920,11 +1970,22 @@ fn rect_vector_honors_units_grid() {
     let srv = "#UNITS RECT order=ENU Grid=2\n\
                A B 0 10 0\n";
     let (configs, _c, _w) = convert_one(parse_srv(srv));
+    // #438: the reading stays as the file wrote it; the grid convergence is
+    // recorded on the section and applied when geometry is computed.
     assert!(
-        approx(configs[0].shots[0].azimuth_in, 358.0),
-        "RECT must honor #Units Grid=, got {}",
+        approx(configs[0].shots[0].azimuth_in, 0.0),
+        "the RECT-derived bearing must be stored as measured, got {}",
         configs[0].shots[0].azimuth_in
     );
+    let reference = configs[0]
+        .azimuth_reference
+        .expect("the importer records a reference");
+    assert!(
+        approx(reference.applied_correction(), -2.0),
+        "RECT must honor #Units Grid=, got {}",
+        reference.applied_correction()
+    );
+    assert!(approx(reference.to_true(0.0), 358.0));
 }
 
 #[test]

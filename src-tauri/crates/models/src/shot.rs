@@ -1092,7 +1092,7 @@ mod tests {
                 ..Default::default()
             },
         );
-        let average = shot.average_azimuth();
+        let average = shot.average_azimuth_measured();
         assert!((average - 0.0).abs() < 1e-6);
     }
 
@@ -1189,7 +1189,7 @@ mod tests {
                 ..Default::default()
             },
         );
-        assert!((shot.average_azimuth() - 90.0).abs() < 1e-6);
+        assert!((shot.average_azimuth_measured() - 90.0).abs() < 1e-6);
     }
 
     #[test]
@@ -1204,7 +1204,7 @@ mod tests {
                 ..Default::default()
             },
         );
-        let avg = shot.average_azimuth();
+        let avg = shot.average_azimuth_measured();
         assert!(
             avg < 1.0 || avg > 359.0,
             "350-10 wrap should give ~0/360, got {avg}"
@@ -1223,7 +1223,7 @@ mod tests {
                 ..Default::default()
             },
         );
-        assert!((shot.average_azimuth() - 180.0).abs() < 1e-6);
+        assert!((shot.average_azimuth_measured() - 180.0).abs() < 1e-6);
     }
 
     #[test]
@@ -1238,7 +1238,7 @@ mod tests {
                 ..Default::default()
             },
         );
-        assert!((shot.average_azimuth() - 270.0).abs() < 1e-6);
+        assert!((shot.average_azimuth_measured() - 270.0).abs() < 1e-6);
     }
 
     /// The `rem_euclid` wrap is a CORRECTION, not a reinterpretation of stored data.

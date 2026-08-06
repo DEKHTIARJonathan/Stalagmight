@@ -25,7 +25,10 @@ use quick_xml::events::{BytesDecl, BytesEnd, BytesStart, BytesText, Event};
 use quick_xml::Writer;
 
 use crate::models::comment_split;
-use crate::models::{normalize_azimuth, Project, Section, SectionId, Shot, StationRef};
+use crate::models::{
+    normalize_azimuth, AzimuthReference, NorthReference, Project, Section, SectionId, Shot,
+    StationRef,
+};
 
 // ============================================================================
 // Element-name map (long vs. short)
@@ -282,7 +285,19 @@ fn write_output(path: &Path, xml: &[u8]) -> Result<()> {
 // ============================================================================
 
 fn build_xml(project: &Project, n: &Names, profile: TmlProfile) -> Result<Vec<u8>> {
-    let shots = build_export_shots(project, profile);
+    let azimuth_export = AzimuthExport::decide(project);
+    if azimuth_export == AzimuthExport::MixedToTrue {
+        // The one export decision that CHANGES the numbers rather than just
+        // labelling them, so it is stated rather than done quietly. The TML
+        // export command returns no receipt, so the log is the surface (#438).
+        tracing::warn!(
+            purpose = "honest single-flag Ariane document",
+            "Project sections declare different north references; azimuths were rotated to \
+             true north on export and the file is marked useMagneticAzimuth=false. The \
+             project's own stored readings are untouched."
+        );
+    }
+    let shots = build_export_shots(project, profile, azimuth_export);
     ensure_rooted_chain(&shots, profile)?;
 
     let mut buf = Vec::new();
@@ -318,7 +333,15 @@ fn build_xml(project: &Project, n: &Names, profile: TmlProfile) -> Result<Vec<u8
 
     // Remaining metadata after Data (matching Ariane's ordering)
     write_text_element(&mut writer, n.unit, "m")?;
-    write_text_element(&mut writer, n.use_magnetic_azimuth, "true")?;
+    write_text_element(
+        &mut writer,
+        n.use_magnetic_azimuth,
+        if azimuth_export.is_magnetic() {
+            "true"
+        } else {
+            "false"
+        },
+    )?;
 
     // </CaveFile>
     writer.write_event(Event::End(BytesEnd::new(n.cave_file)))?;
@@ -612,7 +635,79 @@ fn remint_duplicate_uuids(shots: &mut [ExportShot]) {
     }
 }
 
-fn build_export_shots(project: &Project, profile: TmlProfile) -> Vec<ExportShot> {
+/// How this document declares its azimuths (#438).
+///
+/// The flag `useMagneticAzimuth` is file-level and the project's references are
+/// per section, so the three answers are: the sections agree on magnetic (write
+/// the readings, flag true), they agree on true north (write them, flag false),
+/// or they disagree - and then the only honest single-flag document is one where
+/// every bearing has been rotated into true north on the way out.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AzimuthExport {
+    /// Every section's stored readings are magnetic and share one correction:
+    /// emit them untouched and let Ariane apply its own declination.
+    Magnetic,
+    /// Every section is already true north: emit untouched, flag false.
+    TrueAsStored,
+    /// The sections disagree. Apply each section's correction so the file is
+    /// uniformly true north, and flag false.
+    MixedToTrue,
+}
+
+impl AzimuthExport {
+    fn decide(project: &Project) -> Self {
+        let mut references = project
+            .sections
+            .iter()
+            .filter(|section| !section.shots.is_empty())
+            .map(|section| project.azimuth_reference_for(section));
+
+        // No survey to describe: keep the historical declaration, which is also
+        // what an unreferenced project means.
+        let Some(first) = references.next() else {
+            return AzimuthExport::Magnetic;
+        };
+        // Corrections come from the same file-level source, so this is an
+        // identity test, not a tolerance: the epsilon only keeps a last-bit
+        // difference from routing an otherwise uniform project down the
+        // rewrite-every-azimuth path.
+        let uniform = references.all(|r| {
+            r.north == first.north
+                && (r.applied_correction() - first.applied_correction()).abs() < 1e-12
+        });
+        if !uniform {
+            return AzimuthExport::MixedToTrue;
+        }
+        match first.north {
+            NorthReference::True => AzimuthExport::TrueAsStored,
+            NorthReference::Magnetic => AzimuthExport::Magnetic,
+            // Grid bearings are neither: declaring them magnetic would have
+            // Ariane add a declination to a grid azimuth, and declaring them
+            // true would keep the meridian convergence in. Rotate them out.
+            NorthReference::Grid => AzimuthExport::MixedToTrue,
+        }
+    }
+
+    fn is_magnetic(self) -> bool {
+        matches!(self, AzimuthExport::Magnetic)
+    }
+
+    /// The reference to push each of `section`'s azimuths through on the way
+    /// out. Identity except on the mixed path, so an ordinary export is
+    /// byte-for-byte what it always was.
+    fn emit_reference(self, project: &Project, section: &Section) -> AzimuthReference {
+        match self {
+            AzimuthExport::MixedToTrue => project.azimuth_reference_for(section),
+            _ => AzimuthReference::default(),
+        }
+    }
+}
+
+fn build_export_shots(
+    project: &Project,
+    profile: TmlProfile,
+    azimuth_export: AzimuthExport,
+) -> Vec<ExportShot> {
     if project.sections.is_empty() {
         return Vec::new();
     }
@@ -652,6 +747,10 @@ fn build_export_shots(project: &Project, profile: TmlProfile) -> Vec<ExportShot>
 
     for section in &project.sections {
         let is_root = section.id == root_section_id;
+        // #438: identity unless the project's sections disagree about north, in
+        // which case each section's own correction is applied here so the whole
+        // document is true north - the only thing one file-level flag can say.
+        let emit_reference = azimuth_export.emit_reference(project, section);
 
         // A section that never merges into the tree is a separate entrance, not a
         // child of anything - two unconnected galleries in one project is an ordinary
@@ -755,7 +854,7 @@ fn build_export_shots(project: &Project, profile: TmlProfile) -> Vec<ExportShot>
                         "REAL"
                     },
                     section: section_name.clone(),
-                    azimuth: shot.azimuth_in,
+                    azimuth: emit_reference.to_true(shot.azimuth_in),
                     length: shot.length,
                     depth: shot.depth_out,
                     depth_in: shot.depth_in,
@@ -823,7 +922,7 @@ fn build_export_shots(project: &Project, profile: TmlProfile) -> Vec<ExportShot>
                         section: split_name.clone(),
                         // Ariane carries a single forward azimuth per shot. The reverse
                         // pre-zero leg must therefore be synthesized as reciprocal heading.
-                        azimuth: reverse_pre_zero_azimuth(shot.azimuth_in),
+                        azimuth: reverse_pre_zero_azimuth(emit_reference.to_true(shot.azimuth_in)),
                         length: shot.length,
                         depth: reversed_depth_out,
                         depth_in: reversed_depth_in,
@@ -896,7 +995,7 @@ fn build_export_shots(project: &Project, profile: TmlProfile) -> Vec<ExportShot>
                                 "REAL"
                             },
                             section: section_name.clone(),
-                            azimuth: shot.azimuth_in,
+                            azimuth: emit_reference.to_true(shot.azimuth_in),
                             length: shot.length,
                             depth: shot.depth_out,
                             depth_in: shot.depth_in,
@@ -962,7 +1061,9 @@ fn build_export_shots(project: &Project, profile: TmlProfile) -> Vec<ExportShot>
                                 "REAL"
                             },
                             section: rev_name.clone(),
-                            azimuth: reverse_pre_zero_azimuth(shot.azimuth_in),
+                            azimuth: reverse_pre_zero_azimuth(
+                                emit_reference.to_true(shot.azimuth_in),
+                            ),
                             length: shot.length,
                             depth: reversed_depth_out,
                             depth_in: reversed_depth_in,
@@ -1030,7 +1131,9 @@ fn build_export_shots(project: &Project, profile: TmlProfile) -> Vec<ExportShot>
                                 "REAL"
                             },
                             section: rev_name.clone(),
-                            azimuth: reverse_pre_zero_azimuth(shot.azimuth_in),
+                            azimuth: reverse_pre_zero_azimuth(
+                                emit_reference.to_true(shot.azimuth_in),
+                            ),
                             length: shot.length,
                             depth: reversed_depth_out,
                             depth_in: reversed_depth_in,
@@ -1145,7 +1248,7 @@ fn build_export_shots(project: &Project, profile: TmlProfile) -> Vec<ExportShot>
                     "REAL"
                 },
                 section: section_name.clone(),
-                azimuth: shot.azimuth_in,
+                azimuth: emit_reference.to_true(shot.azimuth_in),
                 length: shot.length,
                 depth: shot.depth_out,
                 depth_in: shot.depth_in,
@@ -2407,7 +2510,7 @@ mod tests {
             .station_comments
             .insert(station_1, "at the bend".to_string());
 
-        let shots = build_export_shots(&project, TmlProfile::User);
+        let shots = build_export_shots(&project, TmlProfile::User, AzimuthExport::decide(&project));
 
         // Station 1 is created by the section's first shot, so its comment rides
         // along there - beside that shot's own comment, split by the ZWSP marker.
@@ -2635,7 +2738,7 @@ mod tests {
     #[test]
     fn test_single_start_shot_at_root() {
         let project = simple_project();
-        let shots = build_export_shots(&project, TmlProfile::User);
+        let shots = build_export_shots(&project, TmlProfile::User, AzimuthExport::decide(&project));
 
         // One entrance in this fixture, so one START. A survey with a section merged
         // into nothing emits one per entrance - see `a_detached_section_exports_as_its_own_entrance`.
@@ -2678,7 +2781,7 @@ mod tests {
             });
         }
 
-        let shots = build_export_shots(&project, TmlProfile::User);
+        let shots = build_export_shots(&project, TmlProfile::User, AzimuthExport::decide(&project));
 
         let uuids: Vec<&str> = shots.iter().filter_map(|s| s.uuid.as_deref()).collect();
         assert_eq!(uuids.len(), 4, "every REAL shot still emits a <UUID>");
@@ -2705,7 +2808,7 @@ mod tests {
     #[test]
     fn test_sequential_ids() {
         let project = simple_project();
-        let shots = build_export_shots(&project, TmlProfile::User);
+        let shots = build_export_shots(&project, TmlProfile::User, AzimuthExport::decide(&project));
 
         for (i, shot) in shots.iter().enumerate() {
             assert_eq!(shot.id, i as i64, "shot {i} should have id {i}");
@@ -2715,7 +2818,7 @@ mod tests {
     #[test]
     fn test_from_id_chain() {
         let project = simple_project();
-        let shots = build_export_shots(&project, TmlProfile::User);
+        let shots = build_export_shots(&project, TmlProfile::User, AzimuthExport::decide(&project));
 
         // START has from_id = -1
         assert_eq!(shots[0].from_id, -1);
@@ -2746,7 +2849,7 @@ mod tests {
             ..Default::default()
         });
 
-        let shots = build_export_shots(&project, TmlProfile::User);
+        let shots = build_export_shots(&project, TmlProfile::User, AzimuthExport::decide(&project));
         // shots[0] = START, shots[1] = VIRTUAL, shots[2] = REAL
         assert_eq!(shots[1].shot_type, "VIRTUAL");
         assert_eq!(shots[2].shot_type, "REAL");
@@ -2803,7 +2906,7 @@ mod tests {
             merged_at: chrono::Utc::now(),
         });
 
-        let shots = build_export_shots(&project, TmlProfile::User);
+        let shots = build_export_shots(&project, TmlProfile::User, AzimuthExport::decide(&project));
 
         // Only ONE start shot should exist (for root section A)
         let start_count = shots.iter().filter(|s| s.shot_type == "START").count();
@@ -2884,7 +2987,7 @@ mod tests {
             merged_at: chrono::Utc::now(),
         });
 
-        let shots = build_export_shots(&project, TmlProfile::User);
+        let shots = build_export_shots(&project, TmlProfile::User, AzimuthExport::decide(&project));
 
         // With non-zero merge at station 1, child is split:
         // Forward block (shots 1,2): id=4 from_id=2 (parent), id=5 from_id=4
@@ -2973,7 +3076,7 @@ mod tests {
             is_aligned: false,
         });
 
-        let shots = build_export_shots(&project, TmlProfile::User);
+        let shots = build_export_shots(&project, TmlProfile::User, AzimuthExport::decide(&project));
         let closure = shots.iter().find(|s| s.shot_type == "CLOSURE").unwrap();
         assert_eq!(
             closure.from_id, 1,
@@ -3022,7 +3125,7 @@ mod tests {
             is_aligned: false,
         });
 
-        let shots = build_export_shots(&project, TmlProfile::User);
+        let shots = build_export_shots(&project, TmlProfile::User, AzimuthExport::decide(&project));
         let closure = shots.iter().find(|s| s.shot_type == "CLOSURE").unwrap();
         assert!(
             closure.depth_in.abs() < f64::EPSILON,
@@ -3069,7 +3172,7 @@ mod tests {
             gps: GpsCoordinates::new(20.25, -87.5, 12.0).unwrap(),
         });
 
-        let shots = build_export_shots(&project, TmlProfile::User);
+        let shots = build_export_shots(&project, TmlProfile::User, AzimuthExport::decide(&project));
 
         let start = shots.iter().find(|s| s.id == 0).unwrap();
         assert!((start.latitude - 20.25).abs() < f64::EPSILON);
@@ -3399,7 +3502,7 @@ mod tests {
             });
         }
 
-        let shots = build_export_shots(&project, TmlProfile::User);
+        let shots = build_export_shots(&project, TmlProfile::User, AzimuthExport::decide(&project));
         println!("re-exported {} shots from {input}", shots.len());
         assert_ariane_chain_is_representable(&shots);
 
@@ -3435,7 +3538,7 @@ mod tests {
         .unwrap();
         let project = db.load_project().unwrap();
 
-        let shots = build_export_shots(&project, TmlProfile::User);
+        let shots = build_export_shots(&project, TmlProfile::User, AzimuthExport::decide(&project));
         let orphans: Vec<&ExportShot> = shots
             .iter()
             .filter(|s| s.from_id == -1 && s.shot_type != "START")
@@ -3514,7 +3617,7 @@ mod tests {
             is_aligned: false,
         });
 
-        let shots = build_export_shots(&project, TmlProfile::User);
+        let shots = build_export_shots(&project, TmlProfile::User, AzimuthExport::decide(&project));
         let closure = shots.iter().find(|s| s.shot_type == "CLOSURE").unwrap();
         assert!(
             (closure.depth - 9.0).abs() < 1e-9,
@@ -3581,7 +3684,7 @@ mod tests {
             merged_at: chrono::Utc::now(),
         });
 
-        let shots = build_export_shots(&project, TmlProfile::User);
+        let shots = build_export_shots(&project, TmlProfile::User, AzimuthExport::decide(&project));
         assert_ariane_chain_is_representable(&shots);
     }
 
@@ -3925,7 +4028,7 @@ mod tests {
             gps: GpsCoordinates::new(20.0, -87.0, 0.0).unwrap(),
         });
 
-        let shots = build_export_shots(&project, TmlProfile::User);
+        let shots = build_export_shots(&project, TmlProfile::User, AzimuthExport::decide(&project));
         let start = shots.iter().find(|s| s.shot_type == "START").unwrap();
 
         // Split produces two first shots from START: forward segment and reversed prefix.
@@ -4007,7 +4110,7 @@ mod tests {
             gps: GpsCoordinates::new(20.0, -87.0, 0.0).unwrap(),
         });
 
-        let shots = build_export_shots(&project, TmlProfile::User);
+        let shots = build_export_shots(&project, TmlProfile::User, AzimuthExport::decide(&project));
         let start = shots.iter().find(|s| s.shot_type == "START").unwrap();
         assert_eq!(start.section, "B");
 
@@ -4127,7 +4230,7 @@ mod tests {
             ..Default::default()
         });
 
-        let shots = build_export_shots(&project, TmlProfile::User);
+        let shots = build_export_shots(&project, TmlProfile::User, AzimuthExport::decide(&project));
         // shots[0] = START, shots[1..3] = REAL
         // `depth_in` now always carries the TRUE start depth and the sentinel rides
         // in its own flag, so assert on what actually reaches the file.
@@ -4231,7 +4334,7 @@ mod tests {
             merged_at: chrono::Utc::now(),
         });
 
-        let shots = build_export_shots(&project, TmlProfile::User);
+        let shots = build_export_shots(&project, TmlProfile::User, AzimuthExport::decide(&project));
         let orphans: Vec<&ExportShot> = shots
             .iter()
             .filter(|s| s.from_id == -1 && s.shot_type != "START")
@@ -4281,7 +4384,7 @@ mod tests {
             gps: GpsCoordinates::new(20.25, -87.5, 0.0).unwrap(),
         });
 
-        let shots = build_export_shots(&project, TmlProfile::User);
+        let shots = build_export_shots(&project, TmlProfile::User, AzimuthExport::decide(&project));
         let starts: Vec<&ExportShot> = shots.iter().filter(|s| s.shot_type == "START").collect();
         assert_eq!(starts.len(), 2, "each detached gallery is its own entrance");
 
@@ -4350,7 +4453,7 @@ mod tests {
             merged_at: chrono::Utc::now(),
         });
 
-        let shots = build_export_shots(&project, TmlProfile::User);
+        let shots = build_export_shots(&project, TmlProfile::User, AzimuthExport::decide(&project));
         let starts: Vec<&ExportShot> = shots.iter().filter(|s| s.shot_type == "START").collect();
 
         assert_eq!(
@@ -4394,7 +4497,8 @@ mod tests {
             ..Default::default()
         });
 
-        let mut shots = build_export_shots(&project, TmlProfile::User);
+        let mut shots =
+            build_export_shots(&project, TmlProfile::User, AzimuthExport::decide(&project));
         assert!(ensure_rooted_chain(&shots, TmlProfile::User).is_ok());
 
         // Force the exact shape the fix prevents.
@@ -4495,7 +4599,7 @@ mod tests {
             merged_at: chrono::Utc::now(),
         });
 
-        let shots = build_export_shots(&project, TmlProfile::User);
+        let shots = build_export_shots(&project, TmlProfile::User, AzimuthExport::decide(&project));
 
         // Root: START(0), shot0(1), shot1(2). parent station 1 → ariane id 1.
         // Forward block (child shots 2,3): id=3 from_id=1, id=4 from_id=3
@@ -4597,7 +4701,7 @@ mod tests {
             merged_at: chrono::Utc::now(),
         });
 
-        let shots = build_export_shots(&project, TmlProfile::User);
+        let shots = build_export_shots(&project, TmlProfile::User, AzimuthExport::decide(&project));
 
         // Root: START(0), shot0(1), shot1(2).
         // Reversed child: shots 2,1,0 reversed → id=3 from_id=2, id=4 from_id=3, id=5 from_id=4
@@ -4714,7 +4818,7 @@ mod tests {
             merged_at: chrono::Utc::now(),
         });
 
-        let shots = build_export_shots(&project, TmlProfile::User);
+        let shots = build_export_shots(&project, TmlProfile::User, AzimuthExport::decide(&project));
 
         // A: START(0), shot0(1), shot1(2)
         // B forward (shots 1,2): id=3 from_id→1, id=4 from_id=3
@@ -4900,7 +5004,7 @@ mod tests {
         // test above, through `build_export_shots`.
         let project = closure_on_the_bound_project();
 
-        let user = build_export_shots(&project, TmlProfile::User);
+        let user = build_export_shots(&project, TmlProfile::User, AzimuthExport::decide(&project));
         let user_closure = user.iter().find(|s| s.shot_type == "CLOSURE").unwrap();
         assert_eq!(
             format_f64(user_closure.length),
@@ -4908,7 +5012,11 @@ mod tests {
             "the user export is unchanged"
         );
 
-        let sidecar = build_export_shots(&project, TmlProfile::SpeleoDbSidecar);
+        let sidecar = build_export_shots(
+            &project,
+            TmlProfile::SpeleoDbSidecar,
+            AzimuthExport::decide(&project),
+        );
         let sidecar_closure = sidecar.iter().find(|s| s.shot_type == "CLOSURE").unwrap();
         assert_eq!(format_f64(sidecar_closure.length), "1.300001");
         assert_written_chain_satisfies_speleodb(&sidecar);
@@ -4928,10 +5036,14 @@ mod tests {
             ..Default::default()
         });
 
-        let user = build_export_shots(&project, TmlProfile::User);
+        let user = build_export_shots(&project, TmlProfile::User, AzimuthExport::decide(&project));
         assert_eq!(user.len(), 1, "a shotless section exports its START alone");
 
-        let sidecar = build_export_shots(&project, TmlProfile::SpeleoDbSidecar);
+        let sidecar = build_export_shots(
+            &project,
+            TmlProfile::SpeleoDbSidecar,
+            AzimuthExport::decide(&project),
+        );
         assert_eq!(sidecar.len(), 2, "the sidecar pads the lone START");
         let pad = &sidecar[1];
         assert_eq!(pad.shot_type, "VIRTUAL", "VIRTUAL is dropped from the map");
@@ -4952,11 +5064,21 @@ mod tests {
         // Nothing else is padded: no section means no shots at all, which is
         // safe, and a project already emitting two or more is left alone.
         let empty = Project::new("Nothing".to_string(), None);
-        assert!(build_export_shots(&empty, TmlProfile::SpeleoDbSidecar).is_empty());
+        assert!(build_export_shots(
+            &empty,
+            TmlProfile::SpeleoDbSidecar,
+            AzimuthExport::decide(&empty)
+        )
+        .is_empty());
         let simple = simple_project();
         assert_eq!(
-            build_export_shots(&simple, TmlProfile::SpeleoDbSidecar).len(),
-            build_export_shots(&simple, TmlProfile::User).len()
+            build_export_shots(
+                &simple,
+                TmlProfile::SpeleoDbSidecar,
+                AzimuthExport::decide(&simple)
+            )
+            .len(),
+            build_export_shots(&simple, TmlProfile::User, AzimuthExport::decide(&simple)).len()
         );
     }
 
@@ -4975,8 +5097,12 @@ mod tests {
 
         // Every emitted shot carries one, including the closure and the START,
         // which have no section date of their own.
-        let sidecar =
-            build_export_shots(&closure_on_the_bound_project(), TmlProfile::SpeleoDbSidecar);
+        let sidecar_project = closure_on_the_bound_project();
+        let sidecar = build_export_shots(
+            &sidecar_project,
+            TmlProfile::SpeleoDbSidecar,
+            AzimuthExport::decide(&sidecar_project),
+        );
         for shot in &sidecar {
             let date = shot.date.as_deref().unwrap_or_default();
             assert!(
@@ -5093,7 +5219,12 @@ mod tests {
 
         // No datum means no anchor, in both profiles: inventing one would put
         // the survey somewhere it has never been.
-        let no_datum = build_export_shots(&simple_project(), TmlProfile::SpeleoDbSidecar);
+        let no_datum_project = simple_project();
+        let no_datum = build_export_shots(
+            &no_datum_project,
+            TmlProfile::SpeleoDbSidecar,
+            AzimuthExport::decide(&no_datum_project),
+        );
         let start = no_datum.iter().find(|s| s.shot_type == "START").unwrap();
         assert!(start.latitude.abs() < f64::EPSILON);
         assert!(start.longitude.abs() < f64::EPSILON);
@@ -5108,11 +5239,15 @@ mod tests {
         project.sections[0].name = Some("Main\u{220e}Line".to_string());
         project.sections[0].surveyor = Some("Alice\u{220e}Bob".to_string());
 
-        let user = build_export_shots(&project, TmlProfile::User);
+        let user = build_export_shots(&project, TmlProfile::User, AzimuthExport::decide(&project));
         assert_eq!(user[0].section, "Main\u{220e}Line");
         assert_eq!(user[0].explorer.as_deref(), Some("Alice\u{220e}Bob"));
 
-        let sidecar = build_export_shots(&project, TmlProfile::SpeleoDbSidecar);
+        let sidecar = build_export_shots(
+            &project,
+            TmlProfile::SpeleoDbSidecar,
+            AzimuthExport::decide(&project),
+        );
         assert_eq!(sidecar[0].section, "Main Line");
         assert_eq!(sidecar[0].explorer.as_deref(), Some("Alice Bob"));
     }
@@ -5127,11 +5262,15 @@ mod tests {
         project.sections[0].shots[0].kind = ShotKind::Jump;
         project.sections[0].shots[1].azimuth_in = 400.0;
 
-        let user = build_export_shots(&project, TmlProfile::User);
+        let user = build_export_shots(&project, TmlProfile::User, AzimuthExport::decide(&project));
         assert!((user[1].azimuth + 10.0).abs() < f64::EPSILON);
         assert!((user[2].azimuth - 400.0).abs() < f64::EPSILON);
 
-        let sidecar = build_export_shots(&project, TmlProfile::SpeleoDbSidecar);
+        let sidecar = build_export_shots(
+            &project,
+            TmlProfile::SpeleoDbSidecar,
+            AzimuthExport::decide(&project),
+        );
         assert_eq!(sidecar[1].shot_type, "VIRTUAL");
         assert!((sidecar[1].azimuth - 350.0).abs() < f64::EPSILON);
         assert!((sidecar[2].azimuth - 40.0).abs() < f64::EPSILON);
@@ -5213,7 +5352,7 @@ mod tests {
         });
 
         for profile in [TmlProfile::User, TmlProfile::SpeleoDbSidecar] {
-            let shots = build_export_shots(&project, profile);
+            let shots = build_export_shots(&project, profile, AzimuthExport::decide(&project));
             assert!(shots.len() > 8, "the topology should mint plenty of ids");
             let unique: HashSet<i64> = shots.iter().map(|s| s.id).collect();
             assert_eq!(

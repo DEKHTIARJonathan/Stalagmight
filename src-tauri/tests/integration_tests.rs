@@ -1490,7 +1490,7 @@ fn test_average_azimuth() {
             ..Default::default()
         },
     );
-    assert!((shot1.average_azimuth() - 10.0).abs() < 0.001);
+    assert!((shot1.average_azimuth_measured() - 10.0).abs() < 0.001);
 
     // Averaging with small difference
     let shot2 = Shot::new(
@@ -1504,7 +1504,7 @@ fn test_average_azimuth() {
             ..Default::default()
         },
     );
-    assert!((shot2.average_azimuth() - 10.0).abs() < 0.001);
+    assert!((shot2.average_azimuth_measured() - 10.0).abs() < 0.001);
 
     // Wraparound case - averaging around 0/360
     let shot3 = Shot::new(
@@ -1518,7 +1518,7 @@ fn test_average_azimuth() {
             ..Default::default()
         },
     );
-    assert!((shot3.average_azimuth() - 0.0).abs() < 0.001);
+    assert!((shot3.average_azimuth_measured() - 0.0).abs() < 0.001);
 }
 
 // ============================================================================

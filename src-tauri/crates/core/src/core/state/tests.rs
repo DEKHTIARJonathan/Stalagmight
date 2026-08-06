@@ -7764,6 +7764,7 @@ fn test_import_shot_updates_reject_atomically_when_one_is_poisoned() {
         shots: vec![test_shot_data(5.0), test_shot_data(6.0)],
         station_comments: Vec::new(),
         placement: ImportPlacement::Origin,
+        azimuth_reference: None,
     };
     let r = state.execute_import_sections(
         vec![seed],
@@ -7793,6 +7794,7 @@ fn test_import_shot_updates_reject_atomically_when_one_is_poisoned() {
         shots: vec![test_shot_data(3.0)],
         station_comments: Vec::new(),
         placement: ImportPlacement::Origin,
+        azimuth_reference: None,
     };
     let r = state.execute_import_sections(
         vec![incoming],
@@ -17458,6 +17460,7 @@ fn test_execute_import_sections_origin_placement() {
             shots: vec![test_shot_data(5.0)],
             station_comments: Vec::new(),
             placement: ImportPlacement::Origin,
+            azimuth_reference: None,
         },
         ImportSectionConfig {
             reverse: false,
@@ -17471,6 +17474,7 @@ fn test_execute_import_sections_origin_placement() {
             shots: vec![test_shot_data(3.0)],
             station_comments: Vec::new(),
             placement: ImportPlacement::Origin,
+            azimuth_reference: None,
         },
     ];
 
@@ -17526,6 +17530,7 @@ fn test_execute_import_sections_unresolvable_closure_is_skipped_on_receipt() {
         shots: vec![test_shot_data(5.0)],
         station_comments: Vec::new(),
         placement: ImportPlacement::Origin,
+        azimuth_reference: None,
     }];
 
     // section_index 99 never appears in `sections`, so `created_ids` never
@@ -17593,6 +17598,7 @@ fn imported_shot_kinds_survive_an_undo_redo_round_trip() {
         station_comments: Vec::new(),
         placement: ImportPlacement::Origin,
         reverse: false,
+        azimuth_reference: None,
     }];
 
     let result = state.execute_import_sections(
@@ -17647,6 +17653,7 @@ fn importing_a_second_file_leaves_existing_shot_kinds_alone() {
         station_comments: Vec::new(),
         placement: ImportPlacement::Origin,
         reverse: false,
+        azimuth_reference: None,
     };
     let reference_shot = ShotData {
         kind: ShotKind::Reference,
@@ -17739,6 +17746,7 @@ fn test_execute_import_sections_rejects_non_finite_shot_update() {
         shots: vec![test_shot_data(5.0)],
         station_comments: Vec::new(),
         placement: ImportPlacement::Origin,
+        azimuth_reference: None,
     };
     let result = state.execute_import_sections(
         vec![seed],
@@ -17766,6 +17774,7 @@ fn test_execute_import_sections_rejects_non_finite_shot_update() {
         shots: vec![test_shot_data(3.0)],
         station_comments: Vec::new(),
         placement: ImportPlacement::Origin,
+        azimuth_reference: None,
     };
     let result = state.execute_import_sections(
         vec![poisoned],
@@ -17827,6 +17836,7 @@ fn test_execute_import_sections_from_importing_placement() {
             shots: vec![test_shot_data(5.0), test_shot_data(3.0)],
             station_comments: Vec::new(),
             placement: ImportPlacement::Origin,
+            azimuth_reference: None,
         },
         ImportSectionConfig {
             reverse: false,
@@ -17844,6 +17854,7 @@ fn test_execute_import_sections_from_importing_placement() {
                 target_section_index: 0,
                 target_station_index: 1,
             },
+            azimuth_reference: None,
         },
     ];
 
@@ -17898,6 +17909,7 @@ fn test_execute_import_sections_from_existing_placement() {
             import_station: 0,
             existing_station: StationRef::new(existing_id, 2),
         },
+        azimuth_reference: None,
     }];
 
     let result = state.execute_import_sections(
@@ -17944,6 +17956,7 @@ fn test_execute_import_sections_manual_with_offset() {
                 z: 0.0,
             }),
         },
+        azimuth_reference: None,
     }];
 
     let result = state.execute_import_sections(
@@ -17995,6 +18008,7 @@ fn test_execute_import_sections_zero_datum_placement() {
             coordinates: gps,
             station_index: 0,
         },
+        azimuth_reference: None,
     }];
 
     let result = state.execute_import_sections(
@@ -18116,6 +18130,7 @@ fn test_execute_import_sections_rollback_on_failure() {
             shots: vec![test_shot_data(5.0)],
             station_comments: Vec::new(),
             placement: ImportPlacement::Origin,
+            azimuth_reference: None,
         },
         ImportSectionConfig {
             reverse: false,
@@ -18132,6 +18147,7 @@ fn test_execute_import_sections_rollback_on_failure() {
                 import_station: 0,
                 existing_station: StationRef::new(9999, 0), // nonexistent
             },
+            azimuth_reference: None,
         },
     ];
 
@@ -18194,6 +18210,7 @@ fn test_execute_import_sections_no_project() {
         shots: vec![test_shot_data(5.0)],
         station_comments: Vec::new(),
         placement: ImportPlacement::Origin,
+        azimuth_reference: None,
     }];
 
     let result = state.execute_import_sections(
@@ -18243,6 +18260,7 @@ fn test_execute_import_sections_manual_snap_placement() {
             align_station_index: 0,
             snapped_to_station: StationRef::new(existing_id, 1),
         },
+        azimuth_reference: None,
     }];
 
     let result = state.execute_import_sections(
@@ -19222,6 +19240,7 @@ fn kb5_import_overlap_interpolation_integration() {
             shots: shots_002.clone(),
             station_comments: Vec::new(),
             placement: ImportPlacement::Origin,
+            azimuth_reference: None,
         }],
         Vec::new(),
         None,
@@ -19338,6 +19357,7 @@ fn kb5_import_overlap_interpolation_integration() {
                 import_station: 105,
                 existing_station: StationRef::new(section_002_id, 182),
             },
+            azimuth_reference: None,
         }],
         Vec::new(),
         None,
@@ -23021,6 +23041,7 @@ fn gate_rejects_every_mutation_entrypoint_with_edit_disabled_code() {
                     shots: vec![test_shot_data(3.0)],
                     station_comments: Vec::new(),
                     placement: ImportPlacement::Origin,
+                    azimuth_reference: None,
                 }],
                 Vec::new(),
                 None,

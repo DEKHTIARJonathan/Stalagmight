@@ -347,6 +347,7 @@ fn import_reverse_applies_before_placement_and_comments_resolve() {
             // Station 0 of the FILE - the backend mirrors it to station 3.
             station_comments: vec![(0, "file station 0".to_string())],
             reverse: true,
+            azimuth_reference: None,
         }],
         Vec::new(),
         None,
@@ -363,7 +364,7 @@ fn import_reverse_applies_before_placement_and_comments_resolve() {
     assert_eq!(section.shots.len(), 3);
     assert_eq!(section.shots[0].length, 7.5);
     assert_eq!(section.shots[2].length, 10.0);
-    assert!((section.shots[2].average_azimuth() - 180.0).abs() < 1e-9);
+    assert!((section.shots[2].average_azimuth_measured() - 180.0).abs() < 1e-9);
 
     // Left/right are untouched on the import path - there is no dialog to ask.
     // The file's last shot (left 20.0) is now first, and its LRUD travelled with
@@ -418,6 +419,7 @@ fn import_reverse_lands_the_section_in_the_same_place() {
                 placement,
                 station_comments: Vec::new(),
                 reverse,
+                azimuth_reference: None,
             }],
             Vec::new(),
             None,
@@ -511,6 +513,7 @@ fn import_one(reverse: bool, placement: fn(SectionId) -> ImportPlacement) -> Vec
             placement: placement(anchor),
             station_comments: Vec::new(),
             reverse,
+            azimuth_reference: None,
         }],
         Vec::new(),
         None,
@@ -641,6 +644,7 @@ fn import_two(
             placement,
             station_comments: Vec::new(),
             reverse,
+            azimuth_reference: None,
         };
     let result = state.execute_import_sections(
         vec![
@@ -901,6 +905,7 @@ fn import_reverse_drops_an_out_of_range_station_comment() {
             // Two shots means stations 0..2; station 7 does not exist.
             station_comments: vec![(7, "nowhere".to_string()), (1, "the bend".to_string())],
             reverse: true,
+            azimuth_reference: None,
         }],
         Vec::new(),
         None,
@@ -1722,6 +1727,7 @@ fn importing_with_the_reverse_toggle_records_the_orientation() {
             placement: ImportPlacement::Origin,
             station_comments: Vec::new(),
             reverse: true,
+            azimuth_reference: None,
         }],
         Vec::new(),
         None,

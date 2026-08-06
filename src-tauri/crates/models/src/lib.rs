@@ -1,6 +1,8 @@
 pub mod angle;
 pub mod app_dirs;
 pub mod azimuth_reference;
+#[cfg(test)]
+mod azimuth_reference_tests;
 pub mod comment_split;
 pub mod config;
 pub mod dive_plan;

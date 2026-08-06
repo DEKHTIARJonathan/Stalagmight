@@ -9296,7 +9296,7 @@ fn shot_displacement_due_north() {
         depth_out: 0.0,
         ..Default::default()
     };
-    let (dx, dy) = Project::shot_displacement(&data);
+    let (dx, dy) = Project::shot_displacement(&data, AzimuthReference::default());
     // Average azimuth = 90° → dx ≈ 10, dy ≈ 0
     assert!(dx.abs() > 9.0, "dx={dx}, expected ~10 for avg azimuth 90°");
     assert!(dy.abs() < 1.0, "dy={dy}, expected ~0");
@@ -9312,7 +9312,7 @@ fn shot_displacement_vertical_shot_is_zero() {
         depth_out: 10.0, // pure vertical
         ..Default::default()
     };
-    let (dx, dy) = Project::shot_displacement(&data);
+    let (dx, dy) = Project::shot_displacement(&data, AzimuthReference::default());
     assert!(dx.abs() < 1e-6, "vertical shot dx should be ~0, got {dx}");
     assert!(dy.abs() < 1e-6, "vertical shot dy should be ~0, got {dy}");
 }
@@ -10041,7 +10041,7 @@ fn lsq_update_shot_horizontal_only_preserves_depth() {
     );
 
     // Update horizontal displacement to pure east (dx=5, dy=0)
-    Project::update_shot_horizontal_only(&mut s, 5.0, 0.0);
+    Project::update_shot_horizontal_only(&mut s, 5.0, 0.0, AzimuthReference::default());
 
     assert!((s.depth_in - 3.0).abs() < 1e-9, "depth_in must not change");
     assert!(
@@ -10080,7 +10080,7 @@ fn lsq_update_shot_horizontal_only_zero_displacement() {
         },
     );
 
-    Project::update_shot_horizontal_only(&mut s, 0.0, 0.0);
+    Project::update_shot_horizontal_only(&mut s, 0.0, 0.0, AzimuthReference::default());
 
     assert!(
         (s.azimuth_in - 135.0).abs() < 1e-6,
@@ -10118,7 +10118,7 @@ fn recomputed_azimuth_from_a_hair_west_of_north_stays_in_range() {
             ..Default::default()
         },
     );
-    Project::update_shot_horizontal_only(&mut s, -1e-16, 1.0);
+    Project::update_shot_horizontal_only(&mut s, -1e-16, 1.0, AzimuthReference::default());
 
     assert!(
         (0.0..360.0).contains(&s.azimuth_in) && (0.0..360.0).contains(&s.azimuth_out),
@@ -13775,7 +13775,7 @@ fn rigorous_polar_reference(
                 gi,
                 gj,
                 dist: shot.horizontal_length(),
-                az: shot.average_azimuth().to_radians(),
+                az: shot.average_azimuth_measured().to_radians(),
                 w_dist: 1.0 / (s_len * s_len),
                 w_az: 1.0 / (s_az * s_az),
             });
@@ -14535,7 +14535,7 @@ fn emit_leveling_gkf(
             if gi == gj {
                 continue;
             }
-            let az = shot.average_azimuth().to_radians();
+            let az = shot.average_azimuth_measured().to_radians();
             let len = shot.length;
             let hlen = shot.horizontal_length();
             let (val, sigma) = if axis == 0 {

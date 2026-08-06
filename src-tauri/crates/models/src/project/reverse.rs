@@ -563,11 +563,11 @@ mod tests {
         // The regression this guards: swapping azimuth_in/out alone leaves
         // average_azimuth untouched, so the section would keep its old bearings.
         let (mut project, id) = project_with_shots(vec![shot(90.0, 10.0, 0.0, 0.0)]);
-        let before = project.get_section(id).unwrap().shots[0].average_azimuth();
+        let before = project.get_section(id).unwrap().shots[0].average_azimuth_measured();
 
         assert!(project.reverse_section(id, false));
 
-        let after = project.get_section(id).unwrap().shots[0].average_azimuth();
+        let after = project.get_section(id).unwrap().shots[0].average_azimuth_measured();
         assert!(
             (after - 270.0).abs() < 1e-9,
             "expected reciprocal bearing 270, got {after}"
@@ -693,12 +693,12 @@ mod tests {
         data.azimuth_out = 210.0;
         let (mut project, id) = project_with_shots(vec![data]);
 
-        let before = project.get_section(id).unwrap().shots[0].average_azimuth();
+        let before = project.get_section(id).unwrap().shots[0].average_azimuth_measured();
         let world_before = world_coords(&project, id);
 
         assert!(project.reverse_section(id, false));
 
-        let after = project.get_section(id).unwrap().shots[0].average_azimuth();
+        let after = project.get_section(id).unwrap().shots[0].average_azimuth_measured();
         assert!(
             (after - reciprocal(before)).abs() < 1e-9,
             "bearing did not turn around: {before} -> {after}"
@@ -771,9 +771,9 @@ mod tests {
         data.azimuth_out = 209.5;
         let (mut project, id) = project_with_shots(vec![data]);
 
-        let before = project.get_section(id).unwrap().shots[0].average_azimuth();
+        let before = project.get_section(id).unwrap().shots[0].average_azimuth_measured();
         assert!(project.reverse_section(id, false));
-        let after = project.get_section(id).unwrap().shots[0].average_azimuth();
+        let after = project.get_section(id).unwrap().shots[0].average_azimuth_measured();
 
         assert!(
             (after - reciprocal(before)).abs() < 1e-9,
@@ -886,7 +886,7 @@ mod tests {
     fn reverse_refuses_to_write_a_non_finite_offset() {
         let (mut project, id) = project_with_shots(vec![shot(0.0, 1e200, 0.0, 0.0)]);
         assert!(
-            shot_run_displacement(&[shot(0.0, 1e200, 0.0, 0.0)])
+            shot_run_displacement(&[shot(0.0, 1e200, 0.0, 0.0)], AzimuthReference::default())
                 .0
                 .is_nan(),
             "precondition: this fixture must actually overflow to a non-finite \
@@ -1021,7 +1021,7 @@ mod tests {
         let coords = world_coords(&project, id);
         let walked = (coords[1].0 - coords[0].0, coords[1].1 - coords[0].1);
 
-        let (dx, dy) = Project::shot_displacement(&data);
+        let (dx, dy) = Project::shot_displacement(&data, AzimuthReference::default());
         assert!(
             (dx - walked.0).abs() < 1e-9 && (dy - walked.1).abs() < 1e-9,
             "shot_displacement {:?} disagrees with the coordinate walk {walked:?}",
@@ -1029,7 +1029,7 @@ mod tests {
         );
         // And with the reverse's own run-displacement helper, which the import
         // toggle and the in-app reverse both use to keep the cave still.
-        let (rx, ry) = shot_run_displacement(&[data]);
+        let (rx, ry) = shot_run_displacement(&[data], AzimuthReference::default());
         assert!((dx - rx).abs() < 1e-9 && (dy - ry).abs() < 1e-9);
     }
 

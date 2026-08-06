@@ -1421,6 +1421,7 @@ mod tests {
             id,
             name: name.to_string(),
             shots,
+            azimuth_reference: AzimuthReference::default(),
         }
     }
 
@@ -2139,6 +2140,7 @@ mod tests {
 
         let suggestions = suggest_placements(
             &import_shots,
+            AzimuthReference::default(),
             &existing,
             &PlacementSuggestionConfig::default(),
         );
@@ -2180,6 +2182,7 @@ mod tests {
 
         let suggestions = suggest_placements(
             &import_shots,
+            AzimuthReference::default(),
             &existing,
             &PlacementSuggestionConfig::default(),
         );
@@ -2217,6 +2220,7 @@ mod tests {
 
         let suggestions = suggest_placements(
             &import_shots,
+            AzimuthReference::default(),
             &existing,
             &PlacementSuggestionConfig::default(),
         );
@@ -2241,8 +2245,12 @@ mod tests {
     #[test]
     fn no_suggestions_for_empty_project() {
         let import_shots = vec![make_shot_data(90.0, 90.0, 5.0, 3.0, 4.0)];
-        let suggestions =
-            suggest_placements(&import_shots, &[], &PlacementSuggestionConfig::default());
+        let suggestions = suggest_placements(
+            &import_shots,
+            AzimuthReference::default(),
+            &[],
+            &PlacementSuggestionConfig::default(),
+        );
         assert!(suggestions.is_empty());
     }
 
@@ -2253,7 +2261,12 @@ mod tests {
             "Test",
             vec![make_shot(0, 90.0, 90.0, 5.0, 3.0, 4.0)],
         )];
-        let suggestions = suggest_placements(&[], &existing, &PlacementSuggestionConfig::default());
+        let suggestions = suggest_placements(
+            &[],
+            AzimuthReference::default(),
+            &existing,
+            &PlacementSuggestionConfig::default(),
+        );
         assert!(suggestions.is_empty());
     }
 
@@ -2273,6 +2286,7 @@ mod tests {
         )];
         let suggestions = suggest_placements(
             &import_shots,
+            AzimuthReference::default(),
             &existing,
             &PlacementSuggestionConfig::default(),
         );
@@ -2313,6 +2327,7 @@ mod tests {
 
         let suggestions = suggest_placements(
             &import_shots,
+            AzimuthReference::default(),
             &existing,
             &PlacementSuggestionConfig::default(),
         );
@@ -2342,6 +2357,7 @@ mod tests {
 
         let suggestions = suggest_placements(
             &import_shots,
+            AzimuthReference::default(),
             &existing,
             &PlacementSuggestionConfig::default(),
         );
@@ -2363,6 +2379,7 @@ mod tests {
 
         let suggestions = suggest_placements(
             &import_shots,
+            AzimuthReference::default(),
             &existing,
             &PlacementSuggestionConfig::default(),
         );
@@ -2388,8 +2405,9 @@ mod tests {
         existing_shots.push(make_shot(15, 41.0, 45.0, 3.74, 18.02, 18.04));
 
         let config = SuggestionConfig::default();
-        let import_match = MatchShot::from_shot_data(&import_shots[0]);
-        let existing_match = MatchShot::from_shot(&existing_shots[15]);
+        let reference = AzimuthReference::default();
+        let import_match = MatchShot::from_shot_data(&import_shots[0], reference);
+        let existing_match = MatchShot::from_shot(&existing_shots[15], reference);
         let single_score = compute_single_shot_score(
             &import_match,
             &existing_match,
@@ -2401,8 +2419,10 @@ mod tests {
             "fixture shot should pass the one-shot scorer"
         );
         let import_trace = section_trace_points(&[import_match]);
-        let existing_match_shots: Vec<MatchShot> =
-            existing_shots.iter().map(MatchShot::from_shot).collect();
+        let existing_match_shots: Vec<MatchShot> = existing_shots
+            .iter()
+            .map(|s| MatchShot::from_shot(s, reference))
+            .collect();
         let existing_trace = section_trace_points(&existing_match_shots);
         assert!(
             placement_crossing_clearance_ok(
@@ -2418,6 +2438,7 @@ mod tests {
 
         let suggestions = suggest_placements(
             &import_shots,
+            AzimuthReference::default(),
             &[make_section(1, "AC3", existing_shots)],
             &PlacementSuggestionConfig::default(),
         );
@@ -2451,6 +2472,7 @@ mod tests {
 
         let suggestions = suggest_placements(
             &import_shots,
+            AzimuthReference::default(),
             &existing,
             &PlacementSuggestionConfig::default(),
         );
@@ -2477,6 +2499,7 @@ mod tests {
 
         let suggestions = suggest_placements(
             &import_shots,
+            AzimuthReference::default(),
             &existing,
             &PlacementSuggestionConfig::default(),
         );
@@ -2809,6 +2832,7 @@ mod tests {
 
         let suggestions = suggest_placements(
             &import_shots,
+            AzimuthReference::default(),
             &existing,
             &PlacementSuggestionConfig::default(),
         );
