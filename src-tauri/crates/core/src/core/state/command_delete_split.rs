@@ -99,6 +99,11 @@ impl AppState {
             let color = section.color.clone();
             let direction = section.direction;
             let quality = section.quality;
+            // Section B is the same survey, so it keeps the same north reference
+            // (#438) - `SectionData` cannot carry it, so it is copied explicitly
+            // below, exactly like the metadata above.
+            let azimuth_reference = section.azimuth_reference;
+            let resolved_reference = project.azimuth_reference_for_id(section_id);
 
             // Stable-identity remap snapshot: resolve every stored cross-reference
             // to its CURRENT positional ref BEFORE we mutate the section.
@@ -134,8 +139,7 @@ impl AppState {
             let mut by: f64 = 0.0;
             for shot_data in &shots_before {
                 let temp_shot = crate::models::Shot::new(0, shot_data.clone());
-                let avg_az = temp_shot.average_azimuth();
-                let azimuth_rad = avg_az.to_radians();
+                let azimuth_rad = temp_shot.average_azimuth_true_rad(resolved_reference);
                 let horizontal = temp_shot.horizontal_length();
                 bx += horizontal * azimuth_rad.sin();
                 by += horizontal * azimuth_rad.cos();
@@ -143,7 +147,7 @@ impl AppState {
             // Add deleted shot
             {
                 let deleted_shot = crate::models::Shot::new(0, deleted_shot_data);
-                let azimuth_rad = deleted_shot.average_azimuth().to_radians();
+                let azimuth_rad = deleted_shot.average_azimuth_true_rad(resolved_reference);
                 let horizontal = deleted_shot.horizontal_length();
                 bx += horizontal * azimuth_rad.sin();
                 by += horizontal * azimuth_rad.cos();
@@ -168,6 +172,9 @@ impl AppState {
 
             let section_b = project.add_section(section_b_data);
             let new_id = section_b.id;
+            if let Some(section_b) = project.get_section_mut(new_id) {
+                section_b.azimuth_reference = azimuth_reference;
+            }
 
             // Set section B offset
             project.set_section_offset(new_id, (section_ox + bx, section_oy + by));
@@ -368,6 +375,8 @@ impl AppState {
             let color = section.color.clone();
             let direction = section.direction;
             let quality = section.quality;
+            // Same survey, same north reference (#438); see the single-shot path.
+            let azimuth_reference = section.azimuth_reference;
 
             // Frozen-geometry guard (mirrors delete_shot).
             for &sid in &range_shot_ids {
@@ -419,9 +428,10 @@ impl AppState {
             // Section B offset = section offset + displacement of (before ++ deleted).
             let mut bx: f64 = 0.0;
             let mut by: f64 = 0.0;
+            let resolved_reference = project.azimuth_reference_for_id(section_id);
             for shot_data in shots_before.iter().chain(deleted_shots_data.iter()) {
                 let temp_shot = crate::models::Shot::new(0, shot_data.clone());
-                let azimuth_rad = temp_shot.average_azimuth().to_radians();
+                let azimuth_rad = temp_shot.average_azimuth_true_rad(resolved_reference);
                 let horizontal = temp_shot.horizontal_length();
                 bx += horizontal * azimuth_rad.sin();
                 by += horizontal * azimuth_rad.cos();
@@ -439,6 +449,9 @@ impl AppState {
             };
             let section_b = project.add_section(section_b_data);
             let new_id = section_b.id;
+            if let Some(section_b) = project.get_section_mut(new_id) {
+                section_b.azimuth_reference = azimuth_reference;
+            }
             project.set_section_offset(new_id, (section_ox + bx, section_oy + by));
 
             // Remap cross-refs across the split: stations at index >= split_station

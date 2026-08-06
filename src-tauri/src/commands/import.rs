@@ -639,12 +639,16 @@ pub fn suggest_import_placement(
                 .clone()
                 .unwrap_or_else(|| format!("Section {}", s.id)),
             shots: s.shots.clone(),
+            azimuth_reference: project.azimuth_reference_for(s),
         })
         .collect();
 
     let config = state.get_config();
     Ok(suggest_placements(
         &shots,
+        // The incoming shots are not in the project yet, so the only reference
+        // on record for them is the project default (#438).
+        project.default_azimuth_reference.unwrap_or_default(),
         &existing_sections,
         &config.placement_suggestion,
     ))
@@ -668,14 +672,20 @@ pub fn suggest_all_import_placements(
                     .clone()
                     .unwrap_or_else(|| format!("Section {}", s.id)),
                 shots: s.shots.clone(),
+                azimuth_reference: project.azimuth_reference_for(s),
             })
             .collect(),
         None => Vec::new(),
     };
+    let import_reference = state
+        .get_project_state()
+        .and_then(|p| p.default_azimuth_reference)
+        .unwrap_or_default();
 
     let config = state.get_config();
     Ok(suggest_all_placements(
         &import_sections,
+        import_reference,
         &existing_sections,
         &config.placement_suggestion,
     ))

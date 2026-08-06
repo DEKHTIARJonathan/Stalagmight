@@ -20,6 +20,7 @@ use std::collections::{HashMap, VecDeque};
 use std::path::Path;
 
 use anyhow::{anyhow, Result};
+use chrono::Datelike;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
@@ -28,6 +29,7 @@ use compass_data::{
     LengthUnits, Project, Shot, Survey,
 };
 
+use crate::models::azimuth_reference::{AzimuthReference, CorrectionSource};
 use crate::models::section::{ImportClosure, ImportPlacement, ImportSectionConfig};
 use crate::models::shot::{ShotData, ShotKind};
 use crate::models::station::GpsCoordinates;
@@ -482,8 +484,15 @@ pub fn build_preview(parsed: &ParsedCompass) -> CompassFile {
 
 /// Per-survey geometry context (corrections, units, declination, convergence).
 struct SurveyCtx {
-    declination: f64,
-    convergence_angle: f64,
+    /// What this survey's readings are measured against and what has to be
+    /// ADDED to reach the frame geometry draws in (#438).
+    ///
+    /// Replaces the old `declination` / `convergence_angle` pair, which
+    /// `shot_geometry` folded into every azimuth. The readings now land in the
+    /// project exactly as the file recorded them and this rides on the section.
+    /// The correction is still `declination - convergence`, so a Compass project
+    /// renders exactly where it did before.
+    azimuth_reference: AzimuthReference,
     length_to_m: f64,
     apply_corrections: bool,
     corrections: Option<CorrectionFactors>,
@@ -602,7 +611,9 @@ fn shot_geometry(shot: &Shot, ctx: &SurveyCtx) -> (f64, f64, f64) {
             length += cf.length;
         }
     }
-    let azimuth_final = (azimuth + ctx.declination - ctx.convergence_angle).rem_euclid(360.0);
+    // #438: measured, not corrected. The survey's declination and convergence
+    // live on `ctx.azimuth_reference` and are applied when geometry is computed.
+    let azimuth_final = azimuth.rem_euclid(360.0);
     let length_m = length * ctx.length_to_m;
     // Single normalisation point: convert whatever Compass unit the
     // survey declared into degrees so the rest of the pipeline
@@ -690,10 +701,10 @@ fn shot_backsight_geometry(shot: &Shot, ctx: &SurveyCtx) -> Option<(f64, f64)> {
             slope_length_raw += cf.length;
         }
     }
-    // Declination + convergence (same as fore).
-    let back_az_grid = (back_az + ctx.declination - ctx.convergence_angle).rem_euclid(360.0);
+    // Measured, like the fore-sight (#438): no declination or convergence here.
+    let back_az_measured = back_az.rem_euclid(360.0);
     // Flip 180° so the bearing points FROM → TO, matching azimuth_in.
-    let azimuth_out_fore_direction = (back_az_grid + 180.0).rem_euclid(360.0);
+    let azimuth_out_fore_direction = (back_az_measured + 180.0).rem_euclid(360.0);
     // Convert the back-inclination into degrees first - Grads / DDD.MM /
     // PercentGrade / DepthGauge are NOT pass-through.  After conversion,
     // back_inc_deg is the TO→FROM slope in Compass +up; the double sign
@@ -788,7 +799,7 @@ fn build_ctx(
             survey.name
         ));
     }
-    let mut declination = survey_declination(
+    let (mut declination, declination_source) = survey_declination(
         file_state.declination_mode,
         survey,
         anchor_lat_lng,
@@ -827,9 +838,16 @@ fn build_ctx(
             sanitize("backsight inclination correction", &mut bcf.inclination);
         }
     }
+    // #438: what the file said, recorded rather than baked in. The correction
+    // is `declination - convergence` - the exact quantity `shot_geometry` used
+    // to add to every reading - so geometry is unchanged and the readings are
+    // now the ones the surveyor wrote down. `north` stays Magnetic because that
+    // is what the STORED numbers are; the convergence rides in the correction so
+    // a UTM-referenced Compass project keeps drawing in the frame it declared.
+    let azimuth_reference =
+        AzimuthReference::magnetic(declination - convergence_angle, declination_source);
     SurveyCtx {
-        declination,
-        convergence_angle,
+        azimuth_reference,
         length_to_m,
         apply_corrections: opts.apply_corrections,
         corrections,
@@ -896,25 +914,41 @@ fn inclination_to_degrees(raw: f64, units: &InclinationUnits, slope_length_raw: 
     }
 }
 
+/// The survey's declination and where the number came from (#438: the
+/// provenance is recorded on the section, so the UI can explain the value and a
+/// later policy change knows which sections it may recompute).
 fn survey_declination(
     mode: DeclinationMode,
     survey: &Survey,
     anchor_lat_lng: Option<(f64, f64)>,
     warnings: &mut Vec<String>,
-) -> f64 {
+) -> (f64, CorrectionSource) {
     match mode {
-        DeclinationMode::Ignore => 0.0,
-        DeclinationMode::Entered => survey.parameters.declination,
+        // The file declares "do not correct". That is a declaration, not an
+        // absence of one, so it is FileDeclared rather than Unknown.
+        DeclinationMode::Ignore => (0.0, CorrectionSource::FileDeclared),
+        DeclinationMode::Entered => (
+            survey.parameters.declination,
+            CorrectionSource::FileDeclared,
+        ),
         DeclinationMode::Auto => match anchor_lat_lng {
             Some((lat, lng)) => {
                 match crate::parsers::geo::igrf_declination(lat, lng, survey.date) {
-                    Ok(value) => value,
+                    Ok(value) => (
+                        value,
+                        CorrectionSource::IgrfAuto {
+                            epoch_year: survey.date.year(),
+                        },
+                    ),
                     Err(reason) => {
                         warnings.push(format!(
                             "Survey '{}': auto declination failed ({reason}); using entered value",
                             survey.name
                         ));
-                        survey.parameters.declination
+                        (
+                            survey.parameters.declination,
+                            CorrectionSource::FileDeclared,
+                        )
                     }
                 }
             }
@@ -923,7 +957,10 @@ fn survey_declination(
                     "Survey '{}': auto declination needs a georeference; using entered value",
                     survey.name
                 ));
-                survey.parameters.declination
+                (
+                    survey.parameters.declination,
+                    CorrectionSource::FileDeclared,
+                )
             }
         },
     }
@@ -1275,6 +1312,9 @@ pub fn convert_compass_to_import_configs(
         label: String,
         surveyor: Option<String>,
         date: chrono::NaiveDate,
+        /// The survey's north reference (#438). Per-SECTION because Compass
+        /// declares the declination per survey and can change mode mid-file.
+        azimuth_reference: AzimuthReference,
     }
     let mut chains: Vec<PendingChain> = Vec::new();
     for kept_survey in &kept {
@@ -1324,6 +1364,7 @@ pub fn convert_compass_to_import_configs(
                 label: section_label(kept_survey.survey, multi, chain_idx),
                 surveyor: non_empty(&kept_survey.survey.team),
                 date: kept_survey.survey.date,
+                azimuth_reference: kept_survey.ctx.azimuth_reference,
             });
         }
     }
@@ -1505,6 +1546,7 @@ pub fn convert_compass_to_import_configs(
             shots: chain.shots.clone(),
             placement: p,
             station_comments: chain.station_comments.clone(),
+            azimuth_reference: Some(chain.azimuth_reference),
         });
     }
 

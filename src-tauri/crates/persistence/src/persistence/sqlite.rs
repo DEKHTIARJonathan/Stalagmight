@@ -80,7 +80,19 @@ use std::path::Path;
 /// field as an explicit `null`, which now reads as "clear the field". The
 /// migration drops the persisted undo/redo stacks for the same reason v7 did;
 /// see the v17 arm of `ensure_schema_version`.
-const SCHEMA_VERSION: i32 = 17;
+///
+/// v18 adds four additive, nullable `sections` columns - `azimuth_north`,
+/// `azimuth_correction`, `azimuth_source`, `azimuth_epoch_year` - plus the
+/// optional `project_settings` key `default_azimuth_reference` (#438: the
+/// stored azimuth is the measured one, and the section declares how it relates
+/// to true north). All NULL, which is what an existing file has after the
+/// `ALTER`, means "no reference recorded" and resolves to a ZERO correction, so
+/// an upgraded file computes exactly the geometry it did before - the property
+/// that makes this bump safe without a data migration. No column changes to any
+/// fenced table, so the carry-forward fence is unaffected, and the persisted
+/// undo payloads keep their meaning (`SectionIdentity` gained an OPTIONAL field,
+/// absent in every pre-v18 entry), so the stacks are NOT dropped.
+const SCHEMA_VERSION: i32 = 18;
 
 /// Schema version at which persisted undo/redo payloads became safe to replay.
 ///

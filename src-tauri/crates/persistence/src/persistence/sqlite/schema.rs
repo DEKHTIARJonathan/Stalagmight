@@ -103,6 +103,36 @@ impl Database {
             }
         }
 
+        // Add the north-reference quartet to sections if absent (#438, v17 -> v18).
+        // All four nullable and NULL by default: that is "no reference recorded",
+        // which resolves to a 0 correction, so an existing file computes exactly
+        // the geometry it did before the columns existed.
+        for (column, decl) in [
+            ("azimuth_north", "TEXT"),
+            ("azimuth_correction", "REAL"),
+            ("azimuth_source", "TEXT"),
+            ("azimuth_epoch_year", "INTEGER"),
+        ] {
+            let present: bool = self
+                .conn
+                .query_row(
+                    &format!(
+                        "SELECT COUNT(*) FROM pragma_table_info('sections') WHERE name='{column}'"
+                    ),
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .map(|c| c > 0)
+                .unwrap_or(false);
+            if !present {
+                self.conn.execute(
+                    &format!("ALTER TABLE sections ADD COLUMN {column} {decl}"),
+                    [],
+                )?;
+                tracing::info!(column, "Added azimuth-reference column to sections table");
+            }
+        }
+
         // Add reverse_parity to sections if absent (#24). Flips on every section reverse; the
         // least-squares gauge reads it to keep pinning the same physical station. Default 0 is
         // exactly right for an existing file - it means "station 0", which is where the gauge
@@ -1329,6 +1359,10 @@ impl Database {
                 reverse_parity INTEGER NOT NULL DEFAULT 0,
                 gauge_shot_uuid TEXT,
                 gauge_neighbour_uuid TEXT,
+                azimuth_north TEXT,
+                azimuth_correction REAL,
+                azimuth_source TEXT,
+                azimuth_epoch_year INTEGER,
                 created_at TEXT NOT NULL
             );
 

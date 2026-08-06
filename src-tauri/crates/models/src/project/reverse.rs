@@ -46,7 +46,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::{normalize_azimuth, SectionId, Shot, ShotData, StationKey, StationRef};
+use crate::{normalize_azimuth, AzimuthReference, SectionId, Shot, ShotData, StationKey, StationRef};
 
 use super::Project;
 
@@ -81,10 +81,15 @@ fn readings_are_antipodal(azimuth_in: f64, azimuth_out: f64) -> bool {
 /// still - station 0 becomes the far end, so the anchor moves by the span the
 /// section used to cover. Shared by the in-app reverse and the import-time
 /// toggle so the two placements can never disagree.
-pub fn shot_run_displacement(shots: &[ShotData]) -> (f64, f64) {
+///
+/// `reference` is the section's north reference (#438): the displacement has to
+/// be measured in the same rotated frame the coordinate walk uses, or a reverse
+/// of a section carrying a declination compensates by a vector that is off by
+/// exactly that rotation - and the section slides.
+pub fn shot_run_displacement(shots: &[ShotData], reference: AzimuthReference) -> (f64, f64) {
     let (mut dx, mut dy) = (0.0_f64, 0.0_f64);
     for shot in shots {
-        let azimuth_rad = shot.average_azimuth().to_radians();
+        let azimuth_rad = shot.average_azimuth_true_rad(reference);
         let horizontal = shot.horizontal_length();
         dx += horizontal * azimuth_rad.sin();
         dy += horizontal * azimuth_rad.cos();
@@ -304,7 +309,7 @@ impl Project {
 
         // Measured on the PRE-reverse order, so it is the offset the anchor has
         // to gain below once station 0 becomes the far end.
-        let (dx, dy) = shot_run_displacement(&data);
+        let (dx, dy) = shot_run_displacement(&data, self.azimuth_reference_for(section));
 
         // ---- Mutate the shots ----------------------------------------------
         reverse_shots(&mut data, swap_lr);

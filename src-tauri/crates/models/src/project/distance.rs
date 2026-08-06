@@ -931,6 +931,7 @@ impl Project {
                     .clone()
                     .unwrap_or_else(|| format!("Section {}", s.id)),
                 shots: s.shots.clone(),
+                azimuth_reference: self.azimuth_reference_for(s),
             })
             .collect();
 
@@ -1062,9 +1063,16 @@ impl Project {
                             .collect()
                     };
 
-                    // 5. Run suggest_placements for this leaf against target sections
-                    let placement_suggestions =
-                        suggest_placements(&leaf_shots, &component_targets, ps_config);
+                    // 5. Run suggest_placements for this leaf against the
+                    // component's targets. The "import" side here is an existing
+                    // ORPHAN section, so its own reference is on record (#438) -
+                    // unlike the wizard path.
+                    let placement_suggestions = suggest_placements(
+                        &leaf_shots,
+                        self.azimuth_reference_for(section),
+                        &component_targets,
+                        ps_config,
+                    );
 
                     for ps in placement_suggestions {
                         // Only keep matches from the terminal end (import station 0).

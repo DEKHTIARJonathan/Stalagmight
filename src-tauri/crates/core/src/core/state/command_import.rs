@@ -717,8 +717,18 @@ impl AppState {
             // the section outright, so for those it is inert - it is `Origin` and
             // `Manual` (which position station 0 directly) that would otherwise
             // silently move.
+            // The section does not exist yet, so its north reference is the one
+            // the importer declared on the config, falling back to the project
+            // default - the same value written onto the section below (#438).
+            // The compensation has to be measured in that frame, because the
+            // coordinate walk it cancels is.
+            let azimuth_reference = config.azimuth_reference.unwrap_or_else(|| {
+                self.get_project_state()
+                    .and_then(|p| p.default_azimuth_reference)
+                    .unwrap_or_default()
+            });
             let reverse_offset = config.reverse.then(|| {
-                let displacement = crate::models::shot_run_displacement(&shots);
+                let displacement = crate::models::shot_run_displacement(&shots, azimuth_reference);
                 crate::models::reverse_shots(&mut shots, false);
                 displacement
             });
@@ -757,12 +767,20 @@ impl AppState {
             // side of a shot a terminal station sits on - leaving it false here would make two
             // geometrically identical projects ("import then reverse" vs "import with the
             // toggle") disagree about that, and about which end the least-squares gauge pins.
-            if config.reverse {
+            if config.reverse || config.azimuth_reference.is_some() {
                 if let Ok(mut guard) = self.project.lock() {
                     if let Some(section) =
                         guard.as_mut().and_then(|p| p.get_section_mut(section_id))
                     {
-                        section.reverse_parity = !section.reverse_parity;
+                        if config.reverse {
+                            section.reverse_parity = !section.reverse_parity;
+                        }
+                        // #438: what the file said its azimuths are measured
+                        // against. Written here because `SectionData` cannot
+                        // carry it through `create_section`.
+                        if config.azimuth_reference.is_some() {
+                            section.azimuth_reference = config.azimuth_reference;
+                        }
                     }
                 }
             }

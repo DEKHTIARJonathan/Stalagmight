@@ -12,7 +12,20 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use crate::models::geo::{haversine_distance, initial_bearing};
-use crate::models::{GpsCoordinates, ImportPlacement, ImportSectionConfig, ShotData, ShotKind};
+use crate::models::{
+    AzimuthReference, CorrectionSource, GpsCoordinates, ImportPlacement, ImportSectionConfig,
+    ShotData, ShotKind,
+};
+
+/// GPX bearings are derived from coordinates (`initial_bearing`), so they are
+/// TRUE north by construction - no instrument, no declination (#438). Declaring
+/// it keeps a GPX track in the same frame as a corrected magnetic survey rather
+/// than inheriting a project default that would rotate it.
+const GPX_AZIMUTH_REFERENCE: AzimuthReference = AzimuthReference {
+    north: crate::models::NorthReference::True,
+    correction: 0.0,
+    source: CorrectionSource::FileDeclared,
+};
 use crate::parsers::encoding::read_utf8;
 
 // ============================================================================
@@ -823,6 +836,7 @@ pub fn waypoints_to_import_configs(
                 station_index: 0,
             },
             station_comments,
+            azimuth_reference: Some(GPX_AZIMUTH_REFERENCE),
         });
     }
 
@@ -856,6 +870,7 @@ fn track_segment_to_config(
         shots: shots_from_points(&points, depth_inverted),
         placement,
         station_comments: Vec::new(),
+        azimuth_reference: Some(GPX_AZIMUTH_REFERENCE),
     }
 }
 
@@ -885,6 +900,7 @@ fn route_to_config(
         shots: shots_from_points(&points, depth_inverted),
         placement,
         station_comments: Vec::new(),
+        azimuth_reference: Some(GPX_AZIMUTH_REFERENCE),
     }
 }
 

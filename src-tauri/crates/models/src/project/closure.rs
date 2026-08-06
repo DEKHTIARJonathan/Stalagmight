@@ -3,7 +3,8 @@ use tracing::{debug, error, trace, warn};
 
 use crate::config::ClosureAdjustmentConfig;
 use crate::{
-    normalize_azimuth, ClosureStrategy, Coordinates, LoopClosure, SectionId, Shot, StationRef,
+    normalize_azimuth, AzimuthReference, ClosureStrategy, Coordinates, LoopClosure, SectionId,
+    Shot, StationRef,
 };
 
 use super::{PathEdge, Project, StationPath};
@@ -29,8 +30,15 @@ impl Project {
         (a.x - b.x).abs() < eps && (a.y - b.y).abs() < eps && (a.z - b.z).abs() < eps
     }
 
-    pub(super) fn shot_vector_along(shot: &Shot, forward: bool) -> Coordinates {
-        let azimuth_rad = shot.average_azimuth().to_radians();
+    /// The shot's displacement in WORLD (true-north) space, which is the frame
+    /// the solver and every coordinate consumer work in - so `reference` is the
+    /// section's, applied here once (#438).
+    pub(super) fn shot_vector_along(
+        shot: &Shot,
+        forward: bool,
+        reference: AzimuthReference,
+    ) -> Coordinates {
+        let azimuth_rad = shot.average_azimuth_true_rad(reference);
         let horizontal = shot.horizontal_length();
         let dx = horizontal * azimuth_rad.sin();
         let dy = horizontal * azimuth_rad.cos();
@@ -44,12 +52,25 @@ impl Project {
 
     /// Update only the horizontal geometry of a shot (azimuth and slope length)
     /// from a solved horizontal displacement, preserving original depths and pitch.
-    pub(super) fn update_shot_horizontal_only(shot: &mut Shot, dx: f64, dy: f64) {
+    ///
+    /// `dx`/`dy` are WORLD displacement, so the bearing they imply is a true-north
+    /// one and has to be turned back into a MEASURED reading before it is stored
+    /// (#438) - a shot always holds what the instrument read. Skipping the
+    /// inverse would rotate the section by one declination per adjustment, and
+    /// the adjustment is re-runnable.
+    pub(super) fn update_shot_horizontal_only(
+        shot: &mut Shot,
+        dx: f64,
+        dy: f64,
+        reference: AzimuthReference,
+    ) {
         let horizontal = (dx * dx + dy * dy).sqrt();
         let new_azi = if horizontal > 1e-9 {
-            normalize_azimuth(dx.atan2(dy).to_degrees())
+            reference.to_measured(normalize_azimuth(dx.atan2(dy).to_degrees()))
         } else {
-            shot.average_azimuth()
+            // Already a measured value - the degenerate branch keeps the shot's
+            // own reading rather than inventing a bearing from a zero vector.
+            shot.average_azimuth_measured()
         };
         let dz = shot.depth_out - shot.depth_in;
         shot.length = (horizontal * horizontal + dz * dz).sqrt();
@@ -208,6 +229,10 @@ impl Project {
         let total_dy = existing.1 + delta.y;
         let total_dz = existing.2 + delta.z;
 
+        // Resolved before the `&mut` borrow of `sections` below, which rules out
+        // reading the project default afterwards (#438).
+        let azimuth_reference = self.azimuth_reference_for_id(station_ref.section_id);
+
         let Some(section) = self
             .sections
             .iter_mut()
@@ -243,7 +268,7 @@ impl Project {
 
         if idx > 0 {
             if let Some(shot) = section.shots.get_mut(idx - 1) {
-                let azi_rad = shot.average_azimuth().to_radians();
+                let azi_rad = shot.average_azimuth_true_rad(azimuth_reference);
                 let old_horizontal = shot.horizontal_length();
                 let old_dx = old_horizontal * azi_rad.sin();
                 let old_dy = old_horizontal * azi_rad.cos();
@@ -253,9 +278,11 @@ impl Project {
                 let new_dz = (shot.depth_out + total_dz) - shot.depth_in;
                 let new_len = (new_horizontal * new_horizontal + new_dz * new_dz).sqrt();
                 let new_azi = if new_horizontal > 1e-9 {
-                    normalize_azimuth(new_dx.atan2(new_dy).to_degrees())
+                    // World bearing back to a measured reading (#438).
+                    azimuth_reference
+                        .to_measured(normalize_azimuth(new_dx.atan2(new_dy).to_degrees()))
                 } else {
-                    shot.average_azimuth()
+                    shot.average_azimuth_measured()
                 };
                 shot.length = new_len;
                 shot.azimuth_in = new_azi;
@@ -268,7 +295,7 @@ impl Project {
         }
 
         if let Some(shot) = section.shots.get_mut(idx) {
-            let azi_rad = shot.average_azimuth().to_radians();
+            let azi_rad = shot.average_azimuth_true_rad(azimuth_reference);
             let old_horizontal = shot.horizontal_length();
             let old_dx = old_horizontal * azi_rad.sin();
             let old_dy = old_horizontal * azi_rad.cos();
@@ -278,9 +305,9 @@ impl Project {
             let new_dz = shot.depth_out - (shot.depth_in + total_dz);
             let new_len = (new_horizontal * new_horizontal + new_dz * new_dz).sqrt();
             let new_azi = if new_horizontal > 1e-9 {
-                normalize_azimuth(new_dx.atan2(new_dy).to_degrees())
+                azimuth_reference.to_measured(normalize_azimuth(new_dx.atan2(new_dy).to_degrees()))
             } else {
-                shot.average_azimuth()
+                shot.average_azimuth_measured()
             };
             shot.length = new_len;
             shot.azimuth_in = new_azi;
@@ -402,6 +429,9 @@ impl Project {
 
         let mut targets: HashMap<StationRef, Coordinates> = HashMap::new();
         let section_lookup = self.build_section_lookup();
+        // Owned (values are `Copy`) so the path closure below does not have to
+        // hold a `&self` borrow into the mutation phase that follows (#438).
+        let azimuth_references = self.azimuth_reference_map();
 
         let apply_path_targets = |path: &StationPath,
                                   start_coords: Coordinates,
@@ -439,7 +469,14 @@ impl Project {
                             .shots
                             .get(shot_index)
                             .ok_or_else(|| "Shot not found for closure path".to_string())?;
-                        let mut v = Self::shot_vector_along(shot, forward);
+                        let mut v = Self::shot_vector_along(
+                            shot,
+                            forward,
+                            azimuth_references
+                                .get(&section_id)
+                                .copied()
+                                .unwrap_or_default(),
+                        );
                         let weight = if strategy == ClosureStrategy::ProportionalByLength {
                             shot.length / total_len
                         } else {
