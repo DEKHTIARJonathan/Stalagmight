@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { useUIStore } from '../store/uiStore';
 import { useProjectStore } from '../store/projectStore';
 import { useGasPlanStore } from '../store/gasPlanStore';
+import { useShallow } from 'zustand/react/shallow';
 import { isEditingBlockedNow } from './useEditingBlocked';
 import { isNonInteractiveTool, navigationToolsEnabled } from '../utils/toolUtils';
 import { normalizeShortcut, parseKeyEvent } from '../utils/shortcuts';
@@ -311,7 +312,22 @@ export function useKeyboardShortcuts() {
     clearMeasure,
     showStations,
     showToast,
-  } = useUIStore();
+  } = useUIStore(useShallow((s) => ({
+    setActiveTool: s.setActiveTool,
+    toggleSectionsPanel: s.toggleSectionsPanel,
+    toggleDetailPanel: s.toggleDetailPanel,
+    toggleDataTable: s.toggleDataTable,
+    toggleDisplay: s.toggleDisplay,
+    clearSelection: s.clearSelection,
+    selectAll: s.selectAll,
+    triggerFitToBounds: s.triggerFitToBounds,
+    selection: s.selection,
+    openDialog: s.openDialog,
+    clearMergeStations: s.clearMergeStations,
+    clearMeasure: s.clearMeasure,
+    showStations: s.showStations,
+    showToast: s.showToast,
+  })));
   const { undo, redo, saveProject, project, stations, config } = useProjectStore();
 
   // Ref for shortcut map - uses ref to avoid stale closures in event handlers

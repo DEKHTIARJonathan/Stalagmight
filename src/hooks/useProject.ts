@@ -2,6 +2,7 @@ import { useCallback } from 'react';
 import { useProjectStore } from '../store/projectStore';
 import { useUIStore } from '../store/uiStore';
 import { useSpeleoStore } from '../store/speleoStore';
+import { useShallow } from 'zustand/react/shallow';
 import { getErrorMessage } from '../utils/ipc';
 import { surfaceSaveFailure } from '../utils/saveFeedback';
 import {
@@ -15,7 +16,9 @@ import { debugLog } from '../utils/debugLog';
 import { needsSpeleoHandBackPrompt } from '../utils/quit';
 
 export function useProject() {
-  const { setView, openDialog } = useUIStore();
+  const { setView, openDialog } = useUIStore(
+    useShallow((s) => ({ setView: s.setView, openDialog: s.openDialog }))
+  );
 
   // Subscribe to store fields/actions individually rather than the whole store.
   // A no-selector `useProjectStore()` returns a fresh snapshot on every mutation
