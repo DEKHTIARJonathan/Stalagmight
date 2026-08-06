@@ -870,7 +870,7 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
       // failed - the work is safe, and only the mutex is outstanding.
       const landed = kind === 'pushed' || kind === 'pushed_lock_held';
       const pushed = kind === 'pushed';
-      return finishOpen(result, summary.permission, summary.id, {
+      const outcome = await finishOpen(result, summary.permission, summary.id, {
         /**
          * [#270] An adopt is NOT a plain pull: the backend stamps the adopted
          * `.stalx` `has_unpushed_edits: true` (it converted an Ariane .tml into a
@@ -933,6 +933,24 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
           // for the user to do, so it is amber with a message that says which.
         },
       });
+      /**
+       * [#411] An adoption IS an Ariane import, so it ends where every other
+       * foreign-format import ends: the receipt dialog (docs/notifications.md - a
+       * success with several facts to review is receipt-class, and import-quality
+       * warnings ride an import receipt). It is the only place this flow ever says
+       * what the conversion dropped - the excluded shots it does not import, and the
+       * anomalies the converter reported - and the backend used to discard them at
+       * the call site, so a pulled project lost them in silence.
+       *
+       * A DIFFERENT event from the toast above, which reports where the survey now
+       * lives; one surface each. Only on a load that actually opened the project -
+       * a receipt for a project not on screen describes nothing the user can look at,
+       * and the failed load has already surfaced itself.
+       */
+      if (outcome.status === 'opened' && result.import_receipt) {
+        openDialog('import-receipt', { receipt: result.import_receipt });
+      }
+      return outcome;
     },
     [
       finishOpen,
@@ -940,6 +958,7 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
       openDumpPicker,
       onAdoptAfterPick,
       failReplay,
+      openDialog,
       t,
     ],
   );

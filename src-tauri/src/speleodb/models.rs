@@ -16,6 +16,7 @@ use ts_rs::TS;
 
 // [Track A] #186/D-B2: the typed action carried on the IPC error DTO.
 use super::contract::{SpeleoDbAction, TransportCause};
+use crate::core::command::ImportReceipt;
 
 /// Project permission level.
 ///
@@ -645,6 +646,27 @@ pub struct SpeleoAdoptResult {
     /// this very call.
     pub concurrent_session: bool,
     pub upload: AdoptUpload,
+    /// [#411] What the `.tml` -> project conversion actually did: the same receipt
+    /// every other foreign-format import produces, carrying the converter's anomaly
+    /// warnings plus a line naming the excluded shots this path drops on purpose.
+    ///
+    /// Adoption IS an Ariane import, and import-quality warnings ride an import
+    /// receipt (docs/notifications.md). This flow used to discard both at the call
+    /// site - it has no import wizard to have shown them - so a pulled Ariane
+    /// project lost its excluded shots and every parse anomaly in silence.
+    ///
+    /// `None` when the import produced no receipt at all. That is reachable today,
+    /// not hypothetical: `execute_import_sections` attaches none when it is handed no
+    /// sections, which is what a `.tml` whose every shot is excluded converts to - so
+    /// the adoption synthesizes one there rather than letting the emptiest possible
+    /// result be the quietest (see `adopt_receipt`). The arm stays because a receipt
+    /// is not something this type can promise on its own.
+    ///
+    /// `#[ts(optional)]`: an older backend answers without the field at all, so the
+    /// webview's type has to admit `undefined` as well as `null` - the alternative is
+    /// a required field that is genuinely absent at runtime.
+    #[ts(optional)]
+    pub import_receipt: Option<ImportReceipt>,
 }
 
 /// Outcome of `speleodb_start_editing` (#194): the result of acquiring the write

@@ -119,6 +119,11 @@ pub fn check_section_hashes(
         .map_err(|e| e.to_string())
 }
 
+/// The most of a file-controlled name worth keeping in the receipt. A dialog title
+/// line, not a path: longer than any real survey filename, shorter than anything that
+/// can push the rest of the title off the screen.
+const MAX_FILE_NAME_LEN: usize = 120;
+
 /// Fill in the importer-specific fields of the base `ImportReceipt` that
 /// `execute_import_sections` already attached (source/section counts, unit
 /// conversion), and extend its warnings with the converter-phase warnings
@@ -127,7 +132,10 @@ pub fn check_section_hashes(
 /// No-op when `result` carries no receipt (a FAILED import - the empty-import
 /// path deliberately carries one, see `ImportReceipt::empty`), so a call site
 /// never has to special-case that path.
-fn decorate_receipt(
+///
+/// Shared with the SpeleoDB Ariane adoption (#411), which is an Ariane import with
+/// no wizard in front of it and must produce the same receipt as one that has.
+pub(crate) fn decorate_receipt(
     result: &mut CommandResult,
     source_format: &str,
     path: &std::path::Path,
@@ -139,9 +147,16 @@ fn decorate_receipt(
         return;
     };
     receipt.source_format = source_format.to_string();
+    // Sanitized and clamped, because this lands in the receipt dialog's TITLE and is
+    // not always a name off this machine's disk: the SpeleoDB adoption passes the
+    // entry name from inside a dump downloaded from a server, where the whole 64 KB
+    // a zip name may hold - bidi overrides included - is the archive author's to
+    // choose. A local path is guarded by the same line at no cost.
     receipt.file_name = path
         .file_name()
-        .map(|n| n.to_string_lossy().to_string())
+        .map(|n| {
+            crate::core::command::sanitize_display_text(&n.to_string_lossy(), MAX_FILE_NAME_LEN)
+        })
         .unwrap_or_default();
     receipt.sections_found = sections_found;
     receipt.unit_conversion = unit_conversion;
@@ -157,6 +172,17 @@ fn decorate_receipt(
         receipt.warnings.extend(execute_warnings);
     }
     receipt.cap_warnings();
+}
+
+/// The import receipt's unit-conversion note for an Ariane file: TML carries ONE
+/// unit for the whole file, so this is a straight read of it.
+pub(crate) fn tml_unit_conversion_note(unit: crate::parsers::tml::TmlUnit) -> Option<String> {
+    match unit {
+        crate::parsers::tml::TmlUnit::Imperial => {
+            Some("Lengths converted from feet to meters".to_string())
+        }
+        crate::parsers::tml::TmlUnit::Metric => None,
+    }
 }
 
 /// The import receipt's unit-conversion note for a Compass file, derived from
@@ -387,12 +413,7 @@ pub fn execute_tml_import(
     );
 
     let sections_found = tml.sections.len() as u32;
-    let unit_conversion = match tml.unit {
-        crate::parsers::tml::TmlUnit::Imperial => {
-            Some("Lengths converted from feet to meters".to_string())
-        }
-        crate::parsers::tml::TmlUnit::Metric => None,
-    };
+    let unit_conversion = tml_unit_conversion_note(tml.unit);
 
     // Entrance elevation (#431): `firstStartAbsoluteElevation`, already
     // unit-converted. 0.0 is the file's no-data value (mirrors the export

@@ -381,6 +381,87 @@ describe('useOpenRemoteProject (#218)', () => {
     expect(loadProjectMock).not.toHaveBeenCalled();
   });
 
+  /** The receipt an adoption's conversion produces, with something to report. */
+  const ADOPT_RECEIPT = {
+    source_format: 'Ariane TML',
+    file_name: 'ariane.tml',
+    sections_found: 3,
+    sections_imported: 2,
+    shot_count: 12,
+    closures_requested: 0,
+    closures_created: 0,
+    unit_conversion: null,
+    warnings: [
+      '2 excluded shots in the remote file were not imported',
+      '1 section had no shots after filtering and was dropped',
+    ],
+  };
+
+  const adoptReplying = (result: Record<string, unknown>) => {
+    invokeIpcMock.mockImplementation((cmd: string) => {
+      if (cmd === 'speleodb_adopt_ariane') return Promise.resolve(result);
+      return Promise.resolve(null);
+    });
+  };
+
+  /**
+   * [#411] An adoption is an Ariane import, so it ends in the same receipt dialog -
+   * the only place this flow says what the conversion dropped. The backend used to
+   * discard the whole thing at the call site, so a pulled project lost its excluded
+   * shots and every parse anomaly in silence.
+   */
+  it('shows the import receipt for what the adoption converted', async () => {
+    adoptReplying({
+      local_path: '/cache/p1.stalx',
+      type_flipped: true,
+      concurrent_session: false,
+      upload: { kind: 'pushed' },
+      import_receipt: ADOPT_RECEIPT,
+    });
+
+    expect(await hook().adoptRemote(SUMMARY)).toEqual({ status: 'opened' });
+    expect(useUIStore.getState().openDialog).toHaveBeenCalledWith('import-receipt', {
+      receipt: ADOPT_RECEIPT,
+    });
+  });
+
+  it('shows no receipt for an adoption whose project never opened', async () => {
+    // A receipt describes what is on screen. After a failed load nothing is, and the
+    // load has already surfaced its own error - a modal over it says the import
+    // landed when it did not.
+    loadProjectMock.mockResolvedValue({ success: false });
+    adoptReplying({
+      local_path: '/cache/p1.stalx',
+      type_flipped: true,
+      concurrent_session: false,
+      upload: { kind: 'pushed' },
+      import_receipt: ADOPT_RECEIPT,
+    });
+
+    expect(await hook().adoptRemote(SUMMARY)).toEqual({ status: 'load_failed' });
+    expect(useUIStore.getState().openDialog).not.toHaveBeenCalledWith(
+      'import-receipt',
+      expect.anything(),
+    );
+  });
+
+  it('shows no receipt when the backend sent none', async () => {
+    // An older backend answers without the field at all; an empty modal is worse
+    // than none.
+    adoptReplying({
+      local_path: '/cache/p1.stalx',
+      type_flipped: true,
+      concurrent_session: false,
+      upload: { kind: 'pushed' },
+    });
+
+    expect(await hook().adoptRemote(SUMMARY)).toEqual({ status: 'opened' });
+    expect(useUIStore.getState().openDialog).not.toHaveBeenCalledWith(
+      'import-receipt',
+      expect.anything(),
+    );
+  });
+
   /**
    * [#270] A failed load must leave the user exactly where they were - the PREVIOUS
    * project is still on screen and still open backend-side.
