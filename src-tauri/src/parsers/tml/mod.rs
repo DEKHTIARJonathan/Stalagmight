@@ -5,8 +5,6 @@
 //! short abbreviations.
 
 use std::collections::HashMap;
-use std::fs;
-use std::io::Read as _;
 use std::path::Path;
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -18,6 +16,10 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use crate::models::{ImportClosure, ImportPlacement, ImportSectionConfig, ShotData, ShotKind};
+
+mod decode;
+#[cfg(test)]
+mod test_helpers;
 
 // ============================================================================
 // IPC-visible types
@@ -45,6 +47,18 @@ pub struct TmlFile {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub parse_anomalies: Option<TmlParseAnomalies>,
+    /// Set when the file's bytes were not valid UTF-8 and had to be decoded
+    /// another way (see `decode::decode_xml_bytes`). Built from a fixed vocabulary, not
+    /// from file text, so it needs no sanitizing to cross IPC.
+    ///
+    /// `convert_tml_to_import_configs` copies it verbatim into the import
+    /// warnings, which reach the receipt on the import-wizard path. The
+    /// SpeleoDB adoption path in `core::state::speleodb_pull` calls the same
+    /// converter but discards its warnings, so this one is invisible there too -
+    /// a pre-existing gap, not one this field introduces.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub encoding_warning: Option<String>,
     pub geo_coding: Option<TmlGeoCoding>,
     pub sections: Vec<TmlSection>,
     pub closures: Vec<TmlClosure>,
@@ -237,41 +251,6 @@ fn normalize_key_bytes(name: &[u8]) -> Option<&'static str> {
 }
 
 // ============================================================================
-// XML loading
-// ============================================================================
-
-/// Load XML content from a `.tml` (ZIP) or `.tmlu` (plain XML) file.
-fn load_xml(path: &Path) -> Result<String> {
-    let ext = path
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(str::to_lowercase)
-        .unwrap_or_default();
-
-    match ext.as_str() {
-        "tml" => load_xml_from_zip(path),
-        "tmlu" => fs::read_to_string(path).context("Failed to read TMLU file"),
-        _ => bail!("Unsupported file extension '.{ext}'. Expected .tml or .tmlu"),
-    }
-}
-
-/// Extract `Data.xml` from a ZIP archive.
-fn load_xml_from_zip(path: &Path) -> Result<String> {
-    let file = fs::File::open(path).context("Failed to open TML file")?;
-    let mut archive = zip::ZipArchive::new(file).context("Failed to read TML as ZIP archive")?;
-
-    let mut data_file = archive
-        .by_name("Data.xml")
-        .context("TML archive does not contain 'Data.xml'")?;
-
-    let mut xml = String::new();
-    data_file
-        .read_to_string(&mut xml)
-        .context("Failed to read Data.xml from archive")?;
-    Ok(xml)
-}
-
-// ============================================================================
 // XML parsing
 // ============================================================================
 
@@ -305,9 +284,18 @@ fn parse_raw_shots(xml: &str) -> Result<(Vec<RawShot>, FileMetadata)> {
     // shot fields and small for the file-level ones.
     let mut buf = Vec::new();
 
+    // How many elements are open right now. quick-xml's low-level reader
+    // reports a document that simply stops as a clean `Eof` (only its serde
+    // layer turns that into `MissingEndTag`), so a half-written save would
+    // otherwise parse as a perfectly successful empty survey. A counter,
+    // not a name stack: this loop runs over Data.xml files of tens of MB and
+    // the surrounding code goes out of its way to stay allocation-free.
+    let mut open_elements: usize = 0;
+
     loop {
         match reader.read_event_into(&mut buf) {
             Ok(Event::Start(e)) => {
+                open_elements += 1;
                 let name_bytes = e.name();
                 let name_bytes = name_bytes.as_ref();
 
@@ -330,6 +318,11 @@ fn parse_raw_shots(xml: &str) -> Result<(Vec<RawShot>, FileMetadata)> {
                                 reader.error_position()
                             );
                         }
+                        // `read_to_end` consumed this element's own End event,
+                        // so the End arm below will never see it. (It fails on
+                        // a truncated subtree, which is why that case already
+                        // errors today.)
+                        open_elements -= 1;
                     }
                     _ => {
                         if in_shot {
@@ -347,6 +340,10 @@ fn parse_raw_shots(xml: &str) -> Result<(Vec<RawShot>, FileMetadata)> {
                 }
             }
             Ok(Event::End(e)) => {
+                // quick-xml rejects an End with no matching Start before we see
+                // it (`check_end_names` is on by default); saturate anyway
+                // rather than wrap a good file into a false truncation report.
+                open_elements = open_elements.saturating_sub(1);
                 let name_bytes = e.name();
                 let name_bytes = name_bytes.as_ref();
 
@@ -397,7 +394,7 @@ fn parse_raw_shots(xml: &str) -> Result<(Vec<RawShot>, FileMetadata)> {
                             b"caveName" => metadata.cave_name = text,
                             b"unit" => metadata.unit = text,
                             b"useMagneticAzimuth" => {
-                                metadata.use_magnetic_azimuth = text == "true";
+                                metadata.use_magnetic_azimuth = text.eq_ignore_ascii_case("true");
                             }
                             b"firstStartAbsoluteElevation" => {
                                 // `"NaN"`, `"inf"` and `1e309` all parse
@@ -426,7 +423,16 @@ fn parse_raw_shots(xml: &str) -> Result<(Vec<RawShot>, FileMetadata)> {
                     }
                 }
             }
-            Ok(Event::Eof) => break,
+            Ok(Event::Eof) => {
+                if open_elements > 0 {
+                    bail!(
+                        "The survey XML ends at byte {} with {open_elements} element(s) \
+                         still unclosed - the file appears truncated or damaged",
+                        reader.buffer_position()
+                    );
+                }
+                break;
+            }
             Err(e) => bail!(
                 "XML parse error at position {}: {e}",
                 reader.error_position()
@@ -460,11 +466,14 @@ fn build_raw_shot(
     let id = parse_i64(fields, "id").context("Missing or invalid ID")?;
     let from_id = parse_i64(fields, "from_id").unwrap_or(-1);
 
+    // Ariane writes the type in upper case, but a file that has been through a
+    // third-party tool need not: match every spelling before falling through to
+    // the unknown-type path.
     let shot_type = match fields.get("type").map(String::as_str) {
-        Some("REAL") => TmlShotType::Real,
-        Some("VIRTUAL") => TmlShotType::Virtual,
-        Some("START") => TmlShotType::Start,
-        Some("CLOSURE") => TmlShotType::Closure,
+        Some(t) if t.eq_ignore_ascii_case("REAL") => TmlShotType::Real,
+        Some(t) if t.eq_ignore_ascii_case("VIRTUAL") => TmlShotType::Virtual,
+        Some(t) if t.eq_ignore_ascii_case("START") => TmlShotType::Start,
+        Some(t) if t.eq_ignore_ascii_case("CLOSURE") => TmlShotType::Closure,
         Some(other) => {
             tracing::warn!(shot_type = other, id, "Unknown shot type, treating as Real");
             anomalies.unknown_shot_types = anomalies.unknown_shot_types.saturating_add(1);
@@ -526,7 +535,9 @@ fn build_raw_shot(
         explorer,
         date,
         color,
-        excluded: fields.get("excluded").map(String::as_str) == Some("true"),
+        excluded: fields
+            .get("excluded")
+            .is_some_and(|v| v.eq_ignore_ascii_case("true")),
         latitude: parse_f64(fields, "latitude"),
         longitude: parse_f64(fields, "longitude"),
     })
@@ -1196,7 +1207,10 @@ fn apply_unit_conversion(
 pub fn parse_tml(path: &Path) -> Result<TmlFile> {
     tracing::info!(path = ?path, "Parsing Ariane TML/TMLU file");
 
-    let xml = load_xml(path)?;
+    let decode::LoadedXml {
+        xml,
+        encoding_warning,
+    } = decode::load_xml(path)?;
     let (raw_shots, metadata) = parse_raw_shots(&xml)?;
 
     tracing::debug!(
@@ -1243,6 +1257,7 @@ pub fn parse_tml(path: &Path) -> Result<TmlFile> {
         first_start_absolute_elevation,
         unrecognized_unit,
         parse_anomalies: anomalies.any().then_some(anomalies),
+        encoding_warning,
         geo_coding,
         sections,
         closures,
@@ -1360,6 +1375,10 @@ pub fn convert_tml_to_import_configs(
     comments_on_stations: bool,
 ) -> Result<(Vec<ImportSectionConfig>, Vec<ImportClosure>, Vec<String>)> {
     let mut warnings: Vec<String> = Vec::new();
+
+    if let Some(note) = &tml.encoding_warning {
+        warnings.push(note.clone());
+    }
 
     if let Some(raw_unit) = &tml.unrecognized_unit {
         warnings.push(format!(
@@ -1733,6 +1752,14 @@ fn topological_sort_configs(configs: &mut Vec<ImportSectionConfig>) {
 ///
 /// `prev_depth` is the previous real shot's cumulative depth (`None` for the first
 /// shot in a section), `start_depth` the parent station's cumulative depth.
+///
+/// The `-1.0` is the FILE FORMAT's marker, not this parser's invention, so a
+/// literal `-1.0` in the file means "inherit" even though -1 m is a perfectly
+/// legal depth one metre above the datum. `export::tml::emitted_depth_in` is the
+/// other half of that contract: it nudges a genuine -1.0 to -1.000001 before
+/// writing, precisely so this reader does not swallow it. Making a literal
+/// `-1.0` measured here would misread every ordinary Ariane file, where the
+/// sentinel is spelled out on nearly every shot.
 fn resolve_tml_depth_in(shot: &TmlShot, prev_depth: Option<f64>, start_depth: f64) -> f64 {
     if shot.depth_in != -1.0 {
         shot.depth_in
@@ -1975,6 +2002,7 @@ fn determine_placement(
     clippy::print_stderr
 )]
 mod tests {
+    use super::test_helpers::*;
     use super::*;
 
     /// A tiny NEGATIVE azimuth must normalise to `0.0`, not `360.0`.
@@ -2003,191 +2031,6 @@ mod tests {
             shot.azimuth = input;
             assert_eq!(normalize_tml_shot(&shot, 0.0).azimuth_in, expected);
         }
-    }
-
-    fn sample_tml_shot() -> TmlShot {
-        TmlShot {
-            id: 1,
-            from_id: 0,
-            shot_type: TmlShotType::Real,
-            azimuth: 0.0,
-            length: 10.0,
-            depth: 0.0,
-            depth_in: 0.0,
-            inclination: 0.0,
-            left: 0.0,
-            right: 0.0,
-            up: 0.0,
-            down: 0.0,
-            comment: None,
-            explorer: None,
-            date: None,
-            color: String::new(),
-            excluded: false,
-            latitude: 0.0,
-            longitude: 0.0,
-            closure_to_id: -1,
-            section: String::new(),
-        }
-    }
-
-    // Helper to build minimal XML for testing
-    fn wrap_xml(shots_xml: &str) -> String {
-        wrap_xml_with("m", 100.0, shots_xml)
-    }
-
-    /// `wrap_xml` with the file-level unit and elevation spelled out. The
-    /// elevation is `Display` so a test can write text a `f64` cannot hold.
-    fn wrap_xml_with(unit: &str, elevation: impl std::fmt::Display, shots_xml: &str) -> String {
-        format!(
-            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<CaveFile>
-    <caveName>Test Cave</caveName>
-    <unit>{unit}</unit>
-    <useMagneticAzimuth>true</useMagneticAzimuth>
-    <firstStartAbsoluteElevation>{elevation}</firstStartAbsoluteElevation>
-    <Data>
-        {shots_xml}
-    </Data>
-</CaveFile>"#
-        )
-    }
-
-    /// Run the real `parse_tml` over synthetic XML, via a throwaway `.tmlu` in a
-    /// temp dir (the entry point takes a path, and the extension picks the
-    /// reader). Nothing survives the call.
-    fn parse_synthetic_tmlu(xml: &str) -> TmlFile {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("synthetic.tmlu");
-        fs::write(&path, xml).unwrap();
-        parse_tml(&path).unwrap()
-    }
-
-    /// A shot element with the depth fields spelled out, for the rebase tests.
-    fn tml_shot_xml_depth(
-        id: i64,
-        from_id: i64,
-        shot_type: &str,
-        section: &str,
-        depth: f64,
-        depth_in: f64,
-    ) -> String {
-        format!(
-            r"<SurveyData>
-    <ID>{id}</ID>
-    <FromID>{from_id}</FromID>
-    <ClosureToID>-1</ClosureToID>
-    <Type>{shot_type}</Type>
-    <Section>{section}</Section>
-    <Azimut>90.0</Azimut>
-    <Length>10.0</Length>
-    <Depth>{depth}</Depth>
-    <DepthIn>{depth_in}</DepthIn>
-    <Inclination>0.0</Inclination>
-    <Left>0.0</Left>
-    <Right>0.0</Right>
-    <Up>0.0</Up>
-    <Down>0.0</Down>
-    <Comment></Comment>
-    <Explorer>Tester</Explorer>
-    <Date>2024-06-15</Date>
-    <Color>0x8f6112ff</Color>
-    <Excluded>false</Excluded>
-    <Latitude>0.0</Latitude>
-    <Longitude>0.0</Longitude>
-</SurveyData>"
-        )
-    }
-
-    fn tml_shot_xml(id: i64, from_id: i64, shot_type: &str, section: &str) -> String {
-        format!(
-            r#"<SurveyData>
-    <ID>{id}</ID>
-    <FromID>{from_id}</FromID>
-    <ClosureToID>-1</ClosureToID>
-    <Type>{shot_type}</Type>
-    <Section>{section}</Section>
-    <Azimut>90.0</Azimut>
-    <Length>10.0</Length>
-    <Depth>5.0</Depth>
-    <DepthIn>-1.0</DepthIn>
-    <Inclination>2.0</Inclination>
-    <Left>1.0</Left>
-    <Right>2.0</Right>
-    <Up>3.0</Up>
-    <Down>4.0</Down>
-    <Comment></Comment>
-    <Explorer>Tester</Explorer>
-    <Date>2024-06-15</Date>
-    <Color>0x8f6112ff</Color>
-    <Excluded>false</Excluded>
-    <Latitude>0.0</Latitude>
-    <Longitude>0.0</Longitude>
-</SurveyData>"#
-        )
-    }
-
-    fn tml_shot_xml_gps(
-        id: i64,
-        from_id: i64,
-        shot_type: &str,
-        section: &str,
-        lat: f64,
-        lng: f64,
-    ) -> String {
-        format!(
-            r#"<SurveyData>
-    <ID>{id}</ID>
-    <FromID>{from_id}</FromID>
-    <ClosureToID>-1</ClosureToID>
-    <Type>{shot_type}</Type>
-    <Section>{section}</Section>
-    <Azimut>90.0</Azimut>
-    <Length>10.0</Length>
-    <Depth>5.0</Depth>
-    <DepthIn>-1.0</DepthIn>
-    <Inclination>2.0</Inclination>
-    <Left>1.0</Left>
-    <Right>2.0</Right>
-    <Up>3.0</Up>
-    <Down>4.0</Down>
-    <Comment></Comment>
-    <Explorer>Tester</Explorer>
-    <Date>2024-06-15</Date>
-    <Color>0x8f6112ff</Color>
-    <Excluded>false</Excluded>
-    <Latitude>{lat}</Latitude>
-    <Longitude>{lng}</Longitude>
-</SurveyData>"#
-        )
-    }
-
-    fn tmlu_shot_xml(id: i64, from_id: i64, shot_type: &str, section: &str) -> String {
-        format!(
-            r#"<SRVD>
-    <ID>{id}</ID>
-    <FRID>{from_id}</FRID>
-    <CID>-1</CID>
-    <TY>{shot_type}</TY>
-    <SC>{section}</SC>
-    <AZ>45.0</AZ>
-    <LG>5.0</LG>
-    <DP>3.0</DP>
-    <DPI>-1.0</DPI>
-    <INC>1.0</INC>
-    <L>0.5</L>
-    <R>0.5</R>
-    <U>1.5</U>
-    <D>0.5</D>
-    <CM></CM>
-    <EX>Explorer1</EX>
-    <DT>2025-01-01</DT>
-    <CL>0x44aa88ff</CL>
-    <EXC>false</EXC>
-    <LT>0.0</LT>
-    <LGT>0.0</LGT>
-</SRVD>"#
-        )
     }
 
     // -------------------------------------------------------------------
@@ -2417,6 +2260,7 @@ mod tests {
             first_start_absolute_elevation: 100.0,
             unrecognized_unit: None,
             parse_anomalies: None,
+            encoding_warning: None,
             geo_coding,
             sections,
             closures,
@@ -3253,6 +3097,7 @@ mod tests {
             first_start_absolute_elevation: 0.0,
             unrecognized_unit: None,
             parse_anomalies: None,
+            encoding_warning: None,
             geo_coding: None,
             sections: vec![TmlSection {
                 name: "Main".to_string(),
@@ -3549,18 +3394,86 @@ mod tests {
         assert!(closures.is_empty());
     }
 
+    /// A document that stops mid-element - a half-written or interrupted save -
+    /// must be an error, not a survey with nothing in it.
+    ///
+    /// Without the fix `Event::Eof` just breaks the loop: this returns
+    /// `Ok(([], _))`, the import reports "0 sections - 0 shots", walks the user
+    /// into creating a project, and lands them in an empty one with no hint
+    /// that the file is damaged.
     #[test]
-    fn test_invalid_xml() {
-        // quick-xml is lenient; use unclosed tags to trigger an error
-        let result = parse_raw_shots("<CaveFile><Data><SurveyData><ID>1</ID>");
-        // Even if it doesn't error, it should produce no usable shots (missing fields)
-        match result {
-            Err(_) => {} // expected
-            Ok((shots, _)) => {
-                // If it tolerates truncated XML, we still shouldn't get valid shots
-                assert!(shots.is_empty() || shots.iter().all(|s| s.id == 0));
-            }
+    fn a_document_truncated_mid_element_is_an_error() {
+        let err = parse_raw_shots("<CaveFile><caveName>X</caveName><Data><SurveyData><ID>1</ID>")
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("truncated or damaged"),
+            "the error must say the file is damaged, got {err:?}"
+        );
+        assert!(
+            err.contains("3 element(s)"),
+            "the error must count what is still open (CaveFile, Data, SurveyData), got {err:?}"
+        );
+    }
+
+    /// The truncation can also land on an element boundary: every element seen
+    /// is well formed and the last shot is complete, yet `CaveFile` and `Data`
+    /// never close. This is why the signal is unclosed depth at EOF and not
+    /// "the last element was cut in half" or "no shots were found" - both would
+    /// wave this file through, and it can carry any number of good shots.
+    #[test]
+    fn a_document_truncated_between_elements_is_an_error() {
+        let xml = format!(
+            "<CaveFile><caveName>X</caveName><Data>\n{}",
+            tml_shot_xml(1, -1, "REAL", "A")
+        );
+        let err = parse_raw_shots(&xml).unwrap_err().to_string();
+        assert!(
+            err.contains("truncated or damaged"),
+            "the error must say the file is damaged, got {err:?}"
+        );
+        assert!(
+            err.contains("2 element(s)"),
+            "CaveFile and Data are the two left open, got {err:?}"
+        );
+    }
+
+    /// A file that genuinely holds no shots is not damaged, and must keep
+    /// reaching the zero-section receipt instead of being refused. Both
+    /// spellings of an empty `<Data>` count.
+    #[test]
+    fn a_complete_document_with_no_shots_still_parses() {
+        let self_closing_data =
+            "<CaveFile><caveName>Test Cave</caveName><unit>m</unit><Data/></CaveFile>";
+        for xml in [wrap_xml(""), self_closing_data.to_string()] {
+            let (shots, meta) = parse_raw_shots(&xml)
+                .unwrap_or_else(|e| panic!("an empty but complete file must parse, got {e}"));
+            assert!(shots.is_empty(), "no shots, but no error either");
+            assert_eq!(meta.cave_name, "Test Cave");
         }
+    }
+
+    /// The `<Shape>` subtree is skipped with `read_to_end`, which swallows its
+    /// own End event - so the depth counter has to be corrected for it.
+    ///
+    /// Without that correction every ordinary Ariane file (they all carry
+    /// per-shot Shape polygons) would come back as "truncated or damaged".
+    #[test]
+    fn shape_subtrees_do_not_read_as_truncation() {
+        let shot = tml_shot_xml(1, -1, "REAL", "A").replace(
+            "</SurveyData>",
+            "<Shape><hasProfileAzimut>false</hasProfileAzimut>\
+             <RadiusCollection><RadiusVector><angle>0.0</angle></RadiusVector>\
+             </RadiusCollection></Shape></SurveyData>",
+        );
+        assert!(
+            shot.contains("<Shape>"),
+            "premise: the shot carries a Shape"
+        );
+
+        let tml = parse_synthetic_tmlu(&wrap_xml(&shot));
+        assert_eq!(tml.sections.len(), 1);
+        assert_eq!(tml.sections[0].shots.len(), 1);
     }
 
     #[test]
@@ -3569,10 +3482,80 @@ mod tests {
         assert!(result.is_err());
     }
 
+    /// `<Type>` spellings other than Ariane's upper case must still be
+    /// recognised. Without the fix `start` falls through to the unknown-type
+    /// path and is imported as an ordinary shot, inventing a second section.
     #[test]
-    fn test_wrong_extension() {
-        let result = load_xml(Path::new("/tmp/test.xyz"));
-        assert!(result.is_err());
+    fn shot_type_spellings_are_case_insensitive() {
+        let xml = wrap_xml(
+            &[
+                tml_shot_xml(0, -1, "start", "Start"),
+                tml_shot_xml(1, 0, "Real", "A"),
+                tml_shot_xml(2, 1, "virtual", "A"),
+            ]
+            .join("\n"),
+        );
+
+        let tml = parse_synthetic_tmlu(&xml);
+        assert_eq!(tml.sections.len(), 1, "the START shot must not become one");
+        assert_eq!(tml.sections[0].shots.len(), 2);
+        assert_eq!(tml.sections[0].shots[1].shot_type, TmlShotType::Virtual);
+    }
+
+    /// The two boolean elements are compared against the literal `"true"`;
+    /// without the fix `TRUE` reads as false and an excluded shot is imported.
+    #[test]
+    fn boolean_element_spellings_are_case_insensitive() {
+        let excluded = tml_shot_xml(2, 1, "REAL", "A")
+            .replace("<Excluded>false</Excluded>", "<Excluded>TRUE</Excluded>");
+        let xml = wrap_xml(
+            &[
+                tml_shot_xml(0, -1, "START", "Start"),
+                tml_shot_xml(1, 0, "REAL", "A"),
+                excluded,
+            ]
+            .join("\n"),
+        )
+        .replace(
+            "<useMagneticAzimuth>true</useMagneticAzimuth>",
+            "<useMagneticAzimuth>True</useMagneticAzimuth>",
+        );
+
+        let tml = parse_synthetic_tmlu(&xml);
+        assert!(tml.use_magnetic_azimuth);
+        assert!(tml.sections[0].shots[1].excluded);
+    }
+
+    /// `-1.0` is the FORMAT's "same as the previous shot" marker, not this
+    /// parser's private default: `export::tml::emitted_depth_in` nudges a
+    /// genuine -1.0 m depth to -1.000001 so it survives this reader. Reading a
+    /// literal -1.0 as a measured depth would misread every ordinary Ariane
+    /// file, so pin both halves of that contract here.
+    #[test]
+    fn a_literal_minus_one_depth_in_stays_the_sentinel_and_the_nudged_value_does_not() {
+        let xml = wrap_xml(
+            &[
+                tml_shot_xml_depth(0, -1, "START", "Start", 0.0, -1.0),
+                tml_shot_xml_depth(1, 0, "REAL", "A", 7.0, -1.0),
+                tml_shot_xml_depth(2, 1, "REAL", "A", 9.0, -1.000_001),
+            ]
+            .join("\n"),
+        );
+
+        let tml = parse_synthetic_tmlu(&xml);
+        let section = &tml.sections[0];
+        let shots = convert_shots_to_shot_data(&section.shots, section.start_depth, false);
+
+        assert!(
+            shots[0].depth_in.abs() < f64::EPSILON,
+            "the sentinel inherits, got {}",
+            shots[0].depth_in
+        );
+        assert!(
+            (shots[1].depth_in - (-1.000_001)).abs() < 1e-9,
+            "the nudged value is a measurement, got {}",
+            shots[1].depth_in
+        );
     }
 
     // -------------------------------------------------------------------
@@ -3630,6 +3613,7 @@ mod tests {
             first_start_absolute_elevation: 100.0,
             unrecognized_unit: None,
             parse_anomalies: None,
+            encoding_warning: None,
             geo_coding: None,
             sections,
             closures,
@@ -3670,46 +3654,58 @@ mod tests {
     // File-level parsing (TML ZIP)
     // -------------------------------------------------------------------
 
+    /// The whole `.tml` path end to end: ZIP wrapper, long element names, and
+    /// the field mapping every consumer downstream reads. Synthetic on purpose -
+    /// survey fixtures are not committed, and the two tests this replaces
+    /// returned early when their fixture was missing, which it always was.
     #[test]
-    fn test_parse_tml_fixture() {
-        let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/test_simple.tml");
-        if !fixture.exists() {
-            // Skip if fixture not yet available
-            return;
-        }
-        let result = parse_tml(&fixture);
-        assert!(
-            result.is_ok(),
-            "Failed to parse test_simple.tml: {:?}",
-            result.err()
+    fn a_zip_wrapped_tml_parses_into_the_mapped_fields() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("synthetic.tml");
+        let xml = wrap_xml(
+            &[
+                tml_shot_xml(0, -1, "START", "Start"),
+                tml_shot_xml(1, 0, "REAL", "Section A"),
+                tml_shot_xml(2, 1, "REAL", "Section A"),
+            ]
+            .join("\n"),
         );
-        let tml = result.unwrap_or_else(|_| TmlFile {
-            cave_name: String::new(),
-            unit: TmlUnit::Metric,
-            use_magnetic_azimuth: false,
-            first_start_absolute_elevation: 0.0,
-            unrecognized_unit: None,
-            parse_anomalies: None,
-            geo_coding: None,
-            sections: Vec::new(),
-            closures: Vec::new(),
-        });
-        assert!(!tml.cave_name.is_empty());
-        assert!(!tml.sections.is_empty());
+        write_tml_archive(&path, "Data.xml", xml.as_bytes());
+
+        let tml = parse_tml(&path).unwrap();
+        assert_eq!(tml.cave_name, "Test Cave");
+        assert_eq!(tml.unit, TmlUnit::Metric);
+        assert!(tml.use_magnetic_azimuth);
+        assert!((tml.first_start_absolute_elevation - 100.0).abs() < f64::EPSILON);
+        assert_eq!(tml.sections.len(), 1);
+
+        let section = &tml.sections[0];
+        assert_eq!(section.name, "Section A");
+        assert_eq!(section.shots.len(), 2);
+        assert_eq!(section.shots[0].shot_type, TmlShotType::Real);
+        assert_eq!(section.shots[0].color, "#8f6112");
+        assert_eq!(section.shots[0].explorer.as_deref(), Some("Tester"));
+        assert!((section.shots[0].azimuth - 90.0).abs() < f64::EPSILON);
+        assert!((section.shots[0].length - 10.0).abs() < f64::EPSILON);
+        assert!((section.shots[0].depth - 5.0).abs() < f64::EPSILON);
     }
 
+    /// The same document as a plain `.tmlu` on disk: the extension picks the
+    /// reader, and no ZIP is involved.
     #[test]
-    fn test_parse_tmlu_fixture() {
-        let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/test_simple.tmlu");
-        if !fixture.exists() {
-            return;
-        }
-        let result = parse_tml(&fixture);
-        assert!(
-            result.is_ok(),
-            "Failed to parse test_simple.tmlu: {:?}",
-            result.err()
-        );
+    fn a_plain_tmlu_parses_the_same_way() {
+        let tml = parse_synthetic_tmlu(&wrap_xml(
+            &[
+                tml_shot_xml(0, -1, "START", "Start"),
+                tml_shot_xml(1, 0, "REAL", "Section A"),
+            ]
+            .join("\n"),
+        ));
+
+        assert_eq!(tml.cave_name, "Test Cave");
+        assert_eq!(tml.sections.len(), 1);
+        assert_eq!(tml.sections[0].shots.len(), 1);
+        assert!((tml.sections[0].shots[0].length - 10.0).abs() < f64::EPSILON);
     }
 
     // -------------------------------------------------------------------
@@ -3954,6 +3950,7 @@ mod tests {
             first_start_absolute_elevation: 0.0,
             unrecognized_unit: None,
             parse_anomalies: None,
+            encoding_warning: None,
             geo_coding: None,
             sections: vec![
                 TmlSection {
@@ -4028,6 +4025,7 @@ mod tests {
             first_start_absolute_elevation: 0.0,
             unrecognized_unit: None,
             parse_anomalies: None,
+            encoding_warning: None,
             geo_coding: None,
             sections: vec![
                 TmlSection {
@@ -4121,6 +4119,7 @@ mod tests {
             first_start_absolute_elevation: 0.0,
             unrecognized_unit: None,
             parse_anomalies: None,
+            encoding_warning: None,
             geo_coding: None,
             sections: vec![
                 TmlSection {
@@ -4204,6 +4203,7 @@ mod tests {
             first_start_absolute_elevation: 0.0,
             unrecognized_unit: None,
             parse_anomalies: None,
+            encoding_warning: None,
             geo_coding: None,
             sections: vec![
                 // Section A (index 0): shots 1,2
@@ -4373,6 +4373,7 @@ mod tests {
             first_start_absolute_elevation: 100.0,
             unrecognized_unit: None,
             parse_anomalies: None,
+            encoding_warning: None,
             geo_coding: None,
             sections,
             closures,
