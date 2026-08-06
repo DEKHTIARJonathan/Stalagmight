@@ -60,50 +60,18 @@ const SMOKE_ITERATIONS: Record<string, number> = {
   'rapid-project-cycle': 4,
 };
 
-/**
- * Scenarios that are EXPECTED to fail, and why.
- *
- * Both reproduce open app bugs by construction, so a green run would mean their
- * oracles had been weakened - that is the standing reminder the comments above
- * are protecting, and none of it changes here. What does change is that their
- * failure no longer costs the gate its meaning: with the two of them failing
- * unconditionally, `pnpm agent:scenarios` exited 1 whatever the other nine did,
- * so it could not answer the question it exists to answer ("does the harness
- * still drive the app?"). An expected failure is now reported as XFAIL and does
- * not fail the run.
- *
- * The other direction is enforced too, and matters more: an expected-red
- * scenario that PASSES fails the gate. That is the bug having been fixed, and
- * the entry has to be removed here (and the scenario's own header updated)
- * rather than quietly becoming a test of nothing.
- */
-const EXPECTED_RED: Record<string, string> = {
-  'undo-redo-fuzz':
-    'reproduces the open undo bugs at issue #413 (seed 1 x40 reaches bug 1 on the v2 stream)',
-  'undo-persistence-fuzz':
-    'reproduces finding 12 on the first id-bearing entry of the restored stack (issue #413)',
-};
-
-/** Opt in to walking past classified bugs - see EXPECTED_RED. */
-const ALLOW_KNOWN_BUGS = process.env.STALAGMIGHT_FUZZ_ALLOW_KNOWN_BUGS === '1';
-
-/**
- * Does this failure come from the scenario's OWN oracle?
- *
- * Every fuzz-scenario failure is composed by its `fail()` helper, which always
- * emits a `reproduce:` line naming the seed and iteration count. A throw
- * without one did not come from an oracle - it is the harness failing to drive
- * the app - and an expected-red entry must not absorb that.
- */
-function looksLikeAnOracleFailure(message: string): boolean {
-  return message.includes('reproduce:');
-}
+// There is no expected-failure list, and adding one back would be a regression.
+// `undo-redo-fuzz` and `undo-persistence-fuzz` are expected GREEN and STRICT:
+// every issue-413 finding is fixed in the Rust tier and every classifier and
+// known-bug tolerance was deleted with it, so nothing in either scenario is
+// walked past and `STALAGMIGHT_FUZZ_ALLOW_KNOWN_BUGS=1` changes nothing. If
+// either one goes red, the red is the APP's - shrink it (`pnpm agent:fuzz-shrink`)
+// and fix the app. Do not re-introduce an EXPECTED_RED map, a classifier, or a
+// tolerance to make this gate green again.
 
 async function main(): Promise<void> {
   const session = createSession();
   let failed = false;
-  const xfailed: string[] = [];
-  const xpassed: string[] = [];
   const started = await session.start({ build: 'auto' });
   process.stdout.write(`session ${started.state} (build ${started.buildAction})\n`);
   const oracle = newOracleState();
@@ -123,77 +91,21 @@ async function main(): Promise<void> {
         // finding. error/warning findings are app signals the harness is meant to
         // surface (that is the point), so they are reported but do not fail the
         // scenario gate.
-        const expectedRed = EXPECTED_RED[name];
-        if (fatal.length && expectedRed === undefined) failed = true;
-        if (expectedRed !== undefined && fatal.length > 0) {
-          // Expected-red, and it DID fail - through the sweep rather than by
-          // throwing. Same news, so the same XFAIL: `fatal` is a second failure
-          // channel, and treating it as a pass would report a crashing scenario
-          // as a fixed bug.
-          xfailed.push(name);
-          process.stdout.write(`XFAIL: ${name} failed as expected via a fatal finding (${expectedRed}).\n`);
-        } else if (expectedRed !== undefined && !ALLOW_KNOWN_BUGS) {
-          // Did not throw and swept clean, in STRICT mode: the bug it pins is
-          // fixed (or its oracle stopped seeing it) and the list above is wrong.
-          failed = true;
-          xpassed.push(name);
-          process.stdout.write(
-            `UNEXPECTED PASS: ${name} was expected to fail (${expectedRed}).\n` +
-              `  If the bug is fixed, remove it from EXPECTED_RED and update the scenario header.\n`,
-          );
-        } else if (expectedRed !== undefined) {
-          // Tolerant mode is the documented way to run this gate, and it is
-          // exactly what makes these two scenarios complete: they walk PAST the
-          // classified bugs rather than stopping on them. A pass here says
-          // nothing about whether the bug is fixed, so it is not news.
-          process.stdout.write(
-            `PASS (tolerant): ${name} completed with STALAGMIGHT_FUZZ_ALLOW_KNOWN_BUGS=1; ` +
-              `that walks past the classified bugs rather than proving them fixed.\n`,
-          );
-        }
+        if (fatal.length) failed = true;
         const label = fatal.length ? 'FAIL' : sweep.findings.length ? 'PASS+findings' : 'PASS';
         process.stdout.write(
           `${label}: ${name} (${metrics.durationMs}ms) ${JSON.stringify(metrics.metrics)}` +
             `${sweep.findings.length ? ` findings=${JSON.stringify(sweep.findings)}` : ''}\n`,
         );
       } catch (err) {
-        const expectedRed = EXPECTED_RED[name];
-        const detail = err instanceof Error ? err.message : String(err);
-        if (expectedRed === undefined) {
-          failed = true;
-          process.stdout.write(`FAIL: ${name} threw: ${detail}\n`);
-        } else if (looksLikeAnOracleFailure(detail)) {
-          xfailed.push(name);
-          process.stdout.write(
-            `XFAIL: ${name} failed as expected (${expectedRed}):\n` +
-              `${detail.split('\n').slice(0, 3).map((line) => `  | ${line}`).join('\n')}\n`,
-          );
-        } else {
-          // Expected-red covers the scenario's OWN oracle saying "the app did
-          // the wrong thing". It does not cover the harness failing to drive the
-          // app at all - a WebDriver attach failure, a missing test hook, a
-          // renamed store action - and swallowing those is exactly how this gate
-          // would stop answering the question it exists to answer.
-          failed = true;
-          process.stdout.write(
-            `FAIL: ${name} threw something that is NOT its oracle (so not the expected red):\n${detail}\n`,
-          );
-        }
+        failed = true;
+        process.stdout.write(`FAIL: ${name} threw: ${err instanceof Error ? err.message : String(err)}\n`);
       }
     }
   } finally {
     await session.stop('scenarios-smoke');
   }
 
-  if (xfailed.length > 0) {
-    process.stdout.write(
-      `\n${xfailed.length} scenario(s) failed as EXPECTED (open app bugs, not harness regressions): ` +
-        `${xfailed.join(', ')}\n`,
-    );
-  }
-  if (xpassed.length > 0) {
-    process.stdout.write(`${xpassed.length} expected-red scenario(s) PASSED: ${xpassed.join(', ')}\n`);
-  }
   process.stdout.write(failed ? '\nSCENARIOS FAILED\n' : '\nSCENARIOS PASSED\n');
   process.exit(failed ? 1 : 0);
 }

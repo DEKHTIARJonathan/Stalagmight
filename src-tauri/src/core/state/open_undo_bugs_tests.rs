@@ -118,17 +118,22 @@ fn shot_ids(state: &AppState, section_id: SectionId) -> Vec<ShotId> {
 }
 
 // ===========================================================================
-// Bug 1: redo of CreateSection re-mints every shot uuid
+// Bug 1 (FIXED): redo of CreateSection re-minted every shot uuid
 // ===========================================================================
 
-/// `UndoData::CreatedSectionSnapshot` stores a `SectionData`, which has no uuid
-/// field, so redo goes `restore_section` -> `Section::new_with_id` ->
+/// `UndoData::CreatedSectionSnapshot` stored a `SectionData`, which has no uuid
+/// field, so redo went `restore_section` -> `Section::new_with_id` ->
 /// `Section::new` -> `add_shot` -> `Shot::new` -> `Uuid::new_v4()`. The sibling
 /// `CreateShot` path was explicitly fixed for this exact reason
 /// (`UndoData::CreatedShotSnapshot { uuid }`), because a fresh uuid dangles
 /// every `StationKey::AfterShot` anchor and the Ariane export identity.
+///
+/// FIXED, and kept as the regression guard: the entry carries a
+/// `SectionIdentity` alongside its `SectionData` - the shots' uuids, the reverse
+/// parity and the gauge pair - and `Section::restore_with_identity`
+/// (models/section.rs) applies it, with the old mint kept as the fallback for a
+/// legacy entry that has no such field.
 #[test]
-#[ignore = "open bug 1: redo of CreateSection re-mints shot uuids - see e2e/agent/scenarios/undoRedoFuzz.ts header"]
 fn redo_of_create_section_preserves_shot_uuids() {
     let _config = isolated_config();
     let state = state_with_project();
@@ -151,16 +156,20 @@ fn redo_of_create_section_preserves_shot_uuids() {
     );
 }
 
-/// The same root cause in a second field. `restore_section` rebuilds through
+/// The same root cause in a second field. `restore_section` rebuilt through
 /// `Section::new`, which hardcodes `gauge_shot_uuid: None` /
 /// `gauge_neighbour_uuid: None` (models/section.rs), and `SectionData` carries
-/// neither - so a redo discards the least-squares gauge pair.
+/// neither - so a redo discarded the least-squares gauge pair.
 ///
 /// The anchors only exist after a save (`capture_missing_gauge_anchors` is a
 /// save-time heal), which is why the fuzzer could not see this half until it
-/// started crossing the persistence boundary.
+/// started crossing the persistence boundary - and why the fix needs the second
+/// half it has: the undo REFRESHES the entry's `SectionIdentity` from the live
+/// section immediately before deleting it
+/// (`AppState::refresh_created_section_identity`, which re-reads BOTH halves so a
+/// redo puts back exactly what the undo removed), so anchors captured by a save
+/// that happened after the entry was pushed are carried too.
 #[test]
-#[ignore = "open bug 1 (second half): redo of CreateSection discards captured gauge anchors - see e2e/agent/scenarios/undoRedoFuzz.ts header"]
 fn redo_of_create_section_preserves_gauge_anchors() {
     let _config = isolated_config();
     let temp = TempDir::new().unwrap();
@@ -387,15 +396,26 @@ fn section_offset(state: &AppState, section_id: SectionId) -> Option<(f64, f64)>
 }
 
 // ===========================================================================
-// Bug 2: undo of a shot insert leaves an orphan all-zero section_offsets entry
+// Bug 2 (FIXED): undo of a shot insert left an orphan all-zero
+// section_offsets entry
 // ===========================================================================
 
-/// `adjust_section_offset` CREATES the `section_offsets` key while compensating
-/// an insert; the undo puts the value back to zero but nothing removes the key.
-/// Geometrically inert, but it means undo is not an exact inverse and the leaked
-/// key is serialized into the .stalx.
+/// `adjust_section_offset` CREATED the `section_offsets` key while compensating
+/// an insert; the undo put the value back to zero but nothing removed the key.
+/// Geometrically inert, but it meant undo was not an exact inverse and the leaked
+/// key was serialized into the .stalx.
+///
+/// FIXED, and kept as the regression guard: `Project::write_section_offset`
+/// (models/project/offsets.rs) is now THE single normalizing writer, and a value
+/// within `Project::OFFSET_DUST_M` of the origin is REMOVED rather than written.
+/// A present all-zero key is unrepresentable, so there is no orphan to leak -
+/// which is also why no write-local rule was needed: the two identities the old
+/// code had to satisfy at once (`(0 + d) - d` from an absent key must end absent,
+/// from a present-zero key must end present-zero) are contradictory, and deleting
+/// the second state dissolves the contradiction. Two boundaries enforce it on
+/// maps this app did not write - the loader's re-solve and snapshot restore for
+/// legacy undo payloads.
 #[test]
-#[ignore = "open bug 2: undo of a shot insert leaks an all-zero section_offsets key - see e2e/agent/scenarios/undoRedoFuzz.ts header"]
 fn undo_of_a_shot_insert_leaves_no_orphan_offset_entry() {
     let _config = isolated_config();
     let state = state_with_project();
@@ -523,15 +543,19 @@ fn two_merged_sections(state: &AppState) -> (SectionId, SectionId) {
 }
 
 // ===========================================================================
-// Bug 4: undo of RemoveLoopClosure appends instead of reinserting
+// Bug 4 (FIXED): undo of RemoveLoopClosure appended instead of reinserting
 // ===========================================================================
 
-/// The removal takes the closure out with `Vec::remove(pos)`; the undo puts it
+/// The removal takes the closure out with `Vec::remove(pos)`; the undo put it
 /// back with `loop_closures.push()` (core/state/undo.rs). Same closure, same id,
 /// new position - and the order is persisted to the .stalx, indexed by the
 /// frontend, and used to build the adjacency lists `resolve_offsets` traverses.
+///
+/// FIXED, and kept as the regression guard: `UndoData::ClosureInfo` records the
+/// index the removal took it out of and the undo re-inserts there, with `push`
+/// kept for a legacy entry that has no recorded position - the same shape
+/// `restore_shot` already used.
 #[test]
-#[ignore = "open bug 4: undo of RemoveLoopClosure appends instead of reinserting at its index - see e2e/agent/scenarios/undoRedoFuzz.ts header"]
 fn undo_of_remove_loop_closure_restores_the_original_order() {
     let _config = isolated_config();
     let state = state_with_project();
@@ -887,10 +911,20 @@ fn save_and_reopen_preserves_an_orphan_loop_closure() {
 }
 
 // ===========================================================================
-// Finding 11: a save's undo-less heals are reverted by undoing a snapshot-pair
-// entry recorded before it
+// Finding 11 (FIXED): a save's undo-less heals were reverted by undoing a
+// snapshot-pair entry recorded before it
 // ===========================================================================
 
+/// FIXED, and kept as the regression guard. Two halves, because the residue
+/// outlived the first one: `reapply_heals_after_restore`
+/// (core/state/project_io.rs) brings a restored project up to the standard a
+/// saved one is held to (which heals it re-applies, and which it deliberately
+/// does not, is argued heal by heal on that function), and snapshot PAIRS are
+/// self-refreshing walls on top of that - undo re-records the entry's `after`
+/// half from the live project before restoring `before`, redo symmetrically, so
+/// pair undo/redo are exact inverses by construction even when the restored half
+/// re-creates a section that has no live counterpart to copy a heal from.
+///
 /// `save_project` HEALS live state with no undo entry of its own -
 /// `ensure_shot_uuids`, `ensure_unique_shot_uuids`,
 /// `capture_missing_gauge_anchors`, the orphan `section_offsets` retain
@@ -910,7 +944,6 @@ fn save_and_reopen_preserves_an_orphan_loop_closure() {
 /// save at depth 1 was followed by a redo/undo of a `moveStation` recorded
 /// before it.
 #[test]
-#[ignore = "open finding 11: undoing a snapshot-pair entry recorded before a save reverts the save's heals - see e2e/agent/scenarios/undoRedoFuzz.ts header"]
 fn undo_of_a_pre_save_entry_keeps_the_saves_gauge_anchors() {
     let _config = isolated_config();
     let temp = TempDir::new().unwrap();
@@ -1431,14 +1464,17 @@ fn redo_after_reload_does_not_duplicate_a_shot_uuid() {
 }
 
 // ===========================================================================
-// Finding 17: undo of RemoveZeroDatum appends the datum instead of restoring
-// its index - finding 4's defect, one collection over
+// Finding 17 (FIXED): undo of RemoveZeroDatum appended the datum instead of
+// restoring its index - finding 4's defect, one collection over
 // ===========================================================================
 
-/// `UndoData::ZeroDatumInfo`'s restore arm ends in
+/// `UndoData::ZeroDatumInfo`'s restore arm ended in
 /// `project.zero_datums.push(ZeroDatum { .. })` (`core/state/undo.rs`) where the
-/// forward path removed the datum in place, so a datum that was not last comes
-/// back last.
+/// forward path removed the datum in place, so a datum that was not last came
+/// back last. FIXED the same way finding 4 was, and kept as the regression
+/// guard: the entry records the index the removal took it out of and the undo
+/// re-inserts there, with `push` kept for a legacy entry and for a
+/// `SetZeroDatum` on a station that had no datum.
 ///
 /// Exactly finding 4's shape and exactly its consequences: `zero_datums` is
 /// persisted in order, the frontend indexes it, and `resolve_offsets` anchors
@@ -1448,7 +1484,6 @@ fn redo_after_reload_does_not_duplicate_a_shot_uuid() {
 /// Found by the Rust fuzzer's closure-shapes mode, which is the first thing that
 /// gave a run two datums to reorder.
 #[test]
-#[ignore = "open finding 17: undo of RemoveZeroDatum appends instead of reinserting at its index - see src-tauri/src/core/state/fuzz_undo_tests.rs"]
 fn undo_of_remove_zero_datum_restores_the_original_order() {
     let _config = isolated_config();
     let state = state_with_project();
@@ -1503,8 +1538,8 @@ fn datum_sections(state: &AppState) -> Vec<SectionId> {
 }
 
 // ===========================================================================
-// Finding 20: a geometry edit inside an UNANCHORED merge group leaves the merge
-// drifted, under every threshold that would report it
+// Finding 20 (FIXED): a geometry edit inside an UNANCHORED merge group left the
+// merge drifted, under every threshold that would report it
 // ===========================================================================
 
 /// The raw distance between two stations, measured the way
@@ -1575,8 +1610,15 @@ fn two_unanchored_merged_sections(state: &AppState) -> (SectionId, SectionId) {
 ///
 /// Found by the Rust fuzzer's HORIZON mode, seed 1, where an `updateShot` after
 /// a `mergeStations` left a pair 1.58 cm apart, raw and resolved agreeing.
+///
+/// FIXED on both gates, and kept as the regression guard.
+/// `realign_after_shot_edit` no longer gives up on an unanchored group: it has no
+/// ABSOLUTE anchor but it still has the relative merge constraints, so it anchors
+/// on the edited section and BFSes its partners into place. And `realign_merges`
+/// heals at `Project::MERGE_ALIGNMENT_INVARIANT_M` (the assert's own 1 cm) rather
+/// than at the 5 cm REPORTING tolerance, so the 1-5 cm band is not a band any
+/// more. Red on `left the merged pair 0.020000 m apart`.
 #[test]
-#[ignore = "open finding 20: a shot edit in an unanchored merge group leaves the merge drifted under the 5 cm heal gate - see src-tauri/src/core/state/fuzz_undo_tests.rs"]
 fn a_shot_edit_keeps_an_unanchored_merge_aligned() {
     let _config = isolated_config();
     let state = state_with_project();
@@ -1618,8 +1660,13 @@ fn a_shot_edit_keeps_an_unanchored_merge_aligned() {
 ///
 /// In a release build the same state produces neither the assert nor a user
 /// warning: it is simply saved.
+///
+/// FIXED with the drift itself, and kept: this is the half that says the damage
+/// is not confined to the pair, so a future regression that only re-opens the
+/// landmine (an edit path that skips the realign) still fails here. Red on
+/// `Merge alignment violated after insert_shot_after: ... 0.020000m apart`,
+/// raised by an insert into a section that touches neither side of the merge.
 #[test]
-#[ignore = "open finding 20: the drift an unanchored shot edit leaves trips the app's own alignment assert in a later unrelated command"]
 fn a_shot_edit_does_not_arm_an_alignment_assert_for_a_later_command() {
     let _config = isolated_config();
     let state = state_with_project();
@@ -1803,8 +1850,34 @@ fn the_adjusted_solve_is_a_function_of_the_project() {
 }
 
 // ===========================================================================
-// Finding 22: a range delete is not the single deletes it says it generalizes
+// Finding 22 (RESOLVED): an atomic range delete keeps a cut-loose partner put
 // ===========================================================================
+//
+// HOW THIS ONE ENDED. Finding 22 was reported as a defect: a range shift-delete
+// is not the `n` single `Command::DeleteShot`s its own doc comment said it
+// "generalizes ... by deleting the range's shots in forward order", because on a
+// suffix range the merged PARTNER section ends up seven metres from where the
+// single deletes leave it.
+//
+// The equivalence is false BY DESIGN, and the doc comment was the defect. Two
+// deliberately-reviewed tests from PR #95 pin the atomic semantics -
+// `test_delete_range_shift_does_not_displace_free_floating_merged_section` and
+// `test_delete_range_suffix_shift_keeps_head_with_doomed_tail_anchor`
+// (`core/state/tests.rs`) - and they are irreconcilable with the composition on
+// this topology. `AppState::execute` runs the geometry epilogue after every
+// command, so the single-delete sequence re-anchors the partner while the merge
+// is still live, drags it as the section shrinks, and then deletes the merge:
+// the partner is left displaced with no edge to pull it back. The range path
+// defers to ONE cascade at the end and leaves it where the surveyor put it,
+// which is the better answer for the user and the reviewed intent.
+//
+// So #413 finding 22 is resolved as intended behaviour plus a documentation fix
+// (`command_delete_split.rs`, `execute_delete_shot_range_shift`), the red test
+// that asserted the false promise is gone, and this green one pins what the code
+// actually contracts to do. Its metamorphic counterpart
+// (`metamorphic_undo_tests.rs`, pair `range-shift-is-n-single-deletes`) asserts
+// the same two halves on random topology and no longer classifies the
+// difference away.
 
 /// Every `section_offsets` entry, by section, ascending.
 fn section_offsets(state: &AppState) -> Vec<(SectionId, (f64, f64))> {
@@ -1840,88 +1913,220 @@ fn merged_chain_for_range_delete(state: &AppState) -> (SectionId, SectionId) {
     (a, b)
 }
 
-/// FINDING 22: `execute_delete_shot_range_shift` and the single deletes its own
-/// doc comment says it generalizes put the survey in two different places.
-///
-/// `command_delete_split.rs:503-509` states the contract in as many words:
-///
-/// > Delete a contiguous range of shots by gap-closing (shifting) [...]
-/// > Generalizes the single-shot `delete_shot` (`remove_shot_with_rewire`) to a
-/// > range by deleting the range's shots in forward order within ONE
-/// > `ProjectSnapshotPair` undo unit
-///
-/// It does not. Deleting the last two shots of a section whose far station is
-/// merged to another section leaves the PARTNER section in a different place
-/// depending on which entry point the user reached for: the range path leaves it
-/// with no `section_offsets` entry at all, the two single deletes leave it seven
-/// metres away at `(-6.06, -3.50)`.
-///
-/// Mechanism. The two routes differ in WHEN geometry is reconciled, not in what
-/// they delete. `Command::DeleteShot` goes through `AppState::execute`, whose
-/// epilogue runs `convert_orphan_closures_in_open_project()` and
-/// `reconcile_geometry()` after EVERY command (`core/state/commands.rs:646-655`),
-/// so the merged partner is re-anchored against the section as it shrinks, one
-/// shot at a time. The range path does the whole range inside one project lock
-/// and calls `reconcile_geometry()` once at the end
-/// (`core/state/command_delete_split.rs:642`) - by which time the station the
-/// merge was anchored to is already gone, so there is nothing left to re-anchor
-/// the partner against and its offset is dropped instead of carried.
-///
-/// The range is a SUFFIX one on purpose, and that is the whole reduction: the
-/// interior and prefix cases agree to the last bit. Measured, on this exact
-/// topology:
-///
-/// | range | ranged | singles |
-/// |---|---|---|
-/// | prefix `[0..=1]`, plain | `[(0, (3.00, 10.20))]` | identical |
-/// | prefix `[0..=1]`, merged | `[(0, (-14.06, -3.50)), (1, (0.00, 0.00))]` | identical |
-/// | interior `[1..=2]`, merged | `[(0, ..), (1, (-9.06, -8.70))]` | identical |
-/// | suffix `[2..=3]`, plain | `[]` | identical |
-/// | **suffix `[2..=3]`, merged** | `[(0, (-17.06, -13.70))]` | **plus `(1, (-6.06, -3.50))`** |
-///
-/// Found by the metamorphic engine (`metamorphic_undo_tests.rs`), which drives
-/// two `AppState`s loaded from ONE `.stalx` down the two routes and compares
-/// them - seed 3, where the same divergence reads as a station moving 10.26 m
-/// in the adjusted solve.
-#[test]
-#[ignore = "open finding 22: a range shift-delete is not the single deletes it generalizes - see src-tauri/src/core/state/metamorphic_undo_tests.rs"]
-fn a_range_shift_delete_is_its_single_deletes() {
-    let _config = isolated_config();
-    let ranged_state = state_with_project();
-    let (ranged_a, _) = merged_chain_for_range_delete(&ranged_state);
-    let ids = shot_ids(&ranged_state, ranged_a);
-    // The SUFFIX range: the last two shots, so the station the merge is anchored
-    // to is one of the ones that goes.
-    let ranged = ranged_state.execute_delete_shot_range_shift(ranged_a, ids[2], ids[3]);
+/// Every adjusted station position of one section, by index, ascending.
+fn positions_of(state: &AppState, section_id: SectionId) -> Vec<(u32, [f64; 3])> {
+    let mut out: Vec<(u32, [f64; 3])> = state
+        .get_adjusted_stations()
+        .expect("no project open")
+        .iter()
+        .filter(|station| station.station_ref.section_id == section_id)
+        .map(|station| {
+            (
+                station.station_ref.station_index,
+                [
+                    station.coordinates.x,
+                    station.coordinates.y,
+                    station.coordinates.z,
+                ],
+            )
+        })
+        .collect();
+    out.sort_by_key(|entry| entry.0);
+    out
+}
+
+/// How far apart two position lists are, in metres, and `f64::INFINITY` when
+/// they do not even describe the same stations.
+fn position_gap(left: &[(u32, [f64; 3])], right: &[(u32, [f64; 3])]) -> f64 {
+    if left.len() != right.len() {
+        return f64::INFINITY;
+    }
+    let mut worst = 0.0_f64;
+    for (a, b) in left.iter().zip(right.iter()) {
+        if a.0 != b.0 {
+            return f64::INFINITY;
+        }
+        // Euclidean, so the number a failure prints is the distance the station
+        // actually moved rather than its longest axis.
+        let moved = (0..3)
+            .map(|axis| (a.1[axis] - b.1[axis]).powi(2))
+            .sum::<f64>()
+            .sqrt();
+        worst = worst.max(moved);
+    }
+    worst
+}
+
+/// Both routes over `[lo..=hi]`, each on its own freshly-built copy of
+/// [`merged_chain_for_range_delete`].
+struct Routes {
+    /// The state `execute_delete_shot_range_shift` was run on.
+    ranged: AppState,
+    /// The state the same shots were deleted on one `Command::DeleteShot` at a
+    /// time, forward from the range's start position.
+    singles: AppState,
+    /// The four-shot section that was edited.
+    a: SectionId,
+    /// The one-shot section merged to A's far station.
+    b: SectionId,
+}
+
+fn both_routes_over(lo: usize, hi: usize) -> Routes {
+    let ranged = state_with_project();
+    let (ranged_a, ranged_b) = merged_chain_for_range_delete(&ranged);
+    let ids = shot_ids(&ranged, ranged_a);
+    let result = ranged.execute_delete_shot_range_shift(ranged_a, ids[lo], ids[hi]);
     assert!(
-        ranged.success,
-        "execute_delete_shot_range_shift failed: {:?}",
-        ranged.error
+        result.success,
+        "execute_delete_shot_range_shift([{lo}..={hi}]) failed: {:?}",
+        result.error
     );
 
-    let singles_state = state_with_project();
-    let (singles_a, _) = merged_chain_for_range_delete(&singles_state);
-    // "in forward order": delete the shot at the range's start position, twice.
-    for step in 0..2 {
-        let live = shot_ids(&singles_state, singles_a);
-        let single = singles_state.execute(Command::DeleteShot {
+    let singles = state_with_project();
+    let (singles_a, singles_b) = merged_chain_for_range_delete(&singles);
+    assert_eq!(
+        (ranged_a, ranged_b),
+        (singles_a, singles_b),
+        "the two routes were not built on the same topology, so nothing below compares anything"
+    );
+    // Forward order: delete the shot AT the range's start position, once per
+    // shot in the range - the ids do not shift but the positions do.
+    for step in lo..=hi {
+        let live = shot_ids(&singles, singles_a);
+        let single = singles.execute(Command::DeleteShot {
             section_id: singles_a,
-            shot_id: live[2],
+            shot_id: live[lo],
         });
         assert!(
             single.success,
-            "single delete {step} failed: {:?}",
+            "single delete {step} of [{lo}..={hi}] failed: {:?}",
             single.error
         );
     }
+    Routes {
+        ranged,
+        singles,
+        a: ranged_a,
+        b: ranged_b,
+    }
+}
 
+/// FINDING 22, RESOLVED: `execute_delete_shot_range_shift` is ATOMIC, and that
+/// is the contract - not the composition its doc comment used to claim.
+///
+/// Two halves, both measured on `merged_chain_for_range_delete` (a four-shot
+/// section A whose far station A:4 is merged to a one-shot, undatumed section B):
+///
+/// 1. THE DOOMED-ANCHOR SHAPE, `[2..=3]`. The range takes A:3 and A:4 - the
+///    station the merge is anchored to - so B is cut loose with no datum and no
+///    remaining edge. The range delete leaves B exactly where it was; the two
+///    single deletes leave it 7.000000 m away, because the first of them
+///    re-anchors B against a section that has already lost one shot and the
+///    second then deletes the merge. Keeping B put is the reviewed intent
+///    (PR #95, the two tests named in the block comment above), and the
+///    difference is documented in `execute_delete_shot_range_shift`.
+///
+/// 2. EVERY OTHER SHAPE. A prefix `[0..=1]` and an interior `[1..=2]` remove no
+///    merged-to station, and there the two routes agree to the last bit - both
+///    in `section_offsets` and in the adjusted geometry, for BOTH sections. The
+///    atomic path is not free to differ wherever it likes; it differs on exactly
+///    the shape the doc comment now names.
+#[test]
+fn a_doomed_anchor_range_shift_keeps_the_partner_in_place() {
+    let _config = isolated_config();
+    // --- Half 1: the doomed-anchor suffix range -------------------------------
+    let reference = state_with_project();
+    let (_, reference_b) = merged_chain_for_range_delete(&reference);
+    let b_before = positions_of(&reference, reference_b);
+    let offsets_before = section_offsets(&reference);
+
+    let suffix = both_routes_over(2, 3);
     assert_eq!(
-        section_offsets(&ranged_state),
-        section_offsets(&singles_state),
-        "deleting a suffix range in one call and deleting the same shots one at a time put the \
-         merged partner section in two different places, so where the survey ends up depends on \
-         which menu item the user reached for"
+        suffix.b, reference_b,
+        "the reference project and the routed ones disagree on which section B is"
     );
+
+    let b_ranged = positions_of(&suffix.ranged, suffix.b);
+    let ranged_moved = position_gap(&b_before, &b_ranged);
+    assert!(
+        ranged_moved <= 1e-9,
+        "the range delete cut B loose (no datum, no merge left) and MOVED it {ranged_moved} m: \
+         {b_before:?} -> {b_ranged:?}. A deferred cascade must leave a free-floating partner \
+         where it was"
+    );
+    // B is really cut loose - otherwise the assertion above is about a section
+    // something else was holding in place, and proves nothing.
+    let project = suffix
+        .ranged
+        .get_project_state()
+        .expect("no project open after the range delete");
+    assert!(
+        project.station_merges.is_empty(),
+        "the range delete was supposed to remove the only merge: {:?}",
+        project.station_merges
+    );
+    assert!(
+        project.zero_datums.is_empty(),
+        "B was supposed to be undatumed: {:?}",
+        project.zero_datums
+    );
+    // The same fact in the STORED project, where the write-up recorded it: B had
+    // no offset going in and comes out with none (or, if some other path leaves
+    // the key behind, a geometrically inert one - whether an inert key survives
+    // at all is finding 2's business, its VALUE is this test's).
+    let ranged_offset = section_offsets(&suffix.ranged)
+        .into_iter()
+        .find(|(id, _)| *id == suffix.b)
+        .map(|(_, offset)| offset);
+    assert!(
+        ranged_offset.is_none_or(|(x, y)| x.abs() <= 1e-9 && y.abs() <= 1e-9),
+        "the range delete gave B a section_offsets entry that MOVES it: {:?} -> {:?}",
+        offsets_before,
+        section_offsets(&suffix.ranged)
+    );
+
+    // The other route, and the DIFFERENCE this pins: the singles drag B along.
+    let b_singles = positions_of(&suffix.singles, suffix.b);
+    let singles_moved = position_gap(&b_before, &b_singles);
+    assert!(
+        (singles_moved - 7.0).abs() <= 1e-6,
+        "the single-delete sequence was expected to strand B 7.000000 m away (the length of the \
+         first shot it deletes, applied while the merge was still live); it moved it \
+         {singles_moved} m: {b_before:?} -> {b_singles:?}"
+    );
+    let singles_offset = section_offsets(&suffix.singles)
+        .into_iter()
+        .find(|(id, _)| *id == suffix.b)
+        .map(|(_, offset)| offset)
+        .expect("the single deletes were expected to give B a section_offsets entry");
+    assert!(
+        (singles_offset.0 - -6.062_177_826_491_07).abs() <= 1e-9
+            && (singles_offset.1 - -3.5).abs() <= 1e-9,
+        "the single deletes put B at an offset this test does not know about: {singles_offset:?}"
+    );
+
+    // --- Half 2: every range that removes no merged-to station ----------------
+    for (label, lo, hi) in [("prefix", 0, 1), ("interior", 1, 2)] {
+        let routes = both_routes_over(lo, hi);
+        assert_eq!(
+            section_offsets(&routes.ranged),
+            section_offsets(&routes.singles),
+            "a {label} range [{lo}..={hi}] removes no station a merge is anchored to, so the \
+             range delete and the single deletes must leave identical section_offsets"
+        );
+        for (name, section_id) in [("A", routes.a), ("B", routes.b)] {
+            let gap = position_gap(
+                &positions_of(&routes.ranged, section_id),
+                &positions_of(&routes.singles, section_id),
+            );
+            assert!(
+                gap <= 1e-9,
+                "a {label} range [{lo}..={hi}] put section {name} in two different places \
+                 depending on the route ({gap} m apart), and only the doomed-anchor shape is \
+                 allowed to differ"
+            );
+        }
+    }
 }
 
 // ===========================================================================
@@ -1989,17 +2194,29 @@ fn describing_a_command_with_an_out_of_range_shot_id_does_not_overflow() {
 }
 
 // ===========================================================================
-// Finding 25: removing the PRIMARY zero datum silently redefines the origin
-// every other datum is expressed in, and nothing re-anchors - so the next
-// unrelated shot edit teleports a whole connected component
+// Finding 25 (FIXED): removing the PRIMARY zero datum silently redefined the
+// origin every other datum is expressed in, and nothing re-anchored - so the
+// next unrelated shot edit teleported a whole connected component
 // ===========================================================================
+
+/// The raw world position of one station, measured the way
+/// `Project::datum_anchor_position` measures the anchor a shot edit holds -
+/// `compute_station_raw_coords` (models/project/mutations.rs), not the resolved
+/// view.
+fn raw_station_xy(state: &AppState, station: StationRef) -> (f64, f64) {
+    let project = state.get_project_state().expect("no project open");
+    let coords = project
+        .compute_station_raw_coords(station)
+        .expect("station has no raw coordinates");
+    (coords.x, coords.y)
+}
 
 /// Every zero datum after the first is stored as a GPS position and RESOLVED
 /// against the first one: `set_zero_datum` places it at
 /// `gps_to_local(gps, zero_datums.first().gps)` and only the first datum sits at
-/// the local origin (models/project/mutations.rs:727-760). The same rule is
-/// re-applied, from scratch, by `realign_after_shot_edit`
-/// (models/project/mutations.rs:945-956) after any geometry-changing shot edit:
+/// the local origin (models/project/mutations.rs). The same rule used to be
+/// re-applied, from scratch, by `realign_after_shot_edit` after any
+/// geometry-changing shot edit:
 ///
 /// ```text
 /// let is_first = self.zero_datums.first().map(|d| d.station_ref == datum.station_ref) ...
@@ -2013,20 +2230,34 @@ fn describing_a_command_with_an_out_of_range_shot_id_does_not_overflow() {
 /// the origin onto whichever datum is now first - a change of frame for every
 /// other anchored component in the project.
 ///
-/// Nothing re-solves for it. `remove_zero_datum` (core/state/command_station.rs:191)
+/// Nothing re-solved for it. `remove_zero_datum` (core/state/command_station.rs)
 /// does call `resolve_offsets()`, but that solver deliberately never touches an
 /// anchor's own offset - "only the genuinely non-derivable anchors (datum
 /// sections and free-placed floating components) keep their stored offset,
-/// because the cascade never seed-adjusts them" (models/project/offsets.rs:289-296).
-/// A datum section IS such an anchor, so the surviving datum keeps the offset it
-/// was given while it was still a SECONDARY datum, and the project is left
-/// holding a placement its own rule no longer produces.
+/// because the cascade never seed-adjusts them" (models/project/offsets.rs). A
+/// datum section IS such an anchor, so the surviving datum kept the offset it was
+/// given while it was still a SECONDARY datum, and the project was left holding a
+/// placement its own rule no longer produces.
 ///
-/// The bill arrives on the next unrelated edit. `realign_after_shot_edit` re-runs
-/// the rule with the CURRENT first datum, so an `UpdateShot` on a shot in (or
-/// merged to) that section rigidly translates the whole connected component onto
-/// the new origin in one move - kilometres, for two datums a few hundred metres
-/// apart in latitude/longitude.
+/// The bill arrived on the next unrelated edit: the re-derived ABSOLUTE target
+/// rigidly translated the whole connected component onto the new origin in one
+/// move - kilometres, for two datums a few hundred metres apart in
+/// latitude/longitude.
+///
+/// FIXED, and kept as the regression guard: `update_shot` measures the group's
+/// datum-station world position BEFORE the edit (`Project::datum_anchor_position`,
+/// `core/state/command_shot.rs`) and passes it to `realign_after_shot_edit` as
+/// `hold_anchor_at`, so the realign holds the anchor exactly where it found it
+/// instead of re-georeferencing to the GPS target. The GPS fallback survives for
+/// the `None` case, and the two answers are identical for a project whose frame
+/// is self-consistent - they part company only on the promoted-datum
+/// contradiction this test builds.
+///
+/// The oracle is the ANCHOR, not the section offset, because the offset is
+/// allowed to move: this edit lengthens the shot UPSTREAM of the datum station by
+/// 2 m, and holding the station still is precisely what slides the section by 2 m.
+/// Both are asserted - the anchor to the bit, the slide to the edit's own
+/// magnitude - so a re-georeference (kilometres, in either quantity) still fails.
 ///
 /// Found by the Rust fuzzer's HORIZON mode, seed 2, at undo depth 1189: sections
 /// 65 and 81 both off by exactly `(22230.0946076, -10480.744175)` with 81 landing
@@ -2034,7 +2265,6 @@ fn describing_a_command_with_an_out_of_range_shot_id_does_not_overflow() {
 /// station 0. `fuzz_shrink_tests.rs` minimized that 1770-move trace to seven
 /// moves, of which this is the reduction.
 #[test]
-#[ignore = "open finding 25: removing the primary zero datum leaves every other datum on a stale origin until an unrelated shot edit teleports it - see src-tauri/src/core/state/fuzz_undo_tests.rs"]
 fn removing_the_primary_zero_datum_re_anchors_the_datums_it_leaves_behind() {
     let _config = isolated_config();
     let state = state_with_project();
@@ -2068,7 +2298,8 @@ fn removing_the_primary_zero_datum_re_anchors_the_datums_it_leaves_behind() {
     );
 
     // The primary datum goes away. `remove_zero_datum` re-solves offsets, so
-    // whatever the project holds after this is what it believes.
+    // whatever the project holds after this is what it believes - and what the
+    // next edit has to hold.
     let removed = state.execute(Command::RemoveZeroDatum {
         station_ref: StationRef::new(origin, 0),
     });
@@ -2077,9 +2308,12 @@ fn removing_the_primary_zero_datum_re_anchors_the_datums_it_leaves_behind() {
         "RemoveZeroDatum failed: {:?}",
         removed.error
     );
-    let settled = section_offset(&state, anchored);
+    let datum_station = StationRef::new(anchored, 1);
+    let settled_anchor = raw_station_xy(&state, datum_station);
+    let settled = section_offset(&state, anchored).expect("the anchored section lost its offset");
 
-    // An edit that has nothing to do with the datum, several moves later.
+    // An edit that has nothing to do with the datum, several moves later: 2 m of
+    // extra length on the shot UPSTREAM of the datum station.
     let target = shot_ids(&state, anchored)[0];
     let edited = state.execute(Command::UpdateShot {
         section_id: anchored,
@@ -2091,31 +2325,44 @@ fn removing_the_primary_zero_datum_re_anchors_the_datums_it_leaves_behind() {
     });
     assert!(edited.success, "UpdateShot failed: {:?}", edited.error);
 
-    let after = section_offset(&state, anchored).expect("the anchored section lost its offset");
-    let moved = settled.map_or(f64::INFINITY, |before| {
-        (after.0 - before.0).hypot(after.1 - before.1)
-    });
+    let now_anchor = raw_station_xy(&state, datum_station);
+    let anchor_moved = (now_anchor.0 - settled_anchor.0).hypot(now_anchor.1 - settled_anchor.1);
     assert!(
-        moved < 1.0,
-        "an UpdateShot moved the anchored section {moved:.1} m (from {settled:?} to {after:?}): \
-         removing the primary zero datum promoted this one to the origin without re-solving, so \
-         the whole component sat on a stale frame until an unrelated shot edit re-anchored it"
+        anchor_moved <= 1e-9,
+        "an UpdateShot moved the promoted datum's own station {anchor_moved:.3} m (from \
+         {settled_anchor:?} to {now_anchor:?}): removing the primary zero datum promoted this one \
+         to the origin without re-solving, and the edit re-derived the ABSOLUTE GPS target instead \
+         of holding the anchor where it found it, translating the whole connected component"
+    );
+
+    let after = section_offset(&state, anchored).expect("the anchored section lost its offset");
+    let moved = (after.0 - settled.0).hypot(after.1 - settled.1);
+    assert!(
+        (moved - 2.0).abs() <= 1e-9,
+        "the anchored section slid {moved:.3} m (from {settled:?} to {after:?}) for a 2 m \
+         lengthening of the shot upstream of its datum station; with the anchor held, the edit's \
+         own magnitude is the only motion allowed"
     );
 }
 
 /// The undo half, and the one the fuzzer's roundtrip oracle actually reports:
-/// the teleport is not undone.
+/// the teleport was not undone.
 ///
 /// `UndoData::PreviousValues` restores the shot's fields, and the geometry
 /// epilogue then runs `realign_after_shot_edit` AGAIN - against the same
-/// (already promoted) first datum. So the undo re-derives the NEW frame rather
-/// than restoring the offsets the edit found, and one `undo()` leaves the
+/// (already promoted) first datum. So the undo re-derived the NEW frame rather
+/// than restoring the offsets the edit found, and one `undo()` left the
 /// project's geometry kilometres from where it was before the edit it undid.
 ///
 /// This is what makes it an undo/redo finding rather than only a geometry one: a
 /// single `undo` of a single `UpdateShot` is not a no-op on `section_offsets`.
+///
+/// FIXED with the forward half, and kept as the regression guard: the undo takes
+/// the same `hold_anchor_at` route as the edit, so it holds the anchor where the
+/// undo found it instead of re-georeferencing a second time. The oracle here is
+/// still exact offset equality - unlike the forward tests, an undo has no edit of
+/// its own to pay for, so every section has to land on the offset it had.
 #[test]
-#[ignore = "open finding 25 (undo half): the component translation an edit performs after the primary datum was removed survives its own undo - see src-tauri/src/core/state/fuzz_undo_tests.rs"]
 fn undoing_the_edit_that_re_anchored_a_component_puts_it_back() {
     let _config = isolated_config();
     let state = state_with_project();
@@ -2187,8 +2434,13 @@ fn undoing_the_edit_that_re_anchored_a_component_puts_it_back() {
 /// This is the shape the shrinker minimized the horizon failure to: an empty
 /// section, one appended shot, a second datum, `deleteShot`, a merge, and one
 /// `updateShot`.
+///
+/// FIXED with the test above, and kept because the promotion arrives here through
+/// a path that never mentions datums: `hold_anchor_at` is measured from the live
+/// project, so it does not care WHICH command left the frame contradicting itself.
+/// Same oracle as above - the anchor to the bit, the section's slide to the
+/// edit's own 2 m.
 #[test]
-#[ignore = "open finding 25 (via DeleteShot): deleting the shot that carries the primary datum's station moves the project origin with no re-solve - see src-tauri/src/core/state/fuzz_undo_tests.rs"]
 fn deleting_the_primary_datums_station_does_not_silently_move_the_origin() {
     let _config = isolated_config();
     let state = state_with_project();
@@ -2222,7 +2474,9 @@ fn deleting_the_primary_datums_station_does_not_silently_move_the_origin() {
         shot_id: first_shot,
     });
     assert!(deleted.success, "DeleteShot failed: {:?}", deleted.error);
-    let settled = section_offset(&state, anchored);
+    let datum_station = StationRef::new(anchored, 1);
+    let settled_anchor = raw_station_xy(&state, datum_station);
+    let settled = section_offset(&state, anchored).expect("the anchored section lost its offset");
 
     let target = shot_ids(&state, anchored)[0];
     assert!(
@@ -2239,33 +2493,46 @@ fn deleting_the_primary_datums_station_does_not_silently_move_the_origin() {
         "UpdateShot failed"
     );
 
-    let after = section_offset(&state, anchored).expect("the anchored section lost its offset");
-    let moved = settled.map_or(f64::INFINITY, |before| {
-        (after.0 - before.0).hypot(after.1 - before.1)
-    });
+    let now_anchor = raw_station_xy(&state, datum_station);
+    let anchor_moved = (now_anchor.0 - settled_anchor.0).hypot(now_anchor.1 - settled_anchor.1);
     assert!(
-        moved < 1.0,
+        anchor_moved <= 1e-9,
         "a DeleteShot that removed the primary datum's station left the survey on a stale origin, \
-         and the next UpdateShot moved the anchored section {moved:.1} m (from {settled:?} to \
-         {after:?}) with no command in between that asked for it"
+         and the next UpdateShot moved the promoted datum's own station {anchor_moved:.3} m (from \
+         {settled_anchor:?} to {now_anchor:?}) with no command in between that asked for it"
+    );
+
+    let after = section_offset(&state, anchored).expect("the anchored section lost its offset");
+    let moved = (after.0 - settled.0).hypot(after.1 - settled.1);
+    assert!(
+        (moved - 2.0).abs() <= 1e-9,
+        "the anchored section slid {moved:.3} m (from {settled:?} to {after:?}) for a 2 m \
+         lengthening of the shot upstream of its datum station; with the anchor held, the edit's \
+         own magnitude is the only motion allowed"
     );
 }
 
 // ===========================================================================
-// Finding 12, CASCADING: the shot the stale id edited by mistake still carries
-// the edit several undos later, when the entry being consumed is unrelated and
-// its own persisted id is FRESH
+// Finding 12, CASCADING (FIXED): the shot the stale id edited by mistake still
+// carried the edit several undos later, when the entry being consumed was
+// unrelated and its own persisted id was FRESH
 // ===========================================================================
 
 /// Finding 12 is a single move going wrong; this is what a user sees, and it is
 /// why the Rust fuzzer reported it as something else for a while.
 ///
-/// After a reload, the undo of `UpdateShot` names its shot by an id the loader
-/// has since reassigned, so it writes the pre-edit values onto a NEIGHBOUR and
-/// leaves the edited shot as it was (finding 12). Nothing puts either half back:
-/// the corruption sits in the PROJECT, not in the entry, so every undo below it
-/// restores a state that still carries it - including undos of entries pushed on
+/// After a reload, the undo of `UpdateShot` named its shot by an id the loader
+/// had since reassigned, so it wrote the pre-edit values onto a NEIGHBOUR and
+/// left the edited shot as it was (finding 12). Nothing put either half back:
+/// the corruption sat in the PROJECT, not in the entry, so every undo below it
+/// restored a state that still carried it - including undos of entries pushed on
 /// a completely different section, whose own persisted ids resolve perfectly.
+///
+/// FIXED with finding 12 itself, and kept as the regression guard: undo/redo
+/// entries address shots by UUID (additive serde fields, with the legacy id as
+/// the fallback), so the renumbering the loader performs no longer decides which
+/// shot an entry means. There is no first wrong write left for a later undo to
+/// preserve.
 ///
 /// That last part is what made this look like a new defect. The fuzzer measures
 /// staleness on the entry it is consuming NOW, so at the depth this fails the
@@ -2284,7 +2551,6 @@ fn deleting_the_primary_datums_station_does_not_silently_move_the_origin() {
 /// FIRST undo and this asserts that the second one cannot clean up after it -
 /// exactly the relationship finding 15 has to finding 3.
 #[test]
-#[ignore = "open finding 12 (cascading): the shot a stale id edited by mistake still carries the edit after later, unrelated undos - see src-tauri/src/core/state/fuzz_undo_tests.rs"]
 fn unwinding_past_a_stale_id_edit_leaves_no_shot_holding_it() {
     let _config = isolated_config();
     let temp = TempDir::new().unwrap();
@@ -2382,16 +2648,16 @@ fn unwinding_past_a_stale_id_edit_leaves_no_shot_holding_it() {
 }
 
 // ===========================================================================
-// Finding 5, on the COMMAND side: a reloaded UpdateSectionMetadata no longer
-// knows it was clearing a field - so the entry mis-describes itself, and its
-// redo silently under-applies
+// Finding 5, on the COMMAND side (FIXED): a reloaded UpdateSectionMetadata no
+// longer knew it was clearing a field - so the entry mis-described itself, and
+// its redo silently under-applied
 // ===========================================================================
 
-/// `SectionUpdates::name` / `surveyor` / `date` are `Option<Option<T>>` behind a
-/// plain `#[serde(default)]` with no `double_option` (models/section.rs:122).
+/// `SectionUpdates::name` / `surveyor` / `date` were `Option<Option<T>>` behind a
+/// plain `#[serde(default)]` with no `double_option` (models/section.rs).
 /// `Some(None)` ("clear it") and `None` ("leave it alone") therefore BOTH
-/// serialize to `null`, and `null` reads back as `None` - so the distinction
-/// survives the write and dies on the read.
+/// serialized to `null`, and `null` read back as `None` - so the distinction
+/// survived the write and died on the read.
 ///
 /// Finding 5 already pins that gap on the entry's `values_json`, where it costs
 /// an UNDO. This is the same gap on the entry's stored COMMAND, where it costs a
@@ -2402,13 +2668,19 @@ fn unwinding_past_a_stale_id_edit_leaves_no_shot_holding_it() {
 /// The previous value here is deliberately NON-null ("Ferreira"), so the undo in
 /// the middle is one finding 5 does not touch: what this isolates is the redo.
 /// Nothing in the sequence is unusual - clear a field, save, reopen, undo, redo -
-/// and the survey silently keeps a surveyor the user removed.
+/// and the survey silently kept a surveyor the user removed.
+///
+/// FIXED, and kept as the regression guard: the three nullable fields carry
+/// `deserialize_with = "double_option"` + `skip_serializing_if = "Option::is_none"`
+/// (models/section.rs), so "clear it" writes `null` and "leave it alone" writes
+/// nothing at all, and the two survive the round trip apart. Because the meaning
+/// of an explicit null FLIPPED, schema v17 drops pre-v17 undo history rather than
+/// reinterpreting it - the v13/v15/v16 precedent.
 ///
 /// Found by `fuzz_undo_tests.rs`'s entry-content oracle, which sees the harmless
 /// half of the same defect first: the reloaded entry's history-dropdown preview
 /// stops listing the Surveyor row (`the_history_preview_still_reports_a_cleared_field`).
 #[test]
-#[ignore = "open finding 5 (command side): a reloaded UpdateSectionMetadata cannot clear a field, so its redo under-applies - see src-tauri/src/core/state/fuzz_undo_tests.rs"]
 fn redo_after_reload_clears_the_section_field_it_cleared() {
     let _config = isolated_config();
     let temp = TempDir::new().unwrap();
@@ -2481,16 +2753,20 @@ fn redo_after_reload_clears_the_section_field_it_cleared() {
 }
 
 /// The same defect, one step earlier and visible without touching the project:
-/// the history dropdown stops saying the entry cleared anything.
+/// the history dropdown stopped saying the entry cleared anything.
 ///
 /// `derive_preview_data` builds the `UpdateSectionMetadata` rows from
-/// `updates.surveyor` (commands/history.rs), so an entry whose `Some(None)` has
-/// decayed to `None` renders no Surveyor row at all - and when the cleared field
-/// was the only thing the edit changed, `preview_data` becomes `null` and the
-/// hover is empty. The entry still UNDOES correctly here; it just no longer says
+/// `updates.surveyor` (commands/history.rs), so an entry whose `Some(None)` had
+/// decayed to `None` rendered no Surveyor row at all - and when the cleared field
+/// was the only thing the edit changed, `preview_data` became `null` and the
+/// hover was empty. The entry still UNDID correctly here; it just no longer said
 /// what it did.
+///
+/// FIXED with the redo half above (the same `double_option` round trip), and
+/// kept because it is the cheaper tripwire: it fails on a preview string without
+/// needing an undo, a redo or a project to compare, so a serde regression on
+/// `SectionUpdates` is caught here first.
 #[test]
-#[ignore = "open finding 5 (command side): a reloaded entry's preview drops the field it cleared - see src-tauri/src/core/state/fuzz_undo_tests.rs"]
 fn the_history_preview_still_reports_a_cleared_field() {
     let _config = isolated_config();
     let temp = TempDir::new().unwrap();
@@ -2574,32 +2850,36 @@ fn surveyor_of(state: &AppState, section_id: SectionId) -> String {
 const CLEARED: &str = "<cleared>";
 
 // ===========================================================================
-// Finding 23, in the history dropdown: an f64 that serde_json writes and its own
-// parser cannot read back
+// Finding 23 (FIXED), in the history dropdown: an f64 that serde_json wrote and
+// its own parser could not read back
 // ===========================================================================
 
 /// `format_property_tests.rs` records finding 23 as "a save/load cycle is not a
 /// fixpoint", with the gzipped `undo_stack` / `redo_stack` JSON blobs as one of
-/// the two places the drift lives. This is that drift with its mechanism named
+/// the two places the drift lived. This is that drift with its mechanism named
 /// and a user-visible consequence attached.
 ///
 /// `serde_json` writes an `f64` through ryu's shortest round-tripping form and
-/// reads it back with a parser that is not correctly rounded past 16 significant
-/// digits: `13.565000000000001` is written for the bits `0x402b2147ae147ae2`,
-/// `str::parse::<f64>` returns exactly those bits, and `serde_json::from_str`
-/// returns `0x402b2147ae147ae1` - one ULP low. (`serde_json`'s `float_roundtrip`
-/// feature switches its parser to the correctly-rounded one; this crate is built
-/// without it, so every persisted undo command carrying a 17-digit float comes
-/// back changed.)
+/// used to read it back with a parser that is not correctly rounded past 16
+/// significant digits: `13.565000000000001` is written for the bits
+/// `0x402b2147ae147ae2`, `str::parse::<f64>` returns exactly those bits, and the
+/// default `serde_json::from_str` returned `0x402b2147ae147ae1` - one ULP low.
 ///
 /// One ULP is invisible until it crosses a rendering boundary. The history
 /// preview renders a shot length at two decimals, and this value sits exactly on
 /// one: `13.57` before the save, `13.56` after it, on an entry nobody touched.
 ///
+/// FIXED, and kept as the regression guard: the crate now depends on
+/// `serde_json` with the `float_roundtrip` feature (src-tauri/Cargo.toml, where
+/// the requirement is written up as REQUIRED rather than a preference), which
+/// switches the parser to the correctly-rounded one - so every persisted undo
+/// command carrying a 17-digit float reads back bit for bit. The other half of
+/// the same finding, the loader's re-solve perturbing an already-right persisted
+/// offset, was closed by `Project::OFFSET_DUST_M` (see bug 2 above).
+///
 /// Found by `fuzz_undo_tests.rs`'s entry-content oracle
 /// (`finding-23-history-float-dust-moves-a-displayed-value`).
 #[test]
-#[ignore = "open finding 23 (history payloads): serde_json reads back an f64 it wrote one ULP low, changing what a reloaded undo entry displays - see src-tauri/src/core/state/format_property_tests.rs"]
 fn a_reloaded_entry_displays_the_length_it_was_given() {
     let _config = isolated_config();
     let temp = TempDir::new().unwrap();

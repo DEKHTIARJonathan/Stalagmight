@@ -79,6 +79,17 @@
 //!
 //! # The numbers
 //!
+//! MEASURED WHILE THE ISSUE-413 FINDINGS WERE OPEN, and kept as the record of
+//! the experiment rather than re-run. Every one of those findings is fixed now
+//! and `fuzz_undo_tests.rs`'s `CLASSIFIERS` table is EMPTY, so re-running this
+//! today measures the `sigs` column and nothing else: `ids` and `rare-ids` are
+//! zero by construction, and the three `first` columns have no event to be
+//! first to. That does not weaken the conclusion - the conclusion is NEGATIVE
+//! and the signature column, the metric the first experiment used, is the one
+//! that carries it. The classifier-keyed columns become measurable again the
+//! moment there is another open bug to key on, which is why the machinery
+//! stays.
+//!
 //! Six repetitions of 80 runs x 60 moves per arm, disjoint seed blocks per
 //! repetition, prologue CHARGED, `STALAGMIGHT_RUST_FUZZ_THREADS=8`. `sigs` is
 //! distinct topology signatures (the first experiment's primary metric), `ids`

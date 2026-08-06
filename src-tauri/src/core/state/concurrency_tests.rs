@@ -623,7 +623,8 @@ fn run_concurrent(seed: u32, threads: usize, operations: usize, deadline_secs: u
             None => outcome.problems.push(format!("a worker PANICKED: {panic}")),
         }
     }
-    // A KNOWN app panic (finding 24's site is the only one left) unwound
+    // A KNOWN app panic - there is none left to classify, so this arm is dormant
+    // and is kept for the next open finding with a live panic site - unwound
     // through the project mutex, which POISONS it - and from that instant every
     // lock site in the app reads "no project open". So the poison check and the
     // post-run walk below would both be re-reporting one already-classified
@@ -853,10 +854,11 @@ fn concurrency_gate() {
     );
     // A run whose threads all no-op'd proves nothing about a lock.
     // Not "every operation completed": a worker that trips a KNOWN assert
-    // (finding 24's overflow site is the only one still classified - the
-    // merge-alignment ones are fixed and are reported problems again) unwinds
-    // and stops early, which is legitimate and is already accounted for by the
-    // classifier. What must not happen is the workers not running at all.
+    // unwinds and stops early, which would be legitimate and accounted for by
+    // the classifier. NOTHING is classified today - finding 24's overflow site
+    // and the merge-alignment ones are all fixed, and every panic is a reported
+    // problem again - so `total` is empty and the high floor is the one that
+    // applies. What must not happen is the workers not running at all.
     let floor = if total.is_empty() {
         GATE_SEEDS.len() * GATE_THREADS * GATE_OPERATIONS
     } else {

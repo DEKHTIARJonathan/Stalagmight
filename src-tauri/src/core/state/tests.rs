@@ -18136,7 +18136,7 @@ fn test_unmerge_undo_restores_merge() {
 ///    that interpolate 002's overlap shots - all in one atomic import call
 /// 3. Read back from project state and assert actual interpolated values
 #[test]
-#[ignore]
+#[ignore = "fixture-gated: needs e2e/fixtures/kb5.dmp, which the repo does not carry"]
 fn kb5_import_overlap_interpolation_integration() {
     use crate::models::ExistingShotUpdate;
     use crate::parsers::dmp::{parse_dmp, DmpShotType};

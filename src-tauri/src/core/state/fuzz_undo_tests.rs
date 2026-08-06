@@ -3,12 +3,12 @@
 //!
 //! # Why this exists next to the agent harness
 //!
-//! `e2e/agent/scenarios/undoRedoFuzz.ts` and its persistence sibling find real
+//! `e2e/agent/scenarios/undoRedoFuzz.ts` and its persistence sibling found real
 //! bugs - eleven of them are on
 //! <https://github.com/Stalagmight/Stalagmight/issues/413> - but neither of them
 //! GATES anything. The harness drives a built desktop app through WebDriver and
-//! never runs in CI, and the red tests in `open_undo_bugs_tests.rs` are
-//! `#[ignore]`d by design. So today an undo regression can land without a single
+//! never runs in CI, and the red tests in `open_undo_bugs_tests.rs` were
+//! `#[ignore]`d by design. So an undo regression could land without a single
 //! check going red.
 //!
 //! This module closes that hole. It is the same model - a canonical project
@@ -28,7 +28,7 @@
 //! | `adversarial_tests.rs` | `AppState` with hostile arguments | a refusal that mutates, and any panic | EVERY CI run |
 //! | `concurrency_tests.rs` | one `AppState` from several threads | a deadlock, a poisoned lock, a race | EVERY CI run |
 //! | agent harness | the real app over IPC | anything the frontend store or the IPC boundary breaks | on demand |
-//! | `open_undo_bugs_tests.rs` | `AppState` directly | the KNOWN open bugs, pinned | `-- --ignored` |
+//! | `open_undo_bugs_tests.rs` | `AppState` directly | the reductions each finding was FIXED against, pinned | EVERY CI run |
 //!
 //! `fuzz_shrink_tests.rs` is not a tier: it finds nothing. It MINIMIZES what
 //! this module finds - see "The trace, and the shrinker" below.
@@ -40,53 +40,57 @@
 //!
 //! # THE BUG IDENTIFICATION MATRIX
 //!
-//! Every finding the agent-harness fuzzers found is reachable HERE, and is
-//! CLASSIFIED by id rather than merely hit. The table below is the evidence: for
-//! each one, a mode, a seed and a move count under which this module reaches it
-//! and names it. Every row was run twice and the two runs are byte-identical
-//! (`the_fuzzer_is_deterministic` pins that property for the gate's seeds; the
-//! whole table was re-run and diffed by hand for the rest).
+//! Every finding the agent-harness fuzzers found is reachable HERE, and each one
+//! was CLASSIFIED by id rather than merely hit while it was open. The table below
+//! is the evidence: for each one, the mode, seed and move count under which this
+//! module reached it and named it, and what is there NOW.
+//!
+//! Every one of them is FIXED, so every classifier is deleted and
+//! [`CLASSIFIERS`] is EMPTY: `classify` answers `None` for every difference and
+//! nothing can bless a diff. Each row therefore records the FIX and the sweep
+//! that is clean over the shape the row used to be found in, which is the only
+//! thing a deleted classifier can be held to.
 //!
 //! Read a row as: run `fuzz_seed_survey` with the listed environment, and the
-//! per-seed summary line for that seed carries the listed classified-hit id.
-//! `SEEDS=n` runs seeds 1..=n, so the named seed is included.
+//! per-seed summary line for that seed carries no hit at all. `SEEDS=n` runs
+//! seeds 1..=n, so the named seed is included.
 //!
-//! | # | classified as | mode env | seed | moves |
-//! |---|---|---|---|---|
-//! | 1 (uuids) | FIXED by #423 (PR #453): `ShotData` now carries the uuid, classifier retired | - | - | - |
-//! | 1 (anchors) | `finding-1-redo-of-create-section-drops-gauge-anchors` | (none), persistence half | 1 | 60 |
-//! | 2 | `finding-2-orphan-zero-section-offset` | (none) | 1 | 60 |
-//! | 3 (offset) | `finding-3-undo-of-the-first-shot-displaces-an-empty-section` | (none) | 2 | 60 |
-//! | 3 (data loss) | `finding-3-undo-of-the-first-shot-drops-station-zero-refs` | (none) | 37 | 60 |
-//! | 4 | `finding-4-closure-reordered-on-undo` | `CLOSURE_SHAPES=1` | 1 | 40 |
-//! | 5 | `finding-5-undo-cannot-restore-null-section-field` | (none) | 6 | 60 |
-//! | 5 (command) | `finding-5-a-reloaded-command-can-no-longer-clear-a-section-field` | (none), persistence half | 1 | 60 |
-//! | 6 | `finding-6-undo-refused-by-a-delete-guard` | `CLOSURES=1` | 4 | 60 |
-//! | 7 | `finding-7-a-jump-is-not-n-single-steps` | `JUMPS=1 CLOSURE_SHAPES=1`, persistence half | 6 | 150 |
-//! | 8 | `finding-8-stale-id-deletes-the-wrong-shot` | `DIVERGENCE=1` | 1 | 12 |
-//! | 10 | `finding-10-reload-converts-an-orphan-closure-to-a-merge` | `CLOSURE_SHAPES=1`, persistence half | 1 | 40 |
-//! | 11 | `finding-11-pre-save-entry-reverts-the-saves-heals` | (none), persistence half | 1 | 60 |
-//! | 12 | `finding-12-stale-id-edits-the-wrong-shot` | `DIVERGENCE=1` | 1 | 12 |
-//! | 13 | `finding-13-stale-id-misses-and-wedges-the-history` | (none), persistence half | 5 | 60 |
-//! | 14 | `finding-14-insert-leaves-a-merge-metres-out-of-alignment` | `CLOSURES=1` | 6 | 60 |
-//! | 14 (mirror) | `finding-14-variant-a-shot-removal-leaves-a-merge-out-of-alignment` | `JUMPS=1 CLOSURE_SHAPES=1` | 1 | 150 |
-//! | 15 | = finding 3, see below | (none) | 5 | 20 |
-//! | 16 | `finding-16-redo-of-a-create-shot-duplicates-a-shot-uuid` | (none), persistence half | 13 | 60 |
-//! | 17 | `finding-17-zero-datum-reordered-on-undo` | (none) | 1 | 60 |
-//! | 20 | `finding-20-an-unanchored-merge-group-is-never-realigned` | `HORIZON=1` | 1 | 2000 |
-//! | 21 | red test only - `the_adjusted_solve_is_a_function_of_the_project` | n/a | n/a | n/a |
-//! | 22 | `finding-22-a-range-shift-delete-is-not-its-single-deletes` | metamorphic gate | 3 | n/a |
-//! | 23 | `finding-23-a-save-load-cycle-is-not-a-fixpoint` | format-property gate | 1 | n/a |
-//! | 23 (display) | `finding-23-history-float-dust-moves-a-displayed-value` | `CROSSINGS=3`, persistence half | 16 | 60 |
-//! | 24 | `finding-24-shot-display-position-overflows-before-validation` | adversarial gate | 4 | 120 |
-//! | 25 | UNCLASSIFIED - fails the run - see the observations section | `HORIZON=1 JUMPS=1` | 2 | 10000 |
+//! | # | was classified as | now | mode env | seed | moves |
+//! |---|---|---|---|---|---|
+//! | 1 (uuids) | `finding-1-redo-of-create-section-remints-shot-uuids` | FIXED - `CreatedSectionSnapshot` carries a `SectionIdentity`; seeds 1..40 x100 are clean | (none) | 1 | 60 |
+//! | 1 (anchors) | `finding-1-redo-of-create-section-drops-gauge-anchors` | FIXED with the uuids, by the same identity | (none), persistence half | 1 | 60 |
+//! | 2 | `finding-2-orphan-zero-section-offset` | FIXED - `Project::write_section_offset` drops the dust ball around zero | (none) | 1 | 60 |
+//! | 3 (offset) | `finding-3-undo-of-the-first-shot-displaces-an-empty-section` | FIXED - `Project::remove_appended_first_shot` is the undo of an append | (none) | 2 | 60 |
+//! | 3 (data loss) | `finding-3-undo-of-the-first-shot-drops-station-zero-refs` | FIXED with the offset half - the undo no longer routes through the general delete | (none) | 37 | 60 |
+//! | 4 | `finding-4-closure-reordered-on-undo` | FIXED - `UndoData::ClosureInfo` records the index the `Vec::remove` took | `CLOSURE_SHAPES=1` | 1 | 40 |
+//! | 5 | `finding-5-undo-cannot-restore-null-section-field` | FIXED - `SectionUpdates` carries `double_option` | (none) | 6 | 60 |
+//! | 5 (command) | `finding-5-a-reloaded-command-can-no-longer-clear-a-section-field` | FIXED with it; schema v17 drops pre-v17 history rather than reinterpret it | (none), persistence half | 1 | 60 |
+//! | 6 | `finding-6-undo-refused-by-a-delete-guard` | FIXED - the undo removes the created shot through `AppState::remove_created_shot`, which consults no user-intent guard | `CLOSURES=1` | 4 | 60 |
+//! | 7 | `finding-7-a-jump-is-not-n-single-steps` | FIXED - `undo_to`/`redo_to` reconcile per step; `bug_7_a_jump_is_n_single_steps` is no longer ignored and GATES it | `JUMPS=1 CLOSURE_SHAPES=1`, persistence half | 6 | 150 |
+//! | 8 | `finding-8-stale-id-deletes-the-wrong-shot` | FIXED - every restore path addresses its shot by `Shot::uuid` | `DIVERGENCE=1` | 1 | 12 |
+//! | 10 | `finding-10-reload-converts-an-orphan-closure-to-a-merge` | FIXED at the LOAD boundary - the commands that orphan a closure convert it themselves. NOT fixed in-session: see the open observation below | `CLOSURE_SHAPES=1`, persistence half | 1 | 40 |
+//! | 11 | `finding-11-pre-save-entry-reverts-the-saves-heals` | FIXED - `reapply_heals_after_restore` brings a restored snapshot up to a saved project's standard | (none), persistence half | 1 | 60 |
+//! | 12 | `finding-12-stale-id-edits-the-wrong-shot` | FIXED with finding 8 | `DIVERGENCE=1` | 1 | 12 |
+//! | 13 | `finding-13-stale-id-misses-and-wedges-the-history` | FIXED with finding 8, plus a load-time pass that DROPS an entry whose target no longer resolves; a refused history move fails the run again | (none), persistence half | 5 | 60 |
+//! | 14 | `finding-14-insert-leaves-a-merge-metres-out-of-alignment` | FIXED - the insert compensates only when the tail alone is anchored; ANY alignment assert fails the run again | `CLOSURES=1` | 6 | 60 |
+//! | 14 (mirror) | `finding-14-variant-a-shot-removal-leaves-a-merge-out-of-alignment` | FIXED with 14, in `remove_shot_with_rewire` | `JUMPS=1 CLOSURE_SHAPES=1` | 1 | 150 |
+//! | 15 | = finding 3, see below | FIXED with it | (none) | 5 | 20 |
+//! | 16 | `finding-16-redo-of-a-create-shot-duplicates-a-shot-uuid` | FIXED - a redo refuses to duplicate a uuid | (none), persistence half | 13 | 60 |
+//! | 17 | `finding-17-zero-datum-reordered-on-undo` | FIXED with finding 4, on `UndoData::ZeroDatumInfo` | (none) | 1 | 60 |
+//! | 18 | `finding-18-raw-and-resolved-merge-alignment-disagree` | DELETED with finding 14 - `expect_raw_and_resolved_agree` still runs and now FAILS; the id never recorded a hit in any mode, before the fix or after | n/a | n/a | n/a |
+//! | 20 | `finding-20-an-unanchored-merge-group-is-never-realigned` | FIXED on both halves - an unanchored group is realigned against the edited section, and the heal gate is the app's own invariant; every drifted merge fails, at any magnitude | `HORIZON=1` | 1 | 2000 |
+//! | 21 | red test only - `the_adjusted_solve_is_a_function_of_the_project` | FIXED - `adjust_least_squares` numbers from a SORTED sequence; that test is no longer ignored and `ADJUSTED_TOLERANCE_REL` is deleted | n/a | n/a | n/a |
+//! | 22 | `finding-22-a-range-shift-delete-is-not-its-single-deletes` | RESOLVED as INTENDED - the metamorphic pair ASSERTS the difference now instead of tolerating it | metamorphic gate | 3 | n/a |
+//! | 23 | `finding-23-a-save-load-cycle-is-not-a-fixpoint` | FIXED - `serde_json`'s `float_roundtrip`, plus `cascade_bfs` declining a sub-dust correction; the format gate compares two generations EXACTLY | format-property gate | 1 | n/a |
+//! | 23 (display) | `finding-23-history-float-dust-moves-a-displayed-value` | FIXED with it; a history row that reads differently after a reload fails the run | `CROSSINGS=3`, persistence half | 16 | 60 |
+//! | 24 | `finding-24-shot-display-position-overflows-before-validation` | FIXED - `shot_display_position` saturates; the adversarial gate tolerates no panic | adversarial gate | 4 | 120 |
+//! | 25 | UNCLASSIFIED - failed the run | FIXED as finding 26's sibling - a shot edit HOLDS the datum anchor where it found it | `HORIZON=1 JUMPS=1` | 2 | 10000 |
 //!
-//! Findings 18 and 19 are ids this module's own classifiers already use and are
-//! NOT rows: 18 is the raw-versus-resolved alignment disagreement (issue #413's
-//! finding 14 write-up records the same fact) and 19 is tolerated float dust
-//! accumulating past the tolerance, which the horizon mode watches for and which
-//! has not fired. They are reserved so the numbering does not collide, which is
-//! why the new ones start at 20.
+//! Finding 19 is an id this module still uses and is not a row: it is tolerated
+//! float dust ACCUMULATING past the tolerance, which the horizon mode watches for
+//! and which has not fired. It is the one id `Outcome::hits` can still carry, and
+//! it is not a classifier - `classify` cannot produce it. It stays reserved so
+//! the numbering does not collide, which is why the new ones start at 20.
 //!
 //! Findings 21 to 24 are not roundtrip-oracle rows because none of them is a
 //! roundtrip defect. 21 is measured by re-solving one project
@@ -106,6 +110,22 @@
 //! on a rounding boundary and changing a number the user reads. Both are cross-
 //! referenced from the file that owns the original.
 //!
+//! ## What the strict engine measures, on this branch
+//!
+//! Every number below is a `fuzz_seed_survey` run at the stated environment, and
+//! "clean" means the run reached NOTHING - not one classified hit, because there
+//! is nothing left to classify.
+//!
+//! | mode env | seeds x moves | clean |
+//! |---|---|---|
+//! | (none) | 40 x 60 | 40/40 |
+//! | (none) | 40 x 100 | 40/40 |
+//! | `CLOSURES=1` | 20 x 60 | 20/20 |
+//! | `CLOSURE_SHAPES=1` | 20 x 40 | 20/20 |
+//! | `DIVERGENCE=1` | 20 x 12 | 20/20 |
+//! | `JUMPS=1 CLOSURE_SHAPES=1` | 20 x 150 | 20/20 |
+//! | `COMBINED=1` | 40 x 300 | 38/40 - seeds 20 and 35 reach the open observation below |
+//!
 //! Environment prefix for every row: `STALAGMIGHT_RUST_FUZZ_`. So the finding-7
 //! row is
 //!
@@ -124,10 +144,10 @@
 //! ## What finding 15 was
 //!
 //! Finding 15 ("an undo leaves a `section_offsets` entry carrying REAL geometry")
-//! is FINDING 3, re-measured. Finding 3 displaces the empty section on the undo
-//! that removes its first shot; nothing ever puts that back, because the redo
+//! is FINDING 3, re-measured. Finding 3 displaced the empty section on the undo
+//! that removed its first shot; nothing ever put that back, because the redo
 //! re-inserts through the offset-neutral append path - which is finding 3's own
-//! ratchet half. So the leftover is still in the project several undos later,
+//! ratchet half. So the leftover was still in the project several undos later,
 //! when the entry being consumed is unrelated and the snapshot it is compared
 //! against never had the key.
 //!
@@ -137,72 +157,196 @@
 //! it, into and out of section 1, the very section that ends up displaced. The
 //! write-up read the move log from the wrong end.
 //!
-//! The classifiers now carry that shape as `finding-3-cascade-...`, and
+//! The classifiers carried that shape as `finding-3-cascade-...` until finding 3
+//! was fixed, which fixed this with it and took both classifiers with it.
 //! `unwinding_the_history_leaves_no_displaced_section_behind` in
-//! `open_undo_bugs_tests.rs` pins the consequence a user sees.
+//! `open_undo_bugs_tests.rs` pins the consequence a user sees and now passes.
 //!
 //! ## Observations, and what each one turned out to be
 //!
-//! NOTHING IS OPEN HERE. Seven observations have been through this section and
-//! all seven are resolved: three into findings (20, 21, 25), TWO into model
-//! fixes, one into a duplicate of finding 12, and one triaged out as the
-//! measuring engine's own artifact. The record stays because the next run of
-//! this programme should start from the evidence - including the shape of the
-//! reductions that did NOT reproduce - rather than from a surprise.
+//! NOTHING IS OPEN. The orphan-closure story was the last one, and both of its
+//! halves - the LOAD BOUNDARY half and the UNDO half, the first two entries
+//! below - are now fixed, with `COMBINED=1 SEEDS=40 ITERATIONS=300` at 40/40.
+//! Every other observation this section has carried is resolved too - three into
+//! findings (20, 21, 25), two into model fixes, one into a duplicate of finding
+//! 12, and one triaged out as the measuring engine's own artifact. The record
+//! stays because the next run of this programme should start from the evidence -
+//! including the shape of the reductions that did NOT reproduce - rather than
+//! from a surprise.
 //!
 //! The bar an entry has to clear to be listed as OPEN is unchanged:
-//! deterministic, reproducing twice, not root-caused, and therefore FAILING its
-//! run rather than classified.
+//! deterministic, reproducing twice, and FAILING its run rather than classified.
 //!
-//! * RESOLVED as FINDING 20. `HORIZON=1 SEEDS=1 ITERATIONS=2000` left a merged
-//!   pair 1.58 cm apart after an `updateShot`. Root cause:
-//!   `realign_after_shot_edit` (models/project/mutations.rs:923) returns at
-//!   line 941 when the edited section's merge group holds no zero datum, and
-//!   the epilogue's `realign_merges` (models/project/offsets.rs:280) only
-//!   re-solves past the app's own 5 cm reporting threshold - while the app's
-//!   `#[cfg(test)]` invariant for the same pair is 1 cm. Classified, terminally.
-//! * RESOLVED as a MODEL FIX. Seeds 2, 7 and 8 were described as failing on
-//!   finding-3-shaped `section_offsets` values the cascade classifier no longer
-//!   matched. Half of that was true and is fixed: the classifier froze one
-//!   value where finding 3 RATCHETS, so it stopped matching after the second
-//!   cycle. It now follows the trajectory and requires BOTH sides to be on it,
-//!   which is narrower per diff and took the survey from 35 to 39 clean seeds
-//!   of 40 at 100 moves.
-//! * RESOLVED as a MODEL FIX, and the reason the classifier chain now COMPOSES.
-//!   `COMBINED=1 ITERATIONS=300` failed seeds 6 and 35, both halves, on
+//! * **RESOLVED, and FIXED: a closure orphaned by a command that did not convert
+//!   was reclassified by the next LOAD.** Surfaced by the fix in the next entry:
+//!   with the undo half closed, `COMBINED=1 SEEDS=40 ITERATIONS=300` went to
+//!   39/40, seed 20's PERSISTENCE half failing on `reload did not restore the
+//!   state recorded at depth # | at loop_closures.length` with
+//!   `station_merges.length` moving the other way. Pre-existing rather than new,
+//!   and measured rather than argued: with `models/project/offsets.rs` and
+//!   `models/project/shots.rs` reverted to their pre-fix state, a project built
+//!   as `createLoopClosure` + `removeZeroDatum` (NO shot removal anywhere, so
+//!   none of that code runs at all) saved and reopened still moved the entry from
+//!   `loop_closures` to `station_merges`. What the undo fix changed is that the
+//!   seed reached the reload comparison instead of aborting at the undo one
+//!   several moves earlier.
+//!
+//!   `fuzz_shrink_tests.rs` took seed 20's 168 recorded moves to 14 in 178 probes
+//!   (`PERSISTENCE=1 CROSSINGS=3` - the shrinker defaults `CROSSINGS` to 1 while
+//!   the survey defaults it to `COMBINED_CROSSINGS`, and the persistence half
+//!   does not reproduce under the shorter crossing schedule). The two that matter
+//!   opened the list: `createLoopClosure(7/0,3/2,Move)` then
+//!   `removeZeroDatum(7/0)`; the rest was filler carrying the project to a
+//!   `save/close/reopen`.
+//!
+//!   Root cause, and it was one asymmetry rather than a bug in either half.
+//!   `RemoveZeroDatum` un-anchors one side of a closure that bridges two
+//!   otherwise unconnected groups. It changes no topology, so the closure was
+//!   already a sole bridge; what it changes is that `merge_would_double_anchor`
+//!   stops refusing the conversion, there being no second GPS anchor left to fuse
+//!   into one rigid component. The command was not flagged
+//!   `can_orphan_closures`, so nothing converted in session, while
+//!   `redrive_offsets_after_load` converts unconditionally. Save
+//!   `(1 closure, 0 merges)`, reopen `(0 closures, 1 merge)`.
+//!
+//!   FIXED by converging the forward path with the loader rather than by teaching
+//!   the loader to leave things alone (which would give back finding 10's
+//!   boundary fix): `RemoveZeroDatum` is now classified `can_orphan_closures` -
+//!   its own profile, `REMOVE_DATUM` in core/state/commands.rs, because the
+//!   reason is not the usual one - so `execute()`'s epilogue converts at the
+//!   instant the closure becomes convertible. `SetZeroDatum` deliberately does
+//!   NOT change: ADDING an anchor can only move the guard the other way, turning
+//!   a convertible orphan into a refused one, and a refused orphan is one the
+//!   loader leaves alone too, so session and disk already agree.
+//!
+//!   The conversion is not something `ZeroDatumInfo` can invert - it can put back
+//!   a datum and a map of offsets, not a closure that has become a merge - so the
+//!   command's undo capture moved to a `ProjectSnapshotPair` (core/state/
+//!   undo_capture.rs). That is the established self-refreshing wall: the epilogue's
+//!   conversion lands in the `after` half by construction, the undo restores
+//!   closure + datum + offsets verbatim, and finding 17's index-preserving datum
+//!   restore comes with it. `SetZeroDatum` keeps `ZeroDatumInfo`, and the legacy
+//!   restore arm stays for stacks persisted before the change. Pinned by
+//!   `removing_a_zero_datum_converts_the_closure_it_makes_convertible` and
+//!   `removing_a_zero_datum_leaves_nothing_for_the_next_load_to_reclassify` in
+//!   `open_undo_bugs_tests.rs`.
+//!
+//!   The invariant this establishes, and the reason no other command needed the
+//!   same treatment: a closure becomes CONVERTIBLE either by losing the
+//!   connectivity that made it a loop (the removals, all already flagged) or by
+//!   losing one of the two anchors that made the conversion unsafe (a datum
+//!   removal - this command - or a delete that takes the datum's station with it,
+//!   also already flagged). Nothing else moves either quantity, so no forward
+//!   command can now leave the session holding a convertible orphan for the
+//!   loader to find.
+//! * **RESOLVED, and FIXED: an orphan closure converted IN SESSION by an undo
+//!   was not one the undo was inverting.** `COMBINED=1 SEEDS=40 ITERATIONS=300`
+//!   failed seeds 20 (both halves) and 35 on `undo x# did not restore the state
+//!   recorded at depth # | at loop_closures.length`, with
+//!   `station_merges.length` moving the other way in the same comparison - one
+//!   entry leaving `loop_closures` and arriving in `station_merges` across a
+//!   single undo. No save and no reload were involved (`saves=0 reloads=0`),
+//!   which is what separated it from FINDING 10.
+//!
+//!   `fuzz_shrink_tests.rs` took seed 20's 74 recorded moves to THREE in 55
+//!   probes: `createLoopClosure(7/0,3/2)`, `removeZeroDatum(7/0)`,
+//!   `createShot(s=5,append)`, then `undo x1`. The mechanism is visible in that
+//!   sequence: removing the zero datum makes the closure convertible (the entry
+//!   above), nothing converts it, and the undo of the `createShot` then ran
+//!   `Project::convert_orphan_closures_to_merges` - a WHOLE-PROJECT sweep - from
+//!   the shot-removal path it takes as its inverse (`remove_appended_first_shot`
+//!   or `remove_shot_with_rewire`, models/project/shots.rs). So the undo
+//!   converted a closure orphaned two moves EARLIER by an unrelated command and
+//!   landed on a state the history never recorded.
+//!
+//!   (A correction to the mechanism as first written here: the conversion does
+//!   NOT run from `realign_merges`, and therefore not after every command.
+//!   `reconcile_geometry` calls `realign_merges`, which re-solves offsets and
+//!   never touches the closure/merge classification. The conversion runs from
+//!   the two shot-removal paths, `execute()`'s `can_orphan_closures` epilogue,
+//!   `execute_batch`, the three custom delete entry points, Repair, and the
+//!   load.)
+//!
+//!   FIXED by scoping the inverse rather than by recording the conversion in an
+//!   `UndoData` variant: the two shot-removal paths snapshot the ALREADY-orphaned
+//!   closure ids before mutating (`Project::orphan_closure_ids`) and convert only
+//!   what they themselves orphaned (`Project::convert_closures_orphaned_since`,
+//!   models/project/offsets.rs). An inverse then does no more than invert, while
+//!   a closure genuinely stranded by the removal - including one whose endpoints
+//!   are nowhere near the deleted station, stranded because a merge that WAS
+//!   anchored there went with it - still converts. The forward paths are
+//!   untouched: `execute()`'s epilogue still sweeps the whole project after a
+//!   user `DeleteShot`, and the load and Repair sweeps still convert everything
+//!   they find. Pinned at the MODEL level by
+//!   `removing_a_shot_converts_the_closure_it_orphans_and_not_an_older_one` and
+//!   its `remove_appended_first_shot` sibling in `models/project/tests.rs`, which
+//!   is where it has to live now: the entry above converged the forward path, so
+//!   a project holding a pre-existing convertible orphan is no longer
+//!   constructible through the command API and this shape cannot be built from
+//!   `AppState` at all. `undo_of_an_appended_first_shot_restores_the_recorded_closure_state`
+//!   and its sibling in `open_undo_bugs_tests.rs` still walk the two inverses
+//!   end to end against the recorded state.
+//!
+//!   NOT introduced by the #413 fixes and NOT reachable by any gate. The
+//!   conversion has been on `remove_shot_with_rewire` since before this
+//!   programme, and this tier could not see it because
+//!   `diffs_without_orphan_conversion` SUBTRACTED exactly this shape from every
+//!   comparison under the id
+//!   `finding-10-reload-converts-an-orphan-closure-to-a-merge`, unconditionally
+//!   and despite the id naming a reload. Deleting that subtraction
+//!   is what made it visible. Finding 10's own fix is real and is a different
+//!   half: the commands that ORPHAN a closure convert it themselves, so the LOAD
+//!   has nothing left to reclassify - and with the entry above, that now holds
+//!   for the one command it did not cover.
+//! * RESOLVED as FINDING 20, and now FIXED. `HORIZON=1 SEEDS=1 ITERATIONS=2000`
+//!   left a merged pair 1.58 cm apart after an `updateShot`, because
+//!   `realign_after_shot_edit` returned early when the edited section's merge
+//!   group held no zero datum and the epilogue's `realign_merges` only re-solved
+//!   past the 5 cm REPORTING threshold, while the app's own `#[cfg(test)]`
+//!   invariant for the same pair was 1 cm. Both halves are closed: an unanchored
+//!   group is now realigned against the edited section, and the heal gate and the
+//!   assert are one constant (`Project::MERGE_ALIGNMENT_INVARIANT_M`), so the app
+//!   cannot decline to repair a state it also asserts cannot exist. The
+//!   classifier is deleted and a drifted merge FAILS again, at any magnitude and
+//!   anchored or not.
+//! * RESOLVED as a MODEL FIX, and since made moot. Seeds 2, 7 and 8 were
+//!   described as failing on finding-3-shaped `section_offsets` values the
+//!   cascade classifier no longer matched. Half of that was true and was fixed:
+//!   the classifier froze one value where finding 3 RATCHETS, so it stopped
+//!   matching after the second cycle; following the trajectory and requiring BOTH
+//!   sides to be on it took the survey from 35 to 39 clean seeds of 40 at 100
+//!   moves. Finding 3 is now FIXED at the source, so there is no trajectory and
+//!   no classifier - a `section_offsets` key gaining real geometry across a
+//!   history move fails again, and all 40 seeds are clean at 100.
+//! * RESOLVED as a MODEL FIX, and since made moot as well. `COMBINED=1
+//!   ITERATIONS=300` failed seeds 6 and 35, both halves, on
 //!   `zero_datums[#].gps.latitude` - a signature no other regime produced, which
-//!   is what made it look like a new defect. It is neither new nor finding 25's
-//!   translation: the six differences are `zero_datums[0]` and `[1]` SWAPPED,
-//!   value for value, on the undo of a `remove_zero_datum`. That is finding 17's
-//!   own signature, which `diffs_without_datum_reorder` has matched since it was
-//!   written.
-//!
-//!   What stopped it being reached is the CHAIN. Findings 4 and 17 are one defect
-//!   on two different lists, one comparison can hit BOTH - a closure reordered
-//!   and a datum reordered at the same depth - and the two subtractions sat
-//!   behind `ref_drop.is_none()`, so whichever matched first took the only slot
-//!   and the other was left in the diff with no classifier able to see it. They
-//!   are subtracted TOGETHER now ([`diffs_without_list_reorders`]), which is
-//!   byte-identical for every comparison that hits one and classifies the ones
-//!   that hit two.
-//!
-//!   Measured rather than asserted: all four gates and
-//!   `the_fuzzer_is_deterministic` print byte-identical lines to the run before
-//!   it, the 40-seed survey and its 3-crossing twin are unchanged (40 and 38
-//!   clean), `CLOSURE_SHAPES=1` goes from 9 clean of 20 to 10 - seed 5 was the
-//!   same shape - and under `COMBINED=1` seed 6 is clean while seed 35 gets past
-//!   it into the `section_offsets` family that eight other seeds of that regime
-//!   already carry at 300 moves.
-//! * RESOLVED as FINDING 21. The adjusted-geometry oracle's 28-micron
-//!   divergence over a byte-identical project is real and the recorded
-//!   hypothesis (`station_offsets` / `station_comments` hash order feeding
-//!   `resolve_offsets`) was wrong in every clause - see `ADJUSTED_TOLERANCE_REL`,
-//!   which records both the refutation and the mechanism that replaced it.
-//!
-//! * RESOLVED as FINDING 25. At horizon depths - seeds 2, 3, 4 and 5 somewhere
-//!   past depth 1000 - an `undo` translates a whole CONNECTED COMPONENT by a
-//!   constant vector, with one section of it landing on exactly `[0, 0]`
-//!   (measured on seed 2 at depth 1189: sections 65 and 81 both off by
+//!   is what made it look like a new defect. It was finding 17's own signature:
+//!   `zero_datums[0]` and `[1]` SWAPPED, value for value, on the undo of a
+//!   `remove_zero_datum`. What stopped it being reached was the CHAIN - findings
+//!   4 and 17 are one defect on two lists, one comparison can hit BOTH, and the
+//!   two subtractions sat behind a single slot, so whichever matched first took
+//!   it and the other was left unexplained. They were subtracted TOGETHER after
+//!   that, and both are FIXED now: the undo of `RemoveLoopClosure` and of
+//!   `RemoveZeroDatum` re-insert at the recorded index, so neither list can come
+//!   back permuted and `diffs_without_list_reorders` is deleted with them.
+//! * RESOLVED as FINDING 21, and now FIXED. The adjusted-geometry oracle's
+//!   28-micron divergence over a byte-identical project was real, and the
+//!   recorded hypothesis (`station_offsets` / `station_comments` hash order
+//!   feeding `resolve_offsets`) was wrong in every clause: `station_comments`
+//!   never feeds geometry, `station_offsets` is EMPTY in every run this module
+//!   makes, and `resolve_offsets` is not on `get_adjusted_stations`' path and
+//!   sorts its cascade seeds anyway. The mechanism was one level down, in
+//!   `Project::adjust_least_squares`: it numbered its unknowns by iterating
+//!   `groups.keys()` over a `HashMap` built fresh inside the call, and the
+//!   reduction then peeled in index order and summed over `HashMap` neighbour
+//!   sets. It now numbers from a SORTED sequence and reduces over a `BTreeMap`,
+//!   so the solve is bit-identical run to run and the oracle compares with the
+//!   absolute tolerance alone.
+//! * RESOLVED as FINDING 25, and now FIXED. At horizon depths - seeds 2, 3, 4 and
+//!   5 somewhere past depth 1000 - an `undo` translated a whole CONNECTED
+//!   COMPONENT by a constant vector, with one section of it landing on exactly
+//!   `[0, 0]` (measured on seed 2 at depth 1189: sections 65 and 81 both off by
 //!   `(22230.0946076, -10480.744175)`, 81 on the origin).
 //!
 //!   `fuzz_shrink_tests.rs` took the 1770-move trace to SEVEN moves in 497
@@ -212,59 +356,40 @@
 //!   depth in it at all. The mechanism: `zero_datums[0]` IS the project's
 //!   coordinate origin, because every later datum is placed at
 //!   `gps_to_local(gps, zero_datums.first().gps)` and only the first sits at the
-//!   local origin (models/project/mutations.rs:727-760, re-applied from scratch
-//!   after every shot edit by `realign_after_shot_edit`,
-//!   models/project/mutations.rs:945-956). Removing the primary datum - directly,
-//!   or by deleting the shot whose station it is anchored to - therefore moves
-//!   the origin, and nothing re-solves for it: `resolve_offsets` deliberately
-//!   never touches an anchor's own offset (models/project/offsets.rs:289-296).
-//!   The survivor keeps the offset it held while it was SECONDARY, and the next
-//!   unrelated `update_shot` re-derives the rule against the new first datum and
-//!   rigidly translates the whole component - 6.4 km in the reduction. The undo
-//!   re-derives the same new frame, which is why the roundtrip oracle is where it
-//!   surfaces. `[0, 0]` is what the component gets when the surviving datum is
-//!   its own station 0. Red tests: the three
+//!   local origin. Removing the primary datum - directly, or by deleting the shot
+//!   whose station it is anchored to - therefore moved the origin, and nothing
+//!   re-solved for it: `resolve_offsets` deliberately never touches an anchor's
+//!   own offset. The survivor kept the offset it held while it was SECONDARY, and
+//!   the next unrelated `update_shot` re-derived the rule against the new first
+//!   datum and rigidly translated the whole component - 6.4 km in the reduction.
+//!
+//!   FIXED: the realign now HOLDS the datum station where the edit found it
+//!   (`Project::datum_anchor_position`, measured before the edit), which is the
+//!   same position for a self-consistent project. The three
 //!   `..._primary_zero_datum...` / `..._re_anchored_a_component...` tests in
-//!   `open_undo_bugs_tests.rs`. Still no classifier: finding 25 is a geometry
-//!   defect a history move merely reveals, and a run that hits it is measuring
-//!   the app, not the model.
-//!
-//! * RESOLVED as a DUPLICATE of FINDING 12, cascading. Seed 10 under
-//!   `crossings: 3` finds three fields of one shot changed when it undoes a
-//!   `set_shot_kind` entry whose own persisted id is MEASURED `Fresh` - which is
-//!   what made it look like none of findings 8, 12 or 13.
-//!
+//!   `open_undo_bugs_tests.rs` pin it and are no longer ignored. What the fix
+//!   does NOT address, and what stays open on #413, is the frame question
+//!   underneath: removing the first datum still re-defines the world origin
+//!   silently, so the survey is left stably mis-georeferenced (Ariane export
+//!   roots on `zero_datums.first()`). That wants a renormalisation on datum
+//!   removal, which moves every offset and so needs its own capture - a geometry
+//!   change, not an undo fix.
+//! * RESOLVED as a DUPLICATE of FINDING 12, cascading, and now FIXED with it.
+//!   Seed 10 under `crossings: 3` found three fields of one shot changed when it
+//!   undid a `set_shot_kind` entry whose own persisted id was MEASURED `Fresh` -
+//!   which is what made it look like none of findings 8, 12 or 13.
 //!   `fuzz_shrink_tests.rs` cut the 59-move run to THREE moves in 105 probes:
 //!   `createShot(s=5,before)`, `setShotKind(6:600001,Jump)`,
-//!   `updateShot(5:500001)`, then the plan's save/reload and the closing unwind.
-//!   Replaying that with `TRACE=1` shows the whole thing: the insert-BEFORE makes
-//!   the allocator's ids disagree with positional order, the reload renumbers
-//!   them, the undo of `update_shot` is classified `finding-12-...` AT DEPTH 2 -
-//!   it writes the pre-edit values onto the neighbour - and the failure is one
-//!   move later, at depth 1, where the entry being consumed is the `set_shot_kind`
-//!   on section 6 whose id did not move. The corruption sits in the PROJECT, not
-//!   in the entry, so the later undo restores a state that still carries it and
-//!   the depth-1 comparison re-measures it against a snapshot recorded before it.
-//!   Exactly finding 15's relationship to finding 3. Reproduce in 0.04 s with
-//!   `STALAGMIGHT_RUST_FUZZ_SHRINK=10 STALAGMIGHT_RUST_FUZZ_PERSISTENCE=1
-//!   STALAGMIGHT_RUST_FUZZ_CROSSINGS=3 STALAGMIGHT_RUST_FUZZ_ITERATIONS=60`.
-//!
-//!   The MODEL GAP that made it unreadable is worth naming, because the fix is
-//!   one classifier: findings 3, 8 and 16 each have a CASCADE entry and finding
-//!   12 did not. `finding-8-cascade-...` is gated on `is_shot_identity_swap`,
-//!   which finding 12 cannot satisfy - it changes a field, it does not move a
-//!   shot. LANDED post-#453 as `finding-12-cascade-stale-id-edits-already-
-//!   applied` (keyed on the walk-level `stale_corruption` flag plus a non-uuid
-//!   shot-field path), and it became URGENT then rather than optional: before
-//!   #453, finding 1's CreateSection-redo re-mint churned every re-measured
-//!   section's uuid set, so `is_shot_identity_swap` happened to absorb finding
-//!   12's re-measurements as finding-8 cascade hits. #453 fixed the re-mint,
-//!   the uuid sets started matching, and the corruption stood naked - the
-//!   uuid-swap PROXY is gone, so every classifier that leaned on it
-//!   under-matches from #453 on. Seed 10's named exclusion from
-//!   `MULTI_CROSSING_SEEDS` can be revisited now the cascade exists. Red test:
-//!   `unwinding_past_a_stale_id_edit_leaves_no_shot_holding_it`.
-//!
+//!   `updateShot(5:500001)`. The insert-BEFORE makes the allocator's ids disagree
+//!   with positional order, the reload renumbers them, the undo of `update_shot`
+//!   writes the pre-edit values onto the NEIGHBOUR, and the failure is one move
+//!   later where the entry being consumed is one whose id did not move: the
+//!   corruption sits in the PROJECT, not in the entry. Exactly finding 15's
+//!   relationship to finding 3. Fixed at the source with findings 8/12/13/16 -
+//!   entries address their shot by `Shot::uuid` - so seed 10 is back in the
+//!   multi-crossing gate (`MULTI_CROSSING_SEEDS` is `GATE_SEEDS` again) and
+//!   `unwinding_past_a_stale_id_edit_leaves_no_shot_holding_it` is no longer
+//!   ignored.
 //! * TRIAGED OUT, and not a defect in the app: the METAMORPHIC engine's
 //!   `observation-split-routes-disagree-on-station-comment-keys` - the two
 //!   delete/split routes intermittently disagreeing about which section a station
@@ -273,8 +398,8 @@
 //!   newly minted section B - in a different slot, i.e. a PERMUTATION rather than
 //!   a re-key. `canonical_snapshot` sorts `station_comments` by the pair's whole
 //!   JSON text, which for a `StationKey::AfterShot` anchor includes the shot
-//!   uuid; both routes mint section B's shots, and `Mask::MintedUuids` erases the
-//!   uuids only AFTER the sort has used them. Measured: 40 seeds x 6 repeats gave
+//!   uuid; both routes mint section B's shots, and `Mask::MintedUuids` erased the
+//!   uuids only AFTER the sort had used them. Measured: 40 seeds x 6 repeats gave
 //!   7 divergences over 240 built instances before, 0 over the same 240 with a
 //!   re-sort after the mask, every other pair byte-identical. The record and the
 //!   fix are in `metamorphic_undo_tests.rs` (`resort_set_like`); the earlier
@@ -284,8 +409,8 @@
 //!
 //! | env | what it adds | why it is not in the gate |
 //! |---|---|---|
-//! | `JUMPS=1` | multi-step `undo_to`/`redo_to` | finding 7 |
-//! | `CLOSURES=1` | a real loop closure in the starting project | findings 6 and 14 |
+//! | `JUMPS=1` | multi-step `undo_to`/`redo_to` | was finding 7; now gated on its own by `bug_7_a_jump_is_n_single_steps` |
+//! | `CLOSURES=1` | a real loop closure in the starting project | was findings 6 and 14; 14 is now gated on its own by `finding_14_no_insert_leaves_a_merge_out_of_alignment` |
 //! | `DIVERGENCE=1` | the id-vs-position divergence findings 8/12/13 need, built | deliberate corruption |
 //! | `CLOSURE_SHAPES=1` | the two closure shapes findings 4 and 10 need, built | deliberate, and implies `CLOSURES` |
 //! | `HORIZON=1` | thousands of moves, past the app's own history limit: the FIFO trim and its sliding window, accumulated float dust, allocator and growth sanity | minutes per seed AT THE APP'S OWN LIMIT - a DRAWN limit reaches the same window in 300 moves, which is what the combined gate uses |
@@ -295,13 +420,17 @@
 //!
 //! A mode that CONSTRUCTS a known defect cannot also be a regression gate: its
 //! hit counts say nothing about whether the model acquired a new way to be
-//! wrong, which is the only thing the gate is for.
+//! wrong, which is the only thing the gate is for. That argument is about a mode
+//! that BUILDS a shape and it survives every finding being fixed; the modes stay
+//! out of the plain gate for it.
 //!
 //! The combined gate does not break that rule, it applies it one level up: what
 //! it guards is the INTERACTIONS - a trimmed history being reloaded, a jump
-//! taken over a sliding window - and it pins the id SET it reaches rather than
-//! the counts, so it goes red when the regime stops combining rather than when a
-//! constructed defect fires more or fewer times.
+//! taken over a sliding window. It used to pin the id SET it reached; every one
+//! of those ids is fixed, so the pin is INVERTED and it now asserts that the
+//! regime reaches NOTHING, with the three structural properties (it trimmed, it
+//! crossed more than once, it jumped) asserted one by one so a regime that
+//! stopped combining cannot pass by finding nothing.
 //!
 //! ## The knobs that are not modes
 //!
@@ -408,8 +537,8 @@
 //!   a value with every reference symbolic - and `apply_op` is the ONLY thing
 //!   that runs a command. A replayed `Op` goes through the same `apply_op`, so
 //!   there is no second execution path for a shrunk trace to differ from, and
-//!   the per-move metadata the classifiers key on (`appended_into_empty`,
-//!   `target`, `anchor`) is computed once, in one place.
+//!   the per-move metadata the failure note reads (`target`, `anchor`) is
+//!   computed once, in one place.
 //! * **A trace names what survives being shrunk.** Shots travel as
 //!   `Shot::uuid`, because `Shot::id` is renumbered by the loader and re-issued
 //!   by the allocator; sections and closures travel as ids, PAIRED between the
@@ -533,10 +662,13 @@
 //! construction and a history move is not.
 //!
 //! It found two things on its first run, both of them existing findings reaching
-//! a surface nothing else was looking at, and both classified rather than fixed:
+//! a surface nothing else was looking at, and both were classified rather than
+//! fixed at the time:
 //! `finding-5-a-reloaded-command-can-no-longer-clear-a-section-field` and
-//! `finding-23-history-float-dust-moves-a-displayed-value`. See their classifiers
-//! for the mechanisms and the matrix rows above for repros.
+//! `finding-23-history-float-dust-moves-a-displayed-value`. Both are fixed now
+//! and both classifiers are deleted - see the matrix rows above - so a history
+//! row that reads differently after a reload than it did before the save FAILS
+//! the run, with the entry's `command` and `undo_data` bytes in the payload.
 //!
 //! # The oracle sees MORE than the harness one
 //!
@@ -560,7 +692,7 @@
 )]
 #![expect(
     clippy::print_stdout,
-    reason = "a fuzzer's per-seed summary IS its output: the classified-hit counts are what a               reviewer reads to see the gate is still gating, and `cargo test -- --nocapture` is               the only channel a test has"
+    reason = "a fuzzer's per-seed summary IS its output: the move and oracle counts are what a               reviewer reads to see the gate is still gating, and `cargo test -- --nocapture` is               the only channel a test has"
 )]
 #![expect(
     clippy::panic,
@@ -1098,14 +1230,15 @@ impl Verdict {
 /// DISAGREE about the same state - the assert panics at 6.97 m while the checker
 /// reports nothing - and asks which is authoritative. This is the oracle that
 /// mines that class instead of noting it.
+///
+/// The pair's two SECTION ids used to be carried here as well, for finding 20's
+/// classifier to ask whether their merge group was datum-anchored. That
+/// classifier is gone - every drifted merge fails now, anchored or not - so the
+/// distance is the whole measurement again.
 struct MergeMeasurement {
     label: String,
     raw: f64,
     resolved: f64,
-    /// The two sections the pair joins. Finding 20's classifier asks whether
-    /// their merge group is datum-anchored, which is a question about the
-    /// SECTIONS rather than about the distance.
-    sections: (SectionId, SectionId),
 }
 
 /// Tolerance for the per-depth ADJUSTED-geometry comparison, in metres.
@@ -1121,42 +1254,17 @@ struct MergeMeasurement {
 /// Accumulation past this bound over a long run is a FINDING, not noise - see
 /// the horizon mode, which re-baselines expressly to detect it.
 const ADJUSTED_TOLERANCE_M: f64 = 1e-6;
-/// Relative companion to the above, and it is a MEASUREMENT, not a knob turned
-/// until a failure went away.
-///
-/// The horizon run found a state whose stored project roundtripped BYTE FOR BYTE
-/// while a station 2.2 km from the origin solved 28 microns (1.3e-8 relative)
-/// from where the same depth had it. The solve IS order-dependent - FINDING 21,
-/// proven, see below - so a derived view that is not a function of its input has
-/// to be compared with a tolerance or not at all, and this is that tolerance.
-///
-/// The mechanism took two goes to name and the first answer is recorded here
-/// because it was WRONG in a way worth not repeating. The original candidate was
-/// the iteration order of `station_offsets` / `station_comments`, on the grounds
-/// that both serialize from a `HashMap`, the comparison SORTS them, and
-/// `resolve_offsets` sums in stored order. Every clause of that is false:
-/// `station_comments` never feeds geometry at all, `station_offsets` is EMPTY in
-/// every run this module makes (the summary line's `peak.station_offsets` is 0 -
-/// `move_station` folds its offset into the shot and removes the entry), and
-/// `resolve_offsets` is not on `get_adjusted_stations`' path and sorts its
-/// cascade seeds anyway (models/project/connectivity.rs).
-///
-/// What is really going on is one level down, in the least-squares adjustment:
-/// `Project::adjust_least_squares` numbers its unknowns by iterating
-/// `groups.keys()` (models/project/lsq.rs:403-409) over a `HashMap` built fresh
-/// inside the call, so the numbering is a new random permutation on EVERY
-/// invocation; the reduction then peels in index order (lsq.rs:72), sums over
-/// `HashMap` neighbour sets (lsq.rs:84-85, 148-155, 200-208), and stops on a
-/// RELATIVE residual (lsq.rs:253). Measured directly:
-/// `the_adjusted_solve_is_a_function_of_the_project` in `open_undo_bugs_tests.rs`
-/// re-solves one unchanging project 64 times and gets a different answer 58
-/// times.
-///
-/// So this constant is a MEASUREMENT of a defect rather than a knob turned until
-/// a failure went away: 1e-7 relative is 8x the largest spread observed and four
-/// orders below the millimetre anything real moves. Delete it when finding 21 is
-/// fixed - the comparison can then be exact, which is what it wants to be.
-const ADJUSTED_TOLERANCE_REL: f64 = 1e-7;
+// There WAS a relative companion here, `ADJUSTED_TOLERANCE_REL = 1e-7`, and it
+// existed for exactly one reason: the solve was not a function of the project,
+// so a station 2.2 km from the origin could come back 28 microns (1.3e-8
+// relative) from where the same depth had it. That is FINDING 21, and it is
+// fixed - `adjust_least_squares` now numbers its unknowns from a SORTED sequence
+// (`StationRef` is `Ord`) and sums over `BTreeMap`s, so re-solving one project
+// returns the same bits every time (`the_adjusted_solve_is_a_function_of_the_project`
+// in `open_undo_bugs_tests.rs`, no longer ignored). The constant's own doc
+// comment said to delete it when that happened, so it is gone and the comparison
+// is back to the absolute bound alone. Do not reintroduce it: a relative slack
+// here would hide precisely the class of regression this oracle exists to catch.
 
 /// The app's OWN merge-alignment tolerance, taken from the app rather than
 /// copied: 5 cm, the distance past which `check_merge_alignment` calls a merged
@@ -1174,15 +1282,18 @@ const RAW_RESOLVED_AGREEMENT_M: f64 = 0.01;
 
 /// A KNOWN OPEN BUG, tracked on <https://github.com/Stalagmight/Stalagmight/issues/413>.
 ///
-/// These are NOT normalizations. The snapshots are still unequal and the run
-/// still records the hit; classification exists so the gate can stay green while
-/// eleven defects are open, and so a hit reads as "finding 5 again" rather than
-/// as a fresh mystery. Every matcher is narrowed by VALUE as well as by path,
-/// because a path alone cannot tell "the anchors were lost" from "the anchors
-/// changed", and only the first is the known bug.
+/// These were NOT normalizations. The snapshots were still unequal and the run
+/// still recorded the hit; classification existed so the gate could stay green
+/// while eleven defects were open, and so a hit read as "finding 5 again" rather
+/// than as a fresh mystery. Every matcher was narrowed by VALUE as well as by
+/// path, because a path alone cannot tell "the anchors were lost" from "the
+/// anchors changed", and only the first was the known bug.
 ///
 /// **Delete a classifier when its bug is fixed.** The gate then fails on the next
-/// hit, which is the regression guard the whole module exists to provide.
+/// hit, which is the regression guard the whole module exists to provide. Every
+/// finding on the issue is fixed, so [`CLASSIFIERS`] is EMPTY and `classify`
+/// answers `None` for every difference: nothing can bless a diff any more. The
+/// type and the loop stay so the next open bug has somewhere to go.
 struct Classifier {
     /// Finding id on issue #413.
     id: &'static str,
@@ -1191,45 +1302,26 @@ struct Classifier {
 
 /// What produced the difference being classified.
 ///
-/// The harness tier cannot see this (its bridge only knows the move's DIRECTION),
-/// which is why its gauge-anchor classifier has to conflate findings 1 and 11.
-/// Here the entry that a move consumed is a `get_undo_stack` read away, so the
-/// two can be told apart precisely, and several other classifiers can be narrowed
-/// to the exact entry shape their bug needs instead of to a path alone.
+/// The harness tier cannot see this (its bridge only knows the move's
+/// DIRECTION), so its classifiers can only ever match on the path. Here the consumed
+/// entries are a `get_undo_stack` read away, so a classifier can be narrowed to
+/// the exact entry shape its bug needs instead of to a path alone.
+///
+/// It has been emptied out by the fixes rather than by design, and the fields
+/// that went name the classifiers that read them: `entry` / `entries` (the
+/// entries the move consumed, because a jump runs several restores in one move
+/// and any of them can carry a finding's precondition) went with findings 1, 3,
+/// 8 and 12's; `after_save` and `epoch` with finding 11's; `heal_reverted` with
+/// the findings 1/11 cascade; `displaced` (the trajectory finding 3's RATCHET
+/// had left in each section's `section_offsets` entry) with the cascade half of
+/// finding 3; and `corrupted` / `section_ids` with finding 16's. `stale` is what
+/// is left, and it is now read only by the failure note - the first classifier
+/// that needs any of this again should put back what it needs.
 #[derive(Clone, Copy)]
-struct MoveCtx<'a> {
-    /// The entry the move consumed, when the move was an undo or a redo. For a
-    /// multi-step jump this is the FIRST of several - the one whose restore
-    /// produced the state being compared.
-    entry: Option<&'a EntryMeta>,
-    /// EVERY entry the move consumed. A jump runs several restores in one move,
-    /// and any of them can be the one that carries a finding's precondition, so
-    /// a classifier that looked only at the first stopped recognising its own
-    /// bug as soon as jumps were switched on.
-    entries: &'a [EntryMeta],
-    /// Has this run crossed a save?
-    after_save: bool,
-    /// The run's current epoch; an entry with a lower one predates the last save.
-    epoch: u32,
-    /// Has finding 1 or finding 11 ALREADY reverted the save's gauge capture in
-    /// this run?
-    heal_reverted: bool,
-    /// Sections finding 3 has already displaced in this run, and every value
-    /// it has left in each one's `section_offsets` entry - the RATCHET's whole
-    /// trajectory. See the cascade classifier.
-    displaced: &'a BTreeMap<SectionId, Vec<[f64; 2]>>,
+struct MoveCtx {
     /// Whether the shot ids the consumed entry addresses still address the
     /// shots they were recorded against - measured BEFORE the move ran.
     stale: StaleTargets,
-    /// Has a stale persisted id ALREADY been measured hitting the wrong shot in
-    /// this run (findings 8/12/16)? Arms the finding-12 cascade, mirroring
-    /// `heal_reverted` for findings 1/11.
-    stale_corruption: bool,
-    /// Sections finding 16 has duplicated a shot uuid in.
-    corrupted: &'a BTreeSet<SectionId>,
-    /// Section ids in the order they appear in the RECORDED snapshot, so a diff
-    /// path (`sections[3]...`, an array index) can be resolved to a section.
-    section_ids: &'a [SectionId],
 }
 
 /// What an in-session shot id an entry carries now addresses.
@@ -1283,175 +1375,19 @@ impl StaleTargets {
     }
 }
 
-impl MoveCtx<'_> {
-    /// Did the move consume an entry of this command type? ANY of them, because
-    /// a jump consumes several and every one of them was restored.
-    fn command_is(&self, command: &str) -> bool {
-        self.entries.iter().any(|entry| entry.command == command)
-    }
-
-    /// True when the consumed entry was recorded BEFORE the most recent save -
-    /// finding 11's precondition, since such an entry's `ProjectSnapshotPair`
-    /// holds the pre-heal project in both halves.
-    fn entry_predates_save(&self) -> bool {
-        self.after_save && self.entry.is_some_and(|entry| entry.epoch < self.epoch)
-    }
-
-    /// The section a consumed `CreateShot` appended the FIRST shot into, when it
-    /// did - finding 3's exact precondition.
-    fn appended_into_empty(&self) -> Option<SectionId> {
-        self.entries
-            .iter()
-            .find_map(|entry| entry.appended_into_empty)
-    }
-
-    /// Is `diff` inside a section finding 16 duplicated a shot uuid in?
-    fn is_in_a_corrupted_section(&self, diff: &Diff) -> bool {
-        if self.corrupted.is_empty() {
-            return false;
-        }
-        let named = section_of_path(&diff.path, self.section_ids)
-            .or_else(|| offset_key_of(&diff.path).map(|(id, _)| id));
-        named.is_some_and(|id| self.corrupted.contains(&id))
-    }
-
-    /// Is `diff` finding 3's displacement on this section, re-measured?
-    ///
-    /// Matched against the RATCHET'S TRAJECTORY - every value finding 3 has left
-    /// in this key over the run - and it takes BOTH sides, which is what makes
-    /// it narrower than the version it replaces rather than looser.
-    ///
-    /// The first version recorded the canonical text of the offset the
-    /// first-hand hit left and required it verbatim on ONE side of a later diff.
-    /// That is correct exactly once, because finding 3 compounds: every further
-    /// undo of a first-shot append adds the shot's horizontal vector again
-    /// (`remove_shot_with_rewire`'s `pos == 0` branch calls
-    /// `adjust_section_offset` unconditionally, and the redo re-inserts through
-    /// the offset-neutral append path). Once the ratchet has turned twice, a
-    /// comparison between two snapshots recorded at DIFFERENT points on the
-    /// trajectory has the recorded text on neither side, and the cascade stopped
-    /// classifying - which is what the horizon run's seeds 2, 7 and 8 were
-    /// failing on.
-    ///
-    /// So the model follows the arithmetic: it remembers the sequence of values
-    /// finding 3 has produced here, starting from the pre-slide `[0, 0]`, and a
-    /// diff is this defect iff both of its sides are on that sequence. A section
-    /// that acquired an offset from anywhere else is not this and still fails.
-    fn is_finding_3_displacement(&self, diff: &Diff) -> bool {
-        let Some((section_id, element)) = offset_key_of(&diff.path) else {
-            return false;
-        };
-        let Some(trajectory) = self.displaced.get(&section_id) else {
-            return false;
-        };
-        match element {
-            // `section_offsets.5[0]` - one component, scalars on both sides. The
-            // differ only produces this spelling when the key exists on BOTH
-            // sides, so neither can be absent.
-            Some(index) => {
-                let on_trajectory = |text: &str| {
-                    text.parse::<f64>().is_ok_and(|value| {
-                        trajectory.iter().any(|point| {
-                            point
-                                .get(index)
-                                .is_some_and(|want| displacements_equal(value, *want))
-                        })
-                    })
-                };
-                on_trajectory(&diff.expected) && on_trajectory(&diff.actual)
-            }
-            // `section_offsets.5` - the whole pair, and one side may be absent,
-            // which MEANS a zero offset.
-            None => {
-                let on_trajectory = |text: &str| {
-                    offset_pair(text).is_some_and(|value| {
-                        trajectory.iter().any(|point| {
-                            (0..2).all(|axis| displacements_equal(value[axis], point[axis]))
-                        })
-                    })
-                };
-                on_trajectory(&diff.expected) && on_trajectory(&diff.actual)
-            }
-        }
-    }
-}
-
-/// Section ids in the order they appear in a canonical snapshot, so a diff path
-/// - which carries the ARRAY INDEX, not the id - can name a section.
-fn section_ids_of(snapshot: &str) -> Vec<SectionId> {
-    let Ok(value) = serde_json::from_str::<serde_json::Value>(snapshot) else {
-        return Vec::new();
-    };
-    value
-        .get("sections")
-        .and_then(|sections| sections.as_array())
-        .map(|sections| {
-            sections
-                .iter()
-                .map(|section| {
-                    section
-                        .get("id")
-                        .and_then(serde_json::Value::as_f64)
-                        .unwrap_or(-1.0) as SectionId
-                })
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
-/// The section a diff path names, by resolving `sections[INDEX]` against the
-/// recorded snapshot's order.
-fn section_of_path(path: &str, section_ids: &[SectionId]) -> Option<SectionId> {
-    let rest = path.strip_prefix("sections[")?;
-    let (index, _) = rest.split_once(']')?;
-    section_ids.get(index.parse::<usize>().ok()?).copied()
-}
-
-/// Two displacements are the SAME displacement.
-///
-/// Looser than `numbers_equal`, and for a stated reason rather than because a
-/// failure went away: what is being compared here is a DIFFERENCE of two
-/// canonical numbers, each already rounded to 12 significant digits, so the
-/// subtraction carries up to ~1e-12 of the larger operand's magnitude in
-/// rounding error before anything real has happened. 1e-11 relative is ten
-/// times that headroom and still eight orders below the millimetre any real
-/// geometry change is - and finding 3's displacements are metres to kilometres,
-/// so nothing near the boundary is being decided.
-fn displacements_equal(a: f64, b: f64) -> bool {
-    (a - b).abs() <= TOLERANCE_ABS + 1e-11 * a.abs().max(b.abs())
-}
-
-/// One side of a whole-key `section_offsets` diff as a pair.
-///
-/// `<absent>` is `[0, 0]`, because that is what an absent offset MEANS - and
-/// treating it as "unknown" instead would make the appearance of a key
-/// unclassifiable, which is half of finding 3's shape.
-fn offset_pair(text: &str) -> Option<[f64; 2]> {
-    if text == ABSENT {
-        return Some([0.0, 0.0]);
-    }
-    let serde_json::Value::Array(items) = serde_json::from_str::<serde_json::Value>(text).ok()?
-    else {
-        return None;
-    };
-    Some([
-        items.first().and_then(serde_json::Value::as_f64)?,
-        items.get(1).and_then(serde_json::Value::as_f64)?,
-    ])
-}
-
-/// The `section_offsets` entry for `section_id` in a canonical snapshot, or
-/// `[0, 0]` when the key is absent.
-fn offset_of(snapshot: &str, section_id: SectionId) -> Option<[f64; 2]> {
-    let value = serde_json::from_str::<serde_json::Value>(snapshot).ok()?;
-    let Some(offset) = value
-        .get("section_offsets")
-        .and_then(|offsets| offsets.get(section_id.to_string()))
-    else {
-        return Some([0.0, 0.0]);
-    };
-    offset_pair(&offset.to_string())
-}
+// `MoveCtx` carried an `impl` block here, and five free helpers sat under it.
+// All of them went with the classifiers that were their only callers:
+//
+// * `command_is` ("did the move consume an entry of this command type?") went
+//   with findings 1, 8 and 12's classifiers;
+// * `entry_predates_save` went with finding 11's;
+// * `appended_into_empty` ("which section did a consumed `CreateShot` append the
+//   FIRST shot into") and `is_finding_3_displacement` ("is this diff that
+//   section sliding along the RATCHET's trajectory") went with FINDING 3's two
+//   classifiers, and took `displacements_equal`, `offset_pair` and `offset_of`
+//   with them;
+// * `is_in_a_corrupted_section` went with finding 16's cascade, and took
+//   `section_ids_of` and `section_of_path` with it.
 
 /// `(section, element)` for a diff path inside `section_offsets`.
 ///
@@ -1479,9 +1415,9 @@ struct EntryMeta {
     command: String,
     /// Epoch the entry was pushed in.
     epoch: u32,
-    /// Set when the entry is a `CreateShot` that appended the first shot into a
-    /// previously EMPTY section.
-    appended_into_empty: Option<SectionId>,
+    // `appended_into_empty` - "this entry is a `CreateShot` that appended the
+    // first shot into a previously EMPTY section" - was finding 3's exact
+    // precondition and went with its classifiers.
     /// The shot this entry's own restore names by id, with the uuid that id
     /// addressed when the entry was pushed.
     target: Option<ShotTarget>,
@@ -1503,25 +1439,9 @@ struct ShotTarget {
     uuid: String,
 }
 
-fn is_null_or_false(text: &str) -> bool {
-    text == "null" || text == "false"
-}
-
-/// A coordinate pair/triple whose every member is within tolerance of zero, or an
-/// absent entry.
-fn is_absent_or_zero(text: &str) -> bool {
-    if text == ABSENT {
-        return true;
-    }
-    let Ok(serde_json::Value::Array(items)) = serde_json::from_str::<serde_json::Value>(text)
-    else {
-        return false;
-    };
-    !items.is_empty()
-        && items
-            .iter()
-            .all(|item| item.as_f64().is_some_and(|v| v.abs() <= TOLERANCE_ABS))
-}
+// `is_null_or_false` and `is_absent_or_zero` lived here, read by the gauge-loss
+// and orphan-zero-offset matchers respectively. Both went with their
+// classifiers; they had no other callers.
 
 /// Does `diff`'s path match `pattern`, where `#` stands for a run of digits?
 ///
@@ -1547,186 +1467,76 @@ fn path_is(diff: &Diff, pattern: &str) -> bool {
     normalized == pattern
 }
 
-/// The classified set, in match order.
+/// The classified set, in match order. EMPTY: every finding it named is fixed.
 const CLASSIFIERS: &[Classifier] = &[
-    // FINDING 1 / 11. `restore_section` rebuilds through `Section::new`, which
-    // hardcodes the anchors to None and `reverse_parity` to false; and a
-    // ProjectSnapshotPair recorded BEFORE a save holds the pre-heal project in
-    // both halves. Both show up as a gauge anchor going value -> null. Narrowed
-    // to LOSS: an anchor changing to a DIFFERENT value is not either bug.
-    Classifier {
-        id: "finding-1-redo-of-create-section-drops-gauge-anchors",
-        matches: |d, ctx| is_gauge_loss(d) && ctx.command_is("create_section"),
-    },
-    // FINDING 11, told apart from finding 1 by the ENTRY rather than by the path.
-    // A `ProjectSnapshotPair` recorded BEFORE a save holds the pre-heal project in
-    // both halves and neither is refreshed, so undoing or redoing an unrelated
-    // pre-save command reverts the save's `capture_missing_gauge_anchors`. The
-    // harness cannot make this distinction - its bridge does not know which entry
-    // a move consumed - so it reports both as finding 1. This tier can.
-    Classifier {
-        id: "finding-11-pre-save-entry-reverts-the-saves-heals",
-        matches: |d, ctx| is_gauge_loss(d) && ctx.entry_predates_save(),
-    },
-    // FINDING 1 - FIXED by #423 (PR #453), classifier retired. The bug:
-    // `UndoData::CreatedSectionSnapshot` stored a `SectionData` with no uuid
-    // field, so redo re-minted every shot in the section. `ShotData` now
-    // carries `uuid`, so redo restores identities. The classifier is REMOVED
-    // rather than left dormant: a dormant match arm would classify any future
-    // uuid regression as the old known bug instead of failing the gate.
-    // FINDINGS 1 and 11, CASCADING. Once either has reverted the save's gauge
-    // capture, the anchors are simply GONE from the live project, so every deeper
-    // snapshot that was recorded with them disagrees. Those are re-measurements of
-    // the same defect, not new ones. Ordered after the two precise classifiers so
-    // a first-hand hit is still attributed to the right finding, and still
-    // narrowed to the anchor paths and to LOSS - a gauge anchor changing to a
-    // different value is not this and still fails.
-    Classifier {
-        id: "finding-1-or-11-cascade-anchors-already-reverted",
-        matches: |d, ctx| is_gauge_loss(d) && ctx.heal_reverted,
-    },
-    // FINDING 2. `adjust_section_offset` CREATES a `section_offsets` key while
-    // compensating an insert and nothing removes it, so an all-zero entry
-    // survives the undo. Geometrically inert; narrowed to zero-or-absent on BOTH
-    // sides, so an offset key appearing with real geometry in it still fails.
-    Classifier {
-        id: "finding-2-orphan-zero-section-offset",
-        matches: |d, _| {
-            path_is(d, "section_offsets.#")
-                && is_absent_or_zero(&d.expected)
-                && is_absent_or_zero(&d.actual)
-        },
-    },
-    // FINDING 5. `SectionUpdates` has no `double_option`, so `Some(None)` and
-    // `None` both serialize to null in `values_json` and both read back as
-    // "leave it alone". The undo cannot restore a previously-null name, surveyor
-    // or date - and once the model has resynced past that, the matching redo
-    // disagrees the other way. Narrowed to the three fields the defect covers AND
-    // to EXACTLY ONE SIDE being null, which is the shape a lost null/value
-    // distinction produces; a field changing from one value to a different value
-    // is not this bug and still fails.
-    Classifier {
-        id: "finding-5-undo-cannot-restore-null-section-field",
-        matches: |d, _| {
-            (path_is(d, "sections[#].name")
-                || path_is(d, "sections[#].surveyor")
-                || path_is(d, "sections[#].date"))
-                && (d.expected == "null") != (d.actual == "null")
-        },
-    },
-    // FINDING 3. `Project::add_shot` (the append path) is offset-neutral, but the
-    // undo routes through `remove_shot_with_rewire`, whose `pos == 0` branch
-    // unconditionally calls `adjust_section_offset`. With one shot the appended
-    // shot IS index 0, so the delete slides the whole section by that shot's
-    // horizontal vector - and the displacement RATCHETS on every further cycle.
+    // FINDINGS 1 and 11 were classified here, in four classifiers: the two
+    // first-hand ones (a gauge anchor lost across a `create_section` entry, and
+    // one lost across an entry recorded before a save), their shared cascade,
+    // and the shot-uuid re-mint. All FIXED:
     //
-    // Narrowed to the ENTRY, not to the path: a `section_offsets` entry gaining or
-    // losing real geometry is otherwise indistinguishable from a genuine offset
-    // bug, and finding 15 is exactly that shape on a different entry. Only a
-    // consumed `create_shot` that appended the FIRST shot into an empty section
-    // qualifies, and only on that section's own offset key.
-    Classifier {
-        id: "finding-3-undo-of-the-first-shot-displaces-an-empty-section",
-        matches: |d, ctx| {
-            let Some(section_id) = ctx.appended_into_empty() else {
-                return false;
-            };
-            // Both spellings: the section may or may not already have had an
-            // offset, and the differ recurses into a pair that exists on both
-            // sides (`section_offsets.5[0]`) while reporting a whole key when it
-            // does not (`section_offsets.5`). The RATCHET half of the finding
-            // only ever produces the second shape, so a classifier that matched
-            // only the first could not see it.
-            offset_key_of(&d.path).is_some_and(|(id, _)| id == section_id)
-        },
-    },
-    // FINDING 12. Same root cause as finding 8, different `UndoData` variants and
-    // a much quieter symptom: no shot is lost, no uuid changes and no count
-    // moves - one shot silently keeps an edit the undo was supposed to take away
-    // and a neighbour silently gains one it never had.
+    // * `UndoData::CreatedSectionSnapshot` carries a `SectionIdentity` alongside
+    //   its `SectionData` - every shot uuid, the reverse parity and the gauge
+    //   pair - and `Section::restore_with_identity` (models/section.rs) puts
+    //   them back instead of minting through `Section::new`. The undo refreshes
+    //   that identity from the live section immediately before deleting it, so
+    //   anchors a save captured after the entry was pushed are carried too.
+    // * `reapply_heals_after_restore` (core/state/project_io.rs) brings a
+    //   project restored from a `ProjectSnapshotPair` up to the standard a saved
+    //   one is held to, so a snapshot recorded before a save no longer reverts
+    //   that save's heals when it is restored.
     //
-    // Narrowed by MEASUREMENT rather than by shape: the entry has to be one of
-    // the two id-bearing edit variants (`PreviousValues` for `update_shot`,
-    // `InverseCommand` for `set_shot_kind`) AND the id it carries has to
-    // PROVABLY address a different shot than the one it was recorded against
-    // (`Staleness::Collides`, measured before the move against the shot's uuid).
-    // Without that second half this would also swallow "the undo of an edit
-    // simply did not work", which is a different bug.
-    Classifier {
-        id: "finding-12-stale-id-edits-the-wrong-shot",
-        matches: |d, ctx| {
-            (ctx.command_is("update_shot") || ctx.command_is("set_shot_kind"))
-                && ctx.stale.target == Staleness::Collides
-                && shot_field_path(&d.path).is_some_and(|field| field != "uuid")
-        },
-    },
-    // FINDING 12, CASCADING - the model gap the header's observations named:
-    // findings 3, 8 and 16 had cascade entries and finding 12 did not, because
-    // finding-8's `is_shot_identity_swap` gate happened to absorb its
-    // re-measurements THROUGH finding 1's uuid churn (the CreateSection redo
-    // re-mint made every re-measured section read as "different shots
-    // present"). #423 (PR #453) fixed the re-mint, the uuid sets now match, and
-    // finding 12's field damage stood naked. Like the other cascades, the
-    // corruption sits in the PROJECT, not the entry, so every comparison after
-    // the measured hit re-reads it. Gated on the MEASURED walk-level flag,
-    // never the damage shape alone, and a `uuid`-path diff still FAILS - a
-    // future identity regression must not be able to hide under this id.
-    // Ordered after the precise classifier so a first-hand hit still attributes
-    // to it.
-    Classifier {
-        id: "finding-12-cascade-stale-id-edits-already-applied",
-        matches: |d, ctx| {
-            ctx.stale_corruption && shot_field_path(&d.path).is_some_and(|field| field != "uuid")
-        },
-    },
-    // FINDING 3, CASCADING - and the answer to what FINDING 15 was.
+    // The classifiers are deleted per the contract above: a gauge anchor, a
+    // reverse-parity flag or a shot uuid differing across a history move - in
+    // either direction, first-hand or cascaded - is now an unclassified failure
+    // and fails the gate. `is_gauge_loss`, `is_null_or_false`,
+    // `MoveCtx::entry_predates_save` and the `heal_reverted` latch went with
+    // them; they had no other callers.
     //
-    // Finding 3's displacement is not undone by anything: the redo re-inserts
-    // through the offset-neutral append path (that is the RATCHET half of the
-    // finding), and no targeted undo below it touches `section_offsets`. So once
-    // the empty section has slid, the live project carries that key until the
-    // walk crosses a `ProjectSnapshotPair` entry, which restores the whole
-    // project and heals it. Every snapshot recorded before the slide disagrees
-    // meanwhile - in EITHER direction, since the model resynced the depth the
-    // hit landed on, so a later redo back UP to that depth is missing a key the
-    // model now expects.
+    // FINDING 2 was classified here as "an orphan zero section offset" (absent
+    // or inert within a nanometre on both sides). FIXED, and the classifier is
+    // gone: a `section_offsets` key present on one side of a history move and
+    // absent on the other now fails the gate, whatever its value.
+    // `Project::write_section_offset` (models/project/offsets.rs) is THE write
+    // point for `section_offsets` and drops the whole dust ball around zero, so
+    // an adjustment that cancels leaves nothing behind - for EVERY writer
+    // including a restore, which is the invariant that closed finding 27.
+    // `is_absent_or_zero` went with it.
     //
-    // Finding 15 was reported as a separate defect ("an undo leaves a
-    // `section_offsets` entry carrying REAL geometry") because the move that
-    // FAILS is several steps past the one that did it and consumes an unrelated
-    // entry - an `update_shot`, a `set_station_comment`. It is finding 3,
-    // re-measured. Narrowed to the displaced section's own key AND to the exact
-    // value finding 3 left, so a section acquiring a DIFFERENT offset is not
-    // this and still fails.
-    Classifier {
-        id: "finding-3-cascade-a-displaced-empty-section-persists",
-        matches: |d, ctx| ctx.is_finding_3_displacement(d),
-    },
-    // FINDING 16, CASCADING. A section holding one `Shot::uuid` twice cannot
-    // match any snapshot recorded before the duplication: one shot was destroyed
-    // to make room for the copy, so every shot below it sits at a different
-    // index and every field of every one of them reads as changed. Nothing
-    // removes the copy either, so it persists until a `ProjectSnapshotPair`
-    // entry restores the whole project.
+    // FINDING 5 was classified here. FIXED: `SectionUpdates`' three nullable
+    // fields carry `double_option` + `skip_serializing_if` (models/section.rs),
+    // so `values_json` keeps the difference between "clear this field"
+    // (`Some(None)`) and "leave it alone" (`None`). The classifier is deleted per
+    // the contract above - a section name, surveyor or date going null on one
+    // side of a history move is now an unclassified failure and fails the gate.
     //
-    // Narrowed to the SECTION finding 16 corrupted - resolved through the
-    // recorded snapshot's own section order - and to its offset key. A
-    // difference anywhere else in the project is not this and still fails.
-    Classifier {
-        id: "finding-16-cascade-a-section-with-a-duplicated-uuid-cannot-match",
-        matches: |d, ctx| ctx.is_in_a_corrupted_section(d),
-    },
+    // FINDING 3 was classified here, twice: first-hand, as "a `section_offsets`
+    // key gaining or losing real geometry on the move that consumed an append of
+    // the FIRST shot into an empty section", and CASCADING (which is what finding
+    // 15 turned out to be) as "that same section still carrying a value on the
+    // ratchet's trajectory, several moves later".
+    //
+    // FIXED. Undo of `CreateShot` no longer reuses the general delete for the one
+    // insert it is not the inverse of: `AppState::remove_created_shot`
+    // (core/state/command_shot.rs) recognises the recorded append-into-an-empty-
+    // section shape and calls `Project::remove_appended_first_shot`
+    // (models/project/shots.rs), which removes the station the append CREATED and
+    // leaves `section_offsets` alone - as offset-neutral in reverse as
+    // `Project::add_shot` is forward, so there is nothing left to ratchet and
+    // nothing left to cascade. Both classifiers are deleted per the
+    // delete-when-fixed contract: a `section_offsets` key gaining or losing real
+    // geometry across a history move is once again an unclassified failure that
+    // fails the gate.
+    //
+    // FINDING 12 was classified here ("a stale in-session id edits the wrong
+    // shot"), and FINDING 16's cascade with it ("a section holding one
+    // `Shot::uuid` twice cannot match any snapshot recorded before the
+    // duplication"). Both are FIXED at the source: every restore path addresses
+    // its shot by `Shot::uuid` rather than by the id the entry happens to carry
+    // (core/state/undo.rs, core/state/undo_restore.rs), so a persisted id going
+    // stale can no longer reach a shot it was not recorded against. A field
+    // changing on a shot an undo did not name, and a uuid appearing twice in one
+    // section, are unclassified failures again.
 ];
-
-/// A gauge anchor (or the reverse-parity flag) being LOST rather than changed.
-/// Shared by findings 1 and 11, which produce the same shape from different
-/// causes; the classifiers above separate them by the consumed entry.
-fn is_gauge_loss(diff: &Diff) -> bool {
-    (path_is(diff, "sections[#].gauge_shot_uuid")
-        || path_is(diff, "sections[#].gauge_neighbour_uuid")
-        || path_is(diff, "sections[#].reverse_parity"))
-        && is_null_or_false(&diff.actual)
-}
 
 /// Which classifier explains `diff`, if any.
 fn classify(diff: &Diff, ctx: &MoveCtx) -> Option<&'static str> {
@@ -1764,479 +1574,49 @@ fn attributable_to_reload(diff: &Diff) -> bool {
     offset_key_of(&diff.path).is_some() || diff.path.starts_with("station_offsets")
 }
 
-/// Per-section shot uuids, in order, from a canonical snapshot.
-fn shot_uuids(snapshot: &str) -> Vec<(i64, Vec<String>)> {
-    let Ok(value) = serde_json::from_str::<serde_json::Value>(snapshot) else {
-        return Vec::new();
-    };
-    let Some(sections) = value.get("sections").and_then(|s| s.as_array()) else {
-        return Vec::new();
-    };
-    sections
-        .iter()
-        .map(|section| {
-            let id = section
-                .get("id")
-                .and_then(serde_json::Value::as_i64)
-                .unwrap_or(-1);
-            let uuids = section
-                .get("shots")
-                .and_then(|s| s.as_array())
-                .map(|shots| {
-                    shots
-                        .iter()
-                        .map(|shot| {
-                            shot.get("uuid")
-                                .and_then(|u| u.as_str())
-                                .unwrap_or("<none>")
-                                .to_string()
-                        })
-                        .collect()
-                })
-                .unwrap_or_default();
-            (id, uuids)
-        })
-        .collect()
-}
-
-/// FINDINGS 8 / 12's structural signature: a section holds the right NUMBER of
-/// shots, but at least one of them is the WRONG shot.
-///
-/// Recognised by uuid rather than by path, because the wrong shot being deleted
-/// or written to rewrites every derived coordinate, and a path rule broad enough
-/// to cover that would hide real drift. Requires an even swap - a count change or
-/// a one-sided loss is something else and still fails.
-fn is_shot_identity_swap(expected: &str, actual: &str) -> bool {
-    let before = shot_uuids(expected);
-    let after = shot_uuids(actual);
-    if before.len() != after.len() || before.is_empty() {
-        return false;
-    }
-    let mut swapped = false;
-    for ((id_a, uuids_a), (id_b, uuids_b)) in before.iter().zip(after.iter()) {
-        if id_a != id_b || uuids_a.len() != uuids_b.len() {
-            return false;
-        }
-        let missing = uuids_a.iter().filter(|u| !uuids_b.contains(u)).count();
-        let extra = uuids_b.iter().filter(|u| !uuids_a.contains(u)).count();
-        if missing != extra {
-            return false;
-        }
-        if missing > 0 {
-            swapped = true;
-        }
-    }
-    swapped
-}
-
-/// Does this subtree name station 0 of `section_id`?
-///
-/// Station 0 of any section is `StationKey { section_id, anchor: SectionStart }`
-/// (models/station.rs), and every stored station reference - a merge endpoint, a
-/// zero datum, a station-comment key - serializes to that shape. Matching the
-/// SHAPE rather than each container's field names is what lets one predicate
-/// cover all three lists.
-fn names_station_zero(value: &serde_json::Value, section_id: SectionId) -> bool {
-    match value {
-        serde_json::Value::Object(map) => {
-            // `as_f64`, not `as_u64`: `canonicalize` rounds every number through
-            // `Number::from_f64`, so an id reads back as `6.0` and an integer
-            // accessor returns None for all of them.
-            let is_ref = map.get("section_id").and_then(serde_json::Value::as_f64)
-                == Some(f64::from(section_id))
-                && map.get("anchor").and_then(serde_json::Value::as_str) == Some("SectionStart");
-            is_ref
-                || map
-                    .values()
-                    .any(|child| names_station_zero(child, section_id))
-        }
-        serde_json::Value::Array(items) => items
-            .iter()
-            .any(|child| names_station_zero(child, section_id)),
-        _ => false,
-    }
-}
-
-/// Drop every array element that names station 0 of `section_id`, and return how
-/// many were dropped.
-fn strip_station_zero_refs(value: &mut serde_json::Value, section_id: SectionId) -> usize {
-    let mut dropped = 0;
-    match value {
-        serde_json::Value::Object(map) => {
-            for child in map.values_mut() {
-                dropped += strip_station_zero_refs(child, section_id);
-            }
-        }
-        serde_json::Value::Array(items) => {
-            let before = items.len();
-            items.retain(|item| !names_station_zero(item, section_id));
-            dropped += before - items.len();
-            for child in items.iter_mut() {
-                dropped += strip_station_zero_refs(child, section_id);
-            }
-        }
-        _ => {}
-    }
-    dropped
-}
-
-/// FINDING 3's DATA-LOSS half: the same `pos == 0` branch that displaces the
-/// section also DROPS every ref keyed to its station 0 (`shots.rs`, the
-/// `pos == 0` branch). An empty section has only station 0, so a merge, a zero
-/// datum or a station comment anchored there is destroyed by the undo.
-///
-/// Recognised structurally rather than by path, because a dropped merge
-/// re-indexes the whole list and every field of every later entry reads as
-/// changed. Returns what is STILL different once both sides are stripped of refs
-/// to that one station, so the offset half of the same hit keeps classifying
-/// normally and anything else the move broke still fails. `None` means the shape
-/// is absent - the expected side did not hold strictly more such refs - and the
-/// caller compares as usual.
-fn diffs_without_station_zero_refs(
-    expected: &str,
-    actual: &str,
-    section_id: SectionId,
-    require_drop: bool,
-) -> Option<Vec<Diff>> {
-    let (Ok(mut left), Ok(mut right)) = (
-        serde_json::from_str::<serde_json::Value>(expected),
-        serde_json::from_str::<serde_json::Value>(actual),
-    ) else {
-        return None;
-    };
-    let before = strip_station_zero_refs(&mut left, section_id);
-    let after = strip_station_zero_refs(&mut right, section_id);
-    // A first-hand hit is an undo that DESTROYS refs, so the expected side has
-    // to hold more of them. The cascade takes either direction: once the model
-    // has resynced to a state missing them, a redo back UP to that depth
-    // restores them and the same loss is re-measured with the sides swapped.
-    if before == after || (require_drop && before < after) {
-        return None;
-    }
-    let mut diffs = Vec::new();
-    diff_values(&left, &right, "", &mut diffs);
-    Some(diffs)
-}
-
-/// The field name for a path naming one SCALAR field of one shot.
-///
-/// `uuid` is deliberately included in what this returns - callers exclude it -
-/// because identity and measurement are different claims and only the caller
-/// knows which one its bug is about.
-fn shot_field_path(path: &str) -> Option<String> {
-    let mut normalized = String::with_capacity(path.len());
-    let mut in_digits = false;
-    for ch in path.chars() {
-        if ch.is_ascii_digit() {
-            if !in_digits {
-                normalized.push('#');
-                in_digits = true;
-            }
-        } else {
-            normalized.push(ch);
-            in_digits = false;
-        }
-    }
-    let field = normalized.strip_prefix("sections[#].shots[#].")?;
-    (!field.contains('.') && !field.contains('[')).then(|| field.to_string())
-}
-
-/// Every shot uuid of one section, in order.
-fn section_shot_uuids(snapshot: &str, section_id: SectionId) -> Option<Vec<String>> {
-    let value = serde_json::from_str::<serde_json::Value>(snapshot).ok()?;
-    let sections = value.get("sections")?.as_array()?;
-    let section = sections.iter().find(|section| {
-        section.get("id").and_then(serde_json::Value::as_f64) == Some(f64::from(section_id))
-    })?;
-    Some(
-        section
-            .get("shots")?
-            .as_array()?
-            .iter()
-            .map(|shot| {
-                shot.get("uuid")
-                    .and_then(|u| u.as_str())
-                    .unwrap_or("<none>")
-                    .to_string()
-            })
-            .collect(),
-    )
-}
-
-/// Drop the shot with `uuid` from `section_id` wherever it appears.
-fn strip_shot(value: &mut serde_json::Value, section_id: SectionId, uuid: &str) {
-    let Some(sections) = value
-        .get_mut("sections")
-        .and_then(serde_json::Value::as_array_mut)
-    else {
-        return;
-    };
-    for section in sections.iter_mut() {
-        if section.get("id").and_then(serde_json::Value::as_f64) != Some(f64::from(section_id)) {
-            continue;
-        }
-        if let Some(shots) = section
-            .get_mut("shots")
-            .and_then(serde_json::Value::as_array_mut)
-        {
-            shots.retain(|shot| shot.get("uuid").and_then(|u| u.as_str()) != Some(uuid));
-        }
-    }
-}
-
-/// A NEW FINDING's structural signature (issue #413, finding 16): ONE shot sits
-/// at a different index than the model recorded, and the section is otherwise
-/// the same list of the same shots.
-///
-/// That is what a re-insert against a stale ANCHOR produces: `redo` of
-/// `CreateShot` re-runs `insert_shot_before` / `insert_shot_after` with the
-/// persisted `before_shot_id` / `after_shot_id` (core/state/undo.rs), and after
-/// a reload those ids address different shots, so the shot comes back in the
-/// wrong place.
-///
-/// Returns what is still different once that one shot is removed from BOTH
-/// sides, so the derived geometry it displaced is still classified or still
-/// fails. `None` when the shape is absent - the shot is missing from a side, or
-/// its index agrees, or the rest of the list does not.
-fn diffs_without_misplaced_shot(
-    expected: &str,
-    actual: &str,
-    section_id: SectionId,
-    uuid: &str,
-) -> Option<Vec<Diff>> {
-    let before = section_shot_uuids(expected, section_id)?;
-    let after = section_shot_uuids(actual, section_id)?;
-    let (Some(was), Some(now)) = (
-        before.iter().position(|u| u == uuid),
-        after.iter().position(|u| u == uuid),
-    ) else {
-        return None;
-    };
-    if was == now {
-        return None;
-    }
-    // The REST of the list has to be untouched, or this is not "one shot moved".
-    let rest =
-        |list: &[String]| -> Vec<String> { list.iter().filter(|u| *u != uuid).cloned().collect() };
-    if rest(&before) != rest(&after) {
-        return None;
-    }
-    let (Ok(mut left), Ok(mut right)) = (
-        serde_json::from_str::<serde_json::Value>(expected),
-        serde_json::from_str::<serde_json::Value>(actual),
-    ) else {
-        return None;
-    };
-    strip_shot(&mut left, section_id, uuid);
-    strip_shot(&mut right, section_id, uuid);
-    let mut diffs = Vec::new();
-    diff_values(&left, &right, "", &mut diffs);
-    Some(diffs)
-}
-
-/// How many shots in `section_id` carry `uuid`. More than one is impossible by
-/// construction and is finding 16's whole signature.
-fn uuid_occurrences(snapshot: &str, section_id: SectionId, uuid: &str) -> usize {
-    section_shot_uuids(snapshot, section_id).map_or(0, |uuids| {
-        uuids.iter().filter(|found| *found == uuid).count()
-    })
-}
-
-/// FINDING 10's structural signature: one loop closure is gone and one station
-/// merge with the SAME endpoints has appeared, and nothing else moved.
-///
-/// That is exactly what `convert_orphan_closures_to_merges` does
-/// (models/project/offsets.rs): it removes the closure and records a
-/// `StationMerge` carrying its two `StationKey`s verbatim. The finding is that
-/// two of the four delete entry points never run it, so the orphan is saved as a
-/// closure and the LOADER converts it - a save+reopen that is not
-/// state-preserving.
-///
-/// Matched on the endpoints rather than on the counts alone: a closure vanishing
-/// and an unrelated merge appearing is not this.
-fn diffs_without_orphan_conversion(expected: &str, actual: &str) -> Option<Vec<Diff>> {
-    let (Ok(mut left), Ok(mut right)) = (
-        serde_json::from_str::<serde_json::Value>(expected),
-        serde_json::from_str::<serde_json::Value>(actual),
-    ) else {
-        return None;
-    };
-    // EITHER direction. The conversion happens once, on the reload, and the
-    // model resyncs to it - so a later redo back UP to a depth recorded before
-    // the reload re-measures the same swap with the sides exchanged.
-    let (closure, merge, closure_on_left) =
-        match (converted_pair(&left, &right), converted_pair(&right, &left)) {
-            (Some((closure, merge)), None) => (closure, merge, true),
-            (None, Some((closure, merge))) => (closure, merge, false),
-            _ => return None,
-        };
-    let drop_matching = |value: &mut serde_json::Value, key: &str, wanted: &serde_json::Value| {
-        if let Some(items) = value.get_mut(key).and_then(serde_json::Value::as_array_mut) {
-            if let Some(index) = items.iter().position(|item| item == wanted) {
-                items.remove(index);
-            }
-        }
-    };
-    if closure_on_left {
-        drop_matching(&mut left, "loop_closures", &closure);
-        drop_matching(&mut right, "station_merges", &merge);
-    } else {
-        drop_matching(&mut right, "loop_closures", &closure);
-        drop_matching(&mut left, "station_merges", &merge);
-    }
-    // What is left goes through the ordinary classification and the ordinary
-    // save/reload attribution - a reload also re-solves `section_offsets`, and
-    // requiring byte equality here would mean the signature only ever matched a
-    // conversion with no geometry attached.
-    let mut diffs = Vec::new();
-    diff_values(&left, &right, "", &mut diffs);
-    Some(diffs)
-}
-
-/// Exactly one closure present in `with_closure` and absent from `with_merge`,
-/// against exactly one merge present in `with_merge` and absent from
-/// `with_closure`, carrying the SAME two station keys.
-fn converted_pair(
-    with_closure: &serde_json::Value,
-    with_merge: &serde_json::Value,
-) -> Option<(serde_json::Value, serde_json::Value)> {
-    let list = |value: &serde_json::Value, key: &str| -> Vec<serde_json::Value> {
-        value
-            .get(key)
-            .and_then(|items| items.as_array())
-            .cloned()
-            .unwrap_or_default()
-    };
-    let ends = |item: &serde_json::Value| -> Option<(serde_json::Value, serde_json::Value)> {
-        Some((
-            item.get("station_a")?.clone(),
-            item.get("station_b")?.clone(),
-        ))
-    };
-    let closures_after = list(with_merge, "loop_closures");
-    let lost: Vec<serde_json::Value> = list(with_closure, "loop_closures")
-        .into_iter()
-        .filter(|closure| {
-            !closures_after
-                .iter()
-                .any(|other| other.get("id") == closure.get("id"))
-        })
-        .collect();
-    let merges_before = list(with_closure, "station_merges");
-    let gained: Vec<serde_json::Value> = list(with_merge, "station_merges")
-        .into_iter()
-        .filter(|merge| !merges_before.iter().any(|other| ends(other) == ends(merge)))
-        .collect();
-    let ([closure], [merge]) = (lost.as_slice(), gained.as_slice()) else {
-        return None;
-    };
-    (ends(closure) == ends(merge)).then(|| (closure.clone(), merge.clone()))
-}
-
-/// The two LIST-REORDER signatures, and the ids they carry.
-///
-/// FINDING 4: `loop_closures` holds the same members in a different order. Undo
-/// of `RemoveLoopClosure` pushes instead of re-inserting at the removed index
-/// (core/state/undo.rs), and that order is persisted, indexed by the frontend,
-/// and the order `resolve_offsets` builds its adjacency in.
-///
-/// FINDING 17: the same defect one collection over.
-/// `UndoData::ZeroDatumInfo`'s restore arm ends in
-/// `project.zero_datums.push(ZeroDatum { .. })` where the forward path took the
-/// datum out in place, so a datum that was not last comes back last. Invisible
-/// until a run has two datums to reorder, which is why the closure-shapes
-/// prologue - which builds a second anchored component - is what surfaced it.
-///
-/// Order matters here and only here: it decides which id lands in `ref_drop`
-/// when a comparison hits both, and closures-then-datums is the order the two
-/// chained subtractions used before they were composed.
-const LIST_REORDER_SIGNATURES: &[(&str, &str)] = &[
-    ("loop_closures", "finding-4-closure-reordered-on-undo"),
-    ("zero_datums", "finding-17-zero-datum-reordered-on-undo"),
-];
-
-/// Both list-reorder signatures, subtracted TOGETHER, with the ids that matched.
-///
-/// They compose because they act on DIFFERENT collections, and they have to,
-/// because one comparison can hit both: the undo of a `remove_zero_datum` taken
-/// at a depth where a closure was also reordered leaves a `zero_datums`
-/// permutation AND a `loop_closures` one. Subtracting them one at a time could
-/// only ever name the first - the second was left in the diff with no classifier
-/// reachable, and the run failed on six differences that are literally finding
-/// 17's own signature. (Reproduced at `COMBINED=1 ITERATIONS=300` on seeds 6 and
-/// 35, both halves, before this; see the header's observations.)
-///
-/// `None` when neither list is a permutation of its partner. Otherwise the ids
-/// that matched, in [`LIST_REORDER_SIGNATURES`] order, and whatever is still
-/// different once every matched list has been sorted on both sides - so a
-/// reorder that comes with other classified differences (a uuid re-mint, an
-/// offset heal) is still recognised and anything unexplained still fails.
-fn diffs_without_list_reorders(
-    expected: &str,
-    actual: &str,
-) -> Option<(Vec<&'static str>, Vec<Diff>)> {
-    let (Ok(mut left), Ok(mut right)) = (
-        serde_json::from_str::<serde_json::Value>(expected),
-        serde_json::from_str::<serde_json::Value>(actual),
-    ) else {
-        return None;
-    };
-    let matched: Vec<&'static str> = LIST_REORDER_SIGNATURES
-        .iter()
-        .filter(|&&(key, _)| sort_if_reordered(&mut left, &mut right, key))
-        .map(|&(_, id)| id)
-        .collect();
-    if matched.is_empty() {
-        return None;
-    }
-    let mut diffs = Vec::new();
-    diff_values(&left, &right, "", &mut diffs);
-    Some((matched, diffs))
-}
-
-/// Is `key` the same members in a different order on the two sides? Sorts both
-/// and reports true if so, and leaves both UNTOUCHED if not.
-///
-/// Committing only on a match is what makes the two signatures composable: a
-/// list that is not a permutation must reach the diff in the order it really has,
-/// or a value that changed would be paired against the wrong neighbour.
-fn sort_if_reordered(
-    left: &mut serde_json::Value,
-    right: &mut serde_json::Value,
-    key: &str,
-) -> bool {
-    let sorted = |value: &serde_json::Value| -> Option<(Vec<serde_json::Value>, Vec<String>)> {
-        let list = value.get(key)?.as_array()?;
-        if list.len() < 2 {
-            return None;
-        }
-        let before: Vec<String> = list.iter().map(ToString::to_string).collect();
-        let mut items = list.clone();
-        items.sort_by_key(ToString::to_string);
-        let after: Vec<String> = items.iter().map(ToString::to_string).collect();
-        let order = if before == after { Vec::new() } else { after };
-        Some((items, order))
-    };
-    let (Some((left_items, left_order)), Some((right_items, right_order))) =
-        (sorted(left), sorted(right))
-    else {
-        return false;
-    };
-    // At least one side has to have been out of order, and the two have to be
-    // the same members - a list that GAINED or LOST an entry is not a reorder.
-    if left_order.is_empty() && right_order.is_empty() {
-        return false;
-    }
-    if !left_order.is_empty() && !right_order.is_empty() && left_order != right_order {
-        return false;
-    }
-    let (Some(left_slot), Some(right_slot)) = (left.get_mut(key), right.get_mut(key)) else {
-        return false;
-    };
-    *left_slot = serde_json::Value::Array(left_items);
-    *right_slot = serde_json::Value::Array(right_items);
-    true
-}
+// A block of DIFF SUBTRACTIONS lived here, each stripping one known bug's shape
+// out of the comparison before anything else looked at it, because each of them
+// re-indexed a list and buried every other difference of the same move under
+// twenty derived paths. All of them are gone, per the delete-when-fixed
+// contract:
+//
+// * FINDING 3's DATA-LOSS half - `diffs_without_station_zero_refs`, which
+//   stripped both sides of every ref keyed to one section's station 0
+//   (`names_station_zero` / `strip_station_zero_refs`), plus the cascade latch
+//   for the sections it had already destroyed them on. The `pos == 0` branch of
+//   `remove_shot_with_rewire` DROPS those refs, and an empty section has only
+//   station 0, so a merge, zero datum or station comment anchored there was
+//   destroyed by the undo of the append that created the section's first shot.
+//   FIXED with the displacement half: that undo no longer routes through the
+//   general delete at all (`Project::remove_appended_first_shot`,
+//   models/project/shots.rs).
+// * FINDING 10 - `diffs_without_orphan_conversion` and `converted_pair`, which
+//   recognised a loop closure the LOAD had reclassified as a merge moving
+//   between two lists and re-indexing both. FIXED at the source: the commands
+//   that leave a closure orphaned convert it themselves
+//   (`execute_delete_last_shot_and_section` and the appended-first-shot undo,
+//   core/state/command_delete_split.rs and command_shot.rs), so the load has
+//   nothing left to reclassify.
+// * FINDINGS 4 and 17 - `LIST_REORDER_SIGNATURES`, `diffs_without_list_reorders`
+//   and `sort_if_reordered`, which recognised `loop_closures` / `zero_datums`
+//   holding the same members in a different order. Both are FIXED: the undo of
+//   `RemoveLoopClosure` and of `RemoveZeroDatum` re-insert at the index the
+//   forward `Vec::remove` took the entry out of, recorded on the entry
+//   (core/undo.rs).
+// * FINDINGS 8 and 16 - `shot_uuids`, `is_shot_identity_swap`,
+//   `section_shot_uuids`, `strip_shot`, `diffs_without_misplaced_shot` and
+//   `uuid_occurrences`, which recognised the wrong shot having been deleted, a
+//   shot having come back in the wrong PLACE, and a section holding one
+//   `Shot::uuid` twice. All FIXED by the same change: every restore path
+//   addresses its shot by `Shot::uuid` instead of by the in-session id the
+//   entry happens to carry, a load-time pass drops an entry whose target no
+//   longer resolves, and a redo refuses to duplicate a uuid (core/undo.rs,
+//   core/state/undo.rs). `shot_field_path` went with finding 12's classifier,
+//   its last caller.
+//
+// A merge, datum or comment disappearing across a history move, either list
+// coming back permuted, a closure that changed lists, a shot in the wrong place
+// and a duplicated uuid are all unclassified failures again.
 
 // ===========================================================================
 // Synthetic starting project
@@ -2249,7 +1629,9 @@ pub(super) fn random_shot(rng: &mut Rng) -> ShotData {
     let azimuth = rng.float(0.0, 359.9);
     let depth_in = rng.float(0.0, 30.0);
     ShotData {
-        // None, like every command-created shot: the model mints (#423).
+        // `None` mints a fresh identity on insert, as every user-created shot
+        // does; the uuid streams the identity oracles draw on come from the
+        // project, not from the generator.
         uuid: None,
         azimuth_in: azimuth,
         azimuth_out: (azimuth + rng.float(-1.5, 1.5) + 360.0) % 360.0,
@@ -3085,6 +2467,35 @@ pub(super) struct Trace {
     /// is what seeds [`Refs`].
     pub(super) prelude: Inventory,
     pub(super) moves: Vec<TraceMove>,
+    /// TEST-ONLY, and `None` for every recorded run - see [`Fault`].
+    #[serde(default)]
+    pub(super) fault: Option<Fault>,
+}
+
+/// A failure INJECTED into a replay, so the shrinker has something to minimize.
+///
+/// The shrinker's own gate needs a failing run, and after issue #413 the app has
+/// none: every finding is fixed, [`CLASSIFIERS`] is empty and every gate here is
+/// clean. A gate that waited for a real bug would be permanently vacuous, and one
+/// pinned to a finding goes red when the finding is FIXED - which is exactly what
+/// happened to `the_shrinker_minimizes_a_classified_failure`, whose target was
+/// "whatever this run classifies" and which had nothing left to classify.
+///
+/// So the failure is injected instead. [`run_trace`] fails the run the moment the
+/// project holds `at_sections` sections, which is a property of the moves a
+/// candidate KEPT: a subsequence reproduces exactly when it still creates enough
+/// sections. That is a monotone predicate with a small, readable minimum, and it
+/// exercises the whole shrink flow - record, replay, reference remapping,
+/// signature match, the ddmin schedule, verify - without asking the app to be
+/// broken.
+///
+/// It rides on the [`Trace`] rather than on the [`Plan`] because it is the
+/// shrinker's business and not a mode of the fuzzer: `run_fuzz` cannot see it, so
+/// no gate, survey, soak or corpus sweep can be affected by it.
+#[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
+pub(super) struct Fault {
+    /// Fail the replay once the project holds this many sections.
+    pub(super) at_sections: usize,
 }
 
 /// The recorder, per thread.
@@ -3326,15 +2737,14 @@ pub(super) struct Outcome {
     float_noise: usize,
     /// Comparisons explained entirely by a documented save/reload heal.
     attributed: usize,
-    /// True when a known wedge stopped the walk early (finding 6 or 13).
-    wedged: bool,
-    /// True when the app's own `#[cfg(test)]` merge-alignment assert fired
-    /// (finding 14) and the run stopped there.
+    // `wedged` - "a known wedge stopped the walk early" - was set only where
+    // `classify_move_failure` excused a refused history move, and both findings
+    // it named (6 and 13) are fixed; a refused move fails the run now.
+    // `drift_stop` was finding 20's terminal latch, and went the same way.
+    /// True when the app's own `#[cfg(test)]` merge-alignment assert fired. The
+    /// run stops there and `run_fuzz` turns it into a failure carrying the seed,
+    /// the depth and the move log - see `catching_alignment`.
     alignment_panic: bool,
-    /// True when finding 20 left a merge drifted under the app's own 5 cm heal
-    /// gate and the run stopped there. See `expect_merges_aligned` for why the
-    /// hit is terminal rather than merely counted.
-    drift_stop: bool,
     /// Integrity verdicts compared. Counted so the oracle can be SHOWN to be
     /// doing work rather than passing vacuously.
     integrity_compared: usize,
@@ -3436,10 +2846,11 @@ pub(super) fn adjusted_diffs(expected: &str, actual: &str) -> Vec<String> {
                 let worst = (0..3)
                     .map(|axis| (left[axis] - right[axis]).abs())
                     .fold(0.0_f64, f64::max);
-                let magnitude = (0..3)
-                    .map(|axis| left[axis].abs().max(right[axis].abs()))
-                    .fold(0.0_f64, f64::max);
-                if worst > ADJUSTED_TOLERANCE_M + ADJUSTED_TOLERANCE_REL * magnitude {
+                // Absolute bound only. The relative term that used to be added
+                // here scaled with the station's distance from the origin and
+                // existed solely to absorb finding 21's solve-to-solve wander;
+                // the solve is deterministic now, so it is gone.
+                if worst > ADJUSTED_TOLERANCE_M {
                     out.push(format!(
                         "station {key} moved {worst:.6} m: {left:?} -> {right:?}"
                     ));
@@ -3560,254 +2971,29 @@ struct HistoryRow {
     undo_data: String,
 }
 
-/// The field labels `derive_preview_data` emits for the three `SectionUpdates`
-/// fields that carry a NULLABLE value, paired with what it renders when that
-/// value is the cleared one.
-///
-/// `Name` renders an empty name as `unnamed` (`commands/history.rs`); the other
-/// two render it as the empty string.
-const CLEARABLE_SECTION_FIELDS: &[(&str, &str)] =
-    &[("Name", "unnamed"), ("Surveyor", ""), ("Date", "")];
-
-/// Why does this history row read differently after the reload than before the
-/// save? `None` when nothing known explains it, which fails the run.
-fn classify_history_row(before: &HistoryRow, after: &HistoryRow) -> Option<&'static str> {
-    if is_cleared_section_field_loss(before, after) {
-        return Some("finding-5-a-reloaded-command-can-no-longer-clear-a-section-field");
-    }
-    if is_history_payload_float_dust(before, after) {
-        return Some("finding-23-history-float-dust-moves-a-displayed-value");
-    }
-    None
-}
-
-/// FINDING 5, on the COMMAND side of the entry rather than the undo-data side.
-///
-/// `SectionUpdates` carries `name`, `surveyor` and `date` as `Option<Option<T>>`
-/// with a plain `#[serde(default)]` and no `double_option`
-/// (models/section.rs:122), which is the exact gap finding 5's classifier
-/// already names for `values_json`. Both `Some(None)` ("clear it") and `None`
-/// ("leave it alone") therefore serialize to `null` AND both read back as
-/// `None`, so the persisted TEXT is identical and its MEANING is not.
-///
-/// What the user loses is two things, and this is the first: the history entry
-/// stops saying it cleared the field, and once every row it listed was a cleared
-/// one, the whole hover preview goes empty. The second is worse and is not
-/// visible here - the entry's redo re-executes `entry.command` (`redo_inner`'s
-/// catch-all arm, core/state/undo.rs), so after a reload the redo of "clear the
-/// name" silently leaves the name alone. That half already lands in the roundtrip
-/// oracle as `finding-5-undo-cannot-restore-null-section-field`, which is the
-/// evidence that the two are one defect rather than two.
-///
-/// Recognised NARROWLY. The persisted bytes must be byte-identical - a lossy
-/// PARSE changes nothing on disk, which is the whole signature - everything
-/// outside the preview must agree, and the two previews must differ ONLY by rows
-/// disappearing:
-///
-/// * every row the reload lost names one of the three clearable fields AND
-///   carries that field's cleared rendering;
-/// * at least one such row was lost, so an unchanged preview is not this;
-/// * a row present on both sides is identical, in the same relative order;
-/// * a row the reload GAINED is only allowed where the pre-save preview was
-///   truncated (`derive_preview_data` shows three of them and counts the rest),
-///   which is the one way a row can surface without being new;
-/// * and the totals must have shrunk, so a preview that grew is not this.
-fn is_cleared_section_field_loss(before: &HistoryRow, after: &HistoryRow) -> bool {
-    if before.command != after.command || before.undo_data != after.undo_data {
-        return false;
-    }
-    let (Some((was_rest, was)), Some((now_rest, now))) =
-        (split_preview(&before.item), split_preview(&after.item))
-    else {
-        return false;
-    };
-    if was_rest != now_rest
-        || was_rest
-            .get("commandType")
-            .and_then(serde_json::Value::as_str)
-            != Some("update_section_metadata")
-    {
-        return false;
-    }
-    if was.total() <= now.total() {
-        return false;
-    }
-    let mut lost_a_cleared_row = false;
-    for row in &was.rows {
-        match now.row_for(row) {
-            // A row the reload kept has to have kept its values too.
-            Some(partner) if partner != row => return false,
-            Some(_) => {}
-            // A row it dropped has to be one the lost `Some(None)` explains.
-            None if is_cleared_row(row) => lost_a_cleared_row = true,
-            None => return false,
-        }
-    }
-    // A row that only the reload shows can only be one the pre-save window hid.
-    if now.rows.iter().any(|row| was.row_for(row).is_none()) && was.additional == 0 {
-        return false;
-    }
-    lost_a_cleared_row && was.order_agrees_with(&now)
-}
-
-/// Is this preview row one of the three nullable `SectionUpdates` fields, showing
-/// the value that field renders as when it is CLEARED?
-fn is_cleared_row(row: &serde_json::Value) -> bool {
-    let field = row.get("field").and_then(serde_json::Value::as_str);
-    let new_value = row.get("newValue").and_then(serde_json::Value::as_str);
-    CLEARABLE_SECTION_FIELDS
-        .iter()
-        .any(|&(label, cleared)| field == Some(label) && new_value == Some(cleared))
-}
-
-/// FINDING 23, reaching the history dropdown.
-///
-/// `format_property_tests.rs` records that a save/load cycle is not a fixpoint,
-/// and that the `undo_stack` / `redo_stack` JSON blobs are one of the two places
-/// the drift lives. The MECHANISM, measured here rather than assumed:
-/// `serde_json` WRITES an `f64` through ryu's shortest round-tripping form and
-/// READS it back with a parser that is not correctly rounded for a
-/// 17-significant-digit literal. `13.565000000000001` - which `str::parse`
-/// returns exactly, bit for bit - comes back through `serde_json` one ULP low, as
-/// plain `13.565`. (`serde_json`'s `float_roundtrip` feature is the switch that
-/// closes it; the crate is built without it.)
-///
-/// One ULP is invisible until it crosses a rendering boundary, and the preview
-/// renders a length at two decimals: that value shows as `13.57` before the save
-/// and `13.56` after it, on an entry nobody touched.
-///
-/// Recognised NARROWLY: the payload must have MOVED but stayed inside the
-/// module's own numeric tolerance (`diff_snapshots`: 1e-9 absolute + 1e-12
-/// relative), everything outside the preview rows must agree, the rows must line
-/// up one for one, and every differing rendered value must be a number that moved
-/// by at most one unit in the last place it is shown at. A payload that moved
-/// further, a row that appeared or vanished, or a non-numeric difference is not
-/// this.
-fn is_history_payload_float_dust(before: &HistoryRow, after: &HistoryRow) -> bool {
-    let moved = before.command != after.command || before.undo_data != after.undo_data;
-    if !moved {
-        return false;
-    }
-    if !diff_snapshots(&before.command, &after.command).is_empty()
-        || !diff_snapshots(&before.undo_data, &after.undo_data).is_empty()
-    {
-        return false;
-    }
-    let (Some((was_rest, was)), Some((now_rest, now))) =
-        (split_preview(&before.item), split_preview(&after.item))
-    else {
-        return false;
-    };
-    if was_rest != now_rest || was.rows.len() != now.rows.len() || was.additional != now.additional
-    {
-        return false;
-    }
-    was.rows
-        .iter()
-        .zip(&now.rows)
-        .all(|(was_row, now_row)| rows_differ_only_in_the_last_shown_place(was_row, now_row))
-}
-
-/// A rendered item's `preview_data`, lifted out so the rest of the item can be
-/// compared for equality on its own.
-struct Preview {
-    /// The rows the dropdown shows. `preview_data: null` is no rows.
-    rows: Vec<serde_json::Value>,
-    /// `additional_changes`: how many more the renderer counted but did not show.
-    additional: u64,
-}
-
-impl Preview {
-    /// How many field changes the entry HAS, shown or not.
-    fn total(&self) -> usize {
-        self.rows.len() + usize::try_from(self.additional).unwrap_or(0)
-    }
-
-    /// The row naming the same field as `row`, if this preview shows one.
-    fn row_for(&self, row: &serde_json::Value) -> Option<&serde_json::Value> {
-        let field = row.get("field")?;
-        self.rows
-            .iter()
-            .find(|other| other.get("field") == Some(field))
-    }
-
-    /// Do the rows the two previews share appear in the same relative order?
-    fn order_agrees_with(&self, other: &Self) -> bool {
-        let shared = |preview: &Self, against: &Self| -> Vec<String> {
-            preview
-                .rows
-                .iter()
-                .filter(|row| against.row_for(row).is_some())
-                .filter_map(|row| {
-                    row.get("field")
-                        .and_then(serde_json::Value::as_str)
-                        .map(ToString::to_string)
-                })
-                .collect()
-        };
-        shared(self, other) == shared(other, self)
-    }
-}
-
-/// Split a rendered `UndoHistoryItem` into everything-but-the-preview and the
-/// preview. `None` when the text is not a rendered item at all.
-fn split_preview(item: &str) -> Option<(serde_json::Value, Preview)> {
-    let mut parsed: serde_json::Value = serde_json::from_str(item).ok()?;
-    let preview = parsed.as_object_mut()?.remove("previewData")?;
-    let (rows, additional) = match preview {
-        serde_json::Value::Null => (Vec::new(), 0),
-        serde_json::Value::Object(map) => (
-            match map.get("changes") {
-                Some(serde_json::Value::Array(rows)) => rows.clone(),
-                _ => return None,
-            },
-            map.get("additionalChanges")
-                .and_then(serde_json::Value::as_u64)
-                .unwrap_or(0),
-        ),
-        _ => return None,
-    };
-    Some((parsed, Preview { rows, additional }))
-}
-
-/// Two preview rows that name the same field, and whose values are either equal
-/// or numbers one unit apart in the last decimal place they are shown at.
-fn rows_differ_only_in_the_last_shown_place(
-    was: &serde_json::Value,
-    now: &serde_json::Value,
-) -> bool {
-    if was == now {
-        return true;
-    }
-    if was.get("field") != now.get("field") {
-        return false;
-    }
-    ["oldValue", "newValue"].iter().all(|key| {
-        let (Some(a), Some(b)) = (
-            was.get(*key).and_then(serde_json::Value::as_str),
-            now.get(*key).and_then(serde_json::Value::as_str),
-        ) else {
-            return false;
-        };
-        a == b || rendered_numbers_are_one_place_apart(a, b)
-    })
-}
-
-/// `13.57` versus `13.56`: the same number, rendered either side of a rounding
-/// boundary it sits exactly on. Both must parse, and differ by no more than the
-/// place they are shown at.
-fn rendered_numbers_are_one_place_apart(a: &str, b: &str) -> bool {
-    let (Ok(left), Ok(right)) = (a.parse::<f64>(), b.parse::<f64>()) else {
-        return false;
-    };
-    let decimals = |text: &str| -> i32 {
-        text.split_once('.').map_or(0, |(_, fraction)| {
-            i32::try_from(fraction.len()).unwrap_or(0)
-        })
-    };
-    let place = 10f64.powi(-decimals(a).max(decimals(b)));
-    (left - right).abs() <= place * 1.5
-}
+// The RELOAD half of the entry-content oracle classified, once, and everything
+// that made that possible lived here: `classify_history_row` and its two
+// matchers, plus the `Preview` splitting they needed
+// (`CLEARABLE_SECTION_FIELDS`, `is_cleared_section_field_loss`,
+// `is_cleared_row`, `is_history_payload_float_dust`, `Preview`,
+// `split_preview`, `rows_differ_only_in_the_last_shown_place` and
+// `rendered_numbers_are_one_place_apart`). Both findings are FIXED and the whole
+// block is deleted, so a history row that reads differently after a reload than
+// it did before the save now fails the run outright:
+//
+// * FINDING 5, COMMAND side. `SectionUpdates` carried `name`, `surveyor` and
+//   `date` as `Option<Option<T>>` with a plain `#[serde(default)]`, so
+//   `Some(None)` ("clear it") and `None` ("leave it alone") both serialized to
+//   `null` AND both read back as `None` - the persisted TEXT was identical and
+//   its MEANING was not, which emptied the hover preview and made a reloaded
+//   redo of "clear the name" silently leave the name alone. The three fields
+//   carry `double_option` + `skip_serializing_if` now (models/section.rs), and
+//   schema v17 drops pre-v17 history rather than reinterpret them.
+// * FINDING 23, reaching the history dropdown. `serde_json` wrote an `f64`
+//   through ryu's shortest round-tripping form and read it back one ULP low, so
+//   a length rendered `13.57` before the save and `13.56` after it on an entry
+//   nobody touched. The crate is built with the `float_roundtrip` feature now
+//   (src-tauri/Cargo.toml), which is the switch that closes it.
 
 struct Fuzzer {
     state: AppState,
@@ -3874,32 +3060,21 @@ struct Fuzzer {
     /// Build finding 10's orphan-closure shape on the next boundary crossing.
     /// See `expose_orphan_closure` for why it cannot be built up front.
     orphan_pending: bool,
-    /// Set once findings 1 or 11 have reverted the save's gauge capture. From then
-    /// on the live project no longer HAS the anchors, so every later depth
-    /// recorded with them disagrees - the same defect, re-measured. See the
-    /// cascade classifier.
-    heal_reverted: bool,
-    /// Sections finding 3 has displaced, and the canonical text of the
-    /// `section_offsets` value it left. Same idea as `heal_reverted`, one
-    /// defect down: the slide is never undone, so every deeper snapshot
-    /// recorded without it disagrees until a snapshot-pair entry heals it.
-    displaced: BTreeMap<SectionId, Vec<[f64; 2]>>,
-    /// Sections whose station-0 refs finding 3 has destroyed. Same cascade, on
-    /// the data-loss half of the same branch.
-    ref_dropped: BTreeSet<SectionId>,
-    /// Set once a stale persisted id has hit the wrong shot in this run
-    /// (findings 8, 12, 16). From then on the live project no longer matches any
-    /// snapshot recorded before the save, and every deeper comparison in the
-    /// same walk is re-measuring that corruption.
+    // Four CASCADE LATCHES lived here, and every one went with the classifier
+    // that read it: `heal_reverted` (findings 1 and 11 had reverted the save's
+    // gauge capture), `displaced` (the trajectory finding 3's RATCHET had walked
+    // each section's offset along), `ref_dropped` (sections whose station-0 refs
+    // finding 3 had destroyed) and `corrupted` (sections finding 16 had
+    // duplicated a shot uuid in). `saved_anchors`, the gauge pairs the last save
+    // captured, went with `heal_reverted`'s measurement.
+    /// Set once a persisted in-session id has been measured stale in this run.
+    ///
+    /// A MEASUREMENT now, not a latch: findings 8, 12, 13 and 16 are fixed and
+    /// the restore paths resolve their shot by `Shot::uuid`, so nothing branches
+    /// on this. It survives because the fact that an id went stale is the
+    /// precondition those defects needed, and the move log is where a reader
+    /// wants to see it happen.
     stale_corruption: bool,
-    /// Sections in which finding 16 duplicated a shot uuid. A section holding
-    /// the same `Shot::uuid` twice cannot match ANY snapshot recorded before
-    /// that happened, and no undo removes the copy.
-    corrupted: BTreeSet<SectionId>,
-    /// Gauge anchors the most recent save captured, by section. Findings 1 and
-    /// 11 both END with these gone, and comparing against what the save left is
-    /// how the cascade knows the run is past that point.
-    saved_anchors: BTreeMap<SectionId, String>,
 }
 
 impl Fuzzer {
@@ -3960,12 +3135,7 @@ impl Fuzzer {
             temp: None,
             closures,
             orphan_pending: false,
-            heal_reverted: false,
-            displaced: BTreeMap::new(),
-            ref_dropped: BTreeSet::new(),
             stale_corruption: false,
-            corrupted: BTreeSet::new(),
-            saved_anchors: BTreeMap::new(),
         };
         // The builder's own commands are undoable, so the stacks are not empty.
         // Clear them: the model measures depth from a known floor, and the
@@ -4079,7 +3249,6 @@ impl Fuzzer {
                 ),
                 raw: ((raw_a.x - raw_b.x).powi(2) + (raw_a.y - raw_b.y).powi(2)).sqrt(),
                 resolved: ((res_a.0 - res_b.0).powi(2) + (res_a.1 - res_b.1).powi(2)).sqrt(),
-                sections: (a.section_id, b.section_id),
             });
         }
         out
@@ -4158,56 +3327,28 @@ impl Fuzzer {
         stale: StaleTargets,
     ) {
         let ctx_entry = consumed.first().cloned();
-        // FINDING 11's consequence, measured rather than inferred: the save
-        // captured a gauge pair per section, and a restore of a pre-save
-        // `ProjectSnapshotPair` puts the pre-heal project back. Once that has
-        // happened the anchors are simply GONE, and every snapshot recorded with
-        // them disagrees - including on depths the walk down never compared,
-        // which is why arming this only on a CLASSIFIED hit left the way back up
-        // unexplained.
-        if self.anchors_reverted() {
-            self.heal_reverted = true;
-        }
-        // Cloned rather than borrowed: the classification loop below records new
-        // displacements into `self`, and a live borrow of the map would make
-        // that a borrow error. The map holds one small entry per section finding
-        // 3 has displaced.
-        let displaced = self.displaced.clone();
-        let corrupted = self.corrupted.clone();
-        let section_ids = section_ids_of(&self.snapshots[depth]);
-        let ctx = MoveCtx {
-            entry: ctx_entry.as_ref(),
-            entries: &consumed,
-            after_save: self.outcome.saves > 0,
-            epoch: self.epoch,
-            heal_reverted: self.heal_reverted,
-            displaced: &displaced,
-            stale,
-            stale_corruption: self.stale_corruption,
-            corrupted: &corrupted,
-            section_ids: &section_ids,
-        };
+        let ctx = MoveCtx { stale };
         let actual = self.snapshot();
         let expected = self.snapshots[depth].clone();
         if expected == actual {
             self.expect_derived(depth, &format!("{what} (stored state EXACT)"), false);
             return;
         }
-        let (mut diffs, truncated) = diff_snapshots_capped(&expected, &actual);
-        // A mismatch wider than the cap is NEVER classified as explained. Every
-        // tolerate path below - attributable, accumulated, all-classified, the
-        // three structural signatures - reads "nothing unexplained is left" off
-        // a list that stops at MAX_DIFFS, and the walk visits root keys in
-        // sorted order, so a wide `project.*` difference can consume the whole
-        // budget before `stations` or `stats` is looked at once. The classifiers
-        // can only speak for what they saw; this is where that is enforced.
+        let (diffs, truncated) = diff_snapshots_capped(&expected, &actual);
+        // A mismatch wider than the cap is NEVER read as explained. Every
+        // tolerate path below - attributable, accumulated - reads "nothing
+        // unexplained is left" off a list that stops at MAX_DIFFS, and the walk
+        // visits root keys in sorted order, so a wide `project.*` difference can
+        // consume the whole budget before `stations` or `stats` is looked at
+        // once. A rule can only speak for what it saw; this is where that is
+        // enforced.
         if truncated {
             self.fail(
                 &format!("{what} did not restore the state recorded at depth {depth}"),
                 &format!(
                     "  the difference is WIDER than the diff cap ({MAX_DIFFS} path(s)): what \
-                     follows is a PREFIX, and nothing past it was examined - so no classifier \
-                     can account for this mismatch, and none is allowed to try.\n{}",
+                     follows is a PREFIX, and nothing past it was examined - so nothing can \
+                     account for this mismatch, and nothing is allowed to try.\n{}",
                     describe_diffs(&diffs)
                 ),
             );
@@ -4216,8 +3357,8 @@ impl Fuzzer {
             self.outcome.float_noise += 1;
             // Remember WHAT the tolerance absorbed, and how much. This is the
             // only record that a path was ever inexact here, and the
-            // accumulation classifier below needs it to tell "this has been
-            // creeping for fifty visits" from "this broke just now".
+            // accumulation rule below needs it to tell "this has been creeping
+            // for fifty visits" from "this broke just now".
             let measured = numeric_drift(&expected, &actual);
             if !measured.is_empty() {
                 let seen = self.drift.entry(depth).or_default();
@@ -4240,98 +3381,27 @@ impl Fuzzer {
             return;
         }
 
-        // FINDING 3's DATA-LOSS half, subtracted before anything else looks at
-        // the diffs: a dropped merge re-indexes the list, so every field of every
-        // later entry reads as changed and the offset half of the SAME hit would
-        // be buried under twenty derived paths. Only ever applied when the
-        // consumed entry is the empty-section append the finding needs, and only
-        // when refs to that section's station 0 were really lost.
-        let mut ref_drop = None;
-        // FINDING 10, subtracted first: a closure reclassified as a merge moves
-        // one entry between two lists, which re-indexes both and buries every
-        // other difference the same move produced.
-        if let Some(remaining) = diffs_without_orphan_conversion(&expected, &actual) {
-            ref_drop = Some((
-                "finding-10-reload-converts-an-orphan-closure-to-a-merge",
-                None,
-            ));
-            diffs = remaining;
-        }
-        // FINDINGS 4 and 17, subtracted TOGETHER rather than one or the other:
-        // they are the same defect on two different lists and one comparison can
-        // hit both. `ref_drop` holds one id, so a second one rides alongside it.
-        let mut reorders: Vec<&'static str> = Vec::new();
-        if ref_drop.is_none() {
-            if let Some((ids, remaining)) = diffs_without_list_reorders(&expected, &actual) {
-                ref_drop = ids.first().map(|id| (*id, None));
-                reorders = ids;
-                diffs = remaining;
-            }
-        }
-        if ref_drop.is_none() {
-            if let Some(section_id) = ctx.appended_into_empty() {
-                if let Some(remaining) =
-                    diffs_without_station_zero_refs(&expected, &actual, section_id, true)
-                {
-                    ref_drop = Some((
-                        "finding-3-undo-of-the-first-shot-drops-station-zero-refs",
-                        Some(section_id),
-                    ));
-                    diffs = remaining;
-                }
-            }
-        }
-        // A NEW FINDING, subtracted for the same reason: a shot that came back in
-        // the wrong PLACE shifts every shot after it, so one misplaced shot reads
-        // as every field of every shot below it having changed. Only ever applied
-        // when the consumed entry is a `create_shot` whose persisted insert
-        // ANCHOR provably addresses a different shot now than it did when the
-        // entry was pushed - which is the mechanism, measured rather than
-        // inferred.
-        if ref_drop.is_none() && ctx.stale.anchor == Staleness::Collides {
-            if let Some(target) = ctx.entry.and_then(|entry| entry.target.as_ref()) {
-                if let Some(remaining) = diffs_without_misplaced_shot(
-                    &expected,
-                    &actual,
-                    target.section_id,
-                    &target.uuid,
-                ) {
-                    ref_drop = Some((
-                        "finding-16-stale-anchor-redoes-a-create-shot-into-the-wrong-position",
-                        None,
-                    ));
-                    diffs = remaining;
-                }
-            }
-        }
-        // ... and its cascade. Nothing restores a dropped merge, datum or
-        // comment either, so every deeper snapshot that still holds one
-        // disagrees until a snapshot-pair entry puts the whole project back -
-        // the same shape as the displacement cascade above it, one field over.
-        // Only sections finding 3 has ALREADY destroyed refs on are candidates,
-        // and only while the expected side still holds strictly more of them.
-        if ref_drop.is_none() {
-            for section_id in self.ref_dropped.clone() {
-                if let Some(remaining) =
-                    diffs_without_station_zero_refs(&expected, &actual, section_id, false)
-                {
-                    ref_drop = Some(("finding-3-cascade-station-zero-refs-still-missing", None));
-                    diffs = remaining;
-                    break;
-                }
-            }
-        }
+        // FIVE subtractions ran here, each stripping one known bug's shape out of
+        // the diffs before anything else looked at them, because each re-indexed
+        // a list and buried every other difference of the same move under twenty
+        // derived paths: finding 10's orphan-closure conversion, findings 4 and
+        // 17's list reorders, finding 3's destroyed station-0 refs and their
+        // cascade, and finding 16's misplaced shot. All five are gone - see the
+        // deleted helper block above the synthetic starting project for the fix
+        // behind each - so a merge, datum or comment disappearing across a
+        // history move, either list coming back permuted, a closure that changed
+        // lists and a shot in the wrong place are unclassified failures again.
 
         // A KNOWN BUG gets first refusal, BEFORE the epoch attribution below.
         //
-        // The two overlap on `section_offsets`: a reload re-solves the whole map,
-        // and finding 3 leaves a key in it. Attributing first read finding 3's
-        // displacement as "the reload re-solved offsets", which silently swallowed
-        // the hit AND resynced the model to a state carrying it - so the redo back
-        // up to that depth failed later with nothing to explain it (seed 4,
-        // persistence). Classifying first attributes the difference to the defect
-        // that caused it and arms the cascade tracker, which is what makes the
-        // later comparison readable.
+        // The ordering was settled while finding 3 was open, and is kept: the two
+        // overlapped on `section_offsets`, a reload re-solves the whole map, and
+        // attributing first read finding 3's displacement as "the reload re-solved
+        // offsets" - which silently swallowed the hit AND resynced the model to a
+        // state carrying it, so the redo back up to that depth failed later with
+        // nothing to explain it (seed 4, persistence). Classifying first
+        // attributes a difference to the defect that caused it, which is what
+        // makes the later comparison readable.
         let mut classified: BTreeMap<&'static str, usize> = BTreeMap::new();
         let mut unknown = Vec::new();
         for diff in &diffs {
@@ -4353,7 +3423,7 @@ impl Fuzzer {
                     && !(self.outcome.reloads > 0 && attributable_to_reload(diff))
             });
             self.outcome.attributed += before - unknown.len();
-            if unknown.is_empty() && classified.is_empty() && ref_drop.is_none() {
+            if unknown.is_empty() && classified.is_empty() {
                 self.resync(depth, actual);
                 self.expect_derived(depth, what, true);
                 return;
@@ -4395,38 +3465,15 @@ impl Fuzzer {
             }
         }
 
-        if let Some((id, section_id)) = ref_drop {
-            classified.entry(id).or_insert(0);
-            if let Some(section_id) = section_id {
-                self.ref_dropped.insert(section_id);
-            }
-        }
-        // The second list-reorder id, when a comparison hit both. `ref_drop`
-        // already carries the first, and `or_insert` makes re-inserting it a
-        // no-op, so this is one line rather than a branch.
-        for id in reorders {
-            classified.entry(id).or_insert(0);
-        }
         if unknown.is_empty() && !classified.is_empty() {
             for id in classified.keys() {
                 *self.outcome.hits.entry(id).or_insert(0) += 1;
-                if id.starts_with("finding-1-redo-of-create-section-drops")
-                    || id.starts_with("finding-11-")
-                {
-                    self.heal_reverted = true;
-                }
-                if *id == "finding-3-undo-of-the-first-shot-displaces-an-empty-section" {
-                    self.record_displacement(ctx.appended_into_empty(), &expected, &actual);
-                }
-                if id.starts_with("finding-12-") || id.starts_with("finding-16-") {
-                    self.stale_corruption = true;
-                }
             }
             // The move log is what a reader reconstructs a failure from, and a
-            // classified hit is a MOVE with consequences - it resyncs the model
-            // and, for findings 1, 11 and 3, arms a cascade. A log that showed
-            // only the moves would make the later failure look spontaneous,
-            // which is exactly how finding 15 came to be filed separately.
+            // classified hit is a MOVE with consequences - it resyncs the model.
+            // A log that showed only the moves would make a later failure look
+            // spontaneous, which is exactly how finding 15 came to be filed
+            // separately from finding 3.
             let ids: Vec<&str> = classified.keys().copied().collect();
             self.note(format!(
                 "  ^ classified at depth {depth}: {}",
@@ -4437,98 +3484,20 @@ impl Fuzzer {
             return;
         }
 
-        // Structural signatures, checked only over what the path rules could not
-        // explain. Order matters: a whole-section uuid re-mint (finding 1) also
-        // reads as "different shots are present", so the path classifiers get
-        // first refusal.
-        // A NEW FINDING (issue #413, finding 16), and the worst shape reached so
-        // far: after a reload, the REDO of a `CreateShot` re-inserts a shot that
-        // is STILL THERE, because the undo before it deleted a different one
-        // (finding 8). `redo_inner`'s `CreatedShotSnapshot` arm forces both the
-        // id and the uuid from the entry (core/state/undo.rs), so the section
-        // ends up holding the same `Shot::uuid` twice - the identity every
-        // `StationKey::AfterShot` anchor and the Ariane export resolve by.
-        //
-        // Recognised by exactly that: the entry's own uuid appears MORE than
-        // once in the live section and at most once in the recorded one, in a
-        // run where a persisted id was measured stale. Nothing else in the model
-        // can duplicate a uuid.
-        if self.stale_corruption {
-            if let Some(target) = ctx.entry.and_then(|entry| entry.target.as_ref()) {
-                let live = uuid_occurrences(&actual, target.section_id, &target.uuid);
-                let recorded = uuid_occurrences(&expected, target.section_id, &target.uuid);
-                if live > 1 && recorded <= 1 {
-                    *self
-                        .outcome
-                        .hits
-                        .entry("finding-16-redo-of-a-create-shot-duplicates-a-shot-uuid")
-                        .or_insert(0) += 1;
-                    self.corrupted.insert(target.section_id);
-                    self.resync(depth, actual);
-                    self.expect_derived(depth, what, true);
-                    return;
-                }
-            }
-        }
-        // FINDING 8, and told apart from finding 12 by the ENTRY and the
-        // MEASUREMENT rather than by the damage. `UndoData::CreatedShotSnapshot`
-        // is the only variant whose undo is `delete_shot(section, stale_id)`, so
-        // a `create_shot` entry is the only one that can produce a MISSING shot;
-        // finding 12's two variants write a field and cannot change which shots
-        // exist. The collision is measured against the uuid the id addressed when
-        // the entry was pushed, so "the wrong shot was deleted" is a fact here
-        // rather than a hypothesis fitted to the diff.
-        if ctx.command_is("create_shot")
-            && ctx.stale.target == Staleness::Collides
-            && is_shot_identity_swap(&expected, &actual)
-        {
-            *self
-                .outcome
-                .hits
-                .entry("finding-8-stale-id-deletes-the-wrong-shot")
-                .or_insert(0) += 1;
-            self.stale_corruption = true;
-            self.resync(depth, actual);
-            self.expect_derived(depth, what, true);
-            return;
-        }
-
-        // FINDING 8's CASCADE. Once a stale id has hit the wrong shot, the live
-        // project no longer matches ANY snapshot recorded before the save, so
-        // every deeper comparison in that walk re-measures the same corruption -
-        // the harness tier calls this contamination and handles it the same way.
-        // Narrowed to a run where a persisted id was MEASURED to address the
-        // wrong shot, and to the same identity-swap signature: the right number
-        // of shots with the wrong ones among them. Deliberately NOT narrowed to
-        // the consumed entry's epoch - the corruption sits in the PROJECT, not
-        // in the entry, so a perfectly sound post-reload entry restores a state
-        // that still carries it.
-        if self.stale_corruption && is_shot_identity_swap(&expected, &actual) {
-            *self
-                .outcome
-                .hits
-                .entry("finding-8-cascade-the-wrong-shot-is-already-gone")
-                .or_insert(0) += 1;
-            self.resync(depth, actual);
-            self.expect_derived(depth, what, true);
-            return;
-        }
+        // THREE structural signatures were checked here, over what the path rules
+        // could not explain: finding 16's duplicated shot uuid, finding 8's
+        // wrong-shot delete, and finding 8's cascade. All three are FIXED with
+        // findings 8/12/13/16 - the restore paths address shots by `Shot::uuid` -
+        // so an identity swap is an unexplained failure again, and the
+        // `stale_corruption` latch that armed them is now a MEASUREMENT the move
+        // log prints and nothing branches on.
         let entry_note = ctx_entry.as_ref().map_or_else(
             || "  consumed entry: (none - not a history move)".to_string(),
             |entry| {
                 format!(
-                    "  consumed entry: {} (pushed in epoch {}, run epoch {}{})\n  \
+                    "  consumed entry: {} (pushed in epoch {}, run epoch {})\n  \
                      persisted ids: target={:?} anchor={:?}",
-                    entry.command,
-                    entry.epoch,
-                    self.epoch,
-                    if entry.appended_into_empty.is_some() {
-                        ", appended into an EMPTY section"
-                    } else {
-                        ""
-                    },
-                    ctx.stale.target,
-                    ctx.stale.anchor,
+                    entry.command, entry.epoch, self.epoch, ctx.stale.target, ctx.stale.anchor,
                 )
             },
         );
@@ -4551,70 +3520,12 @@ impl Fuzzer {
         );
     }
 
-    /// Has anything the last save captured as a gauge anchor since been lost?
-    ///
-    /// `capture_missing_gauge_anchors` is a save-time heal with no undo entry of
-    /// its own, so a section that HAD an anchor at save time and has none now can
-    /// only have got there by a restore of a snapshot recorded before the save.
-    /// A section that no longer exists makes no claim.
-    fn anchors_reverted(&self) -> bool {
-        if self.saved_anchors.is_empty() {
-            return false;
-        }
-        let Some(project) = self.state.get_project_state() else {
-            return false;
-        };
-        self.saved_anchors.iter().any(|(section_id, _)| {
-            project
-                .sections
-                .iter()
-                .find(|section| section.id == *section_id)
-                .is_some_and(|section| section.gauge_shot_uuid.is_none())
-        })
-    }
-
-    /// Record what the save just captured, so the loss can be measured later.
-    fn record_saved_anchors(&mut self) {
-        self.saved_anchors.clear();
-        let Some(project) = self.state.get_project_state() else {
-            return;
-        };
-        for section in &project.sections {
-            if let Some(uuid) = section.gauge_shot_uuid.clone() {
-                self.saved_anchors.insert(section.id, uuid);
-            }
-        }
-    }
-
-    /// Extend the trajectory finding 3 has walked this section's offset along,
-    /// so the cascade classifier can recognise the SAME ratchet later and
-    /// nothing else.
-    ///
-    /// Both sides of the hit are recorded, not just the new value: the point
-    /// the slide STARTED from is on the trajectory too, and a later comparison
-    /// can land on either. The sequence is seeded with `[0, 0]` because that is
-    /// where the key was before finding 3 ever touched it, and an absent key
-    /// means exactly that.
-    fn record_displacement(&mut self, section_id: Option<SectionId>, expected: &str, actual: &str) {
-        let Some(section_id) = section_id else {
-            return;
-        };
-        let trajectory = self
-            .displaced
-            .entry(section_id)
-            .or_insert_with(|| vec![[0.0, 0.0]]);
-        for snapshot in [expected, actual] {
-            let Some(point) = offset_of(snapshot, section_id) else {
-                continue;
-            };
-            let known = trajectory
-                .iter()
-                .any(|seen| (0..2).all(|axis| displacements_equal(point[axis], seen[axis])));
-            if !known {
-                trajectory.push(point);
-            }
-        }
-    }
+    // Two latch helpers lived here and both went with the classifiers that read
+    // them. `anchors_reverted` / `record_saved_anchors` measured whether a
+    // restore had reverted the gauge pair a save captured, which armed findings
+    // 1 and 11's cascade. `record_displacement` extended the trajectory finding
+    // 3 had walked a section's offset along, so its cascade could recognise the
+    // SAME ratchet later and nothing else. Every one of those findings is fixed.
 
     /// The two DERIVED-state oracles, run after the stored-state comparison has
     /// settled, and the consistency rule that makes them usable at all.
@@ -4687,6 +3598,18 @@ impl Fuzzer {
     /// Deliberately NOT "the two distances are equal": they are not supposed to
     /// be. The resolved measure folds in closure adjustment, which legitimately
     /// moves stations. Only the VERDICTS have to agree.
+    ///
+    /// A disagreement was a TOLERATED classified hit
+    /// (`finding-18-raw-and-resolved-merge-alignment-disagree`) for as long as
+    /// finding 14 was open, because finding 14's write-up is where the claim
+    /// that the two measures disagree came from. Finding 14 is fixed, and the
+    /// classifier is gone with it - but the CHECK stays and now FAILS, because
+    /// the id never recorded a single hit in any mode, before the fix or after.
+    /// Finding 14's disagreement lived INSIDE one command - the assert fires
+    /// mid-`insert_shot_after` and the epilogue re-solves before it returns - so
+    /// a per-move check could never see it. Anything this fires on from here is
+    /// a persistent contradiction nobody has an explanation for, which is a
+    /// failure and not a hit.
     fn expect_raw_and_resolved_agree(&mut self, what: &str) {
         let disagreements: Vec<String> = self
             .merge_measurements()
@@ -4706,16 +3629,13 @@ impl Fuzzer {
         if disagreements.is_empty() {
             return;
         }
-        *self
-            .outcome
-            .hits
-            .entry("finding-18-raw-and-resolved-merge-alignment-disagree")
-            .or_insert(0) += 1;
-        self.note(format!(
-            "  ^ raw and resolved disagree about {} merge(s) after {what}: {}",
-            disagreements.len(),
-            disagreements.join("; ")
-        ));
+        self.fail(
+            &format!(
+                "{what} left raw and resolved disagreeing about {} merge(s)",
+                disagreements.len()
+            ),
+            &format!("  {}", disagreements.join("\n  ")),
+        );
     }
 
     /// Accept the live state as the model's expectation at `depth`. Only ever
@@ -4765,71 +3685,24 @@ impl Fuzzer {
                 )
             })
             .collect();
-        // FINDING 20, classified by its MECHANISM rather than by the move that
-        // exposed it: the two things that would repair a drifted merge both
-        // decline, and each declines for a reason that is a property of the
-        // STATE, so both are measurable here.
+        // EVERY drifted pair fails, with no band and no precondition.
         //
-        // * `realign_after_shot_edit` (models/project/mutations.rs:923) - the
-        //   only repair `update_shot` runs - returns at line 941 when the merge
-        //   group holds no resolvable zero datum;
-        // * `realign_merges` (models/project/offsets.rs:280), the epilogue's
-        //   repair, re-solves only when `check_merge_alignment` already reports
-        //   a violation, and that threshold is the app's own 5 cm.
-        //
-        // So: every drifted pair under 5 cm, in a merge group with no anchor.
-        // A pair at or past 5 cm is something the app WOULD have healed and is
-        // not this; a drifted pair in an ANCHORED group got past a repair that
-        // ran, which is a different defect (finding 14's family) and still
-        // fails.
-        let unanchored = broken.iter().all(|m| {
-            m.raw < MERGE_ALIGNMENT_TOLERANCE_M
-                && self.group_is_unanchored(m.sections.0)
-                && self.group_is_unanchored(m.sections.1)
-        });
-        if unanchored {
-            *self
-                .outcome
-                .hits
-                .entry("finding-20-an-unanchored-merge-group-is-never-realigned")
-                .or_insert(0) += 1;
-            self.note(format!(
-                "  ^ finding 20 after {what}: {}",
-                messages.join("; ")
-            ));
-            // TERMINAL, and not because the drift is fatal to the model - it is
-            // not, the stored state still roundtrips. The next command that
-            // calls `debug_assert_merge_alignment` panics on this pair
-            // (`a_shot_edit_does_not_arm_an_alignment_assert_for_a_later_command`
-            // in open_undo_bugs_tests.rs proves it with an insert into an
-            // unrelated section), and `catching_alignment` would then attribute
-            // that panic to FINDING 14 by its context string. Carrying on would
-            // buy more moves at the price of mislabelling one finding as
-            // another, which is the one thing the classifiers exist to prevent.
-            self.outcome.drift_stop = true;
-            return;
-        }
+        // FINDING 20 was classified here, by MECHANISM: a pair under the app's 5
+        // cm reporting tolerance in a merge group holding no resolvable zero
+        // datum was the exact state in which both repairs declined -
+        // `realign_after_shot_edit` returned early for want of an anchor, and
+        // the epilogue's `realign_merges` re-solved only past the 5 cm report.
+        // Both halves are FIXED: the realign now anchors an unanchored group on
+        // the edited section (models/project/mutations.rs) and the heal gate is
+        // `Project::MERGE_ALIGNMENT_INVARIANT_M`, the same 1 cm the app's own
+        // assert uses (models/project/offsets.rs). There is no longer a band
+        // between "the app asserts this cannot exist" and "the app declines to
+        // repair it", so there is nothing left for a classifier to name -
+        // `group_is_unanchored` and the `drift_stop` latch went with it.
         self.fail(
             &format!("{what} left a station merge out of alignment"),
             &format!("  {}", messages.join("\n  ")),
         );
-    }
-
-    /// FINDING 20's precondition, measured: does the merge group containing
-    /// `section_id` hold no zero datum that still resolves?
-    ///
-    /// The same question `realign_after_shot_edit` asks before it gives up
-    /// (models/project/mutations.rs:930-942), asked the same way - a datum whose
-    /// anchor key no longer resolves is not an anchor there either.
-    fn group_is_unanchored(&self, section_id: SectionId) -> bool {
-        let Some(project) = self.state.get_project_state() else {
-            return false;
-        };
-        let group = project.get_merged_section_ids(section_id);
-        !project.zero_datums.iter().any(|datum| {
-            group.contains(&datum.station_ref.section_id)
-                && project.resolve_key(&datum.station_ref).is_some()
-        })
     }
 
     fn expect_stacks(&self, what: &str) {
@@ -4987,11 +3860,14 @@ impl Fuzzer {
     /// The baseline is read BEFORE the save rather than after it, so a save-time
     /// mutation of the stacks is inside the oracle rather than under it.
     ///
-    /// Each row carries the BYTES the file would hold for it as well as the
-    /// rendering, because that pair is what tells the two known causes of a
-    /// difference apart: identical bytes with a different rendering can only be a
-    /// lossy PARSE (finding 5), and differing bytes within the module's numeric
-    /// tolerance are the history payload's float dust (finding 23).
+    /// Each row still carries the BYTES the file would hold for it as well as
+    /// the rendering, and that pair is now purely diagnostic: it used to tell
+    /// the two KNOWN causes of a difference apart - identical bytes with a
+    /// different rendering could only be a lossy PARSE (finding 5), and
+    /// differing bytes within the module's numeric tolerance were the history
+    /// payload's float dust (finding 23) - and both are fixed, so a row that
+    /// reads differently after a reload FAILS whatever its bytes did. The
+    /// payloads go in the failure message, which is where a reader wants them.
     fn expect_history_rows(&mut self, before: &[HistoryRow]) {
         let after = self.history_rows();
         if after.len() != before.len() {
@@ -5003,19 +3879,22 @@ impl Fuzzer {
                 &format!("  before {} item(s), after {}", before.len(), after.len()),
             );
         }
-        let mut classified: BTreeSet<&'static str> = BTreeSet::new();
         let mut unexplained: Vec<String> = Vec::new();
         for (was, now) in before.iter().zip(&after) {
             if was.item == now.item {
                 continue;
             }
-            if let Some(id) = classify_history_row(was, now) {
-                classified.insert(id);
-                continue;
-            }
             unexplained.push(format!(
-                "  {}\n    before save:  {}\n    after reload: {}\n    payload before: {}\n    payload after:  {}",
-                was.label, was.item, now.item, was.command, now.command,
+                "  {}\n    before save:  {}\n    after reload: {}\n    \
+                 command before: {}\n    command after:  {}\n    \
+                 undo_data before: {}\n    undo_data after:  {}",
+                was.label,
+                was.item,
+                now.item,
+                was.command,
+                now.command,
+                was.undo_data,
+                now.undo_data,
             ));
         }
         if !unexplained.is_empty() {
@@ -5034,10 +3913,6 @@ impl Fuzzer {
                 ),
             );
         }
-        for id in classified {
-            *self.outcome.hits.entry(id).or_insert(0) += 1;
-            self.note(format!("  ^ classified at the reload: {id}"));
-        }
     }
 }
 
@@ -5045,10 +3920,9 @@ impl Fuzzer {
 struct Drawn {
     label: String,
     result: CommandResult,
-    /// Set when this was a `CreateShot` that appended the FIRST shot into an
-    /// empty section - finding 3's precondition, recorded here because only the
-    /// generator knows the section was empty.
-    appended_into_empty: Option<SectionId>,
+    // `appended_into_empty` - "this was a `CreateShot` that appended the FIRST
+    // shot into an empty section", which only the generator could know - was
+    // finding 3's precondition and went with its classifiers.
     /// The shot this command's entry will address by id when it is restored.
     target: Option<ShotTarget>,
     /// The shot a `CreateShot`'s redo will anchor its re-insert to.
@@ -5073,7 +3947,6 @@ impl Drawn {
         Self {
             label,
             result,
-            appended_into_empty: None,
             target: None,
             anchor: None,
         }
@@ -5612,11 +4485,6 @@ impl Fuzzer {
                 } else {
                     "append"
                 };
-                // FINDING 3's precondition, and only this knows it: the section
-                // had NO shots, so the appended shot is index 0 and its undo goes
-                // through `remove_shot_with_rewire`'s `pos == 0` branch.
-                let appended_into_empty =
-                    (how == "append" && live.is_empty()).then_some(section_id);
                 // The anchor's identity is read BEFORE the insert, because that
                 // is the shot the persisted `after_shot_id` / `before_shot_id`
                 // means. After a reload the same id may address a different one -
@@ -5632,7 +4500,6 @@ impl Fuzzer {
                         before_shot_id,
                     }),
                 );
-                drawn.appended_into_empty = appended_into_empty;
                 drawn.anchor = anchor_target;
                 // And the shot the UNDO will delete by id, read after the insert.
                 drawn.target = drawn
@@ -6205,7 +5072,6 @@ impl Fuzzer {
             self.entry_meta.push(EntryMeta {
                 command,
                 epoch: self.epoch,
-                appended_into_empty: drawn.appended_into_empty,
                 target: drawn.target,
                 anchor: drawn.anchor,
             });
@@ -6621,29 +5487,35 @@ impl Fuzzer {
             .collect()
     }
 
-    /// Run `body`, turning the app's OWN merge-alignment assert into a
-    /// classified, TERMINAL finding-14 hit instead of an unattributable process
-    /// panic.
+    /// Run `body`, turning the app's OWN merge-alignment assert from an
+    /// unattributable process panic into a FAILURE that carries the seed and the
+    /// move log.
     ///
     /// `Project::debug_assert_merge_alignment` (models/project/offsets.rs) has a
     /// `#[cfg(test)]` assert arm, so it exists in this tier and in no other. It
-    /// fires at the END of `insert_shot_after` - after the mutation it is
-    /// checking - which is why this cannot be pre-empted by checking alignment
-    /// before the move: the command that breaks the invariant is the command
-    /// that asserts it. `expect_merges_aligned` proves the state was clean
-    /// immediately before.
+    /// fires at the END of the command it is checking - which is why this cannot
+    /// be pre-empted by checking alignment before the move: the command that
+    /// breaks the invariant is the command that asserts it.
+    /// `expect_merges_aligned` proves the state was clean immediately before.
     ///
-    /// Three things keep this from being a blanket catch:
+    /// It CLASSIFIED, once. Findings 14 (`insert_shot_after`) and its mirror
+    /// (`remove_shot_with_rewire`) were open, so an assert from either site was a
+    /// counted, tolerated hit that merely stopped the run. Both are FIXED - the
+    /// insert and the delete now decide which side of the edit is anchored over
+    /// the rigid merge forest and compensate only when the tail alone is
+    /// (models/project/shots.rs) - so per the delete-when-fixed contract the
+    /// tolerance is gone: ANY merge-alignment assert, from ANY call site, fails
+    /// the run again.
     ///
-    /// * the payload is READ, and anything whose message is not that assert is
-    ///   re-raised verbatim with `resume_unwind` - no other panic is absorbed;
-    /// * the context string has to be one of the INSERT sites finding 14 names,
-    ///   so the same assert firing after `merge_stations` or `set_zero_datum`
-    ///   is still an unexplained failure;
-    /// * the run STOPS. The assert unwinds through `AppState`'s project mutex,
-    ///   which poisons it, and several call sites treat a poisoned lock as "no
-    ///   project" - so everything after it would be measuring a crippled
-    ///   `AppState` rather than the app.
+    /// What this still does is ATTRIBUTE it. The payload is READ and anything
+    /// that is not that assert is re-raised verbatim with `resume_unwind`, so no
+    /// other panic is absorbed or reshaped. An alignment assert instead unwinds
+    /// no further than here, is recorded in the move log, and latches
+    /// `alignment_panic` - which stops the walk (the unwind went through
+    /// `AppState`'s project mutex, so it is poisoned and several call sites now
+    /// read "no project open") and which `run_fuzz` turns into a `fail` carrying
+    /// the seed, the depth and the last fourteen moves. A bare process panic
+    /// carries none of those.
     ///
     /// The assert itself is untouched. Disabling it would delete this tier's
     /// only view of the defect.
@@ -6657,21 +5529,9 @@ impl Fuzzer {
                     .cloned()
                     .or_else(|| payload.downcast_ref::<&str>().map(|s| (*s).to_string()))
                     .unwrap_or_default();
-                // The CONTEXT decides which finding it is, and an assert from a
-                // site neither of them names is re-raised verbatim.
-                let id = if message.contains("Merge alignment violated after insert_shot_") {
-                    "finding-14-insert-leaves-a-merge-metres-out-of-alignment"
-                } else if message.contains("Merge alignment violated after remove_shot_with_rewire")
-                {
-                    // Finding 14's mirror image, and reached only through an
-                    // UNDO: `remove_shot_with_rewire` is what undo of CreateShot
-                    // routes into, and it has the same "compensate only when the
-                    // partner is independently anchored" shape as the insert.
-                    "finding-14-variant-a-shot-removal-leaves-a-merge-out-of-alignment"
-                } else {
+                if !message.contains("Merge alignment violated after") {
                     std::panic::resume_unwind(payload);
-                };
-                *self.outcome.hits.entry(id).or_insert(0) += 1;
+                }
                 self.outcome.alignment_panic = true;
                 self.note(format!(
                     "  ^ the app's own merge-alignment assert fired: {}",
@@ -6787,39 +5647,22 @@ impl Fuzzer {
         peak.closures = peak.closures.max(project.loop_closures.len());
     }
 
-    /// Did a failed history move fail for a KNOWN, documented reason?
-    ///
-    /// Both of these leave the entry on its stack (`undo_inner`'s epilogue pushes
-    /// it back), so the history is WEDGED and the walk cannot continue - which is
-    /// why the caller stops rather than retrying.
-    fn classify_move_failure(&mut self, error: &str) -> Option<&'static str> {
-        // FINDING 6 is "the user-facing `delete_shot` refuses the undo of a
-        // permitted `CreateShot`", and `delete_shot` has THREE guards that can
-        // do it, not the one the write-up quotes: the loop/datum pair, and a
-        // frozen-shot check that runs before them (core/state/command_shot.rs,
-        // "Defense-in-depth: refuse to delete a frozen shot"). All three leave
-        // the entry pushed back and the history wedged, which is the finding.
-        if error.contains("part of a loop")
-            || error.contains("zero datum")
-            || error.contains("Cannot delete a frozen shot")
-        {
-            return Some("finding-6-undo-refused-by-a-delete-guard");
-        }
-        // Two spellings, one defect. Finding 13 names all three arms a stale shot
-        // id can reach, and they do not word it the same way:
-        // `delete_shot`/`restore_shot` say "Shot {id} not found in section {s}"
-        // (models/project/shots.rs), while `update_shot` and `set_shot_kind` say
-        // "Shot {s}:{id} not found" (core/state/command_shot.rs). Matching only
-        // the first left the `PreviousValues` and `InverseCommand` arms - the two
-        // finding 13's own write-up lists after `CreatedShotSnapshot` -
-        // unclassified.
-        if error.contains("not found in section")
-            || (error.starts_with("Shot ") && error.ends_with(" not found"))
-        {
-            return Some("finding-13-stale-id-misses-and-wedges-the-history");
-        }
-        None
-    }
+    // `classify_move_failure` lived here: "did a failed history move fail for a
+    // KNOWN, documented reason?", the one place a WEDGED history could be
+    // excused. It is empty and therefore gone, and a failed history move is now
+    // ALWAYS an outright failure of the run.
+    //
+    // * FINDING 6 was "the user-facing `delete_shot` refuses the undo of a
+    //   permitted `CreateShot`", by any of its three guards (the shift-blocked
+    //   loop/datum pair, and the frozen-shot check that runs before them). FIXED:
+    //   the undo removes the created shot through `AppState::remove_created_shot`
+    //   (core/state/command_shot.rs), which consults no user-intent guard, so a
+    //   permitted insert can always be undone.
+    // * FINDING 13 was "a stale persisted shot id misses and wedges the history",
+    //   in both spellings the app words it. FIXED with findings 8/12/16: an entry
+    //   addresses its shot by `Shot::uuid`, and a load-time pass drops an entry
+    //   whose target no longer resolves instead of leaving it to wedge the walk
+    //   (core/undo.rs, core/undo/persistence.rs).
 
     /// What the ids on `entry` address in the LIVE project right now.
     ///
@@ -6852,10 +5695,32 @@ impl Fuzzer {
     }
 
     /// Has something happened that makes everything after it measure the
-    /// harness rather than the app? See `catching_alignment` and
-    /// `expect_merges_aligned`.
+    /// harness rather than the app? See `catching_alignment`.
     const fn stopped(&self) -> bool {
-        self.outcome.alignment_panic || self.outcome.drift_stop
+        self.outcome.alignment_panic
+    }
+
+    /// The shrinker's INJECTED failure - see [`Fault`]. Reached only from
+    /// [`run_trace`], and only when the trace carries one.
+    ///
+    /// The headline is fixed text with the numbers in the detail, so
+    /// `failure_signature` buckets every firing of it as ONE defect however deep
+    /// it happens - which is what the shrinker's signature matching needs.
+    fn check_injected_fault(&mut self, fault: Fault) {
+        let sections = self
+            .state
+            .get_project_state()
+            .map_or(0, |project| project.sections.len());
+        if sections >= fault.at_sections {
+            self.fail(
+                "INJECTED FAULT: the project reached the section count this trace fails at",
+                &format!(
+                    "  sections={sections}, at_sections={}\n  this is the shrinker's own \
+                     fault injection, not a defect in the app",
+                    fault.at_sections
+                ),
+            );
+        }
     }
 
     /// One history move, recorded. Only the main loop's history moves are in a
@@ -6920,18 +5785,18 @@ impl Fuzzer {
             .iter()
             .map(|entry| self.measure_staleness(Some(entry)))
             .fold(StaleTargets::default(), StaleTargets::worst);
-        // A restore that is ABOUT to address the wrong shot is a measured fact,
-        // not an inference from the damage afterwards - and it is what makes
-        // every deeper comparison in this walk a re-measurement rather than a
-        // new defect. Armed here so the cascade classifier is armed even when
-        // the first-hand diff shape is one no classifier names.
+        // MEASUREMENT, kept after findings 8/12/13/16 were fixed: an in-session
+        // id an entry still carries no longer decides anything (the restore
+        // paths address the shot by `Shot::uuid`), but the fact that the id has
+        // gone stale is exactly the precondition those defects needed, so the
+        // move log records the first time it happens in a run.
         if matches!(stale.target, Staleness::Collides | Staleness::Missing)
             || matches!(stale.anchor, Staleness::Collides | Staleness::Missing)
         {
             if !self.stale_corruption {
                 self.note(format!(
-                    "  ^ a persisted id on this entry is STALE (target={:?}, anchor={:?}): \
-                     every later comparison against a pre-save snapshot re-measures it",
+                    "  ^ a persisted id on this entry is STALE (target={:?}, anchor={:?}): the \
+                     restore resolves its shot by uuid instead",
                     stale.target, stale.anchor
                 ));
             }
@@ -6961,11 +5826,11 @@ impl Fuzzer {
         if !result.success {
             let error = result.error.clone().unwrap_or_default();
             self.note(format!("{label} -> FAILED [{error}]"));
-            if let Some(id) = self.classify_move_failure(&error) {
-                *self.outcome.hits.entry(id).or_insert(0) += 1;
-                self.outcome.wedged = true;
-                return false;
-            }
+            // No excuse is left: a refused history move leaves its entry on the
+            // stack (`undo_inner`'s epilogue pushes it back), so the history is
+            // WEDGED and every entry beneath it is unreachable. See the deleted
+            // `classify_move_failure` above for the two findings that used to be
+            // excused here.
             self.fail(
                 &format!("{label} at depth {} failed outright", self.cursor),
                 &format!("  error: {error}"),
@@ -6993,7 +5858,7 @@ impl Fuzzer {
         self.expect_state(self.cursor, &label, consumed, stale);
         self.expect_merges_aligned(&label);
         self.expect_raw_and_resolved_agree(&label);
-        !self.outcome.drift_stop
+        true
     }
 
     /// FINDING 7, decided by PROVING the inequality rather than by recognising a
@@ -7107,7 +5972,6 @@ impl Fuzzer {
             );
         }
         self.outcome.saves += 1;
-        self.record_saved_anchors();
         self.note(format!("save -> ok (depth {})", self.cursor));
         self.expect_stacks("save");
         self.expect_state(self.cursor, "save", Vec::new(), StaleTargets::default());
@@ -7420,15 +6284,27 @@ fn start_run(seed: u32, plan: Plan) -> Fuzzer {
 /// The closing guarantee, and the one crossing a persistence run owes: run
 /// AFTER the move stream, drawn or replayed.
 fn finish_run(mut fuzzer: Fuzzer, plan: Plan) -> Outcome {
-    fuzzer.outcome.signature = topology_signature(&fuzzer.state);
-    if !fuzzer.outcome.wedged && !fuzzer.outcome.alignment_panic && !fuzzer.outcome.drift_stop {
-        // Cross the boundary at least once per persistence run, so the closing
-        // walk below runs against a RESTORED stack rather than an in-memory one.
-        if plan.persistence && fuzzer.outcome.reloads == 0 {
-            fuzzer.cross_boundary();
-        }
-        fuzzer.finish();
+    // The app's own merge-alignment assert is a FAILURE again. It was a
+    // classified, tolerated hit while finding 14 and its `remove_shot_with_rewire`
+    // mirror were open; both are fixed, so per the delete-when-fixed contract the
+    // tolerance is gone and the only thing `catching_alignment` still buys is the
+    // seed, the depth and the move log this failure carries.
+    if fuzzer.outcome.alignment_panic {
+        fuzzer.fail(
+            "the app's own merge-alignment assert fired",
+            "  see the last move in the log below for the assert's own message",
+        );
     }
+    fuzzer.outcome.signature = topology_signature(&fuzzer.state);
+    // Cross the boundary at least once per persistence run, so the closing walk
+    // below runs against a RESTORED stack rather than an in-memory one. (This
+    // was skipped for a WEDGED run and for a merge-drift stop, neither of which
+    // exists any more - a refused history move and a drifted merge both fail the
+    // run.)
+    if plan.persistence && fuzzer.outcome.reloads == 0 {
+        fuzzer.cross_boundary();
+    }
+    fuzzer.finish();
     fuzzer.outcome
 }
 
@@ -7470,7 +6346,7 @@ pub(super) fn run_fuzz(seed: u32, plan: Plan) -> Outcome {
         // Nothing after the app's own assert measures the app: it unwound
         // through the project mutex, so the lock is poisoned and half the call
         // sites now read "no project open".
-        if fuzzer.outcome.alignment_panic || fuzzer.outcome.drift_stop {
+        if fuzzer.outcome.alignment_panic {
             break;
         }
         if boundaries.contains(&iteration) {
@@ -7520,7 +6396,7 @@ pub(super) fn run_fuzz(seed: u32, plan: Plan) -> Outcome {
                 continue;
             }
             fuzzer.step_mutate();
-            if fuzzer.outcome.alignment_panic || fuzzer.outcome.drift_stop {
+            if fuzzer.outcome.alignment_panic {
                 break;
             }
             continue;
@@ -7547,7 +6423,7 @@ pub(super) fn run_fuzz(seed: u32, plan: Plan) -> Outcome {
         if !fuzzer.step_recorded_history(back, steps) {
             break;
         }
-        if fuzzer.outcome.alignment_panic || fuzzer.outcome.drift_stop {
+        if fuzzer.outcome.alignment_panic {
             break;
         }
     }
@@ -7594,6 +6470,12 @@ pub(super) fn run_trace(trace: &Trace, moves: &[TraceMove]) -> (Outcome, Vec<Str
             }
         };
         refs.learn(&mv.created, &fuzzer.inventory().created_since(&before));
+        // The shrinker's own fault, checked after the move that could have
+        // caused it. A recorded trace never carries one; only the shrink gate
+        // sets it - see [`Fault`].
+        if let Some(fault) = trace.fault {
+            fuzzer.check_injected_fault(fault);
+        }
         if !alive {
             break;
         }
@@ -7700,12 +6582,8 @@ pub(super) fn summarize(label: &str, seed: u32, outcome: &Outcome) -> String {
         // Empty unless the config knob drew something, so every line this module
         // printed before the knob existed is unchanged to the byte.
         outcome.config.map(DrawnConfig::describe).unwrap_or_default(),
-        if outcome.wedged {
-            " WEDGED"
-        } else if outcome.alignment_panic {
+        if outcome.alignment_panic {
             " ALIGNMENT-PANIC"
-        } else if outcome.drift_stop {
-            " MERGE-DRIFT-STOP"
         } else {
             ""
         },
@@ -7970,11 +6848,14 @@ fn undo_redo_fuzz_gate_persistence() {
 /// twice, and the save/reload attribution has to hold across BOTH. Nothing
 /// exercised that: `cross_boundary` was reachable at most twice per run and the
 /// gate only ever crossed once.
-/// The gate's seeds MINUS seed 10, which fails under three crossings and does
-/// not under one - see the module header's open observations. Pinned rather
-/// than dropped so the exclusion is visible and reversible: when that
-/// observation is understood, delete this list and use `GATE_SEEDS`.
-const MULTI_CROSSING_SEEDS: &[u32] = &[1, 2, 3, 4, 5, 6, 7, 9, 11, 12, 19, 26];
+/// Runs `GATE_SEEDS`, the same list as its two siblings.
+///
+/// It ran a shorter, separately-pinned list while seed 10 failed here and
+/// nowhere else. That observation was finding 12 cascading, and it no longer
+/// reproduces now that the restore paths address shots by uuid - so the
+/// exclusion and its list are deleted and the multi-crossing gate covers the
+/// same seeds as the in-memory and persistence halves.
+const MULTI_CROSSING_SEEDS: &[u32] = GATE_SEEDS;
 
 #[test]
 fn undo_redo_fuzz_gate_multi_crossing() {
@@ -8063,37 +6944,28 @@ const fn combined_plan(iterations: usize) -> Plan {
 /// | 15 | 1 | the FIFO window under maximum pressure: 126 entries trimmed, every push trimming, and the newest-entry fingerprint the only way a push is visible at all |
 /// | 21 | 3 | 30 jumps and `finding-7-a-jump-is-not-n-single-steps`, which is reachable ONLY because the combined regime lets a horizon run jump - see resolution 1 |
 ///
-/// Both cross three times, both trim, both are clean in BOTH halves of the
-/// survey, and between them they reach the eight ids in
-/// [`COMBINED_CLASSIFIED`]. Seed 19 (limit 3, 52 trimmed, 28 jumps) was the
-/// runner-up and adds finding 17 and finding 4 at the cost of a third of the
-/// gate's runtime; seed 3 is richer still (eight ids alone) and is NOT here
-/// because its in-memory half fails on the header's open component-translation
-/// observation.
+/// Both cross three times, both trim, both are clean, and between them they used
+/// to reach the eight ids `COMBINED_CLASSIFIED` pinned. Seed 19 (limit 3, 52
+/// trimmed, 28 jumps) was the runner-up and added findings 17 and 4 at the cost
+/// of a third of the gate's runtime; seed 3 is richer still and was kept out
+/// because its in-memory half failed on what turned out to be finding 26.
+///
+/// The pair is KEPT after the fixes rather than re-mined, because what made it
+/// the best pair is not the ids: it is that seed 15 drives the FIFO window at a
+/// drawn limit of 1 (126 entries trimmed, every push trimming) and seed 21 draws
+/// 30 jumps over a sliding window. Those are properties of the REGIME, they are
+/// asserted below one by one, and they are what the gate is now for.
 const COMBINED_SEEDS: &[u32] = &[15, 21];
 
-/// What the combined regime is pinned to REACH, and the form the pin takes.
-///
-/// The ids, not the counts. Counts move whenever a classifier gets sharper -
-/// that is what happened to finding 3's cascade - and a gate that went red for a
-/// better classifier would be re-pinned without being read, which is how a pin
-/// stops meaning anything. What must not change silently is the SET: if the
-/// combined regime stops reaching one of these, either a finding is fixed (say
-/// so, and drop the id) or the regime stopped combining (a resolution below has
-/// regressed). The exact counts are printed on every run, which is where a
-/// reader compares them.
-const COMBINED_CLASSIFIED: &[&str] = &[
-    // finding-1 (redo of CreateSection re-mints shot uuids) was here until
-    // #423 (PR #453) fixed it - ShotData now carries the uuid through the
-    // snapshot, so the combined regime can no longer reach it.
-    "finding-10-reload-converts-an-orphan-closure-to-a-merge",
-    "finding-2-orphan-zero-section-offset",
-    "finding-3-undo-of-the-first-shot-displaces-an-empty-section",
-    "finding-3-undo-of-the-first-shot-drops-station-zero-refs",
-    "finding-4-closure-reordered-on-undo",
-    "finding-5-undo-cannot-restore-null-section-field",
-    "finding-7-a-jump-is-not-n-single-steps",
-];
+// `COMBINED_CLASSIFIED` pinned the SET of ids the combined regime had to REACH -
+// findings 1, 10, 2, 3 (both halves), 4, 5 and 7 - so that a regime which
+// stopped combining could not go quietly green. Its own doc said what to do when
+// a finding was fixed: drop the id and say so. All eight are fixed, so the list
+// is empty and therefore deleted, and the pin is INVERTED: the assertion below
+// is that the combined regime reaches NOTHING at all. What still proves the
+// regime is combining are the three structural assertions - it trimmed, it
+// crossed more than once per seed, and it jumped - which no fix can satisfy
+// vacuously.
 
 /// THE COMBINED GATE: horizon, closures, closure shapes, jumps, several
 /// crossings and a drawn `undo_history_limit`, all in one run.
@@ -8156,15 +7028,17 @@ fn undo_redo_fuzz_gate_combined() {
         "the combined gate drew no multi-step jump - a horizon run that cannot jump is the \
          defect resolution 1 fixed"
     );
-    let missing: Vec<&&str> = COMBINED_CLASSIFIED
-        .iter()
-        .filter(|id| !total.contains_key(**id))
-        .collect();
+    // And the pin, inverted now that every finding it named is fixed: the
+    // hardest regime this module has reaches NOTHING. `outcome.hits` is the only
+    // channel a tolerated difference has left - `classify` answers `None` for
+    // every diff, so the map can only ever hold the accumulation id - and an
+    // empty map is the statement that the combined regime found nothing even
+    // that far short of a failure.
     assert!(
-        missing.is_empty(),
-        "the combined regime no longer reaches {missing:?}. Either those findings are FIXED (drop \
-         them from COMBINED_CLASSIFIED and say so) or the regime stopped combining. Reached: \
-         {total:?}"
+        total.is_empty(),
+        "the combined regime tolerated something: {total:?}. Every #413 finding is fixed and \
+         `CLASSIFIERS` is empty, so a hit here is either a NEW open bug (name it, classify it, \
+         and pin it) or tolerated float dust that has crept past the tolerance"
     );
     println!("gate (combined) classified totals: {total:?}");
 }
@@ -8250,8 +7124,9 @@ fn the_fuzzer_is_deterministic() {
 // machine (`Rng` is integer-only and no float makes a decision anywhere in this
 // module), and it fails today for the documented reason.
 //
-// They are `#[ignore]`d like every other red test. DELETE THE IGNORE WHEN THE
-// BUG IS FIXED and each becomes its regression guard.
+// They were `#[ignore]`d like every other red test, on the rule DELETE THE
+// IGNORE WHEN THE BUG IS FIXED. Both are fixed and neither is ignored: each is
+// now the regression guard for the seed that found it.
 
 /// The diff cap REPORTS itself.
 ///
@@ -8308,8 +7183,13 @@ fn the_diff_cap_says_when_it_hid_something() {
 /// The fuzzer catches that panic, verifies the message is that assert, and stops
 /// the run - so the finding shows up here as `alignment_panic` rather than as a
 /// process abort.
+///
+/// FIXED, and kept as the REGRESSION GUARD: this seed was red on
+/// `Merge alignment violated after insert_shot_after: ... 3.965451m apart`. The
+/// run itself now fails on an alignment assert (`finish_run`), so this assertion
+/// is the second line of defence rather than the first - and it is the one that
+/// names the seed.
 #[test]
-#[ignore = "open finding 14: a mid-chain insert leaves a merged partner metres out of alignment"]
 fn finding_14_no_insert_leaves_a_merge_out_of_alignment() {
     let _config = isolated_config();
     let outcome = run_fuzz(
@@ -8346,11 +7226,16 @@ fn finding_14_no_insert_leaves_a_merge_out_of_alignment() {
 ///
 /// This is the first pin bug 7 has ever had. `open_undo_bugs_tests.rs` records
 /// the four synthetic reductions that were measured and do NOT diverge, and why:
-/// `realign_merges` is `resolve_offsets` behind a 5 cm gate, and every command's
-/// own epilogue has already run it, so a persistently misaligned merge is not
-/// reachable through the command API in a small project.
+/// `realign_merges` is `resolve_offsets` behind an alignment gate, and every
+/// command's own epilogue has already run it, so a persistently misaligned merge
+/// is not reachable through the command API in a small project. (That gate was 5
+/// cm when the reductions were measured and is `MERGE_ALIGNMENT_INVARIANT_M`
+/// now, #413 finding 20 - tighter, so the argument only got stronger.)
+///
+/// FIXED, and kept as the REGRESSION GUARD: `undo_to`/`redo_to` reconcile per
+/// step now (core/state/undo.rs), so the jump path and the single-step path end
+/// in the same epilogue.
 #[test]
-#[ignore = "open bug 7: undo_to/redo_to skip the reconcile epilogue, so a jump is not N single steps"]
 fn bug_7_a_jump_is_n_single_steps() {
     let _config = isolated_config();
     let outcome = run_fuzz(
@@ -8820,7 +7705,6 @@ fn undo_redo_fuzz_soak() {
         .and_then(|value| value.parse().ok())
         .unwrap_or(1000);
     let mut total: BTreeMap<&'static str, usize> = BTreeMap::new();
-    let mut wedges = 0;
     let mut failures = Vec::new();
     // Seed-major, mode-minor: the order the soak ran in when it ran one seed at
     // a time, and the order the totals are merged in.
@@ -8854,9 +7738,6 @@ fn undo_redo_fuzz_soak() {
     for (&(seed, persistence), result) in jobs.iter().zip(results) {
         match result {
             Ok(outcome) => {
-                if outcome.wedged {
-                    wedges += 1;
-                }
                 for (id, count) in outcome.hits {
                     *total.entry(id).or_insert(0) += count;
                 }
@@ -8871,7 +7752,7 @@ fn undo_redo_fuzz_soak() {
         }
     }
     println!("soak: {seeds} seed(s) x {iterations} iterations x 2 modes");
-    println!("soak classified totals: {total:?} ({wedges} wedged run(s))");
+    println!("soak classified totals: {total:?}");
     assert!(
         failures.is_empty(),
         "soak seed(s) {failures:?} failed - see the payloads above"

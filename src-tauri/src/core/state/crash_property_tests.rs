@@ -135,7 +135,7 @@
 //! exactly the interrupted save, and 41 to 43 opened as something else. The
 //! range is not sloppiness: four runs of one sweep gave 12/42, 12/42, 11/43 and
 //! 13/41, because which row a fixed byte offset cuts through depends on the
-//! writer's `HashMap` order (finding 21). The 306 did not move, and neither did
+//! order the writer lays its rows down in. The 306 did not move, and neither did
 //! any total.
 //!
 //! That last bucket is not a blend of the old and new projects - it cannot be,
@@ -1003,14 +1003,19 @@ fn the_hot_journal_injection_is_a_real_interrupted_write() {
 /// compared exactly, and so is the TOTAL number of leftover-temp probes, which
 /// is structural (one per state that stages a temp). The per-bucket split of
 /// those probes is deliberately NOT compared, and the reason is the app's, not
-/// this module's: finding 21 established that `HashMap` iteration order is
-/// load-bearing in the writer, so two saves of one project can lay the same rows
-/// out differently, and a truncation at a fixed byte offset then cuts a
+/// this module's: two saves of one project can lay the same rows out in a
+/// different PHYSICAL order, and a truncation at a fixed byte offset then cuts a
 /// different row out of the file. Measured directly - the same 60-seed sweep run
 /// twice moved one torn temp between "opens as the new project" and "opens with
 /// content of its own" while every total stayed put. Comparing the split would
-/// make this test fail for finding 21 rather than for a regression here, which
-/// is the only thing it is about.
+/// make this test fail for the writer's row order rather than for a regression
+/// here, which is the only thing it is about.
+///
+/// This is NOT finding 21, which earlier revisions of this comment named. Finding
+/// 21 was the least-squares solve wandering between runs, and it is fixed
+/// (`adjust_least_squares` numbers from a sorted sequence). What is left is where
+/// a row physically LANDS in the file, which no oracle in this programme asserts
+/// and which the totals above are deliberately stated in spite of.
 #[test]
 fn the_crash_properties_are_deterministic() {
     let _config = isolated_config();
