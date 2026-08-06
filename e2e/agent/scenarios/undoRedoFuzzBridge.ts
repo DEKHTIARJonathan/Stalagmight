@@ -56,18 +56,19 @@ import { ORACLE_GLOBAL, oracleInjectionSource, type TargetingDigest } from '../l
  * so adding a generator without widening the allowlist fails a unit test rather
  * than a fuzz run.
  */
-export const FUZZABLE_ACTIONS: ReadonlySet<string> = new Set([
-  // Pure re-observation: no action is dispatched at all (used after a reload).
-  'noop:observe',
-  // History moves.
-  'undo',
-  'redo',
-  'undoTo',
-  'redoTo',
-  // The persistence boundary and the repair pass.
-  'saveProject',
-  'repairProjectIntegrity',
-  // Mutations, from `undoRedoFuzzActions.ts` and `undoPersistenceCoverage.ts`.
+/**
+ * Mutations a REPLAYED trace may drive, with arguments the trace supplies.
+ *
+ * The tighter of the two sets, and the one that matters for a file from
+ * elsewhere: every entry here is produced by `undoRedoFuzzActions.ts` or
+ * `undoPersistenceCoverage.ts` with generated arguments, so replaying one with
+ * the trace's arguments does what the recording did. `saveProject` is
+ * deliberately NOT here even though the scenarios call it constantly - it takes
+ * a PATH (`projectStore.saveProject(path?)`), and the scenarios pass their own
+ * temp path, never a recorded one. A trace step naming it would be choosing
+ * where this process writes a .stalx.
+ */
+export const REPLAYABLE_MUTATIONS: ReadonlySet<string> = new Set([
   'createLoopClosure',
   'createSection',
   'createSectionAndMerge',
@@ -95,6 +96,37 @@ export const FUZZABLE_ACTIONS: ReadonlySet<string> = new Set([
   'updateSection',
   'updateShot',
   'updateStationComment',
+]);
+
+/**
+ * Every `projectStore` action a fuzz step may dispatch at all: the replayable
+ * mutations, plus the control moves the SCENARIO drives with its own arguments
+ * (history moves, the save/reload boundary, Repair, and the re-observe
+ * sentinel). `runStep` reaches an action by NAME, so without this set a step
+ * could call any method the store exposes.
+ *
+ * The two-set split is the point: `runStep` checks this one, and the replay
+ * path checks `REPLAYABLE_MUTATIONS`, so an action the scenario may drive is
+ * not thereby an action a FILE may drive.
+ *
+ * `undoRedoFuzzBridge` owns both, and `lib/fuzzableActions.test.ts` pins the
+ * other direction - every action the generators can produce must be replayable,
+ * so adding a generator without widening the set fails a unit test rather than
+ * a fuzz run.
+ */
+export const FUZZABLE_ACTIONS: ReadonlySet<string> = new Set([
+  ...REPLAYABLE_MUTATIONS,
+  // Pure re-observation: no action is dispatched at all (used after a reload).
+  'noop:observe',
+  // History moves.
+  'undo',
+  'redo',
+  'undoTo',
+  'redoTo',
+  // The persistence boundary and the repair pass - scenario-driven, with the
+  // scenario's own arguments. Never replayable from a trace.
+  'saveProject',
+  'repairProjectIntegrity',
 ]);
 
 /** What Node asks the page to do for one step. */

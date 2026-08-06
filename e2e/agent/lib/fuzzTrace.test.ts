@@ -157,6 +157,32 @@ describe('TraceRecorder', () => {
     expect(recorder.snapshot()).toEqual([{ kind: 'redo' }]);
   });
 
+  it('refuses a step whose kind or jump width this build cannot run', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fuzz-trace-test-'));
+    try {
+      const write = (steps: unknown[]): string => {
+        const file = path.join(dir, `${steps.length}-${Math.abs(JSON.stringify(steps).length)}.json`);
+        fs.writeFileSync(file, JSON.stringify({ v: TRACE_VERSION, steps }));
+        return file;
+      };
+
+      // An unrecognised kind used to fall through the branch chain and replay
+      // as a redo; a negative jump is not bounded by the `Math.min` clamp and
+      // moved the model cursor the wrong way.
+      expect(() => readTrace(write([{ kind: 'loadProject' }]))).toThrow(/does not run/);
+      expect(() => readTrace(write([{ kind: 'undoTo', steps: -5 }]))).toThrow(/positive integer/);
+      expect(() => readTrace(write([{ kind: 'redoTo', steps: 1.5 }]))).toThrow(/positive integer/);
+      expect(() => readTrace(write([{ kind: 'mutate', args: [] }]))).toThrow(/no action name/);
+      expect(() => readTrace(write([{ kind: 'mutate', action: 'createShot' }]))).toThrow(/not an array/);
+      // ...and the shapes it DOES run still parse.
+      expect(
+        readTrace(write([{ kind: 'undo' }, { kind: 'undoTo', steps: 3 }, { kind: 'save' }])).steps,
+      ).toHaveLength(3);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('refuses a trace written by a different schema version', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fuzz-trace-test-'));
     try {
@@ -212,6 +238,27 @@ describe('restoreTraceEnv', () => {
     expect(process.env.STALAGMIGHT_PERSIST_FUZZ_TEST_KNOB).toBe('b');
     expect(applied).toHaveLength(2);
     expect(refused).toEqual([]);
+  });
+
+  it('REFUSES the two path knobs even though they match the prefix', () => {
+    // These decide where THIS process writes its trace and what it replays
+    // next. A file that could set them would pick the output path for the run
+    // reading it - `writeTrace` does `mkdirSync(recursive) + writeFileSync`, so
+    // that is an arbitrary create/overwrite with largely file-controlled
+    // content. The recorder already refuses to emit `_TRACE`; this is the same
+    // rule on the consuming side, where it is a boundary rather than a habit.
+    const before = { trace: process.env.STALAGMIGHT_FUZZ_TRACE, replay: process.env.STALAGMIGHT_FUZZ_REPLAY };
+
+    const { applied, refused } = restoreTraceEnv({
+      STALAGMIGHT_FUZZ_TRACE: '/tmp/pwn/out.json',
+      STALAGMIGHT_FUZZ_REPLAY: '/tmp/pwn/in.json',
+      STALAGMIGHT_FUZZ_TEST_KNOB: 'kept',
+    });
+
+    expect(process.env.STALAGMIGHT_FUZZ_TRACE).toBe(before.trace);
+    expect(process.env.STALAGMIGHT_FUZZ_REPLAY).toBe(before.replay);
+    expect(applied.map(([key]) => key)).toEqual(['STALAGMIGHT_FUZZ_TEST_KNOB']);
+    expect(refused).toEqual(['STALAGMIGHT_FUZZ_TRACE', 'STALAGMIGHT_FUZZ_REPLAY']);
   });
 
   it('REFUSES every key outside those prefixes, and says which', () => {

@@ -73,6 +73,12 @@ export class AppSession extends SessionCore {
     // Reap orphans from previous sessions (scoped to recorded pidfiles).
     this.reapPreviousSessions();
 
+    // Parse the display pool FIRST, before anything has moved `state` or spent
+    // minutes in cargo: a malformed STALAGMIGHT_AGENT_DISPLAYS is a caller
+    // error, and throwing it from the middle of the launch would leave the
+    // session stuck in `building` with a rebuild already paid for.
+    const pool = opts.headed ? [] : xvfbDisplays();
+
     // 1. Build freshness. The profile is resolved ONCE here and threaded
     // through, so a mid-start env change cannot make the freshness check and
     // the launch disagree about which binary they mean.
@@ -106,9 +112,10 @@ export class AppSession extends SessionCore {
     } else {
       // 1920x1080 screen so window-size testing has headroom up to full HD
       // (the app window starts smaller; resizing is capped by the screen).
-      // Resolved HERE, inside start(), so a malformed pool fails this session
-      // instead of throwing while some importer's module graph is still loading.
-      const pool = xvfbDisplays();
+      // `pool` was resolved at the top of this method - inside start() so a
+      // malformed value fails this session rather than throwing while some
+      // importer's module graph is still loading, and BEFORE the build so it
+      // does not surface after a ten-minute compile.
       this.xvfb = await startXvfb(pool, '1920x1080x24');
       if (this.xvfb) {
         this.display = this.xvfb.display;

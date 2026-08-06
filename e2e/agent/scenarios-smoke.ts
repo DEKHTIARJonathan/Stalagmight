@@ -72,6 +72,21 @@ const EXPECTED_RED: Record<string, string> = {
     'reproduces finding 12 on the first id-bearing entry of the restored stack (issue #413)',
 };
 
+/** Opt in to walking past classified bugs - see EXPECTED_RED. */
+const ALLOW_KNOWN_BUGS = process.env.STALAGMIGHT_FUZZ_ALLOW_KNOWN_BUGS === '1';
+
+/**
+ * Does this failure come from the scenario's OWN oracle?
+ *
+ * Every fuzz-scenario failure is composed by its `fail()` helper, which always
+ * emits a `reproduce:` line naming the seed and iteration count. A throw
+ * without one did not come from an oracle - it is the harness failing to drive
+ * the app - and an expected-red entry must not absorb that.
+ */
+function looksLikeAnOracleFailure(message: string): boolean {
+  return message.includes('reproduce:');
+}
+
 async function main(): Promise<void> {
   const session = createSession();
   let failed = false;
@@ -98,15 +113,30 @@ async function main(): Promise<void> {
         // scenario gate.
         const expectedRed = EXPECTED_RED[name];
         if (fatal.length && expectedRed === undefined) failed = true;
-        if (expectedRed !== undefined) {
-          // Reaching here at all means the scenario did NOT throw. For an
-          // expected-red one that is the news: the bug it pins is fixed (or its
-          // oracle stopped seeing it), and the list above is now wrong.
+        if (expectedRed !== undefined && fatal.length > 0) {
+          // Expected-red, and it DID fail - through the sweep rather than by
+          // throwing. Same news, so the same XFAIL: `fatal` is a second failure
+          // channel, and treating it as a pass would report a crashing scenario
+          // as a fixed bug.
+          xfailed.push(name);
+          process.stdout.write(`XFAIL: ${name} failed as expected via a fatal finding (${expectedRed}).\n`);
+        } else if (expectedRed !== undefined && !ALLOW_KNOWN_BUGS) {
+          // Did not throw and swept clean, in STRICT mode: the bug it pins is
+          // fixed (or its oracle stopped seeing it) and the list above is wrong.
           failed = true;
           xpassed.push(name);
           process.stdout.write(
             `UNEXPECTED PASS: ${name} was expected to fail (${expectedRed}).\n` +
               `  If the bug is fixed, remove it from EXPECTED_RED and update the scenario header.\n`,
+          );
+        } else if (expectedRed !== undefined) {
+          // Tolerant mode is the documented way to run this gate, and it is
+          // exactly what makes these two scenarios complete: they walk PAST the
+          // classified bugs rather than stopping on them. A pass here says
+          // nothing about whether the bug is fixed, so it is not news.
+          process.stdout.write(
+            `PASS (tolerant): ${name} completed with STALAGMIGHT_FUZZ_ALLOW_KNOWN_BUGS=1; ` +
+              `that walks past the classified bugs rather than proving them fixed.\n`,
           );
         }
         const label = fatal.length ? 'FAIL' : sweep.findings.length ? 'PASS+findings' : 'PASS';
@@ -120,11 +150,21 @@ async function main(): Promise<void> {
         if (expectedRed === undefined) {
           failed = true;
           process.stdout.write(`FAIL: ${name} threw: ${detail}\n`);
-        } else {
+        } else if (looksLikeAnOracleFailure(detail)) {
           xfailed.push(name);
           process.stdout.write(
             `XFAIL: ${name} failed as expected (${expectedRed}):\n` +
               `${detail.split('\n').slice(0, 3).map((line) => `  | ${line}`).join('\n')}\n`,
+          );
+        } else {
+          // Expected-red covers the scenario's OWN oracle saying "the app did
+          // the wrong thing". It does not cover the harness failing to drive the
+          // app at all - a WebDriver attach failure, a missing test hook, a
+          // renamed store action - and swallowing those is exactly how this gate
+          // would stop answering the question it exists to answer.
+          failed = true;
+          process.stdout.write(
+            `FAIL: ${name} threw something that is NOT its oracle (so not the expected red):\n${detail}\n`,
           );
         }
       }

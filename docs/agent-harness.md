@@ -149,7 +149,8 @@ hazards over long runs.
   - `pnpm agent:smoke` - session-core smoke (build -> launch -> drive -> stop).
   - `pnpm agent:mcp:smoke` - MCP-layer smoke (spawns the server, round-trips
     every tool through the protocol, self-tests the crash oracle).
-  - `pnpm agent:scenarios` - runs all 9 stress scenarios once at small n.
+  - `pnpm agent:scenarios` - runs all 10 stress scenarios once at small n. Two of them
+    are expected-red (see Stress scenarios); the gate reports those as XFAIL.
   - `pnpm agent:scenario <name> [--seed N] [--iterations M] [--release]` - runs
     ONE scenario at a chosen seed/n, then a full sweep. The one to reach for when
     a seeded scenario needs re-running: a fuzzer repro, or a soak at a bigger n
@@ -192,7 +193,7 @@ children). That default is a deliberate trade, not inertia.
 
 - Every `debug_assert!` in a live path - `core/state/command_comment.rs:71`,
   four in `core/loading.rs`, `models/project/reverse.rs:358`,
-  `models/project/classify.rs:244`, `models/project/offsets.rs:112`. Each is an
+  `models/project/classify.rs:244`. Each is an
   invariant check the app performs on itself during exactly the mutations a
   fuzzer drives.
 - `Project::debug_assert_merge_alignment` (`models/project/offsets.rs:72`), whose

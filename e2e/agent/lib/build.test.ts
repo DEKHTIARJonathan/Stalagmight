@@ -14,6 +14,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   FEATURES_FOR_MODE,
   buildStampPathFor,
+  featuresFor,
   isPluginAclChurn,
   needsE2eFeature,
   readBuildStamp,
@@ -232,24 +233,37 @@ describe('build modes', () => {
   it('treats the other profile as stale rather than reusing its binary', () => {
     const reasons = stampStaleReasons(E2E_STAMP, {
       viteE2E: true,
-      e2eFeature: E2E_STAMP.e2eFeature,
+      e2eFeature: featuresFor('release').includes('e2e'),
       binaryMtimeMs: E2E_STAMP.binaryMtimeMs,
       mode: 'release',
       features: 'e2e',
     });
 
-    expect(reasons).toHaveLength(2);
+    // Three, not two: a debug stamp is the wrong profile, was built with the
+    // wrong feature set, and (on a platform where the release profile is what
+    // asks for `e2e`) carries the wrong e2eFeature bit.
+    expect(reasons).toHaveLength(3);
     expect(reasons[0]).toContain('for the debug profile but this start needs release');
     expect(reasons[1]).toContain('features "(none)" but this start needs "e2e"');
+    expect(reasons[2]).toContain('e2e cargo feature');
   });
 
   it('accepts a release stamp for a release start', () => {
-    const releaseStamp: E2EBuildStamp = { ...E2E_STAMP, mode: 'release', features: 'e2e' };
+    // e2eFeature true, because that is what a release build WRITES: `buildApp`
+    // stamps the union it passed, and the release profile asks for `e2e`. The
+    // old fixture left it false - a stamp no build could produce - which is how
+    // the comparison stayed vacuous.
+    const releaseStamp: E2EBuildStamp = {
+      ...E2E_STAMP,
+      mode: 'release',
+      features: 'e2e',
+      e2eFeature: true,
+    };
 
     expect(
       stampStaleReasons(releaseStamp, {
         viteE2E: true,
-        e2eFeature: releaseStamp.e2eFeature,
+        e2eFeature: featuresFor('release').includes('e2e'),
         binaryMtimeMs: releaseStamp.binaryMtimeMs,
         mode: 'release',
         features: 'e2e',
@@ -271,6 +285,34 @@ describe('build modes', () => {
     // self-test; debug must stay featureless so the DEFAULT build is unchanged.
     expect(FEATURES_FOR_MODE.debug).toEqual([]);
     expect(FEATURES_FOR_MODE.release).toEqual(['e2e']);
+  });
+
+  it('accepts the stamp a build of the SAME profile just wrote (no rebuild loop)', () => {
+    // The producer/consumer round trip, which the two cases above cannot make:
+    // they fed the stamp's own e2eFeature back in as the want, so that half of
+    // the comparison was `x !== x`. Production passes what the PLATFORM plus the
+    // PROFILE ask for, and when those two disagreed - Linux release, where the
+    // profile wants `e2e` and the platform does not - every start rebuilt.
+    for (const mode of ['debug', 'release'] as const) {
+      const features = featuresFor(mode);
+      const asBuilt: E2EBuildStamp = {
+        ...E2E_STAMP,
+        mode,
+        features: features.join(','),
+        e2eFeature: features.includes('e2e'),
+      };
+
+      expect(
+        stampStaleReasons(asBuilt, {
+          viteE2E: asBuilt.viteE2E,
+          e2eFeature: featuresFor(mode).includes('e2e'),
+          binaryMtimeMs: asBuilt.binaryMtimeMs,
+          mode,
+          features: features.join(','),
+        }),
+        `${mode}: a freshly written stamp must satisfy its own freshness check`,
+      ).toEqual([]);
+    }
   });
 
   it('names only features the crate actually declares', () => {

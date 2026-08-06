@@ -157,8 +157,27 @@ export const FEATURES_FOR_MODE: Record<AgentBuildMode, string[]> = {
   release: ['e2e'],
 };
 
+/**
+ * Every cargo feature a build of `mode` passes, on THIS platform.
+ *
+ * Two independent reasons to pass `--features e2e` - the PROFILE asks for it
+ * (`FEATURES_FOR_MODE`, so release keeps `debug_trigger_panic`'s body) and the
+ * PLATFORM asks for it (`needsE2eFeature`, so darwin gets the in-app WebDriver
+ * plugin) - unioned into one answer.
+ *
+ * `buildApp` and `checkBuildFreshness` MUST derive from this same function.
+ * They did not: the build unioned both reasons and stamped the result, while
+ * the check asked the platform alone, so on Linux a release stamp said
+ * `e2eFeature: true` and the check wanted `false`. `fresh` was then false the
+ * instant the build finished - every `--release` start rebuilt from scratch,
+ * and a fuzz-matrix run put K concurrent release builds on one target dir.
+ */
+export function featuresFor(mode: AgentBuildMode): string[] {
+  return [...new Set([...FEATURES_FOR_MODE[mode], ...(needsE2eFeature() ? ['e2e'] : [])])].sort();
+}
+
 function featureKey(mode: AgentBuildMode): string {
-  return [...FEATURES_FOR_MODE[mode]].sort().join(',');
+  return featuresFor(mode).join(',');
 }
 
 /** Read + validate the stamp. Returns null if missing, unreadable, or bogus. */
@@ -236,7 +255,8 @@ export function stampStaleReasons(
   if (stamp.e2eFeature !== want.e2eFeature) {
     reasons.push(
       `build stamp says the e2e cargo feature was ${stamp.e2eFeature ? 'on' : 'off'} ` +
-        `but this platform needs it ${want.e2eFeature ? 'on' : 'off'}`,
+        `but this start needs it ${want.e2eFeature ? 'on' : 'off'} ` +
+        `(the profile and the platform both ask - see featuresFor)`,
     );
   }
   if (stamp.binaryMtimeMs !== want.binaryMtimeMs) {
@@ -275,7 +295,7 @@ export function checkBuildFreshness(opts: FreshnessOptions = {}): Freshness {
   reasons.push(
     ...stampStaleReasons(readBuildStamp(buildStampPathFor(mode)), {
       viteE2E: requireE2E,
-      e2eFeature: needsE2eFeature(),
+      e2eFeature: featuresFor(mode).includes('e2e'),
       binaryMtimeMs: binMtime,
       mode,
       features: featureKey(mode),
@@ -353,9 +373,7 @@ export function buildApp(onLog?: (line: string) => void, mode: AgentBuildMode = 
   // body compiled in - `FEATURES_FOR_MODE`), and the PLATFORM asks for it
   // (darwin needs the in-app WebDriver plugin - `needsE2eFeature`). A mac
   // release build needs it once, not twice.
-  const features = [
-    ...new Set([...FEATURES_FOR_MODE[mode], ...(needsE2eFeature() ? ['e2e'] : [])]),
-  ].sort();
+  const features = featuresFor(mode);
   const withE2eFeature = features.includes('e2e');
   // `--debug` selects the dev profile; its absence selects release. The frontend
   // leg is identical either way - `beforeBuildCommand` runs `pnpm build`, and
@@ -406,7 +424,7 @@ export function buildApp(onLog?: (line: string) => void, mode: AgentBuildMode = 
     }
   }
   writeBuildStamp(
-    { viteE2E: true, e2eFeature: withE2eFeature, viteMode: 'production', mode, features: featureKey(mode) },
+    { viteE2E: true, e2eFeature: withE2eFeature, viteMode: 'production', mode, features: features.join(',') },
     onLog,
   );
   onLog?.(`Build complete (${mode}).`);

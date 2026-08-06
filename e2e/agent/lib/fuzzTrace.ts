@@ -95,6 +95,18 @@ export interface FuzzTrace {
 const RECORDED_ENV_PREFIXES = ['STALAGMIGHT_FUZZ_', 'STALAGMIGHT_PERSIST_FUZZ_'];
 
 /**
+ * Knobs that match the prefixes above and are STILL never carried or restored.
+ *
+ * Both name an output or input PATH rather than what the run does, and both are
+ * set by the caller that is about to run - so honouring a file's opinion about
+ * them lets that file decide where this process writes (`_TRACE`) or what it
+ * replays next (`_REPLAY`). The recorder already skipped `_TRACE` on the way
+ * out; the restore side has to skip both on the way in, or the exclusion is a
+ * convention rather than a boundary.
+ */
+const NEVER_RESTORED = ['STALAGMIGHT_FUZZ_TRACE', 'STALAGMIGHT_FUZZ_REPLAY'];
+
+/**
  * Restore a trace's recorded environment - filtered to the SAME prefixes the
  * recorder writes.
  *
@@ -116,6 +128,10 @@ export function restoreTraceEnv(recorded: Readonly<Record<string, string>>): {
   const applied: [string, string][] = [];
   const refused: string[] = [];
   for (const [key, value] of Object.entries(recorded)) {
+    if (NEVER_RESTORED.includes(key)) {
+      refused.push(key);
+      continue;
+    }
     if (RECORDED_ENV_PREFIXES.some((prefix) => key.startsWith(prefix))) {
       process.env[key] = value;
       applied.push([key, value]);
@@ -132,7 +148,7 @@ function recordedEnv(): Record<string, string> {
     if (value === undefined) continue;
     // The trace's own path is not part of what the run DOES, and carrying it
     // would make a replayed trace overwrite the file it came from.
-    if (key === 'STALAGMIGHT_FUZZ_TRACE') continue;
+    if (NEVER_RESTORED.includes(key)) continue;
     if (RECORDED_ENV_PREFIXES.some((prefix) => key.startsWith(prefix))) out[key] = value;
   }
   return out;
@@ -203,12 +219,46 @@ export function writeTrace(filePath: string, trace: FuzzTrace): string {
   return filePath;
 }
 
+/** Every `kind` a step may carry. Anything else is not a step this build runs. */
+const STEP_KINDS = new Set(['mutate', 'undo', 'redo', 'undoTo', 'redoTo', 'save', 'repair']);
+
+/**
+ * Validate one step's SHAPE.
+ *
+ * The file is the untrusted input, and these fields reach control flow: `kind`
+ * selects the branch (an unrecognised one used to fall through to the
+ * history-move arm and replay as a redo), `steps` is clamped with `Math.min`
+ * against the reach - which does not bound it from BELOW, so a negative moved
+ * the model cursor the wrong way - and `args` is spread into a store action.
+ */
+function validateStep(step: unknown, index: number, filePath: string): void {
+  const where = `trace ${filePath} step ${index + 1}`;
+  if (typeof step !== 'object' || step === null) throw new Error(`${where} is not an object`);
+  const candidate = step as Partial<TraceStep> & { steps?: unknown; args?: unknown };
+  if (typeof candidate.kind !== 'string' || !STEP_KINDS.has(candidate.kind)) {
+    throw new Error(`${where} has kind ${JSON.stringify(candidate.kind)}, which this build does not run`);
+  }
+  if (candidate.kind === 'mutate') {
+    if (typeof (candidate as { action?: unknown }).action !== 'string') {
+      throw new Error(`${where} is a mutation with no action name`);
+    }
+    if (!Array.isArray(candidate.args)) throw new Error(`${where} has args that are not an array`);
+  }
+  if (candidate.kind === 'undoTo' || candidate.kind === 'redoTo') {
+    const steps = candidate.steps;
+    if (typeof steps !== 'number' || !Number.isSafeInteger(steps) || steps < 1) {
+      throw new Error(`${where} jumps ${JSON.stringify(steps)} step(s); must be a positive integer`);
+    }
+  }
+}
+
 export function readTrace(filePath: string): FuzzTrace {
   const parsed = JSON.parse(fs.readFileSync(filePath, 'utf8')) as FuzzTrace;
   if (parsed.v !== TRACE_VERSION) {
     throw new Error(`trace ${filePath} is schema v${parsed.v}; this build reads v${TRACE_VERSION}`);
   }
   if (!Array.isArray(parsed.steps)) throw new Error(`trace ${filePath} has no steps array`);
+  parsed.steps.forEach((step, index) => validateStep(step, index, filePath));
   return parsed;
 }
 

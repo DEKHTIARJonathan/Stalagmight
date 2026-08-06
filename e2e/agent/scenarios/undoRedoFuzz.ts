@@ -428,6 +428,7 @@ import {
   type TraceStep,
 } from '../lib/fuzzTrace';
 import {
+  REPLAYABLE_MUTATIONS,
   bumpEpoch,
   enableIdAgnosticModel,
   fetchMismatch,
@@ -1414,6 +1415,16 @@ async function runFuzz(
       if (cursor >= maxDepth) {
         ctx.metric('replaySkipped:mutate');
         return;
+      }
+      // A trace supplies both the action NAME and its arguments, so the replay
+      // path is narrower than the dispatch path: only the mutations a generator
+      // can produce, never a scenario-driven control action like `saveProject`
+      // (which takes a path this file would then be choosing).
+      if (!REPLAYABLE_MUTATIONS.has(traceStep.action)) {
+        throw new Error(
+          `trace step names ${traceStep.action}, which is not a replayable mutation. ` +
+            `A recorded trace may only replay the actions the generators produce.`,
+        );
       }
       await applyMutation(
         { action: traceStep.action, args: traceStep.args, label: traceStep.label },

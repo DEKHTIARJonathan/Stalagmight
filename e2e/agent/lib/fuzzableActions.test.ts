@@ -19,7 +19,7 @@ import * as path from 'path';
 import { fileURLToPath } from 'url';
 import { describe, expect, it } from 'vitest';
 
-import { FUZZABLE_ACTIONS } from '../scenarios/undoRedoFuzzBridge';
+import { FUZZABLE_ACTIONS, REPLAYABLE_MUTATIONS } from '../scenarios/undoRedoFuzzBridge';
 
 const scenariosDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'scenarios');
 
@@ -33,14 +33,17 @@ describe('FUZZABLE_ACTIONS', () => {
     const produced = actionLiteralsIn('undoRedoFuzzActions.ts');
 
     expect(produced.length).toBeGreaterThan(15);
-    expect(produced.filter((action) => !FUZZABLE_ACTIONS.has(action))).toEqual([]);
+    // Replayable, not merely dispatchable: a generator's action has to survive
+    // the narrower gate the REPLAY path applies, or its own recorded trace
+    // cannot be replayed.
+    expect(produced.filter((action) => !REPLAYABLE_MUTATIONS.has(action))).toEqual([]);
   });
 
   it('covers every action the persistence coverage plan can produce', () => {
     const produced = actionLiteralsIn('undoPersistenceCoverage.ts');
 
     expect(produced.length).toBeGreaterThan(10);
-    expect(produced.filter((action) => !FUZZABLE_ACTIONS.has(action))).toEqual([]);
+    expect(produced.filter((action) => !REPLAYABLE_MUTATIONS.has(action))).toEqual([]);
   });
 
   it('does NOT carry the store actions a trace must never reach', () => {
@@ -55,5 +58,20 @@ describe('FUZZABLE_ACTIONS', () => {
     for (const required of ['noop:observe', 'undo', 'redo', 'undoTo', 'redoTo', 'saveProject']) {
       expect(FUZZABLE_ACTIONS.has(required)).toBe(true);
     }
+  });
+
+  it('keeps the path-taking control actions OUT of the replayable set', () => {
+    // `saveProject(path?)` takes a path. The scenarios pass their own temp path
+    // and never a recorded one, so a trace naming it would be choosing where
+    // this process writes a .stalx - which is why the replay path checks the
+    // narrower set and the dispatch path checks the wider one.
+    for (const controlOnly of ['saveProject', 'repairProjectIntegrity', 'undo', 'redo', 'noop:observe']) {
+      expect(FUZZABLE_ACTIONS.has(controlOnly)).toBe(true);
+      expect(REPLAYABLE_MUTATIONS.has(controlOnly)).toBe(false);
+    }
+  });
+
+  it('is a subset relationship, not two hand-maintained lists', () => {
+    for (const action of REPLAYABLE_MUTATIONS) expect(FUZZABLE_ACTIONS.has(action)).toBe(true);
   });
 });
