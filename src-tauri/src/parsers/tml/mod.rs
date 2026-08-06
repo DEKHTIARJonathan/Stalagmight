@@ -471,6 +471,65 @@ struct FileMetadata {
     anomalies: TmlParseAnomalies,
 }
 
+/// The longest foreign shot id we will adopt. A UUID is 36 characters; 128
+/// leaves room for a `urn:uuid:` prefix or a braced form and still bounds the
+/// amplification, because the value is cloned into the project-wide
+/// `shot_uuid_index` AND into every undo snapshot (`Shot::to_shot_data` copies
+/// it), i.e. shots x length x undo depth.
+const MAX_FOREIGN_UUID_LEN: usize = 128;
+
+/// The file's `<UUID>`/`<UU>` as an identity we are willing to store, or `None`
+/// to mint a fresh one.
+///
+/// The VALUE is never coerced - canonicalising it would recreate the identity
+/// churn #423 exists to stop - but its SHAPE is checked, because two classes of
+/// input are not merely odd, they are unstorable:
+///
+/// * **Control characters.** `unescape` resolves `&#1;` to a real U+0001, and
+///   `BytesText::new` escapes only `<>&"'`, so the byte would be written into
+///   the export RAW. Measured: exporting a shot whose uuid holds U+0001 emits a
+///   document with that byte in element content, which XML 1.0 forbids. Our own
+///   quick-xml reader is lenient and reads it straight back, so nothing on this
+///   side complains - the cost lands on the strict consumers, Ariane and
+///   SpeleoDB's `openspeleo_lib`, which reject the whole file. A `\0`
+///   additionally risks truncation on SQLite TEXT read-back, which would make
+///   the saved and reloaded identity differ. `char::is_control` is the right
+///   gate: it covers the C0/C1 ranges XML 1.0 excludes, and no legitimate
+///   identifier contains one.
+/// * **Unbounded length.** See [`MAX_FOREIGN_UUID_LEN`].
+///
+/// Fail-safe by construction: a rejected value costs that shot its foreign
+/// identity and nothing else - it gets the same fresh mint an uncovered row
+/// gets.
+fn foreign_shot_uuid(shot_id: i64, raw: Option<&str>) -> Option<String> {
+    let raw = raw?;
+    // Empty (or whitespace-only) means "no identity", matching the way
+    // `export::tml::shot_export_uuid` already treats an empty stored value.
+    if raw.trim().is_empty() {
+        return None;
+    }
+    if raw.len() > MAX_FOREIGN_UUID_LEN {
+        tracing::warn!(
+            shot_id,
+            len = raw.len(),
+            max = MAX_FOREIGN_UUID_LEN,
+            purpose = "bound foreign shot identity (#423)",
+            "Shot UUID is too long to adopt; minting a fresh identity instead"
+        );
+        return None;
+    }
+    if raw.chars().any(char::is_control) {
+        tracing::warn!(
+            shot_id,
+            purpose = "bound foreign shot identity (#423)",
+            "Shot UUID contains control characters and could not be re-exported as \
+             well-formed XML; minting a fresh identity instead"
+        );
+        return None;
+    }
+    Some(raw.to_owned())
+}
+
 /// Build a `RawShot` from parsed field map.
 fn build_raw_shot(
     fields: &HashMap<&str, String>,
@@ -531,10 +590,7 @@ fn build_raw_shot(
 
     Ok(RawShot {
         id,
-        // Verbatim, un-validated: whatever the file calls this shot IS its
-        // identity. An empty element means "no identity", matching the way
-        // `export::tml::shot_export_uuid` already treats an empty stored value.
-        uuid: fields.get("uuid").filter(|u| !u.is_empty()).cloned(),
+        uuid: foreign_shot_uuid(id, fields.get("uuid").map(String::as_str)),
         from_id,
         closure_to_id: parse_i64(fields, "closure_to_id").unwrap_or(-1),
         shot_type,

@@ -315,11 +315,25 @@ impl Project {
         // `uuids` is still in the OLD order, and so is `data` after the reverse
         // put record i at position count-1-i - zip them by walking the uuids
         // backwards alongside the reversed data.
+        //
+        // Since #423 this pairing is REDUNDANT: `to_shot_data` copies the uuid,
+        // so each `ShotData` already carries its own identity and
+        // `Shot::with_uuid` prefers it over the value zipped in here. It is kept
+        // as a cross-check rather than deleted, because "the uuid vector is one
+        // step out of sync with the shots" is precisely the bug this loop exists
+        // to avoid, and a `debug_assert` turns a future regression into a loud
+        // failure instead of every station anchor in the section moving quietly.
         section.shots = data
             .into_iter()
             .zip(uuids.into_iter().rev())
             .zip(ids)
-            .map(|((d, uuid), id)| Shot::with_uuid(id, d, uuid))
+            .map(|((d, uuid), id)| {
+                debug_assert_eq!(
+                    d.uuid, uuid,
+                    "reverse: a shot's identity parted company with its record"
+                );
+                Shot::with_uuid(id, d, uuid)
+            })
             .collect();
 
         // Every shot in this section moved, so every cached `(section_id, uuid) ->

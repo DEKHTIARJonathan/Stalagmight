@@ -96,6 +96,34 @@ fn cave_file_xml(rows: &[Row]) -> String {
     )
 }
 
+/// A two-section cave file: `main` hangs off the START, `side` hangs off the
+/// last row of `main`. Used to show that a repeat ACROSS sections is legal and
+/// must survive untouched.
+fn two_section_cave_file_xml(main: &[Row], side: &[Row]) -> String {
+    let start = survey_data_xml(&Row::new(0, -1, None), "START", "Main");
+    let rows = |rows: &[Row], section: &str| {
+        rows.iter()
+            .map(|r| survey_data_xml(r, "REAL", section))
+            .collect::<Vec<_>>()
+            .join("\n        ")
+    };
+    let (a, b) = (rows(main, "Main"), rows(side, "Side"));
+    format!(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<CaveFile>
+    <caveName>Synthetic</caveName>
+    <unit>m</unit>
+    <useMagneticAzimuth>true</useMagneticAzimuth>
+    <firstStartAbsoluteElevation>0.0</firstStartAbsoluteElevation>
+    <Data>
+        {start}
+        {a}
+        {b}
+    </Data>
+</CaveFile>"#
+    )
+}
+
 /// Write `xml` next to `dir` under `name` and hand back the path. `.tmlu` is
 /// plain XML, so the parser reads it as written.
 fn write_tmlu(dir: &Path, name: &str, xml: &str) -> std::path::PathBuf {
@@ -743,5 +771,525 @@ fn undo_restores_the_imported_identities_rather_than_minting_new_ones() {
         section_uuids(&state.get_project_state().unwrap(), 0),
         expected,
         "redoing the import must bring back the file's identities, not fresh mints"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 10. The IPC boundary must not let a client name a shot's identity
+// ---------------------------------------------------------------------------
+
+/// `ShotData` is the argument type of the `create_shot` command, and since #423
+/// it has a `uuid` field. If that field were honoured, a caller could name an
+/// EXISTING shot's identity and insert the new shot BEFORE it: both first-wins
+/// repairs keep the first OCCURRENCE - now the injected record - and re-mint the
+/// original, moving every `AfterShot` anchor onto the injected shot.
+///
+/// `create_shot_impl` clears it at the boundary, so the original keeps its
+/// identity. The fixture is deliberately an ALREADY-critical project, because
+/// `execute`'s structural epilogue rolls back only newly introduced criticals -
+/// on a sound project it refuses the create outright (pinned by the companion
+/// test), and that would hide the case where nothing objects at all.
+#[test]
+fn create_shot_cannot_name_an_existing_shots_identity() {
+    const IDS: [&str; 3] = [
+        "ffffffff-0000-4000-8000-000000000001",
+        "ffffffff-0000-4000-8000-000000000002",
+        "ffffffff-0000-4000-8000-000000000003",
+    ];
+
+    let dir = tempfile::tempdir().unwrap();
+    let source = write_tmlu(
+        dir.path(),
+        "boundary.tmlu",
+        &cave_file_xml(&[
+            Row::new(1, 0, Some(IDS[0])),
+            Row::new(2, 1, Some(IDS[1])),
+            Row::new(3, 2, Some(IDS[2])),
+        ]),
+    );
+
+    let state = state_with_project();
+    import_ariane_file(&state, &source);
+
+    // Make the project ALREADY critical before the attack. `execute`'s
+    // structural epilogue only rolls back NEWLY introduced criticals
+    // (`finalize_structural_edit(pre_had_critical)`), so this is the state in
+    // which the duplicate is admitted and nothing objects until the pre-save
+    // repair re-mints the original - the silent shape of the hazard, and the
+    // reason the boundary clear is load-bearing rather than belt-and-braces.
+    let (section_id, victim_shot_id) = {
+        let mut p = state.get_project_state().unwrap();
+        let ids = (p.sections[0].id, p.sections[0].shots[1].id);
+        p.add_section(SectionData {
+            name: Some("Corrupt".to_string()),
+            shots: vec![ShotData {
+                length: f64::NAN,
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+        assert!(
+            p.has_critical_integrity_violations(),
+            "the fixture must start out critical or the epilogue masks the hazard"
+        );
+        state.set_project_for_tests(p);
+        ids
+    };
+
+    // The attack: create a shot that claims the victim's identity, placed
+    // BEFORE it so it becomes the first occurrence.
+    let result = crate::commands::shot::create_shot_impl(
+        &state,
+        section_id,
+        ShotData {
+            uuid: Some(IDS[1].to_string()),
+            azimuth_in: 90.0,
+            azimuth_out: 90.0,
+            length: 4.0,
+            depth_in: 5.0,
+            depth_out: 5.0,
+            ..Default::default()
+        },
+        None,
+        Some(victim_shot_id),
+    );
+    assert!(result.success, "{:?}", result.error);
+
+    let mut project = state.get_project_state().unwrap();
+    let claimants: Vec<u32> = project.sections[0]
+        .shots
+        .iter()
+        .filter(|s| s.uuid.as_deref() == Some(IDS[1]))
+        .map(|s| s.id)
+        .collect();
+    assert_eq!(
+        claimants,
+        vec![victim_shot_id],
+        "only the original shot may hold its identity - the client named it and \
+         was inserted first, so a second claimant is the injection landing"
+    );
+
+    // The pre-save repair is where the damage would land, so run it and check
+    // the victim - not the injected shot - still owns the identity.
+    let reminted = project.ensure_unique_shot_uuids();
+    assert_eq!(reminted, 0, "there was never a duplicate to repair");
+    let victim = project.sections[0]
+        .shots
+        .iter()
+        .find(|s| s.id == victim_shot_id)
+        .expect("the victim shot survives");
+    assert_eq!(
+        victim.uuid.as_deref(),
+        Some(IDS[1]),
+        "the original shot must keep the identity its anchors resolve through"
+    );
+}
+
+/// The same attack on a SOUND project, with a cross-reference anchored on the
+/// victim: the anchor must still resolve to the victim's own station and the
+/// create must still succeed. Without the boundary clear this fails earlier and
+/// differently - `duplicate_shot_uuid` is Critical, so `execute`'s epilogue
+/// rolls the whole create back with "Blocked: this action would corrupt the
+/// survey structure". Recorded as the second line of defence it is, and as
+/// evidence that leaving the field honoured would also break a legitimate edit.
+#[test]
+fn create_shot_cannot_move_an_existing_anchor_onto_a_new_shot() {
+    const IDS: [&str; 3] = [
+        "ffffffff-1111-4000-8000-000000000001",
+        "ffffffff-1111-4000-8000-000000000002",
+        "ffffffff-1111-4000-8000-000000000003",
+    ];
+
+    let dir = tempfile::tempdir().unwrap();
+    let source = write_tmlu(
+        dir.path(),
+        "anchored-boundary.tmlu",
+        &cave_file_xml(&[
+            Row::new(1, 0, Some(IDS[0])),
+            Row::new(2, 1, Some(IDS[1])),
+            Row::new(3, 2, Some(IDS[2])),
+        ]),
+    );
+
+    let state = state_with_project();
+    import_ariane_file(&state, &source);
+
+    // Anchor a comment on the station AFTER shot index 1, i.e. keyed on IDS[1].
+    let (section_id, victim_shot_id) = {
+        let p = state.get_project_state().unwrap();
+        (p.sections[0].id, p.sections[0].shots[1].id)
+    };
+    let r = state.execute(Command::SetStationComment {
+        station_ref: StationRef::new(section_id, 2),
+        comment: Some("anchored on the victim".to_string()),
+    });
+    assert!(r.success, "{:?}", r.error);
+    let anchored_key: StationKey = {
+        let p = state.get_project_state().unwrap();
+        let (key, _) = p.station_comments.iter().next().unwrap();
+        assert_eq!(
+            key.anchor,
+            crate::models::StationAnchor::AfterShot(IDS[1].to_string()),
+            "the comment must be anchored on the victim's own identity"
+        );
+        key.clone()
+    };
+
+    let result = crate::commands::shot::create_shot_impl(
+        &state,
+        section_id,
+        ShotData {
+            uuid: Some(IDS[1].to_string()),
+            azimuth_in: 90.0,
+            azimuth_out: 90.0,
+            length: 4.0,
+            depth_in: 5.0,
+            depth_out: 5.0,
+            ..Default::default()
+        },
+        None,
+        Some(victim_shot_id),
+    );
+    assert!(result.success, "{:?}", result.error);
+
+    let project = state.get_project_state().unwrap();
+    assert_eq!(
+        project.resolve_key(&anchored_key),
+        Some(StationRef::new(section_id, 3)),
+        "the anchored comment must still resolve to the victim's own station \
+         (now one position later), not to the newly created shot"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 11. The foreign id is bounded and characterised
+// ---------------------------------------------------------------------------
+
+/// A control character in `<UUID>` is not merely odd: the writer escapes only
+/// `<>&"'`, so it goes into the export as a raw byte and the document stops
+/// being valid XML 1.0. Our own quick-xml reader is lenient enough to read it
+/// straight back (measured), so the assertion below is on the emitted BYTES -
+/// checking re-import would pass either way and pin nothing. The cost lands on
+/// the strict consumers: Ariane and SpeleoDB's converter reject the file.
+///
+/// An unbounded value is a separate, resource lever: it is cloned into the
+/// project-wide uuid index and into every undo snapshot. Both cases fall back to
+/// a fresh mint, which costs that shot its foreign identity and nothing else.
+#[test]
+fn an_unstorable_foreign_uuid_falls_back_to_a_mint_and_the_export_stays_well_formed() {
+    const GOOD: &str = "abcdabcd-0000-4000-8000-000000000001";
+    // `&#1;` unescapes to a real U+0001.
+    const CONTROL: &str = "&#1;abcdabcd-0000-4000-8000-000000000002";
+    // 200 characters - past the 128 cap.
+    const OVERLONG: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\
+                            aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\
+                            aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\
+                            aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+    let dir = tempfile::tempdir().unwrap();
+    let source = write_tmlu(
+        dir.path(),
+        "unstorable.tmlu",
+        &cave_file_xml(&[
+            Row::new(1, 0, Some(GOOD)),
+            Row::new(2, 1, Some(CONTROL)),
+            Row::new(3, 2, Some(OVERLONG)),
+        ]),
+    );
+
+    let state = state_with_project();
+    import_ariane_file(&state, &source);
+
+    let project = state.get_project_state().unwrap();
+    let uuids = section_uuids(&project, 0);
+    assert_eq!(uuids.len(), 3);
+    assert_eq!(uuids[0], GOOD, "a well-formed id is still adopted verbatim");
+    assert!(
+        !uuids[1].contains('\u{1}') && !uuids[1].is_empty(),
+        "a control-bearing id must be replaced by a mint, not stored: {:?}",
+        uuids[1]
+    );
+    assert!(
+        uuids[2].len() <= 128 && uuids[2] != OVERLONG,
+        "an over-long id must be replaced by a mint: {} chars",
+        uuids[2].len()
+    );
+    for u in &uuids {
+        assert!(
+            !u.chars().any(char::is_control),
+            "no stored identity may hold a control character: {u:?}"
+        );
+    }
+
+    // The whole point of the shape check: what we emit is valid XML 1.0. Assert
+    // on the BYTES - a raw C0 control in element content is exactly what the
+    // spec forbids and what a strict consumer rejects, and our own lenient
+    // reader would happily round-trip it, so re-parsing pins nothing.
+    let exported = dir.path().join("out.tmlu");
+    export_tml(&project, &exported).unwrap();
+    let raw = std::fs::read(&exported).unwrap();
+    let illegal: Vec<u8> = raw
+        .iter()
+        .copied()
+        .filter(|b| b.is_ascii_control() && !matches!(b, b'\t' | b'\n' | b'\r'))
+        .collect();
+    assert!(
+        illegal.is_empty(),
+        "the export must not contain characters XML 1.0 forbids in content: {illegal:?}"
+    );
+    let out: Vec<String> = parse_tml(&exported)
+        .unwrap()
+        .sections
+        .iter()
+        .flat_map(|s| s.shots.iter())
+        .filter_map(|s| s.uuid.clone())
+        .collect();
+    assert!(
+        out.contains(&GOOD.to_string()),
+        "the good id must survive the round trip: {out:?}"
+    );
+}
+
+/// A NUL is the case that would diverge silently rather than loudly: SQLite
+/// TEXT read-back can truncate at it, so a saved identity and a reloaded one
+/// would differ with nothing to show for it. The shape check keeps NUL out of
+/// the model entirely, so save and reload agree exactly.
+#[test]
+fn a_nul_bearing_uuid_cannot_diverge_across_save_and_reload() {
+    let dir = tempfile::tempdir().unwrap();
+    // A literal NUL and a literal U+0001 in the element text, not entities.
+    let xml = cave_file_xml(&[Row::new(1, 0, Some("aa\u{0}bb")), Row::new(2, 1, None)]);
+    let source = write_tmlu(dir.path(), "nul.tmlu", &xml);
+
+    let state = state_with_project();
+    import_ariane_file(&state, &source);
+    let saved = state.get_project_state().unwrap();
+    let before = section_uuids(&saved, 0);
+    assert!(
+        before.iter().all(|u| !u.contains('\u{0}') && !u.is_empty()),
+        "a NUL-bearing id must never reach the model: {before:?}"
+    );
+
+    let (db, _keep) = crate::test_helpers::TestDb::with_project(&saved).unwrap();
+    let reloaded = crate::persistence::Database::open_existing(db.path())
+        .unwrap()
+        .load_project()
+        .unwrap();
+    assert_eq!(
+        section_uuids(&reloaded, 0),
+        before,
+        "identity must not change across save and reload"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 12. Splitting one shot into two is a duplicate path
+// ---------------------------------------------------------------------------
+
+/// `compute_split` is the one place a shot is cloned into two, and its
+/// `uuid: None` on the head is the load-bearing instance of the rule on
+/// [`ShotData::uuid`]: the TAIL keeps the parent's identity (which is what lets
+/// every existing anchor keep resolving with no remap), the head is new.
+///
+/// Red if the head copies the parent's uuid: the section then holds the id
+/// twice with the head FIRST, and the first-wins repair re-mints the tail -
+/// moving every anchor onto the head.
+#[test]
+fn splitting_a_shot_at_distance_leaves_the_identity_on_the_tail_only() {
+    const IDS: [&str; 2] = [
+        "cafecafe-0000-4000-8000-000000000001",
+        "cafecafe-0000-4000-8000-000000000002",
+    ];
+
+    let dir = tempfile::tempdir().unwrap();
+    let source = write_tmlu(
+        dir.path(),
+        "split-shot.tmlu",
+        &cave_file_xml(&[Row::new(1, 0, Some(IDS[0])), Row::new(2, 1, Some(IDS[1]))]),
+    );
+
+    let state = state_with_project();
+    import_ariane_file(&state, &source);
+
+    let (section_id, target) = {
+        let p = state.get_project_state().unwrap();
+        (p.sections[0].id, p.sections[0].shots[0].id)
+    };
+    // Anchor a comment on the station after the shot being split.
+    let r = state.execute(Command::SetStationComment {
+        station_ref: StationRef::new(section_id, 1),
+        comment: Some("after the split shot".to_string()),
+    });
+    assert!(r.success, "{:?}", r.error);
+
+    let r = state.execute_split_shot_at_distance(section_id, target, 4.0);
+    assert!(r.success, "{:?}", r.error);
+
+    let mut project = state.get_project_state().unwrap();
+    let uuids = section_uuids(&project, 0);
+    assert_eq!(uuids.len(), 3, "the split adds one shot: {uuids:?}");
+    assert_eq!(
+        uuids[1], IDS[0],
+        "the TAIL child must keep the parent's identity"
+    );
+    assert_ne!(
+        uuids[0], IDS[0],
+        "the HEAD child is a new shot and must not copy the parent's identity"
+    );
+    assert!(!uuids[0].is_empty(), "the head must still get an identity");
+    assert_eq!(uuids[2], IDS[1], "the untouched shot keeps its own id");
+    assert_eq!(
+        project.ensure_unique_shot_uuids(),
+        0,
+        "the split must not leave a duplicate for the repair to find"
+    );
+
+    // The anchored comment must still name the tail, so it lands on the station
+    // that is now one position later.
+    let (key, _) = {
+        let p = state.get_project_state().unwrap();
+        let (k, t) = p.station_comments.iter().next().unwrap();
+        (k.clone(), t.clone())
+    };
+    assert_eq!(
+        key.anchor,
+        crate::models::StationAnchor::AfterShot(IDS[0].to_string())
+    );
+    assert_eq!(
+        state.get_project_state().unwrap().resolve_key(&key),
+        Some(StationRef::new(section_id, 2)),
+        "the comment must follow the tail child, not snap onto the head"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 13. Adversarial element shapes
+// ---------------------------------------------------------------------------
+
+/// An empty or whitespace-only element is "no identity", not an identity that
+/// happens to be blank - an empty stored uuid reads as a real shared key to
+/// anything that consumes it (see `export::tml::shot_export_uuid`).
+#[test]
+fn an_empty_or_whitespace_uuid_element_means_no_identity() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = write_tmlu(
+        dir.path(),
+        "blank.tmlu",
+        &cave_file_xml(&[
+            Row::new(1, 0, Some("")),
+            Row::new(2, 1, Some("   ")),
+            Row::new(3, 2, Some("dadadada-0000-4000-8000-000000000001")),
+        ]),
+    );
+
+    let state = state_with_project();
+    import_ariane_file(&state, &source);
+
+    let project = state.get_project_state().unwrap();
+    let uuids = section_uuids(&project, 0);
+    assert_eq!(uuids.len(), 3);
+    for (i, u) in uuids.iter().take(2).enumerate() {
+        assert!(
+            !u.is_empty() && !u.trim().is_empty(),
+            "blank element {i} must yield a minted identity, not a blank one: {u:?}"
+        );
+    }
+    assert_eq!(uuids[0..2].iter().collect::<HashSet<_>>().len(), 2);
+    assert_eq!(uuids[2], "dadadada-0000-4000-8000-000000000001");
+    assert!(project
+        .check_structural_integrity()
+        .iter()
+        .all(|v| v.category != "duplicate_shot_uuid"));
+}
+
+/// A repeat across TWO sections of one file is legal by design - `resolve_key`
+/// is section-local, so it cannot mis-resolve - and must be left alone. Red if
+/// the per-section repair is ever widened back to project scope.
+#[test]
+fn the_same_uuid_in_two_sections_of_one_file_is_left_alone() {
+    const SHARED: &str = "bebebebe-0000-4000-8000-000000000001";
+
+    let dir = tempfile::tempdir().unwrap();
+    let source = write_tmlu(
+        dir.path(),
+        "cross-section.tmlu",
+        &two_section_cave_file_xml(
+            &[Row::new(1, 0, Some(SHARED)), Row::new(2, 1, None)],
+            &[Row::new(3, 2, Some(SHARED)), Row::new(4, 3, None)],
+        ),
+    );
+
+    let state = state_with_project();
+    import_ariane_file(&state, &source);
+
+    let project = state.get_project_state().unwrap();
+    assert_eq!(
+        project.sections.len(),
+        2,
+        "the file must import as 2 sections"
+    );
+    let held: Vec<String> = (0..2)
+        .map(|i| section_uuids(&project, i)[0].clone())
+        .collect();
+    assert_eq!(
+        held,
+        vec![SHARED.to_string(), SHARED.to_string()],
+        "a cross-section repeat is legal and must survive in BOTH sections"
+    );
+    assert!(
+        project
+            .check_structural_integrity()
+            .iter()
+            .all(|v| v.category != "duplicate_shot_uuid"),
+        "a cross-section repeat is not a violation"
+    );
+}
+
+/// Entity-escaped text is one value after unescaping and must be stored whole.
+/// A CDATA-split value is the shape the field reader cannot represent - the
+/// `Text` handler overwrites per chunk, which predates #423 but only became
+/// identity-bearing with it. Whatever it yields, the invariant that matters
+/// holds: the stored id is a single non-empty value with no control characters,
+/// and the export re-parses.
+#[test]
+fn an_entity_escaped_uuid_is_stored_whole_and_a_split_one_stays_exportable() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = write_tmlu(
+        dir.path(),
+        "escaped.tmlu",
+        &cave_file_xml(&[
+            Row::new(1, 0, Some("AA&amp;BB")),
+            Row::new(2, 1, Some("AA<![CDATA[&]]>BB")),
+        ]),
+    );
+
+    let state = state_with_project();
+    import_ariane_file(&state, &source);
+
+    let project = state.get_project_state().unwrap();
+    let uuids = section_uuids(&project, 0);
+    assert_eq!(uuids.len(), 2);
+    assert_eq!(
+        uuids[0], "AA&BB",
+        "an entity-escaped id must be unescaped once and stored whole"
+    );
+    for u in &uuids {
+        assert!(!u.is_empty() && !u.chars().any(char::is_control), "{u:?}");
+    }
+    assert_eq!(uuids.iter().collect::<HashSet<_>>().len(), 2);
+
+    // The escaping has to survive a round trip, or the export is unreadable.
+    let exported = dir.path().join("escaped-out.tmlu");
+    export_tml(&project, &exported).unwrap();
+    let reparsed = parse_tml(&exported).expect("the export must be well-formed XML");
+    let out: Vec<String> = reparsed
+        .sections
+        .iter()
+        .flat_map(|s| s.shots.iter())
+        .filter_map(|s| s.uuid.clone())
+        .collect();
+    assert!(
+        out.contains(&"AA&BB".to_string()),
+        "the ampersand must survive re-escaping: {out:?}"
     );
 }

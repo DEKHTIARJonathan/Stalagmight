@@ -304,9 +304,19 @@ impl Section {
             gauge_neighbour_uuid: None,
         };
 
-        // Per-section UUID uniqueness, enforced where a `Vec<ShotData>` first
-        // becomes shots - the only door into a section (import, split, project
-        // merge, undo restore all come through here).
+        // Per-section UUID uniqueness, enforced where a `Vec<ShotData>` becomes
+        // shots. This is the only door for a whole shot VECTOR - a TML import, a
+        // section split, a project merge and a section-level undo restore all
+        // come through here. It is NOT the only door into a section: the
+        // single-shot inserts ([`Self::add_shot`],
+        // [`Self::insert_shot_after_with_id`], [`Self::insert_shot_before_with_id`])
+        // and the per-shot undo restore (`core::state::undo_restore`) build a
+        // `Shot` and push it directly, bypassing this loop. Those paths are safe
+        // for a different reason: none of them takes a caller-supplied identity
+        // (the IPC `create_shot` clears `uuid` at the boundary), and undo replays
+        // an identity the project already held. A NEW path that admits a foreign
+        // id one shot at a time would need its own answer - do not read this as
+        // blanket cover.
         //
         // `ShotData::uuid` can now carry a foreign id (#423), and a source file
         // is free to repeat one inside a section. A repeat makes `resolve_key`
@@ -321,13 +331,26 @@ impl Section {
         // and get a fresh mint from `Shot::new`. Cross-SECTION repeats are legal
         // by design and untouched.
         let mut seen: HashSet<String> = HashSet::new();
+        let mut repaired = 0usize;
         for mut shot_data in data.shots {
             if let Some(u) = shot_data.uuid.as_ref() {
                 if u.is_empty() || !seen.insert(u.clone()) {
                     shot_data.uuid = None;
+                    repaired += 1;
                 }
             }
             section.add_shot(shot_data);
+        }
+        if repaired > 0 {
+            // Losing a foreign identity is exactly the kind of thing that is
+            // invisible until someone asks why a round trip changed ids.
+            tracing::warn!(
+                section_id = id,
+                repaired,
+                purpose = "per-section shot uuid uniqueness (#423)",
+                "Section carried repeated (or empty) shot UUIDs; kept the first \
+                 occurrence and minted fresh identities for the rest"
+            );
         }
 
         section
@@ -361,10 +384,12 @@ impl Section {
     }
 
     /// Insert a shot after a specific shot ID, forcing the new shot's id when
-    /// `forced_id` is `Some` and its UUID when `forced_uuid` is `Some` (used by
-    /// redo to preserve both the station id and the persistent shot UUID that
-    /// undo/redo `AfterShot` anchors resolve through).
-    /// `forced_uuid: None` mints a fresh UUID via `Shot::new`.
+    /// `forced_id` is `Some` (used by redo to preserve the station id).
+    ///
+    /// `forced_uuid` is the FALLBACK identity, not an override: the precedence
+    /// is `data.uuid`, then `forced_uuid`, then a fresh mint - decided once in
+    /// [`Shot::with_uuid`]. Redo passes the UUID its undo entry recorded, which
+    /// wins whenever the recorded `ShotData` predates #423 and so carries none.
     pub fn insert_shot_after_with_id(
         &mut self,
         after_id: ShotId,
@@ -374,19 +399,23 @@ impl Section {
     ) -> Option<&Shot> {
         let pos = self.shots.iter().position(|s| s.id == after_id)?;
         let id = self.take_shot_id(forced_id);
-        let shot = match forced_uuid {
-            Some(u) => Shot::with_uuid(id, data, Some(u)),
-            None => Shot::new(id, data),
-        };
+        let shot = Shot::with_uuid(id, data, Some(Self::fallback_uuid(forced_uuid)));
         self.shots.insert(pos + 1, shot);
         Some(&self.shots[pos + 1])
     }
 
+    /// `forced_uuid` or a fresh mint - the fallback half of the identity
+    /// precedence documented on [`Shot::with_uuid`]. Kept as a named helper so
+    /// the two inserts cannot drift apart on it.
+    fn fallback_uuid(forced_uuid: Option<String>) -> String {
+        forced_uuid.unwrap_or_else(|| uuid::Uuid::new_v4().to_string())
+    }
+
     /// Insert a shot before a specific shot ID, forcing the new shot's id when
-    /// `forced_id` is `Some` and its UUID when `forced_uuid` is `Some` (used by
-    /// redo to preserve both the station id and the persistent shot UUID that
-    /// undo/redo `AfterShot` anchors resolve through).
-    /// `forced_uuid: None` mints a fresh UUID via `Shot::new`.
+    /// `forced_id` is `Some` (used by redo to preserve the station id).
+    ///
+    /// `forced_uuid` is the FALLBACK identity, not an override - see
+    /// [`Self::insert_shot_after_with_id`].
     pub fn insert_shot_before_with_id(
         &mut self,
         before_id: ShotId,
@@ -396,10 +425,7 @@ impl Section {
     ) -> Option<&Shot> {
         let pos = self.shots.iter().position(|s| s.id == before_id)?;
         let id = self.take_shot_id(forced_id);
-        let shot = match forced_uuid {
-            Some(u) => Shot::with_uuid(id, data, Some(u)),
-            None => Shot::new(id, data),
-        };
+        let shot = Shot::with_uuid(id, data, Some(Self::fallback_uuid(forced_uuid)));
         self.shots.insert(pos, shot);
         Some(&self.shots[pos])
     }
