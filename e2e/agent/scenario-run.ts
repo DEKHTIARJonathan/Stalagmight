@@ -43,6 +43,28 @@ interface Args {
   trace?: string;
 }
 
+/**
+ * Numeric flags, validated exactly as `fuzz-matrix.ts` validates the same two:
+ * a seed is any INTEGER (its `--seeds` ranges accept negatives), an iteration
+ * count is a POSITIVE one.
+ *
+ * `Number.isFinite` alone was not enough: it accepts `0`, `-5` and `3.7`, and
+ * `runScenario` passes the count straight through, so `--iterations 0` skipped
+ * the fuzz loop entirely and still printed PASS - a green verdict for a run that
+ * exercised nothing.
+ */
+function integerFlag(flag: string, raw: string): number {
+  if (!/^-?\d+$/.test(raw)) throw new Error(`flag ${flag} needs an integer, got "${raw}"`);
+  return Number(raw);
+}
+
+function positiveIntFlag(flag: string, raw: string): number {
+  if (!/^\d+$/.test(raw) || Number(raw) < 1) {
+    throw new Error(`flag ${flag} needs a positive integer, got "${raw}"`);
+  }
+  return Number(raw);
+}
+
 function parseArgs(argv: string[]): Args {
   const [name, ...rest] = argv;
   if (!name) {
@@ -66,15 +88,12 @@ function parseArgs(argv: string[]): Args {
       args.trace = value;
       continue;
     }
+    if (flag !== '--seed' && flag !== '--iterations') throw new Error(`unknown flag ${flag}`);
     const raw = rest[i + 1];
-    const value = Number(raw);
-    if (raw === undefined || !Number.isFinite(value)) {
-      throw new Error(`flag ${flag} needs a numeric value`);
-    }
+    if (raw === undefined) throw new Error(`flag ${flag} needs a value`);
     i += 1;
-    if (flag === '--seed') args.seed = value;
-    else if (flag === '--iterations') args.iterations = value;
-    else throw new Error(`unknown flag ${flag}`);
+    if (flag === '--seed') args.seed = integerFlag(flag, raw);
+    else args.iterations = positiveIntFlag(flag, raw);
   }
   return args;
 }

@@ -162,8 +162,14 @@ export interface CoverageAction {
  * renumbered range (a stale id would COLLIDE), and with it on the target they
  * run past it (a stale id would MISS). Both are worth exercising; only one can
  * be the default.
+ *
+ * Read at CALL time, never frozen into a const: it is part of a trace header, so
+ * `pnpm agent:fuzz-shrink` restores it from inside its own `main()` - long after
+ * this module was imported. Same rule as the knobs in `undoRedoFuzz.ts`.
  */
-export const DELETE_IN_TARGET = process.env.STALAGMIGHT_PERSIST_FUZZ_DELETE_IN_TARGET === '1';
+export function deleteInTarget(): boolean {
+  return process.env.STALAGMIGHT_PERSIST_FUZZ_DELETE_IN_TARGET === '1';
+}
 
 /** State the plan carries between its steps. */
 export interface CoverageMemo {
@@ -178,7 +184,7 @@ export interface CoverageMemo {
    * fresh, unanchored section is kept: it is what makes the plan's promises hold
    * on ANY fixture, rather than only on one whose topology happens to cooperate.
    *
-   * It also never has a shot DELETED from it (unless `DELETE_IN_TARGET` is set),
+   * It also never has a shot DELETED from it (unless `deleteInTarget()` is set),
    * which is what keeps every id it hands out inside the range the loader
    * renumbers into - see that constant for why that matters.
    */
@@ -409,7 +415,7 @@ export const COVERAGE_STEPS: readonly CoverageStep[] = [
     purpose:
       'a second fresh section, so the DeleteShot pair path has a victim that is NOT the target. ' +
       'A delete leaves the section with fewer shots than ids handed out, and the plan needs the ' +
-      'targets ids to stay inside the range the loader renumbers into (see DELETE_IN_TARGET)',
+      'targets ids to stay inside the range the loader renumbers into (see deleteInTarget)',
     remembers: 'spare',
     build(ctx) {
       const data = nominalSection(ctx);
@@ -425,7 +431,7 @@ export const COVERAGE_STEPS: readonly CoverageStep[] = [
       'STALAGMIGHT_PERSIST_FUZZ_DELETE_IN_TARGET=1 moves it onto the target, which is the ' +
       'repro for finding 13 (the stale-id wedge)',
     build(ctx, digest, memo) {
-      const sectionId = DELETE_IN_TARGET ? target(memo) : memo.spareSectionId;
+      const sectionId = deleteInTarget() ? target(memo) : memo.spareSectionId;
       if (sectionId === null) return null;
       const shotIds = shotsOf(digest, sectionId);
       if (shotIds.length < 3) return null;

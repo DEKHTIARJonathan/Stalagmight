@@ -346,16 +346,27 @@ import {
 } from './undoRedoFuzzBridge';
 
 /**
+ * EVERY env knob below is read at CALL time, never frozen into a module-level
+ * const - the rule, and the reason, are spelled out in `undoRedoFuzz.ts`:
+ * `pnpm agent:scenario --trace` and `pnpm agent:fuzz-shrink` both set these
+ * variables from inside their own `main()`, after this module was imported.
+ */
+
+/**
  * INERT, and kept for the same reason the main fuzzer keeps it: every finding
  * this scenario reproduced (bug 1, bug 8, findings 11/12/13) is fixed and every
  * classifier is deleted, so there is nothing left to tolerate. Still read, and
  * still named in the `reproduce:` line, so a tolerant-looking invocation cannot
  * be mistaken for one that actually relaxed anything.
  */
-const ALLOW_KNOWN_BUGS = process.env.STALAGMIGHT_FUZZ_ALLOW_KNOWN_BUGS === '1';
+function allowKnownBugs(): boolean {
+  return process.env.STALAGMIGHT_FUZZ_ALLOW_KNOWN_BUGS === '1';
+}
 
 /** Which `.stalx` under `e2e/fixtures/` to fuzz. Basename only, as the main fuzzer. */
-const FIXTURE = process.env.STALAGMIGHT_FUZZ_FIXTURE || DEFAULT_FIXTURE;
+function fuzzFixture(): string {
+  return process.env.STALAGMIGHT_FUZZ_FIXTURE || DEFAULT_FIXTURE;
+}
 
 /** Diffs shown in a failure message (more are counted, not printed). */
 const SHOWN_DIFFS = 6;
@@ -370,7 +381,9 @@ const DIFF_LIMIT = 400;
 /** Actions shown in the failure message's history tail. */
 const HISTORY_TAIL = 14;
 /** `STALAGMIGHT_FUZZ_DUMP_HISTORY=1` prints the WHOLE iteration history instead. */
-const DUMP_FULL_HISTORY = process.env.STALAGMIGHT_FUZZ_DUMP_HISTORY === '1';
+function dumpFullHistory(): boolean {
+  return process.env.STALAGMIGHT_FUZZ_DUMP_HISTORY === '1';
+}
 
 /** Most entries undone before the save, so the redo stack is non-empty there. */
 const MAX_PRE_SAVE_UNDOS = 4;
@@ -574,7 +587,9 @@ export const undoPersistenceFuzz: Scenario = {
     'walks the whole restored history down and back up - hunting bug 8s stale-id siblings.',
   defaultIterations: 12,
   async run(ctx, { iterations }) {
-    ctx.setMetric(`fixture:${FIXTURE}`, 1);
+    // Resolved once per RUN, not once per process - see the env-knob rule above.
+    const fixture = fuzzFixture();
+    ctx.setMetric(`fixture:${fixture}`, 1);
     ctx.setMetric('plannedVariants', PLANNED_VARIANTS.length);
     const saveDir = fs.mkdtempSync(path.join(os.tmpdir(), 'stalagmight-persist-fuzz-'));
 
@@ -609,7 +624,7 @@ export const undoPersistenceFuzz: Scenario = {
 
     for (const [variant, count] of seen) ctx.setMetric(`variant:${variant}`, count);
     ctx.log(
-      `fixture=${FIXTURE} seed=${ctx.seed}: ${iterations} save/reload cycle(s), ` +
+      `fixture=${fixture} seed=${ctx.seed}: ${iterations} save/reload cycle(s), ` +
         `${totalEntries} persisted undo entries walked in both directions; variant coverage ` +
         `${[...seen.entries()].map(([v, c]) => `${v}=${c}`).sort().join(' ')}`,
     );
@@ -627,6 +642,7 @@ async function runIteration(
   saveDir: string,
 ): Promise<Map<UndoVariant, number>> {
   const tag = `#${iteration}`;
+  const fixture = fuzzFixture();
   const history: string[] = [];
   const note = (line: string): void => {
     history.push(line);
@@ -673,7 +689,7 @@ async function runIteration(
           scenario: 'undo-persistence-fuzz',
           seed: ctx.seed,
           iterations,
-          fixture: FIXTURE,
+          fixture,
           stream: 'plan',
           failure,
         }),
@@ -683,7 +699,7 @@ async function runIteration(
     }
   };
 
-  const { stripped } = await loadFixtureWithoutUndoHistory(ctx, FIXTURE);
+  const { stripped } = await loadFixtureWithoutUndoHistory(ctx, fixture);
   if (!(await disableAutoSave(ctx))) {
     throw new Error(
       'could not disable auto-save; a save mutates live state with no undo entry and would ' +
@@ -732,15 +748,15 @@ async function runIteration(
   // never-returning and narrows what follows it (an inferred `never` return on a
   // const arrow does not).
   const fail: (headline: string, detail?: string) => never = (headline, detail = '') => {
-    const tail = (DUMP_FULL_HISTORY ? history : history.slice(-HISTORY_TAIL)).map((line) => `    ${line}`);
+    const tail = (dumpFullHistory() ? history : history.slice(-HISTORY_TAIL)).map((line) => `    ${line}`);
     const message = [
       headline,
       `  reproduce: pnpm agent:scenario undo-persistence-fuzz --seed ${ctx.seed} ` +
         `--iterations ${iterations} --release` +
-        `${FIXTURE === DEFAULT_FIXTURE ? '' : ` (STALAGMIGHT_FUZZ_FIXTURE=${FIXTURE})`}` +
-        `${ALLOW_KNOWN_BUGS ? ' (STALAGMIGHT_FUZZ_ALLOW_KNOWN_BUGS=1 - INERT: nothing left to allow)' : ''}` +
+        `${fixture === DEFAULT_FIXTURE ? '' : ` (STALAGMIGHT_FUZZ_FIXTURE=${fixture})`}` +
+        `${allowKnownBugs() ? ' (STALAGMIGHT_FUZZ_ALLOW_KNOWN_BUGS=1 - INERT: nothing left to allow)' : ''}` +
         `${replayPath ? ` (REPLAY of ${replayPath})` : ''}`,
-      `  iteration=${iteration} fixture=${FIXTURE} depth=${cursor} top=${top} ` +
+      `  iteration=${iteration} fixture=${fixture} depth=${cursor} top=${top} ` +
         `saves=${savesDone} reloads=${reloadsDone}`,
       ...(detail ? [detail] : []),
       `  last ${tail.length} action(s) this iteration:`,
@@ -752,14 +768,14 @@ async function runIteration(
 
   if (init.undoLen !== 0 || init.redoLen !== 0) {
     fail(
-      `${FIXTURE} opened with inherited history after stripping ${strippedRows} row(s)`,
+      `${fixture} opened with inherited history after stripping ${strippedRows} row(s)`,
       `  undoLen=${init.undoLen} redoLen=${init.redoLen} ` +
         `(cleared ${JSON.stringify(stripped.cleared)}, absent ${JSON.stringify(stripped.missing)})`,
     );
   }
   if (init.invariants.length > 0) {
     fail(
-      `${FIXTURE} violates project invariants BEFORE any mutation`,
+      `${fixture} violates project invariants BEFORE any mutation`,
       init.invariants.map((violation) => `  INVARIANT: ${violation}`).join('\n'),
     );
   }
@@ -1316,7 +1332,7 @@ async function runIteration(
   for (const variant of PLANNED_VARIANTS) {
     if (covered.has(variant)) continue;
     ctx.metric(`variantMissing:${variant}`);
-    ctx.log(`${tag} variant ${variant} was not reachable on ${FIXTURE} this iteration`);
+    ctx.log(`${tag} variant ${variant} was not reachable on ${fixture} this iteration`);
   }
   note(
     `${tag} restored stacks: undo=${restoredUndo.length} redo=${restoredRedo.length}, ` +
