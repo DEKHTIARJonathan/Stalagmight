@@ -5,17 +5,24 @@
  * ("Some sections will be discarded") listing every section, with no way to act on it.
  *
  * A later review round found the premise itself was wrong: `build_export_shots`
- * (src-tauri/src/export/tml.rs) never discards a section - one not connected to a zero
- * datum just becomes its own separate entrance, exactly like Ariane's own multi-entrance
- * files. So this is an informational notice, not a risk warning, and it must (a) name the
- * real fix (Set Zero Datum, via the station context menu), and (b) distinguish "nothing in
- * this project is anchored" from "some sections aren't" - and get that split from the
- * ACTUAL unanchored-section count, not from `zero_datums.length` (a datum whose station no
- * longer resolves anchors nothing, but still has `zero_datums.length > 0`).
+ * (src-tauri/src/export/tml.rs) never discards a section. And the notice must not
+ * claim entrance topology either: entrance-hood is merge-derived in the exporter
+ * while this dialog classifies by zero-datum reachability - two predicates that
+ * disagree in both directions (see the comment above the AlertDialog in
+ * ExportControls.tsx). So the copy states only the true consequence - the export
+ * is not georeferenced - and it must (a) name the real fix (Set Zero Datum, via
+ * the station context menu), and (b) distinguish "nothing in this project is
+ * anchored" from "some sections aren't" - from the ACTUAL unanchored-section
+ * count, not from `zero_datums.length` (a datum whose station no longer resolves
+ * anchors nothing, but still has `zero_datums.length > 0`).
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+
+// The text assertions below need live i18n; today it loads transitively through
+// projectStore's own import, but that is nobody's contract - import it directly.
+import '../../i18n';
 
 vi.mock('../../utils/fileDialogs', () => ({
   saveDialog: vi.fn(),
@@ -78,8 +85,11 @@ describe('TML export unanchored-section notice', () => {
     expect(dialog).toHaveTextContent('No section is connected to a zero datum');
     expect(dialog).toHaveTextContent('Set Zero Datum');
     expect(dialog).not.toHaveTextContent(/\d+ of \d+ sections/);
-    // Nothing is discarded - the notice must not claim otherwise.
-    expect(dialog).not.toHaveTextContent('discard');
+    // The two claims the copy must make / must not make: nothing is discarded,
+    // and no entrance-topology promise (entrance-hood is merge-derived and this
+    // dialog cannot know it - see the component comment).
+    expect(dialog).toHaveTextContent('Nothing is discarded');
+    expect(dialog).not.toHaveTextContent('entrance');
     expect(saveDialog).not.toHaveBeenCalled();
   });
 
@@ -116,7 +126,8 @@ describe('TML export unanchored-section notice', () => {
     expect(dialog).toHaveTextContent('2 of 3 sections');
     expect(dialog).toHaveTextContent('Set Zero Datum');
     expect(dialog).not.toHaveTextContent('No section is connected to a zero datum');
-    expect(dialog).not.toHaveTextContent('discard');
+    expect(dialog).toHaveTextContent('Nothing is discarded');
+    expect(dialog).not.toHaveTextContent('entrance');
     expect(saveDialog).not.toHaveBeenCalled();
   });
 
@@ -132,9 +143,10 @@ describe('TML export unanchored-section notice', () => {
     await userEvent.click(screen.getByTestId('export-button'));
 
     const dialog = await screen.findByTestId('tml-unanchored-warning-dialog');
-    // A missing `_one` key ships as a BLANK paragraph outside dev (`parseMissingKeyHandler`
-    // returns ''), so asserting the actual singular text - not just its absence - is what
-    // catches that: an empty body would fail this the same way a wrong plural form would.
+    // A missing `_one` key renders as the raw `[key]` under vitest (DEV
+    // `parseMissingKeyHandler`) and as '' in production - either way this
+    // positive assertion on the actual singular text catches it, where a mere
+    // absence check would not.
     expect(dialog).toHaveTextContent('1 of 2 sections is not connected');
   });
 

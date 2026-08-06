@@ -589,9 +589,14 @@ export default function ExportControls({
       </div>
 
       {/* Nothing here is ever discarded: `build_export_shots` (src-tauri/src/export/tml.rs)
-          emits every section, and one not connected to a zero datum just becomes its own
-          entrance, exactly like Ariane's own multi-entrance files. This is informational,
-          not a risk warning - see ExportControls.test.tsx for the states it covers. */}
+          emits every section. The copy deliberately claims only "not georeferenced", never
+          entrance topology: entrance-hood is decided by STATION MERGES (`build_parent_map`
+          walks project.station_merges only), while this dialog's classifier is zero-datum
+          reachability (`get_anchored_section_ids` = merges + aligned closures from each
+          datum) - the two predicates disagree in both directions (merged-but-undatumed
+          exports as ONE system; a closure-only-anchored section still exports as its own
+          entrance), so any entrance claim keyed on this list would lie for some project.
+          This is informational, not a risk warning - see ExportControls.test.tsx. */}
       <AlertDialog
         open={showTmlUnanchoredWarning}
         title={t(
