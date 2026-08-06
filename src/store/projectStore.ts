@@ -444,7 +444,6 @@ export interface ProjectStore extends ProjectConfigActions {
   executeGpxImport: (path: string, fileHash: string | null, importWaypoints: boolean, importTracks: boolean, importRoutes: boolean, sectionPlacements: GpxSectionPlacement[], depthInverted: boolean) => Promise<CommandResult>;
   calculateFileHash: (path: string) => Promise<string>;
   checkDuplicateImport: (hash: string) => Promise<boolean>;
-  trackImportedFile: (hash: string) => Promise<void>;
   checkSectionHashes: (hashes: string[]) => Promise<boolean[]>;
   importSections: (
     sections: ImportSectionConfig[],
@@ -2290,13 +2289,6 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   checkDuplicateImport: async (hash: string) => {
     return await invokeIpc<boolean>('check_duplicate_import', { hash }, {
       purpose: 'detect duplicate imports',
-      fields: { hash },
-    });
-  },
-
-  trackImportedFile: async (hash: string) => {
-    await invokeIpc('track_imported_file', { hash }, {
-      purpose: 'track imported file hash',
       fields: { hash },
     });
   },

@@ -312,7 +312,7 @@ export function useKeyboardShortcuts() {
     showStations,
     showToast,
   } = useUIStore();
-  const { undo, redo, saveProject, project, stations, executeTmlImport, config } = useProjectStore();
+  const { undo, redo, saveProject, project, stations, config } = useProjectStore();
 
   // Ref for shortcut map - uses ref to avoid stale closures in event handlers
   // Initialize with defaults to handle first render before useEffect runs
@@ -739,7 +739,6 @@ export function useKeyboardShortcuts() {
       selection,
       openDialog,
       project,
-      executeTmlImport,
       showStations,
       showToast,
       stations,

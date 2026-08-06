@@ -38,11 +38,9 @@ async function openTmlImportDialog(page: Page, path: string, projectName: string
   await page.getByTestId('create-and-continue-button').click();
 
   await expect(page.getByTestId('tml-import-dialog')).toBeVisible({ timeout: 10000 });
-  // The Import button is gated on the hash-check effect SETTLING, not
-  // succeeding: hashChecked goes true even when calculate_file_hash /
-  // check_duplicate_import throw (TmlImportDialog.tsx catches and proceeds
-  // without duplicate detection). Waiting for enabled here only guarantees
-  // the effect ran, so the click below cannot race it.
+  // Import is enabled as soon as the preview has something to import: the
+  // file-hash round trip is provenance, not a gate (#411 C4 removed the
+  // unreachable duplicate check the button used to wait on).
   await expect(page.getByTestId('tml-import-confirm')).toBeEnabled();
 }
 
@@ -90,10 +88,9 @@ test.describe('Ariane TML import journey', () => {
     const dialog = page.getByTestId('tml-import-dialog');
     await expect(dialog).toContainText('Synthetic Cavern');
     await expect(page.getByTestId('tml-section-count')).toHaveText('2');
-    // 6 = every raw row, INCLUDING the Closure marker row - the dialog's
-    // preview stats count the unfiltered file (a known #411 finding, pinned
-    // as-is here; the receipt below shows the honest post-filter counts).
-    await expect(page.getByTestId('tml-shot-count')).toHaveText('6');
+    // 4, not the file's 5 raw rows: the preview counts what will actually import
+    // under the current toggles, and the excluded shot is out by default (#411 C4).
+    await expect(page.getByTestId('tml-shot-count')).toHaveText('4');
     await expect(page.getByTestId('tml-section-row-0')).toContainText('Main Line');
     await expect(page.getByTestId('tml-section-row-1')).toContainText('Side Passage');
     // The branch-split marker rides on the second section.
@@ -137,6 +134,8 @@ test.describe('Ariane TML import journey', () => {
     await openTmlImportDialog(page, TML_PATH, 'Excluded Shot Import');
 
     await page.getByTestId('tml-include-excluded').check();
+    // Opting the excluded shot in moves the honest preview count with it.
+    await expect(page.getByTestId('tml-shot-count')).toHaveText('5');
     await page.getByTestId('tml-import-confirm').click();
 
     const receipt = page.getByTestId('import-receipt-dialog');
@@ -212,9 +211,28 @@ test.describe('Ariane TML import journey', () => {
     await openTmlImportDialog(page, TML_PATH, 'Cancelled Import');
 
     await page.getByTestId('tml-import-cancel').click();
+    // Cancelling leaves behind the project that was created FOR this import, so
+    // the dialog asks what to do with it instead of dropping the user into an
+    // empty project unannounced (#411 C2). Keeping it is the non-destructive
+    // choice, and still imports nothing.
+    await expect(page.getByTestId('tml-import-residue-dialog')).toBeVisible();
+    await page.getByTestId('tml-import-residue-keep').click();
     await expect(page.getByTestId('tml-import-dialog')).toBeHidden();
+    await expect(page.getByTestId('tml-import-residue-dialog')).toBeHidden();
 
     expect(await getTmlImportCalls(page)).toHaveLength(0);
     expect(await getImportedSections(page)).toEqual([]);
+  });
+
+  test('discarding the empty project after cancelling returns to the project list', async ({ page }) => {
+    await openTmlImportDialog(page, TML_PATH, 'Discarded Import');
+
+    await page.getByTestId('tml-import-cancel').click();
+    await expect(page.getByTestId('tml-import-residue-dialog')).toBeVisible();
+    await page.getByTestId('tml-import-residue-discard').click();
+
+    await expect(page.getByTestId('tml-import-residue-dialog')).toBeHidden();
+    await expect(page.getByTestId('global-view')).toBeVisible({ timeout: 10000 });
+    expect(await getTmlImportCalls(page)).toHaveLength(0);
   });
 });

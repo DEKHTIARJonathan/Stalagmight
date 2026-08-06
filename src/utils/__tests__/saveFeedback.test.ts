@@ -3,11 +3,13 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import {
   surfaceSaveFailure,
   surfaceImportFailure,
+  completeImportToSingleView,
   finalizeDeferredSaveWarnings,
   deferredSaveWarnings,
   type ImportDialogUi,
 } from '../saveFeedback';
 import { useProjectStore } from '../../store/projectStore';
+import { useUIStore } from '../../store/uiStore';
 import type { ValidationWarning } from '../../types/ipc/ValidationWarning';
 import type { ImportReceipt } from '../../types/ipc/ImportReceipt';
 
@@ -147,13 +149,16 @@ describe('finalizeDeferredSaveWarnings (#110)', () => {
 });
 
 describe('surfaceImportFailure', () => {
-  it('command failure: closes the dialog via the shared exit and opens the error dialog', () => {
+  it('command failure: closes the dialog and reports WITHOUT the navigate/fit exit', () => {
     const ui = mockUi();
 
     surfaceImportFailure('tml-import', ui, { phase: 'command', error: 'Bad azimuth on shot 3' });
 
     expect(ui.closeDialog).toHaveBeenCalled();
-    expect(ui.setView).toHaveBeenCalledWith('single');
+    // #411 C2: the exit sequence dropped the user into the empty project the
+    // import had just created - and fitted the map to it - BEFORE saying why.
+    expect(ui.setView).not.toHaveBeenCalled();
+    expect(ui.triggerFitToBounds).not.toHaveBeenCalled();
     expect(ui.openDialog).toHaveBeenCalledWith('error', {
       title: 'Import Errors',
       message: 'Bad azimuth on shot 3',
@@ -188,5 +193,36 @@ describe('surfaceImportFailure', () => {
       title: 'Nothing imported',
       message: 'No survey shots were found to import.',
     });
+  });
+});
+
+/**
+ * `importContext` is read by `saveAfterImport` to decide between "write the
+ * deferred initial save" and "just mark dirty". Left set past the end of its
+ * flow, the next import whose route sets none inherits it and silently commits
+ * the user's unrelated pending edits - so both flow terminators drop it.
+ */
+describe('import-context lifetime', () => {
+  beforeEach(() => {
+    useUIStore.setState({ importContext: 'new-project' });
+  });
+
+  it('is dropped by the success funnel', () => {
+    completeImportToSingleView('tml-import', mockUi());
+
+    expect(useUIStore.getState().importContext).toBeNull();
+  });
+
+  it.each(['command', 'transport', 'empty'] as const)('is dropped by a %s failure', (phase) => {
+    const failure =
+      phase === 'command'
+        ? ({ phase, error: 'boom' } as const)
+        : phase === 'transport'
+          ? ({ phase, error: new Error('boom'), format: 'TML' } as const)
+          : ({ phase, message: 'nothing to import' } as const);
+
+    surfaceImportFailure('tml-import', mockUi(), failure);
+
+    expect(useUIStore.getState().importContext).toBeNull();
   });
 });

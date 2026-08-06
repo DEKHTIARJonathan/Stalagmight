@@ -8,6 +8,7 @@ import { DialogWrapper } from './DialogWrapper';
 import { ensureExtension, projectSaveFilters, saveDialog, PROJECT_EXTENSION } from '../../utils/fileDialogs';
 import type { DmpFile, TmlFile, GpxFile, CompassFile, WallsFile } from '../../types/commands';
 import { setSource, trackDialogComplete, peekProjectActionSource, setProjectActionSource } from '../../utils/telemetry';
+import { computeTmlImportStats } from '../../utils/tmlImportStats';
 
 /**
  * New Project dialog variant used during the DMP/TML import flow.
@@ -30,6 +31,12 @@ export default function NewProjectForImportDialog() {
   const fileName = useMemo(
     () => (filePath ? filePath.split(/[/\\]/).pop() || filePath : ''),
     [filePath]
+  );
+  // Default-options count: exactly what the user gets if they click straight
+  // through to the next screen without touching its toggles (#411).
+  const tmlStats = useMemo(
+    () => (tmlFile ? computeTmlImportStats(tmlFile, false) : null),
+    [tmlFile]
   );
   const importType = dialogData.importType as string | undefined;
   const defaultName = (dialogData.defaultName as string) || '';
@@ -220,13 +227,13 @@ export default function NewProjectForImportDialog() {
             </div>
           </div>
         )}
-        {tmlFile && (
+        {tmlFile && tmlStats && (
           <div className="p-3 bg-accent-10 border border-accent-20 rounded text-sm">
             <div className="font-medium mb-1">{t('dialogs.newProjectForImport.importingFrom.tml')}</div>
             <div className="text-text-secondary">
               {t('dialogs.newProjectForImport.summary.tml', {
-                sections: tmlFile.sections.length,
-                shots: tmlFile.sections.reduce((acc, s) => acc + s.shots.length, 0),
+                sections: tmlStats.totalSections,
+                shots: tmlStats.totalShots,
                 caveName: tmlFile.cave_name ? ` - ${tmlFile.cave_name}` : '',
               })}
             </div>

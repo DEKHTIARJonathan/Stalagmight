@@ -1,4 +1,5 @@
 import { useProjectStore } from '../store/projectStore';
+import { useUIStore } from '../store/uiStore';
 import { isPermissionError } from './saveErrors';
 import { trackDialogComplete } from './telemetry';
 import { getErrorMessage } from './ipc';
@@ -77,15 +78,17 @@ export interface ImportDialogUi {
 /**
  * A failed import, classified by where it failed:
  * - `command`: the backend returned `success: false` - the dialog's work is
- *   over, so it closes via the shared exit sequence before the error dialog.
+ *   over, so it closes (with its completion telemetry) before the error dialog.
+ *   It does NOT run the rest of the exit sequence: `setView`/fit dropped the
+ *   user into the empty project the import had just created, fitted the map to
+ *   nothing, and only THEN said why (#411 C2).
  * - `empty`: the backend succeeded but imported nothing (e.g. a `.wpj` whose
  *   `.srv` files are missing) - closes the dialog and says why, because a
  *   silent "success" with an empty map reads as breakage.
- * - `transport`: the IPC call itself threw - unlike `command`, the shared
- *   exit sequence does NOT run (no dialog-complete telemetry, no view switch);
- *   the error dialog takes the single dialog slot, so dismissing it returns
- *   the user to where they were. `format` names the source format in the
- *   fallback message.
+ * - `transport`: the IPC call itself threw - unlike the other two, the dialog is
+ *   not closed and no completion telemetry is stamped; the error dialog takes
+ *   the single dialog slot, so dismissing it returns the user to where they
+ *   were. `format` names the source format in the fallback message.
  */
 export type ImportFailure =
   | { phase: 'command'; error: string | null | undefined }
@@ -93,23 +96,46 @@ export type ImportFailure =
   | { phase: 'transport'; error: unknown; format: string };
 
 /**
+ * The user-facing message for a failed import. Exported so a dialog that reports
+ * the failure on a surface of its own (TmlImportDialog's empty-project prompt,
+ * which has to ask about the project the failed import created) words it exactly
+ * as this router would, instead of minting a second set of strings.
+ */
+export function importFailureMessage(failure: ImportFailure): string {
+  switch (failure.phase) {
+    case 'transport':
+      return getErrorMessage(
+        failure.error,
+        i18n.t('dialogs.importFailure.transportFallback', { format: failure.format }),
+      );
+    case 'empty':
+      return failure.message;
+    case 'command':
+      return failure.error ?? i18n.t('dialogs.importFailure.unknown');
+  }
+}
+
+/**
  * The one router for the TML/Compass/Walls/GPX import dialogs' failure paths
  * (docs/notifications.md) - bespoke `openDialog('error', ...)` calls in import
  * dialogs are a policy defect.
+ *
+ * Every caller returns straight after calling this, in every phase, so reaching
+ * here ends the import flow - which is why `importContext` is dropped here too
+ * (see `completeImportToSingleView` for what a stale one costs).
  */
 export function surfaceImportFailure(
   dialogName: string,
   ui: ImportDialogUi,
   failure: ImportFailure,
 ): void {
+  const message = importFailureMessage(failure);
+  useUIStore.getState().setImportContext(null);
   switch (failure.phase) {
     case 'transport':
       ui.openDialog('error', {
         title: i18n.t('dialogs.importFailure.transportTitle'),
-        message: getErrorMessage(
-          failure.error,
-          i18n.t('dialogs.importFailure.transportFallback', { format: failure.format }),
-        ),
+        message,
       });
       return;
     case 'empty':
@@ -117,14 +143,16 @@ export function surfaceImportFailure(
       ui.closeDialog();
       ui.openDialog('error', {
         title: i18n.t('dialogs.importFailure.emptyTitle'),
-        message: failure.message,
+        message,
       });
       return;
     case 'command':
-      completeImportToSingleView(dialogName, ui);
+      // Report BEFORE anything moves: no setView, no fit-to-bounds.
+      trackDialogComplete(dialogName);
+      ui.closeDialog();
       ui.openDialog('error', {
         title: i18n.t('dialogs.importFailure.commandTitle'),
-        message: failure.error ?? i18n.t('dialogs.importFailure.unknown'),
+        message,
       });
   }
 }
@@ -137,6 +165,12 @@ export function surfaceImportFailure(
  * When `receipt` is present (a successful import that produced one), opens the
  * post-import receipt dialog (#391) right after so the user sees what landed
  * without having to open the data table.
+ *
+ * This is also where the import flow ENDS, so it is where `importContext` is
+ * dropped. Left set, it outlives its flow: `saveAfterImport` reads it, and a
+ * later import whose own route sets no context (GPX/Compass/Walls) would inherit
+ * a stale 'new-project' and take the full-save branch, committing the user's
+ * unrelated pending edits.
  */
 export function completeImportToSingleView(
   dialogName: string,
@@ -144,6 +178,7 @@ export function completeImportToSingleView(
   receipt?: ImportReceipt,
 ): void {
   trackDialogComplete(dialogName);
+  useUIStore.getState().setImportContext(null);
   ui.closeDialog();
   ui.setView('single');
   ui.triggerFitToBounds();

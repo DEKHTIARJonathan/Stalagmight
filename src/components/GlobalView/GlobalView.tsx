@@ -1,6 +1,5 @@
 import { useEffect, useLayoutEffect, useState, useCallback, useMemo, useRef, type MouseEvent, type ChangeEvent, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { useTranslation } from 'react-i18next';
-import type { TFunction } from 'i18next';
 import { revealItemInDir } from '@tauri-apps/plugin-opener';
 import { useProject } from '../../hooks/useProject';
 import { useGlobalViewShortcuts } from '../../hooks/useGlobalViewShortcuts';
@@ -45,42 +44,7 @@ import type { SpeleoProjectSummary } from '../../types/ipc.generated';
 import { formatNumber } from '../../i18n/format';
 import { debugLog } from '../../utils/debugLog';
 import { TOAST_KEYS } from '../../utils/toastKeys';
-
-/** Map phase enum values to human-readable labels */
-function formatPhaseLabel(
-  t: TFunction,
-  phase: string | undefined,
-  phaseIndex?: number,
-  phaseCount?: number
-): string {
-  if (!phase) return t('globalView.loading.phases.initializing');
-
-  const labels: Record<string, string> = {
-    // Project opening phases
-    opening_database: t('globalView.loading.phases.openingDatabase'),
-    loading_project_data: t('globalView.loading.phases.loadingProjectData'),
-    loading_sections: t('globalView.loading.phases.loadingSections'),
-    computing_stations: t('globalView.loading.phases.computingStations'),
-    computing_statistics: t('globalView.loading.phases.computingStatistics'),
-    validating_data: t('globalView.loading.phases.validatingData'),
-    loading_settings: t('globalView.loading.phases.loadingSettings'),
-    finalizing: t('globalView.loading.phases.finalizing'),
-    // Timeout message
-    loading_taking_long: t('globalView.loading.phases.takingLong'),
-    // Create project phases
-    creating_database: t('globalView.loading.phases.creatingDatabase'),
-    initializing_project: t('globalView.loading.phases.initializingProject'),
-    saving_settings: t('globalView.loading.phases.savingSettings'),
-  };
-
-  const label = labels[phase] ?? phase;
-
-  if (phaseIndex !== undefined && phaseCount !== undefined && phaseCount > 0) {
-    return t('globalView.loading.step', { current: phaseIndex + 1, total: phaseCount, label });
-  }
-
-  return label;
-}
+import { formatPhaseLabel } from '../../utils/loadingPhaseLabel';
 
 type ViewTab = 'map' | 'list';
 
