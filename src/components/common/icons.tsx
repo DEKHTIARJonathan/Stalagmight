@@ -702,8 +702,9 @@ export function LockIcon(props: IconProps) {
   );
 }
 
-/** Open padlock: the same body as `LockIcon`, with the shackle lifted and its
- *  right leg gone, so the two read as a locked/unlocked pair at 14px. */
+/** Open padlock: the body is identical to `LockIcon`; the shackle's arch is
+ *  raised one unit (cy 6 -> 5) and its right leg is removed, so the shackle
+ *  reads as unlatched and the two icons form a locked/unlocked pair at 14px. */
 export function LockOpenIcon(props: IconProps) {
   return (
     <BaseIcon {...props}>

@@ -1987,7 +1987,7 @@
       "groupLabel": "Geometry",
       "measured": "Raw Data View",
       "closureAdjusted": "Closures Computed View",
-      "measuredDescription": "Raw measured survey positions - editable.",
+      "measuredDescription": "Raw measured survey positions.",
       "closureAdjustedDescription": "Loop-closure-corrected positions - read-only.",
       "noClosures": "No loop closures to adjust"
     },
@@ -2909,7 +2909,7 @@
           },
           "geometry": {
             "title": "Raw Data vs Closures Computed",
-            "description": "Raw Data View (open lock) shows the raw survey and stays editable. Closures Computed View (closed lock) shows the least-squares solve across loop closures and is read-only. Plan and Export force it. Available only when the project has eligible closures."
+            "description": "Raw Data View shows the raw survey and stays editable. Closures Computed View shows the least-squares solve across loop closures and is read-only. Plan and Export force it. Available only when the project has eligible closures."
           },
           "tools": {
             "title": "Tool Palette",

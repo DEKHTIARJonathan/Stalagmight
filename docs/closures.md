@@ -8,10 +8,17 @@ Closure adjustment is a **non-destructive, toggleable display mode**, not a dest
 command. The measured survey geometry (raw shots) is always the source of truth and is
 **never rewritten** by adjustment.
 
+(Terminology: below, "adjusted" / "closure-adjusted" is shorthand for the Closures Computed
+View, and "measured" / "raw" for the Raw Data View. The technical prose keeps those words
+because they name the stored enum values - `measured` / `closureAdjusted` - and the solve's
+own vocabulary; only the two UI labels were renamed.)
+
 - The **Display** dropdown has a *Geometry* control with two modes: **Raw Data View** (raw,
   open padlock) and **Closures Computed View** (loop-closure-corrected, closed padlock). The
-  mode is persisted per the display settings ("remember last used"); default is the Raw Data
-  View. (The stored enum values stay `measured` / `closureAdjusted`.) The adjusted option is disabled when
+  padlock glyphs render only at syntactic-highlighting level `icons` and above; at
+  `toolbar_only` / `off` the two pills are label-only. The mode is persisted per the display
+  settings ("remember last used"); default is the Raw Data View. (The stored enum values stay
+  `measured` / `closureAdjusted`.) The adjusted option is disabled when
   the project has no closures eligible for the solve (`Batch` / `LeastSquaresWeighted`); `Move`
   closures are already coincident, so a project with only those shows the option disabled.
 - Closure-adjusted coordinates are derived by running the weighted least-squares solve on a
