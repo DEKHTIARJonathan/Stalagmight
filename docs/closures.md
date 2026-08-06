@@ -2,15 +2,16 @@
 
 This document summarizes how loop closures work in the current codebase (post-removal of Sequential/KeepRaw/Manual strategies).
 
-## Measured vs Closure-Adjusted (non-destructive display mode)
+## Raw Data View vs Closures Computed View (non-destructive display mode)
 
 Closure adjustment is a **non-destructive, toggleable display mode**, not a destructive
 command. The measured survey geometry (raw shots) is always the source of truth and is
 **never rewritten** by adjustment.
 
-- The **Display** dropdown has a *Geometry* control with two modes: **Measured** (raw) and
-  **Closure-adjusted** (loop-closure-corrected). The mode is persisted per the display
-  settings ("remember last used"); default is Measured. The adjusted option is disabled when
+- The **Display** dropdown has a *Geometry* control with two modes: **Raw Data View** (raw,
+  open padlock) and **Closures Computed View** (loop-closure-corrected, closed padlock). The
+  mode is persisted per the display settings ("remember last used"); default is the Raw Data
+  View. (The stored enum values stay `measured` / `closureAdjusted`.) The adjusted option is disabled when
   the project has no closures eligible for the solve (`Batch` / `LeastSquaresWeighted`); `Move`
   closures are already coincident, so a project with only those shows the option disabled.
 - Closure-adjusted coordinates are derived by running the weighted least-squares solve on a
@@ -19,7 +20,7 @@ command. The measured survey geometry (raw shots) is always the source of truth 
   Because the solve always starts from intact measured data, adding/removing closures
   re-solves accurately instead of compounding on already-adjusted geometry.
 - The adjusted view is **read-only**: geometry-mutating tools are disabled there (edits are
-  made in the Measured view). Selection, inspection, and measuring remain available.
+  made in the Raw Data View). Selection, inspection, and measuring remain available.
 - The adjusted set is fetched lazily via the `get_adjusted_stations` IPC command, memoized in
   a transient `AppState` cache keyed on `(modified_at, closure-config hash)` and cleared on
   every command/undo/redo. The solve runs on a blocking thread; the map shows a
@@ -42,7 +43,7 @@ old destructive apply path was removed.
 | `ProportionalByLength` | Deferred | Legacy strategy; create-time distribution is disabled and not exposed in the UI (only revisited if users request it). |
 | `EqualDistribution` | Deferred | Legacy strategy; create-time distribution is disabled and not exposed in the UI (only revisited if users request it). |
 | `Batch` | Create loop closure | Records the closure only; participates in the closure-adjusted display solve. |
-| `LeastSquaresWeighted` | Closure-adjusted view | Weighted least-squares solve over the connected component (derived, non-destructive). |
+| `LeastSquaresWeighted` | Closures Computed View | Weighted least-squares solve over the connected component (derived, non-destructive). |
 | `Move` | Snap-to-merge workflow | Closure created during a move; no extra distribution at create time. |
 
 Removed strategies:
@@ -100,9 +101,9 @@ Common error conditions:
 - `Closure distribution would move a zero datum station` if a computed delta touches a datum station.
 - `Closure distribution failed to align endpoints` if residual misclosure remains and both sides are anchored.
 
-## Closure-Adjusted Solve (LeastSquaresWeighted)
+## Closures Computed Solve (LeastSquaresWeighted)
 
-The closure-adjusted view solves with **only** `LeastSquaresWeighted`. It runs
+The Closures Computed View solves with **only** `LeastSquaresWeighted`. It runs
 non-destructively on a throwaway clone (`Project::compute_adjusted_station_coordinates`),
 once per connected component that has eligible closures, anchored on a zero datum when present
 and otherwise on a deterministic default anchor (the lexicographically smallest
