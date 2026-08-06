@@ -160,7 +160,17 @@ hazards over long runs.
     repro line, merged metric totals and the observed speedup. Each worker slot
     gets its own port block (`STALAGMIGHT_AGENT_BASE_PORT = 4544 + 20*slot`) and
     its own single-entry Xvfb pool (`STALAGMIGHT_AGENT_DISPLAYS`), so `K` is
-    hard-capped at 5 - the size of the display pool.
+    hard-capped at 5 - the size of the display pool. Pinning the pool spends the
+    retries the default 5-display walk would have, so entries are validated
+    (`:N`, non-empty) and a pinned display that will not start is a hard error:
+    the session never falls back to the real display, where the fuzzer would
+    drive a visible window on the user's desktop for the length of the run. A
+    cell GENERATES its own
+    moves, so `STALAGMIGHT_FUZZ_REPLAY` / `_TRACE` are dropped from the child
+    environment rather than inherited (an exported replay path would otherwise
+    make every cell replay one trace and report a green matrix for coverage
+    nothing ran). `--release=0` means what it says: the flag takes an optional
+    `1/0`, `true/false`, `yes/no`, `on/off` value.
   - `pnpm agent:mcp` - run the server standalone (for an external MCP client).
   - `pnpm agent:bridge <dir>` - file-based access to the same server for plain
     shells and subagents without an MCP client: append JSON tool calls to
@@ -563,6 +573,17 @@ classification and the failure payload are the same code, so a replayed failure
 is the same failure rather than a lookalike. A replayed run says so in its
 `reproduce:` line.
 
+The recording's ENVIRONMENT is part of the repro, so `--trace` restores the
+header's `STALAGMIGHT_*` knobs (fixture, tolerance, stream, the persistence
+ones) and prints what it restored. It has to happen before `./scenarios` is
+imported - the fuzz scenarios freeze those knobs into module-level constants at
+import time - which is why both `agent:scenario` and `agent:fuzz-shrink` import
+the registry dynamically. A trace recorded by a different scenario, or on a
+different fixture, is REFUSED: the steps carry resolved section and shot ids, so
+replaying them against another project drives moves at ids that do not exist
+there and reports an invented failure (or none) while the operator believes they
+are looking at the recorded one.
+
 Two rules make replay work on a trace that has been CUT, which is what the
 shrinker needs:
 
@@ -589,6 +610,11 @@ Textbook ddmin (`e2e/agent/lib/fuzzShrink.ts`) over the recorded move list, with
 a candidate cache. It replays the whole trace first to establish the baseline
 signature, then repeatedly replays subsequences until no single step can be
 removed, and writes `<trace>.min.json` plus a numbered action list.
+
+Exit status is the signal, so a recorded trace doubles as a regression check:
+**0** only when the trace reproduced and was minimized, **1** when it replayed
+GREEN (the bug is fixed, or the failure needed something the trace does not
+carry) or the shrink itself threw.
 
 A candidate "preserves" the failure only when its FailureSignature matches:
 headline, first differing path, the `error:` line of a move that failed outright,

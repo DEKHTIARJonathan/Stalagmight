@@ -103,9 +103,27 @@ STALAGMIGHT_RUST_FUZZ_CONFIG=1 STALAGMIGHT_RUST_FUZZ_SEEDS=32 \
 The drawn value is printed at the end of every summary line and of every failure
 payload (`..., undo_history_limit=3`) - a seed alone is not a repro once the same
 moves can run against differently configured apps. `undo_persist_limit` is
-deliberately NOT drawn: it is read from the config struct at save time, and
-`save_project` writes that struct back to the real `config.toml`, so a drawn
-value would escape the run.
+deliberately NOT drawn: it is read from the config struct at save time and
+`save_project` writes that struct back out through `Config::save()`, so a drawn
+value would outlive the moves that drew it.
+
+**Config isolation is mandatory in these modules.** `AppState::new()` LOADS the
+global config and every save reaches `note_recent_project` -> `Config::save()`,
+which WRITES it, so every test in the nine fuzz/property modules opens with
+`let _config = crate::test_helpers::isolated_config();`. Without it a run
+rewrites the developer's real `~/.config/stalagmight/config.toml` (its
+`recent_projects` fills with dead `/tmp/.tmpXXXX/*.stalx` entries), and the
+write races the process-global override that guard installs - so a fuzz save can
+land inside a sibling config test's isolated config and fail it. To check a
+module still holds the line, run it with the config dir redirected and assert
+nothing was written:
+
+```bash
+XDG_CONFIG_HOME=$(mktemp -d) TELEMETRY_ENDPOINT=http://localhost/dummy \
+  cargo test --manifest-path src-tauri/Cargo.toml --features telemetry --lib \
+  -- core::state::metamorphic_undo_tests
+# then: find "$XDG_CONFIG_HOME" -type f   -> must be empty
+```
 
 **Combined.** `STALAGMIGHT_RUST_FUZZ_COMBINED=1` turns on horizon, closures,
 closure shapes, jumps, three crossings and the drawn config at once - the
