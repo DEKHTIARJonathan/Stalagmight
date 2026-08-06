@@ -423,6 +423,9 @@ export default function ContextMenu() {
 
       items.push({ label: '', action: () => {}, separator: true });
       items.push({
+        // This exact English string is quoted by ExportControls' TML-unanchored-warning
+        // dialog copy (dialogs.tmlUnanchoredWarning.* in en.json). Translating this label
+        // will desync that quote - update both together.
         label: 'Set Zero Datum',
         action: () => {
           openDialog('edit-station', {

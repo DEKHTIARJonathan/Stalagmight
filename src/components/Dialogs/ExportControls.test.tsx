@@ -1,11 +1,17 @@
 /**
- * Component test - the TML export "some sections will be discarded" dialog (#411).
+ * Component test - the TML export unanchored-section notice (#411).
  *
- * The defect: exporting a project with zero zero-datums raised a modal listing
- * EVERY section as "potentially discarded" with no way to act on it. The dialog
- * needs to (a) tell the user the actual fix (anchor a station via Set Zero
- * Datum), and (b) distinguish "the whole project has no zero datum" from
- * "some sections just aren't connected to one" - those read very differently.
+ * The original defect: exporting a project with no zero datum raised an alarming modal
+ * ("Some sections will be discarded") listing every section, with no way to act on it.
+ *
+ * A later review round found the premise itself was wrong: `build_export_shots`
+ * (src-tauri/src/export/tml.rs) never discards a section - one not connected to a zero
+ * datum just becomes its own separate entrance, exactly like Ariane's own multi-entrance
+ * files. So this is an informational notice, not a risk warning, and it must (a) name the
+ * real fix (Set Zero Datum, via the station context menu), and (b) distinguish "nothing in
+ * this project is anchored" from "some sections aren't" - and get that split from the
+ * ACTUAL unanchored-section count, not from `zero_datums.length` (a datum whose station no
+ * longer resolves anchors nothing, but still has `zero_datums.length > 0`).
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
@@ -56,8 +62,8 @@ beforeEach(() => {
   vi.mocked(saveDialog).mockResolvedValue('/tmp/out.tml');
 });
 
-describe('TML export unanchored-section warning', () => {
-  it('names the fix and says "every section" when the project has no zero datum at all', async () => {
+describe('TML export unanchored-section notice', () => {
+  it('names the fix and says every section is unanchored when the project has no zero datum at all', async () => {
     getAnchoredSectionIds.mockResolvedValue([]);
     useProjectStore.setState({
       project: buildProject([section(1), section(2)], []),
@@ -69,10 +75,30 @@ describe('TML export unanchored-section warning', () => {
     await userEvent.click(screen.getByTestId('export-button'));
 
     const dialog = await screen.findByTestId('tml-unanchored-warning-dialog');
-    expect(dialog).toHaveTextContent('This project has no zero datum');
+    expect(dialog).toHaveTextContent('No section is connected to a zero datum');
     expect(dialog).toHaveTextContent('Set Zero Datum');
     expect(dialog).not.toHaveTextContent(/\d+ of \d+ sections/);
+    // Nothing is discarded - the notice must not claim otherwise.
+    expect(dialog).not.toHaveTextContent('discard');
     expect(saveDialog).not.toHaveBeenCalled();
+  });
+
+  it('uses the all-unanchored wording when a zero datum exists but resolves nothing (#411 regression)', async () => {
+    // zero_datums.length > 0, but its station no longer resolves: get_anchored_section_ids
+    // returns []. The title must follow the unanchored COUNT, not zero_datums.length.
+    getAnchoredSectionIds.mockResolvedValue([]);
+    useProjectStore.setState({
+      project: buildProject([section(1), section(2), section(3)], [ZERO_DATUM]),
+      getAnchoredSectionIds,
+      exportTml,
+    });
+
+    render(<ExportControls {...baseProps} />);
+    await userEvent.click(screen.getByTestId('export-button'));
+
+    const dialog = await screen.findByTestId('tml-unanchored-warning-dialog');
+    expect(dialog).toHaveTextContent('No section is connected to a zero datum');
+    expect(dialog).not.toHaveTextContent(/\d+ of \d+ sections/);
   });
 
   it('names the fix and gives a count when only some sections are unanchored', async () => {
@@ -89,11 +115,30 @@ describe('TML export unanchored-section warning', () => {
     const dialog = await screen.findByTestId('tml-unanchored-warning-dialog');
     expect(dialog).toHaveTextContent('2 of 3 sections');
     expect(dialog).toHaveTextContent('Set Zero Datum');
-    expect(dialog).not.toHaveTextContent('This project has no zero datum');
+    expect(dialog).not.toHaveTextContent('No section is connected to a zero datum');
+    expect(dialog).not.toHaveTextContent('discard');
     expect(saveDialog).not.toHaveBeenCalled();
   });
 
-  it('does not show the dialog when every section is anchored', async () => {
+  it('uses singular wording for exactly one unanchored section', async () => {
+    getAnchoredSectionIds.mockResolvedValue([1]);
+    useProjectStore.setState({
+      project: buildProject([section(1), section(2)], [ZERO_DATUM]),
+      getAnchoredSectionIds,
+      exportTml,
+    });
+
+    render(<ExportControls {...baseProps} />);
+    await userEvent.click(screen.getByTestId('export-button'));
+
+    const dialog = await screen.findByTestId('tml-unanchored-warning-dialog');
+    // A missing `_one` key ships as a BLANK paragraph outside dev (`parseMissingKeyHandler`
+    // returns ''), so asserting the actual singular text - not just its absence - is what
+    // catches that: an empty body would fail this the same way a wrong plural form would.
+    expect(dialog).toHaveTextContent('1 of 2 sections is not connected');
+  });
+
+  it('does not show the notice when every section is anchored', async () => {
     getAnchoredSectionIds.mockResolvedValue([1, 2]);
     useProjectStore.setState({
       project: buildProject([section(1), section(2)], [ZERO_DATUM]),

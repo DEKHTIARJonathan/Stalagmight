@@ -1596,15 +1596,13 @@
       "shotsHeading": "Shot Data"
     },
     "tmlUnanchoredWarning": {
-      "titleNoDatum": "This project has no zero datum",
-      "titlePartial": "Some sections will be discarded",
-      "bodyNoDatum": "Ariane TML/TMLU exports only include sections connected to a zero datum, and this project does not have one, so every section below would be discarded. Right-click a station and choose \"Set Zero Datum\" to anchor the survey, then export again.",
-      "bodyPartial_one": "Ariane TML/TMLU exports only include sections connected to a zero datum. {{count}} of {{total}} sections is not connected and would be discarded. Right-click a station and choose \"Set Zero Datum\" to connect it, or continue to export the rest.",
-      "bodyPartial_other": "Ariane TML/TMLU exports only include sections connected to a zero datum. {{count}} of {{total}} sections are not connected and would be discarded. Right-click a station and choose \"Set Zero Datum\" to connect them, or continue to export the rest.",
-      "listHeadingNoDatum": "Sections that would be discarded",
-      "listHeadingPartial": "Potentially discarded sections",
-      "sectionFallbackName": "Section {{id}}",
-      "continueAnyway": "Continue anyway"
+      "titleAllUnanchored": "No section is connected to a zero datum",
+      "titlePartial": "Some sections aren't connected to a zero datum",
+      "bodyAllUnanchored": "No section in this project is connected to a zero datum, so every section below will export as its own separate cave entrance instead of one connected system. Cancel this dialog, then right-click a station in Survey mode and choose \"Set Zero Datum\" to anchor the survey before exporting.",
+      "bodyPartial_one": "{{count}} of {{total}} sections is not connected to a zero datum and will export as its own separate cave entrance. Cancel this dialog, then right-click a station in Survey mode and choose \"Set Zero Datum\" to connect it, or continue to export as-is.",
+      "bodyPartial_other": "{{count}} of {{total}} sections are not connected to a zero datum and will export as their own separate cave entrances. Cancel this dialog, then right-click a station in Survey mode and choose \"Set Zero Datum\" to connect them, or continue to export as-is.",
+      "listHeading": "Sections exporting as separate entrances",
+      "sectionFallbackName": "Section {{id}}"
     },
     "about": {
       "title": "About Stalagmight",
