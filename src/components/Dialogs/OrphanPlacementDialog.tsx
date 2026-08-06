@@ -1,4 +1,5 @@
 import { useState, useCallback, useMemo, useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import SectionPreview from './SectionPreview';
@@ -41,24 +42,8 @@ const confidenceColors: Record<string, string> = {
   low: 'bg-background-50 text-text-secondary border-border',
 };
 
-const confidenceLabel = (c: string): string => {
-  switch (c) {
-    case 'high': return 'High';
-    case 'medium': return 'Medium';
-    case 'low': return 'Low';
-    default: return c;
-  }
-};
-
 const directionLabel = (direction: string) =>
   direction === 'forward' ? '\u2192' : '\u2190';
-
-const overlapModeLabels: Record<OverlapMode, string> = {
-  interpolate: 'Interpolate (average)',
-  import_data: 'Use orphan data',
-  existing_data: 'Use target data',
-  keep_both: 'Keep both (mark as reference)',
-};
 
 /** Convert a project Section to DmpSection format for SectionPreview. */
 function sectionToDmpSection(section: Section): DmpSection {
@@ -90,6 +75,24 @@ function sectionToDmpSection(section: Section): DmpSection {
 }
 
 export default function OrphanPlacementDialog({ suggestions, receipt }: OrphanPlacementDialogProps) {
+  const { t } = useTranslation();
+  const confidenceLabel = useCallback(
+    (c: string): string => {
+      switch (c) {
+        case 'high': return t('dialogs.orphanPlacement.confidence.high');
+        case 'medium': return t('dialogs.orphanPlacement.confidence.medium');
+        case 'low': return t('dialogs.orphanPlacement.confidence.low');
+        default: return c;
+      }
+    },
+    [t],
+  );
+  const overlapModeLabels: Record<OverlapMode, string> = {
+    interpolate: t('dialogs.orphanPlacement.overlapModes.interpolate'),
+    import_data: t('dialogs.orphanPlacement.overlapModes.import_data'),
+    existing_data: t('dialogs.orphanPlacement.overlapModes.existing_data'),
+    keep_both: t('dialogs.orphanPlacement.overlapModes.keep_both'),
+  };
   const { mergeStations, updateShot, setShotKind, refreshProjectState, project } = useProjectStore();
   const { closeDialog, setView, triggerFitToBounds, openDialog } = useUIStore();
 
@@ -518,7 +521,7 @@ export default function OrphanPlacementDialog({ suggestions, receipt }: OrphanPl
 
   return (
     <DialogWrapper
-      title="Connect Orphaned Sections"
+      title={t('dialogs.orphanPlacement.title')}
       onClose={finish}
       fixedSize={{ width: 'min(900px, 95vw)', height: 'min(650px, 90vh)' }}
       overflow="hidden"
@@ -528,11 +531,14 @@ export default function OrphanPlacementDialog({ suggestions, receipt }: OrphanPl
       {/* Progress header */}
       <div className="px-4 py-2 border-b border-border text-sm text-text-secondary">
         <span data-testid="wizard-progress">
-          Section {Math.min(processedCount + 1, totalOriginal)} of {totalOriginal}
+          {t('dialogs.orphanPlacement.progress', {
+            current: Math.min(processedCount + 1, totalOriginal),
+            total: totalOriginal,
+          })}
         </span>
         {skippedCount > 0 && (
           <span className="ml-2" data-testid="wizard-skipped">
-            &middot; {skippedCount} skipped
+            &middot; {t('dialogs.orphanPlacement.skipped', { count: skippedCount })}
           </span>
         )}
       </div>
@@ -556,7 +562,7 @@ export default function OrphanPlacementDialog({ suggestions, receipt }: OrphanPl
             )}
             {!orphanDmpSection && (
               <div className="w-[340px] h-[340px] border border-border rounded flex items-center justify-center text-text-secondary text-sm">
-                Section not found
+                {t('dialogs.orphanPlacement.sectionNotFound')}
               </div>
             )}
           </div>
@@ -566,7 +572,7 @@ export default function OrphanPlacementDialog({ suggestions, receipt }: OrphanPl
             {/* Connection heading */}
             <div>
               <h3 className="text-sm font-semibold text-text-secondary uppercase tracking-wide">
-                Suggested Connection
+                {t('dialogs.orphanPlacement.suggestedConnection')}
               </h3>
             </div>
 
@@ -574,11 +580,11 @@ export default function OrphanPlacementDialog({ suggestions, receipt }: OrphanPl
             <div className="p-3 rounded border border-border bg-surface-alt space-y-2">
               <div className="text-sm">
                 <span className="font-medium">{currentSuggestion!.orphanSectionName}</span>
-                <span className="text-text-tertiary"> stn {displayOrphanStation}</span>
+                <span className="text-text-tertiary"> {t('dialogs.orphanPlacement.station', { index: displayOrphanStation })}</span>
               </div>
               <div className="text-xs text-text-secondary">
                 &rarr; <span className="font-medium text-text-primary">{currentSuggestion!.targetSectionName}</span>
-                <span className="text-text-tertiary"> stn {displayTargetStation}</span>
+                <span className="text-text-tertiary"> {t('dialogs.orphanPlacement.station', { index: displayTargetStation })}</span>
               </div>
             </div>
 
@@ -591,10 +597,15 @@ export default function OrphanPlacementDialog({ suggestions, receipt }: OrphanPl
                 {confidenceLabel(currentSuggestion!.confidence)}
               </span>
               <span className="text-xs text-text-secondary">
-                {currentSuggestion!.matchedShots} shot{currentSuggestion!.matchedShots !== 1 ? 's' : ''} matched {directionLabel(currentSuggestion!.direction)}
+                {t('dialogs.orphanPlacement.matchedShots', {
+                  count: currentSuggestion!.matchedShots,
+                  direction: directionLabel(currentSuggestion!.direction),
+                })}
               </span>
               <span className="text-xs text-text-tertiary">
-                {Math.round(currentSuggestion!.score * 100)}% score
+                {t('dialogs.orphanPlacement.score', {
+                  percent: Math.round(currentSuggestion!.score * 100),
+                })}
               </span>
             </div>
 
@@ -602,7 +613,7 @@ export default function OrphanPlacementDialog({ suggestions, receipt }: OrphanPl
             {mergeOptions.length > 1 && (
               <div className="flex items-center gap-2" data-testid="merge-station-picker">
                 <label className="text-xs text-text-secondary whitespace-nowrap">
-                  Merge at
+                  {t('dialogs.orphanPlacement.mergeAt')}
                 </label>
                 <select
                   value={selectedMergeOffset}
@@ -612,7 +623,11 @@ export default function OrphanPlacementDialog({ suggestions, receipt }: OrphanPl
                 >
                   {mergeOptions.map((opt) => (
                     <option key={opt.offset} value={opt.offset}>
-                      stn {opt.importStation} &rarr; {currentSuggestion!.targetSectionName} stn {opt.existingStation}
+                      {t('dialogs.orphanPlacement.mergeOption', {
+                        importStation: opt.importStation,
+                        targetName: currentSuggestion!.targetSectionName,
+                        existingStation: opt.existingStation,
+                      })}
                     </option>
                   ))}
                 </select>
@@ -623,7 +638,7 @@ export default function OrphanPlacementDialog({ suggestions, receipt }: OrphanPl
             {currentSuggestion && currentSuggestion.matchedShots > 0 && (
               <div className="flex items-center gap-2" data-testid="overlap-mode-picker">
                 <label className="text-xs text-text-secondary whitespace-nowrap">
-                  Overlap
+                  {t('dialogs.orphanPlacement.overlap')}
                 </label>
                 <select
                   value={overlapMode}
@@ -641,7 +656,7 @@ export default function OrphanPlacementDialog({ suggestions, receipt }: OrphanPl
 
             {/* Prompt */}
             <p className="text-sm text-text-secondary">
-              Does this connection look right?
+              {t('dialogs.orphanPlacement.prompt')}
             </p>
 
             {/* Accept / Skip buttons */}
@@ -652,14 +667,14 @@ export default function OrphanPlacementDialog({ suggestions, receipt }: OrphanPl
                 disabled={processing}
                 data-primary-action=""
               >
-                Accept
+                {t('dialogs.orphanPlacement.accept')}
               </Button>
               <Button
                 data-testid="orphan-skip"
                 onClick={handleSkip}
                 disabled={processing}
               >
-                Skip
+                {t('dialogs.orphanPlacement.skip')}
               </Button>
             </div>
 
@@ -674,8 +689,8 @@ export default function OrphanPlacementDialog({ suggestions, receipt }: OrphanPl
                 >
                   <span className={`transition-transform ${showAlternatives ? 'rotate-90' : ''}`}>&#9654;</span>
                   {showAlternatives
-                    ? 'Hide alternatives'
-                    : `Show ${alternatives.length} alternative${alternatives.length !== 1 ? 's' : ''}`}
+                    ? t('dialogs.orphanPlacement.hideAlternatives')
+                    : t('dialogs.orphanPlacement.showAlternatives', { count: alternatives.length })}
                 </button>
 
                 {showAlternatives && (
@@ -692,10 +707,17 @@ export default function OrphanPlacementDialog({ suggestions, receipt }: OrphanPl
                           {confidenceLabel(alt.confidence)}
                         </span>
                         <span className="truncate">
-                          {alt.targetSectionName} stn {alt.targetStationIndex}
+                          {t('dialogs.orphanPlacement.alternativeTarget', {
+                            name: alt.targetSectionName,
+                            index: alt.targetStationIndex,
+                          })}
                         </span>
                         <span className="text-text-tertiary ml-auto shrink-0">
-                          {alt.matchedShots} shot{alt.matchedShots !== 1 ? 's' : ''} {directionLabel(alt.direction)} &middot; {Math.round(alt.score * 100)}%
+                          {t('dialogs.orphanPlacement.alternativeSummary', {
+                            count: alt.matchedShots,
+                            direction: directionLabel(alt.direction),
+                            percent: Math.round(alt.score * 100),
+                          })}
                         </span>
                       </button>
                     ))}
@@ -715,14 +737,14 @@ export default function OrphanPlacementDialog({ suggestions, receipt }: OrphanPl
             onClick={handleAcceptAll}
             disabled={processing}
           >
-            Accept All
+            {t('dialogs.orphanPlacement.acceptAll')}
           </Button>
           <Button
             data-testid="orphan-close"
             onClick={finish}
             disabled={processing}
           >
-            Skip All
+            {t('dialogs.orphanPlacement.skipAll')}
           </Button>
         </div>
       )}

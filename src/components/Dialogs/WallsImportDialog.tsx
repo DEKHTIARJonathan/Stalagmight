@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
 import { invokeIpc } from '../../utils/ipc';
@@ -20,6 +21,7 @@ interface WallsImportDialogProps {
 }
 
 export default function WallsImportDialog({ wallsFile, filePath }: WallsImportDialogProps) {
+  const { t } = useTranslation();
   const { executeWallsImport, calculateFileHash, checkDuplicateImport, startLoading, setLoadingProgress, resetLoading } = useProjectStore();
   const { closeDialog, openDialog, setView, triggerFitToBounds } = useUIStore();
 
@@ -214,7 +216,7 @@ export default function WallsImportDialog({ wallsFile, filePath }: WallsImportDi
   }, [executeWallsImport, filePath, fileHash, commentsOnStations, includeSplays, selectedSurveys, allSelected, wallsFile.project_name, fileName, closeDialog, openDialog, setView, triggerFitToBounds, startLoading, setLoadingProgress, resetLoading]);
 
   return (
-    <DialogWrapper title="Import Walls Survey" onClose={closeDialog} size="lg" data-testid="walls-import-dialog">
+    <DialogWrapper title={t('dialogs.wallsImport.title')} onClose={closeDialog} size="lg" data-testid="walls-import-dialog">
       <div className="space-y-4">
         {/* Header info */}
         <div className="space-y-1">
@@ -227,7 +229,7 @@ export default function WallsImportDialog({ wallsFile, filePath }: WallsImportDi
         {/* Summary stats */}
         <div className="grid grid-cols-4 gap-3 p-3 bg-surface-alt rounded">
           <div>
-            <div className="text-xs text-text-tertiary">Surveys</div>
+            <div className="text-xs text-text-tertiary">{t('dialogs.wallsImport.stats.surveys')}</div>
             <div className="text-sm font-medium">
               {wallsFile.resolved_survey_count}
               {wallsFile.survey_count !== wallsFile.resolved_survey_count
@@ -236,15 +238,15 @@ export default function WallsImportDialog({ wallsFile, filePath }: WallsImportDi
             </div>
           </div>
           <div>
-            <div className="text-xs text-text-tertiary">Shots</div>
+            <div className="text-xs text-text-tertiary">{t('dialogs.wallsImport.stats.shots')}</div>
             <div className="text-sm font-medium">
               {selectedShotCount}
               {!allSelected ? ` / ${wallsFile.shot_count}` : ''}
             </div>
           </div>
           <div>
-            <div className="text-xs text-text-tertiary" title="#Fix stations - each becomes a GPS zero datum on its connected component">
-              Fixed stations
+            <div className="text-xs text-text-tertiary" title={t('dialogs.wallsImport.stats.fixedStationsTooltip')}>
+              {t('dialogs.wallsImport.stats.fixedStations')}
             </div>
             <div className="text-sm font-medium">
               {selectedFixedStationCount}
@@ -252,17 +254,17 @@ export default function WallsImportDialog({ wallsFile, filePath }: WallsImportDi
             </div>
           </div>
           <div>
-            <div className="text-xs text-text-tertiary" title="Projection reference from the .wpj .REF directive - the coordinate system, not a station anchor">
-              Projection
+            <div className="text-xs text-text-tertiary" title={t('dialogs.wallsImport.stats.projectionTooltip')}>
+              {t('dialogs.wallsImport.stats.projection')}
             </div>
             <div className="text-sm font-medium">{projectionLabel}</div>
           </div>
         </div>
         {wallsFile.has_georeference && selectedFixedStationCount === 0 && (
           <div className="text-xs text-text-secondary">
-            This project has a coordinate reference (.REF) but no <code>#Fix</code> stations in the
-            resolved surveys, so nothing is GPS-anchored. Walls keeps fixed points in separate
-            survey files - include those to georeference the cave.
+            {t('dialogs.wallsImport.noFixWarning.before')}{' '}
+            <code>#Fix</code>{' '}
+            {t('dialogs.wallsImport.noFixWarning.after')}
           </div>
         )}
 
@@ -271,10 +273,15 @@ export default function WallsImportDialog({ wallsFile, filePath }: WallsImportDi
         {wallsFile.shot_count === 0 && (
           <div className="p-3 bg-warning-10 border border-warning-20 rounded text-sm">
             {wallsFile.missing_file_count > 0
-              ? `None of the ${wallsFile.missing_file_count} referenced .SRV survey file(s) were found next to "${fileName}", so there is nothing to import. A .wpj references its survey files by name - put the .SRV files in the same folder as the .wpj, or import a single .srv file directly.`
+              ? t('dialogs.wallsImport.nothingToImport.missing', {
+                  count: wallsFile.missing_file_count,
+                  fileName,
+                })
               : wallsFile.splay_count > 0
-                ? `This file has no regular survey shots, but ${wallsFile.splay_count} anonymous wall / splay shot(s). Enable "Include anonymous wall / splay shots" below to import them.`
-                : 'This file contains no survey shots to import.'}
+                ? t('dialogs.wallsImport.nothingToImport.splaysOnly', {
+                    count: wallsFile.splay_count,
+                  })
+                : t('dialogs.wallsImport.nothingToImport.none')}
           </div>
         )}
 
@@ -283,10 +290,10 @@ export default function WallsImportDialog({ wallsFile, filePath }: WallsImportDi
           (wallsFile.missing_file_count > 0 || wallsFile.skipped_attachment_count > 0) && (
             <div className="text-xs text-text-secondary">
               {wallsFile.missing_file_count > 0 && (
-                <span>{wallsFile.missing_file_count} referenced survey file(s) not found on disk. </span>
+                <span>{t('dialogs.wallsImport.missingFiles', { count: wallsFile.missing_file_count })} </span>
               )}
               {wallsFile.skipped_attachment_count > 0 && (
-                <span>{wallsFile.skipped_attachment_count} non-survey attachment(s) skipped.</span>
+                <span>{t('dialogs.wallsImport.skippedAttachments', { count: wallsFile.skipped_attachment_count })}</span>
               )}
             </div>
           )}
@@ -294,9 +301,12 @@ export default function WallsImportDialog({ wallsFile, filePath }: WallsImportDi
         {/* Survey list - choose which surveys to import */}
         <div className="space-y-1">
           <div className="flex items-center justify-between text-xs text-text-tertiary">
-            <span>Surveys to import</span>
+            <span>{t('dialogs.wallsImport.surveysToImport')}</span>
             <span data-testid="walls-selected-count">
-              {selectedSurveys.size} of {resolvedIndices.length} selected
+              {t('dialogs.wallsImport.selectedCount', {
+                selected: selectedSurveys.size,
+                total: resolvedIndices.length,
+              })}
             </span>
           </div>
           <div className="max-h-64 overflow-y-auto border border-border rounded">
@@ -308,14 +318,14 @@ export default function WallsImportDialog({ wallsFile, filePath }: WallsImportDi
                       type="checkbox"
                       checked={allSelected}
                       onChange={toggleAll}
-                      aria-label="Select all surveys"
+                      aria-label={t('dialogs.wallsImport.selectAllLabel')}
                       data-testid="walls-select-all"
                     />
                   </th>
-                  <th className="px-3 py-1.5">Survey</th>
-                  <th className="px-3 py-1.5">Shots</th>
-                  <th className="px-3 py-1.5">Segment</th>
-                  <th className="px-3 py-1.5">Date</th>
+                  <th className="px-3 py-1.5">{t('dialogs.wallsImport.table.survey')}</th>
+                  <th className="px-3 py-1.5">{t('dialogs.wallsImport.table.shots')}</th>
+                  <th className="px-3 py-1.5">{t('dialogs.wallsImport.table.segment')}</th>
+                  <th className="px-3 py-1.5">{t('dialogs.wallsImport.table.date')}</th>
                 </tr>
               </thead>
               <tbody>
@@ -327,7 +337,9 @@ export default function WallsImportDialog({ wallsFile, filePath }: WallsImportDi
                           type="checkbox"
                           checked={selectedSurveys.has(i)}
                           onChange={() => toggleSurvey(i)}
-                          aria-label={`Import ${survey.title || survey.name}`}
+                          aria-label={t('dialogs.wallsImport.importSurveyLabel', {
+                            name: survey.title || survey.name,
+                          })}
                           data-testid={`walls-survey-${i}`}
                         />
                       </td>
@@ -355,7 +367,7 @@ export default function WallsImportDialog({ wallsFile, filePath }: WallsImportDi
         {/* Duplicate warning */}
         {isDuplicate && hashChecked && (
           <div className="p-3 bg-warning-10 border border-warning-20 rounded text-sm">
-            This file has already been imported to this project. Importing again will create duplicate sections.
+            {t('dialogs.wallsImport.duplicateWarning')}
           </div>
         )}
 
@@ -367,7 +379,7 @@ export default function WallsImportDialog({ wallsFile, filePath }: WallsImportDi
             onChange={(e) => setCommentsOnStations(e.target.checked)}
             data-testid="walls-comments-on-stations"
           />
-          Promote shot comments to the FROM station
+          {t('dialogs.wallsImport.options.commentsOnStations')}
         </label>
         <label className="flex items-center gap-2 text-sm text-text-secondary cursor-pointer">
           <input
@@ -376,12 +388,12 @@ export default function WallsImportDialog({ wallsFile, filePath }: WallsImportDi
             onChange={(e) => setIncludeSplays(e.target.checked)}
             data-testid="walls-include-splays"
           />
-          Include anonymous wall / splay shots (as reference shots)
+          {t('dialogs.wallsImport.options.includeSplays')}
         </label>
 
         {/* Footer */}
         <div className="flex justify-end gap-2 pt-4 border-t border-border">
-          <Button onClick={closeDialog} data-testid="walls-import-cancel">Cancel</Button>
+          <Button onClick={closeDialog} data-testid="walls-import-cancel">{t('dialogs.wallsImport.cancel')}</Button>
           <Button
             data-primary-action=""
             data-testid="walls-import-confirm"
@@ -393,7 +405,7 @@ export default function WallsImportDialog({ wallsFile, filePath }: WallsImportDi
               (selectedShotCount === 0 && !(includeSplays && selectedSplayCount > 0))
             }
           >
-            {isImporting ? 'Importing...' : 'Import'}
+            {isImporting ? t('dialogs.wallsImport.importing') : t('dialogs.wallsImport.import')}
           </Button>
         </div>
       </div>

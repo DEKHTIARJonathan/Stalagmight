@@ -1342,6 +1342,183 @@
         "next": "Next"
       }
     },
+    "compassImport": {
+      "title": "Import Compass Survey",
+      "lengthUnit": {
+        "meters": "Lengths kept as-is (survey is in meters)",
+        "mixed": "Surveys declare mixed length units; each is converted to meters per its own declaration",
+        "feet": "Lengths converted from feet to meters"
+      },
+      "stats": {
+        "surveys": "Surveys",
+        "shots": "Shots",
+        "datum": "Datum",
+        "georeference": "Georeference",
+        "noGeoreference": "None"
+      },
+      "table": {
+        "survey": "Survey",
+        "shots": "Shots",
+        "team": "Team",
+        "date": "Date",
+        "declination": "Decl."
+      },
+      "declinationMode": "Declination mode: {{mode}}",
+      "backsightsPresent": "· backsights present",
+      "duplicateWarning": "This file has already been imported to this project. Importing again will create duplicate sections.",
+      "options": {
+        "applyCorrections": "Apply per-survey instrument corrections (CORRECTIONS / CORRECTIONS2 lines)",
+        "commentsOnStations": "Promote shot comments to the FROM station (Compass convention)",
+        "includeExcluded": "Include shots flagged for exclusion (as reference shots)"
+      },
+      "cancel": "Cancel",
+      "import": "Import",
+      "importing": "Importing..."
+    },
+    "wallsImport": {
+      "title": "Import Walls Survey",
+      "stats": {
+        "surveys": "Surveys",
+        "shots": "Shots",
+        "fixedStations": "Fixed stations",
+        "fixedStationsTooltip": "#Fix stations - each becomes a GPS zero datum on its connected component",
+        "projection": "Projection",
+        "projectionTooltip": "Projection reference from the .wpj .REF directive - the coordinate system, not a station anchor"
+      },
+      "noFixWarning": {
+        "before": "This project has a coordinate reference (.REF) but no",
+        "after": "stations in the resolved surveys, so nothing is GPS-anchored. Walls keeps fixed points in separate survey files - include those to georeference the cave."
+      },
+      "nothingToImport": {
+        "missing_one": "None of the {{count}} referenced .SRV survey file was found next to \"{{fileName}}\", so there is nothing to import. A .wpj references its survey files by name - put the .SRV files in the same folder as the .wpj, or import a single .srv file directly.",
+        "missing_other": "None of the {{count}} referenced .SRV survey files were found next to \"{{fileName}}\", so there is nothing to import. A .wpj references its survey files by name - put the .SRV files in the same folder as the .wpj, or import a single .srv file directly.",
+        "splaysOnly_one": "This file has no regular survey shots, but {{count}} anonymous wall / splay shot. Enable \"Include anonymous wall / splay shots\" below to import them.",
+        "splaysOnly_other": "This file has no regular survey shots, but {{count}} anonymous wall / splay shots. Enable \"Include anonymous wall / splay shots\" below to import them.",
+        "none": "This file contains no survey shots to import."
+      },
+      "missingFiles_one": "{{count}} referenced survey file not found on disk.",
+      "missingFiles_other": "{{count}} referenced survey files not found on disk.",
+      "skippedAttachments_one": "{{count}} non-survey attachment skipped.",
+      "skippedAttachments_other": "{{count}} non-survey attachments skipped.",
+      "surveysToImport": "Surveys to import",
+      "selectedCount": "{{selected}} of {{total}} selected",
+      "selectAllLabel": "Select all surveys",
+      "importSurveyLabel": "Import {{name}}",
+      "table": {
+        "survey": "Survey",
+        "shots": "Shots",
+        "segment": "Segment",
+        "date": "Date"
+      },
+      "duplicateWarning": "This file has already been imported to this project. Importing again will create duplicate sections.",
+      "options": {
+        "commentsOnStations": "Promote shot comments to the FROM station",
+        "includeSplays": "Include anonymous wall / splay shots (as reference shots)"
+      },
+      "cancel": "Cancel",
+      "import": "Import",
+      "importing": "Importing..."
+    },
+    "gpxSelection": {
+      "title": "Import GPX File",
+      "stats": {
+        "waypoints": "Waypoints",
+        "tracks": "Tracks",
+        "routes": "Routes"
+      },
+      "points": "({{count}} pts)",
+      "importWaypoints_one": "Import {{count}} waypoint",
+      "importWaypoints_other": "Import {{count}} waypoints",
+      "importTracks_one": "Import {{count}} track",
+      "importTracks_other": "Import {{count}} tracks",
+      "importRoutes_one": "Import {{count}} route",
+      "importRoutes_other": "Import {{count}} routes",
+      "depthLabel": "Elevation values represent depth",
+      "depthHint": "(positive = deeper)",
+      "waypointsSection": "Waypoints ({{count}})",
+      "tracksSection": "Tracks ({{count}})",
+      "routesSection": "Routes ({{count}})",
+      "table": {
+        "name": "Name",
+        "lat": "Lat",
+        "lon": "Lon",
+        "elev": "Elev",
+        "segments": "Segments",
+        "points": "Points"
+      },
+      "trackFallbackName": "Track {{index}}",
+      "routeFallbackName": "Route {{index}}",
+      "duplicateWarning": "This file has already been imported to this project. Importing again will create duplicate sections.",
+      "cancel": "Cancel",
+      "import": "Import",
+      "importing": "Importing...",
+      "continue": "Continue"
+    },
+    "dmpSelection": {
+      "title": "Import DMP File (Step 1)",
+      "fileLine": "File: {{fileName}} (v{{version}})",
+      "statsAria": "Selection statistics: {{shots}} shots, {{length}} total length, depth range {{depthRange}}",
+      "shots": "{{count}} shots",
+      "depth": "Depth: {{range}}",
+      "duplicateHashWarning": "File may have been imported before (same hash detected)",
+      "duplicateSectionsWarning": "{{duplicates}} of {{total}} sections already imported (auto-deselected)",
+      "defaultValues": "Default Values (apply to all sections)",
+      "surveyorLabel": "Surveyor",
+      "surveyorPlaceholder": "Enter surveyor name...",
+      "dateOverrideLabel": "Date Override",
+      "selectAll": "Select All",
+      "selectNone": "Select None",
+      "invert": "Invert",
+      "selectedCount": "{{selected}} of {{total}} sections selected",
+      "table": {
+        "name": "Name",
+        "date": "Date",
+        "direction": "Direction",
+        "shots": "Shots"
+      },
+      "selectSectionLabel": "Select section {{name}}",
+      "alreadyImported": "(already imported)",
+      "empty": "(empty)",
+      "cancel": "Cancel",
+      "checkingDuplicates": "Checking for duplicates...",
+      "continue": "Continue to Section Setup"
+    },
+    "orphanPlacement": {
+      "title": "Connect Orphaned Sections",
+      "progress": "Section {{current}} of {{total}}",
+      "skipped": "{{count}} skipped",
+      "confidence": {
+        "high": "High",
+        "medium": "Medium",
+        "low": "Low"
+      },
+      "overlapModes": {
+        "interpolate": "Interpolate (average)",
+        "import_data": "Use orphan data",
+        "existing_data": "Use target data",
+        "keep_both": "Keep both (mark as reference)"
+      },
+      "sectionNotFound": "Section not found",
+      "suggestedConnection": "Suggested Connection",
+      "station": "stn {{index}}",
+      "matchedShots_one": "{{count}} shot matched {{direction}}",
+      "matchedShots_other": "{{count}} shots matched {{direction}}",
+      "score": "{{percent}}% score",
+      "mergeAt": "Merge at",
+      "mergeOption": "stn {{importStation}} → {{targetName}} stn {{existingStation}}",
+      "overlap": "Overlap",
+      "prompt": "Does this connection look right?",
+      "accept": "Accept",
+      "skip": "Skip",
+      "hideAlternatives": "Hide alternatives",
+      "showAlternatives_one": "Show {{count}} alternative",
+      "showAlternatives_other": "Show {{count}} alternatives",
+      "alternativeTarget": "{{name}} stn {{index}}",
+      "alternativeSummary_one": "{{count}} shot {{direction}} · {{percent}}%",
+      "alternativeSummary_other": "{{count}} shots {{direction}} · {{percent}}%",
+      "acceptAll": "Accept All",
+      "skipAll": "Skip All"
+    },
     "zeroDatumSelection": {
       "title": "Select Zero Datum Section",
       "subtitle": "Choose which section will establish the GPS reference point for this project. All other sections will be positioned relative to this one.",
