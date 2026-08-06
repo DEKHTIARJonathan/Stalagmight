@@ -948,8 +948,11 @@ fn the_shrinker_minimizes_a_classified_failure() {
         shrunk.original,
         shrunk.moves.len()
     );
-    let (outcome, _) = run_trace(&trace, &shrunk.moves);
-    let verified: Probe = Ok(outcome);
+    // Through `probe`, not a bare `run_trace`: a minimized trace that PANICS
+    // unclassified must report "stopped reproducing", not abort the gate -
+    // `reproduces` can only speak if the panic is caught and carried as the
+    // probe's Err arm.
+    let verified = probe(&trace, &shrunk.moves);
     assert!(
         reproduces(&target, borrow(&verified)),
         "the minimized trace stopped reproducing {}",
