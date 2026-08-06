@@ -11,7 +11,7 @@
  * - Draining is atomic, so a path cannot be handled twice by a listener that
  *   also polls, nor lost by a listener that mounts a beat late.
  *
- * Three things make this safe to hand to `routeOpenedFile`, and each is a
+ * Four things make this safe to hand to `routeOpenedFile`, and each is a
  * separate mechanism because each fails differently:
  *
  * 1. READINESS. Paths are only drained once the app is ready (config loaded -
@@ -29,6 +29,13 @@
  *    `.stalx` over a clean project - is gated by `routeOpenedFile` itself, so
  *    this module doesn't need its own check: it just tags the source and
  *    delegates.
+ * 4. BOUNDED MEMORY. A drain does not fetch the backend queue at all while the
+ *    screen is busy (#445 review) - a repeated nudge (another second-instance
+ *    launch) while a dialog is up used to fetch and concat onto `deferred`
+ *    regardless, growing it without bound and draining the backend's own
+ *    `MAX_LAUNCH_PATHS` cap and dedupe out from under it one nudge at a time.
+ *    `pendingBackendCheck` remembers to look again once the screen clears, so
+ *    skipping the fetch holds the request rather than losing it.
  */
 import { useEffect, useRef } from 'react';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
@@ -51,12 +58,24 @@ const LAUNCH_ERROR_TITLE = 'Open Failed';
  */
 let deferred: string[] = [];
 
+/**
+ * A drain was skipped WITHOUT fetching because the screen was busy (#445
+ * review), so the backend queue may hold paths this module has never seen.
+ * `deferred` alone can't say that - it can be empty (everything fetched so
+ * far already routed) even while the backend holds more. The resume-on-idle
+ * subscriber checks this too, not just `deferred.length`, so a nudge that
+ * arrived mid-dialog is picked up once the screen clears instead of being
+ * silently stranded in the backend queue with no local trace of it at all.
+ */
+let pendingBackendCheck = false;
+
 /** Tail of the drain chain, so two nudges can never interleave two drains. */
 let chain: Promise<void> = Promise.resolve();
 
 /** Test seam: drop the state that outlives a hook instance. */
 export function resetLaunchFileQueueForTest(): void {
   deferred = [];
+  pendingBackendCheck = false;
   chain = Promise.resolve();
 }
 
@@ -94,8 +113,22 @@ async function routeLaunchedFile(path: string): Promise<void> {
 /**
  * One pass: take whatever the backend has, then route as many as the screen
  * allows - one per completed flow, holding the rest for the next pass.
+ *
+ * Busy is checked BEFORE fetching, not just before each route: a repeated
+ * nudge (another second-instance launch) while a dialog or placement flow is
+ * up used to fetch and concat onto `deferred` regardless, growing it without
+ * bound and draining the backend's own `MAX_LAUNCH_PATHS` cap and dedupe out
+ * from under it - so a flood of forwards while the screen stayed busy grew
+ * local memory unboundedly and could later replay duplicates (#445 review).
+ * Skipping the fetch instead just leaves the backend holding what it has;
+ * `pendingBackendCheck` remembers to come back for it.
  */
 async function runDrain(): Promise<void> {
+  if (screenBusy()) {
+    pendingBackendCheck = true;
+    return;
+  }
+  pendingBackendCheck = false;
   const fetched = await invokeIpc<string[]>('take_pending_launch_files', undefined, {
     purpose: 'collect files the OS asked us to open',
   });
@@ -166,13 +199,18 @@ export function useLaunchWithFile(ready: boolean): void {
 
     // Re-drain when the screen goes idle: a path held back because the previous
     // one owned the dialog slot is only routable once that flow ends, and
-    // nothing else will ask again.
+    // nothing else will ask again. Checks `pendingBackendCheck` too, not just
+    // `deferred.length` - a nudge that arrived while busy was never fetched at
+    // all (see `runDrain`), so `deferred` can be empty here while the backend
+    // still holds something this module has not looked at yet.
     let wasBusy = screenBusy();
     const unsubscribe = useUIStore.subscribe(() => {
       const busy = screenBusy();
       const cleared = wasBusy && !busy;
       wasBusy = busy;
-      if (cleared && deferred.length > 0 && readyRef.current) drainInBackground();
+      if (cleared && (deferred.length > 0 || pendingBackendCheck) && readyRef.current) {
+        drainInBackground();
+      }
     });
 
     return () => {

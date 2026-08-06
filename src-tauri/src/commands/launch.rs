@@ -50,6 +50,22 @@ pub const LAUNCH_FILE_EVENT: &str = "launch-file-queued";
 /// gets; claiming those would take handlers away from software that owns them.
 /// Those formats stay importable through the picker and drag-drop, which is
 /// where the user asked for them by name.
+///
+/// The `.tml`/`.tmlu` entry in `tauri.conf.json` deliberately has NO
+/// `exportedType`: that maps to `UTExportedTypeDeclarations`, which CLAIMS
+/// ownership of a Uniform Type Identifier, and Ariane already owns these -
+/// its installed `Info.plist` exports `com.arianesline.ariane.tml` /
+/// `.tmlu` as `LSHandlerRank: Owner`, `LSIsAppleDefaultForType: true`.
+/// Exporting a competing UTI of our own would not make Finder treat the two
+/// apps as agreeing about the same type, and referencing Ariane's identifier
+/// in OUR `exportedType` would be a straight ownership collision (two apps
+/// each claiming to be the source of truth for the identical UTI). Instead
+/// the entry sets `contentTypes` (`LSItemContentTypes`) to Ariane's own
+/// identifiers - the macOS construct for "I can open a type I do not own":
+/// it references an EXISTING UTI without exporting one, cooperating with
+/// Ariane's `Owner`/default-app declaration rather than contesting it. This
+/// was verified against the real, installed `Ariane.app` on the maintainer's
+/// machine, not guessed.
 pub const LAUNCHABLE_EXTENSIONS: &[&str] = &["stalx", "tml", "tmlu"];
 
 /// Most files we will accept from one launch or forward.
@@ -151,6 +167,18 @@ where
     I: IntoIterator,
     F: Fn(I::Item) -> Option<String>,
 {
+    collect_capped_with_seen(items, decode).0
+}
+
+/// [`collect_capped`]'s actual work, also returning the dedup set - the only
+/// way to observe from a test that it really does stay capped (see
+/// `dedup_set_does_not_grow_past_the_cap`) rather than retaining one string
+/// per surplus path regardless of `MAX_LAUNCH_PATHS` (#445 review).
+fn collect_capped_with_seen<I, F>(items: I, decode: F) -> (Vec<String>, HashSet<String>)
+where
+    I: IntoIterator,
+    F: Fn(I::Item) -> Option<String>,
+{
     let mut seen: HashSet<String> = HashSet::new();
     let mut paths: Vec<String> = Vec::new();
     let mut dropped = 0usize;
@@ -158,11 +186,20 @@ where
         let Some(path) = decode(item) else {
             continue;
         };
-        if !seen.insert(path.clone()) {
+        if paths.len() >= MAX_LAUNCH_PATHS {
+            // The cap is already full - check `seen` WITHOUT inserting into it.
+            // Inserting one string per surplus path here (as before) retained
+            // memory proportional to the flood regardless of the cap - exactly
+            // the case MAX_LAUNCH_PATHS exists to bound (#445 review). A
+            // genuine duplicate of something already collected still isn't
+            // counted as dropped launchable content, matching the accounting
+            // below.
+            if !seen.contains(&path) {
+                dropped += 1;
+            }
             continue;
         }
-        if paths.len() >= MAX_LAUNCH_PATHS {
-            dropped += 1;
+        if !seen.insert(path.clone()) {
             continue;
         }
         paths.push(path);
@@ -175,7 +212,7 @@ where
             "Too many files in one launch; ignoring the surplus"
         );
     }
-    paths
+    (paths, seen)
 }
 
 /// Collect the launchable paths out of a full argv, skipping `argv[0]`.
@@ -479,6 +516,25 @@ mod tests {
         let paths = launch_paths_from_args(args, None);
         assert_eq!(paths.len(), MAX_LAUNCH_PATHS);
         assert_eq!(paths[0], abs("cave0.stalx"));
+    }
+
+    /// #445 review: the cap used to be checked AFTER inserting into the dedup
+    /// set, so a flood of unique surplus paths retained one string per surplus
+    /// file - defeating the cap's memory purpose even though `paths` itself
+    /// stayed capped. `an_argv_flood_is_capped` above pins the OUTPUT cap; this
+    /// pins the internal set that could not otherwise be observed from a test.
+    #[test]
+    fn dedup_set_does_not_grow_past_the_cap() {
+        let paths: Vec<String> = (0..10_000)
+            .map(|i| abs(&format!("cave{i}.stalx")))
+            .collect();
+        let (collected, seen) = collect_capped_with_seen(paths, Some);
+        assert_eq!(collected.len(), MAX_LAUNCH_PATHS);
+        assert_eq!(
+            seen.len(),
+            MAX_LAUNCH_PATHS,
+            "the dedup set must not retain a surplus path once the cap is full"
+        );
     }
 
     #[test]

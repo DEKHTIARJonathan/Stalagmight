@@ -207,6 +207,32 @@ describe('drainLaunchFiles', () => {
   });
 
   /**
+   * #445 review: a repeated drain while busy used to fetch (and concat onto
+   * `deferred`) regardless, growing local memory without bound across a flood
+   * of forwards and draining the backend's own `MAX_LAUNCH_PATHS` cap out from
+   * under it. Busy is now checked BEFORE fetching, so the backend queue is
+   * left untouched - `invokeIpc` is never even called - until the screen
+   * actually clears.
+   */
+  it('does not fetch the backend queue while busy', async () => {
+    useUIStore.setState({ activeDialog: 'settings' });
+    queued = ['/dives/one.stalx'];
+
+    await drainLaunchFiles();
+    expect(invokeIpcMock).not.toHaveBeenCalled();
+    expect(routeOpenedFileMock).not.toHaveBeenCalled();
+
+    // Repeated drains while still busy: still no fetch.
+    await drainLaunchFiles();
+    await drainLaunchFiles();
+    expect(invokeIpcMock).not.toHaveBeenCalled();
+
+    useUIStore.setState({ activeDialog: null });
+    await drainLaunchFiles();
+    expect(routed()).toEqual(['/dives/one.stalx']);
+  });
+
+  /**
    * Two nudges landing together must not run two loops through one dialog slot.
    * Without the chain both drains fetch, both see an idle screen, and both
    * route - the second clobbering the first's dialog.
@@ -328,6 +354,36 @@ describe('useLaunchWithFile', () => {
     });
 
     await waitFor(() => expect(routed()).toEqual(['/dives/one.stalx', '/dives/two.tml']));
+  });
+
+  /**
+   * #445 review: a nudge arriving while the screen is busy is never fetched at
+   * all (`runDrain` checks `screenBusy()` before touching the backend), so
+   * `deferred` cannot grow while a dialog stays open through a flood of
+   * repeated second-instance launches. But the file that nudge represents must
+   * not be lost either - `deferred` stays EMPTY the whole time here; only
+   * `pendingBackendCheck` remembers there is more to look at once the screen
+   * clears, so this still surfaces it rather than stranding it in the backend
+   * queue with no local trace.
+   */
+  it('does not lose a nudge that arrived while busy - deferred stays empty until the screen clears', async () => {
+    useUIStore.setState({ activeDialog: 'settings' });
+    renderHook(() => useLaunchWithFile(true));
+    await waitFor(() => expect(emitToApp).not.toBeNull());
+
+    queued = ['/dives/busy-arrival.stalx'];
+    emitToApp?.();
+    await Promise.resolve();
+
+    // Busy: the backend queue was never even fetched.
+    expect(invokeIpcMock).not.toHaveBeenCalled();
+    expect(routeOpenedFileMock).not.toHaveBeenCalled();
+
+    act(() => {
+      useUIStore.setState({ activeDialog: null });
+    });
+
+    await waitFor(() => expect(routed()).toEqual(['/dives/busy-arrival.stalx']));
   });
 
   it('unsubscribes on unmount', async () => {

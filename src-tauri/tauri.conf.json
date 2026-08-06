@@ -63,7 +63,8 @@
         "name": "Ariane Survey",
         "description": "Ariane Survey",
         "role": "Viewer",
-        "rank": "Alternate"
+        "rank": "Alternate",
+        "contentTypes": ["com.arianesline.ariane.tml", "com.arianesline.ariane.tmlu"]
       }
     ]
   },

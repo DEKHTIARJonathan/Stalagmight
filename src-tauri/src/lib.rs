@@ -1589,7 +1589,13 @@ pub fn run() {
     // the running instance as an Apple event, handled in the `RunEvent::Opened`
     // arm below. Off under `e2e` so the WebDriver harness can still spawn its
     // own instance while a dev build is running.
-    #[cfg(all(not(feature = "e2e"), not(target_os = "macos")))]
+    //
+    // `desktop` (not a hand-rolled `not(android)`/`not(ios)` pair) so this cfg
+    // cannot drift from Cargo.toml's `[target.'cfg(...)'.dependencies]` gate on
+    // the crate itself - `not(macos)` alone used to be WIDER than that gate
+    // (true on Android/iOS too), so a mobile build would try to reference a
+    // dependency Cargo never pulled in and fail to resolve it (#445 review).
+    #[cfg(all(not(feature = "e2e"), desktop, not(target_os = "macos")))]
     let builder = builder.plugin(tauri_plugin_single_instance::init(|app, argv, cwd| {
         // `cwd` is the SENDER's working directory - a relative argument there
         // means nothing against ours, so it is what relative paths resolve
