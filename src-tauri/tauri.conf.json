@@ -43,7 +43,30 @@
     ],
     "macOS": {
       "signingIdentity": "-"
-    }
+    },
+    "fileAssociations": [
+      {
+        "ext": ["stalx"],
+        "name": "Stalagmight Project",
+        "description": "Stalagmight Project",
+        "mimeType": "application/vnd.stalagmight.project",
+        "role": "Editor",
+        "rank": "Owner",
+        "contentTypes": ["com.stalagmight.desktop.stalx"],
+        "exportedType": {
+          "identifier": "com.stalagmight.desktop.stalx",
+          "conformsTo": ["public.data", "public.database"]
+        }
+      },
+      {
+        "ext": ["tml", "tmlu"],
+        "name": "Ariane Survey",
+        "description": "Ariane Survey",
+        "role": "Viewer",
+        "rank": "Alternate",
+        "contentTypes": ["com.arianesline.ariane.tml", "com.arianesline.ariane.tmlu"]
+      }
+    ]
   },
   "plugins": {}
 }

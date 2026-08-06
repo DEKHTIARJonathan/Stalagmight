@@ -1580,7 +1580,44 @@ pub fn run() {
     let builder = tauri::Builder::default();
     #[cfg(feature = "e2e")]
     let builder = tauri::Builder::default().plugin(tauri_plugin_webdriver_automation::init());
+
+    // Single instance (#424), registered before every other plugin as the
+    // plugin requires. A second launch - Explorer's "Open with", a Linux
+    // `.desktop` handler - is killed and its argv forwarded here, so the file
+    // opens in the window the user already has. macOS is not built with the
+    // plugin at all (see Cargo.toml): LaunchServices routes the second open to
+    // the running instance as an Apple event, handled in the `RunEvent::Opened`
+    // arm below. Off under `e2e` so the WebDriver harness can still spawn its
+    // own instance while a dev build is running.
+    //
+    // `desktop` (not a hand-rolled `not(android)`/`not(ios)` pair) so this cfg
+    // cannot drift from Cargo.toml's `[target.'cfg(...)'.dependencies]` gate on
+    // the crate itself - `not(macos)` alone used to be WIDER than that gate
+    // (true on Android/iOS too), so a mobile build would try to reference a
+    // dependency Cargo never pulled in and fail to resolve it (#445 review).
+    #[cfg(all(not(feature = "e2e"), desktop, not(target_os = "macos")))]
+    let builder = builder.plugin(tauri_plugin_single_instance::init(|app, argv, cwd| {
+        // `cwd` is the SENDER's working directory - a relative argument there
+        // means nothing against ours, so it is what relative paths resolve
+        // against (and without it they are dropped, not guessed at).
+        let cwd = std::path::PathBuf::from(cwd);
+        let base = cwd.is_absolute().then_some(cwd.as_path());
+        let paths = commands::launch::launch_paths_from_args(
+            argv.into_iter().map(std::ffi::OsString::from),
+            base,
+        );
+        if paths.is_empty() {
+            return;
+        }
+        // Raise the window BEFORE queueing: whatever the frontend does with
+        // this - a confirm, an open - has to happen somewhere the user can see,
+        // or "Open with" on a backgrounded app reads as nothing happening.
+        commands::launch::focus_main_window(app);
+        commands::launch::queue_and_notify(app, paths);
+    }));
+
     let builder = builder
+        .manage(commands::launch::PendingLaunchFiles::default())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
@@ -1755,6 +1792,22 @@ pub fn run() {
             speleodb::metrics::install(collector.clone());
             telemetry::start_periodic_flush(collector.clone());
             collector.send_buffered();
+
+            // Launch-with-file (#424): a cold launch from Explorer or a Linux
+            // `.desktop` handler puts the path in argv. Queue it now; the
+            // frontend drains the queue once its stores are up. macOS passes
+            // nothing here (Finder sends an Apple event instead - see the
+            // `RunEvent::Opened` arm below), so this is simply empty there.
+            // `args_os`, not `args`: the latter PANICS on a non-Unicode
+            // argument, which would make a latin-1 filename crash the launch.
+            let launch_cwd = std::env::current_dir().ok();
+            commands::launch::queue_and_notify(
+                app.handle(),
+                commands::launch::launch_paths_from_args(
+                    std::env::args_os(),
+                    launch_cwd.as_deref(),
+                ),
+            );
 
             Ok(())
         })
@@ -1946,6 +1999,8 @@ pub fn run() {
             commands::validation::unresolve_warning,
             // Survey geometry
             commands::survey_geometry::get_survey_geometry_for_file,
+            // OS file association / launch-with-file (#424)
+            commands::launch::take_pending_launch_files,
             // Recovery (SPEC 14.4)
             commands::recovery::attempt_repair,
             commands::recovery::list_backups,
@@ -1980,6 +2035,26 @@ pub fn run() {
                     if let Some(state) = app_handle.try_state::<core::state::AppState>() {
                         state.speleodb_release_held_lock_bounded(EXIT_LOCK_RELEASE_TIMEOUT);
                     }
+                }
+
+                // macOS "open with" (#424). Finder never uses argv: both a cold
+                // launch and a double-click while the app runs arrive as an
+                // Apple event, which Tauri surfaces here. On a cold launch this
+                // fires long before the webview exists, so the paths are queued
+                // rather than pushed - the frontend drains them when ready.
+                // `focus_main_window` mirrors the single-instance path above (a
+                // no-op with no webview yet, so the cold-launch case above is
+                // unaffected): without it, a double-click on a backgrounded app
+                // queues the file and raises the confirm in a window the user
+                // cannot see - the exact failure raising it exists to prevent
+                // (#445 review).
+                #[cfg(target_os = "macos")]
+                if let tauri::RunEvent::Opened { urls } = &event {
+                    commands::launch::focus_main_window(app_handle);
+                    commands::launch::queue_and_notify(
+                        app_handle,
+                        commands::launch::launch_paths_from_urls(urls),
+                    );
                 }
             });
         })

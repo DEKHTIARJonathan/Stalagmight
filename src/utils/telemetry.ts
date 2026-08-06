@@ -127,6 +127,7 @@ export type SourceName =
   | 'keyboard'
   | 'map'
   | 'mouse'
+  | 'os-file-association'
   | 'recent-list'
   | 'recent-map'
   | 'sections-panel'

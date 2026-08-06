@@ -4,6 +4,7 @@ import { useSpeleoStore } from '../../store/speleoStore';
 import { formatFixed } from '../../i18n/format';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
+import { useScreenOccupant } from '../../hooks/useScreenOccupant';
 import type { SpeleoDumpCandidate } from '../../types/ipc/SpeleoDumpCandidate';
 
 const RADIO_GROUP = 'speleodb-dump-picker';
@@ -117,6 +118,11 @@ function formatModified(modified: string | null): string {
  */
 export default function SpeleoDumpPickerDialog() {
   const { t } = useTranslation();
+  // Independent top-layer overlay (mounted directly on `dumpPickerOpen`,
+  // outside `activeDialog`) - register occupancy so a cold-launch drain
+  // doesn't raise a second modal over it (#445 review). Always true here:
+  // App.tsx only mounts this component while the picker is open.
+  useScreenOccupant(true);
   const candidates = useSpeleoStore((s) => s.dumpPickerCandidates);
   const kind = useSpeleoStore((s) => s.dumpPickerKind);
   const busy = useSpeleoStore((s) => s.dumpPickerBusy);

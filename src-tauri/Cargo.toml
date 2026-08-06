@@ -85,6 +85,26 @@ time = "0.3"
 [target.'cfg(not(target_os = "android"))'.dependencies]
 trash = "5.2.6"
 
+# Second-instance forwarding for the OS file association (#424): "Open with" on
+# an already-running app must hand the path to the running window, not start a
+# rival process.
+#
+# HELD AT 2.3.x ON PURPOSE. From 2.4.0 the plugin requires `tauri = "2.10"`,
+# which drags `tauri-runtime-wry` to 2.10 and therefore `wry` to 0.54 - and that
+# silently drops the `[patch.crates-io]` wry fork below (pinned at 0.53.5 for the
+# Linux WebKit memory-pressure fix). 2.3.7 is the newest release that still
+# accepts `tauri = "2.9.3"`, i.e. the tauri we are on. Moving off 2.3.x means
+# rebasing the wry fork onto 0.54 first.
+#
+# NOT on macOS, deliberately: LaunchServices already routes a second open of a
+# bundled `.app` to the running instance as an Apple event, which Tauri delivers
+# as `RunEvent::Opened`. The plugin's macOS backend would layer a second,
+# redundant mechanism (a `/tmp` unix socket plus `process::exit(0)` in the
+# newcomer) on top of that - and it fires for *every* second launch, including
+# the ones the dev/e2e workflows depend on.
+[target.'cfg(all(not(target_os = "macos"), not(target_os = "android"), not(target_os = "ios")))'.dependencies]
+tauri-plugin-single-instance = "~2.3.7"
+
 # SpeleoDB auth token at rest (#183, full tiering in #188). Per-OS native secret
 # store. On Linux, Secret Service (gnome-keyring / KWallet) is persistent across
 # sessions - unlike the session-scoped `linux-native` keyutils. `crypto-rust`

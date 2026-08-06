@@ -1248,6 +1248,13 @@
       "stayInExport": "Stay in Export",
       "stayInAdjusted": "Stay in Closure-adjusted"
     },
+    "launchOpenConfirm": {
+      "title": "Open this file?",
+      "body": "{{fileName}} was opened from outside Stalagmight.",
+      "bodyDirect": "Open {{fileName}}?",
+      "closeNotice": "Opening it will close {{projectName}}.",
+      "confirm": "Open"
+    },
     "importAsNewProject": {
       "title": "Import as new project?",
       "body": "{{fileName}} will be converted into a new Stalagmight project. Your original file is never modified.",

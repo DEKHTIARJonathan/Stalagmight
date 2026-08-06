@@ -4,6 +4,7 @@ import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import { isTelemetryAvailable, setTelemetryEnabled } from '../../utils/telemetry';
 import { invokeIpc } from '../../utils/ipc';
+import { useScreenOccupant } from '../../hooks/useScreenOccupant';
 import type { Config } from '../../types/config';
 
 interface TelemetryOptInDialogProps {
@@ -22,6 +23,11 @@ export default function TelemetryOptInDialog({
     visible &&
     isTelemetryAvailable() &&
     !config.general.telemetry_opt_in_shown;
+
+  // Independent top-layer overlay (rendered outside `activeDialog`) - register
+  // occupancy so a cold-launch drain doesn't raise a second modal over it (#445
+  // review).
+  useScreenOccupant(shouldShow);
 
   const handleChoice = useCallback(
     async (enabled: boolean) => {

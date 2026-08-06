@@ -11,3 +11,4 @@ export { useAutoSave } from './useAutoSave';
 export type { AutoSaveStatus, AutoSaveState } from './useAutoSave';
 export { useLongPress } from './useLongPress';
 export { useUiScale } from './useUiScale';
+export { useScreenOccupant } from './useScreenOccupant';

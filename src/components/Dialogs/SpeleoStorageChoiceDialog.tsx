@@ -6,6 +6,7 @@ import { useSpeleoStore } from '../../store/speleoStore';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import { TOAST_KEYS } from '../../utils/toastKeys';
+import { useScreenOccupant } from '../../hooks/useScreenOccupant';
 
 /**
  * The tier each button is ASKING for, so "did they get what they clicked?" is one
@@ -50,6 +51,11 @@ const STORAGE_FOR: Record<'session_only' | 'plaintext', TokenStorage> = {
  */
 export default function SpeleoStorageChoiceDialog() {
   const { t } = useTranslation();
+  // Independent top-layer overlay (mounted directly on `storageChoiceOpen`,
+  // outside `activeDialog`) - register occupancy so a cold-launch drain
+  // doesn't raise a second modal over it (#445 review). Always true here:
+  // App.tsx only mounts this component while the prompt is open.
+  useScreenOccupant(true);
   const showToast = useUIStore((s) => s.showToast);
   const setTokenStorage = useSpeleoStore((s) => s.setTokenStorage);
   // Close this OVERLAY only - the shared `closeDialog` would close whatever this

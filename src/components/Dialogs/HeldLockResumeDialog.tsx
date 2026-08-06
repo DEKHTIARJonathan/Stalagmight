@@ -11,6 +11,7 @@ import { needsSpeleoHandBackPrompt } from '../../utils/quit';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import { TOAST_KEYS } from '../../utils/toastKeys';
+import { useScreenOccupant } from '../../hooks/useScreenOccupant';
 
 /**
  * Held-lock resume/release prompt (#201, B1). SpeleoDB has no server-side lock
@@ -48,6 +49,11 @@ import { TOAST_KEYS } from '../../utils/toastKeys';
  */
 export default function HeldLockResumeDialog() {
   const { t } = useTranslation();
+  // Independent top-layer overlay (mounted directly on `heldLockPromptOpen`,
+  // outside `activeDialog`) - register occupancy so a cold-launch drain
+  // doesn't raise a second modal over it (#445 review). Always true here:
+  // App.tsx only mounts this component while the prompt is open.
+  useScreenOccupant(true);
   const showToast = useUIStore((s) => s.showToast);
   const heldLocks = useSpeleoStore((s) => s.heldLocks);
   const releaseLock = useSpeleoStore((s) => s.releaseLock);

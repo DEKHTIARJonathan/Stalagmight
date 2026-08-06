@@ -680,6 +680,17 @@ interface UIStore {
   closeDialog: () => void;
   setDmpImportWizardPhase: (phase: DmpImportWizardPhase | null) => void;
 
+  // Screen-occupancy registry (#445 review): a count of independent top-layer
+  // overlays that render OUTSIDE `activeDialog` (TelemetryOptInDialog,
+  // HeldLockResumeDialog, SpeleoStorageChoiceDialog, SpeleoDumpPickerDialog) and
+  // are currently actually on screen. Register via `useScreenOccupant` from the
+  // overlay itself; check via `isScreenBusy()`. A counter, not a boolean, because
+  // more than one can be mounted at once (e.g. a login made from inside Settings
+  // can raise the held-lock prompt over it).
+  screenOccupants: number;
+  addScreenOccupant: () => void;
+  removeScreenOccupant: () => void;
+
   // Import flow context
   importContext: 'new-project' | 'existing-project' | null;
   setImportContext: (context: 'new-project' | 'existing-project' | null) => void;
@@ -884,6 +895,21 @@ export const PANEL_FIELDS = {
   detail: { open: 'detailPanelOpen', mode: 'detailPanelMode', width: 'detailPanelWidth' },
   'data-table': { open: 'dataTableOpen', mode: 'dataTableMode', width: 'dataTableHeight' },
 } as const satisfies Record<PanelId, { open: string; mode: string; width: string }>;
+
+/**
+ * Does a modal own the screen right now - the single `activeDialog` slot, a
+ * placement flow, or an independent top-layer overlay registered via
+ * `useScreenOccupant`? The one predicate for "is it safe to open something
+ * else without stacking a dialog over a surface the user is mid-answering" -
+ * `screenBusy()` in launchWithFile.ts today, and whatever else asks tomorrow.
+ * Callable as a plain function (`isScreenBusy(useUIStore.getState())`) or as
+ * a selector, same shape as `isMapReadOnly` above.
+ */
+export function isScreenBusy(
+  state: Pick<UIStore, 'activeDialog' | 'placementMode' | 'screenOccupants'>,
+): boolean {
+  return state.activeDialog !== null || state.placementMode !== null || state.screenOccupants > 0;
+}
 
 export const useUIStore = create<UIStore>((set) => ({
   // View state
@@ -1907,6 +1933,11 @@ export const useUIStore = create<UIStore>((set) => ({
     set({ activeDialog: null, dialogData: {}, dmpImportWizardPhase: null });
   },
   setDmpImportWizardPhase: (dmpImportWizardPhase) => set({ dmpImportWizardPhase }),
+
+  screenOccupants: 0,
+  addScreenOccupant: () => set((state) => ({ screenOccupants: state.screenOccupants + 1 })),
+  removeScreenOccupant: () =>
+    set((state) => ({ screenOccupants: Math.max(0, state.screenOccupants - 1) })),
 
   // Import flow context
   importContext: null,
