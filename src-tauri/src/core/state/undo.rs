@@ -602,9 +602,14 @@ impl AppState {
                             if id >= section.next_shot_id {
                                 section.next_shot_id = id + 1;
                             }
-                            section
-                                .shots
-                                .insert(pos, Shot::with_uuid(id, shot_data.clone(), uuid.clone()));
+                            section.shots.insert(
+                                pos,
+                                Shot::with_uuid(
+                                    id,
+                                    shot_data.clone(),
+                                    Some(Shot::uuid_or_mint(uuid.clone())),
+                                ),
+                            );
                             project.touch();
                             true
                         } else {

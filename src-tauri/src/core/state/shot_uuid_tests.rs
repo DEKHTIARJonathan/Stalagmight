@@ -1495,3 +1495,112 @@ fn a_legacy_undo_entry_with_no_recorded_identity_restores_a_usable_shot() {
         "and it must resolve back to the same station"
     );
 }
+
+/// The redo twin of the test above, for the one insert arm that bypasses the
+/// `section.rs` helpers: a legacy `CreatedShotSnapshot` (both anchors `None`,
+/// no recorded uuid) redone as a TRUE APPEND takes the raw
+/// `section.shots.insert` path in `core/state/undo.rs`, which used to hand
+/// `Shot::with_uuid` a bare `None` - recreating the identity-less shot every
+/// other insert path mints for.
+#[test]
+fn a_legacy_created_shot_redo_append_mints_an_identity() {
+    let state = state_with_project();
+    let section_id = state
+        .execute(Command::CreateSection {
+            name: Some("LegacyRedoAppend".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#4ecdc4".to_string(),
+            direction: None,
+            shots: vec![
+                ShotData {
+                    azimuth_in: 90.0,
+                    azimuth_out: 90.0,
+                    length: 10.0,
+                    depth_in: 5.0,
+                    depth_out: 5.0,
+                    ..Default::default()
+                },
+                ShotData {
+                    azimuth_in: 90.0,
+                    azimuth_out: 90.0,
+                    length: 11.0,
+                    depth_in: 5.0,
+                    depth_out: 5.0,
+                    ..Default::default()
+                },
+            ],
+        })
+        .section_id
+        .unwrap();
+
+    // A pre-#423 persisted redo entry: no anchors, no uuid anywhere, and a
+    // position at/past the tail so the replay is a true append.
+    let entry = crate::core::undo::UndoEntry {
+        command_bytes: None,
+        command: Command::CreateShot {
+            section_id,
+            shot: ShotData {
+                azimuth_in: 45.0,
+                azimuth_out: 45.0,
+                length: 7.0,
+                depth_in: 5.0,
+                depth_out: 5.0,
+                ..Default::default()
+            },
+            after_shot_id: None,
+            before_shot_id: None,
+        },
+        undo_data: crate::core::undo::UndoData::CreatedShotSnapshot {
+            section_id,
+            shot_id: 9_999,
+            shot_data: ShotData {
+                azimuth_in: 45.0,
+                azimuth_out: 45.0,
+                length: 7.0,
+                depth_in: 5.0,
+                depth_out: 5.0,
+                ..Default::default()
+            },
+            position: 2,
+            station_shift_from: 3,
+            after_shot_id: None,
+            before_shot_id: None,
+            uuid: None,
+        },
+        timestamp: None,
+    };
+    state.undo_stack.lock().unwrap().push_redo(entry);
+
+    let redone = state.redo();
+    assert!(redone.success, "{:?}", redone.error);
+
+    let project = state.get_project_state().unwrap();
+    let restored = project
+        .get_section(section_id)
+        .unwrap()
+        .shots
+        .iter()
+        .find(|s| s.id == 9_999)
+        .expect("the legacy redo appended its shot");
+    let uuid = restored
+        .uuid
+        .clone()
+        .expect("an appended shot must have an identity, or no anchor can name it");
+    assert!(!uuid.is_empty());
+
+    // The point of having one: an AfterShot anchor on it resolves.
+    let key = project
+        .key_for_ref(StationRef::new(section_id, 3))
+        .expect("the station after the appended shot must be nameable");
+    assert_eq!(
+        key.anchor,
+        crate::models::StationAnchor::AfterShot(uuid),
+        "the anchor must be keyed on the appended shot's own identity"
+    );
+    assert_eq!(
+        project.resolve_key(&key),
+        Some(StationRef::new(section_id, 3)),
+        "and it must resolve back to the same station"
+    );
+}
