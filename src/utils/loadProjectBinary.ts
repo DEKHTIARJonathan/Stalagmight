@@ -150,6 +150,17 @@ interface SectionHeaderBinary {
 }
 
 /**
+ * `ALREADY_OPEN` is the backend saying the requested path is the project it
+ * already has open (`LoadError::already_open`). Every caller reaching this
+ * rejection treats it as control flow rather than failure - `loadProject` short
+ * circuits on it and switches the view instead of loading - so it is the one
+ * code that must not reach the console as an error.
+ */
+function isAlreadyOpen(e: unknown): boolean {
+  return typeof e === 'object' && e !== null && (e as { code?: unknown }).code === 'ALREADY_OPEN';
+}
+
+/**
  * Invoke `load_project_full_binary` and decode the response into the same
  * shape `load_project_full` returned. The frontend can swap one call for
  * the other without touching consumers.
@@ -160,7 +171,13 @@ export async function loadProjectFullBinary(path: string): Promise<LoadProjectFu
   try {
     raw = await invoke<ArrayBuffer>('load_project_full_binary', { path });
   } catch (e) {
-    console.error('[loadProjectFullBinary] IPC failed:', e);
+    // Still rethrown either way - only the level changes, so the expected
+    // short-circuit stops masquerading as a load failure in the debug log.
+    if (isAlreadyOpen(e)) {
+      console.info('[loadProjectFullBinary] project already open - caller will switch views');
+    } else {
+      console.error('[loadProjectFullBinary] IPC failed:', e);
+    }
     throw e;
   }
   const tInvokeDone = performance.now();

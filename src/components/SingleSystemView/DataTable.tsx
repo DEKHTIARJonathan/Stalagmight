@@ -154,14 +154,17 @@ function SubHeaderPickerMenu({
     };
   }, [open]);
   return (
-    <div className="relative" onMouseDown={(e) => e.stopPropagation()}>
+    // `min-w-0` down the whole trigger chain: the pill lives in a grid track that
+    // is allowed to shrink, and every box between that track and the truncating
+    // label has to be allowed to shrink with it (#429).
+    <div className="relative min-w-0" onMouseDown={(e) => e.stopPropagation()}>
       <button
         ref={triggerRef}
         type="button"
         onClick={toggle}
         onMouseEnter={onHoverTrigger ? () => onHoverTrigger(true) : undefined}
         onMouseLeave={onHoverTrigger ? () => onHoverTrigger(false) : undefined}
-        className="flex cursor-pointer items-center"
+        className="flex min-w-0 max-w-full cursor-pointer items-center"
         title={title}
         data-testid={triggerTestId}
       >
@@ -206,17 +209,40 @@ function SubHeaderPickerMenu({
 }
 
 /**
- * Centers a sub-header pill across the full width WITHOUT a CSS `transform`. A
- * transformed ancestor would make the picker's `position:fixed` list resolve
- * against this box instead of the viewport, re-introducing the Dock-clip the fix
- * escapes (#162) - so we center with flex, not `-translate-x-1/2`. The band is
- * `pointer-events-none` so it can't eat clicks on the surrounding sub-header
- * controls; the inner wrapper re-enables them for the pill itself.
+ * The middle cell of {@link SubHeaderRow}: holds the centered pill, and shrinks
+ * to nothing before it will push on the controls either side of it.
+ *
+ * Centering here is a property of the ROW, not of this box - the two side columns
+ * are equal `1fr`, so the middle track lands on the header's true midpoint. The
+ * previous cut instead spanned the full width with `absolute inset-x-0` and a
+ * `pointer-events-none` band, which centered just as well but took no part in the
+ * layout: at 1024x640 the pill simply grew over the "Shots" button and its
+ * `pointer-events-auto` wrapper swallowed the clicks (#429).
+ *
+ * Still no CSS `transform` anywhere on this path. A transformed ancestor would
+ * make the picker's `position:fixed` list resolve against this box instead of the
+ * viewport, re-introducing the Dock-clip that fix escapes (#162).
  */
 function CenteredPillBand({ children }: { children: ReactNode }) {
+  return <div className="flex min-w-0 justify-center">{children}</div>;
+}
+
+/**
+ * The data table's sub-header row: `title | centered pill | controls`.
+ *
+ * A three-column grid rather than a flex row, because the pill has to center on
+ * the full width while the side groups keep their natural size. The outer columns
+ * are `1fr` with their default `auto` minimum, so they never shrink below their
+ * content; the middle one is `minmax(0, auto)`, so it is the one that gives way
+ * and the pill truncates instead of overlapping (#429).
+ */
+function SubHeaderRow({ children }: { children: ReactNode }) {
   return (
-    <div className="pointer-events-none absolute inset-x-0 z-40 flex justify-center">
-      <div className="pointer-events-auto">{children}</div>
+    <div
+      className="relative grid grid-cols-[1fr_minmax(0,auto)_1fr] items-center gap-3 px-3 py-1 border-b border-border shrink-0 text-xs"
+      data-testid="data-table-sub-header"
+    >
+      {children}
     </div>
   );
 }
@@ -237,19 +263,22 @@ function RawTablePill({ name, trailing }: { name: string; trailing?: ReactNode }
   const level = useUIStore((s) => s.syntacticLevel);
   if (!syntacticLevelAtLeast(level, 'full')) {
     return (
-      <span className="inline-flex items-center font-medium" data-testid="data-table-raw-name">
-        {name}
+      <span
+        className="inline-flex min-w-0 max-w-full items-center font-medium"
+        data-testid="data-table-raw-name"
+      >
+        <span className="truncate">{name}</span>
         {trailing}
       </span>
     );
   }
   return (
     <span
-      className="sh-pill inline-flex items-center gap-1 align-middle rounded-full px-2 py-0.5 text-xs leading-none text-text-primary tabular-nums"
+      className="sh-pill inline-flex min-w-0 max-w-full items-center gap-1 align-middle rounded-full px-2 py-0.5 text-xs leading-none text-text-primary tabular-nums"
       style={{ '--o': 'var(--cc-text-secondary)' } as CSSProperties}
       data-testid="data-table-raw-name"
     >
-      {name}
+      <span className="truncate">{name}</span>
       {trailing}
     </span>
   );
@@ -1560,8 +1589,10 @@ export default function DataTable({ sections }: DataTableProps) {
       {rawTableSelection !== null ? (
         /* Raw-data sub-header: title | raw table name | "as of last save" hint
            (the viewer shows last-saved state, so flag pending edits). */
-        <div className="relative flex items-center gap-3 px-3 py-1 border-b border-border shrink-0 text-xs">
-          <span className="font-medium">{t('dataTable.title')}</span>
+        <SubHeaderRow>
+          <span className="truncate font-medium" data-testid="data-table-title">
+            {t('dataTable.title')}
+          </span>
           <CenteredPillBand>
             <SubHeaderPickerMenu
               triggerTestId="data-table-raw-table-pill"
@@ -1592,23 +1623,32 @@ export default function DataTable({ sections }: DataTableProps) {
               }}
             />
           </CenteredPillBand>
-          {isDirty && (
-            <span className="ml-auto text-text-secondary" data-testid="data-table-raw-dirty-hint">
-              {t('dataTable.rawData.asOfLastSave')}
+          <div className="flex min-w-0 items-center justify-end">
+            {isDirty && (
+              <span className="truncate text-text-secondary" data-testid="data-table-raw-dirty-hint">
+                {t('dataTable.rawData.asOfLastSave')}
+              </span>
+            )}
+          </div>
+        </SubHeaderRow>
+      ) : (
+      /* Condensed header: title + selection indicator | section pill | view toggle + collapse */
+      <SubHeaderRow>
+        <div className="flex min-w-0 items-center gap-3">
+          <span className="truncate font-medium" data-testid="data-table-title">
+            {t('dataTable.title')}
+          </span>
+          {selectionIndicator && (
+            <span
+              className="truncate text-text-secondary tabular-nums"
+              data-testid="data-table-selection-indicator"
+            >
+              {selectionIndicator}
             </span>
           )}
         </div>
-      ) : (
-      /* Condensed header: title + selection indicator | section pill | view toggle + collapse */
-      <div className="relative flex items-center gap-3 px-3 py-1 border-b border-border shrink-0 text-xs">
-        <span className="font-medium">{t('dataTable.title')}</span>
-        {selectionIndicator && (
-          <span className="text-text-secondary tabular-nums" data-testid="data-table-selection-indicator">
-            {selectionIndicator}
-          </span>
-        )}
-        {selectedSection && (
-          <CenteredPillBand>
+        <CenteredPillBand>
+          {selectedSection && (
             <SubHeaderPickerMenu
               triggerTestId="data-table-section-pill"
               listTestId="data-table-section-menu-list"
@@ -1627,69 +1667,77 @@ export default function DataTable({ sections }: DataTableProps) {
               onHoverOption={handleSectionHover}
               onHoverTrigger={(over) => handleSectionHover(over ? String(selectedSection.id) : null)}
               renderTrigger={({ open }) => (
-                <EntityBlob entity="section">
-                  {selectedSection.name ?? t('sections.defaultName', { id: selectedSection.id })}
+                <EntityBlob entity="section" className="min-w-0 max-w-full">
+                  <span className="truncate">
+                    {selectedSection.name ?? t('sections.defaultName', { id: selectedSection.id })}
+                  </span>
                   <PillChevron open={open} testId="data-table-section-menu" />
                 </EntityBlob>
               )}
             />
-          </CenteredPillBand>
-        )}
-        <div
-          className="ml-auto flex items-center rounded border border-border overflow-hidden"
-          role="radiogroup"
-          aria-label={t('dataTable.title')}
-          data-testid="data-table-view-select"
-        >
-          {(['shots', 'stations'] as const).map((view) => (
-            <button
-              key={view}
-              role="radio"
-              aria-checked={tableView === view}
-              className={`px-2 py-0.5 ${
-                tableView === view ? 'bg-accent-20 text-text' : 'text-text-secondary hover:bg-accent-10'
-              }`}
-              onClick={() => handleViewChange(view)}
-              data-testid={`data-table-view-${view}`}
-            >
-              {view === 'shots' ? t('dataTable.viewShots') : t('dataTable.viewStations')}
-            </button>
-          ))}
-        </div>
-        <ShotColumnsMenu
-          hidden={menuHiddenCols}
-          onToggle={menuToggleCols}
-          buttonTestId="data-table-columns-menu"
-          dropdownTestId="data-table-columns-dropdown"
-          anchorScope={panelRef}
-          {...(tableView === 'shots'
-            ? {
-                extraRows: { warnings: true, sectionId: true, shotId: true },
-                angleModes: {
-                  azimuth: {
-                    mode: azimuthMode,
-                    onPick: (m) => changeAngleMode('azimuth', m),
-                  },
-                  inclination: {
-                    mode: inclinationMode,
-                    onPick: (m) => changeAngleMode('inclination', m),
-                  },
-                },
-                problems: draftHiddenProblems,
-              }
-            : { rowsOverride: stationMenuRows })}
-        />
-        {!dataTableFullScreen && (
-          <button
-            onClick={enterDataTableFullScreen}
-            className="text-text-secondary hover:text-text"
-            title={t('dataTable.fullScreen.enter')}
-            data-testid="data-table-expand-button"
+          )}
+        </CenteredPillBand>
+        {/* Controls column. `shrink-0` on the segmented control is load-bearing:
+            its `overflow-hidden` (the rounded clip) drops its automatic minimum
+            size to zero, which would let this column - and so the "Shots" label -
+            collapse instead of the pill. */}
+        <div className="flex items-center justify-end gap-3">
+          <div
+            className="flex shrink-0 items-center rounded border border-border overflow-hidden"
+            role="radiogroup"
+            aria-label={t('dataTable.title')}
+            data-testid="data-table-view-select"
           >
-            <ExpandIcon size={14} />
-          </button>
-        )}
-      </div>
+            {(['shots', 'stations'] as const).map((view) => (
+              <button
+                key={view}
+                role="radio"
+                aria-checked={tableView === view}
+                className={`whitespace-nowrap px-2 py-0.5 ${
+                  tableView === view ? 'bg-accent-20 text-text' : 'text-text-secondary hover:bg-accent-10'
+                }`}
+                onClick={() => handleViewChange(view)}
+                data-testid={`data-table-view-${view}`}
+              >
+                {view === 'shots' ? t('dataTable.viewShots') : t('dataTable.viewStations')}
+              </button>
+            ))}
+          </div>
+          <ShotColumnsMenu
+            hidden={menuHiddenCols}
+            onToggle={menuToggleCols}
+            buttonTestId="data-table-columns-menu"
+            dropdownTestId="data-table-columns-dropdown"
+            anchorScope={panelRef}
+            {...(tableView === 'shots'
+              ? {
+                  extraRows: { warnings: true, sectionId: true, shotId: true },
+                  angleModes: {
+                    azimuth: {
+                      mode: azimuthMode,
+                      onPick: (m) => changeAngleMode('azimuth', m),
+                    },
+                    inclination: {
+                      mode: inclinationMode,
+                      onPick: (m) => changeAngleMode('inclination', m),
+                    },
+                  },
+                  problems: draftHiddenProblems,
+                }
+              : { rowsOverride: stationMenuRows })}
+          />
+          {!dataTableFullScreen && (
+            <button
+              onClick={enterDataTableFullScreen}
+              className="text-text-secondary hover:text-text"
+              title={t('dataTable.fullScreen.enter')}
+              data-testid="data-table-expand-button"
+            >
+              <ExpandIcon size={14} />
+            </button>
+          )}
+        </div>
+      </SubHeaderRow>
       )}
 
       {/* Table. Both grids scroll internally and are sized to this body exactly,

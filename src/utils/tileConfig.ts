@@ -17,7 +17,23 @@ export interface TileConfig {
   tiles: string[];
   /** Attribution HTML string */
   attribution: string;
-  /** Tile size in pixels */
+  /**
+   * Tile size in pixels.
+   *
+   * No `@2x`/retina variant is selected here, and that is a property of the
+   * providers rather than an oversight (#429). Esri is the only one registered -
+   * on this side and in `src-tauri/src/tile_providers.rs` - and World_Imagery is
+   * a `singleFusedMapCache` service whose `tileInfo` declares 256x256: the
+   * endpoint silently IGNORES an `@2x` suffix rather than rejecting it, so
+   * `.../tile/3/2/4@2x` returns the very same 256px JPEG, byte for byte, as
+   * `.../tile/3/2/4`. There is no larger rendition to ask for, so keying a URL
+   * off `devicePixelRatio` would only double the cache keys for identical bytes.
+   * Re-verify before adding one:
+   *   curl -s '<service_info_url>' | jq '.tileInfo.rows, .tileInfo.cols'
+   * A provider that DOES serve retina tiles wants the `@2x` URL with this field
+   * left at the ground coverage (256), not doubled - `tileSize` is the area a
+   * tile covers, not the size of the image that arrives.
+   */
   tileSize: number;
   /** Minimum supported zoom level */
   minZoom: number;
