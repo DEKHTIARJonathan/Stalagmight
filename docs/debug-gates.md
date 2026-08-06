@@ -135,14 +135,39 @@ To enable, set the env var when invoking the dev server:
 VITE_DEBUG_MACOS_LOCKUP=true pnpm tauri dev
 ```
 
-### `MemoryProbe` panel
+### `MemoryProbe` panel and the map dev-stats overlays
 
-Enable **Display ▸ Dev stats** in the running app to show the in-window memory
-probe (it shares the `showDevStats` toggle with the map dev-stats overlay, and
-the toggle resets on project load). It polls backend RSS and frontend feature
-counts on a 2 s interval, and the **Snapshot** button copies a JSON dump to
-clipboard for pasting into bug reports. Also force-visible via the
-`debug.memory_probe` config flag (see [`configuration.md`](configuration.md)).
+The in-project hamburger menu has a **Debug** submenu with four independent
+toggles, each off by default and reset on project load / on returning to
+GlobalView (`showDevStats`/`showMemoryStats`/`showMapStats`/`showZoomStats`
+in `uiStore.ts`):
+
+- **Dev Stats** - frame rate, render-pipeline profile (draw calls, triangles,
+  layers, source feature counts), and the MapLibre built-in debug-layer
+  toggle buttons (tile boundaries, collision boxes, overdraw, labels, all
+  layers).
+- **Map Stats** - map/tile load state, canvas size and center coordinates,
+  WebGL info, satellite tile-fetch stats, network status, and tile-cache
+  stats.
+- **Zoom Stats** - current zoom level, the performance of the last completed
+  zoom gesture (fps, duration, levels crossed, worst frame time), and
+  wheel-chain diagnostics for the previous and live wheel gesture (event
+  count, scroll/travel px, wheel-vs-trackpad classification, zoom start ->
+  end - `WheelChainStats.tsx`). The wheel-chain part used to be a separate
+  overlay mounted unconditionally in dev builds (a leftover from a Windows
+  zoom-choppiness investigation); it's now folded into this toggle instead
+  of always being on screen.
+- **Memory Stats** - shows the in-window `MemoryProbe` panel, which polls
+  backend RSS and frontend feature counts on a 2 s interval; the
+  **Snapshot** button copies a JSON dump to clipboard for pasting into bug
+  reports. Also force-visible via the `debug.memory_probe` config flag (see
+  [`configuration.md`](configuration.md)), independent of the menu toggle.
+
+Dev/Map/Zoom Stats are three panels sharing one `useMapDevStats` hook
+(`src/components/Map/useMapDevStats.ts`) so the WebGL draw-call
+instrumentation and the cache/tile-fetch IPC polling are only installed once,
+regardless of how many of the three are open; see `MapDevStatsPanels.tsx` for
+how they're composed.
 
 The probe used to force-materialize every lazy `section.shots` on every tick
 during the SoA migration - that bug is fixed; if you add a new field that's

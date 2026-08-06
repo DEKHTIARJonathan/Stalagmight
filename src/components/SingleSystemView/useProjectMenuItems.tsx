@@ -27,6 +27,10 @@ import {
   InfoIcon,
   DatabaseIcon,
   FilePlusIcon,
+  BugIcon,
+  LayersIcon,
+  MapIcon,
+  TargetIcon,
 } from '../common/icons';
 
 interface UseProjectMenuItemsArgs {
@@ -45,6 +49,9 @@ export function useProjectMenuItems({ onSave, saveFailed = false }: UseProjectMe
   } = useProject();
   const openDialog = useUIStore((s) => s.openDialog);
   const showDevStats = useUIStore((s) => s.showDevStats);
+  const showMemoryStats = useUIStore((s) => s.showMemoryStats);
+  const showMapStats = useUIStore((s) => s.showMapStats);
+  const showZoomStats = useUIStore((s) => s.showZoomStats);
   const toggleDisplay = useUIStore((s) => s.toggleDisplay);
   // SpeleoDB submenu (T2d) - only for a remote project.
   const speleoLink = useSpeleoStore((s) => s.link);
@@ -182,12 +189,44 @@ export function useProjectMenuItems({ onSave, saveFailed = false }: UseProjectMe
       { id: 'project-menu-sep-4', label: '', separator: true },
       ...serviceMenuItems(t, { onSettings: () => openDialog('settings'), onDebug: () => openDialog('debug') }),
       {
-        id: 'display-toggle-showDevStats',
-        label: t('singleView.menu.devStats'),
-        icon: <DatabaseIcon size={sz} />,
+        id: 'debug-menu',
+        label: t('singleView.menu.debug'),
+        icon: <BugIcon size={sz} />,
         iconColor: MENU_ICON_COLORS.debug,
-        checked: showDevStats,
-        onClick: () => toggleDisplay('showDevStats'),
+        submenu: [
+          {
+            id: 'display-toggle-showDevStats',
+            label: t('singleView.menu.devStats'),
+            icon: <DatabaseIcon size={sz} />,
+            iconColor: MENU_ICON_COLORS.debug,
+            checked: showDevStats,
+            onClick: () => toggleDisplay('showDevStats'),
+          },
+          {
+            id: 'display-toggle-showMemoryStats',
+            label: t('singleView.menu.memoryStats'),
+            icon: <LayersIcon size={sz} />,
+            iconColor: MENU_ICON_COLORS.debug,
+            checked: showMemoryStats,
+            onClick: () => toggleDisplay('showMemoryStats'),
+          },
+          {
+            id: 'display-toggle-showMapStats',
+            label: t('singleView.menu.mapStats'),
+            icon: <MapIcon size={sz} />,
+            iconColor: MENU_ICON_COLORS.debug,
+            checked: showMapStats,
+            onClick: () => toggleDisplay('showMapStats'),
+          },
+          {
+            id: 'display-toggle-showZoomStats',
+            label: t('singleView.menu.zoomStats'),
+            icon: <TargetIcon size={sz} />,
+            iconColor: MENU_ICON_COLORS.debug,
+            checked: showZoomStats,
+            onClick: () => toggleDisplay('showZoomStats'),
+          },
+        ],
       },
       { id: 'project-menu-sep-5', label: '', separator: true },
       {
@@ -201,5 +240,5 @@ export function useProjectMenuItems({ onSave, saveFailed = false }: UseProjectMe
       },
       quitMenuItem(t),
     ];
-  }, [t, openDialog, showDevStats, toggleDisplay, onSave, saveFailed, handleNewProject, handleSaveProjectAs, handleCloseProject, speleoLink, speleoSession, speleoItems]);
+  }, [t, openDialog, showDevStats, showMemoryStats, showMapStats, showZoomStats, toggleDisplay, onSave, saveFailed, handleNewProject, handleSaveProjectAs, handleCloseProject, speleoLink, speleoSession, speleoItems]);
 }

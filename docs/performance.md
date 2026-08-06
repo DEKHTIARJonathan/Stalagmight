@@ -328,15 +328,19 @@ moves are rAF-batched, so only the latest event is processed per frame.
 
 ### How to profile the frontend
 
-**Dev stats overlay** (`src/components/Map/MapDevStats.tsx`, toggled from the
-app menu - `display-toggle-showDevStats` in `useProjectMenuItems.tsx`, not the
-Display menu) is the primary tool and the only view inside a custom layer, since
-MapLibre's own instrumentation cannot see in. It wraps `drawArrays` /
-`drawElements` on the context to count draw calls and triangles per frame, and
-shows FPS and frame time, last-zoom average FPS and worst frame, layer and source
-counts, WebGL renderer and limits, and tile-cache stats. Its per-source feature
-counts call `querySourceFeatures`, which is expensive, so they are collected on
-`idle` with a 500 ms throttle and never on `render`.
+**Dev/Map/Zoom Stats overlays** (`src/components/Map/useMapDevStats.ts` plus
+`DevStatsPanel.tsx` / `MapStatsPanel.tsx` / `ZoomStatsPanel.tsx`, toggled from
+the app menu's Debug submenu - `display-toggle-showDevStats` /
+`-showMapStats` / `-showZoomStats` in `useProjectMenuItems.tsx`, not the
+Display menu) are the primary tool and the only view inside a custom layer,
+since MapLibre's own instrumentation cannot see in. `useMapDevStats` wraps
+`drawArrays` / `drawElements` on the context to count draw calls and
+triangles per frame; Dev Stats shows FPS, frame time, and that render profile
+(draw calls, triangles, layer/source counts), Zoom Stats shows the current
+zoom level and last-zoom average FPS/worst frame, and Map Stats shows WebGL
+renderer and limits and tile-cache stats. Its per-source feature counts call
+`querySourceFeatures`, which is expensive, so they are collected on `idle`
+with a 500 ms throttle and never on `render`.
 
 **Dev-only build timings.** `controller.ts` logs `[customRender] build` with
 elapsed ms, shot-segment and station counts, and buffer megabytes;
@@ -357,5 +361,5 @@ so a production build stays diagnosable.
 
 **`src/hooks/useFpsMonitor.ts` is not running.** It implements a rolling
 `requestAnimationFrame` average with hysteresis thresholds, but it has no
-consumer; the live FPS readout is `MapDevStats`' own loop. Do not wire adaptive
-work to it without wiring the hook up first.
+consumer; the live FPS readout is `useMapDevStats`' own loop. Do not wire
+adaptive work to it without wiring the hook up first.

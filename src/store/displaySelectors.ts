@@ -29,6 +29,9 @@ export const DISPLAY_DEFAULTS = {
   showStationComments: false,
   showShotComments: false,
   showDevStats: false,
+  showMemoryStats: false,
+  showMapStats: false,
+  showZoomStats: false,
   gridSpacing: 10,
 } as const;
 

@@ -561,6 +561,9 @@ interface UIStore {
   showStationComments: boolean;
   showShotComments: boolean;
   showDevStats: boolean;
+  showMemoryStats: boolean;
+  showMapStats: boolean;
+  showZoomStats: boolean;
   gridSpacing: number;
   toggleDisplay: (key: DisplayToggleKey) => void;
   setGridSpacing: (spacing: number) => void;
@@ -775,7 +778,25 @@ export type DisplayToggleKey =
   | 'showDepthGradient'
   | 'showStationComments'
   | 'showShotComments'
-  | 'showDevStats';
+  | 'showDevStats'
+  | 'showMemoryStats'
+  | 'showMapStats'
+  | 'showZoomStats';
+
+/**
+ * The hamburger menu's Debug submenu toggles are session-only developer
+ * overlays (see the showDevStats/showMemoryStats/showMapStats/showZoomStats
+ * resets in applyDisplaySettings and setView('global') below) - they're
+ * never restored from the backend, so persisting them via saveDisplaySetting
+ * would only ever write orphan rows to the project's display-settings table.
+ * toggleDisplay skips the IPC write for any key in this set.
+ */
+const SESSION_ONLY_DISPLAY_TOGGLES: ReadonlySet<DisplayToggleKey> = new Set([
+  'showDevStats',
+  'showMemoryStats',
+  'showMapStats',
+  'showZoomStats',
+]);
 
 /**
  * Layout captured when entering section-focus mode (#50), restored on exit.
@@ -935,16 +956,25 @@ export const useUIStore = create<UIStore>((set) => ({
       // has been consumed, so clear it to prevent bleed into a later open.
       clearProjectActionSource();
     }
-    // Dev stats is a single-view developer overlay - the Display toggle that
-    // controls it lives only in SingleSystemView, but <MemoryProbe/> is mounted
-    // app-wide. Reset it on the way back to GlobalView so the probe (and its 2 s
-    // memory-IPC poll) can't strand there with no in-view way to hide it.
+    // The Debug submenu's four toggles (Dev/Memory/Map/Zoom Stats) are
+    // single-view developer overlays - the Display toggles that control them
+    // live only in SingleSystemView, but <MemoryProbe/> is mounted app-wide.
+    // Reset them on the way back to GlobalView so the overlays (and the
+    // memory probe's 2 s memory-IPC poll) can't strand there with no in-view
+    // way to hide them.
     //
     // The ruler readout/tint now lives in this global store, but is a single-view,
     // map-only interaction - clear it on any view switch so it can't be resurrected
     // when MapCanvas remounts on return (#26, Codex).
     set(view === 'global'
-      ? { view, showDevStats: DISPLAY_DEFAULTS.showDevStats, ...MEASURE_CLEARED }
+      ? {
+          view,
+          showDevStats: DISPLAY_DEFAULTS.showDevStats,
+          showMemoryStats: DISPLAY_DEFAULTS.showMemoryStats,
+          showMapStats: DISPLAY_DEFAULTS.showMapStats,
+          showZoomStats: DISPLAY_DEFAULTS.showZoomStats,
+          ...MEASURE_CLEARED,
+        }
       : { view, ...MEASURE_CLEARED });
   },
 
@@ -1465,6 +1495,9 @@ export const useUIStore = create<UIStore>((set) => ({
   showStationComments: DISPLAY_DEFAULTS.showStationComments,
   showShotComments: DISPLAY_DEFAULTS.showShotComments,
   showDevStats: DISPLAY_DEFAULTS.showDevStats,
+  showMemoryStats: DISPLAY_DEFAULTS.showMemoryStats,
+  showMapStats: DISPLAY_DEFAULTS.showMapStats,
+  showZoomStats: DISPLAY_DEFAULTS.showZoomStats,
   gridSpacing: DISPLAY_DEFAULTS.gridSpacing,
   // Distance-gradient overlay (#34) - runtime-only state, never persisted.
   showDistanceGradient: false,
@@ -1667,6 +1700,9 @@ export const useUIStore = create<UIStore>((set) => ({
     // calls toggleDisplay directly (bypassing setColorMode's gas-exit).
     if (key === 'showDepthGradient' && newValue) useUIStore.getState().exitGasPlan();
     set({ [key]: newValue, ...exclusive });
+    // Session-only overlays (the Debug submenu) are never restored on load, so
+    // persisting them would only write orphan rows - skip the IPC call entirely.
+    if (SESSION_ONLY_DISPLAY_TOGGLES.has(key)) return;
     // Persist only Survey display changes. In Plan/Export the toggles are scoped to
     // that mode (snapshotted on entry, restored on exit), so they must not write to
     // the saved survey config. Re-read appMode: the showDepthGradient branch above
@@ -1715,6 +1751,9 @@ export const useUIStore = create<UIStore>((set) => ({
   showStationComments: DISPLAY_DEFAULTS.showStationComments,
       showShotComments: DISPLAY_DEFAULTS.showShotComments,
       showDevStats: DISPLAY_DEFAULTS.showDevStats,
+      showMemoryStats: DISPLAY_DEFAULTS.showMemoryStats,
+      showMapStats: DISPLAY_DEFAULTS.showMapStats,
+      showZoomStats: DISPLAY_DEFAULTS.showZoomStats,
       gridSpacing: DISPLAY_DEFAULTS.gridSpacing,
       geometryMode: GEOMETRY_MODE_DEFAULT,
     });
@@ -1764,11 +1803,15 @@ export const useUIStore = create<UIStore>((set) => ({
       showSatellite: settings.showSatellite ?? state.showSatellite,
       showStationComments: settings.showStationComments ?? state.showStationComments,
       gridSpacing: settings.gridSpacing ?? state.gridSpacing,
-      // Dev stats is a session-only developer overlay (memory probe + map dev
-      // stats), not a persisted per-project preference and absent from the
-      // backend payload. Reset it on every load so enabling it for one project
-      // can't leak the overlay - and its 2 s memory-IPC poll - into the next.
+      // The Debug submenu's four toggles are session-only developer overlays
+      // (map dev/map/zoom stats + the memory probe), not a persisted
+      // per-project preference and absent from the backend payload. Reset
+      // them on every load so enabling one for one project can't leak the
+      // overlay - and the memory probe's 2 s memory-IPC poll - into the next.
       showDevStats: DISPLAY_DEFAULTS.showDevStats,
+      showMemoryStats: DISPLAY_DEFAULTS.showMemoryStats,
+      showMapStats: DISPLAY_DEFAULTS.showMapStats,
+      showZoomStats: DISPLAY_DEFAULTS.showZoomStats,
       // The three color overlays are restored as ONE single-select mode, never as
       // three independent booleans: only depth is persisted, so writing the saved
       // depth flag back on its own - while the runtime-only distance/issue overlay

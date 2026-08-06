@@ -1,27 +1,79 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
-import { useTranslation } from 'react-i18next';
+import type { TFunction } from 'i18next';
 import { invokeIpc } from '../../utils/ipc';
 import maplibregl from 'maplibre-gl';
 import { getTileFetchStats, type TileFetchStats } from '../../utils/tileProtocol';
 import { formatFixed, formatNumber } from '../../i18n/format';
 import { useNetworkStore } from '../../store/networkStore';
 
-interface CacheStats {
+export interface CacheStats {
   total_tiles: bigint;
   total_bytes: bigint;
   providers: Record<string, { tiles: bigint; bytes: bigint }>;
 }
 
-interface MapDevStatsProps {
-  map: maplibregl.Map;
-}
-
-interface RenderProfile {
+export interface RenderProfile {
   drawCalls: number;
   triangles: number;
   renderMs: number;
   layers: { total: number; visible: number; byType: Record<string, number> };
   sources: Array<{ name: string; features: number }>;
+}
+
+export interface WebGLInfo {
+  renderer: string;
+  vendor: string;
+  webglVersion: string;
+  // GPU limits (static, cached on mount)
+  maxTextureSize: number;
+  maxTextureUnits: number;
+  maxVertexAttribs: number;
+  maxViewportDims: [number, number];
+  // Color depth
+  colorBits: { r: number; g: number; b: number; a: number };
+  depthBits: number;
+  stencilBits: number;
+  // Anti-aliasing
+  samples: number;
+}
+
+export interface MapDevStatsData {
+  // Performance
+  fps: number;
+  frameTime: number;
+  isZooming: boolean;
+  renderProfile: RenderProfile | null;
+
+  // Zoom performance (last completed zoom gesture)
+  zoomFps: number | null;
+  lastZoomDuration: number | null;
+  lastZoomLevels: number | null;
+  worstFrameTime: number | null;
+
+  // Map / tile state
+  zoom: number;
+  center: maplibregl.LngLat;
+  canvasSize: { width: number; height: number };
+  mapLoaded: boolean;
+  tilesLoaded: boolean;
+
+  // WebGL, network, cache
+  webglInfo: WebGLInfo | null;
+  networkStatus: boolean;
+  tileFetchStats: TileFetchStats | null;
+  cacheStats: CacheStats | null;
+
+  // Debug toggles (MapLibre built-in)
+  showTileBoundaries: boolean;
+  showCollisionBoxes: boolean;
+  showOverdraw: boolean;
+  hideSymbols: boolean;
+  hideAllLayers: boolean;
+  toggleTileBoundaries: () => void;
+  toggleCollisionBoxes: () => void;
+  toggleOverdraw: () => void;
+  toggleSymbols: () => void;
+  toggleAllLayers: () => void;
 }
 
 /**
@@ -97,39 +149,22 @@ function createDrawCallCounter(canvas: HTMLCanvasElement) {
   };
 }
 
-interface WebGLInfo {
-  renderer: string;
-  vendor: string;
-  webglVersion: string;
-  // GPU limits (static, cached on mount)
-  maxTextureSize: number;
-  maxTextureUnits: number;
-  maxVertexAttribs: number;
-  maxViewportDims: [number, number];
-  // Color depth
-  colorBits: { r: number; g: number; b: number; a: number };
-  depthBits: number;
-  stencilBits: number;
-  // Anti-aliasing
-  samples: number;
-}
-
 /**
- * Developer stats overlay for the MapLibre map.
- * Shows FPS, WebGL info, cache statistics, network status, and map coordinates.
+ * Collects the data behind the Dev Stats / Map Stats / Zoom Stats debug
+ * panels (see DevStatsPanel/MapStatsPanel/ZoomStatsPanel). Installs a WebGL
+ * draw-call counter and polls cache/tile-fetch stats over IPC, so it should
+ * only be mounted while at least one of those panels is visible.
  *
  * References:
  * - https://maplibre.org/maplibre-gl-js/docs/API/classes/Map/
  * - https://deepwiki.com/maplibre/maplibre-gl-js/5-build-system-and-performance
  */
-export function MapDevStats({ map }: MapDevStatsProps) {
-  const { t } = useTranslation();
+export function useMapDevStats(map: maplibregl.Map): MapDevStatsData {
   // FPS tracking
   const [fps, setFps] = useState(0);
   const [frameTime, setFrameTime] = useState(0);
   const frameTimesRef = useRef<number[]>([]);
   const lastFrameTimeRef = useRef(performance.now());
-
 
   // Cache and network stats
   const [cacheStats, setCacheStats] = useState<CacheStats | null>(null);
@@ -373,7 +408,7 @@ export function MapDevStats({ map }: MapDevStatsProps) {
         const stats = await invokeIpc<CacheStats>('get_cache_stats', undefined, { purpose: 'fetch tile cache stats' });
         setCacheStats(stats);
       } catch (e) {
-        console.debug('[MapDevStats] Failed to fetch cache stats:', e);
+        console.debug('[useMapDevStats] Failed to fetch cache stats:', e);
       }
     };
 
@@ -486,7 +521,7 @@ export function MapDevStats({ map }: MapDevStatsProps) {
         const stats = await getTileFetchStats();
         setTileFetchStats(stats);
       } catch (e) {
-        console.debug('[MapDevStats] Failed to fetch tile stats:', e);
+        console.debug('[useMapDevStats] Failed to fetch tile stats:', e);
       }
     };
 
@@ -547,325 +582,71 @@ export function MapDevStats({ map }: MapDevStatsProps) {
     setHideAllLayers(newValue);
   }, [map, hideAllLayers]);
 
-  // Format bytes to human readable
-  const formatBytes = useCallback((bytes: number | bigint): string => {
-    const value = typeof bytes === 'bigint' ? Number(bytes) : bytes;
-    const sizes = [
-      t('map.devStats.units.bytes'),
-      t('map.devStats.units.kilobytes'),
-      t('map.devStats.units.megabytes'),
-      t('map.devStats.units.gigabytes'),
-    ];
-    if (value === 0) {
-      return t('map.devStats.bytesValue', {
-        value: formatNumber(0),
-        unit: sizes[0],
-      });
-    }
-    const k = 1024;
-    const i = Math.floor(Math.log(value) / Math.log(k));
+  return {
+    fps,
+    frameTime,
+    isZooming,
+    renderProfile,
+    zoomFps,
+    lastZoomDuration,
+    lastZoomLevels,
+    worstFrameTime,
+    zoom,
+    center,
+    canvasSize,
+    mapLoaded,
+    tilesLoaded,
+    webglInfo,
+    networkStatus,
+    tileFetchStats,
+    cacheStats,
+    showTileBoundaries,
+    showCollisionBoxes,
+    showOverdraw,
+    hideSymbols,
+    hideAllLayers,
+    toggleTileBoundaries,
+    toggleCollisionBoxes,
+    toggleOverdraw,
+    toggleSymbols,
+    toggleAllLayers,
+  };
+}
+
+/** Format a byte count as a human-readable string (B/KB/MB/GB), i18n-aware. */
+export function formatBytes(t: TFunction, bytes: number | bigint): string {
+  const value = typeof bytes === 'bigint' ? Number(bytes) : bytes;
+  const sizes = [
+    t('map.devStats.units.bytes'),
+    t('map.devStats.units.kilobytes'),
+    t('map.devStats.units.megabytes'),
+    t('map.devStats.units.gigabytes'),
+  ];
+  if (value === 0) {
     return t('map.devStats.bytesValue', {
-      value: formatFixed(value / Math.pow(k, i), undefined, 1),
-      unit: sizes[i] ?? sizes[sizes.length - 1],
+      value: formatNumber(0),
+      unit: sizes[0],
     });
-  }, [t]);
+  }
+  const k = 1024;
+  const i = Math.floor(Math.log(value) / Math.log(k));
+  return t('map.devStats.bytesValue', {
+    value: formatFixed(value / Math.pow(k, i), undefined, 1),
+    unit: sizes[i] ?? sizes[sizes.length - 1],
+  });
+}
 
-  // Get FPS color based on performance
-  const getFpsColor = useCallback((currentFps: number): string => {
-    if (currentFps >= 55) return 'text-success';
-    if (currentFps >= 30) return 'text-warning';
-    return 'text-error';
-  }, []);
+/** Color-code an FPS value: green >= 55, amber >= 30, red below. */
+export function getFpsColor(currentFps: number): string {
+  if (currentFps >= 55) return 'text-success';
+  if (currentFps >= 30) return 'text-warning';
+  return 'text-error';
+}
 
-  // Get network status indicator
-  const getNetworkIndicator = useCallback(() => {
-    if (networkStatus) {
-      return { color: 'text-success', text: t('map.devStats.network.online') };
-    }
-    return { color: 'text-error', text: t('map.devStats.network.offline') };
-  }, [networkStatus, t]);
-
-  const networkIndicator = getNetworkIndicator();
-
-  // Shorten GPU renderer name for display
-  const shortRenderer = webglInfo?.renderer
-    ? webglInfo.renderer.replace(/ANGLE \(|, .*?\)$/g, '').substring(0, 30)
-    : null;
-
-  return (
-    <div
-      className="absolute bottom-2 right-2 bg-panel-90 text-text-primary text-xs font-mono p-2 rounded border border-border select-none"
-      style={{ minWidth: '200px', maxWidth: '280px' }}
-      data-testid="map-dev-stats"
-    >
-      {/* Performance */}
-      <div className="mb-1">
-        <span className="text-text-secondary">{t('map.devStats.fps')}:</span>{' '}
-        <span className={getFpsColor(fps)}>{formatNumber(fps)}</span>
-        <span className="text-text-secondary opacity-80 ml-2">
-          {t('map.devStats.frameTime', { ms: formatNumber(frameTime) })}
-        </span>
-        {isZooming && <span className="text-warning ml-2">{t('map.devStats.zooming')}</span>}
-      </div>
-
-      {/* Zoom performance (show last zoom stats) */}
-      {(zoomFps !== null || lastZoomDuration !== null) && (
-        <div className="mb-1 text-[10px]">
-          <span className="text-text-secondary">{t('map.devStats.lastZoom')}:</span>{' '}
-          {zoomFps !== null && (
-            <>
-              <span className={getFpsColor(zoomFps)}>
-                {t('map.devStats.fpsValue', { value: formatNumber(zoomFps) })}
-              </span>
-              <span className="text-text-secondary opacity-80 mx-1">|</span>
-            </>
-          )}
-          {lastZoomDuration !== null && (
-            <span className="text-text-primary">
-              {t('map.devStats.durationMs', { ms: formatNumber(lastZoomDuration) })}
-            </span>
-          )}
-          {lastZoomLevels !== null && (
-            <span className="text-text-secondary opacity-80 ml-1">
-              {t('map.devStats.zoomLevels', {
-                count: lastZoomLevels,
-                countFormatted: formatNumber(lastZoomLevels),
-              })}
-            </span>
-          )}
-          {worstFrameTime !== null && worstFrameTime > 20 && (
-            <span className={`ml-1 ${worstFrameTime > 50 ? 'text-error' : 'text-warning'}`}>
-              {t('map.devStats.worstFrame', { ms: formatNumber(worstFrameTime) })}
-            </span>
-          )}
-        </div>
-      )}
-
-      {/* Render pipeline profile */}
-      {renderProfile && (
-        <div className="border-t border-border pt-1 mt-1">
-          <div className="text-text-secondary mb-0.5">Render:</div>
-          <div className="pl-2 text-[10px]">
-            <span className="text-text-secondary opacity-80">Draw calls:</span>{' '}
-            <span className={renderProfile.drawCalls > 100 ? 'text-warning' : 'text-text-primary'}>
-              {formatNumber(renderProfile.drawCalls)}
-            </span>
-            <span className="text-text-secondary opacity-80 ml-2">Render:</span>{' '}
-            <span className={renderProfile.renderMs > 16 ? 'text-error' : renderProfile.renderMs > 8 ? 'text-warning' : 'text-text-primary'}>
-              {formatFixed(renderProfile.renderMs, undefined, 1)}ms
-            </span>
-          </div>
-          <div className="pl-2 text-[10px]">
-            <span className="text-text-secondary opacity-80">Tris:</span>{' '}
-            <span className="text-text-primary">{formatNumber(renderProfile.triangles)}</span>
-          </div>
-          <div className="pl-2 text-[10px]">
-            <span className="text-text-secondary opacity-80">Layers:</span>{' '}
-            <span className="text-text-primary">
-              {formatNumber(renderProfile.layers.visible)}/{formatNumber(renderProfile.layers.total)}
-            </span>
-            <span className="text-text-secondary opacity-80 ml-2">
-              ({Object.entries(renderProfile.layers.byType)
-                .map(([type, count]) => `${count}${type[0]}`)
-                .join(' ')})
-            </span>
-          </div>
-          {renderProfile.sources.length > 0 && (
-            <div className="pl-2 text-[10px]">
-              <span className="text-text-secondary opacity-80">Features:</span>{' '}
-              <span className="text-text-primary">
-                {formatNumber(renderProfile.sources.reduce((sum, s) => sum + s.features, 0))}
-              </span>
-              <span className="text-text-secondary opacity-80 ml-1">
-                ({renderProfile.sources
-                  .filter((s) => s.features > 0)
-                  .map((s) => `${s.name}:${s.features}`)
-                  .join(' ')})
-              </span>
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Map state */}
-      <div className="mb-1">
-        <span className="text-text-secondary">{t('map.devStats.map')}:</span>{' '}
-        <span className={mapLoaded ? 'text-success' : 'text-warning'}>
-          {mapLoaded ? t('map.devStats.loaded') : t('map.devStats.loading')}
-        </span>
-        <span className="text-text-secondary opacity-80 mx-1">|</span>
-        <span className={tilesLoaded ? 'text-success' : 'text-warning'}>
-          {tilesLoaded ? t('map.devStats.tilesReady') : t('map.devStats.tilesLoading')}
-        </span>
-      </div>
-
-      {/* Zoom and center */}
-      <div className="mb-1">
-        <span className="text-text-secondary">{t('map.devStats.zoom')}:</span>{' '}
-        <span className="text-text-primary">{formatFixed(zoom, undefined, 2)}</span>
-        <span className="text-text-secondary opacity-80 ml-2 text-[10px]">
-          {t('map.devStats.canvasSize', {
-            width: formatNumber(canvasSize.width),
-            height: formatNumber(canvasSize.height),
-          })}
-        </span>
-      </div>
-      <div className="mb-1 text-text-secondary opacity-80 text-[10px]">
-        {formatFixed(center.lng, undefined, 6)}, {formatFixed(center.lat, undefined, 6)}
-      </div>
-
-      {/* WebGL Info */}
-      {webglInfo && (
-        <div className="border-t border-border pt-1 mt-1">
-          <div className="text-text-secondary mb-0.5">{t('map.devStats.webgl')}:</div>
-          <div
-            className="pl-2 text-[10px] text-text-secondary opacity-80 truncate"
-            title={webglInfo.renderer}
-          >
-            {webglInfo.webglVersion} - {shortRenderer}
-          </div>
-          <div className="pl-2 text-[10px]">
-            <span className="text-text-secondary opacity-80">{t('map.devStats.maxTexture')}:</span>{' '}
-            <span className="text-text-primary">{formatNumber(webglInfo.maxTextureSize)}</span>
-            <span className="text-text-secondary opacity-80 ml-2">{t('map.devStats.textureUnits')}:</span>{' '}
-            <span className="text-text-primary">{formatNumber(webglInfo.maxTextureUnits)}</span>
-          </div>
-          <div className="pl-2 text-[10px]">
-            <span className="text-text-secondary opacity-80">{t('map.devStats.colorBits')}:</span>{' '}
-            <span className="text-text-primary">
-              {webglInfo.colorBits.r}/{webglInfo.colorBits.g}/{webglInfo.colorBits.b}/{webglInfo.colorBits.a}
-            </span>
-            <span className="text-text-secondary opacity-80 ml-2">{t('map.devStats.depthBits')}:</span>{' '}
-            <span className="text-text-primary">{formatNumber(webglInfo.depthBits)}</span>
-            {webglInfo.samples > 0 && (
-              <>
-                <span className="text-text-secondary opacity-80 ml-2">{t('map.devStats.msaa')}:</span>{' '}
-                <span className="text-success">
-                  {t('map.devStats.msaaValue', {
-                    count: webglInfo.samples,
-                    countFormatted: formatNumber(webglInfo.samples),
-                  })}
-                </span>
-              </>
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* Debug toggles */}
-      <div className="border-t border-border pt-1 mt-1 pointer-events-auto">
-        <div className="text-text-secondary mb-0.5">{t('map.devStats.debug')}:</div>
-        <div className="pl-2 flex flex-wrap gap-1">
-          <button
-            onClick={toggleTileBoundaries}
-            data-testid="map-dev-toggle-tile-boundaries"
-            className={`px-1.5 py-0.5 rounded text-[10px] border ${
-              showTileBoundaries
-                ? 'bg-accent-30 border-accent text-accent'
-                : 'bg-panel border-border text-text-secondary hover:border-accent'
-            }`}
-            title={t('map.devStats.titles.tiles')}
-          >
-            {t('map.devStats.tiles')}
-          </button>
-          <button
-            onClick={toggleCollisionBoxes}
-            data-testid="map-dev-toggle-collision-boxes"
-            className={`px-1.5 py-0.5 rounded text-[10px] border ${
-              showCollisionBoxes
-                ? 'bg-accent-30 border-accent text-accent'
-                : 'bg-panel border-border text-text-secondary hover:border-accent'
-            }`}
-            title={t('map.devStats.titles.collision')}
-          >
-            {t('map.devStats.collision')}
-          </button>
-          <button
-            onClick={toggleOverdraw}
-            data-testid="map-dev-toggle-overdraw"
-            className={`px-1.5 py-0.5 rounded text-[10px] border ${
-              showOverdraw
-                ? 'bg-accent-30 border-accent text-accent'
-                : 'bg-panel border-border text-text-secondary hover:border-accent'
-            }`}
-            title={t('map.devStats.titles.overdraw')}
-          >
-            {t('map.devStats.overdraw')}
-          </button>
-          <button
-            onClick={toggleSymbols}
-            data-testid="map-dev-toggle-symbols"
-            className={`px-1.5 py-0.5 rounded text-[10px] border ${
-              hideSymbols
-                ? 'bg-error-20 border-error text-error'
-                : 'bg-panel border-border text-text-secondary hover:border-accent'
-            }`}
-            title={t('map.devStats.titles.labels')}
-          >
-            {hideSymbols ? t('map.devStats.labelsOff') : t('map.devStats.labels')}
-          </button>
-          <button
-            onClick={toggleAllLayers}
-            data-testid="map-dev-toggle-all-layers"
-            className={`px-1.5 py-0.5 rounded text-[10px] border ${
-              hideAllLayers
-                ? 'bg-error-20 border-error text-error'
-                : 'bg-panel border-border text-text-secondary hover:border-accent'
-            }`}
-            title={t('map.devStats.titles.allLayers')}
-          >
-            {hideAllLayers ? t('map.devStats.allLayersOff') : t('map.devStats.allLayers')}
-          </button>
-        </div>
-      </div>
-
-      {/* Tile fetch stats */}
-      {tileFetchStats && (
-        <div className="border-t border-border pt-1 mt-1">
-          <div className="text-text-secondary mb-0.5">{t('map.devStats.satelliteTiles')}:</div>
-          <div className="pl-2">
-            <span className="text-text-secondary opacity-80">{t('map.devStats.inFlight')}:</span>{' '}
-            <span className={tileFetchStats.inFlight > 0 ? 'text-warning' : 'text-success'}>
-              {formatNumber(tileFetchStats.inFlight)}
-            </span>
-            <span className="text-text-secondary opacity-80 ml-2">{t('map.devStats.latency')}:</span>{' '}
-            <span className={tileFetchStats.avgLatencyMs > 500 ? 'text-warning' : 'text-text-primary'}>
-              {t('map.devStats.durationMs', { ms: formatNumber(tileFetchStats.avgLatencyMs) })}
-            </span>
-          </div>
-          <div className="pl-2">
-            <span className="text-text-secondary opacity-80">{t('map.devStats.fetched')}:</span>{' '}
-            <span className="text-text-primary">{formatNumber(tileFetchStats.totalFetched)}</span>
-            {tileFetchStats.totalErrors > 0 && (
-              <span className="text-error ml-1">
-                {t('map.devStats.errors', {
-                  count: tileFetchStats.totalErrors,
-                  countFormatted: formatNumber(tileFetchStats.totalErrors),
-                })}
-              </span>
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* Network status */}
-      <div className="border-t border-border pt-1 mt-1">
-        <span className="text-text-secondary">{t('map.devStats.network.label')}:</span>{' '}
-        <span className={networkIndicator.color}>{networkIndicator.text}</span>
-      </div>
-
-      {/* Cache stats */}
-      {cacheStats && (
-        <div className="border-t border-border pt-1 mt-1">
-          <div className="text-text-secondary mb-0.5">{t('map.devStats.cache')}:</div>
-          <div className="pl-2">
-            <span className="text-text-secondary opacity-80">{t('map.devStats.tiles')}:</span>{' '}
-            <span className="text-text-primary">{formatNumber(Number(cacheStats.total_tiles))}</span>
-            <span className="text-text-secondary opacity-80 ml-2">{t('map.devStats.size')}:</span>{' '}
-            <span className="text-text-primary">{formatBytes(cacheStats.total_bytes)}</span>
-          </div>
-        </div>
-      )}
-    </div>
-  );
+/** Network status indicator (color + label), i18n-aware. */
+export function getNetworkIndicator(t: TFunction, online: boolean): { color: string; text: string } {
+  if (online) {
+    return { color: 'text-success', text: t('map.devStats.network.online') };
+  }
+  return { color: 'text-error', text: t('map.devStats.network.offline') };
 }

@@ -2562,7 +2562,11 @@
       "closeProject": "Close Project",
       "projectSettings": "Project Settings",
       "projectDetails": "Project Details",
-      "devStats": "Dev Stats"
+      "debug": "Debug",
+      "devStats": "Dev Stats",
+      "memoryStats": "Memory Stats",
+      "mapStats": "Map Stats",
+      "zoomStats": "Zoom Stats"
     },
     "panels": {
       "sectionsName": "Sections",

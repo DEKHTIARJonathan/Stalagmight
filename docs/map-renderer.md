@@ -204,10 +204,12 @@ offset, so a drag is never left without a preview.
 
 ## Debug and dev hooks
 
-Turn on **Display > Dev stats** for `MapDevStats`, which wraps `drawArrays` /
-`drawElements` on the context to count draw calls and triangles per frame - the
-only view of custom-layer cost, since MapLibre's own instrumentation cannot see
-inside one. Both controllers register a runtime re-sync on `window`:
+Turn on the hamburger menu's **Debug > Dev Stats** for `DevStatsPanel`
+(backed by `useMapDevStats`, `src/components/Map/useMapDevStats.ts`), which
+wraps `drawArrays` / `drawElements` on the context to count draw calls and
+triangles per frame - the only view of custom-layer cost, since MapLibre's
+own instrumentation cannot see inside one. Both controllers register a
+runtime re-sync on `window`:
 `__stalagmightSyncCustomRender` and `__stalagmightSyncCustomLabels` (names in
 `gate.ts` / `labelsGate.ts`). Both rebuild from **current store geometry** via
 `SurveyLayer.resyncCustomRenderFromStore`, not from the controller's cached
