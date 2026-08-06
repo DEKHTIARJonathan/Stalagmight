@@ -32,9 +32,14 @@ type ResidualGap = ((SectionId, u32), (SectionId, u32), u64);
 ///   an over-anchored component makes the gap healable without moving a single
 ///   station, so a fingerprint blind to structure would keep skipping the heal
 ///   that has just become possible;
-/// * `residual` is the beyond-invariant merge set itself. Every geometry edit
-///   that changes what the solve would produce for these merges changes one of
-///   these gaps, so geometry needs no hook of its own.
+/// * `residual` is the beyond-invariant merge set itself, compared by identity:
+///   a pair that appears, a pair that goes, or a gap that differs by one ULP all
+///   miss. That is what stands in for a geometry hook - not the stronger claim
+///   that every geometry edit changes one of these gaps, which is false. What it
+///   does buy is exactly the property the invariant is stated in: drift cannot
+///   CROSS [`Project::MERGE_ALIGNMENT_INVARIANT_M`] without entering this set.
+///   See the argument on [`Project::realign_merges`] for what that leaves and
+///   why it is bounded.
 ///
 /// The structure hash is `SipHash` via `DefaultHasher` - stable within a process,
 /// which is all that is required of a field that is never persisted and never
@@ -581,15 +586,40 @@ impl Project {
     /// state is a solver fixpoint and is recorded as a [`RealignFixpoint`]; while
     /// the live state still fingerprints identically, the re-solve is skipped.
     ///
-    /// The invariant is not weakened by that, because the skip is not a decision
-    /// about the gap - it is a decision about the SOLVER. It fires only for a
-    /// residual this same code path has already run the full solve on and watched
-    /// it fail to move, and only while both halves of the fingerprint still
-    /// match: every geometry edit that could change the outcome changes a gap,
-    /// and every structural edit that could change it (merge, closure, datum or
-    /// section added, removed or converted) changes the structure hash. Anything
-    /// the solve could have healed therefore misses the fingerprint and gets the
-    /// solve. What the skip removes is strictly the repetition of a proven no-op.
+    /// The invariant is not weakened by that, but the reason is narrower than
+    /// the one this comment used to give ("every geometry edit that could change
+    /// the outcome changes a gap"), which is simply false - the test below that
+    /// drifts a bystander by 3 mm is a geometry edit the solve WOULD act on and
+    /// no gap records. Two properties carry the guarantee instead:
+    ///
+    /// * any drift that CROSSES the invariant enters the residual set, and that
+    ///   set is compared by identity - a pair appearing, a pair going, or one
+    ///   gap changing by a single ULP all miss the fingerprint and get the full
+    ///   solve. The state the heal gate and `debug_assert_merge_alignment` are
+    ///   written in terms of - "a merge is at least
+    ///   [`Self::MERGE_ALIGNMENT_INVARIANT_M`] out" - therefore cannot be
+    ///   reached while the skip is armed;
+    /// * any structural edit that could turn an irreducible residual into a
+    ///   reducible one without moving anything (a merge, closure, datum or
+    ///   section added, removed or converted) changes the structure hash and
+    ///   misses too.
+    ///
+    /// What the skip does leave alone is a SUB-invariant offset change inside a
+    /// component that already holds a residual: the solve would pull it back and
+    /// the skip does not. That is bounded by the first bullet - it is drift the
+    /// heal gate itself declines to act on until it crosses, at which point the
+    /// solve runs - and it is the optimization, not a leak: without it, one
+    /// irreducible gap anywhere in the project makes every keystroke-scale edit
+    /// pay a whole-project re-solve again.
+    ///
+    /// A whole-rigid-group translation is NOT in that category, despite looking
+    /// like it should be (it leaves every gap and the structure bit-identical).
+    /// The cascade derives each non-authoritative section from an authoritative
+    /// one's STORED offset and never re-derives an authoritative section from
+    /// anything, so it is translation-invariant: after a group move the full
+    /// solve provably changes nothing, and a skip that hides nothing hides
+    /// nothing (`a_whole_rigid_group_translation_is_a_solver_no_op` below runs
+    /// the move through `adjust_rigid_group_offsets` and compares).
     pub fn realign_merges(&mut self) -> usize {
         let residual = self.residual_merge_gaps();
         if residual.is_empty() {

@@ -135,6 +135,15 @@ impl UndoStack {
     /// The ONE rule both stacks are filtered by, in the order
     /// `AppState::resolve_undo_shot` resolves in - which is what makes this
     /// predicate agree with the failure it exists to prevent.
+    ///
+    /// The legacy (uuid-less) arm answers a strictly weaker question, and it
+    /// cannot do better: `Shot::id` is in-session only (the loader renumbers),
+    /// so a stale recorded id can COLLIDE with a live shot that is not the one
+    /// the entry was written against. Such an entry passes this filter and its
+    /// undo edits the wrong shot. That is inherent to an entry that recorded no
+    /// identity - there is nothing left to distinguish the two - and it is why
+    /// the uuid arm exists; this filter only promises to drop the entries that
+    /// would WEDGE the history, not to catch every legacy misfire.
     fn shot_target_resolves(target: ShotTarget<'_>, project: &Project) -> bool {
         let (section_id, uuid, recorded_id) = target;
         match uuid {
@@ -146,14 +155,54 @@ impl UndoStack {
         }
     }
 
+    /// How many dropped-entry descriptions the warning both scans emit carries.
+    ///
+    /// The `count` field beside them is the total, so a sample loses nothing
+    /// that matters - and the field it feeds is one unbounded string built from
+    /// a file this app did not write. A `.stalx` holding 100k unresolvable
+    /// entries produced a single multi-megabyte log record.
+    const DROPPED_SAMPLE: usize = 10;
+
+    /// Longest uuid [`Self::describe_dropped`] will print. A uuid is 36 chars;
+    /// anything past this is not one, and there is no reason to log it whole.
+    const DROPPED_UUID_CHARS: usize = 64;
+
     /// How a dropped entry is named in the warning both scans emit.
+    ///
+    /// The uuid is file-controlled - a persisted entry can carry any string at
+    /// all, from any writer - and this goes verbatim into a log record, so it
+    /// gets the same guard the import receipts use: control characters (a
+    /// newline forges a log line of its own) and bidi overrides dropped, then
+    /// clamped on a char boundary.
     fn describe_dropped(entry: &UndoEntry, target: ShotTarget<'_>) -> String {
         let (section_id, uuid, recorded_id) = target;
+        let shot = uuid.map_or_else(
+            || recorded_id.to_string(),
+            |u| crate::core::command::sanitize_display_text(u, Self::DROPPED_UUID_CHARS),
+        );
         format!(
-            "{} (section {section_id}, shot {})",
+            "{} (section {section_id}, shot {shot})",
             entry.command.description(),
-            uuid.map_or_else(|| recorded_id.to_string(), str::to_string)
         )
+    }
+
+    /// The `entries` field both scans log: the first [`Self::DROPPED_SAMPLE`]
+    /// descriptions, with the elided remainder named rather than silently cut.
+    fn dropped_sample(dropped: &[String]) -> String {
+        let mut sample = dropped
+            .iter()
+            .take(Self::DROPPED_SAMPLE)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join("; ");
+        if let Some(elided) = dropped
+            .len()
+            .checked_sub(Self::DROPPED_SAMPLE)
+            .filter(|n| *n > 0)
+        {
+            sample.push_str(&format!("; ... and {elided} more"));
+        }
+        sample
     }
 
     /// The undo-stack half.
@@ -194,7 +243,7 @@ impl UndoStack {
         }
         tracing::warn!(
             count = dropped.len(),
-            entries = %dropped.join("; "),
+            entries = %Self::dropped_sample(&dropped),
             purpose = "load persisted undo history",
             "Dropped persisted undo entries whose shot no longer exists; each would have failed \
              and been pushed back, blocking every older entry"
@@ -243,7 +292,7 @@ impl UndoStack {
         }
         tracing::warn!(
             count = dropped.len(),
-            entries = %dropped.join("; "),
+            entries = %Self::dropped_sample(&dropped),
             purpose = "load persisted redo history",
             "Dropped persisted redo entries whose shot no longer exists; each would have failed \
              and been pushed back, blocking every redo beneath it"

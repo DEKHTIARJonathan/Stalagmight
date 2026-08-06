@@ -434,9 +434,12 @@ export async function fetchMismatch(
 
 /**
  * Accept the actual state as the model's expectation at `index`.
- * Only ever called for a mismatch that is ENTIRELY a classified known bug and
- * only under `STALAGMIGHT_FUZZ_ALLOW_KNOWN_BUGS=1`, so one open bug does not
- * cascade into every later comparison.
+ * Only ever called for a mismatch every one of whose differences was
+ * ATTRIBUTED to a documented undo-less change across an epoch boundary - a
+ * save-time heal or a reload re-solve - so the new baseline is recorded once
+ * instead of failing the same explained difference at every later comparison.
+ * There is no known-bug branch left in either fuzz scenario:
+ * `STALAGMIGHT_FUZZ_ALLOW_KNOWN_BUGS` is inert and tolerates nothing.
  */
 export async function resyncModel(
   ctx: ScenarioContext,

@@ -240,9 +240,12 @@ impl AppState {
             );
         }
 
-        // Update next_shot_id if needed to avoid collisions
+        // Update next_shot_id if needed to avoid collisions. SATURATING: the id
+        // arrives verbatim from a persisted entry, so ShotId::MAX must park the
+        // counter rather than panic a debug build or wrap a release one into
+        // colliding ids (#413 finding 24's class, same as the redo append arm).
         if original_shot_id >= section.next_shot_id {
-            section.next_shot_id = original_shot_id + 1;
+            section.next_shot_id = original_shot_id.saturating_add(1);
         }
 
         if position <= section.shots.len() {

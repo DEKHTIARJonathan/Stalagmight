@@ -1152,6 +1152,18 @@ impl Database {
                 expected = SCHEMA_VERSION,
                 "Database schema version is newer than this app"
             );
+            // The file is opened anyway (the project tables are read with the
+            // columns this build knows), but its undo history is not. Every
+            // migration arm below exists because some persisted payload became
+            // ambiguous or unsafe to replay, and a version this build has never
+            // heard of runs NONE of them - so a file merely CLAIMING to be from
+            // the future keeps exactly the pre-v17 payloads the v17 arm exists
+            // to drop, which is all it takes to turn `PRAGMA user_version = 99`
+            // into a replay that wipes a section's name, surveyor and date.
+            // Dropping the history is the fail-safe: it costs a best-effort,
+            // capped, local-only stack, and the project data itself is left
+            // exactly as the file holds it.
+            self.drop_legacy_undo_history()?;
             return Ok(());
         }
 

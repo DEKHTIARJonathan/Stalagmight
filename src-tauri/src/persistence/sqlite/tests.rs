@@ -2379,6 +2379,79 @@ fn a_pre_v17_file_loses_its_explicit_null_section_undo_history_on_open() {
     assert_eq!(db.get_user_version().unwrap(), SCHEMA_VERSION);
 }
 
+/// A `PRAGMA user_version` ABOVE `SCHEMA_VERSION` must not be a way to keep the
+/// payloads every migration arm exists to drop.
+///
+/// `ensure_schema_version` runs no arm for a file from the future - there is
+/// nothing sensible it could run - so a stamp of 99 used to walk straight past
+/// the v7, v13, v15, v16 and v17 drops with the stacks intact. That is a
+/// one-pragma bypass of the v17 arm in particular, whose payloads still PARSE
+/// and whose replay wipes a section's name, surveyor and date. The history goes
+/// instead; the project data is left exactly as the file holds it.
+#[test]
+fn a_file_claiming_a_future_schema_loses_its_undo_history_but_keeps_its_project() {
+    let temp_dir = TempDir::new().unwrap();
+    let path = temp_dir.path().join("from-the-future.stalx");
+    {
+        let mut db = Database::open(&path).unwrap();
+        let mut project = Project::new("Future".to_string(), None);
+        project.add_section(SectionData {
+            name: Some("A".to_string()),
+            color: "#123456".to_string(),
+            shots: vec![],
+            ..Default::default()
+        });
+        db.save_project(&project).unwrap();
+        // The same pre-v17 shape the test above stages, on both stacks: the one
+        // the v17 arm drops, and the one this file's forged stamp would keep.
+        db.save_undo_stack_with_timestamps(vec![(
+            r##"{"type":"update_section_metadata","section_id":0,"updates":{"name":null,"surveyor":null,"date":null,"color":"#abcdef","direction":null,"quality":null}}"##
+                .to_string(),
+            r##"{"PreviousValues":{"section_id":0,"shot_id":null,"values_json":"{\"name\":null,\"surveyor\":null,\"date\":null,\"color\":\"#123456\",\"direction\":null,\"quality\":null}"}}"##
+                .to_string(),
+            None,
+        )])
+        .unwrap();
+        db.save_redo_stack_with_timestamps(vec![(
+            r##"{"type":"update_section_metadata","section_id":0,"updates":{"name":null,"surveyor":null,"date":null,"color":"#abcdef","direction":null,"quality":null}}"##
+                .to_string(),
+            r##"{"PreviousValues":{"section_id":0,"shot_id":null,"values_json":"{\"name\":null,\"surveyor\":null,\"date\":null,\"color\":\"#123456\",\"direction\":null,\"quality\":null}"}}"##
+                .to_string(),
+            None,
+        )])
+        .unwrap();
+        assert_eq!(
+            db.load_undo_stack_with_timestamps().unwrap().len(),
+            1,
+            "the fixture must actually stage an undo entry"
+        );
+        assert_eq!(
+            db.load_redo_stack_with_timestamps().unwrap().len(),
+            1,
+            "the fixture must actually stage a redo entry"
+        );
+        // Forge the stamp: a file claiming a schema this build has never heard of.
+        db.set_user_version(SCHEMA_VERSION + 82).unwrap();
+        drop(db);
+    }
+
+    let db = Database::open_existing(&path).unwrap();
+    assert!(
+        db.load_undo_stack_with_timestamps().unwrap().is_empty(),
+        "a forged future user_version kept undo payloads no migration arm could vet"
+    );
+    assert!(
+        db.load_redo_stack_with_timestamps().unwrap().is_empty(),
+        "a forged future user_version kept redo payloads no migration arm could vet"
+    );
+    // The stamp itself is left alone - this build has not migrated anything and
+    // must not claim it has - and the project still loads.
+    assert_eq!(db.get_user_version().unwrap(), SCHEMA_VERSION + 82);
+    let project = db.load_project().unwrap();
+    assert_eq!(project.name, "Future");
+    assert_eq!(project.sections.len(), 1);
+}
+
 #[test]
 fn test_legacy_v6_undo_history_dropped_on_open_existing() {
     let temp_dir = TempDir::new().unwrap();

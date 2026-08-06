@@ -23321,6 +23321,135 @@ fn redo_of_a_created_shot_with_the_maximum_id_saturates_instead_of_overflowing()
     );
 }
 
+/// The same unbounded id, on the UNDO side: `AppState::restore_shot` takes the
+/// id verbatim out of a `ShotSnapshot` and bumps the section counter past it.
+///
+/// `ShotSnapshot` is the LEGACY delete-a-shot capture (a live `DeleteShot`
+/// records a `ProjectSnapshotPair`), so every entry of this shape reaching the
+/// restore came off disk, where nothing bounds `shot_id` - a `.stalx` can carry
+/// `4294967295` in that column. `id + 1` panics a debug build there and wraps a
+/// release one to 0, after which the section hands 0 out again as a fresh id.
+#[test]
+fn undo_of_a_shot_snapshot_with_the_maximum_id_saturates_instead_of_overflowing() {
+    let state = state_with_project();
+    let section = section_with_shots(&state, "A", vec![straight_shot(0.0, 5.0)]);
+
+    {
+        let mut stack = state.undo_stack.lock().unwrap();
+        stack.push_with_data(
+            Command::DeleteShot {
+                section_id: section,
+                shot_id: ShotId::MAX,
+            },
+            UndoData::ShotSnapshot {
+                section_id: section,
+                shot_id: ShotId::MAX,
+                shot_data: straight_shot(90.0, 3.0),
+                position: 1,
+                uuid: Some("33333333-3333-4333-8333-333333333333".to_string()),
+            },
+        );
+    }
+
+    // Panics with "attempt to add with overflow" before the fix.
+    let undone = state.undo();
+    assert!(undone.success, "undo failed: {:?}", undone.error);
+
+    let project = state.get_project_state().unwrap();
+    let restored = project.get_section(section).expect("section missing");
+    assert_eq!(
+        restored.shots.len(),
+        2,
+        "the undo should have restored the recorded shot"
+    );
+    assert_eq!(
+        restored.shots[1].id,
+        ShotId::MAX,
+        "the restored shot should keep the id the entry recorded"
+    );
+    assert_eq!(
+        restored.next_shot_id,
+        ShotId::MAX,
+        "the counter should saturate rather than wrap back onto ids the section already uses"
+    );
+}
+
+/// The third door the same id walks through: `Section::take_shot_id`'s FORCED
+/// arm, reached when the redo of a create still has an anchor to insert against.
+///
+/// The append branch (the test above it) does its own bump; an anchored redo
+/// goes through `insert_shot_before`/`insert_shot_after` instead, and the
+/// counter bump lives in `take_shot_id`. Same unbounded persisted id, same
+/// `id + 1`, so it needs its own saturation and its own regression test.
+#[test]
+fn an_anchored_redo_forcing_the_maximum_shot_id_saturates_instead_of_overflowing() {
+    let state = state_with_project();
+    let section = section_with_shots(
+        &state,
+        "A",
+        vec![straight_shot(0.0, 5.0), straight_shot(0.0, 7.0)],
+    );
+    let first_id = state
+        .get_project_state()
+        .unwrap()
+        .get_section(section)
+        .expect("section missing")
+        .shots[0]
+        .id;
+
+    {
+        let mut stack = state.undo_stack.lock().unwrap();
+        stack.push_redo(UndoEntry {
+            command_bytes: None,
+            command: Command::CreateShot {
+                section_id: section,
+                shot: straight_shot(180.0, 4.0),
+                after_shot_id: None,
+                before_shot_id: Some(first_id),
+            },
+            undo_data: UndoData::CreatedShotSnapshot {
+                section_id: section,
+                shot_id: ShotId::MAX,
+                shot_data: straight_shot(180.0, 4.0),
+                position: 0,
+                station_shift_from: 0,
+                after_shot_id: None,
+                // No uuid beside it: a legacy entry, so the anchor resolves by
+                // the recorded id - which is what routes the redo through
+                // `insert_shot_before` rather than the append branch.
+                before_shot_id: Some(first_id),
+                after_shot_uuid: None,
+                before_shot_uuid: None,
+                uuid: Some("44444444-4444-4444-8444-444444444444".to_string()),
+                previous_offsets: HashMap::new(),
+            },
+            timestamp: None,
+        });
+    }
+
+    // Panics with "attempt to add with overflow" before the fix.
+    let redone = state.redo();
+    assert!(redone.success, "redo failed: {:?}", redone.error);
+
+    let project = state.get_project_state().unwrap();
+    let restored = project.get_section(section).expect("section missing");
+    assert_eq!(
+        restored.shots.len(),
+        3,
+        "the redo should have inserted the recorded shot"
+    );
+    assert_eq!(
+        restored.shots[0].id,
+        ShotId::MAX,
+        "the insert should have landed BEFORE the anchor, under the forced id"
+    );
+    assert_eq!(
+        restored.next_shot_id,
+        ShotId::MAX,
+        "the counter should saturate rather than wrap past the id it must stay ahead of"
+    );
+}
+
 // ===========================================================================
 // #413 finding 1's residue: only half of a CreatedSectionSnapshot was refreshed
 // ===========================================================================

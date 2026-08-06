@@ -11165,6 +11165,159 @@ fn realign_merges_re_solves_once_the_residual_becomes_healable() {
 }
 
 #[test]
+fn realign_merges_re_solves_once_drift_crosses_the_invariant() {
+    // The load-bearing half of the fixpoint's safety argument, asserted rather
+    // than argued: the skip may leave SUB-invariant drift alone (the test two
+    // above), but drift that CROSSES `MERGE_ALIGNMENT_INVARIANT_M` puts a new
+    // pair in the residual set, and the set is compared by identity - so the
+    // fingerprint misses and the full solve runs. That is what makes the state
+    // `debug_assert_merge_alignment` panics on unreachable while the skip is
+    // armed.
+    let (mut project, _a, _b, c) = over_anchored_irreducible_gap();
+    assert_eq!(project.realign_merges(), 0);
+    assert!(project.realign_fixpoint.is_some(), "precondition: armed");
+    let anchored_x = project.section_offset(c).0;
+    project.adjust_section_offset(c, 0.003, 0.0);
+    assert_eq!(project.realign_merges(), 0);
+    assert!(
+        (project.section_offset(c).0 - (anchored_x + 0.003)).abs() < 1e-12,
+        "precondition: 3 mm is under the invariant, so the skip holds it - C is at {:?}",
+        project.section_offset(c)
+    );
+
+    // Push the same bystander past the invariant - one edit, no structural
+    // change, and every EXISTING residual gap still bit-identical.
+    project.adjust_section_offset(c, 0.017, 0.0);
+    assert_eq!(
+        project
+            .merge_alignment_beyond(Project::MERGE_ALIGNMENT_INVARIANT_M)
+            .len(),
+        2,
+        "precondition: C's merge has now crossed, so there are two residuals"
+    );
+
+    project.realign_merges();
+    assert!(
+        (project.section_offset(c).0 - anchored_x).abs() < 1e-9,
+        "a gap past the invariant must never be left to the skip: C is still at {:?}",
+        project.section_offset(c)
+    );
+    assert_eq!(
+        project
+            .merge_alignment_beyond(Project::MERGE_ALIGNMENT_INVARIANT_M)
+            .len(),
+        1,
+        "the solve ran and healed everything it could - only the irreducible gap is left"
+    );
+}
+
+#[test]
+fn realign_merges_still_skips_for_an_edit_in_a_disjoint_component() {
+    // The other side of the same contract: the skip exists so that ONE
+    // irreducible gap does not make every later edit pay a whole-project
+    // re-solve. An edit in a component that shares nothing with the residual
+    // must still hit it.
+    let (mut project, _a, b, _c) = over_anchored_irreducible_gap();
+    // A second, healthy component: D anchored by its own datum, E merged onto
+    // it. Built BEFORE the fixpoint is recorded - adding a section is a
+    // structural change, and the structure hash would (correctly) reject a
+    // fingerprint taken before it. Built while the A=B gap is CLOSED, too:
+    // `merge_stations` runs `debug_assert_merge_alignment`, which a test build
+    // panics on for the very residual this project is about, so the helper's
+    // 2 cm is backed out and re-applied around the new component.
+    project.adjust_section_offset(b, 0.0, 0.02);
+    let d = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    let e = project
+        .add_section(SectionData {
+            shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    project.ensure_shot_uuids();
+    project
+        .merge_stations(StationRef::new(d, 1), StationRef::new(e, 0))
+        .unwrap();
+    project.zero_datums.push(ZeroDatum {
+        station_ref: StationRef::new(d, 0).into(),
+        gps: GpsCoordinates::new(46.0, -91.0, 0.0).unwrap(),
+    });
+    project.adjust_section_offset(b, 0.0, -0.02);
+
+    assert_eq!(project.realign_merges(), 0);
+    assert!(project.realign_fixpoint.is_some(), "precondition: armed");
+
+    project.adjust_section_offset(e, 0.003, 0.0);
+    let drifted = project.section_offset(e);
+    assert_eq!(project.realign_merges(), 0);
+    assert_eq!(
+        project.section_offset(e),
+        drifted,
+        "an edit two components away must still take the skip - that is the whole \
+         optimization"
+    );
+    // And the declined solve was real work here too, so the skip is doing
+    // something rather than agreeing with a no-op.
+    project.resolve_offsets();
+    assert!(
+        (project.section_offset(e).0 - drifted.0).abs() > 0.002,
+        "the solve the skip declined would have moved E: before={drifted:?} after={:?}",
+        project.section_offset(e)
+    );
+}
+
+#[test]
+fn a_whole_rigid_group_translation_is_a_solver_no_op() {
+    // Why the fingerprint does NOT need the residual component's own offsets in
+    // it, which looks like a hole until the cascade is traced: a whole-group
+    // move leaves every residual gap and the structure hash bit-identical, so
+    // the skip fires - and it hides nothing, because the solve it declines is
+    // itself a no-op. `cascade_connection_offsets` derives each
+    // non-authoritative section from an authoritative one's STORED offset and
+    // never re-derives an authoritative section at all (a datum section is
+    // pinned WHERE IT IS, not re-anchored onto its GPS), so translating every
+    // section of a component by one delta lands exactly where the cascade would
+    // put them.
+    let (mut project, a, b, c) = over_anchored_irreducible_gap();
+    assert_eq!(project.realign_merges(), 0);
+    assert!(project.realign_fixpoint.is_some(), "precondition: armed");
+
+    // The move tools' own path, not a hand-rolled loop over the ids.
+    project.adjust_rigid_group_offsets(a, 3.0, -2.0);
+    let moved: Vec<(f64, f64)> = [a, b, c]
+        .iter()
+        .map(|s| project.section_offset(*s))
+        .collect();
+
+    let mut solved = project.clone();
+    solved.resolve_offsets();
+    let after_solve: Vec<(f64, f64)> = [a, b, c]
+        .iter()
+        .map(|s| solved.section_offset(*s))
+        .collect();
+    assert_eq!(
+        moved, after_solve,
+        "a full solve after a whole-group translation must change nothing - if this \
+         ever fails, the skip really would be hiding a re-anchor and the fingerprint \
+         needs the component's offsets in it"
+    );
+
+    project.realign_merges();
+    let after_skip: Vec<(f64, f64)> = [a, b, c]
+        .iter()
+        .map(|s| project.section_offset(*s))
+        .collect();
+    assert_eq!(
+        after_skip, after_solve,
+        "so the skipped state and the solved state are the same state"
+    );
+}
+
+#[test]
 fn realign_preserves_floating_section_offset() {
     // A datum-less, merge-less (floating) section's absolute position is
     // non-derivable (free placement). The always-on re-solve must NOT zero it -

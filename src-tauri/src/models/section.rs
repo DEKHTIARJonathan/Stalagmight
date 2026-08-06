@@ -541,14 +541,18 @@ impl Section {
     fn take_shot_id(&mut self, forced_id: Option<ShotId>) -> ShotId {
         match forced_id {
             Some(id) => {
+                // SATURATING: a forced id can arrive verbatim from a persisted
+                // undo entry (the redo of a CreateShot), so ShotId::MAX must
+                // park the counter rather than overflow (#413 finding 24's
+                // class). The guard keeps monotonicity without a `max`.
                 if id >= self.next_shot_id {
-                    self.next_shot_id = id + 1;
+                    self.next_shot_id = id.saturating_add(1);
                 }
                 id
             }
             None => {
                 let id = self.next_shot_id;
-                self.next_shot_id += 1;
+                self.next_shot_id = self.next_shot_id.saturating_add(1);
                 id
             }
         }

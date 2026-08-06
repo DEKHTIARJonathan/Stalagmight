@@ -70,12 +70,16 @@ stress loop then a full sweep:
   copy of the fixture with the persisted undo history stripped, from depth 0.
   `STALAGMIGHT_FUZZ_FIXTURE=<basename>.stalx` picks the starting fixture (default
   `fractal_plant_iter3.stalx`; `naharon.stalx` has the loop closures, zero datums and
-  null section metadata that reach half the known bugs). Runs three oracles: state
+  null section metadata that reach half the findings). Runs three oracles: state
   roundtrip (including multi-step `undoTo`/`redoTo` jumps against the same snapshots),
-  absolute project invariants, and an integrity-verdict delta. Currently reproduces
-  eight open undo bugs plus an open save/reload finding (listed with repro commands in the scenario's header comment), so
-  it is RED by default; `STALAGMIGHT_FUZZ_ALLOW_KNOWN_BUGS=1` tolerates the three
-  classified ones so the rest still runs. `STALAGMIGHT_FUZZ_STREAM=v1` restores the
+  absolute project invariants, and an integrity-verdict delta. Every issue-413 finding
+  it reported is FIXED, so it is GREEN and STRICT by default: every known-bug classifier
+  and tolerance has been deleted, and a mismatch of any shape at any depth fails the run.
+  The recorded repro lines (in the scenario's header comment) are kept verbatim as
+  regression checks. `STALAGMIGHT_FUZZ_ALLOW_KNOWN_BUGS` is INERT - still read, and still
+  named in a failure's `reproduce:` line so a tolerant-looking invocation cannot be
+  mistaken for one that relaxed something, but it allows nothing.
+  `STALAGMIGHT_FUZZ_STREAM=v1` restores the
   pre-expansion generator set for repro lines minimized against it. Snapshotting and comparison happen in-page, so a step is one
   round trip. To sweep it, `pnpm agent:fuzz-matrix --fixtures a,b --seeds 1..8 --workers 3`
   runs the matrix in parallel (max 5 workers - one Xvfb display each) and prints a
@@ -86,11 +90,14 @@ stress loop then a full sweep:
   undo stack carrying every `UndoData` variant a live command can produce, forces the shot
   ids to diverge from positional order, leaves the redo stack non-empty, saves/closes/reopens,
   then walks the whole RESTORED history to depth 0 and back up - including the restored REDO
-  entries. Also RED by default (`STALAGMIGHT_FUZZ_ALLOW_KNOWN_BUGS=1` to walk past the
-  classified ones): it found findings 12 and 13 on issue #413, where undo after a reload
-  edits the WRONG shot (`SetShotKind` / `UpdateShot` carry the in-session shot id) or fails
-  outright and wedges the history. `STALAGMIGHT_PERSIST_FUZZ_DELETE_IN_TARGET=1` is finding
-  13's repro and is terminal for the walk - see docs/agent-harness.md
+  entries. GREEN and STRICT by default too, and `STALAGMIGHT_FUZZ_ALLOW_KNOWN_BUGS` is
+  INERT here as well: it found findings 12 and 13 on issue #413 - undo after a reload
+  edited the WRONG shot (`SetShotKind` / `UpdateShot` carried the in-session shot id) or
+  failed outright and wedged the history - and both are fixed, with their classifiers
+  deleted. `STALAGMIGHT_PERSIST_FUZZ_DELETE_IN_TARGET=1` is finding 13's repro; the wedge
+  is fixed, so it now walks the whole restored stack instead of being terminal, and stays
+  off by default because the plan's coverage promises are written against the other
+  id-space shape - see docs/agent-harness.md
 - `dialog-cycling` - open/close dialogs, assert no residue / DOM growth
 - `tool-switch-spam` - cycle every tool, assert activeTool tracks each switch
 - `map-storm` - seeded jumpTo barrage + main-thread stall probe
