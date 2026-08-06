@@ -232,6 +232,7 @@ describe('build modes', () => {
   it('treats the other profile as stale rather than reusing its binary', () => {
     const reasons = stampStaleReasons(E2E_STAMP, {
       viteE2E: true,
+      e2eFeature: E2E_STAMP.e2eFeature,
       binaryMtimeMs: E2E_STAMP.binaryMtimeMs,
       mode: 'release',
       features: 'e2e',
@@ -248,6 +249,7 @@ describe('build modes', () => {
     expect(
       stampStaleReasons(releaseStamp, {
         viteE2E: true,
+        e2eFeature: releaseStamp.e2eFeature,
         binaryMtimeMs: releaseStamp.binaryMtimeMs,
         mode: 'release',
         features: 'e2e',

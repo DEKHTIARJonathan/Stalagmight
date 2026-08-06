@@ -299,6 +299,54 @@ export function checkBuildFreshness(opts: FreshnessOptions = {}): Freshness {
  * Build the debug binary with the E2E frontend hooks. Blocking (this is a slow
  * one-time cost). Throws on build failure.
  */
+// The feature build regenerates these TRACKED files with the WebDriver
+// plugin's ACL entries; the repo keeps the plain-build shape.
+const SCHEMA_PATHSPEC = 'src-tauri/gen/schemas';
+// Every ACL entry the plugin adds carries its crate name, so a diff whose added
+// lines all mention it is harness churn and nothing else.
+const PLUGIN_ACL_MARKER = 'webdriver-automation';
+
+/** True when the tracked generated schemas have no uncommitted changes. */
+function schemasClean(): boolean {
+  try {
+    execSync(`git diff --quiet -- ${SCHEMA_PATHSPEC}`, { cwd: repoRoot, stdio: 'ignore' });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function schemaDiff(): string {
+  try {
+    return execSync(`git diff -- ${SCHEMA_PATHSPEC}`, { cwd: repoRoot, encoding: 'utf8' });
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * Is this schema diff nothing but the WebDriver plugin's ACL churn? Every added
+ * line must mention the plugin; a single unrelated addition makes it somebody's
+ * real work, which tooling must never discard.
+ *
+ * Pure (takes the diff text) so the classification is unit-testable without a
+ * dirty worktree.
+ */
+export function isPluginAclChurn(diff: string): boolean {
+  const lines = diff.split('\n');
+  // A removal is never plugin churn: the feature build only ADDS ACL entries.
+  // Any removed line therefore means a human edited these files, and restoring
+  // would silently discard that edit - the exact data loss this guard exists to
+  // prevent. (Missing this was a review finding: classifying on additions alone
+  // called "your deletion + our churn" pure churn.)
+  if (lines.some((line) => line.startsWith('-') && !line.startsWith('---'))) return false;
+  const added = lines
+    .filter((line) => line.startsWith('+') && !line.startsWith('+++'))
+    .map((line) => line.slice(1).trim())
+    .filter((line) => line.length > 0);
+  return added.length > 0 && added.every((line) => line.includes(PLUGIN_ACL_MARKER));
+}
+
 export function buildApp(onLog?: (line: string) => void, mode: AgentBuildMode = agentBuildMode()): void {
   // Two independent reasons to pass `--features e2e`, UNIONED rather than
   // either-or: the PROFILE asks for it (release keeps `debug_trigger_panic`'s

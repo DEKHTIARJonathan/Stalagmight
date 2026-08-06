@@ -35,6 +35,8 @@ export interface StartResult {
   display: string;
   profileDir: string;
   buildAction: 'skipped' | 'built' | 'fresh';
+  /** Cargo profile this session is driving ('release' only when opted in). */
+  buildMode: 'debug' | 'release';
   sessionDir: string;
   /**
    * Set (true) on darwin whenever the caller did not explicitly ask for
