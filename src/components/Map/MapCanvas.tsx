@@ -229,7 +229,10 @@ function MapHoverSync({
  * is driven imperatively via refs); the leave-tool cleanup reads it via getState().
  */
 const MAP_CANVAS_UI_KEYS = [
-  'mapZoom',
+  // NOTE: `mapZoom` is deliberately ABSENT. Its only read is the initial-camera
+  // restore inside the empty-dep map-creation effect, which can never observe a
+  // later store write anyway, so subscribing would only re-render this whole
+  // component on every 'zoomend'. That site reads it via getState() instead.
   'setMapZoom',
   'activeTool',
   'showSatellite',
@@ -491,7 +494,6 @@ function MapCanvas() {
   // this 4000-line component to re-render every frame. Hover sync is handled by the
   // <MapHoverSync> child component instead; measureSnapShot is read via getState().
   const {
-    mapZoom,
     setMapZoom,
     activeTool,
     showSatellite,
@@ -1742,7 +1744,10 @@ function MapCanvas() {
         ],
       },
       center: mapCenter,
-      zoom: mapZoom,
+      // Read at creation time rather than subscribed: this effect has an empty
+      // dep array, so a subscription could never deliver a newer value here and
+      // would only re-render MapCanvas on every 'zoomend' (#430).
+      zoom: useUIStore.getState().mapZoom,
       attributionControl: false,
       // Disable built-in keyboard zoom (handled by useKeyboardShortcuts with config.map.zoom_step)
       keyboard: false,
@@ -1807,7 +1812,7 @@ function MapCanvas() {
 
     // Camera zoom is mirrored into the store once per gesture, not per frame.
     // NOTE: `mapZoom` in the store is therefore STALE mid-gesture. Its only
-    // reader is the initial-camera restore above (`zoom: mapZoom`), which runs
+    // reader is the initial-camera restore above (the `zoom:` option), which runs
     // when the map is recreated. Any future live-zoom consumer must subscribe
     // to the map (`map.on('zoom')`), never to the store.
     map.current.on('zoomend', () => {
@@ -2364,12 +2369,17 @@ function MapCanvas() {
     }
   }, [config, activeTool, setActiveTool]);
 
-  // Update callbacks when they change
+  // Update callbacks when they change. `mapLoaded` is a dependency on purpose:
+  // SurveyLayer is constructed in the async map 'load' handler with whatever
+  // `toolCallbacks` the map-creation effect closed over on first render, and
+  // `toolCallbacks` is memoized (#430), so it can settle to a stable identity
+  // while `surveyLayerRef.current` is still null and this effect no-ops. Re-run
+  // it on the setMapLoaded(true) render to apply the current callbacks.
   useEffect(() => {
     if (surveyLayerRef.current) {
       surveyLayerRef.current.setCallbacks(toolCallbacks);
     }
-  }, [toolCallbacks]);
+  }, [toolCallbacks, mapLoaded]);
 
   // Sync config with SurveyLayer for visual and hitbox layer updates
   useEffect(() => {

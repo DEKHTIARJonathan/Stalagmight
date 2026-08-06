@@ -505,10 +505,12 @@ interface UIStore {
   setFocusedSection: (sectionId: SectionId) => void;
 
   // Map state
-  /** Camera zoom, written once per gesture ('zoomend'), NOT per frame: the only
-   *  reader is MapCanvas restoring the initial camera when the map is recreated.
-   *  It is therefore stale mid-gesture - a live-zoom consumer must subscribe to
-   *  the map (`map.on('zoom')`), not to this field. */
+  /** Camera zoom, NOT written per frame. Two writers only, both in MapCanvas:
+   *  the 'zoomend' handler (once per gesture) and the map-teardown cleanup,
+   *  which captures the final zoom when we unmount mid-gesture and 'zoomend'
+   *  never fires. The only reader is MapCanvas restoring the initial camera when
+   *  the map is recreated. It is therefore stale mid-gesture - a live-zoom
+   *  consumer must subscribe to the map (`map.on('zoom')`), not to this field. */
   mapZoom: number;
   setMapZoom: (zoom: number) => void;
   requestFitToBounds: false | 'animate' | 'snap';
