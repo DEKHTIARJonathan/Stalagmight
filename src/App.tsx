@@ -109,14 +109,20 @@ function App() {
   // Whole-UI zoom via Ctrl+= / Ctrl+- / Ctrl+0 (persisted)
   useUiScale();
 
-  // Files the OS handed us (#424): double-click / "Open with" / a second launch
-  // forwarded by the running instance. Routed through the same open/import
-  // router as every other entry point, but not before config has loaded.
-  useLaunchWithFile(config != null);
-
   // Splash screen state - visible until config loads, then fades out and unmounts
   const [showSplash, setShowSplash] = useState(true);
   const [splashMounted, setSplashMounted] = useState(true);
+
+  // Files the OS handed us (#424): double-click / "Open with" / a second launch
+  // forwarded by the running instance. Routed through the same open/import
+  // router as every other entry point, but not before config has loaded AND the
+  // splash has actually finished unmounting - not just started fading. Readiness
+  // tied to `config` alone fired while the splash was still on screen (it unmounts
+  // on `onTransitionEnd`, one render tick later), so a cold launch with an argv
+  // file could raise `launch-open-confirm` / an import dialog while the splash was
+  // still visible (#445 review). `splashMounted` is the same signal onboarding's
+  // auto-start already waits on (`splashVisible` below), for the same reason.
+  useLaunchWithFile(config != null && !splashMounted);
 
   // Track whether we're hovering with a valid import file (DMP/TML/TMLU)
   const [isDraggingImport, setIsDraggingImport] = useState(false);

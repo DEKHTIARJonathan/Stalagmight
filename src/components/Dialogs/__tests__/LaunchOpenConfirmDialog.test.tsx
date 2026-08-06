@@ -18,8 +18,16 @@ vi.mock('react-i18next', () => ({
 
 const dialogData: { path?: string; fileName?: string } = {};
 
+// `activeDialog` is mutable so a test can simulate a state change claiming the
+// dialog slot WHILE `routeOpenedFile` is in flight (the defensive-close check).
+// `.getState()` mirrors the real store's imperative-read shape, since
+// `handleConfirm` reads it outside render, after the await.
+let activeDialog: string | null = 'launch-open-confirm';
 vi.mock('../../../store/uiStore', () => ({
-  useUIStore: (sel: (s: unknown) => unknown) => sel({ closeDialog, dialogData }),
+  useUIStore: Object.assign(
+    (sel: (s: unknown) => unknown) => sel({ closeDialog, dialogData }),
+    { getState: () => ({ activeDialog, closeDialog, dialogData }) },
+  ),
 }));
 
 let projectName: string | undefined;
@@ -57,6 +65,7 @@ describe('LaunchOpenConfirmDialog', () => {
     dialogData.fileName = 'other.stalx';
     projectName = 'My Cave';
     peekedSource = 'os-file-association';
+    activeDialog = 'launch-open-confirm';
   });
 
   it('renders nothing without a pending path', () => {
@@ -76,6 +85,49 @@ describe('LaunchOpenConfirmDialog', () => {
     );
     expect(trackDialogComplete).toHaveBeenCalledWith('launch-open-confirm');
     expect(closeDialog).toHaveBeenCalled();
+  });
+
+  // #445 review: closing before routing let the launch channel's "resume the
+  // next deferred path" subscriber race the confirmed route outside its own
+  // serialization (repro: multi-select two .stalx, confirm the first). Pins
+  // the fix - route settles BEFORE this dialog closes itself, on every trigger.
+  it('routes the confirmed open before closing itself', async () => {
+    const order: string[] = [];
+    let resolveRoute: () => void = () => {};
+    (routeOpenedFile as ReturnType<typeof vi.fn>).mockImplementation(() => {
+      order.push('route-start');
+      return new Promise<void>((resolve) => {
+        resolveRoute = () => {
+          order.push('route-end');
+          resolve();
+        };
+      });
+    });
+    closeDialog.mockImplementation(() => order.push('close'));
+
+    render(<LaunchOpenConfirmDialog />);
+    fireEvent.click(screen.getByTestId('launch-open-confirm-open'));
+
+    await waitFor(() => expect(order).toEqual(['route-start']));
+    expect(closeDialog).not.toHaveBeenCalled();
+
+    resolveRoute();
+    await waitFor(() => expect(order).toEqual(['route-start', 'route-end', 'close']));
+  });
+
+  // If the route settles into a DIFFERENT dialog (e.g. state changed while this
+  // one was open and `routeOpenedFile` handed off to unsaved-changes /
+  // speleodb-close instead), this handler must not clobber it.
+  it('does not close itself if something else claimed the dialog slot while routing', async () => {
+    (routeOpenedFile as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+      activeDialog = 'unsaved-changes';
+    });
+
+    render(<LaunchOpenConfirmDialog />);
+    fireEvent.click(screen.getByTestId('launch-open-confirm-open'));
+
+    await waitFor(() => expect(routeOpenedFile).toHaveBeenCalled());
+    expect(closeDialog).not.toHaveBeenCalled();
   });
 
   it('cancelling closes without routing and clears the pending source', () => {

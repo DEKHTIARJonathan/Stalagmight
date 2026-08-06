@@ -82,7 +82,7 @@ beforeEach(() => {
   resetLaunchFileQueueForTest();
   emitToApp = null;
   queued = [];
-  useUIStore.setState({ activeDialog: null, dialogData: {}, placementMode: null });
+  useUIStore.setState({ activeDialog: null, dialogData: {}, placementMode: null, screenOccupants: 0 });
   useProjectStore.setState({ project: null, isDirty: false });
   useSpeleoStore.setState({ link: null });
   listenMock.mockImplementation(async (_event: string, handler: () => void) => {
@@ -98,7 +98,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  useUIStore.setState({ activeDialog: null, dialogData: {}, placementMode: null });
+  useUIStore.setState({ activeDialog: null, dialogData: {}, placementMode: null, screenOccupants: 0 });
 });
 
 describe('drainLaunchFiles', () => {
@@ -182,6 +182,28 @@ describe('drainLaunchFiles', () => {
     await drainLaunchFiles();
 
     expect(routeOpenedFileMock).not.toHaveBeenCalled();
+  });
+
+  // #445 review: `screenBusy()` used to read only `activeDialog`/`placementMode`,
+  // blind to the independent top-layer overlays (TelemetryOptInDialog,
+  // HeldLockResumeDialog, SpeleoStorageChoiceDialog, SpeleoDumpPickerDialog) that
+  // render OUTSIDE that slot - exactly the startup/login surfaces live at the
+  // moment a cold-launch drain runs. A cold launch with a held SpeleoDB lock plus
+  // a `.stalx` argv used to raise a dialog over the held-lock prompt, which says
+  // (from the inside) that it refuses exactly that. `screenOccupants` (uiStore,
+  // fed by `useScreenOccupant`) is the single source those overlays register
+  // into, so this covers all of them by construction.
+  it('holds while an independent overlay (held-lock resume, telemetry opt-in, ...) owns the screen', async () => {
+    useUIStore.setState({ screenOccupants: 1 });
+    queued = ['/dives/one.stalx'];
+
+    await drainLaunchFiles();
+
+    expect(routeOpenedFileMock).not.toHaveBeenCalled();
+
+    useUIStore.setState({ screenOccupants: 0 });
+    await drainLaunchFiles();
+    expect(routed()).toEqual(['/dives/one.stalx']);
   });
 
   /**

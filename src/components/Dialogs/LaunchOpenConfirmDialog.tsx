@@ -48,8 +48,25 @@ export default function LaunchOpenConfirmDialog() {
 
   const handleConfirm = async () => {
     trackDialogComplete('launch-open-confirm');
-    closeDialog();
+    // Route BEFORE closing - not after. `closeDialog()` mutates uiStore
+    // synchronously, which synchronously wakes launchWithFile.ts's "resume the
+    // next deferred path" subscriber; closing first let that resume kick off a
+    // SECOND `routeOpenedFile` call that raced this confirmed one outside its
+    // own serialization, reading `store.project` as the still-open OLD project
+    // and sometimes raising a fresh confirm naming a project already being
+    // replaced underneath it (#445 review, repro: multi-select two .stalx,
+    // confirm the first). Routing first keeps the dialog slot occupied - and
+    // so `screenBusy()` correctly busy - for the whole flow, so the resume
+    // can't fire until this one is done, for every trigger, not just the
+    // launch channel.
     await routeOpenedFile(path, 'Open Failed', { swapConfirmed: true });
+    // Only close OURSELVES if nothing else claimed the dialog slot while we
+    // awaited (e.g. a state change surfaced unsaved-changes or speleodb-close
+    // instead) - closing unconditionally here would clobber whatever just
+    // opened.
+    if (useUIStore.getState().activeDialog === 'launch-open-confirm') {
+      closeDialog();
+    }
   };
 
   return (

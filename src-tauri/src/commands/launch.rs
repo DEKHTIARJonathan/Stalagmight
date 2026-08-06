@@ -281,10 +281,23 @@ pub fn queue_and_notify<R: Runtime>(app: &AppHandle<R>, paths: Vec<String>) {
 /// file) lands in a window the user cannot see. Raising the window is also what
 /// makes the forwarded open observable rather than silent, which is half of why
 /// it isn't unconsented remote control; the frontend's confirm is the other.
+///
+/// `unminimize` runs before `set_focus`: on Windows and Linux, `set_focus` alone
+/// does not restore a MINIMIZED window - it would leave the confirm this
+/// function exists to make visible waiting in a window the user still cannot
+/// see. Best-effort like the focus call below it: a window that was never
+/// minimized (or a backend that no-ops the call) is not an error.
 pub fn focus_main_window<R: Runtime>(app: &AppHandle<R>) {
     let Some(window) = app.get_webview_window("main") else {
         return;
     };
+    if let Err(e) = window.unminimize() {
+        tracing::warn!(
+            error = %e,
+            purpose = "raise the window for a forwarded file open",
+            "Could not unminimize the main window"
+        );
+    }
     if let Err(e) = window.set_focus() {
         tracing::warn!(
             error = %e,

@@ -32,7 +32,7 @@
  */
 import { useEffect, useRef } from 'react';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
-import { useUIStore } from '../store/uiStore';
+import { useUIStore, isScreenBusy } from '../store/uiStore';
 import { invokeIpc } from './ipc';
 import { routeOpenedFile } from './openOrImport';
 import { setProjectActionSource } from './telemetry';
@@ -61,14 +61,22 @@ export function resetLaunchFileQueueForTest(): void {
 }
 
 /**
- * Is the single dialog slot (or a placement flow) occupied?
+ * Is the screen occupied - the single dialog slot, a placement flow, or an
+ * independent top-layer overlay (TelemetryOptInDialog, HeldLockResumeDialog,
+ * SpeleoStorageChoiceDialog, SpeleoDumpPickerDialog) registered via
+ * `useScreenOccupant`?
  *
- * The same pair `uiStore` itself treats as "the screen is not idle". Routing a
- * second path now would replace whatever is on screen.
+ * Used to be `activeDialog`/`placementMode` only, which left those overlays
+ * invisible here: a cold-launch drain (readiness is `config != null`, exactly
+ * the moment those startup/login surfaces can be up) would raise
+ * `launch-open-confirm` or an import dialog OVER one of them - precisely what
+ * `HeldLockResumeDialog` says it refuses from the inside (#445 review). Now
+ * `isScreenBusy` (uiStore) is the one place that answer lives, so the next
+ * overlay someone adds is covered by calling `useScreenOccupant` rather than
+ * by remembering to update this function.
  */
 function screenBusy(): boolean {
-  const ui = useUIStore.getState();
-  return ui.activeDialog !== null || ui.placementMode !== null;
+  return isScreenBusy(useUIStore.getState());
 }
 
 /**
@@ -142,11 +150,18 @@ export function useLaunchWithFile(ready: boolean): void {
     let unlisten: UnlistenFn | null = null;
 
     void (async () => {
-      const listener = await listen(LAUNCH_FILE_EVENT, () => {
-        if (readyRef.current) drainInBackground();
-      });
-      if (disposed) listener();
-      else unlisten = listener;
+      try {
+        const listener = await listen(LAUNCH_FILE_EVENT, () => {
+          if (readyRef.current) drainInBackground();
+        });
+        if (disposed) listener();
+        else unlisten = listener;
+      } catch (err) {
+        // A rejected registration would otherwise silently kill live forwarding
+        // for the rest of the process's lifetime - the cold-launch drain below
+        // still runs, so nothing else would ever surface the gap (#445 review).
+        console.error('[launch] registering the OS-open listener failed; live forwarding is off for this session', err);
+      }
     })();
 
     // Re-drain when the screen goes idle: a path held back because the previous

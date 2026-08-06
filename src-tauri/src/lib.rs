@@ -2036,8 +2036,15 @@ pub fn run() {
                 // Apple event, which Tauri surfaces here. On a cold launch this
                 // fires long before the webview exists, so the paths are queued
                 // rather than pushed - the frontend drains them when ready.
+                // `focus_main_window` mirrors the single-instance path above (a
+                // no-op with no webview yet, so the cold-launch case above is
+                // unaffected): without it, a double-click on a backgrounded app
+                // queues the file and raises the confirm in a window the user
+                // cannot see - the exact failure raising it exists to prevent
+                // (#445 review).
                 #[cfg(target_os = "macos")]
                 if let tauri::RunEvent::Opened { urls } = &event {
+                    commands::launch::focus_main_window(app_handle);
                     commands::launch::queue_and_notify(
                         app_handle,
                         commands::launch::launch_paths_from_urls(urls),

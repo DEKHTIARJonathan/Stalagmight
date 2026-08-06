@@ -105,7 +105,7 @@ const quitPrompts = (): boolean => {
  * through it so the open is not swallowed by the prompt it raised.
  *
  * `routeOpenedFile` also raises an UNRELATED confirm before a clean, non-SpeleoDB
- * project gets swapped out (#416) - orthogonal to this file's subject (SpeleoDB
+ * project gets swapped out (#424) - orthogonal to this file's subject (SpeleoDB
  * parity), but it fires on exactly the state most of these cases exercise (nothing
  * for SpeleoDB to hand back). Answer it the way the dialog's "Open" button does, so
  * the exit's actual outcome - the project loads, or doesn't - still shows up instead
