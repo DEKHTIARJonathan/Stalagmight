@@ -71,26 +71,39 @@ render, so nothing is minted per-export (a project loaded but never saved is the
 one case where a UUID is minted on the fly, and it is persisted by the next
 save).
 
-What the value guarantees is **stability across re-exports, not uniqueness
-within the file**. Shot-UUID uniqueness in the model is **per-section only**, and
-deliberately so: `Project::ensure_unique_shot_uuids` resets its dedup set inside
-the section loop, and the companion `duplicate_shot_uuid` integrity check is
-section-scoped for the same reason - `resolve_key` is section-local, so a
-cross-section repeat cannot mis-resolve a station anchor and is not treated as a
-violation. Nothing in the model, the integrity pass or the exporter therefore
-makes `<UUID>` unique across the exported document.
+Uniqueness lives at two different levels, and they are deliberately different:
 
-The consequence for the SpeleoDB render is that a consumer keying features by
-`<UUID>` alone - as a GeoJSON feature `id`, say - would alias the colliding shots
-if such a repeat ever appeared, and neither the export nor our integrity pass
-would flag it. No current edit path is known to mint a cross-section duplicate
-(there is no section split/duplicate command, and the importer mints fresh
-identities), so this is a documented property of the guarantee rather than a live
-bug. What it means in practice: do not build a consumer that assumes
-project-wide uniqueness, and do not describe `<UUID>` as one.
+- **Model level: per-section only.** `Project::ensure_unique_shot_uuids` resets
+  its dedup set inside the section loop, and the companion
+  `duplicate_shot_uuid` integrity check is section-scoped for the same reason -
+  `resolve_key` is section-local, so a cross-section repeat cannot mis-resolve
+  a station anchor and is not treated as a violation. Cross-section repeats are
+  reachable in normal use since #423 (importing the same Ariane file twice, or
+  merging two projects that each imported it) and are legal by design.
+- **Export boundary: per-document, enforced.** `build_export_shots` settles
+  repeats after assembling the full shot list, each profile its own way: the
+  user export re-mints later occurrences (`remint_duplicate_uuids` - the first
+  copy keeps its Ariane identity, later copies draw a fresh v4 *per export*,
+  so byte-stability holds only for the first copy), and the SpeleoDB sidecar
+  drops them (`harden_for_speleodb`), because a repeat would alias two shots
+  onto one GeoJSON feature id.
 
-The importer does **not** read the element back: a fresh import mints its own
-shot identities, so `<UUID>` is write-only as far as Stalagmight is concerned.
+So a consumer of either output may key on `<UUID>` within one document, but the
+value guarantees **stability for settled identities, not project-wide model
+uniqueness** - do not describe `Shot::uuid` itself as unique beyond its section.
+
+The importer reads the element back (#423): a `<UUID>`/`<UU>` on a `<SurveyData>`
+row becomes that shot's identity verbatim, so an Ariane-authored file that leaves
+and returns keeps the same per-shot ids instead of getting a fresh set. The value
+is not validated or coerced into a canonical v4 - coercing would recreate exactly
+the identity churn the carry exists to prevent - so `Shot::uuid` is no longer
+guaranteed to be a v4 we minted. Two consequences follow: an empty element means
+"no identity" and gets a fresh mint, and a non-v4 value is dropped from the
+SpeleoDB sidecar by `speleodb_uuid`, costing that shot its GeoJSON feature id in
+the server preview (Ariane writes v4s, so this bites only hand-edited or
+third-party files). A file that repeats a `<UUID>` inside one section is
+repaired, not rejected: `Section::new` keeps the FIRST occurrence and mints a
+fresh id for the rest, restoring the per-section uniqueness `resolve_key` needs.
 
 Ariane 26.3.0's own Save fills any row missing `<UUID>` with a fresh v4
 (verified 2026-07-31), so the synthesized-shot gaps above do not survive a

@@ -94,48 +94,28 @@ impl AppState {
         let mut section_id_map: std::collections::HashMap<(usize, SectionId), SectionId> =
             std::collections::HashMap::new();
 
-        // Shot UUIDs already placed in the merged project. Shots carry a
-        // persistent UUID that station cross-references anchor on; preserve it
-        // across the merge instead of re-minting. Two source files can
-        // legitimately share a UUID (one branched from the other), so dedup
-        // globally - a colliding UUID keeps a fresh mint to stay unique.
-        let mut seen_uuids: std::collections::HashSet<String> = std::collections::HashSet::new();
-
         // Append sections from all projects
         for (proj_idx, source_project) in source_projects.iter().enumerate() {
             for section in &source_project.sections {
                 let old_section_id = section.id;
                 let new_section_id = merged_project.next_section_id;
 
-                // Clone section data and add to merged project. add_section mints
-                // fresh UUIDs for every shot; restore each source shot's UUID (in
-                // order) so identity survives the merge, deduping across all
-                // sources to guarantee uniqueness within the merged project.
-                let section_data = section.to_section_data();
-                merged_project.add_section(section_data);
-                let source_uuids: Vec<Option<String>> =
-                    section.shots.iter().map(|s| s.uuid.clone()).collect();
-                if let Some(new_section) = merged_project.get_section_mut(new_section_id) {
-                    for (new_shot, src_uuid) in new_section.shots.iter_mut().zip(source_uuids) {
-                        let final_uuid = match src_uuid {
-                            Some(u) if !seen_uuids.contains(&u) => Some(u),
-                            Some(dup) => {
-                                tracing::warn!(
-                                    project = %source_project.name,
-                                    uuid = %dup,
-                                    purpose = "merge shot uuid dedup",
-                                    "Duplicate shot UUID across merged projects; re-minting to keep identities unique"
-                                );
-                                new_shot.uuid.clone() // fresh mint from add_section
-                            }
-                            None => new_shot.uuid.clone(), // pre-v6 shot: keep fresh mint
-                        };
-                        if let Some(u) = &final_uuid {
-                            seen_uuids.insert(u.clone());
-                        }
-                        new_shot.uuid = final_uuid;
-                    }
-                }
+                // Shot identity rides along in `SectionData` (`ShotData::uuid`),
+                // so `add_section` reproduces each source shot's UUID by itself.
+                //
+                // Uniqueness is PER-SECTION here, matching the invariant the app
+                // actually enforces (`Project::ensure_unique_shot_uuids`, the
+                // section-scoped `duplicate_shot_uuid` integrity check, and
+                // `resolve_key`'s section-local lookup) - `Section::new` applies
+                // it as the sections are built. A project-wide dedupe would be
+                // stricter than the model AND than the format: two projects that
+                // imported the same Ariane file legitimately hold the same
+                // foreign ids (#423), and re-minting them here would throw away
+                // exactly the identity the import was preserving. The one
+                // consumer that needs document-wide uniqueness - the SpeleoDB
+                // sidecar - already drops repeats itself
+                // (`export::tml::harden_for_speleodb`).
+                merged_project.add_section(section.to_section_data());
 
                 // Record the mapping
                 section_id_map.insert((proj_idx, old_section_id), new_section_id);

@@ -258,6 +258,21 @@ pub struct Shot {
 /// Data for creating or updating a shot
 #[derive(Debug, Clone, Serialize, Deserialize, Default, TS)]
 pub struct ShotData {
+    /// Persistent identity for the shot this data will become, or `None` to
+    /// mint a fresh one. Set by the Ariane importer from the file's `<UUID>`
+    /// (#423) and by [`Shot::to_shot_data`], so identity survives every
+    /// transform that rebuilds shots from their data - a section split, a
+    /// reverse, a project merge, an undo/redo round trip.
+    ///
+    /// **Any future clone/duplicate-shot path MUST clear this field.** The
+    /// uniqueness repair ([`crate::models::Project::ensure_unique_shot_uuids`],
+    /// and the same rule in [`crate::models::Section::new`]) keeps the FIRST
+    /// occurrence, so a copy that kept its source's identity would get the
+    /// original re-minted instead of the copy - silently moving every station
+    /// cross-reference anchored on it.
+    #[serde(default)]
+    #[ts(optional)]
+    pub uuid: Option<String>,
     pub azimuth_in: f64,
     pub azimuth_out: f64,
     pub length: f64,
@@ -547,19 +562,53 @@ impl Shot {
         true
     }
 
-    /// Create a new shot from shot data.  A fresh v4 UUID is minted for
-    /// persistent shot identity (see `Shot::uuid`); call [`Shot::with_uuid`]
-    /// instead when restoring a shot from a persisted UUID.
+    /// Create a new shot from shot data.  Identity comes from
+    /// [`ShotData::uuid`] when the data carries one (an Ariane import, a split,
+    /// a reverse); otherwise a fresh v4 is minted.  See [`Shot::with_uuid`] for
+    /// the full precedence rule.
     pub fn new(id: ShotId, data: ShotData) -> Self {
-        Self::with_uuid(id, data, Some(uuid::Uuid::new_v4().to_string()))
+        Self::with_uuid(id, data, Some(Self::uuid_or_mint(None)))
     }
 
-    /// Construct a shot with an explicit UUID (`None` = pre-v6 .stalx
-    /// shot loaded without a recorded UUID; the next save will mint one).
+    /// A recorded identity, or a fresh v4 - the fallback half of the precedence
+    /// rule documented on [`Shot::with_uuid`].
+    ///
+    /// Every path that INSERTS a shot goes through this rather than handing
+    /// `with_uuid` a bare `None`, so "the caller had nothing recorded" can never
+    /// become "this shot has no identity". The distinction is not cosmetic: a
+    /// `None` uuid is invisible to `shot_uuid_index` and unnameable by any
+    /// `StationKey::AfterShot`, so a station cross-reference cannot be made to
+    /// the shot at all until some later save mints one.
+    pub fn uuid_or_mint(recorded: Option<String>) -> String {
+        recorded.unwrap_or_else(|| uuid::Uuid::new_v4().to_string())
+    }
+
+    /// Construct a shot, resolving its persistent identity.
+    ///
+    /// **This is the ONE place shot identity is decided**, and the rule is
+    /// `data.uuid.or(explicit)`: the data's own id wins, because it travels
+    /// with the record through every transform that rebuilds a shot from its
+    /// data. `explicit` is the fallback, and exists only for callers holding an
+    /// identity the payload cannot carry:
+    ///
+    /// * undo/redo entries persisted before #423, whose `ShotData` has no
+    ///   `uuid` but which stored one alongside (`core/undo.rs` `ShotInfo`,
+    ///   replayed at `core/state/undo_restore.rs`);
+    /// * `Shot::new`'s fresh mint, used when the data carries no identity.
+    ///
+    /// `None` from both leaves the shot with NO identity, which is a real state
+    /// (a pre-v6 `.stalx` row, minted on the next save) but a poor one to create
+    /// on purpose: until something mints it, the shot is absent from
+    /// `shot_uuid_index` and no `AfterShot` anchor can name it. Any INSERT path
+    /// must therefore pass [`Shot::uuid_or_mint`] rather than a bare `None`.
+    ///
+    /// Because every `Shot`-from-`ShotData` construction funnels through here,
+    /// it is not possible to build a shot that silently drops the identity its
+    /// data was carrying.
     pub fn with_uuid(id: ShotId, data: ShotData, uuid: Option<String>) -> Self {
         Self {
             id,
-            uuid,
+            uuid: data.uuid.or(uuid),
             azimuth_in: data.azimuth_in,
             azimuth_out: data.azimuth_out,
             length: data.length,
@@ -652,6 +701,11 @@ impl Shot {
     /// Convert to ShotData (for undo snapshots)
     pub fn to_shot_data(&self) -> ShotData {
         ShotData {
+            // Identity travels with the record. This is what lets a section
+            // split, a reverse or a merge rebuild shots from their data without
+            // re-minting - see [`ShotData::uuid`] for the one path (clone /
+            // duplicate) that must clear it instead.
+            uuid: self.uuid.clone(),
             azimuth_in: self.azimuth_in,
             azimuth_out: self.azimuth_out,
             length: self.length,
@@ -715,6 +769,7 @@ impl ShotData {
 impl From<Shot> for ShotData {
     fn from(shot: Shot) -> Self {
         ShotData {
+            uuid: shot.uuid,
             azimuth_in: shot.azimuth_in,
             azimuth_out: shot.azimuth_out,
             length: shot.length,
@@ -741,6 +796,7 @@ mod tests {
 
     fn base_shot_data() -> ShotData {
         ShotData {
+            uuid: None,
             azimuth_in: 10.0,
             azimuth_out: 20.0,
             length: 30.0,
@@ -757,6 +813,23 @@ mod tests {
             marker_index: Some(3),
             temperature: Some(21.5),
         }
+    }
+
+    #[test]
+    fn with_uuid_prefers_the_datas_own_identity_over_the_explicit_fallback() {
+        // The precedence rule `data.uuid.or(explicit)` is load-bearing (every
+        // transform that rebuilds a shot from its data relies on the data's id
+        // winning), yet on most live paths the two inputs are equal - so a
+        // flipped `.or()` would survive those tests. Pin it where they differ.
+        let data = ShotData {
+            uuid: Some("data-owned".to_string()),
+            ..base_shot_data()
+        };
+        let shot = Shot::with_uuid(7, data, Some("explicit-fallback".to_string()));
+        assert_eq!(shot.uuid.as_deref(), Some("data-owned"));
+
+        let shot = Shot::with_uuid(7, base_shot_data(), Some("explicit-fallback".to_string()));
+        assert_eq!(shot.uuid.as_deref(), Some("explicit-fallback"));
     }
 
     #[test]

@@ -95,10 +95,16 @@ impl AppState {
             let quality = section.quality;
 
             // Stable-identity remap snapshot: resolve every stored cross-reference
-            // to its CURRENT positional ref BEFORE we mutate the section. The shots
-            // moved into section B get fresh UUIDs, so positional-then-reanchor is
-            // the sound way to carry refs across the split (anchors alone can't
-            // follow a shot whose UUID changes).
+            // to its CURRENT positional ref BEFORE we mutate the section.
+            //
+            // Shot UUIDs now survive the split (#423 - section B is rebuilt from
+            // `to_shot_data`, which carries them), but the remap is still
+            // required: a `StationKey` is `(section_id, anchor)`, so an anchor
+            // cannot follow a shot ACROSS a section boundary. A ref into the B
+            // half would keep pointing at section A, where its shot no longer
+            // exists, and dangle. Positional-then-reanchor rewrites the
+            // section_id; carrying the uuid is what makes the reanchored key
+            // come back identical for the A half and stable for the B half.
             let split_station = (pos + 1) as u32;
             let original_station_count = section.shots.len() as u32 + 1;
             let old_refs: Vec<Option<StationRef>> = {
@@ -165,7 +171,8 @@ impl AppState {
             // [split_station, original_station_count)) become section B refs with
             // index -= split_station; everything else stays put. We re-derive each
             // ref's stable key from its NEW positional home against the now-final
-            // structure (section B's shots carry fresh UUIDs). `old_refs` was
+            // structure - which, since B's shots kept their UUIDs, differs from the
+            // old key only in the section id. `old_refs` was
             // captured before truncation, in `for_each_station_ref` order; the
             // `new_keys` Vec is consumed by `map_station_refs` in that same order.
             let _ = shots_after_len;

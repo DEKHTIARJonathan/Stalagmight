@@ -393,6 +393,13 @@ impl Project {
         let t = distance / shot.length;
         let mid_depth = shot.depth_in + t * (shot.depth_out - shot.depth_in);
         let head_data = ShotData {
+            // The head child is a NEW shot; only the tail keeps the parent's
+            // identity (see this method's doc comment - it is what makes every
+            // existing `AfterShot` anchor keep resolving without a remap).
+            // Copying the parent's uuid here would make the section hold two
+            // shots with one id, and the FIRST-wins repair would then re-mint
+            // the tail - moving every anchor. See [`ShotData::uuid`].
+            uuid: None,
             azimuth_in: shot.azimuth_in,
             azimuth_out: shot.azimuth_out,
             length: distance,

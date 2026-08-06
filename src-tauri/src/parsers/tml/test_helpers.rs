@@ -15,6 +15,7 @@ use super::*;
 pub(super) fn sample_tml_shot() -> TmlShot {
     TmlShot {
         id: 1,
+        uuid: None,
         from_id: 0,
         shot_type: TmlShotType::Real,
         azimuth: 0.0,

@@ -131,6 +131,14 @@ pub struct TmlSection {
 #[ts(export)]
 pub struct TmlShot {
     pub id: i64,
+    /// Ariane's own `<UUID>`/`<UU>` for this row, verbatim - `None` when the
+    /// element is absent or empty. Carried into [`crate::models::ShotData::uuid`]
+    /// so an Ariane-authored file keeps its shot identity across a round trip;
+    /// deliberately NOT validated or coerced to a canonical v4, since coercing
+    /// would recreate the churn the carry exists to stop (#423).
+    #[serde(default)]
+    #[ts(optional)]
+    pub uuid: Option<String>,
     pub from_id: i64,
     pub shot_type: TmlShotType,
     pub azimuth: f64,
@@ -191,6 +199,7 @@ pub struct TmlClosure {
 #[derive(Debug, Clone)]
 struct RawShot {
     id: i64,
+    uuid: Option<String>,
     from_id: i64,
     closure_to_id: i64,
     shot_type: TmlShotType,
@@ -223,6 +232,10 @@ struct RawShot {
 fn normalize_key_bytes(name: &[u8]) -> Option<&'static str> {
     match name {
         b"ID" | b"Id" => Some("id"),
+        // Ariane 26+ writes a stable per-row id here and preserves it across
+        // edits; we read it so a file that leaves Ariane and comes back keeps
+        // its shot identity instead of getting a fresh mint (#423).
+        b"UUID" | b"UU" => Some("uuid"),
         b"FromID" | b"FRID" => Some("from_id"),
         b"ClosureToID" | b"CID" => Some("closure_to_id"),
         b"Type" | b"TY" => Some("type"),
@@ -458,6 +471,91 @@ struct FileMetadata {
     anomalies: TmlParseAnomalies,
 }
 
+/// The longest foreign shot id we will adopt, in BYTES (`str::len`, so a
+/// multibyte value hits the cap sooner in characters). A hyphenated UUID is 36
+/// bytes; 128 leaves room for a `urn:uuid:` prefix or a braced form and still
+/// bounds the amplification, because the value is cloned into the project-wide
+/// `shot_uuid_index` AND into every undo snapshot (`Shot::to_shot_data` copies
+/// it), i.e. shots x length x undo depth.
+const MAX_FOREIGN_UUID_LEN: usize = 128;
+
+/// True if `c` cannot be written into TML element content and read back as
+/// itself. Two overlapping rules, both needed:
+///
+/// * **Outside XML 1.0's `Char` production**, which is
+///   `#x9 | #xA | #xD | [#x20-#xD7FF] | [#xE000-#xFFFD] | [#x10000-#x10FFFF]`.
+///   `BytesText::new` escapes only `<>&"'`, so anything else is emitted as a
+///   RAW byte and the document simply stops being XML. This half is what catches
+///   U+FFFE and U+FFFF, which are excluded by the production but are NOT control
+///   characters - a `char::is_control` gate let them straight through.
+///   Surrogates are the production's other exclusion and cannot occur in a Rust
+///   `char`.
+/// * **Any remaining control character.** Tab, LF and CR are perfectly legal
+///   XML, and the C1 range (U+0080-U+009F) is legal XML 1.0 text, but none of
+///   them belongs in an identifier and a `\0` additionally risks truncation on
+///   SQLite TEXT read-back - which would make the saved and the reloaded
+///   identity differ with nothing to show for it.
+fn is_unexportable_in_xml(c: char) -> bool {
+    let in_xml_char_set = matches!(c,
+        '\u{9}' | '\u{A}' | '\u{D}'
+        | '\u{20}'..='\u{D7FF}'
+        | '\u{E000}'..='\u{FFFD}'
+        | '\u{10000}'..='\u{10FFFF}');
+    !in_xml_char_set || c.is_control()
+}
+
+/// The file's `<UUID>`/`<UU>` as an identity we are willing to store, or `None`
+/// to mint a fresh one.
+///
+/// The VALUE is never coerced - canonicalising it would recreate the identity
+/// churn #423 exists to stop - but its SHAPE is checked, because two classes of
+/// input are not merely odd, they are unstorable:
+///
+/// * **Characters we cannot re-emit.** See [`is_unexportable_in_xml`]. Measured:
+///   exporting a shot whose uuid holds U+0001 writes that byte into element
+///   content. Our own quick-xml reader is lenient and reads it straight back, so
+///   nothing on this side complains; the strict consumers - Ariane and
+///   SpeleoDB's `openspeleo_lib` - reject the file.
+/// * **Unbounded length.** See [`MAX_FOREIGN_UUID_LEN`].
+///
+/// Rejecting is the fail-safe direction and the asymmetry is stark: a rejected
+/// value costs THAT SHOT its foreign identity and nothing else (it gets the same
+/// fresh mint an uncovered row gets), while one accepted bad byte costs the
+/// WHOLE exported document - a strict consumer fails the file, not the row.
+fn foreign_shot_uuid(shot_id: i64, raw: Option<&str>) -> Option<String> {
+    // Surrounding whitespace is trimmed BEFORE adoption - the one normalisation
+    // "never coerced" does not cover. Identity is compared byte-verbatim
+    // everywhere downstream, and XML readers routinely whitespace-normalise
+    // element content, so storing " x " would hand back a different identity on
+    // the very first round trip through a normalising consumer.
+    let raw = raw?.trim();
+    // Empty (or whitespace-only) means "no identity", matching the way
+    // `export::tml::shot_export_uuid` already treats an empty stored value.
+    if raw.is_empty() {
+        return None;
+    }
+    if raw.len() > MAX_FOREIGN_UUID_LEN {
+        tracing::warn!(
+            shot_id,
+            len = raw.len(),
+            max = MAX_FOREIGN_UUID_LEN,
+            purpose = "bound foreign shot identity (#423)",
+            "Shot UUID is too long to adopt; minting a fresh identity instead"
+        );
+        return None;
+    }
+    if raw.chars().any(is_unexportable_in_xml) {
+        tracing::warn!(
+            shot_id,
+            purpose = "bound foreign shot identity (#423)",
+            "Shot UUID holds a character that cannot be re-exported as well-formed \
+             XML; minting a fresh identity instead"
+        );
+        return None;
+    }
+    Some(raw.to_owned())
+}
+
 /// Build a `RawShot` from parsed field map.
 fn build_raw_shot(
     fields: &HashMap<&str, String>,
@@ -518,6 +616,7 @@ fn build_raw_shot(
 
     Ok(RawShot {
         id,
+        uuid: foreign_shot_uuid(id, fields.get("uuid").map(String::as_str)),
         from_id,
         closure_to_id: parse_i64(fields, "closure_to_id").unwrap_or(-1),
         shot_type,
@@ -991,6 +1090,7 @@ fn linearize_section(
             .iter()
             .map(|s| TmlShot {
                 id: s.id,
+                uuid: s.uuid.clone(),
                 from_id: s.from_id,
                 shot_type: s.shot_type,
                 azimuth: s.azimuth,
@@ -1824,6 +1924,10 @@ pub(crate) fn normalize_tml_shot(shot: &TmlShot, depth_in: f64) -> ShotData {
     let az = crate::models::normalize_azimuth(shot.azimuth);
 
     ShotData {
+        // The file's own shot id, carried so the round trip re-emits it (#423).
+        // The TML importer is the only one that sets this; every other importer
+        // leaves it `None` and gets a fresh mint, exactly as before.
+        uuid: shot.uuid.clone(),
         azimuth_in: az,
         azimuth_out: az, // No backsight in Ariane
         length: shot.length,
@@ -2031,6 +2135,66 @@ mod tests {
             shot.azimuth = input;
             assert_eq!(normalize_tml_shot(&shot, 0.0).azimuth_in, expected);
         }
+    }
+
+    // -------------------------------------------------------------------
+    // Foreign shot identity (#423)
+    // -------------------------------------------------------------------
+
+    /// The gate is XML 1.0's `Char` production, not the control range. U+FFFE and
+    /// U+FFFF are excluded by the production and are NOT control characters, so a
+    /// `char::is_control` gate adopted them - and `BytesText::new` escapes only
+    /// `<>&"'`, so they went into element content raw and the document stopped
+    /// being XML. One accepted bad byte costs the WHOLE exported file (a strict
+    /// consumer rejects the document, not the row), so this rejects rather than
+    /// repairs, and the shot gets an ordinary fresh mint.
+    #[test]
+    fn foreign_shot_uuid_rejects_characters_xml_forbids() {
+        const GOOD: &str = "beefbeef-0000-4000-8000-000000000001";
+        assert_eq!(
+            foreign_shot_uuid(1, Some(GOOD)),
+            Some(GOOD.to_owned()),
+            "a well-formed id is adopted verbatim, never coerced"
+        );
+
+        // Excluded by `Char`, but NOT control characters - the gap this closes.
+        assert_eq!(foreign_shot_uuid(1, Some("a\u{FFFF}b")), None);
+        assert_eq!(foreign_shot_uuid(1, Some("a\u{FFFE}b")), None);
+        // C0, C1, and NUL: control characters, rejected as before.
+        assert_eq!(foreign_shot_uuid(1, Some("a\u{1}b")), None);
+        assert_eq!(foreign_shot_uuid(1, Some("a\u{9F}b")), None);
+        assert_eq!(foreign_shot_uuid(1, Some("a\u{0}b")), None);
+        // Tab/LF/CR are legal XML but not legal in an identifier.
+        assert_eq!(foreign_shot_uuid(1, Some("a\tb")), None);
+        // Absent, empty and whitespace-only all mean "no identity".
+        assert_eq!(foreign_shot_uuid(1, None), None);
+        assert_eq!(foreign_shot_uuid(1, Some("")), None);
+        assert_eq!(foreign_shot_uuid(1, Some("   ")), None);
+        // Surrounding whitespace is trimmed, not adopted: identity compares
+        // byte-verbatim downstream, and a whitespace-normalising XML consumer
+        // would hand " x " back as "x" - a different identity - on the first
+        // round trip.
+        assert_eq!(
+            foreign_shot_uuid(1, Some(&format!("  {GOOD}\n"))),
+            Some(GOOD.to_owned())
+        );
+        // Length is bounded: at the cap is fine, one past it is not.
+        let at_cap = "a".repeat(MAX_FOREIGN_UUID_LEN);
+        assert_eq!(foreign_shot_uuid(1, Some(&at_cap)), Some(at_cap.clone()));
+        assert_eq!(
+            foreign_shot_uuid(1, Some(&"a".repeat(MAX_FOREIGN_UUID_LEN + 1))),
+            None
+        );
+        // U+FFFD and astral characters ARE in `Char` and stay adopted, so the
+        // gate cannot quietly widen into "reject anything unusual".
+        assert_eq!(
+            foreign_shot_uuid(1, Some("a\u{FFFD}b")),
+            Some("a\u{FFFD}b".to_owned())
+        );
+        assert_eq!(
+            foreign_shot_uuid(1, Some("a\u{1F300}b")),
+            Some("a\u{1F300}b".to_owned())
+        );
     }
 
     // -------------------------------------------------------------------
@@ -2426,6 +2590,7 @@ mod tests {
         let mut sections = vec![TmlSection {
             name: "Test".to_string(),
             shots: vec![TmlShot {
+                uuid: None,
                 id: 1,
                 from_id: 0,
                 shot_type: TmlShotType::Real,
@@ -2477,6 +2642,7 @@ mod tests {
         let mut sections = vec![TmlSection {
             name: "Test".to_string(),
             shots: vec![TmlShot {
+                uuid: None,
                 id: 1,
                 from_id: 0,
                 shot_type: TmlShotType::Real,
@@ -3715,6 +3881,7 @@ mod tests {
     #[test]
     fn test_virtual_shot_in_shot_data() {
         let shots = vec![TmlShot {
+            uuid: None,
             id: 1,
             from_id: 0,
             shot_type: TmlShotType::Virtual,
@@ -3745,6 +3912,7 @@ mod tests {
     #[test]
     fn test_lrud_zero_becomes_none() {
         let shots = vec![TmlShot {
+            uuid: None,
             id: 1,
             from_id: 0,
             shot_type: TmlShotType::Real,
@@ -3780,6 +3948,7 @@ mod tests {
         // Ariane stores azimuths as arbitrary angles (negative, >360).
         // convert_shots_to_shot_data must normalize to 0..360.
         let make_shot = |az: f64| TmlShot {
+            uuid: None,
             id: 1,
             from_id: 0,
             shot_type: TmlShotType::Real,
@@ -3832,6 +4001,7 @@ mod tests {
     fn test_excluded_shots_filtered_by_default() {
         let shots = vec![
             TmlShot {
+                uuid: None,
                 id: 1,
                 from_id: 0,
                 shot_type: TmlShotType::Real,
@@ -3855,6 +4025,7 @@ mod tests {
                 section: "Test".to_string(),
             },
             TmlShot {
+                uuid: None,
                 id: 2,
                 from_id: 1,
                 shot_type: TmlShotType::Real,
@@ -3878,6 +4049,7 @@ mod tests {
                 section: "Test".to_string(),
             },
             TmlShot {
+                uuid: None,
                 id: 3,
                 from_id: 2,
                 shot_type: TmlShotType::Real,
@@ -3920,6 +4092,7 @@ mod tests {
     fn test_all_excluded_section_dropped_from_configs() {
         // Section where every shot is excluded → should be dropped entirely
         let make_shot = |id, from_id, excluded| TmlShot {
+            uuid: None,
             id,
             from_id,
             shot_type: TmlShotType::Real,
@@ -3995,6 +4168,7 @@ mod tests {
         // whose target station was excluded (and so never made it into
         // `id_to_import_loc`), exercising both converter-level warnings at once.
         let make_shot = |id, from_id, shot_type, excluded, closure_to_id| TmlShot {
+            uuid: None,
             id,
             from_id,
             shot_type,
@@ -4089,6 +4263,7 @@ mod tests {
         // Two branches of "Gallery": branch 2 is all-excluded → dropped.
         // Branch 1 should lose the "(branch 1)" suffix.
         let make_shot = |id, from_id, excluded| TmlShot {
+            uuid: None,
             id,
             from_id,
             shot_type: TmlShotType::Real,
@@ -4173,6 +4348,7 @@ mod tests {
         // (in section C), and topological sort must reorder C before B even though
         // C has a higher raw index than expected.
         let make_shot = |id: i64, from_id: i64, excluded: bool| TmlShot {
+            uuid: None,
             id,
             from_id,
             shot_type: TmlShotType::Real,

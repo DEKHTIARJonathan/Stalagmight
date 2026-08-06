@@ -26,10 +26,42 @@ pub fn create_shot(
 pub(crate) fn create_shot_impl(
     state: &AppState,
     section_id: SectionId,
-    shot: ShotData,
+    mut shot: ShotData,
     after_shot_id: Option<ShotId>,
     before_shot_id: Option<ShotId>,
 ) -> CommandResult {
+    // Identity is not the caller's to name (#423). `ShotData::uuid` exists so a
+    // uuid can travel with its own shot through the transforms that rebuild
+    // shots from their data; it is NOT an input to "create a shot here".
+    //
+    // Left through, a caller could name an EXISTING shot's uuid and insert the
+    // new shot BEFORE it. The first-wins repairs (`Section::new` and the
+    // pre-save `ensure_unique_shot_uuids`) keep the first OCCURRENCE, which is
+    // now the injected record, and re-mint the original - moving every
+    // `AfterShot` anchor on it (merges, closures, zero datums, resolved-warning
+    // ignores) onto the injected shot.
+    //
+    // `execute`'s structural epilogue does catch it on a project that was sound
+    // beforehand: `duplicate_shot_uuid` is Critical, so the whole create is
+    // rolled back (verified - without this line the create returns "Blocked:
+    // this action would corrupt the survey structure"). That is not cover
+    // enough. It fires only on NEWLY introduced criticals, so on a project that
+    // is already critical (`finalize_structural_edit(pre_had_critical)`) the
+    // duplicate is admitted and nothing objects until the pre-save repair
+    // quietly re-mints the original. Clearing here is also the better outcome
+    // for the sound case: a legitimate "add a shot" keeps working instead of
+    // being refused because of a field the client had no business setting.
+    //
+    // The AUTHORITATIVE clear is in the executor (`AppState::create_shot`,
+    // core/state/command_shot.rs) - a wrapper-only clear held only by grace of
+    // the batch allowlist refusing `CreateShot` (pre-PR review, #423); the
+    // executor holds it for every constructor of the command. This one stays
+    // as documentation-plus-belt. `Command::CreateSection` IS batch-allowed
+    // and is stripped at its two dispatch arms instead (core/state/commands.rs,
+    // undo_restore.rs) - its executor is shared with the importers, whose
+    // identities our own parser legitimately adopted. That leaves
+    // `import_sections` as the one door that may carry identities.
+    shot.uuid = None;
     state.execute(Command::CreateShot {
         section_id,
         shot,

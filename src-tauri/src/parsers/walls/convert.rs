@@ -452,6 +452,9 @@ pub fn convert_walls_to_import_configs(
                     _ => own_lrud,
                 };
                 shots.push(ShotData {
+                    // Walls files carry no shot identity; every shot gets a
+                    // fresh mint.
+                    uuid: None,
                     azimuth_in: v.azimuth_in,
                     azimuth_out: v.azimuth_out,
                     length,

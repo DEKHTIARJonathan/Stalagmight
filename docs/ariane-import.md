@@ -37,6 +37,12 @@ Both formats use the same XML schema. TML files use long element names (`Azimut`
 - Comment
 - Shot type (Real, Virtual, Start, Closure) - Ariane's "Virtual" type maps to a virtual `ShotKind`
 - Excluded flag
+- `UUID` / `UU` - Ariane 26+'s stable per-row id, kept verbatim as the shot's
+  identity so a file that leaves Ariane and comes back is not re-identified
+  (#423). Absent or empty means "no identity" and gets a fresh v4. The value is
+  never validated or coerced; see
+  [Ariane export](ariane-export.md) for the uniqueness scope and the SpeleoDB
+  sidecar consequence.
 
 ### Loop closures
 CLOSURE-type shots in Ariane encode loop closure metadata. During import these are resolved into Stalagmight loop closures linking two stations across sections.

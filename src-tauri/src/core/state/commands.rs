@@ -543,7 +543,19 @@ impl AppState {
                 color: color.clone(),
                 direction: *direction,
                 quality: 1.0,
-                shots: shots.clone(),
+                // Identity is not the caller's to name (#423): this Command
+                // arrives verbatim off IPC (create_section, execute_batch), so
+                // strip uuids HERE, not in `AppState::create_section` - the
+                // importers funnel through that executor with identities our
+                // own parser legitimately adopted.
+                shots: shots
+                    .iter()
+                    .cloned()
+                    .map(|mut s| {
+                        s.uuid = None;
+                        s
+                    })
+                    .collect(),
             }),
             Command::DeleteSection { section_id } => self.delete_section(*section_id),
             Command::UpdateSectionMetadata {
