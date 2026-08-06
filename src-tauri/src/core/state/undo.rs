@@ -989,23 +989,36 @@ impl AppState {
     // === Keeping a re-creating entry's identity current ===
 
     /// Re-read the live section a `CreatedSectionSnapshot` entry re-creates, and
-    /// store its identity on the entry (#413, finding 1).
+    /// store BOTH halves of it - the shots and their identity - on the entry
+    /// (#413, finding 1).
     ///
     /// Called immediately before the undo DELETES that section, which is the
-    /// last moment the identity exists. It matters because a section can be
+    /// last moment either half exists. It matters because a section can be
     /// healed after the entry was pushed and with no undo entry of its own -
     /// `capture_missing_gauge_anchors` runs on every save, so "create a section,
     /// save, undo, redo" would otherwise put the section back with the gauge
     /// pair discarded, and `ensure_shot_uuids` / `ensure_unique_shot_uuids` are
     /// the same shape one field over.
     ///
+    /// The two halves are re-read TOGETHER because `Section::restore_with_identity`
+    /// pairs them POSITIONALLY (it zips `section_data.shots` against
+    /// `identity.shot_uuids`). Refreshing only the identity mixes an old shot list
+    /// with current uuids, so a section whose shots grew, shrank or moved since it
+    /// was created comes back as the ORIGINAL shots wearing whichever uuids now sit
+    /// at those indices - the identity every `StationKey::AfterShot` anchor and the
+    /// Ariane export resolve by, silently re-pointed. Re-snapshotting both makes
+    /// the redo put back exactly what the undo destroyed, the same
+    /// self-refreshing-wall property `refresh_snapshot_pair_counterpart` gives a
+    /// `ProjectSnapshotPair`.
+    ///
     /// A no-op for every other variant, and for an entry whose section is
-    /// already gone (the undo is about to fail anyway).
+    /// already gone (the undo is about to fail anyway), which keeps the recorded
+    /// payload rather than degrading it.
     fn refresh_created_section_identity(&self, entry: &mut UndoEntry) {
         let UndoData::CreatedSectionSnapshot {
             section_id,
+            section_data,
             identity,
-            ..
         } = &mut entry.undo_data
         else {
             return;
@@ -1017,6 +1030,7 @@ impl AppState {
         let Some(section) = guard.as_ref().and_then(|p| p.get_section(*section_id)) else {
             return;
         };
+        *section_data = section.to_section_data();
         *identity = SectionIdentity::of(section);
     }
 
@@ -1316,6 +1330,14 @@ impl AppState {
                     count,
                     result.error.unwrap_or_else(|| "Unknown error".to_string())
                 ));
+                // The FAILED step can have mutated too: an arm reports its
+                // failure only after running its inverse, and the inverse
+                // mutates as it goes (`remove_created_shot` ->
+                // `Project::remove_shot_with_rewire` drops the removed station's
+                // offsets and rewires closures and merges before it can report).
+                // The user is left holding that state, so it gets the same
+                // reconcile every completed step gets.
+                self.reconcile_geometry();
                 return if reversed.is_empty() {
                     failure
                 } else {
@@ -1325,27 +1347,34 @@ impl AppState {
             if let Some(entries) = result.reversed_sections {
                 reversed.extend(entries);
             }
+            // The SAME epilogue single-step `undo()` runs, after EVERY step, so
+            // that a jump lands where the equivalent number of single undos
+            // lands - which is the contract the history dropdown makes and which
+            // `undo_to` was breaking by looping `undo_inner` bare (#413,
+            // finding 7). `reconcile_geometry` is what re-derives offsets for a
+            // merge a raw restore left drifted past the alignment invariant.
+            //
+            // PER STEP, not once after the loop: an intermediate state is not
+            // one the user ever SEES, but it is one the steps above it READ.
+            // The arms that re-derive rather than restore read the live offsets
+            // at the moment they run (`PreviousValues` -> `update_shot` ->
+            // `realign_after_shot_edit`, `CreatedShotSnapshot` ->
+            // `remove_created_shot`), so a drifted intermediate state is an
+            // input, and a jump that carries one lands somewhere the single
+            // presses do not. The cost of asking is trivial in the common case:
+            // `realign_merges` returns immediately unless some merge is beyond
+            // the 1 cm invariant, which a state a step just restored normally is
+            // not.
+            // (`invalidate_adjusted_cache` is deliberately not here: the
+            // adjusted cache keys on `project.modified_at`, which every undo
+            // bumps through `Project::touch`, so the next read misses and
+            // re-solves regardless - measured in the finding's write-up.)
+            self.reconcile_geometry();
         }
 
         // Dirty-bit flip (#191, D-B16): undo_to ran one or more undos. Set-only;
         // no-op for local-only.
         self.mark_remote_dirty();
-        // The SAME epilogue single-step `undo()` runs, so that a jump lands
-        // where the equivalent number of single undos lands - which is the
-        // contract the history dropdown makes and which `undo_to` was breaking
-        // by looping `undo_inner` bare (#413, finding 7). `reconcile_geometry`
-        // is what re-derives offsets for a merge a raw restore left drifted past
-        // the 5 cm tolerance, and it ran after every single step and never for a
-        // jump.
-        //
-        // ONCE, after the loop, not per step: the intermediate states of a jump
-        // are not states the user ever sees, so reconciling them is wasted work,
-        // while the FINAL state has to be as reconciled as the single-step route.
-        // (`invalidate_adjusted_cache` is deliberately not here: the adjusted
-        // cache keys on `project.modified_at`, which every undo bumps through
-        // `Project::touch`, so the next read misses and re-solves regardless -
-        // measured in the finding's write-up.)
-        self.reconcile_geometry();
         tracing::info!(index = index, count = count, "Undo to index completed");
         if reversed.is_empty() {
             CommandResult::success()
@@ -1389,13 +1418,15 @@ impl AppState {
             let result = self.redo_inner();
             if !result.success {
                 // Same reasoning as `undo_to`: the steps that already ran are not
-                // rolled back, so the failure carries their entries.
+                // rolled back, so the failure carries their entries - and the
+                // failed step's own partial mutation is reconciled with them.
                 let failure = CommandResult::failure(format!(
                     "Redo failed at step {} of {}: {}",
                     i + 1,
                     count,
                     result.error.unwrap_or_else(|| "Unknown error".to_string())
                 ));
+                self.reconcile_geometry();
                 return if reversed.is_empty() {
                     failure
                 } else {
@@ -1405,14 +1436,15 @@ impl AppState {
             if let Some(entries) = result.reversed_sections {
                 reversed.extend(entries);
             }
+            // The same epilogue single-step `redo()` runs, after every step -
+            // see `undo_to` for why it is per step and not once after the loop
+            // (#413, finding 7).
+            self.reconcile_geometry();
         }
 
         // Dirty-bit flip (#191, D-B16): redo_to ran one or more redos. Set-only;
         // no-op for local-only.
         self.mark_remote_dirty();
-        // The same epilogue single-step `redo()` runs, once after the loop - see
-        // `undo_to` for why (#413, finding 7).
-        self.reconcile_geometry();
         tracing::info!(index = index, count = count, "Redo to index completed");
         if reversed.is_empty() {
             CommandResult::success()

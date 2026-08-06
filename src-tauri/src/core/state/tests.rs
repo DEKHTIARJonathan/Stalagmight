@@ -22782,3 +22782,486 @@ fn finding_26_a_shot_edit_does_not_translate_a_group_whose_first_datum_was_remov
         );
     }
 }
+
+// ===========================================================================
+// #413 finding 7, second half: a jump reconciles after EVERY step
+// ===========================================================================
+
+/// A shot with plain, easily-recognised geometry.
+fn straight_shot(azimuth: f64, length: f64) -> ShotData {
+    ShotData {
+        azimuth_in: azimuth,
+        azimuth_out: azimuth,
+        length,
+        depth_in: 0.0,
+        depth_out: 0.0,
+        ..Default::default()
+    }
+}
+
+/// An `AppState` with an empty project open, ready for commands.
+fn state_with_project() -> AppState {
+    let state = AppState::new().unwrap();
+    let created = state.execute(Command::CreateProject {
+        name: "JumpEpilogue".to_string(),
+        location: None,
+    });
+    assert!(created.success, "CreateProject failed: {:?}", created.error);
+    state
+}
+
+/// Create a section with `shots` and return its id.
+fn section_with_shots(state: &AppState, name: &str, shots: Vec<ShotData>) -> SectionId {
+    let created = state.execute(Command::CreateSection {
+        name: Some(name.to_string()),
+        surveyor: None,
+        date: None,
+        color: "#3388FF".to_string(),
+        direction: None,
+        shots,
+    });
+    assert!(created.success, "CreateSection failed: {:?}", created.error);
+    created.section_id.expect("CreateSection returned no id")
+}
+
+/// How many merges the project currently reports as misaligned.
+fn misaligned_merges(state: &AppState) -> usize {
+    let guard = state.project.lock().expect("project lock poisoned");
+    guard
+        .as_ref()
+        .expect("no project open")
+        .check_merge_alignment()
+        .len()
+}
+
+/// Two merged sections, the first anchored by a zero datum. Returns
+/// `(anchored, partner)`.
+fn two_merged_sections(state: &AppState) -> (SectionId, SectionId) {
+    let a = section_with_shots(
+        state,
+        "A",
+        vec![straight_shot(0.0, 5.0), straight_shot(0.0, 5.0)],
+    );
+    let b = section_with_shots(state, "B", vec![straight_shot(90.0, 5.0)]);
+    let datum = state.execute(Command::SetZeroDatum {
+        station_ref: StationRef::new(a, 0),
+        coordinates: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
+    });
+    assert!(datum.success, "SetZeroDatum failed: {:?}", datum.error);
+    let merged = state.execute(Command::MergeStations {
+        station_a: StationRef::new(a, 2),
+        station_b: StationRef::new(b, 0),
+    });
+    assert!(merged.success, "MergeStations failed: {:?}", merged.error);
+    (a, b)
+}
+
+/// Seven metres of drift written straight into the partner's offset - two
+/// orders of magnitude past the alignment invariant, and far past anything the
+/// command API can leave behind in a project this small.
+fn inject_drift(state: &AppState, partner: SectionId) {
+    let mut guard = state.project.lock().expect("project lock poisoned");
+    let project = guard.as_mut().expect("no project open");
+    project.section_offsets.insert(partner, (7.0, 0.0));
+    assert!(
+        !project.check_merge_alignment().is_empty(),
+        "setup: the injected offset should leave the merge misaligned"
+    );
+}
+
+/// Two merged sections with drift injected into the partner, and then ONE
+/// `MoveStation` recorded over the top of it.
+///
+/// `MoveStation` captures a `ProjectSnapshotPair` BEFORE it mutates, so its
+/// `before` half holds the drifted project while its own epilogue heals the
+/// live one. After this runs, the only way back to the drift is that restore -
+/// which is exactly the shape a jump's INTERMEDIATE step has.
+fn history_recorded_over_drift() -> (AppState, SectionId) {
+    let state = state_with_project();
+    let (anchored, partner) = two_merged_sections(&state);
+    inject_drift(&state, partner);
+    let moved = state.execute(Command::MoveStation {
+        station_ref: StationRef::new(anchored, 1),
+        offset: Coordinates {
+            x: 1.0,
+            y: 2.0,
+            z: 0.0,
+        },
+    });
+    assert!(moved.success, "MoveStation failed: {:?}", moved.error);
+    assert_eq!(
+        misaligned_merges(&state),
+        0,
+        "setup: the command's own epilogue should have healed the live drift"
+    );
+    (state, partner)
+}
+
+/// An undo entry that always fails to undo, for slipping under a good one.
+fn unusable_undo_entry() -> UndoEntry {
+    UndoEntry {
+        command_bytes: None,
+        command: Command::UpdateShot {
+            section_id: 999,
+            shot_id: 999,
+            updates: ShotUpdates::default(),
+        },
+        undo_data: UndoData::PreviousValues {
+            section_id: 999,
+            shot_id: Some(999),
+            shot_uuid: None,
+            values_json: "invalid-json".to_string(),
+            previous_offsets: HashMap::new(),
+        },
+        timestamp: None,
+    }
+}
+
+/// A jump that dies half way must still leave the steps it DID apply
+/// reconciled (#413, finding 7).
+///
+/// `undo_to` reconciled once after its loop and returned early on a failed step
+/// without ever reaching it, so a jump whose first step restored a drifted
+/// snapshot and whose second step failed left the user holding a survey network
+/// the app's own `debug_assert_merge_alignment` calls a violation. Pressing
+/// Ctrl+Z twice never could: `undo()` reconciles per press.
+#[test]
+fn undo_to_reconciles_after_every_step_so_a_failed_jump_leaves_no_drift() {
+    let (state, _partner) = history_recorded_over_drift();
+
+    // Slip an unusable entry UNDER the MoveStation, so the jump completes one
+    // real step (which restores the drift) and then fails on the second.
+    {
+        let mut stack = state.undo_stack.lock().unwrap();
+        let move_entry = stack.pop_undo().expect("the MoveStation entry");
+        stack.push_undo(unusable_undo_entry());
+        stack.push_undo(move_entry);
+    }
+
+    let result = state.undo_to(1);
+    assert!(
+        !result.success,
+        "the second step should have failed, so the jump should report failure"
+    );
+    let error = result.error.as_deref().unwrap_or_default();
+    assert!(
+        error.contains("Undo failed at step 2 of 2"),
+        "expected the step-counted message, got: {error}"
+    );
+    assert_eq!(
+        misaligned_merges(&state),
+        0,
+        "the first step restored a snapshot carrying 7 m of drift and the jump then failed: \
+         reconcile_geometry has to run per step, or the state the user is left holding is one \
+         no sequence of single Ctrl+Z presses can produce"
+    );
+}
+
+/// The redo mirror of the test above.
+///
+/// The pair is built by hand because a genuine redo entry's `after` half is
+/// captured AFTER the forward command's own epilogue healed the project, so
+/// nothing a command records can restore drift on the way forward. What the
+/// fuzzer reaches - and what a persisted entry written by an older build can
+/// hold - is a snapshot that carries it.
+#[test]
+fn redo_to_reconciles_after_every_step_so_a_failed_jump_leaves_no_drift() {
+    let state = state_with_project();
+    let (_anchored, partner) = two_merged_sections(&state);
+    inject_drift(&state, partner);
+    let drifted = state
+        .capture_project_snapshot()
+        .expect("capturing the drifted project");
+    state.reconcile_geometry();
+    assert_eq!(
+        misaligned_merges(&state),
+        0,
+        "setup: the reconcile should have healed the live drift"
+    );
+    let healed = state
+        .capture_project_snapshot()
+        .expect("capturing the healed project");
+
+    {
+        let mut stack = state.undo_stack.lock().unwrap();
+        // Bottom: an entry that cannot be redone. Top: the drift-carrying pair.
+        stack.push_redo(UndoEntry {
+            command_bytes: None,
+            command: Command::CloseProject,
+            undo_data: UndoData::ProjectSnapshotPair {
+                before: "{}".to_string(),
+                after: "not-json".to_string(),
+            },
+            timestamp: None,
+        });
+        stack.push_redo(UndoEntry {
+            command_bytes: None,
+            command: Command::MoveStation {
+                station_ref: StationRef::new(partner, 0),
+                offset: Coordinates {
+                    x: 1.0,
+                    y: 0.0,
+                    z: 0.0,
+                },
+            },
+            undo_data: UndoData::ProjectSnapshotPair {
+                before: healed,
+                after: drifted,
+            },
+            timestamp: None,
+        });
+    }
+
+    let result = state.redo_to(1);
+    assert!(
+        !result.success,
+        "the second step should have failed, so the jump should report failure"
+    );
+    let error = result.error.as_deref().unwrap_or_default();
+    assert!(
+        error.contains("Redo failed at step 2 of 2"),
+        "expected the step-counted message, got: {error}"
+    );
+    assert_eq!(
+        misaligned_merges(&state),
+        0,
+        "the first redo step restored a snapshot carrying 7 m of drift and the jump then \
+         failed: redo_to has to reconcile per step exactly as redo() does per press"
+    );
+}
+
+/// The contract itself, over a jump whose drifted state is an INTERMEDIATE one:
+/// a jump lands where the same number of single presses lands.
+///
+/// Two `MoveStation`s over the injected drift means the step that restores it
+/// still has a step above it. Both routes are built on their own copy of the
+/// same project.
+#[test]
+fn undo_to_lands_where_the_same_number_of_single_undos_lands_over_a_drifted_step() {
+    fn build() -> (AppState, SectionId, SectionId) {
+        let state = state_with_project();
+        let (anchored, partner) = two_merged_sections(&state);
+        inject_drift(&state, partner);
+        for step in 0..2 {
+            let moved = state.execute(Command::MoveStation {
+                station_ref: StationRef::new(anchored, 1),
+                offset: Coordinates {
+                    x: 1.0,
+                    y: 2.0,
+                    z: 0.0,
+                },
+            });
+            assert!(
+                moved.success,
+                "MoveStation {step} failed: {:?}",
+                moved.error
+            );
+        }
+        (state, anchored, partner)
+    }
+
+    let (jumped, jumped_anchored, jumped_partner) = build();
+    // index 2 = three entries: both moves and the merge under them.
+    let jump = jumped.undo_to(2);
+    assert!(jump.success, "undo_to(2) failed: {:?}", jump.error);
+
+    let (stepped, stepped_anchored, stepped_partner) = build();
+    for step in 0..3 {
+        let single = stepped.undo();
+        assert!(
+            single.success,
+            "single undo {step} failed: {:?}",
+            single.error
+        );
+    }
+
+    assert_eq!(
+        (jumped_anchored, jumped_partner),
+        (stepped_anchored, stepped_partner),
+        "the two routes were not built on the same topology, so nothing below compares anything"
+    );
+    let jumped_offsets = jumped.get_project_state().unwrap().section_offsets;
+    let stepped_offsets = stepped.get_project_state().unwrap().section_offsets;
+    assert_eq!(
+        jumped_offsets, stepped_offsets,
+        "a three-step undo_to left the survey somewhere three single undos do not"
+    );
+    assert_eq!(
+        (misaligned_merges(&jumped), misaligned_merges(&stepped)),
+        (0, 0),
+        "a history move left the survey network broken"
+    );
+}
+
+// ===========================================================================
+// #413 finding 24's shape one file over: a persisted shot id is unbounded
+// ===========================================================================
+
+/// Redoing a `CreatedShotSnapshot` whose `shot_id` is `ShotId::MAX` must not
+/// overflow the section's id counter.
+///
+/// The id arrives verbatim from a persisted entry, and the append branch bumped
+/// `next_shot_id` to `id + 1` - a panic in a debug build, a wrap in a release
+/// one, after which `Section::take_shot_id` hands the wrapped value straight
+/// back out as an id another shot already holds.
+#[test]
+fn redo_of_a_created_shot_with_the_maximum_id_saturates_instead_of_overflowing() {
+    let state = state_with_project();
+    let section = section_with_shots(&state, "A", vec![]);
+
+    {
+        let mut stack = state.undo_stack.lock().unwrap();
+        stack.push_redo(UndoEntry {
+            command_bytes: None,
+            command: Command::CreateShot {
+                section_id: section,
+                shot: straight_shot(0.0, 5.0),
+                after_shot_id: None,
+                before_shot_id: None,
+            },
+            undo_data: UndoData::CreatedShotSnapshot {
+                section_id: section,
+                shot_id: ShotId::MAX,
+                shot_data: straight_shot(0.0, 5.0),
+                position: 0,
+                station_shift_from: 0,
+                after_shot_id: None,
+                before_shot_id: None,
+                after_shot_uuid: None,
+                before_shot_uuid: None,
+                uuid: Some("11111111-1111-4111-8111-111111111111".to_string()),
+                previous_offsets: HashMap::new(),
+            },
+            timestamp: None,
+        });
+    }
+
+    // Panics with "attempt to add with overflow" before the fix.
+    let redone = state.redo();
+    assert!(redone.success, "redo failed: {:?}", redone.error);
+
+    let project = state.get_project_state().unwrap();
+    let restored = project.get_section(section).expect("section missing");
+    assert_eq!(
+        restored.shots.iter().map(|s| s.id).collect::<Vec<_>>(),
+        vec![ShotId::MAX],
+        "the redo should have appended the recorded shot under its recorded id"
+    );
+    assert_eq!(
+        restored.next_shot_id,
+        ShotId::MAX,
+        "the counter should saturate rather than wrap past the id it must stay ahead of"
+    );
+}
+
+// ===========================================================================
+// #413 finding 1's residue: only half of a CreatedSectionSnapshot was refreshed
+// ===========================================================================
+
+/// Every shot uuid in `section_id`, in order.
+fn section_shot_uuids(state: &AppState, section_id: SectionId) -> Vec<Option<String>> {
+    state
+        .get_project_state()
+        .expect("no project open")
+        .get_section(section_id)
+        .expect("section missing")
+        .shots
+        .iter()
+        .map(|shot| shot.uuid.clone())
+        .collect()
+}
+
+/// Every shot length in `section_id`, in order - the cheapest way to say WHICH
+/// shot each uuid ended up on.
+fn section_shot_lengths(state: &AppState, section_id: SectionId) -> Vec<f64> {
+    state
+        .get_project_state()
+        .expect("no project open")
+        .get_section(section_id)
+        .expect("section missing")
+        .shots
+        .iter()
+        .map(|shot| shot.length)
+        .collect()
+}
+
+/// The undo of a `CreateSection` re-reads the live section, and it has to
+/// re-read BOTH halves of what it re-creates.
+///
+/// `Section::restore_with_identity` pairs `section_data.shots` against
+/// `identity.shot_uuids` POSITIONALLY. Refreshing only the identity - which is
+/// what the undo did - hands the redo the shot list as the section was CREATED
+/// wearing the uuids the section holds NOW, so a section whose shots moved
+/// under it (an undo-less heal, or anything else with no entry of its own)
+/// comes back as the original shots carrying somebody else's identity, and any
+/// uuid past the end of the shorter list is dropped outright. Those uuids are
+/// what every `StationKey::AfterShot` and the Ariane export resolve by.
+#[test]
+fn undo_of_create_section_re_reads_the_live_shots_so_redo_keeps_uuids_on_their_own_shots() {
+    let state = state_with_project();
+    let section = section_with_shots(
+        &state,
+        "A",
+        vec![straight_shot(0.0, 5.0), straight_shot(0.0, 7.0)],
+    );
+
+    // An undo-less mutation: a shot appears at the FRONT of the section with no
+    // undo entry of its own, the same way a save-time heal mutates a section.
+    {
+        let mut guard = state.project.lock().unwrap();
+        let project = guard.as_mut().expect("no project open");
+        let live = project.get_section_mut(section).expect("section missing");
+        let id = live.next_shot_id;
+        live.next_shot_id += 1;
+        live.shots.insert(
+            0,
+            crate::models::Shot::with_uuid(
+                id,
+                straight_shot(180.0, 3.0),
+                Some("22222222-2222-4222-8222-222222222222".to_string()),
+            ),
+        );
+        project.reindex_section_shot_uuids(section);
+    }
+
+    let uuids_before = section_shot_uuids(&state, section);
+    let lengths_before = section_shot_lengths(&state, section);
+    assert_eq!(
+        lengths_before,
+        vec![3.0, 5.0, 7.0],
+        "setup: the inserted shot should be first"
+    );
+
+    let undone = state.undo();
+    assert!(undone.success, "undo failed: {:?}", undone.error);
+    assert!(
+        state
+            .get_project_state()
+            .unwrap()
+            .get_section(section)
+            .is_none(),
+        "undo of CreateSection should have deleted the section"
+    );
+
+    let redone = state.redo();
+    assert!(redone.success, "redo failed: {:?}", redone.error);
+
+    assert_eq!(
+        section_shot_lengths(&state, section),
+        lengths_before,
+        "the redo put back the shot list as it was CREATED, not the one the undo destroyed"
+    );
+    let uuids_after = section_shot_uuids(&state, section);
+    assert_eq!(
+        uuids_after, uuids_before,
+        "a uuid landed on a different shot than the one that owned it: restore_with_identity \
+         zips the recorded shots against the recorded uuids, so both halves have to come from \
+         the same live section"
+    );
+    let unique: HashSet<Option<String>> = uuids_after.iter().cloned().collect();
+    assert_eq!(
+        unique.len(),
+        uuids_after.len(),
+        "the restored section holds a duplicate shot identity: {uuids_after:?}"
+    );
+}
