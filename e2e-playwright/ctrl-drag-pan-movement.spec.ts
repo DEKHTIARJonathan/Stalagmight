@@ -472,7 +472,7 @@ test.describe('Ctrl+Drag Pan - Content Movement Verification', () => {
   });
 
   /**
-   * The modal modes - the zoom tool's box, placement, a move ghost in flight -
+   * The modal modes - the zoom tool's box and placement, the only two left -
    * are where MapLibre's dragPan is turned OFF entirely (`mapGestureMode`), so
    * ANY camera movement here is the custom handler's doing and nothing else's.
    * That makes this the place to pin the two things that are only true of the

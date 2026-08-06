@@ -25,10 +25,12 @@ import {
  * NO `seedNavigationTools` anywhere in this file, deliberately: this is the
  * default install, which is the configuration the whole feature is about.
  *
- * The gestures that take the left button back are covered elsewhere (the zoom
- * tool in zoom-tool.spec.ts, placement in placement-overlay.spec.ts); the one
- * exception asserted here is a move ghost in flight, because it is the only one
- * reachable without turning a setting on.
+ * The two gestures that take the left button back are covered elsewhere (the
+ * zoom tool in zoom-tool.spec.ts, placement in placement-overlay.spec.ts), and
+ * neither is reachable without turning a setting on or entering a wizard. What
+ * IS reachable from the default install is carrying a move ghost, and that is
+ * asserted here precisely because it is NOT an exception: the drag pans there
+ * too, and the drop is the still click that ends it.
  */
 
 const sectionSeeds: SectionSeed[] = [
@@ -56,6 +58,19 @@ async function getMapZoom(page: Page): Promise<number> {
 /** Manhattan distance between two centers - "did the camera move at all". */
 function centerDelta(a: MapCenter, b: MapCenter): number {
   return Math.abs(a.lng - b.lng) + Math.abs(a.lat - b.lat);
+}
+
+/**
+ * How many move commands have reached the backend. The mocked `move_station` /
+ * `move_segment` / `move_section` handlers record every call in
+ * `__MOCK_MOVE_CALLS__` and deliberately do NOT mutate the project (see
+ * mocks/tauri-ipc.ts), so this - not a coordinate read-back - is the oracle for
+ * "was a move committed".
+ */
+async function getCommittedMoves(page: Page): Promise<number> {
+  return page.evaluate(
+    () => ((window as unknown as { __MOCK_MOVE_CALLS__?: unknown[] }).__MOCK_MOVE_CALLS__ ?? []).length
+  );
 }
 
 /** The ruler's first endpoint and the merge tool's first pick, in one read. */
@@ -370,7 +385,7 @@ test.describe('Map direct manipulation (#409)', () => {
     await expect(page.getByTestId('context-menu')).toBeVisible({ timeout: 5000 });
   });
 
-  test('Move Station: a drag pans, unless a ghost is already in flight', async ({ page }) => {
+  test('Move Station: a drag pans even with a ghost in flight; the still click drops it', async ({ page }) => {
     await page.keyboard.press('t');
     await waitForActiveTool(page, 'move_station');
 
@@ -387,19 +402,32 @@ test.describe('Map direct manipulation (#409)', () => {
     const box = await canvasBox(page);
     await page.mouse.click(box.x + station.x, box.y + station.y);
     await expect.poll(() => getDragGhostState(page), { timeout: 5000 }).not.toBeNull();
+    expect(await getCommittedMoves(page), 'picking up commits nothing').toBe(0);
 
-    // Carrying: the drag belongs to the ghost, which drops on pointerup -
-    // something clickTolerance does not gate - so the map must not pan under it.
+    // Carrying does NOT take the drag back: the drop is gated on the press
+    // STAYING PUT (the same 3px at which the map stops calling a press a click),
+    // so a real drag is a pan like any other and the ghost simply stays up.
     const centerCarrying = await getMapCenter(page);
-    await dragOnCanvas(page, { x: station.x, y: station.y }, { x: station.x + 120, y: station.y + 80 });
-    // Settle: proving the camera did NOT move, so a poll would accept the
-    // pre-update value.
-    await page.waitForTimeout(200);
-    expect(centerDelta(await getMapCenter(page), centerCarrying)).toBe(0);
+    const carryFrom = await findEmptyPoint(page, { dx: 120, dy: 80 });
+    await dragOnCanvas(page, carryFrom, { x: carryFrom.x + 120, y: carryFrom.y + 80 });
+    await waitForMapIdle(page);
 
-    // Leave the ghost behind rather than committing a move the next test would
-    // have to know about.
-    await page.keyboard.press('Escape');
+    expect(centerDelta(await getMapCenter(page), centerCarrying)).toBeGreaterThan(0.00001);
+    // The release at the end of that drag committed nothing and dropped nothing.
+    expect(await getCommittedMoves(page), 'a drag-release is not a drop').toBe(0);
+    expect(await getDragGhostState(page), 'the ghost is still in flight').not.toBeNull();
+
+    // ...and a still click, on the camera the pan just moved, IS the drop. On
+    // empty map: dropping onto another station opens the snap-merge dialog
+    // instead of committing, which is a different path (move-tools.md).
+    const centerBeforeDrop = await getMapCenter(page);
+    const dropAt = await findEmptyPoint(page);
+    await page.mouse.click(box.x + dropAt.x, box.y + dropAt.y);
+
+    await expect.poll(() => getCommittedMoves(page), { timeout: 5000 }).toBe(1);
+    await expect.poll(() => getDragGhostState(page), { timeout: 5000 }).toBeNull();
+    // A click is not a pan: the drop moved the survey, not the camera.
+    expect(centerDelta(await getMapCenter(page), centerBeforeDrop)).toBe(0);
   });
 
   test('releasing a drag over floating chrome still ends the drag', async ({ page }) => {

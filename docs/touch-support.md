@@ -125,14 +125,19 @@ neither mode and passes no gate.
 ## Map and renderer
 
 **Gesture ownership.** One pure predicate decides it: `mapGestureMode`
-(`src/utils/mapGestures.ts`) takes the active tool, whether placement mode is on,
-and whether a move ghost is in flight, and returns `{ dragPan, touchAction }`.
-The default answer is `dragPan: true` / `touchAction: 'manipulation'`, so
-MapLibre's own one-finger pan and pinch-zoom run under **every** tool (#409).
-Three modes take the gesture back, because in each the drag itself is the
-interaction: the zoom tool, whose drag draws the zoom box; placement mode, which
-confirms on `pointerdown`; and a move ghost in flight, which drops on
-`pointerup`. Those three get `touchAction: 'none'` and `dragPan.disable()`.
+(`src/utils/mapGestures.ts`) takes the active tool and whether placement mode is
+on, and returns `{ dragPan, touchAction }`. The default answer is
+`dragPan: true` / `touchAction: 'manipulation'`, so MapLibre's own one-finger pan
+and pinch-zoom run under **every** tool (#409). Two modes take the gesture back,
+because in each the drag itself is the interaction: the zoom tool, whose drag
+draws the zoom box, and placement mode, which confirms on `pointerdown`. Those
+two get `touchAction: 'none'` and `dragPan.disable()`.
+
+Carrying a move ghost is **not** one of them, and is not an input to the
+predicate at all: one finger still pans and a tap drops, because the drop is
+click-gated in `handlePointerUp` (a release within 3px of its press) rather than
+owning every release. A pinch moves both fingers far past that threshold, so it
+zooms without dropping the ghost. See [move-tools.md](move-tools.md).
 
 MapCanvas makes a single `mapGestureMode` call and every consumer - the
 `dragPan` effect, the custom modifier-pan claim, and the container's

@@ -285,6 +285,14 @@ function MapCanvas() {
   const snapMergeDialogPendingRef = useRef(false);
   // Co-located station refs for station drag (includes merged/closured stations)
   const stationDragColocatedRefsRef = useRef<StationRef[]>([]);
+  // Where the live press landed (client coords), or null once that press has
+  // travelled far enough to be a drag rather than a click. This is what
+  // click-gates the move ghost's drop (#409): a plain drag pans the map, so only
+  // a press that stays put may commit. Set on every pointerdown that reaches the
+  // canvas, cleared by the release that ends it - and by the first pointermove
+  // past the threshold, which latches the decision exactly as the custom pan's
+  // own claim does (coming back to the press point cannot revive the drop).
+  const pressClientRef = useRef<{ x: number; y: number } | null>(null);
   const { t } = useTranslation();
 
   const { project, stations, surveyData, stationsAdjusted, surveyDataAdjusted, adjustedLoading, loadAdjustedGeometry, config, warnings, moveStation, moveSegment, getConnectedSectionIds, getAnchoredSectionIds, executeBatch } = useProjectStore();
@@ -2556,22 +2564,22 @@ function MapCanvas() {
     // SurveyLayer at all.
   }, [activeTool, ctrlHeld, isHoveringFeature, placementMode, mapLoaded]);
 
-  // Narrowed to booleans before the gesture effects consume them: `placementMode`
+  // Narrowed to a boolean before the gesture effects consume it: `placementMode`
   // is replaced wholesale on every cursor update, so depending on the object
   // itself would re-run them on each pointer move during placement.
   const placementActive = placementMode !== null;
-  const moveDragActive = moveDrag !== null;
 
   // ONE gesture decision for the whole component, destructured to primitives so
   // the effects below can depend on it. Three consumers read it: the dragPan
   // effect right here, the custom modifier-pan (which claims a Ctrl+left press
   // outright only where MapLibre's dragPan is OFF), and the container's
   // touch-action. Sharing the decision rather than re-deriving it from the same
-  // inputs is what stops them disagreeing about who owns the drag.
+  // inputs is what stops them disagreeing about who owns the drag. An in-flight
+  // move ghost is deliberately NOT an input: carrying one leaves the drag to
+  // MapLibre and click-gates the drop instead (see `handlePointerUp`).
   const { dragPan: mapLibreDragPan, touchAction } = mapGestureMode({
     activeTool,
     placementActive,
-    moveDragActive,
   });
 
   // Hand plain left-drag to MapLibre unless the current tool or mode owns it.
@@ -2818,10 +2826,13 @@ function MapCanvas() {
 
         // Claim the press outright where nothing else can want it: a middle
         // press has no other meaning, and where MapLibre's dragPan is OFF the
-        // mode owns the press itself (placement confirms on pointerdown, a move
-        // ghost drops on pointerup, the zoom tool starts its box) - none of
-        // which may happen because Ctrl was held. Where a plain drag already
-        // pans, a Ctrl+left press is only watched: see `customPanClaimed`.
+        // mode owns the press itself (placement confirms on pointerdown, the
+        // zoom tool starts its box) - neither of which may happen because Ctrl
+        // was held. Where a plain drag already pans, a Ctrl+left press is only
+        // watched: see `customPanClaimed`. Carrying a move ghost is in that
+        // second group since #409 - the drop is click-gated, so a Ctrl press
+        // that travels becomes a pan on the same 3px threshold as everywhere
+        // else, and one that does not travel drops the ghost.
         if (isMiddlePan || !mapLibreDragPan) {
           claimCustomPan(e, isCtrlLeftPan);
         }
@@ -3722,6 +3733,18 @@ function MapCanvas() {
         return;
       }
 
+      // A live press that travels past the click threshold stops being a
+      // possible drop and becomes a pan, permanently for this gesture: forget
+      // the press point so the release cannot commit even if the cursor comes
+      // back to it. Latching mirrors the custom pan's `customPanClaimed`, which
+      // also never un-claims. Moves with no button down (the ghost simply
+      // following the cursor) cannot reach this with a press in flight - a
+      // press is only live between its own pointerdown and pointerup.
+      const press = pressClientRef.current;
+      if (press && Math.hypot(e.clientX - press.x, e.clientY - press.y) >= CUSTOM_PAN_CLAIM_PX) {
+        pressClientRef.current = null;
+      }
+
       if (moveDrag) {
         handleMoveDragMove(e.clientX, e.clientY);
       } else if (zoomBox.start) {
@@ -3750,12 +3773,38 @@ function MapCanvas() {
     [moveDrag, zoomBox.start, handleMoveDragMove, handleZoomBoxMove, checkSnapToStation, placementMode, checkPlacementSnap, updatePlacementCursor, updatePlacementSnap]
   );
 
-  const handlePointerUp = useCallback(() => {
+  const handlePointerUp = useCallback((e: React.PointerEvent) => {
+    // The press this release ends, if there was one on the canvas. Consumed
+    // here either way, so a later release can never reuse it.
+    const press = pressClientRef.current;
+    pressClientRef.current = null;
+
     if (moveDrag) {
       // Block while snap-to-merge dialog is open
       if (snapMergeDialogPendingRef.current) {
         return;
       }
+      // The drop is CLICK-gated (#409): a plain drag pans the map now, so only
+      // a press that stayed put commits. Anything else leaves the ghost in
+      // flight, still following the cursor, and lets MapLibre's dragPan own the
+      // gesture - including a release that lands outside the canvas, which
+      // never reaches this handler at all.
+      //
+      // `press === null` means the gesture did not start on the canvas (a press
+      // on the floating chrome, or none at all) or has already travelled past
+      // the threshold (handlePointerMove forgets it). Neither is a drop.
+      //
+      // The threshold is the one the custom pan claims on, so the two agree on
+      // one boundary with one meaning: under CUSTOM_PAN_CLAIM_PX the gesture is
+      // a click - which is also where MapLibre stops calling it one - at or
+      // above it, it is a drag.
+      //
+      // Nothing here consults `ctrlKey`, deliberately: a still Ctrl+click drops
+      // exactly like a plain one. Ctrl+click's other meaning is the selection
+      // toggle, which `SurveyLayer.handleMapClick` already ignores under the
+      // move tools, so there is nothing for the modifier to protect here.
+      if (press === null) return;
+      if (Math.hypot(e.clientX - press.x, e.clientY - press.y) >= CUSTOM_PAN_CLAIM_PX) return;
       handleMoveDragEnd();
     } else if (zoomBox.start) {
       handleZoomBoxEnd();
@@ -3763,9 +3812,9 @@ function MapCanvas() {
   }, [moveDrag, zoomBox.start, handleMoveDragEnd, handleZoomBoxEnd]);
 
   // Pointer leave: keep all move drags alive so user can return the cursor
-  const handlePointerLeave = useCallback(() => {
+  const handlePointerLeave = useCallback((e: React.PointerEvent) => {
     if (moveDrag) return;
-    handlePointerUp();
+    handlePointerUp(e);
   }, [moveDrag, handlePointerUp]);
 
   // Handle placement mode click
@@ -3821,6 +3870,12 @@ function MapCanvas() {
       if (!canvas || !canvas.contains(e.target as Node)) {
         return;
       }
+      // Remember where the press landed, for the click gate in
+      // `handlePointerUp`. Recorded for every canvas press rather than only
+      // while carrying a ghost: a press cannot outlive its own release, so a
+      // fresh press always overwrites, and there is no stale value for a later
+      // gesture to inherit.
+      pressClientRef.current = { x: e.clientX, y: e.clientY };
       if (placementMode) {
         handlePlacementClick(e);
       } else if (activeTool === 'zoom') {

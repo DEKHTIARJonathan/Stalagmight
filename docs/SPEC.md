@@ -785,9 +785,9 @@ defaults from `src-tauri/src/config/defaults.rs` and are all rebindable.
 | **Zoom** *(hidden by default; `map.controls.show_navigation_tools`)* | Z | Zoom in | Zoom in | Zoom in | Zoom area |
 | **Merge** | M | Select for merge | - | - | - |
 | **Measure** | R | Start measurement | - | Start measurement | - |
-| **Move Station** | T | - | - | - | Drag unanchored station |
-| **Move Shot** | G | - | - | - | Drag one shot: both endpoints plus any co-located stations |
-| **Move Segment** | V | - | - | Deselect | Drag the whole connected branch (sections joined by merges and aligned closures) |
+| **Move Station** | T | Pick up an unanchored station | - | Drop what is being carried | Pan map |
+| **Move Shot** | G | - | Pick up one shot: both endpoints plus any co-located stations | Drop what is being carried | Pan map |
+| **Move Segment** | V | Pick up the whole connected branch (sections joined by merges and aligned closures) | Same, grabbed on a shot | Drop what is being carried, else deselect | Pan map |
 | **Comment** | C | Open the comment editor on the station | Open the comment editor on the shot | Close the editor | - |
 | **Move Comment** | Shift+C | Pick up the comment; second click moves it (swap dialog if the target already has one) | Same, for shot comments | Cancel | - |
 
@@ -797,10 +797,12 @@ any shot, which splits it in two (also available from the data table's row
 menu). Deletion is select plus Delete/Backspace, or the context menu.
 
 Panning is not a tool either. A plain left-click-drag pans the map under every
-tool in the table except **Zoom**, whose drag draws its zoom box; under a move
-tool a drag only moves geometry once a click has picked something up, and
-placement mode confirms on press rather than on release. The single predicate is
-`mapGestureMode` in `src/utils/mapGestures.ts`. **Pan** and **Zoom** survive as
+tool in the table except **Zoom**, whose drag draws its zoom box, and in
+placement mode, which confirms on press rather than on release. The single
+predicate is `mapGestureMode` in `src/utils/mapGestures.ts`. The move tools are
+click-to-pick-up and click-to-drop throughout: a drag pans even while geometry is
+being carried, leaving the ghost on the cursor, and only a press that stays put
+drops it. **Pan** and **Zoom** survive as
 an accessibility fallback for anyone who cannot drag or scroll: they are hidden
 from the toolbar, and their P/Z shortcuts inert, unless
 `map.controls.show_navigation_tools` is on (Settings -> Map -> Controls).
