@@ -3112,10 +3112,16 @@ mod tests {
             ],
         )]);
         let (_, _, warnings) = adopt_convert(&one).expect("the conversion succeeds");
+        // #438 adds one line to every file: what north its azimuths refer to.
+        // The excluded-shot line is still asserted exactly, singular and first.
+        let excluded: Vec<&String> = warnings
+            .iter()
+            .filter(|w| w.contains("excluded shot"))
+            .collect();
         assert_eq!(
-            warnings,
-            vec!["1 excluded shot in the remote file was not imported".to_owned()],
-            "one excluded shot reads in the singular"
+            excluded,
+            vec!["1 excluded shot in the remote file was not imported"],
+            "one excluded shot reads in the singular; got {warnings:?}"
         );
 
         let none = adopt_tml(vec![adopt_section(
@@ -3125,8 +3131,8 @@ mod tests {
         )]);
         let (_, _, warnings) = adopt_convert(&none).expect("the conversion succeeds");
         assert!(
-            warnings.is_empty(),
-            "nothing excluded means nothing said; got {warnings:?}"
+            !warnings.iter().any(|w| w.contains("excluded")),
+            "nothing excluded means nothing said about exclusions; got {warnings:?}"
         );
     }
 

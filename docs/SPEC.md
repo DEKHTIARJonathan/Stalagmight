@@ -275,7 +275,14 @@ Examples:
   position) and changes only the local coordinates
   (`Project::renormalize_frame`, issue #469)
 - **GPS coordinates**: WGS84 (latitude, longitude, depth reference)
-- **Azimuth**: Degrees from magnetic north (0-360), support for declination correction
+- **Azimuth**: degrees (0-360), stored **as measured**. The stored number is
+  never rotated: each section declares what its readings refer to
+  (`Section::azimuth_reference` - magnetic / true / grid, the correction in
+  degrees, and where that correction came from) and the correction is added
+  when geometry is computed, by the one accessor
+  (`Shot::average_azimuth_true`). A section with no reference resolves to the
+  project default, and a project with no default means "nothing recorded",
+  correction 0 (#438).
 - **Depth**: Positive values = below surface
 
 #### GPS-to-Local Coordinate Transformation

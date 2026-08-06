@@ -42,15 +42,16 @@ use stalagmight_lib::models::placement_suggest::{
     PlacementSuggestion, SuggestionConfidence, TargetType,
 };
 use stalagmight_lib::models::{
-    AlongLineResult, ClosurePair, ClosurePreview, ClosureRef, ClosureStrategy, ClosureUpdate,
-    ConnectivityResult, Coordinates, CylRole, Cylinder, DeleteShotImpact, DeleteShotRangeImpact,
-    DistanceField, DivePlan, DivePlanMeta, DivePlanSnapshot, Diver, ExistingShotUpdate,
-    FrozenShotRef, GasReachField, GpsBounds, GpsCoordinates, ImportPlacement, ImportSectionConfig,
-    LoopClosureWire, MarkedPoint, PathShot, PlanAnchorSet, PlanMode, PlanSegment, Project,
-    ProjectMetadata, ProjectStats, ProjectWarning, RangeDeleteKind, RouteLeg, RouteProfilePoint,
-    RulerEndpoint, Section, SectionData, SectionRelationships, SectionStats, SectionUpdates, Shot,
-    ShotData, ShotKind, ShotUpdates, SpeleoLink, Station, StationMergeWire, StationPair,
-    StationRef, SurveyDirection, TankMaterial, Team, UnrecognisedShotKind, ZeroDatumWire,
+    AlongLineResult, AzimuthReference, ClosurePair, ClosurePreview, ClosureRef, ClosureStrategy,
+    ClosureUpdate, ConnectivityResult, Coordinates, CorrectionSource, CylRole, Cylinder,
+    DeleteShotImpact, DeleteShotRangeImpact, DistanceField, DivePlan, DivePlanMeta,
+    DivePlanSnapshot, Diver, ExistingShotUpdate, FrozenShotRef, GasReachField, GpsBounds,
+    GpsCoordinates, ImportPlacement, ImportSectionConfig, LoopClosureWire, MarkedPoint,
+    NorthReference, PathShot, PlanAnchorSet, PlanMode, PlanSegment, Project, ProjectMetadata,
+    ProjectStats, ProjectWarning, RangeDeleteKind, RouteLeg, RouteProfilePoint, RulerEndpoint,
+    Section, SectionData, SectionRelationships, SectionStats, SectionUpdates, Shot, ShotData,
+    ShotKind, ShotUpdates, SpeleoLink, Station, StationMergeWire, StationPair, StationRef,
+    SurveyDirection, TankMaterial, Team, UnrecognisedShotKind, ZeroDatumWire,
 };
 use stalagmight_lib::parsers::compass::{CompassFile, CompassSurveySummary};
 use stalagmight_lib::parsers::dmp::{DmpDirection, DmpFile, DmpSection, DmpShot, DmpShotType};
@@ -180,6 +181,9 @@ fn main() {
     export::<RulerEndpoint>(&out_dir);
     export::<PathShot>(&out_dir);
     export::<AlongLineResult>(&out_dir);
+    export::<AzimuthReference>(&out_dir);
+    export::<CorrectionSource>(&out_dir);
+    export::<NorthReference>(&out_dir);
     export::<Section>(&out_dir);
     export::<SectionData>(&out_dir);
     export::<SectionUpdates>(&out_dir);

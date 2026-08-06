@@ -321,6 +321,7 @@ pub struct Project {
     /// true north" policy has somewhere to live without touching sections that
     /// carry a file-declared value of their own.
     #[serde(default)]
+    #[ts(optional)]
     pub default_azimuth_reference: Option<AzimuthReference>,
 
     /// Transient flag (NOT persisted) - when true,

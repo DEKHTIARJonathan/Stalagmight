@@ -25,8 +25,23 @@ The user chooses between the two formats in the save dialog's file-type filter.
 |----------------|-------------|-------|
 | `project.name` | `caveName` | |
 | Always `"m"` | `unit` | Export is always metric (internal model is metric) |
-| `true` | `useMagneticAzimuth` | Default |
+| Derived from the sections' north references | `useMagneticAzimuth` | See "Azimuth convention" below (#438) |
 | `project.surface_elevation` | `firstStartAbsoluteElevation` | 0.0 if unknown |
+
+### Azimuth convention (#438)
+
+The flag is file-level and the references are per section, so the exporter picks
+one of three shapes:
+
+| Project | `useMagneticAzimuth` | Azimuths written |
+|---------|----------------------|------------------|
+| Every section magnetic, one correction (including a project that declares nothing) | `true` | exactly as stored - Ariane applies its own declination |
+| Every section true north | `false` | exactly as stored |
+| Sections disagree, or any section is grid-referenced | `false` | each section's correction applied, so the document is uniformly true north |
+
+The third case is the only one that changes a number on the way out, and it
+changes only the FILE: the project keeps its measured readings. It is logged
+(`tracing::warn`) because the TML export command returns no receipt.
 
 ### Section-level fields
 

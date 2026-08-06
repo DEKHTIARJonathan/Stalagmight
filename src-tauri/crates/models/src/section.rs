@@ -113,7 +113,12 @@ pub struct Section {
     /// project routinely mixes an Ariane import (magnetic) with a Compass one.
     ///
     /// [`Project::default_azimuth_reference`]: crate::models::Project::default_azimuth_reference
+    ///
+    /// `#[ts(optional)]`, like every other additive field the frontend does not
+    /// construct: the payload always carries it, but a TS `Section` literal
+    /// built before #438 stays valid.
     #[serde(default)]
+    #[ts(optional)]
     pub azimuth_reference: Option<AzimuthReference>,
 }
 
