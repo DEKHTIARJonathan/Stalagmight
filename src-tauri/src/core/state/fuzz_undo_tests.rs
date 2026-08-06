@@ -53,7 +53,7 @@
 //!
 //! | # | classified as | mode env | seed | moves |
 //! |---|---|---|---|---|
-//! | 1 (uuids) | `finding-1-redo-of-create-section-remints-shot-uuids` | (none) | 1 | 60 |
+//! | 1 (uuids) | FIXED by #423 (PR #453): `ShotData` now carries the uuid, classifier retired | - | - | - |
 //! | 1 (anchors) | `finding-1-redo-of-create-section-drops-gauge-anchors` | (none), persistence half | 1 | 60 |
 //! | 2 | `finding-2-orphan-zero-section-offset` | (none) | 1 | 60 |
 //! | 3 (offset) | `finding-3-undo-of-the-first-shot-displaces-an-empty-section` | (none) | 2 | 60 |
@@ -1558,11 +1558,12 @@ const CLASSIFIERS: &[Classifier] = &[
         id: "finding-11-pre-save-entry-reverts-the-saves-heals",
         matches: |d, ctx| is_gauge_loss(d) && ctx.entry_predates_save(),
     },
-    // FINDING 1. `UndoData::CreatedSectionSnapshot` stores a `SectionData`, which
-    // has no uuid field, so redo goes `restore_section` -> `Section::new_with_id`
-    // -> `Shot::new` -> `Uuid::new_v4()` and every shot in the section is
-    // re-minted. Narrowed to value -> DIFFERENT value: a uuid being filled in is
-    // a save heal, and a uuid being lost is not a shape this bug produces.
+    // FINDING 1 - FIXED by #423 (PR #453), classifier retired. The bug:
+    // `UndoData::CreatedSectionSnapshot` stored a `SectionData` with no uuid
+    // field, so redo re-minted every shot in the section. `ShotData` now
+    // carries `uuid`, so redo restores identities. The classifier is REMOVED
+    // rather than left dormant: a dormant match arm would classify any future
+    // uuid regression as the old known bug instead of failing the gate.
     // FINDINGS 1 and 11, CASCADING. Once either has reverted the save's gauge
     // capture, the anchors are simply GONE from the live project, so every deeper
     // snapshot that was recorded with them disagrees. Those are re-measurements of
@@ -1573,17 +1574,6 @@ const CLASSIFIERS: &[Classifier] = &[
     Classifier {
         id: "finding-1-or-11-cascade-anchors-already-reverted",
         matches: |d, ctx| is_gauge_loss(d) && ctx.heal_reverted,
-    },
-    Classifier {
-        id: "finding-1-redo-of-create-section-remints-shot-uuids",
-        matches: |d, _| {
-            path_is(d, "sections[#].shots[#].uuid")
-                && d.expected != ABSENT
-                && d.expected != "null"
-                && d.actual != ABSENT
-                && d.actual != "null"
-                && d.expected != d.actual
-        },
     },
     // FINDING 2. `adjust_section_offset` CREATES a `section_offsets` key while
     // compensating an insert and nothing removes it, so an all-zero entry
@@ -2230,6 +2220,8 @@ pub(super) fn random_shot(rng: &mut Rng) -> ShotData {
     let azimuth = rng.float(0.0, 359.9);
     let depth_in = rng.float(0.0, 30.0);
     ShotData {
+        // None, like every command-created shot: the model mints (#423).
+        uuid: None,
         azimuth_in: azimuth,
         azimuth_out: (azimuth + rng.float(-1.5, 1.5) + 360.0) % 360.0,
         length: rng.float(1.0, 12.0),
@@ -8061,7 +8053,9 @@ const COMBINED_SEEDS: &[u32] = &[15, 21];
 /// regressed). The exact counts are printed on every run, which is where a
 /// reader compares them.
 const COMBINED_CLASSIFIED: &[&str] = &[
-    "finding-1-redo-of-create-section-remints-shot-uuids",
+    // finding-1 (redo of CreateSection re-mints shot uuids) was here until
+    // #423 (PR #453) fixed it - ShotData now carries the uuid through the
+    // snapshot, so the combined regime can no longer reach it.
     "finding-10-reload-converts-an-orphan-closure-to-a-merge",
     "finding-2-orphan-zero-section-offset",
     "finding-3-undo-of-the-first-shot-displaces-an-empty-section",

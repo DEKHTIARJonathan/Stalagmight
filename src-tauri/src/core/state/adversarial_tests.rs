@@ -161,6 +161,10 @@ fn hostile_string(rng: &mut Rng) -> String {
 /// A shot whose every field is drawn from the hostile pool.
 fn hostile_shot(rng: &mut Rng) -> ShotData {
     ShotData {
+        // Deliberately absent, not hostile: the command doors strip a
+        // client-named identity anyway (#423), so a hostile uuid exercises
+        // nothing this suite's oracles can see.
+        uuid: None,
         azimuth_in: hostile_float(rng),
         azimuth_out: hostile_float(rng),
         length: hostile_float(rng),
