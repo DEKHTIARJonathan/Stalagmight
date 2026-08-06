@@ -32,7 +32,9 @@ fn test_map_snap_config_defaults() {
 fn test_map_controls_config_defaults() {
     let config = MapControlsConfig::default();
     assert_eq!(config.pan_speed, 1.0);
-    assert_eq!(config.zoom_speed, 1.0);
+    // #429: zoom_speed is zoom LEVELS per wheel notch, and 0.55 is what the old
+    // 1.0 multiplier delivered through MapLibre's sigmoid.
+    assert_eq!(config.zoom_speed, 0.55);
     assert!(!config.invert_scroll);
     // #409: the Pan/Zoom toolbar group is hidden unless the user opts in.
     assert!(!config.show_navigation_tools);

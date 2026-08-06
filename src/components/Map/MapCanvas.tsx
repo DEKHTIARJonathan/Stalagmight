@@ -16,6 +16,7 @@ import { selectActiveStations, selectActiveSurveyData } from '../../store/geomet
 import { isMutatingTool, shouldResetNavigationTool, toolCursor } from '../../utils/toolUtils';
 import { mapGestureMode } from '../../utils/mapGestures';
 import { attachDragReleaseForwarder } from '../../utils/mapDragRelease';
+import { wheelZoomRateForLevels, ZOOM_LEVELS_PER_NOTCH_DEFAULT } from '../../utils/zoomRate';
 import { hasEligibleClosures } from '../../utils/closures';
 import { useShallow } from 'zustand/react/shallow';
 import {
@@ -1870,27 +1871,25 @@ function MapCanvas() {
     };
   }, []);
 
-  // Scroll-zoom speed: map.controls.zoom_speed feeds MapLibre's zoom rate as
-  // speed/100. Both MapLibre rates (trackpad AND wheel) are set together, on
-  // purpose: MapLibre's per-chain wheel-vs-trackpad classifier misfires on
-  // Windows precision trackpads (measured ~70% wheel-classified events on
-  // gestures that felt sluggish, and the verdict can flap mid-gesture), and
-  // with equal rates its verdict has no visible effect.
+  // Scroll-zoom speed: map.controls.zoom_speed is zoom LEVELS per 100 px wheel
+  // notch, and utils/zoomRate.ts inverts MapLibre's sigmoid to the rate that
+  // delivers them. Handing the setting over as speed/100 instead made the top
+  // of its range inert - the sigmoid is asymptotic at one level per notch, so
+  // 3.0 and 5.0 were 0.930 and 0.990 levels, a difference nobody can feel
+  // (#429). Shift+wheel still applies MapLibre's 1/4-rate precision modifier.
   //
-  // The response is NOT linear in speed. MapLibre scales a chain by
-  // 2 / (1 + exp(-|delta * rate|)), so a 100 px mouse notch moves
-  // log2(2 / (1 + e^-speed)) zoom levels: ~0.55 at speed 1.0, ~0.82 at 2.0,
-  // ~0.99 at the 5.0 maximum. One level per notch is the sigmoid's asymptote
-  // and is unreachable at any setting, which is why the top of the range
-  // barely differs - see the "zoom-speed range saturates" follow-up issue.
-  // Shift+wheel still applies MapLibre's built-in 1/4-rate precision modifier.
-  const zoomSpeed = config?.map.controls.zoom_speed ?? 1.0;
+  // Both MapLibre rates (trackpad AND wheel) are set together, on purpose:
+  // MapLibre's per-chain wheel-vs-trackpad classifier misfires on Windows
+  // precision trackpads (measured ~70% wheel-classified events on gestures that
+  // felt sluggish, and the verdict can flap mid-gesture), and with equal rates
+  // its verdict has no visible effect.
+  const zoomLevelsPerNotch = config?.map.controls.zoom_speed ?? ZOOM_LEVELS_PER_NOTCH_DEFAULT;
   useEffect(() => {
     if (!mapLoaded || !map.current) return;
-    const clamped = Number.isFinite(zoomSpeed) ? Math.min(5.0, Math.max(0.1, zoomSpeed)) : 1.0;
-    map.current.scrollZoom.setZoomRate(clamped / 100);
-    map.current.scrollZoom.setWheelZoomRate(clamped / 100);
-  }, [mapLoaded, zoomSpeed]);
+    const rate = wheelZoomRateForLevels(zoomLevelsPerNotch);
+    map.current.scrollZoom.setZoomRate(rate);
+    map.current.scrollZoom.setWheelZoomRate(rate);
+  }, [mapLoaded, zoomLevelsPerNotch]);
 
   // Invert scroll: MapLibre has no public wheel-direction option, but its
   // HandlerManager looks up `scrollZoom.wheel` at dispatch time, so replacing
@@ -2967,6 +2966,26 @@ function MapCanvas() {
       }
     };
 
+    /**
+     * Restore cursor after a claimed pan: if Ctrl is still held, show the grab
+     * cursor for the next potential pan; otherwise restore the tool cursor.
+     * Hand it to SurveyLayer rather than writing the canvas directly, exactly as
+     * the passive effect above does - it owns the hover-vs-tool precedence,
+     * including Move Station/Shot's arrow fallback, which a raw `move` write
+     * here would defeat with nothing to correct it (hover only re-derives when
+     * the hovered id CHANGES, so a pointer resting on empty map keeps it).
+     */
+    const restoreCursorAfterPan = (e: MouseEvent) => {
+      if (!map.current) return;
+      const ctrlStillPanning = e.ctrlKey && activeTool !== 'pan';
+      const restored = ctrlStillPanning ? 'grab' : toolCursor(activeTool);
+      if (surveyLayerRef.current) {
+        surveyLayerRef.current.setBaseCursor(restored, ctrlStillPanning);
+      } else {
+        map.current.getCanvas().style.cursor = restored;
+      }
+    };
+
     const handleMouseUpCapture = (e: MouseEvent) => {
       if (customPanStart && map.current) {
         const wasClaimed = customPanClaimed;
@@ -2992,20 +3011,7 @@ function MapCanvas() {
           customPanActiveRef.current = false;
           ctrlPanActiveRef.current = false;
         }, 50);
-        // Restore cursor: if Ctrl still held, show grab cursor for next potential
-        // pan; otherwise restore the tool cursor. Hand it to SurveyLayer rather
-        // than writing the canvas directly, exactly as the passive effect above
-        // does - it owns the hover-vs-tool precedence, including Move
-        // Station/Shot's arrow fallback, which a raw `move` write here would
-        // defeat with nothing to correct it (hover only re-derives when the
-        // hovered id CHANGES, so a pointer resting on empty map keeps it).
-        const ctrlStillPanning = e.ctrlKey && activeTool !== 'pan';
-        const restored = ctrlStillPanning ? 'grab' : toolCursor(activeTool);
-        if (surveyLayerRef.current) {
-          surveyLayerRef.current.setBaseCursor(restored, ctrlStillPanning);
-        } else {
-          map.current.getCanvas().style.cursor = restored;
-        }
+        restoreCursorAfterPan(e);
       }
     };
 
@@ -3050,16 +3056,23 @@ function MapCanvas() {
       mouseIsDown = true;
     };
 
-    const handleMouseUpGlobal = () => {
+    const handleMouseUpGlobal = (e: MouseEvent) => {
       mouseIsDown = false;
       // Clear pan state in case mouse was released outside the map container
       // (handleMouseUpCapture only fires for events on the container element)
+      const wasClaimed = customPanClaimed;
       customPanStart = null;
       customPanButtonMask = null;
       customPanOrigin = null;
       customPanClaimed = false;
       if (ctrlPanActiveRef.current) {
         ctrlPanMouseEventTimeRef.current = Date.now();
+      }
+      // The pan now runs past the container edge, so releasing outside it is an
+      // ordinary way to end one, and this is the only handler that sees it -
+      // the grabbing cursor has to be undone here too or it sticks.
+      if (wasClaimed) {
+        restoreCursorAfterPan(e);
       }
       // Fallback: clear custom pan flags for mouseups outside the map container
       // (handleMouseUpCapture handles the in-container case)
@@ -3075,7 +3088,15 @@ function MapCanvas() {
 
     // Use capture: true to intercept BEFORE MapLibre's handlers
     mapElement.addEventListener('mousedown', handleMouseDownCapture, { capture: true });
-    mapElement.addEventListener('mousemove', handleMouseMoveCapture, { capture: true });
+    // The moves go on WINDOW, not the map element: a drag that leaves the
+    // element still has to steer the camera, and an element listener simply
+    // stops receiving moves once the cursor is outside it - a 300px gesture
+    // delivered the 135px to the edge and then froze (#429). The handler
+    // no-ops unless `customPanStart` is set, which only a mousedown on the map
+    // element does, so widening the listener does not widen what it acts on;
+    // and because it suppresses at window-capture, MapLibre still never sees
+    // the moves it would have taken from the element listener.
+    window.addEventListener('mousemove', handleMouseMoveCapture, { capture: true });
     mapElement.addEventListener('mouseup', handleMouseUpCapture, { capture: true });
     mapElement.addEventListener('click', handleClickCapture, { capture: true });
     mapElement.addEventListener('pointerdown', handlePointerDownCapture, { capture: true });
@@ -3090,7 +3111,7 @@ function MapCanvas() {
 
     return () => {
       mapElement.removeEventListener('mousedown', handleMouseDownCapture, { capture: true });
-      mapElement.removeEventListener('mousemove', handleMouseMoveCapture, { capture: true });
+      window.removeEventListener('mousemove', handleMouseMoveCapture, { capture: true });
       mapElement.removeEventListener('mouseup', handleMouseUpCapture, { capture: true });
       mapElement.removeEventListener('click', handleClickCapture, { capture: true });
       mapElement.removeEventListener('pointerdown', handlePointerDownCapture, { capture: true });

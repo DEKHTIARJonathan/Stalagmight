@@ -154,7 +154,10 @@ impl Default for MapControlsConfig {
     fn default() -> Self {
         Self {
             pan_speed: 1.0,
-            zoom_speed: 1.0,
+            // Zoom LEVELS per 100 px wheel notch, not a multiplier (#429). 0.55
+            // is what the old 1.0 multiplier actually delivered through
+            // MapLibre's sigmoid, so the default gesture is unchanged.
+            zoom_speed: 0.55,
             invert_scroll: false,
             show_navigation_tools: false,
         }

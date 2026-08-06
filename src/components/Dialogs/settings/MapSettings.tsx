@@ -430,9 +430,9 @@ export function MapSettings({
         >
           <input
             type="number" inputMode="decimal"
-            step={0.1}
+            step={0.05}
             min={0.1}
-            max={5.0}
+            max={0.95}
             value={config.map.controls.zoom_speed}
             onChange={(e) => handleZoomSpeedChange(e.target.value)}
             className="w-20 px-2 py-1 bg-background border border-border rounded text-sm text-right"
