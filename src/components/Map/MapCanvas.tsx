@@ -47,7 +47,6 @@ import { DepthLegend } from './DepthLegend';
 import { DistanceLegend } from './DistanceLegend';
 import { GasLegend } from './GasLegend';
 import { MapDevStats } from './MapDevStats';
-import { WheelChainDebugOverlay } from './WheelChainDebugOverlay';
 import CommentOverlay from './CommentOverlay';
 import MoveCommentCursorTag from './MoveCommentCursorTag';
 import { installPanZoomDebug } from './panZoomDebug';
@@ -4088,12 +4087,6 @@ function MapCanvas() {
       {/* Developer stats overlay */}
       {showDevStats && mapLoaded && map.current && (
         <MapDevStats map={map.current} />
-      )}
-
-      {/* TEMP: wheel-chain scroll/travel overlay for the zoom-choppiness
-          investigation. Dev builds only; remove with WheelChainDebugOverlay.tsx. */}
-      {import.meta.env.DEV && mapLoaded && map.current && (
-        <WheelChainDebugOverlay map={map.current} />
       )}
 
       {/* Placement mode overlay */}
