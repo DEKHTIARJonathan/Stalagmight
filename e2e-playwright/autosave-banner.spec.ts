@@ -1,5 +1,5 @@
 import { test, expect, type Page } from './fixtures/coverage';
-import { setupMockedPage, createProject } from './helpers/app';
+import { setupMockedPage, createProject, createSectionViaStore } from './helpers/app';
 
 /**
  * E2E for the autosave-failure banner (docs/notifications.md: a failing
@@ -30,6 +30,18 @@ async function clearIpcOverrideKeys(page: Page, commands: string[]): Promise<voi
   }, commands);
 }
 
+/**
+ * PR #460 gates the banner on `isDirty` (projectStore.ts:1355), so every
+ * autosave-failure test needs a real edit first - a freshly created project
+ * is clean and the banner correctly stays hidden.
+ */
+async function makeDirty(page: Page): Promise<void> {
+  await createSectionViaStore(page, {
+    name: 'Autosave Dirty Section',
+    shots: [{ azimuth_in: 0, azimuth_out: 0, length: 5, depth_in: 0, depth_out: 0 }],
+  });
+}
+
 async function runAutosave(page: Page): Promise<void> {
   await page.evaluate(async () => {
     await (window as unknown as {
@@ -52,6 +64,7 @@ test.describe('Autosave-failure banner', () => {
     await setIpcOverrides(page, {
       save_project: { success: false, error: 'Disk full: no space left on device' },
     });
+    await makeDirty(page);
     await runAutosave(page);
 
     const banner = page.getByTestId('autosave-banner');
@@ -66,6 +79,7 @@ test.describe('Autosave-failure banner', () => {
     await setIpcOverrides(page, {
       save_project: { success: false, error: 'Disk full: no space left on device' },
     });
+    await makeDirty(page);
     await runAutosave(page);
     await expect(page.getByTestId('autosave-banner')).toBeVisible();
 
@@ -80,6 +94,7 @@ test.describe('Autosave-failure banner', () => {
     await setIpcOverrides(page, {
       save_project: { success: false, error: 'Disk full: no space left on device' },
     });
+    await makeDirty(page);
     await runAutosave(page);
     await expect(page.getByTestId('autosave-banner')).toBeVisible();
 
@@ -93,6 +108,7 @@ test.describe('Autosave-failure banner', () => {
     await setIpcOverrides(page, {
       save_project: { success: false, error: 'FS_PERMISSION_DENIED: operation not permitted' },
     });
+    await makeDirty(page);
     await runAutosave(page);
 
     const banner = page.getByTestId('autosave-banner');
@@ -101,5 +117,15 @@ test.describe('Autosave-failure banner', () => {
     await expect(banner).not.toContainText('FS_PERMISSION_DENIED');
     // The save-permission dialog stays user-initiated-only - not on autosave.
     await expect(page.getByTestId('save-permission-dialog')).toHaveCount(0);
+  });
+
+  test('a failing autosave on a clean project does not raise the banner (#429)', async ({ page }) => {
+    await setIpcOverrides(page, {
+      save_project: { success: false, error: 'Disk full: no space left on device' },
+    });
+    // Project is still clean here: no edit was made after createProject.
+    await runAutosave(page);
+
+    await expect(page.getByTestId('autosave-banner')).toHaveCount(0);
   });
 });
