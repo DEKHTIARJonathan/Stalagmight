@@ -2490,6 +2490,85 @@ mod tests {
         );
     }
 
+
+    /// [`synthetic_survey_record`] with a declared declination, so the #438
+    /// contract has something to bite on. Kept as its own `format!` rather than
+    /// a parameter there: every other caller wants the zero that helper writes.
+    fn synthetic_dat_with_declination(declination: f64) -> String {
+        format!(
+            "Synthetic Cave\r\n\
+             SURVEY NAME: A\r\n\
+             SURVEY DATE: 7 10 1979\r\n\
+             SURVEY TEAM:\r\n\
+             Nobody\r\n\
+             DECLINATION: {declination:.2}  FORMAT: DMMDLRUDLADN  CORRECTIONS: 0.00 0.00 0.00\r\n\
+             \r\n\
+             FROM TO LENGTH BEARING INC LEFT UP DOWN RIGHT FLAGS COMMENTS\r\n\
+             \r\n\
+             A1 A2 10.00 90.00 0.00 1.00 2.00 3.00 4.00\r\n"
+        )
+    }
+
+    /// #438: Compass used to fold `declination - convergence` into every shot at
+    /// import (`azimuth + ctx.declination - ctx.convergence_angle`), destroying
+    /// the measured reading. It now keeps the reading and declares the
+    /// correction on the section.
+    ///
+    /// Both halves are asserted because either alone is satisfiable by a wrong
+    /// implementation: keeping the reading without recording the correction
+    /// silently drops the declination (the cave rotates), and recording it while
+    /// still baking it in applies it twice.
+    #[test]
+    fn a_declared_declination_lands_on_the_section_not_on_the_shots() {
+        let dir = tempfile::tempdir().unwrap();
+        let dat = dir.path().join("declination.dat");
+        std::fs::write(&dat, synthetic_dat_with_declination(5.0)).unwrap();
+
+        let parsed = parse_compass(&dat).unwrap();
+        let (configs, _closures, _warnings) =
+            convert_compass_to_import_configs(&parsed, &CompassImportOptions::default()).unwrap();
+
+        let shot = &configs[0].shots[0];
+        assert!(
+            (shot.azimuth_in - 90.0).abs() < 1e-9,
+            "the measured bearing must survive the import, got {}",
+            shot.azimuth_in
+        );
+        let reference = configs[0]
+            .azimuth_reference
+            .expect("Compass always declares a reference");
+        assert!(
+            (reference.applied_correction() - 5.0).abs() < 1e-9,
+            "the declared declination must land on the section, got {}",
+            reference.applied_correction()
+        );
+        assert_eq!(reference.north, crate::models::NorthReference::Magnetic);
+        assert_eq!(reference.source, CorrectionSource::FileDeclared);
+        assert!(
+            (reference.to_true(90.0) - 95.0).abs() < 1e-9,
+            "the corrected bearing is what the importer used to store"
+        );
+    }
+
+    /// A file that declares no declination must record an IDENTITY reference,
+    /// not merely a zero one: an inherited project default would otherwise reach
+    /// a survey whose file explicitly said there is nothing to apply.
+    #[test]
+    fn a_zero_declination_is_still_a_declaration() {
+        let dir = tempfile::tempdir().unwrap();
+        let dat = dir.path().join("plain.dat");
+        std::fs::write(&dat, synthetic_dat("Synthetic Cave")).unwrap();
+
+        let parsed = parse_compass(&dat).unwrap();
+        let (configs, _closures, _warnings) =
+            convert_compass_to_import_configs(&parsed, &CompassImportOptions::default()).unwrap();
+        let reference = configs[0]
+            .azimuth_reference
+            .expect("Compass always declares a reference");
+        assert!(reference.is_identity());
+        assert_eq!(reference.source, CorrectionSource::FileDeclared);
+    }
+
     /// Compass files are read one byte per code point, so a "UTF-8 with BOM"
     /// `.DAT` carries three Latin-1 characters into whatever line 1 means -
     /// here the cave name, which becomes the imported project's name.
