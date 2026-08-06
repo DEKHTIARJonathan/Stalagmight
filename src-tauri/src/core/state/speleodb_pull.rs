@@ -2966,6 +2966,10 @@ mod tests {
     fn adopt_shot(id: i64, excluded: bool, shot_type: TmlShotType) -> TmlShot {
         TmlShot {
             id,
+            // No `<UUID>` in this fixture: the adoption tests here are about the
+            // pull/adopt plumbing, and identity carry has its own coverage
+            // (`core::state::shot_uuid_tests`).
+            uuid: None,
             from_id: id - 1,
             shot_type,
             azimuth: 90.0,

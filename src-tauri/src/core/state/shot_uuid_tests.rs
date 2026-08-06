@@ -133,18 +133,29 @@ fn write_tmlu(dir: &Path, name: &str, xml: &str) -> std::path::PathBuf {
 }
 
 /// The full Ariane import as the app runs it: parse the file, convert it to
-/// import configs, execute the import. Mirrors `speleodb_pull::adopt_build_into`
-/// and the wizard's own call.
+/// import configs, execute the import.
+///
+/// Deliberately shaped after `speleodb_pull::adopt_build_into` down to the
+/// entry point (`execute_tml_import_sections`, not the generic
+/// `execute_import_sections`) and the surface-elevation derivation (#431), so
+/// the adoption-idempotence claim below is about the pipeline that actually
+/// ships. `adoption_still_builds_through_the_pipeline_the_idempotence_test_drives`
+/// is the tripwire that keeps the two from drifting - it has already caught one
+/// divergence, when #443/#452 moved the conversion into `adopt_convert` and the
+/// import onto the TML-specific entry point.
 fn import_ariane_file(state: &AppState, path: &Path) {
     let tml = parse_tml(path).unwrap();
     let (sections, closures, _warnings) = convert_tml_to_import_configs(&tml, false, true).unwrap();
-    let result = state.execute_import_sections(
+    let surface_elevation = (tml.first_start_absolute_elevation.abs() > f64::EPSILON)
+        .then_some(tml.first_start_absolute_elevation);
+    let result = state.execute_tml_import_sections(
         sections,
         closures,
         None,
         Vec::new(),
         Vec::new(),
         VirtualShotMode::Auto,
+        surface_elevation,
     );
     assert!(result.success, "import failed: {:?}", result.error);
 }
@@ -343,13 +354,14 @@ fn the_import_reverse_carries_each_id_with_its_own_shot() {
     let (mut sections, closures, _warnings) =
         convert_tml_to_import_configs(&tml, false, true).unwrap();
     sections[0].reverse = true;
-    let result = state.execute_import_sections(
+    let result = state.execute_tml_import_sections(
         sections,
         closures,
         None,
         Vec::new(),
         Vec::new(),
         VirtualShotMode::Auto,
+        None,
     );
     assert!(result.success, "import failed: {:?}", result.error);
 
@@ -628,7 +640,7 @@ fn the_user_export_is_verbatim_while_the_speleodb_sidecar_canonicalises_or_drops
 /// shot - the user-visible churn in the issue.
 ///
 /// The assertion runs the identity-deciding pipeline (`parse_tml` ->
-/// `convert_tml_to_import_configs` -> `execute_import_sections`) twice on the
+/// `convert_tml_to_import_configs` -> `execute_tml_import_sections`) twice on the
 /// same file. `adopt_build_into` itself cannot be called from a unit test: it
 /// goes through `do_create_project_full`, which requires a real `AppHandle`
 /// (`tauri::test::mock_app` yields a `MockRuntime` handle, which `AppState`
@@ -676,9 +688,14 @@ fn adopting_the_same_ariane_file_twice_gives_the_same_shot_uuids() {
 }
 
 /// Tripwire for the test above: `adopt_build_into` must keep building the
-/// project through the same three calls the idempotence test drives. If it grows
-/// its own import path, the idempotence claim stops being tested and this fails
-/// loudly instead.
+/// project through the calls `import_ariane_file` drives. If it grows its own
+/// import path, the idempotence claim stops being tested and this fails loudly
+/// instead - which is exactly what happened when #443/#452 moved the conversion
+/// behind `adopt_convert` and the import onto `execute_tml_import_sections`.
+///
+/// The conversion is asserted through BOTH bodies, since `adopt_convert` is the
+/// indirection that would otherwise let the chain be re-pointed without this
+/// noticing.
 #[test]
 fn adoption_still_builds_through_the_pipeline_the_idempotence_test_drives() {
     let path = format!(
@@ -686,22 +703,31 @@ fn adoption_still_builds_through_the_pipeline_the_idempotence_test_drives() {
         env!("CARGO_MANIFEST_DIR")
     );
     let src = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {path}: {e}"));
-    let start = src
-        .find("fn adopt_build_into")
-        .expect("adopt_build_into is still defined in speleodb_pull.rs");
-    let body = &src[start..];
-    let body = &body[..body.find("\n    }\n").expect("fn body terminates")];
+    let body_of = |name: &str| -> String {
+        let start = src
+            .find(name)
+            .unwrap_or_else(|| panic!("{name} is still defined in speleodb_pull.rs"));
+        let rest = &src[start..];
+        rest[..rest.find("\n}\n").unwrap_or(rest.len())].to_owned()
+    };
+
+    let adopt = body_of("fn adopt_build_into");
     for call in [
         "parsers::tml::parse_tml",
-        "parsers::tml::convert_tml_to_import_configs",
-        "execute_import_sections",
+        "adopt_convert",
+        "execute_tml_import_sections",
     ] {
         assert!(
-            body.contains(call),
+            adopt.contains(call),
             "adopt_build_into no longer calls {call}; the adoption-idempotence \
              test is driving a pipeline the shipped path does not use"
         );
     }
+    assert!(
+        body_of("fn adopt_convert").contains("convert_tml_to_import_configs"),
+        "adopt_convert no longer runs the TML converter; the adoption-idempotence \
+         test is driving a pipeline the shipped path does not use"
+    );
 }
 
 // ---------------------------------------------------------------------------
