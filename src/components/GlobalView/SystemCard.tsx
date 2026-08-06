@@ -1,6 +1,6 @@
 import { type MouseEvent } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useProjectStore } from '../../store/projectStore';
+import { routeOpenedFile } from '../../utils/openOrImport';
 import {
   formatDate as formatDateIntl,
   formatNumber,
@@ -47,7 +47,6 @@ export default function SystemCard({
 }: SystemCardProps) {
   const { t } = useTranslation();
   const { formatLength } = useProjectStatFormatters();
-  const { loadProject } = useProjectStore();
   const testId = systemCardTestId(filePath);
 
   const handleClick = (e: MouseEvent) => {
@@ -59,10 +58,12 @@ export default function SystemCard({
   };
 
   const handleDoubleClick = async () => {
-    // Double click opens the project via store.loadProject
-    // loadProject handles view switching internally
+    // Double click opens the project via the shared open/import router (#450),
+    // so a recents card gets the identical guards (SpeleoDB hand-back,
+    // unsaved-changes, swap confirm) as every other .stalx entry point instead
+    // of calling loadProject directly.
     setProjectActionSource('recent-list');
-    await loadProject(filePath);
+    await routeOpenedFile(filePath);
   };
 
   const handleContextMenu = (e: MouseEvent) => {

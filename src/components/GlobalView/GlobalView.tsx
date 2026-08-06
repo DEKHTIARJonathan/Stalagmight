@@ -16,6 +16,7 @@ import { SpeleoBadgedIcon, RefreshGlyph } from '../common/SpeleoBadgedIcon';
 import { syntacticLevelAtLeast } from '../../theme/syntacticPalette';
 import { MENU_ICON_COLORS } from '../common/menuColors';
 import { setProjectActionSource } from '../../utils/telemetry';
+import { routeOpenedFile } from '../../utils/openOrImport';
 import { PROJECT_EXTENSION, IMPORT_EXTENSIONS } from '../../utils/fileDialogs';
 import { LoadingProgress } from '../LoadingProgress';
 import SystemCard from './SystemCard';
@@ -292,11 +293,15 @@ export default function GlobalView() {
     });
   }, [multiSelectedIds]);
 
-  // Handle project open (double-click on map or from metadata panel)
+  // Handle project open (double-click on map, list row, context menu, or from
+  // metadata panel). Routed through the shared open/import router (#450) - the
+  // same guards (SpeleoDB hand-back, unsaved-changes, swap confirm) that gate
+  // every other .stalx entry point (Ctrl+O, drag-drop, OS file association)
+  // now also gate a recents open, rather than relying on the layout invariant
+  // that GlobalView never renders with a project open.
   const handleProjectOpen = useCallback(async (filePath: string) => {
-    // loadProject handles view switching and clears GlobalView geometry cache
-    await loadProject(filePath);
-  }, [loadProject]);
+    await routeOpenedFile(filePath);
+  }, []);
 
   // Source-tagged open variants for telemetry attribution (the recent list vs
   // the recent map are distinct entry points feeding the same loadProject).
