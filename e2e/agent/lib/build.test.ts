@@ -9,8 +9,12 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { fileURLToPath } from 'url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
+  FEATURES_FOR_MODE,
+  buildStampPathFor,
+  featuresFor,
   isPluginAclChurn,
   needsE2eFeature,
   readBuildStamp,
@@ -20,6 +24,8 @@ import {
 
 const E2E_STAMP: E2EBuildStamp = {
   v: 2,
+  mode: 'debug',
+  features: '',
   viteE2E: true,
   e2eFeature: false,
   viteMode: 'production',
@@ -191,7 +197,7 @@ describe('readBuildStamp', () => {
     expect(readBuildStamp(write(JSON.stringify({ ...E2E_STAMP, v: 3 })))).toBeNull();
   });
 
-  it('returns null for a v1 stamp (predates e2eFeature - one forced rebuild)', () => {
+  it('returns null for a v1 stamp (predates e2eFeature AND the profile - one forced rebuild)', () => {
     const v1 = { ...E2E_STAMP, v: 1 } as Record<string, unknown>;
     delete v1['e2eFeature'];
     expect(readBuildStamp(write(JSON.stringify(v1)))).toBeNull();
@@ -211,5 +217,144 @@ describe('readBuildStamp', () => {
     const stamp = readBuildStamp(write(JSON.stringify(E2E_STAMP)));
     expect(stamp).not.toBeNull();
     expect(stampStaleReasons(stamp, wantMatching)).toEqual([]);
+  });
+});
+
+describe('build modes', () => {
+  it('keeps one stamp per profile, beside the binary it vouches for', () => {
+    const debugStamp = buildStampPathFor('debug');
+    const releaseStamp = buildStampPathFor('release');
+
+    expect(debugStamp).not.toBe(releaseStamp);
+    expect(path.dirname(debugStamp).endsWith('debug')).toBe(true);
+    expect(path.dirname(releaseStamp).endsWith('release')).toBe(true);
+  });
+
+  it('treats the other profile as stale rather than reusing its binary', () => {
+    const reasons = stampStaleReasons(E2E_STAMP, {
+      viteE2E: true,
+      e2eFeature: featuresFor('release').includes('e2e'),
+      binaryMtimeMs: E2E_STAMP.binaryMtimeMs,
+      mode: 'release',
+      features: 'e2e',
+    });
+
+    // Three, not two: a debug stamp is the wrong profile, was built with the
+    // wrong feature set, and (on a platform where the release profile is what
+    // asks for `e2e`) carries the wrong e2eFeature bit.
+    expect(reasons).toHaveLength(3);
+    expect(reasons[0]).toContain('for the debug profile but this start needs release');
+    expect(reasons[1]).toContain('features "(none)" but this start needs "e2e"');
+    expect(reasons[2]).toContain('e2e cargo feature');
+  });
+
+  it('accepts a release stamp for a release start', () => {
+    // e2eFeature true, because that is what a release build WRITES: `buildApp`
+    // stamps the union it passed, and the release profile asks for `e2e`. The
+    // old fixture left it false - a stamp no build could produce - which is how
+    // the comparison stayed vacuous.
+    const releaseStamp: E2EBuildStamp = {
+      ...E2E_STAMP,
+      mode: 'release',
+      features: 'e2e',
+      e2eFeature: true,
+    };
+
+    expect(
+      stampStaleReasons(releaseStamp, {
+        viteE2E: true,
+        e2eFeature: featuresFor('release').includes('e2e'),
+        binaryMtimeMs: releaseStamp.binaryMtimeMs,
+        mode: 'release',
+        features: 'e2e',
+      }),
+    ).toEqual([]);
+  });
+
+  it('rejects a v1 stamp, which cannot say which profile it describes', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'stalagmight-stamp-'));
+    const file = path.join(dir, 'stamp.json');
+    fs.writeFileSync(file, JSON.stringify({ ...E2E_STAMP, v: 1 }));
+
+    expect(readBuildStamp(file)).toBeNull();
+  });
+
+  it('gives release the e2e feature and debug none', () => {
+    // The body of debug_trigger_panic is #[cfg(any(debug_assertions, feature =
+    // "e2e"))], so release needs the feature to keep the crash-oracle
+    // self-test; debug must stay featureless so the DEFAULT build is unchanged.
+    expect(FEATURES_FOR_MODE.debug).toEqual([]);
+    expect(FEATURES_FOR_MODE.release).toEqual(['e2e']);
+  });
+
+  it('accepts the stamp a build of the SAME profile just wrote (no rebuild loop)', () => {
+    // The producer/consumer round trip, which the two cases above cannot make:
+    // they fed the stamp's own e2eFeature back in as the want, so that half of
+    // the comparison was `x !== x`. Production passes what the PLATFORM plus the
+    // PROFILE ask for, and when those two disagreed - Linux release, where the
+    // profile wants `e2e` and the platform does not - every start rebuilt.
+    for (const mode of ['debug', 'release'] as const) {
+      const features = featuresFor(mode);
+      const asBuilt: E2EBuildStamp = {
+        ...E2E_STAMP,
+        mode,
+        features: features.join(','),
+        e2eFeature: features.includes('e2e'),
+      };
+
+      expect(
+        stampStaleReasons(asBuilt, {
+          viteE2E: asBuilt.viteE2E,
+          e2eFeature: featuresFor(mode).includes('e2e'),
+          binaryMtimeMs: asBuilt.binaryMtimeMs,
+          mode,
+          features: features.join(','),
+        }),
+        `${mode}: a freshly written stamp must satisfy its own freshness check`,
+      ).toEqual([]);
+    }
+  });
+
+  it('names only features the crate actually declares', () => {
+    // The assertion above compares a literal with itself: it fails on an edit to
+    // the map and on nothing else. The hazard it reads as covering is the other
+    // side - the cargo feature being renamed or dropped - which would leave the
+    // map green while EVERY release start dies at `cargo build`. Only reading
+    // Cargo.toml can catch that.
+    const manifest = fs.readFileSync(
+      path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'src-tauri', 'Cargo.toml'),
+      'utf8',
+    );
+    const featuresBlock = /\n\[features\]\n([\s\S]*?)(?=\n\[|$)/.exec(manifest)?.[1] ?? '';
+    const declared = new Set(
+      [...featuresBlock.matchAll(/^\s*([A-Za-z][\w-]*)\s*=/gm)].map((match) => match[1] ?? ''),
+    );
+
+    expect(declared.size).toBeGreaterThan(0);
+    for (const mode of ['debug', 'release'] as const) {
+      for (const feature of FEATURES_FOR_MODE[mode]) {
+        expect(declared.has(feature), `src-tauri/Cargo.toml declares no [features] entry "${feature}"`).toBe(
+          true,
+        );
+      }
+    }
+  });
+
+  it('rejects a stamp whose mode or features field is not a valid one', () => {
+    // Both fields are new, and both are load-bearing: a stamp that survives
+    // validation with a bad `mode` lets a RELEASE binary satisfy a debug start,
+    // which silently drops the debug_assert oracles the harness relies on.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'stalagmight-stamp-'));
+    const cases: Record<string, unknown>[] = [
+      { ...E2E_STAMP, mode: 'profile' },
+      { ...E2E_STAMP, mode: undefined },
+      { ...E2E_STAMP, features: 3 },
+      { ...E2E_STAMP, features: undefined },
+    ];
+    for (const [index, candidate] of cases.entries()) {
+      const file = path.join(dir, `stamp-${index}.json`);
+      fs.writeFileSync(file, JSON.stringify(candidate));
+      expect(readBuildStamp(file), JSON.stringify(candidate)).toBeNull();
+    }
   });
 });

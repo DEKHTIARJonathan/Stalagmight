@@ -65,6 +65,32 @@ stress loop then a full sweep:
 
 - `seed-large-project` - load a fractal fixture, assert a clean multi-section open
 - `undo-redo-churn` - create N sections, undo N + redo N, assert snapshot equality
+- `undo-redo-fuzz` - seeded random mutations + random undo/redo walks, asserting an
+  EXACT normalized `get_project_state` roundtrip at every history depth. Opens its own
+  copy of the fixture with the persisted undo history stripped, from depth 0.
+  `STALAGMIGHT_FUZZ_FIXTURE=<basename>.stalx` picks the starting fixture (default
+  `fractal_plant_iter3.stalx`; `naharon.stalx` has the loop closures, zero datums and
+  null section metadata that reach half the known bugs). Runs three oracles: state
+  roundtrip (including multi-step `undoTo`/`redoTo` jumps against the same snapshots),
+  absolute project invariants, and an integrity-verdict delta. Currently reproduces
+  eight open undo bugs plus an open save/reload finding (listed with repro commands in the scenario's header comment), so
+  it is RED by default; `STALAGMIGHT_FUZZ_ALLOW_KNOWN_BUGS=1` tolerates the three
+  classified ones so the rest still runs. `STALAGMIGHT_FUZZ_STREAM=v1` restores the
+  pre-expansion generator set for repro lines minimized against it. Snapshotting and comparison happen in-page, so a step is one
+  round trip. To sweep it, `pnpm agent:fuzz-matrix --fixtures a,b --seeds 1..8 --workers 3`
+  runs the matrix in parallel (max 5 workers - one Xvfb display each) and prints a
+  results table with every failure's repro line. Add `--release` to either runner to
+  drive the release binary (~1.4x on the bigger workloads); debug is the default
+  because its `debug_assert!`s are oracles too - see docs/agent-harness.md
+- `undo-persistence-fuzz` - the save/reload sibling of the above. Each iteration builds an
+  undo stack carrying every `UndoData` variant a live command can produce, forces the shot
+  ids to diverge from positional order, leaves the redo stack non-empty, saves/closes/reopens,
+  then walks the whole RESTORED history to depth 0 and back up - including the restored REDO
+  entries. Also RED by default (`STALAGMIGHT_FUZZ_ALLOW_KNOWN_BUGS=1` to walk past the
+  classified ones): it found findings 12 and 13 on issue #413, where undo after a reload
+  edits the WRONG shot (`SetShotKind` / `UpdateShot` carry the in-session shot id) or fails
+  outright and wedges the history. `STALAGMIGHT_PERSIST_FUZZ_DELETE_IN_TARGET=1` is finding
+  13's repro and is terminal for the walk - see docs/agent-harness.md
 - `dialog-cycling` - open/close dialogs, assert no residue / DOM growth
 - `tool-switch-spam` - cycle every tool, assert activeTool tracks each switch
 - `map-storm` - seeded jumpTo barrage + main-thread stall probe
@@ -72,10 +98,27 @@ stress loop then a full sweep:
 - `import-repeatedly` - re-import a `.tml`, assert the undo stack stays <= 100
 - `rapid-project-cycle` - open/close a fixture, assert clean project transitions
 
+## Fuzz traces: record, replay, shrink
+
+Both undo fuzzers write a TRACE of their resolved moves to
+`<session>/traces/<scenario>-seed<N>-<stamp>.json` whenever they FAIL, and name the
+path in the failure message. `STALAGMIGHT_FUZZ_TRACE=path` also writes one on success.
+
+- Replay it: `pnpm agent:scenario <scenario> --trace <file> [--release]` - same bridge,
+  same oracles, same failure payload; only the source of the decisions changes.
+- Minimize it: `pnpm agent:fuzz-shrink <trace.json> [--release]` - ddmin down to a
+  1-minimal move list, then read `<trace>.min.json` and the printed action list. Measured
+  on the bug 1 repro: 43 steps -> 2, 52 s, ~1.8 s per replay.
+
+A shrunk action list is the body of a red Rust test almost line for line. Do this
+INSTEAD of bisecting a fuzz failure by hand. See docs/agent-harness.md for what the
+signature match does and does not distinguish.
+
 ## When you find a bug
 
 1. **Freeze** - stop exploring; do NOT keep acting (you will bury the repro).
-2. **Minimize** - find the shortest action prefix that still triggers it.
+2. **Minimize** - for a fuzz failure, run `pnpm agent:fuzz-shrink` on the trace it
+   left; otherwise find the shortest action prefix that still triggers it.
 3. **Generate the replay**:
    `node scripts/generate-replay.mjs <sessionDir> --assert-final`
 4. **Verify it reproduces**:

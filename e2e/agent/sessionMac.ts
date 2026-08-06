@@ -28,7 +28,7 @@ import './lib/undici-dispatcher-pin';
 import { spawn, type ChildProcess } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
-import { binaryPath, macWrapperPath } from '../lib/env';
+import { agentBuildMode, binaryPathFor, macWrapperPath } from '../lib/env';
 import { checkBuildFreshness, buildApp } from './lib/build';
 import { findFreePort, isPidAlive, recordPid, reapPidsFromFile, waitForPortListening } from './lib/procs';
 import { SessionCore, gitHead, safeMtime } from './lib/sessionCore';
@@ -79,16 +79,19 @@ export class MacSession extends SessionCore {
     this.reapPreviousSessions();
 
     // 1. Build freshness (the darwin arm adds `--features e2e`; the stamp's
-    // e2eFeature bit keeps a plugin-less binary from passing as fresh).
+    // e2eFeature bit keeps a plugin-less binary from passing as fresh). The
+    // PROFILE is threaded the same way as on Linux, so STALAGMIGHT_AGENT_RELEASE
+    // means the same thing on both platforms and the stamp says which it is.
+    const buildMode = agentBuildMode();
     let buildAction: StartResult['buildAction'] = 'skipped';
     if (build !== 'skip') {
-      const freshness = checkBuildFreshness();
+      const freshness = checkBuildFreshness({ mode: buildMode });
       if (build === 'force' || !freshness.fresh) {
         this.state = 'building';
         if (build !== 'force' && freshness.reasons.length > 0) {
           process.stderr.write(`Rebuilding: ${freshness.reasons.join('; ')}\n`);
         }
-        buildApp((line) => process.stderr.write(`${line}\n`));
+        buildApp((line) => process.stderr.write(`${line}\n`), buildMode);
         buildAction = 'built';
       } else {
         buildAction = 'fresh';
@@ -127,7 +130,7 @@ export class MacSession extends SessionCore {
         ...profileEnv,
         STALAGMIGHT_TEST_HOOKS: '1',
         RUST_BACKTRACE: '1',
-        STALAGMIGHT_BINARY: binaryPath,
+        STALAGMIGHT_BINARY: binaryPathFor(buildMode),
         STALAGMIGHT_TEST_PIDFILE: this.pidFile(),
       },
     });
@@ -203,8 +206,8 @@ export class MacSession extends SessionCore {
       sessionId: this.sessionId,
       startedAt: new Date().toISOString(),
       gitHead: gitHead(),
-      binaryPath,
-      binaryMtime: safeMtime(binaryPath),
+      binaryPath: binaryPathFor(buildMode),
+      binaryMtime: safeMtime(binaryPathFor(buildMode)),
       display: 'aqua',
       headed: true,
       profileDir: profileRoot,
@@ -219,6 +222,7 @@ export class MacSession extends SessionCore {
       display: 'aqua',
       profileDir: profileRoot,
       buildAction,
+      buildMode,
       sessionDir: this.recorder.dir,
       headedForced,
     };

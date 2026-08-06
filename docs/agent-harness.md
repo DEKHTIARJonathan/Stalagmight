@@ -149,7 +149,29 @@ hazards over long runs.
   - `pnpm agent:smoke` - session-core smoke (build -> launch -> drive -> stop).
   - `pnpm agent:mcp:smoke` - MCP-layer smoke (spawns the server, round-trips
     every tool through the protocol, self-tests the crash oracle).
-  - `pnpm agent:scenarios` - runs all 8 stress scenarios once at small n.
+  - `pnpm agent:scenarios` - runs all 10 stress scenarios once at small n. Two of them
+    are expected-red (see Stress scenarios); the gate reports those as XFAIL.
+  - `pnpm agent:scenario <name> [--seed N] [--iterations M] [--release]` - runs
+    ONE scenario at a chosen seed/n, then a full sweep. The one to reach for when
+    a seeded scenario needs re-running: a fuzzer repro, or a soak at a bigger n
+    than the gate would tolerate.
+  - `pnpm agent:fuzz-matrix [--fixtures a,b] [--seeds 1..8|1,3,7] [--workers K]
+    [--iterations M] [--release]` - runs `undo-redo-fuzz` across a (fixture x seed) matrix,
+    K child processes at a time, and prints a results table, every failure's
+    repro line, merged metric totals and the observed speedup. Each worker slot
+    gets its own port block (`STALAGMIGHT_AGENT_BASE_PORT = 4544 + 20*slot`) and
+    its own single-entry Xvfb pool (`STALAGMIGHT_AGENT_DISPLAYS`), so `K` is
+    hard-capped at 5 - the size of the display pool. Pinning the pool spends the
+    retries the default 5-display walk would have, so entries are validated
+    (`:N`, non-empty) and a pinned display that will not start is a hard error:
+    the session never falls back to the real display, where the fuzzer would
+    drive a visible window on the user's desktop for the length of the run. A
+    cell GENERATES its own
+    moves, so `STALAGMIGHT_FUZZ_REPLAY` / `_TRACE` are dropped from the child
+    environment rather than inherited (an exported replay path would otherwise
+    make every cell replay one trace and report a green matrix for coverage
+    nothing ran). `--release=0` means what it says: the flag takes an optional
+    `1/0`, `true/false`, `yes/no`, `on/off` value.
   - `pnpm agent:mcp` - run the server standalone (for an external MCP client).
   - `pnpm agent:bridge <dir>` - file-based access to the same server for plain
     shells and subagents without an MCP client: append JSON tool calls to
@@ -161,6 +183,63 @@ hazards over long runs.
   `.claude/agents/code-analyst.md` (Opus, read-only; per-issue root-cause
   analysis it spawns).
 
+## Build profile: debug by default, release opt-in
+
+The harness drives the **debug** binary unless `STALAGMIGHT_AGENT_RELEASE=1` is
+set (`--release` on `agent:scenario` and `agent:fuzz-matrix` sets it for their
+children). That default is a deliberate trade, not inertia.
+
+**What release costs you.** `debug_assertions` is off, so these stop running:
+
+- Every `debug_assert!` in a live path - `core/state/command_comment.rs:71`,
+  four in `core/loading.rs`, `models/project/reverse.rs:358`,
+  `models/project/classify.rs:244`. Each is an
+  invariant check the app performs on itself during exactly the mutations a
+  fuzzer drives.
+- `Project::debug_assert_merge_alignment` (`models/project/offsets.rs:72`), whose
+  whole body is `#[cfg(debug_assertions)]`. In debug it emits a `tracing::error!`
+  when a merge ends up more than 5 cm out of alignment inside a single command;
+  that line rides the ring buffer into the harness's error-log oracle. In release
+  the check does not exist, so that class of drift becomes invisible.
+- Rust's debug-only integer-overflow panics: an overflow that aborts loudly in
+  debug wraps silently in release.
+- `[profile.release]` sets `strip = true`, so a crash marker's
+  `Backtrace::force_capture()` has no symbol names.
+
+In other words a debug build is itself an oracle, and the release build trades
+several of them for speed. Reach for release when you are sweeping seeds for
+throughput; keep debug for the run whose result you intend to trust.
+
+**What release keeps.** The release harness build passes `--features e2e`, the
+repo's own name for this build. That keeps the BODY of `debug_trigger_panic`
+compiled in (the `#[cfg(any(debug_assertions, feature = "e2e"))]` sits on the
+body blocks, not on the command - the command stays registered in every build so
+the invoke-handler and telemetry-registry contracts are build-invariant, see
+`src-tauri/src/commands/debug.rs`), so the crash-oracle self-test still works
+without `debug_assertions`. The panic hook, the crash marker and the ring buffer
+are not feature-gated and behave identically. `window.__E2E_TEST__` is gated on
+`import.meta.env.DEV || MODE === 'test' || VITE_E2E === '1'`, and the frontend leg
+is the same `pnpm build` in both profiles, so `VITE_E2E=1` supplies the hooks in a
+production-mode vite build too; `waitForE2EHooks` fails the start loudly, naming
+the profile and the binary path, if they are ever missing. The debug build passes
+no features, so the DEFAULT build is byte-for-byte what it always was.
+
+**What release also brings, which is not only a subtraction.** `e2e` enables
+`tauri-plugin-webdriver-automation` (`src-tauri/Cargo.toml`), and `lib.rs`
+registers it under `#[cfg(feature = "e2e")]`. So the two profiles differ by a
+PLUGIN as well as by the compiled-out assertions above, and "release is debug
+minus the `debug_assert!`s" is not the whole truth: a finding that reproduces in
+one profile and not the other has a second candidate explanation, and the
+comparison to reach for is the same seed in the same profile. (The WDIO tier
+builds its DEBUG binary with `--features e2e` for this reason; the agent
+harness deliberately does not, to leave its default build unchanged.)
+
+**Cost.** One-time cold release build: about 3.5 minutes wall clock on the
+self-hosted runner (`Finished release profile [optimized] in 2m 08s` plus the
+vite leg and the link), against roughly 4.5 minutes for debug. Both profiles are
+cached independently under `$CARGO_TARGET_DIR`, so switching back and forth does
+not rebuild.
+
 ## Build freshness + the E2E build stamp
 
 `app_start(build: "auto")` rebuilds when either signal says stale
@@ -168,13 +247,17 @@ hazards over long runs.
 
 1. **mtimes** - any file under `src/`, `src-tauri/src/`, or one of
    `tauri.conf.json` / `package.json` / `index.html` / `vite.config.ts` is newer
-   than the debug binary.
+   than the binary for the profile being started.
 2. **E2E build stamp** - `buildApp` writes
-   `$CARGO_TARGET_DIR/debug/.stalagmight-e2e-build-stamp.json` after a
-   successful build, recording `viteE2E`, the vite mode, and the mtime of the
-   binary it produced. A missing stamp, a stamp whose `viteE2E` disagrees with
-   what the start needs, or a binary whose mtime no longer matches the stamp
-   (`./scripts/dev.sh` or a plain `pnpm tauri build` relinked it) is stale.
+   `$CARGO_TARGET_DIR/<profile>/.stalagmight-e2e-build-stamp.json` after a
+   successful build, recording the profile, its cargo features, `viteE2E`, the
+   vite mode, and the mtime of the binary it produced. A missing stamp, a stamp
+   whose profile / features / `viteE2E` disagree with what the start needs, or a
+   binary whose mtime no longer matches the stamp (`./scripts/dev.sh` or a plain
+   `pnpm tauri build` relinked it) is stale. One stamp per profile, beside the
+   binary it vouches for, is what lets debug and release coexist without
+   thrashing rebuilds or running the wrong binary; a pre-release-mode `v1` stamp
+   cannot name its profile and is treated as absent (one rebuild, once).
 
 mtimes alone cannot see *how* a binary was built, so before the stamp a
 `dev.sh`-built binary looked fresh and `auto` attached to a hookless dist, only
@@ -231,6 +314,389 @@ Oracles + scenarios:
 |---|---|
 | `check_problems` | Full oracle sweep (see below). |
 | `run_scenario(name, seed?, iterations?)` | Run a named stress scenario, then a full sweep. |
+
+## Stress scenarios
+
+Registered in `e2e/agent/scenarios/index.ts`; each is a seeded loop that FAILS by
+throwing. Small-n values for the `pnpm agent:scenarios` gate live in
+`e2e/agent/scenarios-smoke.ts`.
+
+Two of them - `undo-redo-fuzz` and `undo-persistence-fuzz` - reproduce open app
+bugs by construction, so they are RED by design and a green run would mean their
+oracles had been weakened. They are listed in that file's `EXPECTED_RED`, which
+reports them as **XFAIL** and does not fail the gate: with them failing
+unconditionally the gate exited 1 whatever the other nine did, and so could no
+longer answer the question it exists to answer. The other direction is enforced -
+an expected-red scenario that PASSES fails the run, because that means the bug it
+pins was fixed and the entry (and the scenario's header) needs updating.
+
+| Scenario | What it asserts |
+|---|---|
+| `seed-large-project` | A fractal fixture opens cleanly into a multi-section single-system view. |
+| `undo-redo-churn` | Create N sections, undo N + redo N; the cheap state signature returns to baseline. |
+| `undo-redo-fuzz` | Seeded random mutations interleaved with random undo/redo walks; an EXACT normalized `get_project_state` roundtrip at every history depth (see below). |
+| `undo-persistence-fuzz` | Builds an undo stack covering every reachable `UndoData` variant, saves/closes/reopens it, then walks the whole RESTORED history down and back up (see below). |
+| `dialog-cycling` | Opening/closing dialogs leaves no residue and no DOM growth. |
+| `tool-switch-spam` | `activeTool` tracks every switch. |
+| `map-storm` | A seeded `jumpTo` barrage does not stall the main thread. |
+| `save-under-churn` | Mutate+save leaves `isDirty=false`, no `.tmp`, and reopens clean. |
+| `import-repeatedly` | Re-importing a `.tml` keeps the undo stack at or under 100. |
+| `rapid-project-cycle` | Open/close cycles leave clean project transitions. |
+
+### undo-redo-fuzz
+
+The oracle is a full canonical `get_project_state` snapshot per undo depth: every
+field it drops is justified in `e2e/agent/lib/fuzzOracleCore.ts`'s header, map key
+order is canonicalized rather than ignored, and when two canonical strings
+disagree Node re-compares with a 1e-9 absolute / 1e-12 relative tolerance
+(`projectSnapshot.ts`), because geometry is re-derived rather than copied after
+every undo/redo. Backend truth for the model is the app's own `get_undo_stack` /
+`get_redo_stack` lengths.
+
+The snapshot is taken and compared IN THE WEBVIEW. `fuzzOracleCore.ts` holds the
+serializer and the targeting digest as two self-contained functions that Node
+calls directly and also injects into the page via `Function.prototype.toString()`
+- one implementation, with a unit test that feeds the same state to both and
+asserts byte-identical output. Each step is then a single fused `executeAsync`
+(`undoRedoFuzzBridge.ts`): call the projectStore action, observe, canonicalize,
+compare, return a verdict plus the digest. Full canonical strings cross the
+bridge only after a comparison has already failed.
+
+A full run today (release, HEAD) costs about 135 ms/iteration on the fractal
+fixture and 217 ms/iteration on naharon, against 104 / 189 before the extra
+oracles - so the undoTo/redoTo equivalence check, the per-step invariant suite,
+the integrity delta and the save/reload boundary together add roughly 30% and 15%
+respectively. On naharon, `integrityMs` is ~4% of step time and `canonicalMs` ~7%;
+the rest is still the app. Save/close/reopen is charged outside the fused step,
+at roughly a second per round trip.
+
+That leaves the bridge at roughly 6% of a step. Measured on fractal seed 4 x60
+(90 steps, `actionMs`/`observeMs`/`canonicalMs` are reported as metrics): 4775 ms
+in the store action's own `flushPlanAnchors` + command + `refreshProjectState` +
+`checkProjectIntegrity` chain, 810 ms in the three read-only IPC reads, 132 ms
+canonicalizing, ~390 ms of WebDriver. The action chain is the boundary coverage
+that found the `updateSection` and undo-fails-outright bugs, so it stays; further
+speedup has to come from parallelism, which is what `agent:fuzz-matrix` is for.
+
+The starting point is chosen and cleaned rather than inherited. The scenario
+closes whatever project is open, materializes its own copy of the fixture,
+DELETES that copy's persisted undo history, loads it, and then asserts both
+history stacks are empty. Tracked fixtures ship with a stack
+(`undo_persist_limit`, 20 rows in the fractal fixture and 2 in naharon), and a
+scenario that models undo depth must not fuzz on top of somebody else's entries
+or burn the headroom below the 100-entry limit. `stripUndoHistory`
+(`e2e/agent/lib/fixtures.ts`) is the harness-side replica of the app's own
+`Database::clear_undo_history_at`, and refuses any path inside `e2e/fixtures/`
+so it can only ever touch a temp copy.
+
+| Env var | Effect |
+|---|---|
+| `STALAGMIGHT_FUZZ_FIXTURE` | Which `.stalx` under `e2e/fixtures/` to fuzz, by BASENAME (`fixtureSourcePath`'s `path.basename` is the containment guard). Defaults to `DEFAULT_FIXTURE`. Recorded in the metrics and the log line so a run stays attributable. |
+| `STALAGMIGHT_FUZZ_STREAM` | `v1` restores the ORIGINAL generator set, weights and value ranges, reproducing the legacy draw stream byte for byte. The default v2 stream adds the delete/split family, batches, comment moves, synthetic imports, boundary-biased values and per-run swarm weights - and necessarily draws differently, so v1-era repro lines need this variable. |
+| `STALAGMIGHT_FUZZ_ALLOW_KNOWN_BUGS` | `1` keeps going past a mismatch that is ENTIRELY a classified known bug (logged, counted, model resynced). Not the default: a green default would mean the oracle had been weakened. |
+
+Fixture choice is load-bearing, not cosmetic. The fractal fixture has no loop
+closures, no zero datums and a non-null surveyor on all 32 sections; naharon has
+all three plus 13 null-surveyor sections, and half the bugs below are only
+reachable there.
+
+Three oracles run, not one. The **roundtrip** comparison above; an **absolute
+invariant** suite (`checkProjectInvariants`) run in-page on every observed state,
+because the roundtrip only sees drift BETWEEN states and a command that corrupts
+the project with an undo that faithfully restores the corruption matches at every
+depth; and an **integrity delta**, which records
+`check_project_integrity`'s own verdict per depth and asserts every history move
+restores it. The invariant suite deliberately does not re-check what the integrity
+checker owns - the split, and why, is in `fuzzOracleCore.ts`.
+
+About 10% of history moves are taken as a MULTI-step `undoTo`/`redoTo` jump - the
+history dropdown's path - verified against the same snapshots single steps
+recorded. That decision is drawn from a separate PRNG (`mulberry32(seed ^
+0x9e3779b9)`) so the primary draw stream every recorded repro depends on is
+untouched.
+
+Runs also cross the PERSISTENCE boundary - save to a temp path, close, reopen -
+because undo history is persisted and nothing below a save point is exercised
+otherwise. Save-time healing mutations and the reload's zero-trust offset
+re-solve are subtracted only from comparisons that cross that boundary (an epoch
+stamp per recorded depth), so within an epoch the oracle stays strict.
+
+Each run also picks a SWARM PROFILE from the seed (merge-heavy, delete-heavy,
+batch-heavy, split-heavy, move-heavy, metadata-heavy, balanced) on its own
+stream, so different seeds explore different shapes of history rather than all
+sampling the same uniform mix. The profile is recorded in the metrics and the log
+line.
+
+A 60-cell v2 sweep (both fixtures, seeds 1-30, x40, tolerant) yields 18 failures
+and a v2 repro for bugs 1, 5, 6, 7 and 8; bugs 2, 3 and 4 were not re-found and
+keep their v1 lines, executable with `STALAGMIGHT_FUZZ_STREAM=v1`. The full table
+is in the scenario header.
+
+The findings are tracked at
+<https://github.com/Stalagmight/Stalagmight/issues/413>, one comment per finding
+with its mechanism, repro and fix direction; the scenario header is the
+authoritative copy of the repro commands.
+
+It currently reproduces nine open undo bugs plus one open reload finding, enumerated with per-fixture,
+per-seed repro commands in the scenario's header comment, so it is RED by
+default. The most serious is bug 8: after a save/reload an undo DELETES THE WRONG
+SHOT, because shots are renumbered on load while persisted undo entries keep the
+pre-reload ids and nothing remaps them. Three are classified (`KNOWN_UNDO_ASYMMETRIES` plus
+`LOOP_CLOSURE_REORDER`), which makes the failure message name the bug and makes
+them tolerable under the env var above. The other four - a section displaced by
+undoing its first shot, an undo that cannot restore a previously-null section
+field, an undo that FAILS OUTRIGHT and wedges the history, and a multi-step
+`undoTo` landing metres away from the same depth reached by single undos
+(`undo_to`/`redo_to` call neither `invalidate_adjusted_cache()` nor
+`reconcile_geometry()`, which `undo()`/`redo()` both do) - are deliberately never
+tolerated. A tenth finding - a loop closure silently reclassified as a station
+merge across save/reload, `convert_orphan_closures_to_merges` in
+`redrive_offsets_after_load` - is also left failing: it looks intended, but it
+means save+reopen is not state-preserving, and whether to normalize eagerly or
+tolerate it is a maintainer's call.
+
+### undo-persistence-fuzz
+
+The sibling scenario, and the one that took bug 8 seriously as a MECHANISM rather
+than as a single defect. Bug 8 is "shots are renumbered on load, persisted undo
+entries are opaque JSON that nothing remaps, and the in-session allocator draws
+from the same id space, so a stale id collides". None of that is specific to
+`CreatedShotSnapshot` - so this scenario goes looking for the siblings, on
+purpose rather than by luck.
+
+Every iteration is one complete, independent cycle:
+
+1. open a fresh copy of the fixture with its persisted undo history stripped;
+2. run a fixed COVERAGE PLAN (`undoPersistenceCoverage.ts`) whose targets and
+   values are seeded but whose SET and ORDER are not, so the stack carries every
+   `UndoData` variant a live command can produce;
+3. assert the shot ids really have diverged from positional order (the collision
+   precondition), rather than assuming the plan produced it;
+4. undo a few entries so the REDO stack is non-empty at save time;
+5. save, close, reopen - both stack lengths must come back exactly; and
+6. unwind through every restored undo entry to depth 0, then redo back to the
+   top, **through the restored redo entries**, which nothing else in the harness
+   had ever exercised.
+
+The plan's order is the load-bearing part, and it is not the obvious one.
+`Shot::id` is serialized inside a project snapshot, so `UndoData::ProjectSnapshotPair`
+restores the PRE-SAVE id space wholesale and heals every stale id beyond it: a
+snapshot-pair entry is a WALL, and the exposed window is exactly "from the depth
+the reload lands on, down to the first pair beneath it". The first arrangement put
+all the pairs above the id-bearing entries and 60 iterations found nothing new;
+inverted - pairs as low as their preconditions allow, every id-bearing entry
+contiguous at the top - two defects fell out on the third iteration.
+
+Beyond the main fuzzer's three oracles it adds two of its own: COVERAGE (every
+variant a guaranteed plan step promises must be present on the RESTORED stack)
+and STACK SURVIVAL (both lengths must equal what they were at save time). Six
+`UndoData` variants are reported once per run as out of scope: `MergeInfo`,
+`UnmergeInfo`, `StationMoveInfo`, `ShotSnapshot`, `SectionSnapshot` and
+`ProjectSnapshot` still have restore arms in `undo()` but have no live producer
+left, so a project whose history was stripped can never construct one.
+
+| Env var | Effect |
+|---|---|
+| `STALAGMIGHT_FUZZ_FIXTURE` | Same as the main fuzzer: which `.stalx` to build on, by basename. |
+| `STALAGMIGHT_FUZZ_ALLOW_KNOWN_BUGS` | `1` walks past the classified open bugs (bug 1, bug 8, findings 11/12/13) instead of stopping at the first. Not the default. |
+| `STALAGMIGHT_PERSIST_FUZZ_DELETE_IN_TARGET` | `1` moves the plan's mid-section delete onto the section the shot entries target. That is finding 13's repro, and it is terminal: the stale id then runs past the renumbered range, the undo fails, and the unwind cannot continue. |
+
+It found two new bugs, both now written up on issue #413 and pinned red in
+`open_undo_bugs_tests.rs`. **Finding 12**: after a save/reload, undo or redo of
+`SetShotKind` / `UpdateShot` edits the WRONG shot - `UndoData::InverseCommand` and
+`UndoData::PreviousValues { shot_id }` both name a shot by its in-session id, and
+`redo_inner`'s catch-all re-executes the original command with the same id. It
+needs no delete, unlike bug 8; one insert-before is enough, and nothing about the
+resulting project looks wrong. **Finding 13**: when the section HAS had a shot
+deleted, the allocator has run past the renumbered range, so the stale id misses
+instead of colliding - the undo fails outright, `undo_inner` pushes the entry
+back, and the history is WEDGED with every entry beneath it unreachable.
+
+Both are the same root cause as bug 8 and should get the same fix; the write-ups
+argue for addressing shots by `uuid` in the persisted entries, which is the route
+`StationKey` and `CreatedShotSnapshot { uuid }` already took.
+
+### Three tiers, and which one gates CI
+
+The harness is the middle tier of three, and it is worth being clear about what
+each one buys:
+
+| tier | drives | catches | runs |
+|---|---|---|---|
+| `src-tauri/src/core/state/fuzz_undo_tests.rs` | `AppState` directly | undo/redo model + persistence regressions | **every CI run** |
+| this harness | the real app over IPC | anything the frontend store or the IPC boundary breaks | on demand |
+| `open_undo_bugs_tests.rs` | `AppState` directly | the known open bugs, pinned red | `-- --ignored` |
+
+Both `#[ignore]`d red suites are worth running together, since two findings are
+pinned by a SEED in the fuzz module rather than by a reduction in the red one:
+
+```bash
+# 20 red tests. libtest takes several filters and ORs them; a shell-regex
+# filter would match nothing, since cargo's filter is a plain substring.
+TELEMETRY_ENDPOINT=http://localhost/dummy cargo test --manifest-path src-tauri/Cargo.toml \
+  --features telemetry --lib -- --ignored open_undo_bugs finding_14 bug_7
+```
+
+The Rust tier exists because neither of the other two GATES anything: the harness
+needs a built desktop app and a display, and the red tests are `#[ignore]`d by
+design. It runs the same model - a canonical snapshot per undo depth, asserted
+after every move - about a thousand times cheaper per sequence, which is what
+makes it affordable as a `#[test]`. See docs/testing-recipes.md for how to run it
+and its soak.
+
+It is not a replacement. It cannot see the projectStore actions or the IPC
+serialization, which is where the `updateSection` double-option bug (finding 5)
+was found and where the undo-fails-outright bug (finding 6) surfaced. Equally it
+sees two things the harness cannot: `station_offsets` / `station_comments`, which
+`ProjectIpc` omits entirely, and the app's own `#[cfg(test)]`
+`debug_assert_merge_alignment`. Findings 14, 16 and 17 came from those.
+
+**Every finding the harness found is now reachable in the Rust tier too, and
+classified by id there.** Its header carries a BUG IDENTIFICATION MATRIX: per
+finding, the mode, seed and move count under which it fires and is named. That
+is worth having for two reasons beyond convenience - a finding you can only
+reach by driving a desktop app is a finding nobody re-checks after a refactor,
+and the matrix is what made three duplicates and three NEW defects visible
+(finding 15 is finding 3 re-measured; findings 16 and 17 and finding 14's
+mirror image were found while building the modes). The harness stays the tier
+that owns everything above `AppState`.
+
+### Record, replay, shrink
+
+Triage used to be the expensive human step: a failure gave you a seed and an
+iteration count, and finding out which of the 37 mutations mattered meant seed
+sweeps and bisecting by eye. Both fuzzers now record a TRACE, replay one, and
+minimize one automatically.
+
+**Record.** Every fuzz run collects its RESOLVED move list - each generator draw
+already collapsed into a concrete `projectStore` action and its arguments - and
+writes it to `<session>/traces/<scenario>-seed<N>-<stamp>.json` whenever the run
+FAILS. The path is appended to the failure message. `STALAGMIGHT_FUZZ_TRACE=path`
+also writes the trace of a run that PASSED, which is how you capture a baseline
+to shrink against later. Recording is observe-only - it draws nothing, reads no
+app state and runs after the decision it records - so a seed's trajectory is
+identical with it on or off (re-verified against the bug 1 and bug 8 repro
+lines).
+
+The header carries scenario, seed, iterations, fixture, generator stream, the
+`STALAGMIGHT_*` knobs that were set, the git rev and the failure message with its
+parsed signature. `undo-persistence-fuzz` resets its recorder per iteration,
+because its cycles are independent: the trace is of the cycle that failed.
+
+**Replay.**
+
+```
+pnpm agent:scenario undo-redo-fuzz --trace <file> [--release]
+```
+
+Replay is a MODE of the scenario, never a separate one. Only the source of the
+decisions changes: the fused step, the three oracles, the model bookkeeping, the
+classification and the failure payload are the same code, so a replayed failure
+is the same failure rather than a lookalike. A replayed run says so in its
+`reproduce:` line.
+
+The recording's ENVIRONMENT is part of the repro, so `--trace` restores the
+header's `STALAGMIGHT_*` knobs (fixture, tolerance, stream, the persistence
+ones) and prints what it restored. It has to happen before `./scenarios` is
+imported - the fuzz scenarios freeze those knobs into module-level constants at
+import time - which is why both `agent:scenario` and `agent:fuzz-shrink` import
+the registry dynamically. A trace recorded by a different scenario, or on a
+different fixture, is REFUSED: the steps carry resolved section and shot ids, so
+replaying them against another project drives moves at ids that do not exist
+there and reports an invented failure (or none) while the operator believes they
+are looking at the recorded one.
+
+Two rules make replay work on a trace that has been CUT, which is what the
+shrinker needs:
+
+- a history move whose precondition no longer holds (undo at depth 0, redo at
+  the top) is SKIPPED, and a jump wider than the reach is CLAMPED to it. Skipping
+  asserts nothing, so it cannot turn a failing candidate green by hiding
+  something; it just declines to pretend a move was possible. Every skip is
+  counted.
+- the closing unwind/rewind is never recorded and always REGENERATED. A shrink
+  therefore cannot remove the walk that visits every depth in both directions,
+  which is where most failures are actually observed.
+
+`undo-persistence-fuzz` skips its PLAN's own preconditions on a replay - id
+divergence, the renumbering check, variant coverage - because a shrunk trace is
+by construction not the plan. No app oracle is skipped on either scenario.
+
+**Shrink.**
+
+```
+pnpm agent:fuzz-shrink <trace.json> [--release] [--max-tests N] [--out FILE]
+```
+
+Textbook ddmin (`e2e/agent/lib/fuzzShrink.ts`) over the recorded move list, with
+a candidate cache. It replays the whole trace first to establish the baseline
+signature, then repeatedly replays subsequences until no single step can be
+removed, and writes `<trace>.min.json` plus a numbered action list.
+
+Exit status is the signal, so a recorded trace doubles as a regression check:
+**0** only when the trace reproduced and was minimized, **1** when it replayed
+GREEN (the bug is fixed, or the failure needed something the trace does not
+carry) or the shrink itself threw.
+
+A candidate "preserves" the failure only when its FailureSignature matches:
+headline, first differing path, the `error:` line of a move that failed outright,
+and every classifier id the message named. Digits and array indices are
+normalized out of those, because removing a mutation moves every depth and index
+while the defect stays the same; the sentence shape, the field at the end of the
+path and the classifier ids are NOT normalized, so a candidate that fails
+DIFFERENTLY is rejected exactly like one that passes. That is standard ddmin
+practice and it is what stops a shrink wandering onto one of the other ten open
+bugs; the count of rejected-as-divergent candidates is reported.
+
+Measured, on the two current reds:
+
+| trace | before | after | replays | divergent, rejected | per replay | wall clock |
+|---|---|---|---|---|---|---|
+| bug 1 (`undo-redo-fuzz`, fractal seed 1 x40) | 43 | **2** | 28 (+20 cached) | 3 | 1.8 s | 52.5 s |
+| finding 12 (`undo-persistence-fuzz`, seed 1 x1, strict) | 20 | **4** | 58 (+41 cached) | 20 | 1.7 s | 97.6 s |
+
+Both results are 1-minimal, and both replay deterministically twice. The finding
+12 one is the better demonstration: its minimal list is
+
+```
+1. createSection(shots=3)
+2. createShot(s=32,before=3200000)
+3. setShotKind(s=32,shot=3200003,Jump)
+4. save
+```
+
+which is, step for step, the synthetic Rust test that was written for that
+finding by hand - create a section, insert before the first shot so the ids stop
+matching positional order, mark a shot whose id will land on a different slot,
+save. The shrinker got there from a 20-step cycle without being told what the bug
+was. Its 20 divergent rejections are the guard doing its job: subsets that still
+failed, but as bug 8 or as the stale-id wedge rather than as finding 12.
+
+The whole shrink runs against ONE app session -
+each scenario run already closes the project, materializes a fresh fixture copy,
+strips its history and asserts both stacks came up empty, so a replay inherits
+nothing from the one before it.
+
+**From a shrunk trace to a red Rust test.** The action list is already the test
+body: each `mutate` line is one `Command` with its arguments, in order, and the
+`save` line is `state.save_project(Some(path))` followed by a reopen if the trace
+crossed the boundary. Add the closing `undo()` / `redo()` walk the replayer
+regenerates, assert what the fuzzer's diff said should have been restored, and
+`#[ignore]` it per the convention in
+`src-tauri/src/core/state/open_undo_bugs_tests.rs`. Everything is synthetic by
+construction - a trace holds generated values, never fixture data.
+
+**One caveat, worth knowing before you trust a minimal trace.** ddmin finds the
+smallest input with the same SIGNATURE, and two defects that produce the same
+message are indistinguishable to it. The bug 1 shrink above lands on
+`executeBatch(...)` + `save`, whose failure is really finding 11 (a pre-save
+snapshot pair reverting the save's gauge capture) - `undo-redo-fuzz` has no
+classifier that separates the two, so both read as
+`create-section-redo-drops-gauge-anchors`. The shrinker did exactly what it
+promises; the ambiguity is in the message. Read the minimal action list before
+writing the test, and if it does not look like the bug you started from, that
+ambiguity is the reason. (`undo-persistence-fuzz` names the entry each move
+consumed, which is what resolves it there.)
 
 ## Oracles
 

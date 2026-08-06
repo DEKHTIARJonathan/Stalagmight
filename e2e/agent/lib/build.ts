@@ -21,7 +21,7 @@ import { execSync } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
-import { binaryPath, cargoTargetDir } from '../../lib/env';
+import { agentBuildMode, binaryPathFor, cargoTargetDir, type AgentBuildMode } from '../../lib/env';
 import { isDarwinTarget } from './platform';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
@@ -86,6 +86,18 @@ function mtimeOf(file: string): number {
 export interface E2EBuildStamp {
   /** Stamp schema version; an unknown version is treated as no stamp. */
   v: 2;
+  /** Cargo profile this binary was built with. */
+  mode: AgentBuildMode;
+  /**
+   * Every cargo feature the build passed, comma-joined and sorted ('' = none).
+   *
+   * Overlaps `e2eFeature` on purpose and does not replace it: that one answers
+   * "does this binary carry the WebDriver plugin this PLATFORM needs", which
+   * is a darwin question, while this one answers "was it built with what this
+   * PROFILE asks for". A mac debug build and a linux release build both carry
+   * `e2e`, for unrelated reasons, and a stamp has to say which.
+   */
+  features: string;
   /** Was the build run with VITE_E2E set (i.e. does dist carry the hooks)? */
   viteE2E: boolean;
   /**
@@ -103,12 +115,70 @@ export interface E2EBuildStamp {
   builtAtIso: string;
 }
 
-/** Absolute path of the E2E build stamp for the current cargo target dir. */
-export const buildStampPath = path.join(
-  cargoTargetDir,
-  'debug',
-  '.stalagmight-e2e-build-stamp.json',
-);
+/**
+ * Absolute path of the E2E build stamp for `mode`.
+ *
+ * One stamp per profile, living beside the binary it vouches for, so switching
+ * between debug and release neither thrashes rebuilds nor lets a stale binary
+ * from the other profile look fresh.
+ */
+export function buildStampPathFor(mode: AgentBuildMode): string {
+  return path.join(cargoTargetDir, mode, '.stalagmight-e2e-build-stamp.json');
+}
+
+/** Stamp path for the DEBUG build (the default profile). */
+export const buildStampPath = buildStampPathFor('debug');
+
+/**
+ * Cargo features each profile is built with.
+ *
+ * Release adds `e2e`, which is the repo's own name for this build: it keeps the
+ * BODY of `debug_trigger_panic` compiled in (`#[cfg(any(debug_assertions,
+ * feature = "e2e"))]` is on the body blocks, not on the command - the command
+ * itself stays registered in every build so the invoke-handler and
+ * telemetry-registry contracts are build-invariant, see
+ * src-tauri/src/commands/debug.rs), so the crash-oracle self-test still works
+ * without `debug_assertions`. Debug gets that for free and so passes nothing,
+ * which keeps the DEFAULT build byte-for-byte what it has always been.
+ *
+ * WHAT ELSE THE FEATURE BRINGS, and it is not nothing: `e2e` also enables
+ * `tauri-plugin-webdriver-automation` (`src-tauri/Cargo.toml`), which
+ * `src-tauri/src/lib.rs` registers under `#[cfg(feature = "e2e")]`. So a
+ * release session drives an app with one more plugin than a debug session does,
+ * and "release differs only by compiled-out debug_asserts" is not the whole
+ * truth - a finding that reproduces in one mode and not the other has a second
+ * candidate explanation. The WDIO tier passes `--features e2e` for its DEBUG
+ * build too (`scripts/wdio.sh`); this map deliberately does not, to leave the
+ * agent harness's default build unchanged, and the asymmetry is recorded here
+ * rather than discovered later.
+ */
+export const FEATURES_FOR_MODE: Record<AgentBuildMode, string[]> = {
+  debug: [],
+  release: ['e2e'],
+};
+
+/**
+ * Every cargo feature a build of `mode` passes, on THIS platform.
+ *
+ * Two independent reasons to pass `--features e2e` - the PROFILE asks for it
+ * (`FEATURES_FOR_MODE`, so release keeps `debug_trigger_panic`'s body) and the
+ * PLATFORM asks for it (`needsE2eFeature`, so darwin gets the in-app WebDriver
+ * plugin) - unioned into one answer.
+ *
+ * `buildApp` and `checkBuildFreshness` MUST derive from this same function.
+ * They did not: the build unioned both reasons and stamped the result, while
+ * the check asked the platform alone, so on Linux a release stamp said
+ * `e2eFeature: true` and the check wanted `false`. `fresh` was then false the
+ * instant the build finished - every `--release` start rebuilt from scratch,
+ * and a fuzz-matrix run put K concurrent release builds on one target dir.
+ */
+export function featuresFor(mode: AgentBuildMode): string[] {
+  return [...new Set([...FEATURES_FOR_MODE[mode], ...(needsE2eFeature() ? ['e2e'] : [])])].sort();
+}
+
+function featureKey(mode: AgentBuildMode): string {
+  return featuresFor(mode).join(',');
+}
 
 /** Read + validate the stamp. Returns null if missing, unreadable, or bogus. */
 export function readBuildStamp(file: string = buildStampPath): E2EBuildStamp | null {
@@ -126,15 +196,19 @@ export function readBuildStamp(file: string = buildStampPath): E2EBuildStamp | n
   }
   if (typeof parsed !== 'object' || parsed === null) return null;
   const candidate = parsed as Partial<E2EBuildStamp>;
-  // v1 stamps predate the e2eFeature field; treating them as no stamp forces
-  // one rebuild per machine, which beats trusting a mac binary that may lack
-  // the WebDriver plugin.
+  // A v1 stamp predates BOTH the e2eFeature field and the release mode, so it
+  // can say neither whether the binary carries the WebDriver plugin nor which
+  // profile it is. Treated as no stamp: one rebuild per machine, once.
   if (candidate.v !== 2) return null;
+  if (candidate.mode !== 'debug' && candidate.mode !== 'release') return null;
+  if (typeof candidate.features !== 'string') return null;
   if (typeof candidate.viteE2E !== 'boolean') return null;
   if (typeof candidate.e2eFeature !== 'boolean') return null;
   if (typeof candidate.binaryMtimeMs !== 'number') return null;
   return {
     v: 2,
+    mode: candidate.mode,
+    features: candidate.features,
     viteE2E: candidate.viteE2E,
     e2eFeature: candidate.e2eFeature,
     viteMode: typeof candidate.viteMode === 'string' ? candidate.viteMode : 'unknown',
@@ -151,12 +225,27 @@ export function readBuildStamp(file: string = buildStampPath): E2EBuildStamp | n
  */
 export function stampStaleReasons(
   stamp: E2EBuildStamp | null,
-  want: { viteE2E: boolean; e2eFeature: boolean; binaryMtimeMs: number },
+  want: {
+    viteE2E: boolean;
+    e2eFeature: boolean;
+    binaryMtimeMs: number;
+    mode?: AgentBuildMode;
+    features?: string;
+  },
 ): string[] {
   if (!stamp) {
     return ['no E2E build stamp: the binary was not built by this harness'];
   }
   const reasons: string[] = [];
+  if (want.mode !== undefined && stamp.mode !== want.mode) {
+    reasons.push(`build stamp is for the ${stamp.mode} profile but this start needs ${want.mode}`);
+  }
+  if (want.features !== undefined && stamp.features !== want.features) {
+    reasons.push(
+      `build stamp was built with features "${stamp.features || '(none)'}" but this start needs ` +
+        `"${want.features || '(none)'}"`,
+    );
+  }
   if (stamp.viteE2E !== want.viteE2E) {
     reasons.push(
       `build stamp says VITE_E2E=${stamp.viteE2E ? '1' : '0'} but this start needs ` +
@@ -166,7 +255,8 @@ export function stampStaleReasons(
   if (stamp.e2eFeature !== want.e2eFeature) {
     reasons.push(
       `build stamp says the e2e cargo feature was ${stamp.e2eFeature ? 'on' : 'off'} ` +
-        `but this platform needs it ${want.e2eFeature ? 'on' : 'off'}`,
+        `but this start needs it ${want.e2eFeature ? 'on' : 'off'} ` +
+        `(the profile and the platform both ask - see featuresFor)`,
     );
   }
   if (stamp.binaryMtimeMs !== want.binaryMtimeMs) {
@@ -184,6 +274,8 @@ export interface Freshness {
 export interface FreshnessOptions {
   /** Does this start need the VITE_E2E frontend hooks? Defaults to true. */
   requireE2E?: boolean;
+  /** Profile to check. Defaults to `agentBuildMode()`. */
+  mode?: AgentBuildMode;
 }
 
 /**
@@ -192,17 +284,21 @@ export interface FreshnessOptions {
  */
 export function checkBuildFreshness(opts: FreshnessOptions = {}): Freshness {
   const requireE2E = opts.requireE2E ?? true;
+  const mode = opts.mode ?? agentBuildMode();
+  const binaryPath = binaryPathFor(mode);
   const reasons: string[] = [];
   const binMtime = mtimeOf(binaryPath);
   if (binMtime === 0) {
-    return { fresh: false, reasons: [`binary missing at ${binaryPath}`], binaryPath };
+    return { fresh: false, reasons: [`${mode} binary missing at ${binaryPath}`], binaryPath };
   }
 
   reasons.push(
-    ...stampStaleReasons(readBuildStamp(), {
+    ...stampStaleReasons(readBuildStamp(buildStampPathFor(mode)), {
       viteE2E: requireE2E,
-      e2eFeature: needsE2eFeature(),
+      e2eFeature: featuresFor(mode).includes('e2e'),
       binaryMtimeMs: binMtime,
+      mode,
+      features: featureKey(mode),
     }),
   );
 
@@ -271,18 +367,33 @@ export function isPluginAclChurn(diff: string): boolean {
   return added.length > 0 && added.every((line) => line.includes(PLUGIN_ACL_MARKER));
 }
 
-export function buildApp(onLog?: (line: string) => void): void {
-  const withE2eFeature = needsE2eFeature();
-  const command = withE2eFeature
-    ? 'pnpm tauri build --debug --no-bundle -- --features e2e'
-    : 'pnpm tauri build --debug --no-bundle';
+export function buildApp(onLog?: (line: string) => void, mode: AgentBuildMode = agentBuildMode()): void {
+  // Two independent reasons to pass `--features e2e`, UNIONED rather than
+  // either-or: the PROFILE asks for it (release keeps `debug_trigger_panic`'s
+  // body compiled in - `FEATURES_FOR_MODE`), and the PLATFORM asks for it
+  // (darwin needs the in-app WebDriver plugin - `needsE2eFeature`). A mac
+  // release build needs it once, not twice.
+  const features = featuresFor(mode);
+  const withE2eFeature = features.includes('e2e');
+  // `--debug` selects the dev profile; its absence selects release. The frontend
+  // leg is identical either way - `beforeBuildCommand` runs `pnpm build`, and
+  // VITE_E2E=1 is what makes it emit the `window.__E2E_TEST__` hooks (the gate in
+  // src/main.tsx is DEV || MODE==='test' || VITE_E2E==='1', so it works in a
+  // production-mode vite build too).
+  const profileFlag = mode === 'debug' ? ' --debug' : '';
+  // The cargo-PASSTHROUGH form, which is what the WDIO tier uses and what has
+  // been exercised on both platforms.
+  const featureFlag = features.length > 0 ? ` -- --features ${features.join(',')}` : '';
+  const command = `pnpm tauri build${profileFlag} --no-bundle${featureFlag}`;
   // Restore only churn that is provably the plugin's. Timing alone is not
   // enough: an interrupted feature build (a killed smoke, ctrl-c) leaves churn
   // behind, and a "was it clean before?" rule would then refuse to clean up
   // forever after. Classifying the DIFF instead recovers from that while still
   // never discarding a real edit to these files.
   const preBuildDirtIsOurs = withE2eFeature && (schemasClean() || isPluginAclChurn(schemaDiff()));
-  onLog?.(`Building Tauri debug app (VITE_E2E=1, --no-bundle${withE2eFeature ? ', --features e2e' : ''})...`);
+  onLog?.(
+    `Building Tauri ${mode} app (VITE_E2E=1, --no-bundle${withE2eFeature ? ', --features e2e' : ''})...`,
+  );
   // Build output goes to stderr (fd 2), NEVER inherited stdout: under the MCP
   // server, stdout is the JSON-RPC stream and any build chatter (pnpm/vite log
   // to stdout) would corrupt the protocol framing.
@@ -312,8 +423,11 @@ export function buildApp(onLog?: (line: string) => void): void {
       );
     }
   }
-  writeBuildStamp({ viteE2E: true, e2eFeature: withE2eFeature, viteMode: 'production' }, onLog);
-  onLog?.('Build complete.');
+  writeBuildStamp(
+    { viteE2E: true, e2eFeature: withE2eFeature, viteMode: 'production', mode, features: features.join(',') },
+    onLog,
+  );
+  onLog?.(`Build complete (${mode}).`);
 }
 
 /**
@@ -322,22 +436,31 @@ export function buildApp(onLog?: (line: string) => void): void {
  * a stamp we fail to write just means the next start rebuilds.
  */
 function writeBuildStamp(
-  info: { viteE2E: boolean; e2eFeature: boolean; viteMode: string },
+  info: {
+    viteE2E: boolean;
+    e2eFeature: boolean;
+    viteMode: string;
+    mode: AgentBuildMode;
+    features: string;
+  },
   onLog?: (line: string) => void,
 ): void {
   const now = Date.now();
+  const stampPath = buildStampPathFor(info.mode);
   const stamp: E2EBuildStamp = {
     v: 2,
+    mode: info.mode,
+    features: info.features,
     viteE2E: info.viteE2E,
     e2eFeature: info.e2eFeature,
     viteMode: info.viteMode,
-    binaryMtimeMs: mtimeOf(binaryPath),
+    binaryMtimeMs: mtimeOf(binaryPathFor(info.mode)),
     builtAtMs: now,
     builtAtIso: new Date(now).toISOString(),
   };
   try {
-    fs.mkdirSync(path.dirname(buildStampPath), { recursive: true });
-    fs.writeFileSync(buildStampPath, `${JSON.stringify(stamp, null, 2)}\n`);
+    fs.mkdirSync(path.dirname(stampPath), { recursive: true });
+    fs.writeFileSync(stampPath, `${JSON.stringify(stamp, null, 2)}\n`);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     onLog?.(`Warning: could not write E2E build stamp (${msg}); next start will rebuild.`);

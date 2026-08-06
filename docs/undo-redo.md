@@ -84,6 +84,27 @@ Undo and redo stacks are serialized to the SQLite database synchronously on proj
 - On project close, stacks are cleared from memory (DB retains persisted entries)
 - Files written before schema v7 get their persisted stacks dropped on open: pre-v7 builds serialized untouched nullable `ShotUpdates` fields as explicit `null`s, which the v7 `double_option` semantics would replay as "clear the field" (see `UNDO_FORMAT_SAFE_VERSION` / `drop_legacy_undo_history` in `persistence/sqlite.rs`)
 
+### What the round trip does NOT preserve
+
+Two things survive the write and die on the read. Both are open on
+[issue 413](https://github.com/Stalagmight/Stalagmight/issues/413) and both are
+found by the entry-content oracle in `fuzz_undo_tests.rs`, which compares the
+`UndoHistoryItem` rows before a save against the ones after the reload:
+
+- **A cleared section field (finding 5, command side).** `SectionUpdates` has
+  the `double_option` treatment `ShotUpdates` got in v7 on neither `name`,
+  `surveyor` nor `date`, so `Some(None)` ("clear it") and `None` ("leave it
+  alone") both serialize to `null` and both read back as `None`. The persisted
+  bytes are identical; the meaning is not. A reloaded entry stops listing the
+  field it cleared, and - because `redo_inner` re-executes `entry.command` for a
+  `PreviousValues` entry - its REDO silently leaves the field alone.
+- **The last ULP of an `f64` (finding 23).** `serde_json` writes floats through
+  ryu's shortest round-tripping form and reads them back with a parser that is
+  not correctly rounded past 16 significant digits, so it cannot always read its
+  own output: `13.565000000000001` comes back as `13.565`, one ULP low. Enough
+  to move a two-decimal preview value across a rounding boundary. The
+  `float_roundtrip` feature on `serde_json` is the switch that closes it.
+
 ### Every save is a full rewrite (#303)
 
 `UndoStack::rows_to_persist` serializes every entry in the persisted window and

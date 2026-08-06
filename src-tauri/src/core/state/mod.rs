@@ -39,6 +39,24 @@ mod undo_restore;
 mod warnings;
 
 #[cfg(test)]
+mod adversarial_tests;
+#[cfg(test)]
+mod concurrency_tests;
+#[cfg(test)]
+mod crash_property_tests;
+#[cfg(test)]
+mod format_property_tests;
+#[cfg(test)]
+mod fuzz_rarity_tests;
+#[cfg(test)]
+mod fuzz_shrink_tests;
+#[cfg(test)]
+mod fuzz_undo_tests;
+#[cfg(test)]
+mod metamorphic_undo_tests;
+#[cfg(test)]
+mod open_undo_bugs_tests;
+#[cfg(test)]
 #[expect(
     clippy::unwrap_used,
     clippy::indexing_slicing,

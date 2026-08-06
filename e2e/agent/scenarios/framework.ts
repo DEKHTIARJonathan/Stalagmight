@@ -38,6 +38,19 @@ export interface ScenarioContext {
     args?: unknown[],
   ): Promise<{ ok: boolean; result?: unknown; error?: string }>;
   keys(keys: string[]): Promise<void>;
+  /**
+   * The PRNG seed this run was built with (the effective one - a falsy seed
+   * becomes 1). Exposed so a failing scenario can print the exact
+   * `run_scenario(name, seed, iterations)` that reproduces it.
+   */
+  readonly seed: number;
+  /**
+   * The session's artifact directory, when the runner has one. Scenarios drop
+   * failure traces here (`e2e/agent/lib/fuzzTrace.ts`); null when a caller
+   * constructed a context without a session dir, in which case a trace is only
+   * written if `STALAGMIGHT_FUZZ_TRACE` names a path.
+   */
+  readonly artifactsDir: string | null;
   /** Uniform in [0, 1). Deterministic for a given seed. */
   rng(): number;
   /** Integer in [min, max] inclusive. */
@@ -66,8 +79,14 @@ export interface ScenarioMetrics {
   metrics: Record<string, number>;
 }
 
-/** mulberry32: tiny, fast, deterministic PRNG. */
-function mulberry32(seed: number): () => number {
+/**
+ * mulberry32: tiny, fast, deterministic PRNG.
+ *
+ * Exported so a scenario can derive an INDEPENDENT stream from the same seed
+ * (e.g. `mulberry32(seed ^ 0x9e3779b9)`) for decisions it wants to add without
+ * shifting the primary draw sequence every existing repro depends on.
+ */
+export function mulberry32(seed: number): () => number {
   let a = seed >>> 0;
   return () => {
     a |= 0;
@@ -83,7 +102,8 @@ export function makeContext(
   seed: number,
   onLog?: (message: string) => void,
 ): ScenarioContext & { metrics: Record<string, number> } {
-  const rand = mulberry32(seed || 1);
+  const effectiveSeed = seed || 1;
+  const rand = mulberry32(effectiveSeed);
   const metrics: Record<string, number> = {};
   const fixtureDir = target.sessionDir
     ? path.join(target.sessionDir, 'fixtures')
@@ -100,6 +120,8 @@ export function makeContext(
     callAction: (store, action, args = []) =>
       target.exclusive(() => callStoreAction(target.browser, store, action, args)),
     keys: (keys) => target.exclusive(() => target.browser.keys(keys)),
+    seed: effectiveSeed,
+    artifactsDir: target.sessionDir ?? null,
     rng: () => rand(),
     randInt: (min, max) => min + Math.floor(rand() * (max - min + 1)),
     pick: (items) => items[Math.floor(rand() * items.length)] as (typeof items)[number],

@@ -6,6 +6,529 @@ conventions, and the traps that have cost real debugging time.
 For *which tier a test belongs in*, and the testability contract a component has
 to satisfy, see the [Testing Guide](TESTING.md).
 
+## The undo fuzz gate (Rust tier)
+
+`src-tauri/src/core/state/fuzz_undo_tests.rs` runs the undo/redo fuzzing model
+directly against `AppState`, as ordinary tests. It is the only tier that gates
+CI: the agent harness never runs there, and `open_undo_bugs_tests.rs` is
+`#[ignore]`d by design.
+
+```bash
+# The gate. Runs with the default suite; ~10 s for all four tests.
+TELEMETRY_ENDPOINT=http://localhost/dummy cargo test --manifest-path src-tauri/Cargo.toml \
+  --features telemetry --lib fuzz_undo
+
+# See the classified known-bug counts (they are printed, not asserted).
+TELEMETRY_ENDPOINT=http://localhost/dummy cargo test --manifest-path src-tauri/Cargo.toml \
+  --features telemetry --lib fuzz_undo -- --nocapture --test-threads=1
+```
+
+Four gate tests: `undo_redo_fuzz_gate` (in-memory), `_gate_persistence` (one
+save/close/reopen per seed), `_gate_multi_crossing` (three), and
+`_gate_combined` (below).
+
+**Five oracles per run.** Four compare what a history move DID - the project
+snapshot per depth, every cross-section merge, the app's own integrity verdict,
+and the adjusted geometry the map draws. The fifth compares what the entry SAYS:
+the `UndoHistoryItem` rows `get_undo_stack` returns, which are the history
+dropdown. It runs in two halves - the entry-intrinsic triple
+(`timestamp|commandType|description`) is pinned per depth for the life of a run,
+and the whole item including `previewData` is compared across every save/reload
+crossing. `previewData` is left out of the first half on purpose: it resolves
+section NAMES against the live project (see
+[Undo/Redo](undo-redo.md#section-name-resolution)), so it is stable exactly
+where the project is.
+
+**Reproducing a specific known bug.** The module carries a BUG IDENTIFICATION
+MATRIX in its header: for every finding on
+[issue 413](https://github.com/Stalagmight/Stalagmight/issues/413), the mode,
+seed and move count under which this tier reaches it AND classifies it by id.
+Four environment flags switch the modes on, and the gate uses none of them
+because each one CONSTRUCTS a known defect:
+
+| flag | what it adds | the findings it exists for |
+|---|---|---|
+| `STALAGMIGHT_RUST_FUZZ_JUMPS=1` | multi-step `undo_to`/`redo_to` jumps | 7 |
+| `STALAGMIGHT_RUST_FUZZ_CLOSURES=1` | a real loop closure in the starting project | 6, 14 |
+| `STALAGMIGHT_RUST_FUZZ_DIVERGENCE=1` | shot ids that diverge from positional order, with every id-bearing entry contiguous on top, before the save | 8, 12, 13 |
+| `STALAGMIGHT_RUST_FUZZ_CLOSURE_SHAPES=1` | two closures with the first one removed, and an orphaned closure built just before the save | 4, 10 |
+| `STALAGMIGHT_RUST_FUZZ_CROSSINGS=n` | n save/close/reopen boundaries per persistence run instead of one | 8, 13 - without any constructed mode |
+
+So, for example, findings 8 and 12 in twelve moves:
+
+```bash
+STALAGMIGHT_RUST_FUZZ_DIVERGENCE=1 STALAGMIGHT_RUST_FUZZ_SEEDS=1 \
+  STALAGMIGHT_RUST_FUZZ_ITERATIONS=12 \
+  TELEMETRY_ENDPOINT=http://localhost/dummy cargo test --manifest-path src-tauri/Cargo.toml \
+  --features telemetry --lib fuzz_seed_survey -- --ignored --nocapture
+```
+
+Every seed prints one summary line per mode ending in `classified hits: ...`,
+and that list is the answer: a finding is *identified* when its id appears
+there, not merely when the seed fails.
+
+**Long horizon.** Thousands of moves per seed, past the app's own
+`undo_history_limit`, so three things nothing shorter reaches get exercised: the
+FIFO trim and the sliding window it creates, float dust that ACCUMULATES past
+tolerance over dozens of visits to the same depth (classified as its own
+finding rather than reported as a fresh regression, then re-baselined), and id
+allocators / collection growth over a long run.
+
+```bash
+STALAGMIGHT_RUST_FUZZ_HORIZON=1 STALAGMIGHT_RUST_FUZZ_SEEDS=4 \
+  STALAGMIGHT_RUST_FUZZ_ITERATIONS=10000 \
+  TELEMETRY_ENDPOINT=http://localhost/dummy cargo test --manifest-path src-tauri/Cargo.toml \
+  --features telemetry --lib undo_redo_fuzz_horizon -- --ignored --nocapture
+```
+
+The mode changes the move mix while it is CLIMBING (85/8/7 mutate/undo/redo, and
+no jumps) for a measured reason: at the ordinary mix the depth random-walks
+around 25 and never reaches the limit at all, because every jump lands the
+cursor near the floor and the next mutation truncates everything above it.
+
+**Drawn config.** `STALAGMIGHT_RUST_FUZZ_CONFIG=1` fuzzes the app as well as the
+moves: each seed draws its own `undo_history_limit` (1, 2, 3, 5, 8, 13, 20, 40,
+100 = the app's default, and `iterations + 1` = unreachable) from a SECOND
+generator seeded `seed ^ CONFIG_STREAM`, so no existing stream moves and every
+repro above still reproduces. At a limit of 1 every push trims, which is the
+sliding window under maximum pressure at 60 moves instead of 10,000.
+
+```bash
+STALAGMIGHT_RUST_FUZZ_CONFIG=1 STALAGMIGHT_RUST_FUZZ_SEEDS=32 \
+  STALAGMIGHT_RUST_FUZZ_ITERATIONS=60 \
+  TELEMETRY_ENDPOINT=http://localhost/dummy cargo test --manifest-path src-tauri/Cargo.toml \
+  --features telemetry --lib fuzz_seed_survey -- --ignored --nocapture
+```
+
+The drawn value is printed at the end of every summary line and of every failure
+payload (`..., undo_history_limit=3`) - a seed alone is not a repro once the same
+moves can run against differently configured apps. `undo_persist_limit` is
+deliberately NOT drawn: it is read from the config struct at save time and
+`save_project` writes that struct back out through `Config::save()`, so a drawn
+value would outlive the moves that drew it.
+
+**Config isolation is mandatory in these modules.** `AppState::new()` LOADS the
+global config and every save reaches `note_recent_project` -> `Config::save()`,
+which WRITES it, so every test in the nine fuzz/property modules opens with
+`let _config = crate::test_helpers::isolated_config();`. Without it a run
+rewrites the developer's real `~/.config/stalagmight/config.toml` (its
+`recent_projects` fills with dead `/tmp/.tmpXXXX/*.stalx` entries), and the
+write races the process-global override that guard installs - so a fuzz save can
+land inside a sibling config test's isolated config and fail it. To check a
+module still holds the line, run it with the config dir redirected and assert
+nothing was written:
+
+```bash
+XDG_CONFIG_HOME=$(mktemp -d) TELEMETRY_ENDPOINT=http://localhost/dummy \
+  cargo test --manifest-path src-tauri/Cargo.toml --features telemetry --lib \
+  -- core::state::metamorphic_undo_tests
+# then: find "$XDG_CONFIG_HOME" -type f   -> must be empty
+```
+
+**Combined.** `STALAGMIGHT_RUST_FUZZ_COMBINED=1` turns on horizon, closures,
+closure shapes, jumps, three crossings and the drawn config at once - the
+interactions rather than the modes. It is what `undo_redo_fuzz_gate_combined`
+runs (seeds 15 and 21 x 300 moves, ~1.8 s, in the same band as the other gates),
+and re-mining that gate's seeds means running the survey over the regime:
+
+```bash
+STALAGMIGHT_RUST_FUZZ_COMBINED=1 STALAGMIGHT_RUST_FUZZ_SEEDS=40 \
+  STALAGMIGHT_RUST_FUZZ_ITERATIONS=300 \
+  TELEMETRY_ENDPOINT=http://localhost/dummy cargo test --manifest-path src-tauri/Cargo.toml \
+  --features telemetry --lib fuzz_seed_survey -- --ignored --nocapture
+```
+
+Two facts that combining exposed, both fixed only for the combined regime so no
+existing seed moves (the module header has the detail): a horizon run could
+never draw a jump, because its climb test compares a difference the FIFO trim
+pins below the cap; and a horizon run could never cross the save boundary,
+because the crossing guard measured DEPTHS against a limit that counts ENTRIES.
+
+**Soak.** Same engine, no iteration budget, and with the features the gate
+leaves off (multi-step `undo_to`/`redo_to` jumps, loop closures, and both
+constructed shapes) because each reaches open findings:
+
+```bash
+STALAGMIGHT_RUST_FUZZ_SEEDS=200 STALAGMIGHT_RUST_FUZZ_ITERATIONS=1000 \
+  TELEMETRY_ENDPOINT=http://localhost/dummy cargo test --manifest-path src-tauri/Cargo.toml \
+  --features telemetry --lib undo_redo_fuzz_soak -- --ignored --nocapture
+```
+
+**All three sweeps run their seeds in parallel.** The soak, the survey and the
+horizon run spread their seeds over a worker pool; the three CI gates do not
+(they are seconds, and libtest is already running them alongside every other
+test in the binary). Measured at 32 seeds x 300 moves x 2 modes: 13.9 s at one
+worker, 3.7 s at four, 2.7 s at eight.
+
+| knob | effect |
+|---|---|
+| `STALAGMIGHT_RUST_FUZZ_THREADS=n` | n workers |
+| unset | `available_parallelism` less one core, never more workers than there are runs |
+| `STALAGMIGHT_RUST_FUZZ_THREADS=1` | the sequential run, on the same code path |
+
+A run is a pure function of `(seed, plan)` - integer-only PRNG in the `Fuzzer`,
+an `AppState` per run, a `TempDir` per persistence run - and the results are
+merged in SEED order, so **the printed output is byte-identical at any thread
+count**, including the per-seed summary lines, the clean list, the failure
+buckets and the classified totals. Two things follow:
+
+- The `oracle-us` triple in each summary line is WALL time and inflates under
+  contention. Measure the oracle cost at `THREADS=1`.
+- A panicking seed is caught, attributed to its seed and mode, and re-raised
+  after every other seed has finished, so one bad seed no longer costs a soak
+  the rest of its evidence.
+
+**The red tests.** Twenty-five of them, all `#[ignore]`d, all failing today on
+the bug named in each `#[ignore]` reason. Twenty-three are reductions in
+`open_undo_bugs_tests.rs`; two are pinned to a fuzzer SEED in the fuzz module
+instead, because every reduction for those two was measured not to reproduce
+(finding 14, and bug 7 - which had no test anywhere before). Delete an
+`#[ignore]` when its bug is fixed and the test becomes the regression guard.
+
+```bash
+# libtest takes several filters and ORs them; a shell-regex filter matches
+# nothing, since cargo's own filter is a plain substring.
+TELEMETRY_ENDPOINT=http://localhost/dummy cargo test --manifest-path src-tauri/Cargo.toml \
+  --features telemetry --lib -- --ignored open_undo_bugs finding_14 bug_7
+```
+
+## The metamorphic gate (Rust tier)
+
+`src-tauri/src/core/state/metamorphic_undo_tests.rs` asks a question the
+roundtrip fuzzer structurally cannot: do two DIFFERENT ways of asking for the
+same edit agree? The roundtrip oracle compares a state against itself at an
+earlier moment, so a defect that is faithfully undone is invisible to it - and
+the delete/split family is full of places where that can happen, because each
+entry point is its own hand-written implementation of an operation another entry
+point also implements.
+
+It builds one project, saves it, loads it into TWO `AppState`s (which is what
+makes a strict comparison possible at all - `Shot::uuid` is a v4 uuid, so two
+independently-built projects share no identity), drives each down one route, and
+compares them on five oracles: the roundtrip fuzzer's four STATE oracles,
+re-used as free functions so the two engines cannot disagree about what a
+difference is, plus the id ALLOCATORS. (The fuzzer's fifth, entry content, is
+not among them: it compares one `AppState`'s stacks against what that same app
+said earlier, so there is no second route to compare it across.)
+
+```bash
+# The gate. Runs with the default suite; ~11 s.
+TELEMETRY_ENDPOINT=http://localhost/dummy cargo test --manifest-path src-tauri/Cargo.toml \
+  --features telemetry --lib metamorphic
+
+# The sweep, and the tool for re-choosing the metamorphic GATE_SEEDS.
+STALAGMIGHT_RUST_META_SEEDS=40 STALAGMIGHT_RUST_META_REPEATS=4 \
+  TELEMETRY_ENDPOINT=http://localhost/dummy cargo test --manifest-path src-tauri/Cargo.toml \
+  --features telemetry --lib metamorphic_fuzz -- --ignored --nocapture
+```
+
+| env | effect |
+|---|---|
+| `STALAGMIGHT_RUST_META_SEEDS` | seeds 1..=n (default 40) |
+| `STALAGMIGHT_RUST_META_REPEATS` | pair instances per seed, each on fresh twins (default 4) |
+| `STALAGMIGHT_RUST_META_PRELUDE` | random commands before the twins split (default 12) |
+| `STALAGMIGHT_RUST_META_CLOSURES` | put a real loop closure in the base project |
+| `STALAGMIGHT_RUST_META_VERBOSE` | print every divergence, not just the seed summary |
+
+Seven pairs, and every one of them is promised somewhere - two in the code's own
+doc comments, in the word "generalizes". `a-failed-batch-is-a-no-op` is the odd
+one out and asserts a DIFFERENCE: a failed batch must be a strict no-op while
+the same commands run singly apply up to the failure.
+
+Every pair is checked twice - on the states the two routes produce, and on the
+states they UNWIND to. The second is where undo's per-entry-point special cases
+live. It compares the two unwound twins to each other rather than to the
+baseline, because findings 1, 2, 3 and 5 are all "an unwind does not return to
+where it started"; the baseline distance is measured and printed instead of
+asserted, so a regression in it shows up in the summary diff without being a
+false failure today.
+
+It found finding 22 on its first run. The classified-hit ids it prints follow
+the same delete-when-fixed contract the roundtrip classifiers do, and one of
+them is deliberately named `observation-...` rather than `finding-...` because
+it is intermittent on identical inputs and has not been root-caused.
+
+## The file-format gate (Rust tier)
+
+`src-tauri/src/core/state/format_property_tests.rs` is the only thing that
+looks at the `.stalx` itself. Byte-comparison is the wrong instrument for a
+SQLite database (page allocation, freelists, the change counter), so the
+comparison is on the database's LOGICAL content: every user table, every row,
+sorted, with the save's own wall clock masked by value shape.
+
+```bash
+TELEMETRY_ENDPOINT=http://localhost/dummy cargo test --manifest-path src-tauri/Cargo.toml \
+  --features telemetry --lib format_
+
+STALAGMIGHT_RUST_FORMAT_SEEDS=60 STALAGMIGHT_RUST_FORMAT_CLOSURES=1 \
+  TELEMETRY_ENDPOINT=http://localhost/dummy cargo test --manifest-path src-tauri/Cargo.toml \
+  --features telemetry --lib format_property_sweep -- --ignored --nocapture
+```
+
+Three properties: save -> load -> save is a fixpoint (finding 23, classified);
+the loader is a function of the file (four loads per seed, green); and the
+documented legacy fallbacks work, tested by writing a current file and
+degrading it with SQL - dropping the gauge columns `read.rs`'s
+`has_gauge_columns` probe expects to be missing, winding `PRAGMA user_version`
+back, desynchronising the two version markers, and dropping the undo tables.
+No fixture is involved: every degraded file is built from a fresh one.
+
+The fixpoint property does NOT assert that the drift settles. It does not:
+over eight gate runs "settles after one cycle" held four times and failed four
+on the same inputs. What it asserts is that no save/load cycle changes anything
+except bounded float dust in the derived and history tables.
+
+## The crash-timing gate (Rust tier)
+
+`src-tauri/src/core/state/crash_property_tests.rs` tests the save pipeline's
+central promise - "a temp file with atomic rename to prevent data loss on crash
+or power failure" ([Saving](saving.md)) - by simulating a kill at each of its
+boundaries. Nothing else does: the file-format engine above is the only other
+thing that looks at a `.stalx`, and it only ever looks at files a save
+FINISHED writing.
+
+```bash
+TELEMETRY_ENDPOINT=http://localhost/dummy cargo test --manifest-path src-tauri/Cargo.toml \
+  --features telemetry --lib crash_property
+
+STALAGMIGHT_RUST_CRASH_SEEDS=60 STALAGMIGHT_RUST_CRASH_MOVES=26 \
+  STALAGMIGHT_RUST_CRASH_EXTRA=12 \
+  TELEMETRY_ENDPOINT=http://localhost/dummy cargo test --manifest-path src-tauri/Cargo.toml \
+  --features telemetry --lib crash_property_sweep -- --ignored --nocapture
+```
+
+The crash is SIMULATED by constructing the exact files a kill would leave -
+a truncated `<stem>.stalx.tmp` at six byte prefixes, a complete one waiting for
+a rename that never came, one caught mid-transaction with its hot rollback
+journal, the post-rename states, and a destination caught mid-transaction -
+rather than by racing a signal. `rename(2)` is atomic and the temp is a private
+file, so the reachable set is small, enumerable and copyable, which is what
+makes this deterministic and CI-fast. Both reference files are written by the
+real pipeline.
+
+The oracle: no panic, the destination is EXACTLY the old file or EXACTLY the
+new one (never a blend, and the engine names which it must be, because every
+pre-rename state leaves the destination byte-intact), it opens, and it can be
+saved again leaving no staging file behind. That last step is what walks the
+next save into the orphaned-journal hazard `project_io.rs:482` creates: the
+leftover-temp cleanup removes the temp but not its `-journal`, so the next save
+builds a fresh temp database at that name straight on top of a hot journal.
+That one is measured benign - the save succeeds and SQLite discards the stale
+journal, so it does not accumulate - and the engine fails if anything disarms
+the hazard before the recovery save reaches it.
+
+Green over 60 seeds / 720 states. The one thing it measures rather than
+asserts is what a TORN temp does when opened directly (the recovery UI lists
+`.tmp` files as restore candidates and `restore_from_backup` validates
+nothing): 306 refused, 11-13 loaded as the interrupted save, 41-43 loaded with
+the survey intact and the undo history gone. That last split is the one number
+that moves between runs, and it moves for finding 21's reason - `HashMap` order
+in the writer decides which row a fixed byte offset cuts through. The 306 does
+not move, and neither does any total.
+
+## The adversarial gate (Rust tier)
+
+`src-tauri/src/core/state/adversarial_tests.rs` fuzzes the command layer's
+VALIDATION, which every other generator here avoids by construction.
+
+```bash
+TELEMETRY_ENDPOINT=http://localhost/dummy cargo test --manifest-path src-tauri/Cargo.toml \
+  --features telemetry --lib adversarial
+
+STALAGMIGHT_RUST_ADV_SEEDS=200 STALAGMIGHT_RUST_ADV_MOVES=400 \
+  STALAGMIGHT_RUST_ADV_CLOSURES=1 \
+  TELEMETRY_ENDPOINT=http://localhost/dummy cargo test --manifest-path src-tauri/Cargo.toml \
+  --features telemetry --lib adversarial_sweep -- --ignored --nocapture
+```
+
+Two invariants: a rejected command is a PERFECT no-op (all five oracles, not
+just the stacks), and no command ever panics. The second is why every move runs
+inside `catch_unwind` - and why the classifier matches a panic's LOCATION
+rather than its message, since "attempt to add with overflow" says nothing
+about where and a text matcher would swallow every future overflow anywhere in
+the app.
+
+Draws are weighted towards the hand-written `execute_*` entry points, which do
+their own argument checking after taking the project lock. Measured at 60 seeds
+x 300 moves: 10 696 calls, 9 331 rejected, zero no-op violations.
+
+## The concurrency gate (Rust tier)
+
+`src-tauri/src/core/state/concurrency_tests.rs` drives ONE `AppState` from
+several threads. `AppState`'s `command_lock` exists to serialize
+execute/undo/redo, and [Undo/Redo](undo-redo.md) documents a lock ordering
+discipline underneath it; nothing exercised either, because every other engine
+here is single-threaded.
+
+```bash
+TELEMETRY_ENDPOINT=http://localhost/dummy cargo test --manifest-path src-tauri/Cargo.toml \
+  --features telemetry --lib concurrency
+
+STALAGMIGHT_RUST_CONC_SEEDS=40 STALAGMIGHT_RUST_CONC_THREADS=8 \
+  STALAGMIGHT_RUST_CONC_OPS=2000 \
+  TELEMETRY_ENDPOINT=http://localhost/dummy cargo test --manifest-path src-tauri/Cargo.toml \
+  --features telemetry --lib concurrency_soak -- --ignored --nocapture
+```
+
+Inputs are seeded per thread so a failing run replays in what each thread
+ASKED for; the interleaving is not reproducible and no assertion depends on it.
+The four oracles are liveness (a whole-run deadline plus a no-progress window),
+no panic, no poisoned mutex, and a post-run consistency walk.
+
+The deadline is generous on purpose - Windows and macOS hand mutexes over
+differently from Linux and a tight bound turns a slow CI box into a bug report.
+A real deadlock never finishes; the gate finishes in about two seconds.
+
+One trap, recorded because it cost a flaky run: waiting on a progress COUNTER
+reads a worker that panicked as one that is stuck, so a known assert gets
+reported as a deadlock. Poll `JoinHandle::is_finished` instead, and cross-check
+that every unwound worker was seen by the panic hook.
+
+## Corpus guidance, and why it is not wired into anything
+
+`fuzz_corpus_sweep` (`#[ignore]`d) measures whether remembering the shapes a
+sweep reaches lets later runs reach more of them. `topology_signature` is a
+twelve-feature integer fingerprint of a project's shape, and a corpus entry is
+just `(seed, move-count)` - which is all it needs to be, since every run in
+that module is a pure function of its seed.
+
+**The answer is no.** At 80 runs x 60 moves each way: unguided reaches 78
+distinct signatures, guided 73, with identical classifier id sets. 78 of 80
+unguided runs are already distinct, so the corpus admits nearly everything and
+guidance just spends half the budget replaying. The mechanism is kept, and
+deliberately not wired into any gate; the test's own doc comment carries the
+numbers and the two changes that would make it pay.
+
+**The second answer is also no.** One of those two changes - admission keyed on
+a RARE structural bit rather than on whole-signature novelty - was then measured
+in full: `fuzz_rarity_sweep` and `fuzz_rarity_carryover`
+(`src-tauri/src/core/state/fuzz_rarity_tests.rs`, both `#[ignore]`d), six
+repetitions of 80 runs x 60 moves per arm across four admission predicates and
+two regimes.
+
+```bash
+STALAGMIGHT_RUST_FUZZ_THREADS=8 STALAGMIGHT_RUST_FUZZ_RARITY_BUDGET=80 \
+  STALAGMIGHT_RUST_FUZZ_RARITY_REPS=6 STALAGMIGHT_RUST_FUZZ_ITERATIONS=60 \
+  TELEMETRY_ENDPOINT=http://localhost/dummy cargo test --manifest-path src-tauri/Cargo.toml \
+  --features telemetry --lib fuzz_rarity_sweep -- --ignored --nocapture
+```
+
+Three things came out of it, and the third is the one to remember:
+
+- Keyed on a finished run's END state, admission is barely faithful: a corpus
+  entry replays `(seed, n)` as n mutations, the admitted run had also undone and
+  redone, and 8 of 9 entries (plain regime) deliver a state carrying none of the
+  bits they were admitted for. `fuzz_rarity_carryover` measures exactly that.
+- Keyed on the prologue's own trajectory, which is exact, guidance reaches the
+  regime's rare classified findings 41% sooner **counted in runs**, 17% sooner
+  **counted in moves**, and no sooner at all **counted in wall time**.
+- A run is not a unit of compute. A continuation inherits a bigger project, so it
+  draws more moves, and each move costs more because every oracle canonicalizes
+  the whole project (2.87 ms per move against 2.34). Score a fuzzing heuristic
+  per run and you pay it for being expensive; the first experiment handed
+  guidance an 80% compute subsidy without noticing.
+
+Both write-ups stay next to each other; neither mechanism is wired into a gate.
+
+**Choosing gate seeds.** `fuzz_seed_survey` catches each run's panic instead of
+propagating it, so one bad seed does not hide the twenty after it, and prints
+which seeds are clean plus what the rest failed on. Re-run it as findings are
+fixed and widen `GATE_SEEDS`:
+
+```bash
+STALAGMIGHT_RUST_FUZZ_SEEDS=40 STALAGMIGHT_RUST_FUZZ_ITERATIONS=100 \
+  TELEMETRY_ENDPOINT=http://localhost/dummy cargo test --manifest-path src-tauri/Cargo.toml \
+  --features telemetry --lib fuzz_seed_survey -- --ignored --nocapture
+```
+
+`COMBINED_SEEDS` is chosen the same way, from the same tool under `COMBINED=1`,
+with one extra criterion: the pair has to cover `COMBINED_CLASSIFIED` between
+them, which is the id SET that gate pins (the counts are printed, not asserted -
+a sharper classifier must not turn a gate red).
+
+**Debugging a failure.** `STALAGMIGHT_RUST_FUZZ_TRACE=1` streams every move as it
+happens, including the line the classifier writes when a hit is explained - which
+matters, because a classified hit RESYNCS the model and can arm a cascade, so a
+later failure that looks spontaneous usually is not (that is exactly how finding
+15 came to be filed as its own defect). Tracing pins the sweeps to ONE worker
+unless `STALAGMIGHT_RUST_FUZZ_THREADS` says otherwise: a dozen seeds
+interleaving their moves into one stdout is not a move log.
+`STALAGMIGHT_RUST_FUZZ_VERBOSE=1` prints the whole panic payload per seed in the
+survey, and every differing path rather than the first eight.
+
+The app also has assertions of its own - `debug_assert_merge_alignment` is
+`#[cfg(test)]`, so it exists ONLY in this tier. The fuzzer catches that one
+specifically, checks the message is that assert at one of the call sites finding
+14 names, records it as a classified hit and stops the run (the unwind poisoned
+the project mutex, so nothing after it would be measuring the app). Any other
+panic is re-raised verbatim.
+
+Runs are deterministic: the same seed replays identically, forever, on every
+platform (integer-only PRNG, and no float is used to make a decision).
+
+**Minimizing a failure.** A failing seed is a repro in the sense that it fails
+and in no other sense - nobody reads 200 moves and says which three are the bug.
+`fuzz_shrink` (`fuzz_shrink_tests.rs`) records the run's move stream, then runs
+SIGNATURE-MATCHED ddmin over it: remove a chunk, replay the rest through the same
+engine and the same four oracles, keep the candidate only if it still fails THE
+SAME WAY, halve the chunk when nothing more can go.
+
+```bash
+# Record seed 1 under divergence mode, shrink for one named finding.
+STALAGMIGHT_RUST_FUZZ_SHRINK=1 STALAGMIGHT_RUST_FUZZ_DIVERGENCE=1 \
+  STALAGMIGHT_RUST_FUZZ_ITERATIONS=200 \
+  STALAGMIGHT_RUST_FUZZ_SHRINK_TARGET=finding-8-stale-id-deletes-the-wrong-shot \
+  TELEMETRY_ENDPOINT=http://localhost/dummy cargo test --manifest-path src-tauri/Cargo.toml \
+  --features telemetry --lib fuzz_shrink -- --ignored --nocapture
+
+# Replay the minimized trace it wrote, and ASSERT the same failure comes back.
+STALAGMIGHT_RUST_FUZZ_REPLAY=/tmp/stalagmight-shrink-seed1-3moves.json \
+  TELEMETRY_ENDPOINT=http://localhost/dummy cargo test --manifest-path src-tauri/Cargo.toml \
+  --features telemetry --lib fuzz_replay -- --ignored --nocapture
+```
+
+The plan comes from the SAME knobs the survey reads (`ITERATIONS`,
+`PERSISTENCE`, `JUMPS`, `CLOSURES`, `DIVERGENCE`, `CLOSURE_SHAPES`, `CROSSINGS`,
+`HORIZON`, `CONFIG`, `COMBINED`), so a seed that failed under a sweep is shrunk
+under exactly the environment that found it. `SHRINK_TARGET` is optional - the default is whatever
+failure the recorded run produced. `SHRINK=<path.json>` shrinks a trace file
+further instead of a seed, `SHRINK_OUT` picks where the minimized trace is
+written (default: a temp path, printed at the end), and `SHRINK_PROBES` caps the
+probe budget (default 2000).
+
+| what is being shrunk | what "the same failure" means |
+|---|---|
+| a KNOWN finding (the run completes, the hit is counted) | the finding id is in the candidate's `classified hits` |
+| anything else (the run panics) | `failure_signature` matches: the headline plus the first differing snapshot path, every run of digits collapsed to `#` |
+
+Signature matching is the whole discipline: a candidate that fails DIFFERENTLY -
+another finding, another panic, or not at all - is rejected, so the minimum is a
+repro of the failure that was asked about rather than of whatever the search
+drifted onto. Measured, on this branch:
+
+| repro | before | after | probes |
+|---|---|---|---|
+| `finding-8-stale-id-deletes-the-wrong-shot` (divergence, seed 1 x 200) | 199 moves | 0 moves - the constructed prologue and the closing walk ARE the repro | 15 |
+| the open seed-10 observation (persistence, `CROSSINGS=3`, seed 10 x 60) | 59 moves | 3 moves | 105 |
+| an unclassified `section_offsets` panic (persistence, `CROSSINGS=3`, seed 1 x 120) | 122 moves | 5 moves | 98 |
+
+Two things the mechanism guarantees, and one it does not:
+
+- A move whose target was shrunk away is SKIPPED with a note rather than fatal
+  (the trace names shots by `Shot::uuid`, which survives both the loader's
+  renumbering and the allocator; sections and closures by id, mapped through what
+  each move created). Replay has to be a total function or a candidate that kills
+  the harness looks exactly like one that reproduces the bug.
+- Probes in a ddmin round run in PARALLEL on the same worker pool the sweeps use
+  and the first reproducing complement IN INDEX ORDER is accepted, so the result
+  does not depend on `STALAGMIGHT_RUST_FUZZ_THREADS`.
+- It does not shrink the PLAN or the values inside a move. A mode is on or off,
+  and the shot data a move carries is replayed verbatim.
+
+Three tests gate the machinery on every CI run: recording does not change what a
+run does, a FULL trace replays to exactly the run it was recorded from, and the
+ddmin schedule reaches the known minimum of a synthetic predicate.
+
 ## Commands
 
 The authoritative pre-push list lives in the Pre-Push Checklist in

@@ -15,9 +15,10 @@ import './lib/undici-dispatcher-pin';
 import { spawn, type ChildProcess } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
-import { binaryPath } from '../lib/env';
+import { agentBuildMode, binaryPathFor } from '../lib/env';
 import { checkDisplayAvailable, startXvfb, type XvfbHandle } from '../lib/display';
 import { checkBuildFreshness, buildApp } from './lib/build';
+import { DEFAULT_XVFB_DISPLAYS, parseDisplayPool } from './lib/displayPool';
 import { findFreePort, isPidAlive, recordPid, reapPidsFromFile, waitForPortListening } from './lib/procs';
 import { SessionCore, gitHead, safeMtime } from './lib/sessionCore';
 import { attachBrowser, verifyReadiness, E2EHooksMissingError } from './lib/sessionShared';
@@ -32,7 +33,25 @@ export type {
 } from './sessionTypes';
 
 const BASE_PORT = Number.parseInt(process.env.STALAGMIGHT_AGENT_BASE_PORT ?? '4544', 10);
-const XVFB_DISPLAYS = [':89', ':88', ':87', ':86', ':85'];
+/**
+ * The Xvfb pool for this session, and whether the caller pinned it.
+ *
+ * The pool itself and its validation live in `lib/displayPool.ts`; both are
+ * read HERE at call time, never cached at import - the same rule
+ * `agentBuildMode()` follows in `e2e/lib/env.ts`, and for the same two reasons:
+ * a runner may set the variable after this module's graph has loaded, and a bad
+ * value must surface as a failed `start()` rather than as an uncaught throw
+ * that takes down whatever imported us (the MCP server imports this file).
+ */
+function xvfbDisplays(): string[] {
+  return parseDisplayPool(process.env.STALAGMIGHT_AGENT_DISPLAYS);
+}
+
+/** True when the caller pinned the pool, i.e. there is deliberately no fallback. */
+function displayPoolPinned(): boolean {
+  return process.env.STALAGMIGHT_AGENT_DISPLAYS !== undefined;
+}
+
 const REAP_COMM_NAMES = ['stalagmight', 'tauri-driver', 'WebKitWebDriver'];
 
 export class AppSession extends SessionCore {
@@ -54,16 +73,25 @@ export class AppSession extends SessionCore {
     // Reap orphans from previous sessions (scoped to recorded pidfiles).
     this.reapPreviousSessions();
 
-    // 1. Build freshness.
+    // Parse the display pool FIRST, before anything has moved `state` or spent
+    // minutes in cargo: a malformed STALAGMIGHT_AGENT_DISPLAYS is a caller
+    // error, and throwing it from the middle of the launch would leave the
+    // session stuck in `building` with a rebuild already paid for.
+    const pool = opts.headed ? [] : xvfbDisplays();
+
+    // 1. Build freshness. The profile is resolved ONCE here and threaded
+    // through, so a mid-start env change cannot make the freshness check and
+    // the launch disagree about which binary they mean.
+    const buildMode = agentBuildMode();
     let buildAction: StartResult['buildAction'] = 'skipped';
     if (build !== 'skip') {
-      const freshness = checkBuildFreshness();
+      const freshness = checkBuildFreshness({ mode: buildMode });
       if (build === 'force' || !freshness.fresh) {
         this.state = 'building';
         if (build !== 'force' && freshness.reasons.length > 0) {
           process.stderr.write(`Rebuilding: ${freshness.reasons.join('; ')}\n`);
         }
-        buildApp((line) => process.stderr.write(`${line}\n`));
+        buildApp((line) => process.stderr.write(`${line}\n`), buildMode);
         buildAction = 'built';
       } else {
         buildAction = 'fresh';
@@ -84,9 +112,26 @@ export class AppSession extends SessionCore {
     } else {
       // 1920x1080 screen so window-size testing has headroom up to full HD
       // (the app window starts smaller; resizing is capped by the screen).
-      this.xvfb = await startXvfb(XVFB_DISPLAYS, '1920x1080x24');
+      // `pool` was resolved at the top of this method - inside start() so a
+      // malformed value fails this session rather than throwing while some
+      // importer's module graph is still loading, and BEFORE the build so it
+      // does not surface after a ten-minute compile.
+      this.xvfb = await startXvfb(pool, '1920x1080x24');
       if (this.xvfb) {
         this.display = this.xvfb.display;
+      } else if (displayPoolPinned()) {
+        // A pinned pool means a parallel runner handed this session ONE display
+        // and is relying on it, so there is nothing to walk on to. Falling
+        // through to the real display here would put the app window on the
+        // user's desktop and drive it with pointer and keyboard input for the
+        // whole run - the precise thing the pool exists to prevent.
+        this.state = 'idle';
+        throw new Error(
+          `Xvfb could not start on ${pool.join(', ')} and STALAGMIGHT_AGENT_DISPLAYS pins the ` +
+            `pool, so there is no other display to try. Usually a leaked Xvfb (or its stale lock) still ` +
+            `holds the slot: check 'ls /tmp/.X*-lock' and 'pgrep -a Xvfb', or unset ` +
+            `STALAGMIGHT_AGENT_DISPLAYS to use the default ${DEFAULT_XVFB_DISPLAYS.length}-display pool.`,
+        );
       } else if (checkDisplayAvailable()) {
         process.stderr.write(
           '[agent] WARNING: Xvfb unavailable; falling back to the real display (the app window WILL be visible).\n',
@@ -171,7 +216,7 @@ export class AppSession extends SessionCore {
       this.browserInstance = await attachBrowser(this.driverPort, {
         platformName: 'linux',
         'wdio:enforceWebDriverClassic': true,
-        'tauri:options': { application: binaryPath },
+        'tauri:options': { application: binaryPathFor(buildMode) },
       });
     } catch (err) {
       await this.stop('attach-failed');
@@ -194,8 +239,8 @@ export class AppSession extends SessionCore {
       sessionId: this.sessionId,
       startedAt: new Date().toISOString(),
       gitHead: gitHead(),
-      binaryPath,
-      binaryMtime: safeMtime(binaryPath),
+      binaryPath: binaryPathFor(buildMode),
+      binaryMtime: safeMtime(binaryPathFor(buildMode)),
       display: this.display,
       headed: Boolean(opts.headed),
       profileDir: profileRoot,
@@ -210,6 +255,7 @@ export class AppSession extends SessionCore {
       display: this.display,
       profileDir: profileRoot,
       buildAction,
+      buildMode,
       sessionDir: this.recorder.dir,
     };
   }
@@ -271,7 +317,7 @@ export class AppSession extends SessionCore {
         // Already gone.
       }
       // Escalate: nothing reaps a wedged Xvfb across runs, and a leaked one
-      // holds its display slot from the fixed XVFB_DISPLAYS pool forever.
+      // holds its display slot from the small display pool forever.
       if (xvfbPid) {
         await new Promise((r) => setTimeout(r, 300));
         if (isPidAlive(xvfbPid)) {
