@@ -546,10 +546,10 @@ fn ensure_rooted_chain(shots: &[ExportShot], profile: TmlProfile) -> Result<()> 
 /// `Project::ensure_unique_shot_uuids` resets its dedup set inside the section loop,
 /// and the companion `duplicate_shot_uuid` integrity check is section-scoped for the
 /// same reason - `resolve_key` is section-local, so a cross-section repeat cannot
-/// mis-resolve an anchor and is not a violation. Nothing therefore makes `<UUID>`
-/// unique across the exported document, and a consumer that keys features by it
-/// alone (a GeoJSON feature `id`, say) would alias the two shots if a repeat ever
-/// appeared - the export would not flag it, and neither would our integrity pass.
+/// mis-resolve an anchor and is not a violation. Document-level uniqueness is an
+/// EXPORT-boundary guarantee instead: `remint_duplicate_uuids` (user profile) and
+/// `harden_for_speleodb` (sidecar) each settle repeats their own way after the
+/// full shot list is assembled.
 /// Never returns an empty string: an empty stored UUID is treated as "no identity
 /// yet" and gets the same fresh mint as `None`, because an empty `<UUID>` element
 /// is worse than an ephemeral one (it reads as a real, shared key).
@@ -557,6 +557,35 @@ fn shot_export_uuid(shot: &Shot) -> String {
     match shot.uuid.as_deref() {
         Some(u) if !u.is_empty() => u.to_string(),
         _ => uuid::Uuid::new_v4().to_string(),
+    }
+}
+
+/// Document-level `<UUID>` uniqueness for the user-facing export.
+///
+/// Per-section uniqueness (all the model enforces - see `shot_export_uuid`) still
+/// lets one document carry the same `<UUID>` twice: import the same `.tml` into a
+/// project twice, or merge two projects that came from one file, and every shot's
+/// foreign identity repeats across the two copies. How Ariane treats a repeated
+/// id is untestable from here, and a consumer keying features on `<UUID>` would
+/// alias the copies - so the export fails safe the same way the sidecar does: the
+/// FIRST occurrence keeps its identity (round-trip fidelity for the copy that
+/// legitimately owns it), every later repeat gets a fresh mint. Unlike
+/// `harden_for_speleodb` this never drops the element - Ariane's own files carry
+/// a `<UUID>` per row, so an omitted one is the shape least like what it writes.
+///
+/// Verbatim string comparison, deliberately: the duplicate class this exists for
+/// is byte-identical copies of one imported id, and anchors resolve on the stored
+/// string too - two spellings of one v4 are two identities everywhere else in the
+/// model, so treating them as one here would be the inconsistency.
+fn remint_duplicate_uuids(shots: &mut [ExportShot]) {
+    let mut seen: HashSet<String> = HashSet::new();
+    for shot in shots.iter_mut() {
+        if let Some(uuid) = shot.uuid.as_mut() {
+            if !seen.insert(uuid.clone()) {
+                *uuid = uuid::Uuid::new_v4().to_string();
+                seen.insert(uuid.clone());
+            }
+        }
     }
 }
 
@@ -1445,8 +1474,9 @@ fn build_export_shots(project: &Project, profile: TmlProfile) -> Vec<ExportShot>
 
     enforce_ariane_geometry_invariants(&mut all_shots, profile);
 
-    if profile == TmlProfile::SpeleoDbSidecar {
-        harden_for_speleodb(&mut all_shots);
+    match profile {
+        TmlProfile::SpeleoDbSidecar => harden_for_speleodb(&mut all_shots),
+        TmlProfile::User => remint_duplicate_uuids(&mut all_shots),
     }
 
     all_shots
@@ -2582,6 +2612,56 @@ mod tests {
         // Next shots should be REAL
         assert_eq!(shots[1].shot_type, "REAL");
         assert_eq!(shots[2].shot_type, "REAL");
+    }
+
+    #[test]
+    fn a_twice_imported_identity_exports_once_and_reminted_after() {
+        // Import the same .tml twice (or merge two projects from one file) and
+        // both copies of every shot carry the same foreign identity. The
+        // user-facing document must not repeat a <UUID>: the first copy keeps
+        // the Ariane id, later copies are re-minted (never dropped).
+        const FOREIGN: &str = "beefbeef-0000-4000-8000-0000000000aa";
+        let shot = |uuid: Option<&str>| ShotData {
+            azimuth_in: 45.0,
+            azimuth_out: 225.0,
+            length: 10.0,
+            depth_in: 0.0,
+            depth_out: 3.0,
+            uuid: uuid.map(str::to_string),
+            ..Default::default()
+        };
+        let mut project = Project::new("Twice".to_string(), None);
+        for name in ["Copy A", "Copy B"] {
+            project.add_section(SectionData {
+                name: Some(name.to_string()),
+                color: "#ff0000".to_string(),
+                shots: vec![shot(Some(FOREIGN)), shot(None)],
+                ..Default::default()
+            });
+        }
+
+        let shots = build_export_shots(&project, TmlProfile::User);
+
+        let uuids: Vec<&str> = shots.iter().filter_map(|s| s.uuid.as_deref()).collect();
+        assert_eq!(uuids.len(), 4, "every REAL shot still emits a <UUID>");
+        assert_eq!(
+            uuids.iter().filter(|u| **u == FOREIGN).count(),
+            1,
+            "exactly one copy keeps the foreign identity"
+        );
+        let distinct: HashSet<&str> = uuids.iter().copied().collect();
+        assert_eq!(
+            distinct.len(),
+            uuids.len(),
+            "no <UUID> repeats in the document"
+        );
+        // Document order puts Copy A's shots first, so the surviving foreign id
+        // is the FIRST occurrence.
+        let first_foreign = shots
+            .iter()
+            .find(|s| s.uuid.as_deref() == Some(FOREIGN))
+            .unwrap();
+        assert_eq!(first_foreign.section, "Copy A");
     }
 
     #[test]
