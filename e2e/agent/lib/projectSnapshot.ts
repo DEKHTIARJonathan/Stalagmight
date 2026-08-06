@@ -353,6 +353,71 @@ export function isShotIdentitySwap(deltas: readonly ShotSetDelta[]): boolean {
   );
 }
 
+/**
+ * Paths OUTSIDE the swapped section that a wrong-shot delete still moves: the
+ * geometry every consumer re-derives from shot data. Deleting the wrong shot
+ * changes the survey chain, so station coordinates, section offsets and the
+ * aggregate stats legitimately follow it.
+ *
+ * Counts are deliberately absent, as they are in `stale-id-wrong-shot-derived-
+ * stats`: bug 8 leaves the shot COUNT unchanged - one shot swapped for another -
+ * so a count moving is a different defect and must not be absorbed here.
+ */
+const SHOT_SWAP_DERIVED_PATHS: readonly RegExp[] = [
+  /^stations\[\d+\]\.coordinates\.[xyz]$/,
+  /^project\.section_offsets\.\d+(\[\d+\])?$/,
+  /^stats\.(total_length|min_depth|max_depth|penetration_distance)$/,
+];
+
+/** Position of the section with `sectionId` in a snapshot's `project.sections`. */
+function sectionIndexById(snapshotJson: string, sectionId: number): number | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(snapshotJson);
+  } catch {
+    return null;
+  }
+  const project = isPlainObject(parsed) ? parsed.project : null;
+  if (!isPlainObject(project) || !Array.isArray(project.sections)) return null;
+  const index = project.sections.findIndex(
+    (section) => isPlainObject(section) && Number(section.id) === sectionId,
+  );
+  return index >= 0 ? index : null;
+}
+
+/**
+ * Is the WHOLE mismatch one wrong-shot swap, and nothing else?
+ *
+ * `isShotIdentitySwap` answers a question about shot uuids alone. That is not
+ * enough to tolerate a mismatch: the diff list can carry damage the swap says
+ * nothing about - a lost station comment in another section, a dropped loop
+ * closure, a reverted section field - and gating on the uuid predicate alone
+ * swallowed all of it, then resynced the model onto the corrupted state so it
+ * was never reported at any later depth either.
+ *
+ * So the swap must also ACCOUNT for every remaining diff: each one is either
+ * inside the section the swap happened in, or in the geometry that section's
+ * shots feed. This is the same standard `isListPermutationOnly` holds itself
+ * to - normalize the known shape away, then require the rest to be silent.
+ */
+export function isBug8ShotSwapOnly(
+  diffs: readonly SnapshotDiff[],
+  deltas: readonly ShotSetDelta[],
+  expectedJson: string,
+): boolean {
+  if (!isShotIdentitySwap(deltas)) return false;
+  const delta = deltas[0];
+  if (delta === undefined) return false;
+  const index = sectionIndexById(expectedJson, delta.sectionId);
+  if (index === null) return false;
+  const inSwappedSection = new RegExp(`^project\\.sections\\[${index}\\](\\.|$)`);
+  return diffs.every(
+    (diff) =>
+      inSwappedSection.test(diff.path) ||
+      SHOT_SWAP_DERIVED_PATHS.some((pattern) => pattern.test(diff.path)),
+  );
+}
+
 /** Path segments to a list value inside a snapshot. */
 export type ListPath = readonly string[];
 
@@ -527,6 +592,13 @@ export interface ShotSetDelta {
  * value changes, and those cannot distinguish "the same shots moved" from "a
  * different shot was removed". This answers that directly, which is the
  * difference between a reordering and data loss.
+ *
+ * Sections present on only ONE side count as the whole section's shots gained
+ * or lost. They are the LARGEST identity change there is, and skipping them -
+ * which an earlier version did, by iterating `expected` and `continue`ing when
+ * the id was missing from `actual` - reported an EMPTY delta for a run that
+ * dropped an entire section, whereupon the caller printed "shot identity by
+ * uuid is IDENTICAL on both sides - the shots moved, none was lost".
  */
 export function shotSetDelta(expectedJson: string, actualJson: string): ShotSetDelta[] {
   const read = (text: string): Map<number, string[]> => {
@@ -553,9 +625,10 @@ export function shotSetDelta(expectedJson: string, actualJson: string): ShotSetD
   const expected = read(expectedJson);
   const actual = read(actualJson);
   const deltas: ShotSetDelta[] = [];
-  for (const [sectionId, expectedUuids] of expected) {
-    const actualUuids = actual.get(sectionId);
-    if (actualUuids === undefined) continue;
+  const sectionIds = [...new Set([...expected.keys(), ...actual.keys()])].sort((a, b) => a - b);
+  for (const sectionId of sectionIds) {
+    const expectedUuids = expected.get(sectionId) ?? [];
+    const actualUuids = actual.get(sectionId) ?? [];
     const actualSet = new Set(actualUuids);
     const expectedSet = new Set(expectedUuids);
     const missing = expectedUuids.filter((uuid) => !actualSet.has(uuid));

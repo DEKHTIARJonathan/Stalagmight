@@ -103,12 +103,14 @@
  *          (`UndoData::CreatedShotSnapshot`, core/state/undo.rs:126-133) - the
  *          exact mechanism bug 8 names.
  *
- *     and only for the exact SIGNATURE `isShotIdentitySwap` recognises: ONE
+ *     and only for the exact SIGNATURE `isBug8ShotSwapOnly` recognises: ONE
  *     section holding the right NUMBER of shots with exactly one of them the
- *     wrong shot. A count change, a one-sided loss, more than one section, more
- *     than one swap, or a difference that leaves the uuid sets equal is NOT bug 8
- *     and still fails. A wrong-shot swap on any other entry type is a NEW
- *     finding, by construction.
+ *     wrong shot, AND every remaining unexplained diff accounted for by that
+ *     swap (inside the swapped section, or in the geometry its shots feed). A
+ *     count change, a one-sided loss, more than one section, more than one swap,
+ *     a difference that leaves the uuid sets equal, or ANY unrelated damage
+ *     riding along is NOT bug 8 and still fails. A wrong-shot swap on any other
+ *     entry type is a NEW finding, by construction.
  *
  *   - FINDINGS 12 and 13, this scenario's own (see below). Same treatment and
  *     the same three conditions: 12 (`stale-id-writes-to-the-wrong-shot` plus its
@@ -248,7 +250,7 @@ import {
   describeDiffs,
   describeShotSetDelta,
   diffSnapshots,
-  isShotIdentitySwap,
+  isBug8ShotSwapOnly,
   shotSetDelta,
   type KnownAsymmetry,
 } from '../lib/projectSnapshot';
@@ -507,7 +509,12 @@ function checkSnapshot(
   // a structural check running first swallowed bug 1 and reported it as bug 8.
   // `isShotIdentitySwap` is now narrow enough to reject that shape on its own,
   // and this ordering makes the classification unambiguous regardless.
-  if (bug8Allowed && classified.unknown.length > 0 && isShotIdentitySwap(deltas)) {
+  //
+  // `isBug8ShotSwapOnly`, not `isShotIdentitySwap`: the swap has to explain the
+  // WHOLE remaining mismatch. The uuid predicate alone says nothing about the
+  // other unknown diffs, so a lost comment in another section riding along with
+  // a genuine swap was tolerated, resynced away and never seen again.
+  if (bug8Allowed && classified.unknown.length > 0 && isBug8ShotSwapOnly(classified.unknown, deltas, expected)) {
     lines.push(`  KNOWN OPEN APP BUG [${BUG_8_WRONG_SHOT.id}]: ${BUG_8_WRONG_SHOT.description}`);
     return {
       equal: false,
@@ -622,6 +629,16 @@ async function runIteration(
   if (replay && replay.scenario !== 'undo-persistence-fuzz') {
     throw new Error(
       `trace ${replayPath} was recorded by ${replay.scenario}; run it with that scenario`,
+    );
+  }
+  // The recorded steps carry RESOLVED section and shot ids, so replaying them
+  // against a different project drives moves at ids that do not exist there:
+  // an invented failure, or a green run, either way not the recorded bug.
+  if (replay && replay.fixture !== FIXTURE) {
+    throw new Error(
+      `trace ${replayPath} was recorded on ${replay.fixture} but this run is on ${FIXTURE}; ` +
+        `its steps carry ids resolved against that project. Re-run with ` +
+        `STALAGMIGHT_FUZZ_FIXTURE=${replay.fixture} (pnpm agent:scenario --trace restores it for you).`,
     );
   }
 
@@ -787,9 +804,18 @@ async function runIteration(
   const sameIntegrity = (a: IntegrityVerdict, b: IntegrityVerdict): boolean =>
     a.saveBlocked === b.saveBlocked && a.messages.join('\u0000') === b.messages.join('\u0000');
 
-  const assertIntegrityDelta = (res: StepResponse, what: string): void => {
+  const assertIntegrityDelta = (res: StepResponse, what: string, resynced = false): void => {
     const expected = res.integrityExpected;
     if (expected === null) return;
+    // `resolveMismatch` just replaced the model's snapshot at this depth, and
+    // `resyncModel` moves the recorded integrity verdict with it. `expected`
+    // was computed IN THE PAGE at step time, i.e. against the snapshot that has
+    // since been superseded, so comparing it now would fail on precisely the
+    // difference the resync accepted.
+    if (resynced) {
+      ctx.metric('integrityResynced');
+      return;
+    }
     ctx.metric('integrityCompared');
     if (sameIntegrity(expected, res.integrity)) return;
     // See `staleIdContaminated`: past the first stale-id defect the project no
@@ -811,12 +837,16 @@ async function runIteration(
    * Resolve a mismatch the page reported. `consumed` is the commandType of the
    * entry the move applied (null for a save, a reload or a mutation), and it is
    * what picks the classifier order and gates the bug-8 tolerance.
+   *
+   * Returns true when the model was RESYNCED, which the caller has to know:
+   * every expectation the page computed for this step - the integrity verdict
+   * included - was computed against the snapshot the resync replaced.
    */
   const resolveMismatch = async (
     headline: string,
     res: StepResponse,
     consumed: string | null,
-  ): Promise<void> => {
+  ): Promise<boolean> => {
     const pair = await fetchMismatch(ctx);
     // Only an epoch-crossing comparison may subtract the documented undo-less
     // changes. Within an epoch the oracle stays strict.
@@ -837,13 +867,13 @@ async function runIteration(
     );
     if (check.equal) {
       if (check.floatNoise) ctx.metric('floatNoise');
-      return;
+      return false;
     }
     if (check.attributed.length > 0 && check.text.startsWith('  ATTRIBUTED')) {
       ctx.metric('resyncs');
       for (const entry of check.attributed) ctx.metric(`resync:${entry.id}`);
       top = await resyncModel(ctx, pair.index, res.integrity);
-      return;
+      return true;
     }
     if (ALLOW_KNOWN_BUGS && check.onlyKnown) {
       ctx.metric('knownAsymmetry');
@@ -862,7 +892,7 @@ async function runIteration(
           check.asymmetries.map((a) => a.id).join(', '),
       );
       top = await resyncModel(ctx, pair.index, res.integrity);
-      return;
+      return true;
     }
     // CONTAMINATED. A stale-id defect has already fired in this walk, so the live
     // project is not the project any pre-save snapshot describes and the
@@ -877,7 +907,7 @@ async function runIteration(
     if (ALLOW_KNOWN_BUGS && staleIdContaminated) {
       ctx.metric('contaminatedMismatch');
       top = await resyncModel(ctx, pair.index, res.integrity);
-      return;
+      return true;
     }
     fail(headline, check.text);
   };
@@ -1089,15 +1119,15 @@ async function runIteration(
     assertInvariants(res, direction);
     assertModel(res, `${direction} left the page model where Node did not expect it`);
     assertStacks(`${direction} left the history stacks in an unexpected shape`, res);
-    if (res.verdict !== 'equal') {
-      await resolveMismatch(
+    const resynced =
+      res.verdict !== 'equal' &&
+      (await resolveMismatch(
         `${direction} did not restore the state recorded at depth ${cursor} ` +
           `(the entry it consumed was ${consumed ?? 'unknown'})`,
         res,
         consumed,
-      );
-    }
-    assertIntegrityDelta(res, direction);
+      ));
+    assertIntegrityDelta(res, direction, resynced);
     record(res);
     ctx.metric(direction === 'undo' ? 'undos' : 'redos');
     return true;
@@ -1162,10 +1192,14 @@ async function runIteration(
     note(`${tag} reload -> depth ${cursor} (undo ${reloaded.undoLen}, redo ${reloaded.redoLen})`);
     assertInvariants(reloaded, 'reload');
     assertStacks('the persisted history did not come back intact', reloaded);
-    if (reloaded.verdict !== 'equal') {
-      await resolveMismatch('reopening the saved project did not restore the state it was saved at', reloaded, null);
-    }
-    assertIntegrityDelta(reloaded, 'reload');
+    const resynced =
+      reloaded.verdict !== 'equal' &&
+      (await resolveMismatch(
+        'reopening the saved project did not restore the state it was saved at',
+        reloaded,
+        null,
+      ));
+    assertIntegrityDelta(reloaded, 'reload', resynced);
     record(reloaded);
     ctx.metric('reloads');
   };

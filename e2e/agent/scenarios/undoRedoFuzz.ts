@@ -658,786 +658,842 @@ export const undoRedoFuzz: Scenario = {
     'Seeded random mutations interleaved with undo/redo walks; asserts an exact ' +
     'canonical state roundtrip at every history depth, compared in-page.',
   defaultIterations: 40,
-  async run(ctx, { iterations }) {
-    const { stripped } = await loadFixtureWithoutUndoHistory(ctx, FIXTURE);
-    const strippedRows = Object.values(stripped.cleared).reduce((sum, n) => sum + n, 0);
-    ctx.setMetric(`fixture:${FIXTURE}`, 1);
-    ctx.setMetric('strippedUndoRows', strippedRows);
-
-    if (!(await disableAutoSave(ctx))) {
-      throw new Error(
-        'could not disable auto-save; a save mutates live state with no undo entry and would ' +
-          'desync the model (see disableAutoSave in scenarios/common.ts)',
-      );
-    }
-
-    const historyLimit = await ctx.eval<number>(`
-      const config = window.__E2E_TEST__.projectStore.getState().config;
-      return config && config.general && typeof config.general.undo_history_limit === 'number'
-        ? config.general.undo_history_limit
-        : 100;
-    `);
-
-    await injectOracle(ctx);
-    const init = await initModel(ctx);
-
-    // Hard expectation, not a tolerance: the fixture's persisted history was
-    // deleted from the temp copy before the load, so the app must come up with
-    // both stacks empty. Anything else means the strip did not take (a table
-    // this build persists that `UNDO_HISTORY_TABLES` does not list, say), and
-    // every depth in the model would be measured from the wrong floor.
-    const baseUndo = init.undoLen;
-    if (baseUndo !== 0 || init.redoLen !== 0) {
-      throw new Error(
-        `${FIXTURE} opened with inherited history after stripping ` +
-          `${strippedRows} row(s): undoLen=${baseUndo} redoLen=${init.redoLen} ` +
-          `(cleared ${JSON.stringify(stripped.cleared)}, absent ${JSON.stringify(stripped.missing)})`,
-      );
-    }
-
-    if (init.invariants.length > 0) {
-      throw new Error(
-        `${FIXTURE} violates project invariants BEFORE any fuzzing:\n` +
-          init.invariants.map((violation) => `  INVARIANT: ${violation}`).join('\n'),
-      );
-    }
-
-    // Never push so many entries that the stack's FIFO trimming fires - that
-    // would silently invalidate snapshots[0] and every depth above it. baseUndo
-    // is 0 by the assertion above; it stays in the arithmetic so the bound still
-    // reads as "headroom from wherever the stack actually starts".
-    const maxDepth = Math.max(1, Math.min(iterations, historyLimit - baseUndo - DEPTH_HEADROOM));
-
-    /** Non-null when this run is replaying a recorded trace instead of drawing. */
-    const replayPath = replayTracePath();
-    const traceOut = traceOutPath();
-    const replay: FuzzTrace | null = replayPath ? readTrace(replayPath) : null;
-    if (replay && replay.scenario !== 'undo-redo-fuzz') {
-      throw new Error(
-        `trace ${replayPath} was recorded by ${replay.scenario}; run it with that scenario`,
-      );
-    }
-
-    const history: string[] = [];
-    let cursor = 0;
-    /** Node's mirror of the page's `snapshots.length - 1`. */
-    let top = 0;
-    let deepest = 0;
-    let maxBytes = init.bytes;
-    let undoLen = init.undoLen;
-    let redoLen = init.redoLen;
-    let digest: TargetingDigest = init.digest;
-    const jumpRng = mulberry32((ctx.seed ^ JUMP_STREAM_SALT) >>> 0);
-    // Per-run generator weighting, derived from the seed on its own stream.
-    const swarm = swarmProfileFor(ctx.seed);
-    const weightedNames = weightedNamesFor(swarm);
-    ctx.setMetric(`swarm:${swarm.name}`, 1);
-    ctx.setMetric(`stream:${STREAM_V2 ? 'v2' : 'v1'}`, 1);
-    const saveRng = mulberry32((ctx.seed ^ SAVE_STREAM_SALT) >>> 0);
-    let savesDone = 0;
-    let reloadsDone = 0;
+  async run(ctx, opts) {
+    // The temp dir the save/reload boundary writes into is held HERE, one
+    // level above the run body, so a FAILING run cleans it up too. That is
+    // not a corner case: this scenario is deliberately RED by default (it
+    // reproduces open undo bugs), and `pnpm agent:fuzz-shrink` replays it
+    // hundreds of times per shrink with most candidates failing - each one
+    // used to leave a saved copy of the fixture project behind in /tmp.
     const saveDir = fs.mkdtempSync(path.join(os.tmpdir(), 'stalagmight-fuzz-save-'));
-    const savePath = path.join(saveDir, 'fuzz-roundtrip.stalx');
-    // Both stacks persist, but only the newest `undo_persist_limit` entries do.
-    // Crossing the boundary with a deeper history would silently truncate the
-    // restored stack and invalidate the model, so the move is skipped instead.
-    const persistLimit = await ctx.eval<number>(`
-      const config = window.__E2E_TEST__.projectStore.getState().config;
-      return config && config.general && typeof config.general.undo_persist_limit === 'number'
-        ? config.general.undo_persist_limit
-        : 20;
-    `);
-
-    const note = (line: string): void => {
-      history.push(line);
-    };
-
-    /**
-     * The resolved move list for this run. Observe-only: `record` is called AFTER
-     * the decision it describes, draws nothing and reads no app state, so a run
-     * with recording on takes exactly the trajectory it took without.
-     *
-     * The closing unwind/rewind is deliberately NOT recorded - it is a function
-     * of the depth the run ends at, and a replay regenerates it. See
-     * `e2e/agent/lib/fuzzTrace.ts`.
-     */
-    const recorder = new TraceRecorder();
-
-    const recordMove = (direction: 'undo' | 'redo', jumpSteps: number | null): void => {
-      if (jumpSteps === null) {
-        recorder.record(direction === 'undo' ? { kind: 'undo' } : { kind: 'redo' });
-        return;
-      }
-      recorder.record(
-        direction === 'undo'
-          ? { kind: 'undoTo', steps: jumpSteps }
-          : { kind: 'redoTo', steps: jumpSteps },
-      );
-    };
-
-    /** Write the trace, best-effort: a failed write must not mask the failure. */
-    const dumpTrace = (failure: { message: string } | null, explicitPath: string): string | null => {
-      const target =
-        explicitPath ||
-        (ctx.artifactsDir ? defaultTracePath(ctx.artifactsDir, 'undo-redo-fuzz', ctx.seed) : '');
-      if (!target) return null;
+    try {
+      await runFuzz(ctx, opts, saveDir);
+    } finally {
       try {
-        return writeTrace(
-          target,
-          recorder.build({
-            scenario: 'undo-redo-fuzz',
-            seed: ctx.seed,
-            iterations,
-            fixture: FIXTURE,
-            stream: STREAM_V2 ? 'v2' : 'v1',
-            failure,
-          }),
-        );
+        fs.rmSync(saveDir, { recursive: true, force: true });
       } catch {
-        return null;
+        // Best-effort: a leftover temp dir is not a scenario failure.
       }
-    };
+    }
+  },
+};
 
-    const fail = (headline: string, detail = ''): never => {
-      const tail = (DUMP_FULL_HISTORY ? history : history.slice(-HISTORY_TAIL)).map(
-        (line) => `    ${line}`,
+/**
+ * The run body. A free function rather than the `run` member so its caller can
+ * own the temp dir in a `try`/`finally` - see `undoRedoFuzz.run`.
+ */
+async function runFuzz(
+  ctx: ScenarioContext,
+  { iterations }: { iterations: number },
+  saveDir: string,
+): Promise<void> {
+  const { stripped } = await loadFixtureWithoutUndoHistory(ctx, FIXTURE);
+  const strippedRows = Object.values(stripped.cleared).reduce((sum, n) => sum + n, 0);
+  ctx.setMetric(`fixture:${FIXTURE}`, 1);
+  ctx.setMetric('strippedUndoRows', strippedRows);
+
+  if (!(await disableAutoSave(ctx))) {
+    throw new Error(
+      'could not disable auto-save; a save mutates live state with no undo entry and would ' +
+        'desync the model (see disableAutoSave in scenarios/common.ts)',
+    );
+  }
+
+  const historyLimit = await ctx.eval<number>(`
+    const config = window.__E2E_TEST__.projectStore.getState().config;
+    return config && config.general && typeof config.general.undo_history_limit === 'number'
+      ? config.general.undo_history_limit
+      : 100;
+  `);
+
+  await injectOracle(ctx);
+  const init = await initModel(ctx);
+
+  // Hard expectation, not a tolerance: the fixture's persisted history was
+  // deleted from the temp copy before the load, so the app must come up with
+  // both stacks empty. Anything else means the strip did not take (a table
+  // this build persists that `UNDO_HISTORY_TABLES` does not list, say), and
+  // every depth in the model would be measured from the wrong floor.
+  const baseUndo = init.undoLen;
+  if (baseUndo !== 0 || init.redoLen !== 0) {
+    throw new Error(
+      `${FIXTURE} opened with inherited history after stripping ` +
+        `${strippedRows} row(s): undoLen=${baseUndo} redoLen=${init.redoLen} ` +
+        `(cleared ${JSON.stringify(stripped.cleared)}, absent ${JSON.stringify(stripped.missing)})`,
+    );
+  }
+
+  if (init.invariants.length > 0) {
+    throw new Error(
+      `${FIXTURE} violates project invariants BEFORE any fuzzing:\n` +
+        init.invariants.map((violation) => `  INVARIANT: ${violation}`).join('\n'),
+    );
+  }
+
+  // Never push so many entries that the stack's FIFO trimming fires - that
+  // would silently invalidate snapshots[0] and every depth above it. baseUndo
+  // is 0 by the assertion above; it stays in the arithmetic so the bound still
+  // reads as "headroom from wherever the stack actually starts".
+  const maxDepth = Math.max(1, Math.min(iterations, historyLimit - baseUndo - DEPTH_HEADROOM));
+
+  /** Non-null when this run is replaying a recorded trace instead of drawing. */
+  const replayPath = replayTracePath();
+  const traceOut = traceOutPath();
+  const replay: FuzzTrace | null = replayPath ? readTrace(replayPath) : null;
+  if (replay && replay.scenario !== 'undo-redo-fuzz') {
+    throw new Error(
+      `trace ${replayPath} was recorded by ${replay.scenario}; run it with that scenario`,
+    );
+  }
+  // The recorded steps carry RESOLVED section and shot ids, so replaying them
+  // against a different project drives moves at ids that do not exist there:
+  // an invented failure, or a green run, either way not the recorded bug.
+  if (replay && replay.fixture !== FIXTURE) {
+    throw new Error(
+      `trace ${replayPath} was recorded on ${replay.fixture} but this run is on ${FIXTURE}; ` +
+        `its steps carry ids resolved against that project. Re-run with ` +
+        `STALAGMIGHT_FUZZ_FIXTURE=${replay.fixture} (pnpm agent:scenario --trace restores it for you).`,
+    );
+  }
+
+  const history: string[] = [];
+  let cursor = 0;
+  /** Node's mirror of the page's `snapshots.length - 1`. */
+  let top = 0;
+  let deepest = 0;
+  let maxBytes = init.bytes;
+  let undoLen = init.undoLen;
+  let redoLen = init.redoLen;
+  let digest: TargetingDigest = init.digest;
+  const jumpRng = mulberry32((ctx.seed ^ JUMP_STREAM_SALT) >>> 0);
+  // Per-run generator weighting, derived from the seed on its own stream.
+  const swarm = swarmProfileFor(ctx.seed);
+  const weightedNames = weightedNamesFor(swarm);
+  ctx.setMetric(`swarm:${swarm.name}`, 1);
+  ctx.setMetric(`stream:${STREAM_V2 ? 'v2' : 'v1'}`, 1);
+  const saveRng = mulberry32((ctx.seed ^ SAVE_STREAM_SALT) >>> 0);
+  let savesDone = 0;
+  let reloadsDone = 0;
+  const savePath = path.join(saveDir, 'fuzz-roundtrip.stalx');
+  // Both stacks persist, but only the newest `undo_persist_limit` entries do.
+  // Crossing the boundary with a deeper history would silently truncate the
+  // restored stack and invalidate the model, so the move is skipped instead.
+  const persistLimit = await ctx.eval<number>(`
+    const config = window.__E2E_TEST__.projectStore.getState().config;
+    return config && config.general && typeof config.general.undo_persist_limit === 'number'
+      ? config.general.undo_persist_limit
+      : 20;
+  `);
+
+  const note = (line: string): void => {
+    history.push(line);
+  };
+
+  /**
+   * The resolved move list for this run. Observe-only: `record` is called AFTER
+   * the decision it describes, draws nothing and reads no app state, so a run
+   * with recording on takes exactly the trajectory it took without.
+   *
+   * The closing unwind/rewind is deliberately NOT recorded - it is a function
+   * of the depth the run ends at, and a replay regenerates it. See
+   * `e2e/agent/lib/fuzzTrace.ts`.
+   */
+  const recorder = new TraceRecorder();
+
+  const recordMove = (direction: 'undo' | 'redo', jumpSteps: number | null): void => {
+    if (jumpSteps === null) {
+      recorder.record(direction === 'undo' ? { kind: 'undo' } : { kind: 'redo' });
+      return;
+    }
+    recorder.record(
+      direction === 'undo'
+        ? { kind: 'undoTo', steps: jumpSteps }
+        : { kind: 'redoTo', steps: jumpSteps },
+    );
+  };
+
+  /** Write the trace, best-effort: a failed write must not mask the failure. */
+  const dumpTrace = (failure: { message: string } | null, explicitPath: string): string | null => {
+    const target =
+      explicitPath ||
+      (ctx.artifactsDir ? defaultTracePath(ctx.artifactsDir, 'undo-redo-fuzz', ctx.seed) : '');
+    if (!target) return null;
+    try {
+      return writeTrace(
+        target,
+        recorder.build({
+          scenario: 'undo-redo-fuzz',
+          seed: ctx.seed,
+          iterations,
+          fixture: FIXTURE,
+          stream: STREAM_V2 ? 'v2' : 'v1',
+          failure,
+        }),
       );
-      const message = [
+    } catch {
+      return null;
+    }
+  };
+
+  // Annotated on the CONST, not just the arrow: that is what makes TypeScript
+  // treat a `fail(...)` call as never-returning, so a caller ending in one does
+  // not need a dead `return` after it. Same form as undoPersistenceFuzz.
+  const fail: (headline: string, detail?: string) => never = (headline, detail = '') => {
+    const tail = (DUMP_FULL_HISTORY ? history : history.slice(-HISTORY_TAIL)).map(
+      (line) => `    ${line}`,
+    );
+    const message = [
+      headline,
+      `  reproduce: run_scenario("undo-redo-fuzz", seed=${ctx.seed}, iterations=${iterations})` +
+        `${FIXTURE === DEFAULT_FIXTURE ? '' : ` with STALAGMIGHT_FUZZ_FIXTURE=${FIXTURE}`}` +
+        `${STREAM_V2 ? '' : ' with STALAGMIGHT_FUZZ_STREAM=v1'}` +
+        `${ALLOW_KNOWN_BUGS ? ' with STALAGMIGHT_FUZZ_ALLOW_KNOWN_BUGS=1' : ''}` +
+        `${replayPath ? ` (REPLAY of ${replayPath})` : ''}`,
+      `  fixture=${FIXTURE} stream=${STREAM_V2 ? 'v2' : 'v1'} swarm=${swarm.name} ` +
+        `depth=${cursor} modelTop=${top} baseUndo=${baseUndo}`,
+      ...(detail ? [detail] : []),
+      `  last ${tail.length} action(s):`,
+      ...tail,
+    ].join('\n');
+    // The trace carries the message VERBATIM, so a shrink compares signatures
+    // taken from the same text a human reads. The path is appended afterwards,
+    // which is why it is not part of what was recorded.
+    const written = dumpTrace({ message }, traceOut);
+    throw new Error(written ? `${message}\n  trace: ${written}` : message);
+  };
+
+  /** One fused round trip, timed. */
+  const step = async (
+    kind: 'mutate' | 'undo' | 'redo' | 'undoTo' | 'redoTo' | 'save' | 'reload',
+    action: string,
+    actionArgs: unknown[],
+    steps = 1,
+  ): Promise<StepResponse> => {
+    const started = Date.now();
+    const res = await runStep(ctx, {
+      kind,
+      action,
+      args: actionArgs,
+      cursor,
+      undo0: undoLen,
+      steps,
+    });
+    ctx.metric('fusedStepMs', Date.now() - started);
+    // Attribution, so the next round of tuning aims at evidence: the store
+    // action's own work, the three read-only IPC calls, the in-page
+    // canonicalization, and (by subtraction from fusedStepMs) the bridge.
+    ctx.metric('actionMs', res.timing.actionMs);
+    ctx.metric('observeMs', res.timing.observeMs);
+    ctx.metric('canonicalMs', res.timing.canonicalMs);
+    ctx.metric('integrityMs', res.timing.integrityMs);
+    ctx.metric('steps');
+    return res;
+  };
+
+  /** The page applied the same bookkeeping rules; prove it landed in the same place. */
+  const assertModel = (res: StepResponse, headline: string): void => {
+    if (res.cursorAfter !== cursor || res.top !== top) {
+      fail(
         headline,
-        `  reproduce: run_scenario("undo-redo-fuzz", seed=${ctx.seed}, iterations=${iterations})` +
-          `${FIXTURE === DEFAULT_FIXTURE ? '' : ` with STALAGMIGHT_FUZZ_FIXTURE=${FIXTURE}`}` +
-          `${STREAM_V2 ? '' : ' with STALAGMIGHT_FUZZ_STREAM=v1'}` +
-          `${ALLOW_KNOWN_BUGS ? ' with STALAGMIGHT_FUZZ_ALLOW_KNOWN_BUGS=1' : ''}` +
-          `${replayPath ? ` (REPLAY of ${replayPath})` : ''}`,
-        `  fixture=${FIXTURE} stream=${STREAM_V2 ? 'v2' : 'v1'} swarm=${swarm.name} ` +
-          `depth=${cursor} modelTop=${top} baseUndo=${baseUndo}`,
-        ...(detail ? [detail] : []),
-        `  last ${tail.length} action(s):`,
-        ...tail,
-      ].join('\n');
-      // The trace carries the message VERBATIM, so a shrink compares signatures
-      // taken from the same text a human reads. The path is appended afterwards,
-      // which is why it is not part of what was recorded.
-      const written = dumpTrace({ message }, traceOut);
-      throw new Error(written ? `${message}\n  trace: ${written}` : message);
-    };
+        `  page model says cursor=${res.cursorAfter} top=${res.top}, Node says cursor=${cursor} top=${top}`,
+      );
+    }
+  };
 
-    /** One fused round trip, timed. */
-    const step = async (
-      kind: 'mutate' | 'undo' | 'redo' | 'undoTo' | 'redoTo' | 'save' | 'reload',
-      action: string,
-      actionArgs: unknown[],
-      steps = 1,
-    ): Promise<StepResponse> => {
-      const started = Date.now();
-      const res = await runStep(ctx, {
-        kind,
-        action,
-        args: actionArgs,
-        cursor,
-        undo0: undoLen,
-        steps,
-      });
-      ctx.metric('fusedStepMs', Date.now() - started);
-      // Attribution, so the next round of tuning aims at evidence: the store
-      // action's own work, the three read-only IPC calls, the in-page
-      // canonicalization, and (by subtraction from fusedStepMs) the bridge.
-      ctx.metric('actionMs', res.timing.actionMs);
-      ctx.metric('observeMs', res.timing.observeMs);
-      ctx.metric('canonicalMs', res.timing.canonicalMs);
-      ctx.metric('integrityMs', res.timing.integrityMs);
-      ctx.metric('steps');
-      return res;
-    };
+  /**
+   * ABSOLUTE well-formedness, checked on every observed state. Independent of
+   * the roundtrip comparison: a forward command that corrupts the project and
+   * an undo that faithfully restores the corruption match at every depth, so
+   * only this fires.
+   */
+  const assertInvariants = (res: StepResponse, what: string): void => {
+    if (res.invariants.length === 0) return;
+    fail(
+      `project invariant(s) violated after ${what}`,
+      res.invariants.map((violation) => `  INVARIANT: ${violation}`).join('\n'),
+    );
+  };
 
-    /** The page applied the same bookkeeping rules; prove it landed in the same place. */
-    const assertModel = (res: StepResponse, headline: string): void => {
-      if (res.cursorAfter !== cursor || res.top !== top) {
-        fail(
-          headline,
-          `  page model says cursor=${res.cursorAfter} top=${res.top}, Node says cursor=${cursor} top=${top}`,
-        );
-      }
-    };
+  const sameIntegrity = (a: IntegrityVerdict, b: IntegrityVerdict): boolean =>
+    a.saveBlocked === b.saveBlocked && a.messages.join('\u0000') === b.messages.join('\u0000');
 
-    /**
-     * ABSOLUTE well-formedness, checked on every observed state. Independent of
-     * the roundtrip comparison: a forward command that corrupts the project and
-     * an undo that faithfully restores the corruption match at every depth, so
-     * only this fires.
-     */
-    const assertInvariants = (res: StepResponse, what: string): void => {
-      if (res.invariants.length === 0) return;
+  /**
+   * The app runs `check_project_integrity` after every undo/redo anyway, so
+   * its verdict is part of the state a history move is supposed to restore. A
+   * state that roundtrips while its integrity verdict does not is either a bug
+   * in the checker or a divergence the snapshot cannot see.
+   */
+  const assertIntegrityDelta = (res: StepResponse, what: string, resynced = false): void => {
+    const expected = res.integrityExpected;
+    if (expected === null) return;
+    // `resolveMismatch` just replaced the model's snapshot at this depth, and
+    // `resyncModel` moves the recorded integrity verdict with it - that is
+    // its documented job. `expected` was computed IN THE PAGE at step time,
+    // against the snapshot that has since been superseded, so comparing it
+    // now would fail on precisely the difference the resync accepted. That is
+    // how a run under STALAGMIGHT_FUZZ_ALLOW_KNOWN_BUGS could log "tolerated
+    // known asymmetry at depth N" and then immediately fail naming a
+    // different oracle.
+    if (resynced) {
+      ctx.metric('integrityResynced');
+      return;
+    }
+    // Counted so the oracle can be shown to be doing work rather than
+    // passing vacuously on a model that never recorded a verdict.
+    ctx.metric('integrityCompared');
+    if (sameIntegrity(expected, res.integrity)) return;
+    const format = (verdict: IntegrityVerdict): string =>
+      `saveBlocked=${verdict.saveBlocked} messages=${JSON.stringify(verdict.messages)}`;
+    fail(
+      `${what} restored the state but NOT the integrity verdict recorded at depth ${cursor}`,
+      `  expected: ${format(expected)}\n  actual:   ${format(res.integrity)}`,
+    );
+  };
+
+  const assertStacks = (headline: string, res: StepResponse): void => {
+    const wantUndo = baseUndo + cursor;
+    const wantRedo = top - cursor;
+    if (res.undoLen !== wantUndo || res.redoLen !== wantRedo) {
       fail(
-        `project invariant(s) violated after ${what}`,
-        res.invariants.map((violation) => `  INVARIANT: ${violation}`).join('\n'),
+        headline,
+        `  expected undoLen=${wantUndo} redoLen=${wantRedo}, got undoLen=${res.undoLen} redoLen=${res.redoLen}`,
       );
-    };
+    }
+  };
 
-    const sameIntegrity = (a: IntegrityVerdict, b: IntegrityVerdict): boolean =>
-      a.saveBlocked === b.saveBlocked && a.messages.join('\u0000') === b.messages.join('\u0000');
+  /**
+   * Resolve a mismatch the page reported. Fetches both canonical strings (the
+   * only time they cross the bridge) and either tolerates the difference or
+   * fails with the full diff.
+   *
+   * Returns true when the model was RESYNCED, which the caller has to know:
+   * every expectation the page computed for this step - the integrity verdict
+   * included - was computed against the snapshot the resync replaced.
+   */
+  const resolveMismatch = async (
+    headline: string,
+    resyncIntegrity: IntegrityVerdict | null,
+    res: StepResponse,
+  ): Promise<boolean> => {
+    const pair = await fetchMismatch(ctx);
+    // ONLY a comparison that crosses an epoch boundary may subtract the
+    // documented undo-less changes. Within an epoch the oracle stays strict -
+    // otherwise "a reload re-solves offsets" would permanently hide every
+    // section_offsets bug the fuzzer exists to find (bugs 3 and 7).
+    const attributable = res.crossesEpoch
+      ? [
+          ...(savesDone > 0 ? SAVE_HEALING_MUTATIONS : []),
+          ...(reloadsDone > 0 ? RELOAD_RESOLVED_GEOMETRY : []),
+        ]
+      : [];
+    const check = checkSnapshot(pair.expected ?? '', pair.actual ?? '', attributable);
+    if (check.equal) {
+      // Counted, never resynced: keeping the ORIGINAL expectation means the
+      // tolerance can never ratchet, only ever absorb the same dust again.
+      if (check.floatNoise) ctx.metric('floatNoise');
+      return false;
+    }
+    // Every difference was a documented save heal or reload re-solve: record
+    // the new baseline and carry on. Nothing else is tolerated here.
+    if (check.attributed.length > 0 && check.text.startsWith('  ATTRIBUTED')) {
+      ctx.metric('resyncs');
+      for (const entry of check.attributed) ctx.metric(`resync:${entry.id}`);
+      top = await resyncModel(ctx, pair.index, resyncIntegrity);
+      return true;
+    }
+    if (ALLOW_KNOWN_BUGS && check.onlyKnown) {
+      ctx.metric('knownAsymmetry');
+      for (const asymmetry of check.asymmetries) ctx.metric(`known:${asymmetry.id}`);
+      ctx.log(`tolerated known asymmetry at depth ${cursor}: ${check.asymmetries.map((a) => a.id).join(', ')}`);
+      // Resync so one open bug does not cascade into every later comparison.
+      top = await resyncModel(ctx, pair.index, resyncIntegrity);
+      return true;
+    }
+    fail(headline, check.text);
+  };
 
-    /**
-     * The app runs `check_project_integrity` after every undo/redo anyway, so
-     * its verdict is part of the state a history move is supposed to restore. A
-     * state that roundtrips while its integrity verdict does not is either a bug
-     * in the checker or a divergence the snapshot cannot see.
-     */
-    const assertIntegrityDelta = (res: StepResponse, what: string): void => {
-      const expected = res.integrityExpected;
-      if (expected === null) return;
-      // Counted so the oracle can be shown to be doing work rather than
-      // passing vacuously on a model that never recorded a verdict.
-      ctx.metric('integrityCompared');
-      if (sameIntegrity(expected, res.integrity)) return;
-      const format = (verdict: IntegrityVerdict): string =>
-        `saveBlocked=${verdict.saveBlocked} messages=${JSON.stringify(verdict.messages)}`;
+  const record = (res: StepResponse): void => {
+    undoLen = res.undoLen;
+    redoLen = res.redoLen;
+    digest = res.digest;
+    maxBytes = Math.max(maxBytes, res.bytes);
+    deepest = Math.max(deepest, cursor);
+  };
+
+  /**
+   * One history move. `jumpSteps` takes it through `undoTo`/`redoTo` - the
+   * history dropdown's multi-step path - instead of a single `undo`/`redo`.
+   *
+   * The oracle is deliberately the SAME snapshot array either way: the state a
+   * jump lands on must equal the one single steps recorded at that depth. That
+   * equivalence is not free - `undo_to`/`redo_to` loop `undo_inner`/`redo_inner`
+   * and call NEITHER `invalidate_adjusted_cache()` NOR `reconcile_geometry()`,
+   * both of which `undo()`/`redo()` do (verified in
+   * src-tauri/src/core/state/undo.rs) - so a divergence here is a real product
+   * bug reachable from the dropdown.
+   */
+  const walk = async (
+    direction: 'undo' | 'redo',
+    tag: string,
+    jumpSteps: number | null = null,
+  ): Promise<void> => {
+    const steps = jumpSteps ?? 1;
+    const back = direction === 'undo';
+    const jumped = jumpSteps !== null;
+    const action = jumped ? (back ? 'undoTo' : 'redoTo') : direction;
+    const label = jumped ? `${action}(${steps - 1})[${steps} step(s)]` : direction;
+    const beforeUndo = undoLen;
+    const beforeRedo = redoLen;
+    const res = await step(
+      jumped ? (back ? 'undoTo' : 'redoTo') : direction,
+      action,
+      jumped ? [steps - 1] : [],
+      steps,
+    );
+    if (!res.actionOk || res.commandSuccess === false) {
+      note(`${tag} ${label} -> FAILED`);
       fail(
-        `${what} restored the state but NOT the integrity verdict recorded at depth ${cursor}`,
-        `  expected: ${format(expected)}\n  actual:   ${format(res.integrity)}`,
+        `${label} at depth ${cursor} failed outright`,
+        `  error: ${res.commandError ?? res.actionError ?? 'unknown'}`,
       );
-    };
+    }
+    cursor += back ? -steps : steps;
+    note(
+      `${tag} ${label} -> depth ${cursor} (undo ${beforeUndo}->${res.undoLen}, redo ${beforeRedo}->${res.redoLen})`,
+    );
+    assertInvariants(res, label);
+    assertModel(res, `${label} left the page model where Node did not expect it`);
+    assertStacks(`${label} left the history stacks in an unexpected shape`, res);
+    const resynced =
+      res.verdict !== 'equal' &&
+      (await resolveMismatch(
+        `${label} did not restore the state recorded at depth ${cursor}`,
+        res.integrity,
+        res,
+      ));
+    assertIntegrityDelta(res, label, resynced);
+    record(res);
+    ctx.metric(direction === 'undo' ? 'undos' : 'redos');
+    if (jumped) {
+      ctx.metric('jumps');
+      ctx.metric(`jump:${action}`);
+      ctx.metric('jumpSteps', steps);
+    }
+  };
 
-    const assertStacks = (headline: string, res: StepResponse): void => {
-      const wantUndo = baseUndo + cursor;
-      const wantRedo = top - cursor;
-      if (res.undoLen !== wantUndo || res.redoLen !== wantRedo) {
+  /**
+   * Save, close, reopen: the persistence boundary.
+   *
+   * Undo history lives in the .stalx (both stacks, sequence renumbered), so
+   * until a run crosses this boundary nothing below it is exercised at all.
+   * Three separate oracles run here:
+   *
+   *   1. SAVE IS ATTRIBUTABLE. `save_project` heals live state with no undo
+   *      entry - `ensure_shot_uuids`, `ensure_unique_shot_uuids`,
+   *      `capture_missing_gauge_anchors`, the orphan `section_offsets` retain,
+   *      non-finite sanitize. Every path that changes must match
+   *      `SAVE_HEALING_MUTATIONS` by path AND direction; anything else fails.
+   *   2. THE STACKS SURVIVE. Both lengths must come back exactly.
+   *   3. THE RESTORED STACK IS THE SAME HISTORY. From here the model compares
+   *      id-agnostically (the loader renumbers `Shot::id` to
+   *      `section_id * FEATURE_ID_STRIDE + sequence_order`), and the run's
+   *      final unwind/rewind then walks the whole RESTORED stack against the
+   *      snapshots recorded before the save.
+   */
+  const saveAndReload = async (tag: string): Promise<void> => {
+    // The save is about to make undo-less changes, so everything recorded so
+    // far belongs to the previous epoch.
+    await bumpEpoch(ctx);
+    const saveRes = await step('save', 'saveProject', [savePath]);
+    if (!saveRes.actionOk || saveRes.commandSuccess === false) {
+      note(`${tag} save -> FAILED`);
+      fail('saveProject failed', `  error: ${saveRes.commandError ?? saveRes.actionError ?? 'unknown'}`);
+    }
+    note(`${tag} save -> ok (depth ${cursor}, undo ${saveRes.undoLen}, redo ${saveRes.redoLen})`);
+    assertInvariants(saveRes, 'save');
+    assertStacks('save changed the history stacks', saveRes);
+    savesDone += 1;
+    if (saveRes.verdict !== 'equal') {
+      await resolveMismatch(
+        'save mutated the project in a way SAVE_HEALING_MUTATIONS does not account for',
+        saveRes.integrity,
+        saveRes,
+      );
+    }
+    record(saveRes);
+    ctx.metric('saves');
+
+    const closed = (await ctx.callAction('project', 'closeProject', [])) as {
+      ok: boolean;
+      error?: string;
+      result?: { success?: boolean; error?: string };
+    };
+    if (!closed.ok || closed.result?.success === false) {
+      fail('closeProject failed before reopen', `  error: ${closed.result?.error ?? closed.error ?? 'unknown'}`);
+    }
+    const opened = (await ctx.callAction('project', 'loadProject', [savePath])) as {
+      ok: boolean;
+      error?: string;
+      result?: { success?: boolean; error?: string };
+    };
+    if (!opened.ok || opened.result?.success === false) {
+      fail('reopening the saved project failed', `  error: ${opened.result?.error ?? opened.error ?? 'unknown'}`);
+    }
+
+    // Switch BEFORE re-observing so both sides of the comparison are in the
+    // same form. Idempotent, so later reloads are a no-op.
+    await enableIdAgnosticModel(ctx);
+    await bumpEpoch(ctx);
+    reloadsDone += 1;
+    const res = await observeOnly(ctx, cursor);
+    note(`${tag} reload -> depth ${cursor} (undo ${res.undoLen}, redo ${res.redoLen})`);
+    assertInvariants(res, 'reload');
+    assertStacks('the persisted history did not come back intact', res);
+    const resynced =
+      res.verdict !== 'equal' &&
+      (await resolveMismatch(
+        'reopening the saved project did not restore the state it was saved at',
+        res.integrity,
+        res,
+      ));
+    assertIntegrityDelta(res, 'reload', resynced);
+    record(res);
+    ctx.metric('reloads');
+  };
+
+  /**
+   * Run Repair as an additive move. It is a normal mutation as far as the
+   * model is concerned - it either pushes one snapshot-pair entry or nothing -
+   * so the same case analysis the mutate branch uses applies here.
+   */
+  const runRepair = async (tag: string): Promise<void> => {
+    const beforeUndo = undoLen;
+    const beforeRedo = redoLen;
+    const res = await step('mutate', 'repairProjectIntegrity', []);
+    const accepted = res.actionOk && res.commandSuccess !== false;
+    const pushed = res.undoLen - beforeUndo;
+    note(
+      `${tag} repairProjectIntegrity -> ${accepted ? 'ok' : 'rejected'} ` +
+        `(undo ${beforeUndo}->${res.undoLen}, redo ${beforeRedo}->${res.redoLen})`,
+    );
+    assertInvariants(res, 'repairProjectIntegrity');
+    if (!accepted) {
+      ctx.metric('rejected');
+      ctx.metric('rejected:repairProjectIntegrity');
+      record(res);
+      return;
+    }
+    if (pushed === 1) {
+      // Repair changed the project: it becomes the new top of the branch.
+      snapshotsTopChanged(res);
+      ctx.metric('repairs');
+      record(res);
+      return;
+    }
+    if (pushed !== 0) {
+      fail(`repair pushed ${pushed} undo entries (expected 0 or 1)`);
+    }
+    // No-op repair: nothing changed, so nothing may have changed.
+    ctx.metric('repairNoops');
+    if (res.redoLen === 0) top = cursor;
+    if (res.verdict !== 'equal') {
+      await resolveMismatch('a no-op Repair changed the project state', res.integrity, res);
+    }
+    record(res);
+  };
+
+  /** Shared bookkeeping for a move that pushed exactly one undo entry. */
+  const snapshotsTopChanged = (res: StepResponse): void => {
+    if (res.redoLen !== 0) {
+      fail('a successful Repair did not clear the redo stack');
+    }
+    cursor += 1;
+    top = cursor;
+    assertModel(res, 'Repair recorded its snapshot at an unexpected depth');
+    if (res.verdict !== 'recorded') {
+      fail(`the page did not record a snapshot for Repair (verdict=${res.verdict})`);
+    }
+  };
+
+  /** Should this iteration cross the save/reload boundary? */
+  const wantSaveReload = (): boolean => {
+    if (savesDone >= MAX_SAVE_RELOADS) return false;
+    // Only the newest `undo_persist_limit` entries survive the write, so a
+    // deeper history would come back truncated - skip rather than model it.
+    if (top > persistLimit) {
+      ctx.metric('savesSkippedDeepHistory');
+      return false;
+    }
+    return saveRng() < P_SAVE;
+  };
+
+  /**
+   * How wide a jump to take, or null for a single step. Drawn from the
+   * SEPARATE stream so the primary sequence is untouched.
+   */
+  const drawJump = (direction: 'undo' | 'redo'): number | null => {
+    const reach = direction === 'undo' ? cursor : top - cursor;
+    if (reach < 1) return null;
+    if (jumpRng() >= P_JUMP) return null;
+    // 1..reach. A 1-step jump is still worth taking: undo_to(0) reaches the
+    // same depth through a different backend path than undo().
+    return 1 + Math.floor(jumpRng() * reach);
+  };
+
+  /**
+   * Apply ONE mutation and run the whole case analysis on what the stacks did.
+   *
+   * Lifted out of the main loop unchanged so that REPLAY can drive it with a
+   * recorded action instead of a drawn one. The generator path still hands it
+   * exactly what `drawAction` returned, in the same place in the sequence, so
+   * no draw moved and every recorded repro seed is unaffected.
+   */
+  const applyMutation = async (action: FuzzAction, tag: string): Promise<void> => {
+    recorder.record({
+      kind: 'mutate',
+      action: action.action,
+      args: action.args,
+      label: action.label,
+    });
+    const beforeUndo = undoLen;
+    const beforeRedo = redoLen;
+    const res = await step('mutate', action.action, action.args);
+    const accepted = res.actionOk && res.commandSuccess !== false;
+    const pushed = res.undoLen - beforeUndo;
+    note(
+      `${tag} ${action.label} -> ${accepted ? 'ok' : 'rejected'} ` +
+        `(undo ${beforeUndo}->${res.undoLen}, redo ${beforeRedo}->${res.redoLen})`,
+    );
+
+    if (!accepted) {
+      ctx.metric('rejected');
+      ctx.metric(`rejected:${action.action}`);
+      if (pushed !== 0 || res.redoLen !== beforeRedo) {
         fail(
-          headline,
-          `  expected undoLen=${wantUndo} redoLen=${wantRedo}, got undoLen=${res.undoLen} redoLen=${res.redoLen}`,
+          'a REJECTED command changed the history stacks',
+          `  error: ${res.commandError ?? res.actionError ?? 'unknown'}\n` +
+            `  undo ${beforeUndo}->${res.undoLen}, redo ${beforeRedo}->${res.redoLen}`,
         );
       }
-    };
-
-    /**
-     * Resolve a mismatch the page reported. Fetches both canonical strings (the
-     * only time they cross the bridge) and either tolerates the difference or
-     * fails with the full diff.
-     */
-    const resolveMismatch = async (
-      headline: string,
-      resyncIntegrity: IntegrityVerdict | null,
-      res: StepResponse,
-    ): Promise<void> => {
-      const pair = await fetchMismatch(ctx);
-      // ONLY a comparison that crosses an epoch boundary may subtract the
-      // documented undo-less changes. Within an epoch the oracle stays strict -
-      // otherwise "a reload re-solves offsets" would permanently hide every
-      // section_offsets bug the fuzzer exists to find (bugs 3 and 7).
-      const attributable = res.crossesEpoch
-        ? [
-            ...(savesDone > 0 ? SAVE_HEALING_MUTATIONS : []),
-            ...(reloadsDone > 0 ? RELOAD_RESOLVED_GEOMETRY : []),
-          ]
-        : [];
-      const check = checkSnapshot(pair.expected ?? '', pair.actual ?? '', attributable);
-      if (check.equal) {
-        // Counted, never resynced: keeping the ORIGINAL expectation means the
-        // tolerance can never ratchet, only ever absorb the same dust again.
-        if (check.floatNoise) ctx.metric('floatNoise');
-        return;
-      }
-      // Every difference was a documented save heal or reload re-solve: record
-      // the new baseline and carry on. Nothing else is tolerated here.
-      if (check.attributed.length > 0 && check.text.startsWith('  ATTRIBUTED')) {
-        ctx.metric('resyncs');
-        for (const entry of check.attributed) ctx.metric(`resync:${entry.id}`);
-        top = await resyncModel(ctx, pair.index, resyncIntegrity);
-        return;
-      }
-      if (ALLOW_KNOWN_BUGS && check.onlyKnown) {
-        ctx.metric('knownAsymmetry');
-        for (const asymmetry of check.asymmetries) ctx.metric(`known:${asymmetry.id}`);
-        ctx.log(`tolerated known asymmetry at depth ${cursor}: ${check.asymmetries.map((a) => a.id).join(', ')}`);
-        // Resync so one open bug does not cascade into every later comparison.
-        top = await resyncModel(ctx, pair.index, resyncIntegrity);
-        return;
-      }
-      fail(headline, check.text);
-    };
-
-    const record = (res: StepResponse): void => {
-      undoLen = res.undoLen;
-      redoLen = res.redoLen;
-      digest = res.digest;
-      maxBytes = Math.max(maxBytes, res.bytes);
-      deepest = Math.max(deepest, cursor);
-    };
-
-    /**
-     * One history move. `jumpSteps` takes it through `undoTo`/`redoTo` - the
-     * history dropdown's multi-step path - instead of a single `undo`/`redo`.
-     *
-     * The oracle is deliberately the SAME snapshot array either way: the state a
-     * jump lands on must equal the one single steps recorded at that depth. That
-     * equivalence is not free - `undo_to`/`redo_to` loop `undo_inner`/`redo_inner`
-     * and call NEITHER `invalidate_adjusted_cache()` NOR `reconcile_geometry()`,
-     * both of which `undo()`/`redo()` do (verified in
-     * src-tauri/src/core/state/undo.rs) - so a divergence here is a real product
-     * bug reachable from the dropdown.
-     */
-    const walk = async (
-      direction: 'undo' | 'redo',
-      tag: string,
-      jumpSteps: number | null = null,
-    ): Promise<void> => {
-      const steps = jumpSteps ?? 1;
-      const back = direction === 'undo';
-      const jumped = jumpSteps !== null;
-      const action = jumped ? (back ? 'undoTo' : 'redoTo') : direction;
-      const label = jumped ? `${action}(${steps - 1})[${steps} step(s)]` : direction;
-      const beforeUndo = undoLen;
-      const beforeRedo = redoLen;
-      const res = await step(
-        jumped ? (back ? 'undoTo' : 'redoTo') : direction,
-        action,
-        jumped ? [steps - 1] : [],
-        steps,
-      );
-      if (!res.actionOk || res.commandSuccess === false) {
-        note(`${tag} ${label} -> FAILED`);
-        fail(
-          `${label} at depth ${cursor} failed outright`,
-          `  error: ${res.commandError ?? res.actionError ?? 'unknown'}`,
-        );
-      }
-      cursor += back ? -steps : steps;
-      note(
-        `${tag} ${label} -> depth ${cursor} (undo ${beforeUndo}->${res.undoLen}, redo ${beforeRedo}->${res.redoLen})`,
-      );
-      assertInvariants(res, label);
-      assertModel(res, `${label} left the page model where Node did not expect it`);
-      assertStacks(`${label} left the history stacks in an unexpected shape`, res);
-      if (res.verdict !== 'equal') {
-        await resolveMismatch(
-          `${label} did not restore the state recorded at depth ${cursor}`,
+      assertInvariants(res, `a rejected ${action.action}`);
+      assertModel(res, 'a rejected command moved the page model');
+      const resynced =
+        res.verdict !== 'equal' &&
+        (await resolveMismatch(
+          `a REJECTED command (${action.action}) mutated the project: ` +
+            `${res.commandError ?? res.actionError ?? 'unknown'}`,
           res.integrity,
           res,
-        );
-      }
-      assertIntegrityDelta(res, label);
+        ));
+      assertIntegrityDelta(res, `a rejected ${action.action}`, resynced);
       record(res);
-      ctx.metric(direction === 'undo' ? 'undos' : 'redos');
-      if (jumped) {
-        ctx.metric('jumps');
-        ctx.metric(`jump:${action}`);
-        ctx.metric('jumpSteps', steps);
-      }
-    };
+      return;
+    }
 
-    /**
-     * Save, close, reopen: the persistence boundary.
-     *
-     * Undo history lives in the .stalx (both stacks, sequence renumbered), so
-     * until a run crosses this boundary nothing below it is exercised at all.
-     * Three separate oracles run here:
-     *
-     *   1. SAVE IS ATTRIBUTABLE. `save_project` heals live state with no undo
-     *      entry - `ensure_shot_uuids`, `ensure_unique_shot_uuids`,
-     *      `capture_missing_gauge_anchors`, the orphan `section_offsets` retain,
-     *      non-finite sanitize. Every path that changes must match
-     *      `SAVE_HEALING_MUTATIONS` by path AND direction; anything else fails.
-     *   2. THE STACKS SURVIVE. Both lengths must come back exactly.
-     *   3. THE RESTORED STACK IS THE SAME HISTORY. From here the model compares
-     *      id-agnostically (the loader renumbers `Shot::id` to
-     *      `section_id * FEATURE_ID_STRIDE + sequence_order`), and the run's
-     *      final unwind/rewind then walks the whole RESTORED stack against the
-     *      snapshots recorded before the save.
-     */
-    const saveAndReload = async (tag: string): Promise<void> => {
-      // The save is about to make undo-less changes, so everything recorded so
-      // far belongs to the previous epoch.
-      await bumpEpoch(ctx);
-      const saveRes = await step('save', 'saveProject', [savePath]);
-      if (!saveRes.actionOk || saveRes.commandSuccess === false) {
-        note(`${tag} save -> FAILED`);
-        fail('saveProject failed', `  error: ${saveRes.commandError ?? saveRes.actionError ?? 'unknown'}`);
-      }
-      note(`${tag} save -> ok (depth ${cursor}, undo ${saveRes.undoLen}, redo ${saveRes.redoLen})`);
-      assertInvariants(saveRes, 'save');
-      assertStacks('save changed the history stacks', saveRes);
-      savesDone += 1;
-      if (saveRes.verdict !== 'equal') {
-        await resolveMismatch(
-          'save mutated the project in a way SAVE_HEALING_MUTATIONS does not account for',
-          saveRes.integrity,
-          saveRes,
-        );
-      }
-      record(saveRes);
-      ctx.metric('saves');
-
-      const closed = (await ctx.callAction('project', 'closeProject', [])) as {
-        ok: boolean;
-        error?: string;
-        result?: { success?: boolean; error?: string };
-      };
-      if (!closed.ok || closed.result?.success === false) {
-        fail('closeProject failed before reopen', `  error: ${closed.result?.error ?? closed.error ?? 'unknown'}`);
-      }
-      const opened = (await ctx.callAction('project', 'loadProject', [savePath])) as {
-        ok: boolean;
-        error?: string;
-        result?: { success?: boolean; error?: string };
-      };
-      if (!opened.ok || opened.result?.success === false) {
-        fail('reopening the saved project failed', `  error: ${opened.result?.error ?? opened.error ?? 'unknown'}`);
-      }
-
-      // Switch BEFORE re-observing so both sides of the comparison are in the
-      // same form. Idempotent, so later reloads are a no-op.
-      await enableIdAgnosticModel(ctx);
-      await bumpEpoch(ctx);
-      reloadsDone += 1;
-      const res = await observeOnly(ctx, cursor);
-      note(`${tag} reload -> depth ${cursor} (undo ${res.undoLen}, redo ${res.redoLen})`);
-      assertInvariants(res, 'reload');
-      assertStacks('the persisted history did not come back intact', res);
-      if (res.verdict !== 'equal') {
-        await resolveMismatch(
-          'reopening the saved project did not restore the state it was saved at',
-          res.integrity,
-          res,
-        );
-      }
-      assertIntegrityDelta(res, 'reload');
-      record(res);
-      ctx.metric('reloads');
-    };
-
-    /**
-     * Run Repair as an additive move. It is a normal mutation as far as the
-     * model is concerned - it either pushes one snapshot-pair entry or nothing -
-     * so the same case analysis the mutate branch uses applies here.
-     */
-    const runRepair = async (tag: string): Promise<void> => {
-      const beforeUndo = undoLen;
-      const beforeRedo = redoLen;
-      const res = await step('mutate', 'repairProjectIntegrity', []);
-      const accepted = res.actionOk && res.commandSuccess !== false;
-      const pushed = res.undoLen - beforeUndo;
-      note(
-        `${tag} repairProjectIntegrity -> ${accepted ? 'ok' : 'rejected'} ` +
-          `(undo ${beforeUndo}->${res.undoLen}, redo ${beforeRedo}->${res.redoLen})`,
-      );
-      assertInvariants(res, 'repairProjectIntegrity');
-      if (!accepted) {
-        ctx.metric('rejected');
-        ctx.metric('rejected:repairProjectIntegrity');
-        record(res);
-        return;
-      }
-      if (pushed === 1) {
-        // Repair changed the project: it becomes the new top of the branch.
-        snapshotsTopChanged(res);
-        ctx.metric('repairs');
-        record(res);
-        return;
-      }
-      if (pushed !== 0) {
-        fail(`repair pushed ${pushed} undo entries (expected 0 or 1)`);
-      }
-      // No-op repair: nothing changed, so nothing may have changed.
-      ctx.metric('repairNoops');
-      if (res.redoLen === 0) top = cursor;
-      if (res.verdict !== 'equal') {
-        await resolveMismatch('a no-op Repair changed the project state', res.integrity, res);
-      }
-      record(res);
-    };
-
-    /** Shared bookkeeping for a move that pushed exactly one undo entry. */
-    const snapshotsTopChanged = (res: StepResponse): void => {
+    if (pushed === 1) {
       if (res.redoLen !== 0) {
-        fail('a successful Repair did not clear the redo stack');
-      }
-      cursor += 1;
-      top = cursor;
-      assertModel(res, 'Repair recorded its snapshot at an unexpected depth');
-      if (res.verdict !== 'recorded') {
-        fail(`the page did not record a snapshot for Repair (verdict=${res.verdict})`);
-      }
-    };
-
-    /** Should this iteration cross the save/reload boundary? */
-    const wantSaveReload = (): boolean => {
-      if (savesDone >= MAX_SAVE_RELOADS) return false;
-      // Only the newest `undo_persist_limit` entries survive the write, so a
-      // deeper history would come back truncated - skip rather than model it.
-      if (top > persistLimit) {
-        ctx.metric('savesSkippedDeepHistory');
-        return false;
-      }
-      return saveRng() < P_SAVE;
-    };
-
-    /**
-     * How wide a jump to take, or null for a single step. Drawn from the
-     * SEPARATE stream so the primary sequence is untouched.
-     */
-    const drawJump = (direction: 'undo' | 'redo'): number | null => {
-      const reach = direction === 'undo' ? cursor : top - cursor;
-      if (reach < 1) return null;
-      if (jumpRng() >= P_JUMP) return null;
-      // 1..reach. A 1-step jump is still worth taking: undo_to(0) reaches the
-      // same depth through a different backend path than undo().
-      return 1 + Math.floor(jumpRng() * reach);
-    };
-
-    /**
-     * Apply ONE mutation and run the whole case analysis on what the stacks did.
-     *
-     * Lifted out of the main loop unchanged so that REPLAY can drive it with a
-     * recorded action instead of a drawn one. The generator path still hands it
-     * exactly what `drawAction` returned, in the same place in the sequence, so
-     * no draw moved and every recorded repro seed is unaffected.
-     */
-    const applyMutation = async (action: FuzzAction, tag: string): Promise<void> => {
-      recorder.record({
-        kind: 'mutate',
-        action: action.action,
-        args: action.args,
-        label: action.label,
-      });
-      const beforeUndo = undoLen;
-      const beforeRedo = redoLen;
-      const res = await step('mutate', action.action, action.args);
-      const accepted = res.actionOk && res.commandSuccess !== false;
-      const pushed = res.undoLen - beforeUndo;
-      note(
-        `${tag} ${action.label} -> ${accepted ? 'ok' : 'rejected'} ` +
-          `(undo ${beforeUndo}->${res.undoLen}, redo ${beforeRedo}->${res.redoLen})`,
-      );
-
-      if (!accepted) {
-        ctx.metric('rejected');
-        ctx.metric(`rejected:${action.action}`);
-        if (pushed !== 0 || res.redoLen !== beforeRedo) {
-          fail(
-            'a REJECTED command changed the history stacks',
-            `  error: ${res.commandError ?? res.actionError ?? 'unknown'}\n` +
-              `  undo ${beforeUndo}->${res.undoLen}, redo ${beforeRedo}->${res.redoLen}`,
-          );
-        }
-        assertInvariants(res, `a rejected ${action.action}`);
-        assertModel(res, 'a rejected command moved the page model');
-        if (res.verdict !== 'equal') {
-          await resolveMismatch(
-            `a REJECTED command (${action.action}) mutated the project: ` +
-              `${res.commandError ?? res.actionError ?? 'unknown'}`,
-            res.integrity,
-            res,
-          );
-        }
-        assertIntegrityDelta(res, `a rejected ${action.action}`);
-        record(res);
-        return;
-      }
-
-      if (pushed === 1) {
-        if (res.redoLen !== 0) {
-          fail(
-            'a successful command did not clear the redo stack',
-            `  redo ${beforeRedo}->${res.redoLen} after ${action.label}`,
-          );
-        }
-        cursor += 1;
-        top = cursor;
-        assertInvariants(res, action.label);
-        assertModel(res, 'the page recorded the new snapshot at a different depth than Node expected');
-        if (res.verdict !== 'recorded') {
-          fail(`the page did not record a snapshot for a pushed entry (verdict=${res.verdict})`);
-        }
-        record(res);
-        ctx.metric('mutations');
-        ctx.metric(`op:${action.action}`);
-        return;
-      }
-
-      if (pushed !== 0) {
         fail(
-          `a single command pushed ${pushed} undo entries (expected 0 or 1)`,
-          `  after ${action.label}`,
-        );
-      }
-
-      // Succeeded without pushing an entry: a no-op command. It must not have
-      // touched the project; it MAY have cleared the redo stack.
-      ctx.metric('noops');
-      ctx.metric(`noop:${action.action}`);
-      if (res.undoLen >= historyLimit - 1) {
-        fail(
-          'the undo stack hit its history limit; FIFO trimming invalidates the model',
-          `  undoLen=${res.undoLen} limit=${historyLimit}`,
-        );
-      }
-      if (res.redoLen === 0) top = cursor;
-      else if (res.redoLen !== beforeRedo) {
-        fail(
-          'a no-op command changed the redo stack without clearing it',
+          'a successful command did not clear the redo stack',
           `  redo ${beforeRedo}->${res.redoLen} after ${action.label}`,
         );
       }
-      assertInvariants(res, `a no-op ${action.action}`);
-      assertModel(res, 'a no-op command moved the page model');
-      if (res.verdict !== 'equal') {
-        await resolveMismatch(
-          `a no-op command (${action.action}) changed the project state`,
-          res.integrity,
-          res,
-        );
+      cursor += 1;
+      top = cursor;
+      assertInvariants(res, action.label);
+      assertModel(res, 'the page recorded the new snapshot at a different depth than Node expected');
+      if (res.verdict !== 'recorded') {
+        fail(`the page did not record a snapshot for a pushed entry (verdict=${res.verdict})`);
       }
-      assertIntegrityDelta(res, `a no-op ${action.action}`);
       record(res);
-    };
-
-    /**
-     * Apply one recorded move.
-     *
-     * A history move whose precondition no longer holds is SKIPPED rather than
-     * failed, and a jump wider than the reach is CLAMPED to it. That rule is what
-     * makes an arbitrary subsequence of a trace runnable, which is what the
-     * shrinker needs: removing a mutation leaves the moves around it pointing at
-     * depths that no longer exist. Skipping asserts nothing, so it can never turn
-     * a failing candidate green by hiding something - it just declines to
-     * pretend a move was possible. Every skip is counted.
-     */
-    const applyTraceStep = async (traceStep: TraceStep, tag: string): Promise<void> => {
-      if (traceStep.kind === 'mutate') {
-        if (cursor >= maxDepth) {
-          ctx.metric('replaySkipped:mutate');
-          return;
-        }
-        await applyMutation(
-          { action: traceStep.action, args: traceStep.args, label: traceStep.label },
-          tag,
-        );
-        return;
-      }
-      if (traceStep.kind === 'repair') {
-        recorder.record({ kind: 'repair' });
-        await runRepair(tag);
-        return;
-      }
-      if (traceStep.kind === 'save') {
-        // Only the newest `undo_persist_limit` entries survive the write, and a
-        // save at depth 0 has no history to carry, so both are skips rather than
-        // failures - exactly as the generator path treats them.
-        if (top === 0 || top > persistLimit) {
-          ctx.metric('replaySkipped:save');
-          return;
-        }
-        recorder.record({ kind: 'save' });
-        await saveAndReload(tag);
-        return;
-      }
-      const back = traceStep.kind === 'undo' || traceStep.kind === 'undoTo';
-      const reach = back ? cursor : top - cursor;
-      if (reach < 1) {
-        ctx.metric(`replaySkipped:${traceStep.kind}`);
-        return;
-      }
-      const direction = back ? 'undo' : 'redo';
-      if (traceStep.kind === 'undo' || traceStep.kind === 'redo') {
-        recordMove(direction, null);
-        await walk(direction, tag);
-        return;
-      }
-      const steps = Math.min(traceStep.steps, reach);
-      if (steps !== traceStep.steps) ctx.metric('replayClamped:jump');
-      recordMove(direction, steps);
-      await walk(direction, tag, steps);
-    };
-
-    if (replay) {
-      ctx.setMetric('replaySteps', replay.steps.length);
-      for (let index = 0; index < replay.steps.length; index++) {
-        await applyTraceStep(replay.steps[index] as TraceStep, `T${index + 1}`);
-      }
+      ctx.metric('mutations');
+      ctx.metric(`op:${action.action}`);
+      return;
     }
 
-    // Zero when replaying: the trace supplies every move, and drawing more would
-    // make the replay something other than the run it came from.
-    const generatorIterations = replay ? 0 : iterations;
-    for (let iteration = 1; iteration <= generatorIterations; iteration++) {
-      const tag = `#${iteration}`;
-      // Drawn from the SECONDARY stream, and taken IN ADDITION to this
-      // iteration's normal move rather than instead of it: consuming the
-      // iteration would leave the run with fewer mutations than the same seed
-      // produced before, and the point of the secondary stream is that adding a
-      // feature does not move the primary numbers.
-      if (wantSaveReload()) {
-        recorder.record({ kind: 'save' });
-        await saveAndReload(tag);
-      }
-      const roll = ctx.rng();
-      let move: 'mutate' | 'undo' | 'redo' =
-        roll < P_MUTATE ? 'mutate' : roll < P_MUTATE + P_UNDO ? 'undo' : 'redo';
-      if (move === 'redo' && cursor >= top) move = cursor > 0 ? 'undo' : 'mutate';
-      if (move === 'undo' && cursor === 0) move = 'mutate';
-      if (move === 'mutate' && cursor >= maxDepth) move = 'undo';
-
-      if (move !== 'mutate') {
-        const jump = drawJump(move);
-        recordMove(move, jump);
-        await walk(move, tag, jump);
-        continue;
-      }
-      await applyMutation(drawAction(ctx, digest, weightedNames), tag);
+    if (pushed !== 0) {
+      fail(
+        `a single command pushed ${pushed} undo entries (expected 0 or 1)`,
+        `  after ${action.label}`,
+      );
     }
 
-    // Repair once, before the boundary crossing, so its entry is both persisted
-    // and walked by the final roundtrip. Skipped on a replay: the trace already
-    // contains whatever Repair the recorded run did, in the place it did it.
-    if (REPAIR_ENABLED && !replay) {
+    // Succeeded without pushing an entry: a no-op command. It must not have
+    // touched the project; it MAY have cleared the redo stack.
+    ctx.metric('noops');
+    ctx.metric(`noop:${action.action}`);
+    if (res.undoLen >= historyLimit - 1) {
+      fail(
+        'the undo stack hit its history limit; FIFO trimming invalidates the model',
+        `  undoLen=${res.undoLen} limit=${historyLimit}`,
+      );
+    }
+    if (res.redoLen === 0) top = cursor;
+    else if (res.redoLen !== beforeRedo) {
+      fail(
+        'a no-op command changed the redo stack without clearing it',
+        `  redo ${beforeRedo}->${res.redoLen} after ${action.label}`,
+      );
+    }
+    assertInvariants(res, `a no-op ${action.action}`);
+    assertModel(res, 'a no-op command moved the page model');
+    const resynced =
+      res.verdict !== 'equal' &&
+      (await resolveMismatch(
+        `a no-op command (${action.action}) changed the project state`,
+        res.integrity,
+        res,
+      ));
+    assertIntegrityDelta(res, `a no-op ${action.action}`, resynced);
+    record(res);
+  };
+
+  /**
+   * Apply one recorded move.
+   *
+   * A history move whose precondition no longer holds is SKIPPED rather than
+   * failed, and a jump wider than the reach is CLAMPED to it. That rule is what
+   * makes an arbitrary subsequence of a trace runnable, which is what the
+   * shrinker needs: removing a mutation leaves the moves around it pointing at
+   * depths that no longer exist. Skipping asserts nothing, so it can never turn
+   * a failing candidate green by hiding something - it just declines to
+   * pretend a move was possible. Every skip is counted.
+   */
+  const applyTraceStep = async (traceStep: TraceStep, tag: string): Promise<void> => {
+    if (traceStep.kind === 'mutate') {
+      if (cursor >= maxDepth) {
+        ctx.metric('replaySkipped:mutate');
+        return;
+      }
+      await applyMutation(
+        { action: traceStep.action, args: traceStep.args, label: traceStep.label },
+        tag,
+      );
+      return;
+    }
+    if (traceStep.kind === 'repair') {
       recorder.record({ kind: 'repair' });
-      await runRepair('repair');
+      await runRepair(tag);
+      return;
     }
-
-    // Cross the persistence boundary at least once per run, so the final
-    // unwind/rewind below walks a RESTORED stack rather than an in-memory one.
-    // Also skipped on a replay, and for the same reason: a shrink is allowed to
-    // remove the boundary crossing, and re-adding one here would make that
-    // candidate untestable.
-    if (!replay && savesDone === 0 && top > 0 && top <= persistLimit) {
+    if (traceStep.kind === 'save') {
+      // Only the newest `undo_persist_limit` entries survive the write, so a
+      // deeper history would come back truncated - skipped, exactly as
+      // `wantSaveReload` skips it on the generator path.
+      //
+      // NOT skipped at depth 0. The generator has no such guard, so a run can
+      // and does take the boundary on its first iteration; refusing it here
+      // made the replay of such a trace do no reload at all, which means no
+      // id-agnostic model and no RELOAD_RESOLVED_GEOMETRY - so the recorded
+      // failure did not reproduce and `pnpm agent:fuzz-shrink` reported the
+      // bug as fixed.
+      if (top > persistLimit) {
+        ctx.metric('replaySkipped:save');
+        return;
+      }
       recorder.record({ kind: 'save' });
-      await saveAndReload('boundary');
+      await saveAndReload(tag);
+      return;
     }
-
-    // Full roundtrip: unwind every entry, then replay every entry, verifying
-    // the recorded snapshot at each depth in both directions.
-    const summit = top;
-    while (cursor > 0) await walk('undo', 'unwind');
-    while (cursor < summit) await walk('redo', 'rewind');
-
-    if (cursor !== summit) fail(`roundtrip ended at depth ${cursor}, expected ${summit}`);
-
-    try {
-      fs.rmSync(saveDir, { recursive: true, force: true });
-    } catch {
-      // Best-effort: a leftover temp dir is not a scenario failure.
+    const back = traceStep.kind === 'undo' || traceStep.kind === 'undoTo';
+    const reach = back ? cursor : top - cursor;
+    if (reach < 1) {
+      ctx.metric(`replaySkipped:${traceStep.kind}`);
+      return;
     }
-
-    // A run that PASSED only writes a trace when asked to by name. Dropping one
-    // per green run would fill the artifacts dir with files nobody reads; naming
-    // a path is the signal that this particular run is wanted (recording a
-    // baseline, or capturing a trace to shrink against a future regression).
-    if (traceOut) {
-      const written = dumpTrace(null, traceOut);
-      if (written) ctx.log(`trace written to ${written} (${recorder.length} step(s))`);
+    const direction = back ? 'undo' : 'redo';
+    if (traceStep.kind === 'undo' || traceStep.kind === 'redo') {
+      recordMove(direction, null);
+      await walk(direction, tag);
+      return;
     }
-    ctx.setMetric('traceSteps', recorder.length);
-    ctx.setMetric('modelDepth', summit);
-    ctx.setMetric('maxDepth', deepest);
-    ctx.setMetric('snapshotBytesMax', maxBytes);
-    ctx.setMetric('historyLimit', historyLimit);
-    ctx.log(
-      `${replay ? `REPLAY of ${replayPath} (${replay.steps.length} recorded step(s)) ` : ''}` +
-      `fixture=${FIXTURE} stream=${STREAM_V2 ? 'v2' : 'v1'} swarm=${swarm.name} ` +
-        `(stripped ${strippedRows} inherited undo row(s)) seed=${ctx.seed}: ` +
-        `${ctx.metrics.mutations ?? 0} mutations, ${ctx.metrics.undos ?? 0} undos, ` +
-        `${ctx.metrics.redos ?? 0} redos, ${ctx.metrics.rejected ?? 0} rejected, ` +
-        `${ctx.metrics.noops ?? 0} no-ops; max depth ${deepest}; snapshot <=${maxBytes}B`,
-    );
-  },
-};
+    const steps = Math.min(traceStep.steps, reach);
+    if (steps !== traceStep.steps) ctx.metric('replayClamped:jump');
+    recordMove(direction, steps);
+    await walk(direction, tag, steps);
+  };
+
+  if (replay) {
+    ctx.setMetric('replaySteps', replay.steps.length);
+    for (let index = 0; index < replay.steps.length; index++) {
+      await applyTraceStep(replay.steps[index] as TraceStep, `T${index + 1}`);
+    }
+  }
+
+  // Zero when replaying: the trace supplies every move, and drawing more would
+  // make the replay something other than the run it came from.
+  const generatorIterations = replay ? 0 : iterations;
+  for (let iteration = 1; iteration <= generatorIterations; iteration++) {
+    const tag = `#${iteration}`;
+    // Drawn from the SECONDARY stream, and taken IN ADDITION to this
+    // iteration's normal move rather than instead of it: consuming the
+    // iteration would leave the run with fewer mutations than the same seed
+    // produced before, and the point of the secondary stream is that adding a
+    // feature does not move the primary numbers.
+    if (wantSaveReload()) {
+      recorder.record({ kind: 'save' });
+      await saveAndReload(tag);
+    }
+    const roll = ctx.rng();
+    let move: 'mutate' | 'undo' | 'redo' =
+      roll < P_MUTATE ? 'mutate' : roll < P_MUTATE + P_UNDO ? 'undo' : 'redo';
+    if (move === 'redo' && cursor >= top) move = cursor > 0 ? 'undo' : 'mutate';
+    if (move === 'undo' && cursor === 0) move = 'mutate';
+    if (move === 'mutate' && cursor >= maxDepth) move = 'undo';
+
+    if (move !== 'mutate') {
+      const jump = drawJump(move);
+      recordMove(move, jump);
+      await walk(move, tag, jump);
+      continue;
+    }
+    await applyMutation(drawAction(ctx, digest, weightedNames), tag);
+  }
+
+  // Repair once, before the boundary crossing, so its entry is both persisted
+  // and walked by the final roundtrip. Skipped on a replay: the trace already
+  // contains whatever Repair the recorded run did, in the place it did it.
+  if (REPAIR_ENABLED && !replay) {
+    recorder.record({ kind: 'repair' });
+    await runRepair('repair');
+  }
+
+  // Cross the persistence boundary at least once per run, so the final
+  // unwind/rewind below walks a RESTORED stack rather than an in-memory one.
+  // Also skipped on a replay, and for the same reason: a shrink is allowed to
+  // remove the boundary crossing, and re-adding one here would make that
+  // candidate untestable.
+  if (!replay && savesDone === 0 && top > 0 && top <= persistLimit) {
+    recorder.record({ kind: 'save' });
+    await saveAndReload('boundary');
+  }
+
+  // Full roundtrip: unwind every entry, then replay every entry, verifying
+  // the recorded snapshot at each depth in both directions.
+  const summit = top;
+  while (cursor > 0) await walk('undo', 'unwind');
+  while (cursor < summit) await walk('redo', 'rewind');
+
+  if (cursor !== summit) fail(`roundtrip ended at depth ${cursor}, expected ${summit}`);
+
+  // A run that PASSED only writes a trace when asked to by name. Dropping one
+  // per green run would fill the artifacts dir with files nobody reads; naming
+  // a path is the signal that this particular run is wanted (recording a
+  // baseline, or capturing a trace to shrink against a future regression).
+  if (traceOut) {
+    const written = dumpTrace(null, traceOut);
+    if (written) ctx.log(`trace written to ${written} (${recorder.length} step(s))`);
+  }
+  ctx.setMetric('traceSteps', recorder.length);
+  ctx.setMetric('modelDepth', summit);
+  ctx.setMetric('maxDepth', deepest);
+  ctx.setMetric('snapshotBytesMax', maxBytes);
+  ctx.setMetric('historyLimit', historyLimit);
+  ctx.log(
+    `${replay ? `REPLAY of ${replayPath} (${replay.steps.length} recorded step(s)) ` : ''}` +
+    `fixture=${FIXTURE} stream=${STREAM_V2 ? 'v2' : 'v1'} swarm=${swarm.name} ` +
+      `(stripped ${strippedRows} inherited undo row(s)) seed=${ctx.seed}: ` +
+      `${ctx.metrics.mutations ?? 0} mutations, ${ctx.metrics.undos ?? 0} undos, ` +
+      `${ctx.metrics.redos ?? 0} redos, ${ctx.metrics.rejected ?? 0} rejected, ` +
+      `${ctx.metrics.noops ?? 0} no-ops; max depth ${deepest}; snapshot <=${maxBytes}B`,
+  );
+}

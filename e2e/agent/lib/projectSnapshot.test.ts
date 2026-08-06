@@ -10,7 +10,10 @@ import {
   describeDiffs,
   diffJson,
   diffSnapshots,
+  isBug8ShotSwapOnly,
   isListPermutationOnly,
+  isShotIdentitySwap,
+  shotSetDelta,
 } from './projectSnapshot';
 
 // The canonical serializer and its normalization rules are tested in
@@ -234,5 +237,154 @@ describe('SAVE_HEALING_MUTATIONS', () => {
     );
 
     expect(classified.unknown).toHaveLength(1);
+  });
+});
+
+describe('shotSetDelta', () => {
+  const snapshot = (sections: { id: number; uuids: string[] }[]): string =>
+    canonicalJson({
+      project: {
+        sections: sections.map((section) => ({
+          id: section.id,
+          shots: section.uuids.map((uuid) => ({ uuid })),
+        })),
+      },
+      stations: [],
+    });
+
+  it('is empty when the same shots are present on both sides', () => {
+    const same = snapshot([{ id: 1, uuids: ['a', 'b'] }]);
+
+    expect(shotSetDelta(same, same)).toEqual([]);
+    // Reordered within the section: the same shots moved, none was lost.
+    expect(shotSetDelta(same, snapshot([{ id: 1, uuids: ['b', 'a'] }]))).toEqual([]);
+  });
+
+  it('names the shot that went missing and the one that took its place', () => {
+    const deltas = shotSetDelta(
+      snapshot([{ id: 1, uuids: ['a', 'b'] }]),
+      snapshot([{ id: 1, uuids: ['a', 'c'] }]),
+    );
+
+    expect(deltas).toEqual([
+      { sectionId: 1, missing: ['b'], extra: ['c'], expectedCount: 2, actualCount: 2 },
+    ]);
+  });
+
+  it('counts a section that VANISHED as its whole shot list lost', () => {
+    // The regression this guards: iterating only `expected` and skipping ids
+    // absent from `actual` reported NO delta for a run that lost a section, and
+    // the caller then printed "shot identity is IDENTICAL on both sides".
+    const deltas = shotSetDelta(
+      snapshot([{ id: 1, uuids: ['a'] }, { id: 7, uuids: ['x', 'y'] }]),
+      snapshot([{ id: 1, uuids: ['a'] }]),
+    );
+
+    expect(deltas).toEqual([
+      { sectionId: 7, missing: ['x', 'y'], extra: [], expectedCount: 2, actualCount: 0 },
+    ]);
+  });
+
+  it('counts a section that APPEARED as its whole shot list gained', () => {
+    const deltas = shotSetDelta(
+      snapshot([{ id: 1, uuids: ['a'] }]),
+      snapshot([{ id: 1, uuids: ['a'] }, { id: 7, uuids: ['x'] }]),
+    );
+
+    expect(deltas).toEqual([
+      { sectionId: 7, missing: [], extra: ['x'], expectedCount: 0, actualCount: 1 },
+    ]);
+  });
+});
+
+describe('isBug8ShotSwapOnly', () => {
+  // Section id 4 sits at index 1, so its diffs are `project.sections[1]....`.
+  const expected = canonicalJson({
+    project: {
+      sections: [
+        { id: 2, shots: [{ uuid: 'p' }] },
+        { id: 4, shots: [{ uuid: 'a' }, { uuid: 'b' }] },
+      ],
+    },
+    stations: [],
+  });
+  const actual = canonicalJson({
+    project: {
+      sections: [
+        { id: 2, shots: [{ uuid: 'p' }] },
+        { id: 4, shots: [{ uuid: 'a' }, { uuid: 'c' }] },
+      ],
+    },
+    stations: [],
+  });
+  const deltas = shotSetDelta(expected, actual);
+
+  it('agrees with isShotIdentitySwap on the uuid shape', () => {
+    expect(isShotIdentitySwap(deltas)).toBe(true);
+  });
+
+  it('is true when every remaining diff is inside the swapped section', () => {
+    const diffs = [
+      { path: 'project.sections[1].shots[1].uuid', expected: '"b"', actual: '"c"' },
+      { path: 'project.sections[1].shots[1].length', expected: '5', actual: '6' },
+    ];
+
+    expect(isBug8ShotSwapOnly(diffs, deltas, expected)).toBe(true);
+  });
+
+  it('is true for the geometry the swapped section feeds', () => {
+    const diffs = [
+      { path: 'stations[3].coordinates.x', expected: '1', actual: '2' },
+      { path: 'project.section_offsets.4', expected: '[0,0]', actual: '[1,1]' },
+      { path: 'stats.total_length', expected: '10', actual: '9' },
+    ];
+
+    expect(isBug8ShotSwapOnly(diffs, deltas, expected)).toBe(true);
+  });
+
+  it('is FALSE when something outside the swapped section also differs', () => {
+    // The whole point: a lost comment in ANOTHER section rode along with a
+    // genuine swap, was reported as bug 8, and was resynced away unseen.
+    expect(
+      isBug8ShotSwapOnly(
+        [{ path: 'project.sections[0].shots[0].comment', expected: '"note"', actual: 'null' }],
+        deltas,
+        expected,
+      ),
+    ).toBe(false);
+    expect(
+      isBug8ShotSwapOnly(
+        [{ path: 'project.loop_closures.length', expected: '2', actual: '1' }],
+        deltas,
+        expected,
+      ),
+    ).toBe(false);
+    // A count moving is structural, and bug 8 does not move counts.
+    expect(
+      isBug8ShotSwapOnly([{ path: 'stats.total_shots', expected: '9', actual: '8' }], deltas, expected),
+    ).toBe(false);
+  });
+
+  it('is false when the uuid shape is not a single swap', () => {
+    const lost = shotSetDelta(
+      expected,
+      canonicalJson({
+        project: {
+          sections: [
+            { id: 2, shots: [{ uuid: 'p' }] },
+            { id: 4, shots: [{ uuid: 'a' }] },
+          ],
+        },
+        stations: [],
+      }),
+    );
+
+    expect(isBug8ShotSwapOnly([], lost, expected)).toBe(false);
+    expect(isBug8ShotSwapOnly([], [], expected)).toBe(false);
+  });
+
+  it('is false when the swapped section is not in the snapshot it was given', () => {
+    expect(isBug8ShotSwapOnly([], deltas, '{"project":{"sections":[]}}')).toBe(false);
+    expect(isBug8ShotSwapOnly([], deltas, 'not json')).toBe(false);
   });
 });
