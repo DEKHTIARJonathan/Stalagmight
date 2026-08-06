@@ -812,6 +812,13 @@ pub(super) struct Diff {
 const ABSENT: &str = "<absent>";
 /// Diffs collected before the walk gives up. Enough to classify and to read.
 const MAX_DIFFS: usize = 60;
+/// The walk collects ONE more than it reports.
+///
+/// That one extra entry is the whole difference between "there are exactly
+/// `MAX_DIFFS` differences" and "there are at least `MAX_DIFFS` and the rest
+/// were never looked at" - and the classifiers can only speak for what they
+/// saw, so the caller has to be able to tell those apart. See `diff_snapshots`.
+const WALK_DIFFS: usize = MAX_DIFFS + 1;
 
 fn numbers_equal(a: f64, b: f64) -> bool {
     if a == b {
@@ -845,7 +852,7 @@ fn diff_values(
     path: &str,
     out: &mut Vec<Diff>,
 ) {
-    if out.len() >= MAX_DIFFS {
+    if out.len() >= WALK_DIFFS {
         return;
     }
     let label = if path.is_empty() { "<root>" } else { path };
@@ -868,7 +875,7 @@ fn diff_values(
                         actual: right.map_or_else(|| ABSENT.to_string(), show),
                     }),
                 }
-                if out.len() >= MAX_DIFFS {
+                if out.len() >= WALK_DIFFS {
                     return;
                 }
             }
@@ -883,7 +890,7 @@ fn diff_values(
             }
             for index in 0..a.len().min(b.len()) {
                 diff_values(&a[index], &b[index], &format!("{path}[{index}]"), out);
-                if out.len() >= MAX_DIFFS {
+                if out.len() >= WALK_DIFFS {
                     return;
                 }
             }
@@ -976,19 +983,37 @@ fn collect_drift(
 }
 
 pub(super) fn diff_snapshots(expected: &str, actual: &str) -> Vec<Diff> {
+    diff_snapshots_capped(expected, actual).0
+}
+
+/// The same walk, plus whether the cap HID differences.
+///
+/// Every caller that decides a mismatch is EXPLAINED needs the second half.
+/// `classify` runs over the returned list, and "nothing unexplained is left" is
+/// only a statement about that list - on a mismatch wider than the cap the walk
+/// stops inside whichever root key it is in (they are visited in sorted order),
+/// so damage in a later one is not merely unclassified, it was never seen.
+/// Concluding "all explained" there is the vacuous green this whole module
+/// exists to prevent.
+pub(super) fn diff_snapshots_capped(expected: &str, actual: &str) -> (Vec<Diff>, bool) {
     let (Ok(left), Ok(right)) = (
         serde_json::from_str::<serde_json::Value>(expected),
         serde_json::from_str::<serde_json::Value>(actual),
     ) else {
-        return vec![Diff {
-            path: "<unparseable>".to_string(),
-            expected: expected.chars().take(80).collect(),
-            actual: actual.chars().take(80).collect(),
-        }];
+        return (
+            vec![Diff {
+                path: "<unparseable>".to_string(),
+                expected: expected.chars().take(80).collect(),
+                actual: actual.chars().take(80).collect(),
+            }],
+            false,
+        );
     };
     let mut out = Vec::new();
     diff_values(&left, &right, "", &mut out);
-    out
+    let truncated = out.len() > MAX_DIFFS;
+    out.truncate(MAX_DIFFS);
+    (out, truncated)
 }
 
 pub(super) fn describe_diffs(diffs: &[Diff]) -> String {
@@ -4146,7 +4171,25 @@ impl Fuzzer {
             self.expect_derived(depth, &format!("{what} (stored state EXACT)"), false);
             return;
         }
-        let mut diffs = diff_snapshots(&expected, &actual);
+        let (mut diffs, truncated) = diff_snapshots_capped(&expected, &actual);
+        // A mismatch wider than the cap is NEVER classified as explained. Every
+        // tolerate path below - attributable, accumulated, all-classified, the
+        // three structural signatures - reads "nothing unexplained is left" off
+        // a list that stops at MAX_DIFFS, and the walk visits root keys in
+        // sorted order, so a wide `project.*` difference can consume the whole
+        // budget before `stations` or `stats` is looked at once. The classifiers
+        // can only speak for what they saw; this is where that is enforced.
+        if truncated {
+            self.fail(
+                &format!("{what} did not restore the state recorded at depth {depth}"),
+                &format!(
+                    "  the difference is WIDER than the diff cap ({MAX_DIFFS} path(s)): what \
+                     follows is a PREFIX, and nothing past it was examined - so no classifier \
+                     can account for this mismatch, and none is allowed to try.\n{}",
+                    describe_diffs(&diffs)
+                ),
+            );
+        }
         if diffs.is_empty() {
             self.outcome.float_noise += 1;
             // Remember WHAT the tolerance absorbed, and how much. This is the
@@ -8185,6 +8228,54 @@ fn the_fuzzer_is_deterministic() {
 //
 // They are `#[ignore]`d like every other red test. DELETE THE IGNORE WHEN THE
 // BUG IS FIXED and each becomes its regression guard.
+
+/// The diff cap REPORTS itself.
+///
+/// Every tolerate path in `expect_state` reads "nothing unexplained is left" off
+/// the returned list, so the difference between "exactly `MAX_DIFFS`
+/// differences" and "at least that many, and the rest were never walked" is the
+/// difference between a sound green and a vacuous one. The walk collects
+/// `MAX_DIFFS + 1` so the caller can tell them apart; this pins both directions,
+/// because an off-by-one either way silently disarms the guard.
+#[test]
+fn the_diff_cap_says_when_it_hid_something() {
+    let _config = isolated_config();
+    let object_with = |count: usize, from: usize| -> String {
+        let fields: Vec<String> = (0..count)
+            .map(|i| format!("\"k{i}\":{}", i + from))
+            .collect();
+        format!("{{{}}}", fields.join(","))
+    };
+
+    // Fewer differences than the cap: complete, and it says so.
+    let (few, truncated) = diff_snapshots_capped(&object_with(3, 0), &object_with(3, 100));
+    assert_eq!(few.len(), 3);
+    assert!(!truncated, "3 differences is not a truncation");
+
+    // EXACTLY the cap: still complete. This is the boundary an off-by-one turns
+    // into a false alarm, which would make every wide-but-classified mismatch
+    // fail and the guard get relaxed again.
+    let (exact, truncated) =
+        diff_snapshots_capped(&object_with(MAX_DIFFS, 0), &object_with(MAX_DIFFS, 100_000));
+    assert_eq!(exact.len(), MAX_DIFFS);
+    assert!(
+        !truncated,
+        "exactly {MAX_DIFFS} differences fit in the cap and must not read as truncated"
+    );
+
+    // One more than the cap: the list is a prefix, and nothing may be concluded
+    // from it. The returned list is still capped, so callers that only report
+    // are unaffected.
+    let (over, truncated) = diff_snapshots_capped(
+        &object_with(MAX_DIFFS + 1, 0),
+        &object_with(MAX_DIFFS + 1, 100_000),
+    );
+    assert_eq!(over.len(), MAX_DIFFS, "the reported list stays capped");
+    assert!(
+        truncated,
+        "one difference past the cap must report as truncated"
+    );
+}
 
 /// FINDING 14, red: an insert leaves a merged partner metres out of alignment,
 /// and the app's own `#[cfg(test)]` assert says so from inside

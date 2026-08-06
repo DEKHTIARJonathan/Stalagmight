@@ -18,6 +18,7 @@ import * as path from 'path';
 import { agentBuildMode, binaryPathFor } from '../lib/env';
 import { checkDisplayAvailable, startXvfb, type XvfbHandle } from '../lib/display';
 import { checkBuildFreshness, buildApp } from './lib/build';
+import { DEFAULT_XVFB_DISPLAYS, parseDisplayPool } from './lib/displayPool';
 import { findFreePort, isPidAlive, recordPid, reapPidsFromFile, waitForPortListening } from './lib/procs';
 import { SessionCore, gitHead, safeMtime } from './lib/sessionCore';
 import { attachBrowser, verifyReadiness, E2EHooksMissingError } from './lib/sessionShared';
@@ -33,49 +34,24 @@ export type {
 
 const BASE_PORT = Number.parseInt(process.env.STALAGMIGHT_AGENT_BASE_PORT ?? '4544', 10);
 /**
- * Displays `startXvfb` will try, in order, taking the first that comes up.
+ * The Xvfb pool for this session, and whether the caller pinned it.
  *
- * `STALAGMIGHT_AGENT_DISPLAYS` (comma-separated, e.g. ":87") narrows the pool,
- * which is what makes CONCURRENT sessions safe: the default first-that-starts
- * walk relies on Xvfb losing the O_EXCL race on an already-locked display and
- * exiting inside the 250 ms probe window, so two sessions launched together can
- * both believe they own `:89`. A parallel runner gives each worker a pool of
- * exactly one display, keyed off its index, and the collision cannot happen.
- * Five is still the ceiling - that is how many displays the DEFAULT pool has.
- *
- * Narrowing it also spends the retries this walk would otherwise have, so a
- * pinned pool is validated (`parseDisplayPool`) and its failure is terminal
- * (`start`): a session that cannot get its one display must say so, never
- * quietly take the user's desktop instead.
+ * The pool itself and its validation live in `lib/displayPool.ts`; both are
+ * read HERE at call time, never cached at import - the same rule
+ * `agentBuildMode()` follows in `e2e/lib/env.ts`, and for the same two reasons:
+ * a runner may set the variable after this module's graph has loaded, and a bad
+ * value must surface as a failed `start()` rather than as an uncaught throw
+ * that takes down whatever imported us (the MCP server imports this file).
  */
-const DEFAULT_XVFB_DISPLAYS = [':89', ':88', ':87', ':86', ':85'];
-
-/**
- * Parse the pool, rejecting anything that would silently shrink it. A pinned
- * pool has NO retry left - that is the point - so an entry that is not a `:N`
- * display, or a value that filters down to nothing, must stop the session
- * rather than leave `startXvfb` with fewer candidates than the caller thinks it
- * gave it.
- */
-function parseDisplayPool(raw: string | undefined): string[] {
-  if (raw === undefined) return DEFAULT_XVFB_DISPLAYS;
-  const entries = raw.split(',').map((entry) => entry.trim()).filter(Boolean);
-  if (entries.length === 0) {
-    throw new Error(`STALAGMIGHT_AGENT_DISPLAYS is set but empty ("${raw}"); unset it to use the default pool`);
-  }
-  const malformed = entries.filter((entry) => !/^:\d+$/.test(entry));
-  if (malformed.length > 0) {
-    throw new Error(
-      `STALAGMIGHT_AGENT_DISPLAYS has malformed display(s) ${JSON.stringify(malformed)}; ` +
-        `entries must look like ":87"`,
-    );
-  }
-  return entries;
+function xvfbDisplays(): string[] {
+  return parseDisplayPool(process.env.STALAGMIGHT_AGENT_DISPLAYS);
 }
 
-const XVFB_DISPLAYS = parseDisplayPool(process.env.STALAGMIGHT_AGENT_DISPLAYS);
 /** True when the caller pinned the pool, i.e. there is deliberately no fallback. */
-const DISPLAY_POOL_PINNED = process.env.STALAGMIGHT_AGENT_DISPLAYS !== undefined;
+function displayPoolPinned(): boolean {
+  return process.env.STALAGMIGHT_AGENT_DISPLAYS !== undefined;
+}
+
 const REAP_COMM_NAMES = ['stalagmight', 'tauri-driver', 'WebKitWebDriver'];
 
 export class AppSession extends SessionCore {
@@ -130,10 +106,13 @@ export class AppSession extends SessionCore {
     } else {
       // 1920x1080 screen so window-size testing has headroom up to full HD
       // (the app window starts smaller; resizing is capped by the screen).
-      this.xvfb = await startXvfb(XVFB_DISPLAYS, '1920x1080x24');
+      // Resolved HERE, inside start(), so a malformed pool fails this session
+      // instead of throwing while some importer's module graph is still loading.
+      const pool = xvfbDisplays();
+      this.xvfb = await startXvfb(pool, '1920x1080x24');
       if (this.xvfb) {
         this.display = this.xvfb.display;
-      } else if (DISPLAY_POOL_PINNED) {
+      } else if (displayPoolPinned()) {
         // A pinned pool means a parallel runner handed this session ONE display
         // and is relying on it, so there is nothing to walk on to. Falling
         // through to the real display here would put the app window on the
@@ -141,7 +120,7 @@ export class AppSession extends SessionCore {
         // whole run - the precise thing the pool exists to prevent.
         this.state = 'idle';
         throw new Error(
-          `Xvfb could not start on ${XVFB_DISPLAYS.join(', ')} and STALAGMIGHT_AGENT_DISPLAYS pins the ` +
+          `Xvfb could not start on ${pool.join(', ')} and STALAGMIGHT_AGENT_DISPLAYS pins the ` +
             `pool, so there is no other display to try. Usually a leaked Xvfb (or its stale lock) still ` +
             `holds the slot: check 'ls /tmp/.X*-lock' and 'pgrep -a Xvfb', or unset ` +
             `STALAGMIGHT_AGENT_DISPLAYS to use the default ${DEFAULT_XVFB_DISPLAYS.length}-display pool.`,
@@ -331,7 +310,7 @@ export class AppSession extends SessionCore {
         // Already gone.
       }
       // Escalate: nothing reaps a wedged Xvfb across runs, and a leaked one
-      // holds its display slot from the fixed XVFB_DISPLAYS pool forever.
+      // holds its display slot from the small display pool forever.
       if (xvfbPid) {
         await new Promise((r) => setTimeout(r, 300));
         if (isPidAlive(xvfbPid)) {

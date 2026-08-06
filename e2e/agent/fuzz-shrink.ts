@@ -41,6 +41,7 @@ import {
   describeSteps,
   failureSignature,
   readTrace,
+  restoreTraceEnv,
   sameSignature,
   writeTrace,
   type FailureSignature,
@@ -95,8 +96,15 @@ async function main(): Promise<number> {
 
   // The env the recording ran under is part of the repro: tolerance, fixture,
   // stream and the persistence knobs all change what a replay does. Restore it
-  // rather than inheriting whatever shell the shrink was started from.
-  for (const [key, value] of Object.entries(trace.env)) process.env[key] = value;
+  // rather than inheriting whatever shell the shrink was started from - through
+  // the recorder's own prefix filter, because a trace is a file from wherever
+  // the user got it and this process goes on to invoke cargo and launch the app.
+  const { refused } = restoreTraceEnv(trace.env);
+  if (refused.length > 0) {
+    process.stdout.write(
+      `REFUSED ${refused.length} env key(s) the recorder would never write: ${refused.join(', ')}\n`,
+    );
+  }
 
   const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'stalagmight-shrink-'));
   const candidatePath = path.join(scratch, 'candidate.json');

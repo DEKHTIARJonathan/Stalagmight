@@ -32,7 +32,7 @@
  * so it works as a one-off gate too.
  */
 import * as path from 'path';
-import { readTrace } from './lib/fuzzTrace';
+import { readTrace, restoreTraceEnv } from './lib/fuzzTrace';
 
 interface Args {
   name: string;
@@ -102,14 +102,26 @@ async function main(): Promise<void> {
     // before `./scenarios` is imported below, because the fuzz scenarios freeze
     // FIXTURE / ALLOW_KNOWN_BUGS / REPAIR / DUMP_HISTORY into module-level
     // consts at import time; a restore after that would be a no-op.
-    const restored = Object.entries(trace.env).filter(([key, value]) => process.env[key] !== value);
-    for (const [key, value] of Object.entries(trace.env)) process.env[key] = value;
+    //
+    // Through `restoreTraceEnv`, which applies the recorder's own prefix filter:
+    // a trace is a file from wherever the user got it, and this process goes on
+    // to invoke cargo and launch the app.
+    const changed = new Set(
+      Object.entries(trace.env)
+        .filter(([key, value]) => process.env[key] !== value)
+        .map(([key]) => key),
+    );
+    const { applied, refused } = restoreTraceEnv(trace.env);
     process.env.STALAGMIGHT_FUZZ_REPLAY = tracePath;
+    const restored = applied.filter(([key]) => changed.has(key));
     process.stdout.write(
       `replaying ${trace.steps.length} step(s) recorded by ${trace.scenario} on ${trace.fixture} ` +
         `(seed ${trace.seed}, rev ${trace.gitRev.slice(0, 12)})\n` +
         (restored.length > 0
           ? `  restored from the trace: ${restored.map(([key, value]) => `${key}=${value}`).join(' ')}\n`
+          : '') +
+        (refused.length > 0
+          ? `  REFUSED ${refused.length} env key(s) the recorder would never write: ${refused.join(', ')}\n`
           : ''),
     );
   }

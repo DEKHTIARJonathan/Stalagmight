@@ -369,6 +369,17 @@ const SHOT_SWAP_DERIVED_PATHS: readonly RegExp[] = [
   /^stats\.(total_length|min_depth|max_depth|penetration_distance)$/,
 ];
 
+/**
+ * The only SECTION-level fields a wrong-shot delete can move. Both are uuid
+ * anchors into the section's own shot list (`gauge_shot_uuid` /
+ * `gauge_neighbour_uuid`), so deleting a shot can dangle them.
+ *
+ * Everything else on a section - `name`, `color`, `date`, `surveyor`,
+ * `quality`, `direction`, `reverse_parity` - is untouched by a shot delete, and
+ * a blanket `sections[N].*` allowance swallowed all of them.
+ */
+const SHOT_SWAP_SECTION_FIELDS = 'gauge_shot_uuid|gauge_neighbour_uuid';
+
 /** Position of the section with `sectionId` in a snapshot's `project.sections`. */
 function sectionIndexById(snapshotJson: string, sectionId: number): number | null {
   let parsed: unknown;
@@ -386,6 +397,44 @@ function sectionIndexById(snapshotJson: string, sectionId: number): number | nul
 }
 
 /**
+ * Did the shots that SURVIVED the swap keep their relative order?
+ *
+ * Set difference cannot see a reorder, and order is not cosmetic here: the
+ * loader renumbers `Shot::id` to `section_id * FEATURE_ID_STRIDE +
+ * sequence_order` (`persistence/sqlite/read.rs`), so a reordered list comes back
+ * with different ids and every persisted entry naming one addresses a different
+ * shot. A reorder riding along with a genuine swap must not be absorbed by it.
+ */
+function survivingShotsReordered(delta: ShotSetDelta, expectedJson: string, actualJson: string): boolean {
+  const uuidsOf = (json: string): string[] | null => {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(json);
+    } catch {
+      return null;
+    }
+    const project = isPlainObject(parsed) ? parsed.project : null;
+    if (!isPlainObject(project) || !Array.isArray(project.sections)) return null;
+    const section = project.sections.find(
+      (candidate) => isPlainObject(candidate) && Number(candidate.id) === delta.sectionId,
+    );
+    if (!isPlainObject(section) || !Array.isArray(section.shots)) return null;
+    return section.shots.map((shot) =>
+      isPlainObject(shot) && typeof shot.uuid === 'string' ? shot.uuid : '<no-uuid>',
+    );
+  };
+  const expected = uuidsOf(expectedJson);
+  const actual = uuidsOf(actualJson);
+  // Unreadable on either side is not "unchanged" - fail closed.
+  if (expected === null || actual === null) return true;
+  const missing = new Set(delta.missing);
+  const extra = new Set(delta.extra);
+  const left = expected.filter((uuid) => !missing.has(uuid));
+  const right = actual.filter((uuid) => !extra.has(uuid));
+  return left.length !== right.length || left.some((uuid, index) => uuid !== right[index]);
+}
+
+/**
  * Is the WHOLE mismatch one wrong-shot swap, and nothing else?
  *
  * `isShotIdentitySwap` answers a question about shot uuids alone. That is not
@@ -395,25 +444,35 @@ function sectionIndexById(snapshotJson: string, sectionId: number): number | nul
  * swallowed all of it, then resynced the model onto the corrupted state so it
  * was never reported at any later depth either.
  *
- * So the swap must also ACCOUNT for every remaining diff: each one is either
- * inside the section the swap happened in, or in the geometry that section's
- * shots feed. This is the same standard `isListPermutationOnly` holds itself
- * to - normalize the known shape away, then require the rest to be silent.
+ * So the swap must also ACCOUNT for every remaining diff, and "account for" is
+ * kept as narrow as the defect: the swapped section's SHOTS, its two uuid gauge
+ * anchors (which a delete can dangle), and the geometry those shots feed.
+ * Nothing else - not the section's own name/colour/date, not another section,
+ * not a closure, not a count. This is the same standard `isListPermutationOnly`
+ * holds itself to: normalize the known shape away, then require the rest to be
+ * silent.
+ *
+ * `actualJson` is needed for the order check, which set difference cannot make.
  */
 export function isBug8ShotSwapOnly(
   diffs: readonly SnapshotDiff[],
   deltas: readonly ShotSetDelta[],
   expectedJson: string,
+  actualJson: string,
 ): boolean {
   if (!isShotIdentitySwap(deltas)) return false;
   const delta = deltas[0];
   if (delta === undefined) return false;
   const index = sectionIndexById(expectedJson, delta.sectionId);
   if (index === null) return false;
-  const inSwappedSection = new RegExp(`^project\\.sections\\[${index}\\](\\.|$)`);
+  if (survivingShotsReordered(delta, expectedJson, actualJson)) return false;
+  const section = `project\\.sections\\[${index}\\]`;
+  const inSwappedShots = new RegExp(`^${section}\\.shots(\\.|\\[|$)`);
+  const swappedSectionAnchor = new RegExp(`^${section}\\.(${SHOT_SWAP_SECTION_FIELDS})$`);
   return diffs.every(
     (diff) =>
-      inSwappedSection.test(diff.path) ||
+      inSwappedShots.test(diff.path) ||
+      swappedSectionAnchor.test(diff.path) ||
       SHOT_SWAP_DERIVED_PATHS.some((pattern) => pattern.test(diff.path)),
   );
 }

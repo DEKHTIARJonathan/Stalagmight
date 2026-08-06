@@ -296,6 +296,14 @@ const FIXTURE = process.env.STALAGMIGHT_FUZZ_FIXTURE || DEFAULT_FIXTURE;
 
 /** Diffs shown in a failure message (more are counted, not printed). */
 const SHOWN_DIFFS = 6;
+/**
+ * Differences the slow re-compare collects before it gives up.
+ *
+ * A capped list can only ever support a NEGATIVE conclusion. `checkSnapshot`
+ * asks for one more than this and refuses to tolerate anything - including a
+ * bug-8-shaped swap - when the extra one comes back.
+ */
+const DIFF_LIMIT = 400;
 /** Actions shown in the failure message's history tail. */
 const HISTORY_TAIL = 14;
 /** `STALAGMIGHT_FUZZ_DUMP_HISTORY=1` prints the WHOLE iteration history instead. */
@@ -457,8 +465,15 @@ function checkSnapshot(
   bug8Allowed: boolean,
 ): SnapshotCheck {
   if (expected === actual) return EQUAL;
-  const all = diffSnapshots(expected, actual, 400);
+  // ONE MORE than we report: `truncated` is what tells "exactly DIFF_LIMIT
+  // differences" from "at least that many, and the rest were never looked at".
+  // The walk visits root keys in sorted order, so a wide `project.*` difference
+  // can spend the whole budget before `stations` or `stats` is examined once -
+  // and every tolerance below reads "nothing unexplained is left" off this list.
+  const all = diffSnapshots(expected, actual, DIFF_LIMIT + 1);
   if (all.length === 0) return { ...EQUAL, floatNoise: true };
+  const truncated = all.length > DIFF_LIMIT;
+  if (truncated) all.length = DIFF_LIMIT;
 
   let diffs = all;
   let attributed: KnownAsymmetry[] = [];
@@ -470,6 +485,21 @@ function checkSnapshot(
     }
   }
   if (diffs.length === 0) {
+    // The ATTRIBUTED shape is what the caller RESYNCS on, so it may only be
+    // returned for a complete list. Every path we saw was attributable, but on
+    // a truncated diff the ones past the cap were never looked at.
+    if (truncated) {
+      return {
+        equal: false,
+        floatNoise: false,
+        attributed,
+        text:
+          `  every path in the first ${DIFF_LIMIT} was a documented save/reload change, but the\n` +
+          '  diff was CAPPED there - so this is a statement about a PREFIX, not about the mismatch.',
+        onlyKnown: false,
+        asymmetries: [],
+      };
+    }
     return {
       equal: false,
       floatNoise: false,
@@ -482,6 +512,12 @@ function checkSnapshot(
 
   const lines = [describeDiffs(diffs.slice(0, SHOWN_DIFFS))];
   if (diffs.length > SHOWN_DIFFS) lines.push(`  ...and ${diffs.length - SHOWN_DIFFS} more differing path(s)`);
+  if (truncated) {
+    lines.push(
+      `  THE DIFF WAS CAPPED at ${DIFF_LIMIT} path(s): everything above is a PREFIX and nothing`,
+      '  past it was examined, so no classifier can speak for this mismatch and none is allowed to.',
+    );
+  }
 
   // Shot identity by uuid, which survives the renumbering, is the only thing
   // that can tell "the same shots moved" from "a different shot was deleted".
@@ -514,7 +550,12 @@ function checkSnapshot(
   // WHOLE remaining mismatch. The uuid predicate alone says nothing about the
   // other unknown diffs, so a lost comment in another section riding along with
   // a genuine swap was tolerated, resynced away and never seen again.
-  if (bug8Allowed && classified.unknown.length > 0 && isBug8ShotSwapOnly(classified.unknown, deltas, expected)) {
+  if (
+    bug8Allowed &&
+    !truncated &&
+    classified.unknown.length > 0 &&
+    isBug8ShotSwapOnly(classified.unknown, deltas, expected, actual)
+  ) {
     lines.push(`  KNOWN OPEN APP BUG [${BUG_8_WRONG_SHOT.id}]: ${BUG_8_WRONG_SHOT.description}`);
     return {
       equal: false,
@@ -531,7 +572,7 @@ function checkSnapshot(
     floatNoise: false,
     attributed,
     text: lines.join('\n'),
-    onlyKnown: classified.unknown.length === 0,
+    onlyKnown: !truncated && classified.unknown.length === 0,
     asymmetries: classified.asymmetries,
   };
 }

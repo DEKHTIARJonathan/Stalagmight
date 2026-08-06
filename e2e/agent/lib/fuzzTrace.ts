@@ -94,6 +94,38 @@ export interface FuzzTrace {
 /** Env knobs that change what a run does, and so belong in a trace header. */
 const RECORDED_ENV_PREFIXES = ['STALAGMIGHT_FUZZ_', 'STALAGMIGHT_PERSIST_FUZZ_'];
 
+/**
+ * Restore a trace's recorded environment - filtered to the SAME prefixes the
+ * recorder writes.
+ *
+ * The filter has to exist on BOTH sides. `recordedEnv` applying it is a
+ * producer-side convention; a trace is a file, and a file arrives from wherever
+ * the reader got it - the docs tell people to attach one to a bug report and
+ * shrink it. Restoring its keys verbatim would let that file set `PATH`,
+ * `NODE_OPTIONS`, `LD_PRELOAD` or `RUSTFLAGS` for a run that then invokes cargo,
+ * launches the app, and (in `fuzz-matrix`) spreads the whole environment into
+ * every child process.
+ *
+ * Returns what it applied and what it refused, so the caller can print both:
+ * a silently dropped knob would be a replay that quietly is not the recording.
+ */
+export function restoreTraceEnv(recorded: Readonly<Record<string, string>>): {
+  applied: [string, string][];
+  refused: string[];
+} {
+  const applied: [string, string][] = [];
+  const refused: string[] = [];
+  for (const [key, value] of Object.entries(recorded)) {
+    if (RECORDED_ENV_PREFIXES.some((prefix) => key.startsWith(prefix))) {
+      process.env[key] = value;
+      applied.push([key, value]);
+    } else {
+      refused.push(key);
+    }
+  }
+  return { applied, refused };
+}
+
 function recordedEnv(): Record<string, string> {
   const out: Record<string, string> = {};
   for (const [key, value] of Object.entries(process.env)) {

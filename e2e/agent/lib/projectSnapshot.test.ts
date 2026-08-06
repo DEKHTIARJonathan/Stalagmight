@@ -40,11 +40,19 @@ describe('diffJson', () => {
     expect(diffJson({}, { a: 1 })[0]).toEqual({ path: 'a', expected: '<absent>', actual: '1' });
   });
 
-  it('honours the diff limit', () => {
+  it('honours the diff limit, and asking for one more REVEALS the overflow', () => {
     const expected = { a: 1, b: 2, c: 3, d: 4 };
     const actual = { a: 9, b: 9, c: 9, d: 9 };
 
     expect(diffJson(expected, actual, 2)).toHaveLength(2);
+    // How the scenarios detect truncation: they request LIMIT + 1 and treat a
+    // list longer than LIMIT as "this is a prefix, tolerate nothing". Both
+    // directions matter - at exactly the limit the list is complete, and an
+    // off-by-one either way silently disarms that guard.
+    expect(diffJson(expected, actual, 4)).toHaveLength(4);
+    expect(diffJson(expected, actual, 5)).toHaveLength(4);
+    expect(diffJson(expected, actual, 3 + 1)).toHaveLength(4);
+    expect(diffJson(expected, actual, 2 + 1).length > 2).toBe(true);
   });
 
   it('returns nothing for equal structures', () => {
@@ -299,47 +307,81 @@ describe('shotSetDelta', () => {
 
 describe('isBug8ShotSwapOnly', () => {
   // Section id 4 sits at index 1, so its diffs are `project.sections[1]....`.
-  const expected = canonicalJson({
-    project: {
-      sections: [
-        { id: 2, shots: [{ uuid: 'p' }] },
-        { id: 4, shots: [{ uuid: 'a' }, { uuid: 'b' }] },
-      ],
-    },
-    stations: [],
-  });
-  const actual = canonicalJson({
-    project: {
-      sections: [
-        { id: 2, shots: [{ uuid: 'p' }] },
-        { id: 4, shots: [{ uuid: 'a' }, { uuid: 'c' }] },
-      ],
-    },
-    stations: [],
-  });
+  const snapshot = (sections: { id: number; uuids: string[]; extra?: Record<string, unknown> }[]): string =>
+    canonicalJson({
+      project: {
+        sections: sections.map((section) => ({
+          id: section.id,
+          shots: section.uuids.map((uuid) => ({ uuid })),
+          ...section.extra,
+        })),
+      },
+      stations: [],
+    });
+
+  const expected = snapshot([
+    { id: 2, uuids: ['p'] },
+    { id: 4, uuids: ['a', 'b'] },
+  ]);
+  // One shot swapped for another: 'b' gone, 'c' present, count unchanged.
+  const actual = snapshot([
+    { id: 2, uuids: ['p'] },
+    { id: 4, uuids: ['a', 'c'] },
+  ]);
   const deltas = shotSetDelta(expected, actual);
+  // A diff has to be present for the predicate to have anything to account for;
+  // an empty list makes `.every()` vacuously true and tests nothing.
+  const theSwapItself = { path: 'project.sections[1].shots[1].uuid', expected: '"b"', actual: '"c"' };
 
   it('agrees with isShotIdentitySwap on the uuid shape', () => {
     expect(isShotIdentitySwap(deltas)).toBe(true);
   });
 
-  it('is true when every remaining diff is inside the swapped section', () => {
+  it('is true when every remaining diff is in the swapped section SHOTS', () => {
     const diffs = [
-      { path: 'project.sections[1].shots[1].uuid', expected: '"b"', actual: '"c"' },
+      theSwapItself,
       { path: 'project.sections[1].shots[1].length', expected: '5', actual: '6' },
+      { path: 'project.sections[1].shots[0].comment', expected: 'null', actual: '"x"' },
     ];
 
-    expect(isBug8ShotSwapOnly(diffs, deltas, expected)).toBe(true);
+    expect(isBug8ShotSwapOnly(diffs, deltas, expected, actual)).toBe(true);
+  });
+
+  it('is true for the swapped section gauge anchors a delete can dangle', () => {
+    const diffs = [
+      theSwapItself,
+      { path: 'project.sections[1].gauge_shot_uuid', expected: '"b"', actual: 'null' },
+      { path: 'project.sections[1].gauge_neighbour_uuid', expected: '"a"', actual: 'null' },
+    ];
+
+    expect(isBug8ShotSwapOnly(diffs, deltas, expected, actual)).toBe(true);
   });
 
   it('is true for the geometry the swapped section feeds', () => {
     const diffs = [
+      theSwapItself,
       { path: 'stations[3].coordinates.x', expected: '1', actual: '2' },
       { path: 'project.section_offsets.4', expected: '[0,0]', actual: '[1,1]' },
       { path: 'stats.total_length', expected: '10', actual: '9' },
     ];
 
-    expect(isBug8ShotSwapOnly(diffs, deltas, expected)).toBe(true);
+    expect(isBug8ShotSwapOnly(diffs, deltas, expected, actual)).toBe(true);
+  });
+
+  it('is FALSE for another SECTION-level field of the swapped section', () => {
+    // A shot delete moves the section's shots and its uuid anchors. It does not
+    // rename the section, recolour it or flip its parity - a blanket
+    // `sections[N].*` allowance swallowed all of those.
+    for (const field of ['name', 'color', 'date', 'surveyor', 'quality', 'direction', 'reverse_parity']) {
+      expect(
+        isBug8ShotSwapOnly(
+          [theSwapItself, { path: `project.sections[1].${field}`, expected: '"before"', actual: '"after"' }],
+          deltas,
+          expected,
+          actual,
+        ),
+      ).toBe(false);
+    }
   });
 
   it('is FALSE when something outside the swapped section also differs', () => {
@@ -347,44 +389,68 @@ describe('isBug8ShotSwapOnly', () => {
     // genuine swap, was reported as bug 8, and was resynced away unseen.
     expect(
       isBug8ShotSwapOnly(
-        [{ path: 'project.sections[0].shots[0].comment', expected: '"note"', actual: 'null' }],
+        [theSwapItself, { path: 'project.sections[0].shots[0].comment', expected: '"note"', actual: 'null' }],
         deltas,
         expected,
+        actual,
       ),
     ).toBe(false);
     expect(
       isBug8ShotSwapOnly(
-        [{ path: 'project.loop_closures.length', expected: '2', actual: '1' }],
+        [theSwapItself, { path: 'project.loop_closures.length', expected: '2', actual: '1' }],
         deltas,
         expected,
+        actual,
       ),
     ).toBe(false);
     // A count moving is structural, and bug 8 does not move counts.
     expect(
-      isBug8ShotSwapOnly([{ path: 'stats.total_shots', expected: '9', actual: '8' }], deltas, expected),
+      isBug8ShotSwapOnly(
+        [theSwapItself, { path: 'stats.total_shots', expected: '9', actual: '8' }],
+        deltas,
+        expected,
+        actual,
+      ),
     ).toBe(false);
   });
 
-  it('is false when the uuid shape is not a single swap', () => {
-    const lost = shotSetDelta(
-      expected,
-      canonicalJson({
-        project: {
-          sections: [
-            { id: 2, shots: [{ uuid: 'p' }] },
-            { id: 4, shots: [{ uuid: 'a' }] },
-          ],
-        },
-        stations: [],
-      }),
-    );
+  it('is FALSE when the surviving shots were REORDERED as well', () => {
+    // Set difference cannot see a reorder, and order decides the ids the loader
+    // hands out (section_id * FEATURE_ID_STRIDE + sequence_order), so a reorder
+    // riding along with a swap must not be absorbed by it. Three shots, because
+    // a swap that leaves only one survivor has no order to change.
+    const before = snapshot([
+      { id: 2, uuids: ['p'] },
+      { id: 4, uuids: ['a', 'b', 'd'] },
+    ]);
+    // 'b' -> 'c' (the swap) AND 'a'/'d' exchanged (the reorder riding along).
+    const reordered = snapshot([
+      { id: 2, uuids: ['p'] },
+      { id: 4, uuids: ['d', 'c', 'a'] },
+    ]);
+    const reorderDeltas = shotSetDelta(before, reordered);
+    // Same swap, survivors left in place: the tolerance still applies.
+    const inOrder = snapshot([
+      { id: 2, uuids: ['p'] },
+      { id: 4, uuids: ['a', 'c', 'd'] },
+    ]);
 
-    expect(isBug8ShotSwapOnly([], lost, expected)).toBe(false);
-    expect(isBug8ShotSwapOnly([], [], expected)).toBe(false);
+    expect(isShotIdentitySwap(reorderDeltas)).toBe(true);
+    expect(isBug8ShotSwapOnly([theSwapItself], reorderDeltas, before, reordered)).toBe(false);
+    expect(isBug8ShotSwapOnly([theSwapItself], shotSetDelta(before, inOrder), before, inOrder)).toBe(true);
+  });
+
+  it('is false when the uuid shape is not a single swap', () => {
+    const lost = shotSetDelta(expected, snapshot([{ id: 2, uuids: ['p'] }, { id: 4, uuids: ['a'] }]));
+
+    expect(isBug8ShotSwapOnly([theSwapItself], lost, expected, actual)).toBe(false);
+    expect(isBug8ShotSwapOnly([theSwapItself], [], expected, actual)).toBe(false);
   });
 
   it('is false when the swapped section is not in the snapshot it was given', () => {
-    expect(isBug8ShotSwapOnly([], deltas, '{"project":{"sections":[]}}')).toBe(false);
-    expect(isBug8ShotSwapOnly([], deltas, 'not json')).toBe(false);
+    expect(isBug8ShotSwapOnly([theSwapItself], deltas, '{"project":{"sections":[]}}', actual)).toBe(false);
+    expect(isBug8ShotSwapOnly([theSwapItself], deltas, 'not json', actual)).toBe(false);
+    // Unreadable ACTUAL is not "unchanged order" either - fail closed.
+    expect(isBug8ShotSwapOnly([theSwapItself], deltas, expected, 'not json')).toBe(false);
   });
 });

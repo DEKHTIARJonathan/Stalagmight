@@ -8,7 +8,7 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
   TRACE_VERSION,
@@ -16,6 +16,7 @@ import {
   describeSteps,
   failureSignature,
   readTrace,
+  restoreTraceEnv,
   sameSignature,
   writeTrace,
 } from './fuzzTrace';
@@ -179,6 +180,67 @@ describe('describeSteps', () => {
       '  1. createShot(s=3,append)',
       '  2. undoTo(2 step(s))',
       '  3. save',
+    ]);
+  });
+});
+
+describe('restoreTraceEnv', () => {
+  const OWNED = ['STALAGMIGHT_FUZZ_TEST_KNOB', 'STALAGMIGHT_PERSIST_FUZZ_TEST_KNOB', 'STALAGMIGHT_OTHER_TEST'];
+  const saved = new Map<string, string | undefined>();
+
+  beforeEach(() => {
+    for (const key of OWNED) {
+      saved.set(key, process.env[key]);
+      delete process.env[key];
+    }
+  });
+  afterEach(() => {
+    for (const key of OWNED) {
+      const value = saved.get(key);
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  });
+
+  it('applies the knobs the recorder writes', () => {
+    const { applied, refused } = restoreTraceEnv({
+      STALAGMIGHT_FUZZ_TEST_KNOB: 'a',
+      STALAGMIGHT_PERSIST_FUZZ_TEST_KNOB: 'b',
+    });
+
+    expect(process.env.STALAGMIGHT_FUZZ_TEST_KNOB).toBe('a');
+    expect(process.env.STALAGMIGHT_PERSIST_FUZZ_TEST_KNOB).toBe('b');
+    expect(applied).toHaveLength(2);
+    expect(refused).toEqual([]);
+  });
+
+  it('REFUSES every key outside those prefixes, and says which', () => {
+    // A trace is a file from wherever the user got it, and the process that
+    // reads it goes on to invoke cargo and launch the app. The recorder's
+    // prefix filter is a producer-side convention; this is the boundary.
+    const before = { PATH: process.env.PATH, NODE_OPTIONS: process.env.NODE_OPTIONS };
+
+    const { applied, refused } = restoreTraceEnv({
+      PATH: '/evil',
+      NODE_OPTIONS: '--require /tmp/pwn.js',
+      LD_PRELOAD: '/tmp/pwn.so',
+      STALAGMIGHT_AGENT_RELEASE: '1',
+      STALAGMIGHT_OTHER_TEST: 'x',
+      STALAGMIGHT_FUZZ_TEST_KNOB: 'kept',
+    });
+
+    expect(process.env.PATH).toBe(before.PATH);
+    expect(process.env.NODE_OPTIONS).toBe(before.NODE_OPTIONS);
+    expect(process.env.LD_PRELOAD).toBeUndefined();
+    expect(process.env.STALAGMIGHT_OTHER_TEST).toBeUndefined();
+    expect(process.env.STALAGMIGHT_FUZZ_TEST_KNOB).toBe('kept');
+    expect(applied.map(([key]) => key)).toEqual(['STALAGMIGHT_FUZZ_TEST_KNOB']);
+    expect(refused).toEqual([
+      'PATH',
+      'NODE_OPTIONS',
+      'LD_PRELOAD',
+      'STALAGMIGHT_AGENT_RELEASE',
+      'STALAGMIGHT_OTHER_TEST',
     ]);
   });
 });

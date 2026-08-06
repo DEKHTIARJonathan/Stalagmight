@@ -535,6 +535,15 @@ const REPAIR_ENABLED = process.env.STALAGMIGHT_FUZZ_REPAIR === '1';
 
 /** Diffs shown in a failure message (more are counted, not printed). */
 const SHOWN_DIFFS = 6;
+/**
+ * Differences the slow re-compare collects before it gives up.
+ *
+ * A cap is necessary (a whole-project divergence would otherwise build a list
+ * the size of the project), but a capped list can only ever support a NEGATIVE
+ * conclusion. `checkSnapshot` asks for one more than this and refuses to
+ * tolerate anything when the extra one comes back.
+ */
+const DIFF_LIMIT = 200;
 /** Actions shown in the failure message's history tail. */
 const HISTORY_TAIL = 12;
 /**
@@ -577,8 +586,18 @@ function checkSnapshot(expected: string, actual: string, attributable: readonly 
   if (expected === actual) return EQUAL;
   // Geometry is re-derived rather than copied on every undo/redo, so a
   // coordinate whose true value is 0 can come back as different femtometre dust.
-  const all = diffSnapshots(expected, actual, 200);
+  //
+  // ONE MORE than we report, so `truncated` can tell "exactly SHOWN_DIFF_LIMIT
+  // differences" from "at least that many, and the rest were never looked at".
+  // The distinction decides whether this mismatch may be tolerated at all: the
+  // walk visits root keys in sorted order, so a wide `project.*` difference can
+  // spend the whole budget before `stations` or `stats` is examined once, and
+  // "classifyDiffs left nothing unknown" would then be a statement about a
+  // prefix rather than about the mismatch.
+  const all = diffSnapshots(expected, actual, DIFF_LIMIT + 1);
   if (all.length === 0) return { ...EQUAL, floatNoise: true };
+  const truncated = all.length > DIFF_LIMIT;
+  if (truncated) all.length = DIFF_LIMIT;
 
   // SUBTRACT the paths a save or a reload is documented to change before
   // classifying the rest. Without this a real bug found after a save reads as a
@@ -593,6 +612,21 @@ function checkSnapshot(expected: string, actual: string, attributable: readonly 
     }
   }
   if (diffs.length === 0) {
+    // The ATTRIBUTED shape is what the caller RESYNCS on, so it may only be
+    // returned for a complete list. Every path we saw was attributable, but on
+    // a truncated diff the ones past the cap were never looked at.
+    if (truncated) {
+      return {
+        equal: false,
+        floatNoise: false,
+        attributed,
+        text:
+          `  every path in the first ${DIFF_LIMIT} was a documented save/reload change, but the\n` +
+          '  diff was CAPPED there - so this is a statement about a PREFIX, not about the mismatch.',
+        onlyKnown: false,
+        asymmetries: [],
+      };
+    }
     return {
       equal: false,
       floatNoise: false,
@@ -605,6 +639,12 @@ function checkSnapshot(expected: string, actual: string, attributable: readonly 
 
   const lines = [describeDiffs(diffs.slice(0, SHOWN_DIFFS))];
   if (diffs.length > SHOWN_DIFFS) lines.push(`  ...and ${diffs.length - SHOWN_DIFFS} more differing path(s)`);
+  if (truncated) {
+    lines.push(
+      `  THE DIFF WAS CAPPED at ${DIFF_LIMIT} path(s): everything above is a PREFIX and nothing`,
+      '  past it was examined, so no classifier can speak for this mismatch and none is allowed to.',
+    );
+  }
   // A shot list that differs field-by-field cannot say whether the same shots
   // moved or a DIFFERENT shot was removed. uuid survives a save/reload, so it
   // answers that - and the answer is the difference between drift and data loss.
@@ -624,7 +664,7 @@ function checkSnapshot(expected: string, actual: string, attributable: readonly 
   // A shifted list reads as dozens of unrelated value diffs at every index past
   // the move. Prove that shape structurally before falling back to per-path
   // classification, so it is reported as the one thing it is.
-  if (attributed.length === 0 && isListPermutationOnly(expected, actual, LOOP_CLOSURES_PATH)) {
+  if (!truncated && attributed.length === 0 && isListPermutationOnly(expected, actual, LOOP_CLOSURES_PATH)) {
     lines.push('  (every difference above is explained by project.loop_closures being REORDERED:');
     lines.push('   same closures, same ids, same metrics, different positions)');
     lines.push(`  KNOWN OPEN APP BUG [${LOOP_CLOSURE_REORDER.id}]: ${LOOP_CLOSURE_REORDER.description}`);
@@ -647,7 +687,7 @@ function checkSnapshot(expected: string, actual: string, attributable: readonly 
     floatNoise: false,
     attributed,
     text: lines.join('\n'),
-    onlyKnown: classified.unknown.length === 0,
+    onlyKnown: !truncated && classified.unknown.length === 0,
     asymmetries: classified.asymmetries,
   };
 }
