@@ -186,7 +186,7 @@ export async function routeOpenedFile(
       if (!speleoReadOnly) {
         // Every non-SpeleoDB cause is one safe click from fixed, so it's a
         // choice, not an error: the import-blocked prompt offers the switch
-        // (Survey mode and/or the Measured view) and CONTINUES this import,
+        // (Survey mode and/or the Raw Data View) and CONTINUES this import,
         // or abandons it. `cause` picks the wording; mode wins when both
         // apply because its switch also drops the view. The dialog owns the
         // pending telemetry source from here (complete-on-switch /
@@ -202,7 +202,7 @@ export async function routeOpenedFile(
       if (nonSurveyMode) {
         message = 'Switch to Survey mode and acquire the SpeleoDB write lock to import.';
       } else if (closureAdjusted) {
-        message = 'Switch to the Measured view and acquire the SpeleoDB write lock to import.';
+        message = 'Switch to the Raw Data View and acquire the SpeleoDB write lock to import.';
       } else {
         message = 'Acquire the SpeleoDB write lock to import.';
       }

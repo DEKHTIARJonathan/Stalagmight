@@ -1244,12 +1244,12 @@
     "importBlocked": {
       "title": "Importing DMP",
       "body": "Switch to Survey mode for import since Plan and Export modes are read-only.",
-      "bodyView": "Switch to the Measured view for import since the Closure-adjusted view is read-only.",
+      "bodyView": "Switch to the Raw Data View for import since the Closures Computed View is read-only.",
       "switchToSurvey": "Switch to Survey",
-      "switchToMeasured": "Switch to Measured",
+      "switchToMeasured": "Switch to Raw Data View",
       "stayInPlan": "Stay in Plan",
       "stayInExport": "Stay in Export",
-      "stayInAdjusted": "Stay in Closure-adjusted"
+      "stayInAdjusted": "Stay in Closures Computed View"
     },
     "launchOpenConfirm": {
       "title": "Open this file?",
@@ -1985,10 +1985,10 @@
     "title": "Display options",
     "geometry": {
       "groupLabel": "Geometry",
-      "measured": "Measured",
-      "closureAdjusted": "Closure-adjusted",
+      "measured": "Raw Data View",
+      "closureAdjusted": "Closures Computed View",
       "measuredDescription": "Raw measured survey positions.",
-      "closureAdjustedDescription": "Loop-closure-corrected positions (read-only).",
+      "closureAdjustedDescription": "Loop-closure-corrected positions - read-only.",
       "noClosures": "No loop closures to adjust"
     },
     "spacing": {
@@ -2258,10 +2258,10 @@
       "collapsed": "by {{source}}"
     },
     "geometry": {
-      "adjustedBadge": "Closure-adjusted · read-only",
+      "adjustedBadge": "Closures Computed View · read-only",
       "computing": "Computing closures…",
       "computingReadOnly": "Computing Closures - Read Only",
-      "computeFailed": "Couldn't compute the closure-adjusted view; showing measured geometry."
+      "computeFailed": "Couldn't compute the Closures Computed View; showing the Raw Data View."
     },
     "toasts": {
       "stationsHidden": "Enable 'Stations' in the Display menu to interact with station markers",
@@ -2903,13 +2903,13 @@
             "description": "An open project is always in one of three modes. Only Survey can edit; Plan and Export are read-only, and mutating tools are hidden there rather than greyed out.",
             "descriptionItems": [
               "Survey: edit geometry, sections, and shots.",
-              "Plan: gas planning over the closure-adjusted map.",
+              "Plan: gas planning over the Closures Computed View.",
               "Export: frame and export an image of the survey."
             ]
           },
           "geometry": {
-            "title": "Measured vs Closure-Adjusted",
-            "description": "Measured shows the raw survey. Closure-adjusted shows the least-squares solve across loop closures, and is read-only. Plan and Export force it. Available only when the project has eligible closures."
+            "title": "Raw Data vs Closures Computed",
+            "description": "Raw Data View shows the raw survey and stays editable. Closures Computed View shows the least-squares solve across loop closures and is read-only. Plan and Export force it. Available only when the project has eligible closures."
           },
           "tools": {
             "title": "Tool Palette",

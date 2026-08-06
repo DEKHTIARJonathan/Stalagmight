@@ -65,7 +65,7 @@ Stalagmight is a desktop application for processing underwater cave survey data.
 - 2D plan-view map with satellite imagery
 - Section management (create, edit, delete, merge)
 - Jumps and reference shots for virtual survey connections
-- Loop closure detection, plus the non-destructive closure-adjusted display view ([closures.md](closures.md))
+- Loop closure detection, plus the non-destructive Closures Computed View ([closures.md](closures.md))
 - Multi-project workspace (Global View)
 - Export: PNG, SVG, PDF (map images), CSV, JSON, Ariane `.tml` (data)
 - Dive and gas planning as the Plan workspace mode, persisted to a `.plnx` sidecar
@@ -413,8 +413,8 @@ User Action → Command Dispatcher → Tauri IPC → Rust Executor
 An open project is worked in one of three top-level workspace modes, chosen from
 the `ModeCarousel` in the middle of the toolbar (`uiStore.appMode`): **Survey**,
 **Plan**, **Export**. Survey is the editable workspace. Plan and Export force the
-read-only closure-adjusted map (on a project with no eligible closures the
-geometry falls back to measured; the modes are read-only regardless - gating keys
+read-only Closures Computed View (on a project with no eligible closures the
+geometry falls back to the Raw Data View; the modes are read-only regardless - gating keys
 off `appMode`, not the geometry), so the left Sections dock and every
 geometry-mutating tool are Survey-only; selection, inspection and measurement stay
 available in all three.

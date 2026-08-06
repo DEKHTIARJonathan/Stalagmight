@@ -36,7 +36,7 @@ in determines how you write it, and picking wrong is the most common rework.
 | [app-modes.md](app-modes.md) | Survey / Plan / Export modes, and the read-only contract every mutation path has to check. |
 | [saving.md](saving.md) | Atomic save (`.stalx.tmp` then rename), auto-save, undo persistence, and the deferred-import save contract. |
 | [undo-redo.md](undo-redo.md) | Command-pattern undo: two-phase capture, `UndoData` variants, batch and non-undoable commands, persistence, lock ordering. |
-| [closures.md](closures.md) | Loop closure as a non-destructive display mode: measured vs closure-adjusted, the weighted least-squares solve, co-location. |
+| [closures.md](closures.md) | Loop closure as a non-destructive display mode: Raw Data View vs Closures Computed View, the weighted least-squares solve, co-location. |
 | [inclination.md](inclination.md) | Stored pitch is +down; where each importer normalises, and what the v12 migration has to discard. |
 | [configuration.md](configuration.md) | `config.toml` reference - file locations, every section, logging. Ground truth is the `Config` struct. |
 | [ipc-typegen.md](ipc-typegen.md) | How the TypeScript IPC types are generated from Rust with `ts-rs`, and what must never be hand-edited. |

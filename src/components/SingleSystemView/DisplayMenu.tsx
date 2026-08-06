@@ -12,6 +12,8 @@ import {
   EyeIcon,
   MapIcon,
   LayersIcon,
+  LockIcon,
+  LockOpenIcon,
   MessageIcon,
   RulerIcon,
   SlidersIcon,
@@ -420,7 +422,8 @@ export default function DisplayMenu({
             </div>
 
             {/* Row 4: Geometry (single-select), full width. Survey-only - Plan/Export force the
-                read-only closure map, so flipping measured/adjusted there would fight the mode. */}
+                read-only closure map, so switching between the Raw Data View and the Closures
+                Computed View there would fight the mode. */}
             {appMode === 'survey' && (
             <div className="col-span-2 border-t border-border pt-3">
               <Category label={t('displayMenu.geometry.groupLabel')} icon={showIcons ? <RulerIcon size={14} /> : undefined}>
@@ -429,6 +432,7 @@ export default function DisplayMenu({
                   active={geometryMode === 'measured'}
                   onClick={() => setGeometryMode('measured', 'display-menu')}
                   testId="geometry-mode-measured"
+                  icon={showIcons ? <LockOpenIcon size={14} /> : undefined}
                 />
                 <Pill
                   label={t('displayMenu.geometry.closureAdjusted')}
@@ -437,6 +441,7 @@ export default function DisplayMenu({
                   title={!hasClosures ? t('displayMenu.geometry.noClosures') : ''}
                   onClick={() => setGeometryMode('closureAdjusted', 'display-menu')}
                   testId="geometry-mode-closureAdjusted"
+                  icon={showIcons ? <LockIcon size={14} /> : undefined}
                 />
               </Category>
               <p className="mt-1.5 text-xs text-text-secondary">

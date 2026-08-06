@@ -86,8 +86,8 @@ gate, self-tested by `pnpm lint:readonly-gates:test`) scans tracked non-test
   more files are exempt with a written reason.
 
 Two carve-outs are deliberate and trip neither rule. Undo/redo (toolbar buttons
-and keyboard shortcuts) gate on `appMode` alone, so they stay available in the
-closure-adjusted survey view and the SpeleoDB case is left to the backend
+and keyboard shortcuts) gate on `appMode` alone, so they stay available in
+Survey's Closures Computed View and the SpeleoDB case is left to the backend
 rejection. `ContextMenu`'s raw `geometryMode` check sits inside a branch already
 scoped to `appMode === 'survey'`, where it is equivalent.
 
@@ -104,7 +104,7 @@ above, because those may have just restored the real pre-focus dock state.
 Everything the mode forces is written with a plain `set()`, never through
 `setGeometryMode` / `toggleDetailPanel` / `toggleDataTable`. A mode-forced
 change is not a user action: routing it through those would persist the forced
-closure-adjusted view as the remembered geometry preference, or write a
+Closures Computed View as the remembered geometry preference, or write a
 forced-open dock into the saved panel layout. For the same reason `toggleDisplay`
 and `setGridSpacing` write to the saved config only in Survey; that, plus the
 entry snapshot, is what scopes Plan's Display changes to Plan.

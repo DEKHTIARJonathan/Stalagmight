@@ -100,8 +100,16 @@ export function MapTopLeftOverlay({
               data-testid="geometry-computing-spinner"
             />
           )}
+          {/* Closed padlock, exactly as the SpeleoDB badge above draws it: both
+              notices tell the user the same thing (editing is off), so they carry
+              the same glyph rather than one being text-only. Deliberately NOT on
+              the computing branch below - the spinner already owns that slot, and
+              a solve in progress is not itself the reason editing is off. */}
           {showClosureReadOnly && !showClosureComputing && (
-            <span className="text-accent font-medium">{t('map.geometry.adjustedBadge')}</span>
+            <>
+              <LockIcon size={13} />
+              <span className="text-accent font-medium">{t('map.geometry.adjustedBadge')}</span>
+            </>
           )}
           {showClosureComputing && (
             <span className="text-accent font-medium" data-testid="geometry-computing">

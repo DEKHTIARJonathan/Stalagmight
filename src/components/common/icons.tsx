@@ -702,6 +702,31 @@ export function LockIcon(props: IconProps) {
   );
 }
 
+/** Open padlock: the body is identical to `LockIcon`; the shackle has swung up
+ *  out of the body, so its right leg is gone and the arch is both raised and
+ *  tightened - center (10.5, 4) at r 2.5, against LockIcon's (10, 6) at r 3.
+ *  That lifts the arch's crown a full 1.5 units (3 -> 1.5), which is as high as
+ *  it goes: the band's outer edge tops out at cy - r - w/2 = 0.55, just inside
+ *  the 20-unit viewBox. The left leg lengthens to (8, 9)-(8, 4) to keep the
+ *  arch joined to the body top, and lands where the arch's flat left end
+ *  already is; the arch's right end at x 13 is exactly where LockIcon's right
+ *  leg stands, so the pair reads as the same shackle latched vs sprung at
+ *  14px. */
+export function LockOpenIcon(props: IconProps) {
+  return (
+    <BaseIcon {...props}>
+      {/* Body (identical to LockIcon) */}
+      <Bar x1={5} y1={9} x2={15} y2={9} />
+      <Bar x1={5} y1={17} x2={15} y2={17} />
+      <Bar x1={5} y1={9} x2={5} y2={17} />
+      <Bar x1={15} y1={9} x2={15} y2={17} />
+      {/* Shackle: hinged on the left, swung up and open on the right */}
+      <Bar x1={8} y1={9} x2={8} y2={4} />
+      <ArcBand cx={10.5} cy={4} r={2.5} a1={180} a2={360} />
+    </BaseIcon>
+  );
+}
+
 export function MessageIcon(props: IconProps) {
   // Hollow speech-bubble outline (band), rendered as a fill.
   return (
