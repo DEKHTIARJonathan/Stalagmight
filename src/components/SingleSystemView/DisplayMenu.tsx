@@ -12,6 +12,8 @@ import {
   EyeIcon,
   MapIcon,
   LayersIcon,
+  LockIcon,
+  LockOpenIcon,
   MessageIcon,
   RulerIcon,
   SlidersIcon,
@@ -429,6 +431,7 @@ export default function DisplayMenu({
                   active={geometryMode === 'measured'}
                   onClick={() => setGeometryMode('measured', 'display-menu')}
                   testId="geometry-mode-measured"
+                  icon={showIcons ? <LockOpenIcon size={14} /> : undefined}
                 />
                 <Pill
                   label={t('displayMenu.geometry.closureAdjusted')}
@@ -437,6 +440,7 @@ export default function DisplayMenu({
                   title={!hasClosures ? t('displayMenu.geometry.noClosures') : ''}
                   onClick={() => setGeometryMode('closureAdjusted', 'display-menu')}
                   testId="geometry-mode-closureAdjusted"
+                  icon={showIcons ? <LockIcon size={14} /> : undefined}
                 />
               </Category>
               <p className="mt-1.5 text-xs text-text-secondary">
