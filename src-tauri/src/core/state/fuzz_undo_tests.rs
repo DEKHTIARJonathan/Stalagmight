@@ -251,12 +251,18 @@
 //!
 //!   The MODEL GAP that made it unreadable is worth naming, because the fix is
 //!   one classifier: findings 3, 8 and 16 each have a CASCADE entry and finding
-//!   12 does not. `finding-8-cascade-...` is gated on `is_shot_identity_swap`,
+//!   12 did not. `finding-8-cascade-...` is gated on `is_shot_identity_swap`,
 //!   which finding 12 cannot satisfy - it changes a field, it does not move a
-//!   shot - so nothing absorbs the second measurement. A
-//!   `finding-12-cascade-...` keyed on `self.stale_corruption` plus a shot-field
-//!   path would classify it and let seed 10 back into `MULTI_CROSSING_SEEDS`.
-//!   Until that lands, seed 10 stays excluded BY NAME. Red test:
+//!   shot. LANDED post-#453 as `finding-12-cascade-stale-id-edits-already-
+//!   applied` (keyed on the walk-level `stale_corruption` flag plus a non-uuid
+//!   shot-field path), and it became URGENT then rather than optional: before
+//!   #453, finding 1's CreateSection-redo re-mint churned every re-measured
+//!   section's uuid set, so `is_shot_identity_swap` happened to absorb finding
+//!   12's re-measurements as finding-8 cascade hits. #453 fixed the re-mint,
+//!   the uuid sets started matching, and the corruption stood naked - the
+//!   uuid-swap PROXY is gone, so every classifier that leaned on it
+//!   under-matches from #453 on. Seed 10's named exclusion from
+//!   `MULTI_CROSSING_SEEDS` can be revisited now the cascade exists. Red test:
 //!   `unwinding_past_a_stale_id_edit_leaves_no_shot_holding_it`.
 //!
 //! * TRIAGED OUT, and not a defect in the app: the METAMORPHIC engine's
@@ -1215,6 +1221,10 @@ struct MoveCtx<'a> {
     /// Whether the shot ids the consumed entry addresses still address the
     /// shots they were recorded against - measured BEFORE the move ran.
     stale: StaleTargets,
+    /// Has a stale persisted id ALREADY been measured hitting the wrong shot in
+    /// this run (findings 8/12/16)? Arms the finding-12 cascade, mirroring
+    /// `heal_reverted` for findings 1/11.
+    stale_corruption: bool,
     /// Sections finding 16 has duplicated a shot uuid in.
     corrupted: &'a BTreeSet<SectionId>,
     /// Section ids in the order they appear in the RECORDED snapshot, so a diff
@@ -1648,6 +1658,25 @@ const CLASSIFIERS: &[Classifier] = &[
             (ctx.command_is("update_shot") || ctx.command_is("set_shot_kind"))
                 && ctx.stale.target == Staleness::Collides
                 && shot_field_path(&d.path).is_some_and(|field| field != "uuid")
+        },
+    },
+    // FINDING 12, CASCADING - the model gap the header's observations named:
+    // findings 3, 8 and 16 had cascade entries and finding 12 did not, because
+    // finding-8's `is_shot_identity_swap` gate happened to absorb its
+    // re-measurements THROUGH finding 1's uuid churn (the CreateSection redo
+    // re-mint made every re-measured section read as "different shots
+    // present"). #423 (PR #453) fixed the re-mint, the uuid sets now match, and
+    // finding 12's field damage stood naked. Like the other cascades, the
+    // corruption sits in the PROJECT, not the entry, so every comparison after
+    // the measured hit re-reads it. Gated on the MEASURED walk-level flag,
+    // never the damage shape alone, and a `uuid`-path diff still FAILS - a
+    // future identity regression must not be able to hide under this id.
+    // Ordered after the precise classifier so a first-hand hit still attributes
+    // to it.
+    Classifier {
+        id: "finding-12-cascade-stale-id-edits-already-applied",
+        matches: |d, ctx| {
+            ctx.stale_corruption && shot_field_path(&d.path).is_some_and(|field| field != "uuid")
         },
     },
     // FINDING 3, CASCADING - and the answer to what FINDING 15 was.
@@ -4154,6 +4183,7 @@ impl Fuzzer {
             heal_reverted: self.heal_reverted,
             displaced: &displaced,
             stale,
+            stale_corruption: self.stale_corruption,
             corrupted: &corrupted,
             section_ids: &section_ids,
         };
