@@ -154,6 +154,95 @@ fn test_merge_projects_archives_sources_and_adds_extension() {
     assert!(temp_dir.path().join("b.stalx.archived").exists());
 }
 
+/// Save two synthetic projects (with the given `surface_elevation`s) and merge
+/// them, returning the merged project and the merge's `CommandResult`.
+fn merge_two_surface_elevations(
+    elev_a: Option<f64>,
+    elev_b: Option<f64>,
+) -> (Project, CommandResult) {
+    let temp_dir = TempDir::new().unwrap();
+
+    let mut project_a = Project::new("A".to_string(), None);
+    project_a.surface_elevation = elev_a;
+    project_a.add_section(SectionData {
+        name: Some("Section A".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#4ecdc4".to_string(),
+        direction: Some(SurveyDirection::In),
+        quality: 1.0,
+        shots: vec![test_shot_data(1.0)],
+    });
+
+    let mut project_b = Project::new("B".to_string(), None);
+    project_b.surface_elevation = elev_b;
+    project_b.add_section(SectionData {
+        name: Some("Section B".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#4ecdc4".to_string(),
+        direction: Some(SurveyDirection::Out),
+        quality: 1.0,
+        shots: vec![test_shot_data(2.0)],
+    });
+
+    let source_a = temp_dir.path().join("a.stalx");
+    let source_b = temp_dir.path().join("b.stalx");
+
+    let mut db_a = Database::open(&source_a).unwrap();
+    db_a.save_project(&project_a).unwrap();
+    let mut db_b = Database::open(&source_b).unwrap();
+    db_b.save_project(&project_b).unwrap();
+    drop(db_a);
+    drop(db_b);
+
+    let state = AppState::new().unwrap();
+    let output_path = temp_dir.path().join("merged-output.stalx");
+
+    let result = state.execute(Command::MergeProjects {
+        source_paths: vec![source_a, source_b],
+        output_path: output_path.clone(),
+        output_name: "Merged".to_string(),
+        archive_originals: false,
+    });
+    assert!(result.success);
+
+    let db = Database::open_existing(&output_path).unwrap();
+    let merged = db.load_project().unwrap();
+    (merged, result)
+}
+
+#[test]
+fn test_merge_projects_surface_elevation_some_and_none() {
+    let (merged, result) = merge_two_surface_elevations(Some(123.5), None);
+    assert_eq!(merged.surface_elevation, Some(123.5));
+    assert!(result.warnings.is_empty());
+}
+
+#[test]
+fn test_merge_projects_surface_elevation_none_and_some() {
+    let (merged, result) = merge_two_surface_elevations(None, Some(-7.25));
+    assert_eq!(merged.surface_elevation, Some(-7.25));
+    assert!(result.warnings.is_empty());
+}
+
+#[test]
+fn test_merge_projects_surface_elevation_agreeing() {
+    let (merged, result) = merge_two_surface_elevations(Some(100.0), Some(100.002));
+    assert_eq!(merged.surface_elevation, Some(100.0));
+    assert!(result.warnings.is_empty());
+}
+
+#[test]
+fn test_merge_projects_surface_elevation_disagreeing_first_wins_with_warning() {
+    let (merged, result) = merge_two_surface_elevations(Some(100.0), Some(150.0));
+    assert_eq!(merged.surface_elevation, Some(100.0));
+    assert_eq!(result.warnings.len(), 1);
+    assert_eq!(result.warnings[0].code, "SURFACE_ELEVATION_MISMATCH");
+    assert!(result.warnings[0].message.contains("100.00"));
+    assert!(result.warnings[0].message.contains("150.00"));
+}
+
 #[test]
 fn test_start_new_load_cancels_previous_and_clear_is_identity_safe() {
     let state = AppState::new().unwrap();
@@ -2816,6 +2905,39 @@ fn restore_snapshot_into_rebuilds_transient_caches() {
 /// change moved a station 28 microns while the stored project compared equal
 /// (issue #413, finding 25). `serde_json`'s `float_roundtrip` feature is what
 /// makes the parse exact, and this test is the guard on that feature staying on.
+#[test]
+fn restore_snapshot_carries_current_surface_elevation_over_a_legacy_blob() {
+    // A snapshot persisted by a build predating #431/#448 has no
+    // "surface_elevation" key at all, so serde's #[serde(default)] would
+    // otherwise silently restore it to None. Mirrors the `validation`
+    // legacy-carry-over immediately above `restore_snapshot_into`.
+    let mut project = Project::new("Legacy".to_string(), None);
+    project.add_section(SectionData {
+        shots: vec![test_shot_data(1.0)],
+        ..Default::default()
+    });
+    let mut legacy_json = serde_json::to_value(&project).unwrap();
+    legacy_json
+        .as_object_mut()
+        .unwrap()
+        .remove("surface_elevation");
+    let snapshot = serde_json::to_string(&legacy_json).unwrap();
+    assert!(
+        !snapshot.contains("\"surface_elevation\":"),
+        "precondition: the fixture blob must look pre-#431/#448"
+    );
+
+    let mut slot = Some(project.clone());
+    slot.as_mut().unwrap().surface_elevation = Some(123.5);
+    assert!(AppState::restore_snapshot_into(&mut slot, &snapshot));
+
+    assert_eq!(
+        slot.unwrap().surface_elevation,
+        Some(123.5),
+        "restoring a legacy snapshot must carry the CURRENT surface_elevation forward, not drop it to None"
+    );
+}
+
 #[test]
 fn a_snapshot_restore_is_bit_exact() {
     // Doubles whose shortest round-trip decimal the best-effort parser gets

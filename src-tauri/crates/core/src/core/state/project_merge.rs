@@ -90,6 +90,13 @@ impl AppState {
         let mut merged_project = Project::new(output_name, None);
         merged_project.validation = self.get_config().validation;
 
+        // Carry the entrance/surface elevation (#431, #448) forward: the first
+        // source that has one wins, and a later source disagreeing beyond the
+        // same 0.005 m tolerance used on import (see `command_import.rs`'s
+        // `surface_elevation_warning`) becomes a no-clobber receipt warning
+        // instead of silently overwriting or averaging.
+        let mut surface_elevation_warning: Option<String> = None;
+
         // Track section ID remapping: (old_project_idx, old_section_id) -> new_section_id
         let mut section_id_map: std::collections::HashMap<(usize, SectionId), SectionId> =
             std::collections::HashMap::new();
@@ -283,6 +290,23 @@ impl AppState {
                 }
             }
 
+            // Combine surface elevation: first `Some` wins; a disagreeing later
+            // source only produces a warning, it never overwrites.
+            if let Some(incoming) = source_project.surface_elevation {
+                match merged_project.surface_elevation {
+                    None => merged_project.surface_elevation = Some(incoming),
+                    Some(existing) if (existing - incoming).abs() > 0.005 => {
+                        if surface_elevation_warning.is_none() {
+                            surface_elevation_warning = Some(format!(
+                                "Source project's entrance elevation ({incoming:.2} m) differs from \
+                                 the merged project's value ({existing:.2} m); kept {existing:.2} m"
+                            ));
+                        }
+                    }
+                    Some(_) => {}
+                }
+            }
+
             // Combine location if present
             if let Some(ref loc) = source_project.location {
                 if merged_project.location.is_none() {
@@ -366,7 +390,15 @@ impl AppState {
             }
         }
 
-        CommandResult::success()
+        let mut result = CommandResult::success();
+        if let Some(message) = surface_elevation_warning {
+            result.warnings.push(crate::core::ValidationWarning {
+                code: "SURFACE_ELEVATION_MISMATCH".to_string(),
+                message,
+                severity: crate::core::WarningSeverity::Warning,
+            });
+        }
+        result
     }
 
     /// Archive a project file by renaming it with .archived suffix
