@@ -132,12 +132,25 @@ export const buildStampPath = buildStampPathFor('debug');
 /**
  * Cargo features each profile is built with.
  *
- * Release adds `e2e`, which is the repo's own name for this build: it keeps
- * `debug_trigger_panic` compiled in (`#[cfg(any(debug_assertions, feature =
- * "e2e"))]`, src-tauri/src/commands/debug.rs), so the crash-oracle self-test
- * still works without `debug_assertions`. Debug gets it for free from
- * `debug_assertions` and so passes nothing, which keeps the DEFAULT build
- * byte-for-byte what it has always been.
+ * Release adds `e2e`, which is the repo's own name for this build: it keeps the
+ * BODY of `debug_trigger_panic` compiled in (`#[cfg(any(debug_assertions,
+ * feature = "e2e"))]` is on the body blocks, not on the command - the command
+ * itself stays registered in every build so the invoke-handler and
+ * telemetry-registry contracts are build-invariant, see
+ * src-tauri/src/commands/debug.rs), so the crash-oracle self-test still works
+ * without `debug_assertions`. Debug gets that for free and so passes nothing,
+ * which keeps the DEFAULT build byte-for-byte what it has always been.
+ *
+ * WHAT ELSE THE FEATURE BRINGS, and it is not nothing: `e2e` also enables
+ * `tauri-plugin-webdriver-automation` (`src-tauri/Cargo.toml`), which
+ * `src-tauri/src/lib.rs` registers under `#[cfg(feature = "e2e")]`. So a
+ * release session drives an app with one more plugin than a debug session does,
+ * and "release differs only by compiled-out debug_asserts" is not the whole
+ * truth - a finding that reproduces in one mode and not the other has a second
+ * candidate explanation. The WDIO tier passes `--features e2e` for its DEBUG
+ * build too (`scripts/wdio.sh`); this map deliberately does not, to leave the
+ * agent harness's default build unchanged, and the asymmetry is recorded here
+ * rather than discovered later.
  */
 export const FEATURES_FOR_MODE: Record<AgentBuildMode, string[]> = {
   debug: [],

@@ -40,6 +40,63 @@
 import type { ScenarioContext } from './framework';
 import { ORACLE_GLOBAL, oracleInjectionSource, type TargetingDigest } from '../lib/fuzzOracleCore';
 
+/**
+ * Every `projectStore` action a fuzz step may dispatch, and nothing else.
+ *
+ * `runStep` reaches an action by NAME - `store.getState()[req.action]` - and on
+ * a replay that name comes out of a trace file, which `readTrace` checks only
+ * for its schema version and a `steps` array. Without this set a crafted trace
+ * calls any method the store exposes (`loadProject` on a path of its choosing,
+ * `saveProject` over a file of its choosing) inside a privileged webview with
+ * the `__E2E_TEST__` hooks live.
+ *
+ * Kept HERE, at the dispatch point, rather than in the generators: this is the
+ * boundary, and `undoRedoFuzzBridge.test.ts` pins the other direction - every
+ * action the generators and the coverage plan can produce must be in this set,
+ * so adding a generator without widening the allowlist fails a unit test rather
+ * than a fuzz run.
+ */
+export const FUZZABLE_ACTIONS: ReadonlySet<string> = new Set([
+  // Pure re-observation: no action is dispatched at all (used after a reload).
+  'noop:observe',
+  // History moves.
+  'undo',
+  'redo',
+  'undoTo',
+  'redoTo',
+  // The persistence boundary and the repair pass.
+  'saveProject',
+  'repairProjectIntegrity',
+  // Mutations, from `undoRedoFuzzActions.ts` and `undoPersistenceCoverage.ts`.
+  'createLoopClosure',
+  'createSection',
+  'createSectionAndMerge',
+  'createShot',
+  'deleteLastShotAndSection',
+  'deleteSection',
+  'deleteShot',
+  'deleteShotAndSplit',
+  'deleteShotRangeShift',
+  'deleteShotRangeSplit',
+  'executeBatch',
+  'importSections',
+  'mergeStations',
+  'moveComment',
+  'moveSection',
+  'moveSegment',
+  'moveStation',
+  'removeLoopClosure',
+  'removeZeroDatum',
+  'reverseSection',
+  'setShotKind',
+  'setZeroDatum',
+  'splitShotAtDistance',
+  'unmergeStationPair',
+  'updateSection',
+  'updateShot',
+  'updateStationComment',
+]);
+
 /** What Node asks the page to do for one step. */
 export interface StepRequest {
   /**
@@ -201,6 +258,16 @@ export async function initModel(ctx: ScenarioContext): Promise<InitResponse> {
  * drift apart unnoticed.
  */
 export async function runStep(ctx: ScenarioContext, request: StepRequest): Promise<StepResponse> {
+  // Checked in NODE, before the name can reach the page at all. A replayed
+  // trace is the untrusted input here (see `FUZZABLE_ACTIONS`), and this is a
+  // hard throw rather than an `actionOk: false` response because a step naming
+  // something outside the set is not a failed move - it is not a fuzz step.
+  if (!FUZZABLE_ACTIONS.has(request.action)) {
+    throw new Error(
+      `refusing to dispatch projectStore.${request.action}: not in the fuzzable action set. ` +
+        `A recorded trace can only replay the actions the generators produce.`,
+    );
+  }
   return ctx.eval<StepResponse>(
     `
     const req = args[0];

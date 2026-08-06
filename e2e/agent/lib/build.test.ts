@@ -9,6 +9,7 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { fileURLToPath } from 'url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   FEATURES_FOR_MODE,
@@ -263,10 +264,53 @@ describe('build modes', () => {
   });
 
   it('gives release the e2e feature and debug none', () => {
-    // debug_trigger_panic is #[cfg(any(debug_assertions, feature = "e2e"))], so
-    // release needs the feature to keep the crash-oracle self-test; debug must
-    // stay featureless so the DEFAULT build is unchanged.
+    // The body of debug_trigger_panic is #[cfg(any(debug_assertions, feature =
+    // "e2e"))], so release needs the feature to keep the crash-oracle
+    // self-test; debug must stay featureless so the DEFAULT build is unchanged.
     expect(FEATURES_FOR_MODE.debug).toEqual([]);
     expect(FEATURES_FOR_MODE.release).toEqual(['e2e']);
+  });
+
+  it('names only features the crate actually declares', () => {
+    // The assertion above compares a literal with itself: it fails on an edit to
+    // the map and on nothing else. The hazard it reads as covering is the other
+    // side - the cargo feature being renamed or dropped - which would leave the
+    // map green while EVERY release start dies at `cargo build`. Only reading
+    // Cargo.toml can catch that.
+    const manifest = fs.readFileSync(
+      path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'src-tauri', 'Cargo.toml'),
+      'utf8',
+    );
+    const featuresBlock = /\n\[features\]\n([\s\S]*?)(?=\n\[|$)/.exec(manifest)?.[1] ?? '';
+    const declared = new Set(
+      [...featuresBlock.matchAll(/^\s*([A-Za-z][\w-]*)\s*=/gm)].map((match) => match[1] ?? ''),
+    );
+
+    expect(declared.size).toBeGreaterThan(0);
+    for (const mode of ['debug', 'release'] as const) {
+      for (const feature of FEATURES_FOR_MODE[mode]) {
+        expect(declared.has(feature), `src-tauri/Cargo.toml declares no [features] entry "${feature}"`).toBe(
+          true,
+        );
+      }
+    }
+  });
+
+  it('rejects a stamp whose mode or features field is not a valid one', () => {
+    // Both fields are new, and both are load-bearing: a stamp that survives
+    // validation with a bad `mode` lets a RELEASE binary satisfy a debug start,
+    // which silently drops the debug_assert oracles the harness relies on.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'stalagmight-stamp-'));
+    const cases: Record<string, unknown>[] = [
+      { ...E2E_STAMP, mode: 'profile' },
+      { ...E2E_STAMP, mode: undefined },
+      { ...E2E_STAMP, features: 3 },
+      { ...E2E_STAMP, features: undefined },
+    ];
+    for (const [index, candidate] of cases.entries()) {
+      const file = path.join(dir, `stamp-${index}.json`);
+      fs.writeFileSync(file, JSON.stringify(candidate));
+      expect(readBuildStamp(file), JSON.stringify(candidate)).toBeNull();
+    }
   });
 });

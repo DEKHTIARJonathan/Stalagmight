@@ -210,8 +210,10 @@ several of them for speed. Reach for release when you are sweeping seeds for
 throughput; keep debug for the run whose result you intend to trust.
 
 **What release keeps.** The release harness build passes `--features e2e`, the
-repo's own name for this build. That keeps `debug_trigger_panic` compiled in
-(`#[cfg(any(debug_assertions, feature = "e2e"))]`,
+repo's own name for this build. That keeps the BODY of `debug_trigger_panic`
+compiled in (the `#[cfg(any(debug_assertions, feature = "e2e"))]` sits on the
+body blocks, not on the command - the command stays registered in every build so
+the invoke-handler and telemetry-registry contracts are build-invariant, see
 `src-tauri/src/commands/debug.rs`), so the crash-oracle self-test still works
 without `debug_assertions`. The panic hook, the crash marker and the ring buffer
 are not feature-gated and behave identically. `window.__E2E_TEST__` is gated on
@@ -220,6 +222,16 @@ is the same `pnpm build` in both profiles, so `VITE_E2E=1` supplies the hooks in
 production-mode vite build too; `waitForE2EHooks` fails the start loudly, naming
 the profile and the binary path, if they are ever missing. The debug build passes
 no features, so the DEFAULT build is byte-for-byte what it always was.
+
+**What release also brings, which is not only a subtraction.** `e2e` enables
+`tauri-plugin-webdriver-automation` (`src-tauri/Cargo.toml`), and `lib.rs`
+registers it under `#[cfg(feature = "e2e")]`. So the two profiles differ by a
+PLUGIN as well as by the compiled-out assertions above, and "release is debug
+minus the `debug_assert!`s" is not the whole truth: a finding that reproduces in
+one profile and not the other has a second candidate explanation, and the
+comparison to reach for is the same seed in the same profile. (The WDIO tier
+builds its DEBUG binary with `--features e2e` for this reason; the agent
+harness deliberately does not, to leave its default build unchanged.)
 
 **Cost.** One-time cold release build: about 3.5 minutes wall clock on the
 self-hosted runner (`Finished release profile [optimized] in 2m 08s` plus the
@@ -307,6 +319,15 @@ Oracles + scenarios:
 Registered in `e2e/agent/scenarios/index.ts`; each is a seeded loop that FAILS by
 throwing. Small-n values for the `pnpm agent:scenarios` gate live in
 `e2e/agent/scenarios-smoke.ts`.
+
+Two of them - `undo-redo-fuzz` and `undo-persistence-fuzz` - reproduce open app
+bugs by construction, so they are RED by design and a green run would mean their
+oracles had been weakened. They are listed in that file's `EXPECTED_RED`, which
+reports them as **XFAIL** and does not fail the gate: with them failing
+unconditionally the gate exited 1 whatever the other nine did, and so could no
+longer answer the question it exists to answer. The other direction is enforced -
+an expected-red scenario that PASSES fails the run, because that means the bug it
+pins was fixed and the entry (and the scenario's header) needs updating.
 
 | Scenario | What it asserts |
 |---|---|

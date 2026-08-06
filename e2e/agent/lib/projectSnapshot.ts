@@ -614,23 +614,94 @@ export const SAVE_HEALING_MUTATIONS: readonly KnownAsymmetry[] = [
  * comparisons that cross a reload. Everything else - section and shot fields,
  * uuids, merges, closures, datums, comments, stats - must still match exactly,
  * so this cannot hide a structural divergence.
+ *
+ * Narrowed by SHAPE, not by magnitude, and the distinction is deliberate. A
+ * re-solve MOVES a number: an offset entry appearing or disappearing, or a
+ * coordinate turning into null, is structural and is not this - `isNumericMove`
+ * rejects those. What is NOT bounded is how far the number moved, because the
+ * heal this family exists to absorb is measured in metres: bug 3 displaces a
+ * whole section by a shot's horizontal vector (1.13 m in its repro) and
+ * RATCHETS on every cycle, and the reload correcting that is the documented
+ * case above. Any sub-metre threshold would fail on the heal; any threshold
+ * loose enough to pass it would not catch what a threshold is for. So the
+ * magnitude is REPORTED instead - `maxNumericDelta` puts it in the attributed
+ * line and in a metric - and a number that starts growing is visible rather
+ * than silent.
  */
 export const RELOAD_RESOLVED_GEOMETRY: readonly KnownAsymmetry[] = [
   {
     id: 'reload-resolves-section-offsets',
     pathPattern: /^project\.section_offsets\.\d+(\[\d+\])?$/,
+    accepts: isNumericMove,
     description:
       'A reload re-solves section_offsets unconditionally rather than trusting the persisted ' +
-      'value (offsets.rs redrive_offsets_after_load).',
+      'value (offsets.rs redrive_offsets_after_load). A numeric MOVE only: an entry appearing ' +
+      'or disappearing is structural and is not this.',
   },
   {
     id: 'reload-resolves-station-coordinates',
     pathPattern: /^stations\[\d+\]\.coordinates\.[xyz]$/,
+    accepts: isNumericMove,
     description:
       'Station coordinates are derived from section_offsets, so they move with the re-solve a ' +
-      'reload performs.',
+      'reload performs. A numeric MOVE only.',
   },
 ];
+
+/** Every finite number in a rendered diff value (`3.5`, `[1,2]`, `<absent>` -> none). */
+function numbersIn(text: string): number[] {
+  if (text === ABSENT) return [];
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return [];
+  }
+  if (typeof parsed === 'number') return Number.isFinite(parsed) ? [parsed] : [];
+  if (Array.isArray(parsed)) {
+    const out: number[] = [];
+    for (const entry of parsed) {
+      if (typeof entry !== 'number' || !Number.isFinite(entry)) return [];
+      out.push(entry);
+    }
+    return out;
+  }
+  return [];
+}
+
+/**
+ * Is this diff a number (or a tuple of numbers) MOVING to another one?
+ *
+ * The re-derived-geometry families are about a value being recomputed. A path
+ * in one of them that appears, disappears, or changes type is a structural
+ * change wearing a geometry path, and must not be absorbed as a re-solve.
+ */
+export function isNumericMove(diff: SnapshotDiff): boolean {
+  const before = numbersIn(diff.expected);
+  const after = numbersIn(diff.actual);
+  return before.length > 0 && before.length === after.length;
+}
+
+/**
+ * The largest absolute change across `diffs`, or null when none is numeric.
+ *
+ * Reported alongside an absorbed geometry difference so its SIZE is on the
+ * record: this family has no magnitude bound (see `RELOAD_RESOLVED_GEOMETRY`),
+ * which is only defensible while the number is visible.
+ */
+export function maxNumericDelta(diffs: readonly SnapshotDiff[]): number | null {
+  let worst: number | null = null;
+  for (const diff of diffs) {
+    const before = numbersIn(diff.expected);
+    const after = numbersIn(diff.actual);
+    if (before.length === 0 || before.length !== after.length) continue;
+    for (const [index, value] of before.entries()) {
+      const delta = Math.abs(value - (after[index] ?? 0));
+      if (worst === null || delta > worst) worst = delta;
+    }
+  }
+  return worst;
+}
 
 /** Per-section shot-identity delta between two canonical snapshots. */
 export interface ShotSetDelta {

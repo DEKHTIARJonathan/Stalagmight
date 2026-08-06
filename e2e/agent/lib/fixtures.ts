@@ -76,15 +76,45 @@ export interface StripUndoHistoryResult {
  *
  * MUST be pointed at a materialized COPY. `materializeFixture` is what produces
  * one; running this on `e2e/fixtures/` itself would mutate a tracked file, so
- * the path is refused if it resolves inside the tracked fixture directory.
+ * the path is refused if it resolves anywhere inside the tracked fixture
+ * directory - at any depth, and through a symlink. The earlier form compared
+ * against `join(trackedDir, basename(resolved))`, which is only the DIRECT
+ * children: `e2e/fixtures/sub/x.stalx` walked straight past it into the
+ * `DELETE FROM`, and so did a symlink pointing at a tracked file.
  *
  * (`node:sqlite` is still flagged experimental in Node 24, so importing this
  * module emits one `ExperimentalWarning` on stderr.)
  */
+/**
+ * Does `resolved` live inside the TRACKED fixture directory?
+ *
+ * Containment, not equality with a re-joined basename: a nested path and a
+ * symlink both pass the latter. `realpath` is applied to whatever exists (a
+ * missing leaf is fine - it cannot be a tracked file), so a symlink under a
+ * temp dir pointing at `e2e/fixtures/naharon.stalx` is caught by its target
+ * rather than by its name. Compared case-insensitively off Linux, where
+ * `.../NAHARON.stalx` opens the same file that `.../naharon.stalx` does.
+ */
+export function isInsideTrackedFixtures(resolved: string): boolean {
+  const trackedDir = path.resolve(repoRoot, 'e2e', 'fixtures');
+  const real = (target: string): string => {
+    try {
+      return fs.realpathSync(target);
+    } catch {
+      // Does not exist (yet): fall back to the lexical path, which is still
+      // enough to catch `e2e/fixtures/whatever`.
+      return target;
+    }
+  };
+  const fold = (text: string): string => (process.platform === 'linux' ? text : text.toLowerCase());
+  const candidate = fold(real(resolved));
+  const root = fold(real(trackedDir));
+  return candidate === root || candidate.startsWith(root + path.sep);
+}
+
 export function stripUndoHistory(databasePath: string): StripUndoHistoryResult {
   const resolved = path.resolve(databasePath);
-  const trackedDir = path.resolve(repoRoot, 'e2e', 'fixtures');
-  if (resolved === path.join(trackedDir, path.basename(resolved))) {
+  if (isInsideTrackedFixtures(resolved)) {
     throw new Error(`refusing to strip undo history from the tracked fixture ${resolved}; copy it first`);
   }
   if (!fs.existsSync(resolved)) throw new Error(`no such .stalx: ${resolved}`);

@@ -48,9 +48,35 @@ const SMOKE_ITERATIONS: Record<string, number> = {
   'rapid-project-cycle': 4,
 };
 
+/**
+ * Scenarios that are EXPECTED to fail, and why.
+ *
+ * Both reproduce open app bugs by construction, so a green run would mean their
+ * oracles had been weakened - that is the standing reminder the comments above
+ * are protecting, and none of it changes here. What does change is that their
+ * failure no longer costs the gate its meaning: with the two of them failing
+ * unconditionally, `pnpm agent:scenarios` exited 1 whatever the other nine did,
+ * so it could not answer the question it exists to answer ("does the harness
+ * still drive the app?"). An expected failure is now reported as XFAIL and does
+ * not fail the run.
+ *
+ * The other direction is enforced too, and matters more: an expected-red
+ * scenario that PASSES fails the gate. That is the bug having been fixed, and
+ * the entry has to be removed here (and the scenario's own header updated)
+ * rather than quietly becoming a test of nothing.
+ */
+const EXPECTED_RED: Record<string, string> = {
+  'undo-redo-fuzz':
+    'reproduces the open undo bugs at issue #413 (seed 1 x40 reaches bug 1 on the v2 stream)',
+  'undo-persistence-fuzz':
+    'reproduces finding 12 on the first id-bearing entry of the restored stack (issue #413)',
+};
+
 async function main(): Promise<void> {
   const session = createSession();
   let failed = false;
+  const xfailed: string[] = [];
+  const xpassed: string[] = [];
   const started = await session.start({ build: 'auto' });
   process.stdout.write(`session ${started.state} (build ${started.buildAction})\n`);
   const oracle = newOracleState();
@@ -70,21 +96,52 @@ async function main(): Promise<void> {
         // finding. error/warning findings are app signals the harness is meant to
         // surface (that is the point), so they are reported but do not fail the
         // scenario gate.
-        if (fatal.length) failed = true;
+        const expectedRed = EXPECTED_RED[name];
+        if (fatal.length && expectedRed === undefined) failed = true;
+        if (expectedRed !== undefined) {
+          // Reaching here at all means the scenario did NOT throw. For an
+          // expected-red one that is the news: the bug it pins is fixed (or its
+          // oracle stopped seeing it), and the list above is now wrong.
+          failed = true;
+          xpassed.push(name);
+          process.stdout.write(
+            `UNEXPECTED PASS: ${name} was expected to fail (${expectedRed}).\n` +
+              `  If the bug is fixed, remove it from EXPECTED_RED and update the scenario header.\n`,
+          );
+        }
         const label = fatal.length ? 'FAIL' : sweep.findings.length ? 'PASS+findings' : 'PASS';
         process.stdout.write(
           `${label}: ${name} (${metrics.durationMs}ms) ${JSON.stringify(metrics.metrics)}` +
             `${sweep.findings.length ? ` findings=${JSON.stringify(sweep.findings)}` : ''}\n`,
         );
       } catch (err) {
-        failed = true;
-        process.stdout.write(`FAIL: ${name} threw: ${err instanceof Error ? err.message : String(err)}\n`);
+        const expectedRed = EXPECTED_RED[name];
+        const detail = err instanceof Error ? err.message : String(err);
+        if (expectedRed === undefined) {
+          failed = true;
+          process.stdout.write(`FAIL: ${name} threw: ${detail}\n`);
+        } else {
+          xfailed.push(name);
+          process.stdout.write(
+            `XFAIL: ${name} failed as expected (${expectedRed}):\n` +
+              `${detail.split('\n').slice(0, 3).map((line) => `  | ${line}`).join('\n')}\n`,
+          );
+        }
       }
     }
   } finally {
     await session.stop('scenarios-smoke');
   }
 
+  if (xfailed.length > 0) {
+    process.stdout.write(
+      `\n${xfailed.length} scenario(s) failed as EXPECTED (open app bugs, not harness regressions): ` +
+        `${xfailed.join(', ')}\n`,
+    );
+  }
+  if (xpassed.length > 0) {
+    process.stdout.write(`${xpassed.length} expected-red scenario(s) PASSED: ${xpassed.join(', ')}\n`);
+  }
   process.stdout.write(failed ? '\nSCENARIOS FAILED\n' : '\nSCENARIOS PASSED\n');
   process.exit(failed ? 1 : 0);
 }

@@ -5,7 +5,12 @@ import { createRequire } from 'node:module';
 import type { DatabaseSync as DatabaseSyncType } from 'node:sqlite';
 import { describe, expect, it } from 'vitest';
 
-import { UNDO_HISTORY_TABLES, fixtureSourcePath, stripUndoHistory } from './fixtures';
+import {
+  UNDO_HISTORY_TABLES,
+  fixtureSourcePath,
+  isInsideTrackedFixtures,
+  stripUndoHistory,
+} from './fixtures';
 
 // Loaded at runtime, not imported: see the note in fixtures.ts (vite cannot
 // resolve the prefix-only `node:sqlite`).
@@ -128,6 +133,32 @@ describe('stripUndoHistory', () => {
     expect(() => stripUndoHistory(fixtureSourcePath('fractal_plant_iter3.stalx'))).toThrow(
       /refusing to strip undo history from the tracked fixture/,
     );
+  });
+
+  it('refuses a tracked fixture reached through a SYMLINK', () => {
+    // The guard used to compare against `join(trackedDir, basename(resolved))`,
+    // so any path whose basename matched but whose directory did not walked
+    // straight into the DELETE FROM - including a link to the real file.
+    const tracked = fixtureSourcePath('fractal_plant_iter3.stalx');
+    const link = path.join(tempDir(), 'looks-like-a-copy.stalx');
+    fs.symlinkSync(tracked, link);
+
+    expect(() => stripUndoHistory(link)).toThrow(/refusing to strip undo history/);
+  });
+
+  it('refuses a NESTED path under the tracked fixture directory', () => {
+    // e2e/fixtures/ is flat today, so this is latent rather than live - which is
+    // exactly when a containment check is cheap to get right.
+    expect(isInsideTrackedFixtures(path.join(fixtureSourcePath('x.stalx'), '..', 'sub', 'y.stalx'))).toBe(
+      true,
+    );
+    expect(isInsideTrackedFixtures(fixtureSourcePath('naharon.stalx'))).toBe(true);
+  });
+
+  it('allows a materialized copy outside that directory', () => {
+    // The negative half: a containment check that refuses everything would
+    // pass every test above and break every scenario.
+    expect(isInsideTrackedFixtures(path.join(tempDir(), 'naharon.stalx'))).toBe(false);
   });
 
   it('reports a missing file rather than creating an empty database', () => {

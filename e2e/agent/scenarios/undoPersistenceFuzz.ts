@@ -250,9 +250,11 @@ import {
   describeDiffs,
   describeShotSetDelta,
   diffSnapshots,
+  maxNumericDelta,
   isBug8ShotSwapOnly,
   shotSetDelta,
   type KnownAsymmetry,
+  type SnapshotDiff,
 } from '../lib/projectSnapshot';
 import type { TargetingDigest } from '../lib/fuzzOracleCore';
 import {
@@ -477,11 +479,13 @@ function checkSnapshot(
 
   let diffs = all;
   let attributed: KnownAsymmetry[] = [];
+  let absorbed: SnapshotDiff[] = [];
   if (attributable.length > 0) {
     const split = classifyDiffs(all, attributable);
     if (split.known.length > 0) {
       diffs = split.unknown;
       attributed = split.asymmetries;
+      absorbed = split.known.map((hit) => hit.diff);
     }
   }
   if (diffs.length === 0) {
@@ -500,11 +504,18 @@ function checkSnapshot(
         asymmetries: [],
       };
     }
+    // The absorbed MAGNITUDE goes on the record. The re-derived-geometry
+    // families are bounded by shape, not by size (see RELOAD_RESOLVED_GEOMETRY),
+    // which is only defensible while the number is visible.
+    const worst = maxNumericDelta(absorbed);
     return {
       equal: false,
       floatNoise: false,
       attributed,
-      text: attributed.map((entry) => `  ATTRIBUTED [${entry.id}]: ${entry.description}`).join('\n'),
+      text: attributed
+        .map((entry) => `  ATTRIBUTED [${entry.id}]: ${entry.description}`)
+        .concat(worst === null ? [] : [`  largest absorbed numeric change: ${worst.toExponential(3)}`])
+        .join('\n'),
       onlyKnown: false,
       asymmetries: [],
     };
