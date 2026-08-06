@@ -1730,7 +1730,12 @@ fn a_legacy_created_shot_redo_append_mints_an_identity() {
             station_shift_from: 3,
             after_shot_id: None,
             before_shot_id: None,
+            // A legacy persisted entry predates every uuid-anchor field and the
+            // captured-offsets map, so all of them deserialize to their defaults.
+            after_shot_uuid: None,
+            before_shot_uuid: None,
             uuid: None,
+            previous_offsets: std::collections::HashMap::new(),
         },
         timestamp: None,
     };

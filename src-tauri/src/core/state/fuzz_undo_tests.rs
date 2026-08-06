@@ -79,49 +79,10 @@
 //! | 23 | `finding-23-a-save-load-cycle-is-not-a-fixpoint` | format-property gate | 1 | n/a |
 //! | 23 (display) | `finding-23-history-float-dust-moves-a-displayed-value` | `CROSSINGS=3`, persistence half | 16 | 60 |
 //! | 24 | `finding-24-shot-display-position-overflows-before-validation` | adversarial gate | 4 | 120 |
-<<<<<<< HEAD
 //! | 25 | UNCLASSIFIED - fails the run - see the observations section | `HORIZON=1 JUMPS=1` | 2 | 10000 |
 //!
 //! Findings 18 and 19 are ids this module's own classifiers already use and are
 //! NOT rows: 18 is the raw-versus-resolved alignment disagreement (issue #413's
-=======
-//! | 26 | FIXED - no classifier was ever written; `finding_26_a_shot_edit_does_not_translate_a_group_whose_first_datum_was_removed` pins it and seeds 1..5 x2000 are clean | `HORIZON=1` | 2 | 2000 |
-//! | 11 (re-creation) | FIXED - no classifier was ever written; needed a GENERATOR change, see below. Seeds 4 and 6 x150 were red on `redo x1 did not restore ... at sections[#].gauge_shot_uuid, expected "..." actual null, consumed entry: batch`; all 40 are clean now | (none), persistence half | 4 | 150 |
-//! | 27 | FIXED BY MAKING THE STATE UNREPRESENTABLE - no classifier was ever written, and nothing here can reach it any more, by design. See below | n/a | n/a | n/a |
-//!
-//! ## The generator change row 11 (re-creation) needed
-//!
-//! Finding 11's re-creation residue was found by the AGENT HARNESS and was
-//! unreachable here for a structural reason rather than for want of luck: it needs
-//! a snapshot pair whose two halves DISAGREE ABOUT WHETHER A SECTION EXISTS, with
-//! a save after it. `gen_batch` drew only `UpdateShot` / `MoveSection` /
-//! `MoveStation` / `ReverseSection`, none of which can make the halves disagree
-//! that way, so no seed could build the shape. It now draws `CreateSection` as a
-//! fifth branch. That CHANGED THE DRAW STREAM (`below(4)` became `below(5)`), so
-//! the survey was re-run: `GATE_SEEDS` is unchanged because all 40 seeds are still
-//! clean at 100 moves, which is the headroom rule the list is pinned on.
-//!
-//! ## Why finding 27 has no row, and no seeding
-//!
-//! Finding 27 needed a `section_offsets` key whose value was an all-zero one, and
-//! nothing inside one session could produce one - so this tier briefly SEEDED two.
-//! That seeding is deleted, and the finding is closed a level down instead: a
-//! dust-zero entry is now UNREPRESENTABLE (the invariant on
-//! `Project::write_section_offset`), the load boundary drops one out of a legacy
-//! `.stalx`, and a snapshot restore drops one out of a legacy undo payload. A fuzz
-//! corpus may not build a state the app cannot reach, so there is nothing here to
-//! seed and nothing left to find.
-//!
-//! Why the invariant rather than a per-writer rule: no rule local to a write can
-//! satisfy both identities the app owes - `+d` then `-d` from an ABSENT key must
-//! end absent (finding 2's dust half), and from a PRESENT all-zero key must end
-//! present. The second was a real defect the metamorphic pair
-//! `move-out-and-back-is-identity` reported on a project carrying such a key.
-//! Removing the state removes the contradiction.
-//!
-//! Findings 18 and 19 are ids this module's own classifiers used and are NOT
-//! rows: 18 was the raw-versus-resolved alignment disagreement (issue #413's
->>>>>>> f16c96a8 (fix(model): #413 - a dust-zero section_offsets entry is unrepresentable)
 //! finding 14 write-up records the same fact) and 19 is tolerated float dust
 //! accumulating past the tolerance, which the horizon mode watches for and which
 //! has not fired. They are reserved so the numbering does not collide, which is
@@ -1720,7 +1681,6 @@ const CLASSIFIERS: &[Classifier] = &[
     },
     // FINDING 3, CASCADING - and the answer to what FINDING 15 was.
     //
-<<<<<<< HEAD
     // Finding 3's displacement is not undone by anything: the redo re-inserts
     // through the offset-neutral append path (that is the RATCHET half of the
     // finding), and no targeted undo below it touches `section_offsets`. So once
@@ -1730,29 +1690,6 @@ const CLASSIFIERS: &[Classifier] = &[
     // meanwhile - in EITHER direction, since the model resynced the depth the
     // hit landed on, so a later redo back UP to that depth is missing a key the
     // model now expects.
-=======
-    // * The EXACT zero: `Project::write_section_offset`
-    //   (models/project/offsets.rs) is THE write point for `section_offsets`
-    //   and drops the key, so an adjustment that mathematically cancels leaves
-    //   nothing behind. That is finding 2's headline route (insert a shot into
-    //   a section with no offset, undo: 0 + d - d is exactly 0 in IEEE) and the
-    //   metamorphic `move-out-and-back-is-identity` pair. It now drops the whole
-    //   dust ball around zero, for EVERY writer including a restore, which is the
-    //   invariant that closed finding 27 - see that function.
-    // * The float DUST: an adjust-and-adjust-back is NOT the identity once the
-    //   section already carries an offset ((c + d) - d != c), so the round trip
-    //   landed a femtometre from zero and the exact-zero rule KEPT that.
-    //   `Project::write_section_offset` normalizes an offset within
-    //   `Project::OFFSET_DUST_M` of the origin to absent, and
-    //   `cascade_bfs` (models/project/connectivity.rs) declines a correction
-    //   below the same bound instead of creating a key to "fix" its own noise -
-    //   the gate its merge-BFS siblings in `reconcile_after_edit` already had.
-    //   Measured over this survey at 40 seeds x 60 iterations: 38 classified
-    //   hits on seeds 11, 12, 21 and 36 before, zero after, with the sources
-    //   traced by a backtrace on the write to `cascade_bfs`, `reverse_section`
-    //   (models/project/reverse.rs) and `remove_shot_with_rewire_excluding_anchors`
-    //   (models/project/shots.rs).
->>>>>>> f16c96a8 (fix(model): #413 - a dust-zero section_offsets entry is unrepresentable)
     //
     // Finding 15 was reported as a separate defect ("an undo leaves a
     // `section_offsets` entry carrying REAL geometry") because the move that
@@ -2339,23 +2276,6 @@ pub(super) fn random_shot(rng: &mut Rng) -> ShotData {
     }
 }
 
-<<<<<<< HEAD
-=======
-// A `seed_legitimate_all_zero_offsets` lived here, giving two starting sections a
-// `section_offsets` key whose value was exactly `(0, 0)` - the state #413 finding
-// 27 needed and that nothing inside one session could produce. It is DELETED
-// because that state no longer exists: a dust-zero entry is unrepresentable (see
-// the invariant on `Project::write_section_offset`), the load boundary drops one
-// out of a legacy `.stalx` and a snapshot restore drops one out of a legacy undo
-// payload. Seeding it would build a project the app cannot reach, which is the
-// one thing a fuzz corpus may not do.
-//
-// What replaced it as the regression guard is narrower and stronger: the state is
-// gone by construction rather than handled per-writer, and
-// `a_persisted_all_zero_section_offset_does_not_survive_a_load`
-// (`open_undo_bugs_tests.rs`) pins the boundary that removes it.
-
->>>>>>> f16c96a8 (fix(model): #413 - a dust-zero section_offsets entry is unrepresentable)
 /// A starting project with the topology that made the naharon fixture productive:
 /// sections of varied length INCLUDING empty and single-shot ones, station
 /// merges, a zero datum, a genuine loop closure, station comments, and sections
