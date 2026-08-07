@@ -12022,6 +12022,216 @@ fn deleting_a_shot_never_promotes_a_closure_that_would_double_anchor() {
     assert!(project.station_merges.is_empty());
 }
 
+/// One doomed station carrying TWO sole-bridge closures, each into its own
+/// independently GPS-anchored component (#464 defect A, chained).
+///
+/// * section S: two shots north, GPS-anchored at S0, its tail S2 merged into
+///   T0 - so T is the station both closures rewire onto when S2 goes;
+/// * section T: one shot east, no datum of its own;
+/// * sections U and V: one shot each, each carrying its OWN GPS datum, about a
+///   kilometre away in different directions;
+/// * closures S2 <-> U0 and S2 <-> V0 (legal to create: the pairs are
+///   unconnected and both ends are datum-anchored).
+///
+/// Deleting S's last shot removes S2. EITHER closure alone promotes legally -
+/// once S2's merge is gone the replacement T holds no datum, so nothing is
+/// double-anchored - but promoting BOTH welds U and V into one rigid group
+/// carrying two GPS anchors, which is exactly the state defect A is about.
+///
+/// Returns `(project, s, t, u, v)`.
+fn chained_double_anchor_closure_fixture() -> (Project, SectionId, SectionId, SectionId, SectionId)
+{
+    let mut project = Project::new("ChainedDoubleAnchor".to_string(), None);
+    let s = project
+        .add_section(SectionData {
+            shots: vec![
+                shot(0.0, 0.0, 10.0, 0.0, 0.0),
+                shot(0.0, 0.0, 10.0, 0.0, 0.0),
+            ],
+            ..Default::default()
+        })
+        .id;
+    let t = project
+        .add_section(SectionData {
+            shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    let u = project
+        .add_section(SectionData {
+            shots: vec![shot(180.0, 180.0, 5.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    let v = project
+        .add_section(SectionData {
+            shots: vec![shot(270.0, 270.0, 5.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    // T hangs off S's tail: it is the only survivor of S2's merge group, so it
+    // is the replacement station the closure rewire picks.
+    project
+        .merge_stations(StationRef::new(s, 2), StationRef::new(t, 0))
+        .unwrap();
+    project
+        .set_zero_datum(
+            StationRef::new(s, 0),
+            GpsCoordinates::new(45.0, -90.0, 0.0).unwrap(),
+        )
+        .unwrap();
+    // Two more anchors, each far enough that welding them into one group is a
+    // gap no cascade could hide.
+    project
+        .set_zero_datum(
+            StationRef::new(u, 0),
+            GpsCoordinates::new(45.01, -90.0, 0.0).unwrap(),
+        )
+        .unwrap();
+    project
+        .set_zero_datum(
+            StationRef::new(v, 0),
+            GpsCoordinates::new(45.0, -90.01, 0.0).unwrap(),
+        )
+        .unwrap();
+    project
+        .create_loop_closure(
+            StationRef::new(s, 2),
+            StationRef::new(u, 0),
+            ClosureStrategy::Batch,
+        )
+        .unwrap();
+    project
+        .create_loop_closure(
+            StationRef::new(s, 2),
+            StationRef::new(v, 0),
+            ClosureStrategy::Batch,
+        )
+        .unwrap();
+    (project, s, t, u, v)
+}
+
+/// Assert every recorded merge is within the invariant, the way
+/// `debug_assert_merge_alignment` does - but unconditionally, so the check is
+/// part of what this test proves rather than a debug-build side effect.
+fn assert_every_merge_is_aligned(project: &Project, context: &str) {
+    for merge in &project.station_merges {
+        let (Some(a), Some(b)) = (
+            project.resolve_key(&merge.station_a),
+            project.resolve_key(&merge.station_b),
+        ) else {
+            panic!("{context}: merge with a dangling endpoint: {merge:?}");
+        };
+        let (Some((ax, ay)), Some((bx, by))) = (
+            project.compute_station_raw_xy(a),
+            project.compute_station_raw_xy(b),
+        ) else {
+            panic!("{context}: merge endpoint with no position: {merge:?}");
+        };
+        let gap = ((ax - bx).powi(2) + (ay - by).powi(2)).sqrt();
+        assert!(
+            gap < Project::MERGE_ALIGNMENT_INVARIANT_M,
+            "{context}: merge {a:?} <-> {b:?} is {gap:.6} m out of alignment"
+        );
+    }
+}
+
+/// #464 defect A, chained: the guard is only sound if it accumulates.
+///
+/// `preview_delete_shot` built its `planned` hypothesis ONCE, from
+/// `replacement_merges` alone, so a promotion the closure loop itself decided on
+/// was invisible to the next closure's guard. With two sole-bridge closures on
+/// one doomed station, each promotion passes alone - and together they weld two
+/// independently GPS-anchored components into one rigid group, the permanent,
+/// unrepairable gap this branch exists to prevent.
+#[test]
+fn deleting_a_shot_never_promotes_two_closures_that_together_double_anchor() {
+    // The premise first: each closure ALONE is a legal promotion, so what the
+    // test below catches is the COMBINATION and not either closure by itself.
+    for keep in 0..2usize {
+        let (mut project, s, t, ..) = chained_double_anchor_closure_fixture();
+        let kept = project.loop_closures[keep].id;
+        project.loop_closures.retain(|c| c.id == kept);
+        let last_shot = project.get_section(s).unwrap().shots.last().unwrap().id;
+        let (_, impact) = project.remove_shot_with_rewire(s, last_shot).unwrap();
+        assert_eq!(
+            impact.closure_to_merge.len(),
+            1,
+            "closure {keep} alone must promote: {impact:?}"
+        );
+        assert_eq!(impact.closure_to_merge[0].station_a, StationRef::new(t, 0));
+        assert_every_merge_is_aligned(&project, "single promotion");
+        assert!(project.over_anchored_merge_components().is_empty());
+    }
+
+    let (mut project, s, t, u, v) = chained_double_anchor_closure_fixture();
+    let second_closure_id = project.loop_closures[1].id;
+
+    let last_shot = project.get_section(s).unwrap().shots.last().unwrap().id;
+    let (_, impact) = project.remove_shot_with_rewire(s, last_shot).unwrap();
+
+    // Exactly one promotion: the first closure is a legal merge, the second is
+    // refused BECAUSE of it and stays a closure, re-anchored onto T0.
+    assert_eq!(
+        impact.closure_to_merge.len(),
+        1,
+        "the second promotion would double-anchor the group the first created: {impact:?}"
+    );
+    assert_eq!(
+        (
+            impact.closure_to_merge[0].station_a,
+            impact.closure_to_merge[0].station_b
+        ),
+        (StationRef::new(t, 0), StationRef::new(u, 0))
+    );
+    assert_eq!(
+        impact.replacement_closure_updates.len(),
+        1,
+        "the refused promotion must keep the closure, re-anchored: {impact:?}"
+    );
+    assert_eq!(
+        impact.replacement_closure_updates[0].closure_id,
+        second_closure_id
+    );
+    assert_eq!(
+        impact.replacement_closure_updates[0].new_station,
+        StationRef::new(t, 0)
+    );
+
+    assert_eq!(
+        project.loop_closures.len(),
+        1,
+        "the refused closure must survive: {:?}",
+        project.loop_closures
+    );
+    let survivor = &project.loop_closures[0];
+    assert_eq!(
+        (
+            project.resolve_key(&survivor.station_a).unwrap(),
+            project.resolve_key(&survivor.station_b).unwrap()
+        ),
+        (StationRef::new(t, 0), StationRef::new(v, 0))
+    );
+
+    // The merge that WAS minted paid for the coincidence it declares, and no
+    // rigid group ended up holding two GPS anchors.
+    assert_every_merge_is_aligned(&project, "after the chained delete");
+    assert!(
+        project.over_anchored_merge_components().is_empty(),
+        "the delete welded two anchored components: {:?}",
+        project.over_anchored_merge_components()
+    );
+
+    // ...and the refusal is STABLE: the whole-project sweep and the loader both
+    // decline it for the same reason, so memory and disk agree.
+    assert_eq!(project.convert_orphan_closures_to_merges(), 0);
+    project.redrive_offsets_after_load();
+    assert_eq!(project.loop_closures.len(), 1);
+    assert_eq!(project.station_merges.len(), 1);
+    assert_every_merge_is_aligned(&project, "after a reload");
+    assert!(project.over_anchored_merge_components().is_empty());
+}
+
 /// A genuine loop over two sections, with a real misclosure, whose other leg is
 /// about to be deleted (#464 defect C).
 ///

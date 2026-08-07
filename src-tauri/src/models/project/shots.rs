@@ -676,17 +676,27 @@ impl Project {
 
         if !impact.removed_closures.is_empty() {
             let doomed = HashSet::from([removed_station]);
-            let planned: Vec<(StationRef, StationRef)> = impact
-                .replacement_merges
-                .iter()
-                .map(|p| (p.station_a, p.station_b))
-                .collect();
             let mut candidates: Vec<StationRef> = merge_group_without.into_iter().collect();
             candidates.sort_by_key(Self::station_ref_key);
             let replacement = candidates.first().copied();
 
             for closure in &impact.removed_closures {
                 if let Some(replacement_station) = replacement {
+                    // The hypothesis ACCUMULATES, exactly as the
+                    // `replacement_merges` arm above rebuilds `planned` inside
+                    // its own loop: a promotion already decided on in this loop
+                    // is a merge `remove_shot_with_rewire` will record, so the
+                    // next closure's guard has to be asked about the graph that
+                    // INCLUDES it. Hoisted out of the loop, two sole-bridge
+                    // closures on one doomed station each passed the guard alone
+                    // and together welded two independently anchored components -
+                    // defect A again, one hop further out (#464).
+                    let planned: Vec<(StationRef, StationRef)> = impact
+                        .replacement_merges
+                        .iter()
+                        .chain(impact.closure_to_merge.iter())
+                        .map(|p| (p.station_a, p.station_b))
+                        .collect();
                     let other = if closure.station_a == removed_station {
                         closure.station_b
                     } else {
@@ -1320,14 +1330,21 @@ impl Project {
         // each promotion plans the translation that makes the claim true and is
         // settled below, once this function's own geometry is final (#464).
         //
-        // The merge is recorded whatever the plan says, because this list IS the
-        // dialog's promise and execution may not quietly do less than it. There
-        // is nothing to be defensive about: `preview_delete_shot` asked the same
-        // over-anchoring question through `would_double_anchor_after_removal`,
-        // and everything this function has mutated since - the retains that drop
+        // A `None` plan REFUSES the merge here too. `preview_delete_shot` asked
+        // the same over-anchoring question through
+        // `would_double_anchor_after_removal` - accumulating the promotions it
+        // decided on, so its hypothesis matches this loop closure-for-closure -
+        // and everything this function has mutated since (the retains that drop
         // the removed station's merges and datum, the closure rewires, the
-        // replacement merges - is exactly the `doomed`/`planned` hypothesis the
-        // preview evaluated against, so a `None` here cannot happen.
+        // replacement merges) is exactly the `doomed`/`planned` graph the preview
+        // evaluated against. So this arm is UNREACHABLE, and recording anyway is
+        // strictly worse than not: an unsettled promotion is a merge asserting a
+        // coincidence nothing settles and no cascade, realign or Repair can heal
+        // (#464 defect A - it measured 1.4 km in the test that pinned this).
+        // Preview and execution stay structurally identical because the preview,
+        // refusing the same promotion, routes that closure to
+        // `replacement_closure_updates` instead: the closure survives, re-anchored,
+        // in both halves.
         let mut minted: Vec<MintedMerge> = Vec::new();
         for pair in &impact.closure_to_merge {
             if !self.has_direct_merge(pair.station_a, pair.station_b) {
@@ -1335,14 +1352,41 @@ impl Project {
                     self.key_for_ref(pair.station_a),
                     self.key_for_ref(pair.station_b),
                 ) {
-                    if let Some(plan) = self.plan_merge_promotion(&ka, &kb) {
-                        minted.push(plan);
+                    match self.plan_merge_promotion(&ka, &kb) {
+                        Some(plan) => {
+                            minted.push(plan);
+                            self.record_station_merge(StationMerge {
+                                station_a: ka,
+                                station_b: kb,
+                                merged_at: Utc::now(),
+                            });
+                        }
+                        None => {
+                            // Loud: it means the preview promised a merge on a
+                            // hypothesis this function then contradicted, which
+                            // is the preview/execution divergence #464 is about.
+                            tracing::error!(
+                                station_a = ?pair.station_a,
+                                station_b = ?pair.station_b,
+                                purpose = "never record a promotion nothing can settle",
+                                "Refused a promised closure->merge promotion: it would double-anchor"
+                            );
+                            #[cfg(test)]
+                            #[expect(
+                                clippy::panic,
+                                reason = "tripwire: unreachable once the preview's guard \
+                                          accumulates, and a silent preview/execution \
+                                          divergence is what #464 is about"
+                            )]
+                            {
+                                panic!(
+                                    "preview promised a closure->merge promotion {:?} <-> {:?} \
+                                     that `plan_merge_promotion` refuses",
+                                    pair.station_a, pair.station_b
+                                );
+                            }
+                        }
                     }
-                    self.record_station_merge(StationMerge {
-                        station_a: ka,
-                        station_b: kb,
-                        merged_at: Utc::now(),
-                    });
                 }
             }
         }
