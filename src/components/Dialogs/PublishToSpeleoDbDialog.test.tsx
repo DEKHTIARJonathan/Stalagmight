@@ -11,6 +11,17 @@ import userEvent from '@testing-library/user-event';
 const invokeIpcMock = vi.hoisted(() => vi.fn());
 vi.mock('../../utils/ipc', () => ({ invokeIpc: invokeIpcMock, getErrorMessage: (_e: unknown, f: string) => f }));
 
+// jsdom does not implement scrollIntoView; the Select component calls it on open.
+Element.prototype.scrollIntoView = vi.fn();
+
+/** Pick `value` from a portal-based `Select` (src/components/common/Select.tsx):
+ *  it isn't a native `<select>`, so this clicks the trigger, then the option
+ *  rendered at `data-testid="${testId}-option-${value}"`. */
+async function pickOption(testId: string, value: string) {
+  await userEvent.click(screen.getByTestId(testId));
+  await userEvent.click(screen.getByTestId(`${testId}-option-${encodeURIComponent(value)}`));
+}
+
 import PublishToSpeleoDbDialog from './PublishToSpeleoDbDialog';
 import { useProjectStore } from '../../store/projectStore';
 import { useSpeleoStore } from '../../store/speleoStore';
@@ -49,7 +60,7 @@ describe('PublishToSpeleoDbDialog', () => {
     expect(screen.getByTestId('publish-to-speleodb-dialog-name')).toHaveValue('My Cave');
     expect(screen.getByTestId('publish-to-speleodb-dialog-submit')).toBeDisabled();
 
-    await userEvent.selectOptions(screen.getByTestId('publish-to-speleodb-dialog-country'), 'US');
+    await pickOption('publish-to-speleodb-dialog-country', 'US');
     const submit = screen.getByTestId('publish-to-speleodb-dialog-submit');
     // Country chosen but description still empty -> stays disabled (server requires it).
     expect(submit).toBeDisabled();
@@ -88,7 +99,7 @@ describe('PublishToSpeleoDbDialog', () => {
     loadProjectMock.mockResolvedValue({ success: false });
     render(<PublishToSpeleoDbDialog />);
 
-    await userEvent.selectOptions(screen.getByTestId('publish-to-speleodb-dialog-country'), 'US');
+    await pickOption('publish-to-speleodb-dialog-country', 'US');
     fireEvent.change(screen.getByTestId('publish-to-speleodb-dialog-description'), { target: { value: 'desc' } });
     await userEvent.click(screen.getByTestId('publish-to-speleodb-dialog-submit'));
 
@@ -98,7 +109,7 @@ describe('PublishToSpeleoDbDialog', () => {
 
   it('blocks submit on an out-of-range coordinate pair', async () => {
     render(<PublishToSpeleoDbDialog />);
-    await userEvent.selectOptions(screen.getByTestId('publish-to-speleodb-dialog-country'), 'US');
+    await pickOption('publish-to-speleodb-dialog-country', 'US');
     await userEvent.type(screen.getByTestId('publish-to-speleodb-dialog-latitude'), '999');
     await userEvent.type(screen.getByTestId('publish-to-speleodb-dialog-longitude'), '0');
     expect(screen.getByTestId('publish-to-speleodb-dialog-submit')).toBeDisabled();
@@ -115,7 +126,7 @@ describe('PublishToSpeleoDbDialog', () => {
       loadProject: loadProjectMock,
     });
     render(<PublishToSpeleoDbDialog />);
-    expect(screen.getByTestId('publish-to-speleodb-dialog-country')).toHaveValue('MX');
+    expect(screen.getByTestId('publish-to-speleodb-dialog-country')).toHaveTextContent('Mexico');
     expect(screen.getByTestId('publish-to-speleodb-dialog-latitude')).toHaveValue(20.21);
     expect(screen.getByTestId('publish-to-speleodb-dialog-longitude')).toHaveValue(-87.46);
     // Country + coords + name are prefilled, but a description is still required, so
@@ -136,7 +147,7 @@ describe('PublishToSpeleoDbDialog', () => {
       loadProject: loadProjectMock,
     });
     render(<PublishToSpeleoDbDialog />);
-    expect(screen.getByTestId('publish-to-speleodb-dialog-country')).toHaveValue('');
+    expect(screen.getByTestId('publish-to-speleodb-dialog-country')).toHaveTextContent('Select a country');
   });
 
   it('autocompletes a collaborator, then grants it after the project is published', async () => {
@@ -151,17 +162,14 @@ describe('PublishToSpeleoDbDialog', () => {
       return Promise.resolve({ users: [], teams: [] });
     });
     render(<PublishToSpeleoDbDialog />);
-    await userEvent.selectOptions(screen.getByTestId('publish-to-speleodb-dialog-country'), 'US');
+    await pickOption('publish-to-speleodb-dialog-country', 'US');
     fireEvent.change(screen.getByTestId('publish-to-speleodb-dialog-description'), { target: { value: 'desc' } });
 
     // Pick a suggestion from the debounced typeahead, choose a level, and queue it.
     await userEvent.type(screen.getByTestId('publish-to-speleodb-dialog-collab-email'), 'ali');
     await userEvent.click(await screen.findByTestId('publish-to-speleodb-dialog-collab-suggestion-alice@x.com'));
     expect(screen.getByTestId('publish-to-speleodb-dialog-collab-email')).toHaveValue('alice@x.com');
-    await userEvent.selectOptions(
-      screen.getByTestId('publish-to-speleodb-dialog-collab-add-level'),
-      'READ_AND_WRITE',
-    );
+    await pickOption('publish-to-speleodb-dialog-collab-add-level', 'READ_AND_WRITE');
     await userEvent.click(screen.getByTestId('publish-to-speleodb-dialog-collab-add'));
     expect(screen.getByTestId('publish-to-speleodb-dialog-collab-alice@x.com')).toBeInTheDocument();
 
@@ -185,7 +193,7 @@ describe('PublishToSpeleoDbDialog', () => {
       return Promise.resolve({ users: [], teams: [] });
     });
     render(<PublishToSpeleoDbDialog />);
-    await userEvent.selectOptions(screen.getByTestId('publish-to-speleodb-dialog-country'), 'US');
+    await pickOption('publish-to-speleodb-dialog-country', 'US');
     fireEvent.change(screen.getByTestId('publish-to-speleodb-dialog-description'), { target: { value: 'desc' } });
     await userEvent.type(screen.getByTestId('publish-to-speleodb-dialog-collab-email'), 'bob@x.com');
     await userEvent.click(screen.getByTestId('publish-to-speleodb-dialog-collab-add'));
@@ -207,7 +215,7 @@ describe('PublishToSpeleoDbDialog', () => {
       return Promise.resolve({ users: [], teams: [] });
     });
     render(<PublishToSpeleoDbDialog />);
-    await userEvent.selectOptions(screen.getByTestId('publish-to-speleodb-dialog-country'), 'US');
+    await pickOption('publish-to-speleodb-dialog-country', 'US');
     fireEvent.change(screen.getByTestId('publish-to-speleodb-dialog-description'), { target: { value: 'desc' } });
 
     // Queue carol at the default level, then change the QUEUED row's level.
@@ -215,9 +223,7 @@ describe('PublishToSpeleoDbDialog', () => {
       target: { value: 'carol@x.com' },
     });
     await userEvent.click(screen.getByTestId('publish-to-speleodb-dialog-collab-add'));
-    fireEvent.change(screen.getByTestId('publish-to-speleodb-dialog-collab-level-carol@x.com'), {
-      target: { value: 'ADMIN' },
-    });
+    await pickOption('publish-to-speleodb-dialog-collab-level-carol@x.com', 'ADMIN');
 
     await userEvent.click(screen.getByTestId('publish-to-speleodb-dialog-submit'));
 
@@ -236,7 +242,7 @@ describe('PublishToSpeleoDbDialog', () => {
       return Promise.resolve({ users: [], teams: [] });
     });
     render(<PublishToSpeleoDbDialog />);
-    await userEvent.selectOptions(screen.getByTestId('publish-to-speleodb-dialog-country'), 'US');
+    await pickOption('publish-to-speleodb-dialog-country', 'US');
     fireEvent.change(screen.getByTestId('publish-to-speleodb-dialog-description'), { target: { value: 'desc' } });
 
     fireEvent.change(screen.getByTestId('publish-to-speleodb-dialog-collab-email'), {

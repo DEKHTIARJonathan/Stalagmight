@@ -1,5 +1,5 @@
 import { test, expect } from './fixtures/coverage';
-import { setupMockedPage, createProject, waitForMapReady } from './helpers/app';
+import { setupMockedPage, createProject, waitForMapReady, selectDropdownOption } from './helpers/app';
 
 test.describe('UI Components', () => {
   test.beforeEach(async ({ page }) => {
@@ -166,7 +166,7 @@ test.describe('UI Components', () => {
       await expect(spacingSelect).toBeVisible({ timeout: 2000 });
 
       // Default spacing should be 10m
-      await expect(spacingSelect).toHaveValue('10');
+      await expect(spacingSelect).toHaveText('10m');
 
       // Toggle back off
       await gridButton.click();
@@ -188,19 +188,19 @@ test.describe('UI Components', () => {
       await expect(spacingSelect).toBeVisible({ timeout: 2000 });
 
       // Default is 10m
-      await expect(spacingSelect).toHaveValue('10');
+      await expect(spacingSelect).toHaveText('10m');
 
       // Change to 25m
-      await spacingSelect.selectOption('25');
-      await expect(spacingSelect).toHaveValue('25');
+      await selectDropdownOption(page, 'grid-spacing-select', '25');
+      await expect(spacingSelect).toHaveText('25m');
 
       // Change to 5m
-      await spacingSelect.selectOption('5');
-      await expect(spacingSelect).toHaveValue('5');
+      await selectDropdownOption(page, 'grid-spacing-select', '5');
+      await expect(spacingSelect).toHaveText('5m');
 
       // Change to 100m
-      await spacingSelect.selectOption('100');
-      await expect(spacingSelect).toHaveValue('100');
+      await selectDropdownOption(page, 'grid-spacing-select', '100');
+      await expect(spacingSelect).toHaveText('100m');
     });
 
     test('should show satellite option in Display menu', async ({ page }) => {

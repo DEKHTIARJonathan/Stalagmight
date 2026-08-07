@@ -10,6 +10,17 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 
+// jsdom does not implement scrollIntoView; the Select component calls it on open.
+Element.prototype.scrollIntoView = vi.fn();
+
+/** Pick `value` from a portal-based `Select` (src/components/common/Select.tsx):
+ *  it isn't a native `<select>`, so this clicks the trigger, then the option
+ *  rendered at `data-testid="${testId}-option-${value}"`. */
+function pickOption(testId: string, value: string) {
+  fireEvent.click(screen.getByTestId(testId));
+  fireEvent.click(screen.getByTestId(`${testId}-option-${encodeURIComponent(value)}`));
+}
+
 const executeBatch = vi.fn().mockResolvedValue({ success: true });
 const closeDialog = vi.fn();
 
@@ -72,8 +83,8 @@ describe('UnrecognisedShotKindDialog', () => {
 
   it('preselects Reference - the fail-closed answer the backend already applied', () => {
     render(<UnrecognisedShotKindDialog />);
-    expect(screen.getByTestId('unrecognised-kind-select-1')).toHaveValue('Reference');
-    expect(screen.getByTestId('unrecognised-kind-select-2')).toHaveValue('Reference');
+    expect(screen.getByTestId('unrecognised-kind-select-1')).toHaveTextContent('shotKind.reference');
+    expect(screen.getByTestId('unrecognised-kind-select-2')).toHaveTextContent('shotKind.reference');
   });
 
   it('issues NO edits when the user accepts the defaults', async () => {
@@ -85,9 +96,7 @@ describe('UnrecognisedShotKindDialog', () => {
 
   it('issues an edit only for the shots the user actually changed', async () => {
     render(<UnrecognisedShotKindDialog />);
-    fireEvent.change(screen.getByTestId('unrecognised-kind-select-1'), {
-      target: { value: 'Jump' },
-    });
+    pickOption('unrecognised-kind-select-1', 'Jump');
     fireEvent.click(screen.getByTestId('unrecognised-kind-apply'));
     await waitFor(() => expect(closeDialog).toHaveBeenCalled());
     expect(executeBatch).toHaveBeenCalledTimes(1);
@@ -103,9 +112,7 @@ describe('UnrecognisedShotKindDialog', () => {
     // be re-offered.
     executeBatch.mockResolvedValueOnce({ success: false, error: 'Project is read-only' });
     render(<UnrecognisedShotKindDialog />);
-    fireEvent.change(screen.getByTestId('unrecognised-kind-select-1'), {
-      target: { value: 'Jump' },
-    });
+    pickOption('unrecognised-kind-select-1', 'Jump');
     fireEvent.click(screen.getByTestId('unrecognised-kind-apply'));
 
     await waitFor(() =>
@@ -115,7 +122,7 @@ describe('UnrecognisedShotKindDialog', () => {
     );
     expect(closeDialog).not.toHaveBeenCalled();
     // The user's selection survives, so they can retry once the lock is held.
-    expect(screen.getByTestId('unrecognised-kind-select-1')).toHaveValue('Jump');
+    expect(screen.getByTestId('unrecognised-kind-select-1')).toHaveTextContent('shotKind.jump');
   });
 
   it('sends every change as ONE batch, not a call per shot', async () => {
@@ -124,9 +131,7 @@ describe('UnrecognisedShotKindDialog', () => {
     // warnings and the integrity check.
     render(<UnrecognisedShotKindDialog />);
     for (const id of [1, 2]) {
-      fireEvent.change(screen.getByTestId(`unrecognised-kind-select-${id}`), {
-        target: { value: 'Jump' },
-      });
+      pickOption(`unrecognised-kind-select-${id}`, 'Jump');
     }
     fireEvent.click(screen.getByTestId('unrecognised-kind-apply'));
     await waitFor(() => expect(closeDialog).toHaveBeenCalled());

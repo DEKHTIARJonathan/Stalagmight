@@ -1,6 +1,6 @@
 import { test, expect, Page } from './fixtures/coverage';
 import { setupTauriMocks } from './mocks/tauri-ipc';
-import { seedProjectWithSections, deleteShotAt, type SectionSeed } from './helpers/app';
+import { seedProjectWithSections, deleteShotAt, selectDropdownOption, type SectionSeed } from './helpers/app';
 import { gasWaypointUnresolvedIndicators } from './helpers/testIds';
 
 /**
@@ -173,7 +173,7 @@ test.describe('Dive-plan persistence (#244)', () => {
     // The just-saved plan is now the loaded one (baseline = current inputs → not dirty).
     expect(await loadedPlanId(page)).toBe(plans[0].id);
     await expect(page.locator('[data-testid="dive-plan-dirty"]')).toHaveCount(0);
-    await expect(page.locator('[data-testid="dive-plan-select"]')).toHaveValue(String(plans[0].id));
+    await expect(page.locator('[data-testid="dive-plan-select"]')).toHaveText(plans[0].name);
   });
 
   test('loading another plan applies its snapshot to the inputs @smoke', async ({ page }) => {
@@ -190,7 +190,7 @@ test.describe('Dive-plan persistence (#244)', () => {
     expect(planA).toBeDefined();
 
     // Not dirty (just saved B), so selecting A loads immediately (no confirm).
-    await page.locator('[data-testid="dive-plan-select"]').selectOption(String(planA!.id));
+    await selectDropdownOption(page, 'dive-plan-select', String(planA!.id));
     await expect
       .poll(() => loadedPlanId(page), { timeout: 3000 })
       .toBe(planA!.id);
@@ -223,7 +223,7 @@ test.describe('Dive-plan persistence (#244)', () => {
     const plans = await savedPlans(page);
     const withPoints = plans.find((p) => p.name === 'With route points');
     expect(withPoints).toBeDefined();
-    await page.locator('[data-testid="dive-plan-select"]').selectOption(String(withPoints!.id));
+    await selectDropdownOption(page, 'dive-plan-select', String(withPoints!.id));
     await expect.poll(() => loadedPlanId(page), { timeout: 3000 }).toBe(withPoints!.id);
 
     const restored = await page.evaluate(() => {
@@ -270,7 +270,7 @@ test.describe('Dive-plan persistence (#244)', () => {
     const plans = await savedPlans(page);
     const withSegments = plans.find((p) => p.name === 'With segments');
     expect(withSegments).toBeDefined();
-    await page.locator('[data-testid="dive-plan-select"]').selectOption(String(withSegments!.id));
+    await selectDropdownOption(page, 'dive-plan-select', String(withSegments!.id));
     await expect.poll(() => loadedPlanId(page), { timeout: 3000 }).toBe(withSegments!.id);
 
     const restored = await page.evaluate(
@@ -311,12 +311,12 @@ test.describe('Dive-plan persistence (#244)', () => {
     const plans = await savedPlans(page);
     const planA = plans.find((p) => p.name === 'Plan A')!;
     const planB = plans.find((p) => p.name === 'Plan B')!;
-    await page.locator('[data-testid="dive-plan-select"]').selectOption(String(planA.id));
+    await selectDropdownOption(page, 'dive-plan-select', String(planA.id));
     await expect.poll(() => loadedPlanId(page), { timeout: 3000 }).toBe(planA.id);
     await setDiverRmv(page, 99); // dirty
 
     // Selecting B must NOT switch yet - it prompts.
-    await page.locator('[data-testid="dive-plan-select"]').selectOption(String(planB.id));
+    await selectDropdownOption(page, 'dive-plan-select', String(planB.id));
     await expect(page.locator('[data-testid="dive-plan-switch-confirm"]')).toBeVisible();
     expect(await loadedPlanId(page)).toBe(planA.id); // still A until confirmed
 
@@ -348,7 +348,7 @@ test.describe('Dive-plan persistence (#244)', () => {
     await enterPlan(page);
     expect(await loadedPlanId(page)).toBe(id);
     expect(await diverRmv(page)).toBe(17);
-    await expect(page.locator('[data-testid="dive-plan-select"]')).toHaveValue(String(id));
+    await expect(page.locator('[data-testid="dive-plan-select"]')).toHaveText('Persist me');
   });
 
   test('deleting the loaded plan removes it @smoke', async ({ page }) => {

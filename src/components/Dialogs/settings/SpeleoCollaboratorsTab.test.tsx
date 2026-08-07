@@ -6,9 +6,22 @@
  * arming that every server-mutating verb on this tab now needs plus the
  * cancellation of a superseded roster load.
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, beforeAll } from 'vitest';
 import { render, screen, waitFor, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+
+// jsdom does not implement scrollIntoView; the Select component calls it on open.
+beforeAll(() => {
+  Element.prototype.scrollIntoView = vi.fn();
+});
+
+/** Pick `value` from a portal-based `Select` (src/components/common/Select.tsx):
+ *  it isn't a native `<select>`, so this clicks the trigger, then the option
+ *  rendered at `data-testid="${testId}-option-${value}"`. */
+async function pickOption(testId: string, value: string) {
+  await userEvent.click(screen.getByTestId(testId));
+  await userEvent.click(screen.getByTestId(`${testId}-option-${encodeURIComponent(value)}`));
+}
 
 const invokeIpcMock = vi.hoisted(() => vi.fn());
 vi.mock('../../../utils/ipc', () => ({
@@ -104,10 +117,7 @@ describe('SpeleoCollaboratorsTab', () => {
     seed('ADMIN');
     render(<SpeleoCollaboratorsTab />);
     await userEvent.type(await screen.findByTestId('speleodb-collaborators-add-email'), 'new@x.com');
-    await userEvent.selectOptions(
-      screen.getByTestId('speleodb-collaborators-add-level'),
-      'READ_AND_WRITE',
-    );
+    await pickOption('speleodb-collaborators-add-level', 'READ_AND_WRITE');
     await userEvent.click(screen.getByTestId('speleodb-collaborators-add-user'));
     await waitFor(() => {
       const call = invokeIpcMock.mock.calls.find((c) => c[0] === 'speleodb_add_collaborator');
@@ -152,10 +162,8 @@ describe('SpeleoCollaboratorsTab', () => {
   it('changes and removes another user with the right payloads', async () => {
     seed('ADMIN');
     render(<SpeleoCollaboratorsTab />);
-    await userEvent.selectOptions(
-      await screen.findByTestId('speleodb-collab-user-level-bob@x.com'),
-      'READ_AND_WRITE',
-    );
+    await screen.findByTestId('speleodb-collab-user-level-bob@x.com');
+    await pickOption('speleodb-collab-user-level-bob@x.com', 'READ_AND_WRITE');
     await userEvent.click(screen.getByTestId('speleodb-collab-user-level-apply-bob@x.com'));
     await waitFor(() => {
       const call = invokeIpcMock.mock.calls.find((c) => c[0] === 'speleodb_set_collaborator');
@@ -172,11 +180,13 @@ describe('SpeleoCollaboratorsTab', () => {
   it('adds a team via the picker (no ADMIN option offered)', async () => {
     seed('ADMIN');
     render(<SpeleoCollaboratorsTab />);
-    const picker = await screen.findByTestId('speleodb-collaborators-add-team-id');
+    await screen.findByTestId('speleodb-collaborators-add-team-id');
     // Teams cannot be ADMIN: the level select offers only the three non-admin tiers.
     const levelSelect = screen.getByTestId('speleodb-collaborators-add-team-level');
-    expect(levelSelect.querySelectorAll('option')).toHaveLength(3);
-    await userEvent.selectOptions(picker, 't2');
+    await userEvent.click(levelSelect);
+    expect(screen.getAllByRole('option')).toHaveLength(3);
+    await userEvent.click(levelSelect); // close it back before touching the other picker
+    await pickOption('speleodb-collaborators-add-team-id', 't2');
     await userEvent.click(screen.getByTestId('speleodb-collaborators-add-team'));
     await waitFor(() => {
       const call = invokeIpcMock.mock.calls.find((c) => c[0] === 'speleodb_add_team');
@@ -187,10 +197,8 @@ describe('SpeleoCollaboratorsTab', () => {
   it('changes and removes a team with the right payloads', async () => {
     seed('ADMIN');
     render(<SpeleoCollaboratorsTab />);
-    await userEvent.selectOptions(
-      await screen.findByTestId('speleodb-collab-team-level-t1'),
-      'READ_ONLY',
-    );
+    await screen.findByTestId('speleodb-collab-team-level-t1');
+    await pickOption('speleodb-collab-team-level-t1', 'READ_ONLY');
     await userEvent.click(screen.getByTestId('speleodb-collab-team-level-apply-t1'));
     await waitFor(() => {
       const call = invokeIpcMock.mock.calls.find((c) => c[0] === 'speleodb_set_team');
@@ -256,10 +264,10 @@ describe('SpeleoCollaboratorsTab', () => {
     seed('ADMIN');
     render(<SpeleoCollaboratorsTab />);
     const select = await screen.findByTestId('speleodb-collab-user-level-bob@x.com');
-    await userEvent.selectOptions(select, 'READ_AND_WRITE');
+    await pickOption('speleodb-collab-user-level-bob@x.com', 'READ_AND_WRITE');
     // The picker shows the user's own choice, but says it is not applied, and
     // nothing has been granted server-side.
-    expect(select).toHaveValue('READ_AND_WRITE');
+    expect(select).toHaveTextContent('Read & write');
     expect(screen.getByTestId('speleodb-collab-user-level-pending-bob@x.com')).toBeInTheDocument();
     expect(notCalled('speleodb_set_collaborator')).toBe(true);
   });
@@ -268,10 +276,10 @@ describe('SpeleoCollaboratorsTab', () => {
     seed('ADMIN');
     render(<SpeleoCollaboratorsTab />);
     const select = await screen.findByTestId('speleodb-collab-user-level-bob@x.com');
-    await userEvent.selectOptions(select, 'ADMIN');
+    await pickOption('speleodb-collab-user-level-bob@x.com', 'ADMIN');
     await userEvent.click(screen.getByTestId('speleodb-collab-user-level-cancel-bob@x.com'));
     // Back to server truth, with no pending badge left claiming otherwise.
-    expect(select).toHaveValue('READ_ONLY');
+    expect(select).toHaveTextContent('Read only');
     expect(screen.queryByTestId('speleodb-collab-user-level-pending-bob@x.com')).toBeNull();
     expect(notCalled('speleodb_set_collaborator')).toBe(true);
   });
@@ -280,12 +288,12 @@ describe('SpeleoCollaboratorsTab', () => {
     seed('ADMIN');
     render(<SpeleoCollaboratorsTab />);
     const select = await screen.findByTestId('speleodb-collab-user-level-bob@x.com');
-    await userEvent.selectOptions(select, 'ADMIN');
+    await pickOption('speleodb-collab-user-level-bob@x.com', 'ADMIN');
     await userEvent.click(screen.getByTestId('speleodb-collab-user-remove-offer-bob@x.com'));
     // The competing action wins the single armed slot: the half-made grant is gone
     // and the picker is back on what the server has.
     expect(screen.queryByTestId('speleodb-collab-user-level-pending-bob@x.com')).toBeNull();
-    expect(select).toHaveValue('READ_ONLY');
+    expect(select).toHaveTextContent('Read only');
     expect(
       screen.getByTestId('speleodb-collab-user-remove-confirm-bob@x.com'),
     ).toBeInTheDocument();
@@ -302,13 +310,13 @@ describe('SpeleoCollaboratorsTab', () => {
     });
     render(<SpeleoCollaboratorsTab />);
     const select = await screen.findByTestId('speleodb-collab-user-level-bob@x.com');
-    await userEvent.selectOptions(select, 'READ_AND_WRITE');
+    await pickOption('speleodb-collab-user-level-bob@x.com', 'READ_AND_WRITE');
     await userEvent.click(screen.getByTestId('speleodb-collab-user-level-apply-bob@x.com'));
     // Error surfaced, and the row is still there (roster not blanked on failure).
     await waitFor(() => expect(showToast).toHaveBeenCalled());
     expect(screen.getByTestId('speleodb-collab-user-bob@x.com')).toBeInTheDocument();
     // A change that did not take is not left on screen looking applied.
-    expect(select).toHaveValue('READ_ONLY');
+    expect(select).toHaveTextContent('Read only');
     expect(screen.queryByTestId('speleodb-collab-user-level-pending-bob@x.com')).toBeNull();
   });
 
