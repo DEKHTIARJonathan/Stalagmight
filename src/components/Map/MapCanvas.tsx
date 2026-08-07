@@ -3227,17 +3227,21 @@ function MapCanvas() {
           maxzoom: tileConfig.maxZoom,
         });
 
-        // Add satellite layer below survey layers but above background.
-        // The main shots/stations hitbox layers were removed (#mem budget), so
-        // the bottom-most survey layer is now the ghost shot hitbox (added first
-        // in initializeLayers). Fall back through the first visible survey layers
-        // in case ordering changes, so satellite always lands beneath them.
+        // Satellite goes below the grid, and the grid below the survey. The grid
+        // has to lead the list: GridOverlay anchors it on the same bottom-most
+        // survey layer, and a later insertion before that same anchor lands
+        // nearer to it, i.e. above the grid - which 0.7-opacity raster then
+        // hides. The survey ids cover the grid-off case: the ghost shot hitbox
+        // is added first in initializeLayers (the main shots/stations hitbox
+        // layers were removed, #mem budget), the rest are fallbacks in case that
+        // ordering changes, so satellite always lands beneath them.
         const bottomCandidates = [
+          'grid-lines',
           'survey-ghost-shots-hitbox',
           'survey-ghost-shots',
           'survey-shots',
         ];
-        const firstSurveyLayer = bottomCandidates.find((id) => currentMap.getLayer(id));
+        const bottomAnchor = bottomCandidates.find((id) => currentMap.getLayer(id));
         currentMap.addLayer({
           id: 'satellite-tiles',
           type: 'raster',
@@ -3245,7 +3249,7 @@ function MapCanvas() {
           paint: {
             'raster-opacity': 0.7,
           },
-        }, firstSurveyLayer);
+        }, bottomAnchor);
 
         // Add error handler for tile fetch failures
         const sourceId = 'satellite-tiles';

@@ -122,8 +122,19 @@ export default function GridOverlay({ map, gpsOrigin }: GridOverlayProps) {
       }
 
       if (!map.getLayer(layerId)) {
-        // Insert below survey layers if they exist
-        const surveyLayer = map.getLayer('survey-shots');
+        // The grid belongs under every survey layer, ghosts and loop closures
+        // included, so it anchors on the bottom-most one: `initializeLayers`
+        // adds the ghost shot hitbox first. The later candidates only matter if
+        // that ordering changes; `survey-custom-render` is the geometry itself,
+        // so the grid still lands under the survey even then. No anchor means
+        // no survey layer exists yet, and layers added after this one are
+        // appended above it anyway.
+        const bottomCandidates = [
+          'survey-ghost-shots-hitbox',
+          'survey-ghost-shots',
+          'survey-custom-render',
+        ];
+        const firstSurveyLayer = bottomCandidates.find((id) => map.getLayer(id));
         map.addLayer(
           {
             id: layerId,
@@ -135,7 +146,7 @@ export default function GridOverlay({ map, gpsOrigin }: GridOverlayProps) {
               'line-opacity': 0.8,
             },
           },
-          surveyLayer ? 'survey-shots' : undefined
+          firstSurveyLayer
         );
       }
 
