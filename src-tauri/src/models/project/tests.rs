@@ -11903,6 +11903,249 @@ fn deleting_shot_converts_broken_loop_closure_to_merge() {
     assert!(!project.has_critical_integrity_violations());
 }
 
+/// Two independently GPS-anchored components, bridged only by a loop closure,
+/// and the shot carrying the closure's endpoint deleted (#464 defect A).
+///
+/// * component 1: section A (4 shots north) merged tail-to-head into section C,
+///   whose station 0 carries the GPS datum;
+/// * component 2: section B, with its OWN GPS datum ~1.4 km away;
+/// * a loop closure A4 <-> B0, which `create_loop_closure` legitimately allows
+///   between two unconnected components when both are datum-anchored.
+///
+/// Returns `(project, a, b, c)`.
+fn double_anchored_closure_fixture() -> (Project, SectionId, SectionId, SectionId) {
+    let mut project = Project::new("DoubleAnchor".to_string(), None);
+    let a = project
+        .add_section(SectionData {
+            shots: vec![
+                shot(0.0, 0.0, 10.0, 0.0, 0.0),
+                shot(0.0, 0.0, 10.0, 0.0, 0.0),
+                shot(0.0, 0.0, 10.0, 0.0, 0.0),
+                shot(0.0, 0.0, 10.0, 0.0, 0.0),
+            ],
+            ..Default::default()
+        })
+        .id;
+    let c = project
+        .add_section(SectionData {
+            shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    let b = project
+        .add_section(SectionData {
+            shots: vec![shot(180.0, 180.0, 5.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    // A's tail hangs C off it, and C carries component 1's anchor.
+    project
+        .merge_stations(StationRef::new(a, 4), StationRef::new(c, 0))
+        .unwrap();
+    project
+        .set_zero_datum(
+            StationRef::new(c, 0),
+            GpsCoordinates::new(45.0, -90.0, 0.0).unwrap(),
+        )
+        .unwrap();
+    // Component 2's own anchor, far enough away that welding the two is a gap
+    // no cascade could hide.
+    project
+        .set_zero_datum(
+            StationRef::new(b, 0),
+            GpsCoordinates::new(45.01, -90.0, 0.0).unwrap(),
+        )
+        .unwrap();
+    project
+        .create_loop_closure(
+            StationRef::new(a, 4),
+            StationRef::new(b, 0),
+            ClosureStrategy::Batch,
+        )
+        .unwrap();
+    (project, a, b, c)
+}
+
+/// #464 defect A: the broken-loop arm of `preview_delete_shot` used to convert
+/// an orphaned closure into a merge with NO guard at all, welding two
+/// independently datum-anchored components into one rigid group. Both ends are
+/// authoritative to `cascade_bfs`, so the gap is permanent and Repair cannot
+/// reduce it. The closure has to SURVIVE, re-anchored onto the replacement
+/// station.
+#[test]
+fn deleting_a_shot_never_promotes_a_closure_that_would_double_anchor() {
+    let (mut project, a, b, c) = double_anchored_closure_fixture();
+    let closure_id = project.loop_closures[0].id;
+
+    // Delete A's last shot: that removes station A4, which is both the merge
+    // partner of C0 and one end of the closure.
+    let last_shot = project.get_section(a).unwrap().shots.last().unwrap().id;
+    let (_, impact) = project.remove_shot_with_rewire(a, last_shot).unwrap();
+
+    assert!(
+        impact.closure_to_merge.is_empty(),
+        "a closure between two independently anchored components must not become a merge: {impact:?}"
+    );
+    assert_eq!(
+        impact.replacement_closure_updates.len(),
+        1,
+        "the refused promotion must keep the closure, re-anchored: {impact:?}"
+    );
+    let update = &impact.replacement_closure_updates[0];
+    assert_eq!(update.closure_id, closure_id);
+    assert_eq!(update.new_station, StationRef::new(c, 0));
+
+    assert_eq!(
+        project.loop_closures.len(),
+        1,
+        "the closure must survive: {:?}",
+        project.loop_closures
+    );
+    let survivor = &project.loop_closures[0];
+    let ends = (
+        project.resolve_key(&survivor.station_a).unwrap(),
+        project.resolve_key(&survivor.station_b).unwrap(),
+    );
+    assert_eq!(ends, (StationRef::new(c, 0), StationRef::new(b, 0)));
+    assert!(
+        !project.are_stations_merged(StationRef::new(c, 0), StationRef::new(b, 0)),
+        "no rigid merge may exist across the two anchors: {:?}",
+        project.station_merges
+    );
+
+    // ...and the refusal is STABLE: the whole-project sweep the command epilogue
+    // and the loader both run declines it for the same reason, so memory and
+    // disk cannot disagree about what this closure is.
+    assert_eq!(project.convert_orphan_closures_to_merges(), 0);
+    project.redrive_offsets_after_load();
+    assert_eq!(project.loop_closures.len(), 1);
+    assert!(project.station_merges.is_empty());
+}
+
+/// A genuine loop over two sections, with a real misclosure, whose other leg is
+/// about to be deleted (#464 defect C).
+///
+/// * section P: two 10 m shots north, GPS-anchored at P0;
+/// * section Q: two 10 m shots east, merged P2 <-> Q0;
+/// * a loop closure P0 <-> Q2 - a true loop (P0-P1-P2=Q0-Q1-Q2) carrying the
+///   28.28 m misclosure the survey actually measured.
+///
+/// Returns `(project, p, q)`.
+fn misclosing_loop_fixture() -> (Project, SectionId, SectionId) {
+    let mut project = Project::new("Misclosure".to_string(), None);
+    let p = project
+        .add_section(SectionData {
+            shots: vec![
+                shot(0.0, 0.0, 10.0, 0.0, 0.0),
+                shot(0.0, 0.0, 10.0, 0.0, 0.0),
+            ],
+            ..Default::default()
+        })
+        .id;
+    let q = project
+        .add_section(SectionData {
+            shots: vec![
+                shot(90.0, 90.0, 10.0, 0.0, 0.0),
+                shot(90.0, 90.0, 10.0, 0.0, 0.0),
+            ],
+            ..Default::default()
+        })
+        .id;
+    project
+        .set_zero_datum(
+            StationRef::new(p, 0),
+            GpsCoordinates::new(45.0, -90.0, 0.0).unwrap(),
+        )
+        .unwrap();
+    project
+        .merge_stations(StationRef::new(p, 2), StationRef::new(q, 0))
+        .unwrap();
+    let closure = project
+        .create_loop_closure(
+            StationRef::new(p, 0),
+            StationRef::new(q, 2),
+            ClosureStrategy::Batch,
+        )
+        .unwrap();
+    assert!(
+        closure.misclosure_distance > 28.0,
+        "the fixture must carry a REAL misclosure, got {}",
+        closure.misclosure_distance
+    );
+    (project, p, q)
+}
+
+/// #464 defect C: promoting an orphaned closure to a merge declares a
+/// coincidence the geometry does not have. The follow-up
+/// `cascade_connection_offsets(&[edited_section])` cannot pay for it - the
+/// edited section is a seed and the other end holds the datum, so both are
+/// authoritative and `cascade_bfs` skips the freshly minted edge. The promotion
+/// itself has to translate the movable side.
+#[test]
+fn promoting_an_orphaned_closure_co_locates_the_side_that_may_move() {
+    let (mut project, p, q) = misclosing_loop_fixture();
+    let q_before = project.section_offset(q);
+
+    // Delete Q's first shot: station Q0 goes, and with it the P2 <-> Q0 merge,
+    // so the closure is the sole bridge left between P and Q.
+    let first_shot = project.get_section(q).unwrap().shots[0].id;
+    project.remove_shot_with_rewire(q, first_shot).unwrap();
+
+    assert!(
+        project.loop_closures.is_empty(),
+        "the sole-bridge closure must be promoted: {:?}",
+        project.loop_closures
+    );
+    assert_eq!(project.station_merges.len(), 1);
+    let merge = &project.station_merges[0];
+    let a = project.resolve_key(&merge.station_a).unwrap();
+    let b = project.resolve_key(&merge.station_b).unwrap();
+    let (ax, ay) = project.compute_station_raw_xy(a).unwrap();
+    let (bx, by) = project.compute_station_raw_xy(b).unwrap();
+    let gap = ((ax - bx).powi(2) + (ay - by).powi(2)).sqrt();
+    assert!(
+        gap < Project::MERGE_ALIGNMENT_INVARIANT_M,
+        "the promotion left the merge {gap:.6} m out of alignment"
+    );
+
+    // The DATUM side did not move; the free side did.
+    assert!(
+        project.section_offset(p).0.abs() < 1e-9 && project.section_offset(p).1.abs() < 1e-9,
+        "the anchored side must stay put, got {:?}",
+        project.section_offset(p)
+    );
+    assert!(
+        (project.section_offset(q).0 - q_before.0).abs() > 1.0
+            || (project.section_offset(q).1 - q_before.1).abs() > 1.0,
+        "the free side must have been translated onto the anchor"
+    );
+}
+
+/// The same promotion with NOTHING anchored: the coincidence is still owed, and
+/// the side that moves is picked deterministically (`station_a`'s group, exactly
+/// as `merge_stations` picks when neither side holds a datum).
+#[test]
+fn promoting_an_orphaned_closure_co_locates_even_with_no_datum() {
+    let (mut project, _p, q) = misclosing_loop_fixture();
+    project.zero_datums.clear();
+
+    let first_shot = project.get_section(q).unwrap().shots[0].id;
+    project.remove_shot_with_rewire(q, first_shot).unwrap();
+
+    assert!(project.loop_closures.is_empty());
+    assert_eq!(project.station_merges.len(), 1);
+    let merge = &project.station_merges[0];
+    let a = project.resolve_key(&merge.station_a).unwrap();
+    let b = project.resolve_key(&merge.station_b).unwrap();
+    let (ax, ay) = project.compute_station_raw_xy(a).unwrap();
+    let (bx, by) = project.compute_station_raw_xy(b).unwrap();
+    let gap = ((ax - bx).powi(2) + (ay - by).powi(2)).sqrt();
+    assert!(
+        gap < Project::MERGE_ALIGNMENT_INVARIANT_M,
+        "the promotion left the merge {gap:.6} m out of alignment"
+    );
+}
+
 #[test]
 fn repair_structural_integrity_drops_dangling_refs_and_keeps_valid() {
     let (mut project, a, b) = integrity_fixture();
