@@ -612,7 +612,8 @@ impl Project {
                 tracing::warn!(
                     closure_id = id,
                     purpose = "avoid double-anchoring a merge component",
-                    "Left a sole-bridge loop closure unconverted: both endpoints are zero-datum-anchored"
+                    "Left a sole-bridge loop closure unconverted: promoting it is not legal \
+                     (both endpoints zero-datum-anchored, or an endpoint no longer resolves)"
                 );
                 left_as_closure.insert(id);
                 continue;
