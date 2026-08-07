@@ -940,6 +940,28 @@ async function runFuzz(
   };
 
   /**
+   * The move that is RUNNING RIGHT NOW - `null` between moves.
+   *
+   * A `note` line reports what a move DID to the stacks, so it can only be
+   * written once the move RETURNS. A move that throws instead - the step never
+   * comes back, or an assertion inside it fires - then left the tail ending on
+   * the PREVIOUS move, which reads as an attribution and is one: it names the
+   * wrong move. The same gotcha in the Rust tier mis-read two of issue #464's
+   * defects during triage.
+   *
+   * Armed before each step and disarmed after, and rendered by `fail` only, so
+   * a run that does not fail behaves exactly as before and the trace is
+   * untouched.
+   */
+  let inFlight: string | null = null;
+  const startingMove = (label: string): void => {
+    inFlight = label;
+  };
+  const finishedMove = (): void => {
+    inFlight = null;
+  };
+
+  /**
    * The resolved move list for this run. Observe-only: `record` is called AFTER
    * the decision it describes, draws nothing and reads no app state, so a run
    * with recording on takes exactly the trajectory it took without.
@@ -992,6 +1014,9 @@ async function runFuzz(
     const tail = (dumpFullHistory() ? history : history.slice(-HISTORY_TAIL)).map(
       (line) => `    ${line}`,
     );
+    // A move that has not RETURNED has no history line yet, so name it here -
+    // without this the tail ends on the move BEFORE the one that failed.
+    if (inFlight !== null) tail.push(`    ${inFlight} -> IN FLIGHT (had not returned)`);
     const message = [
       headline,
       `  reproduce: run_scenario("undo-redo-fuzz", seed=${ctx.seed}, iterations=${iterations})` +
@@ -1190,12 +1215,14 @@ async function runFuzz(
     const label = jumped ? `${action}(${steps - 1})[${steps} step(s)]` : direction;
     const beforeUndo = undoLen;
     const beforeRedo = redoLen;
+    startingMove(`${tag} ${label}`);
     const res = await step(
       jumped ? (back ? 'undoTo' : 'redoTo') : direction,
       action,
       jumped ? [steps - 1] : [],
       steps,
     );
+    finishedMove();
     if (!res.actionOk || res.commandSuccess === false) {
       note(`${tag} ${label} -> FAILED`);
       fail(
@@ -1250,7 +1277,9 @@ async function runFuzz(
     // The save is about to make undo-less changes, so everything recorded so
     // far belongs to the previous epoch.
     await bumpEpoch(ctx);
+    startingMove(`${tag} save`);
     const saveRes = await step('save', 'saveProject', [savePath]);
+    finishedMove();
     if (!saveRes.actionOk || saveRes.commandSuccess === false) {
       note(`${tag} save -> FAILED`);
       fail('saveProject failed', `  error: ${saveRes.commandError ?? saveRes.actionError ?? 'unknown'}`);
@@ -1269,6 +1298,7 @@ async function runFuzz(
     record(saveRes);
     ctx.metric('saves');
 
+    startingMove(`${tag} close/reopen`);
     const closed = (await ctx.callAction('project', 'closeProject', [])) as {
       ok: boolean;
       error?: string;
@@ -1285,6 +1315,7 @@ async function runFuzz(
     if (!opened.ok || opened.result?.success === false) {
       fail('reopening the saved project failed', `  error: ${opened.result?.error ?? opened.error ?? 'unknown'}`);
     }
+    finishedMove();
 
     // Switch BEFORE re-observing so both sides of the comparison are in the
     // same form. Idempotent, so later reloads are a no-op.
@@ -1315,7 +1346,9 @@ async function runFuzz(
   const runRepair = async (tag: string): Promise<void> => {
     const beforeUndo = undoLen;
     const beforeRedo = redoLen;
+    startingMove(`${tag} repairProjectIntegrity`);
     const res = await step('mutate', 'repairProjectIntegrity', []);
+    finishedMove();
     const accepted = res.actionOk && res.commandSuccess !== false;
     const pushed = res.undoLen - beforeUndo;
     note(
@@ -1403,7 +1436,9 @@ async function runFuzz(
     });
     const beforeUndo = undoLen;
     const beforeRedo = redoLen;
+    startingMove(`${tag} ${action.label}`);
     const res = await step('mutate', action.action, action.args);
+    finishedMove();
     const accepted = res.actionOk && res.commandSuccess !== false;
     const pushed = res.undoLen - beforeUndo;
     note(
