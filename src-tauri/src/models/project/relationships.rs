@@ -294,7 +294,42 @@ impl Project {
         //    over-constraint `over_anchored_merge_components` reports; each half
         //    holds its own position through its own datum, so creating NOTHING
         //    lets the deletion heal a file that was already over-anchored.
-        !self.would_double_anchor_after_removal(a.section_id, b.section_id, doomed, planned)
+        if self.would_double_anchor_after_removal(a.section_id, b.section_id, doomed, planned) {
+            return false;
+        }
+        // 5. The two stations are not in the same place. A merge ASSERTS they
+        //    are (`debug_assert_merge_alignment`), and unlike a closure promotion
+        //    - which converts a relationship the surveyor recorded, and so pays
+        //    for the coincidence by translating the movable side
+        //    (`plan_merge_promotion`) - this pair is ARBITRARY: it is whichever
+        //    two survivors the component walk happened to reach first. Moving a
+        //    survey group onto an arbitrary partner would invent geometry, so a
+        //    pair that is not already coincident is simply not stitched. In
+        //    practice every genuine repair passes: the pair comes from ONE merge
+        //    group, whose members are coincident by the very invariant this
+        //    guards. Same threshold as the invariant, so this cannot refuse a
+        //    pair the assert would have accepted.
+        let coincident = match (
+            self.compute_station_raw_xy(a),
+            self.compute_station_raw_xy(b),
+        ) {
+            (Some((ax, ay)), Some((bx, by))) => {
+                let gap = ((ax - bx).powi(2) + (ay - by).powi(2)).sqrt();
+                gap < Self::MERGE_ALIGNMENT_INVARIANT_M
+            }
+            // An endpoint with no computable position cannot be shown coincident,
+            // and a merge onto it would be a constraint nothing can check.
+            _ => false,
+        };
+        if !coincident {
+            tracing::debug!(
+                a = ?a,
+                b = ?b,
+                purpose = "never mint a merge that asserts a coincidence the geometry lacks",
+                "Skipped a replacement merge between two stations that are not co-located"
+            );
+        }
+        coincident
     }
 
     /// Sections reachable from `from` through merges - and, when
@@ -363,7 +398,7 @@ impl Project {
     /// merges-ONLY component definition it and
     /// [`Self::over_anchored_merge_components`] share - so the guard and the
     /// detector that would flag the result cannot disagree.
-    fn would_double_anchor_after_removal(
+    pub(crate) fn would_double_anchor_after_removal(
         &self,
         a: SectionId,
         b: SectionId,

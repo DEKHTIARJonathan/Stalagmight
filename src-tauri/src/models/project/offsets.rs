@@ -8,9 +8,42 @@ use std::hash::{Hash, Hasher};
 #[cfg(debug_assertions)]
 use tracing::error;
 
-use crate::models::{LoopClosure, SectionId, StationMerge};
+use crate::models::{LoopClosure, SectionId, StationKey, StationMerge};
 
 use super::Project;
+
+/// A rigid merge a command MINTED out of a coincidence CLAIM - a loop closure
+/// promoted because it stopped being a loop, or a deletion's broken-loop
+/// conversion.
+///
+/// The two are not the same statement. A loop closure RECORDS a misclosure; a
+/// merge ASSERTS that its two endpoints are the same point, and
+/// [`Project::debug_assert_merge_alignment`] holds the app to it. So a promotion
+/// owes the coincidence it declares, and pays it the way
+/// [`Project::merge_stations`] pays it interactively: by translating the movable
+/// side's whole rigid group onto the anchored one. Nothing else can - the offset
+/// cascade that follows a promotion is structurally unable to close the gap
+/// whenever both ends are authoritative to it (issue #464).
+///
+/// Planned by [`Project::plan_merge_promotion`], applied by
+/// [`Project::settle_minted_merges`]. Two steps rather than one because the
+/// command that mints usually goes on changing geometry afterwards - a shot
+/// removal re-places its own section's stations, and the gap-close compensation
+/// slides the whole section - so a delta computed at mint time is stale before
+/// anything asserts on it. What must be captured AT MINT TIME is the SET: it is
+/// the moving side's merge group taken BEFORE the new edge fuses the two groups
+/// into one, which is not recoverable once the merge exists. The DELTA is
+/// measured at settle time, off final geometry.
+#[derive(Debug, Clone)]
+pub(crate) struct MintedMerge {
+    /// The moving side's merge group, snapshotted before the merge existed.
+    /// Empty when nothing may move (see [`Project::plan_merge_promotion`]).
+    movable: Vec<SectionId>,
+    /// The endpoint that stays put.
+    anchor: StationKey,
+    /// The endpoint that has to reach it.
+    moving: StationKey,
+}
 
 /// One beyond-invariant merge, as the fixpoint fingerprint records it: the two
 /// endpoints as they currently resolve, and the EXACT gap between them.
@@ -162,6 +195,123 @@ impl Project {
         let group = self.get_merged_section_ids(anchor);
         for sid in group {
             self.adjust_section_offset(sid, dx, dy);
+        }
+    }
+
+    /// May the coincidence CLAIM between `a` and `b` become a rigid merge, and
+    /// which side has to move for the claim to be true?
+    ///
+    /// `None` REFUSES the promotion, and there is exactly one reason: it would
+    /// place two zero datums in one rigid merge group. That is the state
+    /// [`Self::merge_would_double_anchor`] names and
+    /// [`Self::over_anchored_merge_components`] reports, and it is unrepairable
+    /// rather than merely wrong - `cascade_bfs` pre-loads every datum-bearing
+    /// section as authoritative and never traverses an edge into one, so the gap
+    /// survives every cascade, realign and Repair (issue #464 defect A, where it
+    /// was 59 km).
+    ///
+    /// GEOMETRY is never a reason to refuse. A closure whose endpoints stopped
+    /// being connected IS a merge - the load path, Repair and every forward
+    /// command agree on that ([`Self::convert_orphan_closures_to_merges`]) - so a
+    /// site that declined a promotion because the endpoints were far apart would
+    /// leave the session holding a closure the next open converts anyway, and
+    /// memory and disk would disagree from then on. The distance is what the
+    /// translation is FOR.
+    ///
+    /// The movable side is picked exactly as [`Self::merge_stations`] picks it:
+    /// the datum-anchored side is the anchor, and with neither anchored `a`'s
+    /// group moves. `movable` comes back EMPTY when the two endpoints are already
+    /// in one merge group - the gap is then a cyclic misclosure inside a rigid
+    /// group, which no rigid translation can reduce - so the promotion still
+    /// happens and settling it is a no-op.
+    pub(crate) fn plan_merge_promotion(
+        &self,
+        a: &StationKey,
+        b: &StationKey,
+    ) -> Option<MintedMerge> {
+        let (Some(ref_a), Some(ref_b)) = (self.resolve_key(a), self.resolve_key(b)) else {
+            // A dangling endpoint carries no position, so there is no coincidence
+            // to claim and nothing for a translation to aim at.
+            return None;
+        };
+        if self.merge_would_double_anchor(ref_a.section_id, ref_b.section_id) {
+            return None;
+        }
+        let (anchor, moving, anchor_section, moving_section) =
+            if self.section_has_zero_datum(ref_a.section_id) {
+                (a, b, ref_a.section_id, ref_b.section_id)
+            } else {
+                (b, a, ref_b.section_id, ref_a.section_id)
+            };
+        let group = self.get_merged_section_ids(moving_section);
+        let mut movable: Vec<SectionId> = if group.contains(&anchor_section) {
+            Vec::new()
+        } else {
+            group.into_iter().collect()
+        };
+        // Deterministic order: the translation is the same sum of adjustments
+        // however the merge-group set happened to hash.
+        movable.sort_unstable();
+        Some(MintedMerge {
+            movable,
+            anchor: anchor.clone(),
+            moving: moving.clone(),
+        })
+    }
+
+    /// Translate each minted merge's movable group so the coincidence its merge
+    /// ASSERTS is actually true, measuring the residual off the geometry as it
+    /// stands NOW (see [`MintedMerge`] for why the delta cannot be computed when
+    /// the merge is recorded).
+    ///
+    /// Translating a whole merge group cannot break anything else: by
+    /// construction the group is the moving side as it was BEFORE the new edge
+    /// joined the two, so the only merge crossing its boundary is the one being
+    /// settled, and every merge inside it moves rigidly with it. Settling several
+    /// in mint order is likewise stable - a later settle either moves a superset
+    /// of an earlier group (both of that merge's ends move together) or a group
+    /// disjoint from it.
+    ///
+    /// The dust bound is `cascade_bfs`'s, for its reason: a femtometre gap is the
+    /// residue of summing a survey chain, not a displacement, and "correcting" it
+    /// would write a `section_offsets` key for a section that is not displaced
+    /// (the invariant on [`Self::write_section_offset`]).
+    pub(crate) fn settle_minted_merges(&mut self, minted: &[MintedMerge]) {
+        for merge in minted {
+            if merge.movable.is_empty() {
+                continue;
+            }
+            let (Some(anchor), Some(moving)) = (
+                self.resolve_key(&merge.anchor),
+                self.resolve_key(&merge.moving),
+            ) else {
+                continue;
+            };
+            let (Some((ax, ay)), Some((mx, my))) = (
+                self.compute_station_raw_xy(anchor),
+                self.compute_station_raw_xy(moving),
+            ) else {
+                continue;
+            };
+            let (dx, dy) = (ax - mx, ay - my);
+            if !dx.is_finite() || !dy.is_finite() {
+                continue;
+            }
+            if dx.abs() <= Self::OFFSET_DUST_M && dy.abs() <= Self::OFFSET_DUST_M {
+                continue;
+            }
+            tracing::debug!(
+                anchor = ?merge.anchor,
+                moving = ?merge.moving,
+                dx,
+                dy,
+                sections = merge.movable.len(),
+                purpose = "pay for the coincidence a promoted merge declares",
+                "Co-locating the movable side of a minted merge"
+            );
+            for section in &merge.movable {
+                self.adjust_section_offset(*section, dx, dy);
+            }
         }
     }
 
@@ -390,7 +540,13 @@ impl Project {
     /// and wrong inside an inverse, which is what
     /// [`Self::convert_closures_orphaned_since`] exists for.
     pub fn convert_orphan_closures_to_merges(&mut self) -> usize {
-        self.convert_closures_orphaned_since(&HashSet::new())
+        let minted = self.convert_closures_orphaned_since(&HashSet::new());
+        let converted = minted.len();
+        // Settled immediately: this entry point's callers - the load, Repair and
+        // `execute()`'s epilogue - change no geometry between the conversion and
+        // the re-solve that follows it, so "now" IS final geometry for them.
+        self.settle_minted_merges(&minted);
+        converted
     }
 
     /// [`Self::convert_orphan_closures_to_merges`] restricted to the orphans a
@@ -409,8 +565,19 @@ impl Project {
     /// keeps the pre-existing orphan exactly as recorded while still converting
     /// the closures the removal genuinely stranded - including ones nowhere near
     /// the removed station, whose loop-ness hung off a merge that was.
-    pub(crate) fn convert_closures_orphaned_since(&mut self, preexisting: &HashSet<u64>) -> usize {
-        let mut converted = 0;
+    ///
+    /// Returns the [`MintedMerge`]s the conversion created, which the caller
+    /// owes [`Self::settle_minted_merges`] once its own geometry is final: a
+    /// promoted closure carries the loop's real misclosure into an edge that says
+    /// the two endpoints coincide, and the promotion - not whatever cascades next
+    /// - has to pay for that (#464 defects B and C).
+    #[must_use = "a promotion that is never settled leaves a merge asserting a coincidence \
+                  the geometry does not have - call settle_minted_merges"]
+    pub(crate) fn convert_closures_orphaned_since(
+        &mut self,
+        preexisting: &HashSet<u64>,
+    ) -> Vec<MintedMerge> {
+        let mut minted = Vec::new();
         // Sole-bridge closures left UNCONVERTED because turning them into a rigid
         // merge would fuse two independently zero-datum-anchored groups. Tracked by
         // id so the orphan scan below does not reconsider them on every iteration
@@ -425,28 +592,31 @@ impl Project {
             });
             let Some(idx) = orphan else { break };
 
-            // Converting a sole-bridge closure into a merge makes it a RIGID edge.
-            // If both endpoints' groups are already zero-datum-anchored, that edge
-            // would place two GPS anchors in one merge component, and the next
-            // offset cascade would tear the merge apart (the reported failure
-            // mode). Keep it a (soft) closure instead - a closure between two
-            // anchored groups is legitimate - and let the over-anchoring detector
-            // surface it for the user to resolve.
-            {
+            // Converting a sole-bridge closure into a merge makes it a RIGID edge,
+            // and `plan_merge_promotion` answers both questions that raises: MAY
+            // it (an edge between two independently zero-datum-anchored groups
+            // would place two GPS anchors in one merge component, which no offset
+            // cascade can satisfy and Repair cannot reduce), and WHICH SIDE must
+            // move for the coincidence the edge declares to be true. A refusal
+            // keeps it a (soft) closure - legitimate between two anchored groups -
+            // and lets the over-anchoring detector surface it for the user.
+            let (id, a, b) = {
                 let closure = &self.loop_closures[idx];
-                if self.merge_would_double_anchor(
-                    closure.station_a.section_id,
-                    closure.station_b.section_id,
-                ) {
-                    tracing::warn!(
-                        closure_id = closure.id,
-                        purpose = "avoid double-anchoring a merge component",
-                        "Left a sole-bridge loop closure unconverted: both endpoints are zero-datum-anchored"
-                    );
-                    left_as_closure.insert(closure.id);
-                    continue;
-                }
-            }
+                (
+                    closure.id,
+                    closure.station_a.clone(),
+                    closure.station_b.clone(),
+                )
+            };
+            let Some(plan) = self.plan_merge_promotion(&a, &b) else {
+                tracing::warn!(
+                    closure_id = id,
+                    purpose = "avoid double-anchoring a merge component",
+                    "Left a sole-bridge loop closure unconverted: both endpoints are zero-datum-anchored"
+                );
+                left_as_closure.insert(id);
+                continue;
+            };
 
             let closure = self.loop_closures.remove(idx);
             let already = match (
@@ -463,9 +633,9 @@ impl Project {
                     merged_at: Utc::now(),
                 });
             }
-            converted += 1;
+            minted.push(plan);
         }
-        converted
+        minted
     }
 
     /// Every merge whose endpoints are at least [`Self::MERGE_ALIGNMENT_INVARIANT_M`]
