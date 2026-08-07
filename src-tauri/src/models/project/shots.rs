@@ -1319,6 +1319,15 @@ impl Project {
         // A closure TOLERATES a misclosure and a merge ASSERTS coincidence, so
         // each promotion plans the translation that makes the claim true and is
         // settled below, once this function's own geometry is final (#464).
+        //
+        // The merge is recorded whatever the plan says, because this list IS the
+        // dialog's promise and execution may not quietly do less than it. There
+        // is nothing to be defensive about: `preview_delete_shot` asked the same
+        // over-anchoring question through `would_double_anchor_after_removal`,
+        // and everything this function has mutated since - the retains that drop
+        // the removed station's merges and datum, the closure rewires, the
+        // replacement merges - is exactly the `doomed`/`planned` hypothesis the
+        // preview evaluated against, so a `None` here cannot happen.
         let mut minted: Vec<MintedMerge> = Vec::new();
         for pair in &impact.closure_to_merge {
             if !self.has_direct_merge(pair.station_a, pair.station_b) {
