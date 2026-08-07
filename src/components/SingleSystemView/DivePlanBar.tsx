@@ -206,9 +206,9 @@ export function DivePlanBar() {
   return (
     <section className="space-y-1" data-testid="dive-plan-bar">
       <div className="flex items-center justify-between">
-        <label className="text-xs font-medium opacity-80" id="dive-plan-select-label">
+        <span className="text-xs font-medium opacity-80" id="dive-plan-select-label">
           {t('divePlanBar.label')}
-        </label>
+        </span>
         {loadedPlanId !== null && isDirty && (
           <span className="text-xs text-warning" data-testid="dive-plan-dirty">
             {t('divePlanBar.unsavedBadge')}

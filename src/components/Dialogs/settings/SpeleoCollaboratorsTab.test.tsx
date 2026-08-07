@@ -7,7 +7,7 @@
  * cancellation of a superseded roster load.
  */
 import { describe, it, expect, vi, beforeEach, beforeAll } from 'vitest';
-import { render, screen, waitFor, act } from '@testing-library/react';
+import { render, screen, waitFor, act, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
 // jsdom does not implement scrollIntoView; the Select component calls it on open.
@@ -184,7 +184,8 @@ describe('SpeleoCollaboratorsTab', () => {
     // Teams cannot be ADMIN: the level select offers only the three non-admin tiers.
     const levelSelect = screen.getByTestId('speleodb-collaborators-add-team-level');
     await userEvent.click(levelSelect);
-    expect(screen.getAllByRole('option')).toHaveLength(3);
+    const levelListbox = screen.getByTestId('speleodb-collaborators-add-team-level-listbox');
+    expect(within(levelListbox).getAllByRole('option')).toHaveLength(3);
     await userEvent.click(levelSelect); // close it back before touching the other picker
     await pickOption('speleodb-collaborators-add-team-id', 't2');
     await userEvent.click(screen.getByTestId('speleodb-collaborators-add-team'));
