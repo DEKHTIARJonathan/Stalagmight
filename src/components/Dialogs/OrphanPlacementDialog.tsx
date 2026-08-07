@@ -1,6 +1,7 @@
 import { useState, useCallback, useMemo, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Button } from '../common/Button';
+import { Select } from '../common/Select';
 import { DialogWrapper } from './DialogWrapper';
 import SectionPreview from './SectionPreview';
 import type { MergePreviewConfig } from './SectionPreview';
@@ -623,22 +624,20 @@ export default function OrphanPlacementDialog({ suggestions, receipt }: OrphanPl
                 <label className="text-xs text-text-secondary whitespace-nowrap">
                   {t('dialogs.orphanPlacement.mergeAt')}
                 </label>
-                <select
-                  value={selectedMergeOffset}
-                  onChange={(e) => setSelectedMergeOffset(Number(e.target.value))}
-                  className="px-2 py-1 bg-background border border-border rounded text-xs"
+                <Select
+                  value={String(selectedMergeOffset)}
+                  onChange={(v) => setSelectedMergeOffset(Number(v))}
+                  options={mergeOptions.map((opt) => ({
+                    value: String(opt.offset),
+                    label: t('dialogs.orphanPlacement.mergeOption', {
+                      importStation: opt.importStation,
+                      targetName: currentSuggestion!.targetSectionName,
+                      existingStation: opt.existingStation,
+                    }),
+                  }))}
+                  size="sm"
                   data-testid="merge-station-select"
-                >
-                  {mergeOptions.map((opt) => (
-                    <option key={opt.offset} value={opt.offset}>
-                      {t('dialogs.orphanPlacement.mergeOption', {
-                        importStation: opt.importStation,
-                        targetName: currentSuggestion!.targetSectionName,
-                        existingStation: opt.existingStation,
-                      })}
-                    </option>
-                  ))}
-                </select>
+                />
               </div>
             )}
 
@@ -648,17 +647,18 @@ export default function OrphanPlacementDialog({ suggestions, receipt }: OrphanPl
                 <label className="text-xs text-text-secondary whitespace-nowrap">
                   {t('dialogs.orphanPlacement.overlap')}
                 </label>
-                <select
+                <Select
                   value={overlapMode}
-                  onChange={(e) => setOverlapMode(e.target.value as OverlapMode)}
-                  className="px-2 py-1 bg-background border border-border rounded text-xs"
+                  onChange={(v) => setOverlapMode(v as OverlapMode)}
+                  options={[
+                    { value: 'interpolate', label: overlapModeLabels.interpolate, disabled: isTargetDoublyAnchored },
+                    { value: 'import_data', label: overlapModeLabels.import_data, disabled: isTargetDoublyAnchored },
+                    { value: 'existing_data', label: overlapModeLabels.existing_data },
+                    { value: 'keep_both', label: overlapModeLabels.keep_both },
+                  ]}
+                  size="sm"
                   data-testid="overlap-mode-select"
-                >
-                  <option value="interpolate" disabled={isTargetDoublyAnchored}>{overlapModeLabels.interpolate}</option>
-                  <option value="import_data" disabled={isTargetDoublyAnchored}>{overlapModeLabels.import_data}</option>
-                  <option value="existing_data">{overlapModeLabels.existing_data}</option>
-                  <option value="keep_both">{overlapModeLabels.keep_both}</option>
-                </select>
+                />
               </div>
             )}
 

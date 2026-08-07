@@ -2,6 +2,7 @@ import { useTranslation } from 'react-i18next';
 import { useShallow } from 'zustand/react/shallow';
 import { useGasPlanStore } from '../../store/gasPlanStore';
 import { PositiveNumberField } from '../common/PositiveNumberField';
+import { Select } from '../common/Select';
 import { isBudgetRole } from '../../utils/gasRoles';
 import { pressureFromDisplay, pressureToDisplay } from '../../utils/formatGas';
 import { TANK_PRESETS, cylinderFromPreset } from '../../utils/tankPresets';
@@ -147,18 +148,14 @@ export function CylindersTable() {
                 )}
               </td>
               <td className="py-1 pr-3">
-                <select
+                <Select
                   value={cyl.role}
-                  onChange={(e) => setRole(idx, e.target.value as CylRole)}
-                  className="text-xs bg-transparent border border-border rounded px-1 py-0.5"
+                  onChange={(v) => setRole(idx, v as CylRole)}
+                  options={CYL_ROLES.map((role) => ({ value: role, label: t(`gasPanel.roles.${role}`) }))}
+                  size="sm"
+                  aria-label={t('gasPanel.tanks.roleAria', { tank: tankName })}
                   data-testid={`gas-cylinder-role-${idx}`}
-                >
-                  {CYL_ROLES.map((role) => (
-                    <option key={role} value={role}>
-                      {t(`gasPanel.roles.${role}`)}
-                    </option>
-                  ))}
-                </select>
+                />
               </td>
               <td className="py-1">
                 <button
@@ -177,21 +174,18 @@ export function CylindersTable() {
         </tbody>
       </table>
       <div className="flex items-center gap-4 mt-3">
-        <select
-          className="text-xs bg-transparent border border-border rounded px-2 py-1"
+        <Select
           value=""
-          onChange={(e) => {
-            if (e.target.value) addPreset(e.target.value);
-          }}
+          onChange={(v) => addPreset(v)}
+          options={TANK_PRESETS.map((p) => ({
+            value: p.id,
+            label: `${p.label} (${p.water_volume_l}L)`,
+          }))}
+          placeholder={t('gasPanel.tanks.addPlaceholder')}
+          size="sm"
+          aria-label={t('gasPanel.tanks.addPlaceholder')}
           data-testid="gas-add-tank"
-        >
-          <option value="">{t('gasPanel.tanks.addPlaceholder')}</option>
-          {TANK_PRESETS.map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.label} ({p.water_volume_l}L)
-            </option>
-          ))}
-        </select>
+        />
         <label className="flex items-center gap-2 text-xs">
           <input
             type="checkbox"

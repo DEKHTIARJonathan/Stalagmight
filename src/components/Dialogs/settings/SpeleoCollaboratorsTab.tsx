@@ -3,6 +3,7 @@ import type { Dispatch, SetStateAction } from 'react';
 import { useTranslation } from 'react-i18next';
 import { SettingsSection } from './SettingsSection';
 import { Button } from '../../common/Button';
+import { Select } from '../../common/Select';
 import { SpeleoUserAutocomplete } from '../../common/SpeleoUserAutocomplete';
 import { useUIStore } from '../../../store/uiStore';
 import { useSpeleoStore } from '../../../store/speleoStore';
@@ -85,27 +86,21 @@ function RosterRowActions({
 
   return (
     <>
-      <select
+      <Select
         value={staged ?? current}
         disabled={busy}
-        onChange={(e) => {
-          const next = e.target.value as Permission;
+        onChange={(v) => {
+          const next = v as Permission;
           // Landing back on the tier the server already has is a back-out, not a
           // change: there is nothing left to apply, so drop the staged step.
           setArmed(next === current ? null : { kind: 'level', row, permission: next });
         }}
-        className={`px-1 py-0.5 bg-background border rounded text-xs ${
-          staged ? 'border-warning' : 'border-border'
-        }`}
+        options={levels.map((p) => ({ value: p, label: t(levelKey(p)) }))}
+        size="sm"
+        pending={staged !== null}
         aria-label={t('speleodb.collaborators.levelFor', { name })}
         data-testid={testId('level')}
-      >
-        {levels.map((p) => (
-          <option key={p} value={p}>
-            {t(levelKey(p))}
-          </option>
-        ))}
-      </select>
+      />
       {staged !== null && (
         <>
           <span className="text-warning text-xs" data-testid={testId('level-pending')}>
@@ -440,20 +435,14 @@ export function SpeleoCollaboratorsTab() {
                   listTestId="speleodb-collaborators-suggestions"
                   suggestionTestIdPrefix="speleodb-collaborators-suggestion"
                 />
-                <select
+                <Select
                   value={newLevel}
                   disabled={busy}
-                  onChange={(e) => setNewLevel(e.target.value as Permission)}
-                  className="px-1 py-1 bg-background border border-border rounded text-sm"
+                  onChange={(v) => setNewLevel(v as Permission)}
+                  options={USER_LEVELS.map((p) => ({ value: p, label: levelLabel(p) }))}
                   aria-label={t('speleodb.collaborators.addLevel')}
                   data-testid="speleodb-collaborators-add-level"
-                >
-                  {USER_LEVELS.map((p) => (
-                    <option key={p} value={p}>
-                      {levelLabel(p)}
-                    </option>
-                  ))}
-                </select>
+                />
                 <Button
                   variant="secondary"
                   disabled={busy || newEmail.trim() === ''}
@@ -466,37 +455,26 @@ export function SpeleoCollaboratorsTab() {
 
               {teams.length > 0 && (
                 <div className="flex items-center gap-2">
-                  <select
+                  <Select
                     value={newTeamId}
                     disabled={busy}
-                    onChange={(e) => setNewTeamId(e.target.value)}
-                    className={inputClass}
+                    onChange={setNewTeamId}
+                    options={[
+                      { value: '', label: t('speleodb.collaborators.teamPlaceholder'), disabled: true },
+                      ...teams.map((tm) => ({ value: tm.id, label: tm.name })),
+                    ]}
+                    className="w-full"
                     aria-label={t('speleodb.collaborators.addTeam')}
                     data-testid="speleodb-collaborators-add-team-id"
-                  >
-                    <option value="" disabled>
-                      {t('speleodb.collaborators.teamPlaceholder')}
-                    </option>
-                    {teams.map((tm) => (
-                      <option key={tm.id} value={tm.id}>
-                        {tm.name}
-                      </option>
-                    ))}
-                  </select>
-                  <select
+                  />
+                  <Select
                     value={newTeamLevel}
                     disabled={busy}
-                    onChange={(e) => setNewTeamLevel(e.target.value as Permission)}
-                    className="px-1 py-1 bg-background border border-border rounded text-sm"
+                    onChange={(v) => setNewTeamLevel(v as Permission)}
+                    options={TEAM_LEVELS.map((p) => ({ value: p, label: levelLabel(p) }))}
                     aria-label={t('speleodb.collaborators.addTeamLevel')}
                     data-testid="speleodb-collaborators-add-team-level"
-                  >
-                    {TEAM_LEVELS.map((p) => (
-                      <option key={p} value={p}>
-                        {levelLabel(p)}
-                      </option>
-                    ))}
-                  </select>
+                  />
                   <Button
                     variant="secondary"
                     disabled={busy || newTeamId === ''}

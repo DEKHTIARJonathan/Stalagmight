@@ -5,6 +5,7 @@ import { getErrorMessage } from '../../utils/ipc';
 import { normalizeAzimuth } from '../../utils/azimuth';
 import { trackDialogComplete } from '../../utils/telemetry';
 import { Button } from '../common/Button';
+import { Select } from '../common/Select';
 import { EntityBlob } from '../common/EntityBlob';
 import { formatStationId } from '../../utils/formatters';
 import { DialogWrapper } from './DialogWrapper';
@@ -380,18 +381,14 @@ export default function DrawShotDialog() {
             rather than leaving it to the classifier. */}
         <label className="flex items-center gap-2">
           <span>Shot kind</span>
-          <select
+          <Select
             data-testid="draw-shot-kind"
-            className="bg-surface border border-border rounded px-2 py-1"
             value={shotKind}
-            onChange={(e) => setShotKind(e.target.value as ShotKind)}
-          >
-            {SHOT_KIND_CYCLE.map((kind) => (
-              <option key={kind} value={kind}>
-                {SHOT_KIND_MENU_LABEL[kind]}
-              </option>
-            ))}
-          </select>
+            onChange={(v) => setShotKind(v as ShotKind)}
+            options={SHOT_KIND_CYCLE.map((kind) => ({ value: kind, label: SHOT_KIND_MENU_LABEL[kind] }))}
+            size="sm"
+            aria-label="Shot kind"
+          />
           <span className="text-text-secondary text-sm">
             (a jump is swum; a reference is a survey tie)
           </span>

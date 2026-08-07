@@ -1,6 +1,7 @@
 import { useTranslation } from 'react-i18next';
 import { SettingsSection } from './SettingsSection';
 import { Button } from '../../common/Button';
+import { Select } from '../../common/Select';
 import { SpeleoUndoModeControl } from './SpeleoUndoModeControl';
 import { COUNTRIES } from '../../../data/countries';
 import type { SpeleoProjectMetadataState } from '../../../hooks/useSpeleoProjectMetadata';
@@ -88,40 +89,34 @@ export function SpeleoDbGeneralTab({ metadata }: { metadata: SpeleoProjectMetada
           <label className="block text-sm font-medium text-text-primary mb-1">
             {t('speleodb.projectSettings.fields.country')}
           </label>
-          <select
+          <Select
             value={form.country}
             disabled={!canEdit}
-            onChange={(e) => update('country', e.target.value)}
-            className={inputClass}
+            onChange={(v) => update('country', v)}
+            options={[
+              { value: '', label: t('speleodb.publish.countryPlaceholder'), disabled: true },
+              ...COUNTRIES.map((c) => ({ value: c.code, label: c.name })),
+            ]}
             aria-label={t('speleodb.projectSettings.fields.country')}
             data-testid="speleodb-settings-country"
-          >
-            <option value="" disabled>
-              {t('speleodb.publish.countryPlaceholder')}
-            </option>
-            {COUNTRIES.map((c) => (
-              <option key={c.code} value={c.code}>
-                {c.name}
-              </option>
-            ))}
-          </select>
+          />
         </div>
 
         <div className="py-2">
           <label className="block text-sm font-medium text-text-primary mb-1">
             {t('speleodb.projectSettings.fields.visibility')}
           </label>
-          <select
+          <Select
             value={form.visibility}
             disabled={!canEdit}
-            onChange={(e) => update('visibility', e.target.value as Visibility)}
-            className={inputClass}
+            onChange={(v) => update('visibility', v as Visibility)}
+            options={[
+              { value: 'PRIVATE', label: t('speleodb.projectSettings.visibilityOptions.private') },
+              { value: 'PUBLIC', label: t('speleodb.projectSettings.visibilityOptions.public') },
+            ]}
             aria-label={t('speleodb.projectSettings.fields.visibility')}
             data-testid="speleodb-settings-visibility"
-          >
-            <option value="PRIVATE">{t('speleodb.projectSettings.visibilityOptions.private')}</option>
-            <option value="PUBLIC">{t('speleodb.projectSettings.visibilityOptions.public')}</option>
-          </select>
+          />
         </div>
 
         <div className="py-2 grid grid-cols-2 gap-3">

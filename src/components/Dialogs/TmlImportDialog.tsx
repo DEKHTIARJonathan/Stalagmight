@@ -15,6 +15,7 @@ import { extractFilename } from '../../utils/path';
 import { clamp } from '../../utils/clamp';
 import { formatNumber } from '../../i18n/format';
 import { Button } from '../common/Button';
+import { Select } from '../common/Select';
 import { DialogWrapper } from './DialogWrapper';
 import type { TmlFile, OrphanPlacementSuggestion } from '../../types/commands';
 import { setSource, trackDialogComplete } from '../../utils/telemetry';
@@ -498,16 +499,18 @@ export default function TmlImportDialog({ tmlFile, filePath }: TmlImportDialogPr
         {stats.virtualCount > 0 && (
           <label className="flex items-center gap-2 text-sm text-text-secondary">
             <span>{t('dialogs.tmlImport.virtualShots', { count: stats.virtualCount })}</span>
-            <select
-              className="bg-surface border border-border rounded px-2 py-1"
+            <Select
               value={virtualShotMode}
-              onChange={(e) => setVirtualShotMode(e.target.value as VirtualShotMode)}
+              onChange={(v) => setVirtualShotMode(v as VirtualShotMode)}
+              options={[
+                { value: 'Auto', label: t('dialogs.tmlImport.virtualMode.auto') },
+                { value: 'AllJumps', label: t('dialogs.tmlImport.virtualMode.allJumps') },
+                { value: 'AllReferences', label: t('dialogs.tmlImport.virtualMode.allReferences') },
+              ]}
+              size="sm"
+              aria-label={t('dialogs.tmlImport.virtualShots', { count: stats.virtualCount })}
               data-testid="tml-virtual-shot-mode"
-            >
-              <option value="Auto">{t('dialogs.tmlImport.virtualMode.auto')}</option>
-              <option value="AllJumps">{t('dialogs.tmlImport.virtualMode.allJumps')}</option>
-              <option value="AllReferences">{t('dialogs.tmlImport.virtualMode.allReferences')}</option>
-            </select>
+            />
           </label>
         )}
 

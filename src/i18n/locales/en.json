@@ -2689,6 +2689,7 @@
       "colUsablePsi": "Usable (psi)",
       "usableHint": "Penetration gas: how much you'll breathe off this tank on the way in before turning. Computed by the strategy; editable under Free.",
       "usableAria": "Usable gas for {{tank}}",
+      "roleAria": "Role for {{tank}}",
       "colRole": "Role",
       "editHint": "Edit your cylinders in the Equipment tab below."
     },

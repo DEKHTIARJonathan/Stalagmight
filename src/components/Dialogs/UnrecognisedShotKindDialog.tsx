@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { Button } from '../common/Button';
+import { Select } from '../common/Select';
 import { DialogWrapper } from './DialogWrapper';
 import { trackDialogComplete } from '../../utils/telemetry';
 import { SHOT_KIND_CYCLE, SHOT_KIND_LABEL_KEY } from '../../utils/shotKind';
@@ -115,26 +116,24 @@ export default function UnrecognisedShotKindDialog() {
                   </td>
                   <td className="p-2 font-mono text-text-secondary">{shot.raw_value}</td>
                   <td className="p-2">
-                    <select
+                    <Select
                       value={choiceFor(shot)}
-                      onChange={(e) =>
+                      onChange={(v) =>
                         setChoices((prev) => ({
                           ...prev,
-                          [shot.shot_id]: e.target.value as ShotKind,
+                          [shot.shot_id]: v as ShotKind,
                         }))
                       }
-                      className="px-2 py-1 bg-background border border-border rounded text-sm"
+                      options={SHOT_KIND_CYCLE.map((kind) => ({
+                        value: kind,
+                        label: t(SHOT_KIND_LABEL_KEY[kind]),
+                      }))}
+                      size="sm"
                       aria-label={t('dialogs.unrecognisedShotKind.treatAsAria', {
                         number: shot.shot_number,
                       })}
                       data-testid={`unrecognised-kind-select-${shot.shot_id}`}
-                    >
-                      {SHOT_KIND_CYCLE.map((kind) => (
-                        <option key={kind} value={kind}>
-                          {t(SHOT_KIND_LABEL_KEY[kind])}
-                        </option>
-                      ))}
-                    </select>
+                    />
                   </td>
                 </tr>
               ))}

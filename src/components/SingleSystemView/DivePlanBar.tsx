@@ -7,6 +7,7 @@ import {
   useGasPlanStore,
 } from '../../store/gasPlanStore';
 import { useProjectStore } from '../../store/projectStore';
+import { Select } from '../common/Select';
 import { divePlanSnapshotOf } from '../../utils/divePlan';
 import {
   deleteDivePlan,
@@ -205,7 +206,7 @@ export function DivePlanBar() {
   return (
     <section className="space-y-1" data-testid="dive-plan-bar">
       <div className="flex items-center justify-between">
-        <label className="text-xs font-medium opacity-80" htmlFor="dive-plan-select">
+        <label className="text-xs font-medium opacity-80" id="dive-plan-select-label">
           {t('divePlanBar.label')}
         </label>
         {loadedPlanId !== null && isDirty && (
@@ -216,23 +217,18 @@ export function DivePlanBar() {
       </div>
 
       <div className="flex items-center gap-1">
-        <select
-          id="dive-plan-select"
+        <Select
           data-testid="dive-plan-select"
-          className="flex-1 min-w-0 bg-input border border-border rounded px-2 py-1 text-sm"
+          className="flex-1 min-w-0 text-sm"
           value={loadedPlanId !== null ? String(loadedPlanId) : ''}
-          onChange={(e) => onSelect(e.target.value)}
+          onChange={(v) => onSelect(v)}
+          options={[
+            { value: '', label: plans.length === 0 ? t('divePlanBar.empty') : t('divePlanBar.choose') },
+            ...plans.map((p) => ({ value: String(p.id), label: p.name })),
+          ]}
           disabled={busy}
-        >
-          <option value="">
-            {plans.length === 0 ? t('divePlanBar.empty') : t('divePlanBar.choose')}
-          </option>
-          {plans.map((p) => (
-            <option key={p.id} value={String(p.id)}>
-              {p.name}
-            </option>
-          ))}
-        </select>
+          aria-labelledby="dive-plan-select-label"
+        />
       </div>
 
       <div className="flex items-center gap-1">

@@ -3434,18 +3434,16 @@ export default function DmpNewImportDialog({
                     {t('dialogs.dmpNewImport.mergeStation')}
                   </label>
                   {mergeOptions.length > 1 ? (
-                    <select
-                      value={selectedMergeOffset}
-                      onChange={(e) => setSelectedMergeOffset(Number(e.target.value))}
-                      className="px-2 py-1 bg-background border border-border rounded text-xs"
+                    <Select
+                      value={String(selectedMergeOffset)}
+                      onChange={(v) => setSelectedMergeOffset(Number(v))}
+                      options={mergeOptions.map((opt) => ({
+                        value: String(opt.offset),
+                        label: `stn ${opt.importStation} → ${targetSectionName} stn ${opt.existingStation}`,
+                      }))}
+                      size="sm"
                       data-testid="merge-station-select"
-                    >
-                      {mergeOptions.map((opt) => (
-                        <option key={opt.offset} value={opt.offset}>
-                          stn {opt.importStation} → {targetSectionName} stn {opt.existingStation}
-                        </option>
-                      ))}
-                    </select>
+                    />
                   ) : (
                     <span className="text-xs text-text-secondary">
                       stn {selectedMergePair?.importStation ?? currentSuggestion!.importStationIndex}
@@ -3462,17 +3460,18 @@ export default function DmpNewImportDialog({
                     {t('dialogs.dmpNewImport.overlapMode')}
                   </label>
                   {currentSuggestion && currentSuggestion.matchedShots > 0 ? (
-                    <select
+                    <Select
                       value={overlapMode}
-                      onChange={(e) => handleOverlapModeChange(e.target.value as OverlapMode)}
-                      className="px-2 py-1 bg-background border border-border rounded text-xs"
+                      onChange={(v) => handleOverlapModeChange(v as OverlapMode)}
+                      options={[
+                        { value: 'interpolate', label: t('dialogs.dmpNewImport.overlapMode_interpolate'), disabled: isTargetDoublyAnchored },
+                        { value: 'import_data', label: t('dialogs.dmpNewImport.overlapMode_importData'), disabled: isTargetDoublyAnchored },
+                        { value: 'existing_data', label: t('dialogs.dmpNewImport.overlapMode_existingData') },
+                        { value: 'keep_both', label: t('dialogs.dmpNewImport.overlapMode_keepBoth') },
+                      ]}
+                      size="sm"
                       data-testid="overlap-mode-select"
-                    >
-                      <option value="interpolate" disabled={isTargetDoublyAnchored}>{t('dialogs.dmpNewImport.overlapMode_interpolate')}</option>
-                      <option value="import_data" disabled={isTargetDoublyAnchored}>{t('dialogs.dmpNewImport.overlapMode_importData')}</option>
-                      <option value="existing_data">{t('dialogs.dmpNewImport.overlapMode_existingData')}</option>
-                      <option value="keep_both">{t('dialogs.dmpNewImport.overlapMode_keepBoth')}</option>
-                    </select>
+                    />
                   ) : (
                     <span className="text-xs text-text-secondary">
                       {t('dialogs.dmpNewImport.noOverlapShots')}
