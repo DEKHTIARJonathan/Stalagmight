@@ -23,6 +23,13 @@ export interface SelectOptionGroup {
   options: SelectOption[];
 }
 
+export type SelectSize = 'sm' | 'md';
+
+const triggerSizeStyles: Record<SelectSize, string> = {
+  sm: 'px-2 py-1 text-xs',
+  md: 'px-3 py-2',
+};
+
 interface SelectProps {
   /** Currently selected value */
   value: string;
@@ -36,6 +43,10 @@ interface SelectProps {
   disabled?: boolean;
   /** Additional CSS classes */
   className?: string;
+  /** Trigger button padding/text size - 'md' (default) matches the historical fixed size, 'sm' fits dense contexts (table rows, inline control strips). */
+  size?: SelectSize;
+  /** Highlights the trigger border to flag an uncommitted/staged value (e.g. arm-then-confirm pickers). */
+  pending?: boolean;
   /** Test ID for E2E tests */
   'data-testid'?: string;
   /** Accessible label for screen readers */
@@ -143,6 +154,8 @@ export function Select({
   placeholder = 'Select...',
   disabled = false,
   className = '',
+  size = 'md',
+  pending = false,
   'data-testid': testId,
   'aria-label': ariaLabel,
   'aria-labelledby': ariaLabelledBy,
@@ -535,9 +548,9 @@ export function Select({
         role="combobox"
         data-testid={testId}
         data-dropdown-open={isOpen || undefined}
-        className={`w-full px-3 py-2 bg-background border border-border rounded text-left flex items-center justify-between ${
-          disabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer hover:border-accent'
-        }`}
+        className={`w-full ${triggerSizeStyles[size]} bg-background border rounded text-left flex items-center justify-between ${
+          pending ? 'border-warning' : 'border-border'
+        } ${disabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer hover:border-accent'}`}
         onClick={() => {
           if (disabled) return;
           if (isOpen) {

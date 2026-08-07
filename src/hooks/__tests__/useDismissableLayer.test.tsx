@@ -141,6 +141,21 @@ describe('useDismissableLayer', () => {
     expect(onDismiss).toHaveBeenCalledTimes(1);
   });
 
+  it('does NOT dismiss on a mousedown inside a nested Select portal (#462)', () => {
+    // A Select's dropdown portals to document.body, so it is never a descendant of
+    // `contains` even when the Select lives inside this layer's own content.
+    mount([dropdown]);
+    const nestedListbox = document.createElement('div');
+    nestedListbox.setAttribute('role', 'listbox');
+    const option = document.createElement('div');
+    option.setAttribute('role', 'option');
+    nestedListbox.appendChild(option);
+    document.body.appendChild(nestedListbox);
+    option.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+    expect(onDismiss).not.toHaveBeenCalled();
+    nestedListbox.remove();
+  });
+
   it('attaches no listeners while closed', () => {
     renderHook(() =>
       useDismissableLayer({

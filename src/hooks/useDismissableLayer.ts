@@ -65,8 +65,17 @@ export function useDismissableLayer({
 
   useEffect(() => {
     if (!open) return undefined;
+    // A `Select` nested inside this layer (e.g. one of its menu rows) portals its
+    // own dropdown to `document.body`, so it is never a DOM descendant of `contains`
+    // even though it is visually and logically part of this layer's content.
+    // Without this, picking an option in a nested Select fires this layer's outside-
+    // mousedown check first (mousedown precedes click) and dismisses the HOST layer
+    // before the Select's own onChange can even land - the host (and the Select
+    // inside it) unmounts out from under the click (#462).
     const isInside = (refs: Array<RefObject<HTMLElement | null>>, node: Node | null) =>
-      node !== null && refs.some((r) => r.current?.contains(node));
+      node !== null &&
+      (refs.some((r) => r.current?.contains(node)) ||
+        (node instanceof Element && node.closest('[role="listbox"], [role="option"]') !== null));
 
     const onMouseDown = (e: MouseEvent) => {
       if (!isInside(containsRef.current, e.target as Node)) onDismissRef.current();
