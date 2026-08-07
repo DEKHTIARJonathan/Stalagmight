@@ -7324,6 +7324,29 @@ fn a_move_that_panics_is_the_move_the_failure_tail_names() {
     let mut fuzzer = Fuzzer::new(1, false);
     fuzzer.note("createShot(s=8,append) -> ok (undo 0->1, redo 0->0)".to_string());
     fuzzer.starting_move("deleteShot(8:800002)".to_string());
+
+    // FIRST render path: an oracle that fails while a move is still running.
+    // The tail has no line for that move yet, so `fail` names it itself.
+    let mid_move = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        fuzzer.fail("something failed mid-move", "  detail")
+    }))
+    .expect_err("`fail` returned");
+    let mid_move = panic_message(&*mid_move);
+    assert!(
+        mid_move.contains("deleteShot(8:800002) -> IN FLIGHT"),
+        "a failure raised mid-move does not name the move that was running:\n{mid_move}"
+    );
+    assert!(
+        mid_move
+            .lines()
+            .last()
+            .is_some_and(|line| line.contains("deleteShot(8:800002)")),
+        "the in-flight move is not the LAST line of the tail, so the tail still reads as if the \
+         move before it is where the run stopped:\n{mid_move}"
+    );
+
+    // SECOND render path: the move panics outright, and the flush puts it in
+    // the log so the note that follows attributes the assert to it.
     let absorbed = fuzzer.catching_alignment(|_| {
         panic!(
             "Merge alignment violated after remove_shot_with_rewire: stations A and B are \
