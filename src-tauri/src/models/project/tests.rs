@@ -12336,8 +12336,10 @@ fn promoting_an_orphaned_closure_co_locates_the_side_that_may_move() {
 /// as `merge_stations` picks when neither side holds a datum).
 #[test]
 fn promoting_an_orphaned_closure_co_locates_even_with_no_datum() {
-    let (mut project, _p, q) = misclosing_loop_fixture();
+    let (mut project, p, q) = misclosing_loop_fixture();
     project.zero_datums.clear();
+    let p_before = project.section_offset(p);
+    let q_before = project.section_offset(q);
 
     let first_shot = project.get_section(q).unwrap().shots[0].id;
     project.remove_shot_with_rewire(q, first_shot).unwrap();
@@ -12353,6 +12355,35 @@ fn promoting_an_orphaned_closure_co_locates_even_with_no_datum() {
     assert!(
         gap < Project::MERGE_ALIGNMENT_INVARIANT_M,
         "the promotion left the merge {gap:.6} m out of alignment"
+    );
+
+    // WHICH side moved, not just that the gap closed: the closure was created
+    // P0 <-> Q2, so `station_a` is P, and with nothing anchored P's group is the
+    // one translated onto Q. Inverting the anchor/moving pick in
+    // `plan_merge_promotion`'s no-datum branch fails here.
+    //
+    // Measured against the SAME delete with no closure to promote, because the
+    // deletion itself shifts Q (it closes the gap the removed first shot left).
+    // Anything beyond that baseline is the promotion's own translation.
+    let (p_baseline, q_baseline) = {
+        let (mut baseline, p, q) = misclosing_loop_fixture();
+        baseline.zero_datums.clear();
+        baseline.loop_closures.clear();
+        let first_shot = baseline.get_section(q).unwrap().shots[0].id;
+        baseline.remove_shot_with_rewire(q, first_shot).unwrap();
+        (baseline.section_offset(p), baseline.section_offset(q))
+    };
+    let p_after = project.section_offset(p);
+    let q_after = project.section_offset(q);
+    assert!(
+        (p_after.0 - p_baseline.0).abs() > 1.0 || (p_after.1 - p_baseline.1).abs() > 1.0,
+        "station_a's group is the movable side: p {p_before:?} -> {p_after:?} \
+         (delete alone: {p_baseline:?})"
+    );
+    assert_eq!(
+        q_after, q_baseline,
+        "the side picked as anchor must not move beyond what the delete itself does: \
+         q {q_before:?} -> {q_after:?}"
     );
 }
 

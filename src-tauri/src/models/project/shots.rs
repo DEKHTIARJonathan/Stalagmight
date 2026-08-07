@@ -1352,39 +1352,36 @@ impl Project {
                     self.key_for_ref(pair.station_a),
                     self.key_for_ref(pair.station_b),
                 ) {
-                    match self.plan_merge_promotion(&ka, &kb) {
-                        Some(plan) => {
-                            minted.push(plan);
-                            self.record_station_merge(StationMerge {
-                                station_a: ka,
-                                station_b: kb,
-                                merged_at: Utc::now(),
-                            });
-                        }
-                        None => {
-                            // Loud: it means the preview promised a merge on a
-                            // hypothesis this function then contradicted, which
-                            // is the preview/execution divergence #464 is about.
-                            tracing::error!(
-                                station_a = ?pair.station_a,
-                                station_b = ?pair.station_b,
-                                purpose = "never record a promotion nothing can settle",
-                                "Refused a promised closure->merge promotion: it would double-anchor"
+                    if let Some(plan) = self.plan_merge_promotion(&ka, &kb) {
+                        minted.push(plan);
+                        self.record_station_merge(StationMerge {
+                            station_a: ka,
+                            station_b: kb,
+                            merged_at: Utc::now(),
+                        });
+                    } else {
+                        // Loud: it means the preview promised a merge on a
+                        // hypothesis this function then contradicted, which is
+                        // the preview/execution divergence #464 is about.
+                        tracing::error!(
+                            station_a = ?pair.station_a,
+                            station_b = ?pair.station_b,
+                            purpose = "never record a promotion nothing can settle",
+                            "Refused a promised closure->merge promotion: it would double-anchor"
+                        );
+                        #[cfg(test)]
+                        #[expect(
+                            clippy::panic,
+                            reason = "tripwire: unreachable once the preview's guard \
+                                      accumulates, and a silent preview/execution divergence \
+                                      is what #464 is about"
+                        )]
+                        {
+                            panic!(
+                                "preview promised a closure->merge promotion {:?} <-> {:?} \
+                                 that `plan_merge_promotion` refuses",
+                                pair.station_a, pair.station_b
                             );
-                            #[cfg(test)]
-                            #[expect(
-                                clippy::panic,
-                                reason = "tripwire: unreachable once the preview's guard \
-                                          accumulates, and a silent preview/execution \
-                                          divergence is what #464 is about"
-                            )]
-                            {
-                                panic!(
-                                    "preview promised a closure->merge promotion {:?} <-> {:?} \
-                                     that `plan_merge_promotion` refuses",
-                                    pair.station_a, pair.station_b
-                                );
-                            }
                         }
                     }
                 }

@@ -91,6 +91,12 @@ The two statements are not equivalent, and the difference is the whole of issue 
 | endpoints | may be metres apart - the misclosure is the point | are ONE point, within `MERGE_ALIGNMENT_INVARIANT_M` (1 cm) |
 | enforced by | nothing; it is a record | `debug_assert_merge_alignment`, the offset cascade, integrity |
 
+`debug_assert_merge_alignment` only *panics* at that 1 cm invariant in test builds
+(the assert is `#[cfg(test)]`, the whole body `#[cfg(debug_assertions)]`), so outside
+tests the signal is the `realign_merges` self-heal plus tolerance-level reporting -
+an `error!` past the looser 5 cm `MERGE_ALIGNMENT_TOLERANCE_M` in debug builds, and
+`check_merge_alignment` feeding the integrity report in any build.
+
 So a promotion **owes the coincidence it declares**, and cannot delegate that to
 whatever cascades next: `cascade_bfs` never traverses an edge into an already
 authoritative section, so a merge whose two ends are both authoritative (both

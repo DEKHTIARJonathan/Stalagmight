@@ -678,12 +678,23 @@ impl AppState {
             // one anchor per connected component - and it is not an extra state
             // change, because the epilogue's `reconcile_geometry` (just below this
             // scope, before the `after` snapshot is taken) runs the very same heal
-            // a moment later. All it moves is WHEN, so the assert is backed by a
-            // solve that can see what it asserts on (#464 defect B). It early-
-            // returns when nothing is beyond the invariant, which is the ordinary
-            // case, and it still cannot invent an alignment that is genuinely
-            // unreachable - the assert keeps its teeth.
-            project.realign_merges();
+            // a moment later, under the very same condition. All it moves is WHEN,
+            // so the assert is backed by a solve that can see what it asserts on
+            // (#464 defect B). It early-returns when nothing is beyond the
+            // invariant, which is the ordinary case, and it still cannot invent an
+            // alignment that is genuinely unreachable - the assert keeps its teeth.
+            //
+            // The `cascade_deferred` gate is what makes "the very same heal" true.
+            // `reconcile_geometry` returns early during a deferred batch, and so
+            // does `debug_assert_merge_alignment` - intermediate states inside one
+            // are misaligned BY DESIGN. `realign_merges` has no such guard and
+            // clears the flag internally (`resolve_offsets_tracked`), so calling it
+            // unconditionally would resolve a batch's geometry mid-batch, ahead of
+            // an assert that is not even looking. No caller is known to reach this
+            // path inside a deferred window; the gate makes that irrelevant.
+            if !project.cascade_deferred {
+                project.realign_merges();
+            }
             project.debug_assert_merge_alignment("delete_shot_range_shift");
 
             // Closures-are-loops invariant (issue #413 finding 10): a loop closure
