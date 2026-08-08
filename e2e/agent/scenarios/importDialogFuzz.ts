@@ -965,7 +965,11 @@ export const importDialogFuzz: Scenario = {
 
     // ---- per-step oracles ------------------------------------------------
 
-    const stepOracles = async (move: FuzzMove, digest: ImportScreenDigest): Promise<void> => {
+    const stepOracles = async (
+      move: FuzzMove,
+      digest: ImportScreenDigest,
+      screenBefore: ScreenId,
+    ): Promise<void> => {
       if (digest.boundary) {
         fail('S2 ERROR BOUNDARY: the React tree crashed', `  after: ${move.label}`);
       }
@@ -991,7 +995,14 @@ export const importDialogFuzz: Scenario = {
           [`  after: ${move.label}`, ...digest.inv.map((line) => `  INVARIANT: ${line}`)].join('\n'),
         );
       }
-      if (digest.screen === 'error' && !mayRaiseError(move)) {
+      // RAISED one, which is not the same as "was on screen while one was up".
+      // A move that legitimately raises the error dialog (a malformed file
+      // routed in) leaves it there, and every move after it - an undo, an
+      // Escape, a click that missed - would otherwise be blamed for it.
+      // Measured, on the seed-2 matrix cell: `import via router` produced "No
+      // valid sections found in DMP file", which is the app reporting a problem
+      // properly, and the NEXT interjection was reported as the defect.
+      if (digest.screen === 'error' && screenBefore !== 'error' && !mayRaiseError(move)) {
         fail(
           'S4 UNEXPECTED ERROR DIALOG: a move with no business failing raised one',
           `  after: ${move.label}\n  error: ${digest.err ?? '(no text)'}`,
@@ -1097,9 +1108,10 @@ export const importDialogFuzz: Scenario = {
           route.find((candidate) => candidate.startsWith('key:') || digest.live[candidate] === 2) ?? 'key:Escape';
         const move: FuzzMove = { kind: 'ui', testid, label: `ESCAPE ${digest.screen} via ${testid}` };
         ctx.metric('escapeMoves');
+        const screenBefore = digest.screen;
         const outcome = await execute(move, true);
         digest = outcome.digest;
-        await stepOracles(move, digest);
+        await stepOracles(move, digest, screenBefore);
       }
       if (isEscaped(digest.screen, digest.placement)) return digest;
       fail(
@@ -1435,8 +1447,9 @@ export const importDialogFuzz: Scenario = {
 
         /** Everything both walks do after a move lands. */
         const afterMove = async (move: FuzzMove, outcome: Executed): Promise<void> => {
+          const screenBefore = digest.screen;
           digest = outcome.digest;
-          await stepOracles(move, digest);
+          await stepOracles(move, digest, screenBefore);
           if (move.kind === 'undo' || move.kind === 'redo' || move.kind === 'save') historyTouched = true;
           if (move.kind === 'closeProject') historyTouched = true;
           // The export modal is not an import screen, so opening it must not
