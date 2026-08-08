@@ -10,6 +10,7 @@
 //! Layout:
 //! - [`client`]   - the ureq HTTP surface (Bearer auth, retry/timeout idiom).
 //! - [`auth`]     - backend-only token storage (keychain / plaintext / memory tiers).
+//! - [`config`]   - persisted connection settings (re-exported via `crate::config`).
 //! - [`contract`] - the pure status→action table (#186) + `SpeleoErrorDto`.
 //! - [`dump`]     - ZIP dump classification + `.stalx` extraction.
 //! - [`metrics`]  - per-endpoint traffic instrumentation (#210).
@@ -22,6 +23,8 @@
 
 pub(crate) mod auth;
 pub(crate) mod client;
+// Persisted connection settings ([`SpeleoDbConfig`]), re-exported via `crate::config`.
+pub mod config;
 // [Track A] #186 status→action contract (pure map_status + ts-rs SpeleoDbAction).
 pub(crate) mod contract;
 pub(crate) mod dump;

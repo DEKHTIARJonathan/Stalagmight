@@ -6,11 +6,11 @@ use std::path::{Path, PathBuf};
 use ts_rs::TS;
 
 use super::panels::PanelsConfig;
-use super::speleodb::SpeleoDbConfig;
 use super::webkit::WebkitMemoryConfig;
 use crate::models::config::{
     ClosureAdjustmentConfig, GasConfig, PlacementSuggestionConfig, ValidationConfig,
 };
+use crate::speleodb::config::SpeleoDbConfig;
 
 /// Application configuration
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]

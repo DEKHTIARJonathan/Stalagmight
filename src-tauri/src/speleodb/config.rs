@@ -1,11 +1,12 @@
 //! SpeleoDB connection configuration ([`SpeleoDbConfig`] and its
-//! [`TokenFallback`] tier), split out of `types.rs` for the file-size ratchet
-//! (#157). The runtime consumer is `crate::speleodb`.
+//! [`TokenFallback`] tier), split out of `config/types.rs` for the file-size
+//! ratchet (#157) and co-located with its runtime consumer. Re-exported via
+//! `crate::config` so config consumers keep their `crate::config::X` paths.
 
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-use crate::speleodb::auth::account_key;
+use super::auth::account_key;
 
 /// Opt-in fallback tier for the SpeleoDB token when no OS keychain is available.
 ///

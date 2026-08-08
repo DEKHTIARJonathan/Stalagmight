@@ -3,7 +3,6 @@ mod column_widths;
 pub mod defaults;
 mod general;
 mod panels;
-mod speleodb;
 mod types;
 mod webkit;
 
@@ -14,6 +13,8 @@ mod tests;
 pub use crate::models::config::*;
 pub(crate) use column_widths::normalize_column_widths;
 pub use panels::*;
-pub use speleodb::*;
+// SpeleoDB connection settings live with their runtime consumer
+// (`crate::speleodb::config`); re-exported here so `crate::config::X` keeps working.
+pub use crate::speleodb::config::*;
 pub use types::*;
 pub use webkit::*;
