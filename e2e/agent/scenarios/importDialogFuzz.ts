@@ -1,11 +1,40 @@
 /**
- * import-dialog-fuzz: a seeded random walk over the DMP import flow.
+ * import-dialog-fuzz: a seeded random walk over EVERY import flow.
  *
- * It generates `.dmp` files, hands them to the real app through the real entry
- * points, and then clicks the import UI at random - selection dialog, zero-datum
- * pair, the placement wizard, the shot-table grid, the map placement, the
- * receipt - asserting after every move that the app is still coherent, and after
- * every FLOW that the import kept its contract.
+ * It generates survey files in the five formats the app imports - mNemo `.dmp`,
+ * Ariane `.tml`/`.tmlu`, Compass `.dat`/`.mak`, Walls `.srv`/`.wpj`, GPX - hands
+ * them to the real app through the real entry points, and then clicks the import
+ * UI at random - selection dialog, zero-datum pair, the placement wizard, the
+ * shot-table grid, the map placement, the four options screens, GPX placement,
+ * orphan placement, the receipt - asserting after every move that the app is
+ * still coherent, and after every FLOW that the import kept its contract.
+ *
+ * ## Formats, and why the flow shape follows from the extension
+ *
+ * `.dmp` is the ONLY additive import. Every other extension routes to
+ * `new-project-for-import` whether or not a project is open
+ * (`src/utils/openOrImport.ts`), and with a project open it goes through
+ * `import-as-new-project` first, whose confirm CLOSES the project and re-enters
+ * the router. So a non-DMP flow always creates a project in the middle of
+ * itself, which is why those flows are the ones that reach the deferred initial
+ * save, the TML residue choice, and `f1Skipped:projectSwapped`.
+ *
+ * ## Three input sources
+ *
+ * A generated spec (valid-biased, or corrupted with probability
+ * `STALAGMIGHT_FUZZ_IMPORT_MALFORMED_P`), a tracked `.dmp` fixture, or an entry
+ * from a PRIVATE corpus of real survey files when one is configured
+ * (`STALAGMIGHT_FUZZ_CORPUS_DIR`). Generated files reach the parsers' edges;
+ * real files reach the shapes nobody would think to generate. A run with no
+ * corpus counts `corpus:absent` and is exactly as valid, just narrower.
+ *
+ * NOTHING THIS RUN PUBLISHES EVER NAMES A CORPUS FILE. A corpus entry is
+ * identified everywhere by `corpusFileId` - a 5-hex fold of its relative path -
+ * because a survey filename can name a cave, a landowner or an unreleased
+ * project, and a metric key, a log line and a failure payload are all things
+ * that end up attached to an issue. The corpus-relative path appears in ONE
+ * place, the `corpusFile` trace step, which is a local artifact by construction
+ * (`lib/fixtureCorpus.ts` states the full rule).
  *
  * ## The shape of a run
  *
@@ -34,13 +63,15 @@
  *   plus `check_project_integrity` after any step that pushed an undo entry -
  *   `save_blocked`, or a non-finite-geometry message, is a hard failure
  *
- * Three inline expected-behaviour checks ride along with the moves that provoke
+ * Five inline expected-behaviour checks ride along with the moves that provoke
  * them, because each one is only meaningful against the state immediately
  * before its own move:
- *   RACE          a DISABLED `continue-button` must not advance the flow
+ *   RACE          a DISABLED confirm must not advance the flow (`RACE_TARGETS`)
  *   FROZEN DELETE an all-frozen selection must survive, and must say so
  *   IMPORT GATE   a second file routed into a screen an import owns must be
  *                 refused (#411's `importFlowOwnsScreen`)
+ *   EXPORT CHORD  Ctrl+E must be inert while a dialog owns the screen
+ *   CLOSE         closing the project at idle must leave nothing behind
  *
  * Per FLOW (`lib/importFlowOracles.ts`): F1 undo roundtrip, F2 residue,
  * F3 receipt-vs-project accounting, F4 receipt rendering, F5 temp files.
@@ -88,11 +119,15 @@
  * ## Knobs (all read at CALL time, so a replay's restored env reaches them)
  *
  *   STALAGMIGHT_FUZZ_FIXTURE                    which `.stalx` to open
+ *   STALAGMIGHT_FUZZ_IMPORT_FORMAT              csv of families, default all
+ *                                               (dmp,tml,compass,walls,gpx)
  *   STALAGMIGHT_FUZZ_IMPORT_FLOWS_PER_EPISODE   default 3
  *   STALAGMIGHT_FUZZ_IMPORT_MAX_FLOW_STEPS      default 140
  *   STALAGMIGHT_FUZZ_IMPORT_MALFORMED_P         default 0.2
  *   STALAGMIGHT_FUZZ_IMPORT_INTERJECT_P         default 0.08
+ *   STALAGMIGHT_FUZZ_IMPORT_AUX_INTERJECT_P     default 0.04 (wave-3 stream)
  *   STALAGMIGHT_FUZZ_IMPORT_SETTLE_MS           default 12000
+ *   STALAGMIGHT_FUZZ_CORPUS_DIR                 optional private corpus root
  *   STALAGMIGHT_FUZZ_TRACE / _REPLAY            record / replay a trace
  *
  * ## Findings
@@ -102,6 +137,17 @@
  * finding is fixed its entry names the commit and becomes that fix's regression
  * check. Do NOT add a classifier or a tolerance to turn a red green - this file
  * has neither, and that is the whole discipline it inherits.
+ *
+ * WAVE 3 MOVED THE TRAJECTORIES, and the entries below say so rather than
+ * implying otherwise. Findings 1 and 3 were recorded on the DMP-only walk; the
+ * five-format draw and the auxiliary interjection stream change which moves a
+ * seed makes, so those repro lines no longer replay the exact sequence that
+ * found the bug. They are still run as regression checks and are still expected
+ * green - and the SHRUNK five-step sequence in finding 1 is the durable form of
+ * that check, because it is a trace rather than a seed. The auxiliary stream is
+ * deliberately a SECOND stream (`AUX_INTERJECT_STREAM_SALT`) so that the
+ * original interjection stream's own draws are bit-identical; that bounds the
+ * change to inserted moves rather than a re-partitioned distribution.
  *
  * 1. FIXED (95155c51), issue #476. THE IMPORT WIZARD BECAME AN INVISIBLE
  *    MODAL, PERMANENTLY. This is now that fix's regression check - a red here
@@ -230,7 +276,21 @@ import {
   type FuzzTrace,
   type TraceStep,
 } from '../lib/fuzzTrace';
-import { materializeSurveyFile, randomDmpSpec, type GeneratedFileSpec } from '../lib/surveyFileSpecs';
+import {
+  materializeSurveyFile,
+  randomSurveyFileSpec,
+  selfCheckClaim,
+  type GeneratedFileSpec,
+  type SurveyFileFormat,
+} from '../lib/surveyFileSpecs';
+import {
+  CORPUS_DIR_ENV,
+  corpusEntryFor,
+  describeCorpus,
+  discoverCorpus,
+  materializeCorpusEntry,
+  type CorpusEntry,
+} from '../lib/fixtureCorpus';
 import type { ImportScreenDigest } from '../lib/importScreenDigest';
 import { LogCursor } from '../lib/logs';
 import {
@@ -253,12 +313,14 @@ import {
   ESCAPE_BUDGET,
   ESCAPE_PATH,
   isEscaped,
+  NON_FLOW_SCREENS,
   progressMode,
   WEDGE_EXEMPT_SCREENS,
   type ScreenId,
 } from './importDialogModel';
 import {
   answerFileDialogInPage,
+  answerKeyboardFileDialog,
   dismissFirstRunModal,
   injectScreenDigest,
   observeScreen,
@@ -267,8 +329,16 @@ import {
   type Move,
 } from './importDialogBridge';
 import {
+  AUX_INTERJECT_STREAM_SALT,
+  auxInterjectProbability,
+  buildAuxInterjection,
   buildInterjection,
+  corpusCandidates,
+  describeSource,
+  drawAuxInterjection,
   drawInterjection,
+  enabledFamilies,
+  enabledFormats,
   interjectProbability,
   INTERJECT_STREAM_SALT,
   PROJECT_DIR_PLACEHOLDER,
@@ -338,31 +408,61 @@ function traceOutPath(): string {
  * Every one of them re-enters the open/import ROUTER (or creates a project),
  * and a malformed file or an unwritable path there is a reported error, not a
  * defect. Nothing else on the flow has any business producing one.
+ *
+ * The four import confirms are here for the same reason a `route` is: they hand
+ * a file the parser accepted to the command that actually imports it, and a
+ * file whose CONTENT the importer then refuses is a reported error.
  */
 const ERROR_PRODUCING: ReadonlySet<string> = new Set([
   'create-and-continue-button',
   'import-blocked-switch',
   'import-as-new-project-confirm',
   'retry-button',
+  'tml-import-confirm',
+  'tml-import-residue-discard',
+  'compass-import-confirm',
+  'walls-import-confirm',
+  'gpx-import-confirm',
+  'gpx-continue-button',
 ]);
 
 function mayRaiseError(move: FuzzMove): boolean {
-  if (move.kind === 'openFile' || move.kind === 'cancelDialog') return true;
+  if (move.kind === 'openFile' || move.kind === 'cancelDialog' || move.kind === 'keyFile') return true;
   if (move.kind === 'ui') return ERROR_PRODUCING.has(move.testid);
   return false;
 }
 
 /**
+ * Confirms that are DISABLED while a duplicate-hash probe is in flight.
+ *
+ * The window is short and real, and clicking into it asserts that the disabled
+ * state is HONEST: a disabled control must not advance the flow. Each screen's
+ * `race-*` generator aims at exactly these, and the shell checks the outcome
+ * inline, because the check is only meaningful against the state its own move
+ * acted on.
+ */
+const RACE_TARGETS: ReadonlySet<string> = new Set([
+  'continue-button',
+  'tml-import-confirm',
+  'compass-import-confirm',
+  'walls-import-confirm',
+  'gpx-continue-button',
+  'gpx-import-confirm',
+]);
+
+/**
  * `mutate` actions a REPLAYED trace may drive - the DOM allowlist's twin.
  *
- * EMPTY, and kept rather than deleted. The one entry it had was
- * `ui:confirmPlacement`, removed with its generator: that store action abandons
- * a placement rather than completing one (see the note in
- * `importDialogGenerators.ts`). An empty set still REFUSES a `mutate` step
- * loudly, which is the point - a trace naming `loadProject` must not be quietly
- * skipped - and the boundary stays in place for whatever wave 3 adds.
+ * One entry: `closeProject`, which the wave-3 auxiliary interjection plays at
+ * `idle`. The set REFUSES anything else loudly, which is the point - a trace
+ * naming `loadProject` or `deleteProject` must not be quietly skipped inside a
+ * privileged webview with the `__E2E_TEST__` hooks live.
+ *
+ * `ui:confirmPlacement` is deliberately still absent: that store action
+ * ABANDONS a placement rather than completing one (see the note in
+ * `importDialogGenerators.ts`), so it reaches a state no user can.
  */
-const REPLAYABLE_UI_ACTIONS: ReadonlySet<string> = new Set();
+const REPLAYABLE_UI_ACTIONS: ReadonlySet<string> = new Set(['closeProject']);
 
 function actionableCount(digest: ImportScreenDigest): number {
   let count = 0;
@@ -381,8 +481,8 @@ interface Bounds extends FlowBounds {
 export const importDialogFuzz: Scenario = {
   name: SCENARIO,
   description:
-    'Generates .dmp files and walks the real DMP import UI at random, asserting per-step coherence ' +
-    'and a per-flow undo roundtrip, residue, accounting, receipt and temp-file contract.',
+    'Generates DMP/Ariane/Compass/Walls/GPX files and walks the real import UI at random, asserting ' +
+    'per-step coherence and a per-flow undo roundtrip, residue, accounting, receipt and temp-file contract.',
   defaultIterations: 3,
 
   async run(ctx: ScenarioContext, { iterations }): Promise<void> {
@@ -393,6 +493,32 @@ export const importDialogFuzz: Scenario = {
     }
     const filesDir = path.join(sessionDir, FILES_REL);
     const projectsDir = path.join(sessionDir, PROJECTS_REL);
+
+    // ---- input sources ---------------------------------------------------
+    //
+    // The format axis and the private corpus are both resolved ONCE: discovery
+    // walks a directory, and a generator runs once per step. Neither is ever
+    // named in a log line - `describeCorpus` prints counts per format, and a
+    // corpus file is identified downstream by `corpusFileId`.
+    const formats = enabledFormats();
+    const inventory = discoverCorpus();
+    const corpus: Partial<Record<SurveyFileFormat, readonly CorpusEntry[]>> = {};
+    let corpusUsable = 0;
+    for (const format of formats) {
+      const entries = corpusCandidates([format]);
+      corpus[format] = entries;
+      corpusUsable += entries.length;
+    }
+    ctx.log(`formats: ${enabledFamilies().join(',')} (${formats.join(',')})`);
+    ctx.log(describeCorpus(inventory));
+    ctx.setMetric('corpusEntriesUsable', corpusUsable);
+    if (corpusUsable === 0) {
+      // Not a failure and never one: a corpus is optional by design, and a run
+      // without one is exactly as valid, just narrower. Counted so a run that
+      // MEANT to use one can tell that it did not.
+      ctx.metric('corpus:absent');
+      if (!inventory.available) ctx.log(`corpus: set ${CORPUS_DIR_ENV} to widen this run's inputs`);
+    }
 
     const replayPath = replayTracePath();
     const traceOut = traceOutPath();
@@ -427,7 +553,9 @@ export const importDialogFuzz: Scenario = {
             seed: ctx.seed,
             iterations,
             fixture,
-            stream: 'dmp-v1',
+            // v3 = the five-format vocabulary: corpus sources, the armed
+            // keyboard picker, and the auxiliary interjection stream.
+            stream: 'import-v3',
             failure,
           }),
         );
@@ -483,12 +611,65 @@ export const importDialogFuzz: Scenario = {
       return target;
     };
 
-    /** Absolute path of a source's file, or null when it is not on disk. */
+    /**
+     * Absolute path of a source's file, or null when it is not on disk.
+     *
+     * A CORPUS source is the one that can legitimately come back null on a
+     * machine that is not the recorder's: the trace names a corpus-relative
+     * path, and a replayer with no corpus (or a different one) simply does not
+     * have it. That is skipped-and-counted like any other impossible move -
+     * never a failure, because a corpus is optional by design.
+     */
     const sourceOnDisk = (source: FileSource): string | null => {
       if (source.origin === 'gen') return materialize(source.spec, source.rel);
       if (source.origin === 'fixture') return ctx.fixturePath(source.name);
+      if (source.origin === 'corpus') {
+        const entry = corpusEntryFor(source.corpusRel);
+        if (entry === null) {
+          ctx.metric('corpus:absent');
+          return null;
+        }
+        const copied = materializeCorpusEntry(entry, resolveRel(source.dirRel));
+        if (copied.skipped) {
+          ctx.metric('corpus:oversizedDirectory');
+          return null;
+        }
+        ctx.metric('corpus:materialized');
+        ctx.metric('corpus:copiedBytes', copied.bytes);
+        return copied.path;
+      }
       const target = resolveRel(source.rel);
       return fs.existsSync(target) ? target : null;
+    };
+
+    /**
+     * Record the step that PUT a file on disk, before the step that opens it.
+     *
+     * A generated file travels as its spec; a corpus file travels as its
+     * corpus-relative path and nothing else. Both are resolved against a
+     * directory the REPLAYER chooses, which is the rule `fuzzTrace.ts` states.
+     */
+    const recordFileSource = (source: FileSource, record: boolean): void => {
+      if (!record) return;
+      if (source.origin === 'gen') {
+        recorder.record({
+          kind: 'genFile',
+          spec: source.spec,
+          rel: source.rel,
+          label: describeSource(source),
+        });
+        return;
+      }
+      if (source.origin === 'corpus') {
+        recorder.record({
+          kind: 'corpusFile',
+          corpusRel: source.corpusRel,
+          // The DIRECTORY the copy lands in; the `route`/`fileDialog` step that
+          // follows names the file inside it.
+          rel: source.dirRel,
+          label: describeSource(source),
+        });
+      }
     };
 
     /**
@@ -564,18 +745,12 @@ export const importDialogFuzz: Scenario = {
         const live = move;
         const absolute = sourceOnDisk(live.source);
         if (absolute === null) {
-          // Only reachable on a REPLAY whose `genFile` step ddmin cut away.
-          skip = 'file-missing';
+          // A REPLAY whose `genFile` step ddmin cut away, or a corpus entry
+          // this machine does not have.
+          skip = live.source.origin === 'corpus' ? 'corpus-missing' : 'file-missing';
           digest = await observeScreen(ctx, false);
         } else {
-          if (record && live.source.origin === 'gen') {
-            recorder.record({
-              kind: 'genFile',
-              spec: live.source.spec,
-              rel: live.source.rel,
-              label: `${live.source.spec.profile} ${live.source.spec.format}`,
-            });
-          }
+          recordFileSource(live.source, record);
           const rel = live.source.rel;
           if (live.via === 'route') {
             const routed = await routeFile(ctx, absolute);
@@ -594,6 +769,38 @@ export const importDialogFuzz: Scenario = {
             }
           }
         }
+      } else if (move.kind === 'keyFile') {
+        const live = move;
+        const absolute = sourceOnDisk(live.source);
+        if (absolute === null) {
+          skip = live.source.origin === 'corpus' ? 'corpus-missing' : 'file-missing';
+          digest = await observeScreen(ctx, false);
+        } else {
+          recordFileSource(live.source, record);
+          const answered = await answerKeyboardFileDialog(ctx, live.chord, absolute);
+          performed = answered.performed;
+          skip = answered.reason;
+          digest = answered.digest;
+          // A chord the dispatcher swallowed (it returns early whenever a
+          // dialog is open) leaves the answer unconsumed. That is the app's
+          // documented gate, so it is counted rather than asserted.
+          ctx.metric(answered.consumed ? 'keyPickerConsumed' : 'keyPickerSwallowed');
+          if (record && performed) {
+            recorder.record({
+              kind: 'fileDialog',
+              trigger: `key:${live.chord}`,
+              dialog: 'open',
+              rel: live.source.rel,
+              label: move.label,
+            });
+          }
+        }
+      } else if (move.kind === 'closeProject') {
+        const res = await ctx.callAction('project', 'closeProject', []);
+        performed = res.ok;
+        if (!res.ok) skip = 'close-refused';
+        if (record && performed) recorder.record({ kind: 'mutate', action: 'closeProject', args: [], label: move.label });
+        digest = await observeScreen(ctx);
       } else if (move.kind === 'cancelDialog') {
         const live = move;
         const answered = await answerFileDialogInPage(ctx, live.trigger, 'open', null);
@@ -830,20 +1037,30 @@ export const importDialogFuzz: Scenario = {
     // ---- move sources ----------------------------------------------------
 
     const interjectRng = mulberry32((ctx.seed ^ INTERJECT_STREAM_SALT) >>> 0);
+    const auxRng = mulberry32((ctx.seed ^ AUX_INTERJECT_STREAM_SALT) >>> 0);
 
-    const genEnv = (digest: ImportScreenDigest): GenEnv => ({ ctx, digest, filesRel: FILES_REL, fileSeq });
+    const genEnv = (digest: ImportScreenDigest): GenEnv => ({
+      ctx,
+      digest,
+      filesRel: FILES_REL,
+      fileSeq,
+      corpus,
+    });
 
     const drawMove = (digest: ImportScreenDigest, mode: 'draw' | 'advance'): FuzzMove | null => {
       if (mode === 'advance') {
-        const testid = ADVANCE_MOVE[digest.screen];
-        if (testid !== undefined && digest.live[testid] === 2) {
+        const route = ADVANCE_MOVE[digest.screen] ?? [];
+        const testid = route.find((candidate) => digest.live[candidate] === 2);
+        if (testid !== undefined) {
           ctx.metric('forcedAdvance');
           return { kind: 'ui', testid, label: `FORCED advance on ${digest.screen}` };
         }
         ctx.metric('forcedAdvanceUnavailable');
       }
       // Interjections come off their OWN stream, so adding one later does not
-      // shift the trajectory every existing repro line depends on.
+      // shift the trajectory every existing repro line depends on. Wave 3's
+      // additions get a SECOND stream for the same reason, rather than being
+      // folded into `drawInterjection`'s partition.
       if (interjectRng() < interjectProbability()) {
         const kind = drawInterjection(interjectRng);
         const move = buildInterjection(kind, genEnv(digest));
@@ -852,6 +1069,16 @@ export const importDialogFuzz: Scenario = {
           if (move.kind === 'openFile') fileSeq += 1;
           return move;
         }
+      }
+      if (auxRng() < auxInterjectProbability()) {
+        const kind = drawAuxInterjection(auxRng);
+        const move = buildAuxInterjection(kind, genEnv(digest));
+        if (move !== null) {
+          ctx.metric(`interject:${kind}`);
+          if (move.kind === 'keyFile') fileSeq += 1;
+          return move;
+        }
+        ctx.metric(`interjectSkipped:${kind}`);
       }
       const pool = weightedFor(digest.screen);
       if (pool.length === 0) {
@@ -897,15 +1124,28 @@ export const importDialogFuzz: Scenario = {
             trigger: 'routeOpenedFile',
             label: step.label,
           };
-        case 'fileDialog':
+        case 'fileDialog': {
           if (step.rel === null) return { kind: 'cancelDialog', trigger: step.trigger, label: step.label };
+          const rel = Array.isArray(step.rel) ? (step.rel[0] as string) : step.rel;
+          // A `key:<chord>` trigger is the ARMED-KEYBOARD picker, not a click on
+          // an element - it has no testid, so it cannot go through the click
+          // path at all.
+          if (step.trigger.startsWith('key:')) {
+            return {
+              kind: 'keyFile',
+              chord: step.trigger.slice('key:'.length),
+              source: replaySource(rel),
+              label: step.label,
+            };
+          }
           return {
             kind: 'openFile',
-            source: replaySource(Array.isArray(step.rel) ? (step.rel[0] as string) : step.rel),
+            source: replaySource(rel),
             via: 'dialog',
             trigger: step.trigger,
             label: step.label,
           };
+        }
         case 'mapClick':
           return { kind: 'mapClick', lngLat: step.lngLat, label: step.label };
         case 'undo':
@@ -916,7 +1156,8 @@ export const importDialogFuzz: Scenario = {
           return { kind: 'save', label: 'replay save' };
         case 'mutate':
           // The store-action twin of the DOM allowlist: a trace names an action,
-          // and only the one this scenario produces may be dispatched.
+          // and only the ones this scenario produces may be dispatched.
+          if (step.action === 'closeProject') return { kind: 'closeProject', label: step.label };
           throw new Error(
             `refusing to replay mutate "${step.action}": ${SCENARIO} replays ` +
               `${REPLAYABLE_UI_ACTIONS.size === 0 ? 'no store actions' : [...REPLAYABLE_UI_ACTIONS].join(', ')}`,
@@ -951,26 +1192,31 @@ export const importDialogFuzz: Scenario = {
     {
       const probeDir = path.join(filesDir, 'selfcheck');
       const probeRng = mulberry32((ctx.seed ^ 0x5bd1e995) >>> 0);
-      for (let i = 0; i < SELF_CHECK_SPECS; i += 1) {
-        const spec: GeneratedFileSpec = {
-          format: 'dmp',
-          name: `selfcheck-${i}.dmp`,
-          profile: 'valid',
-          dmp: randomDmpSpec(probeRng, 'valid'),
-        };
-        const { path: written } = materializeSurveyFile(probeDir, spec);
-        const parsed = (await ctx.ipc('import_dmp', { path: written })) as { sections?: unknown[] } | null;
-        const found = parsed && Array.isArray(parsed.sections) ? parsed.sections.length : -1;
-        if (found !== spec.dmp.sections.length) {
-          throw new Error(
-            `GENERATOR SELF-CHECK failed on ${written}: the writer emitted ` +
-              `${spec.dmp.sections.length} section(s) and import_dmp read ${found}. ` +
-              'surveyFileWriters.ts has drifted from the Rust parser; every generated file would be ' +
-              'rejected at the door and this run would pass green having exercised nothing.',
-          );
+      let probes = 0;
+      // EVERY format this run may draw, not just the first: a drift in one
+      // writer would otherwise hide behind the others passing.
+      for (const format of formats) {
+        for (let i = 0; i < SELF_CHECK_SPECS; i += 1) {
+          const drawn = randomSurveyFileSpec(probeRng, 'valid', format);
+          const spec: GeneratedFileSpec = { ...drawn, name: `selfcheck-${format}-${i}.${format}` };
+          const { path: written } = materializeSurveyFile(probeDir, spec);
+          const claim = selfCheckClaim(spec);
+          const parsed = await ctx.ipc(claim.command, { path: written });
+          const found = claim.read(parsed);
+          const withinBounds = found >= claim.min && (claim.max === null || found <= claim.max);
+          if (!withinBounds) {
+            throw new Error(
+              `GENERATOR SELF-CHECK failed on ${written}: the writer emitted a spec claiming ` +
+                `${claim.min}${claim.max === null ? '+' : claim.max === claim.min ? '' : `..${claim.max}`} ` +
+                `${claim.what}(s) and ${claim.command} read ${found}. ` +
+                'The writer has drifted from the Rust parser; every generated file of this format would be ' +
+                'rejected at the door and this run would pass green having exercised nothing.',
+            );
+          }
+          probes += 1;
         }
       }
-      ctx.setMetric('selfCheckSpecs', SELF_CHECK_SPECS);
+      ctx.setMetric('selfCheckSpecs', probes);
       fs.rmSync(probeDir, { recursive: true, force: true });
     }
 
@@ -1070,7 +1316,11 @@ export const importDialogFuzz: Scenario = {
           digest = outcome.digest;
           await stepOracles(move, digest);
           if (move.kind === 'undo' || move.kind === 'redo' || move.kind === 'save') historyTouched = true;
-          if (digest.screen !== 'idle') leftIdle = true;
+          if (move.kind === 'closeProject') historyTouched = true;
+          // The export modal is not an import screen, so opening it must not
+          // make an idle walk look like a flow that imported nothing - see
+          // NON_FLOW_SCREENS.
+          if (digest.screen !== 'idle' && !NON_FLOW_SCREENS.has(digest.screen)) leftIdle = true;
           if (digest.receipt && receipt === null) {
             receipt = receiptClaimFrom(digest);
             if (receipt) guarded(() => checkReceipt(receipt as ReceiptClaim));
@@ -1087,6 +1337,20 @@ export const importDialogFuzz: Scenario = {
             if (step.kind === 'genFile') {
               materialize(step.spec as GeneratedFileSpec, step.rel);
               ctx.metric('replay:genFile');
+              continue;
+            }
+            if (step.kind === 'corpusFile') {
+              // The replayer's OWN corpus, or none. A trace carries no content,
+              // so a machine without the file replays everything else and the
+              // move that would have opened it is skipped and counted. That is
+              // a narrower replay, not a failed one.
+              const entry = corpusEntryFor(step.corpusRel);
+              if (entry === null) {
+                ctx.metric('corpus:absent');
+                continue;
+              }
+              const copied = materializeCorpusEntry(entry, resolveRel(step.rel));
+              ctx.metric(copied.skipped ? 'corpus:oversizedDirectory' : 'replay:corpusFile');
               continue;
             }
             const move = moveFromStep(step);
@@ -1137,7 +1401,9 @@ export const importDialogFuzz: Scenario = {
           // is only meaningful against the state its own move acted on.
           const screenBefore = digest.screen;
           const rowsBefore = digest.rows;
-          const raceMove = move.kind === 'ui' && move.testid === 'continue-button' && digest.live[move.testid] === 1;
+          const raceMove = move.kind === 'ui' && RACE_TARGETS.has(move.testid) && digest.live[move.testid] === 1;
+          const exportChord = move.kind === 'ui' && move.testid === 'key:Ctrl+E';
+          const closeMove = move.kind === 'closeProject';
           const frozenDelete =
             move.kind === 'ui' &&
             move.testid === 'shot-editor-context-delete-rows' &&
@@ -1153,8 +1419,21 @@ export const importDialogFuzz: Scenario = {
             ctx.metric('raceContinue');
             if (digest.screen !== screenBefore) {
               fail(
-                'RACE: a DISABLED continue-button advanced the flow',
+                `RACE: a DISABLED ${move.kind === 'ui' ? move.testid : '?'} advanced the flow`,
                 `  screen ${screenBefore} -> ${digest.screen}; a disabled control must not act`,
+              );
+            }
+          }
+          if (exportChord && outcome.performed) {
+            ctx.metric(`exportChord:${screenBefore}`);
+            // The app's own gate: both keyboard dispatchers return early for
+            // every non-Escape key while a dialog is open, so Ctrl+E must be
+            // inert on top of an import screen. An export modal that opened
+            // there would sit over a flow that still owns the state under it.
+            if (screenBefore !== 'idle' && digest.screen === 'export-modal') {
+              fail(
+                `EXPORT CHORD: Ctrl+E opened the export modal on top of "${screenBefore}"`,
+                `  a dialog was already up; the shortcut dispatcher must swallow the chord`,
               );
             }
           }
@@ -1171,6 +1450,20 @@ export const importDialogFuzz: Scenario = {
                 'FROZEN DELETE: the refusal was SILENT',
                 `  no dmp-wizard-frozen-delete toast; toasts=${JSON.stringify(digest.toast)}`,
               );
+            }
+          }
+          if (closeMove && outcome.performed) {
+            ctx.metric('closeProjectInterjections');
+            // Only ever played at `idle` (see `buildAuxInterjection`), so this
+            // is E1's contract applied mid-run: closing must leave no project,
+            // no dialog and no placement behind it.
+            const residue = [
+              digest.hasProject ? 'a project is still open' : null,
+              digest.dialog !== null ? `activeDialog=${JSON.stringify(digest.dialog)}` : null,
+              digest.placement ? 'placementMode is still set' : null,
+            ].filter((line): line is string => line !== null);
+            if (residue.length > 0) {
+              fail('CLOSE: closing the project at idle left state behind', residue.map((line) => `  ${line}`).join('\n'));
             }
           }
           if (interjectRoute && outcome.performed) {

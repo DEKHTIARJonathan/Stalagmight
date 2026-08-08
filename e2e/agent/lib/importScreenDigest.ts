@@ -42,10 +42,34 @@
  * produces on every descendant).
  */
 
-/** Screens the DMP import flow can be on. `importDialogModel.ts` re-exports it. */
+/** Screens an import flow can be on. `importDialogModel.ts` re-exports it. */
 export type ScreenId =
   | 'idle'
   | 'dmp-select'
+  /** The Ariane options screen (`activeDialog: 'tml-import'`). */
+  | 'tml-config'
+  /**
+   * The keep-or-discard choice a cancelled/failed TML import into a FRESH
+   * project raises.
+   *
+   * Same `activeDialog` as `tml-config` - `TmlImportDialog` returns this body
+   * instead of its own when `residue !== null` - so the two are told apart by
+   * their roots, and this one is checked first.
+   */
+  | 'tml-residue'
+  | 'compass'
+  | 'walls'
+  | 'gpx-select'
+  | 'gpx-place'
+  /**
+   * The export modal, which Ctrl+E opens.
+   *
+   * Not an import screen and deliberately in the table anyway: the fuzzer
+   * presses Ctrl+E as an interjection, and a modal this table did not name
+   * would read as `unknown` and fail the run for a dialog the app is entitled
+   * to open. Its CONTENTS are not fuzzed here.
+   */
+  | 'export-modal'
   | 'zero-datum-select'
   | 'zero-datum-config'
   | 'wiz-init'
@@ -245,6 +269,14 @@ export async function computeImportScreenDigest(
   if (shown('telemetry-opt-in-dialog')) screen = 'first-run';
   else if (shown('cancel-confirm-dialog') || shown('back-confirm-dialog')) screen = 'wiz-confirm';
   else if (shown('dmp-selection-dialog')) screen = 'dmp-select';
+  // Before `tml-import-dialog`: the residue body REPLACES the options body
+  // under the same `activeDialog`, so only the roots tell them apart.
+  else if (shown('tml-import-residue-dialog')) screen = 'tml-residue';
+  else if (shown('tml-import-dialog')) screen = 'tml-config';
+  else if (shown('compass-import-dialog')) screen = 'compass';
+  else if (shown('walls-import-dialog')) screen = 'walls';
+  else if (shown('gpx-selection-dialog')) screen = 'gpx-select';
+  else if (shown('gpx-placement-dialog')) screen = 'gpx-place';
   else if (shown('zero-datum-selection-dialog')) screen = 'zero-datum-select';
   else if (shown('zero-datum-config-dialog')) screen = 'zero-datum-config';
   else if (shown('orphan-placement-dialog')) screen = 'orphan-placement';
@@ -262,6 +294,7 @@ export async function computeImportScreenDigest(
   else if (shown('import-receipt-dialog')) screen = 'receipt';
   else if (shown('import-blocked-dialog')) screen = 'blocked';
   else if (shown('import-as-new-project-dialog')) screen = 'as-new-project';
+  else if (shown('export-dialog')) screen = 'export-modal';
   else if (shown('error-dialog')) screen = 'error';
   else if (placement) screen = 'map-placement';
   else if (dialog === null) screen = 'idle';
@@ -368,11 +401,18 @@ export async function computeImportScreenDigest(
     const probes = [
       'dmp-new-import-dialog',
       'dmp-selection-dialog',
+      'tml-import-dialog',
+      'tml-import-residue-dialog',
+      'compass-import-dialog',
+      'walls-import-dialog',
+      'gpx-selection-dialog',
+      'gpx-placement-dialog',
       'zero-datum-selection-dialog',
       'zero-datum-config-dialog',
       'new-project-for-import-dialog',
       'import-receipt-dialog',
       'orphan-placement-dialog',
+      'export-dialog',
       'error-dialog',
       'wizard-importing-zero-datum',
       'wizard-calculating',

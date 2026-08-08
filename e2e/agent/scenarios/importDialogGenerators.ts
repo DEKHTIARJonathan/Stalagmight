@@ -17,23 +17,45 @@
  * every seed's trajectory and invalidates every repro line in the header of
  * `importDialogFuzz.ts`.
  *
- * ## DMP only, this wave
+ * ## Five formats, three input sources
  *
- * `randomDmpSpec` / `corruptSpec` can emit TML and TMLU too, and
- * `lib/fixtureCorpus.ts` exists. Neither is drawn here: the flow model, the
- * escape paths and the accounting oracle are all DMP-shaped, and widening them
- * is wave 3.
+ * A flow starts by drawing a FORMAT FAMILY (`dmp`, `tml`, `compass`, `walls`,
+ * `gpx` - restricted by `STALAGMIGHT_FUZZ_IMPORT_FORMAT`), then a concrete
+ * extension inside it, then where the bytes come from: a generated spec
+ * (valid-biased, or corrupted with probability
+ * `STALAGMIGHT_FUZZ_IMPORT_MALFORMED_P`), a tracked fixture, or an entry from
+ * the replayer's own PRIVATE corpus when one is configured.
+ *
+ * The family matters to the flow and not only to the parser: `.dmp` is the ONLY
+ * additive import. Every other extension routes to `new-project-for-import`
+ * whether or not a project is open (`src/utils/openOrImport.ts` - with a
+ * project open it goes through `import-as-new-project` first, whose confirm
+ * closes the project and re-enters the router). So a non-DMP flow always has a
+ * project-creation screen in the middle of it.
+ *
+ * ## Nothing here ever names a corpus file
+ *
+ * A corpus source travels as its corpus-relative path (a trace is a local
+ * artifact) and is LABELLED by `corpusFileId`. Labels reach the move history,
+ * the failure payload and the metric keys, all of which are things that get
+ * attached to an issue - see `lib/fixtureCorpus.ts` for why the real name
+ * cannot be one of them.
  */
 import type { ScenarioContext } from './framework';
 import type { ImportScreenDigest } from '../lib/importScreenDigest';
 import {
+  FORMATS_IN_FAMILY,
   HOSTILE_COMMENTS,
-  randomDmpSpec,
+  SURVEY_FORMAT_FAMILIES,
+  randomSurveyFileSpec,
   type GeneratedFileSpec,
   type Rng,
+  type SurveyFileFormat,
+  type SurveyFormatFamily,
 } from '../lib/surveyFileSpecs';
 import { corruptSpec } from '../lib/surveyFileCorrupt';
-import { OVERLAP_MODES, type ScreenId } from './importDialogModel';
+import { corpusFileId, discoverCorpus, type CorpusEntry } from '../lib/fixtureCorpus';
+import { OVERLAP_MODES, VIRTUAL_SHOT_MODES, type ScreenId } from './importDialogModel';
 
 // ---------------------------------------------------------------------------
 // Move vocabulary
@@ -45,6 +67,20 @@ export type FileSource =
   | { origin: 'gen'; spec: GeneratedFileSpec; rel: string }
   /** A tracked fixture, materialized by `ctx.fixturePath` under `fixtures/`. */
   | { origin: 'fixture'; name: string; rel: string }
+  /**
+   * An entry from the replayer's own private corpus.
+   *
+   * TWO rels, because the unit of materialization is a DIRECTORY: a Compass
+   * `.mak` names sibling `.dat` files and a Walls `.wpj` names a tree of
+   * `.srv`, so `materializeCorpusEntry` copies the entry's whole folder into
+   * `dirRel` and the file to open is `rel` inside it.
+   *
+   * `corpusRel` is resolved against whatever `STALAGMIGHT_FUZZ_CORPUS_DIR` is
+   * set to at REPLAY time, so a trace carries no content and no absolute path -
+   * and a replayer with no corpus simply skips the move and counts it.
+   * `id` is the publishable stand-in the labels and metrics use.
+   */
+  | { origin: 'corpus'; corpusRel: string; id: string; dirRel: string; rel: string }
   /**
    * REPLAY ONLY: a file a preceding `genFile` step already wrote. The spec does
    * not travel twice, so the reference is just the rel - and if ddmin cut the
@@ -75,7 +111,11 @@ export type FuzzMove =
   | { kind: 'mapClick'; lngLat: [number, number]; relative?: boolean; label: string }
   | { kind: 'undo'; label: string }
   | { kind: 'redo'; label: string }
-  | { kind: 'save'; label: string };
+  | { kind: 'save'; label: string }
+  /** Close the project. Only ever drawn at `idle` - see `buildAuxInterjection`. */
+  | { kind: 'closeProject'; label: string }
+  /** Arm a picker answer, then press the chord that raises it. */
+  | { kind: 'keyFile'; chord: string; source: FileSource; label: string };
 
 /** What a generator gets to look at. */
 export interface GenEnv {
@@ -85,6 +125,14 @@ export interface GenEnv {
   filesRel: string;
   /** Draw counter, so generated file names are unique within a run. */
   fileSeq: number;
+  /**
+   * Corpus entries this run may draw, by format. Empty for every format when no
+   * corpus is configured, which is a supported configuration.
+   *
+   * Passed IN rather than discovered here: discovery walks a directory, and a
+   * generator runs once per step.
+   */
+  corpus: Partial<Record<SurveyFileFormat, readonly CorpusEntry[]>>;
 }
 
 export interface Generator {
@@ -241,32 +289,108 @@ export function malformedProbability(): number {
   return Number.isFinite(raw) && raw >= 0 && raw <= 1 ? raw : 0.2;
 }
 
-/** Draw one input file: a generated spec (valid-biased) or a tracked fixture. */
+/** Share of drawn files taken from the private corpus, when one is configured. */
+export const CORPUS_DRAW_P = 0.25;
+/** Share of DMP draws taken from a tracked fixture. */
+const FIXTURE_DRAW_P = 0.25;
+
+/**
+ * Format families this run may draw, from `STALAGMIGHT_FUZZ_IMPORT_FORMAT`.
+ *
+ * A csv of family names; unknown entries are dropped, and an empty or unset
+ * value means all five. Read at CALL time, like every other knob, so a replay's
+ * restored environment reaches it.
+ */
+export function enabledFamilies(): readonly SurveyFormatFamily[] {
+  const raw = (process.env.STALAGMIGHT_FUZZ_IMPORT_FORMAT ?? '').trim();
+  if (raw === '') return SURVEY_FORMAT_FAMILIES;
+  const wanted = raw
+    .split(',')
+    .map((entry) => entry.trim().toLowerCase())
+    .filter((entry) => entry !== '');
+  const chosen = SURVEY_FORMAT_FAMILIES.filter((family) => wanted.includes(family));
+  return chosen.length > 0 ? chosen : SURVEY_FORMAT_FAMILIES;
+}
+
+/**
+ * Corpus entries this run may draw, grouped by the formats it is allowed to
+ * draw at all.
+ *
+ * Discovery walks a directory, so it is done ONCE per call site rather than per
+ * draw - `drawFileSource` takes the inventory it was handed.
+ */
+export function corpusCandidates(formats: readonly SurveyFileFormat[]): CorpusEntry[] {
+  const inventory = discoverCorpus();
+  if (!inventory.available) return [];
+  const out: CorpusEntry[] = [];
+  for (const format of formats) {
+    const entries = inventory.byFormat[format];
+    if (entries !== undefined) out.push(...entries);
+  }
+  return out;
+}
+
+/** Every concrete extension the enabled families cover. */
+export function enabledFormats(): SurveyFileFormat[] {
+  const out: SurveyFileFormat[] = [];
+  for (const family of enabledFamilies()) out.push(...FORMATS_IN_FAMILY[family]);
+  return out;
+}
+
+/**
+ * Draw one input file: a generated spec (valid-biased or corrupted), a tracked
+ * fixture, or a private-corpus entry.
+ *
+ * The corpus is drawn FIRST and only from entries whose format this run is
+ * allowed to use, so a `--axis STALAGMIGHT_FUZZ_IMPORT_FORMAT=gpx` cell does not
+ * quietly import somebody's `.srv` collection. When no corpus is configured the
+ * caller counts `corpus:absent` once and this returns a generated file, which is
+ * a narrower run and not a failed one.
+ */
 export function drawFileSource(env: GenEnv): FileSource {
   const rng = () => env.ctx.rng();
-  if (rng() < 0.25) {
+  const format = pickFrom(rng, enabledFormats()) as SurveyFileFormat;
+
+  const corpus = env.corpus[format];
+  if (corpus !== undefined && corpus.length > 0 && rng() < CORPUS_DRAW_P) {
+    const entry = pickFrom(rng, corpus) as CorpusEntry;
+    const dirRel = `${env.filesRel}/corpus-${env.fileSeq}`;
+    // `relPath` is POSIX by construction (`discoverCorpus` joins on '/').
+    const base = entry.relPath.slice(entry.relPath.lastIndexOf('/') + 1);
+    return { origin: 'corpus', corpusRel: entry.relPath, id: entry.id, dirRel, rel: `${dirRel}/${base}` };
+  }
+
+  // Tracked fixtures are all `.dmp`; there are none for the other formats, and
+  // the repo forbids adding any.
+  if (format === 'dmp' && rng() < FIXTURE_DRAW_P) {
     const name = pickFrom(rng, DMP_FIXTURES) as string;
     return { origin: 'fixture', name, rel: `fixtures/${name}` };
   }
+
   const malformed = rng() < malformedProbability();
   const profile = malformed ? 'malformed' : 'valid';
-  const clean: GeneratedFileSpec = {
-    format: 'dmp',
-    name: `fuzz-${env.fileSeq}.dmp`,
-    profile,
-    dmp: randomDmpSpec(rng, profile),
-  };
-  let spec = clean;
+  const clean = randomSurveyFileSpec(rng, profile, format);
+  let spec: GeneratedFileSpec = { ...clean, name: `fuzz-${env.fileSeq}.${format}` };
   if (malformed) {
     const corrupted = corruptSpec(rng, clean);
-    // The catalog id is `dmp:<entry>`; a colon is a legal Linux filename byte
-    // and an illegal Windows one, and a trace is meant to be portable.
+    // The catalog id is `<format>:<entry>`; a colon is a legal Linux filename
+    // byte and an illegal Windows one, and a trace is meant to be portable.
     const tag = corrupted.corruption.replace(/[^a-z0-9]+/gi, '-');
-    if (corrupted.spec.format !== 'dmp') throw new Error('the DMP corruption catalog returned a non-DMP spec');
-    spec = { ...corrupted.spec, name: `fuzz-${env.fileSeq}-${tag}.dmp` };
+    spec = { ...corrupted.spec, name: `fuzz-${env.fileSeq}-${tag}.${format}` };
   }
   return { origin: 'gen', spec, rel: `${env.filesRel}/${spec.name}` };
 }
+
+/** How a source is named in a log line, a metric key or a failure payload. */
+export function describeSource(source: FileSource): string {
+  if (source.origin === 'gen') return `${source.spec.profile} ${source.spec.format}`;
+  if (source.origin === 'fixture') return `fixture ${source.name}`;
+  if (source.origin === 'corpus') return `corpus #${source.id}`;
+  return `disk ${source.rel}`;
+}
+
+/** The publishable id of a corpus-relative path. Re-exported for the shell. */
+export { corpusFileId };
 
 // ---------------------------------------------------------------------------
 // The catalog
@@ -403,6 +527,403 @@ const DMP_SELECT: Generator[] = [
       presentButOff(env.digest, 'continue-button')
         ? click('continue-button', 'RACE: continue while disabled')
         : null,
+  },
+];
+
+/**
+ * The four non-DMP options screens, plus the GPX placement screen and the TML
+ * residue choice.
+ *
+ * Each of these is ONE screen with a handful of controls, so the catalog is
+ * flat rather than layered the way the DMP wizard's is. What they have in
+ * common with `dmp-select` is a confirm that is DISABLED while a duplicate-hash
+ * probe is in flight, which is why each has a `race-*` entry: `RACE_TARGETS` in
+ * `importDialogFuzz.ts` asserts that none of them advances while disabled.
+ */
+const TML_CONFIG: Generator[] = [
+  {
+    name: 'tml:include-excluded',
+    weight: 5,
+    screens: ['tml-config'],
+    build: (env) => {
+      if (!actionable(env.digest, 'tml-include-excluded')) return null;
+      const want = env.ctx.rng() < 0.5;
+      return check('tml-include-excluded', want, `tml include excluded=${want}`);
+    },
+  },
+  {
+    name: 'tml:comments-on-shots',
+    weight: 5,
+    screens: ['tml-config'],
+    build: (env) => {
+      if (!actionable(env.digest, 'tml-comments-on-shots')) return null;
+      const want = env.ctx.rng() < 0.5;
+      return check('tml-comments-on-shots', want, `tml comments on shots=${want}`);
+    },
+  },
+  {
+    name: 'tml:virtual-mode',
+    weight: 5,
+    screens: ['tml-config'],
+    build: (env) => {
+      if (!actionable(env.digest, 'tml-virtual-shot-mode')) return null;
+      const mode = pickFrom(() => env.ctx.rng(), VIRTUAL_SHOT_MODES) as string;
+      return select('tml-virtual-shot-mode', mode, `tml virtual shot mode ${mode}`);
+    },
+  },
+  {
+    name: 'tml:confirm',
+    weight: 14,
+    screens: ['tml-config'],
+    build: (env) => (actionable(env.digest, 'tml-import-confirm') ? click('tml-import-confirm', 'tml import') : null),
+  },
+  {
+    name: 'tml:cancel',
+    weight: 3,
+    screens: ['tml-config'],
+    build: (env) => (actionable(env.digest, 'tml-import-cancel') ? click('tml-import-cancel', 'tml cancel') : null),
+  },
+  {
+    name: 'tml:race-confirm',
+    weight: 4,
+    screens: ['tml-config'],
+    build: (env) =>
+      presentButOff(env.digest, 'tml-import-confirm')
+        ? click('tml-import-confirm', 'RACE: tml import while disabled')
+        : null,
+  },
+  {
+    /**
+     * KEEP is what an escape plays, so the generator weights DISCARD higher:
+     * discarding is the branch that re-checks the project's `created_at`
+     * against the one the residue captured and then deletes the project the
+     * import created, and it is only reachable from here.
+     */
+    name: 'residue:discard',
+    weight: 10,
+    screens: ['tml-residue'],
+    build: (env) =>
+      actionable(env.digest, 'tml-import-residue-discard')
+        ? click('tml-import-residue-discard', 'discard the import project')
+        : null,
+  },
+  {
+    name: 'residue:keep',
+    weight: 6,
+    screens: ['tml-residue'],
+    build: (env) =>
+      actionable(env.digest, 'tml-import-residue-keep')
+        ? click('tml-import-residue-keep', 'keep the import project')
+        : null,
+  },
+];
+
+const COMPASS: Generator[] = [
+  {
+    name: 'compass:apply-corrections',
+    weight: 5,
+    screens: ['compass'],
+    build: (env) => {
+      if (!actionable(env.digest, 'compass-apply-corrections')) return null;
+      const want = env.ctx.rng() < 0.5;
+      return check('compass-apply-corrections', want, `compass apply corrections=${want}`);
+    },
+  },
+  {
+    name: 'compass:comments-on-stations',
+    weight: 5,
+    screens: ['compass'],
+    build: (env) => {
+      if (!actionable(env.digest, 'compass-comments-on-stations')) return null;
+      const want = env.ctx.rng() < 0.5;
+      return check('compass-comments-on-stations', want, `compass comments on stations=${want}`);
+    },
+  },
+  {
+    name: 'compass:include-excluded',
+    weight: 5,
+    screens: ['compass'],
+    build: (env) => {
+      if (!actionable(env.digest, 'compass-include-excluded')) return null;
+      const want = env.ctx.rng() < 0.5;
+      return check('compass-include-excluded', want, `compass include excluded=${want}`);
+    },
+  },
+  {
+    name: 'compass:confirm',
+    weight: 14,
+    screens: ['compass'],
+    build: (env) =>
+      actionable(env.digest, 'compass-import-confirm') ? click('compass-import-confirm', 'compass import') : null,
+  },
+  {
+    name: 'compass:cancel',
+    weight: 3,
+    screens: ['compass'],
+    build: (env) =>
+      actionable(env.digest, 'compass-import-cancel') ? click('compass-import-cancel', 'compass cancel') : null,
+  },
+  {
+    name: 'compass:race-confirm',
+    weight: 5,
+    screens: ['compass'],
+    build: (env) =>
+      presentButOff(env.digest, 'compass-import-confirm')
+        ? click('compass-import-confirm', 'RACE: compass import while disabled')
+        : null,
+  },
+];
+
+const WALLS: Generator[] = [
+  {
+    name: 'walls:toggle-survey',
+    weight: 12,
+    screens: ['walls'],
+    build: (env) => {
+      const index = pickFrom(() => env.ctx.rng(), indexedIds(env.digest, 'walls-survey-'));
+      if (index === null) return null;
+      const testid = `walls-survey-${index}`;
+      const want = env.ctx.rng() < 0.5;
+      return check(testid, want, `set ${testid}=${want}`);
+    },
+  },
+  {
+    name: 'walls:select-all',
+    weight: 5,
+    screens: ['walls'],
+    build: (env) => {
+      if (!actionable(env.digest, 'walls-select-all')) return null;
+      const want = env.ctx.rng() < 0.5;
+      return check('walls-select-all', want, `walls select all=${want}`);
+    },
+  },
+  {
+    name: 'walls:comments-on-stations',
+    weight: 4,
+    screens: ['walls'],
+    build: (env) => {
+      if (!actionable(env.digest, 'walls-comments-on-stations')) return null;
+      const want = env.ctx.rng() < 0.5;
+      return check('walls-comments-on-stations', want, `walls comments on stations=${want}`);
+    },
+  },
+  {
+    /**
+     * The one Walls control with a GATE behind it: a selection whose only
+     * importable content is splays leaves the confirm disabled until this is
+     * on (`WallsImportDialog.tsx`), and the valid-biased spec generator emits
+     * splay-only surveys on purpose so that gate is reachable.
+     */
+    name: 'walls:include-splays',
+    weight: 8,
+    screens: ['walls'],
+    build: (env) => {
+      if (!actionable(env.digest, 'walls-include-splays')) return null;
+      const want = env.ctx.rng() < 0.5;
+      return check('walls-include-splays', want, `walls include splays=${want}`);
+    },
+  },
+  {
+    name: 'walls:confirm',
+    weight: 14,
+    screens: ['walls'],
+    build: (env) =>
+      actionable(env.digest, 'walls-import-confirm') ? click('walls-import-confirm', 'walls import') : null,
+  },
+  {
+    name: 'walls:cancel',
+    weight: 3,
+    screens: ['walls'],
+    build: (env) =>
+      actionable(env.digest, 'walls-import-cancel') ? click('walls-import-cancel', 'walls cancel') : null,
+  },
+  {
+    name: 'walls:race-confirm',
+    weight: 5,
+    screens: ['walls'],
+    build: (env) =>
+      presentButOff(env.digest, 'walls-import-confirm')
+        ? click('walls-import-confirm', 'RACE: walls import while disabled')
+        : null,
+  },
+];
+
+const GPX: Generator[] = [
+  {
+    name: 'gpx:toggle-collection',
+    weight: 14,
+    screens: ['gpx-select'],
+    build: (env) => {
+      const candidates = ['gpx-import-waypoints', 'gpx-import-tracks', 'gpx-import-routes'].filter((testid) =>
+        actionable(env.digest, testid),
+      );
+      const testid = pickFrom(() => env.ctx.rng(), candidates);
+      if (testid === null) return null;
+      const want = env.ctx.rng() < 0.5;
+      return check(testid, want, `set ${testid}=${want}`);
+    },
+  },
+  {
+    name: 'gpx:depth-inverted',
+    weight: 5,
+    screens: ['gpx-select'],
+    build: (env) => {
+      if (!actionable(env.digest, 'gpx-depth-inverted')) return null;
+      const want = env.ctx.rng() < 0.5;
+      return check('gpx-depth-inverted', want, `gpx depth inverted=${want}`);
+    },
+  },
+  {
+    name: 'gpx:expand',
+    weight: 3,
+    screens: ['gpx-select'],
+    build: (env) => {
+      const candidates = ['gpx-waypoints-toggle', 'gpx-tracks-toggle', 'gpx-routes-toggle'].filter((testid) =>
+        actionable(env.digest, testid),
+      );
+      const testid = pickFrom(() => env.ctx.rng(), candidates);
+      return testid === null ? null : click(testid, `expand ${testid}`);
+    },
+  },
+  {
+    /**
+     * The footer's primary is `gpx-import-confirm` when ONLY waypoints are
+     * selected (there is nothing to place, so the flow finishes here) and
+     * `gpx-continue-button` otherwise. They are opposite branches of one
+     * ternary, so exactly one of them exists at a time.
+     */
+    name: 'gpx:advance',
+    weight: 14,
+    screens: ['gpx-select'],
+    build: (env) => {
+      const testid = actionable(env.digest, 'gpx-continue-button')
+        ? 'gpx-continue-button'
+        : actionable(env.digest, 'gpx-import-confirm')
+          ? 'gpx-import-confirm'
+          : null;
+      return testid === null ? null : click(testid, `gpx advance via ${testid}`);
+    },
+  },
+  {
+    name: 'gpx:cancel',
+    weight: 3,
+    screens: ['gpx-select'],
+    build: (env) =>
+      actionable(env.digest, 'gpx-selection-cancel') ? click('gpx-selection-cancel', 'gpx cancel') : null,
+  },
+  {
+    name: 'gpx:race-advance',
+    weight: 5,
+    screens: ['gpx-select'],
+    build: (env) => {
+      const testid = presentButOff(env.digest, 'gpx-continue-button')
+        ? 'gpx-continue-button'
+        : presentButOff(env.digest, 'gpx-import-confirm')
+          ? 'gpx-import-confirm'
+          : null;
+      return testid === null ? null : click(testid, `RACE: gpx advance on a disabled ${testid}`);
+    },
+  },
+  {
+    /**
+     * The zero-datum picker for one track/route. Its options are the point
+     * indices of THAT section, which the digest cannot report for a dynamic id
+     * (it reads options only for the statically named selects), so the index is
+     * drawn blind and an option the section does not have is skipped-and-counted
+     * like any other impossible move.
+     */
+    name: 'gpxp:zero-datum',
+    weight: 10,
+    screens: ['gpx-place'],
+    build: (env) => {
+      const section = pickFrom(() => env.ctx.rng(), indexedIds(env.digest, 'gpx-placement-zero-datum-'));
+      if (section === null) return null;
+      const point = env.ctx.randInt(0, 7);
+      return select(`gpx-placement-zero-datum-${section}`, String(point), `gpx section ${section} zero datum ${point}`);
+    },
+  },
+  {
+    name: 'gpxp:confirm',
+    weight: 12,
+    screens: ['gpx-place'],
+    build: (env) =>
+      actionable(env.digest, 'gpx-import-confirm') ? click('gpx-import-confirm', 'gpx placement import') : null,
+  },
+  {
+    name: 'gpxp:back',
+    weight: 5,
+    screens: ['gpx-place'],
+    build: (env) =>
+      actionable(env.digest, 'gpx-placement-back') ? click('gpx-placement-back', 'gpx placement back') : null,
+  },
+  {
+    name: 'gpxp:cancel',
+    weight: 3,
+    screens: ['gpx-place'],
+    build: (env) =>
+      actionable(env.digest, 'gpx-placement-cancel') ? click('gpx-placement-cancel', 'gpx placement cancel') : null,
+  },
+];
+
+/**
+ * Orphan placement, reachable after ANY import that lands more than one
+ * component.
+ *
+ * `OrphanPlacementDialog` renders the same suggestion controls the DMP wizard
+ * does, and the generators are separate rather than shared so their weights can
+ * differ from the wizard's without rewriting that screen's trajectory.
+ */
+const ORPHAN: Generator[] = [
+  {
+    name: 'orphan:merge-station',
+    weight: 5,
+    screens: ['orphan-placement'],
+    build: (env) => {
+      if (!actionable(env.digest, 'merge-station-select')) return null;
+      const options = env.digest.opts['merge-station-select'];
+      const value =
+        options && options.length > 0 ? pickFrom(() => env.ctx.rng(), options) : String(env.ctx.randInt(-2, 2));
+      if (value === null) return null;
+      return select('merge-station-select', value, `orphan merge station offset ${value}`);
+    },
+  },
+  {
+    name: 'orphan:overlap-mode',
+    weight: 5,
+    screens: ['orphan-placement'],
+    build: (env) => {
+      if (!actionable(env.digest, 'overlap-mode-select')) return null;
+      const mode = pickFrom(() => env.ctx.rng(), OVERLAP_MODES) as string;
+      return select('overlap-mode-select', mode, `orphan overlap mode ${mode}`);
+    },
+  },
+  {
+    name: 'orphan:toggle-alternatives',
+    weight: 4,
+    screens: ['orphan-placement'],
+    build: (env) =>
+      actionable(env.digest, 'toggle-alternatives') ? click('toggle-alternatives', 'orphan alternatives') : null,
+  },
+  {
+    name: 'orphan:alternative',
+    weight: 5,
+    screens: ['orphan-placement'],
+    build: (env) => {
+      const index = pickFrom(() => env.ctx.rng(), indexedIds(env.digest, 'alternative-'));
+      if (index === null) return null;
+      return click(`alternative-${index}`, `orphan alternative ${index}`);
+    },
+  },
+];
+
+/** The export modal, opened by a Ctrl+E interjection. Its contents are not fuzzed. */
+const EXPORT_MODAL: Generator[] = [
+  {
+    name: 'export:close',
+    weight: 10,
+    screens: ['export-modal'],
+    build: (env) =>
+      actionable(env.digest, 'export-dialog-close') ? click('export-dialog-close', 'close the export modal') : null,
   },
 ];
 
@@ -1068,6 +1589,12 @@ const NEW_PROJECT: Generator[] = [
 export const GENERATORS: readonly Generator[] = [
   ...STARTERS,
   ...DMP_SELECT,
+  ...TML_CONFIG,
+  ...COMPASS,
+  ...WALLS,
+  ...GPX,
+  ...ORPHAN,
+  ...EXPORT_MODAL,
   ...ZERO_DATUM,
   ...ZERO_DATUM_CONFIG,
   ...WIZARD_SUGGEST,
@@ -1132,4 +1659,80 @@ export function buildInterjection(kind: Interjection, env: GenEnv): FuzzMove | n
     trigger: 'routeOpenedFile',
     label: 'INTERJECT: route a second file mid-flow',
   };
+}
+
+// ---------------------------------------------------------------------------
+// Auxiliary interjections (wave 3)
+// ---------------------------------------------------------------------------
+
+/**
+ * The moves wave 3 added, on their OWN stream with their OWN probability.
+ *
+ * Deliberately not folded into `drawInterjection`: that function's thresholds
+ * and its stream are what every repro line in `importDialogFuzz.ts`'s header
+ * was recorded against, and re-partitioning them would silently rewrite the
+ * draw sequence of a trajectory those lines describe. A second stream leaves
+ * the first one's draws bit-identical and only inserts moves between them.
+ */
+export type AuxInterjection = 'export' | 'mode' | 'close' | 'openKey';
+
+export function auxInterjectProbability(): number {
+  const raw = Number(process.env.STALAGMIGHT_FUZZ_IMPORT_AUX_INTERJECT_P);
+  return Number.isFinite(raw) && raw >= 0 && raw <= 1 ? raw : 0.04;
+}
+
+/** Salt for the auxiliary stream (`mulberry32(seed ^ SALT)`). */
+export const AUX_INTERJECT_STREAM_SALT = 0x9e3779b9;
+
+export function drawAuxInterjection(rng: Rng): AuxInterjection {
+  const roll = rng();
+  if (roll < 0.4) return 'export';
+  if (roll < 0.7) return 'mode';
+  if (roll < 0.85) return 'close';
+  return 'openKey';
+}
+
+/**
+ * Build one auxiliary interjection, or `null` when it is not legal right now.
+ *
+ * THREE OF THE FOUR ARE `idle`-ONLY, and the reason is the same for each: they
+ * would otherwise reach a state no user can reach, and a bug found in one of
+ * those is a fabricated bug. This file already makes that argument once, for
+ * `uiStore.confirmPlacement()`; these are the same argument applied to the
+ * shell's other privileged handles.
+ *
+ *   `mode`   - the mode carousel lives in the toolbar, and every import screen
+ *              is a modal whose backdrop covers it. This bridge dispatches
+ *              synthetic events straight at an element, so it can "click"
+ *              through a backdrop that a mouse cannot. The carousel is also
+ *              `disabled` while a placement is running, which the digest
+ *              already reports as not-actionable.
+ *   `close`  - nothing in the UI binds `handleCloseProject` while a dialog is
+ *              open, and both keyboard dispatchers return early for every
+ *              non-Escape key in that state. Driving the raw store action
+ *              mid-flow leaves a dialog mounted with no project behind it -
+ *              which is a real observation about `closeProject`, and NOT a bug
+ *              this scenario may report, because no user can get there.
+ *   `openKey`- an armed answer that the dispatcher then swallows has to be
+ *              un-armed again; keeping the chord to the state where it actually
+ *              runs keeps that window as small as it can be.
+ *
+ * `export` is the exception and is legal EVERYWHERE, because Ctrl+E is a real
+ * keystroke a user can make at any moment and the app's own dispatcher decides
+ * what it does. That is exactly what makes it worth pressing mid-flow: the
+ * scenario asserts the modal does NOT open on top of an import screen.
+ */
+export function buildAuxInterjection(kind: AuxInterjection, env: GenEnv): FuzzMove | null {
+  if (kind === 'export') return click('key:Ctrl+E', 'INTERJECT: Ctrl+E (export modal)');
+  if (env.digest.screen !== 'idle') return null;
+  if (kind === 'mode') {
+    const candidates = ['mode-survey', 'mode-plan', 'mode-export'].filter((testid) => actionable(env.digest, testid));
+    const testid = pickFrom(() => env.ctx.rng(), candidates);
+    return testid === null ? null : click(testid, `INTERJECT: switch app mode via ${testid}`);
+  }
+  if (kind === 'close') {
+    return env.digest.hasProject ? { kind: 'closeProject', label: 'INTERJECT: closeProject at idle' } : null;
+  }
+  const source = drawFileSource(env);
+  return { kind: 'keyFile', chord: 'Ctrl+O', source, label: 'INTERJECT: Ctrl+O with an armed picker' };
 }

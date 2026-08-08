@@ -15,22 +15,27 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  ARMABLE_KEYS,
   CHECKABLE_PATTERNS,
   CHECKABLE_TESTIDS,
   CLICKABLE_PATTERNS,
   CLICKABLE_TESTIDS,
   isDispatchable,
+  keyEventInit,
   PRESSABLE_KEYS,
+  SELECTABLE_PATTERNS,
   SELECTABLE_TESTIDS,
   TYPEABLE_TESTIDS,
 } from '../scenarios/importDialogBridge';
 import {
   ADVANCE_MOVE,
   ESCAPE_PATH,
+  IN_FLOW_SCREENS,
+  NON_FLOW_SCREENS,
   SELECT_TESTIDS,
   TESTID_INVENTORY,
 } from '../scenarios/importDialogModel';
-import { GENERATORS } from '../scenarios/importDialogGenerators';
+import { describeSource, enabledFamilies, GENERATORS } from '../scenarios/importDialogGenerators';
 
 /**
  * Testids a generator can emit, as literals.
@@ -55,9 +60,10 @@ function literalTargets(text: string, fn: string): string[] {
   return [...text.matchAll(re)].map((match) => match[1] as string);
 }
 
-/** Every `` `prefix-${...}` `` template the catalog clicks. */
-function templateTargets(text: string): string[] {
-  return [...text.matchAll(/\bclick\(`([^`]+)`/g)].map((match) => match[1] as string);
+/** Every `` `prefix-${...}` `` template the catalog drives, by call shape. */
+function templateTargets(text: string, fn = 'click'): string[] {
+  const re = new RegExp(`\\b${fn}\\(\`([^\`]+)\``, 'g');
+  return [...text.matchAll(re)].map((match) => match[1] as string);
 }
 
 /** Turn a template into a concrete id a pattern can be tested against. */
@@ -122,12 +128,33 @@ describe('import fuzzer testid allowlists', () => {
 
   it('allows every testid the model can force as an advance or an escape', () => {
     const forced = [
-      ...Object.values(ADVANCE_MOVE),
+      ...Object.values(ADVANCE_MOVE).flatMap((route) => [...(route ?? [])]),
       ...Object.values(ESCAPE_PATH).flatMap((route) => [...route]),
     ].filter((id): id is string => typeof id === 'string');
-    expect(forced.length).toBeGreaterThan(15);
+    expect(forced.length).toBeGreaterThan(30);
     const rejected = forced.filter((id) => !isDispatchable({ kind: 'ui', testid: id, label: 'x' }));
     expect(rejected).toEqual([]);
+  });
+
+  it('allows every dynamic testid the generators can select', async () => {
+    const text = await generatorSource();
+    const templates = templateTargets(text, 'select');
+    expect(templates.length).toBeGreaterThan(0);
+    const rejected = templates
+      .map(sampleFrom)
+      .filter((id) => !isDispatchable({ kind: 'input', testid: id, value: 'v', mode: 'select', label: 'x' }));
+    expect(rejected).toEqual([]);
+  });
+
+  it('allows the two dynamic checkbox families', () => {
+    // Both are built into a local before the call, so the source scan above
+    // cannot see them; they are named here instead of being missed.
+    for (const id of ['section-checkbox-12', 'walls-survey-7']) {
+      expect(
+        isDispatchable({ kind: 'input', testid: id, value: 'true', mode: 'check', label: 'x' }),
+        `${id} must be checkable`,
+      ).toBe(true);
+    }
   });
 
   it('does NOT carry the destructive controls a trace must never reach', () => {
@@ -157,7 +184,7 @@ describe('import fuzzer testid allowlists', () => {
   });
 
   it('keeps every pattern anchored and bounded', () => {
-    for (const pattern of [...CLICKABLE_PATTERNS, ...CHECKABLE_PATTERNS]) {
+    for (const pattern of [...CLICKABLE_PATTERNS, ...CHECKABLE_PATTERNS, ...SELECTABLE_PATTERNS]) {
       const body = pattern.source;
       expect(body.startsWith('^'), `${body} must be anchored at the start`).toBe(true);
       expect(body.endsWith('$'), `${body} must be anchored at the end`).toBe(true);
@@ -169,9 +196,45 @@ describe('import fuzzer testid allowlists', () => {
 
   it('refuses a key nobody registered', () => {
     expect(PRESSABLE_KEYS.has('Escape')).toBe(true);
-    for (const key of ['Enter', 'Control+o', 'F5', 'Delete']) {
+    for (const key of ['Enter', 'Control+o', 'F5', 'Delete', 'ctrl+e']) {
       expect(isDispatchable({ kind: 'ui', testid: `key:${key}`, label: 'x' })).toBe(false);
     }
+  });
+
+  it('keeps the ARMABLE chords out of the pressable set', () => {
+    // A bare press of Ctrl+O raises a native picker with no armed answer, which
+    // falls through to the real GTK chooser and hangs the webview. The two
+    // vocabularies must not be interchangeable even by accident.
+    for (const chord of ARMABLE_KEYS) {
+      expect(PRESSABLE_KEYS.has(chord), `${chord} must not be pressable`).toBe(false);
+      expect(isDispatchable({ kind: 'ui', testid: `key:${chord}`, label: 'x' })).toBe(false);
+    }
+  });
+
+  it('spells a chord the way the app itself reads one back', () => {
+    /**
+     * A MIRROR of `parseKeyEvent` + `normalizeKeyName` (`src/utils/shortcuts.ts`),
+     * not an import of them: that module's first line pulls in `../i18n`, whose
+     * `import.meta.env` does not typecheck under `tsconfig.agent.json`. The
+     * mirror is three lines and is what the pseudo-testid's whole meaning rests
+     * on - a chord this fuzzer presses has to fold back into the shortcut name
+     * the app registered, or the keystroke is silently inert.
+     */
+    const spell = (init: ReturnType<typeof keyEventInit>): string => {
+      const parts: string[] = [];
+      if (init.ctrl) parts.push('Ctrl');
+      if (init.alt) parts.push('Alt');
+      if (init.shift) parts.push('Shift');
+      parts.push(/^[a-zA-Z]$/.test(init.key) ? init.key.toUpperCase() : init.key);
+      return parts.join('+');
+    };
+    for (const chord of [...PRESSABLE_KEYS, ...ARMABLE_KEYS]) {
+      expect(spell(keyEventInit(chord)), `${chord} must round-trip`).toBe(chord);
+    }
+    // A real browser reports the LOWERCASE letter for an unshifted press, and
+    // sending the uppercase one would make the event look like Shift+E.
+    expect(keyEventInit('Ctrl+E').key).toBe('e');
+    expect(keyEventInit('Escape').key).toBe('Escape');
   });
 
   it('has an inventory that covers every allowlisted literal', () => {
@@ -196,6 +259,56 @@ describe('import fuzzer testid allowlists', () => {
     expect(screens.size).toBeGreaterThan(8);
     for (const screen of screens) {
       expect(ESCAPE_PATH[screen], `no escape path for ${screen}`).toBeDefined();
+    }
+  });
+
+  it('has a generator for every screen a flow can be on', () => {
+    // The other half of the escapability contract: a screen with an escape path
+    // and no generators is one the walk can only ever leave, so the controls on
+    // it are never exercised at all.
+    const screens = new Set(GENERATORS.flatMap((generator) => [...generator.screens]));
+    const uncovered = [...IN_FLOW_SCREENS].filter((screen) => !screens.has(screen));
+    // The exceptions are named rather than tolerated. `wiz-init` and
+    // `wiz-blank` are transient wizard phases that render no control of their
+    // own, and `first-run` is the telemetry modal, whose only choice the
+    // scenario makes once at startup - so progress forcing is the only thing
+    // that ever acts on any of the three.
+    expect(uncovered.sort()).toEqual(['first-run', 'wiz-blank', 'wiz-init']);
+    for (const screen of NON_FLOW_SCREENS) {
+      expect(screens.has(screen), `${screen} needs a generator too`).toBe(true);
+    }
+  });
+
+  it('never names a corpus file in anything a run publishes', () => {
+    // A survey filename can name a cave, a landowner or an unreleased project.
+    // `describeSource` is what reaches the move history, the metric keys and the
+    // failure payload, so it carries the id and never the path.
+    const relPath = 'some-cave-system/2019-expedition/final.tml';
+    const described = describeSource({
+      origin: 'corpus',
+      corpusRel: relPath,
+      id: 'abc12',
+      dirRel: 'fuzz-files/corpus-3',
+      rel: 'fuzz-files/corpus-3/final.tml',
+    });
+    expect(described).toBe('corpus #abc12');
+    for (const segment of relPath.split('/')) expect(described).not.toContain(segment);
+  });
+
+  it('reads the format axis at call time and falls back to every family', () => {
+    const before = process.env.STALAGMIGHT_FUZZ_IMPORT_FORMAT;
+    try {
+      delete process.env.STALAGMIGHT_FUZZ_IMPORT_FORMAT;
+      expect([...enabledFamilies()].sort()).toEqual(['compass', 'dmp', 'gpx', 'tml', 'walls']);
+      process.env.STALAGMIGHT_FUZZ_IMPORT_FORMAT = 'walls, GPX ,nonsense';
+      expect([...enabledFamilies()].sort()).toEqual(['gpx', 'walls']);
+      // An axis that names nothing this build knows is a typo, and silently
+      // fuzzing zero formats would be worse than fuzzing all of them.
+      process.env.STALAGMIGHT_FUZZ_IMPORT_FORMAT = 'nonsense';
+      expect([...enabledFamilies()].sort()).toEqual(['compass', 'dmp', 'gpx', 'tml', 'walls']);
+    } finally {
+      if (before === undefined) delete process.env.STALAGMIGHT_FUZZ_IMPORT_FORMAT;
+      else process.env.STALAGMIGHT_FUZZ_IMPORT_FORMAT = before;
     }
   });
 

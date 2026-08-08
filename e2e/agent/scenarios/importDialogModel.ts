@@ -1,5 +1,5 @@
 /**
- * The import fuzzer's MODEL of the DMP import flow: what screens exist, what
+ * The import fuzzer's MODEL of the import flows: what screens exist, what
  * controls each one has, how to get OFF each one, and when the walk has to stop
  * exploring and start leaving.
  *
@@ -36,9 +36,26 @@ import type { ScreenId } from '../lib/importScreenDigest';
 
 export type { ScreenId };
 
+/**
+ * Screens that are NOT part of an import flow, though they are not `idle`.
+ *
+ * Only the export modal, which a Ctrl+E interjection can open from `idle`.
+ * A flow is measured from the moment the walk leaves `idle` to the moment it
+ * comes back, and opening an unrelated modal would otherwise start a "flow"
+ * with no file in it - which the residue and accounting oracles would then
+ * measure as an import that imported nothing.
+ */
+export const NON_FLOW_SCREENS: ReadonlySet<ScreenId> = new Set<ScreenId>(['export-modal']);
+
 /** Screens on which the walk is inside a flow (i.e. a flow is in progress). */
 export const IN_FLOW_SCREENS: ReadonlySet<ScreenId> = new Set<ScreenId>([
   'dmp-select',
+  'tml-config',
+  'tml-residue',
+  'compass',
+  'walls',
+  'gpx-select',
+  'gpx-place',
   'zero-datum-select',
   'zero-datum-config',
   'wiz-init',
@@ -67,12 +84,33 @@ export const IN_FLOW_SCREENS: ReadonlySet<ScreenId> = new Set<ScreenId>([
  * Verified against the components, one by one - `DmpSelectionDialog.tsx`,
  * `ZeroDatumSelectionDialog.tsx`, `ZeroDatumConfigDialog.tsx`,
  * `DmpNewImportDialog.tsx` (+ `WizardScrollBody`/`WizardMapPanel`),
+ * `TmlImportDialog.tsx` (+ its inline residue body), `CompassImportDialog.tsx`,
+ * `WallsImportDialog.tsx`, `GpxSelectionDialog.tsx`, `GpxPlacementDialog.tsx`,
  * `NewProjectForImportDialog.tsx`, `ImportReceiptDialog.tsx`,
  * `ImportBlockedDialog.tsx`, `ImportAsNewProjectDialog.tsx`,
- * `OrphanPlacementDialog.tsx`, `ErrorDialog.tsx`, `SectionMetadataForm.tsx`,
- * `ShotTableEditor.tsx` + `SpreadsheetGrid/` and `Toolbar.tsx`/`GlobalView.tsx`.
+ * `OrphanPlacementDialog.tsx`, `ErrorDialog.tsx`, `ExportDialog.tsx`,
+ * `SectionMetadataForm.tsx`, `ShotTableEditor.tsx` + `SpreadsheetGrid/`,
+ * `ModeCarousel.tsx` and `Toolbar.tsx`/`GlobalView.tsx`.
  * A testid that is not in a component is a control the fuzzer silently never
  * reaches, which is the failure mode this list exists to prevent.
+ *
+ * ## Two controls are deliberately ABSENT
+ *
+ * `project-save-path-browse-button` opens a native SAVE picker through
+ * `saveDialog(...)` with NO `triggerTestId` (`NewProjectForImportDialog.tsx`).
+ * `takeTestFileDialogAnswer` matches an armed answer on
+ * `activeFileDialogTriggerTestId`, which only a CLICK on a named trigger sets,
+ * so an answer cannot be aimed at it - the picker would fall through to the
+ * real GTK chooser and hang the webview. The path is typed instead
+ * (`project-save-path-input`), which is the same code path minus the picker.
+ *
+ * `tml-import-cancel` is in the list but there is no mid-import cancel to
+ * fuzz: it is `disabled={isImporting}` and `handleCancel` early-returns while
+ * an import is running (`TmlImportDialog.tsx`), so a TML import cannot be
+ * abandoned once started. The bridge's settle loop waits for
+ * `tml-import-progress` to clear for exactly that reason - there is nothing
+ * actionable during that window, and a window that OUTLASTS the settle cap is
+ * a hang, which the WEDGE oracle then reports.
  */
 export const TESTID_INVENTORY: readonly string[] = [
   // --- entry points ---------------------------------------------------------
@@ -91,6 +129,63 @@ export const TESTID_INVENTORY: readonly string[] = [
   'continue-button',
   'cancel-button',
   'section-checkbox-*',
+  // --- tml-config -----------------------------------------------------------
+  'tml-import-dialog',
+  'tml-include-excluded',
+  'tml-comments-on-shots',
+  'tml-virtual-shot-mode',
+  // Present only while the import runs; the settle loop waits for it to clear,
+  // so a step that still sees it is a TML import that outlasted the cap.
+  'tml-import-progress',
+  'tml-import-cancel',
+  'tml-import-confirm',
+  // --- tml-residue ----------------------------------------------------------
+  'tml-import-residue-dialog',
+  'tml-import-residue-keep',
+  'tml-import-residue-discard',
+  // --- compass --------------------------------------------------------------
+  'compass-import-dialog',
+  'compass-apply-corrections',
+  'compass-comments-on-stations',
+  'compass-include-excluded',
+  'compass-import-cancel',
+  'compass-import-confirm',
+  // --- walls ----------------------------------------------------------------
+  'walls-import-dialog',
+  'walls-select-all',
+  // Sparse: only surveys whose `.srv` resolved render a row, and the index is
+  // into the FULL survey list (`WallsImportDialog.tsx`).
+  'walls-survey-*',
+  'walls-comments-on-stations',
+  'walls-include-splays',
+  'walls-import-cancel',
+  'walls-import-confirm',
+  // --- gpx-select -----------------------------------------------------------
+  'gpx-selection-dialog',
+  'gpx-import-waypoints',
+  'gpx-import-tracks',
+  'gpx-import-routes',
+  'gpx-depth-inverted',
+  'gpx-waypoints-toggle',
+  'gpx-tracks-toggle',
+  'gpx-routes-toggle',
+  'gpx-selection-cancel',
+  // The footer's primary is one OR the other: `gpx-import-confirm` when only
+  // waypoints are selected (nothing to place), `gpx-continue-button` otherwise.
+  'gpx-continue-button',
+  'gpx-import-confirm',
+  // --- gpx-place ------------------------------------------------------------
+  'gpx-placement-dialog',
+  'gpx-placement-zero-datum-*',
+  'gpx-placement-back',
+  'gpx-placement-cancel',
+  // --- export modal (Ctrl+E; contents are not fuzzed this wave) --------------
+  'export-dialog',
+  'export-dialog-close',
+  // --- app mode carousel ----------------------------------------------------
+  'mode-survey',
+  'mode-plan',
+  'mode-export',
   // --- zero-datum-select ----------------------------------------------------
   'zero-datum-selection-dialog',
   'zero-datum-selection-cancel',
@@ -190,6 +285,7 @@ export const TESTID_INVENTORY: readonly string[] = [
 
 /** Selects whose option values the digest should report when it can read them. */
 export const SELECT_TESTIDS: readonly string[] = [
+  'tml-virtual-shot-mode',
   'zero-datum-station-select',
   'merge-station-select',
   'overlap-mode-select',
@@ -205,24 +301,44 @@ export const SELECT_TESTIDS: readonly string[] = [
 /** `overlap-mode-select`'s option values are static (see DmpNewImportDialog). */
 export const OVERLAP_MODES: readonly string[] = ['interpolate', 'import_data', 'existing_data', 'keep_both'];
 
-/** The one move that makes a screen progress when the walk has stalled on it. */
-export const ADVANCE_MOVE: Readonly<Partial<Record<ScreenId, string>>> = {
-  'dmp-select': 'continue-button',
-  'zero-datum-select': 'zero-datum-selection-skip',
-  'zero-datum-config': 'zero-datum-config-confirm',
-  'wiz-suggest': 'confirm-button',
-  'wiz-no-suggest': 'cancel-button',
-  'wiz-manual': 'segment-place-button',
-  'wiz-done': 'cancel-button',
-  'wiz-error': 'retry-button',
-  'wiz-confirm': 'cancel-confirm-continue',
-  'new-project': 'create-and-continue-button',
-  receipt: 'import-receipt-continue',
-  blocked: 'import-blocked-stay',
-  'as-new-project': 'import-as-new-project-cancel',
-  'orphan-placement': 'orphan-close',
-  error: 'error-dialog-close',
-  'first-run': 'telemetry-opt-in-no',
+/** `tml-virtual-shot-mode`'s option values are static (see TmlImportDialog). */
+export const VIRTUAL_SHOT_MODES: readonly string[] = ['Auto', 'AllJumps', 'AllReferences'];
+
+/**
+ * How a screen is made to progress when the walk has stalled on it, in order.
+ *
+ * A LIST rather than one id, because two of these screens render their
+ * advancing control conditionally: `GpxSelectionDialog` shows
+ * `gpx-import-confirm` when only waypoints are selected and
+ * `gpx-continue-button` otherwise, and they are opposite branches of one
+ * ternary. The walk plays the first entry that is actionable.
+ */
+export const ADVANCE_MOVE: Readonly<Partial<Record<ScreenId, readonly string[]>>> = {
+  'dmp-select': ['continue-button'],
+  // The confirm is disabled for a file with no shots at all, which a malformed
+  // spec produces; leaving is then the only progress available.
+  'tml-config': ['tml-import-confirm', 'tml-import-cancel'],
+  'tml-residue': ['tml-import-residue-keep'],
+  compass: ['compass-import-confirm'],
+  walls: ['walls-import-confirm', 'walls-import-cancel'],
+  'gpx-select': ['gpx-continue-button', 'gpx-import-confirm', 'gpx-selection-cancel'],
+  'gpx-place': ['gpx-import-confirm'],
+  'zero-datum-select': ['zero-datum-selection-skip'],
+  'zero-datum-config': ['zero-datum-config-confirm'],
+  'wiz-suggest': ['confirm-button'],
+  'wiz-no-suggest': ['cancel-button'],
+  'wiz-manual': ['segment-place-button'],
+  'wiz-done': ['cancel-button'],
+  'wiz-error': ['retry-button'],
+  'wiz-confirm': ['cancel-confirm-continue'],
+  'new-project': ['create-and-continue-button'],
+  receipt: ['import-receipt-continue'],
+  blocked: ['import-blocked-stay'],
+  'as-new-project': ['import-as-new-project-cancel'],
+  'orphan-placement': ['orphan-close'],
+  'export-modal': ['export-dialog-close'],
+  error: ['error-dialog-close'],
+  'first-run': ['telemetry-opt-in-no'],
 };
 
 /**
@@ -238,6 +354,18 @@ export const ADVANCE_MOVE: Readonly<Partial<Record<ScreenId, string>>> = {
 export const ESCAPE_PATH: Readonly<Record<ScreenId, readonly string[]>> = {
   idle: [],
   'dmp-select': ['dirty-dialog-discard', 'cancel-button', 'key:Escape'],
+  // `TmlImportDialog` is `isDirty` whenever an option was changed, so leaving
+  // raises the discard overlay first - the same shape as `dmp-select`.
+  'tml-config': ['dirty-dialog-discard', 'tml-import-cancel', 'key:Escape'],
+  // KEEP, never discard: discarding deletes the project the import created,
+  // and an escape is the walk trying to LEAVE, not to make that decision. The
+  // discard path is reached by its own generator instead.
+  'tml-residue': ['tml-import-residue-keep', 'key:Escape'],
+  compass: ['compass-import-cancel', 'key:Escape'],
+  walls: ['walls-import-cancel', 'key:Escape'],
+  'gpx-select': ['gpx-selection-cancel', 'key:Escape'],
+  'gpx-place': ['gpx-placement-cancel', 'key:Escape'],
+  'export-modal': ['export-dialog-close', 'key:Escape'],
   'zero-datum-select': ['zero-datum-selection-cancel', 'key:Escape'],
   'zero-datum-config': ['zero-datum-config-cancel', 'key:Escape'],
   'wiz-init': ['cancel-button', 'key:Escape'],

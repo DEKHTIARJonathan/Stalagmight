@@ -55,16 +55,49 @@ export type Move =
   | { kind: 'input'; testid: string; value: string; mode: 'type' | 'select' | 'check'; label: string };
 
 /**
- * Keys a move may press, spelled as the pseudo-testid `key:<name>` on a `ui`
+ * Chords a move may press, spelled as the pseudo-testid `key:<chord>` on a `ui`
  * step so the whole vocabulary stays inside the trace schema wave 1 landed.
  *
- * Escape only. Enter and the file-opening chords are deliberately absent:
- * `Ctrl+O`/`Ctrl+I` raise a NATIVE picker, and a picker with no armed answer
- * falls through to the real GTK chooser and hangs the webview (see
- * `src/utils/fileDialogs.ts` - an unarmed queue returns `queued:false`). The
- * scenario arms an answer first and drives those through `fileDialog` steps.
+ * The spelling is the app's own canonical form (`src/utils/shortcuts.ts`
+ * `normalizeKeyName`): modifiers first, single letters uppercase. `Ctrl+E`
+ * therefore dispatches `{ key: 'e', ctrlKey: true }`, which is what
+ * `eventToShortcut` folds back into `Ctrl+E`.
+ *
+ * `Ctrl+O` / `Ctrl+I` are deliberately NOT here. They raise a NATIVE picker,
+ * and a picker with no armed answer falls through to the real GTK chooser and
+ * hangs the webview (`src/utils/fileDialogs.ts` - an unarmed queue returns
+ * `queued:false`). They are driven by `answerKeyboardFileDialog` below, which
+ * arms the answer FIRST and is recorded as a `fileDialog` step.
  */
-export const PRESSABLE_KEYS: ReadonlySet<string> = new Set(['Escape']);
+export const PRESSABLE_KEYS: ReadonlySet<string> = new Set(['Escape', 'Ctrl+E']);
+
+/**
+ * Chords whose picker the scenario may arm and press.
+ *
+ * Separate from `PRESSABLE_KEYS` on purpose: a bare press of one of these is
+ * the hang described above, so the two vocabularies must not be interchangeable
+ * even by accident.
+ */
+export const ARMABLE_KEYS: ReadonlySet<string> = new Set(['Ctrl+O', 'Ctrl+I']);
+
+/**
+ * `{ key, ctrlKey, ... }` for a chord in the canonical spelling.
+ *
+ * Exported so `lib/importDialogActions.test.ts` can pin it against the app's
+ * own `eventToShortcut` rather than against this file's idea of it.
+ */
+export function keyEventInit(chord: string): { key: string; ctrl: boolean; alt: boolean; shift: boolean } {
+  const parts = chord.split('+');
+  const key = parts[parts.length - 1] as string;
+  return {
+    // `eventToShortcut` uppercases a single letter, and a real browser reports
+    // the LOWERCASE letter for an unshifted key press.
+    key: /^[A-Z]$/.test(key) ? key.toLowerCase() : key,
+    ctrl: parts.includes('Ctrl'),
+    alt: parts.includes('Alt'),
+    shift: parts.includes('Shift'),
+  };
+}
 
 /** Clickable ids, as literals. */
 export const CLICKABLE_TESTIDS: ReadonlySet<string> = new Set([
@@ -77,6 +110,34 @@ export const CLICKABLE_TESTIDS: ReadonlySet<string> = new Set([
   'invert-selection-button',
   'continue-button',
   'cancel-button',
+  // tml-config / tml-residue
+  'tml-import-cancel',
+  'tml-import-confirm',
+  'tml-import-residue-keep',
+  'tml-import-residue-discard',
+  // compass
+  'compass-import-cancel',
+  'compass-import-confirm',
+  // walls
+  'walls-import-cancel',
+  'walls-import-confirm',
+  // gpx
+  'gpx-waypoints-toggle',
+  'gpx-tracks-toggle',
+  'gpx-routes-toggle',
+  'gpx-selection-cancel',
+  'gpx-continue-button',
+  'gpx-import-confirm',
+  'gpx-placement-back',
+  'gpx-placement-cancel',
+  // export modal (opened by Ctrl+E; its contents are not fuzzed)
+  'export-dialog-close',
+  // app mode carousel. Only ever clicked at `idle`: everywhere else a modal
+  // covers the toolbar, so a synthetic click on it would reach a control no
+  // user can reach - see the note on `mode:*` in importDialogGenerators.ts.
+  'mode-survey',
+  'mode-plan',
+  'mode-export',
   // zero-datum-select
   'zero-datum-selection-cancel',
   'zero-datum-selection-back',
@@ -163,6 +224,7 @@ export const TYPEABLE_TESTIDS: ReadonlySet<string> = new Set([
 
 /** Ids a `select` move may target (all custom `Select`s except where noted). */
 export const SELECTABLE_TESTIDS: ReadonlySet<string> = new Set([
+  'tml-virtual-shot-mode',
   'zero-datum-station-select',
   'merge-station-select',
   'overlap-mode-select',
@@ -175,6 +237,12 @@ export const SELECTABLE_TESTIDS: ReadonlySet<string> = new Set([
   'manual-import-station-select',
 ]);
 
+/**
+ * Select id PATTERNS. `GpxPlacementDialog` renders one zero-datum picker per
+ * track/route section, so the id carries the section index.
+ */
+export const SELECTABLE_PATTERNS: readonly RegExp[] = [/^gpx-placement-zero-datum-\d{1,3}$/];
+
 /** Ids a `check` move may target (checkboxes and the segment-mode radios). */
 export const CHECKABLE_TESTIDS: ReadonlySet<string> = new Set([
   'section-reverse-checkbox',
@@ -182,9 +250,28 @@ export const CHECKABLE_TESTIDS: ReadonlySet<string> = new Set([
   'segment-mode-from-existing-input',
   'segment-mode-manual-input',
   'segment-mode-discard-input',
+  // tml-config
+  'tml-include-excluded',
+  'tml-comments-on-shots',
+  // compass
+  'compass-apply-corrections',
+  'compass-comments-on-stations',
+  'compass-include-excluded',
+  // walls
+  'walls-select-all',
+  'walls-comments-on-stations',
+  'walls-include-splays',
+  // gpx-select
+  'gpx-import-waypoints',
+  'gpx-import-tracks',
+  'gpx-import-routes',
+  'gpx-depth-inverted',
 ]);
 
-export const CHECKABLE_PATTERNS: readonly RegExp[] = [/^section-checkbox-\d{1,3}$/];
+export const CHECKABLE_PATTERNS: readonly RegExp[] = [
+  /^section-checkbox-\d{1,3}$/,
+  /^walls-survey-\d{1,3}$/,
+];
 
 function allowed(testid: string, literals: ReadonlySet<string>, patterns: readonly RegExp[] = []): boolean {
   if (literals.has(testid)) return true;
@@ -198,7 +285,7 @@ export function isDispatchable(move: Move): boolean {
     return allowed(move.testid, CLICKABLE_TESTIDS, CLICKABLE_PATTERNS);
   }
   if (move.mode === 'type') return allowed(move.testid, TYPEABLE_TESTIDS);
-  if (move.mode === 'select') return allowed(move.testid, SELECTABLE_TESTIDS);
+  if (move.mode === 'select') return allowed(move.testid, SELECTABLE_TESTIDS, SELECTABLE_PATTERNS);
   return allowed(move.testid, CHECKABLE_TESTIDS, CHECKABLE_PATTERNS);
 }
 
@@ -262,7 +349,15 @@ const HELPERS = `
   /**
    * Cheap stability probe: no IPC, no full digest.
    *
-   * The four wizard BUSY markers, plus the wizard being MOUNTED-BUT-HIDDEN.
+   * The wizard BUSY markers, the TML import's progress marker, plus the wizard
+   * being MOUNTED-BUT-HIDDEN.
+   *
+   * \`tml-import-progress\` is here because there is nothing to do while it is
+   * up: \`tml-import-cancel\` is \`disabled={isImporting}\` and \`handleCancel\`
+   * early-returns anyway, so a TML import cannot be abandoned once started. A
+   * progress marker that OUTLASTS the settle cap is a hang, and the digest then
+   * reports a screen whose controls are all disabled, which is what the WEDGE
+   * oracle is for.
    * That last one is \`DialogWrapper\`'s \`hidden\` prop, which
    * \`DmpNewImportDialog\` sets while \`autoStartManualPlacementPending\` is true:
    * for a frame or two the dialog is \`display:none\` and \`placementMode\` is not
@@ -279,6 +374,7 @@ const HELPERS = `
     shown('wizard-importing-zero-datum') ||
     shown('wizard-early-importing') ||
     shown('wizard-placing') ||
+    shown('tml-import-progress') ||
     (!!q('dmp-new-import-dialog') && !shown('dmp-new-import-dialog'));
   const marker = () => {
     const ui = window.__E2E_TEST__ && window.__E2E_TEST__.uiStore
@@ -369,9 +465,20 @@ export async function runUiStep(ctx: ScenarioContext, move: Move): Promise<StepO
     const actionStarted = Date.now();
 
     if (req.kind === 'ui' && req.testid.indexOf('key:') === 0) {
-      const key = req.testid.slice(4);
+      // args[3] is the event init Node resolved from the chord's canonical
+      // spelling ("Escape", "Ctrl+E"), so that string is never parsed twice.
+      const chord = args[3];
       const target = document.activeElement || document.body;
-      const init = { key: key, code: key, bubbles: true, cancelable: true, composed: true };
+      const init = {
+        key: chord.key,
+        code: chord.key,
+        ctrlKey: chord.ctrl,
+        altKey: chord.alt,
+        shiftKey: chord.shift,
+        bubbles: true,
+        cancelable: true,
+        composed: true,
+      };
       target.dispatchEvent(new KeyboardEvent('keydown', init));
       target.dispatchEvent(new KeyboardEvent('keyup', init));
       performed = true;
@@ -484,7 +591,12 @@ export async function runUiStep(ctx: ScenarioContext, move: Move): Promise<StepO
       timing: { actionMs: actionMs, settleMs: settleMs, digestMs: digestMs },
     };
   `,
-    [move, screenSpec(), settleCapMs()],
+    [
+      move,
+      screenSpec(),
+      settleCapMs(),
+      keyEventInit(move.kind === 'ui' && move.testid.startsWith('key:') ? move.testid.slice(4) : 'Escape'),
+    ],
   );
 }
 
@@ -594,6 +706,107 @@ export async function answerFileDialogInPage(
     };
   `,
     [triggerTestId, kind, value, screenSpec(), settleCapMs()],
+  );
+}
+
+/**
+ * Answer the native picker a KEYBOARD shortcut raises (Ctrl+O / Ctrl+I).
+ *
+ * Wave 2 excluded these chords because `answerFileDialogInPage` cannot arm
+ * them: it attaches a capture-phase click listener to the trigger ELEMENT, and
+ * a keystroke clicks nothing, so `activeFileDialogTriggerTestId` is never set
+ * and `takeTestFileDialogAnswer` refuses the answer. Then the production path
+ * falls through to the real GTK chooser and the webview hangs.
+ *
+ * It is nonetheless armable, and the mechanism is worth stating because getting
+ * it wrong hangs the session rather than failing a step. `pickAndRoute` calls
+ * `openDialog(filters, undefined)` - no trigger id - and
+ * `takeTestFileDialogAnswer` (`src/utils/fileDialogs.ts:21-44`) then checks
+ * exactly two things: that the head entry is `armed`, and that
+ * `hooks.activeFileDialogTriggerTestId === entry.triggerTestId`. Its mismatch
+ * throw is skipped when the CALLER passes no id. So a SENTINEL trigger id that
+ * no element carries, written to both sides before the keystroke, is consumed
+ * by the keyboard path and by nothing else.
+ *
+ * Arming eagerly is safe here for the same reason it is unsafe for a click:
+ * there is no element whose listener could arm it late, and the sentinel cannot
+ * collide with a real trigger id. The entry is removed again in a `finally`,
+ * because `takeTestFileDialogAnswer` refuses a second queued entry and a leaked
+ * one would break every later import in the session.
+ *
+ * A chord the app's dispatcher swallows (every non-Escape key is swallowed
+ * while a dialog is open) simply leaves the answer unconsumed - reported as
+ * `consumed: false`, which is a metric, not a failure.
+ */
+export async function answerKeyboardFileDialog(
+  ctx: ScenarioContext,
+  chord: string,
+  value: string | null,
+): Promise<DialogOutcome> {
+  if (!ARMABLE_KEYS.has(chord)) {
+    throw new Error(`refusing to arm a picker for "${chord}": not in the import fuzzer's armable-key set`);
+  }
+  return ctx.eval<DialogOutcome>(
+    `
+    const chord = args[0];
+    const value = args[1];
+    const spec = args[2];
+    const capMs = args[3];
+    ${HELPERS}
+
+    const testApi = window.__E2E_TEST__;
+    const queue = testApi && testApi.fileDialogAnswers && testApi.fileDialogAnswers.open;
+    if (!queue) throw new Error('file dialog hooks are unavailable; start an E2E build');
+    if (queue.length > 0) throw new Error('a file dialog answer is already pending');
+
+    // A sentinel no element carries, so only the keyboard path can take it.
+    const trigger = 'fuzz-keyboard-picker';
+    const id = 'fuzz-' + Date.now() + '-' + Math.floor(Math.random() * 1e9);
+    queue.push({ id: id, value: value, triggerTestId: trigger, armed: true });
+    const previousActive = testApi.activeFileDialogTriggerTestId;
+    testApi.activeFileDialogTriggerTestId = trigger;
+
+    let consumed = false;
+    try {
+      const target = document.activeElement || document.body;
+      const init = {
+        key: chord.key,
+        code: chord.key,
+        ctrlKey: chord.ctrl,
+        altKey: chord.alt,
+        shiftKey: chord.shift,
+        bubbles: true,
+        cancelable: true,
+        composed: true,
+      };
+      target.dispatchEvent(new KeyboardEvent('keydown', init));
+      target.dispatchEvent(new KeyboardEvent('keyup', init));
+      const deadline = Date.now() + capMs;
+      for (;;) {
+        const seen = testApi.fileDialogConsumptions && testApi.fileDialogConsumptions[id];
+        if (seen === 'open') { consumed = true; break; }
+        if (Date.now() >= deadline) break;
+        await new Promise((resolve) => setTimeout(resolve, 40));
+      }
+    } finally {
+      const index = queue.findIndex((candidate) => candidate.id === id);
+      if (index >= 0) queue.splice(index, 1);
+      if (testApi.activeFileDialogTriggerTestId === trigger) {
+        if (previousActive === undefined) delete testApi.activeFileDialogTriggerTestId;
+        else testApi.activeFileDialogTriggerTestId = previousActive;
+      }
+      if (testApi.fileDialogConsumptions) delete testApi.fileDialogConsumptions[id];
+    }
+    await settle(capMs);
+
+    return {
+      performed: true,
+      reason: null,
+      consumed: consumed,
+      digest: await SCREEN.digest(spec),
+    };
+  `,
+    [keyEventInit(chord), value, screenSpec(), settleCapMs()],
   );
 }
 
