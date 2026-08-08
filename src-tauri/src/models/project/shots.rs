@@ -6,6 +6,7 @@ use crate::models::{
     StationMerge, StationRef, FEATURE_ID_STRIDE,
 };
 
+use super::offsets::MintedMerge;
 use super::{
     ClosurePair, ClosureUpdate, DeleteShotImpact, DeleteShotRangeImpact, Project, RangeDeleteKind,
     StationPair,
@@ -674,12 +675,28 @@ impl Project {
         }
 
         if !impact.removed_closures.is_empty() {
+            let doomed = HashSet::from([removed_station]);
             let mut candidates: Vec<StationRef> = merge_group_without.into_iter().collect();
             candidates.sort_by_key(Self::station_ref_key);
             let replacement = candidates.first().copied();
 
             for closure in &impact.removed_closures {
                 if let Some(replacement_station) = replacement {
+                    // The hypothesis ACCUMULATES, exactly as the
+                    // `replacement_merges` arm above rebuilds `planned` inside
+                    // its own loop: a promotion already decided on in this loop
+                    // is a merge `remove_shot_with_rewire` will record, so the
+                    // next closure's guard has to be asked about the graph that
+                    // INCLUDES it. Hoisted out of the loop, two sole-bridge
+                    // closures on one doomed station each passed the guard alone
+                    // and together welded two independently anchored components -
+                    // defect A again, one hop further out (#464).
+                    let planned: Vec<(StationRef, StationRef)> = impact
+                        .replacement_merges
+                        .iter()
+                        .chain(impact.closure_to_merge.iter())
+                        .map(|p| (p.station_a, p.station_b))
+                        .collect();
                     let other = if closure.station_a == removed_station {
                         closure.station_b
                     } else {
@@ -696,10 +713,32 @@ impl Project {
                         other,
                         Some((section_id, pos)),
                         false,
+                    ) || self.would_double_anchor_after_removal(
+                        replacement_station.section_id,
+                        other.section_id,
+                        &doomed,
+                        &planned,
                     ) {
-                        // The two ends still reach each other through the survey
-                        // (shots + merges), so it remains a genuine loop - just
-                        // move the closure off the deleted station.
+                        // Two reasons to keep this a CLOSURE, re-anchored off the
+                        // deleted station:
+                        //
+                        // * the two ends still reach each other through the survey
+                        //   (shots + merges), so it remains a genuine loop;
+                        // * or promoting it would weld two components that each
+                        //   survive independently zero-datum-anchored. That edge
+                        //   puts two GPS anchors in one rigid group -
+                        //   `cascade_bfs` treats both ends as authoritative and
+                        //   never traverses between them - so the gap is PERMANENT
+                        //   and Repair cannot reduce it (#464 defect A; the sibling
+                        //   `replacement_merges` arm above has always guarded this,
+                        //   and `convert_orphan_closures_to_merges` refuses the same
+                        //   promotion for the same reason, so the refusal survives
+                        //   the epilogue sweep and the next load).
+                        //
+                        // Refusing here rather than dropping the closure keeps the
+                        // relationship the surveyor recorded, and refusing in the
+                        // PREVIEW keeps the delete dialog's promise identical to
+                        // what `remove_shot_with_rewire` replays.
                         impact.replacement_closure_updates.push(ClosureUpdate {
                             closure_id: closure.closure_id,
                             old_station: removed_station,
@@ -1287,17 +1326,64 @@ impl Project {
 
         // Closures whose loop the deletion broke become plain merges: the
         // endpoints stay declared-coincident but are no longer a true loop (#8).
+        // A closure TOLERATES a misclosure and a merge ASSERTS coincidence, so
+        // each promotion plans the translation that makes the claim true and is
+        // settled below, once this function's own geometry is final (#464).
+        //
+        // A `None` plan REFUSES the merge here too. `preview_delete_shot` asked
+        // the same over-anchoring question through
+        // `would_double_anchor_after_removal` - accumulating the promotions it
+        // decided on, so its hypothesis matches this loop closure-for-closure -
+        // and everything this function has mutated since (the retains that drop
+        // the removed station's merges and datum, the closure rewires, the
+        // replacement merges) is exactly the `doomed`/`planned` graph the preview
+        // evaluated against. So this arm is UNREACHABLE, and recording anyway is
+        // strictly worse than not: an unsettled promotion is a merge asserting a
+        // coincidence nothing settles and no cascade, realign or Repair can heal
+        // (#464 defect A - it measured 1.4 km in the test that pinned this).
+        // Preview and execution stay structurally identical because the preview,
+        // refusing the same promotion, routes that closure to
+        // `replacement_closure_updates` instead: the closure survives, re-anchored,
+        // in both halves.
+        let mut minted: Vec<MintedMerge> = Vec::new();
         for pair in &impact.closure_to_merge {
             if !self.has_direct_merge(pair.station_a, pair.station_b) {
                 if let (Some(ka), Some(kb)) = (
                     self.key_for_ref(pair.station_a),
                     self.key_for_ref(pair.station_b),
                 ) {
-                    self.record_station_merge(StationMerge {
-                        station_a: ka,
-                        station_b: kb,
-                        merged_at: Utc::now(),
-                    });
+                    if let Some(plan) = self.plan_merge_promotion(&ka, &kb) {
+                        minted.push(plan);
+                        self.record_station_merge(StationMerge {
+                            station_a: ka,
+                            station_b: kb,
+                            merged_at: Utc::now(),
+                        });
+                    } else {
+                        // Loud: it means the preview promised a merge on a
+                        // hypothesis this function then contradicted, which is
+                        // the preview/execution divergence #464 is about.
+                        tracing::error!(
+                            station_a = ?pair.station_a,
+                            station_b = ?pair.station_b,
+                            purpose = "never record a promotion nothing can settle",
+                            "Refused a promised closure->merge promotion: it would double-anchor"
+                        );
+                        #[cfg(test)]
+                        #[expect(
+                            clippy::panic,
+                            reason = "tripwire: unreachable once the preview's guard \
+                                      accumulates, and a silent preview/execution divergence \
+                                      is what #464 is about"
+                        )]
+                        {
+                            panic!(
+                                "preview promised a closure->merge promotion {:?} <-> {:?} \
+                                 that `plan_merge_promotion` refuses",
+                                pair.station_a, pair.station_b
+                            );
+                        }
+                    }
                 }
             }
         }
@@ -1361,7 +1447,7 @@ impl Project {
         // loop-ness hung off a merge that was. The forward user delete loses
         // nothing: `execute()`'s `can_orphan_closures` epilogue still sweeps the
         // whole project after `Command::DeleteShot`.
-        self.convert_closures_orphaned_since(&preexisting_orphans);
+        minted.extend(self.convert_closures_orphaned_since(&preexisting_orphans));
 
         // After removing a shot, stations after the deletion point (index > pos)
         // shift by -displacement in section-local coordinates.  We must decide
@@ -1397,6 +1483,17 @@ impl Project {
                 self.adjust_section_offset(section_id, dx, dy);
             }
         }
+
+        // Every merge this removal MINTED out of a coincidence claim now pays for
+        // the coincidence it declares, by translating the movable side onto the
+        // anchored one. This is the last thing that touches geometry before the
+        // cascade, deliberately: the gap-close compensation above slides the whole
+        // edited section, and the shot removal itself re-placed that section's
+        // stations, so a translation computed when the merge was recorded would
+        // already be stale. It runs even when the cascade is deferred - the range
+        // driver's single cascade is seeded with the edited section and cannot
+        // reach a component the range has just cut loose (#464 defects B and C).
+        self.settle_minted_merges(&minted);
 
         // A bulk range delete removes shots one at a time and runs ONE cascade +
         // alignment pass at the end (see execute_delete_shot_range_shift). A
@@ -1516,7 +1613,14 @@ impl Project {
         // rigid one, though, which can leave the new merge drifted, so THAT case -
         // and only that case - cascades, exactly as the sibling does. Nothing
         // converted is the overwhelmingly common case and stays offset-neutral.
-        if self.convert_closures_orphaned_since(&preexisting_orphans) > 0 {
+        let minted = self.convert_closures_orphaned_since(&preexisting_orphans);
+        if !minted.is_empty() {
+            // Settled before the cascade, as the sibling does and for the same
+            // reason (#464): the cascade is seeded with this section, so a merge
+            // whose other end is datum-anchored has BOTH ends authoritative and
+            // the BFS never traverses it. Nothing between here and the cascade
+            // moves anything, so "now" is final geometry for this function.
+            self.settle_minted_merges(&minted);
             self.cascade_connection_offsets(&[section_id]);
         }
 

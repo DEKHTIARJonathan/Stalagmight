@@ -13209,6 +13209,119 @@ fn test_delete_range_shift_does_not_displace_free_floating_merged_section() {
     assert_xy_close(b1_before, *after.get(&StationRef::new(sec_b, 1)).unwrap());
 }
 
+/// #464 defect B: a range gap-close whose first removal orphans a loop closure
+/// promotes it to a rigid merge, and the promotion used to carry the loop's REAL
+/// misclosure into a constraint that says the two endpoints coincide. The single
+/// cascade the range driver runs at the end is seeded with the edited section
+/// plus the datum sections, and by then the promoted pair sits in a datum-less
+/// component of its own - so the BFS never enters it and
+/// `debug_assert_merge_alignment("delete_shot_range_shift")` fires on a gap
+/// nothing in that command could close.
+///
+/// Y - X - Z with a closure Y1 <-> Z1 closing the loop; the range takes out both
+/// of X's merge stations, so Y is stranded on the first removal (promotion) and
+/// Z on the second (the component floats free).
+#[test]
+fn delete_range_shift_leaves_a_promoted_closure_aligned() {
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Range Promotion".to_string(),
+        location: None,
+    });
+    let sec_x = state
+        .execute(Command::CreateSection {
+            name: Some("X".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#ff0000".to_string(),
+            direction: None,
+            shots: vec![
+                shot_data_with_azimuth(10.0, 0.0, 0.0),
+                shot_data_with_azimuth(10.0, 0.0, 0.0),
+                shot_data_with_azimuth(10.0, 0.0, 0.0),
+                shot_data_with_azimuth(10.0, 0.0, 0.0),
+                shot_data_with_azimuth(10.0, 0.0, 0.0),
+            ],
+        })
+        .section_id
+        .unwrap();
+    let sec_y = state
+        .execute(Command::CreateSection {
+            name: Some("Y".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#00ff00".to_string(),
+            direction: None,
+            shots: vec![shot_data_with_azimuth(10.0, 90.0, 90.0)],
+        })
+        .section_id
+        .unwrap();
+    let sec_z = state
+        .execute(Command::CreateSection {
+            name: Some("Z".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#0000ff".to_string(),
+            direction: None,
+            shots: vec![shot_data_with_azimuth(10.0, 270.0, 270.0)],
+        })
+        .section_id
+        .unwrap();
+    assert!(
+        state
+            .execute(Command::SetZeroDatum {
+                station_ref: StationRef::new(sec_x, 0),
+                coordinates: GpsCoordinates::new(45.0, -90.0, 0.0).unwrap(),
+            })
+            .success
+    );
+    // Y and Z hang off the two stations the range is about to remove.
+    for (station, other) in [((sec_x, 2), (sec_y, 0)), ((sec_x, 3), (sec_z, 0))] {
+        assert!(
+            state
+                .execute(Command::MergeStations {
+                    station_a: StationRef::new(station.0, station.1),
+                    station_b: StationRef::new(other.0, other.1),
+                })
+                .success
+        );
+    }
+    // The loop's other leg, carrying a genuine 22.4 m misclosure.
+    assert!(
+        state
+            .execute(Command::CreateLoopClosure {
+                station_a: StationRef::new(sec_y, 1),
+                station_b: StationRef::new(sec_z, 1),
+                closure_strategy: ClosureStrategy::Batch,
+            })
+            .success
+    );
+
+    let (s1, s2) = {
+        let proj = state.get_project_state().unwrap();
+        let sec = proj.get_section(sec_x).unwrap();
+        (sec.shots[1].id, sec.shots[2].id)
+    };
+    let deleted = state.execute_delete_shot_range_shift(sec_x, s1, s2);
+    assert!(
+        deleted.success,
+        "delete_shot_range_shift failed: {:?}",
+        deleted.error
+    );
+
+    let proj = state.get_project_state().unwrap();
+    assert!(
+        proj.loop_closures.is_empty(),
+        "the stranded closure must be promoted: {:?}",
+        proj.loop_closures
+    );
+    let beyond = proj.merge_alignment_beyond(Project::MERGE_ALIGNMENT_INVARIANT_M);
+    assert!(
+        beyond.is_empty(),
+        "the range gap-close left a merge out of alignment: {beyond:?}"
+    );
+}
+
 #[test]
 fn test_delete_range_interior_shift_not_blocked_via_removed_tail_boundary() {
     // Codex re-review: a path from the head to the REMOVED tail boundary

@@ -294,7 +294,62 @@ impl Project {
         //    over-constraint `over_anchored_merge_components` reports; each half
         //    holds its own position through its own datum, so creating NOTHING
         //    lets the deletion heal a file that was already over-anchored.
-        !self.would_double_anchor_after_removal(a.section_id, b.section_id, doomed, planned)
+        if self.would_double_anchor_after_removal(a.section_id, b.section_id, doomed, planned) {
+            return false;
+        }
+        // 5. The two stations are not in the same place. A merge ASSERTS they
+        //    are (`debug_assert_merge_alignment`), and unlike a closure promotion
+        //    - which converts a relationship the surveyor recorded, and so pays
+        //    for the coincidence by translating the movable side
+        //    (`plan_merge_promotion`) - this pair is ARBITRARY: it is whichever
+        //    two survivors the component walk happened to reach first. Moving a
+        //    survey group onto an arbitrary partner would invent geometry, so a
+        //    pair that is not already coincident is simply not stitched. In
+        //    practice every genuine repair passes: the pair comes from ONE merge
+        //    group, whose members are coincident by the very invariant this
+        //    guards.
+        //
+        //    The THRESHOLD is the invariant's; the FRAME is not the assert's.
+        //    This measures `compute_station_raw_xy` on the LIVE, pre-removal
+        //    graph, while `debug_assert_merge_alignment` measures after the
+        //    removal has shifted station indices and the gap-close has
+        //    compensated the offsets. Reading the same number in two frames makes
+        //    the parity APPROXIMATE - good enough that a pair the assert would
+        //    accept is in practice accepted here, not a proof that it must be.
+        //
+        //    A refusal is a stitch the deletion genuinely loses: a merge group
+        //    already carrying a beyond-invariant residual (the `RealignFixpoint`
+        //    irreducible case) fragments into two components instead of being
+        //    re-stitched, so this logs at WARN with the measured gap rather than
+        //    at debug. It deliberately does not set
+        //    `DeleteShotImpact::merge_rewire_skipped`: that flag's user-facing
+        //    copy names a different cause ("only same-section candidates"), this
+        //    function answers with a bool so no caller can tell the two refusals
+        //    apart, and two of its three call sites have no impact struct at all.
+        //    Telling the user which one happened needs an IPC field of its own.
+        let gap = match (
+            self.compute_station_raw_xy(a),
+            self.compute_station_raw_xy(b),
+        ) {
+            (Some((ax, ay)), Some((bx, by))) => {
+                Some(((ax - bx).powi(2) + (ay - by).powi(2)).sqrt())
+            }
+            // An endpoint with no computable position cannot be shown coincident,
+            // and a merge onto it would be a constraint nothing can check.
+            _ => None,
+        };
+        let coincident = gap.is_some_and(|gap| gap < Self::MERGE_ALIGNMENT_INVARIANT_M);
+        if !coincident {
+            tracing::warn!(
+                a = ?a,
+                b = ?b,
+                gap_m = ?gap,
+                threshold_m = Self::MERGE_ALIGNMENT_INVARIANT_M,
+                purpose = "never mint a merge that asserts a coincidence the geometry lacks",
+                "Skipped a replacement merge between two stations that are not co-located"
+            );
+        }
+        coincident
     }
 
     /// Sections reachable from `from` through merges - and, when
@@ -363,7 +418,7 @@ impl Project {
     /// merges-ONLY component definition it and
     /// [`Self::over_anchored_merge_components`] share - so the guard and the
     /// detector that would flag the result cannot disagree.
-    fn would_double_anchor_after_removal(
+    pub(crate) fn would_double_anchor_after_removal(
         &self,
         a: SectionId,
         b: SectionId,

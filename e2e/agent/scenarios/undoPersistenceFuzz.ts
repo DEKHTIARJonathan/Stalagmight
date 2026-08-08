@@ -590,6 +590,27 @@ async function runIteration(
   };
 
   /**
+   * The move that is RUNNING RIGHT NOW - `null` between moves.
+   *
+   * A `note` line reports what a move DID to the stacks, so it can only be
+   * written once the move RETURNS. A move that throws instead then left the
+   * tail ending on the PREVIOUS move, which reads as an attribution and is one:
+   * it names the wrong move. The same gotcha in the Rust tier mis-read two of
+   * issue #464's defects during triage.
+   *
+   * Armed before each step and disarmed after, and rendered by `fail` only, so
+   * a run that does not fail behaves exactly as before and the trace is
+   * untouched.
+   */
+  let inFlight: string | null = null;
+  const startingMove = (label: string): void => {
+    inFlight = label;
+  };
+  const finishedMove = (): void => {
+    inFlight = null;
+  };
+
+  /**
    * The resolved move list for THIS cycle. Reset per iteration on purpose: the
    * iterations are independent (each re-opens the fixture from a known floor), so
    * a trace of the failing cycle is already minimal in that dimension and a
@@ -690,6 +711,9 @@ async function runIteration(
   // const arrow does not).
   const fail: (headline: string, detail?: string) => never = (headline, detail = '') => {
     const tail = (dumpFullHistory() ? history : history.slice(-HISTORY_TAIL)).map((line) => `    ${line}`);
+    // A move that has not RETURNED has no history line yet, so name it here -
+    // without this the tail ends on the move BEFORE the one that failed.
+    if (inFlight !== null) tail.push(`    ${inFlight} -> IN FLIGHT (had not returned)`);
     const message = [
       headline,
       `  reproduce: pnpm agent:scenario undo-persistence-fuzz --seed ${ctx.seed} ` +
@@ -847,7 +871,9 @@ async function runIteration(
     });
     const beforeUndo = undoLen;
     const beforeRedo = redoLen;
+    startingMove(`${tag} ${stepName}: ${built.label}`);
     const res = await step('mutate', built.action, built.args);
+    finishedMove();
     const accepted = res.actionOk && res.commandSuccess !== false;
     const pushed = res.undoLen - beforeUndo;
     note(
@@ -1006,7 +1032,9 @@ async function runIteration(
     const consumed = entryType[back ? cursor : cursor + 1] ?? null;
     const beforeUndo = undoLen;
     const beforeRedo = redoLen;
+    startingMove(`${tag} ${label} ${direction}[${consumed ?? '?'}]`);
     const res = await step(direction, direction, []);
+    finishedMove();
     if (!res.actionOk || res.commandSuccess === false) {
       const error = res.commandError ?? res.actionError ?? 'unknown';
       note(`${tag} ${label} ${direction}[${consumed ?? '?'}] -> FAILED [${error}]`);
@@ -1053,7 +1081,9 @@ async function runIteration(
   const crossBoundary = async (): Promise<void> => {
     const savePath = path.join(saveDir, `cycle-${iteration}.stalx`);
     await bumpEpoch(ctx);
+    startingMove(`${tag} save`);
     const saveRes = await step('save', 'saveProject', [savePath]);
+    finishedMove();
     if (!saveRes.actionOk || saveRes.commandSuccess === false) {
       fail('saveProject failed', `  error: ${saveRes.commandError ?? saveRes.actionError ?? 'unknown'}`);
     }
@@ -1071,6 +1101,7 @@ async function runIteration(
     record(saveRes);
     ctx.metric('saves');
 
+    startingMove(`${tag} close/reopen`);
     const closed = (await ctx.callAction('project', 'closeProject', [])) as {
       ok: boolean;
       error?: string;
@@ -1087,6 +1118,7 @@ async function runIteration(
     if (!opened.ok || opened.result?.success === false) {
       fail('reopening the saved project failed', `  error: ${opened.result?.error ?? opened.error ?? 'unknown'}`);
     }
+    finishedMove();
 
     await enableIdAgnosticModel(ctx);
     await bumpEpoch(ctx);

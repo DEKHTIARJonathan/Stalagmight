@@ -26,10 +26,20 @@
 //!   one - and the gate below shrinks an INJECTED failure instead, see `Fault`.
 //! * **Unclassified.** Anything else PANICS, with the fuzzer's full payload. The
 //!   signature is `failure_signature` - the headline with every run of digits
-//!   collapsed to `#`, plus the first differing snapshot path, collapsed the same
-//!   way. That is the same normalization the classifiers use, and it is what
-//!   keeps "did not restore the state recorded at depth 23 | at sections[#].shots[#].length"
+//!   collapsed to `#`, plus any DISCRIMINATOR the payload carries below its
+//!   headline, plus the first differing snapshot path, collapsed the same way.
+//!   That is the same normalization the classifiers use, and it is what keeps
+//!   "did not restore the state recorded at depth 23 | at sections[#].shots[#].length"
 //!   from splitting into one bucket per depth.
+//!
+//! The discriminator exists because a headline can name an INVARIANT rather than
+//! a defect: "the app's own merge-alignment assert fired" is one headline for
+//! every call site that can trip that assert, and issue #464 filed three
+//! separate defects behind it. Shrinking the second drifted onto the third. So
+//! the signature also carries the assert's own context string - the call site,
+//! a `&'static str` literal - and nothing else from that message: see
+//! `DISCRIMINATORS` in `fuzz_undo_tests.rs` for why the distance it also reports
+//! must stay out.
 //!
 //! A step that produces a DIFFERENT signature is a NON-MATCH and is rejected,
 //! whether it is a different finding, a different panic, or no failure at all.
@@ -1073,5 +1083,108 @@ fn a_different_signature_is_not_a_match() {
         failure_signature(panicked.as_ref().unwrap_err()),
         failure_signature(deeper.as_ref().unwrap_err()),
         "two depths of one defect landed in different buckets"
+    );
+}
+
+/// One `Fuzzer::fail` payload for the app's merge-alignment assert, built the
+/// way `fail` builds one: a FIXED headline, the run header, the detail line, and
+/// the move-log tail with the assert's own message under the move that tripped
+/// it.
+///
+/// The three parameters are exactly the three things that differ between two
+/// runs of ONE defect (`depth`, `distance`, `coords`) and the one thing that
+/// differs between two DIFFERENT defects (`context`). Written as a builder so
+/// the tests below can vary them one at a time rather than eyeballing two large
+/// string literals for their differences.
+fn alignment_payload(context: &str, depth: usize, distance: f64, coords: (f64, f64)) -> String {
+    format!(
+        "the app's own merge-alignment assert fired\n  \
+         seed=162 depth={depth} top={depth} saves=0 reloads=0\n  \
+         see the last move in the log below for the assert's own message\n  \
+         last 2 move(s):\n    \
+         mergeStations(4/1, 8/3) -> ok (undo {depth}->{depth}, redo 0->0)\n    \
+         deleteShotRangeShift(s=4, 400000..400002) -> PANICKED (did not return)\n      \
+         ^ the app's own merge-alignment assert fired: Merge alignment violated after \
+         {context}: stations StationKey {{ section_id: 3, station_index: 0 }} and \
+         StationKey {{ section_id: 8, station_index: 2 }} are {distance:.6}m apart \
+         (threshold 0.01m). A=({:.6}, {:.6}), B=(0.000000, 0.000000)",
+        coords.0, coords.1,
+    )
+}
+
+/// Two defects behind ONE app assert are two signatures.
+///
+/// The gotcha issue #464 was filed with: `Fuzzer::fail`'s headline names the
+/// INVARIANT ("the app's own merge-alignment assert fired") and not the call
+/// site, so all three of that issue's defects produced the same signature and a
+/// shrink of the second one drifted onto the third. The assert's context string
+/// is what tells them apart, and this pins that it reaches the signature - and
+/// that ddmin's `reproduces` therefore rejects the other defect.
+#[test]
+fn the_assert_context_splits_one_headline_into_two_signatures() {
+    let _config = isolated_config();
+    let range_delete = alignment_payload("delete_shot_range_shift", 41, 7.512_345, (1.0, 2.0));
+    let rewire = alignment_payload("remove_shot_with_rewire", 41, 7.512_345, (1.0, 2.0));
+
+    // Same headline by construction - which is the whole problem being fixed.
+    assert_eq!(
+        range_delete.lines().next(),
+        rewire.lines().next(),
+        "the two payloads must share a headline, else this proves nothing"
+    );
+    assert_ne!(
+        failure_signature(&range_delete),
+        failure_signature(&rewire),
+        "two defects sharing one assert still share one signature"
+    );
+    // The discriminator is the call site, and it is in there by name.
+    assert!(
+        failure_signature(&range_delete).contains("delete_shot_range_shift"),
+        "the asserting call site is not in the signature: {}",
+        failure_signature(&range_delete)
+    );
+
+    // ... and that is what ddmin matches on: a candidate that reproduces the
+    // OTHER defect is a NON-MATCH, so a shrink cannot drift onto it.
+    let target = Target::Panic(failure_signature(&range_delete));
+    let drifted: Probe = Err(rewire);
+    let held: Probe = Err(range_delete);
+    assert!(reproduces(&target, borrow(&held)));
+    assert!(
+        !reproduces(&target, borrow(&drifted)),
+        "a shrink step that landed on a different call site was accepted as the same failure"
+    );
+}
+
+/// One defect at two geometries is ONE signature.
+///
+/// The other half of the rule, and the one that decides whether the shrinker
+/// still works at all: every move ddmin removes changes the survey, so the
+/// distance and the coordinates the assert reports differ between the original
+/// trace and every candidate. A signature carrying them would reject every
+/// candidate and shrink nothing. The depth moves for the same reason.
+#[test]
+fn the_same_defect_at_a_different_geometry_is_one_signature() {
+    let _config = isolated_config();
+    let small = alignment_payload("remove_shot_with_rewire", 41, 16.7, (1.0, 2.0));
+    let large = alignment_payload("remove_shot_with_rewire", 7, 1_111.32, (58_921.5, -412.25));
+    assert_eq!(
+        failure_signature(&small),
+        failure_signature(&large),
+        "one defect split into two buckets when the geometry changed"
+    );
+    // Stated exactly as well, because "equal to each other" would also hold if
+    // the signature collapsed to something useless: this is the whole string,
+    // and the distance clause the assert carries ("... are 1111.320000m apart")
+    // is not in it.
+    let signature = failure_signature(&small);
+    assert_eq!(
+        signature, "the app's own merge-alignment assert fired | after=remove_shot_with_rewire",
+        "the signature is not headline + call site"
+    );
+    let target = Target::Panic(signature);
+    assert!(
+        reproduces(&target, borrow(&Err(large))),
+        "the same defect at a different magnitude stopped reproducing its own target"
     );
 }

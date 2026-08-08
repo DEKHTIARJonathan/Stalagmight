@@ -670,6 +670,31 @@ impl AppState {
             // deferred for exactly this reason. Assert alignment here, since each
             // per-shot delete skipped its own alignment check.
             project.cascade_connection_offsets(&[section_id]);
+            // That cascade is seeded with the edited section plus the datum
+            // sections, which is the right frame for THIS edit and is not a set
+            // that reaches every merge the assert below covers: a range can cut a
+            // whole component loose, and the BFS never enters one with no
+            // authoritative section in it. `realign_merges` closes that hole with
+            // one anchor per connected component - and it is not an extra state
+            // change, because the epilogue's `reconcile_geometry` (just below this
+            // scope, before the `after` snapshot is taken) runs the very same heal
+            // a moment later, under the very same condition. All it moves is WHEN,
+            // so the assert is backed by a solve that can see what it asserts on
+            // (#464 defect B). It early-returns when nothing is beyond the
+            // invariant, which is the ordinary case, and it still cannot invent an
+            // alignment that is genuinely unreachable - the assert keeps its teeth.
+            //
+            // The `cascade_deferred` gate is what makes "the very same heal" true.
+            // `reconcile_geometry` returns early during a deferred batch, and so
+            // does `debug_assert_merge_alignment` - intermediate states inside one
+            // are misaligned BY DESIGN. `realign_merges` has no such guard and
+            // clears the flag internally (`resolve_offsets_tracked`), so calling it
+            // unconditionally would resolve a batch's geometry mid-batch, ahead of
+            // an assert that is not even looking. No caller is known to reach this
+            // path inside a deferred window; the gate makes that irrelevant.
+            if !project.cascade_deferred {
+                project.realign_merges();
+            }
             project.debug_assert_merge_alignment("delete_shot_range_shift");
 
             // Closures-are-loops invariant (issue #413 finding 10): a loop closure

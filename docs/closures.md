@@ -74,6 +74,58 @@ Metrics are computed from current station coordinates:
 
 Create-time distribution strategies (`ProportionalByLength`, `EqualDistribution`) are **deferred** and not available in the UI (only revisited if users request them). Loop closures are currently recorded only (`Batch`), unless created by the Move workflow.
 
+## When a closure becomes a merge (promotion)
+
+A closure exists only for a TRUE loop. When its two endpoints stop being connected
+through the survey itself (shots + merges) the closure is their *sole* bridge, which
+is a merge - so it is converted. This happens on load
+(`redrive_offsets_after_load`), in Repair, in `execute()`'s epilogue for any command
+classified `can_orphan_closures`, and inside the shot-removal paths themselves
+(`Project::convert_closures_orphaned_since`, scoped to what that removal orphaned so
+an inverse does no more than invert).
+
+The two statements are not equivalent, and the difference is the whole of issue #464:
+
+| | loop closure | station merge |
+|---|---|---|
+| endpoints | may be metres apart - the misclosure is the point | are ONE point, within `MERGE_ALIGNMENT_INVARIANT_M` (1 cm) |
+| enforced by | nothing; it is a record | `debug_assert_merge_alignment`, the offset cascade, integrity |
+
+`debug_assert_merge_alignment` only *panics* at that 1 cm invariant in test builds
+(the assert is `#[cfg(test)]`, the whole body `#[cfg(debug_assertions)]`), so outside
+tests the signal is the `realign_merges` self-heal plus tolerance-level reporting -
+an `error!` past the looser 5 cm `MERGE_ALIGNMENT_TOLERANCE_M` in debug builds, and
+`check_merge_alignment` feeding the integrity report in any build.
+
+So a promotion **owes the coincidence it declares**, and cannot delegate that to
+whatever cascades next: `cascade_bfs` never traverses an edge into an already
+authoritative section, so a merge whose two ends are both authoritative (both
+datum-bearing, or one of them the edited section the cascade was seeded with) is a
+gap no cascade, realign or Repair will close.
+
+Two rules, both in `models/project/offsets.rs`:
+
+- **`plan_merge_promotion`** decides whether the promotion may happen at all, and
+  which side moves. The one refusal is over-anchoring - an edge fusing two
+  independently zero-datum-anchored groups puts two GPS anchors in one rigid
+  component. A refused closure STAYS a closure (re-anchored, if the deletion moved
+  its endpoint), which is legitimate between two anchored groups and is what the
+  over-anchoring detector reports. **Distance is never a refusal**: the loader
+  converts unconditionally, so declining on geometry would leave memory and disk
+  disagreeing about what the relationship is.
+- **`settle_minted_merges`** translates the movable side's whole rigid group onto
+  the anchored one, exactly as `merge_stations` does interactively (the datum side
+  anchors; with neither anchored, `station_a`'s group moves). It runs after the
+  minting command's own geometry is final - a shot removal re-places its section's
+  stations and the gap-close compensation slides the whole section - so the residual
+  is measured off the geometry that will actually be asserted on.
+
+A **replacement merge** (the arbitrary pair a deletion invents to keep a torn merge
+group connected) is the opposite case and is governed by
+`replacement_merge_allowed`: nothing is translated, and a pair that is not already
+coincident is simply not stitched. The pair is arbitrary rather than surveyed, so
+moving a group onto it would invent geometry.
+
 ## Deferred: Distribution at Create Time (Proportional/Equal)
 
 These algorithms remain in the codebase for possible future use, but are **disabled** today.

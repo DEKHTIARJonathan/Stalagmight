@@ -3051,6 +3051,22 @@ struct Fuzzer {
     drift: BTreeMap<usize, BTreeMap<String, f64>>,
     /// Human-readable move history, tailed into a failure payload.
     log: Vec<String>,
+    /// The move that is RUNNING RIGHT NOW, named the way the trace names it -
+    /// `None` between moves.
+    ///
+    /// A `log` line reports what a move DID to the stacks, so it can only be
+    /// written once the move RETURNS. A move that never returns - the app's own
+    /// `debug_assert_merge_alignment` unwinds straight out of the command - then
+    /// left the payload's tail ending on the PREVIOUS move, with
+    /// `catching_alignment`'s "^ ..." note pointing at that line. It reads as an
+    /// attribution and it is one: it names the wrong move. That mis-read #464's
+    /// defects B and C twice during triage, because the recorded TRACE carries
+    /// the true last move while the log tail named the one before it.
+    ///
+    /// Recording the label BEFORE the move runs is what makes the two agree.
+    /// Nothing else consumes it: it is rendered by `fail` and by
+    /// `catching_alignment`, and the trace is untouched.
+    in_flight: Option<String>,
     id_agnostic: bool,
     outcome: Outcome,
     /// Kept alive for the run: dropping it deletes the save file.
@@ -3127,6 +3143,7 @@ impl Fuzzer {
             drawn,
             drift: BTreeMap::new(),
             log: Vec::new(),
+            in_flight: None,
             id_agnostic: false,
             outcome: Outcome {
                 config: drawn,
@@ -3287,8 +3304,31 @@ impl Fuzzer {
         self.log.push(line);
     }
 
+    /// Arm the in-flight label. Paired with [`Self::finished_move`] on every
+    /// path a move can return by; see [`Self::in_flight`].
+    fn starting_move(&mut self, label: String) {
+        self.in_flight = Some(label);
+    }
+
+    /// Disarm it: the move returned, so its own log line is (or is about to be)
+    /// the last one and there is nothing left in flight to name.
+    fn finished_move(&mut self) {
+        self.in_flight = None;
+    }
+
+    /// Move the in-flight label INTO the log, marked as never having returned.
+    ///
+    /// Called on the panic path only, and before the note that describes the
+    /// panic - which is what makes that note's "^" point at the move that
+    /// actually panicked instead of at the one before it.
+    fn flush_in_flight(&mut self) {
+        if let Some(label) = self.in_flight.take() {
+            self.note(format!("{label} -> PANICKED (did not return)"));
+        }
+    }
+
     fn fail(&self, headline: &str, detail: &str) -> ! {
-        let tail: Vec<String> = self
+        let mut tail: Vec<String> = self
             .log
             .iter()
             .rev()
@@ -3296,6 +3336,12 @@ impl Fuzzer {
             .rev()
             .map(|line| format!("    {line}"))
             .collect();
+        // A move that has not RETURNED has no log line yet, so name it here:
+        // without this the tail ends on the previous move and reads as if THAT
+        // one is where the run stopped. See `Fuzzer::in_flight`.
+        if let Some(label) = &self.in_flight {
+            tail.push(format!("    {label} -> IN FLIGHT (had not returned)"));
+        }
         panic!(
             "{headline}\n  seed={} depth={} top={} saves={} reloads={}{}\n{detail}\n  last {} move(s):\n{}",
             self.seed,
@@ -4909,8 +4955,13 @@ impl Fuzzer {
         // app's own merge-alignment assert is the one a shrinker most needs and
         // that assert unwinds straight out of `apply_op`.
         let mark = self.recorder_mark(MoveKind::Mutate(Box::new(op.clone())));
-        let Some(applied) = self.catching_alignment(|fuzzer| fuzzer.apply_op(op, refs, targets))
-        else {
+        // The LABEL, armed before the command runs, for exactly the reason the
+        // trace move above is recorded before it: `record_mutation` writes this
+        // move's log line only once `apply_op` RETURNS. See `Fuzzer::in_flight`.
+        self.starting_move(op.describe());
+        let applied = self.catching_alignment(|fuzzer| fuzzer.apply_op(op, refs, targets));
+        self.finished_move();
+        let Some(applied) = applied else {
             return StepOutcome::Stopped;
         };
         self.recorder_seal(mark);
@@ -5533,6 +5584,9 @@ impl Fuzzer {
                     std::panic::resume_unwind(payload);
                 }
                 self.outcome.alignment_panic = true;
+                // FIRST: the move that panicked has no log line of its own yet,
+                // and the note below points at whatever line is last.
+                self.flush_in_flight();
                 self.note(format!(
                     "  ^ the app's own merge-alignment assert fired: {}",
                     message.lines().next().unwrap_or_default()
@@ -5802,7 +5856,16 @@ impl Fuzzer {
             }
             self.stale_corruption = true;
         }
-        let Some(result) = self.catching_alignment(|fuzzer| {
+        // Built BEFORE the move, so a move that panics can be named in the
+        // failure tail - the notes below are all written after it returns. See
+        // `Fuzzer::in_flight`.
+        let label = format!(
+            "{}{} x{steps}",
+            if back { "undo" } else { "redo" },
+            if jumped { "To" } else { "" }
+        );
+        self.starting_move(label.clone());
+        let result = self.catching_alignment(|fuzzer| {
             if back {
                 if jumped {
                     fuzzer.state.undo_to(steps - 1)
@@ -5814,14 +5877,11 @@ impl Fuzzer {
             } else {
                 fuzzer.state.redo()
             }
-        }) else {
+        });
+        self.finished_move();
+        let Some(result) = result else {
             return false;
         };
-        let label = format!(
-            "{}{} x{steps}",
-            if back { "undo" } else { "redo" },
-            if jumped { "To" } else { "" }
-        );
 
         if !result.success {
             let error = result.error.clone().unwrap_or_default();
@@ -5964,7 +6024,12 @@ impl Fuzzer {
         // The save is about to make undo-less changes, so everything recorded so
         // far belongs to the previous epoch.
         self.epoch += 1;
+        // Same rule as a mutation and a history move: the crossing is a MOVE,
+        // its log lines are written after each half returns, and a panic inside
+        // either half would otherwise leave the tail naming the move before it.
+        self.starting_move("save".to_string());
         let saved = self.state.save_project(Some(path.clone()));
+        self.finished_move();
         if !saved.success {
             self.fail(
                 "save_project failed",
@@ -5976,6 +6041,7 @@ impl Fuzzer {
         self.expect_stacks("save");
         self.expect_state(self.cursor, "save", Vec::new(), StaleTargets::default());
 
+        self.starting_move("close/reopen".to_string());
         let closed = self.state.execute(Command::CloseProject);
         if !closed.success {
             self.fail(
@@ -5984,6 +6050,7 @@ impl Fuzzer {
             );
         }
         let opened = self.state.execute(Command::OpenProject { path });
+        self.finished_move();
         if !opened.success {
             self.fail(
                 "OpenProject failed",
@@ -6513,6 +6580,74 @@ const GATE_SEEDS: &[u32] = &[1, 2, 3, 4, 5, 6, 7, 9, 10, 11, 12, 19, 26];
 /// unwind/rewind over every entry.
 pub(super) const GATE_ITERATIONS: usize = 60;
 
+/// Every run of digits as a single `#`.
+///
+/// The one normalization every part of a signature goes through: it is what
+/// keeps "at depth 23" and "at depth 7" one bucket rather than twenty, and it is
+/// why a distance, a coordinate or a section id cannot split a bucket even where
+/// one reaches the signature.
+fn collapse_digits(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut in_digits = false;
+    for ch in text.chars() {
+        if ch.is_ascii_digit() {
+            if !in_digits {
+                out.push('#');
+                in_digits = true;
+            }
+        } else {
+            out.push(ch);
+            in_digits = false;
+        }
+    }
+    out
+}
+
+/// Discriminators a payload carries BELOW its headline, as
+/// `(marker, terminator, label)`.
+///
+/// A [`Fuzzer::fail`] headline is FIXED TEXT - "the app's own merge-alignment
+/// assert fired" says WHICH INVARIANT broke and nothing about WHERE - so every
+/// defect that trips one app assert shares one signature. Issue #464 filed three
+/// such defects at once, and shrinking the second one drifted onto the third:
+/// ddmin accepted a candidate that reproduced "an alignment assert" rather than
+/// THE alignment assert, and every later step then minimized for the wrong bug.
+///
+/// The assert's own message is in the move-log tail and it names the CALL SITE
+/// that asserted ("Merge alignment violated after `remove_shot_with_rewire`:").
+/// That token is the discriminator, and it is stable in the only sense that
+/// matters here: it is a compile-time `&'static str` literal passed to
+/// `Project::debug_assert_merge_alignment` (models/project/offsets.rs), the same
+/// text on every run, on every machine, at every geometry.
+///
+/// What is deliberately NOT admitted is the rest of that message - the endpoints
+/// and the distance ("... are 1111.324000m apart"). Those move with the geometry
+/// that a shrink step is REMOVING MOVES from, so a signature carrying them would
+/// reject the very candidates ddmin exists to accept, and a shrink would
+/// terminate at the original trace every time.
+const DISCRIMINATORS: &[(&str, char, &str)] = &[("Merge alignment violated after ", ':', "after")];
+
+/// The first discriminator this payload carries, if any.
+///
+/// FIRST occurrence only, and one entry only: a payload's tail is a WINDOW over
+/// the move log, so admitting every occurrence would put the window's contents
+/// into the bucket key and make the signature depend on how deep the run got.
+fn discriminator(message: &str) -> Option<String> {
+    DISCRIMINATORS
+        .iter()
+        .find_map(|(marker, terminator, label)| {
+            let rest = message.split_once(marker)?.1;
+            // Bounded twice: at the terminator the message puts after the token,
+            // and at the end of the line either way.
+            let line = rest.lines().next().unwrap_or(rest);
+            let token = line.split(*terminator).next().unwrap_or(line).trim();
+            if token.is_empty() {
+                return None;
+            }
+            Some(format!("{label}={}", collapse_digits(token)))
+        })
+}
+
 /// Bucket a failure by its SHAPE rather than by its text.
 ///
 /// The headline alone buckets by depth ("did not restore the state recorded at
@@ -6520,33 +6655,27 @@ pub(super) const GATE_ITERATIONS: usize = 60;
 /// distinct things a sweep actually found. Digits are collapsed to `#` and the
 /// first differing path is appended, so two seeds that lost the same field at
 /// different depths land in the same bucket - which is what a triage read wants.
+///
+/// The headline alone also buckets TOO COARSELY in the other direction, once a
+/// headline names an invariant rather than a call site: see [`DISCRIMINATORS`]
+/// for the token that splits those back apart and for why it is only that token.
 pub(super) fn failure_signature(message: &str) -> String {
-    let collapse = |text: &str| -> String {
-        let mut out = String::with_capacity(text.len());
-        let mut in_digits = false;
-        for ch in text.chars() {
-            if ch.is_ascii_digit() {
-                if !in_digits {
-                    out.push('#');
-                    in_digits = true;
-                }
-            } else {
-                out.push(ch);
-                in_digits = false;
-            }
-        }
-        out
-    };
-    let headline = collapse(message.lines().next().unwrap_or("<empty>"));
+    let headline = collapse_digits(message.lines().next().unwrap_or("<empty>"));
     let first_path = message
         .lines()
         .map(str::trim)
         .find(|line| line.starts_with("at "))
-        .map(collapse);
-    match first_path {
-        Some(path) => format!("{headline} | {path}"),
-        None => headline,
+        .map(collapse_digits);
+    let mut signature = headline;
+    if let Some(token) = discriminator(message) {
+        signature.push_str(" | ");
+        signature.push_str(&token);
     }
+    if let Some(path) = first_path {
+        signature.push_str(" | ");
+        signature.push_str(&path);
+    }
+    signature
 }
 
 pub(super) fn summarize(label: &str, seed: u32, outcome: &Outcome) -> String {
@@ -7173,6 +7302,99 @@ fn the_diff_cap_says_when_it_hid_something() {
     assert!(
         truncated,
         "one difference past the cap must report as truncated"
+    );
+}
+
+/// A move that does NOT RETURN is the move the failure names.
+///
+/// The tail is built from `log`, and a move's log line is written after it
+/// returns, so before `in_flight` existed a panicking move left the tail ending
+/// on the PREVIOUS move - with `catching_alignment`'s "^ ..." note pointing at
+/// it, which reads as an attribution and is one. It mis-read issue #464's
+/// defects B and C twice.
+///
+/// Both halves are pinned here, on a synthetic alignment panic raised through
+/// `catching_alignment` itself: the log line the flush writes, and what
+/// `failure_signature` then makes of the payload `fail` builds - which is where
+/// the two follow-ups meet, since the call site the tail now carries is the
+/// discriminator ddmin matches on.
+#[test]
+fn a_move_that_panics_is_the_move_the_failure_tail_names() {
+    let _config = isolated_config();
+    let mut fuzzer = Fuzzer::new(1, false);
+    fuzzer.note("createShot(s=8,append) -> ok (undo 0->1, redo 0->0)".to_string());
+    fuzzer.starting_move("deleteShot(8:800002)".to_string());
+
+    // FIRST render path: an oracle that fails while a move is still running.
+    // The tail has no line for that move yet, so `fail` names it itself.
+    let mid_move = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        fuzzer.fail("something failed mid-move", "  detail")
+    }))
+    .expect_err("`fail` returned");
+    let mid_move = panic_message(&*mid_move);
+    assert!(
+        mid_move.contains("deleteShot(8:800002) -> IN FLIGHT"),
+        "a failure raised mid-move does not name the move that was running:\n{mid_move}"
+    );
+    assert!(
+        mid_move
+            .lines()
+            .last()
+            .is_some_and(|line| line.contains("deleteShot(8:800002)")),
+        "the in-flight move is not the LAST line of the tail, so the tail still reads as if the \
+         move before it is where the run stopped:\n{mid_move}"
+    );
+
+    // SECOND render path: the move panics outright, and the flush puts it in
+    // the log so the note that follows attributes the assert to it.
+    let absorbed = fuzzer.catching_alignment(|_| {
+        panic!(
+            "Merge alignment violated after remove_shot_with_rewire: stations A and B are \
+             16.700000m apart (threshold 0.01m). A=(1.000000, 2.000000), B=(0.000000, 0.000000)"
+        )
+    });
+    assert!(
+        absorbed.is_none(),
+        "the alignment assert was not absorbed, so nothing below is being measured"
+    );
+    assert!(fuzzer.outcome.alignment_panic);
+
+    // The panicking move has a line of its own, and the "^ ..." note is UNDER
+    // it rather than under the move before it.
+    let flushed = fuzzer
+        .log
+        .iter()
+        .position(|line| line.contains("deleteShot(8:800002)"))
+        .expect("the in-flight move was never written to the log");
+    assert!(
+        fuzzer.log[flushed].contains("PANICKED"),
+        "the in-flight move's line does not say it never returned: {}",
+        fuzzer.log[flushed]
+    );
+    assert!(
+        fuzzer.log[flushed + 1].contains("^ the app's own merge-alignment assert fired"),
+        "the assert note is not directly under the move that panicked: {:?}",
+        fuzzer.log
+    );
+
+    // ... and the payload the run then fails with carries that move's assert,
+    // so the signature ddmin matches on names the call site.
+    let payload = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        fuzzer.fail(
+            "the app's own merge-alignment assert fired",
+            "  see the last move in the log below for the assert's own message",
+        )
+    }))
+    .expect_err("`fail` returned");
+    let message = panic_message(&*payload);
+    assert!(
+        message.contains("deleteShot(8:800002) -> PANICKED"),
+        "the failure tail does not name the move that panicked:\n{message}"
+    );
+    assert_eq!(
+        failure_signature(&message),
+        "the app's own merge-alignment assert fired | after=remove_shot_with_rewire",
+        "the call site did not reach the signature"
     );
 }
 
