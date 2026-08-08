@@ -183,6 +183,44 @@
  *    durable form of this one, because the harness probe is deliberately a
  *    metric.
  *
+ * 4. OPEN. A REAL SURVEY DOES NOT ROUND-TRIP THROUGH `.tmlu`: 78 SHOT UUIDS ARE
+ *    RE-MINTED AND EVERY ZERO LRUD COMES BACK NULL.
+ *
+ *        STALAGMIGHT_FUZZ_FIXTURE=naharon.stalx \
+ *          pnpm agent:scenario export-roundtrip-fuzz --seed 1 --iterations 8
+ *
+ *    Found on the FIRST run against a fixture other than the default. X6 on a
+ *    532-shot cave, exported to `.tmlu` and imported into a fresh project:
+ *
+ *      a. 78 of 532 shot uuids do not come back, and 78 new ones appear -
+ *         a clean re-mint, not a loss (the count is identical and X5 still
+ *         converges raw). `docs/ariane-import.md` now records that the importer
+ *         PRESERVES the file's uuids subject to a shape check
+ *         (`foreign_shot_uuid`: non-empty, <= 128 chars, no XML-unexportable
+ *         character), so the question is which of those 78 the exporter emitted
+ *         in a shape the reader then rejected - `remint_duplicate_uuids` firing
+ *         on export is the obvious first suspect, and it would mean this cave
+ *         holds 78 cross-section duplicates (legal: uniqueness is per-section).
+ *      b. every shot whose LRUD is `0/0/0/0` comes back `null/null/null/null`.
+ *         542 geometry keys differ and the overwhelming majority are exactly
+ *         that pair - the SAME length, azimuth and depths with the LRUD column
+ *         flipped. Zero and absent are different facts about a passage ("I
+ *         measured it and it is zero" vs "I did not measure it"), and one of
+ *         the two ends of this trip conflates them.
+ *
+ *    NOT FIXED HERE, and flagged rather than quietly tolerated. Both halves are
+ *    format-semantics questions that want a decision in `docs/ariane-export.md`
+ *    and `ariane-import.md`'s lossiness tables before code moves, and (b) in
+ *    particular could equally be fixed on the writer or the reader. The oracle
+ *    is deliberately left ASSERTING: the default fixture is green, so this
+ *    stays visible as a red on the fixture that shows it rather than being
+ *    absorbed by a tolerance.
+ *
+ *    CONSEQUENCE FOR THE MATRIX: `pnpm agent:fuzz-matrix --scenario
+ *    export-roundtrip-fuzz` sweeps EVERY `.stalx` under `e2e/fixtures/`, so its
+ *    `naharon.stalx` cells are red until this is resolved. Use
+ *    `--fixtures fractal_plant_iter3.stalx` for a green matrix in the meantime.
+ *
  * ## Observations that are NOT findings
  *
  * A SUCCESSFUL export from the PANEL says nothing at all. The modal closes,

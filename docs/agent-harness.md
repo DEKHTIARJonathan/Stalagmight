@@ -677,6 +677,12 @@ The nine oracles, the two probe results it recorded rather than asserted (the
 defaults), and the findings it produced are all written up in the scenario
 file's header, each with the `reproduce:` line that still runs.
 
+ONE OPEN FINDING MAKES THE MATRIX'S `naharon.stalx` CELLS RED (finding 4 in
+that header): a real 532-shot survey does not round-trip through `.tmlu` - 78
+shot uuids are re-minted and every `0/0/0/0` LRUD comes back null. The oracle is
+deliberately left asserting rather than tolerated, so until that is resolved use
+`--fixtures fractal_plant_iter3.stalx` for a green matrix.
+
 ### Three tiers, and which one gates CI
 
 The harness is the middle tier of three, and it is worth being clear about what
