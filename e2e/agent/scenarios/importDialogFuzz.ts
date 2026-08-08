@@ -97,11 +97,60 @@
  *
  * ## Findings
  *
- * (none yet - no campaign has been run against this scenario. When one lands,
- * each entry here gets its verbatim `reproduce:` line, the mechanism, and the
- * commit that fixed it, exactly as `undoRedoFuzz.ts`'s table does. Do NOT add a
- * classifier or a tolerance to turn a red green: this file has neither, and that
- * is the whole discipline it inherits.)
+ * This is the RECORD, not a to-do list, and it follows `undoRedoFuzz.ts`'s
+ * conventions: every repro line is kept verbatim and stays runnable, and when a
+ * finding is fixed its entry names the commit and becomes that fix's regression
+ * check. Do NOT add a classifier or a tolerance to turn a red green - this file
+ * has neither, and that is the whole discipline it inherits.
+ *
+ * 1. OPEN. THE IMPORT WIZARD BECOMES AN INVISIBLE MODAL, PERMANENTLY.
+ *
+ *        pnpm agent:scenario import-dialog-fuzz --seed 7 --iterations 8
+ *
+ *    Found on the scenario's first real run, and `pnpm agent:fuzz-shrink` cut
+ *    the 124-step trace to FIVE steps (83 replays, 1-minimal, 0 divergent):
+ *
+ *        1. generate a VALID .dmp                (no malformed input involved)
+ *        2. import it                            (router or toolbar, either)
+ *        3. continue                             (the default whole-file selection)
+ *        4. skip zero datum
+ *        5. accept the first suggestion          (confirm-button)
+ *
+ *    What is then true, and stays true: `activeDialog` is `'dmp-import-new'`,
+ *    the wizard subtree is MOUNTED with `wizard-manual-placing` rendered, and
+ *    the whole thing sits under a `display:none` ancestor - the digest measures
+ *    `display=flex visibility=visible 0x0` on the dialog root, which is what a
+ *    `display:none` PARENT produces on a descendant. `DialogWrapper` sets
+ *    `display:none` in exactly one place, its `hidden` prop, and
+ *    `DmpNewImportDialog` passes `hidden={autoStartManualPlacementPending}`.
+ *
+ *    So the flag never clears. It is set true at the `manual_placing`
+ *    transition and cleared in exactly ONE place - inside
+ *    `handleStartSegmentPlacement`, AFTER two early returns - and the effect
+ *    that calls it (`autoStartManualPlacementPending && phase === 'manual_placing'
+ *    && currentSegment && segmentAnchor && !isImporting`, via `setTimeout(0)`)
+ *    has no dependency that changes on a refusal, so it never retries.
+ *
+ *    NOT the documented incomplete-shots refusal. That was the first suspect -
+ *    `handleStartSegmentPlacement` opens with `if (refuseIncompleteShots()) return;`
+ *    and the fuzzer's grid generators produce blank rows - but the minimal trace
+ *    contains NO grid edit, and the failure payload records `toasts: []` where
+ *    that path would have raised `dmp-wizard-incomplete`. The remaining
+ *    candidate is the effect's own cleanup: `handleStartSegmentPlacement` is in
+ *    its dependency array, so if that callback's identity changes on every
+ *    render the cleanup clears the pending `setTimeout(0)` before it can fire,
+ *    and the placement is starved rather than refused.
+ *
+ *    Why it matters: this is not a cosmetic hidden dialog. `activeDialog` stays
+ *    set, so `useKeyboardShortcuts` swallows every shortcut; `DialogWrapper`'s
+ *    Escape handler is an `onKeyDown` on the `display:none` container, which
+ *    nothing inside can focus, so Escape cannot reach it either. The user sees
+ *    the map, cannot import, cannot use a shortcut, and has no control to click.
+ *    The only way out is to kill the app.
+ *
+ *    Verified permanent, not slow: replaying the minimal trace with
+ *    `STALAGMIGHT_FUZZ_IMPORT_SETTLE_MS=60000` fails identically, so the app had
+ *    a full minute to finish the transition.
  */
 import * as fs from 'fs';
 import * as path from 'path';
@@ -515,7 +564,12 @@ export const importDialogFuzz: Scenario = {
           // ddmin then accepts a candidate that fails on a different one.
           `S1 UNKNOWN SCREEN ${JSON.stringify(digest.dialog)}: a dialog is up that this build's ` +
             'screen table does not name',
-          `  activeDialog=${JSON.stringify(digest.dialog)} after: ${move.label}\n  dom: ${digest.why}`,
+          `  activeDialog=${JSON.stringify(digest.dialog)} after: ${move.label}\n` +
+            `  dom: ${digest.why}\n` +
+            // Toast KEYS, not text: they are i18n-independent, and a refusal
+            // toast is usually the whole explanation for a screen that stopped
+            // moving (the wizard's guards refuse silently apart from these).
+            `  toasts: ${JSON.stringify(digest.toast)}`,
         );
       }
       if (digest.inv.length > 0) {
