@@ -23065,6 +23065,23 @@ fn finding_26_a_shot_edit_does_not_translate_a_group_whose_first_datum_was_remov
             .success
     );
 
+    // The promotion is no longer silent: local (0, 0) means `zero_datums[0]`'s
+    // GPS, so the removal translates the survey onto the new origin and a's datum
+    // station - the new `zero_datums[0]` - sits there (#469, item 1). Everything
+    // below is measured against that state.
+    let promoted = state
+        .get_project_state()
+        .unwrap()
+        .compute_station_raw_coords(StationRef::new(a, 0))
+        .unwrap();
+    assert!(
+        promoted.x.abs() < 1e-6 && promoted.y.abs() < 1e-6,
+        "the promoted datum's station must sit at the local origin after the removal, got \
+         ({}, {})",
+        promoted.x,
+        promoted.y
+    );
+
     let before = state.get_project_state().unwrap().section_offsets.clone();
     let shot_id = state
         .get_project_state()
