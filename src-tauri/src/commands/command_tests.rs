@@ -4010,6 +4010,71 @@ fn test_export_image_refuses_to_overwrite_open_project_file() {
 }
 
 #[test]
+fn test_export_image_refuses_to_overwrite_the_plnx_sibling() {
+    // `<project>.plnx` holds EVERY saved dive plan for the open project. The
+    // text exports and the dive-profile export have always refused it via
+    // `is_project_owned_file`; the image export used the narrower
+    // `is_open_project_file`, so a PNG/SVG/PDF aimed at that path was written
+    // and took the whole plan store with it. The path is not reachable through
+    // the save dialog (the frontend forces the extension), but the IPC boundary
+    // takes an arbitrary path from the webview - which is the boundary the
+    // guard exists for, and which the export fuzzer drives.
+    let app = app_with_state();
+    create_project(&app);
+    create_section_with_shots(&app, vec![shot_data(1.0)]);
+    let dir = TempDir::new().unwrap();
+    let saved_path = save_project_to_temp(&app, &dir);
+    let plnx = saved_path.with_extension("plnx");
+    // A project with no saved plan has no sibling to protect, so the guard has
+    // nothing to canonicalize - the refusal only applies to a `.plnx` that is
+    // really there, exactly as for the `.stalx`.
+    fs::write(&plnx, b"dive plans").unwrap();
+
+    let mut options = crate::export::ExportImageOptions::default();
+    options.format = crate::export::ImageFormat::Svg;
+    let result = export::export_image_impl(state(&app).inner(), plnx.clone(), options);
+    assert!(
+        result.is_err(),
+        "an image export must refuse the open project's .plnx sibling"
+    );
+    assert!(
+        result.unwrap_err().contains("open project"),
+        "error must explain the clobber guard"
+    );
+    assert_eq!(
+        fs::read(&plnx).unwrap(),
+        b"dive plans",
+        "the plan store must be byte-for-byte untouched"
+    );
+}
+
+#[test]
+fn test_text_exports_refuse_to_overwrite_the_plnx_sibling() {
+    // The control for the test above: the text exports were already correct, so
+    // a regression that narrowed THEIR guard would otherwise go unnoticed.
+    let app = app_with_state();
+    create_project(&app);
+    create_section_with_shots(&app, vec![shot_data(1.0)]);
+    let dir = TempDir::new().unwrap();
+    let saved_path = save_project_to_temp(&app, &dir);
+    let plnx = saved_path.with_extension("plnx");
+    fs::write(&plnx, b"dive plans").unwrap();
+
+    for res in [
+        export::export_csv(state(&app), plnx.clone()),
+        export::export_json(state(&app), plnx.clone()),
+        export::export_tml(state(&app), plnx.clone()),
+    ] {
+        assert!(res.is_err(), "text export must refuse the .plnx sibling");
+        assert!(
+            res.unwrap_err().contains("open project"),
+            "error must explain the clobber guard"
+        );
+    }
+    assert_eq!(fs::read(&plnx).unwrap(), b"dive plans");
+}
+
+#[test]
 fn test_text_exports_refuse_to_overwrite_open_project_file() {
     // CSV/JSON/TML exports do raw file writes too; exporting over the open
     // project's own `.stalx` would corrupt the live database. The guard must

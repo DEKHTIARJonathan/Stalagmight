@@ -174,18 +174,23 @@ pub async fn export_image(
         "No project open".to_string()
     })?;
 
-    // Never let an image export clobber the open project's own `.stalx`: the
-    // raw file write in `export/image.rs` would overwrite the live database.
-    if let Some(open_path) = project.file_path.as_deref() {
-        if is_open_project_file(&path, open_path) {
-            tracing::warn!(
-                path = ?path,
-                open_project = ?open_path,
-                purpose = "protect the open project database",
-                "Refusing to export an image over the open project file"
-            );
-            return Err("Cannot export over the open project file".to_string());
-        }
+    // Never let an image export clobber a file the open project owns: the raw
+    // file write in `export/image.rs` would overwrite the live database, or the
+    // `.plnx` sibling holding every saved dive plan.
+    //
+    // `is_project_owned_file`, not `is_open_project_file`: this arm used the
+    // narrower `.stalx`-only predicate while the text exports and the dive
+    // profile used the wider one, so a PNG/SVG/PDF aimed at `<project>.plnx`
+    // was written - and the doc comment on `is_project_owned_file` already
+    // claimed the gap was closed.
+    if is_project_owned_file(&path, &project) {
+        tracing::warn!(
+            path = ?path,
+            open_project = ?project.file_path,
+            purpose = "protect the open project database",
+            "Refusing to export an image over a file the open project owns"
+        );
+        return Err("Cannot export over the open project file".to_string());
     }
 
     let format = options.format;
@@ -283,11 +288,9 @@ pub(crate) fn export_image_impl(
         "No project open".to_string()
     })?;
 
-    // Mirror the live command's guard: never clobber the open project `.stalx`.
-    if let Some(open_path) = project.file_path.as_deref() {
-        if is_open_project_file(&path, open_path) {
-            return Err("Cannot export over the open project file".to_string());
-        }
+    // Mirror the live command's guard: never clobber a file the open project owns.
+    if is_project_owned_file(&path, &project) {
+        return Err("Cannot export over the open project file".to_string());
     }
 
     tracing::info!(
