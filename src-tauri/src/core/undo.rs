@@ -88,8 +88,15 @@ pub(crate) const ENTRY_OVERHEAD_BYTES: usize = 512;
 /// The persisted tables are attacker-controlled: a `.stalx` is a file the user opens,
 /// and nothing in the schema bounds `undo_stack` / `redo_stack`. The loader used to
 /// `SELECT` and gunzip every row before anything trimmed, so a crafted (or merely
-/// ancient) file could exhaust memory during open, with the in-memory bound armed but
-/// applied too late to help.
+/// ancient) file with a million rows in it was read whole during open, with the
+/// in-memory bound armed but applied too late to help.
+///
+/// **What this bounds is the ROW COUNT, and only that.** The other half of the same
+/// exposure is untouched: one row's gzip blob is decompressed with no output ceiling
+/// (`decompress_json`, persistence/sqlite.rs, reads the decoder into a `String`), so a
+/// single crafted blob still expands as far as it likes. That residual - a per-blob
+/// decompression ceiling - is a separate bound, tracked separately; it is not what
+/// this constant closes and it must not be claimed as closed here.
 ///
 /// A count window project reads its own window (`undo_history_limit`), which is exact.
 /// Full mode has no count at all - its bound is [`UNDO_BYTE_BUDGET_BYTES`] - so this
@@ -99,14 +106,24 @@ pub(crate) const ENTRY_OVERHEAD_BYTES: usize = 512;
 /// more than `budget / ENTRY_OVERHEAD_BYTES` entries are in the stack the running
 /// total necessarily exceeds the budget and `trim_to_bytes` evicts from the front.
 /// Reading past this row therefore CANNOT change the loaded stack: the extra rows are
-/// gunzipped, deserialized and then immediately evicted. The cap is lossless by
-/// construction, not a judgement call about how much history is enough.
+/// gunzipped, deserialized and then immediately evicted.
+///
+/// So the cap is lossless by construction EXCEPT for one shape: a count window
+/// configured above this ceiling. `AppState::history_load_row_cap` applies
+/// `.min(MAX_PERSISTED_HISTORY_ROWS)`, and `undo_history_limit` is an unclamped `usize`
+/// in `config.toml` - the settings UI validates it to 10..1000, but a hand-edited
+/// config is not validated at all. Such a project is NOT byte-bounded, so the rows past
+/// the ceiling are ones its restore would have kept: that load is genuinely lossy. It is
+/// accepted rather than fixed because the ceiling is 65536 entries (32 MiB / 512 B),
+/// sixty-five times the deepest window the settings UI will accept, so only a config
+/// edited by hand past 65536 reaches it - and the alternative is letting that same edit
+/// hand an unbounded row count to a hostile file.
 ///
 /// A byte ceiling on the load was considered and rejected: the in-memory accounting is
 /// an estimate (see [`UndoStack::estimated_size`]), and a count-window project is not
 /// byte-bounded at all, so any byte cutoff would silently drop history that today's
 /// load keeps for a legitimately large project. Bounding the row count is the part
-/// that can be proven not to lose anything.
+/// that can be proven, at every window the UI can configure, not to lose anything.
 pub const MAX_PERSISTED_HISTORY_ROWS: usize = UNDO_BYTE_BUDGET_BYTES / ENTRY_OVERHEAD_BYTES;
 
 /// How a stack's depth is bounded.

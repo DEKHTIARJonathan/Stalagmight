@@ -147,7 +147,10 @@ impl Database {
         table: &'static str,
         max_rows: usize,
     ) -> Result<Vec<CompressedHistoryRow>> {
-        let limit = i64::try_from(max_rows).unwrap_or(i64::MAX);
+        // Clamp HERE rather than trusting the caller: `max_rows` is config-derived on the
+        // load paths (`undo_history_limit` is an unclamped `usize` in `config.toml`), so
+        // the ceiling only binds a future caller if the loader applies it itself.
+        let limit = i64::try_from(max_rows.min(MAX_PERSISTED_HISTORY_ROWS)).unwrap_or(i64::MAX);
         let mut stmt = self.conn.prepare(&format!(
             "SELECT sequence, command_json, undo_data_json, executed_at FROM {table} \
              ORDER BY sequence DESC LIMIT ?1"
@@ -182,7 +185,8 @@ impl Database {
     /// than by delegation: this query names only the three columns the legacy shape
     /// guarantees, so a file old enough to lack `executed_at` still loads.
     pub fn load_undo_stack_capped(&self, max_rows: usize) -> Result<Vec<(i64, String, String)>> {
-        let limit = i64::try_from(max_rows).unwrap_or(i64::MAX);
+        // Clamped to the ceiling inside the loader, exactly as `newest_history_rows` does.
+        let limit = i64::try_from(max_rows.min(MAX_PERSISTED_HISTORY_ROWS)).unwrap_or(i64::MAX);
         let mut stmt = self.conn.prepare(
             "SELECT sequence, command_json, undo_data_json FROM undo_stack \
              ORDER BY sequence DESC LIMIT ?1",
@@ -210,8 +214,15 @@ impl Database {
     /// Load undo stack from database with timestamps
     ///
     /// [#469] Bounded by [`MAX_PERSISTED_HISTORY_ROWS`]. The load paths pass their own,
-    /// tighter window to [`Self::load_undo_stack_with_timestamps_capped`]; this default
-    /// exists so that no caller - present or future - can read the table whole.
+    /// tighter window to [`Self::load_undo_stack_with_timestamps_capped`]; this default is
+    /// what a caller with no window of its own gets. The ceiling binds either way, because
+    /// the capped loaders clamp `max_rows` to it themselves - a future caller handing them
+    /// a config-derived number is bounded too.
+    ///
+    /// One reader does take the whole table, deliberately: `Database::cut_inherited_undo_rows`
+    /// (persistence/sqlite/repair.rs) selects `id, executed_at` and nothing else, because its
+    /// cut has to consider every row. That scan is bounded by the row count times two small
+    /// columns and gunzips nothing, which is the property this ceiling exists to protect.
     pub fn load_undo_stack_with_timestamps(
         &self,
     ) -> Result<Vec<(i64, String, String, Option<String>)>> {
@@ -482,9 +493,12 @@ mod tests {
         };
         use crate::core::{Command, UndoStack};
 
+        // The DERIVATION, not the product: `budget == rows * overhead` only holds while
+        // the budget happens to divide evenly, and a budget that does not is still a
+        // sound ceiling (the truncating division rounds DOWN, which can only be safer).
         assert_eq!(
-            MAX_PERSISTED_HISTORY_ROWS * ENTRY_OVERHEAD_BYTES,
-            UNDO_BYTE_BUDGET_BYTES,
+            MAX_PERSISTED_HISTORY_ROWS,
+            UNDO_BYTE_BUDGET_BYTES / ENTRY_OVERHEAD_BYTES,
             "the load ceiling is the byte budget divided by the per-entry floor"
         );
         // The floor itself: a restored entry carries no `command_bytes`, so it is

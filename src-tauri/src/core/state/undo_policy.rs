@@ -506,9 +506,23 @@ mod tests {
         );
 
         for func in ["fn open_project", "pub fn do_load_project_full"] {
-            let body = &src[src
+            // Slice at the NEXT item in the `impl AppState` block rather than at the end
+            // of the file. Both are 4-space-indented methods, so the next `///`, `pub` or
+            // `fn` at that indent ends this one. Without the cut, `open_project`'s slice
+            // ran through `do_load_project_full` and would have passed on ITS cap and read
+            // even if `open_project` had lost both - the check has to be scoped to one
+            // function to mean anything.
+            let start = src
                 .find(func)
-                .unwrap_or_else(|| panic!("{func} is present"))..];
+                .unwrap_or_else(|| panic!("{func} is present"))
+                + func.len();
+            let rest = &src[start..];
+            let end = ["\n    /// ", "\n    pub ", "\n    pub(", "\n    fn "]
+                .iter()
+                .filter_map(|boundary| rest.find(boundary))
+                .min()
+                .unwrap_or(rest.len());
+            let body = &rest[..end];
             let cap = body
                 .find("history_load_row_cap(")
                 .unwrap_or_else(|| panic!("{func} resolves a load cap"));
