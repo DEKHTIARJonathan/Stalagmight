@@ -698,10 +698,14 @@ of 24 shots, length changed on 0, azimuth on 0, LRUD on 0, descent on 1, and
 that one shot's source descent exceeds its own tape), so X6 keys the descent
 rather than the absolute depths and counts the re-hangs as a metric.
 
-Closing them let X5 run on that fixture for the first time, and finding 6
-records that it does not converge there: T2 and T3 are the same size with the
-shots in a different arrangement. So the matrix's `naharon.stalx` cells stay red
-on that alone - use `--fixtures fractal_plant_iter3.stalx` for a green matrix.
+Closing them let X5 run on that fixture for the first time, and finding 6 is its
+own correction: the chain settles at the THIRD export there, not the second,
+because the first import inherits its section order from the source project
+rather than deriving it. T3 and T4 are byte-identical, no boundary moves and no
+shot changes section - so X5 now asserts a fixed POINT rather than a fixed index
+and reports `x5:settledAt:N`.
+
+Both fixtures are green.
 
 ### Three tiers, and which one gates CI
 

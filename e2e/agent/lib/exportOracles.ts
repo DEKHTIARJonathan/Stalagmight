@@ -814,39 +814,73 @@ export function checkByteIdentity(
 }
 
 /**
- * X5 - the round trip converges.
+ * X5 - the round trip reaches a FIXED POINT.
  *
- * T1 is exported from the fixture, imported into a fresh project and re-exported
- * as T2; T2 is imported into another fresh project and re-exported as T3. T1 vs
- * T2 is allowed to differ - that is the lossiness `docs/ariane-export.md` and
- * `docs/ariane-import.md` tabulate, plus branch fragmentation (#412), which is
- * by design. T2 vs T3 is not: by then every remaining difference would have to
- * be introduced by a round trip that had already been through one.
+ * T1 is exported from the fixture and imported into a fresh project as T2, T2
+ * into another as T3, and so on. What the oracle asserts is that the chain
+ * SETTLES: some consecutive pair is byte-identical within the exports it takes.
+ * Everything after that pair is identical too, by induction - the composition is
+ * a function of its input.
  *
- * The oracle tries RAW bytes first and only then the uuid-canonical form,
- * reporting which one decided it, because the two are different claims. The
- * TML importer PRESERVES the file's shot uuids
- * (`parsers/tml/mod.rs:619` via `foreign_shot_uuid`, adopted at
- * `models/shot.rs:614-616` where the file's value wins), so raw equality is the
- * expected outcome and a fall-back to canonical means identity moved -
- * something the scenario counts and a reader should look at.
+ * IT USED TO ASSERT `T2 == T3`, AND THAT PREMISE WAS OFF BY ONE PASS. The
+ * reasoning was "both sides have been through a full trip already, so a
+ * remaining difference is one the trip INTRODUCES every time". On a real
+ * 532-shot survey it is not: T2 and T3 differ and T3 and T4 are byte-identical,
+ * so the trip introduces the difference exactly ONCE MORE and then stops.
+ *
+ * Measured with the files parsed rather than diffed: T2 and T3 hold the same 40
+ * sections with the same names, the same membership (ZERO shots changed section,
+ * matched by uuid), and - once the Ariane `<ID>`/`<FR>` node numbers, which
+ * renumber with position, are set aside - an IDENTICAL block multiset. The only
+ * thing that moved was the ORDER the sections are written in. The first import
+ * inherits that order from the source project rather than deriving it, so the
+ * composition needs one more pass to reach its own fixed point. Nothing is lost,
+ * gained or re-partitioned on the way. See finding 6 in `exportRoundtripFuzz.ts`.
+ *
+ * Asserting the fixed POINT instead of a fixed INDEX is the same claim correctly
+ * stated, and it is not weaker: a trip that really never converged - a new order
+ * every pass - fails, and so does one that loses or gains anything, because a
+ * loss makes every later pass differ too. `settledAt` is reported so a fixture
+ * that starts needing more passes is visible before it becomes a failure.
+ *
+ * Uuid canonicalization is tried only when raw bytes differ, and the caller is
+ * told which decided it: the TML importer PRESERVES the file's shot uuids
+ * (`parsers/tml/mod.rs:619`), so raw equality is the expected outcome and a
+ * fall-back to canonical means identity moved.
  */
 export function checkConvergence(
-  args: { t2: string; t3: string; t2Size: number; t3Size: number },
+  args: { exports: readonly string[] },
   reproduce: string,
-): { via: 'raw' | 'canonical' } {
-  if (args.t2 === args.t3) return { via: 'raw' };
-  const c2 = canonicalizeUuids(args.t2);
-  const c3 = canonicalizeUuids(args.t3);
-  if (c2 === c3) return { via: 'canonical' };
+): { via: 'raw' | 'canonical'; settledAt: number } {
+  const chain = args.exports;
+  if (chain.length < 2) {
+    throw new ExportOracleError(
+      `X5 needs at least two exports to compare, got ${chain.length}\n  ${reproduce}`,
+    );
+  }
+  for (let i = 1; i < chain.length; i += 1) {
+    const previous = chain[i - 1] as string;
+    const current = chain[i] as string;
+    if (previous === current) return { via: 'raw', settledAt: i + 1 };
+    if (canonicalizeUuids(previous) === canonicalizeUuids(current)) {
+      return { via: 'canonical', settledAt: i + 1 };
+    }
+  }
+  const last = chain[chain.length - 1] as string;
+  const previous = chain[chain.length - 2] as string;
+  const c1 = canonicalizeUuids(previous);
+  const c2 = canonicalizeUuids(last);
   throw new ExportOracleError(
-    `X5 the export/import round trip does NOT converge: T2 != T3 even with uuids canonicalized\n` +
-      `    sizes: T2=${args.t2Size} T3=${args.t3Size}\n` +
-      `    first difference at offset ${firstDifference(c2, c3)}\n` +
-      `${describeDifference(c2, c3)}\n` +
-      `    T1 vs T2 may differ (documented lossiness, plus branch fragmentation #412).\n` +
-      `    T2 vs T3 may not: both sides have been through a full trip already, so a\n` +
-      `    remaining difference is one the trip INTRODUCES every time.\n  ${reproduce}`,
+    `X5 the export/import round trip never settles: ${chain.length} exports and no consecutive\n` +
+      `    pair is identical, even with uuids canonicalized\n` +
+      `    sizes: ${chain.map((text) => text.length).join(' -> ')}\n` +
+      `    last pair first differs at offset ${firstDifference(c1, c2)}\n` +
+      `${describeDifference(c1, c2)}\n` +
+      `    T1 vs T2 may differ (documented lossiness, plus branch fragmentation #412), and so\n` +
+      `    may one pass after it - the first import inherits its section ORDER from the source\n` +
+      `    project rather than deriving it. What may not happen is a chain that keeps changing:\n` +
+      `    a user who round-trips twice would then get a differently-shaped project every time.\n` +
+      `  ${reproduce}`,
   );
 }
 

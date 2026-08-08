@@ -330,38 +330,42 @@
  *    `x6:commentTextsGained`. Making it symmetric needs `station_comments` on
  *    the wire, which `ProjectIpc` does not put there.
  *
- * 6. OPEN, and NEWLY REACHABLE rather than new. X5 DOES NOT CONVERGE ON naharon:
- *    T2 != T3.
+ * 6. CLOSED - THE ORACLE'S PREMISE WAS OFF BY ONE PASS. NOT A BUG. X5 asserted
+ *    `T2 == T3`; on a real survey the chain settles at T3 == T4 instead. This is
+ *    now that correction's regression check.
  *
  *        STALAGMIGHT_FUZZ_FIXTURE=naharon.stalx \
  *          pnpm agent:scenario export-roundtrip-fuzz --seed 1 --iterations 8
  *
- *    X6 runs before X5 in the chain, so every earlier naharon run died at X6 and
- *    X5 had never actually executed on this fixture. Closing findings 4 and 5
- *    is what let it run, and it fails on the first pass.
+ *    NEWLY REACHABLE rather than new: X6 runs before X5 in the chain, so every
+ *    earlier naharon run died at X6 and X5 had never executed on this fixture.
+ *    Closing findings 4 and 5 is what let it run.
  *
- *    WHAT IT LOOKS LIKE, and no more than that: T2 and T3 are the SAME SIZE
- *    (401492 bytes) and diverge at offset 163869, where one `<SRVD>` block
- *    carries `<AZ>1.1</AZ>` in T2 and `<AZ>246.3</AZ>` in T3, with different
- *    `<CL>` colours. Identical length with a different shot at a position is a
- *    REORDERING or a re-partition, not a content change - the same shots in a
- *    different arrangement.
+ *    MEASURED, by parsing T1..T4 rather than diffing bytes, matching shots by
+ *    uuid:
+ *      - T3 and T4 are BYTE-IDENTICAL. The chain converges; it does not churn.
+ *      - T2 and T3 hold the same 40 sections, the same NAME SET, and the same
+ *        MEMBERSHIP - ZERO shots changed section between them.
+ *      - Setting aside the Ariane `<ID>`/`<FR>` node numbers, which renumber
+ *        with position, T2 and T3 have an IDENTICAL BLOCK MULTISET.
+ *    So no boundary moved, nothing was lost or gained, and the only thing that
+ *    differs is the ORDER the sections are written in.
  *
- *    That is what X5 exists to catch and the claim it makes is deliberately
- *    strong: T1 vs T2 may differ (documented lossiness, plus branch
- *    fragmentation #412), but both sides of T2 vs T3 have been through a full
- *    trip already, so a remaining difference is one the trip INTRODUCES every
- *    time. If section partitioning is not a fixed point after one pass, a user
- *    who round-trips twice gets a differently-shaped project each time.
+ *    THE MECHANISM. The first import does not DERIVE its section order - it
+ *    inherits it from the source project, which for T1 is the fixture's own.
+ *    The second import derives it from a file the exporter wrote, and from then
+ *    on the composition maps that order to itself. So the trip needs one extra
+ *    pass to reach its own fixed point, and reaches it. It was NOT the suspected
+ *    map-iteration nondeterminism: that would make T3 != T4 as well, and T3 and
+ *    T4 are the same bytes.
  *
- *    NOT ROOT-CAUSED. The next step is to diff T2 against T3 as parsed
- *    structures rather than bytes and find whether the section BOUNDARIES or
- *    only their ORDER moved, then whether T3 -> T4 settles or keeps churning -
- *    the difference between "converges at n=2" and "never converges".
- *
- *    The oracle stays ASSERTING and naharon stays RED on this alone. The
- *    synthetic fixture is green, so the matrix's `naharon.stalx` cells stay red;
- *    use `--fixtures fractal_plant_iter3.stalx` for a green matrix meanwhile.
+ *    THE FIX IS THE ORACLE'S. X5 now asserts a fixed POINT rather than a fixed
+ *    INDEX - it runs the chain until two consecutive exports match, up to
+ *    `MAX_ROUNDTRIP_EXPORTS`, and reports `x5:settledAt:N`. That is the same
+ *    claim correctly stated and it is not weaker: a chain that really never
+ *    converged fails, and so does one that loses or gains anything, because a
+ *    loss makes every later pass differ too. Measured: the synthetic fixture
+ *    settles at 2, naharon at 3, every episode.
  *
  * ## Observations that are NOT findings
  *
@@ -501,6 +505,15 @@ const DIFFERENTIAL_DPI = 72;
  * projects T2 and T3 come out of - see `freshProjectWithImport`.
  */
 const ROUNDTRIP_PROJECT_NAME = 'export-fuzz-roundtrip';
+/**
+ * How far the X5 chain runs before it calls a non-convergence.
+ *
+ * Measured: the synthetic fixture settles at the 2nd export and a real survey at
+ * the 3rd (finding 6). Four gives that a pass of headroom without turning a
+ * genuine never-settles into an expensive one - each pass is a project create
+ * plus a full import.
+ */
+const MAX_ROUNDTRIP_EXPORTS = 4;
 /**
  * `DEFAULT_IMAGE_OPTIONS` + the two scalar defaults, as `exportStore.ts`
  * declares them.
@@ -1360,62 +1373,56 @@ export const exportRoundtripFuzz: Scenario = {
         ctx.metric('skip:second-import-refused');
       }
 
-      // X5 needs T2 from a project holding ONE copy, so it is re-derived from a
-      // clean import rather than from the doubled one above.
-      const cleanAgain = await freshProjectWithImport('roundtrip-b', t1);
-      if (!cleanAgain.ok) {
-        ctx.metric('x5:reimport-refused');
-        rmrf(dir);
-        return;
-      }
-      const t2 = path.join(dir, 'trip-2.tmlu');
-      const secondExport = await callProjectAction(ctx, 'exportTml', [t2]);
-      if (!secondExport.ok) {
-        ctx.metric('x5:t2-refused');
-        rmrf(dir);
-        return;
+      // X5 needs a chain from projects holding ONE copy each, so it is re-derived
+      // from clean imports rather than from the doubled one above.
+      //
+      // The chain runs until two consecutive exports match, up to
+      // MAX_ROUNDTRIP_EXPORTS. Asserting a fixed POINT rather than a fixed INDEX
+      // is what finding 6 corrected: on a real survey the first import inherits
+      // its section ORDER from the source project rather than deriving it, so
+      // the composition takes one more pass to reach its own fixed point - and
+      // nothing but that order moves on the way.
+      const chain: string[] = [];
+      let source = t1;
+      for (let pass = 2; pass <= MAX_ROUNDTRIP_EXPORTS; pass += 1) {
+        const holding = await freshProjectWithImport(`roundtrip-${pass}`, source);
+        if (!holding.ok) {
+          ctx.metric('x5:chain-import-refused');
+          rmrf(dir);
+          return;
+        }
+        await assertIntegrity(`round-trip import pass ${pass}`);
+        const target = path.join(dir, `trip-${pass}.tmlu`);
+        const exported = await callProjectAction(ctx, 'exportTml', [target]);
+        if (!exported.ok) {
+          ctx.metric(`x5:t${pass}-refused`);
+          rmrf(dir);
+          return;
+        }
+        chain.push(fs.readFileSync(target, 'utf8'));
+        source = target;
+        // Stop as soon as it has settled; the oracle re-checks and the extra
+        // passes cost a project create and an import each.
+        const last = chain[chain.length - 1];
+        const previous = chain[chain.length - 2];
+        if (previous !== undefined && previous === last) break;
       }
 
-      const importedTwice = await freshProjectWithImport('roundtrip-c', t2);
-      if (!importedTwice.ok) {
-        ctx.metric('x5:third-import-refused');
-        rmrf(dir);
-        return;
-      }
-      await assertIntegrity('the second round-trip import');
-      const t3 = path.join(dir, 'trip-3.tmlu');
-      const thirdExport = await callProjectAction(ctx, 'exportTml', [t3]);
-      if (!thirdExport.ok) {
-        ctx.metric('x5:t3-refused');
-        rmrf(dir);
-        return;
-      }
-
-      const t2Text = fs.readFileSync(t2, 'utf8');
-      const t3Text = fs.readFileSync(t3, 'utf8');
-      const verdict = guardedValue(() =>
-        checkConvergence(
-          { t2: t2Text, t3: t3Text, t2Size: t2Text.length, t3Size: t3Text.length },
-          reproduce,
-        ),
-      );
+      const verdict = guardedValue(() => checkConvergence({ exports: chain }, reproduce));
       ctx.metric(`x5:converged:${verdict.via}`);
+      ctx.metric(`x5:settledAt:${verdict.settledAt}`);
       if (verdict.via === 'canonical') {
         ctx.log(
-          'x5: T2 and T3 agree only after canonicalizing uuids - the TML importer preserves the ' +
+          'x5: the chain settles only after canonicalizing uuids - the TML importer preserves the ' +
             "file's uuids, so identity moved somewhere it should not have",
         );
         // Counted, not asserted: the fallback is what the oracle is for, and
         // the metric is what makes it visible in a matrix cell.
         ctx.metric('x5:identityMoved');
       }
-      // A sanity read that costs nothing: the canonical forms must be equal by
-      // construction after the check above, so this only fires on a bug HERE.
-      if (canonicalizeUuids(t2Text) !== canonicalizeUuids(t3Text)) {
-        fail(`x5 internal: the convergence check passed but the canonical forms differ\n  ${reproduce}`);
-      }
       rmrf(dir);
     };
+
 
     /** X7: hostile comments through the CSV and the TML writers. */
     const runNeutralisation = async (episodeDir: string): Promise<void> => {

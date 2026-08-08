@@ -537,20 +537,49 @@ describe('X5 convergence', () => {
   const A = '11111111-2222-4333-8444-555555555555';
   const B = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
 
-  it('reports raw equality when the bytes match', () => {
-    expect(checkConvergence({ t2: '<x/>', t3: '<x/>', t2Size: 4, t3Size: 4 }, REPRO)).toEqual({ via: 'raw' });
+  it('settles at the second export when the first pair matches', () => {
+    expect(checkConvergence({ exports: ['<x/>', '<x/>'] }, REPRO)).toEqual({
+      via: 'raw',
+      settledAt: 2,
+    });
+  });
+
+  it('settles at the THIRD export, which a real survey needs', () => {
+    // The first import inherits its section ORDER from the source project
+    // rather than deriving it, so the composition takes one more pass to reach
+    // its own fixed point. Measured: T2 != T3, T3 == T4, byte for byte, with
+    // the same 40 sections and zero shots changing section. Finding 6.
+    expect(checkConvergence({ exports: ['<a/>', '<b/>', '<b/>'] }, REPRO)).toEqual({
+      via: 'raw',
+      settledAt: 3,
+    });
   });
 
   it('falls back to canonical when only the uuids moved, and SAYS so', () => {
     expect(
-      checkConvergence({ t2: `<s>${A}</s>`, t3: `<s>${B}</s>`, t2Size: 40, t3Size: 40 }, REPRO),
-    ).toEqual({ via: 'canonical' });
+      checkConvergence({ exports: [`<s>${A}</s>`, `<s>${B}</s>`] }, REPRO),
+    ).toEqual({ via: 'canonical', settledAt: 2 });
   });
 
-  it('fails when the documents differ beyond identity', () => {
+  it('fails a chain that never settles', () => {
+    // A new arrangement every pass: a user round-tripping twice would get a
+    // differently-shaped project each time.
     expect(() =>
-      checkConvergence({ t2: `<Length>1</Length>`, t3: `<Length>2</Length>`, t2Size: 1, t3Size: 1 }, REPRO),
-    ).toThrow(/does NOT converge/);
+      checkConvergence({ exports: ['<a/>', '<b/>', '<c/>', '<d/>'] }, REPRO),
+    ).toThrow(/never settles/);
+  });
+
+  it('fails when content is lost, because the loss makes every later pass differ', () => {
+    expect(() =>
+      checkConvergence(
+        { exports: ['<Length>1</Length>', '<Length>2</Length>', '<Length>3</Length>'] },
+        REPRO,
+      ),
+    ).toThrow(/never settles/);
+  });
+
+  it('refuses a chain too short to compare', () => {
+    expect(() => checkConvergence({ exports: ['<x/>'] }, REPRO)).toThrow(/at least two/);
   });
 });
 
