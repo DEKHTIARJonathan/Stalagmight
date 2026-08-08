@@ -387,11 +387,26 @@ fn write_shot<W: std::io::Write>(
     write_text_element(writer, n.shot_type, shot.shot_type)?;
     write_text_element(writer, n.up, &format_f64(shot.up))?;
 
-    // Stable per-shot UUID. Only emitted for real forward shots (the
-    // synthesized START/CLOSURE/leg shots carry none), and it is what makes a
-    // re-export of an unchanged project byte-identical - which the SpeleoDB
-    // co-push render relies on. Ariane 26+ preserves it across edits, ≤25
-    // ignores it.
+    // Stable per-shot UUID. Emitted for every block that stands for a REAL
+    // PROJECT SHOT - the forward blocks and the reversed "(pre-zero-datum)" /
+    // merge legs alike - and omitted only for the blocks this exporter
+    // SYNTHESIZES, which are the START stations, the CLOSURE connectors and the
+    // VIRTUAL padding shot. It is what makes a re-export of an unchanged project
+    // byte-identical, which the SpeleoDB co-push render relies on. Ariane 26+
+    // preserves it across edits, <=25 ignores it.
+    //
+    // The reversed legs used to be omitted too, and that cost their shots their
+    // identity on the way back in: the reader has nothing to preserve, so
+    // `Shot::with_uuid` mints a fresh one. On a real 532-shot survey that was 78
+    // shots re-identified by a round trip through a file this app wrote (found
+    // by `export-roundtrip-fuzz`'s X6). A reversed leg is not a synthetic shot -
+    // it is a real shot emitted with its heading and LRUD mirrored, and it is
+    // that shot's ONLY appearance in the document, because every constructor
+    // pairs it with a forward block over a DISJOINT index range (`0..split` vs
+    // `split..len`) or replaces the forward block entirely (the whole-section
+    // reversal). So no shot can appear twice, and `remint_duplicate_uuids`
+    // cannot see a forward/reverse pair as a duplicate - pinned by
+    // `a_reversed_leg_is_a_shots_only_appearance_so_nothing_is_reminted`.
     if let Some(uuid) = &shot.uuid {
         write_text_element(writer, n.uuid, uuid)?;
     }
@@ -795,7 +810,10 @@ fn build_export_shots(project: &Project, profile: TmlProfile) -> Vec<ExportShot>
 
                     reverse_shots.push(ExportShot {
                         id: shot_ariane_id,
-                        uuid: None,
+                        // The reversed leg IS this shot's only appearance in the
+                        // document (the forward block covers a DISJOINT index range),
+                        // so it carries the shot's identity. See `write_shot`.
+                        uuid: Some(shot_export_uuid(shot)),
                         from_id: prev_id,
                         shot_type: if shot.kind.is_virtual() {
                             "VIRTUAL"
@@ -933,7 +951,10 @@ fn build_export_shots(project: &Project, profile: TmlProfile) -> Vec<ExportShot>
 
                         rev_shots.push(ExportShot {
                             id: shot_ariane_id,
-                            uuid: None,
+                            // The reversed leg IS this shot's only appearance in the
+                            // document (the forward block covers a DISJOINT index range),
+                            // so it carries the shot's identity. See `write_shot`.
+                            uuid: Some(shot_export_uuid(shot)),
                             from_id: prev_id,
                             shot_type: if shot.kind.is_virtual() {
                                 "VIRTUAL"
@@ -998,7 +1019,10 @@ fn build_export_shots(project: &Project, profile: TmlProfile) -> Vec<ExportShot>
 
                         rev_shots.push(ExportShot {
                             id: shot_ariane_id,
-                            uuid: None,
+                            // The reversed leg IS this shot's only appearance in the
+                            // document (the forward block covers a DISJOINT index range),
+                            // so it carries the shot's identity. See `write_shot`.
+                            uuid: Some(shot_export_uuid(shot)),
                             from_id: prev_id,
                             shot_type: if shot.kind.is_virtual() {
                                 "VIRTUAL"
@@ -5243,5 +5267,272 @@ mod tests {
         let again = dir.path().join("again.tmlu");
         export_tml_for_speleodb(&project, &again).unwrap();
         assert_eq!(sidecar, std::fs::read_to_string(&again).unwrap());
+    }
+
+    // ---- reversed legs keep their shot's identity (export-roundtrip-fuzz X6) ----
+
+    /// A section split by a zero datum: the shots before the datum are
+    /// re-emitted as the reversed `(pre-zero-datum)` leg.
+    fn project_split_by_a_zero_datum() -> Project {
+        let mut project = Project::new("Split".to_string(), None);
+        project.add_section(SectionData {
+            name: Some("Main".to_string()),
+            color: "#ff0000".to_string(),
+            shots: (0..4)
+                .map(|i| ShotData {
+                    length: 3.0 + f64::from(i),
+                    azimuth_in: 10.0 * f64::from(i),
+                    ..Default::default()
+                })
+                .collect(),
+            ..Default::default()
+        });
+        project.zero_datums.push(ZeroDatum {
+            station_ref: StationRef {
+                section_id: 0,
+                station_index: 2,
+            }
+            .into(),
+            gps: GpsCoordinates::new(20.25, -87.5, 12.0).unwrap(),
+        });
+        project.ensure_shot_uuids();
+        project
+    }
+
+    /// A child merged MID-section: a forward block plus a reversed block.
+    fn project_with_a_mid_section_merge() -> Project {
+        let mut project = Project::new("Mid Merge".to_string(), None);
+        project.add_section(SectionData {
+            name: Some("Root".to_string()),
+            color: "#ff0000".to_string(),
+            shots: vec![
+                ShotData {
+                    length: 5.0,
+                    azimuth_in: 90.0,
+                    ..Default::default()
+                },
+                ShotData {
+                    length: 5.0,
+                    azimuth_in: 90.0,
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        });
+        project.add_section(SectionData {
+            name: Some("Branch".to_string()),
+            color: "#00ff00".to_string(),
+            shots: (0..4)
+                .map(|i| ShotData {
+                    length: 3.0 + f64::from(i),
+                    azimuth_in: 20.0 * f64::from(i),
+                    ..Default::default()
+                })
+                .collect(),
+            ..Default::default()
+        });
+        // Child station 2 is in the MIDDLE of its four shots, so the exporter
+        // emits shots 2..4 forward and shots 0..2 reversed.
+        project.station_merges.push(StationMerge {
+            station_a: StationRef {
+                section_id: 0,
+                station_index: 2,
+            }
+            .into(),
+            station_b: StationRef {
+                section_id: 1,
+                station_index: 2,
+            }
+            .into(),
+            merged_at: chrono::Utc::now(),
+        });
+        project.ensure_shot_uuids();
+        project
+    }
+
+    /// A child merged at its LAST station: the whole section is reversed and
+    /// there is no forward block at all.
+    fn project_with_an_end_merge() -> Project {
+        let mut project = Project::new("End Merge".to_string(), None);
+        project.add_section(SectionData {
+            name: Some("Root".to_string()),
+            color: "#ff0000".to_string(),
+            shots: vec![
+                ShotData {
+                    length: 5.0,
+                    azimuth_in: 90.0,
+                    ..Default::default()
+                },
+                ShotData {
+                    length: 5.0,
+                    azimuth_in: 90.0,
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        });
+        project.add_section(SectionData {
+            name: Some("Tail".to_string()),
+            color: "#00ff00".to_string(),
+            shots: (0..3)
+                .map(|i| ShotData {
+                    length: 3.0 + f64::from(i),
+                    azimuth_in: 10.0 * f64::from(i),
+                    ..Default::default()
+                })
+                .collect(),
+            ..Default::default()
+        });
+        project.station_merges.push(StationMerge {
+            station_a: StationRef {
+                section_id: 0,
+                station_index: 2,
+            }
+            .into(),
+            station_b: StationRef {
+                section_id: 1,
+                station_index: 3,
+            }
+            .into(),
+            merged_at: chrono::Utc::now(),
+        });
+        project.ensure_shot_uuids();
+        project
+    }
+
+    fn project_uuids(project: &Project) -> HashSet<String> {
+        project
+            .sections
+            .iter()
+            .flat_map(|s| s.shots.iter().filter_map(|sh| sh.uuid.clone()))
+            .collect()
+    }
+
+    fn reversal_shapes() -> Vec<(&'static str, Project)> {
+        vec![
+            ("zero-datum split", project_split_by_a_zero_datum()),
+            ("mid-section merge", project_with_a_mid_section_merge()),
+            ("end merge", project_with_an_end_merge()),
+        ]
+    }
+
+    /// Every REAL project shot reaches the file with its own UUID, whichever
+    /// block it lands in.
+    ///
+    /// The reversed legs used to be emitted with `uuid: None`, so the reader had
+    /// nothing to preserve and `Shot::with_uuid` minted a fresh one - 78 of a
+    /// real 532-shot survey's shots were re-identified by a round trip through a
+    /// file this app had just written. Found by `export-roundtrip-fuzz`'s X6;
+    /// see that scenario's finding 4.
+    #[test]
+    fn every_real_shot_reaches_the_export_with_its_own_uuid() {
+        for (label, project) in reversal_shapes() {
+            let expected = project_uuids(&project);
+            assert!(!expected.is_empty(), "{label}: fixture has no uuids");
+
+            let shots = build_export_shots(&project, TmlProfile::User);
+            let emitted: HashSet<String> = shots.iter().filter_map(|s| s.uuid.clone()).collect();
+            assert_eq!(emitted, expected, "{label}: emitted uuids != project uuids");
+
+            // The synthesized blocks - the ones that stand for no project shot -
+            // still carry none.
+            for shot in &shots {
+                if shot.shot_type == "START" || shot.shot_type == "CLOSURE" {
+                    assert!(
+                        shot.uuid.is_none(),
+                        "{label}: a synthesized {} block carries a uuid",
+                        shot.shot_type
+                    );
+                }
+            }
+        }
+    }
+
+    /// A reversed leg is its shot's ONLY appearance, so nothing is re-minted.
+    ///
+    /// This is the premise the fix rests on: every constructor pairs a reversed
+    /// block with a forward block over a DISJOINT index range, or replaces the
+    /// forward block entirely. If one ever emitted a shot twice,
+    /// `remint_duplicate_uuids` would read a forward/reverse pair as a document
+    /// duplicate and re-mint one of them - silently undoing the fix for exactly
+    /// the shots it was made for.
+    #[test]
+    fn a_reversed_leg_is_a_shots_only_appearance_so_nothing_is_reminted() {
+        for (label, project) in reversal_shapes() {
+            let shots = build_export_shots(&project, TmlProfile::User);
+            let mut seen: HashMap<String, usize> = HashMap::new();
+            for shot in &shots {
+                if let Some(uuid) = &shot.uuid {
+                    *seen.entry(uuid.clone()).or_default() += 1;
+                }
+            }
+            let repeats: Vec<&String> = seen
+                .iter()
+                .filter(|(_, count)| **count > 1)
+                .map(|(uuid, _)| uuid)
+                .collect();
+            assert!(
+                repeats.is_empty(),
+                "{label}: {} uuid(s) appear more than once in the document: {repeats:?}",
+                repeats.len()
+            );
+            // `build_export_shots` has already run `remint_duplicate_uuids` for
+            // the User profile, so this equality is what proves it did not fire:
+            // a re-mint would put a uuid in the document that the project does
+            // not have.
+            let emitted: HashSet<String> = shots.iter().filter_map(|s| s.uuid.clone()).collect();
+            assert_eq!(
+                emitted,
+                project_uuids(&project),
+                "{label}: a uuid was re-minted"
+            );
+        }
+    }
+
+    /// The identity survives the whole trip: write the file, read it back with
+    /// the app's own parser, and the reversed leg's shots still answer to the
+    /// uuids they left with.
+    #[test]
+    fn a_reversed_legs_uuid_survives_an_export_and_reparse() {
+        for (label, project) in reversal_shapes() {
+            let expected = project_uuids(&project);
+
+            let file = NamedTempFile::with_suffix(".tmlu").unwrap();
+            export_tml(&project, file.path()).unwrap();
+            let parsed = crate::parsers::tml::parse_tml(file.path()).unwrap();
+
+            let read_back: HashSet<String> = parsed
+                .sections
+                .iter()
+                .flat_map(|s| s.shots.iter().filter_map(|sh| sh.uuid.clone()))
+                .collect();
+            assert_eq!(
+                read_back, expected,
+                "{label}: a shot's identity did not survive export + parse_tml"
+            );
+        }
+    }
+
+    /// The SpeleoDB sidecar is unaffected: it still renders, and still renders
+    /// the same bytes twice, which is what keeps a re-push a 304 no-op.
+    ///
+    /// `harden_for_speleodb` runs INSTEAD of `remint_duplicate_uuids` and drops
+    /// any uuid that is not a canonical v4 or that repeats, so the extra uuids
+    /// the reversed legs now carry go through the same gate every forward shot's
+    /// already did.
+    #[test]
+    fn reversed_leg_uuids_leave_the_speleodb_sidecar_deterministic() {
+        for (label, project) in reversal_shapes() {
+            let dir = tempfile::tempdir().unwrap();
+            let first = dir.path().join("a.tmlu");
+            let second = dir.path().join("b.tmlu");
+            export_tml_for_speleodb(&project, &first).unwrap();
+            export_tml_for_speleodb(&project, &second).unwrap();
+            assert_eq!(
+                std::fs::read(&first).unwrap(),
+                std::fs::read(&second).unwrap(),
+                "{label}: the sidecar render is no longer deterministic"
+            );
+        }
     }
 }
