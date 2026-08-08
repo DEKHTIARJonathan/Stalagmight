@@ -271,28 +271,70 @@ impl AppState {
     /// station across the command catches all of them, including the ones nobody
     /// thought of, and asks the state rather than the command what happened.
     ///
-    /// # Both sides must be `Some`
+    /// # The AFTER side must be `Some`
     ///
     /// * `Some -> None` removed the last anchor: there is no frame left to
     ///   renormalise onto, and translating onto nothing would move the survey for
     ///   no reason. No-op.
-    /// * `None -> Some` ADDED the survey's first georeference. Nothing changed
-    ///   meaning, because there was no prior meaning - the map was falling back to
-    ///   a config default, which is not survey data. Left exactly as it is today
-    ///   (that add still translates only the datum's own merge group, which is a
-    ///   separate, pre-existing asymmetry).
+    /// * `None -> Some` ESTABLISHED the survey's first georeference, which gives
+    ///   local `(0, 0)` a meaning it did not have, so the survey moves onto it -
+    ///   the whole survey, rigidly, exactly as any other promotion does.
+    ///   `Project::set_zero_datum` already does that inline (its subsequent-datum
+    ///   arithmetic reads the invariant, so it cannot wait for an epilogue that
+    ///   the import loop and redo's re-execute never reach), which makes this a
+    ///   measured no-op on that route and a safety net on any other.
     ///
     /// # Never on the inverse
     ///
     /// This is the FORWARD epilogue only, alongside the orphan-closure conversion,
     /// and deliberately not inside `reconcile_geometry` - which `undo()`/`redo()`
-    /// share. An inverse must RESTORE, not re-derive; every command that can get
-    /// here records either a `ProjectSnapshotPair` or (for `SetZeroDatum`) a
-    /// whole-project `previous_offsets`, so the undo hands the old map back
-    /// verbatim. Nor on the LOAD path: `resolve_offsets`' cascade is
-    /// translation-invariant, so save/reopen converges with the loader untouched,
-    /// and a load-time renormalisation would silently translate a merged project
-    /// whose datums legitimately do not sit at the origin.
+    /// share. An inverse must RESTORE, not re-derive. Nor on the LOAD path:
+    /// `resolve_offsets`' cascade is translation-invariant, so save/reopen
+    /// converges with the loader untouched, and a load-time renormalisation would
+    /// silently translate a merged project whose datums legitimately do not sit at
+    /// the origin.
+    ///
+    /// # What the undo side actually guarantees
+    ///
+    /// Stated as what holds rather than as a blanket claim, because the gate now
+    /// admits `None -> Some` as well and that is a different set of routes:
+    ///
+    /// * The commands that PROMOTE a datum (`RemoveZeroDatum`, `DeleteSection`,
+    ///   `DeleteShot`, the delete/split entry points, `RepairIntegrity`, any
+    ///   `Batch`) each record a `ProjectSnapshotPair`, so their undo hands the old
+    ///   map back verbatim.
+    /// * `SetZeroDatum` - the only command that ESTABLISHES a frame today -
+    ///   records `UndoData::ZeroDatumInfo` with a whole-project
+    ///   `previous_offsets` (`Project::capture_all_section_offsets`, taken before
+    ///   the mutation), which is exactly the blast radius of the translation it
+    ///   performs.
+    ///
+    /// KNOWN LIMITATION, pre-existing and NOT introduced here: a datum stored
+    /// against a legacy POSITIONAL anchor (`StationAnchor::Index`, written by
+    /// pre-anchor builds) can go from dangling to resolving when a command GROWS
+    /// its section - `CreateShot` is the reachable one - which flips the frame
+    /// key under a command whose undo captures only its rigid group
+    /// (`CreatedShotSnapshot`). The resulting translation is then not restored
+    /// exactly by that undo. It is reachable on master already in the
+    /// `Some -> Some` form (an index datum un-dangling ahead of the datum that
+    /// was the frame); widening the gate adds the `None -> Some` form of the same
+    /// shape. Anchors written by any current build are `SectionStart`/`AfterShot`,
+    /// which no forward command can un-dangle, so this stays a legacy-file
+    /// question and is deliberately left to the anchor work rather than patched
+    /// here.
+    ///
+    /// # Why `MergeProjects` cannot fire this
+    ///
+    /// It is classified `affects_geometry` and dispatched through `execute()`, so
+    /// it reaches this call - but `merge_projects` builds a `Project` locally,
+    /// writes it to a NEW file and returns; it never touches `self.project` (there
+    /// is no reference to it anywhere in `project_merge.rs`). Both reads therefore
+    /// see the same unchanged open project, `before == after`, and the gate
+    /// returns without measuring anything. That matters because a merged project's
+    /// datums legitimately do NOT sit at the origin
+    /// (`store_zero_datum_without_repositioning` copies them precisely to preserve
+    /// the source offsets), so a fire here would translate a file the user just
+    /// built. Pinned by `merge_projects_does_not_renormalise_the_open_project`.
     pub(super) fn renormalize_frame_if_changed(&self, before: Option<StationKey>) {
         let mut guard = match self.project.lock() {
             Ok(g) => g,
@@ -988,11 +1030,13 @@ impl AppState {
         // function, so a renormalisation applied afterwards would sit OUTSIDE the
         // pair and undo->redo would land on the pre-renormalisation geometry.
         //
-        // No batch can change the frame TODAY - `is_batch_allowed` admits only
-        // `SetZeroDatum` among the datum commands, and that one appends or updates
-        // in place, so `zero_datums[0]` keeps its identity. Stated rather than
-        // relied on: the allowlist is the kind of thing that grows, and this is the
-        // only placement that stays correct when it does.
+        // A batch CAN change the frame, in one shape: `is_batch_allowed` admits
+        // `SetZeroDatum`, and the batch whose first sub-command adds the survey's
+        // first datum goes `None -> Some`. `Project::set_zero_datum` re-frames the
+        // survey inline for that one, so what is left for this bookend is any
+        // FUTURE shape - a promotion by some later member of an allowlist that is
+        // the kind of thing that grows. This is the only placement that stays
+        // correct when it does.
         let frame_before = self.frame_datum_key();
 
         // Capture pre-batch snapshot for rollback on partial failure and undo

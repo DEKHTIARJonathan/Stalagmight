@@ -89,7 +89,14 @@ impl Project {
             return (None, None);
         }
 
-        // Center from first valid zero datum (lng, lat order for MapLibre)
+        // Center from first valid zero datum (lng, lat order for MapLibre).
+        //
+        // Positional over VALID, deliberately not the frame rule
+        // (`Project::frame_datum`, the first datum that RESOLVES): this is the
+        // "roughly where in the world is this project" pin for the project list
+        // and the GlobalView map, computed from GPS alone and never combined with
+        // a local coordinate. A dangling datum still says where the cave is, so
+        // dropping it here would lose the pin without making any number truer.
         let first_gps = &valid_datums[0].gps;
         let gps_center = Some((first_gps.longitude, first_gps.latitude));
 

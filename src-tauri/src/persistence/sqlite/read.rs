@@ -90,6 +90,14 @@ impl Database {
         let (gps_center, gps_bounds) = if zero_datums.is_empty() {
             (None, None)
         } else {
+            // Positional on purpose, and not the frame rule
+            // (`Project::frame_datum`, the first datum that RESOLVES): this reads
+            // GPS columns out of the file for a project-list pin, with no sections
+            // and no station refs loaded, so there is nothing here that could
+            // resolve and nothing that reads LOCAL metres against it. The
+            // divergence the frame rule exists to prevent - coordinates laid out
+            // against one datum and interpreted against another - cannot arise
+            // where no coordinate is involved.
             let first = &zero_datums[0];
             let center = Some((first.longitude, first.latitude));
 

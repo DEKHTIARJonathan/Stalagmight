@@ -2849,19 +2849,33 @@ fn the_zero_datum_undo_capture_covers_every_section() {
 }
 
 /// The behavioural half: adding the survey's first georeference and undoing it
-/// puts every section offset back, presence included.
+/// puts every section offset back, presence included - and redoing it lands
+/// byte-for-byte back on what the forward add produced.
 ///
-/// This one passes under EITHER capture width today - no reachable `SetZeroDatum`
-/// currently moves an offset outside the datum's merge group, which is why the
-/// width is pinned directly above rather than only through behaviour. It is the
-/// contract the widening exists to keep true as the add's scope changes.
+/// The width matters now rather than only in principle. Establishing the frame
+/// translates EVERY section (`Project::set_zero_datum` -> `renormalize_frame`),
+/// free-floating components included, so an inverse that handed back only the
+/// datum's merge group would leave the `Floater` section carrying the
+/// establishing translation with nothing left to justify it. The floater is
+/// asserted to move on the add, which is what makes the restore assertion below
+/// bite: under the pre-fix add it never moved at all and either capture width
+/// looked exact.
+///
+/// The redo half pins the same rule from the other side. `redo` re-executes the
+/// command through `execute_without_undo`, which has no epilogue behind it, so a
+/// design that left the re-framing to `AppState`'s `renormalize_frame_if_changed`
+/// would redo onto the pre-renormalisation geometry and the offsets would differ
+/// from the forward result by the full establishing delta.
 #[test]
 fn adding_the_first_zero_datum_and_undoing_it_restores_every_section_offset() {
     let _config = isolated_config();
     let state = state_with_project();
     let anchored = create_section(&state, "Anchored", vec![shot(10.0, 3.0), shot(20.0, 4.0)]);
     let partner = create_section(&state, "Partner", vec![shot(70.0, 7.0), shot(100.0, 8.0)]);
-    let _floater = create_section(&state, "Floater", vec![shot(300.0, 12.0)]);
+    // Outside the datum's merge group and outside every other connection: the
+    // section whose movement separates "the group was placed on the origin" from
+    // "the survey was re-framed onto it".
+    let floater = create_section(&state, "Floater", vec![shot(300.0, 12.0)]);
 
     // A merge so the add has a group wider than one section to move.
     assert!(
@@ -2889,6 +2903,14 @@ fn adding_the_first_zero_datum_and_undoing_it_restores_every_section_offset() {
     );
 
     let before = all_section_offsets(&state);
+    let datum_station_before = raw_station_xy(&state, StationRef::new(anchored, 1));
+    let floater_before = raw_station_xy(&state, StationRef::new(floater, 0));
+    assert!(
+        datum_station_before.0.hypot(datum_station_before.1) > 1.0,
+        "setup: the datum station has to start away from the origin or the establishing \
+         translation is nothing, got {datum_station_before:?}"
+    );
+
     assert!(
         state
             .execute(Command::SetZeroDatum {
@@ -2903,12 +2925,45 @@ fn adding_the_first_zero_datum_and_undoing_it_restores_every_section_offset() {
         before,
         "setup: adding the first datum must have moved the group"
     );
+    let datum_station_after = raw_station_xy(&state, StationRef::new(anchored, 1));
+    assert!(
+        datum_station_after.0.abs() <= 1e-9 && datum_station_after.1.abs() <= 1e-9,
+        "the first datum's station has to land on local (0, 0), got {datum_station_after:?}"
+    );
+    let delta = (-datum_station_before.0, -datum_station_before.1);
+    let floater_after = raw_station_xy(&state, StationRef::new(floater, 0));
+    assert!(
+        (floater_after.0 - (floater_before.0 + delta.0)).abs() <= 1e-9
+            && (floater_after.1 - (floater_before.1 + delta.1)).abs() <= 1e-9,
+        "the section OUTSIDE the datum's merge group has to ride the establishing translation \
+         {delta:?}: it went {floater_before:?} -> {floater_after:?}"
+    );
+    let after_add = all_section_offsets(&state);
 
     assert!(state.undo().success, "undo of SetZeroDatum failed");
     assert_eq!(
         all_section_offsets(&state),
         before,
         "undoing the add of the first zero datum did not restore the section offsets it found"
+    );
+
+    assert!(state.redo().success, "redo of SetZeroDatum failed");
+    assert_eq!(
+        all_section_offsets(&state),
+        after_add,
+        "redo has to land byte-for-byte on the geometry the forward add produced - it re-executes \
+         the command with no epilogue behind it, so anything the re-framing leaves to `AppState` \
+         rather than to the model shows up here as a redo that lands somewhere else"
+    );
+    let project = state.get_project_state().expect("no project open");
+    let redone = project
+        .zero_datums
+        .first()
+        .and_then(|zd| project.resolve_key(&zd.station_ref));
+    assert_eq!(
+        redone,
+        Some(StationRef::new(anchored, 1)),
+        "redo has to put the datum back on the station the forward add anchored"
     );
 }
 
