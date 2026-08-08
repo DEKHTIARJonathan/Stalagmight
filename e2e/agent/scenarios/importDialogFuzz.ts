@@ -103,12 +103,14 @@
  * check. Do NOT add a classifier or a tolerance to turn a red green - this file
  * has neither, and that is the whole discipline it inherits.
  *
- * 1. OPEN. THE IMPORT WIZARD BECOMES AN INVISIBLE MODAL, PERMANENTLY.
+ * 1. FIXED (95155c51), issue #476. THE IMPORT WIZARD BECAME AN INVISIBLE
+ *    MODAL, PERMANENTLY. This is now that fix's regression check - a red here
+ *    again is a NEW bug.
  *
  *        pnpm agent:scenario import-dialog-fuzz --seed 7 --iterations 8
  *
- *    Found on the scenario's first real run, and `pnpm agent:fuzz-shrink` cut
- *    the 124-step trace to FIVE steps (83 replays, 1-minimal, 0 divergent):
+ *    Found on this scenario's first real run; `pnpm agent:fuzz-shrink` cut the
+ *    124-step trace to FIVE steps (83 replays, 1-minimal, 0 divergent):
  *
  *        1. generate a VALID .dmp                (no malformed input involved)
  *        2. import it                            (router or toolbar, either)
@@ -116,87 +118,74 @@
  *        4. skip zero datum
  *        5. accept the first suggestion          (confirm-button)
  *
- *    What is then true, and stays true: `activeDialog` is `'dmp-import-new'`,
- *    the wizard subtree is MOUNTED with `wizard-manual-placing` rendered, and
- *    the whole thing sits under a `display:none` ancestor - the digest measures
- *    `display=flex visibility=visible 0x0` on the dialog root, which is what a
- *    `display:none` PARENT produces on a descendant. `DialogWrapper` sets
- *    `display:none` in exactly one place, its `hidden` prop, and
- *    `DmpNewImportDialog` passes `hidden={autoStartManualPlacementPending}`.
+ *    `activeDialog` stayed `'dmp-import-new'` with the wizard mounted under a
+ *    `display:none` ancestor - the digest measured `display=flex
+ *    visibility=visible 0x0`, which is what a `display:none` PARENT produces on
+ *    a descendant. `DialogWrapper` sets it in one place, its `hidden` prop, fed
+ *    by `autoStartManualPlacementPending`.
  *
- *    So the flag never clears. It is set true at the `manual_placing`
- *    transition and cleared in exactly ONE place - inside
- *    `handleStartSegmentPlacement`, AFTER two early returns - and the effect
- *    that calls it (`autoStartManualPlacementPending && phase === 'manual_placing'
- *    && currentSegment && segmentAnchor && !isImporting`, via `setTimeout(0)`)
- *    has no dependency that changes on a refusal, so it never retries.
+ *    Mechanism: the flag is set at the `manual_placing` transition and was
+ *    cleared in exactly ONE place, inside `handleStartSegmentPlacement`, behind
+ *    two early returns - the first of which is `refuseIncompleteShots()`. The
+ *    auto-start effect has no dependency that changes on a refusal, so it never
+ *    retried. The incompleteness is FILE-BORNE: the parser clamps a negative
+ *    raw length to exactly 0.0 (`parsers/dmp.rs:370`), the shot survives
+ *    `isImportableDmpShot`, and `editableShotStatus.ts:66` marks `length <= 0`
+ *    missing. Fixed by moving ownership of the hidden window into the effect
+ *    that opens it, and taking the payload guard off a transition that submits
+ *    nothing.
  *
- *    NOT the documented incomplete-shots refusal. That was the first suspect -
- *    `handleStartSegmentPlacement` opens with `if (refuseIncompleteShots()) return;`
- *    and the fuzzer's grid generators produce blank rows - but the minimal trace
- *    contains NO grid edit, and the failure payload records `toasts: []` where
- *    that path would have raised `dmp-wizard-incomplete`. The remaining
- *    candidate is the effect's own cleanup: `handleStartSegmentPlacement` is in
- *    its dependency array, so if that callback's identity changes on every
- *    render the cleanup clears the pending `setTimeout(0)` before it can fire,
- *    and the placement is starved rather than refused.
+ *    A NOTE ON THIS FILE'S FIRST DIAGNOSIS, because it was wrong and the way it
+ *    was wrong is reusable. It blamed the effect's cleanup starving the
+ *    `setTimeout(0)`, and ruled the refusal out on `toasts: []` in the payload.
+ *    That evidence was worthless: the settle loop treats "wizard mounted but
+ *    hidden" as busy, so on this very wedge it burns the whole settle cap
+ *    (12 s, or 60 s in the verification run) before the digest is taken, and a
+ *    warning toast dwells 7 s. The toast had always expired. An oracle that
+ *    waits for quiescence cannot then use the ABSENCE of a transient as
+ *    evidence.
  *
- *    Why it matters: this is not a cosmetic hidden dialog. `activeDialog` stays
- *    set, so `useKeyboardShortcuts` swallows every shortcut; `DialogWrapper`'s
- *    Escape handler is an `onKeyDown` on the `display:none` container, which
- *    nothing inside can focus, so Escape cannot reach it either. The user sees
- *    the map, cannot import, cannot use a shortcut, and has no control to click.
- *    The only way out is to kill the app.
+ * 2. FIXED (3595b151), issue #477. A COMPLETED DMP IMPORT LEFT `importContext`
+ *    SET.
  *
- *    Verified permanent, not slow: replaying the minimal trace with
- *    `STALAGMIGHT_FUZZ_IMPORT_SETTLE_MS=60000` fails identically, so the app had
- *    a full minute to finish the transition.
+ *    `completeImportToSingleView` states the contract - "This is also where the
+ *    import flow ENDS, so it is where `importContext` is dropped" - and every
+ *    other importer routes through it, as do both failure paths via
+ *    `surfaceImportFailure`. The DMP wizard's `onComplete` in `App.tsx`
+ *    hand-rolled the same exit sequence and omitted that line. The sibling
+ *    branch settles that it was an oversight: `OrphanPlacementDialog.finish()`
+ *    clears it explicitly and points at #435 for the duplication. Fixed by
+ *    routing the wizard's completion through the shared helper.
  *
- * 2. OPEN. A COMPLETED DMP IMPORT LEAVES `importContext` SET.
+ *    NOT VERIFIED BY THIS SCENARIO, and the entry says so rather than implying
+ *    otherwise. #477 was established by READING the code. The red that first
+ *    drew attention to it was F2 asserting "a flow whose undo depth grew must
+ *    end with a null context", and that premise is false: the DMP wizard commits
+ *    EARLY and mid-flow, so a user can land sections and then walk back and
+ *    cancel, and a retained context on the cancel path is by design
+ *    (`routeOpenedFile` resets it at the next flow's entry). Re-checked with the
+ *    fix reverted, the corrected oracle does not fire - measured: no flow on
+ *    that seed presented a receipt in either surface. The assertion is gone and
+ *    the value is counted instead (`residualImportContext:*`); see
+ *    `checkResidue` for the full argument.
  *
- *        pnpm agent:scenario import-dialog-fuzz --seed 1 --iterations 2
+ * 3. OPEN, not yet filed as its own issue. `import_sections` REJECTED THE
+ *    WIZARD'S OWN ARGUMENTS.
  *
- *    Shrunk from 37 steps to SEVEN (30 replays, budget-bounded, 0 divergent):
+ *        ERROR [frontend]: [manualPlacement] Immediate segment import failed:
+ *        invalid args `sections` for command `import_sections`:
+ *        premature end of input
  *
- *        1. generate a VALID .dmp
- *        2. import it via the toolbar
- *        3. continue
- *        4. skip zero datum
- *        5. Escape                      (leaves the auto-started placement)
- *        6. place segment on map
- *        7. click the map               (the placement completes the import)
- *
- *    F2 then reports `importContext="existing-project" after a COMPLETED
- *    import`, and that is the app's own contract being broken rather than this
- *    oracle inventing one. `completeImportToSingleView` (`utils/saveFeedback.ts`)
- *    says so in as many words - "This is also where the import flow ENDS, so it
- *    is where `importContext` is dropped. Left set, it outlives its flow" - and
- *    every other importer (TML, Compass, Walls, GPX, and both failure paths via
- *    `surfaceImportFailure`) goes through it.
- *
- *    The DMP wizard does not. Its `onComplete` in `App.tsx` hand-rolls the same
- *    exit sequence inline - `closeDialog(); setView('single');
- *    triggerFitToBounds(); presentImportReceipt(...)` - and omits the one line
- *    that drops the context.
- *
- *    That this is a defect and not a choice is settled by the sibling branch:
- *    `OrphanPlacementDialog.finish()` calls `setImportContext(null)` explicitly,
- *    with a comment saying it "never reaches completeImportToSingleView, which
- *    drops the context on the other one", spelling out the consequence, and
- *    pointing at #435 for the duplicated exit sequence itself. So the leak was
- *    identified and fixed on the ORPHAN branch and left in place on the branch
- *    taken when there are no orphan suggestions - which is the common one.
- *
- *    Blast radius, stated honestly: `routeOpenedFile` resets the context at the
- *    entry of every import flow, so the "next import inherits it" scenario its
- *    own comment describes is largely headed off by the router. What is left is
- *    a stale value visible to anything that reaches `saveAfterImport` WITHOUT
- *    going through the router - which is exactly the situation the orphan branch
- *    was fixed for.
- *
- *    F2 stays strict. This scenario is consequently RED on seeds that complete a
- *    DMP import, and that is the delete-when-fixed contract working: the oracle
- *    does not move, the app does.
+ *    Twice in one `--seed 7 --iterations 8` run, surfaced by the oracle sweep as
+ *    a `log-error` finding (which is reported, not fatal, so the run is still
+ *    green). This is Tauri failing to DESERIALIZE the arguments, not the backend
+ *    rejecting their content - so it is not the non-finite class that
+ *    `assertSendableShots` already covers, and the prime suspect is the hostile
+ *    text this scenario types into section names and comments (control
+ *    characters, a bidi override, U+FFFD, 512-character strings) reaching the
+ *    IPC framing. Finding 1's fix changes only WHETHER the placement path runs,
+ *    never the payload's shape, so this is pre-existing and newly reachable
+ *    rather than a regression. Needs its own shrink before it is filed.
  */
 import * as fs from 'fs';
 import * as path from 'path';
@@ -270,6 +259,15 @@ const HISTORY_TAIL = 25;
 /** Specs the writer/parser drift detector pushes through `import_dmp`. */
 const SELF_CHECK_SPECS = 6;
 /**
+ * `TOAST_KEYS.IMPORT_RECEIPT` (`src/utils/toastKeys.ts`). A clean receipt is a
+ * toast rather than the modal, and both surfaces prove the completion path ran.
+ */
+const RECEIPT_TOAST_KEY = 'import-receipt';
+/** Times an `idle` screen is re-observed before a flow is called finished. */
+const IDLE_CONFIRMATIONS = 3;
+/** Grace between those observations. One IPC round trip is tens of ms. */
+const IDLE_CONFIRM_MS = 200;
+/**
  * Share of episodes that run with NO project open.
  *
  * Fixed rather than a knob: it is a coverage split, not something a repro would
@@ -324,8 +322,17 @@ function mayRaiseError(move: FuzzMove): boolean {
   return false;
 }
 
-/** `mutate` actions a REPLAYED trace may drive - the DOM allowlist's twin. */
-const REPLAYABLE_UI_ACTIONS: ReadonlySet<string> = new Set(['ui:confirmPlacement']);
+/**
+ * `mutate` actions a REPLAYED trace may drive - the DOM allowlist's twin.
+ *
+ * EMPTY, and kept rather than deleted. The one entry it had was
+ * `ui:confirmPlacement`, removed with its generator: that store action abandons
+ * a placement rather than completing one (see the note in
+ * `importDialogGenerators.ts`). An empty set still REFUSES a `mutate` step
+ * loudly, which is the point - a trace naming `loadProject` must not be quietly
+ * skipped - and the boundary stays in place for whatever wave 3 adds.
+ */
+const REPLAYABLE_UI_ACTIONS: ReadonlySet<string> = new Set();
 
 function actionableCount(digest: ImportScreenDigest): number {
   let count = 0;
@@ -589,14 +596,6 @@ export const importDialogFuzz: Scenario = {
           ctx.metric(`mapSkip:${err instanceof Error ? err.message.slice(0, 32) : 'unknown'}`);
         }
         digest = await observeScreen(ctx);
-      } else if (move.kind === 'confirmPlacement') {
-        const res = await ctx.callAction('ui', 'confirmPlacement', []);
-        performed = res.ok;
-        if (!res.ok) skip = 'confirm-refused';
-        if (record && performed) {
-          recorder.record({ kind: 'mutate', action: 'ui:confirmPlacement', args: [], label: move.label });
-        }
-        digest = await observeScreen(ctx);
       } else if (move.kind === 'undo' || move.kind === 'redo') {
         const which = move.kind;
         const res = await ctx.callAction('project', which, []);
@@ -685,6 +684,32 @@ export const importDialogFuzz: Scenario = {
         }
       }
       if (digest.undo >= 0) lastUndoDepth = digest.undo;
+    };
+
+    /**
+     * Wait until `idle` is REST, not just a gap between two macrotasks.
+     *
+     * Completing a map placement runs `void handlePlacementComplete()` - an
+     * async chain that imports the segment and then REOPENS the wizard. Between
+     * the store update that ends the placement and the reopen, `activeDialog` is
+     * null and `placementMode` is null, so the screen reads `idle` while the
+     * import is still in flight. A flow that ended there measured its residue
+     * mid-completion and reported a context the app was about to clear.
+     *
+     * So an idle screen is re-observed a few times before it is believed. The
+     * settle loop already waits for a stable marker; this adds the "and it is
+     * still idle a moment later" half, which is what distinguishes finished from
+     * between-two-ticks. Anything that comes back non-idle hands the walk back
+     * its screen and the flow continues.
+     */
+    const settleToRest = async (from: ImportScreenDigest): Promise<ImportScreenDigest> => {
+      let digest = from;
+      for (let attempt = 0; attempt < IDLE_CONFIRMATIONS; attempt += 1) {
+        if (digest.screen !== 'idle' || digest.placement) return digest;
+        await ctx.sleep(IDLE_CONFIRM_MS);
+        digest = await observeScreen(ctx);
+      }
+      return digest;
     };
 
     /**
@@ -855,13 +880,10 @@ export const importDialogFuzz: Scenario = {
         case 'mutate':
           // The store-action twin of the DOM allowlist: a trace names an action,
           // and only the one this scenario produces may be dispatched.
-          if (!REPLAYABLE_UI_ACTIONS.has(step.action)) {
-            throw new Error(
-              `refusing to replay mutate "${step.action}": ${SCENARIO} only replays ` +
-                `${[...REPLAYABLE_UI_ACTIONS].join(', ')}`,
-            );
-          }
-          return { kind: 'confirmPlacement', label: step.label };
+          throw new Error(
+            `refusing to replay mutate "${step.action}": ${SCENARIO} replays ` +
+              `${REPLAYABLE_UI_ACTIONS.size === 0 ? 'no store actions' : [...REPLAYABLE_UI_ACTIONS].join(', ')}`,
+          );
         default:
           return null;
       }
@@ -988,6 +1010,13 @@ export const importDialogFuzz: Scenario = {
       for (let flow = 0; flow < flows; flow += 1) {
         const before = await boundsNow(digest);
         let receipt: ReceiptClaim | null = null;
+        /**
+         * Did the completion path present a receipt, in EITHER of its surfaces?
+         * The modal carries a decision; a clean receipt is a toast. Both come
+         * from `presentImportReceipt`, so either one proves the flow finished
+         * through the path that owes the `importContext` clear.
+         */
+        let sawReceipt = false;
         let sawCommit = false;
         let historyTouched = false;
         let leftIdle = false;
@@ -1007,6 +1036,7 @@ export const importDialogFuzz: Scenario = {
             receipt = receiptClaimFrom(digest);
             if (receipt) guarded(() => checkReceipt(receipt as ReceiptClaim));
           }
+          if (digest.receipt !== null || digest.toast.includes(RECEIPT_TOAST_KEY)) sawReceipt = true;
           if (digest.undo > before.undoDepth) sawCommit = true;
         };
 
@@ -1120,20 +1150,27 @@ export const importDialogFuzz: Scenario = {
           continue;
         }
 
-        // The flow is over. Make sure it really is before measuring it.
-        if (!isEscaped(digest.screen, digest.placement)) digest = await escapeFrom(digest);
+        // The flow is over. Make sure it really is before measuring it - both
+        // that nothing is still on screen, and that `idle` is rest rather than
+        // a gap in an async completion.
+        digest = await settleToRest(digest);
+        if (!isEscaped(digest.screen, digest.placement)) {
+          digest = await escapeFrom(digest);
+          digest = await settleToRest(digest);
+        }
         const after = await boundsNow(digest);
         ctx.metric('flows');
 
         const what = `flow ${flow + 1} of episode ${episode + 1}`;
-        const shape: FlowShape = sawCommit || receipt !== null ? 'imported' : 'cancelled';
+        const shape: FlowShape = sawCommit || sawReceipt ? 'imported' : 'cancelled';
         ctx.metric(`flowShape:${shape}`);
-        guarded(() => checkResidue(digest, shape, what));
+        guarded(() => checkResidue(digest, what));
         guarded(() => checkTempFiles(before, after, what));
-        // Counted, not asserted, and only for a CANCELLED flow: see
-        // `checkResidue` for the two source comments that make that asymmetry
-        // the app's contract rather than a tolerance.
+        // Counted, never asserted: `checkResidue` documents why this scenario
+        // cannot tell a completion from an abandonment, and #477 - the real
+        // completion-path defect - was established by reading the code.
         if (digest.ctx !== null) ctx.metric(`residualImportContext:${digest.ctx}`);
+        if (sawReceipt) ctx.metric('flowPresentedReceipt');
         if (receipt) guarded(() => checkAccounting(receipt as ReceiptClaim, before, after));
 
         // F1 needs a flow whose only history effect was the import itself, and

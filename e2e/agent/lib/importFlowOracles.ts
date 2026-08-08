@@ -131,34 +131,37 @@ export function checkReceipt(claim: ReceiptClaim): void {
 /**
  * F2. Nothing of the flow may outlive it.
  *
- * `importContext` is asserted only for a COMPLETED import, and that asymmetry is
- * the app's stated contract rather than a tolerance. Two source comments define
- * it and they do not say the same thing about the two endings:
+ * `importContext` is NOT asserted here, and the reason is worth writing down
+ * because two earlier versions of this oracle got it wrong in opposite ways.
  *
- *   - `completeImportToSingleView` (`utils/saveFeedback.ts`): "This is also
- *     where the import flow ENDS, so it is where `importContext` is dropped.
- *     Left set, it outlives its flow." So a finished import MUST clear it, and
- *     one that does not is a real defect - `saveAfterImport` reads the value,
- *     and a stale 'new-project' makes a later import commit the user's unrelated
- *     pending edits (#411).
- *   - `routeOpenedFile` (`utils/openOrImport.ts`): "It has no auto-reset, so a
- *     value left behind by a previous flow - abandoned parse, CANCELLED DIALOG,
- *     or a completed import - would decide the NEXT one ... Reset it here: this
- *     router is the single entry point of every import flow." So a cancel
- *     leaving it set is known, and is handled at the next flow's entry.
+ * The app's contract is real: `completeImportToSingleView`
+ * (`utils/saveFeedback.ts`) says "This is also where the import flow ENDS, so it
+ * is where `importContext` is dropped", and `routeOpenedFile` says a CANCELLED
+ * dialog leaving it set is fine because the next flow's entry resets it. So the
+ * value is only wrong after a COMPLETION - and this scenario cannot reliably
+ * tell a completion from an abandonment:
  *
- * Asserting null after a cancel would therefore report a bug the app has
- * explicitly designed around. It is counted instead, by the caller.
+ *   - "the undo stack grew" does not mean completed. The DMP wizard commits
+ *     EARLY and mid-flow (`transitionToPlacingOrManual` calls `import_sections`
+ *     well before the end), so a user can land sections and then walk back and
+ *     cancel. Keying on that reported a leak for flows that ended on the cancel
+ *     path, where retention is by design.
+ *   - "a receipt was shown" does not fire often enough to be a gate. A clean
+ *     receipt is a toast, not the modal, and a toast has expired by the time a
+ *     wedge-settled digest is taken - measured: on the seed that first raised
+ *     this, no flow presented a receipt in either surface at all.
+ *
+ * So it is COUNTED (`residualImportContext:*`) and left to a reader. The
+ * completion-path defect itself is #477, which was established by reading the
+ * code - every other importer routes through the shared helper and the DMP
+ * wizard hand-rolled it - not by this oracle.
  */
-export function checkResidue(digest: ImportScreenDigest, shape: FlowShape, what: string): void {
+export function checkResidue(digest: ImportScreenDigest, what: string): void {
   const wrong: string[] = [];
   if (digest.dialog !== null) wrong.push(`activeDialog=${JSON.stringify(digest.dialog)}`);
   if (digest.placement) wrong.push('placementMode is still set');
   if (digest.importInProgress) wrong.push('isImportInProgress is still true');
   if (digest.phase !== null) wrong.push(`dmpImportWizardPhase=${JSON.stringify(digest.phase)}`);
-  if (shape === 'imported' && digest.ctx !== null) {
-    wrong.push(`importContext=${JSON.stringify(digest.ctx)} after a COMPLETED import`);
-  }
   if (wrong.length === 0) return;
   fail(`F2 RESIDUE: ${what} left import state behind`, wrong);
 }

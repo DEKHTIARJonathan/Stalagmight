@@ -73,8 +73,6 @@ export type FuzzMove =
    * draw would be skipped on essentially every attempt.
    */
   | { kind: 'mapClick'; lngLat: [number, number]; relative?: boolean; label: string }
-  /** `uiStore.confirmPlacement()` - the map's confirm has no button. */
-  | { kind: 'confirmPlacement'; label: string }
   | { kind: 'undo'; label: string }
   | { kind: 'redo'; label: string }
   | { kind: 'save'; label: string };
@@ -893,12 +891,18 @@ const PLACEMENT: Generator[] = [
       };
     },
   },
-  {
-    name: 'map:confirm',
-    weight: 3,
-    screens: ['map-placement'],
-    build: () => ({ kind: 'confirmPlacement', label: 'confirmPlacement()' }),
-  },
+  // There is deliberately NO generator for `uiStore.confirmPlacement()`.
+  //
+  // It reads like the map's confirm button and is not one: it clears
+  // `placementMode` and RETURNS the state, leaving the caller to run
+  // `onComplete`. `MapCanvas.handlePlacementConfirm` is its only caller and
+  // bails when there is no `cursorPosition`, so calling it directly ABANDONS
+  // the placement - wizard already closed, early-imported sections committed,
+  // completion handler never run. That is a state no user can reach, and the
+  // flow oracles then fairly report residue for a flow that was neither
+  // completed nor cancelled. A placement is driven the way a user drives it:
+  // `map:click` (which goes through MapCanvas and does call `onComplete`) or
+  // Escape.
   {
     name: 'map:escape',
     weight: 3,
