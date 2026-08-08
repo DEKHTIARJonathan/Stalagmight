@@ -533,6 +533,202 @@ fn set_zero_datum_first_datum_positions_station_at_origin() {
     );
 }
 
+/// Adding the survey's FIRST datum translates the WHOLE survey as one rigid
+/// body, not just the datum's own merge group.
+///
+/// Before the frame exists, local `(0, 0)` means nothing and nothing has been
+/// placed against it, so the only real content of the project is the RELATIVE
+/// arrangement of its components. Landing the datum on the origin by moving its
+/// own merge group is the one answer that destroys exactly that: every other
+/// component stays where it was and the whole survey silently re-arranges
+/// itself. `renormalize_frame` gives the other answer - one translation applied
+/// to every section - which lands the datum on the origin AND leaves every
+/// inter-component vector bit-for-bit intact.
+///
+/// Non-vacuous by construction, on both halves. The two sections are separate
+/// components (no merge, no closure, so `adjust_rigid_group_offsets` on `a`
+/// cannot reach `b`), and the datum's station sits 10 m north of its section's
+/// start, so establishing the frame is a real (0, -10) translation rather than
+/// nothing at all. Under the pre-fix rule `b` keeps its coordinates and the
+/// vector between the components changes by the full 10 m.
+#[test]
+fn set_zero_datum_first_datum_translates_every_component() {
+    let mut project = Project::new("FirstDatumFrame".to_string(), None);
+    // Component A: one shot due north, so station 1 sits at (0, 10) - away from
+    // the origin, which is what gives the establishing translation something to
+    // do.
+    let a = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    // Component B: unconnected to A and deliberately parked away from the
+    // origin, so "B did not move" and "B moved with A" are different answers.
+    let b = project
+        .add_section(SectionData {
+            shots: vec![shot(90.0, 90.0, 4.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    project.set_section_offset(b, (25.0, -13.0));
+    assert!(
+        project.station_merges.is_empty() && project.loop_closures.is_empty(),
+        "setup: the two sections have to be independent components, or the datum's rigid group \
+         would reach B and the test would prove nothing"
+    );
+
+    let datum_station = StationRef::new(a, 1);
+    let a1_before = project.compute_station_raw_coords(datum_station).unwrap();
+    assert!(
+        a1_before.x.abs() < 1e-9 && (a1_before.y - 10.0).abs() < 1e-9,
+        "setup: the datum station must start AWAY from the origin, got {a1_before:?}"
+    );
+    let b0_before = project
+        .compute_station_raw_coords(StationRef::new(b, 0))
+        .unwrap();
+    let b1_before = project
+        .compute_station_raw_coords(StationRef::new(b, 1))
+        .unwrap();
+
+    project
+        .set_zero_datum(
+            datum_station,
+            GpsCoordinates::new(45.0, -90.0, 0.0).unwrap(),
+        )
+        .unwrap();
+
+    // Half one: the datum station IS the origin now. That is what establishing
+    // the frame means, and every reader of local metres depends on it.
+    let a1_after = project.compute_station_raw_coords(datum_station).unwrap();
+    assert!(
+        a1_after.x.abs() < 1e-9 && a1_after.y.abs() < 1e-9,
+        "the first datum's station has to sit at local (0, 0), got {a1_after:?}"
+    );
+
+    // Half two: the OTHER component moved by the same delta, so nothing moved
+    // relative to anything else.
+    let delta = (-a1_before.x, -a1_before.y);
+    let b0_after = project
+        .compute_station_raw_coords(StationRef::new(b, 0))
+        .unwrap();
+    let b1_after = project
+        .compute_station_raw_coords(StationRef::new(b, 1))
+        .unwrap();
+    assert!(
+        (b0_after.x - (b0_before.x + delta.0)).abs() < 1e-9
+            && (b0_after.y - (b0_before.y + delta.1)).abs() < 1e-9,
+        "the unconnected component has to ride the establishing translation {delta:?}: B:0 went \
+         {b0_before:?} -> {b0_after:?}"
+    );
+    assert!(
+        (b1_after.x - (b1_before.x + delta.0)).abs() < 1e-9
+            && (b1_after.y - (b1_before.y + delta.1)).abs() < 1e-9,
+        "the unconnected component has to ride the establishing translation {delta:?}: B:1 went \
+         {b1_before:?} -> {b1_after:?}"
+    );
+
+    // Said the other way round, which is the property the user actually owns:
+    // the vector between the two components is unchanged.
+    let separation_before = (b0_before.x - a1_before.x, b0_before.y - a1_before.y);
+    let separation_after = (b0_after.x - a1_after.x, b0_after.y - a1_after.y);
+    assert!(
+        (separation_after.0 - separation_before.0).abs() < 1e-9
+            && (separation_after.1 - separation_before.1).abs() < 1e-9,
+        "adding the survey's first georeference moved one component relative to another: A:1 -> \
+         B:0 was {separation_before:?}, is {separation_after:?}"
+    );
+}
+
+/// A datum whose station no longer resolves anchors NOTHING, so the survey's
+/// first RESOLVABLE datum is the one that establishes the frame - and a new
+/// datum added while only a dangling one is stored lands on the origin, not at
+/// `gps_to_local(its gps, the dangling one's gps)`.
+///
+/// A dangling datum is dropped by `Project::datum_to_wire` before the frontend
+/// ever sees it, and `Project::frame_datum_key` skips it, so the map's
+/// `gpsOrigin`, the data table's GPS column and the Ariane export all read the
+/// first resolvable one. `set_zero_datum` used to read `zero_datums.first()`
+/// unfiltered, which positioned the new group against an origin nothing else in
+/// the app reads.
+///
+/// Non-vacuous by construction: the stored datum's `AfterShot` anchor names a
+/// uuid no shot carries (asserted below, so the setup cannot rot into a
+/// resolvable key), and its GPS sits over 2 km from the new one - so under the
+/// unfiltered rule the new component was flung by that whole distance instead
+/// of landing on the origin.
+#[test]
+fn set_zero_datum_ignores_a_dangling_datum_when_choosing_the_frame() {
+    let mut project = Project::new("DanglingFrame".to_string(), None);
+    // The section the dangling datum claims to be anchored in, and a second,
+    // unconnected component that will carry the real datum.
+    let a = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    let b = project
+        .add_section(SectionData {
+            shots: vec![shot(90.0, 90.0, 7.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    project.set_section_offset(b, (12.0, 30.0));
+
+    // The dangling datum, pushed straight onto the vector: no mutator will
+    // create one, it is what a project reaches when the anchoring shot is
+    // deleted out from under a stored datum.
+    let dangling_gps = GpsCoordinates::new(45.0, -90.0, 0.0).unwrap();
+    project.zero_datums.push(ZeroDatum {
+        station_ref: StationKey::new(a, StationAnchor::AfterShot("no-such-uuid".to_string())),
+        gps: dangling_gps,
+    });
+    assert_eq!(
+        project.resolve_key(&project.zero_datums[0].station_ref),
+        None,
+        "setup: the stored datum has to be DANGLING, or this test is about the ordinary \
+         subsequent-datum path instead"
+    );
+
+    let datum_station = StationRef::new(b, 1);
+    let b1_before = project.compute_station_raw_coords(datum_station).unwrap();
+    let a0_before = project
+        .compute_station_raw_coords(StationRef::new(a, 0))
+        .unwrap();
+    // Over 2 km north of the dangling fix: the displacement the unfiltered rule
+    // would have applied, and far past any tolerance here.
+    let new_gps = GpsCoordinates::new(45.02, -90.0, 0.0).unwrap();
+    let flung = crate::models::gps_to_local(&new_gps, &dangling_gps);
+    assert!(
+        flung.0.hypot(flung.1) > 1000.0,
+        "setup: the two GPS fixes must be far enough apart to be unmistakable, got {flung:?}"
+    );
+
+    project.set_zero_datum(datum_station, new_gps).unwrap();
+
+    let b1_after = project.compute_station_raw_coords(datum_station).unwrap();
+    assert!(
+        b1_after.x.abs() < 1e-9 && b1_after.y.abs() < 1e-9,
+        "the first RESOLVABLE datum defines the frame, so its station has to sit at local (0, 0); \
+         got {b1_after:?} (the dangling datum's GPS would have put it near {flung:?})"
+    );
+
+    // And, as with any establishing add, nothing moved relative to anything
+    // else - the dangling-datum section rode along.
+    let a0_after = project
+        .compute_station_raw_coords(StationRef::new(a, 0))
+        .unwrap();
+    let separation_before = (a0_before.x - b1_before.x, a0_before.y - b1_before.y);
+    let separation_after = (a0_after.x - b1_after.x, a0_after.y - b1_after.y);
+    assert!(
+        (separation_after.0 - separation_before.0).abs() < 1e-9
+            && (separation_after.1 - separation_before.1).abs() < 1e-9,
+        "the establishing add moved one component relative to another: B:1 -> A:0 was \
+         {separation_before:?}, is {separation_after:?}"
+    );
+}
+
 #[test]
 fn set_zero_datum_connected_sections_move_together() {
     let mut project = Project::new("Connected".to_string(), None);
