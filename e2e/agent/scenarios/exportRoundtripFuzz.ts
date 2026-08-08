@@ -761,7 +761,6 @@ export const exportRoundtripFuzz: Scenario = {
       draw: ExportDraw,
       episodeDir: string,
       projectFile: string | null,
-      projectHashBefore: string | null,
       record: boolean,
     ): Promise<void> => {
       const moveDir = path.join(episodeDir, `m${draw.seq}`);
@@ -808,6 +807,15 @@ export const exportRoundtripFuzz: Scenario = {
       let error: string | null = null;
       let toastKeys: string[] = [];
       let skipped: string | null = null;
+
+      // The project's own bytes, read IMMEDIATELY before the move rather than
+      // once per episode. The `.stalx` is a live SQLite database and every
+      // mutating command writes to it, so an episode-scoped baseline reports
+      // the hostile-comment oracle's `createSection` as "the export modified
+      // the database". Measured on seed 2. Taken as late as possible so the
+      // only thing between the two reads is the export.
+      const projectBytesBefore =
+        draw.shape === 'openProject' && projectFile !== null ? hashOf(projectFile) : null;
 
       if (draw.route === 'store') {
         const outcome = await runStoreExport(draw, requested);
@@ -878,7 +886,7 @@ export const exportRoundtripFuzz: Scenario = {
               {
                 route: draw.route,
                 format: draw.format,
-                before: projectHashBefore ?? '(unread)',
+                before: projectBytesBefore ?? '(unread)',
                 after,
                 ok,
                 error,
@@ -1591,7 +1599,6 @@ export const exportRoundtripFuzz: Scenario = {
       await loadFixtureWithoutUndoHistory(ctx, fixture);
       await disableAutoSave(ctx);
       let opened = await readProjectDigest(ctx);
-      const projectHash = opened.filePath === null ? null : hashOf(opened.filePath);
       for (const step of replay.steps) {
         if (step.kind === 'export') {
           const draw = drawFromStep(step);
@@ -1600,7 +1607,7 @@ export const exportRoundtripFuzz: Scenario = {
             if (draw.route === 'modal') await openModal(ctx);
             else await setAppMode(ctx, 'export');
           }
-          await performExport(draw, episodeDir, opened.filePath, projectHash, false);
+          await performExport(draw, episodeDir, opened.filePath, false);
           if (draw.route === 'modal' && (await modalIsOpen(ctx))) await closeModal(ctx);
           if (draw.route === 'panel') await setAppMode(ctx, 'survey');
         } else if (step.kind === 'mutate') {
@@ -1628,9 +1635,8 @@ export const exportRoundtripFuzz: Scenario = {
       const episodeDir = path.join(exportsDir, `ep${episode}`);
       fs.mkdirSync(episodeDir, { recursive: true });
       recorder.record({ kind: 'reload', fixture });
-      const { path: projectFile } = await loadFixtureWithoutUndoHistory(ctx, fixture);
+      await loadFixtureWithoutUndoHistory(ctx, fixture);
       if (!(await disableAutoSave(ctx))) ctx.metric('autoSaveStillOn');
-      const projectHash = hashOf(projectFile);
       const digest = await readProjectDigest(ctx);
       if (episode === 0) {
         ctx.setMetric('fixtureSections', digest.sections);
@@ -1655,7 +1661,7 @@ export const exportRoundtripFuzz: Scenario = {
             continue;
           }
         }
-        await performExport(draw, episodeDir, digest.filePath, projectHash, true);
+        await performExport(draw, episodeDir, digest.filePath, true);
         if (draw.route === 'modal' && (await modalIsOpen(ctx))) await closeModal(ctx);
         if (draw.route === 'panel') await setAppMode(ctx, 'survey');
       }
