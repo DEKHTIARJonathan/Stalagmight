@@ -315,9 +315,20 @@ pub struct ExistingShotUpdate {
 }
 
 /// Placement strategy for an imported section.
+///
+/// `export_to` without `export`: the file itself is still written only by the
+/// gen_ipc_types example (which takes the file name), but the path must use the
+/// member-crate base so `stalagmight-parsers`' export test for
+/// `GpxSectionPlacement` can compute the sibling `./ImportPlacement` import -
+/// ts-rs diffs the two `EXPORT_TO` strings, and mixing the root-crate
+/// `bindings/` base with the member `../../bindings/` base makes that diff
+/// unrepresentable (the export test panics).
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[serde(tag = "type", rename_all = "snake_case")]
-#[ts(rename_all = "snake_case")]
+#[ts(
+    rename_all = "snake_case",
+    export_to = "../../bindings/ImportPlacement.ts"
+)]
 pub enum ImportPlacement {
     /// Place at origin (0, 0) - no additional operations needed.
     Origin,

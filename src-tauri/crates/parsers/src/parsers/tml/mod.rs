@@ -18,8 +18,11 @@ use ts_rs::TS;
 use crate::models::{ImportClosure, ImportPlacement, ImportSectionConfig, ShotData, ShotKind};
 
 mod decode;
-#[cfg(test)]
-pub(crate) mod test_helpers;
+// `test-support` (never on in production builds) keeps these fixture builders
+// compiled for the root crate's tests, which can no longer see a dependency's
+// `#[cfg(test)]` items now that the parsers live in their own crate.
+#[cfg(any(test, feature = "test-support"))]
+pub mod test_helpers;
 
 // ============================================================================
 // IPC-visible types
@@ -27,7 +30,7 @@ pub(crate) mod test_helpers;
 
 /// Parsed Ariane TML/TMLU file.
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export)]
+#[ts(export, export_to = "../../bindings/")]
 pub struct TmlFile {
     pub cave_name: String,
     pub unit: TmlUnit,
@@ -68,7 +71,7 @@ pub struct TmlFile {
 /// failing on. All three are recoveries, not errors: the file still imports,
 /// but with fewer or different shots than it declares.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[ts(export)]
+#[ts(export, export_to = "../../bindings/")]
 pub struct TmlParseAnomalies {
     /// Shot elements with no usable `<ID>`, dropped by `build_raw_shot`.
     pub shots_missing_id: u32,
@@ -90,7 +93,7 @@ impl TmlParseAnomalies {
 
 /// Measurement unit in the TML file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[ts(export)]
+#[ts(export, export_to = "../../bindings/")]
 pub enum TmlUnit {
     Metric,
     Imperial,
@@ -98,7 +101,7 @@ pub enum TmlUnit {
 
 /// GPS reference from the TML file.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, TS)]
-#[ts(export)]
+#[ts(export, export_to = "../../bindings/")]
 pub struct TmlGeoCoding {
     pub latitude: f64,
     pub longitude: f64,
@@ -107,7 +110,7 @@ pub struct TmlGeoCoding {
 
 /// A linearized survey section.
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export)]
+#[ts(export, export_to = "../../bindings/")]
 pub struct TmlSection {
     pub name: String,
     pub shots: Vec<TmlShot>,
@@ -128,7 +131,7 @@ pub struct TmlSection {
 
 /// A single survey shot.
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export)]
+#[ts(export, export_to = "../../bindings/")]
 pub struct TmlShot {
     pub id: i64,
     /// Ariane's own `<UUID>`/`<UU>` for this row, verbatim - `None` when the
@@ -164,7 +167,7 @@ pub struct TmlShot {
 
 /// Shot type in Ariane.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[ts(export)]
+#[ts(export, export_to = "../../bindings/")]
 pub enum TmlShotType {
     Real,
     Virtual,
@@ -184,7 +187,7 @@ pub enum TmlShotType {
 /// before anything is imported, and the import path re-resolves every closure
 /// from the raw Ariane IDs rather than reading these.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, TS)]
-#[ts(export)]
+#[ts(export, export_to = "../../bindings/")]
 pub struct TmlClosure {
     pub from_section_index: usize,
     pub from_station_index: usize,
@@ -1395,7 +1398,7 @@ fn sanitize_unit_label(raw: &str) -> String {
 
 /// The import receipt's unit-conversion note for an Ariane file: TML carries ONE
 /// unit for the whole file, so this is a straight read of it.
-pub(crate) fn tml_unit_conversion_note(unit: TmlUnit) -> Option<String> {
+pub fn tml_unit_conversion_note(unit: TmlUnit) -> Option<String> {
     match unit {
         TmlUnit::Imperial => Some("Lengths converted from feet to meters".to_string()),
         TmlUnit::Metric => None,
@@ -1898,7 +1901,7 @@ fn resolve_tml_depth_in(shot: &TmlShot, prev_depth: Option<f64>, start_depth: f6
 /// pre-#296 build holds raw +down pitch here and so imports inverted, with no
 /// migration to repair it; that is accepted rather than sniffed for, since real
 /// Ariane files carry `Inclination` 0. See `docs/inclination.md`.
-pub(crate) fn inclination_to_pitch(inclination: f64) -> f64 {
+pub fn inclination_to_pitch(inclination: f64) -> f64 {
     if inclination == 0.0 {
         0.0
     } else {
@@ -1912,7 +1915,7 @@ pub(crate) fn inclination_to_pitch(inclination: f64) -> f64 {
 /// (azimuth `rem_euclid(360)`, depth in/out, inclination to `pitch_in`, LRUD 0
 /// to None, VIRTUAL to a virtual [`ShotKind`]). `depth_in` must already be
 /// resolved via [`resolve_tml_depth_in`].
-pub(crate) fn normalize_tml_shot(shot: &TmlShot, depth_in: f64) -> ShotData {
+pub fn normalize_tml_shot(shot: &TmlShot, depth_in: f64) -> ShotData {
     // LRUD: pass through, using None for zero values
     let lrud_opt = |v: f64| {
         if v.abs() < f64::EPSILON {

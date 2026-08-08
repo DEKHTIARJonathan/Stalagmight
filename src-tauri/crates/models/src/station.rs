@@ -11,6 +11,11 @@ use super::SectionId;
 /// geometry is a function of the project rather than of `HashMap` iteration
 /// order (see `Project::adjust_least_squares`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, TS)]
+// `export_to` without `export` (here and on `GpsCoordinates` / `Coordinates`):
+// no export test writes the file - it must only carry the member-crate path
+// base, because `ImportPlacement` (same base, see its doc comment) lists these
+// as ts-rs dependencies and mixed bases make the import diff unrepresentable.
+#[ts(export_to = "../../bindings/StationRef.ts")]
 pub struct StationRef {
     pub section_id: SectionId,
     pub station_index: u32,
@@ -148,6 +153,8 @@ impl std::fmt::Display for StationKey {
 
 /// GPS coordinates in WGS84 format
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, TS)]
+// Member-crate path base only - see the rationale on `StationRef`.
+#[ts(export_to = "../../bindings/GpsCoordinates.ts")]
 pub struct GpsCoordinates {
     pub latitude: f64,
     pub longitude: f64,
@@ -226,6 +233,8 @@ pub struct GpsBounds {
 
 /// Internal XYZ coordinates (meters)
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, TS)]
+// Member-crate path base only - see the rationale on `StationRef`.
+#[ts(export_to = "../../bindings/Coordinates.ts")]
 pub struct Coordinates {
     /// X = East (meters)
     pub x: f64,

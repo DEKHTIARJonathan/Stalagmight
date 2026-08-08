@@ -11,7 +11,7 @@ default-run = "stalagmight"
 # Hybrid workspace root: this package stays where it is, extracted crates land
 # in crates/*.
 [workspace]
-members = ["crates/models", "crates/telemetry"]
+members = ["crates/models", "crates/parsers", "crates/telemetry"]
 resolver = "2"
 # Required: path deps inside the workspace directory are auto-adopted as
 # members, which would drag the vendored crate into the fmt/clippy gates.
@@ -96,6 +96,7 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 stalagmight-models = { path = "crates/models" }
+stalagmight-parsers = { path = "crates/parsers" }
 stalagmight-telemetry = { path = "crates/telemetry" }
 tauri = { version = "2", features = ["devtools"] }
 tauri-plugin-fs = "2"
@@ -145,10 +146,6 @@ flate2 = { workspace = true }
 rmp-serde = { workspace = true }
 serde_bytes = { workspace = true }
 tauri-plugin-webdriver-automation = { git = "https://github.com/FumblingBarbell/tauri-webdriver", branch = "fix/resolve-element-refs-in-execute-sync", optional = true }
-compass_data = { path = "vendor/compass_data" }
-igrf = { workspace = true }
-proj4rs = { workspace = true }
-time = { workspace = true }
 
 # `trash` has no Android platform module, and the app ships desktop-only - gate it
 # off the Android `cdylib` target so `tauri android build` keeps compiling.
@@ -320,6 +317,7 @@ workspace = true
 # `#[cfg(test)]` in the unsplit crate) for this crate's own test builds;
 # dev-dependencies don't affect production builds, so `cargo build` is unchanged.
 stalagmight-models = { path = "crates/models", features = ["test-support"] }
+stalagmight-parsers = { path = "crates/parsers", features = ["test-support"] }
 tempfile = { workspace = true }
 tauri = { version = "2", features = ["test"] }
 libc = "0.2"

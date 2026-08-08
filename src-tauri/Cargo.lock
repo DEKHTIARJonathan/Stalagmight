@@ -4422,16 +4422,13 @@ version = "0.5.0"
 dependencies = [
  "anyhow",
  "chrono",
- "compass_data",
  "directories",
  "flate2",
  "http",
- "igrf",
  "image",
  "keyring",
  "libc",
  "percent-encoding",
- "proj4rs",
  "quick-xml 0.37.5",
  "resvg",
  "rmp-serde",
@@ -4441,6 +4438,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "stalagmight-models",
+ "stalagmight-parsers",
  "stalagmight-telemetry",
  "svg2pdf",
  "tauri",
@@ -4452,7 +4450,6 @@ dependencies = [
  "tauri-plugin-webdriver-automation",
  "tempfile",
  "thiserror 1.0.69",
- "time",
  "toml 0.8.2",
  "tracing",
  "tracing-appender",
@@ -4475,6 +4472,27 @@ dependencies = [
  "tracing",
  "ts-rs",
  "uuid",
+]
+
+[[package]]
+name = "stalagmight-parsers"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "compass_data",
+ "igrf",
+ "proj4rs",
+ "quick-xml 0.37.5",
+ "serde",
+ "serde_json",
+ "sha2",
+ "stalagmight-models",
+ "tempfile",
+ "time",
+ "tracing",
+ "ts-rs",
+ "zip",
 ]
 
 [[package]]

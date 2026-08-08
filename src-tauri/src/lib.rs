@@ -12,7 +12,9 @@ pub mod export;
 // the old names, same deal as `models` above.
 pub use stalagmight_models as models;
 pub use stalagmight_telemetry::logging;
-pub mod parsers;
+// Extracted to the `stalagmight-parsers` workspace member; re-exported under
+// the old name, same deal as `models` above.
+pub use stalagmight_parsers::parsers;
 pub mod persistence;
 pub mod speleodb;
 pub use stalagmight_telemetry::telemetry;

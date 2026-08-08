@@ -7,7 +7,7 @@ use crate::parsers::tml::test_helpers::{
     parse_synthetic_tmlu, tml_shot_xml_depth, tml_shot_xml_gps, wrap_xml_with,
 };
 use crate::parsers::tml::{convert_tml_to_import_configs, parse_tml};
-use crate::parsers::walls::tests::{convert_one, parse_srv};
+use crate::parsers::walls::test_support::{convert_one, parse_srv};
 
 /// #431: a round elevation in metres (100.0) stated in feet (328.084)
 /// lands in `Project.surface_elevation` correctly converted, not just on

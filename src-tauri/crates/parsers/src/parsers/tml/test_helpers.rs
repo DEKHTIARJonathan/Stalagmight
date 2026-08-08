@@ -10,9 +10,9 @@
 use std::fs;
 use std::path::Path;
 
-use super::*;
+use super::{parse_tml, TmlFile, TmlShot, TmlShotType};
 
-pub(super) fn sample_tml_shot() -> TmlShot {
+pub fn sample_tml_shot() -> TmlShot {
     TmlShot {
         id: 1,
         uuid: None,
@@ -40,17 +40,13 @@ pub(super) fn sample_tml_shot() -> TmlShot {
 }
 
 // Helper to build minimal XML for testing
-pub(super) fn wrap_xml(shots_xml: &str) -> String {
+pub fn wrap_xml(shots_xml: &str) -> String {
     wrap_xml_with("m", 100.0, shots_xml)
 }
 
 /// `wrap_xml` with the file-level unit and elevation spelled out. The
 /// elevation is `Display` so a test can write text a `f64` cannot hold.
-pub(crate) fn wrap_xml_with(
-    unit: &str,
-    elevation: impl std::fmt::Display,
-    shots_xml: &str,
-) -> String {
+pub fn wrap_xml_with(unit: &str, elevation: impl std::fmt::Display, shots_xml: &str) -> String {
     format!(
         r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <CaveFile>
@@ -68,7 +64,7 @@ pub(crate) fn wrap_xml_with(
 /// Run the real `parse_tml` over synthetic XML, via a throwaway `.tmlu` in a
 /// temp dir (the entry point takes a path, and the extension picks the
 /// reader). Nothing survives the call.
-pub(crate) fn parse_synthetic_tmlu(xml: &str) -> TmlFile {
+pub fn parse_synthetic_tmlu(xml: &str) -> TmlFile {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("synthetic.tmlu");
     fs::write(&path, xml).unwrap();
@@ -76,7 +72,7 @@ pub(crate) fn parse_synthetic_tmlu(xml: &str) -> TmlFile {
 }
 
 /// A shot element with the depth fields spelled out, for the rebase tests.
-pub(crate) fn tml_shot_xml_depth(
+pub fn tml_shot_xml_depth(
     id: i64,
     from_id: i64,
     shot_type: &str,
@@ -111,7 +107,7 @@ pub(crate) fn tml_shot_xml_depth(
     )
 }
 
-pub(super) fn tml_shot_xml(id: i64, from_id: i64, shot_type: &str, section: &str) -> String {
+pub fn tml_shot_xml(id: i64, from_id: i64, shot_type: &str, section: &str) -> String {
     format!(
         r#"<SurveyData>
     <ID>{id}</ID>
@@ -139,7 +135,7 @@ pub(super) fn tml_shot_xml(id: i64, from_id: i64, shot_type: &str, section: &str
     )
 }
 
-pub(crate) fn tml_shot_xml_gps(
+pub fn tml_shot_xml_gps(
     id: i64,
     from_id: i64,
     shot_type: &str,
@@ -174,7 +170,7 @@ pub(crate) fn tml_shot_xml_gps(
     )
 }
 
-pub(super) fn tmlu_shot_xml(id: i64, from_id: i64, shot_type: &str, section: &str) -> String {
+pub fn tmlu_shot_xml(id: i64, from_id: i64, shot_type: &str, section: &str) -> String {
     format!(
         r#"<SRVD>
     <ID>{id}</ID>
@@ -202,11 +198,11 @@ pub(super) fn tmlu_shot_xml(id: i64, from_id: i64, shot_type: &str, section: &st
     )
 }
 
-pub(super) fn write_tml_archive(path: &Path, entry: &str, body: &[u8]) {
+pub fn write_tml_archive(path: &Path, entry: &str, body: &[u8]) {
     write_tml_archive_entries(path, &[(entry, body)]);
 }
 
-pub(super) fn write_tml_archive_entries(path: &Path, entries: &[(&str, &[u8])]) {
+pub fn write_tml_archive_entries(path: &Path, entries: &[(&str, &[u8])]) {
     use std::io::Write as _;
     let file = fs::File::create(path).unwrap();
     let mut zip = zip::ZipWriter::new(file);

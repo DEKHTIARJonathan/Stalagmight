@@ -67,7 +67,7 @@ pub(crate) const STATUS_GRID_RELATIVE: u32 = 1 << 11;
 
 /// Lightweight summary of a parsed Walls project, returned to the import dialog.
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export)]
+#[ts(export, export_to = "../../bindings/")]
 pub struct WallsFile {
     pub project_name: String,
     pub book_count: u32,
@@ -103,7 +103,7 @@ pub struct WallsFile {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export)]
+#[ts(export, export_to = "../../bindings/")]
 pub struct WallsSurveySummary {
     pub name: String,
     pub title: String,
@@ -438,7 +438,11 @@ pub(crate) struct WallsFix {
 }
 
 /// A resolved + parsed survey leaf.
-pub(crate) struct ParsedSurvey {
+///
+/// `pub` (fields deliberately not) because `test_support::parse_srv` hands it
+/// to the root crate's tests as an opaque token to pass back into
+/// `test_support::convert_one`.
+pub struct ParsedSurvey {
     pub(crate) title: String,
     pub(crate) name: String,
     pub(crate) segment: String,
@@ -486,5 +490,11 @@ pub fn parse_walls(path: &Path) -> Result<ParsedWalls> {
     }
 }
 
+// `test-support` (never on in production builds) keeps the shared test entry
+// points compiled for the root crate's tests, which can no longer see a
+// dependency's `#[cfg(test)]` items now that the parsers live in their own
+// crate. The test suite proper stays `cfg(test)`-only.
+#[cfg(any(test, feature = "test-support"))]
+pub mod test_support;
 #[cfg(test)]
 pub(crate) mod tests;

@@ -18,36 +18,9 @@ use super::*;
 
 // ----- helpers ---------------------------------------------------------
 
-pub(crate) fn parse_srv(content: &str) -> ParsedSurvey {
-    let mut warnings = Vec::new();
-    parse_srv_contents(
-        content,
-        "Test Survey",
-        "TEST",
-        "",
-        &WallsUnits::default(),
-        &HashMap::new(),
-        None,
-        true,
-        false,
-        &mut warnings,
-    )
-}
-
-pub(crate) fn convert_one(
-    survey: ParsedSurvey,
-) -> (Vec<ImportSectionConfig>, Vec<ImportClosure>, Vec<String>) {
-    let parsed = ParsedWalls {
-        project_name: "Test".to_string(),
-        book_count: 0,
-        surveys: vec![survey],
-        georef: None,
-        missing_files: Vec::new(),
-        skipped_attachments: 0,
-        warnings: Vec::new(),
-    };
-    convert_walls_to_import_configs(&parsed, &WallsImportOptions::default()).unwrap()
-}
+// `parse_srv` / `convert_one` moved to `walls::test_support` (also compiled
+// under the `test-support` feature) so the root crate's tests can reach them.
+use super::test_support::{convert_one, parse_srv};
 
 fn approx(a: f64, b: f64) -> bool {
     (a - b).abs() < 1e-6

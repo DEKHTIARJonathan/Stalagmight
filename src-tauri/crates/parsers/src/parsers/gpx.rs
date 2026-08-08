@@ -21,7 +21,7 @@ use crate::parsers::encoding::read_utf8;
 
 /// Parsed GPX file.
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export)]
+#[ts(export, export_to = "../../bindings/")]
 pub struct GpxFile {
     pub name: Option<String>,
     pub waypoints: Vec<GpxWaypoint>,
@@ -31,7 +31,7 @@ pub struct GpxFile {
 
 /// A GPX waypoint.
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export)]
+#[ts(export, export_to = "../../bindings/")]
 pub struct GpxWaypoint {
     pub name: Option<String>,
     pub comment: Option<String>,
@@ -43,7 +43,7 @@ pub struct GpxWaypoint {
 
 /// A GPX track containing one or more segments.
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export)]
+#[ts(export, export_to = "../../bindings/")]
 pub struct GpxTrack {
     pub name: Option<String>,
     pub comment: Option<String>,
@@ -52,14 +52,14 @@ pub struct GpxTrack {
 
 /// A single track segment (contiguous sequence of trackpoints).
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export)]
+#[ts(export, export_to = "../../bindings/")]
 pub struct GpxTrackSegment {
     pub points: Vec<GpxTrackPoint>,
 }
 
 /// A trackpoint within a track segment.
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export)]
+#[ts(export, export_to = "../../bindings/")]
 pub struct GpxTrackPoint {
     pub latitude: f64,
     pub longitude: f64,
@@ -69,7 +69,7 @@ pub struct GpxTrackPoint {
 
 /// A GPX route.
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export)]
+#[ts(export, export_to = "../../bindings/")]
 pub struct GpxRoute {
     pub name: Option<String>,
     pub comment: Option<String>,
@@ -78,7 +78,7 @@ pub struct GpxRoute {
 
 /// A routepoint within a route.
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export)]
+#[ts(export, export_to = "../../bindings/")]
 pub struct GpxRoutePoint {
     pub name: Option<String>,
     pub latitude: f64,
@@ -89,7 +89,7 @@ pub struct GpxRoutePoint {
 
 /// Per-section placement for GPX import (tracks/routes from Step 2).
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export)]
+#[ts(export, export_to = "../../bindings/")]
 pub struct GpxSectionPlacement {
     pub section_index: u32,
     pub placement: ImportPlacement,

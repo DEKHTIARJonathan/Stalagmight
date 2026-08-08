@@ -50,7 +50,7 @@ const SECTION_COLORS: &[&str] = &[
 
 /// Lightweight summary of a parsed Compass file, returned to the import dialog.
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export)]
+#[ts(export, export_to = "../../bindings/")]
 pub struct CompassFile {
     pub cave_name: String,
     pub survey_count: u32,
@@ -70,7 +70,7 @@ pub struct CompassFile {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export)]
+#[ts(export, export_to = "../../bindings/")]
 pub struct CompassSurveySummary {
     pub name: String,
     pub date: String,
@@ -1549,7 +1549,7 @@ mod tests {
 
     fn fixture(name: &str) -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/fixtures/compass")
+            .join("../../tests/fixtures/compass")
             .join(name)
     }
 

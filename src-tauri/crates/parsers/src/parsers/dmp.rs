@@ -976,7 +976,8 @@ mod tests {
     // Integration tests with real DMP files
     #[test]
     fn test_parse_v2_dmp() {
-        let test_file = Path::new(env!("CARGO_MANIFEST_DIR")).join("../e2e/fixtures/test_v2.dmp");
+        let test_file =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../e2e/fixtures/test_v2.dmp");
         assert!(
             test_file.exists(),
             "Fixture missing: {}",
@@ -1022,7 +1023,8 @@ mod tests {
 
     #[test]
     fn test_parse_v5_dmp() {
-        let test_file = Path::new(env!("CARGO_MANIFEST_DIR")).join("../e2e/fixtures/test_v5.dmp");
+        let test_file =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../e2e/fixtures/test_v5.dmp");
         assert!(
             test_file.exists(),
             "Fixture missing: {}",
@@ -1071,8 +1073,8 @@ mod tests {
     /// and still recover sections instead of bailing out.
     #[test]
     fn test_parse_v5_dmp_buggy_eos_is_resilient() {
-        let test_file =
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("../e2e/fixtures/test_v5_buggy_EOS.dmp");
+        let test_file = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../e2e/fixtures/test_v5_buggy_EOS.dmp");
         assert!(
             test_file.exists(),
             "Fixture missing: {}",
@@ -1092,7 +1094,7 @@ mod tests {
     #[test]
     fn test_parse_corrupted_dmp_errors() {
         let test_file =
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("../e2e/fixtures/test_corrupted.dmp");
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../e2e/fixtures/test_corrupted.dmp");
         assert!(
             test_file.exists(),
             "Fixture missing: {}",
@@ -2091,7 +2093,7 @@ mod tests {
     #[test]
     #[ignore]
     fn kb5_parse_regression() {
-        let test_file = Path::new(env!("CARGO_MANIFEST_DIR")).join("../e2e/fixtures/kb5.dmp");
+        let test_file = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../e2e/fixtures/kb5.dmp");
         assert!(
             test_file.exists(),
             "Fixture missing: {}",
@@ -2225,7 +2227,7 @@ mod tests {
         };
         use crate::models::shot::{Shot, ShotKind};
 
-        let test_file = Path::new(env!("CARGO_MANIFEST_DIR")).join("../e2e/fixtures/kb5.dmp");
+        let test_file = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../e2e/fixtures/kb5.dmp");
         assert!(
             test_file.exists(),
             "Fixture missing: {}",
@@ -2288,7 +2290,7 @@ mod tests {
         let suggestions = suggest_all_placements(
             &import_sections,
             &existing_sections,
-            &crate::config::PlacementSuggestionConfig::default(),
+            &crate::models::config::PlacementSuggestionConfig::default(),
         );
 
         // Print all suggestions for debugging
@@ -2434,7 +2436,7 @@ mod tests {
         use crate::models::shot::{Shot, ShotKind};
         use std::collections::{HashMap, HashSet};
 
-        let test_file = Path::new(env!("CARGO_MANIFEST_DIR")).join("../e2e/fixtures/kb5.dmp");
+        let test_file = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../e2e/fixtures/kb5.dmp");
         let dmp = parse_dmp(&test_file).expect("should parse kb5.dmp");
 
         // Raw standard shot counts (pre-treatment)
@@ -2503,7 +2505,7 @@ mod tests {
         let suggestions = suggest_all_placements(
             &import_sections,
             &existing_sections,
-            &crate::config::PlacementSuggestionConfig::default(),
+            &crate::models::config::PlacementSuggestionConfig::default(),
         );
 
         // Simulate applyAllOverlapTreatments import-side logic.
@@ -2959,7 +2961,8 @@ mod tests {
     /// test_v5.dmp fixture. Both codebases must produce identical results.
     #[test]
     fn test_parse_v5_fixture_pitch_values() {
-        let test_file = Path::new(env!("CARGO_MANIFEST_DIR")).join("../e2e/fixtures/test_v5.dmp");
+        let test_file =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../e2e/fixtures/test_v5.dmp");
         if !test_file.exists() {
             eprintln!("Skipping: fixture not found at {}", test_file.display());
             return;
@@ -2994,7 +2997,8 @@ mod tests {
     /// ahead of the hash changes it and fails here.
     #[test]
     fn section_hash_is_unchanged_by_the_pitch_normalisation() {
-        let test_file = Path::new(env!("CARGO_MANIFEST_DIR")).join("../e2e/fixtures/test_v5.dmp");
+        let test_file =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../e2e/fixtures/test_v5.dmp");
         if !test_file.exists() {
             eprintln!("Skipping: fixture not found at {}", test_file.display());
             return;
@@ -3022,7 +3026,8 @@ mod tests {
     /// V2 format has many shots with negative pitch.
     #[test]
     fn test_parse_v2_fixture_pitch_values() {
-        let test_file = Path::new(env!("CARGO_MANIFEST_DIR")).join("../e2e/fixtures/test_v2.dmp");
+        let test_file =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../e2e/fixtures/test_v2.dmp");
         if !test_file.exists() {
             eprintln!("Skipping: fixture not found at {}", test_file.display());
             return;
@@ -3068,7 +3073,7 @@ mod tests {
     fn test_fixture_pitch_in_physical_range() {
         for fixture in &["test_v2.dmp", "test_v5.dmp"] {
             let test_file = Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../e2e/fixtures")
+                .join("../../../e2e/fixtures")
                 .join(fixture);
             if !test_file.exists() {
                 eprintln!("Skipping: fixture not found at {}", test_file.display());
