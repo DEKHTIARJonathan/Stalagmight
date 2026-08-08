@@ -23,7 +23,7 @@ use anyhow::Result;
 use quick_xml::events::{BytesDecl, BytesEnd, BytesStart, BytesText, Event};
 use quick_xml::Writer;
 
-use crate::config::GasUnits;
+use crate::models::config::GasUnits;
 use crate::models::{GasReachField, RouteProfilePoint, StationRef};
 use crate::parsers::geo::FEET_TO_METERS;
 
@@ -54,7 +54,10 @@ impl ProfileFormat {
     }
 
     /// Stable identifier for logs and telemetry.
-    pub(crate) fn label(self) -> &'static str {
+    ///
+    /// `pub` (was `pub(crate)`): the root crate's export commands log it, and
+    /// that call now crosses the crate boundary.
+    pub fn label(self) -> &'static str {
         match self {
             Self::SubsurfaceXml => "subsurface-xml",
             Self::PlainText => "text",

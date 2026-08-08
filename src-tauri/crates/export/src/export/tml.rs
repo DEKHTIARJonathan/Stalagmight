@@ -3405,7 +3405,10 @@ mod tests {
         let Ok(input) = std::env::var("STALX_EXPORT_IN") else {
             return;
         };
-        let db = crate::persistence::sqlite::Database::open_readonly(Path::new(&input)).unwrap();
+        let db = stalagmight_persistence::persistence::sqlite::Database::open_readonly(Path::new(
+            &input,
+        ))
+        .unwrap();
         let project = db.load_project().unwrap();
 
         let shots = build_export_shots(&project, TmlProfile::User);

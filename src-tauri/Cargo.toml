@@ -12,6 +12,7 @@ default-run = "stalagmight"
 # in crates/*.
 [workspace]
 members = [
+    "crates/export",
     "crates/models",
     "crates/parsers",
     "crates/persistence",
@@ -100,6 +101,7 @@ required-features = ["ipc-typegen"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+stalagmight-export = { path = "crates/export" }
 stalagmight-models = { path = "crates/models" }
 stalagmight-parsers = { path = "crates/parsers" }
 stalagmight-persistence = { path = "crates/persistence" }
@@ -129,9 +131,6 @@ thiserror = { workspace = true }
 anyhow = { workspace = true }
 toml = { workspace = true }
 directories = { workspace = true }
-svg2pdf = { workspace = true }
-usvg = { workspace = true }
-resvg = { workspace = true }
 sha2 = { workspace = true }
 uuid = { workspace = true, features = ["v4"] }
 # Pinned exact: the SpeleoDB seed upload (#183) uses `unversioned::multipart`,
@@ -143,7 +142,6 @@ http = { workspace = true }
 # param (#215). Already in the tree transitively; promoted to a direct dep.
 percent-encoding = { workspace = true }
 image = { workspace = true }
-quick-xml = { workspace = true }
 zip = { workspace = true }
 # Used both for telemetry's batched event encoding and for the binary
 # load_project_full IPC. Always available so we can switch the load path

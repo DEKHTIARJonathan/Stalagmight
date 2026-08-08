@@ -7,7 +7,9 @@ pub use stalagmight_persistence::cache;
 pub mod commands;
 pub mod config;
 pub mod core;
-pub mod export;
+// Extracted to the `stalagmight-export` workspace member; re-exported under
+// the old name, same deal as `models` below.
+pub use stalagmight_export::export;
 // Extracted to the `stalagmight-telemetry` workspace member; re-exported under
 // the old names, same deal as `models` above.
 pub use stalagmight_models as models;
