@@ -151,6 +151,52 @@
  *    Verified permanent, not slow: replaying the minimal trace with
  *    `STALAGMIGHT_FUZZ_IMPORT_SETTLE_MS=60000` fails identically, so the app had
  *    a full minute to finish the transition.
+ *
+ * 2. OPEN. A COMPLETED DMP IMPORT LEAVES `importContext` SET.
+ *
+ *        pnpm agent:scenario import-dialog-fuzz --seed 1 --iterations 2
+ *
+ *    Shrunk from 37 steps to SEVEN (30 replays, budget-bounded, 0 divergent):
+ *
+ *        1. generate a VALID .dmp
+ *        2. import it via the toolbar
+ *        3. continue
+ *        4. skip zero datum
+ *        5. Escape                      (leaves the auto-started placement)
+ *        6. place segment on map
+ *        7. click the map               (the placement completes the import)
+ *
+ *    F2 then reports `importContext="existing-project" after a COMPLETED
+ *    import`, and that is the app's own contract being broken rather than this
+ *    oracle inventing one. `completeImportToSingleView` (`utils/saveFeedback.ts`)
+ *    says so in as many words - "This is also where the import flow ENDS, so it
+ *    is where `importContext` is dropped. Left set, it outlives its flow" - and
+ *    every other importer (TML, Compass, Walls, GPX, and both failure paths via
+ *    `surfaceImportFailure`) goes through it.
+ *
+ *    The DMP wizard does not. Its `onComplete` in `App.tsx` hand-rolls the same
+ *    exit sequence inline - `closeDialog(); setView('single');
+ *    triggerFitToBounds(); presentImportReceipt(...)` - and omits the one line
+ *    that drops the context.
+ *
+ *    That this is a defect and not a choice is settled by the sibling branch:
+ *    `OrphanPlacementDialog.finish()` calls `setImportContext(null)` explicitly,
+ *    with a comment saying it "never reaches completeImportToSingleView, which
+ *    drops the context on the other one", spelling out the consequence, and
+ *    pointing at #435 for the duplicated exit sequence itself. So the leak was
+ *    identified and fixed on the ORPHAN branch and left in place on the branch
+ *    taken when there are no orphan suggestions - which is the common one.
+ *
+ *    Blast radius, stated honestly: `routeOpenedFile` resets the context at the
+ *    entry of every import flow, so the "next import inherits it" scenario its
+ *    own comment describes is largely headed off by the router. What is left is
+ *    a stale value visible to anything that reaches `saveAfterImport` WITHOUT
+ *    going through the router - which is exactly the situation the orphan branch
+ *    was fixed for.
+ *
+ *    F2 stays strict. This scenario is consequently RED on seeds that complete a
+ *    DMP import, and that is the delete-when-fixed contract working: the oracle
+ *    does not move, the app does.
  */
 import * as fs from 'fs';
 import * as path from 'path';
@@ -419,6 +465,15 @@ export const importDialogFuzz: Scenario = {
       return { ...move, value: path.join(projectsDir, `import-${ctx.seed}-${fileSeq}.stalx`) };
     };
 
+    /** The map's current centre, so a placement click lands on the survey. */
+    const mapCentre = async (): Promise<[number, number] | null> =>
+      ctx.eval<[number, number] | null>(`
+        const map = window.__stalagmight_map__;
+        if (!map || typeof map.getCenter !== 'function') return null;
+        const centre = map.getCenter();
+        return [centre.lng, centre.lat];
+      `);
+
     // ---- move execution --------------------------------------------------
 
     interface Executed {
@@ -513,10 +568,18 @@ export const importDialogFuzz: Scenario = {
         }
       } else if (move.kind === 'mapClick') {
         const live = move;
+        // A relative draw is resolved HERE and recorded ABSOLUTE: replay must
+        // click the same geographic point, not the same offset from whatever
+        // camera the replay happens to have.
+        const centre = live.relative === true ? await mapCentre() : [0, 0];
+        const at: [number, number] =
+          centre === null
+            ? live.lngLat
+            : [live.lngLat[0] + (centre[0] as number), live.lngLat[1] + (centre[1] as number)];
         try {
-          await ctx.exclusive(() => mapClick(ctx.browser, live.lngLat));
+          await ctx.exclusive(() => mapClick(ctx.browser, at));
           performed = true;
-          if (record) recorder.record({ kind: 'mapClick', lngLat: live.lngLat, label: move.label });
+          if (record) recorder.record({ kind: 'mapClick', lngLat: at, label: move.label });
         } catch (err) {
           // Outside the viewport, or no map on this screen. Both are ordinary
           // impossible moves - skipped and counted, exactly like an absent

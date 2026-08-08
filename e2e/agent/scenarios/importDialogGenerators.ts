@@ -65,7 +65,14 @@ export type FuzzMove =
   | { kind: 'openFile'; source: FileSource; via: 'dialog' | 'route'; trigger: string; label: string }
   /** Answer a picker with a CANCEL, which is its own code path. */
   | { kind: 'cancelDialog'; trigger: string; label: string }
-  | { kind: 'mapClick'; lngLat: [number, number]; label: string }
+  /**
+   * A map click. `relative` means `lngLat` is an OFFSET from the map's current
+   * centre, resolved by the shell at dispatch and recorded ABSOLUTE - a
+   * generator cannot know where the survey is, and `lib/controls.ts`'s
+   * `mapClick` refuses a point outside the visible viewport, so an absolute
+   * draw would be skipped on essentially every attempt.
+   */
+  | { kind: 'mapClick'; lngLat: [number, number]; relative?: boolean; label: string }
   /** `uiStore.confirmPlacement()` - the map's confirm has no button. */
   | { kind: 'confirmPlacement'; label: string }
   | { kind: 'undo'; label: string }
@@ -874,14 +881,15 @@ const PLACEMENT: Generator[] = [
     weight: 12,
     screens: ['map-placement'],
     build: (env) => {
-      // Near the fixture's survey rather than anywhere on the globe: a click
-      // outside the visible viewport is refused by `mapClick` before it reaches
-      // the app, which would be a skip on every draw.
+      // An OFFSET from the map centre, which is where the survey is: the shell
+      // resolves it against the live centre at dispatch. An absolute draw would
+      // land in the Gulf of Guinea and be refused before it reached the app.
       const jitter = (): number => (env.ctx.rng() - 0.5) * 0.0008;
       return {
         kind: 'mapClick',
         lngLat: [jitter(), jitter()],
-        label: 'place at the map centre (jittered)',
+        relative: true,
+        label: 'place near the map centre',
       };
     },
   },
