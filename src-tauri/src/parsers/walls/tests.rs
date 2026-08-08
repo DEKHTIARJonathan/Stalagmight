@@ -18,7 +18,7 @@ use super::*;
 
 // ----- helpers ---------------------------------------------------------
 
-fn parse_srv(content: &str) -> ParsedSurvey {
+pub(crate) fn parse_srv(content: &str) -> ParsedSurvey {
     let mut warnings = Vec::new();
     parse_srv_contents(
         content,
@@ -34,7 +34,7 @@ fn parse_srv(content: &str) -> ParsedSurvey {
     )
 }
 
-fn convert_one(
+pub(crate) fn convert_one(
     survey: ParsedSurvey,
 ) -> (Vec<ImportSectionConfig>, Vec<ImportClosure>, Vec<String>) {
     let parsed = ParsedWalls {
@@ -1411,63 +1411,6 @@ fn per_survey_fixed_station_count_dedups_and_validates() {
     // counts its lone valid `A0`.
     assert_eq!(preview.surveys[0].fixed_station_count, 1);
     assert_eq!(preview.surveys[1].fixed_station_count, 1);
-}
-
-#[test]
-fn end_to_end_import_respects_datum_invariants() {
-    // Runs the REAL import (execute_import_sections enforces
-    // `multiple_datums_per_merge_component`), so a successful result proves
-    // the placement respects the model's one-datum-per-component invariant.
-    use crate::core::state::{AppState, VirtualShotMode};
-    use crate::core::Command;
-
-    let run = |srv: &str| -> (bool, Option<String>, usize) {
-        let (sections, closures, _w) = convert_one(parse_srv(srv));
-        let state = AppState::new().unwrap();
-        state.execute(Command::CreateProject {
-            name: "T".to_string(),
-            location: None,
-        });
-        let result = state.execute_import_sections(
-            sections,
-            closures,
-            None,
-            Vec::new(),
-            Vec::new(),
-            VirtualShotMode::Auto,
-        );
-        let datums = state
-            .get_project_state()
-            .map(|p| p.zero_datums.len())
-            .unwrap_or(0);
-        (result.success, result.error, datums)
-    };
-
-    // Two separate components, each with its own #Fix -> 2 datums, OK.
-    let (ok2, err2, d2) = run("#UNITS meters order=DAV\n\
-         #FIX A0 W90:00:00 N30:00:00 0\n\
-         A0 A1 10 90 0\n\
-         #FIX B0 W91:00:00 N31:00:00 0\n\
-         B0 B1 10 90 0\n");
-    assert!(ok2, "two-datum import should succeed: {err2:?}");
-    assert_eq!(d2, 2);
-
-    // Two #Fix in ONE connected component -> exactly 1 datum, import still
-    // succeeds (no multiple_datums_per_merge_component violation).
-    let (ok1, err1, d1) = run("#UNITS meters order=DAV\n\
-         #FIX A0 W90:00:00 N30:00:00 0\n\
-         #FIX B0 W91:00:00 N31:00:00 0\n\
-         A0 A1 10 90 0\n\
-         A1 J 10 90 0\n\
-         B0 J 10 270 0\n");
-    assert!(
-        ok1,
-        "single-datum component import should succeed: {err1:?}"
-    );
-    assert_eq!(
-        d1, 1,
-        "exactly one datum survives in a single merge component"
-    );
 }
 
 // ----- ignored real-data validation (no project files committed) -------

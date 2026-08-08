@@ -903,36 +903,4 @@ mod tests {
             "the canonical-storage refusal must run BEFORE open_existing, not after it"
         );
     }
-
-    #[test]
-    fn the_legacy_open_project_is_not_exposed_over_ipc() {
-        // `AppState::open_project` deliberately has NO canonical-storage guard
-        // (see its doc comment): its one production caller reopens the canonical
-        // cache path after a failed replace. That is only sound while the webview
-        // cannot reach it, so pin the non-exposure the same way
-        // `registry_covers_all_commands` reads the handler block.
-        let lib_src = include_str!("../../lib.rs");
-        let start = lib_src
-            .find("generate_handler![")
-            .expect("generate_handler![ not found in lib.rs")
-            + "generate_handler![".len();
-        let end = start
-            + lib_src[start..]
-                .find(']')
-                .expect("closing ] not found for generate_handler!");
-        let block = &lib_src[start..end];
-        let exposed = block.lines().any(|line| {
-            let trimmed = line.trim();
-            !trimmed.starts_with("//")
-                && trimmed
-                    .rsplit("::")
-                    .next()
-                    .is_some_and(|name| name.trim_end_matches(',').trim() == "open_project")
-        });
-        assert!(
-            !exposed,
-            "open_project gained an IPC registration - it must now run the \
-             canonical-storage guard (see AppState::open_project's doc comment)"
-        );
-    }
 }

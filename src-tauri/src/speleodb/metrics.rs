@@ -302,3 +302,57 @@ mod tests {
         assert_eq!(produced.len(), LATENCY_BUCKETS.len());
     }
 }
+
+// Relocated from `telemetry::registry` ahead of the crate split: `speleodb`
+// depends on `telemetry` non-test, so the coverage test that joins
+// `Endpoint::ALL` with `EVENT_NAMES` lives on the upper side of that edge.
+// Gated exactly as the registry test module it came from: the registry
+// (and `EVENT_NAMES`) only exists with the `telemetry` feature.
+#[cfg(all(test, feature = "telemetry"))]
+mod telemetry_coverage_tests {
+    use std::collections::HashSet;
+
+    use super::{Endpoint, Outcome, LATENCY_BUCKETS};
+    use crate::telemetry::registry::EVENT_NAMES;
+
+    /// Every SpeleoDB endpoint kind (#210, F1) must have its full traffic-event
+    /// set registered: four outcome counters + one counter per latency bucket.
+    /// Mirrors `every_tile_provider_has_consumption_events` - add an `Endpoint`
+    /// variant and this fails until its ten names land in `EVENT_NAMES`. Also
+    /// asserts the reverse: no orphan `speleodb-api.*` name the generator cannot
+    /// produce (a typo, or a renamed/removed kind), so the vocabulary can't drift
+    /// away from `speleodb::metrics::Endpoint`.
+    #[test]
+    fn every_speleodb_endpoint_has_traffic_events() {
+        let registered: HashSet<&str> = EVENT_NAMES.iter().copied().collect();
+        let mut expected: HashSet<String> = HashSet::new();
+        for ep in Endpoint::ALL {
+            let kind = ep.kind();
+            for outcome in Outcome::ALL {
+                let event = format!("speleodb-api.{kind}.{outcome}");
+                assert!(
+                    registered.contains(event.as_str()),
+                    "endpoint '{kind}' missing outcome event '{event}' - add it to EVENT_NAMES"
+                );
+                expected.insert(event);
+            }
+            for bucket in LATENCY_BUCKETS {
+                let event = format!("speleodb-api.{kind}.latency.{bucket}");
+                assert!(
+                    registered.contains(event.as_str()),
+                    "endpoint '{kind}' missing latency event '{event}' - add it to EVENT_NAMES"
+                );
+                expected.insert(event);
+            }
+        }
+        for name in EVENT_NAMES {
+            if name.starts_with("speleodb-api.") {
+                assert!(
+                    expected.contains(*name),
+                    "orphan speleodb-api event '{name}' - not produced by Endpoint::ALL \
+                     x Outcome::ALL x LATENCY_BUCKETS; remove it or fix the kind/label"
+                );
+            }
+        }
+    }
+}

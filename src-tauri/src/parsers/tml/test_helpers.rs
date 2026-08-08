@@ -46,7 +46,7 @@ pub(super) fn wrap_xml(shots_xml: &str) -> String {
 
 /// `wrap_xml` with the file-level unit and elevation spelled out. The
 /// elevation is `Display` so a test can write text a `f64` cannot hold.
-pub(super) fn wrap_xml_with(
+pub(crate) fn wrap_xml_with(
     unit: &str,
     elevation: impl std::fmt::Display,
     shots_xml: &str,
@@ -68,7 +68,7 @@ pub(super) fn wrap_xml_with(
 /// Run the real `parse_tml` over synthetic XML, via a throwaway `.tmlu` in a
 /// temp dir (the entry point takes a path, and the extension picks the
 /// reader). Nothing survives the call.
-pub(super) fn parse_synthetic_tmlu(xml: &str) -> TmlFile {
+pub(crate) fn parse_synthetic_tmlu(xml: &str) -> TmlFile {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("synthetic.tmlu");
     fs::write(&path, xml).unwrap();
@@ -76,7 +76,7 @@ pub(super) fn parse_synthetic_tmlu(xml: &str) -> TmlFile {
 }
 
 /// A shot element with the depth fields spelled out, for the rebase tests.
-pub(super) fn tml_shot_xml_depth(
+pub(crate) fn tml_shot_xml_depth(
     id: i64,
     from_id: i64,
     shot_type: &str,
@@ -139,7 +139,7 @@ pub(super) fn tml_shot_xml(id: i64, from_id: i64, shot_type: &str, section: &str
     )
 }
 
-pub(super) fn tml_shot_xml_gps(
+pub(crate) fn tml_shot_xml_gps(
     id: i64,
     from_id: i64,
     shot_type: &str,

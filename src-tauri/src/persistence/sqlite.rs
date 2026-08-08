@@ -259,6 +259,10 @@ pub struct ResolvedWarning {
 }
 
 #[cfg(test)]
+#[expect(clippy::unwrap_used, clippy::print_stderr)]
+mod diagnostic_tests;
+
+#[cfg(test)]
 #[expect(
     clippy::unwrap_used,
     clippy::expect_used,

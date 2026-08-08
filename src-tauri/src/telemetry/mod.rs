@@ -14,7 +14,7 @@
 use std::collections::HashMap;
 
 #[cfg(feature = "telemetry")]
-mod registry;
+pub(crate) mod registry;
 
 // ── Feature-gated imports ────────────────────────────────────────────
 

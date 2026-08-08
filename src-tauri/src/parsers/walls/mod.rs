@@ -487,4 +487,4 @@ pub fn parse_walls(path: &Path) -> Result<ParsedWalls> {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

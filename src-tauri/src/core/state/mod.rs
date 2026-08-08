@@ -53,6 +53,9 @@ mod fuzz_shrink_tests;
 #[cfg(test)]
 mod fuzz_undo_tests;
 #[cfg(test)]
+#[expect(clippy::unwrap_used, clippy::expect_used)]
+mod import_pipeline_tests;
+#[cfg(test)]
 mod metamorphic_undo_tests;
 #[cfg(test)]
 mod open_undo_bugs_tests;
