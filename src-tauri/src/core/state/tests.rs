@@ -350,6 +350,169 @@ fn opening_a_full_mode_project_restores_history_deeper_than_the_count_window() {
     });
 }
 
+/// [#469] A count-window project opens the NEWEST window of a bloated undo table and
+/// reads nothing beyond it - and what it reads is a WORKING history.
+///
+/// Nothing in the schema bounds `undo_stack`, and a `.stalx` is a file the app opens
+/// rather than one it can trust: the loader used to `SELECT` and gunzip every row, and
+/// only the restore that followed applied the entry window. A long-lived (or crafted)
+/// file could therefore exhaust memory during open with the correct bound already armed
+/// - it was applied one step too late to matter. The bound has to be in the QUERY, which
+/// is what the row counts below pin.
+///
+/// The undo at the end is the other half: dropping the oldest rows must not corrupt the
+/// sequence bookkeeping. It cannot, because the loaded sequences are discarded and every
+/// save renumbers 0..n - which the final assertion checks rather than assumes.
+#[test]
+fn opening_a_count_window_project_reads_only_the_newest_window_of_a_bloated_table() {
+    // `open_project`/`save_project` record the path in the global config, and the entry
+    // window this test reasons about is read from it.
+    crate::test_helpers::with_isolated_config(|| {
+        let temp_dir = TempDir::new().unwrap();
+        let path = temp_dir.path().join("bloated_history.stalx");
+
+        let mut project = Project::new("Bloated".to_string(), None);
+        project.add_section(SectionData {
+            shots: vec![ShotData {
+                comment: Some("edit 399".to_string()),
+                ..test_shot_data(2.0)
+            }],
+            ..Default::default()
+        });
+
+        let mut db = Database::open(&path).unwrap();
+        db.save_project(&project).unwrap();
+        // Ids as the loader assigns them, so the persisted entries address the shot the
+        // reopened project actually has.
+        let saved = db.load_project().unwrap();
+        let section_id = saved.sections[0].id;
+        let shot_id = saved.sections[0].shots[0].id;
+
+        // Four times the 100-entry default window, so a load that read the whole table
+        // and trimmed afterwards is distinguishable from one that never read it.
+        const PERSISTED: usize = 400;
+        let now = chrono::Utc::now();
+        let rows: Vec<_> = (0..PERSISTED)
+            .map(|i| {
+                let entry = UndoEntry {
+                    command_bytes: None,
+                    command: Command::UpdateShot {
+                        section_id,
+                        shot_id,
+                        updates: ShotUpdates {
+                            comment: Some(Some(format!("edit {i}"))),
+                            ..Default::default()
+                        },
+                    },
+                    undo_data: UndoData::PreviousValues {
+                        section_id,
+                        shot_id: Some(shot_id),
+                        shot_uuid: None,
+                        values_json: serde_json::to_string(&ShotUpdates {
+                            comment: Some(Some(format!("comment {i}"))),
+                            ..Default::default()
+                        })
+                        .unwrap(),
+                        previous_offsets: HashMap::new(),
+                    },
+                    timestamp: Some(now + chrono::Duration::seconds(i as i64)),
+                };
+                UndoStack::serialize_entry_with_timestamp(&entry).unwrap()
+            })
+            .collect();
+        db.save_undo_stack_with_timestamps(rows.clone()).unwrap();
+        db.save_redo_stack_with_timestamps(rows).unwrap();
+        drop(db);
+
+        // The row that makes this test decisive rather than vacuous: the OLDEST entry in
+        // each table is given a blob that claims to be gzip and is not, so any read that
+        // reaches it fails - and a failed history load restores NOTHING. Without a
+        // windowed query the assertions below therefore see an empty stack, whatever the
+        // in-memory trim would have done afterwards.
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        for table in ["undo_stack", "redo_stack"] {
+            conn.execute(
+                &format!("UPDATE {table} SET command_json = X'1F8B0000FFFF' WHERE sequence = 0"),
+                [],
+            )
+            .unwrap();
+        }
+        drop(conn);
+        assert!(
+            Database::open_existing(&path)
+                .unwrap()
+                .load_undo_stack_with_timestamps()
+                .is_err(),
+            "the poison row must really poison a read that reaches it, or the window \
+             assertions below prove nothing"
+        );
+
+        let state = AppState::new().unwrap();
+        let window = state.undo_stack.lock().unwrap().history_limit();
+        assert!(
+            window < PERSISTED,
+            "the fixture must overflow the window it is testing: {window} vs {PERSISTED}"
+        );
+        assert!(state.open_project(path.clone()).success);
+
+        {
+            let stack = state.undo_stack.lock().unwrap();
+            assert_eq!(
+                stack.len(),
+                window,
+                "a count-window project keeps its window and no more"
+            );
+            assert_eq!(
+                stack.redo_len(),
+                window,
+                "the redo table is bounded the same way - a `.stalx` persists both"
+            );
+            assert!(
+                matches!(
+                    &stack.undo_entries().next().unwrap().command,
+                    Command::UpdateShot { updates, .. }
+                        if updates.comment == Some(Some("edit 399".to_string()))
+                ),
+                "the window has to be the NEWEST rows: the newest entry is the next undo"
+            );
+            assert!(
+                matches!(
+                    &stack.undo_entries().last().unwrap().command,
+                    Command::UpdateShot { updates, .. }
+                        if updates.comment == Some(Some("edit 300".to_string()))
+                ),
+                "...and it must be contiguous down to exactly one window's depth"
+            );
+        }
+
+        // A working history, not merely a short one.
+        assert!(state.undo().success);
+        assert_eq!(
+            state.get_project_state().unwrap().sections[0].shots[0]
+                .comment
+                .as_deref(),
+            Some("comment 399"),
+            "the newest restored entry must still undo to the state it recorded"
+        );
+
+        // And the rows dropped with the oldest history leave no hole behind: the save
+        // renumbers the table from 0, exactly as it does for a history that was never
+        // truncated.
+        assert!(state.save_project(Some(path.clone())).success);
+        let persisted = Database::open_existing(&path)
+            .unwrap()
+            .load_undo_stack_with_timestamps()
+            .unwrap();
+        assert!(!persisted.is_empty());
+        assert_eq!(
+            persisted.iter().map(|(seq, ..)| *seq).collect::<Vec<_>>(),
+            (0..persisted.len() as i64).collect::<Vec<_>>(),
+            "sequences are contiguous from 0 after a truncated load, so nothing that \
+             reads them can trip over the dropped rows"
+        );
+    });
+}
+
 /// Shot with every nullable field populated - the fields a replayed legacy
 /// (pre-v7) undo entry would silently clear under the v7 `double_option`
 /// null-means-clear semantics.

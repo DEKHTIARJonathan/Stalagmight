@@ -76,6 +76,39 @@ const DEFAULT_UNDO_HISTORY_LIMIT: usize = 100;
 /// cost exactly what the budget exists to avoid.
 pub const UNDO_BYTE_BUDGET_BYTES: usize = 32 * 1024 * 1024;
 
+/// Command JSON plus enum/field scaffolding for any entry.
+///
+/// Module-level rather than local to [`UndoStack::estimated_size`] because
+/// [`MAX_PERSISTED_HISTORY_ROWS`] is derived from it and the derivation is only
+/// sound while the two are the same number.
+pub(crate) const ENTRY_OVERHEAD_BYTES: usize = 512;
+
+/// [#469] Hard ceiling on how many persisted history rows ONE load may read.
+///
+/// The persisted tables are attacker-controlled: a `.stalx` is a file the user opens,
+/// and nothing in the schema bounds `undo_stack` / `redo_stack`. The loader used to
+/// `SELECT` and gunzip every row before anything trimmed, so a crafted (or merely
+/// ancient) file could exhaust memory during open, with the in-memory bound armed but
+/// applied too late to help.
+///
+/// A count window project reads its own window (`undo_history_limit`), which is exact.
+/// Full mode has no count at all - its bound is [`UNDO_BYTE_BUDGET_BYTES`] - so this
+/// is the ceiling it reads instead, and it is derived rather than picked: EVERY
+/// restored entry is deserialized with `command_bytes: None`, so
+/// [`UndoStack::estimated_size`] charges it at least [`ENTRY_OVERHEAD_BYTES`]. Once
+/// more than `budget / ENTRY_OVERHEAD_BYTES` entries are in the stack the running
+/// total necessarily exceeds the budget and `trim_to_bytes` evicts from the front.
+/// Reading past this row therefore CANNOT change the loaded stack: the extra rows are
+/// gunzipped, deserialized and then immediately evicted. The cap is lossless by
+/// construction, not a judgement call about how much history is enough.
+///
+/// A byte ceiling on the load was considered and rejected: the in-memory accounting is
+/// an estimate (see [`UndoStack::estimated_size`]), and a count-window project is not
+/// byte-bounded at all, so any byte cutoff would silently drop history that today's
+/// load keeps for a legitimately large project. Bounding the row count is the part
+/// that can be proven not to lose anything.
+pub const MAX_PERSISTED_HISTORY_ROWS: usize = UNDO_BYTE_BUDGET_BYTES / ENTRY_OVERHEAD_BYTES;
+
 /// How a stack's depth is bounded.
 ///
 /// Two shapes rather than one number, because the two are not interchangeable: a

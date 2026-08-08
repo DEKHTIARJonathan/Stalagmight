@@ -1,6 +1,6 @@
 use std::collections::VecDeque;
 
-use super::{DepthLimit, UndoData, UndoEntry, UndoStack};
+use super::{DepthLimit, UndoData, UndoEntry, UndoStack, ENTRY_OVERHEAD_BYTES};
 
 impl UndoStack {
     /// [#303] Estimated serialized size of one entry, in bytes.
@@ -27,8 +27,6 @@ impl UndoStack {
         /// such a map, so a long merge chain's offsets count against the budget
         /// wherever they were recorded.
         const BYTES_PER_OFFSET: usize = 64;
-        /// Command JSON plus enum/field scaffolding for any entry.
-        const ENTRY_OVERHEAD: usize = 512;
 
         let payload = match &entry.undo_data {
             // Exact: these hold the serialized project already.
@@ -72,7 +70,9 @@ impl UndoStack {
         // Restored rows deliberately do not reserialize their command just to rebuild
         // this cache. They retain the historical 512-byte estimate; snapshot and other
         // undo payloads remain the dominant, separately-counted part of the budget.
-        payload + entry.command_bytes.unwrap_or(ENTRY_OVERHEAD)
+        // That floor is what `MAX_PERSISTED_HISTORY_ROWS` is derived from, so a restored
+        // entry must keep costing at least `ENTRY_OVERHEAD_BYTES`.
+        payload + entry.command_bytes.unwrap_or(ENTRY_OVERHEAD_BYTES)
     }
 
     /// [#303] Total estimated size of the undo stack (the budget's subject).

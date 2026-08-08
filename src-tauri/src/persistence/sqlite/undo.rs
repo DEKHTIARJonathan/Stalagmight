@@ -3,6 +3,7 @@ use chrono::{DateTime, Utc};
 use rusqlite::{params, OptionalExtension};
 
 use super::{compress_json, decompress_json, Database};
+use crate::core::undo::MAX_PERSISTED_HISTORY_ROWS;
 
 type CompressedHistoryRow = (i64, Vec<u8>, Vec<u8>, Option<String>);
 type HistoryRow = (i64, String, String, Option<String>);
@@ -134,12 +135,59 @@ impl Database {
         Ok(())
     }
 
+    /// [#469] The newest `max_rows` rows of a history table, OLDEST-first.
+    ///
+    /// The `ORDER BY sequence DESC LIMIT ?1` is the whole point: an ascending `SELECT`
+    /// with a `LIMIT` would keep the OLDEST window, which is the half a restore throws
+    /// away, and an unlimited one is what let a crafted table be read whole. The result
+    /// is reversed back to ascending so every consumer downstream sees the order it
+    /// always saw.
+    fn newest_history_rows(
+        &self,
+        table: &'static str,
+        max_rows: usize,
+    ) -> Result<Vec<CompressedHistoryRow>> {
+        let limit = i64::try_from(max_rows).unwrap_or(i64::MAX);
+        let mut stmt = self.conn.prepare(&format!(
+            "SELECT sequence, command_json, undo_data_json, executed_at FROM {table} \
+             ORDER BY sequence DESC LIMIT ?1"
+        ))?;
+        let rows = stmt.query_map(params![limit], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, Vec<u8>>(1)?,
+                row.get::<_, Vec<u8>>(2)?,
+                row.get::<_, Option<String>>(3)?,
+            ))
+        })?;
+        let mut raw: Vec<CompressedHistoryRow> = Vec::new();
+        for row in rows {
+            raw.push(row?);
+        }
+        raw.reverse();
+        Ok(raw)
+    }
+
     /// Load undo stack from database
+    ///
+    /// [#469] Bounded by [`MAX_PERSISTED_HISTORY_ROWS`]; see
+    /// [`Self::load_undo_stack_capped`].
     pub fn load_undo_stack(&self) -> Result<Vec<(i64, String, String)>> {
+        self.load_undo_stack_capped(MAX_PERSISTED_HISTORY_ROWS)
+    }
+
+    /// [#469] The legacy (no-timestamp) loader, reading at most the newest `max_rows`.
+    ///
+    /// Bounded for the same reason as its timestamped sibling, and separately rather
+    /// than by delegation: this query names only the three columns the legacy shape
+    /// guarantees, so a file old enough to lack `executed_at` still loads.
+    pub fn load_undo_stack_capped(&self, max_rows: usize) -> Result<Vec<(i64, String, String)>> {
+        let limit = i64::try_from(max_rows).unwrap_or(i64::MAX);
         let mut stmt = self.conn.prepare(
-            "SELECT sequence, command_json, undo_data_json FROM undo_stack ORDER BY sequence",
+            "SELECT sequence, command_json, undo_data_json FROM undo_stack \
+             ORDER BY sequence DESC LIMIT ?1",
         )?;
-        let rows = stmt.query_map([], |row| {
+        let rows = stmt.query_map(params![limit], |row| {
             Ok((
                 row.get::<_, i64>(0)?,
                 row.get::<_, Vec<u8>>(1)?,
@@ -154,32 +202,42 @@ impl Database {
             let undo_data_json = decompress_json(&undo_bytes)?;
             entries.push((seq, command_json, undo_data_json));
         }
+        // Read newest-first for the LIMIT; hand back ascending sequence order.
+        entries.reverse();
         Ok(entries)
     }
 
     /// Load undo stack from database with timestamps
+    ///
+    /// [#469] Bounded by [`MAX_PERSISTED_HISTORY_ROWS`]. The load paths pass their own,
+    /// tighter window to [`Self::load_undo_stack_with_timestamps_capped`]; this default
+    /// exists so that no caller - present or future - can read the table whole.
     pub fn load_undo_stack_with_timestamps(
         &self,
     ) -> Result<Vec<(i64, String, String, Option<String>)>> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT sequence, command_json, undo_data_json, executed_at FROM undo_stack ORDER BY sequence")?;
-        let rows = stmt.query_map([], |row| {
-            Ok((
-                row.get::<_, i64>(0)?,
-                row.get::<_, Vec<u8>>(1)?,
-                row.get::<_, Vec<u8>>(2)?,
-                row.get::<_, Option<String>>(3)?,
-            ))
-        })?;
+        self.load_undo_stack_with_timestamps_capped(MAX_PERSISTED_HISTORY_ROWS)
+    }
 
+    /// [#469] Load at most the newest `max_rows` undo rows, oldest-first.
+    ///
+    /// `max_rows` is the count bound that will be in force when these rows are restored:
+    /// the configured `undo_history_limit` for a count-window project, or
+    /// [`MAX_PERSISTED_HISTORY_ROWS`] for a byte-budgeted (Full-mode) one. Rows past it
+    /// are ones the restore's own `enforce_depth_limit` would evict, so not reading them
+    /// costs no history - and stops a table with a million rows in it from being
+    /// gunzipped into memory first.
+    ///
+    /// Dropping the oldest rows cannot corrupt sequence bookkeeping: the returned
+    /// sequences are discarded by both load paths, and every save renumbers the table
+    /// 0..n (`save_undo_stack_with_timestamps`).
+    pub fn load_undo_stack_with_timestamps_capped(
+        &self,
+        max_rows: usize,
+    ) -> Result<Vec<(i64, String, String, Option<String>)>> {
         // Decompress independent blobs in bounded batches. Large snapshot payloads
         // still use multiple cores, but a deep Full-mode history cannot create two
         // operating-system threads for every row at once.
-        let mut raw: Vec<CompressedHistoryRow> = Vec::new();
-        for row in rows {
-            raw.push(row?);
-        }
+        let raw = self.newest_history_rows("undo_stack", max_rows)?;
         decompress_history_rows(raw, "undo")
     }
 
@@ -284,27 +342,26 @@ impl Database {
     }
 
     /// Load redo stack from database with timestamps
+    ///
+    /// [#469] Bounded by [`MAX_PERSISTED_HISTORY_ROWS`], exactly as the undo side.
     pub fn load_redo_stack_with_timestamps(
         &self,
     ) -> Result<Vec<(i64, String, String, Option<String>)>> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT sequence, command_json, undo_data_json, executed_at FROM redo_stack ORDER BY sequence")?;
-        let rows = stmt.query_map([], |row| {
-            Ok((
-                row.get::<_, i64>(0)?,
-                row.get::<_, Vec<u8>>(1)?,
-                row.get::<_, Vec<u8>>(2)?,
-                row.get::<_, Option<String>>(3)?,
-            ))
-        })?;
+        self.load_redo_stack_with_timestamps_capped(MAX_PERSISTED_HISTORY_ROWS)
+    }
 
+    /// [#469] Load at most the newest `max_rows` redo rows, oldest-first.
+    ///
+    /// The redo table gets the same treatment as the undo one because the bound it is
+    /// read under is the same: `enforce_depth_limit` applies the active count or byte
+    /// limit to BOTH stacks independently, and `.stalx` persists both.
+    pub fn load_redo_stack_with_timestamps_capped(
+        &self,
+        max_rows: usize,
+    ) -> Result<Vec<(i64, String, String, Option<String>)>> {
         // Parallel gzip decompression of the per-entry blobs - see
-        // load_undo_stack_with_timestamps for the rationale.
-        let mut raw: Vec<CompressedHistoryRow> = Vec::new();
-        for row in rows {
-            raw.push(row?);
-        }
+        // load_undo_stack_with_timestamps_capped for the rationale.
+        let raw = self.newest_history_rows("redo_stack", max_rows)?;
         decompress_history_rows(raw, "redo")
     }
 
@@ -347,6 +404,110 @@ mod tests {
     fn decompression_batch_never_exceeds_the_thread_cap() {
         assert!(rows_per_decompress_batch() >= 1);
         assert!(rows_per_decompress_batch() * 2 <= MAX_DECOMPRESS_THREADS);
+    }
+
+    /// [#469] A table with far more rows than the bound loads only the NEWEST window,
+    /// in ascending sequence order.
+    ///
+    /// Newest, because that is the end a restore keeps: `enforce_depth_limit` evicts
+    /// from the front. Ascending, because every consumer downstream reads stack order
+    /// off the returned vector, and a `DESC` result would restore the history reversed.
+    #[test]
+    fn a_bloated_history_table_loads_only_the_newest_window_in_ascending_order() {
+        const ROWS: i64 = 250;
+        let db = Database::in_memory().unwrap();
+        let rows: Vec<_> = (0..ROWS)
+            .map(|i| (format!(r#"{{"n":{i}}}"#), format!(r#"{{"u":{i}}}"#), None))
+            .collect();
+        db.save_undo_stack_with_timestamps(rows.clone()).unwrap();
+        db.save_redo_stack_with_timestamps(rows).unwrap();
+
+        let undo = db.load_undo_stack_with_timestamps_capped(10).unwrap();
+        assert_eq!(
+            undo.iter().map(|(seq, ..)| *seq).collect::<Vec<_>>(),
+            (240..250).collect::<Vec<_>>(),
+            "the cap must keep the newest rows, in ascending sequence order"
+        );
+        assert_eq!(undo.first().unwrap().1, r#"{"n":240}"#);
+        assert_eq!(undo.last().unwrap().1, r#"{"n":249}"#);
+
+        let redo = db.load_redo_stack_with_timestamps_capped(3).unwrap();
+        assert_eq!(
+            redo.iter().map(|(seq, ..)| *seq).collect::<Vec<_>>(),
+            vec![247, 248, 249],
+            "the redo table is bounded the same way as the undo one"
+        );
+
+        let legacy = db.load_undo_stack_capped(4).unwrap();
+        assert_eq!(
+            legacy.iter().map(|(seq, ..)| *seq).collect::<Vec<_>>(),
+            vec![246, 247, 248, 249],
+            "the legacy no-timestamp loader is bounded too, and returns ascending"
+        );
+        assert_eq!(legacy.last().unwrap().1, r#"{"n":249}"#);
+
+        // A cap the table does not reach changes nothing - the exact-restore behaviour
+        // every other test in the suite relies on.
+        assert_eq!(
+            db.load_undo_stack_with_timestamps_capped(250)
+                .unwrap()
+                .len(),
+            250
+        );
+        assert_eq!(db.load_undo_stack_with_timestamps().unwrap().len(), 250);
+        assert_eq!(db.load_redo_stack_with_timestamps().unwrap().len(), 250);
+        assert_eq!(db.load_undo_stack().unwrap().len(), 250);
+        assert_eq!(
+            db.load_undo_stack().unwrap().first().unwrap().1,
+            r#"{"n":0}"#,
+            "an unbounded-in-practice load still starts at the oldest row"
+        );
+        // A zero window reads nothing rather than everything.
+        assert!(db
+            .load_undo_stack_with_timestamps_capped(0)
+            .unwrap()
+            .is_empty());
+    }
+
+    /// [#469] The default ceiling is DERIVED from the byte budget, and the derivation
+    /// only holds while a restored entry costs at least `ENTRY_OVERHEAD_BYTES`.
+    ///
+    /// That is what makes the cap lossless: past `budget / ENTRY_OVERHEAD_BYTES`
+    /// entries the byte trim necessarily evicts, so the rows the cap does not read are
+    /// rows the restore would have thrown away.
+    #[test]
+    fn the_default_history_load_ceiling_is_derived_from_the_byte_budget() {
+        use crate::core::undo::{
+            UndoData, UndoEntry, ENTRY_OVERHEAD_BYTES, UNDO_BYTE_BUDGET_BYTES,
+        };
+        use crate::core::{Command, UndoStack};
+
+        assert_eq!(
+            MAX_PERSISTED_HISTORY_ROWS * ENTRY_OVERHEAD_BYTES,
+            UNDO_BYTE_BUDGET_BYTES,
+            "the load ceiling is the byte budget divided by the per-entry floor"
+        );
+        // The floor itself: a restored entry carries no `command_bytes`, so it is
+        // charged the overhead whatever its command was.
+        let restored = UndoStack::deserialize_entry_with_timestamp(
+            r#"{"type":"close_project"}"#,
+            r#""None""#,
+            None,
+        )
+        .unwrap();
+        assert!(restored.command_bytes.is_none());
+        assert!(
+            UndoStack::estimated_size(&restored) >= ENTRY_OVERHEAD_BYTES,
+            "a restored entry must cost at least the overhead the ceiling is derived from"
+        );
+        // ...and the same holds for the emptiest entry that can be constructed at all.
+        let bare = UndoEntry {
+            command_bytes: None,
+            command: Command::CloseProject,
+            undo_data: UndoData::None,
+            timestamp: None,
+        };
+        assert_eq!(UndoStack::estimated_size(&bare), ENTRY_OVERHEAD_BYTES);
     }
 
     #[test]
