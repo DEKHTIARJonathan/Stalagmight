@@ -41,7 +41,11 @@ old destructive apply path was removed.
 > Migration: a project whose shots were already baked by a *previous* destructive adjustment
 > cannot recover its original measurements (they were overwritten and never stored). Such a
 > project opens looking identical (legacy closures keep `is_aligned = true`) and is never
-> rewritten again.
+> rewritten again. That promise is explicit in the alignment re-measure below: it governs
+> `Move` closures only, and a baked closure carries a different strategy, so nothing demotes
+> it. Its shots were rewritten to make the claim true; the app cannot know what the bake did
+> to them, so it leaves the claim as recorded and `check_closure_alignment` reports a torn
+> one rather than silently changing co-location and move rigidity underneath the survey.
 
 ## Strategy Summary
 
@@ -191,6 +195,40 @@ Closures are treated as co-location relationships **only after alignment** (like
 - Before batch adjustment, closure endpoints move independently (not co-located).
 - Immovable stations (zero datums and their merge/aligned-closure neighbors) are computed via BFS over merges + aligned closures.
 - There is no longer a KeepRaw exception; closure participation is gated by alignment.
+
+## `is_aligned` is a MEASUREMENT (#469)
+
+An aligned closure is a **rigid edge**: `get_rigid_connected_section_ids` follows it
+like a merge, the offset cascade solves through it, co-location averages station depth
+across it, and `compute_frozen_shots` freezes the shots of the loop it closes. So the
+flag is a claim about geometry, and it is measured rather than asserted. One predicate,
+`Project::closure_alignment_stamp`, with three terms:
+
+| term | why |
+|---|---|
+| strategy is `Move` | only the snap-to-merge workflow claims coincidence. A `Batch` / `LeastSquaresWeighted` closure RECORDS a misclosure - it is the soft edge the Closures Computed solve relaxes, and rigidifying it would fight what it exists for |
+| measured horizontal end gap `< MERGE_ALIGNMENT_INVARIANT_M` (1 cm) | the merge INVARIANT, not the 5 cm reporting tolerance: the cascade treats the edge as a merge, so it is held to what a merge is held to. It also makes a fresh stamp unable to trip `check_closure_alignment`, since `INVARIANT <= TOLERANCE` is enforced |
+| the rigid edge would not double-anchor | `merge_would_double_anchor`, the refusal `plan_merge_promotion` makes: an edge fusing two independently zero-datum-anchored merge components is the over-constraint of #464, which no cascade, realign or Repair can satisfy. Unlike a promotion an alignment translates nothing, so refusing costs no geometry - the pair simply stays a soft closure |
+
+Three sites apply it, and they are the same predicate so memory and disk cannot
+disagree about what a closure is: `create_loop_closure`, `assign_closure_ids` (which
+used to FORCE `is_aligned = true` on every `Move` closure on every open - fixing only
+the creation site would have made a closure honestly saved as `0` come straight back
+as `1`), and `Project::remeasure_closure_alignment`, a derived idempotent sweep run
+from `AppState::reconcile_geometry`, from `redrive_offsets_after_load` and from
+Repair - each LAST, after the re-solve that settles the geometry it measures.
+
+The user-facing snap-to-merge path is unchanged: `ClosureDialog` sends `Move` only
+behind the move commands that made the two stations one point, so the measurement says
+exactly what the assertion used to. What changes is every other route - IPC, the agent
+harness, the fuzzers - which could stamp an arbitrary pair metres apart as closed, and
+a closure TORN LATER by an edit that moves one endpoint. Neither can persist a lie now:
+the claim follows the geometry in both directions, including across an undo (see
+[undo-redo.md](undo-redo.md) for why re-deriving it on an inverse is still a restore).
+
+The sweep measures the GAP only. The stored misclosure metrics stay as recorded -
+re-measuring them is a Dijkstra per closure, which does not belong in a per-command
+epilogue, and `error_percentage` already means "as measured when recorded".
 
 ## Legacy Strategy Mapping
 

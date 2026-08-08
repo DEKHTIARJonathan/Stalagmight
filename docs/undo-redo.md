@@ -285,6 +285,34 @@ can change the frame, and widening those would put an N-entry map on every one.
 Entries persisted with a narrow map still restore through the same arm - what they
 recorded, and no more.
 
+#### The one derived field an inverse RE-DERIVES: `is_aligned` (#469, item 2)
+
+`reconcile_geometry` runs on every history move as well as every forward command,
+and it now re-derives two things rather than one: the section offsets
+(`realign_merges`) and every snap-to-merge closure's alignment claim
+(`Project::remeasure_closure_alignment`, LAST - the realign can move a section,
+which changes the very gaps the claim is measured from). No undo arm captures
+`is_aligned` at all, and none needs to.
+
+That looks like the opposite of the rule above, and it is not, because the claim is
+a **total function of the rest of the state**: `Move` strategy, a measured end gap
+under `MERGE_ALIGNMENT_INVARIANT_M`, and no double-anchoring, none of which reads
+any closure flag (see `Project::closure_alignment_stamp`). Every state the history
+records therefore satisfies `flag == stamp(state)`, so an inverse that restores the
+rest of the state reproduces the flag it recorded. The frame renormalisation has no
+such property - it is a translation, not a function of what it translates - which is
+why that one is forward-only and this one is not.
+
+The direction matters. A sweep that could only DEMOTE would break the roundtrip
+outright: `UpdateShot`'s `PreviousValues` carries no closure flag, so tearing an
+aligned closure and undoing it would hand the geometry back with the claim stuck
+false - a state the history never held. The sweep sets the flag BOTH ways.
+
+Repair carries the same sweep itself (it never goes through `reconcile_geometry`),
+and so does `redrive_offsets_after_load`, each after its own re-solve. A boundary
+that left a stale claim behind would have the next command's sweep correct it, i.e.
+produce a difference against a snapshot recorded one command earlier.
+
 ### An inverse consults no user-intent guard (#413, findings 3 and 6)
 
 **If a forward command was permitted, its inverse must be too.** Undo of

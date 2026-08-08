@@ -298,6 +298,33 @@
 //!   half: the commands that ORPHAN a closure convert it themselves, so the LOAD
 //!   has nothing left to reclassify - and with the entry above, that now holds
 //!   for the one command it did not cover.
+//! * **RESOLVED, and FIXED: a closure ASSERTED that its endpoints coincided.**
+//!   Recorded on #413 as "arguably intended staleness after large geometry
+//!   edits" and carried to #469 item 2: `COMBINED=1` runs left the post-run
+//!   integrity sweep reporting a closure "marked closed but its ends are 5.86 m
+//!   apart", with every IN-RUN oracle green. That combination is the whole
+//!   signature: `Verdict` compares one state's integrity messages against
+//!   another's, and this message was reproduced identically in both directions,
+//!   so nothing here could see it - only the harness's post-run sweep
+//!   (`e2e/agent/lib/oracles.ts`) named it.
+//!
+//!   The mechanism was the CREATE, not the drift. `create_loop_closure` stamped
+//!   `is_aligned: strategy == Move` without measuring, one line after
+//!   `compute_closure_metrics` had computed the refutation - and this module's
+//!   generator draws `Move` for half its closures over an arbitrary cross-section
+//!   pair, with `moveSection(+/-1000 m)` supplying the distance. Nothing could
+//!   ever heal it: the flag was never set back to false, `realign_merges` looks at
+//!   merges only, and `cascade_connection_offsets` deliberately preserves a
+//!   redundant closure's residual.
+//!
+//!   FIXED by making the flag a MEASUREMENT re-derived after every geometry
+//!   change (`Project::closure_alignment_stamp` /
+//!   `remeasure_closure_alignment`, models/project/offsets.rs), which is safe to
+//!   run on an inverse because the stamp is total and blind to the flags it
+//!   computes - see that function and docs/undo-redo.md. `COMBINED=1 SEEDS=40
+//!   ITERATIONS=300` is 40/40 on both halves after it, and the reductions are
+//!   pinned in `open_undo_bugs_tests.rs` (six tests, from the birth route to the
+//!   save/reopen convergence) and `models/project/tests.rs` (three).
 //! * RESOLVED as FINDING 20, and now FIXED. `HORIZON=1 SEEDS=1 ITERATIONS=2000`
 //!   left a merged pair 1.58 cm apart after an `updateShot`, because
 //!   `realign_after_shot_edit` returned early when the edited section's merge
