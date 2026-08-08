@@ -538,7 +538,7 @@ describe('writeTmlZip', () => {
   it('stores the document as Data.xml by default', () => {
     const archive = writeTmlZip(tmlSpec());
     const text = new TextDecoder().decode(archive);
-    expect(text.startsWith('PK')).toBe(true);
+    expect(text.startsWith('PK\u0003\u0004')).toBe(true);
     expect(text).toContain('Data.xml');
     expect(text).toContain('<CaveFile>');
   });
