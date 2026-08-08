@@ -402,7 +402,8 @@ so it can only ever touch a temp copy.
 | Env var | Effect |
 |---|---|
 | `STALAGMIGHT_FUZZ_FIXTURE` | Which `.stalx` under `e2e/fixtures/` to fuzz, by BASENAME (`fixtureSourcePath`'s `path.basename` is the containment guard). Defaults to `DEFAULT_FIXTURE`. Recorded in the metrics and the log line so a run stays attributable. |
-| `STALAGMIGHT_FUZZ_STREAM` | `v1` restores the ORIGINAL generator set, weights and value ranges, reproducing the legacy draw stream byte for byte. The default v2 stream adds the delete/split family, batches, comment moves, synthetic imports, boundary-biased values and per-run swarm weights - and necessarily draws differently, so v1-era repro lines need this variable. |
+| `STALAGMIGHT_FUZZ_STREAM` | `v1` restores the ORIGINAL generator set, weights and value ranges, reproducing the legacy draw stream byte for byte. The default v2 stream adds the delete/split family, batches, comment moves, synthetic imports, boundary-biased values and per-run swarm weights - and necessarily draws differently, so v1-era repro lines need this variable. `v3` is v2 PLUS the import group; see below. |
+| `STALAGMIGHT_FUZZ_IMPORT_MALFORMED_P` | v3 only: share of generated input files drawn from the corruption catalog rather than written clean. Default 0.2. The same knob, with the same default, that `import-dialog-fuzz` uses. |
 | `STALAGMIGHT_FUZZ_ALLOW_KNOWN_BUGS` | INERT. It used to keep a run going past a mismatch that was entirely a classified known bug; every classifier is deleted now that the findings are fixed, so there is nothing left to allow. Still read, and still named in the failure's `reproduce:` line, so a tolerant-looking invocation cannot be mistaken for one that relaxed something. |
 
 Fixture choice is load-bearing, not cosmetic. The fractal fixture has no loop
@@ -441,6 +442,119 @@ A 60-cell v2 sweep (both fixtures, seeds 1-30, x40) yielded 18 failures and a v2
 repro for bugs 1, 5, 6, 7 and 8; bugs 2, 3 and 4 were not re-found and keep their
 v1 lines, executable with `STALAGMIGHT_FUZZ_STREAM=v1`. The full table is in the
 scenario header.
+
+#### v3: the import stream
+
+```bash
+STALAGMIGHT_FUZZ_STREAM=v3 pnpm agent:scenario undo-redo-fuzz --seed 1 --iterations 80
+STALAGMIGHT_FUZZ_STREAM=v3 pnpm agent:fuzz-matrix --seeds 1..4 --workers 1 --iterations 40
+```
+
+`import_sections` and the four `execute_*_import` commands push ONE undo entry
+covering an arbitrary number of new sections, placements, station comments and
+in-place edits to shots that were already there. That is the widest single
+command in the app, and it is a `ProjectSnapshotPair` - the entry family findings
+8 and 11 both lived in. v3 adds thirteen generators for it
+(`e2e/agent/scenarios/undoRedoFuzzImportActions.ts`), about 22% of a balanced
+run's draws:
+
+- **`importSectionsSynthetic`** - fully synthetic `ImportSectionConfig` batches:
+  0 to 6 sections under a 24-shot cap, all six `ImportPlacement` variants,
+  duplicate names inside one batch, `reverse`, `station_comments` past the end of
+  a section, and refs the targeting digest says are no longer live (the shape a
+  placement takes when it names a section the run has since deleted).
+- **`importSectionsNonFinite`** - one guarded shot field poisoned. This is really
+  the NULL family: `JSON.stringify` spells `NaN` and `Infinity` as `null` on the
+  WebDriver bridge exactly as it does on the real `invoke`, which is the whole
+  premise of `src/utils/importPayloadGuard.ts`.
+- **`importSectionsWithOverlap`** - `existing_shot_updates`, the DMP wizard's
+  overlap interpolation, aimed at the doubly-anchored range the wizard's
+  `useMemo` greys out. The backend refuses it independently
+  (`command_import.rs` collects zero datums, datum-backed merges and aligned
+  closures into `anchor_indices` and skips the section when one sits on each
+  side), and that parity is only testable if something sends the payload the UI
+  will not.
+- **The four file importers** plus the parse-only `importDmp`, on files built by
+  `surveyFileSpecs.ts` / `surveyFileCorrupt.ts` - the same writers
+  `import-dialog-fuzz` uses, never a fixture.
+- **The cheap probes** - `calculateFileHash`, `checkDuplicateImport`,
+  `checkSectionHashes`, `suggestImportPlacement`, `saveAfterImport`.
+
+**v1 and v2 draw identically.** The group is filtered out before the weighted
+name array is built, and appended at its END when it is not, so every index
+`ctx.pick` reads still holds what it held. The `import-heavy` swarm profile is
+likewise appended only under the v3 gate, because merging it into the profile
+list would have changed the divisor every v2 seed picks its profile with. Both
+properties are pinned by `e2e/agent/lib/undoRedoFuzzImportActions.test.ts`, and
+both were re-measured against the pre-v3 tree: v1 fractal seed 4 x60 and v2
+fractal seeds 1 x40 / 4 x60 are metric-for-metric identical before and after.
+
+A **fourth oracle** applies to v3 payloads only. `mustBeRejected` names the two
+shapes that cannot be deserialized at all - a required `f64` arriving `null`, and
+`date: ""` (issue #478, here on the route that BYPASSES the wizard's
+normalisation) - and the run FAILS if the app accepts one. It says nothing about
+the OPTIONAL shot numbers, where `null` legally means "absent": the frontend
+guard refuses those because dropping a measurement is data loss, but the backend
+accepting them is not a defect. It is a pure function of the recorded args rather
+than a flag on the drawn action, which is what lets a replayed trace assert
+exactly what the recording did.
+
+A v3 run legitimately produces `log-error` findings from the oracle sweep: a
+malformed file the parser refuses, or the deliberate missing-file probe, is the
+app reporting a problem properly. Those are findings at severity `error`, which
+does not fail a run.
+
+##### File inputs: what a trace carries, and what it rebuilds
+
+A file-backed import takes a PATH, and a path cannot be recorded verbatim - the
+recording machine's absolute path means nothing to a replayer, and a trace is
+meant to be attachable to a bug report. So a file-backed move records **two**
+steps:
+
+1. a `genFile` carrying the generator SPEC and a session-relative `rel`
+   (`fuzz-files/<content-hash>.<ext>`), and
+2. the `mutate` whose `args[0]` is that same `rel`.
+
+The replayer rebuilds the file from the spec into its OWN directory and then
+resolves `args[0]` against it. `surveyFileWriters.ts` is a pure function of the
+spec, so the rebuilt bytes are identical; the trace carries no fixture (which the
+repo forbids), no bytes, and no absolute path.
+
+`FILE_ARG_ACTIONS` (`e2e/agent/lib/fuzzTrace.ts`) is the single list that says
+"argument zero is a path", and `readTrace` refuses a trace that points one of
+those actions outside the session directory - the same rule every other v2 `rel`
+field has, and for the same reason: a trace is untrusted input, and these
+arguments reach the filesystem instead of the model.
+
+Generated files live under the run's own temp directory and are removed in the
+same `finally` as the save/reload copies. Nothing is lost by deleting them (the
+trace regenerates them), and `pnpm agent:fuzz-shrink` replays this scenario
+hundreds of times per shrink, so leaving them behind is not an option.
+
+Verified end to end: v3 fractal seed 1 x80 recorded with `STALAGMIGHT_FUZZ_TRACE`
+and replayed with `--trace` reproduces the run metric for metric (34 mutations,
+31 undos, 19 redos, 18 rejected, 2 no-ops, depth 15, 66037-byte snapshot) with
+all five `genFile` steps re-materialized.
+
+##### What v3 does not reach
+
+`suggest_orphan_placements` is not a `projectStore` action - `App.tsx` and the
+three import dialogs invoke it directly - and this scenario dispatches store
+actions by name. Widening the bridge to dispatch IPC commands by name for one
+read-only probe would give a recorded trace a much larger surface; the probe is
+covered by `import-dialog-fuzz`, which drives the dialogs that call it.
+
+There is no Rust-tier analogue of the import group, and adding one is a design
+problem rather than a transcription. `Refs::learn`
+(`src-tauri/src/core/state/fuzz_undo_tests.rs`) pairs what a recorded move
+created against what the replayed move created POSITIONALLY, with `zip` and no
+length check - sound only because every existing `Op` creates a fixed number of
+entities (at most one section, one shot, one closure; `BatchOp` has no creating
+variant at all). An import creates an arbitrary number in one move, and
+`execute_import_sections` drops sections whose placement does not resolve, so a
+replay that places one fewer would pair a PREFIX, silently, and the shrinker
+would minimize toward the mis-pairing instead of toward the bug. Whoever adds it
+has to give `learn` a checked, arity-aware pairing first.
 
 The findings are tracked at
 <https://github.com/Stalagmight/Stalagmight/issues/413>, one comment per finding
