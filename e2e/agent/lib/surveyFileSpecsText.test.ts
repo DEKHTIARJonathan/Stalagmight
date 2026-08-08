@@ -297,6 +297,12 @@ describe('randomCompassDatSpec (valid)', () => {
       expect(blocks).toHaveLength(spec.surveys.length);
       for (const [index, block] of blocks.entries()) {
         const lines = compassLines(block);
+        // NON-BLANK cave name. The terminator is `opt(ws(tag("\x0c")))` and
+        // `ws` runs `multispace0` AFTER the form feed, so an all-whitespace
+        // cave-name line is eaten by it: the next survey's `SURVEY NAME:` is
+        // then read as ITS cave name and `many0` stops with no error at all.
+        // Measured - it turned a 3-survey `.dat` into a 1-survey one.
+        expect(lines[0].trim()).not.toBe('');
         expect(lines[1]).toBe(`SURVEY NAME: ${spec.surveys[index].name}`);
         expect(lines[2].startsWith('SURVEY DATE:')).toBe(true);
         expect(lines[3]).toBe('SURVEY TEAM:');

@@ -604,7 +604,18 @@ export function randomCompassDatSpec(rng: Rng, profile: SpecProfile = 'valid'): 
   const malformed = profile === 'malformed';
   const surveyCount = randInt(rng, 1, 3);
   const disjoint = chance(rng, 0.5);
-  const caveName = lineSafe(biasedName(rng, `FUZZ CAVE ${randInt(rng, 100, 999)}`));
+  // NON-BLANK, always, and the reason is worth stating because the failure it
+  // causes is silent and total. A survey terminator is
+  // `opt(ws(tag("\x0c")))` (`survey/parser/mod.rs:147`), and `ws` runs
+  // `multispace0` AFTER the form feed - so a cave-name line that is empty or
+  // all spaces is EATEN by the terminator, the next survey's `SURVEY NAME:`
+  // line is read as its cave name, and `many0` stops there with no error at
+  // all. Measured: a spec whose cave name was a single space rendered 3 surveys
+  // into a `.dat` the parser read as 1, and the whole `.mak` self-check came
+  // back 4 instead of 6.
+  const nominalCaveName = `FUZZ CAVE ${randInt(rng, 100, 999)}`;
+  const drawnCaveName = lineSafe(biasedName(rng, nominalCaveName));
+  const caveName = drawnCaveName.trim() === '' ? nominalCaveName : drawnCaveName;
 
   const surveys: CompassSurveySpec[] = [];
   let previousLast: string | null = null;
