@@ -329,10 +329,14 @@ expected GREEN and STRICT and `STALAGMIGHT_FUZZ_ALLOW_KNOWN_BUGS=1` has nothing
 left to allow. If either goes red the red is the APP's: shrink it
 (`pnpm agent:fuzz-shrink`) and fix the app.
 
-One scenario is EXCLUDED from the gate rather than expected to fail:
-`import-dialog-fuzz`, in `SMOKE_EXCLUDED`. It runs on explicit request only (see
-its section below), and it is expected green with no classifier and no tolerance
-of its own.
+Two scenarios are EXCLUDED from the gate rather than expected to fail:
+`import-dialog-fuzz` and `export-roundtrip-fuzz`, both in `SMOKE_EXCLUDED`. They
+run on explicit request only (see their sections below), and both are expected
+green with no classifier and no tolerance of their own. The export one is out
+for two reasons of its own on top of the wall clock: an episode rasterizes the
+whole survey up to three times, and its round-trip oracles create projects on
+disk and import into them - neither belongs in a gate that runs every scenario
+back to back on one session.
 
 | Scenario | What it asserts |
 |---|---|
@@ -346,6 +350,7 @@ of its own.
 | `save-under-churn` | Mutate+save leaves `isDirty=false`, no `.tmp`, and reopens clean. |
 | `import-repeatedly` | Re-importing a `.tml` keeps the undo stack at or under 100. |
 | `import-dialog-fuzz` | Generates DMP/Ariane/Compass/Walls/GPX files and walks the real import UI at random; per-step coherence plus a per-flow undo-roundtrip / residue / accounting / receipt / temp-file contract (see below). |
+| `export-roundtrip-fuzz` | Exports every format through the modal, the Export-mode panel and the raw store action at hostile destination paths; file/result agreement, refusal parity, a svg/png/pdf differential, byte identity, round-trip convergence and shot survival (see below). |
 | `rapid-project-cycle` | Open/close cycles leave clean project transitions. |
 
 ### undo-redo-fuzz
@@ -626,6 +631,51 @@ moved - the convention `mulberry32`'s header states.
 
 The open findings it has produced are written up in the scenario file's header,
 each with the `reproduce:` line that still runs.
+
+### export-roundtrip-fuzz
+
+The mirror image of `import-dialog-fuzz`: it drives survey data OUT of the app,
+and then back in. Each iteration draws a `{format, route, path shape, options}`
+and exports through the real surface, then asserts that the app's report, the
+filesystem and what the user was told all agree.
+
+Three routes, because they are not interchangeable. The modal Export dialog and
+the Export-mode panel are ONE component (`ExportControls`) over two option sets
+- the dialog's local `useState`, the panel's `exportStore` - and both push the
+answered path through `ensureExtension`, so a destination the user typed is
+REWRITTEN before the command sees it. The raw store action hands the path over
+verbatim, which is the only way the backend's own guards are reached. Each route
+is asserted against its own contract rather than forced to agree move for move.
+
+Ten destination-path shapes, each aimed at a rule somewhere in the stack:
+`NAME.TMLU` (the exporter lowercases before comparing), `a.tml.txt` (the
+extension is replaced, not appended), no extension, a trailing dot, a name
+carrying U+202E, a ~200-character name, `%`/`"`/space, and the two that name a
+file the open project owns - its `.stalx` and the `.plnx` dive-plan sibling.
+
+| Env var | Effect |
+|---|---|
+| `STALAGMIGHT_FUZZ_EXPORT_FORMATS` | csv list of `csv,json,tml,tmlu,png,svg,pdf,preview,diveProfile`. Default all nine. An unknown name is a hard error, not a silent drop - a typo in a matrix cell would otherwise run the full set and be reported as covering something it did not. |
+| `STALAGMIGHT_FUZZ_EXPORT_MAX_DPI` | Ceiling for the DPI draw, default 600. There is no backend ceiling (`export_png` bounds the derived PIXEL dimensions at 16384, not the DPI), so drawing freely mostly measures the size bail. Raise it to go looking for that deliberately. |
+| `STALAGMIGHT_FUZZ_EXPORT_ROUNDTRIP` | `0` turns the X5/X6 import chains off. They are the expensive half: each creates projects on disk and imports into them. |
+| `STALAGMIGHT_FUZZ_EXPORT_MOVES` | Export moves per episode, default 3. |
+| `STALAGMIGHT_FUZZ_EXPORT_SETTLE_MS` | In-page settle cap, default 20000. |
+
+```bash
+pnpm agent:scenario export-roundtrip-fuzz --seed 1 --iterations 10
+# round-trip heavy: every draw is a .tml or .tmlu
+STALAGMIGHT_FUZZ_EXPORT_FORMATS=tml,tmlu \
+  pnpm agent:scenario export-roundtrip-fuzz --seed 4 --iterations 20
+pnpm agent:fuzz-matrix --scenario export-roundtrip-fuzz --seeds 1..3 --workers 1 --iterations 8
+# one format per cell:
+pnpm agent:fuzz-matrix --scenario export-roundtrip-fuzz \
+  --axis STALAGMIGHT_FUZZ_EXPORT_FORMATS=csv,json,tml,png,svg,pdf --seeds 1..2
+```
+
+The nine oracles, the two probe results it recorded rather than asserted (the
+`.plnx` x image guard asymmetry, and the inert `ExportSettings` config
+defaults), and the findings it produced are all written up in the scenario
+file's header, each with the `reproduce:` line that still runs.
 
 ### Three tiers, and which one gates CI
 

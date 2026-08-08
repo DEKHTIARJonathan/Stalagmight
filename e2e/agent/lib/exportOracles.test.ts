@@ -1,0 +1,790 @@
+/**
+ * The pure half of `export-roundtrip-fuzz`'s oracles.
+ *
+ * Two of these functions are MIRRORS of app code that this tier cannot import
+ * (`exportOracles.ts` states why), so the tables below are transcribed straight
+ * from the source they mirror and are the whole reason the mirrors are allowed
+ * to exist. A drift in `src/utils/fileDialogs.ts` or `src-tauri/src/export/csv.rs`
+ * has to fail HERE, loudly, rather than turn the fuzzer into something that
+ * checks a path the app never writes to.
+ */
+import { describe, expect, it } from 'vitest';
+
+import {
+  canonicalizeUuids,
+  checkByteIdentity,
+  checkConvergence,
+  checkExportModeInvariants,
+  checkExportStoreReset,
+  checkFileResult,
+  checkFormatDifferential,
+  checkNoDuplicateUuids,
+  checkOptionIndependence,
+  checkProjectFileSurvived,
+  checkShotMultiset,
+  commentMultisetDelta,
+  csvTextViolations,
+  ensureExtensionMirror,
+  escapeCsvMirror,
+  exportBaseName,
+  ExportOracleError,
+  finalizeExportPath,
+  multisetDelta,
+  naturalExtension,
+  neutralisedForm,
+  parseCsvRows,
+  PATH_SHAPES,
+  shotKey,
+  type ExportAttempt,
+  type ModeSnapshot,
+  type OptionSnapshot,
+  type PathShape,
+  type ShotIdentity,
+} from './exportOracles';
+
+const REPRO = 'reproduce: pnpm agent:scenario export-roundtrip-fuzz --seed 1 --iterations 1';
+
+// ---------------------------------------------------------------------------
+// Path shapes
+// ---------------------------------------------------------------------------
+
+describe('exportBaseName', () => {
+  it('produces a plain basename for every generatable shape', () => {
+    const generatable = PATH_SHAPES.filter((s) => s !== 'openProject' && s !== 'plnxSibling');
+    // Nine shapes are listed; two name a file the project owns and are supplied
+    // by the scenario, so exactly eight are generatable.
+    expect(generatable).toHaveLength(8);
+    for (const shape of generatable) {
+      const name = exportBaseName(shape, 'csv', 7);
+      expect(name).not.toBe('');
+      expect(name.startsWith('.')).toBe(false);
+      expect(name).not.toContain('/');
+      expect(name).not.toContain('\\');
+      expect(name.split(/[/\\]/).includes('..')).toBe(false);
+      // Under NAME_MAX on every filesystem the harness runs on.
+      expect(Buffer.byteLength(name, 'utf8')).toBeLessThan(255);
+    }
+  });
+
+  it('refuses to invent a name for a project-owned shape', () => {
+    for (const shape of ['openProject', 'plnxSibling'] as PathShape[]) {
+      expect(() => exportBaseName(shape, 'csv', 1)).toThrow(/open project owns/);
+    }
+  });
+
+  it('gives each shape the property it exists to exercise', () => {
+    expect(exportBaseName('normal', 'csv', 1)).toBe('export-1.csv');
+    expect(exportBaseName('upperTmlu', 'tml', 2)).toBe('EXPORT-2.TMLU');
+    expect(exportBaseName('doubleExtension', 'tml', 3)).toBe('export-3.tml.txt');
+    expect(exportBaseName('noExtension', 'csv', 4)).toBe('export-4');
+    expect(exportBaseName('trailingDot', 'csv', 5)).toBe('export-5.');
+    expect(exportBaseName('unicodeRtl', 'svg', 6)).toContain('\u202e');
+    expect(exportBaseName('longName', 'png', 7).length).toBeGreaterThan(190);
+    expect(exportBaseName('percentQuoteSpace', 'pdf', 8)).toBe('export-8 100% "quoted".pdf');
+  });
+
+  it('keeps the long name deterministic in LENGTH regardless of the sequence number', () => {
+    // The pad is computed from the stem, so a two-digit sequence must not push
+    // the name past the ~200 target - otherwise a late iteration would test a
+    // different thing from an early one.
+    for (const seq of [1, 42, 999]) {
+      expect(exportBaseName('longName', 'png', seq).length).toBeLessThanOrEqual(205);
+    }
+  });
+});
+
+describe('naturalExtension', () => {
+  it('maps every format to what the app forces', () => {
+    expect(naturalExtension('csv')).toBe('csv');
+    expect(naturalExtension('json')).toBe('json');
+    expect(naturalExtension('tml')).toBe('tml');
+    expect(naturalExtension('tmlu')).toBe('tmlu');
+    expect(naturalExtension('png')).toBe('png');
+    expect(naturalExtension('svg')).toBe('svg');
+    expect(naturalExtension('pdf')).toBe('pdf');
+    // ProfileChart.onExport does ensureExtension(path, '.xml').
+    expect(naturalExtension('diveProfile')).toBe('xml');
+    expect(naturalExtension('preview')).toBe('svg');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Mirror 1: ensureExtension
+// ---------------------------------------------------------------------------
+
+describe('ensureExtensionMirror (src/utils/fileDialogs.ts:49-65)', () => {
+  // Transcribed from the source: the rule is "already ends in the extension ->
+  // unchanged; a dot AFTER the last separator -> REPLACE from that dot;
+  // otherwise append".
+  const table: [string, string, string][] = [
+    ['/x/out.csv', 'csv', '/x/out.csv'],
+    ['/x/out.CSV', 'csv', '/x/out.CSV'],
+    ['/x/out', 'csv', '/x/out.csv'],
+    ['/x/out.txt', 'csv', '/x/out.csv'],
+    ['/x/out.tml.txt', 'tml', '/x/out.tml.tml'],
+    ['/x/out.', 'csv', '/x/out.csv'],
+    // The dot is in a DIRECTORY, not the file name: appended, not replaced.
+    ['/a.b/out', 'csv', '/a.b/out.csv'],
+    ['/.agent-artifacts/sessions/s1/out', 'json', '/.agent-artifacts/sessions/s1/out.json'],
+    // A leading dot in the extension argument is stripped.
+    ['/x/out', '.png', '/x/out.png'],
+    // Windows separator.
+    ['C:\\x\\out.txt', 'svg', 'C:\\x\\out.svg'],
+    // The open project's own path, which is why the modal route never reaches
+    // the backend guard.
+    ['/x/cave.stalx', 'csv', '/x/cave.csv'],
+  ];
+
+  it.each(table)('%s + %s -> %s', (input, extension, expected) => {
+    expect(ensureExtensionMirror(input, extension)).toBe(expected);
+  });
+
+  it('REPLACES rather than appends - the mistake a from-memory mirror makes', () => {
+    expect(ensureExtensionMirror('/x/out.txt', 'csv')).not.toBe('/x/out.txt.csv');
+  });
+});
+
+describe('finalizeExportPath (ExportControls.handleExport)', () => {
+  it('keeps a .tml or .tmlu the user already typed', () => {
+    expect(finalizeExportPath('/x/out.tmlu', 'tml')).toBe('/x/out.tmlu');
+    expect(finalizeExportPath('/x/OUT.TMLU', 'tml')).toBe('/x/OUT.TMLU');
+    expect(finalizeExportPath('/x/out.tml', 'tml')).toBe('/x/out.tml');
+  });
+
+  it('forces .tml when the typed path has any other extension', () => {
+    expect(finalizeExportPath('/x/out.tml.txt', 'tml')).toBe('/x/out.tml.tml');
+    expect(finalizeExportPath('/x/out', 'tml')).toBe('/x/out.tml');
+    expect(finalizeExportPath('/x/out.', 'tml')).toBe('/x/out.tml');
+  });
+
+  it('forces .tml for a tmlu DRAW too - the Format select has no tmlu option', () => {
+    // `.tmlu` is reachable through the UI only by typing it into the save
+    // dialog, which is what the `upperTmlu` path shape does. A tmlu draw at any
+    // other shape lands on `.tml`, and predicting `.tmlu` made X1 call every
+    // such export a silent failure.
+    expect(finalizeExportPath('/x/out', 'tmlu')).toBe('/x/out.tml');
+    expect(finalizeExportPath('/x/out.txt', 'tmlu')).toBe('/x/out.tml');
+    expect(finalizeExportPath('/x/OUT.TMLU', 'tmlu')).toBe('/x/OUT.TMLU');
+  });
+
+  it('forces the data format for csv/json and the image format for png/svg/pdf', () => {
+    expect(finalizeExportPath('/x/out.txt', 'csv')).toBe('/x/out.csv');
+    expect(finalizeExportPath('/x/out.txt', 'json')).toBe('/x/out.json');
+    expect(finalizeExportPath('/x/out.txt', 'png')).toBe('/x/out.png');
+    expect(finalizeExportPath('/x/out.txt', 'pdf')).toBe('/x/out.pdf');
+  });
+
+  it('REDIRECTS an export aimed at the open project, which is why X2 is per-route', () => {
+    // The UI never reaches the backend's refusal for these: the extension
+    // forcing has already turned the path into a different file.
+    expect(finalizeExportPath('/x/cave.stalx', 'csv')).toBe('/x/cave.csv');
+    expect(finalizeExportPath('/x/cave.plnx', 'png')).toBe('/x/cave.png');
+    // ... except for TML, where `.stalx` is neither .tml nor .tmlu, so it is
+    // still rewritten. There is no shape where the modal hands the raw path on.
+    expect(finalizeExportPath('/x/cave.stalx', 'tml')).toBe('/x/cave.tml');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Mirror 2: escape_csv
+// ---------------------------------------------------------------------------
+
+describe('escapeCsvMirror (src-tauri/src/export/csv.rs:66-79)', () => {
+  const table: [string, string][] = [
+    ['', ''],
+    ['plain', 'plain'],
+    // Formula injection: neutralised with a leading apostrophe, and NOT quoted
+    // when nothing in the quote-trigger set is present.
+    ["=cmd|' /C calc'!A0", "'=cmd|' /C calc'!A0"],
+    ['+1+1', "'+1+1"],
+    ['-2+3', "'-2+3"],
+    ['@SUM(1)', "'@SUM(1)"],
+    // A leading TAB is in the neutralisation set and in NO quote-trigger set,
+    // so it comes out neutralised and unquoted. Easy to get wrong.
+    ['\tleading tab', "'\tleading tab"],
+    // A leading CR is in BOTH sets: neutralised, then quoted.
+    ['\rleading carriage return', '"\'\rleading carriage return"'],
+    // A leading LF is in neither neutralisation set but IS a quote trigger.
+    ['\nleading newline', '"\nleading newline"'],
+    // Quoting and doubling.
+    ['a,b', '"a,b"'],
+    ['say "hi"', '"say ""hi"""'],
+    ['line1\nline2', '"line1\nline2"'],
+    // Neutralise FIRST: the apostrophe is INSIDE the quotes.
+    ['=a,b', '"\'=a,b"'],
+    // A formula leader that is not FIRST is untouched.
+    ['x=1', 'x=1'],
+    // Non-ASCII passes through.
+    ['\u6d1e\u7a74', '\u6d1e\u7a74'],
+    ['part one\u200bpart two', 'part one\u200bpart two'],
+  ];
+
+  it.each(table)('%j -> %j', (input, expected) => {
+    expect(escapeCsvMirror(input)).toBe(expected);
+  });
+
+  it('neutralises before quoting, never after', () => {
+    // The failure mode the Rust comment calls out: an apostrophe stranded
+    // OUTSIDE the quotes, which a spreadsheet would then not honour.
+    expect(escapeCsvMirror('=a,b')).not.toBe('\'"=a,b"');
+  });
+});
+
+describe('parseCsvRows', () => {
+  it('reads quoted fields containing separators and newlines', () => {
+    const rows = parseCsvRows('a,b\n"x,y","p\nq"\n');
+    expect(rows).toEqual([
+      ['a', 'b'],
+      ['x,y', 'p\nq'],
+    ]);
+  });
+
+  it('unescapes doubled quotes', () => {
+    expect(parseCsvRows('"say ""hi"""\n')).toEqual([['say "hi"']]);
+  });
+
+  it('accepts CRLF and LF row separators but not a bare CR', () => {
+    expect(parseCsvRows('a\r\nb\n')).toEqual([['a'], ['b']]);
+    // `writeln!` emits LF, so a bare CR inside a record is DATA. Splitting on
+    // it would tear a row the exporter meant to keep whole.
+    expect(parseCsvRows('a\rb\n')).toEqual([['a\rb']]);
+  });
+
+  it('round-trips everything escapeCsvMirror can produce', () => {
+    const values = [
+      'plain',
+      '=cmd',
+      'a,b',
+      'say "hi"',
+      'line1\nline2',
+      '\tleading tab',
+      '',
+      '\u202eoverridden',
+    ];
+    const line = values.map(escapeCsvMirror).join(',');
+    expect(parseCsvRows(`${line}\n`)[0]).toEqual(values.map(neutralisedForm));
+  });
+});
+
+describe('csvTextViolations', () => {
+  const header =
+    'section_id,section_name,shot_id,length,azimuth_in,azimuth_out,depth_in,depth_out,left,right,up,down,kind,comment';
+  const row = (name: string, comment: string): string =>
+    [
+      '1',
+      escapeCsvMirror(name),
+      '1',
+      '1.00',
+      '0.0',
+      '0.0',
+      '0.00',
+      '0.00',
+      '',
+      '',
+      '',
+      '',
+      'Permanent',
+      escapeCsvMirror(comment),
+    ].join(',');
+
+  it('accepts a correctly escaped file and finds every seeded comment', () => {
+    const hostile = ["=cmd|' /C calc'!A0", 'a,b', 'say "hi"', '\tleading tab', 'line1\nline2'];
+    const text = `${header}\n${hostile.map((c) => row('Cueva "Nueva", 1', c)).join('\n')}\n`;
+    const result = csvTextViolations(text, hostile);
+    expect(result.violations).toEqual([]);
+    expect(result.missing).toEqual([]);
+    expect(result.rows).toBe(hostile.length + 1);
+  });
+
+  it('reports an UN-NEUTRALISED formula cell', () => {
+    // What a regression in escape_csv would produce: the raw `=` reaches the
+    // file, and the next spreadsheet to open it evaluates the cell.
+    const text = `${header}\n1,Sec,1,1.00,0.0,0.0,0.00,0.00,,,,,Permanent,=cmd\n`;
+    const result = csvTextViolations(text, ['=cmd']);
+    // The cell parses as `=cmd`, which escape_csv would have written as `'=cmd`.
+    expect(result.violations.map((v) => v.column)).toContain('comment');
+    // And the seeded comment is reported missing, because its written form
+    // (neutralised) is not present.
+    expect(result.missing).toEqual(['=cmd']);
+  });
+
+  it('reports a row torn by an unquoted separator', () => {
+    const text = `${header}\n1,Sec,1,1.00,0.0,0.0,0.00,0.00,,,,,Permanent,a,b\n`;
+    const result = csvTextViolations(text, []);
+    // 15 fields against a 14-column header. Note every surviving cell here is
+    // individually well-formed (`a` needs no escaping), which is why the field
+    // COUNT has to be its own check rather than a consequence of the per-cell
+    // shape check.
+    expect(parseCsvRows(text)[1]).toHaveLength(15);
+    expect(result.violations.map((v) => v.column)).toContain('(record)');
+  });
+
+  it('reports a comment that did not survive at all', () => {
+    const text = `${header}\n1,Sec,1,1.00,0.0,0.0,0.00,0.00,,,,,Permanent,\n`;
+    expect(csvTextViolations(text, ['important note']).missing).toEqual(['important note']);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Canonicalization
+// ---------------------------------------------------------------------------
+
+describe('canonicalizeUuids', () => {
+  const A = '11111111-2222-4333-8444-555555555555';
+  const B = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
+
+  it('replaces uuids positionally and keeps repeats consistent', () => {
+    expect(canonicalizeUuids(`<a>${A}</a><b>${B}</b><c>${A}</c>`)).toBe(
+      '<a><uuid-0></a><b><uuid-1></b><c><uuid-0></c>',
+    );
+  });
+
+  it('keeps the REPEAT STRUCTURE, which a single constant token would flatten', () => {
+    // One uuid on two shots vs two distinct uuids is exactly the difference
+    // `remint_duplicate_uuids` makes, so it must survive canonicalization.
+    expect(canonicalizeUuids(`${A}|${B}|${A}`)).not.toBe(canonicalizeUuids(`${A}|${B}|${B}`));
+  });
+
+  it('does NOT distinguish a bare permutation, and that is stated rather than hidden', () => {
+    // Shots carry their geometry with them, so a real reordering moves every
+    // Length/Azimuth/Depth around it and the comparison sees those instead.
+    expect(canonicalizeUuids(`${A}${B}`)).toBe(canonicalizeUuids(`${B}${A}`));
+  });
+
+  it('leaves everything that is not uuid-shaped alone', () => {
+    const xml = '<Length>12.5</Length><Comment>not-a-uuid-1234</Comment>';
+    expect(canonicalizeUuids(xml)).toBe(xml);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The throwing oracles
+// ---------------------------------------------------------------------------
+
+const attempt = (over: Partial<ExportAttempt> = {}): ExportAttempt => ({
+  format: 'csv',
+  route: 'modal',
+  shape: 'normal',
+  requested: '/s/fuzz-exports/export-1.csv',
+  effective: '/s/fuzz-exports/export-1.csv',
+  ok: true,
+  error: null,
+  size: 128,
+  toastKeys: [],
+  strays: [],
+  ...over,
+});
+
+describe('X1 file/result agreement', () => {
+  it('passes a success that wrote a non-empty file', () => {
+    expect(() => checkFileResult(attempt(), REPRO)).not.toThrow();
+  });
+
+  it('fails a success with no file', () => {
+    expect(() => checkFileResult(attempt({ size: null }), REPRO)).toThrow(ExportOracleError);
+  });
+
+  it('fails a success with a zero-byte file', () => {
+    expect(() => checkFileResult(attempt({ size: 0 }), REPRO)).toThrow(/ZERO-BYTE/);
+  });
+
+  it('fails a failure that left an artifact behind', () => {
+    expect(() =>
+      checkFileResult(attempt({ ok: false, error: 'boom', size: 12, toastKeys: ['export-failed'] }), REPRO),
+    ).toThrow(/left a 12-byte file/);
+  });
+
+  it('fails a UI-route failure the user was never told about', () => {
+    expect(() => checkFileResult(attempt({ ok: false, error: 'boom', size: null }), REPRO)).toThrow(
+      /NOTHING TOLD THE USER/,
+    );
+  });
+
+  it('passes a UI-route failure that raised the export-failed toast', () => {
+    expect(() =>
+      checkFileResult(attempt({ ok: false, error: 'boom', size: null, toastKeys: ['export-failed'] }), REPRO),
+    ).not.toThrow();
+  });
+
+  it('exempts the store route from the toast requirement', () => {
+    // A rejected promise IS the report for a raw IPC caller; the surfacing
+    // lives in the component.
+    expect(() =>
+      checkFileResult(attempt({ route: 'store', ok: false, error: 'boom', size: null }), REPRO),
+    ).not.toThrow();
+  });
+
+  it('fails when a move left a file it did not name', () => {
+    expect(() => checkFileResult(attempt({ strays: ['export-1.csv.part'] }), REPRO)).toThrow(/did not name/);
+  });
+});
+
+describe('X2 the open project survives', () => {
+  const base = {
+    route: 'store' as const,
+    format: 'csv' as const,
+    before: 'sha-before',
+    after: 'sha-before',
+    ok: false,
+    error: 'Cannot export over the open project file',
+    expectRefusal: true,
+  };
+
+  it('passes a refused store-route attempt that left the database alone', () => {
+    expect(() => checkProjectFileSurvived(base, REPRO)).not.toThrow();
+  });
+
+  it('fails when the database bytes changed', () => {
+    expect(() => checkProjectFileSurvived({ ...base, after: 'sha-after' }, REPRO)).toThrow(/MODIFIED/);
+  });
+
+  it('fails when the database is gone', () => {
+    expect(() => checkProjectFileSurvived({ ...base, after: null }, REPRO)).toThrow(/GONE/);
+  });
+
+  it('fails when the raw command accepted the open project path', () => {
+    expect(() => checkProjectFileSurvived({ ...base, ok: true, error: null }, REPRO)).toThrow(/ACCEPTED/);
+  });
+
+  it('does NOT require a refusal on a UI route - ensureExtension redirects there', () => {
+    expect(() =>
+      checkProjectFileSurvived(
+        { ...base, route: 'modal', ok: true, error: null, expectRefusal: false },
+        REPRO,
+      ),
+    ).not.toThrow();
+  });
+});
+
+describe('X3 svg/png/pdf differential', () => {
+  it('is silent when the SVG itself failed - it says nothing about the markup', () => {
+    expect(() =>
+      checkFormatDifferential({ format: 'svg', ok: false, error: 'no dir' }, [
+        { format: 'png', ok: false, error: 'no dir' },
+      ], REPRO),
+    ).not.toThrow();
+  });
+
+  it('passes when all three succeeded', () => {
+    expect(() =>
+      checkFormatDifferential({ format: 'svg', ok: true, error: null }, [
+        { format: 'png', ok: true, error: null },
+        { format: 'pdf', ok: true, error: null },
+      ], REPRO),
+    ).not.toThrow();
+  });
+
+  it('fails when the SVG rendered and the raster could not parse it', () => {
+    expect(() =>
+      checkFormatDifferential({ format: 'svg', ok: true, error: null }, [
+        { format: 'png', ok: false, error: 'Failed to parse SVG for PNG conversion' },
+        { format: 'pdf', ok: true, error: null },
+      ], REPRO),
+    ).toThrow(/SVG export succeeded but png failed/);
+  });
+});
+
+describe('X4 byte identity', () => {
+  const clean = { missing: 0, duplicated: 0 };
+
+  it('passes three identical exports', () => {
+    const out = checkByteIdentity(
+      { hashes: ['h', 'h', 'h'], sizes: [10, 10, 10], precondition: clean, extension: 'tmlu' },
+      REPRO,
+    );
+    expect(out).toEqual({ stable: true, skipped: false });
+  });
+
+  it('fails when they differ and nothing in the exporter is allowed to re-mint', () => {
+    expect(() =>
+      checkByteIdentity(
+        { hashes: ['a', 'b', 'b'], sizes: [10, 10, 10], precondition: clean, extension: 'tmlu' },
+        REPRO,
+      ),
+    ).toThrow(/not byte-identical/);
+  });
+
+  it('SKIPS rather than asserts when a uuid is missing or duplicated', () => {
+    // Both are documented exporter behaviour (shot_export_uuid's mint,
+    // remint_duplicate_uuids), so asserting against them would be asserting the
+    // app is different from what it says it is.
+    for (const precondition of [{ missing: 1, duplicated: 0 }, { missing: 0, duplicated: 2 }]) {
+      const out = checkByteIdentity(
+        { hashes: ['a', 'b', 'c'], sizes: [10, 10, 10], precondition, extension: 'tmlu' },
+        REPRO,
+      );
+      expect(out).toEqual({ stable: false, skipped: true });
+    }
+  });
+
+  it('still fails an empty or absent artifact even when the uuid precondition is broken', () => {
+    expect(() =>
+      checkByteIdentity(
+        {
+          hashes: ['a', 'b', 'c'],
+          sizes: [10, 0, 10],
+          precondition: { missing: 3, duplicated: 0 },
+          extension: 'tmlu',
+        },
+        REPRO,
+      ),
+    ).toThrow(/empty file/);
+  });
+});
+
+describe('X5 convergence', () => {
+  const A = '11111111-2222-4333-8444-555555555555';
+  const B = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
+
+  it('reports raw equality when the bytes match', () => {
+    expect(checkConvergence({ t2: '<x/>', t3: '<x/>', t2Size: 4, t3Size: 4 }, REPRO)).toEqual({ via: 'raw' });
+  });
+
+  it('falls back to canonical when only the uuids moved, and SAYS so', () => {
+    expect(
+      checkConvergence({ t2: `<s>${A}</s>`, t3: `<s>${B}</s>`, t2Size: 40, t3Size: 40 }, REPRO),
+    ).toEqual({ via: 'canonical' });
+  });
+
+  it('fails when the documents differ beyond identity', () => {
+    expect(() =>
+      checkConvergence({ t2: `<Length>1</Length>`, t3: `<Length>2</Length>`, t2Size: 1, t3Size: 1 }, REPRO),
+    ).toThrow(/does NOT converge/);
+  });
+});
+
+describe('X6 shot multiset', () => {
+  const shot = (over: Partial<ShotIdentity> = {}): ShotIdentity => ({
+    length: 5,
+    azimuthIn: 90,
+    depthIn: 1,
+    depthOut: 2,
+    lrud: [1, 1, 1, 1],
+    ...over,
+  });
+
+  it('keys on geometry values, not on order', () => {
+    expect(shotKey(shot())).toBe(shotKey(shot()));
+    expect(shotKey(shot({ length: 6 }))).not.toBe(shotKey(shot()));
+    expect(shotKey(shot({ lrud: [1, 1, 1, null] }))).not.toBe(shotKey(shot()));
+  });
+
+  it('rounds to the precision the format carries, so formatting is not data loss', () => {
+    expect(shotKey(shot({ length: 5.0000001 }))).toBe(shotKey(shot({ length: 5 })));
+  });
+
+  it('does NOT key on the comment - the round trip moves it to the station', () => {
+    // `commentsOnStations` defaults on, so a shot comment legitimately comes
+    // back as a STATION comment. Keying the shot on it reported every comment
+    // as lost while the text was sitting right there (measured, seed 1).
+    expect(shotKey(shot())).toBe(shotKey(shot()));
+  });
+
+  it('pools comment survival over shots AND stations, split on ZWSP and trimmed', () => {
+    // Moved from a shot to a station: still present, so no delta.
+    expect(commentMultisetDelta(['one', 'two'], ['two', 'one'])).toEqual([]);
+    // The co-encoding is undone by splitting before this is called.
+    expect(commentMultisetDelta('a\u200bb'.split('\u200b'), ['b', 'a'])).toEqual([]);
+    // Leading whitespace is trimmed by the reader by design.
+    expect(commentMultisetDelta(['\tnote'], ['note'])).toEqual([]);
+    // Text that is simply gone.
+    expect(commentMultisetDelta(['kept', 'gone'], ['kept'])).toEqual([
+      { key: 'gone', before: 1, after: 0 },
+    ]);
+    // A duplicate that lost one of its copies.
+    expect(commentMultisetDelta(['x', 'x'], ['x'])).toEqual([{ key: 'x', before: 2, after: 1 }]);
+  });
+
+  it('passes an unchanged multiset with an unchanged uuid set', () => {
+    expect(() =>
+      checkShotMultiset(
+        { deltas: [], uuidsBefore: ['u1'], uuidsAfter: ['u1'], countBefore: 1, countAfter: 1 },
+        REPRO,
+      ),
+    ).not.toThrow();
+  });
+
+  it('fails when a shot GEOMETRY value changed', () => {
+    const deltas = multisetDelta([shot()], [shot({ length: 6 })]);
+    expect(deltas).toHaveLength(2);
+    expect(() =>
+      checkShotMultiset({ deltas, uuidsBefore: ['u1'], uuidsAfter: ['u1'], countBefore: 1, countAfter: 1 }, REPRO),
+    ).toThrow(/GEOMETRY key/);
+  });
+
+  it('fails when comment text disappeared, even with identical geometry and uuids', () => {
+    expect(() =>
+      checkShotMultiset(
+        {
+          deltas: [],
+          commentDeltas: [{ key: 'a note', before: 1, after: 0 }],
+          uuidsBefore: ['u1'],
+          uuidsAfter: ['u1'],
+          countBefore: 1,
+          countAfter: 1,
+        },
+        REPRO,
+      ),
+    ).toThrow(/COMMENT text/);
+  });
+
+  it('fails when a uuid did not come back, even with identical geometry', () => {
+    expect(() =>
+      checkShotMultiset(
+        { deltas: [], uuidsBefore: ['u1'], uuidsAfter: ['u2'], countBefore: 1, countAfter: 1 },
+        REPRO,
+      ),
+    ).toThrow(/did not come back/);
+  });
+
+  it('flags a duplicate uuid WITHIN one section', () => {
+    expect(() => checkNoDuplicateUuids([['u1', 'u2', 'u1']], REPRO)).toThrow(/same uuid/);
+    expect(() => checkNoDuplicateUuids([['u1', 'u2']], REPRO)).not.toThrow();
+  });
+
+  it('ACCEPTS the same uuid in two different sections', () => {
+    // Shot-uuid uniqueness is per-section by design: `resolve_key` and the
+    // `(section_id, uuid)` cache are section-scoped, and the exporter handles
+    // the document-level collision itself (`remint_duplicate_uuids`). Importing
+    // one file twice lands the copies in NEW sections, so this is the ordinary
+    // outcome, not a defect.
+    expect(() => checkNoDuplicateUuids([['u1', 'u2'], ['u1', 'u2']], REPRO)).not.toThrow();
+  });
+});
+
+describe('X8 option independence', () => {
+  const options = (over: Partial<OptionSnapshot> = {}): OptionSnapshot => ({
+    exportType: 'image',
+    dataFormat: 'csv',
+    imageFormat: 'png',
+    dpi: 300,
+    branchingThreshold: 2,
+    ...over,
+  });
+
+  it('passes when the panel is untouched by the modal', () => {
+    expect(() =>
+      checkOptionIndependence(
+        { panelBefore: options(), panelAfter: options(), modalChangedTo: options({ dpi: 600 }) },
+        REPRO,
+      ),
+    ).not.toThrow();
+  });
+
+  it('fails when the modal wrote through to the panel', () => {
+    expect(() =>
+      checkOptionIndependence(
+        {
+          panelBefore: options(),
+          panelAfter: options({ dpi: 600 }),
+          modalChangedTo: options({ dpi: 600 }),
+        },
+        REPRO,
+      ),
+    ).toThrow(/changed the PANEL/);
+  });
+
+  it('fails when export options survive a project switch', () => {
+    expect(() =>
+      checkExportStoreReset(
+        {
+          dirty: options({ dataFormat: 'tml', dpi: 600 }),
+          afterSwitch: options({ dataFormat: 'tml', dpi: 600 }),
+          defaults: options(),
+        },
+        REPRO,
+      ),
+    ).toThrow(/survived a project switch/);
+  });
+
+  it('passes when they were reset', () => {
+    expect(() =>
+      checkExportStoreReset(
+        { dirty: options({ dpi: 600 }), afterSwitch: options(), defaults: options() },
+        REPRO,
+      ),
+    ).not.toThrow();
+  });
+});
+
+describe('X9 export-mode invariants', () => {
+  const survey: ModeSnapshot = {
+    appMode: 'survey',
+    geometryMode: 'measured',
+    mapReadOnly: false,
+    hasEligibleClosures: true,
+  };
+  const exporting: ModeSnapshot = {
+    appMode: 'export',
+    geometryMode: 'closureAdjusted',
+    mapReadOnly: true,
+    hasEligibleClosures: true,
+  };
+
+  it('passes the enter/exit round trip', () => {
+    expect(() =>
+      checkExportModeInvariants({ before: survey, during: exporting, after: survey }, REPRO),
+    ).not.toThrow();
+  });
+
+  it('fails when export mode did not force closure-adjusted geometry', () => {
+    expect(() =>
+      checkExportModeInvariants(
+        { before: survey, during: { ...exporting, geometryMode: 'measured' }, after: survey },
+        REPRO,
+      ),
+    ).toThrow(/closure-adjusted/);
+  });
+
+  it('EXEMPTS a project with no eligible closure from the geometry half', () => {
+    // MapCanvas reverts closureAdjusted to measured there by design ("the
+    // adjusted view is meaningless without an eligible closure"), so asserting
+    // it would report the app's documented fallback as a defect.
+    expect(() =>
+      checkExportModeInvariants(
+        {
+          before: { ...survey, hasEligibleClosures: false },
+          during: { ...exporting, geometryMode: 'measured', hasEligibleClosures: false },
+          after: { ...survey, hasEligibleClosures: false },
+        },
+        REPRO,
+      ),
+    ).not.toThrow();
+  });
+
+  it('still requires READ-ONLY on a project with no eligible closure', () => {
+    expect(() =>
+      checkExportModeInvariants(
+        {
+          before: { ...survey, hasEligibleClosures: false },
+          during: {
+            ...exporting,
+            geometryMode: 'measured',
+            mapReadOnly: false,
+            hasEligibleClosures: false,
+          },
+          after: { ...survey, hasEligibleClosures: false },
+        },
+        REPRO,
+      ),
+    ).toThrow(/still EDITABLE/);
+  });
+
+  it('fails when the map stayed editable', () => {
+    expect(() =>
+      checkExportModeInvariants(
+        { before: survey, during: { ...exporting, mapReadOnly: false }, after: survey },
+        REPRO,
+      ),
+    ).toThrow(/still EDITABLE/);
+  });
+
+  it('fails when the exit did not restore the geometry mode', () => {
+    expect(() =>
+      checkExportModeInvariants(
+        { before: survey, during: exporting, after: { ...survey, geometryMode: 'closureAdjusted' } },
+        REPRO,
+      ),
+    ).toThrow(/did not restore/);
+  });
+});

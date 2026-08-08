@@ -67,11 +67,18 @@ const SMOKE_ITERATIONS: Record<string, number> = {
  *
  * `import-dialog-fuzz` generates files, drives native file dialogs and walks a
  * multi-screen wizard, so one iteration costs far more wall clock than anything
- * else here and its failures want a shrink rather than a red gate. Excluding it
- * is NOT an expected-failure list in disguise: it is expected GREEN, it has no
- * classifier and no tolerance, and a red from it is the app's.
+ * else here and its failures want a shrink rather than a red gate.
+ *
+ * `export-roundtrip-fuzz` is excluded for the same reasons and two more of its
+ * own: an episode rasterizes the whole survey up to three times, and its
+ * round-trip oracles CREATE PROJECTS on disk and import into them. Neither
+ * belongs in a gate that runs every scenario back to back on one session.
+ *
+ * Excluding either is NOT an expected-failure list in disguise: both are
+ * expected GREEN, neither has a classifier or a tolerance, and a red from
+ * either is the app's.
  */
-const SMOKE_EXCLUDED = new Set(['import-dialog-fuzz']);
+const SMOKE_EXCLUDED = new Set(['import-dialog-fuzz', 'export-roundtrip-fuzz']);
 
 // There is no expected-failure list, and adding one back would be a regression.
 // `undo-redo-fuzz` and `undo-persistence-fuzz` are expected GREEN and STRICT:

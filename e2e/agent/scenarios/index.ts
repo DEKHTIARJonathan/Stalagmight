@@ -14,6 +14,7 @@ import { mapStorm } from './mapStorm';
 import { saveUnderChurn } from './saveUnderChurn';
 import { importRepeatedly } from './importRepeatedly';
 import { importDialogFuzz } from './importDialogFuzz';
+import { exportRoundtripFuzz } from './exportRoundtripFuzz';
 import { rapidProjectCycle } from './rapidProjectCycle';
 
 const SCENARIOS: Scenario[] = [
@@ -27,6 +28,7 @@ const SCENARIOS: Scenario[] = [
   saveUnderChurn,
   importRepeatedly,
   importDialogFuzz,
+  exportRoundtripFuzz,
   rapidProjectCycle,
 ];
 

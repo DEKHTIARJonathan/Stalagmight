@@ -1,0 +1,1692 @@
+/**
+ * export-roundtrip-fuzz: a seeded random walk over EVERY export flow, plus the
+ * round trip back in.
+ *
+ * `import-dialog-fuzz` drives files INTO the app. This one drives them out, and
+ * then back in again: it draws a format, a route, a destination-path shape and
+ * an option set, exports through the real surface, and then asserts that what
+ * the app reported, what is on disk and what the user was told all agree - and
+ * that a survey which leaves as a `.tml` and comes back is still the same
+ * survey.
+ *
+ * ## Three routes, and why all three
+ *
+ * `ExportControls` is ONE component rendered twice: the modal Export dialog
+ * (local `useState`) and the Export-mode panel (`exportStore`). The third route
+ * is the raw store action, which is what the IPC boundary looks like. They are
+ * not interchangeable and the differences are the point:
+ *
+ *   - the UI routes push the answered path through `ensureExtension`, so a
+ *     destination the user typed is REWRITTEN before the command sees it;
+ *   - the store route hands the path over verbatim, which is the only way the
+ *     backend's own guards are ever reached;
+ *   - only the UI routes can raise a toast, so only they can tell the user
+ *     anything.
+ *
+ * Each route is asserted against ITS OWN contract rather than forced to agree
+ * move-for-move with the others - the header of `checkProjectFileSurvived` in
+ * `lib/exportOracles.ts` states where that matters most.
+ *
+ * ## The shape of a run
+ *
+ *   EPISODE (= one iteration)
+ *     open a fresh copy of the fixture with NO inherited undo history
+ *     turn auto-save off
+ *     K = randInt(1, STALAGMIGHT_FUZZ_EXPORT_MOVES) export moves, each into its
+ *       OWN directory so a stray file is attributable to the move that made it
+ *     a rotation of the structural oracles (see below)
+ *     teardown: close, assert nothing survived, delete this episode's files
+ *
+ * The structural oracles run on a ROTATION keyed by the episode index rather
+ * than every episode, because three of them create projects and import files
+ * and one rasterizes the survey three times. At the default 30 iterations every
+ * one runs ten or more times; at `--iterations 2` every one runs at least once.
+ *
+ * ## What is asserted (all in `lib/exportOracles.ts`, all throwing)
+ *
+ *   X1  file/result agreement: success => a non-empty file; failure => no file
+ *       AND, on a UI route, a visible report. No stray artifacts either way.
+ *   X2  refusal parity: the open project's `.stalx` is byte-for-byte untouched
+ *       by every attempt to export over it, and the RAW command refuses it.
+ *   X3  svg/png/pdf differential: the SVG succeeding while the raster or the
+ *       PDF fails on the same options means malformed markup the SVG path
+ *       cannot notice, because only it has no parse gate.
+ *   X4  byte identity: three `.tml`/`.tmlu` exports of an unmutated project.
+ *   X5  convergence: T1 -> fresh project -> T2 -> fresh project -> T3, and
+ *       T2 == T3.
+ *   X6  shot multiset + uuid identity across the first re-import, and no
+ *       surviving duplicate uuid after importing the same file twice.
+ *   X7  hostile comments survive a CSV export neutralised, and a TML export
+ *       intact.
+ *   X8  the modal's options and the panel's do not leak into each other, and
+ *       the panel's reset on a project switch.
+ *   X9  Export mode forces closure-adjusted, read-only geometry and gives the
+ *       previous state back.
+ *
+ * Per EPISODE: `check_project_integrity` after every oracle that imported, and
+ * a teardown that ASSERTS rather than merely performs - `fuzz-shrink` reuses
+ * ONE live session across ddmin candidates, so a candidate that leaves a
+ * project open or a file on disk poisons the verdict of every candidate after
+ * it, and ddmin would minimize toward the leak rather than toward the bug.
+ *
+ * ## Impossible moves are skipped and counted, never asserted
+ *
+ * Every driver in `exportFuzzActions.ts` returns a reason instead of throwing.
+ * `diveProfile` is the one that skips most: it needs a computed gas route, and
+ * nothing in this scenario builds one, so on the tracked fixtures it counts
+ * `skip:no-dive-route` on every draw. That is DECLARED coverage rather than
+ * pretended coverage - the gate is the real one (`buildRouteProfile`'s
+ * predicate, which is what greys the button), so the day a fixture or a
+ * sibling scenario leaves a plan behind, the moves start running.
+ *
+ * ## Record and replay
+ *
+ * Every export move is recorded as a v2 `export` trace step carrying the route,
+ * the path shape and the option set, so the replayer rebuilds the move rather
+ * than re-drawing it. `pnpm agent:scenario export-roundtrip-fuzz --trace FILE`
+ * re-executes the recorded step list through the same drivers with the SAME
+ * per-move oracles (X1, X2), and then re-runs the two whole-episode oracles
+ * that need no draw (X8, X9). It does NOT re-derive the rotation: X3-X7 are
+ * whole-episode judgments over exports the trace already contains, and a replay
+ * that invented new ones would not be replaying anything. A structural failure
+ * therefore names its oracle in the message and hands you the export sequence
+ * that reached it, which is the same guarantee `import-dialog-fuzz` gives for
+ * its per-flow oracles.
+ *
+ * A trace never carries an absolute path: every `rel` is session-relative, and
+ * `readTrace` refuses one that is not.
+ *
+ * ## Knobs (all read at CALL time, so a replay's restored env reaches them)
+ *
+ *   STALAGMIGHT_FUZZ_FIXTURE              which `.stalx` to open
+ *   STALAGMIGHT_FUZZ_EXPORT_FORMATS       csv list, default all nine
+ *   STALAGMIGHT_FUZZ_EXPORT_MAX_DPI       default 600
+ *   STALAGMIGHT_FUZZ_EXPORT_ROUNDTRIP     `0` disables the X5/X6 chains
+ *   STALAGMIGHT_FUZZ_EXPORT_MOVES         export moves per episode, default 3
+ *   STALAGMIGHT_FUZZ_EXPORT_SETTLE_MS     default 20000
+ *   STALAGMIGHT_FUZZ_TRACE / _REPLAY      record / replay a trace
+ *
+ * ## Probe results (measurements, not assertions)
+ *
+ * These are the two the wave-4 brief asked to MEASURE rather than assert, and
+ * what the measurements said.
+ *
+ * THE `.plnx` x IMAGE ASYMMETRY WAS REAL, AND IS NOW FIXED (commit ca0b7d85).
+ * `commands/export.rs` had two guards: `is_open_project_file`, which knows only
+ * the `.stalx`, and `is_project_owned_file`, which also covers the `.plnx`
+ * dive-plan sibling. The text exports and `export_dive_profile` used the wide
+ * one; `export_image` used the narrow one. So a PNG/SVG/PDF aimed at
+ * `<project>.plnx` was WRITTEN, taking every saved dive plan for that project
+ * with it - while the doc comment on `is_project_owned_file` already claimed
+ * the gap was closed. Not reachable through the save dialog (the frontend
+ * forces the image extension), reachable at the IPC boundary, which is the
+ * boundary the guard exists for. Found by reading the guard table while
+ * designing X2, pinned by
+ * `test_export_image_refuses_to_overwrite_the_plnx_sibling` (confirmed
+ * non-vacuous: with the guard reverted it fails on `result.is_err()`, i.e. the
+ * export succeeded). The probe remains a METRIC here - `x2:plnx:*` - because a
+ * guard's REACH is a judgment about which files an export may touch, and this
+ * scenario reports what it measured rather than legislating it.
+ *
+ * ONE MORE THING THE `.plnx` PROBE MEASURED, which is by design and worth
+ * writing down: a `.plnx` that does not exist yet is NOT refused, because
+ * `is_open_project_file` canonicalizes `existing` and gives up when that fails.
+ * So the probe has to create a sentinel first, and it deletes it again
+ * immediately - the metric would otherwise read `written` on every run and mean
+ * nothing.
+ *
+ * `ExportSettings` CONFIG DEFAULTS ARE INERT, and always were. `ExportConfig`
+ * (`src-tauri/src/config/types.rs:1302-1309`) carries `default_image_format`,
+ * `default_dpi`, `default_include_satellite`, `default_include_grid` and
+ * `default_include_labels`, all settable in the Settings dialog and persisted.
+ * NO export path reads any of them: `DEFAULT_IMAGE_OPTIONS`
+ * (`src/store/exportStore.ts`) hardcodes its own literals and says it mirrors
+ * the backend's `ExportImageOptions::default`, which is a different struct, and
+ * `ExportDialog.tsx` never touches `config`. Two of the five have no analogue
+ * in `ExportImageOptions` at all (`_include_satellite`, `_include_grid`), and
+ * one DISAGREES with the shipped default: the config says
+ * `default_include_labels: true` while `show_station_labels` and
+ * `show_section_names` both default `false`. Metered as
+ * `x8:configDefaultsHonored` (0 or 1) rather than asserted, because "should a
+ * settings default seed the export form" is a product question, not a
+ * correctness one. Recorded here so the answer is a decision rather than an
+ * oversight.
+ *
+ * ## Findings
+ *
+ * The RECORD, in `importDialogFuzz.ts`'s conventions: every repro line stays
+ * runnable, a fixed finding names its commit and becomes that fix's regression
+ * check, and no classifier or tolerance is ever added to turn a red green.
+ *
+ * 1. FIXED (a15cd3bb). A FAILED EXPORT WAS INVISIBLE.
+ *    `ExportControls.handleExport`'s catch was a bare `console.error`, so every
+ *    reachable refusal - the project-owned guard, `export_png`'s DPI-zero and
+ *    16384px bails, a `Tree::from_str` failure, any I/O error - left the modal
+ *    sitting there with its button un-greyed and the panel doing nothing at
+ *    all, which is indistinguishable from "the file was written". Nothing else
+ *    covered it: the four `projectStore` export actions do not go through
+ *    `executeCommand`, so `TOAST_KEYS.COMMAND_FAILED`'s catch-all never fires
+ *    for them. X1's third claim is now that fix's regression check.
+ *
+ *        pnpm agent:scenario export-roundtrip-fuzz --seed 2 --iterations 30
+ *
+ * 2. FIXED (c2648a53). THE EXPORT-MODE OPTIONS OUTLIVED THEIR PROJECT.
+ *    `exportStore` is app-global and had three setters and nothing else, so a
+ *    600-DPI PDF framed for one survey stayed selected when the next opened,
+ *    with the Export-mode preview rendering a different cave at settings nobody
+ *    chose for it. `setAppMode` says explicitly that it does not reset it, and
+ *    neither `loadProject`, `createProject` nor `closeProject` did either.
+ *    X8b is that fix's regression check.
+ *
+ * 3. FIXED (ca0b7d85). AN IMAGE EXPORT COULD CLOBBER THE OPEN PROJECT'S
+ *    `.plnx`. See the probe write-up above; the Rust regression test is the
+ *    durable form of this one, because the harness probe is deliberately a
+ *    metric.
+ *
+ * ## Observations that are NOT findings
+ *
+ * A SUCCESSFUL export from the PANEL says nothing at all. The modal closes,
+ * which is its report; the panel just stays there. `docs/notifications.md`
+ * lists "export results" as a toast case, and the decision-tree question -
+ * "outcome already visible where the user is looking?" - has different answers
+ * for the two surfaces. This scenario does not report it, because the wave-4
+ * brief scoped the notification work to FAILURES and a success toast is a
+ * product decision about how chatty the panel should be, not a defect. It is
+ * written down here so the asymmetry is a decision rather than an oversight.
+ *
+ * A SYNTHETIC FLOATING SECTION DOES NOT SURVIVE THE TML ROUND TRIP INTACT, and
+ * this scenario measures it without claiming to have characterised it. X7 builds
+ * a 14-shot chain with `createSection` - unconnected, unanchored - and when the
+ * rotation put it in the same episode as X5/X6, the re-imported copy came back
+ * with every depth shifted by a constant 7 and every comment gone (seed 1,
+ * episode 3, both counts exact). The depth shift is the exporter re-rooting an
+ * orphan chain (`ensure_rooted_chain`), and the comments are somewhere between
+ * the exporter's U+200B co-encoding and the importer's `comment_split::split` -
+ * `docs/ariane-export.md` already tabulates several comment-dropping cases
+ * around the START shot, and this may be one of them or may not.
+ *
+ * IT IS NOT REPORTED AS A FINDING, because the input is one this scenario
+ * fabricated rather than one a user can make: `createSection` builds a chain
+ * that no import or draw flow produces in that state, and the same argument
+ * `importDialogFuzz.ts` makes for `uiStore.confirmPlacement()` applies - a bug
+ * found by driving a store into a state no UI can reach is a fabricated bug.
+ * X5/X6 therefore reload the pristine fixture first and ask their question of
+ * the SURVEY, and X7 keeps the hostile comments where its claim is grounded:
+ * at the file level, a .tmlu write followed by a `parse_tml` read.
+ *
+ * If a future wave wants this characterised, the repro is one line - drop the
+ * reload at the top of `runRoundtrip` and run seed 1 with 10 iterations.
+ *
+ * `preview_svg_export` ALWAYS returns SVG, whatever `options.format` says
+ * (`ExportPreview.tsx` passes the live options through unchanged, and the
+ * command ignores the format field). So the PNG and PDF previews are the SVG
+ * preview, and the preview cannot warn about a raster that will not rasterize.
+ * That is what X3 is for, and it is a limitation of the preview rather than a
+ * bug in it.
+ */
+import * as crypto from 'crypto';
+import * as fs from 'fs';
+import * as path from 'path';
+
+import type { Scenario, ScenarioContext } from './framework';
+import { DEFAULT_FIXTURE, disableAutoSave, loadFixtureWithoutUndoHistory } from './common';
+import { HOSTILE_COMMENTS } from '../lib/surveyFileSpecs';
+import { shotSetDelta, describeShotSetDelta } from '../lib/projectSnapshot';
+import {
+  defaultTracePath,
+  readTrace,
+  TraceRecorder,
+  writeTrace,
+  type FuzzTrace,
+  type TraceStep,
+} from '../lib/fuzzTrace';
+import {
+  canonicalizeUuids,
+  checkByteIdentity,
+  checkConvergence,
+  checkExportModeInvariants,
+  checkExportStoreReset,
+  checkFileResult,
+  checkFormatDifferential,
+  checkNoDuplicateUuids,
+  checkOptionIndependence,
+  checkProjectFileSurvived,
+  checkShotMultiset,
+  commentMultisetDelta,
+  csvTextViolations,
+  exportBaseName,
+  ExportOracleError,
+  finalizeExportPath,
+  multisetDelta,
+  naturalExtension,
+  PROJECT_OWNED_SHAPES,
+  type ExportAttempt,
+  type ExportFormat,
+  type ExportRoute,
+  type ModeSnapshot,
+  type OptionSnapshot,
+  type PathShape,
+  type ShotIdentity,
+} from '../lib/exportOracles';
+import {
+  callProjectAction,
+  clickAndAnswerSave,
+  clickControl,
+  closeModal,
+  dataFormatValue,
+  diveProfileRequest,
+  drawExport,
+  drawImageOptions,
+  enabledFormats,
+  hasDiveRoute,
+  isDataFormat,
+  isImageFormat,
+  modalIsOpen,
+  openModal,
+  readModalOptions,
+  readModeSnapshot,
+  readPanelOptions,
+  readPreview,
+  readToastKeys,
+  roundtripEnabled,
+  selectValue,
+  setAppMode,
+  setCheckbox,
+  setThreshold,
+  settleOnce,
+  type ExportDraw,
+  type ImageOptionDraw,
+} from './exportFuzzActions';
+
+const SCENARIO = 'export-roundtrip-fuzz';
+/** Session-relative homes for what a run writes. Both are wiped per episode. */
+const EXPORTS_REL = 'fuzz-exports';
+const PROJECTS_REL = 'fuzz-export-projects';
+/** Failure messages print this many trailing moves. */
+const HISTORY_TAIL = 20;
+/**
+ * DPI the differential pins itself to.
+ *
+ * Low enough that the derived pixel dimensions cannot reach
+ * `MAX_PNG_DIMENSION` on any fixture, so a PNG failure at this DPI cannot be
+ * the size bail - which is a legitimate refusal of the raster path alone and
+ * says nothing about the markup X3 is asking about.
+ */
+const DIFFERENTIAL_DPI = 72;
+/**
+ * The name every holding project in the X5 chain is created with.
+ *
+ * It reaches the export as `<caveName>`, so it must not vary between the two
+ * projects T2 and T3 come out of - see `freshProjectWithImport`.
+ */
+const ROUNDTRIP_PROJECT_NAME = 'export-fuzz-roundtrip';
+/**
+ * `DEFAULT_IMAGE_OPTIONS` + the two scalar defaults, as `exportStore.ts`
+ * declares them.
+ *
+ * Copied rather than imported, the same way `importDialogFuzz.ts` copies its
+ * toast keys: the agent tier cannot follow an import into `src/`. The drift
+ * risk is real and is covered from the other side - `exportStore.test.ts`
+ * asserts the full `DEFAULT_IMAGE_OPTIONS` object literal, so a changed default
+ * fails there first, loudly, rather than turning X8b vacuous here.
+ */
+const EXPECTED_DEFAULT_OPTIONS: OptionSnapshot = {
+  exportType: 'image',
+  dataFormat: 'csv',
+  imageFormat: 'png',
+  dpi: 300,
+  branchingThreshold: 2,
+};
+
+// ---------------------------------------------------------------------------
+// Knobs. Read at CALL time, never frozen at import.
+// ---------------------------------------------------------------------------
+
+function fixtureName(): string {
+  return process.env.STALAGMIGHT_FUZZ_FIXTURE || DEFAULT_FIXTURE;
+}
+function movesPerEpisode(): number {
+  const raw = Number(process.env.STALAGMIGHT_FUZZ_EXPORT_MOVES);
+  return Number.isInteger(raw) && raw > 0 ? raw : 3;
+}
+function replayTracePath(): string {
+  return process.env.STALAGMIGHT_FUZZ_REPLAY ?? '';
+}
+function traceOutPath(): string {
+  return process.env.STALAGMIGHT_FUZZ_TRACE ?? '';
+}
+
+// ---------------------------------------------------------------------------
+// Small helpers
+// ---------------------------------------------------------------------------
+
+function sha256(bytes: Buffer): string {
+  return crypto.createHash('sha256').update(bytes).digest('hex');
+}
+
+/** `fs.statSync().size`, or null when the file is not there. */
+function sizeOf(target: string): number | null {
+  try {
+    const stat = fs.statSync(target);
+    return stat.isFile() ? stat.size : null;
+  } catch {
+    return null;
+  }
+}
+
+function hashOf(target: string): string | null {
+  try {
+    return sha256(fs.readFileSync(target));
+  } catch {
+    return null;
+  }
+}
+
+function rmrf(target: string): void {
+  fs.rmSync(target, { recursive: true, force: true });
+}
+
+/**
+ * A canonical-snapshot-shaped document holding every uuid in ONE section.
+ *
+ * `shotSetDelta` reads `project.sections[].shots[].uuid` and answers per
+ * section. A round trip is allowed to re-partition sections, so the flattening
+ * is what makes its answer the project-wide identity question instead of a
+ * restatement of the fragmentation.
+ */
+function flatUuidSnapshot(uuids: readonly string[]): string {
+  return JSON.stringify({ project: { sections: [{ id: 0, shots: uuids.map((uuid) => ({ uuid })) }] } });
+}
+
+/** Everything in `dir` that is not one of `expected`. */
+function straysIn(dir: string, expected: readonly string[]): string[] {
+  let entries: string[] = [];
+  try {
+    entries = fs.readdirSync(dir);
+  } catch {
+    return [];
+  }
+  return entries.filter((name) => !expected.includes(name));
+}
+
+/** The project state, reduced in page to what the oracles need. */
+interface ProjectDigest {
+  open: boolean;
+  sections: number;
+  shots: ShotIdentity[];
+  uuids: string[];
+  /**
+   * The same uuids, grouped BY SECTION.
+   *
+   * Shot-uuid uniqueness is a per-section invariant in this app
+   * (`models/project.rs::ensure_unique_shot_uuids`, and the `(section_id, uuid)`
+   * lookup cache), so X6b needs the grouping and X4's precondition needs the
+   * flat list - they are different questions and both are carried.
+   */
+  uuidsBySection: string[][];
+  /**
+   * Every comment TEXT in the project, U+200B-split, pooled over shot comments
+   * AND station comments.
+   *
+   * Pooled because the round trip moves text between the two by design - see
+   * `shotKey`'s header - so the only honest question is whether the text is
+   * still in the project at all.
+   */
+  commentParts: string[];
+  /** Shots whose uuid is missing or empty. */
+  missingUuids: number;
+  /** Uuids that appear more than once ACROSS the whole project. */
+  duplicateUuids: number;
+  filePath: string | null;
+}
+
+/**
+ * Reduce `get_project_state` IN PAGE.
+ *
+ * A fractal fixture's project state is megabytes of JSON and the oracles need a
+ * few numbers per shot, so the reduction happens where the data already is. The
+ * same argument `fuzzOracleCore.ts` makes for its injected snapshot.
+ */
+async function readProjectDigest(ctx: ScenarioContext): Promise<ProjectDigest> {
+  return ctx.eval<ProjectDigest>(`
+    const core = window.__TAURI__ && window.__TAURI__.core;
+    const state = await core.invoke('get_project_state');
+    const project = state && state.project ? state.project : state;
+    if (!project || !Array.isArray(project.sections)) {
+      return { open: false, sections: 0, shots: [], uuids: [], uuidsBySection: [], commentParts: [], missingUuids: 0, duplicateUuids: 0, filePath: null };
+    }
+    const shots = [];
+    const uuids = [];
+    const uuidsBySection = [];
+    const commentParts = [];
+    const addComment = (text) => {
+      if (typeof text !== 'string' || text === '') return;
+      const parts = text.split('\u200b');
+      for (let i = 0; i < parts.length; i++) if (parts[i] !== '') commentParts.push(parts[i]);
+    };
+    let missing = 0;
+    const seen = Object.create(null);
+    let duplicates = 0;
+    for (const section of project.sections) {
+      if (!section || !Array.isArray(section.shots)) continue;
+      const sectionUuids = [];
+      uuidsBySection.push(sectionUuids);
+      for (const shot of section.shots) {
+        const uuid = typeof shot.uuid === 'string' ? shot.uuid : '';
+        if (uuid === '') missing += 1;
+        else {
+          if (seen[uuid]) duplicates += 1;
+          seen[uuid] = true;
+          uuids.push(uuid);
+          sectionUuids.push(uuid);
+        }
+        addComment(shot.comment);
+        shots.push({
+          length: Number(shot.length) || 0,
+          azimuthIn: Number(shot.azimuth_in) || 0,
+          depthIn: Number(shot.depth_in) || 0,
+          depthOut: Number(shot.depth_out) || 0,
+          lrud: [
+            shot.left == null ? null : Number(shot.left),
+            shot.right == null ? null : Number(shot.right),
+            shot.up == null ? null : Number(shot.up),
+            shot.down == null ? null : Number(shot.down),
+          ],
+        });
+      }
+    }
+    // Station comments: serde renders a HashMap with a struct key as an array of
+    // [key, value] pairs, and the binary loader calls the same field
+    // station_comments_map. Both shapes are read rather than assumed, because
+    // reading the wrong one would silently report every station comment as lost
+    // - which is the exact failure mode this pooling exists to avoid.
+    //
+    // (No backticks anywhere in this string: it is a template literal, and one
+    // would close it. That mistake compiled as a TS syntax error 40 lines away.)
+    const stationComments = project.station_comments || project.station_comments_map;
+    if (Array.isArray(stationComments)) {
+      for (const entry of stationComments) {
+        if (Array.isArray(entry)) addComment(entry[1]);
+      }
+    } else if (stationComments && typeof stationComments === 'object') {
+      for (const key of Object.keys(stationComments)) addComment(stationComments[key]);
+    }
+
+    return {
+      open: true,
+      sections: project.sections.length,
+      shots: shots,
+      uuids: uuids,
+      uuidsBySection: uuidsBySection,
+      commentParts: commentParts,
+      missingUuids: missing,
+      duplicateUuids: duplicates,
+      filePath: typeof project.file_path === 'string' ? project.file_path : null,
+    };
+  `);
+}
+
+interface Integrity {
+  messages: string[];
+  save_blocked: boolean;
+}
+
+// ---------------------------------------------------------------------------
+
+export const exportRoundtripFuzz: Scenario = {
+  name: SCENARIO,
+  description:
+    'Exports CSV/JSON/TML/TMLU/PNG/SVG/PDF/preview through the modal, the Export-mode panel and the ' +
+    'raw store action at hostile destination paths, asserting file/result agreement, refusal parity, ' +
+    'a svg/png/pdf differential, byte identity, round-trip convergence and shot survival.',
+  defaultIterations: 30,
+
+  async run(ctx: ScenarioContext, { iterations }): Promise<void> {
+    const fixture = fixtureName();
+    const sessionDir = ctx.artifactsDir;
+    if (!sessionDir) {
+      throw new Error(`${SCENARIO} needs a session artifacts dir to write its exports into`);
+    }
+    const exportsDir = path.join(sessionDir, EXPORTS_REL);
+    const projectsDir = path.join(sessionDir, PROJECTS_REL);
+
+    ctx.log(`formats: ${enabledFormats().join(',')}`);
+    ctx.setMetric('roundtripEnabled', roundtripEnabled() ? 1 : 0);
+
+    // ---- replay wiring ---------------------------------------------------
+    const replayPath = replayTracePath();
+    const traceOut = traceOutPath();
+    const replay: FuzzTrace | null = replayPath ? readTrace(replayPath) : null;
+    if (replay && replay.scenario !== SCENARIO) {
+      throw new Error(`trace ${replayPath} was recorded by ${replay.scenario}; run it with that scenario`);
+    }
+    // The recorded moves resolve their paths against THAT project, so replaying
+    // them on a different fixture drives exports of a different survey: an
+    // invented failure, or a green run, either way not the recorded bug.
+    if (replay && replay.fixture !== fixture) {
+      throw new Error(
+        `trace ${replayPath} was recorded on ${replay.fixture} but this run is on ${fixture}; ` +
+          `re-run with STALAGMIGHT_FUZZ_FIXTURE=${replay.fixture} ` +
+          `(pnpm agent:scenario --trace restores it for you).`,
+      );
+    }
+
+    const recorder = new TraceRecorder();
+    const history: string[] = [];
+
+    const dumpTrace = (failure: { message: string } | null): string | null => {
+      const target = traceOut || defaultTracePath(sessionDir, SCENARIO, ctx.seed);
+      try {
+        return writeTrace(
+          target,
+          recorder.build({
+            scenario: SCENARIO,
+            seed: ctx.seed,
+            iterations,
+            fixture,
+            stream: 'export-v1',
+            failure,
+          }),
+        );
+      } catch {
+        return null;
+      }
+    };
+
+    /**
+     * Annotated on the CONST so TypeScript treats a `fail(...)` call as
+     * never-returning - the same form `importDialogFuzz.ts` uses.
+     */
+    const fail: (message: string) => never = (message: string): never => {
+      const tail = history.slice(-HISTORY_TAIL);
+      const tracePath = dumpTrace({ message });
+      throw new Error(
+        `${message}\n\n  last ${tail.length} move(s):\n` +
+          tail.map((line, index) => `    ${index + 1}. ${line}`).join('\n') +
+          (tracePath === null ? '' : `\n\n  trace: ${tracePath}\n  replay: pnpm agent:scenario ${SCENARIO} --trace ${tracePath}`),
+      );
+    };
+
+    const reproduce = `reproduce: pnpm agent:scenario ${SCENARIO} --seed ${ctx.seed} --iterations ${iterations}`;
+
+    /** Run an oracle, turning its throw into this scenario's failure shape. */
+    const guarded = (fn: () => void): void => {
+      try {
+        fn();
+      } catch (err) {
+        if (err instanceof ExportOracleError) fail(err.message);
+        throw err;
+      }
+    };
+
+    const note = (line: string): void => {
+      history.push(line);
+    };
+
+    const integrity = async (): Promise<Integrity> =>
+      ctx.ipc<Integrity>('check_project_integrity').catch(() => ({ messages: [], save_blocked: false }));
+
+    const assertIntegrity = async (after: string): Promise<void> => {
+      const result = await integrity();
+      if (result.save_blocked) {
+        fail(`project integrity: SAVING IS BLOCKED after ${after}\n    ${result.messages.join('\n    ')}\n  ${reproduce}`);
+      }
+      const fatal = result.messages.filter((m) => /non-finite|NaN|infinite/i.test(m));
+      if (fatal.length > 0) {
+        fail(`project integrity reported non-finite geometry after ${after}\n    ${fatal.join('\n    ')}\n  ${reproduce}`);
+      }
+      if (result.messages.length > 0) ctx.metric('integrityMessages', result.messages.length);
+    };
+
+    // -----------------------------------------------------------------------
+    // One export move
+    // -----------------------------------------------------------------------
+
+    /**
+     * Resolve a draw's destination.
+     *
+     * Returns the path ANSWERED into the dialog (or handed to the command) and
+     * the path the app should actually write to, which differ on the UI routes
+     * because `ensureExtension` rewrites the answer.
+     */
+    const resolveDestination = (
+      draw: ExportDraw,
+      moveDir: string,
+      projectFile: string | null,
+    ): { requested: string; effective: string; ownDir: boolean } | null => {
+      if (PROJECT_OWNED_SHAPES.has(draw.shape)) {
+        if (projectFile === null) return null; // no saved project to aim at
+        const requested =
+          draw.shape === 'openProject'
+            ? projectFile
+            : `${projectFile.slice(0, projectFile.length - path.extname(projectFile).length)}.plnx`;
+        const effective =
+          draw.route === 'store' ? requested : finalizeExportPath(requested, draw.format);
+        return { requested, effective, ownDir: false };
+      }
+      const base = exportBaseName(draw.shape, naturalExtension(draw.format), draw.seq);
+      const requested = path.join(moveDir, base);
+      const effective = draw.route === 'store' ? requested : finalizeExportPath(requested, draw.format);
+      return { requested, effective, ownDir: true };
+    };
+
+    /** Put the shared form into the state a draw asks for. Skips are counted. */
+    const applyFormControls = async (draw: ExportDraw): Promise<void> => {
+      if (isDataFormat(draw.format)) {
+        const typed = await clickControl(ctx, 'export-type-data');
+        if (!typed.performed) ctx.metric(`skip:type-data:${typed.reason}`);
+        const chosen = await selectValue(ctx, 'data-format-select', dataFormatValue(draw.format));
+        if (!chosen.performed) ctx.metric(`skip:data-format:${chosen.reason}`);
+        return;
+      }
+      const typed = await clickControl(ctx, 'export-type-image');
+      if (!typed.performed) ctx.metric(`skip:type-image:${typed.reason}`);
+      const options = draw.imageOptions;
+      const chosen = await selectValue(ctx, 'image-format-select', options.format);
+      if (!chosen.performed) ctx.metric(`skip:image-format:${chosen.reason}`);
+      if (options.format === 'png') {
+        // The Select offers 72/150/300/600 only; the backend edges (0 and 1)
+        // are reachable through the store route alone, and the draw says so by
+        // being skipped-and-counted here rather than silently coerced.
+        const dpi = await selectValue(ctx, 'resolution-select', String(options.dpi));
+        if (!dpi.performed) ctx.metric(`skip:dpi:${dpi.reason}`);
+      }
+      const threshold = await setThreshold(ctx, options.branching_threshold);
+      if (!threshold.performed) ctx.metric(`skip:threshold:${threshold.reason}`);
+      // The label toggles live behind a collapsed disclosure.
+      const toggle = await clickControl(ctx, 'export-labels-options-toggle');
+      if (!toggle.performed) ctx.metric(`skip:labels-toggle:${toggle.reason}`);
+      const checkboxes: [string, boolean][] = [
+        ['export-show-section-names', options.show_section_names],
+        ['export-show-station-labels', options.show_station_labels],
+        ['export-show-station-comments', options.show_station_comments],
+        ['export-show-shot-comments', options.show_shot_comments],
+        ['export-show-shot-data', options.show_shot_data],
+        ['export-show-labels', options.show_penetration_labels],
+      ];
+      for (const [testid, want] of checkboxes) {
+        const outcome = await setCheckbox(ctx, testid, want);
+        if (!outcome.performed && outcome.reason !== 'no-change') {
+          ctx.metric(`skip:${testid}:${outcome.reason}`);
+        }
+      }
+      const color = await selectValue(ctx, 'export-color-mode', options.color_mode);
+      if (!color.performed) ctx.metric(`skip:color-mode:${color.reason}`);
+    };
+
+    /** The store-route call for one draw. */
+    const runStoreExport = async (
+      draw: ExportDraw,
+      target: string,
+    ): Promise<{ ok: boolean; error: string | null; skipped: string | null }> => {
+      if (draw.format === 'csv' || draw.format === 'json') {
+        const action = draw.format === 'csv' ? 'exportCsv' : 'exportJson';
+        const res = await callProjectAction(ctx, action, [target]);
+        return { ok: res.ok, error: res.err, skipped: null };
+      }
+      if (draw.format === 'tml' || draw.format === 'tmlu') {
+        const res = await callProjectAction(ctx, 'exportTml', [target]);
+        return { ok: res.ok, error: res.err, skipped: null };
+      }
+      if (isImageFormat(draw.format)) {
+        // Through `projectStore.exportImage`, NOT raw `export_image`: that
+        // action is the one funnel every image export passes through, and it is
+        // where `withThemeDepthRamp` stamps the live theme's ramp (#360). A raw
+        // invoke here would be this scenario hand-rolling the ramp instead of
+        // exercising the pipeline the app uses.
+        const res = await callProjectAction(ctx, 'exportImage', [target, draw.imageOptions]);
+        return { ok: res.ok, error: res.err, skipped: null };
+      }
+      if (draw.format === 'diveProfile') {
+        if (!(await hasDiveRoute(ctx))) return { ok: false, error: null, skipped: 'no-dive-route' };
+        const request = await diveProfileRequest(ctx);
+        if (request === null) return { ok: false, error: null, skipped: 'no-dive-route' };
+        try {
+          await ctx.ipc('export_dive_profile', { path: target, format: 'subsurface-xml', request });
+          return { ok: true, error: null, skipped: null };
+        } catch (err) {
+          return { ok: false, error: err instanceof Error ? err.message : String(err), skipped: null };
+        }
+      }
+      return { ok: false, error: null, skipped: 'preview-has-no-store-route' };
+    };
+
+    /**
+     * Drive one export move end to end and judge it.
+     *
+     * `record` is false during a replay's own dispatch, which already has the
+     * step it is executing.
+     */
+    const performExport = async (
+      draw: ExportDraw,
+      episodeDir: string,
+      projectFile: string | null,
+      projectHashBefore: string | null,
+      record: boolean,
+    ): Promise<void> => {
+      const moveDir = path.join(episodeDir, `m${draw.seq}`);
+      fs.mkdirSync(moveDir, { recursive: true });
+      const destination = resolveDestination(draw, moveDir, projectFile);
+      if (destination === null) {
+        ctx.metric('skip:no-saved-project-to-aim-at');
+        return;
+      }
+      const { requested, effective, ownDir } = destination;
+      const label = `${draw.format} via ${draw.route} at ${draw.shape}`;
+      note(label);
+
+      if (record) {
+        recorder.record({
+          kind: 'export',
+          format: draw.format,
+          options: {
+            route: draw.route,
+            shape: draw.shape,
+            seq: draw.seq,
+            imageOptions: draw.imageOptions,
+          },
+          rel: path.relative(sessionDir, requested).split(path.sep).join('/'),
+          label,
+        });
+      }
+
+      // The `.plnx` probe needs a sentinel: `is_open_project_file`
+      // canonicalizes the file it is protecting and gives up when that fails,
+      // so a `.plnx` that is not there is correctly not refused and the metric
+      // would read `written` on every run and mean nothing.
+      let plnxSentinel: string | null = null;
+      if (draw.shape === 'plnxSibling') {
+        plnxSentinel = requested;
+        try {
+          fs.writeFileSync(plnxSentinel, 'export-fuzz dive-plan sentinel');
+        } catch {
+          plnxSentinel = null;
+        }
+      }
+
+      let ok = false;
+      let error: string | null = null;
+      let toastKeys: string[] = [];
+      let skipped: string | null = null;
+
+      if (draw.route === 'store') {
+        const outcome = await runStoreExport(draw, requested);
+        ok = outcome.ok;
+        error = outcome.error;
+        skipped = outcome.skipped;
+        toastKeys = await readToastKeys(ctx);
+      } else if (draw.format === 'preview') {
+        // No file, no save dialog: mounting the preview IS the move. Reading it
+        // back through the DOM is also the only way to exercise
+        // `withThemeDepthRamp` without hand-rolling the ramp.
+        //
+        // The form has to be driven FIRST: `ExportPreview` only mounts on the
+        // image type (the dialog opens on data/CSV), so reading before setting
+        // it would measure "absent" every time and call it coverage.
+        await applyFormControls(draw);
+        await settleOnce(ctx);
+        const preview = await readPreview(ctx);
+        ctx.metric(`preview:${preview.mounted ? (preview.error ? 'error' : preview.svgBytes > 0 ? 'rendered' : 'blank') : 'absent'}`);
+        if (preview.mounted && preview.error !== null) {
+          ctx.metric('previewError');
+          note(`preview error: ${preview.error.slice(0, 120)}`);
+        }
+        rmrf(moveDir);
+        return;
+      } else {
+        await applyFormControls(draw);
+        let answered = await clickAndAnswerSave(ctx, 'export-button', requested);
+        if (answered.sawUnanchoredNotice) {
+          ctx.metric('tmlUnanchoredNotice');
+          // `handleExport` returned before opening the picker; Continue calls
+          // the same function with `skipTmlAnchorCheck`, so the answer is
+          // re-armed on that button rather than a second code path.
+          answered = await clickAndAnswerSave(ctx, 'tml-unanchored-warning-continue', requested);
+        }
+        if (!answered.performed) {
+          ctx.metric(`skip:export-button:${answered.reason}`);
+          rmrf(moveDir);
+          return;
+        }
+        if (!answered.consumed) {
+          ctx.metric('skip:save-picker-unconsumed');
+          rmrf(moveDir);
+          return;
+        }
+        toastKeys = await readToastKeys(ctx);
+        // A UI route has no promise to inspect. The app's own report is the
+        // toast, and X1 then asks whether the disk agrees with it - which is
+        // the non-tautological half.
+        ok = !toastKeys.includes('export-failed');
+        error = ok ? null : 'reported by the export-failed toast';
+      }
+
+      if (skipped !== null) {
+        ctx.metric(`skip:${skipped}`);
+        rmrf(moveDir);
+        return;
+      }
+
+      ctx.metric(`export:${draw.format}:${draw.route}:${ok ? 'ok' : 'failed'}`);
+      ctx.metric(`shape:${draw.shape}:${ok ? 'ok' : 'failed'}`);
+
+      if (PROJECT_OWNED_SHAPES.has(draw.shape)) {
+        if (draw.shape === 'openProject') {
+          const after = projectFile === null ? null : hashOf(projectFile);
+          guarded(() =>
+            checkProjectFileSurvived(
+              {
+                route: draw.route,
+                format: draw.format,
+                before: projectHashBefore ?? '(unread)',
+                after,
+                ok,
+                error,
+                // Only the raw command sees the path as given; the UI routes
+                // have already had `ensureExtension` rewrite it.
+                expectRefusal: draw.route === 'store',
+              },
+              reproduce,
+            ),
+          );
+          ctx.metric(`x2:stalx:${draw.route}:${ok ? 'accepted' : 'refused'}`);
+          // The redirected artifact is real and belongs to nobody: clean it up.
+          if (draw.route !== 'store' && effective !== projectFile) rmrf(effective);
+        } else {
+          // The `.plnx` probe: measured, never asserted. See the header.
+          const survived = plnxSentinel !== null && sizeOf(plnxSentinel) !== null;
+          const clobbered =
+            plnxSentinel !== null &&
+            survived &&
+            (fs.readFileSync(plnxSentinel, 'utf8') !== 'export-fuzz dive-plan sentinel');
+          ctx.metric(`x2:plnx:${draw.format}:${draw.route}:${clobbered ? 'CLOBBERED' : ok ? 'written-elsewhere' : 'refused'}`);
+          if (plnxSentinel !== null) rmrf(plnxSentinel);
+          if (draw.route !== 'store') rmrf(effective);
+        }
+        rmrf(moveDir);
+        return;
+      }
+
+      const attempt: ExportAttempt = {
+        format: draw.format,
+        route: draw.route,
+        shape: draw.shape,
+        requested,
+        effective,
+        ok,
+        error,
+        size: sizeOf(effective),
+        toastKeys,
+        strays: ownDir ? straysIn(moveDir, [path.basename(effective)]) : [],
+      };
+      guarded(() => checkFileResult(attempt, reproduce));
+      rmrf(moveDir);
+    };
+
+    // -----------------------------------------------------------------------
+    // Structural oracles
+    // -----------------------------------------------------------------------
+
+    /** X3: the same options through SVG, PNG and PDF. */
+    const runDifferential = async (episodeDir: string): Promise<void> => {
+      const dir = path.join(episodeDir, 'differential');
+      fs.mkdirSync(dir, { recursive: true });
+      const base = drawImageOptions(ctx, 'svg');
+      const arms: { format: 'svg' | 'png' | 'pdf'; ok: boolean; error: string | null }[] = [];
+      for (const format of ['svg', 'png', 'pdf'] as const) {
+        const options: ImageOptionDraw = { ...base, format, dpi: DIFFERENTIAL_DPI };
+        const target = path.join(dir, `differential.${format}`);
+        const res = await callProjectAction(ctx, 'exportImage', [target, options]);
+        arms.push({ format, ok: res.ok, error: res.err });
+        ctx.metric(`x3:${format}:${res.ok ? 'ok' : 'failed'}`);
+      }
+      const svgArm = arms[0] as { format: 'svg'; ok: boolean; error: string | null };
+      guarded(() => checkFormatDifferential(svgArm, arms.slice(1), reproduce));
+      rmrf(dir);
+    };
+
+    /** X4: three exports of an unmutated project. */
+    const runByteIdentity = async (episodeDir: string, digest: ProjectDigest): Promise<void> => {
+      const dir = path.join(episodeDir, 'identity');
+      fs.mkdirSync(dir, { recursive: true });
+      // Both container shapes are worth a run: `.tml` is a zip and `.tmlu` is
+      // plain XML, and only one of them can carry a container timestamp.
+      const extension = ctx.pick(['tml', 'tmlu'] as const);
+      const hashes: string[] = [];
+      const sizes: (number | null)[] = [];
+      for (const label of ['a', 'b', 'c']) {
+        const target = path.join(dir, `identity-${label}.${extension}`);
+        const res = await callProjectAction(ctx, 'exportTml', [target]);
+        if (!res.ok) {
+          // A refusal here is content-driven (`ensure_rooted_chain` bails on
+          // orphans plus closures) and is the same for all three, so it is not
+          // an identity question at all.
+          ctx.metric('x4:refused');
+          rmrf(dir);
+          return;
+        }
+        hashes.push(hashOf(target) ?? '(unreadable)');
+        sizes.push(sizeOf(target));
+      }
+      const verdict = guardedValue(() =>
+        checkByteIdentity(
+          {
+            hashes,
+            sizes,
+            precondition: { missing: digest.missingUuids, duplicated: digest.duplicateUuids },
+            extension,
+          },
+          reproduce,
+        ),
+      );
+      ctx.metric(`x4:${extension}:${verdict.skipped ? (verdict.stable ? 'skipped-stable' : 'skipped-unstable') : 'stable'}`);
+      if (verdict.skipped) {
+        ctx.metric('x4:uuidPreconditionBroken');
+        ctx.log(
+          `x4: ${digest.missingUuids} shot(s) with no uuid and ${digest.duplicateUuids} document-level ` +
+            `duplicate(s), so the exporter re-mints per export by design - byte identity not asserted`,
+        );
+      }
+      rmrf(dir);
+    };
+
+    const guardedValue = <T,>(fn: () => T): T => {
+      try {
+        return fn();
+      } catch (err) {
+        if (err instanceof ExportOracleError) fail(err.message);
+        throw err;
+      }
+    };
+
+    /**
+     * Create a fresh project under the session dir and import `file` into it.
+     *
+     * `execute_tml_import` requires a project to be OPEN and does not create
+     * one (`core/state/app_state.rs:648-650` answers "No project open"), which
+     * is why the frontend routes every non-DMP import through
+     * `new-project-for-import`. This is that route's store-level equivalent.
+     */
+    const freshProjectWithImport = async (
+      slot: string,
+      file: string,
+    ): Promise<{ ok: boolean; error: string | null; projectPath: string }> => {
+      fs.mkdirSync(projectsDir, { recursive: true });
+      // ONE project NAME across every slot, different files.
+      //
+      // The name lands in the export as `<caveName>` (`export/tml.rs`), so two
+      // differently-named holding projects make T2 and T3 differ in a byte the
+      // round trip did not introduce - this harness did. Measured: on seed 1
+      // the ONLY difference between T2 and T3 was `roundtrip-b` vs
+      // `roundtrip-c` at offset 91.
+      const projectPath = path.join(projectsDir, `${slot}.stalx`);
+      rmrf(projectPath);
+      const created = await callProjectAction(ctx, 'createProject', [
+        ROUNDTRIP_PROJECT_NAME,
+        undefined,
+        // A real `savePath` rather than a deferred initial save: the deferred
+        // one reserves a path and leaves the database unopened, and an import
+        // into it cannot run. It also means `ensure_shot_uuids` has run by the
+        // time anything is exported back out.
+        { savePath: projectPath },
+      ]);
+      if (!created.ok) {
+        return { ok: false, error: created.err ?? 'createProject failed', projectPath };
+      }
+      const imported = await callProjectAction(ctx, 'executeTmlImport', [file, null, false, true, null]);
+      if (!imported.ok) {
+        return { ok: false, error: imported.err ?? 'import failed', projectPath };
+      }
+      await settleOnce(ctx);
+      return { ok: true, error: null, projectPath };
+    };
+
+    /** X5 + X6: T1 -> fresh -> T2 -> fresh -> T3, and the shot multiset. */
+    const runRoundtrip = async (episodeDir: string): Promise<void> => {
+      // START FROM THE PRISTINE FIXTURE, not from whatever this episode has
+      // done to the project so far.
+      //
+      // The rotation can put the hostile-comment oracle (X7) in the same
+      // episode, and its section is a SYNTHETIC FLOATING chain built by
+      // `createSection` - not connected to anything, not anchored to a datum.
+      // Measured on seed 1 episode 3: those 14 shots come back with their
+      // depths shifted by a constant 7 and their comments gone, which is the
+      // exporter re-rooting an orphan chain (`ensure_rooted_chain`) and the
+      // importer's comment split doing something this scenario has not
+      // characterised - see the OBSERVATIONS in the header. Neither is a
+      // question about the SURVEY's round trip, which is what X5 and X6 ask, so
+      // the answer is to ask it on the survey rather than to relax the oracle.
+      //
+      // X7 still covers the hostile comments where they belong: at the file
+      // level, where it asserts they survive a .tmlu write and a parse_tml read.
+      await loadFixtureWithoutUndoHistory(ctx, fixtureName());
+      await disableAutoSave(ctx);
+      const original = await readProjectDigest(ctx);
+      const dir = path.join(episodeDir, 'roundtrip');
+      fs.mkdirSync(dir, { recursive: true });
+      // `.tmlu` throughout: it is plain XML, so a canonical comparison is
+      // meaningful text rather than a deflate stream, and the byte comparison
+      // is not measuring the zip container.
+      const t1 = path.join(dir, 'trip-1.tmlu');
+      const first = await callProjectAction(ctx, 'exportTml', [t1]);
+      if (!first.ok) {
+        ctx.metric('x5:t1-refused');
+        rmrf(dir);
+        return;
+      }
+
+      const importedOnce = await freshProjectWithImport('roundtrip-a', t1);
+      if (!importedOnce.ok) {
+        ctx.metric('x5:import-refused');
+        ctx.log(`x5: first import refused (${importedOnce.error ?? 'no message'})`);
+        rmrf(dir);
+        return;
+      }
+      await assertIntegrity('the first round-trip import');
+
+      const afterFirst = await readProjectDigest(ctx);
+      // X6a: the shots survived the trip out and back.
+      //
+      // Identity goes through `projectSnapshot.ts`'s `shotSetDelta`, the
+      // harness's one answer to "which shots did this gain or lose", over a
+      // FLATTENED snapshot: that function is per-SECTION, and section identity
+      // is exactly what a round trip is allowed to change (`parse_tml` rebuilds
+      // sections as connected runs of the shot graph, so one exported section
+      // can come back as several - #412, by design). Collapsing both sides onto
+      // one synthetic section asks the question that survives the trip.
+      const identity = shotSetDelta(flatUuidSnapshot(original.uuids), flatUuidSnapshot(afterFirst.uuids));
+      guarded(() =>
+        checkShotMultiset(
+          {
+            deltas: multisetDelta(original.shots, afterFirst.shots),
+            commentDeltas: commentMultisetDelta(original.commentParts, afterFirst.commentParts),
+            uuidsBefore: original.uuids,
+            uuidsAfter: afterFirst.uuids,
+            countBefore: original.shots.length,
+            countAfter: afterFirst.shots.length,
+            identityDetail: identity.length > 0 ? describeShotSetDelta(identity) : null,
+          },
+          reproduce,
+        ),
+      );
+      ctx.metric('x6:multisetIntact');
+
+      // X6b: importing the SAME file again must not leave two shots on one
+      // uuid. The second import carries the first's foreign uuids verbatim, so
+      // `remint_duplicate_uuids`' project-side twin has to fire.
+      const second = await callProjectAction(ctx, 'executeTmlImport', [t1, null, false, true, null]);
+      if (second.ok) {
+        await settleOnce(ctx);
+        await assertIntegrity('a second import of the same file');
+        const doubled = await readProjectDigest(ctx);
+        guarded(() => checkNoDuplicateUuids(doubled.uuidsBySection, reproduce));
+        ctx.metric('x6:doubleImportUnique');
+      } else {
+        ctx.metric('skip:second-import-refused');
+      }
+
+      // X5 needs T2 from a project holding ONE copy, so it is re-derived from a
+      // clean import rather than from the doubled one above.
+      const cleanAgain = await freshProjectWithImport('roundtrip-b', t1);
+      if (!cleanAgain.ok) {
+        ctx.metric('x5:reimport-refused');
+        rmrf(dir);
+        return;
+      }
+      const t2 = path.join(dir, 'trip-2.tmlu');
+      const secondExport = await callProjectAction(ctx, 'exportTml', [t2]);
+      if (!secondExport.ok) {
+        ctx.metric('x5:t2-refused');
+        rmrf(dir);
+        return;
+      }
+
+      const importedTwice = await freshProjectWithImport('roundtrip-c', t2);
+      if (!importedTwice.ok) {
+        ctx.metric('x5:third-import-refused');
+        rmrf(dir);
+        return;
+      }
+      await assertIntegrity('the second round-trip import');
+      const t3 = path.join(dir, 'trip-3.tmlu');
+      const thirdExport = await callProjectAction(ctx, 'exportTml', [t3]);
+      if (!thirdExport.ok) {
+        ctx.metric('x5:t3-refused');
+        rmrf(dir);
+        return;
+      }
+
+      const t2Text = fs.readFileSync(t2, 'utf8');
+      const t3Text = fs.readFileSync(t3, 'utf8');
+      const verdict = guardedValue(() =>
+        checkConvergence(
+          { t2: t2Text, t3: t3Text, t2Size: t2Text.length, t3Size: t3Text.length },
+          reproduce,
+        ),
+      );
+      ctx.metric(`x5:converged:${verdict.via}`);
+      if (verdict.via === 'canonical') {
+        ctx.log(
+          'x5: T2 and T3 agree only after canonicalizing uuids - the TML importer preserves the ' +
+            "file's uuids, so identity moved somewhere it should not have",
+        );
+        // Counted, not asserted: the fallback is what the oracle is for, and
+        // the metric is what makes it visible in a matrix cell.
+        ctx.metric('x5:identityMoved');
+      }
+      // A sanity read that costs nothing: the canonical forms must be equal by
+      // construction after the check above, so this only fires on a bug HERE.
+      if (canonicalizeUuids(t2Text) !== canonicalizeUuids(t3Text)) {
+        fail(`x5 internal: the convergence check passed but the canonical forms differ\n  ${reproduce}`);
+      }
+      rmrf(dir);
+    };
+
+    /** X7: hostile comments through the CSV and the TML writers. */
+    const runNeutralisation = async (episodeDir: string): Promise<void> => {
+      const dir = path.join(episodeDir, 'hostile');
+      fs.mkdirSync(dir, { recursive: true });
+      // Direct section creation rather than a synthetic import: the comments
+      // are the input under test, and routing them through an importer first
+      // would mean testing the importer's escaping instead of the exporter's.
+      const shots = HOSTILE_COMMENTS.map((comment, index) => ({
+        azimuth_in: (index * 17) % 360,
+        azimuth_out: (index * 17) % 360,
+        length: 3 + (index % 5),
+        depth_in: index % 7,
+        depth_out: (index % 7) + 1,
+        pitch_in: null,
+        pitch_out: null,
+        left: 1,
+        right: 1,
+        up: 1,
+        down: 1,
+        comment,
+        kind: 'Normal',
+        marker_index: null,
+        temperature: null,
+      }));
+      const created = await callProjectAction(ctx, 'createSection', [
+        {
+          name: 'hostile "comments", =1+1',
+          surveyor: 'export-fuzz',
+          date: '2026-01-01',
+          color: '#3388FF',
+          direction: 'out',
+          quality: 3,
+          shots,
+        },
+      ]);
+      if (!created.ok) {
+        ctx.metric('skip:hostile-section-refused');
+        ctx.log(`x7: createSection refused (${created.err ?? 'no message'})`);
+        rmrf(dir);
+        return;
+      }
+      recorder.record({
+        kind: 'mutate',
+        action: 'createHostileSection',
+        args: [],
+        label: 'createSection with every HOSTILE_COMMENTS entry',
+      });
+      note('createSection(hostile comments)');
+      await assertIntegrity('seeding hostile comments');
+
+      const csvPath = path.join(dir, 'hostile.csv');
+      const csvExport = await callProjectAction(ctx, 'exportCsv', [csvPath]);
+      if (!csvExport.ok) {
+        ctx.metric('x7:csv-refused');
+      } else {
+        const text = fs.readFileSync(csvPath, 'utf8');
+        const result = csvTextViolations(text, HOSTILE_COMMENTS);
+        if (result.violations.length > 0 || result.missing.length > 0) {
+          fail(
+            `X7 the CSV export did not honour escape_csv for every cell\n` +
+              result.violations
+                .slice(0, 8)
+                .map((v) => `    row ${v.row} [${v.column}]: ${v.detail}`)
+                .join('\n') +
+              (result.missing.length > 0
+                ? `\n    ${result.missing.length} seeded comment(s) did not survive at all: ` +
+                  `${JSON.stringify(result.missing.map((c) => c.slice(0, 40)))}`
+                : '') +
+              `\n    escape_csv (src-tauri/src/export/csv.rs:66-79) neutralises a leading\n` +
+              `    = + - @ TAB or CR with an apostrophe and then RFC-4180-quotes anything\n` +
+              `    containing , " LF or CR. A cell that reaches a spreadsheet un-neutralised\n` +
+              `    is a formula that runs on open.\n  ${reproduce}`,
+          );
+        }
+        ctx.metric('x7:csvClean');
+        ctx.setMetric('x7:csvRows', result.rows);
+      }
+
+      const tmlPath = path.join(dir, 'hostile.tmlu');
+      const tmlExport = await callProjectAction(ctx, 'exportTml', [tmlPath]);
+      if (!tmlExport.ok) {
+        ctx.metric('x7:tml-refused');
+        rmrf(dir);
+        return;
+      }
+      // Re-parse through the app's own reader rather than by reading the XML:
+      // the question is whether the text survives a round trip, and a substring
+      // search over the raw file would pass on markup the parser rejects.
+      let parsed: unknown;
+      try {
+        parsed = await ctx.ipc('parse_tml', { path: tmlPath });
+      } catch (err) {
+        fail(
+          `X7 the app could not re-parse a .tmlu it had just written\n` +
+            `    ${err instanceof Error ? err.message : String(err)}\n` +
+            `    the comments in it are hostile, but the FILE is the exporter's own output;\n` +
+            `    a document only the writer can produce and not the reader is a broken\n` +
+            `    round trip whatever provoked it.\n  ${reproduce}`,
+        );
+      }
+      const haystack = JSON.stringify(parsed);
+      const inHaystack = (part: string): boolean =>
+        haystack.includes(JSON.stringify(part).slice(1, -1));
+      // Compared as ZWSP-split PARTS: the exporter co-encodes station comments
+      // into the shot comment with U+200B separators, so the joined string
+      // legitimately changes shape while every part survives. U+200B is not
+      // whitespace in Unicode terms, so the trim below cannot eat a separator.
+      const parts = (comment: string): string[] => comment.split('\u200b');
+      let trimmed = 0;
+      const lost = HOSTILE_COMMENTS.filter((comment) =>
+        parts(comment).some((part) => {
+          if (part === '') return false;
+          if (inHaystack(part)) return false;
+          // LEADING/TRAILING WHITESPACE IS FORMAT LOSSINESS, NOT A DEFECT, and
+          // this is a corrected PREMISE rather than a tolerance. The reader
+          // does `e.unescape()?.trim()` on every shot element's text
+          // (`parsers/tml/mod.rs:398`), which is what makes a pretty-printed
+          // `<Comment>\n  text\n</Comment>` written by another tool read as
+          // `text`. A comment that begins with whitespace therefore cannot
+          // round-trip, and writing `&#13;` would not help: XML 1.0 line-end
+          // handling normalises a literal CR to LF before the reader sees it,
+          // and the trim then removes that too. Measured on this scenario's
+          // first run (seed 1) and written into docs/ariane-import.md's
+          // lossiness table, which is where a claim like this belongs.
+          const bare = part.trim();
+          if (bare !== '' && inHaystack(bare)) {
+            trimmed += 1;
+            return false;
+          }
+          return true;
+        }),
+      );
+      if (trimmed > 0) ctx.metric('x7:tmlWhitespaceTrimmed', trimmed);
+      if (lost.length > 0) {
+        fail(
+          `X7 ${lost.length} hostile comment(s) did not survive a .tmlu write + parse_tml read\n` +
+            `    ${JSON.stringify(lost.map((c) => c.slice(0, 40)))}\n` +
+            `    Leading/trailing whitespace is already excused (the reader trims every text\n` +
+            `    field by design - see docs/ariane-import.md), so this is CONTENT loss:\n` +
+            `    escaping that dropped or mangled a character the document may legally carry.\n` +
+            `  ${reproduce}`,
+        );
+      }
+      ctx.metric('x7:tmlCommentsIntact');
+      rmrf(dir);
+    };
+
+    /**
+     * Does `config.export` reach the export form at all?
+     *
+     * Returns 1 when a CHANGED config default shows up in a freshly reset
+     * `exportStore`, 0 when it does not, and -1 when the config was unreadable
+     * (which is a skip, not an answer).
+     */
+    const probeConfigDefaults = async (): Promise<number> => {
+      return ctx.eval<number>(`
+        const project = window.__E2E_TEST__ && window.__E2E_TEST__.projectStore;
+        const exportStore = window.__E2E_TEST__ && window.__E2E_TEST__.exportStore;
+        if (!project || !exportStore) return -1;
+        const state = project.getState();
+        const config = state.config;
+        if (!config || !config.export) return -1;
+        const original = config.export;
+        try {
+          state.setConfig({
+            ...config,
+            export: { ...original, default_image_format: 'pdf', default_dpi: 111 },
+          });
+          exportStore.getState().reset();
+          const after = exportStore.getState().imageOptions || {};
+          return after.dpi === 111 && after.format === 'pdf' ? 1 : 0;
+        } finally {
+          const now = project.getState().config;
+          if (now) project.getState().setConfig({ ...now, export: original });
+          exportStore.getState().reset();
+        }
+      `);
+    };
+
+    /** X8: the two option sets, and the store's reset on a project switch. */
+    const runOptionIndependence = async (): Promise<void> => {
+      // The DECLARED defaults, not a read of the live store. Reading would make
+      // X8b vacuous the moment it mattered: if a previous move had dirtied the
+      // store and nothing reset it, the "defaults" would BE the dirty values
+      // and the comparison would pass on exactly the bug it is for.
+      const defaults = EXPECTED_DEFAULT_OPTIONS;
+      // Dirty the panel's set first, through the store the panel is bound to.
+      const dirtyImage = {
+        format: 'pdf' as const,
+        dpi: 600,
+        branching_threshold: 9,
+        show_penetration_labels: false,
+        color_mode: 'depth' as const,
+        show_station_labels: true,
+        show_section_names: true,
+        show_station_comments: true,
+        show_shot_comments: true,
+        show_shot_data: true,
+      };
+      await ctx.callAction('export', 'setExportType', ['data']);
+      await ctx.callAction('export', 'setDataFormat', ['tml']);
+      await ctx.callAction('export', 'setImageOptions', [dirtyImage]);
+      const panelBefore = await readPanelOptions(ctx);
+
+      // Now open the modal and change ITS options.
+      if (!(await openModal(ctx))) {
+        ctx.metric('skip:modal-would-not-open');
+      } else {
+        await clickControl(ctx, 'export-type-image');
+        await selectValue(ctx, 'image-format-select', 'svg');
+        await setThreshold(ctx, 7);
+        const modalChangedTo = (await readModalOptions(ctx)) ?? panelBefore;
+        const panelAfter = await readPanelOptions(ctx);
+        guarded(() => checkOptionIndependence({ panelBefore, panelAfter, modalChangedTo }, reproduce));
+        ctx.metric('x8:independent');
+        await closeModal(ctx);
+      }
+
+      // X8b: a project switch drops the panel's set.
+      const dirty = await readPanelOptions(ctx);
+      await loadFixtureWithoutUndoHistory(ctx, fixtureName());
+      await disableAutoSave(ctx);
+      const afterSwitch = await readPanelOptions(ctx);
+      guarded(() => checkExportStoreReset({ dirty, afterSwitch, defaults }, reproduce));
+      ctx.metric('x8:resetOnSwitch');
+
+      // Measured, never asserted: see the header.
+      //
+      // The probe CHANGES `config.export` and then resets the store, rather than
+      // comparing the shipped config default against the shipped store default.
+      // Those two agree by coincidence today (both say png / 300), so a
+      // comparison would report "honored" for a pipeline that reads neither -
+      // which is exactly the wrong answer and the reason this is a probe rather
+      // than a read. Frontend-only (`setConfig` does not persist), and the
+      // original config is put back.
+      ctx.setMetric('x8:configDefaultsHonored', await probeConfigDefaults());
+    };
+
+    /** X9: export mode forces the adjusted, read-only map and gives it back. */
+    const runModeInvariants = async (): Promise<void> => {
+      const before = await readModeSnapshot(ctx);
+      if (!(await setAppMode(ctx, 'export'))) {
+        ctx.metric('skip:setAppMode-refused');
+        return;
+      }
+      const during = await readModeSnapshot(ctx);
+      await setAppMode(ctx, 'survey');
+      const after = await readModeSnapshot(ctx);
+      guarded(() => checkExportModeInvariants({ before, during, after }, reproduce));
+      ctx.metric('x9:modeRoundTrip');
+    };
+
+    /**
+     * X9b: survey -> export -> a DIFFERENT project -> survey leaks no
+     * `prePlan*` state.
+     *
+     * Those three module variables are unreadable from anywhere
+     * (`uiStore.ts:826, 858, 877` - plain `let`s, not store fields), so the
+     * only way to see them is behaviourally: enter export mode on project A,
+     * load project B, and check that the geometry mode and dock state B
+     * arrives with are B's own rather than A's snapshot being replayed over
+     * them.
+     */
+    const runPrePlanLeak = async (): Promise<void> => {
+      await setAppMode(ctx, 'survey');
+      await ctx.callAction('ui', 'setGeometryMode', ['measured']);
+      const baseline = await readModeSnapshot(ctx);
+      if (!(await setAppMode(ctx, 'export'))) {
+        ctx.metric('skip:setAppMode-refused');
+        return;
+      }
+      // A direct project switch mid-Export: `applyDisplaySettings` clears the
+      // snapshot and forces survey, so the later exit must be a no-op rather
+      // than a restore of the PREVIOUS project's geometry.
+      await loadFixtureWithoutUndoHistory(ctx, fixtureName());
+      await disableAutoSave(ctx);
+      const afterLoad = await readModeSnapshot(ctx);
+      if (afterLoad.appMode !== 'survey') {
+        fail(
+          `X9b loading a project mid-Export left appMode at "${afterLoad.appMode}"\n` +
+            `    applyDisplaySettings sets APP_MODE_DEFAULT precisely so a load is\n` +
+            `    authoritative over whatever workspace mode the previous project was in.\n` +
+            `  ${reproduce}`,
+        );
+      }
+      // Now leave "export mode" again - there is nothing to leave, and that is
+      // the point: a stale prePlanGeometryMode would be applied here.
+      await setAppMode(ctx, 'export');
+      await setAppMode(ctx, 'survey');
+      const settled = await readModeSnapshot(ctx);
+      if (settled.geometryMode !== afterLoad.geometryMode) {
+        fail(
+          `X9b a project switch mid-Export leaked the PREVIOUS project's geometry mode\n` +
+            `    baseline (project A): ${JSON.stringify(baseline)}\n` +
+            `    after loading B:      ${JSON.stringify(afterLoad)}\n` +
+            `    after export -> survey on B: ${JSON.stringify(settled)}\n` +
+            `    prePlanGeometryMode is a module variable that outlives the project that\n` +
+            `    set it; applyDisplaySettings nulls it for exactly this reason.\n  ${reproduce}`,
+        );
+      }
+      ctx.metric('x9b:noPrePlanLeak');
+    };
+
+    // -----------------------------------------------------------------------
+    // Teardown
+    // -----------------------------------------------------------------------
+
+    const teardown = async (episodeDir: string): Promise<void> => {
+      if (await modalIsOpen(ctx)) {
+        await closeModal(ctx);
+        ctx.metric('teardown:modalWasOpen');
+      }
+      await setAppMode(ctx, 'survey');
+      await ctx.callAction('project', 'closeProject', []).catch(() => undefined);
+      await settleOnce(ctx);
+
+      const digest = await readProjectDigest(ctx);
+      if (digest.open) {
+        fail(
+          `E1 teardown left a project open\n    ${digest.sections} section(s)\n  ${reproduce}`,
+        );
+      }
+      const dialog = (await ctx.readStore('ui', 'activeDialog')) as { value?: unknown };
+      if (dialog.value !== null && dialog.value !== undefined) {
+        fail(`E1 teardown left activeDialog = ${JSON.stringify(dialog.value)}\n  ${reproduce}`);
+      }
+      // The panel's option set is per-project state; a close resets it, and E1
+      // is where that contract is asserted rather than merely relied on.
+      const options = await readPanelOptions(ctx);
+      if (options.exportType !== 'image' || options.dataFormat !== 'csv') {
+        fail(
+          `E1 closing the project left the Export-mode options dirty: ` +
+            `${JSON.stringify(options)}\n  ${reproduce}`,
+        );
+      }
+
+      rmrf(episodeDir);
+      rmrf(projectsDir);
+      const leftover = straysIn(exportsDir, []);
+      if (leftover.length > 0) {
+        fail(
+          `E1 teardown left ${leftover.length} file(s) under ${EXPORTS_REL}/: ` +
+            `${JSON.stringify(leftover.slice(0, 8))}\n  ${reproduce}`,
+        );
+      }
+    };
+
+    // -----------------------------------------------------------------------
+    // Replay
+    // -----------------------------------------------------------------------
+
+    /** Store actions a REPLAYED trace may drive - the DOM allowlist's twin. */
+    const REPLAYABLE_MUTATIONS: ReadonlySet<string> = new Set(['createHostileSection']);
+
+    const drawFromStep = (step: TraceStep): ExportDraw | null => {
+      if (step.kind !== 'export') return null;
+      const options = step.options as {
+        route?: unknown;
+        shape?: unknown;
+        seq?: unknown;
+        imageOptions?: unknown;
+      };
+      const route = options.route;
+      const shape = options.shape;
+      if (route !== 'modal' && route !== 'panel' && route !== 'store') {
+        throw new Error(`trace step names route ${JSON.stringify(route)}, which this build does not run`);
+      }
+      if (typeof shape !== 'string' || !PATH_SHAPE_NAMES.has(shape)) {
+        throw new Error(`trace step names path shape ${JSON.stringify(shape)}, which this build does not run`);
+      }
+      const imageOptions = options.imageOptions as ImageOptionDraw | undefined;
+      if (imageOptions === undefined || typeof imageOptions !== 'object') {
+        throw new Error('trace export step carries no image options');
+      }
+      return {
+        format: step.format as ExportFormat,
+        route: route as ExportRoute,
+        shape: shape as PathShape,
+        imageOptions,
+        seq: typeof options.seq === 'number' ? options.seq : 0,
+      };
+    };
+
+    const PATH_SHAPE_NAMES = new Set<string>([
+      'normal',
+      'upperTmlu',
+      'doubleExtension',
+      'noExtension',
+      'trailingDot',
+      'unicodeRtl',
+      'longName',
+      'percentQuoteSpace',
+      'openProject',
+      'plnxSibling',
+    ]);
+
+    // -----------------------------------------------------------------------
+    // Run
+    // -----------------------------------------------------------------------
+
+    fs.mkdirSync(exportsDir, { recursive: true });
+
+    if (replay !== null) {
+      ctx.log(`replaying ${replay.steps.length} step(s) from ${replayPath}`);
+      const episodeDir = path.join(exportsDir, 'replay');
+      fs.mkdirSync(episodeDir, { recursive: true });
+      await loadFixtureWithoutUndoHistory(ctx, fixture);
+      await disableAutoSave(ctx);
+      let opened = await readProjectDigest(ctx);
+      const projectHash = opened.filePath === null ? null : hashOf(opened.filePath);
+      for (const step of replay.steps) {
+        if (step.kind === 'export') {
+          const draw = drawFromStep(step);
+          if (draw === null) continue;
+          if (draw.route !== 'store' && !(await modalIsOpen(ctx))) {
+            if (draw.route === 'modal') await openModal(ctx);
+            else await setAppMode(ctx, 'export');
+          }
+          await performExport(draw, episodeDir, opened.filePath, projectHash, false);
+          if (draw.route === 'modal' && (await modalIsOpen(ctx))) await closeModal(ctx);
+          if (draw.route === 'panel') await setAppMode(ctx, 'survey');
+        } else if (step.kind === 'mutate') {
+          if (!REPLAYABLE_MUTATIONS.has(step.action)) {
+            throw new Error(
+              `refusing to replay mutate "${step.action}": ${SCENARIO} replays ` +
+                `${[...REPLAYABLE_MUTATIONS].join(', ')}`,
+            );
+          }
+          await runNeutralisation(episodeDir);
+          opened = await readProjectDigest(ctx);
+        }
+      }
+      // The two whole-episode oracles that need no draw still run: they judge
+      // state the replayed steps left behind rather than a move of their own.
+      await runOptionIndependence();
+      await runModeInvariants();
+      await teardown(episodeDir);
+      ctx.log('replay complete');
+      return;
+    }
+
+    let seq = 0;
+    for (let episode = 0; episode < iterations; episode += 1) {
+      const episodeDir = path.join(exportsDir, `ep${episode}`);
+      fs.mkdirSync(episodeDir, { recursive: true });
+      recorder.record({ kind: 'reload', fixture });
+      const { path: projectFile } = await loadFixtureWithoutUndoHistory(ctx, fixture);
+      if (!(await disableAutoSave(ctx))) ctx.metric('autoSaveStillOn');
+      const projectHash = hashOf(projectFile);
+      const digest = await readProjectDigest(ctx);
+      if (episode === 0) {
+        ctx.setMetric('fixtureSections', digest.sections);
+        ctx.setMetric('fixtureShots', digest.shots.length);
+        ctx.setMetric('fixtureMissingUuids', digest.missingUuids);
+        ctx.setMetric('fixtureDuplicateUuids', digest.duplicateUuids);
+      }
+
+      // ---- export moves --------------------------------------------------
+      const moves = ctx.randInt(1, movesPerEpisode());
+      for (let move = 0; move < moves; move += 1) {
+        seq += 1;
+        const draw = drawExport(ctx, seq);
+        if (draw.route === 'modal') {
+          if (!(await openModal(ctx))) {
+            ctx.metric('skip:modal-would-not-open');
+            continue;
+          }
+        } else if (draw.route === 'panel') {
+          if (!(await setAppMode(ctx, 'export'))) {
+            ctx.metric('skip:setAppMode-refused');
+            continue;
+          }
+        }
+        await performExport(draw, episodeDir, digest.filePath, projectHash, true);
+        if (draw.route === 'modal' && (await modalIsOpen(ctx))) await closeModal(ctx);
+        if (draw.route === 'panel') await setAppMode(ctx, 'survey');
+      }
+
+      // ---- the structural rotation ---------------------------------------
+      //
+      // Keyed by the episode index rather than drawn, so a given
+      // seed/iterations pair always covers the same oracles - a repro line that
+      // sometimes ran X5 and sometimes did not would not be a repro line.
+      if (episode % 2 === 0) {
+        await runDifferential(episodeDir);
+        await runByteIdentity(episodeDir, digest);
+      }
+      if (episode % 3 === 0) {
+        await runNeutralisation(episodeDir);
+      }
+      if (episode % 2 === 1 && roundtripEnabled()) {
+        await runRoundtrip(episodeDir);
+      }
+      await runOptionIndependence();
+      await runModeInvariants();
+      if (episode % 4 === 0) await runPrePlanLeak();
+
+      await teardown(episodeDir);
+      ctx.metric('episodes');
+    }
+
+    if (traceOut) {
+      const written = dumpTrace(null);
+      if (written !== null) ctx.log(`trace written to ${written}`);
+    }
+    ctx.setMetric('exportMoves', seq);
+  },
+};
