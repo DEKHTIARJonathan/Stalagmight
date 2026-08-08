@@ -117,6 +117,17 @@ export interface ImportScreenDigest {
   rows: number;
   /** Visible row indices carrying a `shot-frozen-*` lock icon. */
   frozen: number[];
+  /** The grid's active row (`data-active`), or null. */
+  activeRow: number | null;
+  /**
+   * Visible row indices inside the grid's current selection.
+   *
+   * Load-bearing, not diagnostics: `handleDeleteShots` in the DMP wizard
+   * REFUSES a selection made entirely of frozen rows (toast
+   * `dmp-wizard-frozen-delete`, no rows removed), and the only way to assert
+   * that expected refusal is to know what was selected before the delete.
+   */
+  selRows: number[];
   /** `data-toast-key` of every live toast - stable, unlike the i18n text. */
   toast: string[];
   /** First error text on screen (wizard error, error dialog, GPS error). */
@@ -306,6 +317,31 @@ export async function computeImportScreenDigest(
   }
   frozen.sort((a, b) => a - b);
 
+  const rowIndexOf = (el: Element, prefix: string): number => {
+    const id = el.getAttribute('data-testid') || '';
+    const rest = id.slice(prefix.length);
+    const cut = rest.indexOf('-');
+    const index = Number(cut >= 0 ? rest.slice(0, cut) : rest);
+    return Number.isInteger(index) && index >= 0 ? index : -1;
+  };
+  let activeRow: number | null = null;
+  for (let i = 0; i < rowNodes.length; i++) {
+    if (rowNodes[i].getAttribute('data-active') === 'true') {
+      const index = rowIndexOf(rowNodes[i], 'shot-editor-row-');
+      if (index >= 0) activeRow = index;
+    }
+  }
+  const selected: Record<string, true> = {};
+  const cellNodes = byPrefix('shot-editor-cell-');
+  for (let i = 0; i < cellNodes.length; i++) {
+    if (cellNodes[i].getAttribute('data-in-selection') !== 'true') continue;
+    const index = rowIndexOf(cellNodes[i], 'shot-editor-cell-');
+    if (index >= 0) selected[String(index)] = true;
+  }
+  const selRows = Object.keys(selected)
+    .map((key) => Number(key))
+    .sort((a, b) => a - b);
+
   // ---- toasts / errors ----------------------------------------------------
   const toast: string[] = [];
   const toastNodes = many('toast');
@@ -372,6 +408,8 @@ export async function computeImportScreenDigest(
     opts,
     rows: rowNodes.length,
     frozen,
+    activeRow,
+    selRows,
     toast,
     err,
     boundary: !!one('error-boundary-fallback'),

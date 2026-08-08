@@ -1,11 +1,11 @@
 /**
- * Parallel (fixture x seed) matrix runner for the `undo-redo-fuzz` scenario.
+ * Parallel (fixture x seed [x axis]) matrix runner for a fuzz scenario.
  *
  * Three runners, three jobs:
  *   - `pnpm agent:scenarios`   - every scenario once, at small n. A cheap gate.
  *   - `pnpm agent:scenario`    - ONE scenario at ONE seed. A repro, or a soak.
- *   - `pnpm agent:fuzz-matrix` - THIS: one scenario over MANY (fixture, seed)
- *     cells, K live app sessions at a time, aggregated into one verdict.
+ *   - `pnpm agent:fuzz-matrix` - THIS: one scenario over MANY cells, K live app
+ *     sessions at a time, aggregated into one verdict.
  *
  * Reach for it when the question is coverage rather than a single answer: "does
  * the undo/redo model survive seeds 1..8 on both fixtures?", or a sweep after
@@ -14,8 +14,25 @@
  * down with it, and each cell gets its own app session, profile, Xvfb display
  * and port block.
  *
- *   pnpm agent:fuzz-matrix [--fixtures a.stalx,b.stalx] [--seeds 1..8|1,3,7]
+ *   pnpm agent:fuzz-matrix [--scenario NAME] [--fixtures a.stalx,b.stalx]
+ *                          [--seeds 1..8|1,3,7] [--axis KEY=v1,v2]
  *                          [--workers K] [--iterations M]
+ *
+ * `--scenario` defaults to `undo-redo-fuzz`, so every existing invocation means
+ * exactly what it did. It is validated by SHAPE only, never against the registry:
+ * importing `./scenarios` here would evaluate the fuzz scenarios' module scope
+ * in the PARENT process, and `scenario-run.ts` documents at length why that
+ * import has to happen after the environment is settled. The child rejects an
+ * unknown name with the known-scenario list anyway.
+ *
+ * `--axis KEY=v1,v2,...` is a SECOND matrix dimension, orthogonal to
+ * `--fixtures`: each cell runs with `KEY` set to its value in the child's
+ * environment. It is how a knob gets swept - `--axis
+ * STALAGMIGHT_FUZZ_IMPORT_MALFORMED_P=0,0.5,1` - without a wrapper script per
+ * value. Only `STALAGMIGHT_*` keys are accepted: this process spreads the whole
+ * environment into every child, which then invokes cargo and launches the app,
+ * so a matrix flag does not get to set `PATH`, `NODE_OPTIONS` or `LD_PRELOAD` -
+ * the same boundary `fuzzTrace.ts`'s `restoreTraceEnv` draws for a trace file.
  *
  * Every `STALAGMIGHT_*` variable reaches the children unchanged, including
  * `STALAGMIGHT_FUZZ_ALLOW_KNOWN_BUGS` - which is now INERT: every issue-413
@@ -37,7 +54,9 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'
 /** The repo's own tsx, so no pnpm wrapper sits between us and the child. */
 const TSX_BIN = path.join(repoRoot, 'node_modules', '.bin', 'tsx');
 const CHILD_SCRIPT = path.join('e2e', 'agent', 'scenario-run.ts');
-const SCENARIO = 'undo-redo-fuzz';
+const DEFAULT_SCENARIO = 'undo-redo-fuzz';
+/** Env keys `--axis` may set. See the header: the children run cargo and the app. */
+const AXIS_KEY_RE = /^STALAGMIGHT_[A-Z0-9_]{1,64}$/;
 /** Size of session.ts's Xvfb display pool - one display per worker, so 5 is the ceiling. */
 const MAX_WORKERS = 5;
 const BASE_PORT = 4544;
@@ -55,12 +74,21 @@ const TAIL_LINES = 15;
 const MAX_MERGED_METRICS = new Set(['snapshotBytesMax', 'maxDepth']);
 
 const USAGE =
-  'usage: pnpm agent:fuzz-matrix [--fixtures a.stalx,b.stalx] [--seeds 1..8|1,3,7] ' +
-  '[--workers K] [--iterations M] [--release]';
+  'usage: pnpm agent:fuzz-matrix [--scenario NAME] [--fixtures a.stalx,b.stalx] [--seeds 1..8|1,3,7] ' +
+  '[--axis STALAGMIGHT_KEY=v1,v2] [--workers K] [--iterations M] [--release]';
+
+/** One value of the optional third dimension. `null` = no axis was given. */
+interface AxisValue {
+  key: string;
+  value: string;
+}
 
 interface Options {
+  scenario: string;
   fixtures: string[];
   seeds: number[];
+  /** `[null]` when no `--axis` was passed, so the cell product is unchanged. */
+  axis: (AxisValue | null)[];
   iterations: number;
   workers: number;
   /** Drive the release binary (STALAGMIGHT_AGENT_RELEASE=1 in every child). */
@@ -70,6 +98,7 @@ interface Options {
 interface RunResult {
   fixture: string;
   seed: number;
+  axis: AxisValue | null;
   passed: boolean;
   durationMs: number;
   metrics: Record<string, number>;
@@ -121,8 +150,25 @@ function booleanFlag(flag: string, raw: string): boolean {
   bail(`--${flag} takes 1/0, true/false, yes/no or on/off, got "${raw}"`);
 }
 
+/**
+ * `--axis STALAGMIGHT_KEY=v1,v2,...`. An EMPTY value is legal and meaningful -
+ * it is how a cell runs with the knob explicitly unset-ish - so the list is
+ * split without filtering blanks.
+ */
+function parseAxis(raw: string): AxisValue[] {
+  const eq = raw.indexOf('=');
+  if (eq <= 0) bail(`--axis needs KEY=v1,v2,..., got "${raw}"`);
+  const key = raw.slice(0, eq);
+  if (!AXIS_KEY_RE.test(key)) {
+    bail(`--axis key "${key}" is not a STALAGMIGHT_* variable; the cells run cargo and launch the app`);
+  }
+  const values = raw.slice(eq + 1).split(',');
+  if (values.length === 0) bail('--axis needs at least one value');
+  return values.map((value) => ({ key, value }));
+}
+
 function parseArgs(argv: string[]): Options {
-  const known = new Set(['fixtures', 'seeds', 'workers', 'iterations', 'release']);
+  const known = new Set(['scenario', 'fixtures', 'seeds', 'axis', 'workers', 'iterations', 'release']);
   const raw: Record<string, string> = {};
   for (let i = 0; i < argv.length; i++) {
     const token = argv[i];
@@ -170,7 +216,14 @@ function parseArgs(argv: string[]): Options {
   const seeds = raw.seeds === undefined ? [1, 2, 3, 4] : parseSeeds(raw.seeds);
   const iterations = raw.iterations === undefined ? DEFAULT_ITERATIONS : positiveInt('iterations', raw.iterations);
   const release = raw.release === undefined ? false : booleanFlag('release', raw.release);
-  return { fixtures, seeds, iterations, workers, release };
+  // Shape only, never the registry - see the header for why importing
+  // `./scenarios` in the PARENT would be wrong.
+  const scenario = raw.scenario === undefined ? DEFAULT_SCENARIO : raw.scenario;
+  if (!/^[a-z][a-z0-9-]{1,63}$/.test(scenario)) {
+    bail(`--scenario "${scenario}" is not a scenario name (lower-case, digits and dashes)`);
+  }
+  const axis: (AxisValue | null)[] = raw.axis === undefined ? [null] : parseAxis(raw.axis);
+  return { scenario, fixtures, seeds, axis, iterations, workers, release };
 }
 
 /**
@@ -196,7 +249,7 @@ function parseArgs(argv: string[]): Options {
  */
 const INHERITED_ENV_BLOCKLIST = ['STALAGMIGHT_FUZZ_REPLAY', 'STALAGMIGHT_FUZZ_TRACE'] as const;
 
-function slotEnv(slot: number, fixture: string, release: boolean): NodeJS.ProcessEnv {
+function slotEnv(slot: number, fixture: string, release: boolean, axis: AxisValue | null): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {
     // Inherited wholesale, so STALAGMIGHT_FUZZ_ALLOW_KNOWN_BUGS reaches the
     // child exactly as the caller set it.
@@ -207,9 +260,16 @@ function slotEnv(slot: number, fixture: string, release: boolean): NodeJS.Proces
     // `--release` on the matrix sets it for every child; an inherited
     // STALAGMIGHT_AGENT_RELEASE=1 already reaches them through the spread.
     ...(release ? { STALAGMIGHT_AGENT_RELEASE: '1' } : {}),
+    // Applied LAST, so an axis sweep beats whatever the invoking shell exported
+    // for the same key - otherwise half the matrix would silently be one cell.
+    ...(axis ? { [axis.key]: axis.value } : {}),
   };
   for (const key of INHERITED_ENV_BLOCKLIST) delete env[key];
   return env;
+}
+
+function axisLabel(axis: AxisValue | null): string {
+  return axis ? `${axis.key}=${axis.value}` : '';
 }
 
 const live = new Set<ChildProcess>();
@@ -245,18 +305,29 @@ function parseMetrics(line: string): Record<string, number> {
   }
 }
 
-function runOne(fixture: string, seed: number, slot: number, opts: Options, label: string): Promise<RunResult> {
+function runOne(
+  cell: { fixture: string; seed: number; axis: AxisValue | null },
+  slot: number,
+  opts: Options,
+  label: string,
+): Promise<RunResult> {
+  const { fixture, seed, axis } = cell;
   const startedAt = Date.now();
   process.stdout.write(
-    `${label} start ${fixture} seed=${seed} slot=${slot} port=${BASE_PORT + slot * PORT_STRIDE} ` +
-      `display=:${TOP_DISPLAY - slot}\n`,
+    `${label} start ${fixture} seed=${seed}${axis ? ` ${axisLabel(axis)}` : ''} slot=${slot} ` +
+      `port=${BASE_PORT + slot * PORT_STRIDE} display=:${TOP_DISPLAY - slot}\n`,
   );
 
   return new Promise<RunResult>((resolve) => {
     const child = spawn(
       TSX_BIN,
-      [CHILD_SCRIPT, SCENARIO, '--seed', String(seed), '--iterations', String(opts.iterations)],
-      { cwd: repoRoot, detached: true, stdio: ['ignore', 'pipe', 'pipe'], env: slotEnv(slot, fixture, opts.release) },
+      [CHILD_SCRIPT, opts.scenario, '--seed', String(seed), '--iterations', String(opts.iterations)],
+      {
+        cwd: repoRoot,
+        detached: true,
+        stdio: ['ignore', 'pipe', 'pipe'],
+        env: slotEnv(slot, fixture, opts.release, axis),
+      },
     );
     live.add(child);
     const stdout: string[] = [];
@@ -298,6 +369,7 @@ function runOne(fixture: string, seed: number, slot: number, opts: Options, labe
       resolve({
         fixture,
         seed,
+        axis,
         passed,
         durationMs: Date.now() - startedAt,
         metrics: passLine ? parseMetrics(passLine) : {},
@@ -317,14 +389,26 @@ function secs(ms: number): string {
 
 function printDone(result: RunResult, label: string): void {
   process.stdout.write(
-    `${label} ${result.passed ? 'PASS ' : 'FAIL '} ${result.fixture} seed=${result.seed} ` +
+    `${label} ${result.passed ? 'PASS ' : 'FAIL '} ${result.fixture} seed=${result.seed}` +
+      `${result.axis ? ` ${axisLabel(result.axis)}` : ''} ` +
       `(${secs(result.durationMs)})${result.passed ? '' : ` ${result.headline}`}\n`,
   );
 }
 
-function printReport(results: RunResult[], wallMs: number): void {
-  const rows = results.map((r) => [r.fixture, String(r.seed), r.passed ? 'PASS' : 'FAIL', secs(r.durationMs), r.headline]);
-  const header = ['fixture', 'seed', 'result', 'duration', 'detail'];
+function printReport(results: RunResult[], opts: Options, wallMs: number): void {
+  const withAxis = results.some((r) => r.axis !== null);
+  const rows = results.map((r) =>
+    [
+      r.fixture,
+      String(r.seed),
+      ...(withAxis ? [r.axis ? r.axis.value : ''] : []),
+      r.passed ? 'PASS' : 'FAIL',
+      secs(r.durationMs),
+      r.headline,
+    ],
+  );
+  const axisKey = results.find((r) => r.axis !== null)?.axis?.key ?? 'axis';
+  const header = ['fixture', 'seed', ...(withAxis ? [axisKey] : []), 'result', 'duration', 'detail'];
   const widths = header.map((h, i) => Math.max(h.length, ...rows.map((row) => row[i].length)));
   const line = (cells: string[]): string =>
     cells.map((cell, i) => (i === cells.length - 1 ? cell : cell.padEnd(widths[i]))).join('  ').trimEnd();
@@ -336,9 +420,10 @@ function printReport(results: RunResult[], wallMs: number): void {
   if (failures.length) {
     process.stdout.write('\n=== repro commands ===\n');
     for (const failure of failures) {
+      const prefix = `STALAGMIGHT_FUZZ_FIXTURE=${failure.fixture}${failure.axis ? ` ${axisLabel(failure.axis)}` : ''}`;
       process.stdout.write(
-        `${failure.fixture} seed=${failure.seed}: ` +
-          `${failure.reproduce || `(no reproduce line) STALAGMIGHT_FUZZ_FIXTURE=${failure.fixture} pnpm agent:scenario ${SCENARIO} --seed ${failure.seed}`}\n`,
+        `${failure.fixture} seed=${failure.seed}${failure.axis ? ` ${axisLabel(failure.axis)}` : ''}: ` +
+          `${failure.reproduce || `(no reproduce line) ${prefix} pnpm agent:scenario ${opts.scenario} --seed ${failure.seed}`}\n`,
       );
       if (!failure.reproduce && failure.tail) {
         process.stdout.write(`${failure.tail.split('\n').map((l) => `    | ${l}`).join('\n')}\n`);
@@ -375,10 +460,14 @@ async function main(): Promise<void> {
         `own moves. Use pnpm agent:scenario --trace to replay one.\n`,
     );
   }
-  const cells = opts.fixtures.flatMap((fixture) => opts.seeds.map((seed) => ({ fixture, seed })));
+  const cells = opts.fixtures.flatMap((fixture) =>
+    opts.seeds.flatMap((seed) => opts.axis.map((axis) => ({ fixture, seed, axis }))),
+  );
   const workers = Math.min(opts.workers, cells.length);
+  const axisKey = opts.axis.find((entry) => entry !== null)?.key;
   process.stdout.write(
-    `${SCENARIO}: ${cells.length} cell(s) = ${opts.fixtures.length} fixture(s) x ${opts.seeds.length} seed(s), ` +
+    `${opts.scenario}: ${cells.length} cell(s) = ${opts.fixtures.length} fixture(s) x ${opts.seeds.length} seed(s)` +
+      `${axisKey ? ` x ${opts.axis.length} ${axisKey} value(s)` : ''}, ` +
       `iterations=${opts.iterations}, workers=${workers}, ` +
       `mode=${opts.release ? 'release' : agentBuildMode()}\n`,
   );
@@ -407,7 +496,7 @@ async function main(): Promise<void> {
     next = 1;
     const label = `[1/${cells.length}]`;
     process.stdout.write(`${label} warm-up alone (rebuild needed: ${freshness.reasons.join('; ')})\n`);
-    const warm = await runOne(first.fixture, first.seed, 0, opts, label);
+    const warm = await runOne(first, 0, opts, label);
     results.push(warm);
     printDone(warm, label);
   }
@@ -420,7 +509,7 @@ async function main(): Promise<void> {
           if (index >= cells.length) return;
           const cell = cells[index];
           const label = `[${index + 1}/${cells.length}]`;
-          const result = await runOne(cell.fixture, cell.seed, slot, opts, label);
+          const result = await runOne(cell, slot, opts, label);
           results.push(result);
           printDone(result, label);
         }
@@ -428,8 +517,13 @@ async function main(): Promise<void> {
     ),
   );
 
-  results.sort((a, b) => a.fixture.localeCompare(b.fixture) || a.seed - b.seed);
-  printReport(results, Date.now() - startedAt);
+  results.sort(
+    (a, b) =>
+      a.fixture.localeCompare(b.fixture) ||
+      a.seed - b.seed ||
+      (a.axis?.value ?? '').localeCompare(b.axis?.value ?? ''),
+  );
+  printReport(results, opts, Date.now() - startedAt);
   process.exit(results.some((result) => !result.passed) ? 1 : 0);
 }
 
