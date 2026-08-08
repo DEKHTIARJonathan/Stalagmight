@@ -34,7 +34,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 
-import { crc32Text } from './crc32';
+import { shortId } from './crc32';
 
 /** The env knob. Unset means "no corpus", which is a supported configuration. */
 export const CORPUS_DIR_ENV = 'STALAGMIGHT_FUZZ_CORPUS_DIR';
@@ -107,15 +107,15 @@ export function corpusAvailable(): boolean {
  * This exists because the repo's private-fixture rules make the real name
  * unpublishable - a survey filename can name a cave system, a landowner or an
  * unreleased project, and a failure payload, a metric key and a shrunk trace are
- * all things that get attached to an issue. 20 bits is ~1M values: collisions are
- * possible in a corpus of thousands and are harmless, because the id identifies
- * a file WITHIN one contributor's run, where the full path is still on their own
- * disk. It is deliberately not reversible and deliberately not a full hash - a
- * long opaque digest invites someone to treat it as an identifier worth
- * correlating across runs.
+ * all things that get attached to an issue.
+ *
+ * The fold itself lives in `crc32.ts` as `shortId`, because
+ * `fuzzTrace.describeSteps` prints the same tag for a `corpusFile` step: a trace
+ * line naming a different id from the metric key beside it would be worse than
+ * having no id at all.
  */
 export function corpusFileId(relPath: string): string {
-  return (crc32Text(relPath) & 0xfffff).toString(16).padStart(5, '0');
+  return shortId(relPath);
 }
 
 function emptyByFormat(): Record<CorpusFormat, CorpusEntry[]> {

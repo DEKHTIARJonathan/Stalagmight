@@ -43,3 +43,22 @@ export function crc32(bytes: Uint8Array): number {
 export function crc32Text(text: string): number {
   return crc32(new TextEncoder().encode(text));
 }
+
+/**
+ * `text` folded to a 5-hex-character tag: CRC-32, low 20 bits.
+ *
+ * The publishable stand-in for a name that must not be published - see
+ * `fixtureCorpus.corpusFileId`, which is this function under a domain name, and
+ * `fuzzTrace.describeSteps`, which prints it for a corpus step. It lives here so
+ * the two agree by construction rather than by two copies staying in step: a
+ * trace line that named a different id from the metric key would be worse than
+ * either alone.
+ *
+ * 20 bits is ~1M values. Collisions are possible and harmless: the tag
+ * distinguishes files WITHIN one run, where the real path is still on the
+ * operator's own disk. It is deliberately short and deliberately not reversible,
+ * so nobody mistakes it for an identifier worth correlating across runs.
+ */
+export function shortId(text: string): string {
+  return (crc32Text(text) & 0xfffff).toString(16).padStart(5, '0');
+}

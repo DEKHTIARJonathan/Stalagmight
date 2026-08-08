@@ -1585,6 +1585,22 @@ async function runFuzz(
       await saveAndReload(tag);
       return;
     }
+    // Schema v2 added the import/export step vocabulary (`genFile`, `ui`,
+    // `export`, ...). This scenario drives the store, not the UI, so it cannot
+    // run them - and it must say so rather than let one fall through into the
+    // history-move arm below, which is the exact bug the `kind` allow-list in
+    // `validateStep` was added for.
+    if (
+      traceStep.kind !== 'undo' &&
+      traceStep.kind !== 'redo' &&
+      traceStep.kind !== 'undoTo' &&
+      traceStep.kind !== 'redoTo'
+    ) {
+      throw new Error(
+        `trace step kind ${traceStep.kind} is not one undo-redo-fuzz replays; ` +
+          `it belongs to a scenario that drives the import/export UI.`,
+      );
+    }
     const back = traceStep.kind === 'undo' || traceStep.kind === 'undoTo';
     const reach = back ? cursor : top - cursor;
     if (reach < 1) {
