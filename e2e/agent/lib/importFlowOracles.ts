@@ -59,6 +59,43 @@ export interface ReceiptClaim {
 
 export class ImportOracleError extends Error {}
 
+/**
+ * Tauri's answer to an argument body it cannot deserialize:
+ * `invalid args \`X\` for command \`Y\`: <serde error>`.
+ *
+ * The distinction this pattern draws is the whole point of the S6 oracle. A
+ * command that RAN and returned `success: false` is the app reporting a problem
+ * properly, and this scenario provokes plenty of those on purpose with
+ * malformed files. This is the other thing: the call never reached the command,
+ * because what the frontend serialized is not what the backend can parse. That
+ * is a wire-format disagreement, and it is always a defect no matter which
+ * command or which content triggered it - which is what makes asserting on it
+ * an oracle rather than a classifier for one bug.
+ */
+export const IPC_ARG_REJECTION_RE = /invalid args [`'"]?(\w+)[`'"]? for command [`'"]?(\w+)[`'"]?/;
+
+/** Log lines that are an argument-deserialization rejection. */
+export function ipcArgRejections(lines: readonly string[]): string[] {
+  return lines.filter((line) => IPC_ARG_REJECTION_RE.test(line));
+}
+
+/**
+ * S6. No command may be invoked with arguments the backend cannot deserialize.
+ *
+ * Reads the app's own log ring rather than a patched `invoke`, because Tauri
+ * ships `window.__TAURI_INTERNALS__.invoke` non-configurable and the spy in
+ * `importDialogBridge.ts` cannot get in on a stock build. The log always
+ * carries the failure; the spy, when it works, only adds the payload.
+ */
+export function checkIpcContract(lines: readonly string[], what: string, detail: string[] = []): void {
+  const rejected = ipcArgRejections(lines);
+  if (rejected.length === 0) return;
+  fail(
+    `S6 IPC CONTRACT: the app sent arguments the backend could not deserialize (${rejected.length} line(s))`,
+    [`after: ${what}`, ...rejected.slice(0, 4), ...detail],
+  );
+}
+
 function fail(headline: string, detail: string[] = []): never {
   throw new ImportOracleError([headline, ...detail.map((line) => `  ${line}`)].join('\n'));
 }

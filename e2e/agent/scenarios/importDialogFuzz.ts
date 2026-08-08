@@ -169,23 +169,51 @@
  *    the value is counted instead (`residualImportContext:*`); see
  *    `checkResidue` for the full argument.
  *
- * 3. OPEN, not yet filed as its own issue. `import_sections` REJECTED THE
- *    WIZARD'S OWN ARGUMENTS.
+ * 3. FIXED (caaa1847), issue #478. A CLEARED DATE MADE THE WIZARD SEND
+ *    `date: ""`, AND TAURI REJECTED THE WHOLE `import_sections` CALL.
  *
- *        ERROR [frontend]: [manualPlacement] Immediate segment import failed:
- *        invalid args `sections` for command `import_sections`:
- *        premature end of input
+ *        pnpm agent:scenario import-dialog-fuzz --seed 7 --iterations 8
  *
- *    Twice in one `--seed 7 --iterations 8` run, surfaced by the oracle sweep as
- *    a `log-error` finding (which is reported, not fatal, so the run is still
- *    green). This is Tauri failing to DESERIALIZE the arguments, not the backend
- *    rejecting their content - so it is not the non-finite class that
- *    `assertSendableShots` already covers, and the prime suspect is the hostile
- *    text this scenario types into section names and comments (control
- *    characters, a bidi override, U+FFFD, 512-character strings) reaching the
- *    IPC framing. Finding 1's fix changes only WHETHER the placement path runs,
- *    never the payload's shape, so this is pre-existing and newly reachable
- *    rather than a regression. Needs its own shrink before it is filed.
+ *    By hand: import a `.dmp`, continue, skip the zero datum, CLEAR the date
+ *    field on the section being placed, and complete the placement. The call
+ *    fails at Tauri's argument layer with `invalid args \`sections\` for command
+ *    \`import_sections\`: premature end of input`, so the placement does not
+ *    import and the wizard reopens showing serde's message.
+ *
+ *    `ImportSectionConfig.date` is `Option<NaiveDate>`
+ *    (`src-tauri/src/models/section.rs:253`), and chrono parses `""` as
+ *    TOO_SHORT, whose Display is literally `premature end of input`.
+ *    `buildBatchImport` normalised `surveyor` and not `date`, one line apart.
+ *
+ *    HOW THIS ONE WAS FOUND is the part worth keeping. It was first recorded
+ *    here as a log line the oracle sweep reported at severity `error` - which
+ *    does not fail a run - so the scenario was GREEN while the app was telling
+ *    it that a command had been rejected. The gap was the oracle's, not the
+ *    app's: S6 now asserts the IPC contract directly, and the distinction it
+ *    draws is in `checkIpcContract`. A command that RAN and returned
+ *    `success: false` is the app reporting a problem properly, and this
+ *    scenario provokes plenty of those on purpose; a command whose ARGUMENTS
+ *    could not be deserialized never ran at all, and that is a wire-format
+ *    disagreement, always a defect, whatever the command or the content. That
+ *    is what makes it an oracle rather than a classifier for this bug.
+ *
+ *    The root cause was measured rather than guessed, because the message
+ *    points nowhere near it. `e2e/agent/ipc-payload-probe.ts` (kept, and the
+ *    evidence behind the issue) ruled out the three things it suggests: payload
+ *    SIZE (32 MiB of one string argument arrives intact), CHARACTER CLASS (NUL,
+ *    SOH, BS, TAB, LF, CR, ESC, DEL, U+200B, U+202E and U+FFFD all arrive; lone
+ *    surrogates fail with a DIFFERENT message), and SERIALIZATION refusals
+ *    (BigInt and cyclic structures fail in the webview with their own errors,
+ *    never as a truncated body). `date: ""` is the only probed input that
+ *    reproduces it.
+ *
+ *    A note for whoever next wants the failing PAYLOAD rather than the failing
+ *    line: you cannot get it by patching `invoke`. Tauri ships
+ *    `window.__TAURI_INTERNALS__.invoke` NON-CONFIGURABLE and non-writable, and
+ *    the global object itself resists replacement, so a spy wrapped around it
+ *    silently records nothing - which looks exactly like a spy that saw
+ *    nothing. That was tried, measured (zero rejections recorded on a run whose
+ *    log had two) and removed; the log ring is the source S6 uses.
  */
 import * as fs from 'fs';
 import * as path from 'path';
@@ -204,8 +232,10 @@ import {
 } from '../lib/fuzzTrace';
 import { materializeSurveyFile, randomDmpSpec, type GeneratedFileSpec } from '../lib/surveyFileSpecs';
 import type { ImportScreenDigest } from '../lib/importScreenDigest';
+import { LogCursor } from '../lib/logs';
 import {
   checkAccounting,
+  checkIpcContract,
   checkPushed,
   checkReceipt,
   checkResidue,
@@ -661,6 +691,13 @@ export const importDialogFuzz: Scenario = {
       }
       ctx.metric(`screen:${digest.screen}`);
 
+      // S6 IPC CONTRACT. `checkIpcContract` documents the distinction it draws.
+      // Through `guarded`, like every other oracle that lives in the oracle
+      // module: its own `fail` throws a bare ImportOracleError, which would lose
+      // the reproduce line, the move history and the dropped trace.
+      const fresh = await ctx.exclusive(() => logs.read('error'));
+      guarded(() => checkIpcContract(fresh.newEntries, move.label));
+
       // An import commits through `import_sections`, which pushes exactly one
       // undo entry per call - so a rise in depth is the cheap signal that
       // something landed, and the moment to pay for the structural check.
@@ -898,6 +935,8 @@ export const importDialogFuzz: Scenario = {
     // rather than spending a flow on it; the model still knows the screen, so a
     // reappearance mid-run is handled rather than mistaken for `idle`.
     if (await dismissFirstRunModal(ctx)) ctx.setMetric('dismissedFirstRunModal', 1);
+    const logs = new LogCursor(ctx.browser);
+    await ctx.exclusive(() => logs.checkpoint());
 
     /**
      * WRITER/PARSER DRIFT DETECTOR.
