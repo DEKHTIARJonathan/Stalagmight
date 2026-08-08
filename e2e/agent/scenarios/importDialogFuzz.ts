@@ -373,7 +373,6 @@ import {
   auxInterjectProbability,
   buildAuxInterjection,
   buildInterjection,
-  corpusCandidates,
   describeSource,
   drawAuxInterjection,
   drawInterjection,
@@ -546,11 +545,14 @@ export const importDialogFuzz: Scenario = {
     // named in a log line - `describeCorpus` prints counts per format, and a
     // corpus file is identified downstream by `corpusFileId`.
     const formats = enabledFormats();
+    // ONE walk, shared by every format: `discoverCorpus` reads a directory tree
+    // that can hold thousands of files, and this runs at the start of every
+    // session (and of every ddmin candidate under `fuzz-shrink`).
     const inventory = discoverCorpus();
     const corpus: Partial<Record<SurveyFileFormat, readonly CorpusEntry[]>> = {};
     let corpusUsable = 0;
     for (const format of formats) {
-      const entries = corpusCandidates([format]);
+      const entries = inventory.byFormat[format] ?? [];
       corpus[format] = entries;
       corpusUsable += entries.length;
     }

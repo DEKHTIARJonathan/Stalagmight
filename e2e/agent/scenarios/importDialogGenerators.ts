@@ -312,24 +312,6 @@ export function enabledFamilies(): readonly SurveyFormatFamily[] {
   return chosen.length > 0 ? chosen : SURVEY_FORMAT_FAMILIES;
 }
 
-/**
- * Corpus entries this run may draw, grouped by the formats it is allowed to
- * draw at all.
- *
- * Discovery walks a directory, so it is done ONCE per call site rather than per
- * draw - `drawFileSource` takes the inventory it was handed.
- */
-export function corpusCandidates(formats: readonly SurveyFileFormat[]): CorpusEntry[] {
-  const inventory = discoverCorpus();
-  if (!inventory.available) return [];
-  const out: CorpusEntry[] = [];
-  for (const format of formats) {
-    const entries = inventory.byFormat[format];
-    if (entries !== undefined) out.push(...entries);
-  }
-  return out;
-}
-
 /** Every concrete extension the enabled families cover. */
 export function enabledFormats(): SurveyFileFormat[] {
   const out: SurveyFileFormat[] = [];
