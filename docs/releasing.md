@@ -217,7 +217,7 @@ the day the version was bumped, which may be well before the day it ships.
   helper, that assumption has to be revisited - either add entitlements or set
   `"hardenedRuntime": false` explicitly rather than discovering it in a crash.
 - **An ad-hoc signature changes identity every build, which the keychain notices.**
-  The SpeleoDB token is stored via the OS keychain (`src-tauri/src/speleodb/auth.rs`),
+  The SpeleoDB token is stored via the OS keychain (`src-tauri/crates/speleodb/src/speleodb/auth.rs`),
   and a keychain item's ACL is bound to the creating app's code identity. An ad-hoc
   signature's designated requirement is its cdhash, which differs for every build,
   so each release is a different app as far as the keychain is concerned and users

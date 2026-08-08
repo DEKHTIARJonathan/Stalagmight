@@ -6,7 +6,7 @@ turn dots, the stage drops, the pressure gauges - is a view onto that answer.
 
 Plan is one of the three workspace modes, read-only over the survey
 ([SPEC.md 6.1](SPEC.md#61-workspace-modes)). The engine is
-`src-tauri/src/models/project/gas.rs` (+ `gas/model.rs`, `gas/physics.rs`),
+`src-tauri/crates/models/src/project/gas.rs` (+ `gas/model.rs`, `gas/physics.rs`),
 reached through the single `compute_gas_reach_field` command. Umbrella issue
 [#38](https://github.com/Stalagmight/Stalagmight/issues/38); its design PRD was
 removed from the repo before open-sourcing, so this page is the reference.

@@ -1,6 +1,6 @@
 # SpeleoDB dev/integration testing
 
-How the SpeleoDB client (`src-tauri/src/speleodb/`) is tested against a **real**
+How the SpeleoDB client (`src-tauri/crates/speleodb/src/speleodb/`) is tested against a **real**
 SpeleoDB server, and how to design future multi-account / permission /
 collaboration tests against the dev box.
 
@@ -75,7 +75,7 @@ The client follows a two-layer convention (see the plan for #183 and the epic #1
 2. **Env-gated live tests** - real HTTP against the dev box. Marked `#[ignore]` so
    they never run in normal `cargo test` or CI, and they early-return (skip) if the
    `DEV_SPELEODB_*` env vars are absent. They live in the `live_tests` module of
-   `src-tauri/src/speleodb/mod.rs`.
+   `src-tauri/crates/speleodb/src/speleodb/mod.rs`.
 
 ### Self-seeding, self-cleaning (no shared fixtures)
 
@@ -116,12 +116,13 @@ DEV_SPELEODB_URL=http://10.10.0.220:8000/ \
 DEV_SPELEODB_EMAIL=dab@dab.com \
 DEV_SPELEODB_PASSWORD=dab \
 TELEMETRY_ENDPOINT=http://localhost/dummy \
-cargo test --manifest-path src-tauri/Cargo.toml --features telemetry \
+cargo test --manifest-path src-tauri/Cargo.toml -p stalagmight-speleodb --features telemetry \
   speleodb::live_tests -- --ignored
 ```
 
 - `--ignored` is required - the live tests are `#[ignore]`d by default.
-- `TELEMETRY_ENDPOINT` is needed because `build.rs` requires it under
+- `TELEMETRY_ENDPOINT` is needed because the telemetry member's `build.rs`
+  (`src-tauri/crates/telemetry/build.rs`) requires it under
   `--features telemetry` (which the project's test command uses anyway).
 - Drop the `DEV_SPELEODB_*` vars and the tests skip cleanly (they print a skip line
   and pass), so this command is safe to leave in a script.

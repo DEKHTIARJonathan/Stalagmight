@@ -51,7 +51,7 @@ shipped with exactly that bug.
 **There is no server backstop for this half of the predicate.** The backend's
 `AppState::guard_mutation` rejects a mutation only when `edit_enabled` is false,
 and that flag is false only for a remote SpeleoDB project opened without the
-write lock (`src-tauri/src/core/state/app_state.rs`). A local project in Plan or
+write lock (`src-tauri/crates/core/src/core/state/app_state.rs`). A local project in Plan or
 Export is `edit_enabled == true` server-side, so read-only there rests entirely
 on UI gating - which is why the gating is linted.
 

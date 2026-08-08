@@ -138,7 +138,7 @@ invariant on the exporter alone:
   pre-fix export), and every Ariane-authored file examined in the #379
   investigation typed all of its parentless roots START. Nothing downstream
   compensates.
-- `ensure_rooted_chain` in `src-tauri/src/export/tml.rs` therefore refuses to
+- `ensure_rooted_chain` in `src-tauri/crates/export/src/export/tml.rs` therefore refuses to
   write an orphan root alongside closures (user profile), and warns when a
   file carries orphans without closures.
 
@@ -258,9 +258,9 @@ dropped or capped.
 
 | Component | File | Role |
 |-----------|------|------|
-| Export logic | `src-tauri/src/export/tml.rs` | XML generation, ZIP packaging, topology resolution, the two profiles |
+| Export logic | `src-tauri/crates/export/src/export/tml.rs` | XML generation, ZIP packaging, topology resolution, the two profiles |
 | Export command | `src-tauri/src/commands/export.rs` | `export_tml` IPC handler |
-| SpeleoDB sidecar | `src-tauri/src/core/state/speleodb.rs` | `speleodb_render_tml` renders the co-push sidecar via `export_tml_for_speleodb` |
+| SpeleoDB sidecar | `src-tauri/crates/core/src/core/state/speleodb.rs` | `speleodb_render_tml` renders the co-push sidecar via `export_tml_for_speleodb` |
 | Store method | `src/store/projectStore.ts` | `exportTml()` frontend binding |
 | Export dialog | `src/components/Dialogs/ExportDialog.tsx` | UI with TML format option |
 

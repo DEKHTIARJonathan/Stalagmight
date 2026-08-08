@@ -245,11 +245,12 @@ These mappings are handled in `ClosureStrategy::from_str_lossy` and via serde al
 
 ## Files of Interest
 
-- `src-tauri/src/models/station.rs` (ClosureStrategy enum + legacy mapping)
-- `src-tauri/src/models/project.rs` (create logic; `adjust_loop_closures` solver kept as the
-  internal derivation helper; `compute_adjusted_station_coordinates`; `default_anchor_for_component`)
+- `src-tauri/crates/models/src/station.rs` (ClosureStrategy enum + legacy mapping)
+- `src-tauri/crates/models/src/project/` (`mutations.rs`: create logic; `closure.rs`: the
+  `adjust_loop_closures` solver kept as the internal derivation helper; `coordinates.rs`:
+  `compute_adjusted_station_coordinates`, `default_anchor_for_component`)
 - `src-tauri/src/commands/project.rs` (`get_adjusted_stations` IPC command)
-- `src-tauri/src/core/state/app_state.rs` (transient closure-adjusted cache)
+- `src-tauri/crates/core/src/core/state/app_state.rs` (transient closure-adjusted cache)
 - `src/components/Dialogs/ClosureDialog.tsx` (create closure UI)
 - `src/components/SingleSystemView/DisplayMenu.tsx` (Geometry mode toggle)
 - `src/store/geometrySelectors.ts` (active-geometry selectors)

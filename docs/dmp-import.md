@@ -209,11 +209,11 @@ Sections unreachable after all passes remain in the wizard's manual segment-plac
 | `VirtualConnection` | `src/utils/segmentContext.ts` | Client-side connection record |
 | `ConfirmedOverlapInfo` | `src/components/Dialogs/DmpNewImportDialog.tsx` | Merge station choice per confirmed suggestion |
 | `ExistingShotUpdateLocal` | `src/components/Dialogs/DmpNewImportDialog.tsx` | Frontend representation of existing shot modifications |
-| `ExistingShotUpdate` | `src-tauri/src/models/section.rs` | Backend type for atomic existing shot modifications |
+| `ExistingShotUpdate` | `src-tauri/crates/models/src/section.rs` | Backend type for atomic existing shot modifications |
 | `ExistingAnchor` | `src/utils/segmentContext.ts` | Position where a DMP section meets an existing section |
 | `ExistingSectionGeoEntry` | `src/utils/segmentContext.ts` | Cached segment geometry with frame offset |
-| `CrossSectionSuggestion` | `src-tauri/src/models/placement_suggest.rs` | Backend suggestion with score/confidence |
-| `SegmentGeometry` | `src-tauri/src/models/section.rs` | Backend segment shot-line data |
+| `CrossSectionSuggestion` | `src-tauri/crates/models/src/placement_suggest.rs` | Backend suggestion with score/confidence |
+| `SegmentGeometry` | `src-tauri/crates/models/src/section.rs` | Backend segment shot-line data |
 | `ContextSectionGeometry` | `src/components/Dialogs/SectionPreview.tsx` | Shot pairs for preview rendering |
 | `SectionEditState` | `src/components/Dialogs/DmpNewImportDialog.tsx` | Per-section editable metadata + shots |
 
@@ -244,7 +244,7 @@ Sections unreachable after all passes remain in the wizard's manual segment-plac
 
 ## Backend Safety Guards
 
-The `execute_import_sections` function in `src-tauri/src/core/state/commands.rs` applies two guards before modifying existing section shots:
+The `execute_import_sections` function in `src-tauri/crates/core/src/core/state/commands.rs` applies two guards before modifying existing section shots:
 
 1. **Doubly-anchored filter**: For each affected section, if the modified shot range is straddled by positional constraints (zero datums, station merges, aligned closures) on both sides, updates for that section are silently skipped.
 
@@ -260,4 +260,4 @@ pnpm vitest run src/utils/__tests__/segmentContext.test.ts
 
 Overlap helper tests: `src/utils/__tests__/overlapHelpers.test.ts`
 
-Backend integration test for overlap interpolation: `src-tauri/src/core/state/tests.rs` (`kb5_import_overlap_interpolation_integration`, currently `#[ignore]`).
+Backend integration test for overlap interpolation: `src-tauri/crates/core/src/core/state/tests.rs` (`kb5_import_overlap_interpolation_integration`, currently `#[ignore]`).

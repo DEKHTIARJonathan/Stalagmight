@@ -20,22 +20,26 @@
 
 ```
 stalagmight/
-├── src-tauri/                    # Rust backend
-│   ├── src/
+├── src-tauri/                    # Rust backend: cargo workspace root + the app crate
+│   ├── Cargo.toml                # Hybrid workspace root (see note below)
+│   ├── src/                      # The thin `stalagmight` app crate
 │   │   ├── main.rs               # Tauri entry point
-│   │   ├── lib.rs                # Library root, Tauri setup
+│   │   ├── lib.rs                # Library root, Tauri setup, the single generate_handler!
 │   │   ├── commands/             # Tauri IPC command handlers
-│   │   ├── core/                 # Business logic (command, state, undo)
-│   │   ├── models/               # Data structures
+│   │   ├── tile_attribution.rs   # Tile-provider attribution fetch
+│   │   └── webkit_memory.rs      # Linux WebKit memory-pressure env setup
+│   ├── examples/                 # gen_ipc_types (dev-only, feature-gated)
+│   ├── tests/                    # App-crate integration tests
+│   ├── crates/                   # The 7 workspace member crates
+│   │   ├── models/               # Data structures (Project, Section, Shot, geo, app_dirs)
+│   │   ├── telemetry/            # Anonymous counters + event registry, logging/ (tracing setup)
 │   │   ├── parsers/              # Import parsers: dmp (mNemo, versions 2-5),
 │   │   │                         #   tml (Ariane), compass, gpx, walls/
-│   │   ├── persistence/          # SQLite operations
-│   │   ├── cache/                # Tile caching (SQLite-based)
-│   │   ├── export/               # CSV, JSON, image export
+│   │   ├── persistence/          # SQLite operations (.stalx, .plnx), tile caches
+│   │   ├── export/               # CSV, JSON, image, TML export
 │   │   ├── speleodb/             # SpeleoDB integration (auth, dump, sync)
-│   │   ├── telemetry/            # Anonymous counters + event registry
-│   │   ├── config/               # Configuration with defaults
-│   │   └── logging/              # Tracing setup
+│   │   └── core/                 # Business logic (AppState, command executors, undo,
+│   │                             #   config/ I/O, tile_providers)
 │   ├── capabilities/             # Tauri 2.x permissions
 │   └── icons/                    # App icons
 │
@@ -106,6 +110,14 @@ stalagmight/
 │
 └── CLAUDE.md                     # Agent instructions (AGENTS.md symlinks to it)
 ```
+
+`src-tauri/Cargo.toml` is the workspace root - a hybrid one: it is both the
+`stalagmight` app package's manifest and the `[workspace]` declaration for the
+seven members under `src-tauri/crates/`. The lockfile (`Cargo.lock`), the wry
+`[patch.crates-io]`, the build profiles, `[workspace.dependencies]` and the
+`[workspace.lints]` policy all live there; each member inherits the lints via
+`[lints] workspace = true`. See the workspace-layout table in
+[architecture.md](architecture.md) for what each crate contains.
 
 ## Shared UI primitives
 

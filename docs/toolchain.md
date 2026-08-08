@@ -77,7 +77,8 @@ the `src-tauri` cargo workspace:
 - `cargo.features = ["telemetry"]` + `cargo.extraEnv.TELEMETRY_ENDPOINT` - the
   exact feature/env shape CI and the pre-push checklist use, so RA sees the
   telemetry module and flycheck matches CI. The env var is required: with the
-  feature on, `src-tauri/build.rs` refuses to build without it.
+  feature on, the telemetry member's build script
+  (`src-tauri/crates/telemetry/build.rs`) refuses to build without it.
 
 If your editor's rust-analyzer does not pick the file up (older RA builds only
 read `rust-analyzer.toml` from certain roots), set the same three keys in your

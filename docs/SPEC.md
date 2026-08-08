@@ -60,7 +60,7 @@ Stalagmight is a desktop application for processing underwater cave survey data.
 ### 1.4 Scope
 
 **Shipped:**
-- Import: DMP (mNemo devices), Walls (experimental), Compass, Ariane `.tml`/`.tmlu`, GPX - see `src-tauri/src/parsers/`
+- Import: DMP (mNemo devices), Walls (experimental), Compass, Ariane `.tml`/`.tmlu`, GPX - see `src-tauri/crates/parsers/src/parsers/`
 - Manual data entry via a spreadsheet interface
 - 2D plan-view map with satellite imagery
 - Section management (create, edit, delete, merge)
@@ -295,7 +295,7 @@ When a zero datum is set with GPS coordinates, a coordinate transformation conve
    - These become the local X, Y coordinates for positioning sections
    - All other stations are computed relative to this origin
 
-The transformation is implemented in `src-tauri/src/models/geo.rs` with:
+The transformation is implemented in `src-tauri/crates/models/src/geo.rs` with:
 - `geodetic_to_ecef(lat, lon, alt)` - WGS84 to ECEF
 - `gps_to_local(gps, origin)` - Main entry point returning (east, north) meters
 
@@ -787,7 +787,7 @@ When an action is performed while the dropdown is open:
 
 The tool set is the `ToolType` union in `src/store/uiStore.ts`; per-tool click and
 drag handling lives in `src/hooks/useMapTools.ts`. Shortcuts below are the
-defaults from `src-tauri/src/config/defaults.rs` and are all rebindable.
+defaults from `src-tauri/crates/core/src/config/defaults.rs` and are all rebindable.
 
 | Tool | Shortcut | Click Station | Click Shot | Click Empty | Drag |
 |------|----------|---------------|------------|-------------|------|
@@ -1431,7 +1431,7 @@ The variants cover project lifecycle (create/open/save/close/merge), sections,
 shots, station merges, loop closures, zero datums, station comments, the move
 operations, and a `Batch` wrapper that applies a list atomically. The
 authoritative list - every variant with its fields - is
-`src-tauri/src/core/command.rs`; it grows with the feature set, so it is
+`src-tauri/crates/core/src/core/command.rs`; it grows with the feature set, so it is
 deliberately not mirrored here.
 
 ### 8.2 UndoEntry Structure
@@ -1463,7 +1463,7 @@ execution for anything that exists only once IDs are assigned - and stored as an
 a merge / closure / datum / move record, or a whole-project snapshot pair for
 batches.
 
-`src-tauri/src/core/undo.rs` defines the variants.
+`src-tauri/crates/core/src/core/undo.rs` defines the variants.
 [undo-redo.md](undo-redo.md) is the reference for which command uses which
 variant and what undo and redo each does with it.
 
@@ -1507,10 +1507,10 @@ interface UndoHistoryItem {
 
 ### 8.5 Command Execution
 
-`AppState::execute` (`src-tauri/src/core/state/commands.rs`) is the generic entry
+`AppState::execute` (`src-tauri/crates/core/src/core/state/commands.rs`) is the generic entry
 point; a handful of commands with heavier bookkeeping have their own `execute_*`
 methods alongside it, and `undo()`/`redo()`/`undo_to()`/`redo_to()` live in
-`src-tauri/src/core/state/undo.rs`. Lock ordering
+`src-tauri/crates/core/src/core/state/undo.rs`. Lock ordering
 (`command_lock` -> `undo_stack` -> `project`), the two-phase undo capture and the
 batch rollback rules are documented in [undo-redo.md](undo-redo.md).
 
@@ -1531,8 +1531,8 @@ Managed entirely in Zustand store on frontend.
 ## 9. Configuration
 
 All settings live in a single TOML file. Ground truth for the keys is the `Config`
-struct in `src-tauri/src/config/types.rs`, with the shipped values in
-`src-tauri/src/config/defaults.rs`; [configuration.md](configuration.md) is the
+struct in `src-tauri/crates/core/src/config/types.rs`, with the shipped values in
+`src-tauri/crates/core/src/config/defaults.rs`; [configuration.md](configuration.md) is the
 maintained reference for what each block does.
 
 ### 9.1 File Location
@@ -1543,7 +1543,7 @@ maintained reference for what each block does.
 | macOS | `~/Library/Application Support/com.stalagmight.desktop/config.toml` |
 | Windows | `%APPDATA%\com.stalagmight.desktop\config.toml` |
 
-The directory is resolved through Tauri's path API (`src-tauri/src/app_dirs.rs`)
+The directory is resolved through Tauri's path API (`src-tauri/crates/models/src/app_dirs.rs`)
 rather than the `directories` crate, which returns nothing on Android.
 
 ### 9.2 Loading
@@ -2158,7 +2158,7 @@ writes a fresh `<name>.stalx.tmp` and atomically renames it over the target, so 
 interrupted save never leaves a half-written project - see [saving.md](saving.md).
 
 The schema is versioned (`SCHEMA_VERSION` in
-`src-tauri/src/persistence/sqlite.rs`) and migrated forward when an older file is
+`src-tauri/crates/persistence/src/persistence/sqlite.rs`) and migrated forward when an older file is
 opened. Alongside the survey tables (project, sections, shots, station merges,
 zero datums, loop closures, section and station offsets) it holds per-project and
 display settings, the persisted undo and redo stacks, resolved warnings, import
@@ -2201,9 +2201,9 @@ code:
   those arms removed.
 
 The dive plan lives beside the project in its own `.plnx` SQLite sidecar
-(`src-tauri/src/persistence/plnx.rs`), not in the `.stalx`.
+(`src-tauri/crates/persistence/src/persistence/plnx.rs`), not in the `.stalx`.
 
-Table definitions are authoritative in `src-tauri/src/persistence/sqlite/` and are
+Table definitions are authoritative in `src-tauri/crates/persistence/src/persistence/sqlite/` and are
 not reproduced here.
 
 ### 17.2 DMP File Import

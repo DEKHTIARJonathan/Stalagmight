@@ -76,7 +76,7 @@ All saves use a temp file with atomic rename to prevent data loss on crash or po
 
 If a leftover `.stalx.tmp` file exists from a previous failed save, it is removed before starting. Its rollback journal (`.stalx.tmp-journal`) is not, so the next save's fresh temp database can meet an orphaned hot journal - a state the crash-timing gate injects deliberately.
 
-That gate (`src-tauri/src/core/state/crash_property_tests.rs`, see [Testing Recipes](testing-recipes.md)) is what holds this promise up: it constructs the exact files a kill at each pipeline boundary would leave and asserts the destination comes back as EXACTLY the old project or EXACTLY the new one, never a blend, and that the next save recovers cleanly.
+That gate (`src-tauri/crates/core/src/core/state/crash_property_tests.rs`, see [Testing Recipes](testing-recipes.md)) is what holds this promise up: it constructs the exact files a kill at each pipeline boundary would leave and asserts the destination comes back as EXACTLY the old project or EXACTLY the new one, never a blend, and that the next save recovers cleanly.
 
 ## Failure classification
 
@@ -192,10 +192,10 @@ The `save_project` backend command returns the save path as a string in `Command
 
 | File | Purpose |
 |------|---------|
-| `src-tauri/src/core/state/project_io.rs` | Backend `save_project`, `open_project`, atomic save logic |
-| `src-tauri/src/core/command.rs` | `CommandResult` with `saved_path` field |
+| `src-tauri/crates/core/src/core/state/project_io.rs` | Backend `save_project`, `open_project`, atomic save logic |
+| `src-tauri/crates/core/src/core/command.rs` | `CommandResult` with `saved_path` field |
 | `src/store/projectStore.ts` | Frontend `saveProject()` action |
 | `src/hooks/useAutoSave.ts` | Debounced auto-save hook |
-| `src-tauri/src/persistence/sqlite.rs` | SQLite database operations |
+| `src-tauri/crates/persistence/src/persistence/sqlite.rs` | SQLite database operations |
 | `docs/undo-redo.md` | Undo/redo stack persistence details |
 | `docs/configuration.md` | Auto-save config options |

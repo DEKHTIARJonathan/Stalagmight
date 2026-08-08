@@ -22,33 +22,38 @@ measurable fraction of the wall clock.
 | `error!` | always | Conditions a user should care about (corruption, save failed, FK violation). |
 | `warn!`  | always | Recoverable anomalies (poisoned mutex, FK rebuild fallback). |
 | `info!`  | always (release default filter is `info`) | **Once-per-lifecycle** events: app startup, project create / open / save / close success, schema migrations, full integrity check. |
-| `debug!` | off in release; on when `RUST_LOG=stalagmight_lib=debug` | Per-operation chatter, sub-phase timings, load-loop progress, per-section import timing. |
+| `debug!` | off in release; on when `RUST_LOG=stalagmight=debug` | Per-operation chatter, sub-phase timings, load-loop progress, per-section import timing. |
 | `trace!` | off everywhere by default | Per-shot / per-row spam. (Reserved - no current callers.) |
 
-The default release filter is set in `src-tauri/src/logging/mod.rs`. Override at
-runtime via `RUST_LOG=…` exactly as in any tracing application:
+The default release filter is set in `src-tauri/crates/telemetry/src/logging/mod.rs`. Override at
+runtime via `RUST_LOG=…` exactly as in any tracing application. Log targets
+follow module paths, so they carry the workspace crate names: the app crate is
+`stalagmight_lib`, the members are `stalagmight_core`,
+`stalagmight_persistence`, `stalagmight_parsers`, and so on. The bare prefix
+`stalagmight` matches all of them.
 
 ```bash
 # See per-operation chatter (load_metadata timings, save/load phases, etc.)
-RUST_LOG=stalagmight_lib=debug pnpm tauri dev
+# across the app crate and every member crate
+RUST_LOG=stalagmight=debug pnpm tauri dev
 
 # Just the parts you care about
-RUST_LOG=stalagmight_lib::persistence::sqlite=debug,\
-stalagmight_lib::parsers::tml=debug pnpm tauri dev
+RUST_LOG=stalagmight_persistence::persistence::sqlite=debug,\
+stalagmight_parsers::parsers::tml=debug pnpm tauri dev
 ```
 
 ### Categories of `debug!` worth knowing about
 
 **Load-phase timings** (`debug!` in
-`src-tauri/src/persistence/sqlite.rs::open_existing` and
-`src-tauri/src/models/project.rs::compute_station_coordinates_with_progress`):
+`src-tauri/crates/persistence/src/persistence/sqlite.rs::open_existing` and
+`src-tauri/crates/models/src/project.rs::compute_station_coordinates_with_progress`):
 break down `Database::open_existing` and `compute_station_coordinates` into
 sub-phases (validate_integrity, has_project_data, ensure_schema_version,
 validate_foreign_keys, build_colocated_groups, depths loop, xyz walk, …).
 Enable when investigating slow project opens.
 
 **TML import loop progress** (`debug!` in
-`src-tauri/src/core/state/commands.rs::execute_import_sections`): per-100-section
+`src-tauri/crates/core/src/core/state/commands.rs::execute_import_sections`): per-100-section
 batch timing - `batch_ms`, `create_ms`, `placement_ms`. Enable when debugging
 super-linear growth during a batch import.
 
@@ -57,7 +62,7 @@ created", "Stations merged", "Shot updated", etc. Quiet by default - they fire
 N times during a 14k-section import and don't help in release.
 
 **SQLite open / save chatter** (`debug!` in
-`src-tauri/src/persistence/sqlite.rs`): per-open / per-save / per-row-count
+`src-tauri/crates/persistence/src/persistence/sqlite.rs`): per-open / per-save / per-row-count
 diagnostics. Enable when debugging persistence bugs.
 
 **Recent-projects metadata timings** (`debug!` in
@@ -78,23 +83,23 @@ and document that fact at the call site, the way that function does.
 ### Profile harnesses
 
 `profile_tml_import_full` and `profile_stalx_load` live in
-`src-tauri/src/core/state/tests.rs`. They are unit tests with `#[ignore]` -
+`src-tauri/crates/core/src/core/state/tests.rs`. They are unit tests with `#[ignore]` -
 they never run with `cargo test` unless explicitly opted in:
 
 ```bash
 # Profile a TML import end-to-end (parse + convert + execute_import_sections)
 STALAGMIGHT_PROFILE_TML=/path/to/file.tml \
-  cargo test --release --manifest-path src-tauri/Cargo.toml --lib \
+  cargo test --release --manifest-path src-tauri/Cargo.toml -p stalagmight-core --lib \
   core::state::tests::profile_tml_import_full -- --nocapture --ignored
 
 # Profile a stalx load end-to-end (open + load + station coords + warnings +
 # undo/redo + binary encode)
 STALAGMIGHT_PROFILE_STALX=/path/to/file.stalx \
-  cargo test --release --manifest-path src-tauri/Cargo.toml --lib \
+  cargo test --release --manifest-path src-tauri/Cargo.toml -p stalagmight-core --lib \
   core::state::tests::profile_stalx_load -- --nocapture --ignored
 ```
 
-Combine with `RUST_LOG=stalagmight_lib=debug` to also get the in-code sub-phase
+Combine with `RUST_LOG=stalagmight=debug` to also get the in-code sub-phase
 timings. Both harnesses print a pretty per-phase table to stderr and exit
 clean - they're meant to be run on demand by hand.
 
