@@ -1232,7 +1232,7 @@ impl AppState {
     }
 
     /// Get the undo stack as a list of history items for the UI
-    pub fn get_undo_stack(&self) -> Vec<crate::commands::history::UndoHistoryItem> {
+    pub fn get_undo_stack(&self) -> Vec<crate::core::undo::history_view::UndoHistoryItem> {
         // Build a lightweight section name lookup map, then release the project lock
         // before acquiring the undo_stack lock (avoids holding both simultaneously)
         let section_names: std::collections::HashMap<u32, Option<String>> = self
@@ -1253,7 +1253,11 @@ impl AppState {
                     .undo_entries()
                     .enumerate()
                     .map(|(idx, entry)| {
-                        crate::commands::history::entry_to_history_item(entry, idx, &section_names)
+                        crate::core::undo::history_view::entry_to_history_item(
+                            entry,
+                            idx,
+                            &section_names,
+                        )
                     })
                     .collect()
             })
@@ -1261,7 +1265,7 @@ impl AppState {
     }
 
     /// Get the redo stack as a list of history items for the UI
-    pub fn get_redo_stack(&self) -> Vec<crate::commands::history::UndoHistoryItem> {
+    pub fn get_redo_stack(&self) -> Vec<crate::core::undo::history_view::UndoHistoryItem> {
         let section_names: std::collections::HashMap<u32, Option<String>> = self
             .project
             .lock()
@@ -1280,7 +1284,11 @@ impl AppState {
                     .redo_entries()
                     .enumerate()
                     .map(|(idx, entry)| {
-                        crate::commands::history::entry_to_history_item(entry, idx, &section_names)
+                        crate::core::undo::history_view::entry_to_history_item(
+                            entry,
+                            idx,
+                            &section_names,
+                        )
                     })
                     .collect()
             })

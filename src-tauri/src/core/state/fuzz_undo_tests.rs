@@ -795,7 +795,7 @@ use std::sync::{Mutex, OnceLock, PoisonError};
 use tempfile::TempDir;
 
 use super::AppState;
-use crate::commands::history::UndoHistoryItem;
+use crate::core::undo::history_view::UndoHistoryItem;
 use crate::core::{Command, CommandResult};
 use crate::models::{
     ClosureStrategy, Coordinates, GpsCoordinates, SectionId, SectionUpdates, ShotData, ShotId,

@@ -1393,6 +1393,15 @@ fn sanitize_unit_label(raw: &str) -> String {
     crate::core::command::sanitize_display_text(raw, MAX_UNIT_LABEL_LEN)
 }
 
+/// The import receipt's unit-conversion note for an Ariane file: TML carries ONE
+/// unit for the whole file, so this is a straight read of it.
+pub(crate) fn tml_unit_conversion_note(unit: TmlUnit) -> Option<String> {
+    match unit {
+        TmlUnit::Imperial => Some("Lengths converted from feet to meters".to_string()),
+        TmlUnit::Metric => None,
+    }
+}
+
 // ============================================================================
 // Conversion to ImportSectionConfig
 // ============================================================================

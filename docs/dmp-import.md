@@ -213,7 +213,7 @@ Sections unreachable after all passes remain in the wizard's manual segment-plac
 | `ExistingAnchor` | `src/utils/segmentContext.ts` | Position where a DMP section meets an existing section |
 | `ExistingSectionGeoEntry` | `src/utils/segmentContext.ts` | Cached segment geometry with frame offset |
 | `CrossSectionSuggestion` | `src-tauri/src/models/placement_suggest.rs` | Backend suggestion with score/confidence |
-| `SegmentGeometry` | `src-tauri/src/commands/section.rs` | Backend segment shot-line data |
+| `SegmentGeometry` | `src-tauri/src/models/section.rs` | Backend segment shot-line data |
 | `ContextSectionGeometry` | `src/components/Dialogs/SectionPreview.tsx` | Shot pairs for preview rendering |
 | `SectionEditState` | `src/components/Dialogs/DmpNewImportDialog.tsx` | Per-section editable metadata + shots |
 

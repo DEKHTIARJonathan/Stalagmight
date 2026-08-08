@@ -242,6 +242,23 @@ pub struct SectionStats {
     pub reference_shot_count: usize,
 }
 
+/// Shot-line geometry for a single section within a segment.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct SegmentSectionGeometry {
+    pub section_id: SectionId,
+    pub color: String,
+    /// Shot lines as pairs of [x, y] coords in meters, relative to the anchor section's station 0
+    pub shot_lines: Vec<[[f64; 2]; 2]>,
+}
+
+/// Shot-line geometry for all sections in a segment, positioned relative to a given section.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct SegmentGeometry {
+    pub sections: Vec<SegmentSectionGeometry>,
+}
+
 /// Configuration for a single section being imported via the batch import command.
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct ImportSectionConfig {

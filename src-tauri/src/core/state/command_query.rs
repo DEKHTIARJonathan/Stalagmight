@@ -112,8 +112,8 @@ impl AppState {
     pub fn get_segment_geometry(
         &self,
         section_id: SectionId,
-    ) -> Result<crate::commands::section::SegmentGeometry, String> {
-        use crate::commands::section::{SegmentGeometry, SegmentSectionGeometry};
+    ) -> Result<crate::models::SegmentGeometry, String> {
+        use crate::models::{SegmentGeometry, SegmentSectionGeometry};
 
         // Serialize with command execution to avoid observing intermediate batch state
         let _cmd_guard = self

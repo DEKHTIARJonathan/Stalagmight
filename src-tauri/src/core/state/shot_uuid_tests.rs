@@ -816,8 +816,9 @@ fn undo_restores_the_imported_identities_rather_than_minting_new_ones() {
 /// repairs keep the first OCCURRENCE - now the injected record - and re-mint the
 /// original, moving every `AfterShot` anchor onto the injected shot.
 ///
-/// `create_shot_impl` clears it at the boundary, so the original keeps its
-/// identity. The fixture is deliberately an ALREADY-critical project, because
+/// The executor (`AppState::create_shot`, core/state/command_shot.rs) clears
+/// it, so the original keeps its identity. The fixture is deliberately an
+/// ALREADY-critical project, because
 /// `execute`'s structural epilogue rolls back only newly introduced criticals -
 /// on a sound project it refuses the create outright (pinned by the companion
 /// test), and that would hide the case where nothing objects at all.
@@ -848,7 +849,7 @@ fn create_shot_cannot_name_an_existing_shots_identity() {
     // (`finalize_structural_edit(pre_had_critical)`), so this is the state in
     // which the duplicate is admitted and nothing objects until the pre-save
     // repair re-mints the original - the silent shape of the hazard, and the
-    // reason the boundary clear is load-bearing rather than belt-and-braces.
+    // reason the executor clear is load-bearing rather than belt-and-braces.
     let (section_id, victim_shot_id) = {
         let mut p = state.get_project_state().unwrap();
         let ids = (p.sections[0].id, p.sections[0].shots[1].id);
@@ -870,10 +871,9 @@ fn create_shot_cannot_name_an_existing_shots_identity() {
 
     // The attack: create a shot that claims the victim's identity, placed
     // BEFORE it so it becomes the first occurrence.
-    let result = crate::commands::shot::create_shot_impl(
-        &state,
+    let result = state.execute(Command::CreateShot {
         section_id,
-        ShotData {
+        shot: ShotData {
             uuid: Some(IDS[1].to_string()),
             azimuth_in: 90.0,
             azimuth_out: 90.0,
@@ -882,9 +882,9 @@ fn create_shot_cannot_name_an_existing_shots_identity() {
             depth_out: 5.0,
             ..Default::default()
         },
-        None,
-        Some(victim_shot_id),
-    );
+        after_shot_id: None,
+        before_shot_id: Some(victim_shot_id),
+    });
     assert!(result.success, "{:?}", result.error);
 
     let mut project = state.get_project_state().unwrap();
@@ -917,8 +917,8 @@ fn create_shot_cannot_name_an_existing_shots_identity() {
     );
 }
 
-/// The same attack through the doors that skip `create_shot_impl` entirely
-/// (pre-PR review, #423). `execute_batch` is a `#[tauri::command]` taking
+/// The same attack through the remaining command doors (pre-PR review, #423).
+/// `execute_batch` is a `#[tauri::command]` taking
 /// `Vec<Command>` verbatim from the webview; the batch allowlist
 /// (`is_batch_allowed`) refuses `CreateShot` today, and this pins that refusal
 /// - but `CreateSection` IS batch-allowed, and `state.execute` itself is
@@ -1077,7 +1077,7 @@ fn client_named_identities_are_stripped_at_every_command_door() {
 
 /// The same attack on a SOUND project, with a cross-reference anchored on the
 /// victim: the anchor must still resolve to the victim's own station and the
-/// create must still succeed. Without the boundary clear this fails earlier and
+/// create must still succeed. Without the executor clear this fails earlier and
 /// differently - `duplicate_shot_uuid` is Critical, so `execute`'s epilogue
 /// rolls the whole create back with "Blocked: this action would corrupt the
 /// survey structure". Recorded as the second line of defence it is, and as
@@ -1125,10 +1125,9 @@ fn create_shot_cannot_move_an_existing_anchor_onto_a_new_shot() {
         key.clone()
     };
 
-    let result = crate::commands::shot::create_shot_impl(
-        &state,
+    let result = state.execute(Command::CreateShot {
         section_id,
-        ShotData {
+        shot: ShotData {
             uuid: Some(IDS[1].to_string()),
             azimuth_in: 90.0,
             azimuth_out: 90.0,
@@ -1137,9 +1136,9 @@ fn create_shot_cannot_move_an_existing_anchor_onto_a_new_shot() {
             depth_out: 5.0,
             ..Default::default()
         },
-        None,
-        Some(victim_shot_id),
-    );
+        after_shot_id: None,
+        before_shot_id: Some(victim_shot_id),
+    });
     assert!(result.success, "{:?}", result.error);
 
     let project = state.get_project_state().unwrap();

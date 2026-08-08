@@ -23,7 +23,7 @@ use super::speleodb_cache::{
 };
 use super::speleodb_revisions::validate_hexsha;
 use super::{AppState, VirtualShotMode};
-use crate::core::command::{CommandResult, ImportReceipt};
+use crate::core::command::{Command, CommandResult, ImportReceipt};
 use crate::models::{ImportClosure, ImportSectionConfig};
 use crate::speleodb::contract::{dto_for_error, Endpoint};
 use crate::speleodb::dump::{self, DumpClassification};
@@ -158,7 +158,7 @@ fn adopt_receipt(
     // The same decoration `execute_tml_import` applies, through the same helper:
     // adoption differs from that import only in having no wizard in front of it, and
     // the receipt is what stands in for what the wizard would have shown.
-    crate::commands::import::decorate_receipt(
+    crate::core::command::decorate_receipt(
         imported,
         "Ariane TML",
         Path::new(entry_name),
@@ -1983,7 +1983,7 @@ impl AppState {
             .map_err(|e| local_dto(SpeleoDbError::Parse(e.to_string())))?;
         let (sections, closures, warnings) = adopt_convert(&tml)?;
         let sections_found = tml.sections.len() as u32;
-        let unit_conversion = crate::commands::import::tml_unit_conversion_note(tml.unit);
+        let unit_conversion = crate::parsers::tml::tml_unit_conversion_note(tml.unit);
         // Auto: adoption is an ordinary Ariane import with no dialog to carry a
         // per-file override, so its virtual shots get the chain rule (#27).
         let auto = VirtualShotMode::Auto;
@@ -2014,7 +2014,9 @@ impl AppState {
             warnings,
         );
 
-        let saved = crate::commands::project::save_project_impl(self, Some(staged.to_path_buf()));
+        let saved = self.execute(Command::SaveProject {
+            path: Some(staged.to_path_buf()),
+        });
         if !saved.success {
             return Err(local_dto(SpeleoDbError::Io(format!(
                 "could not save the adopted project: {}",

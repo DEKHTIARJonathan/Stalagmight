@@ -697,7 +697,7 @@ Appears on item hover, positioned to the right of the dropdown (flips left if ne
 
 Section names in preview data are resolved at **display time**, not execution time. When you hover a "Merge stations" entry, it shows current section names, not the names at the time of the merge. This is intentional - the preview answers "what is this referring to now?" For historical names, only `ProjectSnapshotPair` data retains the state at execution time.
 
-### Preview Data Generation (`history.rs`)
+### Preview Data Generation (`core/undo/history_view.rs`)
 
 `derive_preview_data()` matches `(Command, UndoData)` pairs to extract meaningful field changes. Every command type produces preview data - the fallback arm returns the command description as an "Action" field so hover is never empty.
 
@@ -719,7 +719,8 @@ For batch commands, `derive_command_details()` extracts a compact detail string 
 | `src/components/Dialogs/settings/SpeleoUndoModeControl.tsx` | The per-project Full/Disabled control |
 | `src-tauri/src/core/state/commands.rs` | `execute()`, `generate_undo_data()`, `finalize_undo_data()` |
 | `src-tauri/src/core/command.rs` | `Command` enum and `description()` method |
-| `src-tauri/src/commands/history.rs` | Tauri commands for stacks, `derive_preview_data()`, `entry_to_history_item()` |
+| `src-tauri/src/commands/history.rs` | Tauri commands for stacks |
+| `src-tauri/src/core/undo/history_view.rs` | `UndoHistoryItem` DTO, `derive_preview_data()`, `entry_to_history_item()` |
 | `src-tauri/src/core/state/project_io.rs` | Stack persistence (save/load to SQLite) |
 | `src/components/SingleSystemView/UndoHistoryDropdown.tsx` | Frontend dropdown + preview popup |
 | `src-tauri/src/models/shot.rs` | `shot_display_position()` helper |

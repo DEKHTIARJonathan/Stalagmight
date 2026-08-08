@@ -10,6 +10,7 @@ use crate::models::{
 };
 
 mod budget;
+pub mod history_view;
 mod persistence;
 
 /// Serialize a section-offset map in KEY order rather than in `HashMap`

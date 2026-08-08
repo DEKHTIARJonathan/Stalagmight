@@ -333,6 +333,59 @@ impl ImportReceipt {
     }
 }
 
+/// The most of a file-controlled name worth keeping in the receipt. A dialog title
+/// line, not a path: longer than any real survey filename, shorter than anything that
+/// can push the rest of the title off the screen.
+const MAX_FILE_NAME_LEN: usize = 120;
+
+/// Fill in the importer-specific fields of the base `ImportReceipt` that
+/// `execute_import_sections` already attached (source/section counts, unit
+/// conversion), and extend its warnings with the converter-phase warnings
+/// collected while turning the parsed file into `ImportSectionConfig`s.
+///
+/// No-op when `result` carries no receipt (a FAILED import - the empty-import
+/// path deliberately carries one, see `ImportReceipt::empty`), so a call site
+/// never has to special-case that path.
+///
+/// Shared with the SpeleoDB Ariane adoption (#411), which is an Ariane import with
+/// no wizard in front of it and must produce the same receipt as one that has.
+pub(crate) fn decorate_receipt(
+    result: &mut CommandResult,
+    source_format: &str,
+    path: &std::path::Path,
+    sections_found: u32,
+    unit_conversion: Option<String>,
+    converter_warnings: Vec<String>,
+) {
+    let Some(receipt) = result.import_receipt.as_mut() else {
+        return;
+    };
+    receipt.source_format = source_format.to_string();
+    // Sanitized and clamped, because this lands in the receipt dialog's TITLE and is
+    // not always a name off this machine's disk: the SpeleoDB adoption passes the
+    // entry name from inside a dump downloaded from a server, where the whole 64 KB
+    // a zip name may hold - bidi overrides included - is the archive author's to
+    // choose. A local path is guarded by the same line at no cost.
+    receipt.file_name = path
+        .file_name()
+        .map(|n| sanitize_display_text(&n.to_string_lossy(), MAX_FILE_NAME_LEN))
+        .unwrap_or_default();
+    receipt.sections_found = sections_found;
+    receipt.unit_conversion = unit_conversion;
+    // Converter warnings go FIRST, ahead of the execute-phase ones. They are
+    // whole-file statements - an unrecognized unit, a section dropped entirely -
+    // and there is a handful of them at most, while the execute phase can emit
+    // one per shot. Appending them meant `cap_warnings`' 50-entry limit dropped
+    // the highest-signal warning first on exactly the noisy file that needs it.
+    // Every importer routes through here, so the ordering is the same for
+    // Ariane, Compass, Walls, GPX and DMP.
+    if !converter_warnings.is_empty() {
+        let execute_warnings = std::mem::replace(&mut receipt.warnings, converter_warnings);
+        receipt.warnings.extend(execute_warnings);
+    }
+    receipt.cap_warnings();
+}
+
 /// Result of command execution
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct CommandResult {

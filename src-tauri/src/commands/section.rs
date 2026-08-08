@@ -1,7 +1,5 @@
 use chrono::NaiveDate;
-use serde::{Deserialize, Serialize};
 use tauri::State;
-use ts_rs::TS;
 
 use crate::core::{AppState, Command, CommandResult};
 use crate::models::{
@@ -9,22 +7,7 @@ use crate::models::{
     StationRef, SurveyDirection,
 };
 
-/// Shot-line geometry for a single section within a segment.
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export)]
-pub struct SegmentSectionGeometry {
-    pub section_id: SectionId,
-    pub color: String,
-    /// Shot lines as pairs of [x, y] coords in meters, relative to the anchor section's station 0
-    pub shot_lines: Vec<[[f64; 2]; 2]>,
-}
-
-/// Shot-line geometry for all sections in a segment, positioned relative to a given section.
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export)]
-pub struct SegmentGeometry {
-    pub sections: Vec<SegmentSectionGeometry>,
-}
+pub use crate::models::{SegmentGeometry, SegmentSectionGeometry};
 
 /// Create a new section
 #[tauri::command]
