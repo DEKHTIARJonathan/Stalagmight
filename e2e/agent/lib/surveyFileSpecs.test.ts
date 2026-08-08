@@ -185,6 +185,9 @@ describe('corruptSpec', () => {
 
     for (const seed of SEEDS.slice(0, 60)) {
       const spec = randomSurveyFileSpec(mulberry32(seed), 'valid', 'dmp');
+      // The declared format is what came back: asking for one and being handed
+      // another would make every assertion below vacuous.
+      if (spec.format !== 'dmp') throw new Error(`asked for dmp, got ${spec.format}`);
       const ids = corruptionsFor(spec);
       if (spec.dmp.version < 5) {
         expect(ids).not.toContain('dmp:bad-shot-start-magic');
