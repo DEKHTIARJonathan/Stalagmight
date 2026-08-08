@@ -8,12 +8,14 @@ pub mod commands;
 pub mod config;
 pub mod core;
 pub mod export;
-pub mod logging;
+// Extracted to the `stalagmight-telemetry` workspace member; re-exported under
+// the old names, same deal as `models` above.
 pub use stalagmight_models as models;
+pub use stalagmight_telemetry::logging;
 pub mod parsers;
 pub mod persistence;
 pub mod speleodb;
-pub mod telemetry;
+pub use stalagmight_telemetry::telemetry;
 #[cfg(test)]
 pub mod test_helpers;
 pub mod tile_attribution;

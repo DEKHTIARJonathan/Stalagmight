@@ -5,7 +5,7 @@
 //! (every command / tool / dialog has a tracked event; typo detection).
 
 /// Known interaction-source names (appended to an event as `:source`).
-pub(crate) const SOURCE_NAMES: &[&str] = &[
+pub const SOURCE_NAMES: &[&str] = &[
     "",               // no source suffix present
     "keyboard",       // 1
     "toolbar",        // 2
@@ -32,7 +32,7 @@ pub(crate) const SOURCE_NAMES: &[&str] = &[
 
 /// Known event base names (the `:source` suffix is appended at runtime). The
 /// canonical vocabulary the coverage tests check against; order is irrelevant.
-pub(crate) const EVENT_NAMES: &[&str] = &[
+pub const EVENT_NAMES: &[&str] = &[
     // ── Commands ──
     // `adjust_loop_closures` was removed when closure adjustment became a
     // non-destructive display mode. Its name is kept in the vocabulary for

@@ -11,7 +11,7 @@ default-run = "stalagmight"
 # Hybrid workspace root: this package stays where it is, extracted crates land
 # in crates/*.
 [workspace]
-members = ["crates/models"]
+members = ["crates/models", "crates/telemetry"]
 resolver = "2"
 # Required: path deps inside the workspace directory are auto-adopted as
 # members, which would drag the vendored crate into the fmt/clippy gates.
@@ -66,7 +66,10 @@ tempfile = "3.24.0"
 
 [features]
 e2e = ["tauri-plugin-webdriver-automation"]
-telemetry = []
+# Forwards to the member that owns the implementation, and stays a real feature
+# of this crate too: the root's own `#[cfg(feature = "telemetry")]` users (the
+# registry coverage tests in commands/, speleodb/metrics.rs) are gated on it.
+telemetry = ["stalagmight-telemetry/telemetry"]
 # Dev-only: gates the gen_ipc_types example so it isn't compiled in normal
 # builds/tests. Enabled by `pnpm gen:ipc-types`.
 ipc-typegen = []
@@ -93,6 +96,7 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 stalagmight-models = { path = "crates/models" }
+stalagmight-telemetry = { path = "crates/telemetry" }
 tauri = { version = "2", features = ["devtools"] }
 tauri-plugin-fs = "2"
 tauri-plugin-dialog = "2"

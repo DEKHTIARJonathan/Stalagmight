@@ -4441,6 +4441,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "stalagmight-models",
+ "stalagmight-telemetry",
  "svg2pdf",
  "tauri",
  "tauri-build",
@@ -4474,6 +4475,25 @@ dependencies = [
  "tracing",
  "ts-rs",
  "uuid",
+]
+
+[[package]]
+name = "stalagmight-telemetry"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "directories",
+ "flate2",
+ "serde",
+ "serde_json",
+ "stalagmight-models",
+ "tempfile",
+ "tracing",
+ "tracing-appender",
+ "tracing-subscriber",
+ "ts-rs",
+ "ureq",
 ]
 
 [[package]]
