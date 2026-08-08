@@ -3149,4 +3149,136 @@ mod tests {
             _ => panic!("Expected CreateLoopClosure command"),
         }
     }
+
+    // The two tests below moved here from the persistence sqlite tests when
+    // persistence became a workspace member: they assert against `UndoStack`'s
+    // entry costing and (de)serialization, which that crate cannot see.
+
+    /// [#469] The default ceiling is DERIVED from the byte budget, and the derivation
+    /// only holds while a restored entry costs at least `ENTRY_OVERHEAD_BYTES`.
+    ///
+    /// That is what makes the cap lossless: past `budget / ENTRY_OVERHEAD_BYTES`
+    /// entries the byte trim necessarily evicts, so the rows the cap does not read are
+    /// rows the restore would have thrown away.
+    #[test]
+    fn the_default_history_load_ceiling_is_derived_from_the_byte_budget() {
+        // The DERIVATION, not the product: `budget == rows * overhead` only holds while
+        // the budget happens to divide evenly, and a budget that does not is still a
+        // sound ceiling (the truncating division rounds DOWN, which can only be safer).
+        assert_eq!(
+            MAX_PERSISTED_HISTORY_ROWS,
+            UNDO_BYTE_BUDGET_BYTES / ENTRY_OVERHEAD_BYTES,
+            "the load ceiling is the byte budget divided by the per-entry floor"
+        );
+        // The floor itself: a restored entry carries no `command_bytes`, so it is
+        // charged the overhead whatever its command was.
+        let restored = UndoStack::deserialize_entry_with_timestamp(
+            r#"{"type":"close_project"}"#,
+            r#""None""#,
+            None,
+        )
+        .unwrap();
+        assert!(restored.command_bytes.is_none());
+        assert!(
+            UndoStack::estimated_size(&restored) >= ENTRY_OVERHEAD_BYTES,
+            "a restored entry must cost at least the overhead the ceiling is derived from"
+        );
+        // ...and the same holds for the emptiest entry that can be constructed at all.
+        let bare = UndoEntry {
+            command_bytes: None,
+            command: Command::CloseProject,
+            undo_data: UndoData::None,
+            timestamp: None,
+        };
+        assert_eq!(UndoStack::estimated_size(&bare), ENTRY_OVERHEAD_BYTES);
+    }
+
+    #[test]
+    fn test_new_format_undo_history_survives_reload() {
+        use std::collections::HashMap;
+
+        use crate::models::{Project, SectionData, ShotUpdates};
+        use crate::persistence::sqlite::Database;
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+        let path = temp_dir.path().join("new_format_undo.stalx");
+
+        let mut project = Project::new("New Undo".to_string(), None);
+        project.add_section(SectionData {
+            shots: vec![ShotData {
+                azimuth_in: 45.0,
+                azimuth_out: 225.0,
+                length: 2.0,
+                depth_in: 10.0,
+                depth_out: 11.0,
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+
+        let mut db = Database::open(&path).unwrap();
+        db.save_project(&project).unwrap();
+        let saved = db.load_project().unwrap();
+        let section_id = saved.sections[0].id;
+        let shot_id = saved.sections[0].shots[0].id;
+
+        // New-format entry: only the edited field is present (untouched nullable
+        // fields are omitted thanks to skip_serializing_if).
+        let prev_values = ShotUpdates {
+            comment: Some(Some("original".to_string())),
+            ..Default::default()
+        };
+        let values_json = serde_json::to_string(&prev_values).unwrap();
+        assert!(
+            !values_json.contains("left") && !values_json.contains("pitch_in"),
+            "untouched nullable fields must serialize as absent, got: {values_json}"
+        );
+        let entry = UndoEntry {
+            command_bytes: None,
+            command: Command::UpdateShot {
+                section_id,
+                shot_id,
+                updates: ShotUpdates {
+                    comment: Some(Some("edited".to_string())),
+                    ..Default::default()
+                },
+            },
+            undo_data: UndoData::PreviousValues {
+                section_id,
+                shot_id: Some(shot_id),
+                shot_uuid: None,
+                values_json,
+                previous_offsets: HashMap::new(),
+            },
+            timestamp: None,
+        };
+        let persisted = UndoStack::serialize_entry_with_timestamp(&entry).unwrap();
+        db.save_undo_stack_with_timestamps(vec![persisted]).unwrap();
+        drop(db);
+
+        // Reload: the v7-stamped file keeps its history.
+        let db = Database::open_existing(&path).unwrap();
+        let loaded = db.load_undo_stack_with_timestamps().unwrap();
+        assert_eq!(loaded.len(), 1, "new-format undo entry must survive reload");
+
+        let (_, cmd_json, undo_json, ts) = &loaded[0];
+        let restored =
+            UndoStack::deserialize_entry_with_timestamp(cmd_json, undo_json, ts.as_deref())
+                .unwrap();
+        match &restored.undo_data {
+            UndoData::PreviousValues { values_json, .. } => {
+                let prev: ShotUpdates = serde_json::from_str(values_json).unwrap();
+                // Exactly the edited field round-trips...
+                assert_eq!(prev.comment, Some(Some("original".to_string())));
+                // ...and untouched nullable fields stay untouched (None), so
+                // replaying this entry cannot clear them.
+                assert_eq!(prev.left, None);
+                assert_eq!(prev.pitch_in, None);
+                assert_eq!(prev.marker_index, None);
+                assert_eq!(prev.temperature, None);
+            }
+            other => panic!("Expected PreviousValues, got {}", other.variant_name()),
+        }
+    }
 }

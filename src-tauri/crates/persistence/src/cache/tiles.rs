@@ -392,7 +392,7 @@ impl TileCache {
     }
 
     /// Create an in-memory cache (for testing)
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn in_memory(max_mb: u32, ttl_days: u32) -> Result<Self> {
         let conn = Connection::open_in_memory().context("Failed to create in-memory cache")?;
         let cache = Self {
@@ -920,7 +920,7 @@ impl TileCache {
 
     /// Push a tile past its provider `max-age` without touching retention.
     /// Lets a test reach the revalidation window without sleeping through it.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn expire_max_age_for_test(
         &mut self,
         provider: &str,
@@ -942,7 +942,7 @@ impl TileCache {
     /// retained. Winding `fetched_at` back instead would cross the retention
     /// bound as well, which is a different case entirely (and, since
     /// `get_stale` began enforcing retention, one where nothing is served).
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn expire_for_test(&self, provider: &str, z: u32, y: u32, x: u32) -> Result<()> {
         self.conn.execute(
             "UPDATE tiles SET expires_at = ?1
@@ -959,7 +959,7 @@ impl TileCache {
     /// which the directives touch - so they need a tile that actually lands on
     /// disk. Since the cache stores only on an explicit grant, "no directives"
     /// is no longer a way to store anything; the gate itself has its own tests.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn put_granted(
         &mut self,
         provider: &str,

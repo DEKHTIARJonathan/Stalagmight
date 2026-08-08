@@ -186,7 +186,7 @@ mod write;
 
 /// A stringified page of rows from a raw sqlite table.
 #[derive(Debug, Clone, serde::Serialize, ts_rs::TS)]
-#[ts(export)]
+#[ts(export, export_to = "../../bindings/")]
 pub struct RawTableData {
     pub columns: Vec<String>,
     pub rows: Vec<Vec<String>>,
@@ -195,7 +195,7 @@ pub struct RawTableData {
 
 /// Information about a backup file.
 #[derive(Debug, Clone, serde::Serialize, ts_rs::TS)]
-#[ts(export)]
+#[ts(export, export_to = "../../bindings/")]
 #[serde(rename_all = "camelCase")]
 pub struct BackupInfo {
     pub path: String,
@@ -205,7 +205,7 @@ pub struct BackupInfo {
 
 /// Result of attempting to repair a corrupt database.
 #[derive(Debug, Clone, serde::Serialize, ts_rs::TS)]
-#[ts(export)]
+#[ts(export, export_to = "../../bindings/")]
 #[serde(rename_all = "camelCase")]
 pub struct RepairResult {
     pub success: bool,
@@ -215,7 +215,7 @@ pub struct RepairResult {
 
 /// Data salvaged from a corrupt database.
 #[derive(Debug, Clone, Default, serde::Serialize, ts_rs::TS)]
-#[ts(export)]
+#[ts(export, export_to = "../../bindings/")]
 #[serde(rename_all = "camelCase")]
 pub struct SalvagedData {
     pub project_name: Option<String>,

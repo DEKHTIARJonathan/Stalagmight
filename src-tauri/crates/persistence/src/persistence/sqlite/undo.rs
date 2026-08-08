@@ -322,8 +322,8 @@ impl Database {
     ///
     /// [#303] DELETE-all-then-INSERT-all, with `sequence` renumbered 0..n, is the whole
     /// of it - there is no incremental variant, and an earlier attempt at one silently
-    /// dropped the history. See [`crate::core::UndoStack::rows_to_persist`] for why the
-    /// save pipeline leaves nothing to be incremental about.
+    /// dropped the history. See `UndoStack::rows_to_persist` (core, in the root crate)
+    /// for why the save pipeline leaves nothing to be incremental about.
     pub fn save_undo_stack_with_timestamps(
         &self,
         entries: Vec<(String, String, Option<String>)>,
@@ -480,49 +480,9 @@ mod tests {
             .is_empty());
     }
 
-    /// [#469] The default ceiling is DERIVED from the byte budget, and the derivation
-    /// only holds while a restored entry costs at least `ENTRY_OVERHEAD_BYTES`.
-    ///
-    /// That is what makes the cap lossless: past `budget / ENTRY_OVERHEAD_BYTES`
-    /// entries the byte trim necessarily evicts, so the rows the cap does not read are
-    /// rows the restore would have thrown away.
-    #[test]
-    fn the_default_history_load_ceiling_is_derived_from_the_byte_budget() {
-        use crate::core::undo::{
-            UndoData, UndoEntry, ENTRY_OVERHEAD_BYTES, UNDO_BYTE_BUDGET_BYTES,
-        };
-        use crate::core::{Command, UndoStack};
-
-        // The DERIVATION, not the product: `budget == rows * overhead` only holds while
-        // the budget happens to divide evenly, and a budget that does not is still a
-        // sound ceiling (the truncating division rounds DOWN, which can only be safer).
-        assert_eq!(
-            MAX_PERSISTED_HISTORY_ROWS,
-            UNDO_BYTE_BUDGET_BYTES / ENTRY_OVERHEAD_BYTES,
-            "the load ceiling is the byte budget divided by the per-entry floor"
-        );
-        // The floor itself: a restored entry carries no `command_bytes`, so it is
-        // charged the overhead whatever its command was.
-        let restored = UndoStack::deserialize_entry_with_timestamp(
-            r#"{"type":"close_project"}"#,
-            r#""None""#,
-            None,
-        )
-        .unwrap();
-        assert!(restored.command_bytes.is_none());
-        assert!(
-            UndoStack::estimated_size(&restored) >= ENTRY_OVERHEAD_BYTES,
-            "a restored entry must cost at least the overhead the ceiling is derived from"
-        );
-        // ...and the same holds for the emptiest entry that can be constructed at all.
-        let bare = UndoEntry {
-            command_bytes: None,
-            command: Command::CloseProject,
-            undo_data: UndoData::None,
-            timestamp: None,
-        };
-        assert_eq!(UndoStack::estimated_size(&bare), ENTRY_OVERHEAD_BYTES);
-    }
+    // The [#469] "ceiling is derived from the byte budget" test lives with
+    // `core::undo` in the root crate now: it asserts against `UndoStack`'s
+    // entry costing, which this crate cannot see.
 
     #[test]
     fn replacing_both_history_stacks_rolls_back_when_redo_insert_fails() {

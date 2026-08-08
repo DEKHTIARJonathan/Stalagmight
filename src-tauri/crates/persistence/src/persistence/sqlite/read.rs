@@ -1159,7 +1159,9 @@ impl Database {
         Ok(())
     }
 
-    pub fn load_project_validation(&self) -> Result<Option<crate::config::ValidationConfig>> {
+    pub fn load_project_validation(
+        &self,
+    ) -> Result<Option<crate::models::config::ValidationConfig>> {
         let json: Option<String> = self
             .conn
             .query_row(

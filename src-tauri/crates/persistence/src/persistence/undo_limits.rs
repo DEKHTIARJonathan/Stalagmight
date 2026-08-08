@@ -41,7 +41,7 @@ pub const UNDO_BYTE_BUDGET_BYTES: usize = 32 * 1024 * 1024;
 /// Module-level rather than local to `UndoStack::estimated_size` because
 /// [`MAX_PERSISTED_HISTORY_ROWS`] is derived from it and the derivation is only
 /// sound while the two are the same number.
-pub(crate) const ENTRY_OVERHEAD_BYTES: usize = 512;
+pub const ENTRY_OVERHEAD_BYTES: usize = 512;
 
 /// [#469] Hard ceiling on how many persisted history rows ONE load may read.
 ///

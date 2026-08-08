@@ -3,7 +3,7 @@
 // `stalagmight_lib::…` paths the integration tests and gen_ipc_types example
 // use) keeps compiling unchanged.
 pub use stalagmight_models::app_dirs;
-pub mod cache;
+pub use stalagmight_persistence::cache;
 pub mod commands;
 pub mod config;
 pub mod core;
@@ -15,14 +15,16 @@ pub use stalagmight_telemetry::logging;
 // Extracted to the `stalagmight-parsers` workspace member; re-exported under
 // the old name, same deal as `models` above.
 pub use stalagmight_parsers::parsers;
-pub mod persistence;
+// Extracted to the `stalagmight-persistence` workspace member (together with
+// `cache` and `tilemap_cache`); re-exported under the old names, same deal.
+pub use stalagmight_persistence::persistence;
 pub mod speleodb;
 pub use stalagmight_telemetry::telemetry;
 #[cfg(test)]
 pub mod test_helpers;
 pub mod tile_attribution;
 pub mod tile_providers;
-pub mod tilemap_cache;
+pub use stalagmight_persistence::tilemap_cache;
 /// Linux-only WebKit memory-pressure wiring (see the module docs and the
 /// patched wry fork: <https://github.com/Stalagmight/wry>).
 #[cfg(target_os = "linux")]

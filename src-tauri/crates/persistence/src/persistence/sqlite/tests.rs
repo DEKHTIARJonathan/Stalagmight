@@ -1791,7 +1791,7 @@ fn test_merged_with_from_fractal_iter2() {
 
     // Use the fractal_plant_iter2 fixture
     let fixture_path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("..") // Go up from src-tauri
+        .join("../../..") // Go up from crates/persistence to the repo root
         .join("e2e")
         .join("fixtures")
         .join("fractal_plant_iter2.stalx");
@@ -1906,7 +1906,7 @@ fn test_merged_with_from_fractal_iter4() {
 
     // Use the fractal_plant_iter4 fixture
     let fixture_path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("..") // Go up from src-tauri
+        .join("../../..") // Go up from crates/persistence to the repo root
         .join("e2e")
         .join("fixtures")
         .join("fractal_plant_iter4.stalx");
@@ -2622,91 +2622,9 @@ fn open_migrates_existing_file_stamped_v0() {
     );
 }
 
-#[test]
-fn test_new_format_undo_history_survives_reload() {
-    use crate::core::undo::{UndoData, UndoEntry};
-    use crate::core::{Command, UndoStack};
-    use crate::models::ShotUpdates;
-
-    let temp_dir = TempDir::new().unwrap();
-    let path = temp_dir.path().join("new_format_undo.stalx");
-
-    let mut project = Project::new("New Undo".to_string(), None);
-    project.add_section(SectionData {
-        shots: vec![ShotData {
-            azimuth_in: 45.0,
-            azimuth_out: 225.0,
-            length: 2.0,
-            depth_in: 10.0,
-            depth_out: 11.0,
-            ..Default::default()
-        }],
-        ..Default::default()
-    });
-
-    let mut db = Database::open(&path).unwrap();
-    db.save_project(&project).unwrap();
-    let saved = db.load_project().unwrap();
-    let section_id = saved.sections[0].id;
-    let shot_id = saved.sections[0].shots[0].id;
-
-    // New-format entry: only the edited field is present (untouched nullable
-    // fields are omitted thanks to skip_serializing_if).
-    let prev_values = ShotUpdates {
-        comment: Some(Some("original".to_string())),
-        ..Default::default()
-    };
-    let values_json = serde_json::to_string(&prev_values).unwrap();
-    assert!(
-        !values_json.contains("left") && !values_json.contains("pitch_in"),
-        "untouched nullable fields must serialize as absent, got: {values_json}"
-    );
-    let entry = UndoEntry {
-        command_bytes: None,
-        command: Command::UpdateShot {
-            section_id,
-            shot_id,
-            updates: ShotUpdates {
-                comment: Some(Some("edited".to_string())),
-                ..Default::default()
-            },
-        },
-        undo_data: UndoData::PreviousValues {
-            section_id,
-            shot_id: Some(shot_id),
-            shot_uuid: None,
-            values_json,
-            previous_offsets: HashMap::new(),
-        },
-        timestamp: None,
-    };
-    let persisted = UndoStack::serialize_entry_with_timestamp(&entry).unwrap();
-    db.save_undo_stack_with_timestamps(vec![persisted]).unwrap();
-    drop(db);
-
-    // Reload: the v7-stamped file keeps its history.
-    let db = Database::open_existing(&path).unwrap();
-    let loaded = db.load_undo_stack_with_timestamps().unwrap();
-    assert_eq!(loaded.len(), 1, "new-format undo entry must survive reload");
-
-    let (_, cmd_json, undo_json, ts) = &loaded[0];
-    let restored =
-        UndoStack::deserialize_entry_with_timestamp(cmd_json, undo_json, ts.as_deref()).unwrap();
-    match &restored.undo_data {
-        UndoData::PreviousValues { values_json, .. } => {
-            let prev: ShotUpdates = serde_json::from_str(values_json).unwrap();
-            // Exactly the edited field round-trips...
-            assert_eq!(prev.comment, Some(Some("original".to_string())));
-            // ...and untouched nullable fields stay untouched (None), so
-            // replaying this entry cannot clear them.
-            assert_eq!(prev.left, None);
-            assert_eq!(prev.pitch_in, None);
-            assert_eq!(prev.marker_index, None);
-            assert_eq!(prev.temperature, None);
-        }
-        other => panic!("Expected PreviousValues, got {}", other.variant_name()),
-    }
-}
+// The "new-format undo history survives reload" round-trip test lives with
+// `core::undo`'s own tests in the root crate now: it drives `UndoStack`'s
+// entry (de)serialization, which this crate cannot see.
 
 // === Schema migration idempotency ===
 
@@ -6511,9 +6429,9 @@ fn migrate_v12_preserves_null_pitch_and_does_not_launder_a_blunder() {
 /// it, and unlike a wrong warning that is not something the user can see.
 #[test]
 fn migrate_v12_leaves_a_section_with_no_vertical_signal_untouched() {
-    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("../e2e/fixtures/test_v5.dmp");
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../e2e/fixtures/test_v5.dmp");
     assert!(fixture.exists(), "Fixture missing: {}", fixture.display());
-    let dmp = crate::parsers::dmp::parse_dmp(&fixture).unwrap();
+    let dmp = stalagmight_parsers::parsers::dmp::parse_dmp(&fixture).unwrap();
 
     let mut project = Project::new("Flat".to_string(), None);
     let mut stored: Vec<Option<f64>> = Vec::new();

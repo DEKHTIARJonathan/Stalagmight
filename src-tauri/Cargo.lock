@@ -4423,7 +4423,6 @@ dependencies = [
  "anyhow",
  "chrono",
  "directories",
- "flate2",
  "http",
  "image",
  "keyring",
@@ -4439,6 +4438,7 @@ dependencies = [
  "sha2",
  "stalagmight-models",
  "stalagmight-parsers",
+ "stalagmight-persistence",
  "stalagmight-telemetry",
  "svg2pdf",
  "tauri",
@@ -4493,6 +4493,24 @@ dependencies = [
  "tracing",
  "ts-rs",
  "zip",
+]
+
+[[package]]
+name = "stalagmight-persistence"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "flate2",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "stalagmight-models",
+ "stalagmight-parsers",
+ "tempfile",
+ "tracing",
+ "ts-rs",
+ "uuid",
 ]
 
 [[package]]

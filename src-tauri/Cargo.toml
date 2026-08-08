@@ -11,7 +11,12 @@ default-run = "stalagmight"
 # Hybrid workspace root: this package stays where it is, extracted crates land
 # in crates/*.
 [workspace]
-members = ["crates/models", "crates/parsers", "crates/telemetry"]
+members = [
+    "crates/models",
+    "crates/parsers",
+    "crates/persistence",
+    "crates/telemetry",
+]
 resolver = "2"
 # Required: path deps inside the workspace directory are auto-adopted as
 # members, which would drag the vendored crate into the fmt/clippy gates.
@@ -97,6 +102,7 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 stalagmight-models = { path = "crates/models" }
 stalagmight-parsers = { path = "crates/parsers" }
+stalagmight-persistence = { path = "crates/persistence" }
 stalagmight-telemetry = { path = "crates/telemetry" }
 tauri = { version = "2", features = ["devtools"] }
 tauri-plugin-fs = "2"
@@ -139,7 +145,6 @@ percent-encoding = { workspace = true }
 image = { workspace = true }
 quick-xml = { workspace = true }
 zip = { workspace = true }
-flate2 = { workspace = true }
 # Used both for telemetry's batched event encoding and for the binary
 # load_project_full IPC. Always available so we can switch the load path
 # off JSON without conditional compilation.
@@ -318,6 +323,7 @@ workspace = true
 # dev-dependencies don't affect production builds, so `cargo build` is unchanged.
 stalagmight-models = { path = "crates/models", features = ["test-support"] }
 stalagmight-parsers = { path = "crates/parsers", features = ["test-support"] }
+stalagmight-persistence = { path = "crates/persistence", features = ["test-support"] }
 tempfile = { workspace = true }
 tauri = { version = "2", features = ["test"] }
 libc = "0.2"

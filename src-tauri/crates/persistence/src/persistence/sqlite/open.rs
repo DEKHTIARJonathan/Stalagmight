@@ -163,9 +163,8 @@ impl Database {
     /// read-write so SQLite performs that recovery on the first read - and does
     /// nothing else: no integrity check, no project-data check, no foreign-key
     /// validation and, above all, NO `ensure_schema_version`. That last one is
-    /// the point. The caller
-    /// ([`crate::core::state::speleodb_foreign`](../../core/state/speleodb_foreign/index.html))
-    /// uses this to decide whether a file may be opened AT ALL, and may well
+    /// the point. The caller (`core::state::speleodb_foreign`, in the root
+    /// crate) uses this to decide whether a file may be opened AT ALL, and may well
     /// refuse it; running the load path's migrations there would rewrite - and
     /// in the v15 case discard undo/redo history from - a file the user is
     /// about to be told they cannot open, before they have answered the prompt.
