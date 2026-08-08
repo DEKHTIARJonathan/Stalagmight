@@ -1975,6 +1975,176 @@ fn demoted_closure_is_not_re_promoted_by_orphan_conversion() {
     assert_eq!(project.station_merges.len(), 1);
 }
 
+// ===========================================================================
+// #469 item 2: `is_aligned` is a MEASUREMENT
+// ===========================================================================
+
+#[test]
+fn a_closure_is_born_with_a_measured_claim() {
+    // The MODEL API, which the importers and the project merge call directly and
+    // no command epilogue follows. Two laps of a 10 m square, so stations 0, 4
+    // and 8 are all one physical point and station 2 is the far corner.
+    let mut project = Project::new("Square".to_string(), None);
+    let lap = [0.0, 90.0, 180.0, 270.0];
+    let s = project
+        .add_section(SectionData {
+            shots: lap
+                .iter()
+                .chain(lap.iter())
+                .map(|&azimuth| shot(azimuth, azimuth, 10.0, 0.0, 0.0))
+                .collect(),
+            ..Default::default()
+        })
+        .id;
+    project.ensure_shot_uuids();
+
+    let closure = |project: &mut Project, from: u32, to: u32, strategy| {
+        project
+            .create_loop_closure(StationRef::new(s, from), StationRef::new(s, to), strategy)
+            .expect("create_loop_closure failed")
+            .is_aligned
+    };
+
+    assert!(
+        closure(&mut project, 0, 4, ClosureStrategy::Move),
+        "the lap closes on itself, so the coincidence claim is TRUE"
+    );
+    assert!(
+        !closure(&mut project, 0, 2, ClosureStrategy::Move),
+        "the diagonal is 14 m of open loop - a claim the app measured the \
+         refutation of one line earlier must not be stamped"
+    );
+    assert!(
+        !closure(&mut project, 4, 8, ClosureStrategy::Batch),
+        "and a Batch closure RECORDS a misclosure: coincident or not, it is the \
+         soft edge the non-destructive solve relaxes"
+    );
+    assert_eq!(
+        project
+            .loop_closures
+            .iter()
+            .map(|lc| lc.is_aligned)
+            .collect::<Vec<_>>(),
+        vec![true, false, false],
+        "the recorded closures carry what was measured"
+    );
+}
+
+#[test]
+fn the_re_measure_never_re_promotes_what_repair_demoted() {
+    // Repair's demotion and the per-command re-measure both run over the same
+    // project, and the re-measure is the one that can set `is_aligned` back to
+    // TRUE. If it went on geometry alone, the two would fight: Repair softens the
+    // edge precisely so the two anchored halves stop being one rigid component,
+    // and the next geometry command would rigidify it again the moment anything
+    // pulled the endpoints together. The double-anchor term is what makes that
+    // impossible, and it is asked of the MERGE graph, so no closure flag can
+    // change the answer.
+    let (mut project, _a, b, c) = double_anchored_bridge_project();
+    // The pair already carries the one kind of closure the re-measure governs.
+    project.loop_closures.push(LoopClosure {
+        id: 7,
+        station_a: StationRef::new(b, 2).into(),
+        station_b: StationRef::new(c, 0).into(),
+        path_length: 123.0,
+        misclosure_distance: 0.0,
+        error_percentage: 0.0,
+        horizontal_misclosure: 0.0,
+        vertical_misclosure: 0.0,
+        strategy: ClosureStrategy::Move,
+        is_aligned: true,
+    });
+
+    assert_eq!(project.demote_double_anchoring_merges(), 1);
+    assert!(
+        !project.loop_closures[0].is_aligned,
+        "setup: Repair softens the closure over the demoted pair"
+    );
+
+    // What Repair itself does next, in order.
+    project.resolve_offsets();
+    assert_eq!(
+        project.remeasure_closure_alignment(),
+        0,
+        "the re-measure must not re-impose the constraint Repair removed"
+    );
+
+    // And now the part geometry alone would get wrong: slide C's rigid group so
+    // the two endpoints are exactly one point. The claim is now TRUE and still
+    // must not be made, because the edge would weld two independently
+    // GPS-anchored merge components into one - the #464 refusal.
+    project.adjust_rigid_group_offsets(c, 0.0, 40.0);
+    let (local, station_offsets) = (
+        project.section_local_coords(),
+        project.resolved_station_offsets(),
+    );
+    let gap = project
+        .endpoint_gap(
+            &StationRef::new(b, 2).into(),
+            &StationRef::new(c, 0).into(),
+            &local,
+            &station_offsets,
+        )
+        .expect("both endpoints resolve")
+        .2;
+    assert!(
+        gap < Project::MERGE_ALIGNMENT_INVARIANT_M,
+        "setup: the endpoints are coincident now (gap {gap})"
+    );
+    assert_eq!(
+        project.remeasure_closure_alignment(),
+        0,
+        "a coincident pair bridging two anchored groups is still not alignable"
+    );
+    assert!(!project.loop_closures[0].is_aligned);
+}
+
+#[test]
+fn the_re_measure_leaves_a_legacy_baked_alignment_alone() {
+    // The 0.5.0 migration promise (docs/closures.md): a project whose shots were
+    // baked by the removed destructive "Adjust Closures" action opens looking
+    // identical and is never rewritten again. Those closures carry `is_aligned`
+    // with a NON-`Move` strategy, and their shots were rewritten to make the
+    // claim true - so demoting them would silently change co-location, station
+    // depth averaging, move-tool rigidity and which shots are frozen on a file
+    // that is exactly what it says it is. The re-measure governs `Move` closures
+    // and nothing else.
+    //
+    // The far end of the pair here is 40 m out, i.e. the worst case: even a
+    // legacy claim the app can SEE is false is left as recorded, because the app
+    // cannot know what the bake did to the shots and `check_closure_alignment`
+    // is the honest surface for it.
+    let (mut project, _a, b, c) = double_anchored_bridge_project();
+    for (id, strategy) in [
+        (1_u64, ClosureStrategy::Batch),
+        (2, ClosureStrategy::LeastSquaresWeighted),
+    ] {
+        project.loop_closures.push(LoopClosure {
+            id,
+            station_a: StationRef::new(b, 2).into(),
+            station_b: StationRef::new(c, 1).into(),
+            path_length: 10.0,
+            misclosure_distance: 0.0,
+            error_percentage: 0.0,
+            horizontal_misclosure: 0.0,
+            vertical_misclosure: 0.0,
+            strategy,
+            is_aligned: true,
+        });
+    }
+
+    assert_eq!(project.remeasure_closure_alignment(), 0);
+    assert!(project.loop_closures.iter().all(|lc| lc.is_aligned));
+    // Including through the LOAD, which is where the force-restamp used to live.
+    project.assign_closure_ids();
+    assert!(project.loop_closures.iter().all(|lc| lc.is_aligned));
+    assert_eq!(
+        project.check_closure_alignment().len(),
+        2,
+        "a torn legacy claim is still REPORTED - detect-only is the contract"
+    );
+}
+
 #[test]
 fn set_zero_datum_error_includes_section_name() {
     // Error message should include section name if available

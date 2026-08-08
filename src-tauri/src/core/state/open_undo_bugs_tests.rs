@@ -3099,6 +3099,376 @@ fn the_renormalised_frame_survives_save_and_reopen() {
 }
 
 // ===========================================================================
+// #469 item 2 (FIXED): a loop closure ASSERTED that its endpoints coincided,
+// and nothing in the app could ever set the claim straight
+// ===========================================================================
+//
+// `create_loop_closure` stamped `is_aligned: strategy == Move` without
+// measuring, one line after `compute_closure_metrics` had computed the
+// refutation. The flag is a RIGID edge to the offset cascade, to the move
+// tools, to co-location and to the frozen-shot rule, and nothing ever set it
+// back to false: `realign_merges` looks at merges only, and the cascade
+// deliberately leaves a redundant loop's residual intact. So a closure born
+// torn - or torn later by a `moveStation` on one endpoint - was reported
+// Critical forever, with no way out but deleting a legitimate closure.
+//
+// It is MEASURED now, by one predicate re-derived after every geometry change
+// (`Project::closure_alignment_stamp` / `remeasure_closure_alignment`).
+
+/// The alignment claim of a closure between `a` and `b`, or `None` when there
+/// is no closure over that pair.
+fn closure_alignment(state: &AppState, a: StationRef, b: StationRef) -> Option<bool> {
+    let project = state.get_project_state().expect("no project open");
+    project
+        .loop_closures
+        .iter()
+        .find(|c| {
+            (project.key_is_ref(&c.station_a, a) && project.key_is_ref(&c.station_b, b))
+                || (project.key_is_ref(&c.station_a, b) && project.key_is_ref(&c.station_b, a))
+        })
+        .map(|c| c.is_aligned)
+}
+
+/// `two_merged_sections` with the far end of B snapped onto the datum station,
+/// closing the loop as one physical point, and a `Move` closure recorded over
+/// it - the state the snap-to-merge workflow produces. Returns `(a, b)`.
+fn snapped_loop(state: &AppState) -> (SectionId, SectionId) {
+    let (a, b) = two_merged_sections(state);
+    let (from, to) = station_raw_xy(state, (b, 1), (a, 0));
+    let snapped = state.execute(Command::MoveStation {
+        station_ref: StationRef::new(b, 1),
+        offset: Coordinates {
+            x: to.0 - from.0,
+            y: to.1 - from.1,
+            z: 0.0,
+        },
+    });
+    assert!(snapped.success, "snap failed: {:?}", snapped.error);
+    let closed = state.execute(Command::CreateLoopClosure {
+        station_a: StationRef::new(a, 0),
+        station_b: StationRef::new(b, 1),
+        closure_strategy: ClosureStrategy::Move,
+    });
+    assert!(
+        closed.success,
+        "CreateLoopClosure failed: {:?}",
+        closed.error
+    );
+    (a, b)
+}
+
+/// The birth route: the fuzzer's `createLoopClosure(..., Move)` on an arbitrary
+/// pair, which is also every IPC and harness caller. The two stations here are
+/// 11 m apart and the app knows it - `compute_closure_metrics` records exactly
+/// that distance on the closure one line earlier.
+///
+/// This is the shape the COMBINED regime kept reaching: "marked closed but its
+/// ends are 5.86 m apart" in the post-run integrity sweep, with every in-run
+/// oracle green because the lie was stable in both directions.
+#[test]
+fn a_move_closure_over_a_real_gap_is_not_born_aligned() {
+    let _config = isolated_config();
+    let state = state_with_project();
+    let (a, b) = two_merged_sections(&state);
+
+    let closed = state.execute(Command::CreateLoopClosure {
+        station_a: StationRef::new(a, 0),
+        station_b: StationRef::new(b, 1),
+        closure_strategy: ClosureStrategy::Move,
+    });
+    assert!(
+        closed.success,
+        "CreateLoopClosure failed: {:?}",
+        closed.error
+    );
+
+    let gap = raw_station_gap(&state, (a, 0), (b, 1));
+    assert!(
+        gap > 1.0,
+        "setup: the endpoints are metres apart (got {gap} m)"
+    );
+    assert_eq!(
+        closure_alignment(&state, StationRef::new(a, 0), StationRef::new(b, 1)),
+        Some(false),
+        "a closure cannot claim a coincidence the app measured the refutation of"
+    );
+    let misclosure = state
+        .get_project_state()
+        .expect("no project open")
+        .loop_closures[0]
+        .misclosure_distance;
+    assert!(
+        (misclosure - gap).abs() < 1e-6,
+        "nothing is lost: the distance lives in the misclosure the user reads ({misclosure} vs {gap})"
+    );
+    assert!(
+        !state
+            .integrity_check()
+            .messages
+            .iter()
+            .any(|m| m.contains("marked closed")),
+        "and the Critical banner that had no cure is not raised: {:?}",
+        state.integrity_check().messages
+    );
+}
+
+/// The other half: the REAL workflow, which is a batch - the move commands that
+/// snapped the station onto its target, then the closure. The frontend
+/// (`ClosureDialog.tsx`) sends `Move` only with those `preCommands`, so the
+/// measurement says exactly what the assertion used to, and the user-facing
+/// path is unchanged.
+#[test]
+fn the_snap_to_merge_batch_still_creates_an_aligned_closure() {
+    let _config = isolated_config();
+    let state = state_with_project();
+    let (a, b) = two_merged_sections(&state);
+    let (from, to) = station_raw_xy(&state, (b, 1), (a, 0));
+
+    let batched = state.execute(Command::Batch {
+        commands: vec![
+            Command::MoveStation {
+                station_ref: StationRef::new(b, 1),
+                offset: Coordinates {
+                    x: to.0 - from.0,
+                    y: to.1 - from.1,
+                    z: 0.0,
+                },
+            },
+            Command::CreateLoopClosure {
+                station_a: StationRef::new(a, 0),
+                station_b: StationRef::new(b, 1),
+                closure_strategy: ClosureStrategy::Move,
+            },
+        ],
+    });
+    assert!(
+        batched.success,
+        "snap-to-merge batch failed: {:?}",
+        batched.error
+    );
+
+    assert!(
+        raw_station_gap(&state, (a, 0), (b, 1)) < 1e-6,
+        "setup: the snap made the two stations one point"
+    );
+    assert_eq!(
+        closure_alignment(&state, StationRef::new(a, 0), StationRef::new(b, 1)),
+        Some(true),
+        "a measured coincidence is still an alignment - the workflow is unchanged"
+    );
+}
+
+/// THE CRUX. `MoveStation` moves ONE station (only the UI batches the
+/// co-located set), and its undo captures no closure flag at all - so a sweep
+/// that could only DEMOTE would leave the flag stuck false after the undo,
+/// landing on a state the history never recorded and failing the roundtrip
+/// oracle. The stamp is total and blind to the flags, so the undo re-derives
+/// exactly the claim the recorded state had.
+#[test]
+fn tearing_an_aligned_closure_demotes_it_and_the_undo_restores_the_claim() {
+    let _config = isolated_config();
+    let state = state_with_project();
+    let (a, b) = snapped_loop(&state);
+    let closed_geometry = all_station_xy(&state);
+    assert_eq!(
+        closure_alignment(&state, StationRef::new(a, 0), StationRef::new(b, 1)),
+        Some(true),
+        "setup: the loop is closed and the claim is true"
+    );
+
+    let torn = state.execute(Command::MoveStation {
+        station_ref: StationRef::new(b, 1),
+        offset: Coordinates {
+            x: 100.0,
+            y: 0.0,
+            z: 0.0,
+        },
+    });
+    assert!(torn.success, "MoveStation failed: {:?}", torn.error);
+    assert!(
+        raw_station_gap(&state, (a, 0), (b, 1)) > 1.0,
+        "setup: the move tore the loop open"
+    );
+    assert_eq!(
+        closure_alignment(&state, StationRef::new(a, 0), StationRef::new(b, 1)),
+        Some(false),
+        "the claim is false now, so the flag must be"
+    );
+    assert!(
+        !state
+            .integrity_check()
+            .messages
+            .iter()
+            .any(|m| m.contains("marked closed")),
+        "the demotion IS the 'recompute' the old Critical asked for: {:?}",
+        state.integrity_check().messages
+    );
+
+    let undone = state.undo();
+    assert!(undone.success, "undo failed: {:?}", undone.error);
+    assert_eq!(
+        all_station_xy(&state),
+        closed_geometry,
+        "the undo restores the geometry"
+    );
+    assert_eq!(
+        closure_alignment(&state, StationRef::new(a, 0), StationRef::new(b, 1)),
+        Some(true),
+        "AND the claim, which is what a demote-only sweep could never do"
+    );
+}
+
+/// Drift back into coincidence: the flag follows the geometry in BOTH
+/// directions, which is the same property the undo above relies on, reached by
+/// two forward commands instead of an inverse.
+#[test]
+fn drifting_back_into_coincidence_re_promotes_the_closure() {
+    let _config = isolated_config();
+    let state = state_with_project();
+    let (a, b) = snapped_loop(&state);
+
+    for (offset, expected) in [(100.0, false), (-100.0, true)] {
+        let moved = state.execute(Command::MoveStation {
+            station_ref: StationRef::new(b, 1),
+            offset: Coordinates {
+                x: offset,
+                y: 0.0,
+                z: 0.0,
+            },
+        });
+        assert!(
+            moved.success,
+            "MoveStation({offset}) failed: {:?}",
+            moved.error
+        );
+        assert_eq!(
+            closure_alignment(&state, StationRef::new(a, 0), StationRef::new(b, 1)),
+            Some(expected),
+            "after moving by {offset} m the gap is {} m",
+            raw_station_gap(&state, (a, 0), (b, 1))
+        );
+    }
+}
+
+/// The double-anchor term, on the one shape where it is the ONLY thing
+/// refusing: two independently GPS-anchored sections whose stations are
+/// coincident. Aligning the closure would weld two datum-anchored merge
+/// components into one rigid group - `cascade_bfs` pre-loads every
+/// datum-bearing section as authoritative and never traverses an edge into one,
+/// so nothing could ever satisfy it. That is #464 defect A, and
+/// `plan_merge_promotion` refuses it for the same reason.
+#[test]
+fn a_coincident_closure_between_two_anchored_groups_is_never_aligned() {
+    let _config = isolated_config();
+    let state = state_with_project();
+    let a = create_section(&state, "A", vec![shot(0.0, 5.0)]);
+    let c = create_section(&state, "C", vec![shot(90.0, 5.0)]);
+    // The SAME GPS on both: `set_zero_datum` puts the first datum's station at
+    // the local origin and every later one at `gps_to_local(gps, first.gps)`, so
+    // identical coordinates place both stations on exactly one point.
+    let gps = GpsCoordinates::new(20.4, -87.3, 0.0).unwrap();
+    for station in [StationRef::new(a, 0), StationRef::new(c, 0)] {
+        let datum = state.execute(Command::SetZeroDatum {
+            station_ref: station,
+            coordinates: gps,
+        });
+        assert!(datum.success, "SetZeroDatum failed: {:?}", datum.error);
+    }
+    assert!(
+        raw_station_gap(&state, (a, 0), (c, 0)) < 1e-6,
+        "setup: the two anchored stations are one point"
+    );
+
+    let closed = state.execute(Command::CreateLoopClosure {
+        station_a: StationRef::new(a, 0),
+        station_b: StationRef::new(c, 0),
+        closure_strategy: ClosureStrategy::Move,
+    });
+    assert!(
+        closed.success,
+        "CreateLoopClosure failed: {:?}",
+        closed.error
+    );
+    assert_eq!(
+        closure_alignment(&state, StationRef::new(a, 0), StationRef::new(c, 0)),
+        Some(false),
+        "coincident is not enough: a rigid edge here would double-anchor the group"
+    );
+
+    // And no later command promotes it either - the term is a function of the
+    // merges and the datums, both of which this leaves exactly as they were.
+    let commented = state.execute(Command::MoveSection {
+        section_id: c,
+        offset: Coordinates {
+            x: 0.0,
+            y: 0.0,
+            z: 0.0,
+        },
+    });
+    assert!(
+        commented.success,
+        "MoveSection failed: {:?}",
+        commented.error
+    );
+    assert_eq!(
+        closure_alignment(&state, StationRef::new(a, 0), StationRef::new(c, 0)),
+        Some(false)
+    );
+}
+
+/// CONVERGENCE. `assign_closure_ids` used to force `is_aligned = true` on every
+/// `Move` closure on every open, so a closure honestly saved as `0` came
+/// straight back as `1`: memory and disk would have disagreed from that open
+/// onward, which is the #413 finding-10 shape and exactly what the persistence
+/// oracle exists to catch.
+#[test]
+fn a_demoted_alignment_claim_survives_save_and_reopen() {
+    let _config = isolated_config();
+    let temp = TempDir::new().unwrap();
+    let save_path: PathBuf = temp.path().join("demoted-claim.stalx");
+
+    let (a, b) = {
+        let state = state_with_project();
+        let (a, b) = snapped_loop(&state);
+        let torn = state.execute(Command::MoveStation {
+            station_ref: StationRef::new(b, 1),
+            offset: Coordinates {
+                x: 100.0,
+                y: 0.0,
+                z: 0.0,
+            },
+        });
+        assert!(torn.success, "MoveStation failed: {:?}", torn.error);
+        assert_eq!(
+            closure_alignment(&state, StationRef::new(a, 0), StationRef::new(b, 1)),
+            Some(false),
+            "setup: the claim is demoted in session"
+        );
+        let saved = state.save_project(Some(save_path.clone()));
+        assert!(saved.success, "save failed: {:?}", saved.error);
+        (a, b)
+    };
+
+    let reopened = AppState::new().unwrap();
+    let opened = reopened.execute(Command::OpenProject { path: save_path });
+    assert!(opened.success, "reopen failed: {:?}", opened.error);
+    assert_eq!(
+        closure_alignment(&reopened, StationRef::new(a, 0), StationRef::new(b, 1)),
+        Some(false),
+        "the open must not re-assert the claim the session measured away"
+    );
+    assert!(
+        !reopened
+            .integrity_check()
+            .messages
+            .iter()
+            .any(|m| m.contains("marked closed")),
+        "and the reopened project is clean: {:?}",
+        reopened.integrity_check().messages
+    );
+}
+
+// ===========================================================================
 // Finding 12, CASCADING (FIXED): the shot the stale id edited by mistake still
 // carried the edit several undos later, when the entry being consumed was
 // unrelated and its own persisted id was FRESH
