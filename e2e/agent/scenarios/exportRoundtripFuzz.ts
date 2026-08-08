@@ -86,12 +86,15 @@
  * than re-drawing it. `pnpm agent:scenario export-roundtrip-fuzz --trace FILE`
  * re-executes the recorded step list through the same drivers with the SAME
  * per-move oracles (X1, X2), and then re-runs the two whole-episode oracles
- * that need no draw (X8, X9). It does NOT re-derive the rotation: X3-X7 are
- * whole-episode judgments over exports the trace already contains, and a replay
- * that invented new ones would not be replaying anything. A structural failure
- * therefore names its oracle in the message and hands you the export sequence
- * that reached it, which is the same guarantee `import-dialog-fuzz` gives for
- * its per-flow oracles.
+ * that need no draw, and then EVERY whole-episode oracle - X3 through X9 - once.
+ *
+ * The structural oracles are not steps, so a replay cannot re-execute them from
+ * the trace; it re-ASKS them instead, and it has to, because most of what this
+ * scenario finds is structural. A replay that only re-clicked the recorded moves
+ * would come back GREEN on the very trace a failing X5, X6 or X7 dropped, which
+ * is the one thing a replay must never do. They draw their own options from
+ * `ctx.rng`, which a replay seeds identically. The rotation is not re-derived -
+ * a replay runs one episode, so each of them runs exactly once.
  *
  * A trace never carries an absolute path: every `rel` is session-relative, and
  * `readTrace` refuses one that is not.
@@ -1659,10 +1662,21 @@ export const exportRoundtripFuzz: Scenario = {
           opened = await readProjectDigest(ctx);
         }
       }
-      // The two whole-episode oracles that need no draw still run: they judge
-      // state the replayed steps left behind rather than a move of their own.
+      // Then the WHOLE-EPISODE oracles, all of them.
+      //
+      // They are not steps, so a replay cannot re-execute them from the trace -
+      // but it can re-ASK them, and it must, because most of what this scenario
+      // finds is structural. A replay that only re-clicked the recorded moves
+      // would come back green on the trace that a failing X5, X6 or X7 dropped,
+      // which is the one thing a replay must never do. They draw their own
+      // options from `ctx.rng`, which the replay seeds identically.
+      await runDifferential(episodeDir);
+      await runByteIdentity(episodeDir, await readProjectDigest(ctx));
+      await runNeutralisation(episodeDir);
+      if (roundtripEnabled()) await runRoundtrip(episodeDir);
       await runOptionIndependence();
       await runModeInvariants();
+      await runPrePlanLeak();
       await teardown(episodeDir);
       ctx.log('replay complete');
       return;
