@@ -82,6 +82,41 @@ export function newOracleState(): OracleState {
  * Note the app's own recovery scanner (`commands/recovery.rs`) treats ANY trailing
  * `.tmp` as leftover, so it needs no such list; this narrower allowlist is the
  * harness's alone, and is the only one that can silently fall behind a producer.
+ *
+ * ## EXPORTS ADD NOTHING HERE, because no export stages
+ *
+ * Audited for `export-roundtrip-fuzz` (wave 4), since a leaked staging file is
+ * exactly what a fuzzer that aims exports at hostile paths would produce. Every
+ * export writer opens the DESTINATION and writes into it, so a failure mid-write
+ * leaves a TRUNCATED artifact at the real path rather than a `.tmp` beside it -
+ * which is why `exportOracles.ts`'s X1 checks the destination's own size and
+ * shape and does not look for a staging suffix that cannot exist:
+ *
+ *   export/csv.rs:9        `std::fs::File::create(path)`, unbuffered `writeln!`
+ *                          per row, no flush, no rename
+ *   export/json.rs:14      `std::fs::write(path, json)`
+ *   export/tml.rs:275,276  `std::fs::write(path, xml)` (TMLU, and the
+ *                          any-other-extension fallback)
+ *   export/tml.rs:460      `std::fs::File::create(path)` -> `ZipWriter` (TML)
+ *   export/image.rs:400    `std::fs::write(path, svg)`
+ *   export/image.rs:443    `pixmap.save_png(path)`
+ *   export/image.rs:469    `std::fs::write(path, pdf)`
+ *   commands/export.rs:441 `std::fs::write(&path, rendered)` (dive profile,
+ *                          both wire formats)
+ *
+ * Functions read and confirmed staging-free: `export::csv::export_csv`,
+ * `export::json::export_json`, `export::tml::{export_tml, export_with_profile,
+ * write_output, write_zip}`, `export::image::{export_image,
+ * export_image_with_stations, export_svg, export_png, export_pdf}`,
+ * `commands::export::export_dive_profile`. `commands::export::preview_svg_export`
+ * writes no file at all.
+ *
+ * So a `.tmp` seen during an export run belongs to a SAVE, not to the export -
+ * `project_io.rs:535` (`.stalx.tmp`), `project_merge.rs:311`, `speleodb/dump.rs:194`
+ * (`.download.tmp`), `sqlite/repair.rs:387` (`.vacuum.tmp`) - and the three
+ * suffixes below already cover all of them. This paragraph is the record that
+ * the question was asked; if an export ever grows a staging write, its suffix
+ * goes in the list and this note comes out.
  */
 const LEFTOVER_TEMP_SUFFIXES = ['.stalx.tmp', '.download.tmp', '.vacuum.tmp'] as const;
 
