@@ -3,7 +3,7 @@ import maplibregl from 'maplibre-gl';
 import { metersToMapCoords } from '../../utils/coordinates';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
-import { hasLiveStyle } from './mapUtils';
+import { hasLiveStyle, BOTTOM_SURVEY_LAYERS } from './mapUtils';
 import { getThemeColor } from '../../utils/themeColors';
 import type { GpsOrigin } from '../../types/config';
 
@@ -123,18 +123,11 @@ export default function GridOverlay({ map, gpsOrigin }: GridOverlayProps) {
 
       if (!map.getLayer(layerId)) {
         // The grid belongs under every survey layer, ghosts and loop closures
-        // included, so it anchors on the bottom-most one: `initializeLayers`
-        // adds the ghost shot hitbox first. The later candidates only matter if
-        // that ordering changes; `survey-custom-render` is the geometry itself,
-        // so the grid still lands under the survey even then. No anchor means
-        // no survey layer exists yet, and layers added after this one are
-        // appended above it anyway.
-        const bottomCandidates = [
-          'survey-ghost-shots-hitbox',
-          'survey-ghost-shots',
-          'survey-custom-render',
-        ];
-        const firstSurveyLayer = bottomCandidates.find((id) => map.getLayer(id));
+        // included, which the first candidate gives; the last one only lands it
+        // under the geometry, above ghosts and closures. No anchor means no
+        // survey layer exists yet, and layers added after this one are appended
+        // above it anyway.
+        const firstSurveyLayer = BOTTOM_SURVEY_LAYERS.find((id) => map.getLayer(id));
         map.addLayer(
           {
             id: layerId,

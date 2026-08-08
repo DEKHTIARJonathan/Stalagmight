@@ -41,6 +41,7 @@ import { useMapTools } from '../../hooks/useMapTools';
 import { useGasPlanPointMarkers } from './useGasPlanPointMarkers';
 import { useGasPlanDropMarkers } from './useGasPlanDropMarkers';
 import SurveyLayer, { type SurveyLayerCallbacks } from './SurveyLayer';
+import { SATELLITE_BOTTOM_CANDIDATES } from './mapUtils';
 import { renderFatalMessage } from './surveyLayer/mapErrors';
 import PlacementOverlay from './PlacementOverlay';
 import GridOverlay from './GridOverlay';
@@ -3227,21 +3228,10 @@ function MapCanvas() {
           maxzoom: tileConfig.maxZoom,
         });
 
-        // Satellite goes below the grid, and the grid below the survey. The grid
-        // has to lead the list: GridOverlay anchors it on the same bottom-most
-        // survey layer, and a later insertion before that same anchor lands
-        // nearer to it, i.e. above the grid - which 0.7-opacity raster then
-        // hides. The survey ids cover the grid-off case: the ghost shot hitbox
-        // is added first in initializeLayers (the main shots/stations hitbox
-        // layers were removed, #mem budget), the rest are fallbacks in case that
-        // ordering changes, so satellite always lands beneath them.
-        const bottomCandidates = [
-          'grid-lines',
-          'survey-ghost-shots-hitbox',
-          'survey-ghost-shots',
-          'survey-shots',
-        ];
-        const bottomAnchor = bottomCandidates.find((id) => currentMap.getLayer(id));
+        // Satellite draws below the grid and both below the survey; the shared
+        // candidate list owns that ordering. An unresolved anchor would append
+        // the raster over everything, so it must not be the common case.
+        const bottomAnchor = SATELLITE_BOTTOM_CANDIDATES.find((id) => currentMap.getLayer(id));
         currentMap.addLayer({
           id: 'satellite-tiles',
           type: 'raster',
