@@ -17652,6 +17652,85 @@ fn test_execute_import_sections_zero_datum_placement() {
     assert!((project.zero_datums[0].gps.latitude - 10.0).abs() < 1e-6);
 }
 
+/// The import placement loop anchors on a station that is NOT its section's
+/// start, and the datum still ends up on local (0, 0).
+///
+/// The loop calls `AppState::set_zero_datum` directly rather than going through
+/// `execute()`, so it never reaches the `renormalize_frame_if_changed` epilogue:
+/// whatever `Project::set_zero_datum` leaves behind is what the imported project
+/// keeps, and an import whose datum does not sit on the origin hands every later
+/// reader of local metres - the map's `gpsOrigin`, the GPS column, the Ariane
+/// export's `START` - an origin the survey is not laid out against.
+///
+/// Non-vacuous by construction: `station_index: 1` is a whole shot away from the
+/// section's start, so placing it on the origin requires a real displacement.
+/// The sibling test above anchors station 0, which is already at the origin and
+/// therefore cannot tell a placement that works from one that does nothing.
+#[test]
+fn test_execute_import_sections_zero_datum_placement_at_non_origin_station() {
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Test".to_string(),
+        location: None,
+    });
+
+    let gps = GpsCoordinates::new(10.0, 20.0, 5.0).unwrap();
+    let imported_shot = test_shot_data(5.0);
+    let sections = vec![ImportSectionConfig {
+        reverse: false,
+        section_index: 0,
+        name: Some("GPS Section".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#ff0000".to_string(),
+        direction: None,
+        quality: 1.0,
+        shots: vec![imported_shot.clone()],
+        station_comments: Vec::new(),
+        placement: ImportPlacement::ZeroDatum {
+            coordinates: gps,
+            station_index: 1,
+        },
+    }];
+
+    let result = state.execute_import_sections(
+        sections,
+        Vec::new(),
+        None,
+        Vec::new(),
+        Vec::new(),
+        VirtualShotMode::Auto,
+    );
+    assert!(result.success, "import failed: {:?}", result.error);
+
+    let project = state.get_project_state().unwrap();
+    assert_eq!(project.zero_datums.len(), 1);
+    let section_id = project.sections[0].id;
+    let datum_station = project
+        .compute_station_raw_coords(StationRef::new(section_id, 1))
+        .expect("the datum station has no raw coordinates");
+    assert!(
+        datum_station.x.abs() < 1e-9 && datum_station.y.abs() < 1e-9,
+        "the import's first datum has to land its station on local (0, 0), got ({}, {})",
+        datum_station.x,
+        datum_station.y
+    );
+
+    // Read off the result rather than asserted in prose: station 0 is a whole
+    // shot away from the origin, which is exactly the displacement the placement
+    // had to apply to get station 1 onto it.
+    let station_zero = project
+        .compute_station_raw_coords(StationRef::new(section_id, 0))
+        .expect("station 0 has no raw coordinates");
+    assert!(
+        (station_zero.x.hypot(station_zero.y) - imported_shot.horizontal_length()).abs() < 1e-9,
+        "the section had to move by the whole shot to put station 1 on the origin; station 0 is \
+         at ({}, {})",
+        station_zero.x,
+        station_zero.y
+    );
+}
+
 #[test]
 fn test_execute_import_sections_rollback_on_failure() {
     use crate::models::ImportPlacement;
@@ -17891,6 +17970,119 @@ fn test_batch_partial_failure_rolls_back() {
     assert_eq!(
         sections_before, sections_after,
         "batch rollback should restore section count"
+    );
+}
+
+/// A batch that adds two zero datums places the SECOND against the origin the
+/// FIRST one established, not against wherever the survey happened to sit when
+/// the batch started.
+///
+/// `execute_batch` runs its sub-commands through `execute_without_undo` and
+/// applies `renormalize_frame_if_changed` ONCE, after the last of them - so the
+/// establishing re-frame has to happen inside `Project::set_zero_datum` itself.
+/// Left to the batch epilogue, sub-command two reads "the frame datum's station
+/// sits at (0, 0)" while it does not yet, places B against that origin, and the
+/// epilogue then translates the already-misplaced B along with everything else:
+/// B lands off by the whole establishing delta and the two datums no longer sit
+/// at their true GPS separation.
+///
+/// Non-vacuous by construction. A's datum station is 10 m north of its section's
+/// start, so establishing the frame is a real translation rather than nothing;
+/// the two GPS fixes are hundreds of metres apart, so the expected offset is
+/// decades above `Project::OFFSET_DUST_M`; and the sections are separate
+/// components, which is required rather than incidental - `set_zero_datum`
+/// refuses a second datum inside one merge group.
+#[test]
+fn test_batch_second_zero_datum_lands_on_the_origin_the_first_established() {
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Test".to_string(),
+        location: None,
+    });
+
+    let north = |length: f64| ShotData {
+        azimuth_in: 0.0,
+        azimuth_out: 0.0,
+        length,
+        depth_in: 0.0,
+        depth_out: 0.0,
+        ..Default::default()
+    };
+    let sec_a = state
+        .execute(Command::CreateSection {
+            name: Some("A".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#ff0000".to_string(),
+            direction: None,
+            shots: vec![north(10.0)],
+        })
+        .section_id
+        .unwrap();
+    let sec_b = state
+        .execute(Command::CreateSection {
+            name: Some("B".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#00ff00".to_string(),
+            direction: None,
+            shots: vec![north(4.0)],
+        })
+        .section_id
+        .unwrap();
+
+    let gps_a = GpsCoordinates::new(20.4, -87.3, 0.0).unwrap();
+    let gps_b = GpsCoordinates::new(20.4, -87.295, 0.0).unwrap();
+    let expected_b = crate::models::gps_to_local(&gps_b, &gps_a);
+    assert!(
+        expected_b.0.hypot(expected_b.1) > 100.0,
+        "setup: the two datums have to sit far enough apart for the expected offset to be \
+         unmistakable, got {expected_b:?}"
+    );
+    let datum_a_before = state
+        .get_project_state()
+        .unwrap()
+        .compute_station_raw_coords(StationRef::new(sec_a, 1))
+        .expect("A's datum station has no raw coordinates");
+    assert!(
+        (datum_a_before.y - 10.0).abs() < 1e-9,
+        "setup: A's datum station has to start away from the origin, got {datum_a_before:?}"
+    );
+
+    let result = state.execute(Command::Batch {
+        commands: vec![
+            Command::SetZeroDatum {
+                station_ref: StationRef::new(sec_a, 1),
+                coordinates: gps_a,
+            },
+            Command::SetZeroDatum {
+                station_ref: StationRef::new(sec_b, 0),
+                coordinates: gps_b,
+            },
+        ],
+    });
+    assert!(result.success, "batch failed: {:?}", result.error);
+
+    let project = state.get_project_state().unwrap();
+    let a1 = project
+        .compute_station_raw_coords(StationRef::new(sec_a, 1))
+        .expect("A's datum station has no raw coordinates");
+    assert!(
+        a1.x.abs() < 1e-6 && a1.y.abs() < 1e-6,
+        "the batch's FIRST datum establishes the frame, so its station has to sit at local \
+         (0, 0), got ({}, {})",
+        a1.x,
+        a1.y
+    );
+    let b0 = project
+        .compute_station_raw_coords(StationRef::new(sec_b, 0))
+        .expect("B's datum station has no raw coordinates");
+    assert!(
+        (b0.x - expected_b.0).abs() < 1e-6 && (b0.y - expected_b.1).abs() < 1e-6,
+        "the batch's SECOND datum has to sit at its GPS offset from the first, {expected_b:?}, \
+         got ({}, {})",
+        b0.x,
+        b0.y
     );
 }
 
@@ -18387,7 +18579,11 @@ fn test_delete_section_cascades_closures_and_offsets() {
     // on it displaces nothing - and `section_offsets` now means "sections that
     // are actually displaced" (#413 finding 2: an exactly-(0, 0) entry is
     // dropped rather than stored). Anchoring station 1 gives A a REAL offset, so
-    // the delete-cascade assertion below has something to cascade.
+    // the delete-cascade assertion below has something to cascade. Note that the
+    // add displaces EVERY section, not just A's merge group: establishing the
+    // frame re-frames the whole survey rigidly (`Project::set_zero_datum` ->
+    // `renormalize_frame`), so B picks up the same translation. Only A's offset
+    // is asserted here because only A's is the one the delete has to cascade.
     let datum_result = state.execute(Command::SetZeroDatum {
         station_ref: StationRef::new(sec_a, 1),
         coordinates: GpsCoordinates::new(45.0, 10.0, 0.0).unwrap(),
