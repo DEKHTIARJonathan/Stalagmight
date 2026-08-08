@@ -288,68 +288,80 @@
  *         exact, and a heading off by one degree, an unswapped depth pair, a
  *         changed length or an LRUD that is not the mirror all still fail.
  *
- *      b. OPEN - NEEDS A PRODUCT CALL. 24 shots, the remaining 48 keys. Azimuth
- *         delta is EXACTLY 0.000 on all 24; only the depths move, by 0.01 to
- *         7.16 m, in two clusters - a small one (0.01, 0.09, 0.095, 0.14) and a
- *         large one (4.71, 6.91, 7.05, 7.15+). Sampled pairs show whole runs of
- *         shots moved by the SAME offset, e.g. two different shots both shifted
- *         +4.71.
+ *      b. CLOSED - ORACLE FIX, and the measurement settled it rather than a
+ *         judgment call. 24 shots, the remaining 48 keys. Matched all 532 shots
+ *         BY UUID - only possible because 4a made uuids survive the trip - and
+ *         of those 24: LENGTH changed on 0, AZIMUTH on 0, LRUD on 0, and
+ *         DESCENT on exactly 1. Absolute depths moved by 0.01 to 7.16 m across
+ *         18 distinct offsets, in runs sharing one value.
  *
- *         NOT ROUNDING, and that was checked rather than assumed: the exported
- *         LENGTH differs from the database for 4 shots by at most 2.1e-7, which
- *         is the writer's six-decimal formatting and is three orders of
- *         magnitude below the key's precision. The signature instead matches
- *         `enforce_ariane_geometry_invariants` (`export/tml.rs:1608`), which
- *         RE-HANGS a branch whose junction depth Ariane cannot represent and
- *         CLAMPS a shot past the `|depth - origin_depth| <= length` bound - it
- *         has its own test family saying so (`a_re_hang_moves_the_rest_of_the_
- *         branch_with_it`, `a_junction_depth_discontinuity_is_re_hung_rather_
- *         than_exported_impossible`, `a_shot_exactly_on_the_bound_is_left_
- *         alone_and_one_past_it_is_clamped`). A constant offset shared by a run
- *         of shots is exactly what "the rest of the branch moves with it" looks
- *         like.
+ *         That is precisely `enforce_ariane_geometry_invariants`
+ *         (`export/tml.rs:1608`) doing the two things its own test family names:
+ *         RE-HANGING a branch whose junction depth Ariane cannot represent, and
+ *         moving the rest of the branch with it. A round trip is entitled to
+ *         change where a branch HANGS. It is not entitled to change what a shot
+ *         MEASURES, and it did not.
  *
- *         WHAT IS NOT PROVEN: the attribution is by signature, not shot by shot.
- *         Confirming it needs the before/after digests carrying UUIDs so each of
- *         the 24 can be matched by identity rather than by length - about one
- *         instrumented run.
+ *         THE ONE DESCENT CHANGE IS THE CLAMP, AND THE SOURCE SHOT IS
+ *         IMPOSSIBLE. Exactly one shot in the whole survey has |descent| greater
+ *         than its tape: a 0.150 m shot carrying a 2.350 m depth change. That is
+ *         not a survey the world contains - it is a data-entry error the fixture
+ *         happens to hold - and the exporter pins it to exactly -0.150, i.e. to
+ *         the tape, which is `a_shot_exactly_on_the_bound_is_left_alone_and_one_
+ *         past_it_is_clamped`. It is the only shot in the file the clamp
+ *         touches.
  *
- *         THE QUESTION TO DECIDE, and why this scenario will not decide it. The
- *         exporter deliberately MOVES survey geometry to fit the format. Unlike
- *         4b that is not a sentinel collision - there is no equivalence to
- *         canonicalize, the depths genuinely differ - so X6 has three options
- *         and only the third is honest:
- *           (i)   keep asserting: naharon stays red on designed behaviour;
- *           (ii)  excuse the family: that IS a tolerance, and this file has none;
- *           (iii) assert the WEAKER property the transform preserves - a re-hang
- *                 moves a branch's datum, so each shot's own length and descent
- *                 (`depth_out - depth_in`) should survive even when the absolute
- *                 depths do not, and a re-hang that changed a shot's descent
- *                 would still be a red.
- *         (iii) is the shape to aim at and needs (b)'s per-uuid measurement
- *         first, because one sampled pair in the current output has a descent of
- *         -2.35 arriving as -0.15 - which, if it survives identity matching,
- *         is a re-hang changing a measurement and a real bug rather than a
- *         datum shift. It may equally be an artifact of pairing by length. That
- *         is the fact the decision turns on.
+ *         So X6 now keys the DESCENT, clamped to the tape, and not the absolute
+ *         depths - asserting exactly what the transform contracts to preserve
+ *         and dropping the one thing it contracts to change. `clampedDescent`
+ *         carries the argument and the numbers. Absolute-depth agreement is kept
+ *         as the `x6:absoluteDepthShifts` metric (`strictShotKey`) so a change
+ *         in how often the exporter re-hangs stays visible instead of silently
+ *         not mattering.
  *
- *      c. CLOSED - HARNESS BUG, NOT THE APP'S. 2 comment texts read as lost, and
- *         both were this scenario's fault twice over. `ProjectIpc`
- *         (`models/project.rs:585-602`) serializes 16 fields and
- *         `station_comments` is not one of them, so `get_project_state` cannot
- *         show station comments at all - the fixture's 74 were never measured -
- *         and the round-trip import ran with `commentsOnStations` at the app
- *         default of TRUE, which MOVES a shot comment onto its to-station, i.e.
- *         straight into the blind spot. The chain now imports with it FALSE, a
- *         real user-facing option rather than a fabricated state, which keeps
- *         the comments where the oracle can see them and makes the text half an
- *         assertion instead of a formality. Both comments now survive.
+ *    NET: X6 IS GREEN ON naharon. 198 geometry keys -> 0, and no comment losses.
  *
- *    NET: 198 keys -> 48, and the comment deltas are gone. naharon is still RED
- *    on family (b) alone, deliberately - the synthetic fixture is green, so it
- *    stays visible on the fixture that shows it, and the matrix's
- *    `naharon.stalx` cells stay red until (b) is decided. Use
- *    `--fixtures fractal_plant_iter3.stalx` for a green matrix meanwhile.
+ *    ONE CORRECTION TO (c) THAT THE FIX ITSELF PRODUCED. Keeping comments on
+ *    shots moves the blind spot rather than closing it: the AFTER side now sees
+ *    66 texts that were station comments before the trip and shot comments
+ *    after, so they read as GAINS. A gain is not data loss and nothing supports
+ *    asserting it, so X6 asserts LOSSES only - every comment the before side can
+ *    see must still be there - and counts the gains as
+ *    `x6:commentTextsGained`. Making it symmetric needs `station_comments` on
+ *    the wire, which `ProjectIpc` does not put there.
+ *
+ * 6. OPEN, and NEWLY REACHABLE rather than new. X5 DOES NOT CONVERGE ON naharon:
+ *    T2 != T3.
+ *
+ *        STALAGMIGHT_FUZZ_FIXTURE=naharon.stalx \
+ *          pnpm agent:scenario export-roundtrip-fuzz --seed 1 --iterations 8
+ *
+ *    X6 runs before X5 in the chain, so every earlier naharon run died at X6 and
+ *    X5 had never actually executed on this fixture. Closing findings 4 and 5
+ *    is what let it run, and it fails on the first pass.
+ *
+ *    WHAT IT LOOKS LIKE, and no more than that: T2 and T3 are the SAME SIZE
+ *    (401492 bytes) and diverge at offset 163869, where one `<SRVD>` block
+ *    carries `<AZ>1.1</AZ>` in T2 and `<AZ>246.3</AZ>` in T3, with different
+ *    `<CL>` colours. Identical length with a different shot at a position is a
+ *    REORDERING or a re-partition, not a content change - the same shots in a
+ *    different arrangement.
+ *
+ *    That is what X5 exists to catch and the claim it makes is deliberately
+ *    strong: T1 vs T2 may differ (documented lossiness, plus branch
+ *    fragmentation #412), but both sides of T2 vs T3 have been through a full
+ *    trip already, so a remaining difference is one the trip INTRODUCES every
+ *    time. If section partitioning is not a fixed point after one pass, a user
+ *    who round-trips twice gets a differently-shaped project each time.
+ *
+ *    NOT ROOT-CAUSED. The next step is to diff T2 against T3 as parsed
+ *    structures rather than bytes and find whether the section BOUNDARIES or
+ *    only their ORDER moved, then whether T3 -> T4 settles or keeps churning -
+ *    the difference between "converges at n=2" and "never converges".
+ *
+ *    The oracle stays ASSERTING and naharon stays RED on this alone. The
+ *    synthetic fixture is green, so the matrix's `naharon.stalx` cells stay red;
+ *    use `--fixtures fractal_plant_iter3.stalx` for a green matrix meanwhile.
  *
  * ## Observations that are NOT findings
  *
@@ -426,6 +438,7 @@ import {
   ExportOracleError,
   finalizeExportPath,
   multisetDelta,
+  strictShotKey,
   naturalExtension,
   PROJECT_OWNED_SHAPES,
   type ExportAttempt,
@@ -650,6 +663,12 @@ async function readProjectDigest(ctx: ScenarioContext): Promise<ProjectDigest> {
         }
         addComment(shot.comment);
         shots.push({
+          // Carried but NOT keyed: shotKey reads only the geometry fields, so
+          // this is inert for the oracle and is what lets a failure be matched
+          // shot-by-shot by identity rather than by length. 5a is what made it
+          // useful - before it, a round trip re-minted the uuids that matter.
+          // (No backticks: this is inside a template literal.)
+          uuid: uuid,
           length: Number(shot.length) || 0,
           azimuthIn: Number(shot.azimuth_in) || 0,
           depthIn: Number(shot.depth_in) || 0,
@@ -1288,7 +1307,24 @@ export const exportRoundtripFuzz: Scenario = {
         checkShotMultiset(
           {
             deltas: multisetDelta(original.shots, afterFirst.shots),
-            commentDeltas: commentMultisetDelta(original.commentParts, afterFirst.commentParts),
+            // LOSSES ONLY, and the asymmetry is forced by what this tier can
+            // see rather than chosen to quiet a red.
+            //
+            // `ProjectIpc` (`models/project.rs:585-602`) serializes 16 fields
+            // and `station_comments` is not one of them, so the BEFORE side is
+            // blind to every station comment - naharon's 74 of them, against 2
+            // shot comments. The exporter co-encodes station comments into the
+            // shot comment, so after a trip that keeps comments on shots they
+            // land somewhere the digest CAN see, and 66 texts read as gained.
+            // A gain is not data loss and there is no evidence behind asserting
+            // it; a LOSS is exactly the claim the oracle is for, and every
+            // comment the before side can see is still asserted to survive.
+            //
+            // Making this symmetric needs station comments on the wire. Until
+            // then the gain count is a metric.
+            commentDeltas: commentMultisetDelta(original.commentParts, afterFirst.commentParts).filter(
+              (delta) => delta.before > delta.after,
+            ),
             uuidsBefore: original.uuids,
             uuidsAfter: afterFirst.uuids,
             countBefore: original.shots.length,
@@ -1299,6 +1335,16 @@ export const exportRoundtripFuzz: Scenario = {
         ),
       );
       ctx.metric('x6:multisetIntact');
+      const commentGains = commentMultisetDelta(original.commentParts, afterFirst.commentParts).filter(
+        (delta) => delta.after > delta.before,
+      );
+      if (commentGains.length > 0) ctx.metric('x6:commentTextsGained', commentGains.length);
+      // The re-hangs the key deliberately does NOT see, kept countable so a
+      // change in how often the exporter moves a branch's datum shows up in the
+      // metrics rather than silently not mattering. `clampedDescent` states why
+      // this is a metric and not an assertion.
+      const datumShifts = multisetDelta(original.shots, afterFirst.shots, strictShotKey);
+      if (datumShifts.length > 0) ctx.metric('x6:absoluteDepthShifts', datumShifts.length);
 
       // X6b: importing the SAME file again must not leave two shots on one
       // uuid. The second import carries the first's foreign uuids verbatim, so

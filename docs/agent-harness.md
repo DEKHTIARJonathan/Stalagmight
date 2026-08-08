@@ -692,8 +692,16 @@ reversal (X6's key is now direction-agnostic, which is a fact about the key),
 exporter re-hanging branch depths to fit the format - which is designed,
 tested behaviour and needs a product call rather than an oracle change.
 
-So the matrix's `naharon.stalx` cells stay red on that last family alone. Use
-`--fixtures fractal_plant_iter3.stalx` for a green matrix until it is decided.
+All three are now closed - the depth family turned out to be the exporter
+re-hanging a branch's datum while preserving every measurement (matched by uuid:
+of 24 shots, length changed on 0, azimuth on 0, LRUD on 0, descent on 1, and
+that one shot's source descent exceeds its own tape), so X6 keys the descent
+rather than the absolute depths and counts the re-hangs as a metric.
+
+Closing them let X5 run on that fixture for the first time, and finding 6
+records that it does not converge there: T2 and T3 are the same size with the
+shots in a different arrangement. So the matrix's `naharon.stalx` cells stay red
+on that alone - use `--fixtures fractal_plant_iter3.stalx` for a green matrix.
 
 ### Three tiers, and which one gates CI
 

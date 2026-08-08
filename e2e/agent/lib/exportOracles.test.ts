@@ -35,6 +35,7 @@ import {
   parseCsvRows,
   PATH_SHAPES,
   shotKey,
+  strictShotKey,
   type ExportAttempt,
   type ModeSnapshot,
   type OptionSnapshot,
@@ -628,6 +629,48 @@ describe('X6 shot multiset', () => {
     expect(shotKey(out)).not.toBe(
       shotKey(shot({ azimuthIn: 270, depthIn: 8, depthOut: 5, lrud: [1, 2, 4, 3] })),
     );
+  });
+
+  it('keys the DESCENT, not the absolute depths - a datum re-hang is invisible', () => {
+    // `enforce_ariane_geometry_invariants` re-hangs a branch whose junction
+    // depth Ariane cannot represent and moves the rest of the branch with it,
+    // so a round trip may change where a branch HANGS. It may not change what a
+    // shot MEASURES. Measured on the survey that found this: of the 24 shots
+    // whose depths moved, length changed on 0, azimuth on 0, LRUD on 0.
+    expect(shotKey(shot({ depthIn: 1, depthOut: 3 }))).toBe(shotKey(shot({ depthIn: 11, depthOut: 13 })));
+    expect(shotKey(shot({ depthIn: 1, depthOut: 3 }))).toBe(shotKey(shot({ depthIn: -4, depthOut: -2 })));
+  });
+
+  it('still fails a shot whose DESCENT changed within its tape', () => {
+    // The half the transform does not get to touch.
+    expect(shotKey(shot({ length: 5, depthIn: 1, depthOut: 3 }))).not.toBe(
+      shotKey(shot({ length: 5, depthIn: 1, depthOut: 4 })),
+    );
+    expect(shotKey(shot({ length: 5, depthIn: 11, depthOut: 14 }))).not.toBe(
+      shotKey(shot({ length: 5, depthIn: 1, depthOut: 3 })),
+    );
+  });
+
+  it('clamps an IMPOSSIBLE source descent to the tape, so the clamp folds', () => {
+    // A 0.150 m tape carrying a 2.350 m depth change is not a survey the world
+    // contains; the exporter pins it to exactly -0.150. Both sides clamp to the
+    // same value, so the one shot on the fixture that hits this keys equal.
+    const impossible = shot({ length: 0.15, depthIn: 12.21, depthOut: 9.86 });
+    const pinned = shot({ length: 0.15, depthIn: 16.92, depthOut: 16.77 });
+    expect(shotKey(impossible)).toBe(shotKey(pinned));
+    // And the clamp is not a blanket excuse: a shot inside its tape is compared
+    // exactly, and one clamped to the OTHER end of the bound still differs.
+    expect(shotKey(impossible)).not.toBe(shotKey(shot({ length: 0.15, depthIn: 16.77, depthOut: 16.92 })));
+  });
+
+  it('strictShotKey keeps the absolute depths, so re-hangs stay countable', () => {
+    expect(strictShotKey(shot({ depthIn: 1, depthOut: 3 }))).not.toBe(
+      strictShotKey(shot({ depthIn: 11, depthOut: 13 })),
+    );
+    expect(multisetDelta([shot({ depthIn: 1, depthOut: 3 })], [shot({ depthIn: 11, depthOut: 13 })])).toEqual([]);
+    expect(
+      multisetDelta([shot({ depthIn: 1, depthOut: 3 })], [shot({ depthIn: 11, depthOut: 13 })], strictShotKey),
+    ).toHaveLength(2);
   });
 
   it('folds ONLY that equivalence - a real LRUD change still differs', () => {

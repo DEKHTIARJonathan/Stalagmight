@@ -867,6 +867,16 @@ function describeDifference(a: string, b: string): string {
 
 /** One shot, reduced to the GEOMETRY a round trip has to carry. */
 export interface ShotIdentity {
+  /**
+   * The shot's uuid, when it has one. CARRIED BUT NEVER KEYED.
+   *
+   * `shotKey` reads only the geometry below, so this cannot affect a verdict.
+   * It is here so a failure can be investigated shot-by-shot by IDENTITY rather
+   * than by guessing which vanished key pairs with which gained one - which is
+   * exactly how finding 5's families were told apart, and only possible at all
+   * because 5a made uuids survive the trip.
+   */
+  uuid?: string;
   length: number;
   azimuthIn: number;
   depthIn: number;
@@ -928,6 +938,22 @@ function lrudSentinel(value: number | null): string {
  * (`commentMultisetDelta`), which asks the question that survives the move.
  */
 export function shotKey(shot: ShotIdentity): string {
+  return keyWith(shot, false);
+}
+
+/**
+ * The same shot keyed on its ABSOLUTE depths as well.
+ *
+ * Not an oracle - a metric. `shotKey` deliberately keys the descent rather than
+ * the depths (see `clampedDescent`), which makes a datum re-hang invisible to
+ * it; this keeps the re-hangs COUNTABLE so a change in how often the exporter
+ * moves a branch shows up in the metrics instead of silently not mattering.
+ */
+export function strictShotKey(shot: ShotIdentity): string {
+  return keyWith(shot, true);
+}
+
+function keyWith(shot: ShotIdentity, absoluteDepths: boolean): string {
   const n = (value: number | null): string => (value === null ? '-' : value.toFixed(3));
   const oriented = (s: ShotIdentity): string =>
     [
@@ -935,8 +961,8 @@ export function shotKey(shot: ShotIdentity): string {
       // one heading, and keying them apart would report a shot as lost and
       // gained for pointing due north.
       n(normalizeHeading(s.azimuthIn)),
-      n(s.depthIn),
-      n(s.depthOut),
+      n(clampedDescent(s)),
+      ...(absoluteDepths ? [n(s.depthIn), n(s.depthOut)] : []),
       s.lrud.map(lrudSentinel).join('/'),
     ].join('|');
   // DIRECTION-AGNOSTIC: a leg and the same leg walked the other way key equal.
@@ -944,6 +970,43 @@ export function shotKey(shot: ShotIdentity): string {
   const forward = oriented(shot);
   const backward = oriented(reciprocal(shot));
   return [n(shot.length), forward < backward ? forward : backward].join('|');
+}
+
+/**
+ * The shot's own DESCENT, pinned to its tape - what the export transform
+ * contracts to preserve, where the absolute depths are not.
+ *
+ * `enforce_ariane_geometry_invariants` (`export/tml.rs:1608`) does two things to
+ * geometry Ariane cannot represent, and its own test family names them:
+ * `a_junction_depth_discontinuity_is_re_hung_rather_than_exported_impossible`
+ * and `a_re_hang_moves_the_rest_of_the_branch_with_it` move a whole branch's
+ * DATUM, and `a_shot_exactly_on_the_bound_is_left_alone_and_one_past_it_is_
+ * clamped` pins a shot whose depth change exceeds its tape back onto the bound.
+ * So a round trip is entitled to change where a branch HANGS, and not what any
+ * shot MEASURES.
+ *
+ * That is exactly what this keys. Absolute depths are out (a re-hang moves
+ * them, by design, and `strictShotKey` keeps them countable); the descent is in,
+ * clamped to `[-length, +length]` so the one shot whose source descent is
+ * already impossible keys the same on both sides.
+ *
+ * MEASURED, ON THE SURVEY THAT FOUND THIS, matching all 532 shots BY UUID -
+ * which only 5a made possible. Of the 24 shots whose depths moved: length
+ * changed on 0, azimuth on 0, LRUD on 0, and descent on exactly 1 - a 0.150 m
+ * tape carrying a 2.350 m depth change, which is not a survey the world
+ * contains, and which the exporter pinned to exactly -0.150. Its clamp is the
+ * whole of that one difference. See finding 5 in `exportRoundtripFuzz.ts`.
+ *
+ * THIS IS NOT A TOLERANCE, and the difference is the same one `lrudSentinel`
+ * draws: a tolerance would be a threshold chosen to quiet a red. This asserts
+ * the property the transform contracts to preserve and drops the one it
+ * contracts to change - so a re-hang that altered a shot's descent, its tape or
+ * its heading is still a red, and the tests pin each of those.
+ */
+function clampedDescent(shot: ShotIdentity): number {
+  const descent = shot.depthOut - shot.depthIn;
+  const tape = Math.abs(shot.length);
+  return Math.max(-tape, Math.min(tape, descent));
 }
 
 /**
@@ -997,11 +1060,12 @@ export interface MultisetDelta {
 export function multisetDelta(
   before: readonly ShotIdentity[],
   after: readonly ShotIdentity[],
+  keyFn: (shot: ShotIdentity) => string = shotKey,
 ): MultisetDelta[] {
   const count = (shots: readonly ShotIdentity[]): Map<string, number> => {
     const out = new Map<string, number>();
     for (const shot of shots) {
-      const key = shotKey(shot);
+      const key = keyFn(shot);
       out.set(key, (out.get(key) ?? 0) + 1);
     }
     return out;
@@ -1103,8 +1167,9 @@ export function checkShotMultiset(
   if (args.deltas.length > 0) {
     lines.push(
       `    ${args.deltas.length} GEOMETRY key(s) differ ` +
-        `(length|azimuth_in|depth_in|depth_out|LRUD, with Ariane's 0.0 absent-sentinel folded ` +
-        `onto null - see docs/ariane-export.md#the-lrud-zeronull-collision):`,
+        `(length|azimuth|descent-clamped-to-the-tape|LRUD, direction-agnostic, with Ariane's ` +
+        `0.0 absent-sentinel folded onto null - see docs/ariane-export.md, and \`clampedDescent\` ` +
+        `for why the absolute depths are a metric rather than a key):`,
     );
     for (const delta of args.deltas.slice(0, 8)) {
       lines.push(`      ${delta.key}  x${delta.before} -> x${delta.after}`);
