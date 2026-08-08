@@ -127,6 +127,9 @@ export const CLICKABLE_TESTIDS: ReadonlySet<string> = new Set([
   // dirty-discard overlay
   'dirty-dialog-keep-editing',
   'dirty-dialog-discard',
+  // first-run modal. Declining is the only choice the fuzzer ever makes here:
+  // opting IN would point a fuzz run's telemetry at a real endpoint.
+  'telemetry-opt-in-no',
 ]);
 
 /**
@@ -257,15 +260,26 @@ const HELPERS = `
     el.disabled === true || el.hasAttribute('disabled') || el.getAttribute('aria-disabled') === 'true';
   const shown = (id) => isVisible(q(id));
   /**
-   * Cheap stability probe: no IPC, no full digest. Only the four wizard BUSY
-   * markers count as transient - the dmp-selection hash-settling window is left
-   * alone on purpose, because that window is what \`race-continue\` targets.
+   * Cheap stability probe: no IPC, no full digest.
+   *
+   * The four wizard BUSY markers, plus the wizard being MOUNTED-BUT-HIDDEN.
+   * That last one is \`DialogWrapper\`'s \`hidden\` prop, which
+   * \`DmpNewImportDialog\` sets while \`autoStartManualPlacementPending\` is true:
+   * for a frame or two the dialog is \`display:none\` and \`placementMode\` is not
+   * set yet, so the screen is neither a wizard phase nor a placement. Without it
+   * here the digest catches that gap and the S1 oracle reports an unknown screen
+   * for a transition the app is entitled to make. If it ever OUTLASTS the settle
+   * cap it is a genuine wedge, and S1 then says so.
+   *
+   * The dmp-selection hash-settling window is deliberately NOT waited for -
+   * that window is what \`race-continue\` exists to hit.
    */
   const busy = () =>
     shown('wizard-calculating') ||
     shown('wizard-importing-zero-datum') ||
     shown('wizard-early-importing') ||
-    shown('wizard-placing');
+    shown('wizard-placing') ||
+    (!!q('dmp-new-import-dialog') && !shown('dmp-new-import-dialog'));
   const marker = () => {
     const ui = window.__E2E_TEST__ && window.__E2E_TEST__.uiStore
       ? window.__E2E_TEST__.uiStore.getState()
@@ -489,64 +503,125 @@ export async function observeScreen(ctx: ScenarioContext, waitForSettle = true):
   );
 }
 
-/**
- * Arm a native file-dialog answer that no CLICK will trigger.
- *
- * `lib/controls.ts`'s `answerFileDialog` arms on a real trigger element's click,
- * which is the faithful path and is what the toolbar/global entry points use.
- * A keyboard chord has no trigger element, so the entry is armed directly and
- * `activeFileDialogTriggerTestId` set to the same synthetic id - the two fields
- * `takeTestFileDialogAnswer` matches on. Without this an unarmed picker falls
- * through to the real GTK chooser and hangs the webview.
- */
-export async function armFileDialog(
-  ctx: ScenarioContext,
-  kind: 'open' | 'save',
-  value: string | string[] | null,
-  triggerId: string,
-): Promise<string> {
-  const answerId = `fuzz-${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
-  const armed = await ctx.eval<boolean>(
-    `
-    const testApi = window.__E2E_TEST__;
-    const queue = testApi && testApi.fileDialogAnswers && testApi.fileDialogAnswers[args[0]];
-    if (!queue) return false;
-    if (queue.length > 0) throw new Error('a file dialog answer is already pending');
-    queue.push({ id: args[1], value: args[2], triggerTestId: args[3], armed: true });
-    testApi.activeFileDialogTriggerTestId = args[3];
-    return true;
-  `,
-    [kind, answerId, value, triggerId],
-  );
-  if (!armed) throw new Error('file dialog hooks are unavailable; start an E2E build');
-  return answerId;
+export interface DialogOutcome {
+  /** Did the trigger get clicked at all? */
+  performed: boolean;
+  reason: SkipReason | null;
+  /** Did the app's picker consume the answer within the settle budget? */
+  consumed: boolean;
+  digest: ImportScreenDigest;
 }
 
-/** Drop an armed answer that was never consumed, and say whether it was. */
-export async function disarmFileDialog(
+/**
+ * Answer a native file dialog, entirely IN PAGE.
+ *
+ * `lib/controls.ts`'s `answerFileDialog` does the same arming but clicks through
+ * WebDriver, whose actionability model is stricter than this bridge's - it also
+ * requires the element to be un-obscured at its centre point. That is a second,
+ * different definition of "can I click this", and the first time this scenario
+ * ran it produced a bare `still not clickable after 5000ms` because a first-run
+ * modal was covering the toolbar: no screen, no digest, nothing to shrink. Every
+ * click in this fuzzer therefore goes through ONE model - the digest's - and an
+ * unclickable trigger is a skip with a reason like every other impossible move.
+ *
+ * The arming is faithful to the production path: the entry goes in `armed:false`
+ * and a capture-phase, once-only click listener on the trigger sets `armed` and
+ * `activeFileDialogTriggerTestId`, exactly as `answerFileDialog` does. Arming
+ * eagerly would let an unrelated picker consume the answer.
+ *
+ * An UNCONSUMED answer is always removed again. `takeTestFileDialogAnswer`
+ * refuses to queue a second entry, so a leaked one would break every later
+ * import in the session - and under `fuzz-shrink`, which reuses one live session
+ * across ddmin candidates, it would poison every candidate after it.
+ */
+export async function answerFileDialogInPage(
   ctx: ScenarioContext,
+  triggerTestId: string,
   kind: 'open' | 'save',
-  answerId: string,
-  triggerId: string,
-): Promise<boolean> {
+  value: string | string[] | null,
+): Promise<DialogOutcome> {
+  return ctx.eval<DialogOutcome>(
+    `
+    const trigger = args[0];
+    const kind = args[1];
+    const value = args[2];
+    const spec = args[3];
+    const capMs = args[4];
+    ${HELPERS}
+
+    const testApi = window.__E2E_TEST__;
+    const queue = testApi && testApi.fileDialogAnswers && testApi.fileDialogAnswers[kind];
+    if (!queue) throw new Error('file dialog hooks are unavailable; start an E2E build');
+    if (queue.length > 0) throw new Error('a file dialog answer is already pending');
+
+    const el = q(trigger);
+    let reason = null;
+    if (!el) reason = 'absent';
+    else if (!isVisible(el) || isOff(el)) reason = 'not-actionable';
+
+    let consumed = false;
+    if (reason === null) {
+      const id = 'fuzz-' + Date.now() + '-' + Math.floor(Math.random() * 1e9);
+      const entry = { id: id, value: value, triggerTestId: trigger, armed: false };
+      queue.push(entry);
+      el.addEventListener('click', () => {
+        entry.armed = true;
+        testApi.activeFileDialogTriggerTestId = trigger;
+      }, { capture: true, once: true });
+      try {
+        dispatchClick(el, false, false);
+        const deadline = Date.now() + capMs;
+        for (;;) {
+          const seen = testApi.fileDialogConsumptions && testApi.fileDialogConsumptions[id];
+          if (seen === kind) { consumed = true; break; }
+          if (Date.now() >= deadline) break;
+          await new Promise((resolve) => setTimeout(resolve, 40));
+        }
+      } finally {
+        const index = queue.findIndex((candidate) => candidate.id === id);
+        if (index >= 0) queue.splice(index, 1);
+        if (testApi.activeFileDialogTriggerTestId === trigger) delete testApi.activeFileDialogTriggerTestId;
+        if (testApi.fileDialogConsumptions) delete testApi.fileDialogConsumptions[id];
+      }
+      await settle(capMs);
+    }
+
+    return {
+      performed: reason === null,
+      reason: reason,
+      consumed: consumed,
+      digest: await SCREEN.digest(spec),
+    };
+  `,
+    [triggerTestId, kind, value, screenSpec(), settleCapMs()],
+  );
+}
+
+/**
+ * Dismiss the first-run telemetry modal if it is up.
+ *
+ * It is rendered OUTSIDE `activeDialog` and covers the whole window, so until it
+ * is gone every click lands on its backdrop. Declining is the only choice this
+ * fuzzer ever makes: opting in would point a fuzz run's telemetry at a real
+ * endpoint. Returns true when it was there and is now gone.
+ */
+export async function dismissFirstRunModal(ctx: ScenarioContext): Promise<boolean> {
   return ctx.eval<boolean>(
     `
-    const testApi = window.__E2E_TEST__;
-    const consumed = testApi && testApi.fileDialogConsumptions
-      ? testApi.fileDialogConsumptions[args[1]] === args[0]
-      : false;
-    const queue = testApi && testApi.fileDialogAnswers ? testApi.fileDialogAnswers[args[0]] : null;
-    if (queue) {
-      const index = queue.findIndex((entry) => entry.id === args[1]);
-      if (index >= 0) queue.splice(index, 1);
+    const spec = args[0];
+    const capMs = args[1];
+    ${HELPERS}
+    if (!shown('telemetry-opt-in-dialog')) return false;
+    const decline = q('telemetry-opt-in-no');
+    if (!decline) throw new Error('the first-run telemetry modal is up with no telemetry-opt-in-no to decline it');
+    dispatchClick(decline, false, false);
+    await settle(capMs);
+    if (shown('telemetry-opt-in-dialog')) {
+      throw new Error('the first-run telemetry modal survived telemetry-opt-in-no');
     }
-    if (testApi && testApi.activeFileDialogTriggerTestId === args[2]) {
-      delete testApi.activeFileDialogTriggerTestId;
-    }
-    if (testApi && testApi.fileDialogConsumptions) delete testApi.fileDialogConsumptions[args[1]];
-    return consumed;
+    return true;
   `,
-    [kind, answerId, triggerId],
+    [screenSpec(), settleCapMs()],
   );
 }
 

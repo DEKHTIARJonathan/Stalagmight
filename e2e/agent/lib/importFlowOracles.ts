@@ -128,14 +128,37 @@ export function checkReceipt(claim: ReceiptClaim): void {
   }
 }
 
-/** F2. Nothing of the flow may outlive it. */
-export function checkResidue(digest: ImportScreenDigest, what: string): void {
+/**
+ * F2. Nothing of the flow may outlive it.
+ *
+ * `importContext` is asserted only for a COMPLETED import, and that asymmetry is
+ * the app's stated contract rather than a tolerance. Two source comments define
+ * it and they do not say the same thing about the two endings:
+ *
+ *   - `completeImportToSingleView` (`utils/saveFeedback.ts`): "This is also
+ *     where the import flow ENDS, so it is where `importContext` is dropped.
+ *     Left set, it outlives its flow." So a finished import MUST clear it, and
+ *     one that does not is a real defect - `saveAfterImport` reads the value,
+ *     and a stale 'new-project' makes a later import commit the user's unrelated
+ *     pending edits (#411).
+ *   - `routeOpenedFile` (`utils/openOrImport.ts`): "It has no auto-reset, so a
+ *     value left behind by a previous flow - abandoned parse, CANCELLED DIALOG,
+ *     or a completed import - would decide the NEXT one ... Reset it here: this
+ *     router is the single entry point of every import flow." So a cancel
+ *     leaving it set is known, and is handled at the next flow's entry.
+ *
+ * Asserting null after a cancel would therefore report a bug the app has
+ * explicitly designed around. It is counted instead, by the caller.
+ */
+export function checkResidue(digest: ImportScreenDigest, shape: FlowShape, what: string): void {
   const wrong: string[] = [];
   if (digest.dialog !== null) wrong.push(`activeDialog=${JSON.stringify(digest.dialog)}`);
   if (digest.placement) wrong.push('placementMode is still set');
-  if (digest.ctx !== null) wrong.push(`importContext=${JSON.stringify(digest.ctx)}`);
   if (digest.importInProgress) wrong.push('isImportInProgress is still true');
   if (digest.phase !== null) wrong.push(`dmpImportWizardPhase=${JSON.stringify(digest.phase)}`);
+  if (shape === 'imported' && digest.ctx !== null) {
+    wrong.push(`importContext=${JSON.stringify(digest.ctx)} after a COMPLETED import`);
+  }
   if (wrong.length === 0) return;
   fail(`F2 RESIDUE: ${what} left import state behind`, wrong);
 }

@@ -57,6 +57,7 @@ export const IN_FLOW_SCREENS: ReadonlySet<ScreenId> = new Set<ScreenId>([
   'as-new-project',
   'orphan-placement',
   'error',
+  'first-run',
 ]);
 
 /**
@@ -77,6 +78,9 @@ export const TESTID_INVENTORY: readonly string[] = [
   // --- entry points ---------------------------------------------------------
   'toolbar-import-button',
   'global-open-import-button',
+  // --- first-run modal (rendered OUTSIDE activeDialog; covers everything) ----
+  'telemetry-opt-in-dialog',
+  'telemetry-opt-in-no',
   // --- dmp-select -----------------------------------------------------------
   'dmp-selection-dialog',
   'select-all-button',
@@ -218,6 +222,7 @@ export const ADVANCE_MOVE: Readonly<Partial<Record<ScreenId, string>>> = {
   'as-new-project': 'import-as-new-project-cancel',
   'orphan-placement': 'orphan-close',
   error: 'error-dialog-close',
+  'first-run': 'telemetry-opt-in-no',
 };
 
 /**
@@ -251,8 +256,23 @@ export const ESCAPE_PATH: Readonly<Record<ScreenId, readonly string[]>> = {
   'as-new-project': ['import-as-new-project-cancel', 'key:Escape'],
   'orphan-placement': ['orphan-close', 'key:Escape'],
   error: ['error-dialog-close', 'key:Escape'],
+  'first-run': ['telemetry-opt-in-no'],
   unknown: ['key:Escape'],
 };
+
+/**
+ * Screens whose affordances are NOT testids, and which the WEDGE oracle
+ * therefore cannot judge.
+ *
+ * `map-placement` is driven by clicking the MAP and by Escape; the wizard behind
+ * it is `display:none` (DialogWrapper's `hidden` prop) while a placement is
+ * running, so every testid in the inventory is legitimately non-actionable. A
+ * wedge oracle that counted that as a dead end would fire on the app working
+ * exactly as designed. A placement that genuinely cannot be left is still caught
+ * - by the ESCAPE oracle, which requires Escape to reach `idle` inside its
+ * budget.
+ */
+export const WEDGE_EXEMPT_SCREENS: ReadonlySet<ScreenId> = new Set<ScreenId>(['map-placement']);
 
 /** Steps on one screen before the walk plays that screen's advancing move. */
 export const FORCE_ADVANCE_AT = 8;

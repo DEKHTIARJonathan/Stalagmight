@@ -75,6 +75,16 @@ export type ScreenId =
   | 'as-new-project'
   | 'orphan-placement'
   | 'error'
+  /**
+   * The first-run telemetry opt-in modal.
+   *
+   * Not part of the import flow, and in the table for one reason: it is a
+   * top-level modal rendered OUTSIDE `activeDialog`, so a screen classifier that
+   * only consulted the store would call a covered screen `idle` and every click
+   * after it would land on the backdrop. That is exactly what happened the first
+   * time this scenario ran against a fresh profile.
+   */
+  | 'first-run'
   /** A visible dialog this build's table does not name. The scenario FAILS. */
   | 'unknown';
 
@@ -145,6 +155,16 @@ export interface ImportScreenDigest {
   receipt: ReceiptDigest | null;
   /** Is a `DialogWrapper` discard-confirm overlay up? */
   dirty: boolean;
+  /**
+   * Why the screen came out `unknown` or `wiz-blank`: every dialog root and
+   * wizard phase marker, tagged present / hidden / absent.
+   *
+   * Empty on every other screen. It exists because the first two unclassifiable
+   * states this scenario met were indistinguishable from the failure message
+   * alone - a dialog that is mounted but `display:none` and one whose
+   * `activeDialog` is set with no component mounted at all read identically.
+   */
+  why: string;
 }
 
 /** What the caller wants observed. Passed in so the lists live in TypeScript. */
@@ -219,7 +239,11 @@ export async function computeImportScreenDigest(
   // generators at it.
   const wizardUp = shown('dmp-new-import-dialog');
   let screen: string;
-  if (shown('cancel-confirm-dialog') || shown('back-confirm-dialog')) screen = 'wiz-confirm';
+  // FIRST, and above everything: a modal rendered outside `activeDialog` that
+  // covers the whole window. A classifier that consulted only the store would
+  // call this `idle` and every later click would land on its backdrop.
+  if (shown('telemetry-opt-in-dialog')) screen = 'first-run';
+  else if (shown('cancel-confirm-dialog') || shown('back-confirm-dialog')) screen = 'wiz-confirm';
   else if (shown('dmp-selection-dialog')) screen = 'dmp-select';
   else if (shown('zero-datum-selection-dialog')) screen = 'zero-datum-select';
   else if (shown('zero-datum-config-dialog')) screen = 'zero-datum-config';
@@ -338,6 +362,54 @@ export async function computeImportScreenDigest(
     const index = rowIndexOf(cellNodes[i], 'shot-editor-cell-');
     if (index >= 0) selected[String(index)] = true;
   }
+  // Diagnostics, only for the two screens a reader cannot otherwise explain.
+  let why = '';
+  if (screen === 'unknown' || screen === 'wiz-blank') {
+    const probes = [
+      'dmp-new-import-dialog',
+      'dmp-selection-dialog',
+      'zero-datum-selection-dialog',
+      'zero-datum-config-dialog',
+      'new-project-for-import-dialog',
+      'import-receipt-dialog',
+      'orphan-placement-dialog',
+      'error-dialog',
+      'wizard-importing-zero-datum',
+      'wizard-calculating',
+      'wizard-early-importing',
+      'wizard-suggestion',
+      'wizard-no-suggestions',
+      'wizard-manual-placing',
+      'wizard-placing',
+      'wizard-all-placed',
+      'wizard-error',
+      'wizard-progress',
+    ];
+    const parts: string[] = [];
+    for (let i = 0; i < probes.length; i++) {
+      const id = probes[i] as string;
+      const node = one(id);
+      if (!node) continue;
+      parts.push(id + (visible(node) ? ':visible' : ':hidden'));
+    }
+    // The measurement, not just the verdict: "hidden" is three different states
+    // (`display:none`, `visibility:hidden`, a zero-area rect) and they have
+    // different causes.
+    for (let i = 0; i < probes.length; i++) {
+      const id = probes[i] as string;
+      const node = one(id) as HTMLElement | null;
+      if (!node || visible(node)) continue;
+      const style = getComputedStyle(node);
+      const rect = node.getBoundingClientRect();
+      parts.push(
+        `[${id} display=${style.display} visibility=${style.visibility} ` +
+          `${Math.round(rect.width)}x${Math.round(rect.height)}]`,
+      );
+    }
+    parts.push(`viewport=${window.innerWidth}x${window.innerHeight}`);
+    why = parts.length > 0 ? parts.join(' ') : '(no known dialog root in the DOM at all)';
+  }
+
   const selRows = Object.keys(selected)
     .map((key) => Number(key))
     .sort((a, b) => a - b);
@@ -419,6 +491,7 @@ export async function computeImportScreenDigest(
     shots,
     receipt,
     dirty: byPrefix('dirty-dialog-').length > 0,
+    why,
   };
 }
 

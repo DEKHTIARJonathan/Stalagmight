@@ -109,7 +109,7 @@ import * as path from 'path';
 import { mulberry32, type Scenario, type ScenarioContext } from './framework';
 import { DEFAULT_FIXTURE, disableAutoSave, loadFixtureWithoutUndoHistory } from './common';
 import { ORACLE_GLOBAL, oracleInjectionSource } from '../lib/fuzzOracleCore';
-import { answerFileDialog, mapClick } from '../lib/controls';
+import { mapClick } from '../lib/controls';
 import {
   defaultTracePath,
   readTrace,
@@ -127,6 +127,7 @@ import {
   checkResidue,
   checkRoundtripState,
   checkTempFiles,
+  ImportOracleError,
   leftoverTempNames,
   receiptClaimFrom,
   type FlowBounds,
@@ -139,9 +140,12 @@ import {
   ESCAPE_PATH,
   isEscaped,
   progressMode,
+  WEDGE_EXEMPT_SCREENS,
   type ScreenId,
 } from './importDialogModel';
 import {
+  answerFileDialogInPage,
+  dismissFirstRunModal,
   injectScreenDigest,
   observeScreen,
   routeFile,
@@ -430,23 +434,27 @@ export const importDialogFuzz: Scenario = {
             if (!routed) fail('the E2E routeOpenedFile hook is missing; rebuild with VITE_E2E=1');
             performed = true;
             if (record) recorder.record({ kind: 'route', rel, label: move.label });
+            digest = await observeScreen(ctx);
           } else {
-            await ctx.exclusive(() => answerFileDialog(ctx.browser, live.trigger, 'open', absolute));
-            performed = true;
-            if (record) {
+            const answered = await answerFileDialogInPage(ctx, live.trigger, 'open', absolute);
+            performed = answered.performed;
+            skip = answered.reason;
+            digest = answered.digest;
+            if (performed && !answered.consumed) ctx.metric('dialogAnswerUnconsumed');
+            if (record && performed) {
               recorder.record({ kind: 'fileDialog', trigger: live.trigger, dialog: 'open', rel, label: move.label });
             }
           }
-          digest = await observeScreen(ctx);
         }
       } else if (move.kind === 'cancelDialog') {
         const live = move;
-        await ctx.exclusive(() => answerFileDialog(ctx.browser, live.trigger, 'open', null));
-        performed = true;
-        if (record) {
+        const answered = await answerFileDialogInPage(ctx, live.trigger, 'open', null);
+        performed = answered.performed;
+        skip = answered.reason;
+        digest = answered.digest;
+        if (record && performed) {
           recorder.record({ kind: 'fileDialog', trigger: live.trigger, dialog: 'open', rel: null, label: move.label });
         }
-        digest = await observeScreen(ctx);
       } else if (move.kind === 'mapClick') {
         const live = move;
         try {
@@ -502,7 +510,7 @@ export const importDialogFuzz: Scenario = {
       if (digest.screen === 'unknown') {
         fail(
           "S1 UNKNOWN SCREEN: a dialog is up that this build's screen table does not name",
-          `  activeDialog=${JSON.stringify(digest.dialog)} after: ${move.label}`,
+          `  activeDialog=${JSON.stringify(digest.dialog)} after: ${move.label}\n  dom: ${digest.why}`,
         );
       }
       if (digest.inv.length > 0) {
@@ -517,7 +525,7 @@ export const importDialogFuzz: Scenario = {
           `  after: ${move.label}\n  error: ${digest.err ?? '(no text)'}`,
         );
       }
-      if (digest.screen !== 'idle' && actionableCount(digest) === 0) {
+      if (digest.screen !== 'idle' && !WEDGE_EXEMPT_SCREENS.has(digest.screen) && actionableCount(digest) === 0) {
         fail(
           'S5 WEDGE: a non-idle screen with no actionable control anywhere in the inventory',
           `  screen=${digest.screen} activeDialog=${JSON.stringify(digest.dialog)} after: ${move.label}`,
@@ -548,6 +556,24 @@ export const importDialogFuzz: Scenario = {
         }
       }
       if (digest.undo >= 0) lastUndoDepth = digest.undo;
+    };
+
+    /**
+     * Run a FLOW oracle through `fail`.
+     *
+     * The oracles in `lib/importFlowOracles.ts` throw on their own, which is
+     * right - they are the contract - but a raw throw loses the three things
+     * that make a failure actionable: the `reproduce:` line, the tail of moves
+     * that produced it, and the dropped trace. Every F-check goes through here
+     * so a flow failure reads exactly like a step failure.
+     */
+    const guarded = <T>(what: () => T): T => {
+      try {
+        return what();
+      } catch (err) {
+        if (err instanceof ImportOracleError) fail(err.message);
+        throw err;
+      }
     };
 
     /**
@@ -716,6 +742,11 @@ export const importDialogFuzz: Scenario = {
 
     await ctx.eval<boolean>(`${oracleInjectionSource()}\nreturn true;`);
     await injectScreenDigest(ctx);
+    // A fresh profile opens behind the first-run telemetry modal, which is
+    // rendered outside `activeDialog` and covers the toolbar. Clear it once here
+    // rather than spending a flow on it; the model still knows the screen, so a
+    // reappearance mid-run is handled rather than mistaken for `idle`.
+    if (await dismissFirstRunModal(ctx)) ctx.setMetric('dismissedFirstRunModal', 1);
 
     /**
      * WRITER/PARSER DRIFT DETECTOR.
@@ -803,7 +834,7 @@ export const importDialogFuzz: Scenario = {
           if (digest.screen !== 'idle') leftIdle = true;
           if (digest.receipt && receipt === null) {
             receipt = receiptClaimFrom(digest);
-            if (receipt) checkReceipt(receipt);
+            if (receipt) guarded(() => checkReceipt(receipt as ReceiptClaim));
           }
           if (digest.undo > before.undoDepth) sawCommit = true;
         };
@@ -924,12 +955,15 @@ export const importDialogFuzz: Scenario = {
         ctx.metric('flows');
 
         const what = `flow ${flow + 1} of episode ${episode + 1}`;
-        checkResidue(digest, what);
-        checkTempFiles(before, after, what);
-
         const shape: FlowShape = sawCommit || receipt !== null ? 'imported' : 'cancelled';
         ctx.metric(`flowShape:${shape}`);
-        if (receipt) checkAccounting(receipt, before, after);
+        guarded(() => checkResidue(digest, shape, what));
+        guarded(() => checkTempFiles(before, after, what));
+        // Counted, not asserted, and only for a CANCELLED flow: see
+        // `checkResidue` for the two source comments that make that asymmetry
+        // the app's contract rather than a tolerance.
+        if (digest.ctx !== null) ctx.metric(`residualImportContext:${digest.ctx}`);
+        if (receipt) guarded(() => checkAccounting(receipt as ReceiptClaim, before, after));
 
         // F1 needs a flow whose only history effect was the import itself, and
         // whose project did not change identity underneath it. An undo/redo/save
@@ -946,13 +980,15 @@ export const importDialogFuzz: Scenario = {
         } else if (before.undoDepth < 0 || after.undoDepth < 0) {
           ctx.metric('f1Skipped:noProject');
         } else {
-          const pushed = checkPushed(shape, before, after, what);
+          const pushed = guarded(() => checkPushed(shape, before, after, what));
           ctx.metric(`f1Pushed:${shape}:${pushed}`);
           if (pushed > 0) {
             for (let i = 0; i < pushed; i += 1) await ctx.callAction('project', 'undo', []);
-            checkRoundtripState('pre-flow', before.snapshot, await canonicalNow(true), `undoing ${what}`);
+            const unwound = await canonicalNow(true);
+            guarded(() => checkRoundtripState('pre-flow', before.snapshot, unwound, `undoing ${what}`));
             for (let i = 0; i < pushed; i += 1) await ctx.callAction('project', 'redo', []);
-            checkRoundtripState('post-flow', after.snapshot, await canonicalNow(true), `redoing ${what}`);
+            const rewound = await canonicalNow(true);
+            guarded(() => checkRoundtripState('post-flow', after.snapshot, rewound, `redoing ${what}`));
             ctx.metric('f1Roundtrips');
           }
         }
@@ -968,7 +1004,10 @@ export const importDialogFuzz: Scenario = {
       if (closed.hasProject) residue.push('a project is still open');
       if (closed.dialog !== null) residue.push(`activeDialog=${JSON.stringify(closed.dialog)}`);
       if (closed.placement) residue.push('placementMode is still set');
-      if (closed.ctx !== null) residue.push(`importContext=${JSON.stringify(closed.ctx)}`);
+      // NOT importContext. `closeProject` does not touch it and is not meant
+      // to: `routeOpenedFile` resets it at the entry of every import flow, and
+      // `checkResidue` cites the two source comments that make that the
+      // contract. Counted above per flow, asserted only for a completed import.
       if (residue.length > 0) {
         fail(`E1 TEARDOWN: episode ${episode + 1} did not close cleanly`, residue.map((line) => `  ${line}`).join('\n'));
       }
