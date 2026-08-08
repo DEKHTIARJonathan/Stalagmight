@@ -3,6 +3,9 @@ import { useTranslation } from 'react-i18next';
 import { listen } from '@tauri-apps/api/event';
 import { saveDialog } from '../../utils/fileDialogs';
 import { useProjectStore } from '../../store/projectStore';
+import { useUIStore } from '../../store/uiStore';
+import { TOAST_KEYS } from '../../utils/toastKeys';
+import { getErrorMessage } from '../../utils/ipc';
 import { Button } from '../common/Button';
 import { Select } from '../common/Select';
 import { AlertDialog } from './AlertDialog';
@@ -64,6 +67,7 @@ export default function ExportControls({
 }: ExportControlsProps) {
   const { project, exportCsv, exportJson, exportTml, exportImage, getAnchoredSectionIds } =
     useProjectStore();
+  const showToast = useUIStore((s) => s.showToast);
   const { t } = useTranslation();
 
   const [isExporting, setIsExporting] = useState(false);
@@ -135,7 +139,24 @@ export default function ExportControls({
               }
             }
           } catch (error) {
-            console.error('Failed to check zero-datum coverage before TML export:', error);
+            // Deliberately LOG-ONLY, and deliberately not the failure toast below.
+            //
+            // This check is informational and fails OPEN: the export continues
+            // and produces exactly the file the user asked for, so an `error`
+            // toast here would report a failure that did not happen
+            // (docs/notifications.md: pick the severity honestly, one event one
+            // surface). What is actually lost is a notice the user could have
+            // dismissed and continued past anyway, which lands on "user-relevant
+            // at all? no -> log only" in that document's decision tree.
+            //
+            // Contrast MapCanvas's `ANCHORED_IDS_ERROR` toast on the SAME IPC:
+            // there the failure fails CLOSED and blocks Move Segment, so it
+            // does change what the user can do, and it says so.
+            console.error(
+              'Failed to check zero-datum coverage before TML export; ' +
+                'skipping the unanchored-sections notice and exporting anyway:',
+              error,
+            );
           }
         }
 
@@ -246,6 +267,19 @@ export default function ExportControls({
       }
     } catch (e) {
       console.error('Export failed:', e);
+      // A failed export used to be console-only, so the dialog just sat there
+      // un-greyed and the panel did nothing at all - indistinguishable from
+      // "the file was written". Every reachable refusal arrives here: the
+      // backend's "Cannot export over the open project file", `export_png`'s
+      // DPI/size bails, a `Tree::from_str` parse failure, and any I/O error.
+      //
+      // Toast rather than a dialog, per docs/notifications.md's tree: the
+      // condition is not ongoing, nothing must be decided before continuing,
+      // and the outcome is invisible where the user is looking. `error` kind,
+      // because it failed and will not self-heal. The backend message is
+      // preferred over the generic string for the same reason ProfileChart
+      // prefers it - it names which of those refusals happened.
+      showToast(getErrorMessage(e, t('dialogs.export.failed')), TOAST_KEYS.EXPORT_FAILED, 'error');
       if (isMountedRef.current) {
         setExporting(false);
         setExportProgress(null);
