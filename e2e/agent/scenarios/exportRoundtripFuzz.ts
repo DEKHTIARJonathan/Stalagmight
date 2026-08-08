@@ -195,29 +195,61 @@
  *    Found on the FIRST run against a fixture other than the default. X6 on a
  *    532-shot cave, exported to `.tmlu` and imported into a fresh project:
  *
- *      a. 78 of 532 shot uuids do not come back, and 78 new ones appear -
- *         a clean re-mint, not a loss (the count is identical and X5 still
- *         converges raw). `docs/ariane-import.md` now records that the importer
- *         PRESERVES the file's uuids subject to a shape check
- *         (`foreign_shot_uuid`: non-empty, <= 128 chars, no XML-unexportable
- *         character), so the question is which of those 78 the exporter emitted
- *         in a shape the reader then rejected - `remint_duplicate_uuids` firing
- *         on export is the obvious first suspect, and it would mean this cave
- *         holds 78 cross-section duplicates (legal: uniqueness is per-section).
- *      b. every shot whose LRUD is `0/0/0/0` comes back `null/null/null/null`.
- *         542 geometry keys differ and the overwhelming majority are exactly
- *         that pair - the SAME length, azimuth and depths with the LRUD column
- *         flipped. Zero and absent are different facts about a passage ("I
- *         measured it and it is zero" vs "I did not measure it"), and one of
- *         the two ends of this trip conflates them.
+ *      a. THE EXPORTER OMITS THE UUID ON THE REVERSED PRE-ZERO-DATUM LEG.
+ *         Measured, not inferred. In the fixture's own database all 532 shots
+ *         have a uuid, all 532 are DISTINCT project-wide, and the longest is 36
+ *         characters - so neither `shot_export_uuid`'s absent-uuid mint
+ *         (`export/tml.rs:556-561`) nor `remint_duplicate_uuids` (`:588-596`)
+ *         can fire, and neither is involved. The exported `.tmlu` holds 538
+ *         `<SRVD>` blocks of which only 454 carry a `<UU>` element; the 84
+ *         without are 1 START, 5 CLOSURE, 74 REAL and 4 VIRTUAL. START and
+ *         CLOSURE are synthetic and have no project shot behind them, so
+ *         74 + 4 = exactly the 78. The file contains ZERO uuids that are not in
+ *         the database and ZERO repeats, which rules out any export-side mint.
+ *         Those 78 come from the three `uuid: None` constructors at
+ *         `export/tml.rs:793`, `:931` and `:996` - `reverse_shots` / `rev_shots`,
+ *         the reversed "(pre-zero-datum)" leg, whose `shot_type` is
+ *         `if shot.kind.is_virtual() { VIRTUAL } else { REAL }`, which is the
+ *         74/4 split. The writer says so at `:390-397`: "Only emitted for real
+ *         forward shots (the synthesized START/CLOSURE/leg shots carry none)".
+ *         The re-mint therefore happens on IMPORT and correctly:
+ *         `foreign_shot_uuid` gets nothing, and `Shot::with_uuid` falls back to
+ *         a fresh one. The question is whether a reversed leg should keep the
+ *         identity of the shot it reverses.
+ *      b. THE ZERO/NULL SENTINEL COLLISION, and it is per-FIELD. Export writes
+ *         `shot.left.unwrap_or(0.0)` into an `f64` (`export/tml.rs:744-747` and
+ *         its two siblings) because Ariane's format has no null; import maps any
+ *         field with `abs() < f64::EPSILON` back to `None`
+ *         (`parsers/tml/mod.rs:1908-1914`, `lrud_opt`, applied to each of L, R,
+ *         U and D independently). So null -> 0.0 -> null is lossless and
+ *         MEASURED-ZERO -> 0.0 -> null is not. Direction confirmed from the
+ *         database: naharon holds 261 all-null shots and 271 all-zero shots and
+ *         NO shot with a non-zero LRUD, so the originals are measured zeros and
+ *         it is the import that nulls them. 271 x 2 = 542, which is exactly the
+ *         geometry-key count X6 reported - one key vanishing and one appearing
+ *         per affected shot.
+ *
+ *    THE FINDING IS EXACTLY THESE TWO SEMANTICS AND NOTHING ELSE. That 542 is
+ *    2 x 271 accounts for every geometry key, so length, azimuth and both depths
+ *    round-trip perfectly on all 532 shots; the 261 all-null shots round-trip
+ *    perfectly too; and X6's comment multiset did not fire at all, so every
+ *    comment survived. X5 still converges on RAW bytes.
+ *
+ *    NEITHER HALF WOULD GO GREEN UNDER A NARROWER ORACLE. A uuid check that
+ *    only asserted preservation for shots holding a unique uuid in the original
+ *    would exclude nothing here - all 532 qualify - so all 78 stay red. And
+ *    treating measured-zero -> null as a documented sentinel collision would
+ *    take the LRUD half green and leave the uuid half red on its own.
  *
  *    NOT FIXED HERE, and flagged rather than quietly tolerated. Both halves are
  *    format-semantics questions that want a decision in `docs/ariane-export.md`
- *    and `ariane-import.md`'s lossiness tables before code moves, and (b) in
- *    particular could equally be fixed on the writer or the reader. The oracle
- *    is deliberately left ASSERTING: the default fixture is green, so this
- *    stays visible as a red on the fixture that shows it rather than being
- *    absorbed by a tolerance.
+ *    and `ariane-import.md`'s lossiness tables before code moves: (a) is "does a
+ *    reversed leg keep its shot's identity", and (b) is "is Ariane's 0.0 a null
+ *    or a measurement" - which could equally be answered on the writer (emit
+ *    nothing, or a distinguishable sentinel, for an unmeasured LRUD) or on the
+ *    reader (stop nulling zeros). The oracle is deliberately left ASSERTING:
+ *    the default fixture is green, so this stays visible as a red on the
+ *    fixture that shows it rather than being absorbed by a tolerance.
  *
  *    CONSEQUENCE FOR THE MATRIX: `pnpm agent:fuzz-matrix --scenario
  *    export-roundtrip-fuzz` sweeps EVERY `.stalx` under `e2e/fixtures/`, so its
