@@ -681,12 +681,18 @@ fn undo_of_create_shot_in_an_anchored_loop_succeeds() {
 /// both refusals intact.
 ///
 /// Both are exercised, because bug 6's write-up quoted only one and the fuzzer
-/// hits the other more often. The strategy is what separates them: a
-/// `ClosureStrategy::Move` closure is created `is_aligned`
-/// (`models/project/mutations.rs`), which rigidifies the loop, so both endpoints
-/// of a shot on it reach the datum and the shot is FROZEN; the default `Batch`
-/// closure is not aligned, so the shot is not frozen and the shift-blocked
-/// loop/datum pair behind the frozen check is what refuses.
+/// hits the other more often. ALIGNMENT is what separates them: an aligned
+/// closure rigidifies the loop, so both endpoints of a shot on it reach the
+/// datum and the shot is FROZEN; an unaligned one leaves the shot movable, and
+/// the shift-blocked loop/datum pair behind the frozen check is what refuses.
+///
+/// The `Move` row snaps `(b, 1)` onto the datum station first, because
+/// `is_aligned` is a MEASUREMENT now (#469 item 2) rather than a property of the
+/// strategy alone: `two_merged_sections` leaves those two stations 11 m apart,
+/// and a closure across that gap is not a coincidence claim anybody would
+/// believe. Snapping is also what the real workflow does - the strategy is
+/// called `Move` because the frontend sends it only behind the move commands
+/// that made the two stations one point.
 #[test]
 fn the_delete_guards_still_refuse_a_user_delete() {
     for (strategy, expected) in [
@@ -698,17 +704,11 @@ fn the_delete_guards_still_refuse_a_user_delete() {
     ] {
         let state = state_with_project();
         let (a, b) = two_merged_sections(&state);
-        let closed = state.execute(Command::CreateLoopClosure {
-            station_a: StationRef::new(a, 0),
-            station_b: StationRef::new(b, 1),
-            closure_strategy: strategy,
-        });
-        assert!(
-            closed.success,
-            "setup ({strategy:?}): loop-closing closure failed: {:?}",
-            closed.error
-        );
 
+        // The insert comes FIRST here, before the loop is closed. It lengthens
+        // the loop by 3 m, which a closure across it cannot absorb - so closing
+        // afterwards is the only order in which the `Move` row's premise (an
+        // aligned, i.e. genuinely coincident, closure) survives to the delete.
         let first_shot_of_a = shot_ids(&state, a)[0];
         let created = state.execute(Command::CreateShot {
             section_id: a,
@@ -722,6 +722,43 @@ fn the_delete_guards_still_refuse_a_user_delete() {
             created.error
         );
         let inserted = shot_ids(&state, a)[1];
+
+        if strategy == ClosureStrategy::Move {
+            // Snap the far end onto the datum station, measured off the geometry
+            // as it stands - which is what the frontend's snap-to-merge does
+            // before it sends this strategy.
+            let (from, to) = station_raw_xy(&state, (b, 1), (a, 0));
+            let snapped = state.execute(Command::MoveStation {
+                station_ref: StationRef::new(b, 1),
+                offset: Coordinates {
+                    x: to.0 - from.0,
+                    y: to.1 - from.1,
+                    z: 0.0,
+                },
+            });
+            assert!(
+                snapped.success,
+                "setup ({strategy:?}): snap-to-merge move failed: {:?}",
+                snapped.error
+            );
+        }
+        let closed = state.execute(Command::CreateLoopClosure {
+            station_a: StationRef::new(a, 0),
+            station_b: StationRef::new(b, 1),
+            closure_strategy: strategy,
+        });
+        assert!(
+            closed.success,
+            "setup ({strategy:?}): loop-closing closure failed: {:?}",
+            closed.error
+        );
+        assert_eq!(
+            state
+                .get_project_state()
+                .and_then(|project| project.loop_closures.first().map(|c| c.is_aligned)),
+            Some(strategy == ClosureStrategy::Move),
+            "setup ({strategy:?}): the row's premise is the closure's alignment"
+        );
 
         let deleted = state.execute(Command::DeleteShot {
             section_id: a,
@@ -1548,6 +1585,23 @@ fn datum_sections(state: &AppState) -> Vec<SectionId> {
 /// through `resolved_station_offsets()`. The app's two alignment measures
 /// disagree by construction (issue #413 finding 14), so a test about the
 /// invariant the app ASSERTS has to use the assert's own measure.
+/// The raw `(x, y)` of two stations, in one project read - for a caller that
+/// needs the VECTOR between them (a snap-to-merge move) rather than the distance.
+fn station_raw_xy(
+    state: &AppState,
+    a: (SectionId, u32),
+    b: (SectionId, u32),
+) -> ((f64, f64), (f64, f64)) {
+    let project = state.get_project_state().expect("no project open");
+    let raw = |at: (SectionId, u32)| {
+        let coords = project
+            .compute_station_raw_coords(StationRef::new(at.0, at.1))
+            .expect("station has no raw coordinates");
+        (coords.x, coords.y)
+    };
+    (raw(a), raw(b))
+}
+
 fn raw_station_gap(state: &AppState, a: (SectionId, u32), b: (SectionId, u32)) -> f64 {
     let project = state.get_project_state().expect("no project open");
     let left = project

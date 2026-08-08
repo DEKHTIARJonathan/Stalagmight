@@ -1,5 +1,5 @@
 use super::*;
-use crate::models::ShotKind;
+use crate::models::{ClosureStrategy, ShotKind};
 
 fn shot(azimuth_in: f64, azimuth_out: f64, length: f64, depth_in: f64, depth_out: f64) -> ShotData {
     ShotData {
@@ -8874,9 +8874,16 @@ fn assign_closure_ids_fills_zeros_and_updates_counter() {
 
     // First closure (was 0) gets id=6 (next after max existing=5)
     assert_eq!(project.loop_closures[0].id, 6);
-    // Second closure keeps id=5, and Move strategy sets is_aligned
+    // Second closure keeps id=5. Its `Move` strategy used to FORCE `is_aligned`
+    // on every open; it is MEASURED now (#469 item 2), and this project has no
+    // sections at all - so neither endpoint resolves, there is no coincidence to
+    // measure, and the claim stays false. (An open that re-asserted the flag
+    // would put memory and disk permanently at odds about what the closure is.)
     assert_eq!(project.loop_closures[1].id, 5);
-    assert!(project.loop_closures[1].is_aligned);
+    assert!(
+        !project.loop_closures[1].is_aligned,
+        "assign_closure_ids must not re-assert an alignment claim it cannot measure"
+    );
     // Third closure (was 0) gets id=7
     assert_eq!(project.loop_closures[2].id, 7);
     // next_closure_id should be 8

@@ -496,6 +496,13 @@ impl AppState {
             // before the solve that lands on it.
             project.renormalize_frame_if_changed(frame_before);
             project.resolve_offsets();
+            // Repair does not go through `reconcile_geometry`, so it carries the
+            // closure re-measure itself, last and off the geometry the re-solve
+            // settled on (#469 item 2). Without it Repair would be the one path
+            // that leaves an alignment claim untrue of the state it just built,
+            // and the NEXT command's reconcile would correct it - landing on a
+            // state Repair's own undo snapshot never recorded.
+            project.remeasure_closure_alignment();
         } // release the guard before re-measuring (integrity_violation_messages re-locks)
           // Repair mutated measured geometry (and convert_orphan_closures_to_merges
           // doesn't bump modified_at), so drop any cached closure-adjusted solve.

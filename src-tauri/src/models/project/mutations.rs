@@ -282,6 +282,16 @@ impl Project {
         else {
             return Err("Cannot create loop closure: station has no stable anchor".to_string());
         };
+        // MEASURED, not asserted (#469 item 2). A `Move` closure is born of the
+        // snap-to-merge workflow, whose batch runs the moves that made the two
+        // stations coincide BEFORE this command - so in that workflow the
+        // measurement says `true` and nothing changes. Every other route to a
+        // `Move` closure (IPC, the harness, the fuzzer) can hand this an
+        // arbitrary pair metres apart, and stamping such a pair aligned made the
+        // app assert a coincidence it had computed the refutation of one line
+        // earlier, rigidify the edge, and report it Critical forever with no
+        // path back.
+        let is_aligned = self.closure_alignment_stamp_now(strategy, &key_a, &key_b);
         let closure = LoopClosure {
             id: next_id,
             station_a: key_a,
@@ -292,7 +302,7 @@ impl Project {
             horizontal_misclosure: metrics.horizontal_misclosure,
             vertical_misclosure: metrics.vertical_misclosure,
             strategy,
-            is_aligned: strategy == ClosureStrategy::Move,
+            is_aligned,
         };
 
         self.loop_closures.push(closure.clone());

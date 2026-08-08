@@ -253,9 +253,10 @@ impl Project {
     /// when either endpoint dangles, has no computable position, or sits on
     /// non-finite (NaN/inf) geometry.
     ///
-    /// The single measurement used by the merge and closure alignment checks and
-    /// by [`Self::demote_double_anchoring_merges`], so those three cannot disagree
-    /// about how far apart a pair is - including about a pair they cannot measure
+    /// The single measurement used by the merge and closure alignment checks, by
+    /// [`Self::demote_double_anchoring_merges`] and by the closure-alignment
+    /// predicate [`Self::closure_alignment_stamp`], so they cannot disagree about
+    /// how far apart a pair is - including about a pair they cannot measure
     /// at all. A NaN gap compares false against the tolerance in either direction,
     /// so an unguarded distance would read as "aligned" to the two checks and as
     /// "not torn" to the demotion by accident rather than by decision. `None` makes
@@ -264,7 +265,7 @@ impl Project {
     /// the real problem) and the demotion never deletes a merge on the strength of
     /// a distance that does not exist. Testing the final distance covers a
     /// non-finite value in either input coordinate.
-    fn endpoint_gap(
+    pub(super) fn endpoint_gap(
         &self,
         key_a: &StationKey,
         key_b: &StationKey,
@@ -551,12 +552,32 @@ impl Project {
     /// Cross-section *aligned* loop closures whose two stations have drifted
     /// apart. An aligned closure (`is_aligned == true`) asserts its loop is
     /// closed - its endpoints coincide - and the offset solver enforces it as a
-    /// rigid edge. But `is_aligned` is never set back to false, so a later shot
-    /// edit can leave the closure stale while still marked aligned. The
-    /// merge-only [`Self::check_merge_alignment`] cannot see this; surface it so
-    /// the user can recompute or remove the loop closure (forcing a loop
-    /// misclosure to zero is over-constrained, so this is detect-and-report, not
-    /// auto-heal).
+    /// rigid edge, so a stale claim silently rigidifies geometry that is metres
+    /// out. The merge-only [`Self::check_merge_alignment`] cannot see this;
+    /// surface it so the user can recompute or remove the loop closure (forcing a
+    /// loop misclosure to zero is over-constrained, so this is detect-and-report,
+    /// not auto-heal).
+    ///
+    /// # A TRIPWIRE, and what can still trip it (#469)
+    ///
+    /// This used to be the only thing standing between the user and a permanent
+    /// lie: `is_aligned` was ASSERTED at creation and never set back to false, so
+    /// any later edit could tear an aligned closure and nothing in the app could
+    /// heal it. It is MEASURED now - [`Self::closure_alignment_stamp`] is the one
+    /// predicate, re-derived after every geometry change by
+    /// [`Self::remeasure_closure_alignment`] - and a measured stamp cannot trip
+    /// this check by construction, because the stamp's gate
+    /// ([`Self::MERGE_ALIGNMENT_INVARIANT_M`]) is at or below the reporting
+    /// threshold this one uses and that ordering is enforced.
+    ///
+    /// What is left is exactly one population, and it is why this check stays: a
+    /// closure whose strategy is NOT [`ClosureStrategy::Move`] carrying
+    /// `is_aligned = true`. Only a build that predates 0.5.0 could write one - the
+    /// destructive "Adjust Closures" action baked its correction into the shots
+    /// and marked every closure it adjusted aligned - and the re-measure
+    /// deliberately leaves those alone (see [`Self::remeasure_closure_alignment`]).
+    /// Their shots were rewritten to make the claim true, so a torn one here is a
+    /// real finding about a real file rather than a stamp the app got wrong.
     pub fn check_closure_alignment(&self) -> Vec<IntegrityViolation> {
         let local = self.section_local_coords();
         let station_offsets = self.resolved_station_offsets();

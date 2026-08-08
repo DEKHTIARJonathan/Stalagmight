@@ -4,16 +4,24 @@ use crate::models::{Section, SectionData, SectionId, SectionIdentity, Shot, Shot
 use super::AppState;
 
 impl AppState {
-    /// Re-derive section offsets so merged stations stay colocated, healing any
-    /// drift a just-completed operation left behind.
+    /// Re-derive the geometry every command leaves behind: the section offsets
+    /// that keep merged stations colocated, and the alignment claims the loop
+    /// closures make about their own endpoints.
     ///
-    /// Section offsets are treated as *derived* state: rather than trust every
-    /// forward / undo / redo path to maintain them perfectly by hand (the source
-    /// of the redo-desync and cascade-propagation bugs), the command layer
-    /// reconciles them once after each user action. It is a no-op when nothing
-    /// drifted (the common case - an `O(shots + merges)` check thanks to the
-    /// coordinate precompute) and is skipped during the bulk-import loop
+    /// Both are treated as *derived* state: rather than trust every forward /
+    /// undo / redo path to maintain them perfectly by hand (the source of the
+    /// redo-desync and cascade-propagation bugs), the command layer reconciles
+    /// them once after each user action. Both are a no-op when nothing changed
+    /// (the common case - `O(shots + merges + closures)` thanks to the coordinate
+    /// precompute) and both are skipped during the bulk-import loop
     /// (`cascade_deferred`), so it doesn't reintroduce the per-mutation cost.
+    ///
+    /// ORDER MATTERS: `realign_merges` can MOVE a section, which changes the very
+    /// gaps the closure re-measure reads, so the re-measure runs last and this
+    /// function exits with the claims true of the geometry it is leaving. That is
+    /// what makes the pair idempotent, and it is what every undo comparison
+    /// rests on - see `Project::remeasure_closure_alignment` for why a sweep that
+    /// runs on the inverse is still a restore rather than a re-derivation.
     pub(super) fn reconcile_geometry(&self) {
         let mut guard = match self.project.lock() {
             Ok(g) => g,
@@ -33,6 +41,7 @@ impl AppState {
                 "Re-aligned drifted station merges after an operation"
             );
         }
+        project.remeasure_closure_alignment();
     }
 
     /// Execute a command without pushing to undo stack (used for undo operations and batch)

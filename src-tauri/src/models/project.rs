@@ -6,9 +6,8 @@ use std::path::PathBuf;
 use ts_rs::TS;
 
 use super::{
-    ClosureStrategy, GpsBounds, LoopClosure, Section, SectionData, SectionId, SectionUpdates,
-    ShotData, ShotId, StationAnchor, StationKey, StationMerge, StationMergeWire, StationRef,
-    ZeroDatum,
+    GpsBounds, LoopClosure, Section, SectionData, SectionId, SectionUpdates, ShotData, ShotId,
+    StationAnchor, StationKey, StationMerge, StationMergeWire, StationRef, ZeroDatum,
 };
 use super::{LoopClosureWire, ZeroDatumWire};
 
@@ -645,8 +644,19 @@ impl Project {
         }
     }
 
-    /// Assign sequential IDs to any loop closures that have id=0 (legacy projects).
+    /// Assign sequential IDs to any loop closures that have id=0 (legacy projects),
+    /// and re-derive the alignment claims the file carries.
     /// Updates `next_closure_id` to be greater than all existing IDs.
+    ///
+    /// The alignment half used to FORCE `is_aligned = true` on every
+    /// [`ClosureStrategy::Move`] closure on every open, which is why fixing the
+    /// creation stamp alone would not have been enough: a closure honestly saved
+    /// as `0` came straight back as `true`, and memory and disk would have
+    /// disagreed from that open onward (the #413 finding-10 convergence shape).
+    /// It re-MEASURES now, through the one predicate
+    /// ([`Self::remeasure_closure_alignment`]), so the round trip converges - and
+    /// the load re-measures once more after `redrive_offsets_after_load`'s
+    /// zero-trust re-solve, which is the geometry the opened project actually has.
     pub fn assign_closure_ids(&mut self) {
         // First, ensure next_closure_id is at least max(existing) + 1
         let max_id = self.loop_closures.iter().map(|lc| lc.id).max().unwrap_or(0);
@@ -659,10 +669,8 @@ impl Project {
                 lc.id = self.next_closure_id;
                 self.next_closure_id += 1;
             }
-            if lc.strategy == ClosureStrategy::Move {
-                lc.is_aligned = true;
-            }
         }
+        self.remeasure_closure_alignment();
     }
 
     /// Mark the project as modified

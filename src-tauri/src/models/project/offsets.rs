@@ -8,7 +8,9 @@ use std::hash::{Hash, Hasher};
 #[cfg(debug_assertions)]
 use tracing::error;
 
-use crate::models::{LoopClosure, SectionId, StationKey, StationMerge};
+use crate::models::{
+    ClosureStrategy, LoopClosure, SectionId, StationKey, StationMerge, StationRef,
+};
 
 use super::Project;
 
@@ -315,6 +317,189 @@ impl Project {
         }
     }
 
+    /// THE alignment predicate: is a loop closure's coincidence CLAIM true right
+    /// now, and may it be made rigid? One definition, so the three sites that ask
+    /// - creation ([`Self::create_loop_closure`]), the load
+    /// ([`Self::assign_closure_ids`]) and the per-command re-measure
+    /// ([`Self::remeasure_closure_alignment`]) - cannot answer it differently and
+    /// leave memory and disk disagreeing about what a closure IS (#469 item 2;
+    /// the single-definition doctrine of [`Self::is_orphan_closure`]).
+    ///
+    /// Three terms, and each is load-bearing:
+    ///
+    /// * **STRATEGY.** Only a [`ClosureStrategy::Move`] closure - one the
+    ///   snap-to-merge workflow created because the user physically moved a
+    ///   station onto another - can be aligned. A `Batch` /
+    ///   `LeastSquaresWeighted` closure RECORDS a misclosure and is what the
+    ///   non-destructive solve relaxes; rigidifying one because it happens to be
+    ///   coincident would fight the thing it exists for.
+    /// * **GEOMETRY**, gated at [`Self::MERGE_ALIGNMENT_INVARIANT_M`] and not at
+    ///   the 5 cm reporting tolerance. An aligned closure is treated exactly like
+    ///   a merge by [`Self::get_rigid_connected_section_ids`] and by the offset
+    ///   cascade, so it is held to the merge INVARIANT - the number that answers
+    ///   "is this a state the code considers valid" rather than "is this worth
+    ///   telling the user about". That also makes a fresh stamp unable to trip
+    ///   [`Self::check_closure_alignment`], since `INVARIANT <= TOLERANCE` is an
+    ///   enforced ordering.
+    /// * **DOUBLE-ANCHORING**, asked with [`Self::merge_would_double_anchor`] -
+    ///   the same refusal [`Self::plan_merge_promotion`] makes, for the same
+    ///   reason. Aligning a closure between two independently zero-datum-anchored
+    ///   merge components mints precisely the rigid edge #464 exists to refuse:
+    ///   `cascade_bfs` pre-loads every datum-bearing section as authoritative and
+    ///   never traverses an edge into one, so nothing could ever satisfy it.
+    ///   Refusing keeps the pair a SOFT closure, which is legitimate between two
+    ///   anchored groups and costs no geometry - unlike a promotion, an alignment
+    ///   never translates anything, so there is nothing to pay and nothing to
+    ///   settle.
+    ///
+    /// # Why every term is blind to `is_aligned`
+    ///
+    /// Deliberately, and it is what makes the re-measure safe on an INVERSE. The
+    /// gap reads shots plus offsets, and the double-anchor question reads merges
+    /// plus datums, through [`Self::get_merged_section_ids`] - the MERGE-only
+    /// graph, never the rigid one. So the stamp is a pure function of the state
+    /// MINUS the flags it computes: re-running it cannot depend on the order the
+    /// closures are visited in, cannot iterate to a fixpoint, and reproduces
+    /// exactly the flag any earlier state had for the same geometry. See
+    /// [`Self::remeasure_closure_alignment`] for what that buys.
+    pub(crate) fn closure_alignment_stamp(
+        &self,
+        strategy: ClosureStrategy,
+        station_a: &StationKey,
+        station_b: &StationKey,
+        local: &HashMap<SectionId, Vec<(f64, f64)>>,
+        station_offsets: &HashMap<StationRef, (f64, f64, f64)>,
+    ) -> bool {
+        if strategy != ClosureStrategy::Move {
+            return false;
+        }
+        // `None` is "cannot measure" - a dangling endpoint or non-finite geometry
+        // - and an unmeasurable claim is not a claim this app will act on.
+        let Some((a, b, gap)) = self.endpoint_gap(station_a, station_b, local, station_offsets)
+        else {
+            return false;
+        };
+        if gap >= Self::MERGE_ALIGNMENT_INVARIANT_M {
+            return false;
+        }
+        !self.merge_would_double_anchor(a.section_id, b.section_id)
+    }
+
+    /// [`Self::closure_alignment_stamp`] for a caller that has ONE closure and no
+    /// precomputes - the creation path. Builds the two tables itself
+    /// (`O(total shots)`, next to nothing beside the Dijkstra
+    /// [`Self::compute_closure_metrics`] already ran) and short-circuits before
+    /// building them at all when the strategy cannot be aligned anyway.
+    pub(crate) fn closure_alignment_stamp_now(
+        &self,
+        strategy: ClosureStrategy,
+        station_a: &StationKey,
+        station_b: &StationKey,
+    ) -> bool {
+        if strategy != ClosureStrategy::Move {
+            return false;
+        }
+        let local = self.section_local_coords();
+        let station_offsets = self.resolved_station_offsets();
+        self.closure_alignment_stamp(strategy, station_a, station_b, &local, &station_offsets)
+    }
+
+    /// Re-derive every snap-to-merge closure's `is_aligned` from the geometry as
+    /// it stands NOW, and report how many claims changed.
+    ///
+    /// Derived state, not a hook set, for the reason
+    /// [`Self::realign_structure_hash`] gives: a `MoveStation` that tears one
+    /// endpoint, an `UpdateShot` whose realign walks merges only, an insert or a
+    /// removal whose compensation is merge-scoped - each can falsify a coincidence
+    /// claim, and a hook that is one call site short does not degrade, it silently
+    /// keeps a lie. `AppState::reconcile_geometry` is the single post-geometry
+    /// choke point (execute, execute_batch, the delete/split entry points,
+    /// undo/redo/undo_to/redo_to, `finalize_structural_edit`), so the sweep runs
+    /// there, plus at the two boundaries that build a project rather than edit one
+    /// ([`Self::redrive_offsets_after_load`], Repair).
+    ///
+    /// # It runs on the INVERSE too, and that is not a re-derivation
+    ///
+    /// The rule an undo owes is that it RESTORES what was recorded. A sweep that
+    /// only DEMOTED would break it outright: `MoveStation` captures no closure
+    /// flags, so tearing an aligned closure and undoing it would give the geometry
+    /// back with the flag stuck false, landing on a state the history never held.
+    /// What makes running it on both directions correct is that the stamp is TOTAL
+    /// and blind to the flags (see [`Self::closure_alignment_stamp`]): the flag is
+    /// a FUNCTION of the rest of the state, every state the history records
+    /// satisfies `flag == stamp(state)`, and an inverse that restores the rest of
+    /// the state therefore reproduces the flag it recorded - in both directions,
+    /// promotion as well as demotion. It is the same argument
+    /// [`Self::realign_merges`] rests on, one field over.
+    ///
+    /// # What it deliberately does NOT touch (#469, and the 0.5.0 migration)
+    ///
+    /// A closure whose strategy is not [`ClosureStrategy::Move`] keeps whatever
+    /// flag it arrived with. The app has not been able to CREATE one aligned since
+    /// the destructive "Adjust Closures" action was removed in 0.5.0, so the only
+    /// source is a file that action wrote - and it wrote the correction INTO the
+    /// shots, which is why docs/closures.md promises such a project "opens looking
+    /// identical and is never rewritten again". Demoting them would silently
+    /// change co-location, station depth averaging, move-tool rigidity and which
+    /// shots are frozen, on files that are geometrically exactly what they claim
+    /// to be. [`Self::check_closure_alignment`] still reports a torn one.
+    ///
+    /// It measures the GAP only, never the stored misclosure metrics: those are
+    /// per-closure Dijkstra (`O(closures x (V log V + E))`) and would put a
+    /// whole-network solve in a per-command epilogue, while the gap is `O(1)` per
+    /// closure off the two precomputes below. The metrics stay as RECORDED, which
+    /// is what `error_percentage` already means; display staleness is not a
+    /// geometry lie.
+    pub(crate) fn remeasure_closure_alignment(&mut self) -> usize {
+        if !self
+            .loop_closures
+            .iter()
+            .any(|closure| closure.strategy == ClosureStrategy::Move)
+        {
+            return 0;
+        }
+        let local = self.section_local_coords();
+        let station_offsets = self.resolved_station_offsets();
+        // Decided in an immutable pass, applied after: the stamp reads merges and
+        // datums off `self`. Every decision is independent of every other, so the
+        // batch is the same however the list is ordered.
+        let changes: Vec<(usize, bool)> = self
+            .loop_closures
+            .iter()
+            .enumerate()
+            .filter(|(_, closure)| closure.strategy == ClosureStrategy::Move)
+            .filter_map(|(index, closure)| {
+                let stamp = self.closure_alignment_stamp(
+                    closure.strategy,
+                    &closure.station_a,
+                    &closure.station_b,
+                    &local,
+                    &station_offsets,
+                );
+                (stamp != closure.is_aligned).then_some((index, stamp))
+            })
+            .collect();
+        if changes.is_empty() {
+            return 0;
+        }
+        for &(index, stamp) in &changes {
+            let Some(closure) = self.loop_closures.get_mut(index) else {
+                continue;
+            };
+            tracing::info!(
+                closure_id = closure.id,
+                station_a = ?closure.station_a,
+                station_b = ?closure.station_b,
+                is_aligned = stamp,
+                purpose = "keep a closure's alignment claim measured rather than asserted",
+                "Re-measured a snap-to-merge closure's coincidence claim"
+            );
+            closure.is_aligned = stamp;
+        }
+        self.touch();
+        changes.len()
+    }
+
     /// Does the merge group containing `section_id` hold a zero datum?
     pub(crate) fn rigid_group_has_datum(&self, id: SectionId) -> bool {
         // Delegate to the resolve-aware check so a DANGLING datum (anchor key no
@@ -483,6 +668,13 @@ impl Project {
                 "Dropped persisted section offsets that were within dust of the origin"
             );
         }
+        // LAST, so the claims are measured off the geometry the re-solve settled
+        // on rather than the geometry the file happened to cache. `is_aligned` is
+        // derived state exactly as `section_offsets` is, and the same zero-trust
+        // rule applies: a file written by a build that asserted the flag, or one
+        // whose closure was torn by an edit that predates the re-measure, opens
+        // holding the truth instead of the claim (#469 item 2).
+        self.remeasure_closure_alignment();
         healed
     }
 
