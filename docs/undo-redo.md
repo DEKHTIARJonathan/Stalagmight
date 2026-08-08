@@ -254,6 +254,37 @@ Only the undo direction needs them. A redo re-executes the forward command from 
 state the undo restored exactly, and the forward path is deterministic, so it
 reproduces the recorded post-command map.
 
+#### `ZeroDatumInfo` captures the WHOLE project, not a connected set (#469, item 1)
+
+`UndoData::ZeroDatumInfo { previous_offsets }` is the one capture whose scope is
+not a connectivity question, and it takes `Project::capture_all_section_offsets`
+rather than the merge group its two siblings above take.
+
+Local `(0, 0)` MEANS `zero_datums[0]`'s GPS: `set_zero_datum` puts the first datum
+on the origin and every later one at `gps_to_local(its gps, first.gps)`, and the
+map, the data table's GPS column, the Ariane export's `START` lat/long and the
+GlobalView pin all read local metres against it. So changing WHICH datum is first
+re-defines every stored coordinate, and `Project::renormalize_frame` answers that
+by translating the whole survey - free-floating, datum-less components included -
+so the promoted datum's station lands back on the origin. Nothing bounded by
+merges or aligned closures can hand that back. Undoing the ADD of a first datum
+removes it, which is an inverse that performs a frame change, so this is the arm
+that has to hold the whole map.
+
+The renormalisation itself runs only in the FORWARD epilogue (`execute()`,
+`execute_batch`, `repair_open_project_integrity`, and the four delete/split entry
+points that bypass `execute()`), never in `reconcile_geometry` - which
+`undo()`/`redo()` share - and never in the loader. Every command that can reach it
+records either a `ProjectSnapshotPair` or this widened map, so no inverse
+re-derives a frame; and `resolve_offsets`' cascade never re-derives a seed's
+offset, which makes a whole-project translation a provable no-op for the loader, so
+save/reopen converges without teaching it anything.
+
+The other three offset captures stay merge/rigid-scoped: no per-keystroke shot edit
+can change the frame, and widening those would put an N-entry map on every one.
+Entries persisted with a narrow map still restore through the same arm - what they
+recorded, and no more.
+
 ### An inverse consults no user-intent guard (#413, findings 3 and 6)
 
 **If a forward command was permitted, its inverse must be too.** Undo of

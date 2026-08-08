@@ -2596,7 +2596,9 @@ fn promoting_a_zero_datum_keeps_every_station_where_it_is_in_the_world() {
     let state = state_with_project();
     let origin = create_section(&state, "Origin", vec![shot(10.0, 3.0), shot(20.0, 4.0)]);
     let anchored = create_section(&state, "Anchored", vec![shot(70.0, 7.0), shot(100.0, 8.0)]);
-    let floater = create_section(&state, "Floater", vec![shot(300.0, 12.0)]);
+    // Free-floating: no datum, no merge, no closure. `all_station_xy` sweeps it
+    // like every other section, which is what puts it under the oracle below.
+    let _floater = create_section(&state, "Floater", vec![shot(300.0, 12.0)]);
 
     let first_gps = GpsCoordinates::new(20.4, -87.3, 0.0).unwrap();
     // About 400 m away: far enough that a missed translation is unmissable, close
