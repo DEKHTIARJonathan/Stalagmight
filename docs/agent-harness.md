@@ -321,14 +321,18 @@ Registered in `e2e/agent/scenarios/index.ts`; each is a seeded loop that FAILS b
 throwing. Small-n values for the `pnpm agent:scenarios` gate live in
 `e2e/agent/scenarios-smoke.ts`.
 
-Two of them - `undo-redo-fuzz` and `undo-persistence-fuzz` - reproduce open app
-bugs by construction, so they are RED by design and a green run would mean their
-oracles had been weakened. They are listed in that file's `EXPECTED_RED`, which
-reports them as **XFAIL** and does not fail the gate: with them failing
-unconditionally the gate exited 1 whatever the other nine did, and so could no
-longer answer the question it exists to answer. The other direction is enforced -
-an expected-red scenario that PASSES fails the run, because that means the bug it
-pins was fixed and the entry (and the scenario's header) needs updating.
+There is no expected-failure list, and adding one back would be a regression.
+`EXPECTED_RED` existed while `undo-redo-fuzz` and `undo-persistence-fuzz`
+reproduced open bugs by construction; every issue-413 finding is now fixed in the
+Rust tier and every classifier and tolerance was deleted with it, so both are
+expected GREEN and STRICT and `STALAGMIGHT_FUZZ_ALLOW_KNOWN_BUGS=1` has nothing
+left to allow. If either goes red the red is the APP's: shrink it
+(`pnpm agent:fuzz-shrink`) and fix the app.
+
+One scenario is EXCLUDED from the gate rather than expected to fail:
+`import-dialog-fuzz`, in `SMOKE_EXCLUDED`. It runs on explicit request only (see
+its section below), and it is expected green with no classifier and no tolerance
+of its own.
 
 | Scenario | What it asserts |
 |---|---|
