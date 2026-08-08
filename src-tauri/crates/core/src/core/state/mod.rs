@@ -73,7 +73,6 @@ mod reverse_tests;
     clippy::expect_used,
     clippy::panic,
     clippy::indexing_slicing,
-    clippy::float_cmp,
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod shot_uuid_tests;

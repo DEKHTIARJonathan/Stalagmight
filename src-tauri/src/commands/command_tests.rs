@@ -3479,6 +3479,51 @@ fn test_create_shot_before_inserts_at_position() {
 }
 
 #[test]
+fn test_create_shot_wrapper_strips_a_client_named_uuid() {
+    // Identity is not the caller's to name (#423): `create_shot_impl` clears
+    // `ShotData::uuid` before building the command. The executor clears its own
+    // copy too, but `execute` records the command AS RECEIVED into the undo
+    // stack, which every save persists - so the persisted-history assertion
+    // below is the one only the wrapper's clear can hold.
+    const SPOOFED: &str = "ffffffff-0000-4000-8000-000000000423";
+    let app = app_with_state();
+    create_project(&app);
+    let id = create_section_with_shots(&app, vec![shot_data(1.0)]);
+    let result = shot::create_shot_impl(
+        state(&app).inner(),
+        id,
+        ShotData {
+            uuid: Some(SPOOFED.to_string()),
+            ..shot_data(2.0)
+        },
+        None,
+        None,
+    );
+    assert_success(&result);
+    let section = get_section(state(&app), id).unwrap();
+    let created = section.shots.last().unwrap();
+    assert_ne!(
+        created.uuid.as_deref(),
+        Some(SPOOFED),
+        "the wrapper must clear a client-named identity before execution"
+    );
+    assert!(created.uuid.is_some(), "and the shot still gets a mint");
+
+    let dir = TempDir::new().unwrap();
+    let path = save_project_to_temp(&app, &dir);
+    let rows = Database::open_existing(&path)
+        .unwrap()
+        .load_undo_stack()
+        .unwrap();
+    assert!(!rows.is_empty(), "the save must persist the undo history");
+    assert!(
+        rows.iter()
+            .all(|(_, command_json, _)| !command_json.contains(SPOOFED)),
+        "a client-named uuid must not reach the recorded (persisted) undo command"
+    );
+}
+
+#[test]
 fn test_update_shot_fails_missing() {
     let app = app_with_state();
     create_project(&app);

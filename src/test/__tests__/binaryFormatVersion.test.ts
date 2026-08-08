@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url';
  * decoder checks before trusting the payload. That version lives in THREE
  * places with nothing tying them together:
  *
- *   - `BINARY_FORMAT_VERSION` in `src-tauri/src/core/load_binary.rs`
+ *   - `BINARY_FORMAT_VERSION` in `src-tauri/crates/core/src/core/load_binary.rs`
  *   - `EXPECTED_VERSION` in `src/utils/loadProjectBinary.ts`
  *   - the hardcoded `version:` the Playwright mock puts in its envelope
  *
@@ -28,7 +28,7 @@ import { fileURLToPath } from 'node:url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const REPO_ROOT = path.resolve(__dirname, '../../../');
-const RUST_PATH = path.join(REPO_ROOT, 'src-tauri/src/core/load_binary.rs');
+const RUST_PATH = path.join(REPO_ROOT, 'src-tauri/crates/core/src/core/load_binary.rs');
 const TS_PATH = path.join(REPO_ROOT, 'src/utils/loadProjectBinary.ts');
 const MOCK_PATH = path.join(REPO_ROOT, 'e2e-playwright/mocks/tauri-ipc.ts');
 
