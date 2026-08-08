@@ -427,6 +427,112 @@ describe('writeDmpText framing', () => {
     expect(sections[0].shots.map((s) => s.shotType)).toEqual([2, 2, 3]);
   });
 
+  /**
+   * The strongest check available without running cargo: reproduce, token for
+   * token, the two synthetic files the Rust parser's OWN tests assert it parses
+   * (`build_v3_section_data` and `build_v4_section_data` in
+   * `src-tauri/src/parsers/dmp.rs`, consumed by `test_parse_dmp_v3_format` and
+   * `test_parse_dmp_v4_with_lrud`).
+   *
+   * The TS mirror above can only prove this module agrees with a second thing
+   * this module's author wrote. These strings are the real parser's accepted
+   * input, transcribed - so a shared misreading of the format shows up here.
+   */
+  it('reproduces build_v3_section_data token for token', () => {
+    const spec: DmpSpec = {
+      version: 3,
+      sections: [
+        {
+          name: 'TST',
+          direction: 0,
+          year: 24,
+          month: 6,
+          day: 15,
+          hour: 10,
+          minute: 30,
+          shots: [
+            {
+              ...shot(),
+              headingIn: 450,
+              headingOut: 460,
+              length: 1000,
+              depthIn: 200,
+              depthOut: 300,
+              pitchIn: 0,
+              pitchOut: 0,
+              markerIndex: 1,
+            },
+          ],
+        },
+      ],
+    };
+    const expected = [
+      '3', // version
+      '68;89;101', // section magic
+      '24;6;15;10;30', // date
+      '84;83;84', // "TST"
+      '0', // direction: In
+      '2', // shot type: Standard
+      '1;194;1;204;3;232;0;200;1;44;0;0;0;0', // 7 int16 BE
+      '1', // marker index
+      ['3', ...new Array<string>(20).fill('0')].join(';'), // 21-byte terminator
+    ].join(';');
+    expect(writeDmpText(spec)).toBe(expected);
+  });
+
+  it('reproduces build_v4_section_data token for token', () => {
+    const spec: DmpSpec = {
+      version: 4,
+      sections: [
+        {
+          name: 'V4S',
+          direction: 1,
+          year: 24,
+          month: 8,
+          day: 20,
+          hour: 14,
+          minute: 45,
+          shots: [
+            {
+              shotType: 2,
+              headingIn: 900,
+              headingOut: 910,
+              length: 500,
+              depthIn: 100,
+              depthOut: 150,
+              pitchIn: 50,
+              pitchOut: -50,
+              left: 100,
+              right: 150,
+              up: 200,
+              down: 80,
+              temperature: 185,
+              hour: 14,
+              minute: 45,
+              second: 30,
+              markerIndex: 2,
+            },
+          ],
+        },
+      ],
+    };
+    const expected = [
+      '4',
+      '68;89;101',
+      '24;8;20;14;45',
+      '86;52;83', // "V4S"
+      '1', // direction: Out
+      '2',
+      '3;132;3;142;1;244;0;100;0;150;0;50;255;206', // -50 as two's complement
+      '0;100;0;150;0;200;0;80', // LRUD
+      '0;185', // temperature
+      '14;45;30', // time
+      '2', // marker index
+      ['3', ...new Array<string>(28).fill('0')].join(';'),
+    ].join(';');
+    expect(writeDmpText(spec)).toBe(expected);
+  });
+
   it('emits exactly three name bytes whatever the name is', () => {
     for (const [name, expected] of [
       ['AB', 'AB '],
@@ -454,6 +560,27 @@ describe('writeTmluXml', () => {
     expect(xml).toContain('<SurveyData><ID>0</ID><FromID>-1</FromID><ClosureToID>-1</ClosureToID>');
     expect(xml).toContain('<Azimut>90</Azimut>');
     expect(xml).toContain('<firstStartAbsoluteElevation>100.0</firstStartAbsoluteElevation>');
+  });
+
+  it('emits exactly the element set the parser test fixtures use', () => {
+    // Transcribed from `tml_shot_xml` / `tmlu_shot_xml` in
+    // `src-tauri/src/parsers/tml/test_helpers.rs`, in their order. A tag this
+    // module invented would be dropped silently by `normalize_key_bytes`, and
+    // the field would just read as its default all the way into the import.
+    const tagsIn = (xml: string, open: string, close: string): string[] =>
+      [...xml.slice(xml.indexOf(open) + open.length, xml.indexOf(close)).matchAll(/<([A-Za-z]+)>/g)].map(
+        (match) => match[1],
+      );
+
+    expect(tagsIn(writeTmluXml(tmlSpec()), '<SurveyData>', '</SurveyData>')).toEqual([
+      'ID', 'FromID', 'ClosureToID', 'Type', 'Section', 'Azimut', 'Length', 'Depth', 'DepthIn',
+      'Inclination', 'Left', 'Right', 'Up', 'Down', 'Comment', 'Explorer', 'Date', 'Color',
+      'Excluded', 'Latitude', 'Longitude',
+    ]);
+    expect(tagsIn(writeTmluXml(tmlSpec({ dialect: 'short' })), '<SRVD>', '</SRVD>')).toEqual([
+      'ID', 'FRID', 'CID', 'TY', 'SC', 'AZ', 'LG', 'DP', 'DPI', 'INC', 'L', 'R', 'U', 'D',
+      'CM', 'EX', 'DT', 'CL', 'EXC', 'LT', 'LGT',
+    ]);
   });
 
   it('switches every field name for the short (TMLU) dialect', () => {
