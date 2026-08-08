@@ -51,7 +51,7 @@ These are written per-shot since Ariane stores section metadata on every shot ro
 | `shot.depth_out` | `Depth` / `DP` | Absolute station depth |
 | `shot.depth_in` | `DepthIn` / `DPI` | -1.0 sentinel when equal to previous `depth_out` |
 | `shot.pitch_in` | `Inclination` / `INC` | 0.0 if unset |
-| LRUD | `Left`/`Right`/`Up`/`Down` | 0.0 for `None` |
+| LRUD | `Left`/`Right`/`Up`/`Down` | `0.0` for `None` - Ariane's format has no null, so an UNMEASURED passage dimension and one MEASURED as zero are written as the same `0.0`. See [The LRUD zero/null collision](#the-lrud-zeronull-collision). |
 | `shot.comment` | `Comment` / `CM` | Empty string if unset. Also carries the **to-station's** `project.station_comments` entry, joined with the shot comment via the ZWSP marker - see [Station-comment co-encoding](#station-comment-co-encoding). |
 | `shot.kind` | `Type` / `TY` | Both `Jump` and `Reference` export as `VIRTUAL`; `Normal` as `REAL`. Ariane has a single virtual category, so the #27 distinction is lossy on export by design (q9) and is preserved locally instead. |
 | `shot.uuid` | `UUID` / `UU` | Emitted for every REAL/VIRTUAL forward shot; omitted on the synthesized shots (START, CLOSURE, reversed and pre-zero-datum legs), which have no 1:1 Stalagmight shot behind them. See [Shot UUIDs](#shot-uuids). |
@@ -162,6 +162,35 @@ IDs are assigned sequentially starting from 0:
 ## Color Format Conversion
 
 Internal `#RRGGBB` hex colors are converted to Ariane's `0xRRGGBBff` format (8-digit hex with alpha suffix). On import, the reverse conversion strips the alpha channel.
+
+## The LRUD zero/null collision
+
+`ExportShot.left` and its three siblings are plain `f64`, filled with
+`shot.left.unwrap_or(0.0)` (`export/tml.rs:744-747` and the two reversed-leg
+constructors beside it), because Ariane's `Left`/`Right`/`Up`/`Down` elements
+have no null. So the file cannot distinguish these two facts about a passage:
+
+- **unmeasured** - nobody put a tape across it (`None` in the model);
+- **measured as zero** - somebody did, and it is zero (`Some(0.0)`).
+
+Both are written `0.0`, and [the importer](ariane-import.md) maps `0.0` back to
+`None` **per field** (`parsers/tml/mod.rs:1908-1914`). The round trip is
+therefore lossless for an unmeasured dimension (`None -> 0.0 -> None`) and lossy
+for a measured zero (`Some(0.0) -> 0.0 -> None`).
+
+**This is intended, and it is a property of the format rather than a defect in
+either end.** `0.0` IS Ariane's absent sentinel; the alternatives are to invent
+a spelling Ariane does not define, or to stop treating `0.0` as absent on read
+and hand every Ariane file in the world four measured zeros per shot. Per-field
+rather than all-four also matters: a shot measured `left=0, right=3` comes back
+`null/3`, not `0/3`.
+
+Measured, so the scale is on record rather than guessed: on a 532-shot survey
+carrying 261 all-null and 271 all-zero shots, the round trip nulls exactly those
+271 and changes nothing else - no length, azimuth, depth or comment moves.
+`export-roundtrip-fuzz`'s X6 oracle cites this section by name for that reason;
+it is the one difference it excuses, and it excuses it because the format says
+so, not because the oracle was losing.
 
 ## Station-comment co-encoding
 

@@ -875,10 +875,40 @@ export interface ShotIdentity {
 }
 
 /**
+ * One LRUD field, with Ariane's absent sentinel collapsed onto absent.
+ *
+ * `0.0` IS the absent sentinel in the `.tml`/`.tmlu` format: the writer fills
+ * `shot.left.unwrap_or(0.0)` because Ariane's `Left`/`Right`/`Up`/`Down` have no
+ * null, and the reader maps `abs() < f64::EPSILON` back to `None` PER FIELD. So
+ * a MEASURED zero cannot round-trip and an unmeasured one can, and both arrive
+ * as the same four bytes in between.
+ *
+ * THIS IS THE FORMAT'S SEMANTIC, NOT A TOLERANCE, and the difference is worth
+ * being precise about because the two look identical from a distance. A
+ * tolerance would be a threshold this harness chose to stop a red it could not
+ * explain. This is a documented equivalence with a citation:
+ * `docs/ariane-export.md#the-lrud-zeronull-collision` states the collision, why
+ * neither end can be "fixed" without inventing a spelling Ariane does not
+ * define, and the measured scale of it; `docs/ariane-import.md` states the read
+ * half at `parsers/tml/mod.rs:1908-1914`. The oracle folds exactly that
+ * equivalence and nothing else - a zero becoming 3.5, or a 3.5 becoming null,
+ * still fails.
+ */
+function lrudSentinel(value: number | null): string {
+  if (value === null) return '-';
+  return Math.abs(value) < 1e-12 ? '-' : value.toFixed(3);
+}
+
+/**
  * A multiset key for one shot.
  *
  * Numbers are rounded to the precision the TML actually carries so a formatting
  * round trip is not reported as data loss.
+ *
+ * LRUD goes through `lrudSentinel`, which reads Ariane's `0.0` as the absent
+ * sentinel it is - see that function for why this is a documented format
+ * semantic rather than a tolerance, and for the two doc sections that own the
+ * claim. Every other field is compared as measured.
  *
  * COMMENTS ARE DELIBERATELY NOT IN THE KEY, and that is a corrected premise
  * rather than a weakening. A comment does not belong to a SHOT across this round
@@ -900,7 +930,7 @@ export function shotKey(shot: ShotIdentity): string {
     n(shot.azimuthIn),
     n(shot.depthIn),
     n(shot.depthOut),
-    shot.lrud.map(n).join('/'),
+    shot.lrud.map(lrudSentinel).join('/'),
   ].join('|');
 }
 
@@ -1018,7 +1048,11 @@ export function checkShotMultiset(
     `    shots: ${args.countBefore} before, ${args.countAfter} after`,
   ];
   if (args.deltas.length > 0) {
-    lines.push(`    ${args.deltas.length} GEOMETRY key(s) differ (length|azimuth_in|depth_in|depth_out|LRUD):`);
+    lines.push(
+      `    ${args.deltas.length} GEOMETRY key(s) differ ` +
+        `(length|azimuth_in|depth_in|depth_out|LRUD, with Ariane's 0.0 absent-sentinel folded ` +
+        `onto null - see docs/ariane-export.md#the-lrud-zeronull-collision):`,
+    );
     for (const delta of args.deltas.slice(0, 8)) {
       lines.push(`      ${delta.key}  x${delta.before} -> x${delta.after}`);
     }

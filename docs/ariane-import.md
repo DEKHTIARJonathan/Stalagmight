@@ -127,6 +127,17 @@ Parsed but dropped:
 
 - **Declination is never applied.** The `useMagneticAzimuth` flag is parsed onto `TmlFile` and read by nobody: a magnetic file's azimuths are imported as-is, with no declination correction and no warning that one may be needed.
 - **Entrance elevation is not wired.** `firstStartAbsoluteElevation` reaches `TmlFile` (and the geo-coding altitude) but has no home in the project model, so it is dropped - Ariane's elevation is +up from sea level while the zero datum's `depth_reference` is +down from the surface ([#431](https://github.com/Stalagmight/Stalagmight/issues/431)).
+- **A `0.0` LRUD field is read as UNMEASURED, per field.** `lrud_opt`
+  (`parsers/tml/mod.rs:1908-1914`) maps any of `Left`/`Right`/`Up`/`Down` whose
+  `abs()` is under `f64::EPSILON` to `None`, independently of the other three - so
+  `left=0, right=3` imports as `null/3`. This is the read half of an INTENDED
+  sentinel collision, not a loss of information the file had: the export writes
+  `unwrap_or(0.0)` because Ariane's format has no null, so an unmeasured dimension
+  and one measured as zero arrive identical. The consequence is that a MEASURED
+  zero does not survive a round trip through this app's own `.tml`/`.tmlu`; an
+  unmeasured one does. The full argument, and the measured scale of it, is in
+  [ariane-export.md](ariane-export.md#the-lrud-zeronull-collision).
+
 - **Leading and trailing whitespace is trimmed off every text field.** The reader does
   `e.unescape()?.trim()` on every shot element's text (`parsers/tml/mod.rs:398`), which is what
   makes a pretty-printed `<Comment>\n  text\n</Comment>` from another tool read as `text` rather

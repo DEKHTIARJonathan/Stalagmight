@@ -677,11 +677,20 @@ The nine oracles, the two probe results it recorded rather than asserted (the
 defaults), and the findings it produced are all written up in the scenario
 file's header, each with the `reproduce:` line that still runs.
 
-ONE OPEN FINDING MAKES THE MATRIX'S `naharon.stalx` CELLS RED (finding 4 in
-that header): a real 532-shot survey does not round-trip through `.tmlu` - 78
-shot uuids are re-minted and every `0/0/0/0` LRUD comes back null. The oracle is
-deliberately left asserting rather than tolerated, so until that is resolved use
-`--fixtures fractal_plant_iter3.stalx` for a green matrix.
+Its first run against a fixture other than the default found that a real
+532-shot survey did not round-trip through `.tmlu` (finding 4 in that header):
+78 shot uuids were re-minted, because the exporter dropped the UUID on the
+reversed pre-zero-datum leg, and every measured-zero LRUD came back null. The
+first half is fixed; the second is Ariane's absent sentinel and is now written
+up in both lossiness tables, with the oracle folding that one documented
+equivalence and nothing else.
+
+Neither was the whole story, and finding 5 records the residue: 198 geometry
+keys still differ on that fixture, at least some of them the reversed leg
+arriving reversed (same tape, reciprocal heading, swapped depths), which X6's
+direction-bearing key cannot see through. So the matrix's `naharon.stalx` cells
+stay red - use `--fixtures fractal_plant_iter3.stalx` for a green matrix until
+that is measured.
 
 ### Three tiers, and which one gates CI
 

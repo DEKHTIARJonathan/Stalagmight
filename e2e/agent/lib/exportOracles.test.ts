@@ -573,6 +573,22 @@ describe('X6 shot multiset', () => {
     expect(shotKey(shot({ length: 5.0000001 }))).toBe(shotKey(shot({ length: 5 })));
   });
 
+  it("reads Ariane's 0.0 LRUD as the absent sentinel it is, per field", () => {
+    // `0.0` IS the format's null: the writer fills unwrap_or(0.0) and the reader
+    // maps it back to None per field. A MEASURED zero therefore cannot round-trip
+    // and an unmeasured one can. Documented at
+    // docs/ariane-export.md#the-lrud-zeronull-collision.
+    expect(shotKey(shot({ lrud: [0, 0, 0, 0] }))).toBe(shotKey(shot({ lrud: [null, null, null, null] })));
+    expect(shotKey(shot({ lrud: [0, 3, 0, 2] }))).toBe(shotKey(shot({ lrud: [null, 3, null, 2] })));
+  });
+
+  it('folds ONLY that equivalence - a real LRUD change still differs', () => {
+    // The line between a documented semantic and a tolerance.
+    expect(shotKey(shot({ lrud: [0, 0, 0, 0] }))).not.toBe(shotKey(shot({ lrud: [3.5, 0, 0, 0] })));
+    expect(shotKey(shot({ lrud: [3.5, 0, 0, 0] }))).not.toBe(shotKey(shot({ lrud: [null, 0, 0, 0] })));
+    expect(shotKey(shot({ lrud: [3.5, 0, 0, 0] }))).not.toBe(shotKey(shot({ lrud: [3.6, 0, 0, 0] })));
+  });
+
   it('does NOT key on the comment - the round trip moves it to the station', () => {
     // `commentsOnStations` defaults on, so a shot comment legitimately comes
     // back as a STATION comment. Keying the shot on it reported every comment
