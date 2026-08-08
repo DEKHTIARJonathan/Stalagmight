@@ -60,7 +60,7 @@ const MAX_PICKER_CANDIDATES: usize = 32;
 
 /// What a downloaded project dump contains, from the caller's point of view.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum DumpClassification {
+pub enum DumpClassification {
     /// Exactly one `*.stalx` - open it. Holds the entry's path within the ZIP.
     Stalx(String),
     /// No `*.stalx` but an `ariane.tml` is present - route to C2 adoption (#214).
@@ -83,7 +83,7 @@ pub(crate) enum DumpClassification {
 }
 
 /// Classify a dump from its list of entry paths. Pure; never panics.
-pub(crate) fn classify(entry_paths: &[String]) -> DumpClassification {
+pub fn classify(entry_paths: &[String]) -> DumpClassification {
     let stalx: Vec<String> = entry_paths
         .iter()
         .filter(|p| has_stalx_suffix(p))
@@ -116,7 +116,7 @@ pub(crate) fn classify(entry_paths: &[String]) -> DumpClassification {
 /// bare path let a chosen `.tml` be extracted as if it were a database, which fails
 /// to open AND replaces whatever clean copy was there.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ChosenKind {
+pub enum ChosenKind {
     Stalx,
     Ariane,
 }
@@ -132,7 +132,7 @@ pub(crate) enum ChosenKind {
 /// remembered from an earlier download - otherwise it validates a listing the
 /// extract does not honour. Comparison is exact: the archive is keyed by byte-equal
 /// names, so any normalisation here would let a near-miss resolve to a real entry.
-pub(crate) fn chosen_candidate(entry_paths: &[String], chosen: &str) -> Option<ChosenKind> {
+pub fn chosen_candidate(entry_paths: &[String], chosen: &str) -> Option<ChosenKind> {
     let holds = |paths: &[String]| paths.iter().any(|p| p == chosen);
     match classify(entry_paths) {
         DumpClassification::AmbiguousStalx(paths) if holds(&paths) => Some(ChosenKind::Stalx),
@@ -198,7 +198,7 @@ fn download_temp_path(dest: &Path) -> PathBuf {
 /// A dump ZIP parsed once. Lists its entry paths and extracts the chosen entry
 /// from the *same* archive, so the central directory isn't re-parsed between the
 /// classify step and the extract step.
-pub(crate) struct Dump<'a> {
+pub struct Dump<'a> {
     archive: zip::ZipArchive<Cursor<&'a [u8]>>,
 }
 
@@ -208,7 +208,7 @@ impl<'a> Dump<'a> {
     /// Rejects an absurd entry count up front (see [`MAX_ENTRIES`]) so the
     /// per-entry work in [`Self::entry_paths`] can never be driven to exhaustion by
     /// a server that claims millions of files.
-    pub(crate) fn open(zip_bytes: &'a [u8]) -> Result<Self, SpeleoDbError> {
+    pub fn open(zip_bytes: &'a [u8]) -> Result<Self, SpeleoDbError> {
         Self::open_capped(zip_bytes, MAX_ENTRIES)
     }
 
@@ -228,7 +228,7 @@ impl<'a> Dump<'a> {
     }
 
     /// The entry paths, in central-directory order - what [`classify`] consumes.
-    pub(crate) fn entry_paths(&mut self) -> Result<Vec<String>, SpeleoDbError> {
+    pub fn entry_paths(&mut self) -> Result<Vec<String>, SpeleoDbError> {
         let mut names = Vec::with_capacity(self.archive.len());
         for i in 0..self.archive.len() {
             let entry = self
@@ -253,7 +253,7 @@ impl<'a> Dump<'a> {
     /// central-directory order is arbitrary, and the canonical entry has to lead
     /// because it is the only pick that does not set up a silent replace on the next
     /// push.
-    pub(crate) fn entry_details(
+    pub fn entry_details(
         &mut self,
         wanted: &[String],
     ) -> Result<Vec<SpeleoDumpCandidate>, SpeleoDbError> {
@@ -324,11 +324,7 @@ impl<'a> Dump<'a> {
 
     /// Extract a single entry (the one chosen by [`classify`]) to `dest`, creating
     /// parent directories as needed.
-    pub(crate) fn extract_entry_to(
-        &mut self,
-        entry_path: &str,
-        dest: &Path,
-    ) -> Result<(), SpeleoDbError> {
+    pub fn extract_entry_to(&mut self, entry_path: &str, dest: &Path) -> Result<(), SpeleoDbError> {
         self.extract_entry_capped(entry_path, dest, MAX_ENTRY_BYTES)
     }
 

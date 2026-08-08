@@ -27,7 +27,15 @@ use crate::models::ImportReceipt;
 ///
 /// Variants are ordered ascending so `>=` expresses capability thresholds
 /// (download ≥ `ReadOnly`, upload/lock ≥ `ReadAndWrite`, delete/collab = `Admin`).
+///
+/// `export_to` without `export` (C3 rule): the file itself is still written
+/// only by the gen_ipc_types example (which takes the file name), but the path
+/// must use the member-crate base so `SpeleoLinkStatus`'s export test can
+/// compute the sibling `./Permission` import - ts-rs diffs the two `EXPORT_TO`
+/// strings, and mixing the default `bindings/` base with the member
+/// `../../bindings/` base makes that diff unrepresentable (the test panics).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, TS)]
+#[ts(export_to = "../../bindings/Permission.ts")]
 pub enum Permission {
     #[serde(rename = "WEB_VIEWER")]
     WebViewer,
@@ -54,9 +62,9 @@ pub enum Visibility {
 
 /// A git commit as carried in `latest_commit`. Only the SHA is needed here.
 #[derive(Debug, Clone, Deserialize)]
-pub(crate) struct Commit {
+pub struct Commit {
     /// 40-hex git commit SHA.
-    pub(crate) id: String,
+    pub id: String,
 }
 
 /// One commit in a project's **linear** revision history
@@ -64,33 +72,33 @@ pub(crate) struct Commit {
 /// only `id` / `parent_ids` / `author_email`; the display fields (`authored_date`,
 /// `message`) are captured too for the #218 history view. `author_name` is ignored.
 #[derive(Debug, Clone, Deserialize)]
-pub(crate) struct RevisionCommit {
+pub struct RevisionCommit {
     /// 40-hex git commit SHA.
-    pub(crate) id: String,
+    pub id: String,
     /// Parent SHAs. Empty for the root commit; exactly one for a linear commit;
     /// more than one only for a merge (which the classifier treats as
     /// non-linear → fail closed).
     #[serde(default)]
-    pub(crate) parent_ids: Vec<String>,
+    pub parent_ids: Vec<String>,
     /// Commit author's email - compared against our own to tell "my push
     /// landed" from "someone else pushed".
     #[serde(default)]
-    pub(crate) author_email: String,
+    pub author_email: String,
     /// [#218] Commit timestamp (RFC-3339), for the history view. `None` if the
     /// server omits it.
     #[serde(default)]
-    pub(crate) authored_date: Option<String>,
+    pub authored_date: Option<String>,
     /// [#218] Commit message, for the history view. `None` if the server omits it.
     #[serde(default)]
-    pub(crate) message: Option<String>,
+    pub message: Option<String>,
 }
 
 /// Response of `GET /api/v2/projects/{id}/revisions/` - the project's linear
 /// commit list. The sibling `project` object the server also returns is ignored.
 #[derive(Debug, Clone, Deserialize)]
-pub(crate) struct RevisionHistory {
+pub struct RevisionHistory {
     #[serde(default)]
-    pub(crate) commits: Vec<RevisionCommit>,
+    pub commits: Vec<RevisionCommit>,
 }
 
 /// [#303] Which revision the next "Unwind to previous SpeleoDB version" would load.
@@ -104,7 +112,7 @@ pub(crate) struct RevisionHistory {
 /// - `false` - the target is an ancestor, so the working copy DOES move back, and any
 ///   later push lands that older content as a new forward commit.
 #[derive(Debug, Clone, Serialize, TS)]
-#[ts(export)]
+#[ts(export, export_to = "../../bindings/")]
 pub struct SpeleoUnwindTarget {
     /// 40-hex commit SHA to check out.
     pub hexsha: String,
@@ -129,7 +137,7 @@ pub struct SpeleoUnwindTarget {
 /// the case had been considered and could fire. An edit drops the pointer, which is what
 /// removes this direction entirely rather than warning about it.
 #[derive(Debug, Clone, Serialize, TS)]
-#[ts(export)]
+#[ts(export, export_to = "../../bindings/")]
 pub struct SpeleoRewindTarget {
     /// 40-hex commit SHA to check out.
     pub hexsha: String,
@@ -142,7 +150,7 @@ pub struct SpeleoRewindTarget {
 /// slice of [`RevisionCommit`] carrying only what the UI renders (no token, no
 /// server-internal fields). The list is server-ordered (newest first).
 #[derive(Debug, Clone, Serialize, TS)]
-#[ts(export)]
+#[ts(export, export_to = "../../bindings/")]
 pub struct SpeleoRevision {
     /// 40-hex git commit SHA.
     pub id: String,
@@ -177,7 +185,7 @@ impl From<RevisionCommit> for SpeleoRevision {
 /// rather than failing the whole listing - but it says so via [`Self::state_unknown`]
 /// instead of impersonating a clean row.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, TS)]
-#[ts(export)]
+#[ts(export, export_to = "../../bindings/")]
 pub struct SpeleoLocalProjectState {
     /// A local `.stalx` for this project exists AND its SpeleoDB link row could be
     /// read. False when the file is missing, corrupt, or carries no link row. Also
@@ -215,37 +223,37 @@ pub struct SpeleoLocalProjectState {
 
 /// The active lock ("mutex") on a project, when one is held.
 #[derive(Debug, Clone, Deserialize)]
-pub(crate) struct ActiveMutex {
+pub struct ActiveMutex {
     /// Email of the user currently holding the lock.
-    pub(crate) user: String,
+    pub user: String,
 }
 
 /// A SpeleoDB project as returned by `GET /api/v2/projects/` (and `/{id}/`),
 /// parsed down to the fields the spike consumes.
 #[derive(Debug, Clone, Deserialize)]
-pub(crate) struct Project {
-    pub(crate) id: String,
-    pub(crate) name: String,
+pub struct Project {
+    pub id: String,
+    pub name: String,
     /// Absent (not null) when the requesting user has no permission.
     #[serde(default)]
-    pub(crate) permission: Option<Permission>,
+    pub permission: Option<Permission>,
     /// Present only while the project is locked.
     #[serde(default)]
-    pub(crate) active_mutex: Option<ActiveMutex>,
+    pub active_mutex: Option<ActiveMutex>,
     /// Null on an empty (never-committed) repo.
     #[serde(default)]
-    pub(crate) latest_commit: Option<Commit>,
+    pub latest_commit: Option<Commit>,
     /// Raw project-type label (`ariane`/`compass`/…/`other`). Kept as the wire
     /// string: it is only a display heuristic, and staying a string is robust to
     /// new server types. The dump classifier is the authoritative openability check.
     #[serde(default, rename = "type")]
-    pub(crate) kind: String,
+    pub kind: String,
     // [Track A] #185/D-A-methods: the server's GeoJSON-export toggle. Parsed (not
     // ignored) so the full v2 payload round-trips; defaults false when omitted.
     // Consumed by #200 (surfaced via SpeleoLinkStatus to drive the rendering-disabled
     // banner + Enable-rendering PATCH).
     #[serde(default)]
-    pub(crate) exclude_geojson: bool,
+    pub exclude_geojson: bool,
     // [#206] editable metadata, parsed so the Project Settings tab can prefill the
     // current server truth. `description`/`country` are required server-side (always
     // present); `visibility` is PRIVATE/PUBLIC; `latitude`/`longitude` are JSON
@@ -267,10 +275,10 @@ pub(crate) struct Project {
 /// array of `GET /api/v2/projects/{id}/permissions/user/` (#215). Only the fields
 /// the collaborator UI needs are modelled; serde ignores `creation_date` etc.
 #[derive(Debug, Clone, Deserialize)]
-pub(crate) struct UserPermission {
+pub struct UserPermission {
     /// Collaborator email.
-    pub(crate) user: String,
-    pub(crate) level: Permission,
+    pub user: String,
+    pub level: Permission,
 }
 
 /// Wrapper for `GET .../permissions/user/` -> `{project, permissions: [...]}`.
@@ -285,9 +293,9 @@ pub(crate) struct UserPermissionList {
 /// `team` is the team UUID (resolved to a display name against the caller's team
 /// list, falling back to the raw UUID).
 #[derive(Debug, Clone, Deserialize)]
-pub(crate) struct TeamPermission {
-    pub(crate) team: String,
-    pub(crate) level: Permission,
+pub struct TeamPermission {
+    pub team: String,
+    pub level: Permission,
 }
 
 /// Wrapper for `GET .../permissions/team/` -> `{project, permissions: [...]}`.
@@ -301,18 +309,18 @@ pub(crate) struct TeamPermissionList {
 /// `GET /api/v2/teams/` (#215). Only id + name are consumed (the name map for the
 /// team roster + the add-team picker).
 #[derive(Debug, Clone, Deserialize)]
-pub(crate) struct Team {
-    pub(crate) id: String,
-    pub(crate) name: String,
+pub struct Team {
+    pub id: String,
+    pub name: String,
 }
 
 /// One autocomplete suggestion from the bare-array `GET /api/v2/user/autocomplete/`
 /// (#215): a user matched by email/name substring. The server pre-formats `label`
 /// as "Name <email>"; `name` is ignored (folded into `label`).
 #[derive(Debug, Clone, Deserialize)]
-pub(crate) struct UserAutocomplete {
-    pub(crate) email: String,
-    pub(crate) label: String,
+pub struct UserAutocomplete {
+    pub email: String,
+    pub label: String,
 }
 
 /// IPC-facing summary of a project for the spike dialog's list. Derived from
@@ -331,7 +339,7 @@ pub struct SpeleoProjectSummary {
 }
 
 impl SpeleoProjectSummary {
-    pub(crate) fn from_project(p: Project) -> Self {
+    pub fn from_project(p: Project) -> Self {
         Self {
             id: p.id,
             name: p.name,
@@ -373,7 +381,7 @@ pub struct SpeleoLoginResult {
 /// Where the API key is being kept. Mirrors `auth::TokenTier` across the IPC
 /// boundary.
 #[derive(Debug, Clone, Copy, Serialize, TS, PartialEq, Eq)]
-#[ts(export)]
+#[ts(export, export_to = "../../bindings/")]
 #[serde(rename_all = "snake_case")]
 pub enum TokenStorage {
     /// The OS keychain: survives a restart, encrypted by the platform.
@@ -390,7 +398,7 @@ pub enum TokenStorage {
 /// desktop unlock prompt, so `NotAttempted` is a real answer we show rather than
 /// go looking.
 #[derive(Debug, Clone, Copy, Serialize, TS, PartialEq, Eq)]
-#[ts(export)]
+#[ts(export, export_to = "../../bindings/")]
 #[serde(rename_all = "snake_case")]
 pub enum KeychainReport {
     /// Nothing has touched it yet (no login this session, no rehydrate).
@@ -455,7 +463,7 @@ impl SpeleoProjectMetadata {
     /// Project the SDB [`Project`] DTO down to the editable metadata surface,
     /// defaulting the required-but-Option-parsed fields (they are always present
     /// on a real GET/PATCH response).
-    pub(crate) fn from_project(p: &Project) -> Self {
+    pub fn from_project(p: &Project) -> Self {
         Self {
             name: p.name.clone(),
             description: p.description.clone().unwrap_or_default(),
@@ -578,7 +586,7 @@ pub struct SpeleoOpenResult {
 /// that lets "not pushed" travel without a reason is how that arm gets widened by
 /// accident.
 #[derive(Debug, Clone, Serialize, TS)]
-#[ts(export)]
+#[ts(export, export_to = "../../bindings/")]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum AdoptUpload {
     /// The `.stalx` is on the server, the lock was handed back, and the local copy
@@ -674,7 +682,7 @@ pub struct SpeleoAdoptResult {
 /// union (`kind`) the webview branches on. Errors (no permission, anomalies,
 /// network) surface through the `Err(SpeleoErrorDto)` channel instead.
 #[derive(Debug, Clone, Serialize, TS)]
-#[ts(export)]
+#[ts(export, export_to = "../../bindings/")]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum StartEditingResult {
     /// Lock acquired; the local copy already matched the server tip. Editing is
@@ -698,7 +706,7 @@ pub enum StartEditingResult {
 /// Outcome of `speleodb_done` (#197): push the open project's edits, then release
 /// the lock and return to read-only.
 #[derive(Debug, Clone, Serialize, TS)]
-#[ts(export)]
+#[ts(export, export_to = "../../bindings/")]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum DoneResult {
     /// Edits pushed (or there was nothing to push); the lock was released and the
@@ -734,7 +742,7 @@ pub enum DoneResult {
 /// Outcome of `speleodb_update` (#197): a read-only refresh of the open project
 /// against the server (no lock taken).
 #[derive(Debug, Clone, Serialize, TS)]
-#[ts(export)]
+#[ts(export, export_to = "../../bindings/")]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum UpdateResult {
     /// Already at the server tip - nothing to do.
@@ -781,7 +789,7 @@ pub struct SpeleoSessionStatus {
 /// `get_project`; they degrade to `None` when logged out / offline so the local
 /// truth (which the read-only gate hangs on) always returns. Carries no token.
 #[derive(Debug, Clone, Serialize, TS)]
-#[ts(export)]
+#[ts(export, export_to = "../../bindings/")]
 pub struct SpeleoLinkStatus {
     /// True when the open project is linked to a SpeleoDB project (a `speleo_link`
     /// row exists). False for a local project or when no project is open.
@@ -865,7 +873,7 @@ pub struct SpeleoLinkStatus {
 /// projected for the UI). Drives the action button (T2c): `RemoteAhead` → pull,
 /// `Conflict` → resolve. Derived from [`super::sync::reconcile_verdict`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
-#[ts(export)]
+#[ts(export, export_to = "../../bindings/")]
 #[serde(rename_all = "snake_case")]
 pub enum RemoteState {
     /// Local BASE == server tip (nothing to pull).
@@ -882,7 +890,7 @@ pub enum RemoteState {
 /// releasing the lock (unlike [`DoneResult`], which releases). The lock is
 /// retained in every arm so editing continues.
 #[derive(Debug, Clone, Serialize, TS)]
-#[ts(export)]
+#[ts(export, export_to = "../../bindings/")]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum PushResult {
     /// Edits pushed (or nothing to push); the lock is retained.
@@ -911,7 +919,7 @@ pub enum PushResult {
 /// code for a `Status` error and `None` for transport / local errors. Carries no
 /// token (the no-token-leak guard pins this).
 #[derive(Debug, Clone, Serialize, TS)]
-#[ts(export)]
+#[ts(export, export_to = "../../bindings/")]
 pub struct SpeleoErrorDto {
     pub message: String,
     pub action: SpeleoDbAction,
@@ -945,7 +953,7 @@ pub struct SpeleoErrorDto {
 
 /// [#258] Which flavour of ambiguity a picker is being offered for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
-#[ts(export)]
+#[ts(export, export_to = "../../bindings/")]
 #[serde(rename_all = "snake_case")]
 pub enum DumpCandidateKind {
     /// Several `.stalx` - the chosen one is extracted.
@@ -963,7 +971,7 @@ pub enum DumpCandidateKind {
 /// with the same commit time, so the frontend suppresses a metadata column whose
 /// values all agree rather than showing a uselessly uniform one.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
-#[ts(export)]
+#[ts(export, export_to = "../../bindings/")]
 pub struct SpeleoDumpCandidate {
     /// The entry's path inside the dump ZIP, and the value the frontend sends back
     /// as `entryPath` to resolve. It must be byte-identical to the archive's own
@@ -1000,7 +1008,7 @@ pub struct SpeleoDumpCandidate {
 ///   `speleodb_open_project` was given. That is the abandoning verb: it performs
 ///   the very replace this error refused.
 #[derive(Debug, Clone, Serialize, TS)]
-#[ts(export)]
+#[ts(export, export_to = "../../bindings/")]
 pub struct UnpushedLocalEdits {
     /// The SpeleoDB project whose local copy holds the un-pushed edits.
     pub project_id: String,

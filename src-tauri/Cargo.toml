@@ -16,6 +16,7 @@ members = [
     "crates/models",
     "crates/parsers",
     "crates/persistence",
+    "crates/speleodb",
     "crates/telemetry",
 ]
 resolver = "2"
@@ -52,7 +53,7 @@ usvg = "0.43"
 resvg = "0.43"
 sha2 = "0.10"
 uuid = "1"
-# Pinned exact - rationale on the [dependencies] entry below.
+# Pinned exact - rationale on the speleodb member's entry (crates/speleodb).
 ureq = "=3.1.4"
 http = "1"
 percent-encoding = "2"
@@ -72,10 +73,11 @@ tempfile = "3.24.0"
 
 [features]
 e2e = ["tauri-plugin-webdriver-automation"]
-# Forwards to the member that owns the implementation, and stays a real feature
-# of this crate too: the root's own `#[cfg(feature = "telemetry")]` users (the
-# registry coverage tests in commands/, speleodb/metrics.rs) are gated on it.
-telemetry = ["stalagmight-telemetry/telemetry"]
+# Forwards to the members that own the implementations, and stays a real
+# feature of this crate too: the root's own `#[cfg(feature = "telemetry")]`
+# users (the registry coverage tests in commands/) are gated on it. The
+# speleodb member forwards for the same reason (its metrics.rs coverage test).
+telemetry = ["stalagmight-telemetry/telemetry", "stalagmight-speleodb/telemetry"]
 # Dev-only: gates the gen_ipc_types example so it isn't compiled in normal
 # builds/tests. Enabled by `pnpm gen:ipc-types`.
 ipc-typegen = []
@@ -105,6 +107,7 @@ stalagmight-export = { path = "crates/export" }
 stalagmight-models = { path = "crates/models" }
 stalagmight-parsers = { path = "crates/parsers" }
 stalagmight-persistence = { path = "crates/persistence" }
+stalagmight-speleodb = { path = "crates/speleodb" }
 stalagmight-telemetry = { path = "crates/telemetry" }
 tauri = { version = "2", features = ["devtools"] }
 tauri-plugin-fs = "2"
@@ -127,20 +130,15 @@ tracing-subscriber = { workspace = true, features = ["json", "env-filter"] }
 tracing-appender = { workspace = true }
 chrono = { workspace = true, features = ["serde"] }
 ts-rs = { workspace = true, features = ["no-serde-warnings"] }
-thiserror = { workspace = true }
 anyhow = { workspace = true }
 toml = { workspace = true }
 directories = { workspace = true }
 sha2 = { workspace = true }
 uuid = { workspace = true, features = ["v4"] }
-# Pinned exact: the SpeleoDB seed upload (#183) uses `unversioned::multipart`,
-# whose API is explicitly not semver-stable (see #185). `multipart` adds to the
-# existing default features (rustls, gzip); the tile fetch is unaffected.
-ureq = { workspace = true, features = ["multipart"] }
+# The tile fetch. The exact pin (and the `multipart` feature it exists for)
+# is explained on the speleodb member's entry (crates/speleodb).
+ureq = { workspace = true }
 http = { workspace = true }
-# Percent-encode the user-typed substring for the collaborator autocomplete query
-# param (#215). Already in the tree transitively; promoted to a direct dep.
-percent-encoding = { workspace = true }
 image = { workspace = true }
 zip = { workspace = true }
 # Used both for telemetry's batched event encoding and for the binary
@@ -174,23 +172,6 @@ trash = "5.2.6"
 # the ones the dev/e2e workflows depend on.
 [target.'cfg(all(not(target_os = "macos"), not(target_os = "android"), not(target_os = "ios")))'.dependencies]
 tauri-plugin-single-instance = "~2.3.7"
-
-# SpeleoDB auth token at rest (#183, full tiering in #188). Per-OS native secret
-# store. On Linux, Secret Service (gnome-keyring / KWallet) is persistent across
-# sessions - unlike the session-scoped `linux-native` keyutils. `crypto-rust`
-# avoids a system OpenSSL dependency, and `vendored` statically builds libdbus
-# (keyring → dbus-secret-service → dbus → libdbus-sys) so there is no
-# `libdbus-1-dev` system build dependency to install on a clean box or in CI.
-# Headless CI has no secret service at runtime, so the client falls back to an
-# in-memory session token (see speleodb::auth).
-[target.'cfg(target_os = "linux")'.dependencies]
-keyring = { version = "3", default-features = false, features = ["sync-secret-service", "crypto-rust", "vendored"] }
-
-[target.'cfg(target_os = "macos")'.dependencies]
-keyring = { version = "3", default-features = false, features = ["apple-native"] }
-
-[target.'cfg(target_os = "windows")'.dependencies]
-keyring = { version = "3", default-features = false, features = ["windows-native"] }
 
 # Minimally-patched wry so the Linux WebKit web process returns freed memory to
 # the OS. The patch adds `WebKitMemoryPressureSettings` (read from
@@ -322,6 +303,7 @@ workspace = true
 stalagmight-models = { path = "crates/models", features = ["test-support"] }
 stalagmight-parsers = { path = "crates/parsers", features = ["test-support"] }
 stalagmight-persistence = { path = "crates/persistence", features = ["test-support"] }
+stalagmight-speleodb = { path = "crates/speleodb", features = ["test-support"] }
 tempfile = { workspace = true }
 tauri = { version = "2", features = ["test"] }
 libc = "0.2"

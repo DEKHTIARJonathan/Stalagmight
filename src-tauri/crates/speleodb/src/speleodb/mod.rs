@@ -21,18 +21,18 @@
 //! The orchestration that ties these to `AppState`/config/app-dirs lives in
 //! `core::state::speleodb`; the IPC commands are in `commands::speleodb`.
 
-pub(crate) mod auth;
-pub(crate) mod client;
+pub mod auth;
+pub mod client;
 // Persisted connection settings ([`SpeleoDbConfig`]), re-exported via `crate::config`.
 pub mod config;
 // [Track A] #186 status→action contract (pure map_status + ts-rs SpeleoDbAction).
-pub(crate) mod contract;
-pub(crate) mod dump;
+pub mod contract;
+pub mod dump;
 // [F1] #210 per-endpoint traffic instrumentation (count + latency + outcome).
-pub(crate) mod metrics;
+pub mod metrics;
 pub mod models;
 // [P1] #192/#193 pure sync-engine logic: base-SHA fence + ancestry recovery.
-pub(crate) mod sync;
+pub mod sync;
 // [Track A] #187 http/https private-network TLS policy (pure classify_addr + enforce).
 pub(crate) mod tls;
 
@@ -53,7 +53,7 @@ pub use models::{
 /// Shaped so the status→action decision table (#186) can branch on
 /// [`SpeleoDbError::Status`] without re-parsing message strings.
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum SpeleoDbError {
+pub enum SpeleoDbError {
     /// No token is available - the user is not logged in (or the token was dropped).
     #[error("not logged in to SpeleoDB")]
     NotAuthenticated,
@@ -336,7 +336,7 @@ mod live_tests {
 
     const SEED_FIXTURE: &str = concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../e2e/fixtures/fractal_plant_iter2.stalx"
+        "/../../../e2e/fixtures/fractal_plant_iter2.stalx"
     );
 
     /// A **real** Ariane `.tml` (a ZIP archive - verified live: the server's
@@ -347,7 +347,7 @@ mod live_tests {
     /// `ariane.tml` so the multipart part keeps the contract filename.
     const TML_FIXTURE: &str = concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/tests/fixtures/test_simple.tml"
+        "/../../tests/fixtures/test_simple.tml"
     );
 
     /// Build a `base/api/v2/{suffix}` URL the same way `client::api_url` does
@@ -488,7 +488,8 @@ mod live_tests {
         dump.extract_entry_to(&entry, &dest)
             .expect("extract .stalx");
 
-        let db = crate::persistence::Database::open_existing(&dest).expect("open extracted .stalx");
+        let db = stalagmight_persistence::persistence::Database::open_existing(&dest)
+            .expect("open extracted .stalx");
         let project = db
             .load_project()
             .expect("load project from extracted .stalx");
@@ -1268,7 +1269,7 @@ mod live_tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let dest = dir.path().join("project.stalx");
         d.extract_entry_to(&entry, &dest).expect("extract .stalx");
-        let db = crate::persistence::Database::open_existing(&dest)
+        let db = stalagmight_persistence::persistence::Database::open_existing(&dest)
             .expect("the round-tripped .stalx opens as sqlite");
         let project = db
             .load_project()
@@ -1438,7 +1439,7 @@ mod live_tests {
 
     /// Build an in-memory project with one section of two real shots. With
     /// `anchor = Some((lat, lon))` it carries a georeferenced zero datum, so
-    /// [`export_tml_for_speleodb`](crate::export::tml::export_tml_for_speleodb)
+    /// [`export_tml_for_speleodb`](stalagmight_export::export::tml::export_tml_for_speleodb)
     /// writes a real GPS anchor on the exported START shot - the thing `openspeleo_lib` needs to emit a
     /// `ProjectGeoJSON`. With `None` the exported `.tml` START is 0/0 (no anchor).
     #[expect(clippy::expect_used, reason = "ignored live integration test helper")]
@@ -1554,7 +1555,7 @@ mod live_tests {
         let project = build_render_project(Some((20.25, -87.5)));
         let dir = tempfile::tempdir().expect("tempdir");
         let tml = dir.path().join("ariane.tml");
-        crate::export::tml::export_tml_for_speleodb(&project, &tml)
+        stalagmight_export::export::tml::export_tml_for_speleodb(&project, &tml)
             .expect("export georeferenced .tml");
 
         // The .stalx part is a stand-in (the render is driven entirely by the
@@ -1639,7 +1640,7 @@ mod live_tests {
         let project = build_render_project(None); // no zero datum → 0/0 START
         let dir = tempfile::tempdir().expect("tempdir");
         let tml = dir.path().join("ariane.tml");
-        crate::export::tml::export_tml_for_speleodb(&project, &tml)
+        stalagmight_export::export::tml::export_tml_for_speleodb(&project, &tml)
             .expect("export un-georeferenced .tml");
 
         let stalx = std::path::Path::new(SEED_FIXTURE);
@@ -1716,7 +1717,7 @@ mod live_tests {
         let project = build_render_project(Some((20.25, -87.5)));
         let dir = tempfile::tempdir().expect("tempdir");
         let tml = dir.path().join("ariane.tml");
-        crate::export::tml::export_tml_for_speleodb(&project, &tml)
+        stalagmight_export::export::tml::export_tml_for_speleodb(&project, &tml)
             .expect("export georeferenced .tml");
 
         // A single `.tml` artifact part with NO explicit `.mime_str(...)` - let

@@ -20,7 +20,9 @@ pub use stalagmight_parsers::parsers;
 // Extracted to the `stalagmight-persistence` workspace member (together with
 // `cache` and `tilemap_cache`); re-exported under the old names, same deal.
 pub use stalagmight_persistence::persistence;
-pub mod speleodb;
+// Extracted to the `stalagmight-speleodb` workspace member; re-exported under
+// the old name, same deal as `models` above.
+pub use stalagmight_speleodb::speleodb;
 pub use stalagmight_telemetry::telemetry;
 #[cfg(test)]
 pub mod test_helpers;

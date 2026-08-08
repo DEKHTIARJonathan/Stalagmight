@@ -198,7 +198,7 @@ static SINK: OnceLock<TelemetryCollector> = OnceLock::new();
 
 /// Install the telemetry sink the SpeleoDB client records through. Called once at
 /// app setup; a second call is ignored (the first handle wins).
-pub(crate) fn install(collector: TelemetryCollector) {
+pub fn install(collector: TelemetryCollector) {
     let _ = SINK.set(collector);
 }
 

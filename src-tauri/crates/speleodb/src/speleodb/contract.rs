@@ -25,7 +25,7 @@ use super::SpeleoDbError;
 /// frontend branches on `err.action` rather than on message text (D-B2). Order
 /// is non-load-bearing (no `>=` comparisons - unlike [`super::Permission`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[ts(export)]
+#[ts(export, export_to = "../../bindings/")]
 pub enum SpeleoDbAction {
     /// The token is dead (revoked / invalid): a 401 on any authed endpoint, or a
     /// 403 on the `/user/` whoami chokepoint (the box's DRF 401→403 downgrade,
@@ -81,7 +81,7 @@ pub enum SpeleoDbAction {
 /// surfacing a bare errno like "Invalid argument". The raw cause is kept in the
 /// error's `detail` (and logged) so bug reports stay actionable.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[ts(export)]
+#[ts(export, export_to = "../../bindings/")]
 pub enum TransportCause {
     /// The host answered the dial with a refusal / dropped the connection
     /// (nothing listening on that port, or the server closed on us).
@@ -102,7 +102,7 @@ pub enum TransportCause {
 /// per-endpoint 403 semantics (D-B4): a 403 on a read endpoint means read-only
 /// access, a 403 on a write endpoint means a write fence.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Endpoint {
+pub enum Endpoint {
     Login,
     User,
     ListProjects,
@@ -159,7 +159,7 @@ impl Endpoint {
 /// not use them - lock contention is acquire-**400**, handled by #194), so they
 /// fall through to the Fatal default; 429/Retry-After is intentionally NOT a
 /// `Wait` action (there is no `Wait` in this issue).
-pub(crate) fn map_status(endpoint: Endpoint, status: u16) -> SpeleoDbAction {
+pub fn map_status(endpoint: Endpoint, status: u16) -> SpeleoDbAction {
     match status {
         // 401 = real token revocation on every authenticated endpoint. Login is
         // the exception: bad creds come back as 400 (verified), so a 401 cannot
@@ -206,7 +206,7 @@ pub(crate) fn map_status(endpoint: Endpoint, status: u16) -> SpeleoDbAction {
 ///   translated "could not reach <endpoint>" line instead of the raw errno.
 /// - `NotAuthenticated` → `ReLogin` (no usable token).
 /// - `InsecureEndpoint` and every other local error → `Fatal`, `status: None`.
-pub(crate) fn dto_for_error(endpoint: Endpoint, err: &SpeleoDbError) -> SpeleoErrorDto {
+pub fn dto_for_error(endpoint: Endpoint, err: &SpeleoDbError) -> SpeleoErrorDto {
     // Only a Transport error carries a cause; every other arm leaves it None,
     // which is what makes `transport` a sound discriminant on the FE side.
     let transport = match err {

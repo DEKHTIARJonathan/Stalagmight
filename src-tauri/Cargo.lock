@@ -4425,9 +4425,7 @@ dependencies = [
  "directories",
  "http",
  "image",
- "keyring",
  "libc",
- "percent-encoding",
  "rmp-serde",
  "rusqlite",
  "serde",
@@ -4438,6 +4436,7 @@ dependencies = [
  "stalagmight-models",
  "stalagmight-parsers",
  "stalagmight-persistence",
+ "stalagmight-speleodb",
  "stalagmight-telemetry",
  "tauri",
  "tauri-build",
@@ -4447,7 +4446,6 @@ dependencies = [
  "tauri-plugin-single-instance",
  "tauri-plugin-webdriver-automation",
  "tempfile",
- "thiserror 1.0.69",
  "toml 0.8.2",
  "tracing",
  "tracing-appender",
@@ -4530,6 +4528,29 @@ dependencies = [
  "tracing",
  "ts-rs",
  "uuid",
+]
+
+[[package]]
+name = "stalagmight-speleodb"
+version = "0.0.0"
+dependencies = [
+ "chrono",
+ "http",
+ "keyring",
+ "percent-encoding",
+ "serde",
+ "serde_json",
+ "stalagmight-export",
+ "stalagmight-models",
+ "stalagmight-persistence",
+ "stalagmight-telemetry",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tracing",
+ "ts-rs",
+ "ureq",
+ "uuid",
+ "zip",
 ]
 
 [[package]]

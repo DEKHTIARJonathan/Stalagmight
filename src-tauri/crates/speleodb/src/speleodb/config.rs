@@ -251,7 +251,7 @@ impl SpeleoDbConfig {
     /// would take that on their first launch, to spare the rare same-email-new-
     /// server switch one prompt. So the unstamped belief is kept, and it is
     /// self-limiting: the first write from any belief writer stamps it.
-    pub(crate) fn keychain_belief_applies_to(&self, endpoint: &str, email: &str) -> bool {
+    pub fn keychain_belief_applies_to(&self, endpoint: &str, email: &str) -> bool {
         if !self.keychain_has_token {
             return false;
         }

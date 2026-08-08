@@ -2,8 +2,8 @@
 //! I/O.
 //!
 //! These functions take the SHAs / commit lists already fetched by the client
-//! and return a typed verdict that the orchestration in
-//! [`crate::core::state::speleodb`] acts on. Keeping the policy pure makes every
+//! and return a typed verdict that the orchestration in the app crate's
+//! `core::state::speleodb` acts on. Keeping the policy pure makes every
 //! branch exhaustively unit-testable offline, which is what the guardrail suite
 //! (#211) relies on.
 //!
@@ -211,7 +211,7 @@ pub(crate) fn classify_ancestry(
 ///
 /// Returns `None` for an empty history OR an ambiguous one (zero or multiple
 /// leaves - e.g. a fork), so the caller fails closed rather than guessing.
-pub(crate) fn tip_of(commits: &[RevisionCommit]) -> Option<&str> {
+pub fn tip_of(commits: &[RevisionCommit]) -> Option<&str> {
     let parents: HashSet<&str> = commits
         .iter()
         .flat_map(|c| c.parent_ids.iter().map(String::as_str))
@@ -288,10 +288,7 @@ pub(crate) fn base_is_ancestor_of_tip(
 /// (#197): a confirmed push clears the dirty bit ONLY when this returns true, so a
 /// concurrent edit recorded after `push_start_at` (not in the uploaded snapshot)
 /// keeps its dirty bit and is re-pushed on the next Done rather than silently lost.
-pub(crate) fn edits_captured_by_push(
-    last_edit_at: Option<&str>,
-    push_start_at: Option<&str>,
-) -> bool {
+pub fn edits_captured_by_push(last_edit_at: Option<&str>, push_start_at: Option<&str>) -> bool {
     match (last_edit_at, push_start_at) {
         (Some(le), Some(ps)) => match (
             chrono::DateTime::parse_from_rfc3339(le),
@@ -309,7 +306,7 @@ pub(crate) fn edits_captured_by_push(
 /// local copy stands against the server tip, collapsing the fence + the
 /// fast-forward ancestry guard into the three outcomes those callers act on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ReconcileVerdict {
+pub enum ReconcileVerdict {
     /// BASE == tip: nothing remote to reconcile.
     UpToDate,
     /// Tip moved forward of a clean BASE AND BASE is a genuine ancestor of it -
@@ -328,7 +325,7 @@ pub(crate) enum ReconcileVerdict {
 /// FailClosed folds into `Diverged` here precisely so non-linear / multi-root /
 /// empty-with-base histories surface the divergence prompt instead of erroring.
 #[must_use]
-pub(crate) fn reconcile_verdict(
+pub fn reconcile_verdict(
     base: Option<&str>,
     tip: Option<&str>,
     dirty: bool,
@@ -352,7 +349,7 @@ pub(crate) fn reconcile_verdict(
 /// What a Done push should do, after fencing BASE against the server tip and (on a
 /// moved tip we hold the lock over) classifying the BASE..tip gap by authorship.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum PushPlan {
+pub enum PushPlan {
     /// BASE == tip: upload our edits directly.
     Upload,
     /// Our prior (ambiguous) push landed but an edit followed it: adopt the landed
@@ -373,7 +370,7 @@ pub(crate) enum PushPlan {
 /// the gap by authorship. Every fail-closed branch routes to the divergence prompt
 /// rather than a hard error or a blind re-push.
 #[must_use]
-pub(crate) fn plan_push(
+pub fn plan_push(
     base: Option<&str>,
     tip: Option<&str>,
     commits: &[RevisionCommit],
@@ -445,7 +442,7 @@ pub(crate) fn plan_push(
 /// BASE with no server tip is a transient empty response, and nothing local is at
 /// risk, so it degrades to `Unknown` rather than shouting `Conflict`.
 #[must_use]
-pub(crate) fn poll_verdict(
+pub fn poll_verdict(
     base: Option<&str>,
     tip: Option<&str>,
     dirty: bool,
@@ -517,7 +514,7 @@ pub(crate) fn poll_verdict(
 /// Returns `(hexsha, is_current)` where `is_current` marks the BASE case, so the caller
 /// can say "reload this revision's history" rather than "go back one".
 #[must_use]
-pub(crate) fn unwind_target(
+pub fn unwind_target(
     unwound_from: Option<&str>,
     base: Option<&str>,
     commits: &[RevisionCommit],
@@ -573,7 +570,7 @@ pub(crate) fn unwind_target(
 /// Returns `(hexsha, is_latest)` where `is_latest` marks the step that lands back ON BASE,
 /// so the caller can say "return to the latest version" instead of naming a revision.
 #[must_use]
-pub(crate) fn rewind_target(
+pub fn rewind_target(
     unwound_from: Option<&str>,
     base: Option<&str>,
     commits: &[RevisionCommit],
@@ -659,7 +656,7 @@ fn is_project_creation_commit(commit: &RevisionCommit) -> bool {
 /// HIDE real revisions, which is far worse than showing them in a debatable order.
 /// The root is dropped either way.
 #[must_use]
-pub(crate) fn display_history(commits: Vec<RevisionCommit>) -> Vec<RevisionCommit> {
+pub fn display_history(commits: Vec<RevisionCommit>) -> Vec<RevisionCommit> {
     let by_id: HashMap<&str, usize> = commits
         .iter()
         .enumerate()
@@ -709,7 +706,7 @@ pub(crate) fn display_history(commits: Vec<RevisionCommit>) -> Vec<RevisionCommi
 /// live - surface a notice. Case-insensitive (the server may normalise email case);
 /// a lock held by a DIFFERENT account is an ordinary contended-lock case, not this.
 #[must_use]
-pub(crate) fn concurrent_session_notice(active_mutex_user: Option<&str>, my_email: &str) -> bool {
+pub fn concurrent_session_notice(active_mutex_user: Option<&str>, my_email: &str) -> bool {
     active_mutex_user.is_some_and(|holder| holder.eq_ignore_ascii_case(my_email))
 }
 

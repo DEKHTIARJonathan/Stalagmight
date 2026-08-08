@@ -440,7 +440,7 @@ struct AuthTokenResponse {
 /// Note (verified against the live box): bad credentials return **400** with
 /// `{errors: {non_field_errors: [...]}}`, not 401. On an authenticated endpoint a
 /// *missing* header yields 403 and an *invalid/expired* token yields 401.
-pub(crate) fn login(
+pub fn login(
     base: &str,
     insecure_http: bool,
     email: &str,
@@ -468,7 +468,7 @@ pub(crate) fn login(
 }
 
 /// `GET /api/v2/projects/` - list the projects visible to the token holder.
-pub(crate) fn list_projects(
+pub fn list_projects(
     base: &str,
     token: &str,
     insecure_http: bool,
@@ -496,7 +496,7 @@ pub(crate) fn list_projects(
 /// mirror of [`list_projects`] parsing one bare [`Project`]. The caller validates
 /// `project_id` (UUID) before calling. Consumed by #194 start_editing (the
 /// lock-holder re-GET) and #202 (the freshness fold).
-pub(crate) fn get_project(
+pub fn get_project(
     base: &str,
     token: &str,
     insecure_http: bool,
@@ -522,7 +522,7 @@ const REVERIFY_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 /// re-verify: one attempt, [`REVERIFY_PROBE_TIMEOUT`]. #202 is not a correctness
 /// guard (a probe miss allows the edit and the release fence backstops it), so a
 /// single fast attempt is the right trade - it must never freeze the editor.
-pub(crate) fn get_project_probe(
+pub fn get_project_probe(
     base: &str,
     token: &str,
     insecure_http: bool,
@@ -575,7 +575,7 @@ fn get_project_inner(
 /// confirmation was lost, whether our edit actually landed on the server. The
 /// caller validates `project_id` (UUID) first. A GET, so it is retry-safe.
 /// Consumed by #197 done (ancestry recovery).
-pub(crate) fn get_revisions(
+pub fn get_revisions(
     base: &str,
     token: &str,
     insecure_http: bool,
@@ -610,7 +610,7 @@ struct UserInfo {
 /// (instead of trusting typed input) and, as a side effect, to validate the
 /// token at login time: a bad/expired token 401s here rather than slipping
 /// through to the first list call.
-pub(crate) fn fetch_user_email(
+pub fn fetch_user_email(
     base: &str,
     token: &str,
     insecure_http: bool,
@@ -635,7 +635,7 @@ pub(crate) fn fetch_user_email(
 
 /// `GET /api/v2/projects/{id}/download/dump/` - download the project's working
 /// tree (HEAD) as a ZIP. Returns the raw ZIP bytes for [`super::dump`] to handle.
-pub(crate) fn download_dump(
+pub fn download_dump(
     base: &str,
     token: &str,
     insecure_http: bool,
@@ -663,7 +663,7 @@ pub(crate) fn download_dump(
 /// [`download_dump`] (same `Endpoint::DownloadDump` contract/metrics, same read
 /// retry) but pinned to `hexsha` rather than HEAD. The caller validates `hexsha`
 /// at the trust boundary before it reaches this URL interpolation.
-pub(crate) fn download_dump_at_hash(
+pub fn download_dump_at_hash(
     base: &str,
     token: &str,
     insecure_http: bool,
@@ -773,7 +773,7 @@ fn build_upload_parts(
 /// an explicit MIME (D-A-multipart / D-A-mime). The caller must hold the project
 /// mutex. `idempotent = false` → runs at most once (a commit must not
 /// double-submit on a mid-response failure).
-pub(crate) fn upload_auto(
+pub fn upload_auto(
     base: &str,
     token: &str,
     insecure_http: bool,
@@ -870,7 +870,7 @@ fn parse_upload_auto_response(body: &[u8]) -> Result<Project, SpeleoDbError> {
 /// updated [`Project`]. The upload endpoint requires the caller to hold the lock
 /// (`UserOwnsProjectMutex`). `idempotent = false`. Consumed by #194
 /// `speleodb_start_editing`.
-pub(crate) fn acquire_lock(
+pub fn acquire_lock(
     base: &str,
     token: &str,
     insecure_http: bool,
@@ -888,7 +888,7 @@ pub(crate) fn acquire_lock(
 
 /// `POST /api/v2/projects/{id}/release/` - release the project mutex, returning
 /// the updated [`Project`]. `idempotent = false`. Consumed by #194/#197.
-pub(crate) fn release_lock(
+pub fn release_lock(
     base: &str,
     token: &str,
     insecure_http: bool,
@@ -908,7 +908,7 @@ pub(crate) fn release_lock(
 /// holder currently holds, returning `()` on success. Idempotent (releasing when
 /// none are held is a no-op), so a transient-transport retry is safe. Drives the
 /// held-lock resume/release prompt's "Release all" choice (#201, B1).
-pub(crate) fn release_all_locks(
+pub fn release_all_locks(
     base: &str,
     token: &str,
     insecure_http: bool,
@@ -933,7 +933,7 @@ pub(crate) fn release_all_locks(
 /// failure can't double-apply. Consumed by #200's Enable-rendering action (PATCH
 /// `exclude_geojson = false`); the server enforces permission (READ_AND_WRITE, no
 /// lock) on the metadata PATCH.
-pub(crate) fn patch_project(
+pub fn patch_project(
     base: &str,
     token: &str,
     insecure_http: bool,
@@ -961,7 +961,7 @@ pub(crate) fn patch_project(
 /// mid-response failure can't double-submit a create). The #207 create-on-SDB
 /// orchestration builds the payload (name/description/country/visibility/`type`/
 /// lat-long/`exclude_geojson`); `created_by` is injected server-side.
-pub(crate) fn create_project_with(
+pub fn create_project_with(
     base: &str,
     token: &str,
     insecure_http: bool,
@@ -987,14 +987,9 @@ pub(crate) fn create_project_with(
 
 /// Convenience: create a minimal `other`-type project by name. Test/seed helper
 /// (the #207 production path uses [`create_project_with`] with a full payload).
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "name-only convenience; prod create-on-SDB (#207) uses create_project_with"
-    )
-)]
-pub(crate) fn create_project(
+/// `pub` because the root crate's live tests drive it across the crate
+/// boundary, which also retires the old non-test dead-code expectation.
+pub fn create_project(
     base: &str,
     token: &str,
     insecure_http: bool,
@@ -1040,7 +1035,7 @@ fn post_no_body_project(
 /// DELETE is idempotent (deleting an already-deleted project is a no-op/404), so a
 /// transient-transport retry is safe. Consumed by #215's Delete-project action and
 /// the live tests' per-run cleanup. Does not require releasing the lock first.
-pub(crate) fn delete_project(
+pub fn delete_project(
     base: &str,
     token: &str,
     insecure_http: bool,
@@ -1118,7 +1113,7 @@ fn send_json_request(
 /// `GET /api/v2/projects/{id}/permissions/user/` - list the project's active
 /// per-user permission grants (#215). A GET, so retry-safe; requires READ_ONLY+
 /// server-side (403 below that). Only the `permissions[]` array is consumed.
-pub(crate) fn list_user_permissions(
+pub fn list_user_permissions(
     base: &str,
     token: &str,
     insecure_http: bool,
@@ -1143,7 +1138,7 @@ pub(crate) fn list_user_permissions(
 
 /// `POST /api/v2/projects/{id}/permission/user/detail/` `{user, level}` - grant a
 /// collaborator a permission level (#215). ADMIN-gated server-side.
-pub(crate) fn add_user_permission(
+pub fn add_user_permission(
     base: &str,
     token: &str,
     insecure_http: bool,
@@ -1164,7 +1159,7 @@ pub(crate) fn add_user_permission(
 
 /// `PUT /api/v2/projects/{id}/permission/user/detail/` `{user, level}` - change an
 /// existing collaborator's permission level (#215). ADMIN-gated server-side.
-pub(crate) fn set_user_permission(
+pub fn set_user_permission(
     base: &str,
     token: &str,
     insecure_http: bool,
@@ -1185,7 +1180,7 @@ pub(crate) fn set_user_permission(
 
 /// `DELETE /api/v2/projects/{id}/permission/user/detail/` with body `{user}` -
 /// remove a collaborator (soft, #215). ADMIN-gated server-side.
-pub(crate) fn remove_user_permission(
+pub fn remove_user_permission(
     base: &str,
     token: &str,
     insecure_http: bool,
@@ -1205,7 +1200,7 @@ pub(crate) fn remove_user_permission(
 
 /// `GET /api/v2/projects/{id}/permissions/team/` - list the project's active
 /// per-team permission grants (#215). A GET, so retry-safe.
-pub(crate) fn list_team_permissions(
+pub fn list_team_permissions(
     base: &str,
     token: &str,
     insecure_http: bool,
@@ -1231,7 +1226,7 @@ pub(crate) fn list_team_permissions(
 /// `POST /api/v2/projects/{id}/permission/team/detail/` `{team, level}` - grant a
 /// team a permission level (#215). ADMIN-gated; the server rejects `ADMIN` for a
 /// team (teams may only hold WEB_VIEWER / READ_ONLY / READ_AND_WRITE).
-pub(crate) fn add_team_permission(
+pub fn add_team_permission(
     base: &str,
     token: &str,
     insecure_http: bool,
@@ -1252,7 +1247,7 @@ pub(crate) fn add_team_permission(
 
 /// `PUT /api/v2/projects/{id}/permission/team/detail/` `{team, level}` - change a
 /// team's permission level (#215). ADMIN-gated; no `ADMIN` for teams.
-pub(crate) fn set_team_permission(
+pub fn set_team_permission(
     base: &str,
     token: &str,
     insecure_http: bool,
@@ -1273,7 +1268,7 @@ pub(crate) fn set_team_permission(
 
 /// `DELETE /api/v2/projects/{id}/permission/team/detail/` with body `{team}` -
 /// revoke a team's access (soft, #215). ADMIN-gated server-side.
-pub(crate) fn remove_team_permission(
+pub fn remove_team_permission(
     base: &str,
     token: &str,
     insecure_http: bool,
@@ -1294,7 +1289,7 @@ pub(crate) fn remove_team_permission(
 /// `GET /api/v2/teams/` - the authenticated user's teams (a bare JSON array), for
 /// the add-team picker and to resolve a team-permission UUID to a display name
 /// (#215). A GET, so retry-safe.
-pub(crate) fn list_teams(
+pub fn list_teams(
     base: &str,
     token: &str,
     insecure_http: bool,
@@ -1319,7 +1314,7 @@ pub(crate) fn list_teams(
 /// Backs the add-collaborator email typeahead (#215). A GET, so retry-safe. The
 /// query is percent-encoded so spaces / `@` / `&` in a partial name or email cannot
 /// break the URL.
-pub(crate) fn list_user_autocomplete(
+pub fn list_user_autocomplete(
     base: &str,
     token: &str,
     insecure_http: bool,
@@ -1346,8 +1341,8 @@ pub(crate) fn list_user_autocomplete(
 /// Drives the two-account live tests' collaborator setup; the production path is
 /// [`add_user_permission`] (typed `Permission`). The dev box is a private address,
 /// so `insecure_http = false` is fine here.
-#[cfg(test)]
-pub(crate) fn grant_permission(
+#[cfg(any(test, feature = "test-support"))]
+pub fn grant_permission(
     base: &str,
     token: &str,
     project_id: &str,
@@ -2368,10 +2363,7 @@ mod tests {
         // future edit that reaches for the bare `agent()` silently reinstates the
         // 30 s budget on one of them.
         let src = include_str!("client.rs");
-        for name in [
-            "pub(crate) fn download_dump(",
-            "pub(crate) fn download_dump_at_hash(",
-        ] {
+        for name in ["pub fn download_dump(", "pub fn download_dump_at_hash("] {
             let start = src.find(name).expect("dump download fn present");
             let body = &src[start..];
             let end = body.find("\n}\n").expect("fn body terminates");

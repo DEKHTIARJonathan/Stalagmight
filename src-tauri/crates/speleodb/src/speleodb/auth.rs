@@ -30,7 +30,7 @@ const KEYRING_SERVICE: &str = "stalagmight";
 /// trailing slash and default ports dropped) so the same server entered several
 /// ways resolves to one entry. Falls back to the lightweight string normalization
 /// when the endpoint does not parse as a URL (e.g. a bare host).
-pub(crate) fn account_key(endpoint: &str, email: &str) -> String {
+pub fn account_key(endpoint: &str, email: &str) -> String {
     let normalized = normalize_endpoint(endpoint);
     format!("{normalized}|{email}")
 }
@@ -43,7 +43,7 @@ pub(crate) fn account_key(endpoint: &str, email: &str) -> String {
 /// (require explicit http/https) is **not** done here - it lives in Track A's
 /// `tls.rs`; this is keying only, so an unparseable endpoint degrades gracefully
 /// to the trimmed/lowercased string rather than erroring.
-pub(crate) fn normalize_endpoint(endpoint: &str) -> String {
+pub fn normalize_endpoint(endpoint: &str) -> String {
     let trimmed = endpoint.trim();
     if let Ok(uri) = trimmed.parse::<http::Uri>() {
         if let Some(host) = uri.host() {
@@ -71,13 +71,13 @@ pub(crate) fn normalize_endpoint(endpoint: &str) -> String {
 /// (mirrors the redacted [`TokenStore`] `Debug`).
 #[derive(Debug, thiserror::Error)]
 #[error("secret store error: {0}")]
-pub(crate) struct SecretStoreError(String);
+pub struct SecretStoreError(String);
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 impl SecretStoreError {
     /// Build a store error directly, so test fakes in sibling modules can fail a
     /// backend op (the inner message is private to this module).
-    pub(crate) fn for_test(message: &str) -> Self {
+    pub fn for_test(message: &str) -> Self {
         Self(message.to_owned())
     }
 }
@@ -101,7 +101,7 @@ impl From<std::io::Error> for SecretStoreError {
 ///
 /// [Track C] (#188, D-B17): introduced so the keychain tiers are CI-testable
 /// without a real OS secret service.
-pub(crate) trait SecretStore: Send + Sync {
+pub trait SecretStore: Send + Sync {
     /// A stable label for the backend (`"keychain"` | `"plaintext"` | `"memory"`).
     fn kind(&self) -> &'static str;
     /// Persist `token` under `account_key`, overwriting any existing value.
@@ -151,20 +151,15 @@ impl SecretStore for KeyringStore {
 /// precedence, delete-on-401, rehydration, and the never-override-keychain
 /// guardrail are all unit-tested by injecting these. It compiles in production
 /// (the impls are not `#[cfg(test)]`-gated per the plan) but its constructor is
-/// only called from tests, hence the non-test dead-code expectation on `new`.
-pub(crate) struct InMemoryStore {
+/// only called from tests - the root crate's among them, so `new` is `pub`
+/// (a reachable `pub` fn is never dead, retiring the old non-test dead-code
+/// expectation).
+pub struct InMemoryStore {
     map: Mutex<HashMap<String, String>>,
 }
 
 impl InMemoryStore {
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "[Track C] CI test seam (D-B17); constructed only in tests"
-        )
-    )]
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             map: Mutex::new(HashMap::new()),
         }
@@ -210,12 +205,12 @@ impl SecretStore for InMemoryStore {
 /// it pre-existed looser (the 0600-at-create invariant). On Windows there is no
 /// `0o600` equivalent - it relies on the per-user profile-dir ACL (documented
 /// gap, no new platform dep). The `root` is injectable so tests use a tempdir.
-pub(crate) struct PlaintextStore {
+pub struct PlaintextStore {
     root: PathBuf,
 }
 
 impl PlaintextStore {
-    pub(crate) fn new(root: PathBuf) -> Self {
+    pub fn new(root: PathBuf) -> Self {
         Self { root }
     }
 
@@ -298,7 +293,7 @@ impl SecretStore for PlaintextStore {
 /// store can distinguish a persistent keychain token from the plaintext escape
 /// hatch from a session-only one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum TokenTier {
+pub enum TokenTier {
     Keychain,
     Plaintext,
     Memory,
@@ -314,7 +309,7 @@ pub(crate) enum TokenTier {
 /// rehydrate read), and `NotAttempted` is an honest answer we are willing to
 /// show.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum KeychainState {
+pub enum KeychainState {
     /// Nothing has touched the keychain this session, so we genuinely do not know.
     NotAttempted,
     /// A keychain read or write succeeded.
@@ -340,7 +335,7 @@ pub(crate) enum KeychainState {
 /// [Track C] (#188): reworked from `{ in_memory, keychain_backed }` onto the
 /// [`SecretStore`] tiers with keychain-first read + plaintext self-heal + the
 /// two-gate plaintext write.
-pub(crate) struct TokenStore {
+pub struct TokenStore {
     /// The live token for this session: cached here after [`Self::store`]/
     /// [`Self::load`] so authed calls don't re-hit the keychain each request.
     in_memory: Option<String>,
@@ -445,7 +440,7 @@ impl TokenStore {
     /// Called when seeding the session and again when the user signs in - a fresh
     /// login is the one moment they have opted back into being asked, so that is
     /// where `false` is passed to re-enable the keychain.
-    pub(crate) fn set_keychain_declined(&mut self, declined: bool) {
+    pub fn set_keychain_declined(&mut self, declined: bool) {
         if self.keychain_declined == declined {
             return; // see `refresh_keychain_state`: re-asserting is not a change
         }
@@ -459,7 +454,7 @@ impl TokenStore {
     /// login already wrote has to be removed separately, by
     /// [`Self::evict_from_keychain`] BEFORE this is called (afterwards the gate
     /// would block it). `core::state::config::update_config` owns that sequence.
-    pub(crate) fn set_keychain_disabled(&mut self, disabled: bool) {
+    pub fn set_keychain_disabled(&mut self, disabled: bool) {
         if self.keychain_disabled == disabled {
             return; // see `refresh_keychain_state`: re-asserting is not a change
         }
@@ -486,7 +481,7 @@ impl TokenStore {
     /// the keyring has learned nothing that would justify `false`, and the paths
     /// that DO prove the entry gone - a delete the keyring accepted, a probe or a
     /// [`Self::load`] read that answered `Ok(None)` - clear it themselves.
-    pub(crate) fn note_keychain_has_token(&mut self, has_token: bool) {
+    pub fn note_keychain_has_token(&mut self, has_token: bool) {
         self.keychain_has_token |= has_token;
     }
 
@@ -505,7 +500,7 @@ impl TokenStore {
     /// are cleared - the one place an account leaves - and AFTER the sweep there,
     /// which still needs the belief to decide what an unreadable keyring may be
     /// holding for the account it is sweeping.
-    pub(crate) fn forget_keychain_belief(&mut self) {
+    pub fn forget_keychain_belief(&mut self) {
         self.keychain_has_token = false;
     }
 
@@ -576,7 +571,7 @@ impl TokenStore {
     /// [`Self::refresh_keychain_state`]) because the sweep asks a different question
     /// of it - whether anything of ours could still be in there - and the user's
     /// preference does not answer that one.
-    pub(crate) fn keychain_state(&self) -> KeychainState {
+    pub fn keychain_state(&self) -> KeychainState {
         // The two flags behind `keychain_off` are reported SEPARATELY, for the same
         // reason `clear` refuses to treat them alike (see its doc above): they differ
         // in whether anything can act on them. A decline is revoked by the retry verb;
@@ -593,7 +588,7 @@ impl TokenStore {
     /// Whether the keychain is currently being skipped. Lets a caller that flips
     /// the flag around a fallible operation put the previous answer back, instead
     /// of leaving the live store disagreeing with the persisted preference.
-    pub(crate) fn keychain_declined(&self) -> bool {
+    pub fn keychain_declined(&self) -> bool {
         self.keychain_declined
     }
 
@@ -612,12 +607,12 @@ impl TokenStore {
     /// record that the entry exists. The next launch then skipped the keyring, and
     /// turning the keyring off classified the failed eviction as "nothing was in
     /// there" and reported success over a live bearer token.
-    pub(crate) fn keychain_has_token(&self) -> bool {
+    pub fn keychain_has_token(&self) -> bool {
         self.keychain_has_token
     }
 
     /// The tier the active token lives in, or `None` when there is no token.
-    pub(crate) fn active_tier(&self) -> Option<TokenTier> {
+    pub fn active_tier(&self) -> Option<TokenTier> {
         self.active_tier
     }
 
@@ -639,7 +634,7 @@ impl TokenStore {
     /// 1, the `token_fallback == Plaintext` preference) AND the plaintext tier is
     /// available (gate 2 is the keychain failure that landed us here); otherwise
     /// falls back to session-only memory. Returns the resolved [`TokenTier`].
-    pub(crate) fn store(
+    pub fn store(
         &mut self,
         endpoint: &str,
         email: &str,
@@ -735,7 +730,7 @@ impl TokenStore {
     /// answer as settled. See [`Self::sweep_persistent_tiers`]. No tier is returned
     /// alongside it because the tier is not the interesting fact there: "memory"
     /// over a file the next launch reads back is accurate and misleading at once.
-    pub(crate) fn restore(
+    pub fn restore(
         &mut self,
         endpoint: &str,
         email: &str,
@@ -821,7 +816,7 @@ impl TokenStore {
 
     /// Whether the active token is backed by the OS keychain (vs the plaintext or
     /// in-memory tiers). Lets the UI keep warning about a non-persistent token.
-    pub(crate) fn keychain_backed(&self) -> bool {
+    pub fn keychain_backed(&self) -> bool {
         self.active_tier == Some(TokenTier::Keychain)
     }
 
@@ -832,7 +827,7 @@ impl TokenStore {
     /// plaintext tier. All-miss yields `None` (callers → `NotAuthenticated`).
     ///
     /// `&mut self` because it updates the session cache + `active_tier`.
-    pub(crate) fn load(&mut self, endpoint: &str, email: &str) -> Option<String> {
+    pub fn load(&mut self, endpoint: &str, email: &str) -> Option<String> {
         if let Some(token) = &self.in_memory {
             return Some(token.clone());
         }
@@ -935,7 +930,7 @@ impl TokenStore {
     /// one, and the user reaching for this switch on a keyring that will not open is
     /// the likeliest way to get here with a live token still in it. See
     /// [`Self::unreadable_keychain_may_hold`] for the evidence that separates them.
-    pub(crate) fn evict_from_keychain(
+    pub fn evict_from_keychain(
         &mut self,
         endpoint: &str,
         email: &str,
@@ -1078,7 +1073,7 @@ impl TokenStore {
     /// Logout propagates the `Err` so the user can be warned (#270); the 401
     /// auto-drop deliberately drops it (`SpeleoDbSession::forget`) - a dead token
     /// must leave the session even when the keychain is flaky.
-    pub(crate) fn clear(&mut self, endpoint: &str, email: &str) -> Result<(), SecretStoreError> {
+    pub fn clear(&mut self, endpoint: &str, email: &str) -> Result<(), SecretStoreError> {
         let key = account_key(endpoint, email);
         let mut failure = None;
         // The keychain is ALWAYS swept, but its failure is only REPORTED when the
@@ -1221,12 +1216,12 @@ fn sweep_tier(
     Ok(())
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 impl TokenStore {
     /// Build an in-memory-backed store directly, bypassing the OS keychain. For
     /// unit tests here and in sibling modules (the real fields are private, and
     /// touching the keychain in tests is both slow and environment-dependent).
-    pub(crate) fn from_in_memory_token(token: &str) -> Self {
+    pub fn from_in_memory_token(token: &str) -> Self {
         Self {
             in_memory: Some(token.to_owned()),
             active_tier: Some(TokenTier::Memory),
@@ -1243,7 +1238,7 @@ impl TokenStore {
     /// shape a session has at the moment the storage question is asked: the key is
     /// in hand, only its destination is undecided. Lets sibling-module tests drive
     /// [`Self::restore`] without a login or a real keychain.
-    pub(crate) fn from_stores_holding(
+    pub fn from_stores_holding(
         token: &str,
         keychain: Box<dyn SecretStore>,
         plaintext: Option<Box<dyn SecretStore>>,
@@ -1256,7 +1251,7 @@ impl TokenStore {
 
     /// Inject the keychain (+ optional plaintext) backends so tier-precedence,
     /// self-heal, two-gate, and guardrail-6 tests run against fakes.
-    pub(crate) fn from_stores(
+    pub fn from_stores(
         keychain: Box<dyn SecretStore>,
         plaintext: Option<Box<dyn SecretStore>>,
     ) -> Self {
