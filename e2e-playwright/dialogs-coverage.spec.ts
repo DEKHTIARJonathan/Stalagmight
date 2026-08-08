@@ -6,6 +6,7 @@ import {
   waitForMapReady,
   waitForNoDialogs,
   openSettingsFromMenu,
+  selectDropdownOption,
 } from './helpers/app';
 import type { Locator } from '@playwright/test';
 
@@ -210,7 +211,7 @@ test.describe('Dialog Coverage - Draw Shot', () => {
 
     // #27 replaced the boolean "reference" checkbox with the 3-way shot kind, so
     // marking this shot a reference is now a select, not a toggle.
-    await dialog.getByTestId('draw-shot-kind').selectOption('Reference');
+    await selectDropdownOption(page, 'draw-shot-kind', 'Reference');
 
     await dialog.getByRole('button', { name: 'Create Shot' }).click();
     await expect(dialog).not.toBeVisible({ timeout: 5000 });

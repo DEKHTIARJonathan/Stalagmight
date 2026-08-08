@@ -1,5 +1,5 @@
 import { test, expect, Page } from './fixtures/coverage';
-import { setupMockedPage } from './helpers/app';
+import { setupMockedPage, selectDropdownOption } from './helpers/app';
 
 /**
  * First mocked-tier coverage for the Ariane (.tml/.tmlu) import journey (#411).
@@ -158,7 +158,7 @@ test.describe('Ariane TML import journey', () => {
   test('the virtual-shot override imports references instead of jumps', async ({ page }) => {
     await openTmlImportDialog(page, TML_PATH, 'Virtual Shot Import');
 
-    await page.getByTestId('tml-virtual-shot-mode').selectOption('AllReferences');
+    await selectDropdownOption(page, 'tml-virtual-shot-mode', 'AllReferences');
     await page.getByTestId('tml-import-confirm').click();
 
     // Toast, not modal (warning-free receipt, #411/#420).
@@ -178,7 +178,7 @@ test.describe('Ariane TML import journey', () => {
   test('the all-jumps override imports jumps regardless of topology', async ({ page }) => {
     await openTmlImportDialog(page, TML_PATH, 'All Jumps Import');
 
-    await page.getByTestId('tml-virtual-shot-mode').selectOption('AllJumps');
+    await selectDropdownOption(page, 'tml-virtual-shot-mode', 'AllJumps');
     await page.getByTestId('tml-import-confirm').click();
 
     // Toast, not modal (warning-free receipt, #411/#420).

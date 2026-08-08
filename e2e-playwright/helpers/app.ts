@@ -120,6 +120,32 @@ export async function getSelection(page: Page): Promise<unknown> {
   });
 }
 
+/**
+ * Pick `value` from a portal-based `Select` component (src/components/common/Select.tsx).
+ * `Select` isn't a native `<select>` so `.selectOption()` doesn't work on it: this clicks
+ * the trigger, then the option rendered at
+ * `data-testid="${testId}-option-${encodeURIComponent(value)}"` - the exact convention
+ * `Select.tsx` renders and the agent-harness `select_option` tool already relies on.
+ * The option list is portaled to `document.body` (escaping any dialog/table it's
+ * opened from), so both locators are page-scoped rather than taking a root - the
+ * test-ID contract already guarantees `testId` is unique across the page.
+ */
+export async function selectDropdownOption(page: Page, testId: string, value: string): Promise<void> {
+  await selectDropdownOptionAt(page.locator(`[data-testid="${testId}"]`), value);
+}
+
+/**
+ * Same as {@link selectDropdownOption}, but for a trigger already narrowed to one
+ * element via a dynamic/index-based locator (e.g. `qualifiedIndexTestIds(page,
+ * 'gas-cylinder-role').last()`) rather than a known static testid.
+ */
+export async function selectDropdownOptionAt(trigger: Locator, value: string): Promise<void> {
+  await trigger.click();
+  const testId = await trigger.getAttribute('data-testid');
+  if (!testId) throw new Error('selectDropdownOptionAt: trigger has no data-testid');
+  await trigger.page().locator(`[data-testid="${testId}-option-${encodeURIComponent(value)}"]`).click();
+}
+
 export async function waitForDialogClosed(page: Page, testId: string): Promise<void> {
   const dialog = page.getByTestId(testId);
   await expect(dialog).toBeHidden();

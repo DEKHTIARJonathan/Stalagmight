@@ -2,6 +2,7 @@ import { useCallback, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { DialogWrapper } from './DialogWrapper';
 import { Button } from '../common/Button';
+import { Select } from '../common/Select';
 import { SpeleoUserAutocomplete } from '../common/SpeleoUserAutocomplete';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
@@ -256,38 +257,32 @@ export default function PublishToSpeleoDbDialog() {
           <label className="block text-sm font-medium text-text-primary mb-1">
             {t('speleodb.publish.country')} <span className="text-error">*</span>
           </label>
-          <select
+          <Select
             value={country}
-            onChange={(e) => setCountry(e.target.value)}
-            className={inputClass}
+            onChange={setCountry}
+            options={[
+              { value: '', label: t('speleodb.publish.countryPlaceholder'), disabled: true },
+              ...COUNTRIES.map((c) => ({ value: c.code, label: c.name })),
+            ]}
             aria-label={t('speleodb.publish.country')}
             data-testid="publish-to-speleodb-dialog-country"
-          >
-            <option value="" disabled>
-              {t('speleodb.publish.countryPlaceholder')}
-            </option>
-            {COUNTRIES.map((c) => (
-              <option key={c.code} value={c.code}>
-                {c.name}
-              </option>
-            ))}
-          </select>
+          />
         </div>
 
         <div>
           <label className="block text-sm font-medium text-text-primary mb-1">
             {t('speleodb.publish.visibility')}
           </label>
-          <select
+          <Select
             value={visibility}
-            onChange={(e) => setVisibility(e.target.value as Visibility)}
-            className={inputClass}
+            onChange={(v) => setVisibility(v as Visibility)}
+            options={[
+              { value: 'PRIVATE', label: t('speleodb.projectSettings.visibilityOptions.private') },
+              { value: 'PUBLIC', label: t('speleodb.projectSettings.visibilityOptions.public') },
+            ]}
             aria-label={t('speleodb.publish.visibility')}
             data-testid="publish-to-speleodb-dialog-visibility"
-          >
-            <option value="PRIVATE">{t('speleodb.projectSettings.visibilityOptions.private')}</option>
-            <option value="PUBLIC">{t('speleodb.projectSettings.visibilityOptions.public')}</option>
-          </select>
+          />
         </div>
 
         <div className="grid grid-cols-2 gap-3">
@@ -341,20 +336,15 @@ export default function PublishToSpeleoDbDialog() {
                   data-testid={`publish-to-speleodb-dialog-collab-${c.email}`}
                 >
                   <span className="flex-1 min-w-0 truncate text-sm">{c.email}</span>
-                  <select
+                  <Select
                     value={c.permission}
                     disabled={publishing}
-                    onChange={(e) => setCollaboratorLevel(c.email, e.target.value as Permission)}
-                    className="px-1 py-0.5 bg-background border border-border rounded text-xs"
+                    onChange={(v) => setCollaboratorLevel(c.email, v as Permission)}
+                    options={USER_LEVELS.map((p) => ({ value: p, label: t(`speleodb.collaborators.levels.${p}`) }))}
+                    size="sm"
                     aria-label={t('speleodb.collaborators.levelFor', { name: c.email })}
                     data-testid={`publish-to-speleodb-dialog-collab-level-${c.email}`}
-                  >
-                    {USER_LEVELS.map((p) => (
-                      <option key={p} value={p}>
-                        {t(`speleodb.collaborators.levels.${p}`)}
-                      </option>
-                    ))}
-                  </select>
+                  />
                   <button
                     type="button"
                     disabled={publishing}
@@ -382,20 +372,14 @@ export default function PublishToSpeleoDbDialog() {
               listTestId="publish-to-speleodb-dialog-collab-suggestions"
               suggestionTestIdPrefix="publish-to-speleodb-dialog-collab-suggestion"
             />
-            <select
+            <Select
               value={collabLevel}
               disabled={publishing}
-              onChange={(e) => setCollabLevel(e.target.value as Permission)}
-              className="px-1 py-1 bg-background border border-border rounded text-sm"
+              onChange={(v) => setCollabLevel(v as Permission)}
+              options={USER_LEVELS.map((p) => ({ value: p, label: t(`speleodb.collaborators.levels.${p}`) }))}
               aria-label={t('speleodb.collaborators.addLevel')}
               data-testid="publish-to-speleodb-dialog-collab-add-level"
-            >
-              {USER_LEVELS.map((p) => (
-                <option key={p} value={p}>
-                  {t(`speleodb.collaborators.levels.${p}`)}
-                </option>
-              ))}
-            </select>
+            />
             <Button
               variant="secondary"
               disabled={publishing || collabEmail.trim() === ''}

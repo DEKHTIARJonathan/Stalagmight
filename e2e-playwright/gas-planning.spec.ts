@@ -8,6 +8,8 @@ import {
   getStationScreenPositions,
   readCanvasPixel,
   readCanvasPixelBlock,
+  selectDropdownOption,
+  selectDropdownOptionAt,
   type PixelRgba,
   type SectionSeed,
 } from './helpers/app';
@@ -280,8 +282,8 @@ async function enterPlanMode(page: Page): Promise<void> {
 async function setupOneStageDrop(page: Page): Promise<void> {
   await enterPlanMode(page);
   await expect(page.locator('[data-testid="cylinders-table"]')).toBeVisible({ timeout: 3000 });
-  await page.selectOption('[data-testid="gas-add-tank"]', 'al80');
-  await qualifiedIndexTestIds(page, 'gas-cylinder-role').last().selectOption('stage');
+  await selectDropdownOption(page, 'gas-add-tank', 'al80');
+  await selectDropdownOptionAt(qualifiedIndexTestIds(page, 'gas-cylinder-role').last(), 'stage');
   const oneStage = page.locator('[data-testid="gas-reserve-one_stage"]');
   await expect(oneStage).toBeEnabled();
   await oneStage.click();
@@ -780,8 +782,8 @@ test.describe('Gas planning', () => {
     await expect(page.locator('[data-testid="gas-reserve-one_stage"]')).toBeDisabled();
 
     // Add a cylinder and set its role to Stage → the rig now carries one stage.
-    await page.selectOption('[data-testid="gas-add-tank"]', 'al80');
-    await qualifiedIndexTestIds(page, 'gas-cylinder-role').last().selectOption('stage');
+    await selectDropdownOption(page, 'gas-add-tank', 'al80');
+    await selectDropdownOptionAt(qualifiedIndexTestIds(page, 'gas-cylinder-role').last(), 'stage');
 
     // 1-stage is now selectable, but clicking it raises the advanced-acknowledgment gate
     // (it must NOT apply until acknowledged).
@@ -843,8 +845,8 @@ test.describe('Gas planning', () => {
     await enterPlanMode(page);
     await expect(page.locator('[data-testid="cylinders-table"]')).toBeVisible({ timeout: 3000 });
     // Carry one stage and select the (acked) 1-stage strategy → the stage-reserve control shows.
-    await page.selectOption('[data-testid="gas-add-tank"]', 'al80');
-    await qualifiedIndexTestIds(page, 'gas-cylinder-role').last().selectOption('stage');
+    await selectDropdownOption(page, 'gas-add-tank', 'al80');
+    await selectDropdownOptionAt(qualifiedIndexTestIds(page, 'gas-cylinder-role').last(), 'stage');
     await page.locator('[data-testid="gas-reserve-one_stage"]').click();
     await page.locator('[data-testid="gas-pushy-ack-confirm"]').click();
     await expect(page.locator('[data-testid="gas-stage-reserve-input"]')).toBeVisible();
@@ -912,8 +914,8 @@ test.describe('Gas planning', () => {
 
     // Add a stage + select the staged strategy → the gauge flips to "switch pressure", and the
     // stage-drop row shows both a pressure and a distance ("… @ …m").
-    await page.selectOption('[data-testid="gas-add-tank"]', 'al80');
-    await qualifiedIndexTestIds(page, 'gas-cylinder-role').last().selectOption('stage');
+    await selectDropdownOption(page, 'gas-add-tank', 'al80');
+    await selectDropdownOptionAt(qualifiedIndexTestIds(page, 'gas-cylinder-role').last(), 'stage');
     await page.locator('[data-testid="gas-reserve-one_stage"]').click();
     await page.locator('[data-testid="gas-pushy-ack-confirm"]').click();
     await expect(readout).toContainText('Backgas switch pressure');

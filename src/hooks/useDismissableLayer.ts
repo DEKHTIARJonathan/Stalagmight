@@ -65,8 +65,29 @@ export function useDismissableLayer({
 
   useEffect(() => {
     if (!open) return undefined;
-    const isInside = (refs: Array<RefObject<HTMLElement | null>>, node: Node | null) =>
-      node !== null && refs.some((r) => r.current?.contains(node));
+    // A `Select` nested inside this layer (e.g. one of its menu rows) portals its
+    // own dropdown to `document.body`, so it is never a DOM descendant of `contains`
+    // even though it is visually and logically part of this layer's content.
+    // Without this, picking an option in a nested Select fires this layer's outside-
+    // mousedown check first (mousedown precedes click) and dismisses the HOST layer
+    // before the Select's own onChange can even land - the host (and the Select
+    // inside it) unmounts out from under the click (#462).
+    //
+    // Resolve the listbox back to the combobox that owns it (via `aria-controls`,
+    // which `Select` sets to the listbox's id whenever it's open) and test THAT
+    // element against `contains`, rather than treating any `role="listbox"` as
+    // inside unconditionally - other, unrelated listboxes exist in the app (e.g.
+    // SectionsPanel's own `role="listbox"` section list), and accepting all of them
+    // would suppress a legitimate outside-click dismiss for every open layer.
+    const isInside = (refs: Array<RefObject<HTMLElement | null>>, node: Node | null) => {
+      if (node === null) return false;
+      if (refs.some((r) => r.current?.contains(node))) return true;
+      if (!(node instanceof Element)) return false;
+      const listbox = node.closest('[role="listbox"]');
+      if (listbox === null || !listbox.id) return false;
+      const owner = document.querySelector(`[aria-controls="${listbox.id}"]`);
+      return owner !== null && refs.some((r) => r.current?.contains(owner));
+    };
 
     const onMouseDown = (e: MouseEvent) => {
       if (!isInside(containsRef.current, e.target as Node)) onDismissRef.current();

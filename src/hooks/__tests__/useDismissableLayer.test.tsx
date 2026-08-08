@@ -141,6 +141,49 @@ describe('useDismissableLayer', () => {
     expect(onDismiss).toHaveBeenCalledTimes(1);
   });
 
+  it('does NOT dismiss on a mousedown inside a nested Select portal owned by a trigger in `contains` (#462)', () => {
+    // A Select's dropdown portals to document.body, so it is never a descendant of
+    // `contains` even when the Select's trigger lives inside this layer's own
+    // content. `Select` links the two via `aria-controls` on the trigger pointing
+    // at the listbox's id - mirror that wiring here rather than a bare unowned
+    // listbox, which would pass even with the naive "any listbox" bug this guards.
+    const nestedTrigger = document.createElement('button');
+    nestedTrigger.setAttribute('aria-controls', 'nested-listbox');
+    dropdown.appendChild(nestedTrigger); // dropdown is already inside `contains`
+    mount([dropdown]);
+    const nestedListbox = document.createElement('div');
+    nestedListbox.id = 'nested-listbox';
+    nestedListbox.setAttribute('role', 'listbox');
+    const option = document.createElement('div');
+    option.setAttribute('role', 'option');
+    nestedListbox.appendChild(option);
+    document.body.appendChild(nestedListbox);
+    option.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+    expect(onDismiss).not.toHaveBeenCalled();
+    nestedListbox.remove();
+  });
+
+  it('DOES dismiss on a mousedown inside an unrelated listbox owned by a trigger outside `contains` (#462)', () => {
+    // A listbox whose owning trigger is NOT part of this layer (e.g. an unrelated
+    // widget elsewhere on the page, such as SectionsPanel's own role="listbox"
+    // section list) must still count as a genuine outside click.
+    mount([dropdown]);
+    const elsewhereTrigger = document.createElement('button');
+    elsewhereTrigger.setAttribute('aria-controls', 'unrelated-listbox');
+    document.body.appendChild(elsewhereTrigger);
+    const unrelatedListbox = document.createElement('div');
+    unrelatedListbox.id = 'unrelated-listbox';
+    unrelatedListbox.setAttribute('role', 'listbox');
+    const option = document.createElement('div');
+    option.setAttribute('role', 'option');
+    unrelatedListbox.appendChild(option);
+    document.body.appendChild(unrelatedListbox);
+    option.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+    expect(onDismiss).toHaveBeenCalledTimes(1);
+    elsewhereTrigger.remove();
+    unrelatedListbox.remove();
+  });
+
   it('attaches no listeners while closed', () => {
     renderHook(() =>
       useDismissableLayer({

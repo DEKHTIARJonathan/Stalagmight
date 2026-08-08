@@ -5,6 +5,7 @@ import { useProjectStore } from '../../store/projectStore';
 import { useDismissableLayer } from '../../hooks/useDismissableLayer';
 import { useShallow } from 'zustand/react/shallow';
 import { GRID_SPACING_OPTIONS } from '../Map/GridOverlay';
+import { Select } from '../common/Select';
 import { formatNumber } from '../../i18n/format';
 import {
   ChevronDownIcon,
@@ -391,18 +392,17 @@ export default function DisplayMenu({
               {toggleValues.showGrid && (
                 <div className="basis-full flex items-center gap-2 pt-1">
                   <span className="text-xs text-text-secondary">{t('displayMenu.spacing.label')}:</span>
-                  <select
-                    value={gridSpacing}
-                    onChange={(e) => setGridSpacing(Number(e.target.value))}
-                    className="px-2 py-1 text-xs bg-background border border-border rounded text-text-primary"
+                  <Select
+                    value={String(gridSpacing)}
+                    onChange={(v) => setGridSpacing(Number(v))}
+                    options={GRID_SPACING_OPTIONS.map((spacing) => ({
+                      value: String(spacing),
+                      label: `${formatNumber(spacing)}${t('common.units.meters')}`,
+                    }))}
+                    size="sm"
+                    aria-label={t('displayMenu.spacing.label')}
                     data-testid="grid-spacing-select"
-                  >
-                    {GRID_SPACING_OPTIONS.map((spacing) => (
-                      <option key={spacing} value={spacing}>
-                        {formatNumber(spacing)}{t('common.units.meters')}
-                      </option>
-                    ))}
-                  </select>
+                  />
                 </div>
               )}
             </Category>

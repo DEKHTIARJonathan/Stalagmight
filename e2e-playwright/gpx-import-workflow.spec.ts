@@ -1,5 +1,5 @@
 import { test, expect } from './fixtures/coverage';
-import { setupMockedPage, createProject } from './helpers/app';
+import { setupMockedPage, createProject, selectDropdownOption } from './helpers/app';
 
 async function setImportPath(page: import('./fixtures/coverage').Page, path: string): Promise<void> {
   await page.evaluate((selectedPath) => {
@@ -34,8 +34,7 @@ test.describe('GPX Import Workflow', () => {
     await page.getByTestId('gpx-continue-button').click();
     await expect(page.getByTestId('gpx-placement-dialog')).toBeVisible({ timeout: 10000 });
 
-    const firstStationSelect = page.locator('[data-testid="gpx-placement-dialog"] select').first();
-    await firstStationSelect.selectOption('1');
+    await selectDropdownOption(page, 'gpx-placement-zero-datum-0', '1');
     await page.getByTestId('gpx-import-confirm').click();
 
     await expect(page.getByTestId('gpx-placement-dialog')).toBeHidden({ timeout: 15000 });

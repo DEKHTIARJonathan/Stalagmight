@@ -7,6 +7,7 @@ import {
   surfaceImportFailure,
 } from '../../utils/saveFeedback';
 import { Button } from '../common/Button';
+import { Select } from '../common/Select';
 import { DialogWrapper } from './DialogWrapper';
 import type { GpxFile, GpxSectionPlacement } from '../../types/commands';
 import { sectionColorPalette } from '../../utils/colors';
@@ -189,18 +190,17 @@ export default function GpxPlacementDialog() {
                   <td className="px-3 py-1.5 capitalize text-text-secondary">{sec.type}</td>
                   <td className="px-3 py-1.5">{sec.pointCount}</td>
                   <td className="px-3 py-1.5">
-                    <select
-                      className="text-sm bg-surface border border-border rounded px-1 py-0.5"
-                      value={zeroDatumIndices[i] ?? 0}
+                    <Select
+                      value={String(zeroDatumIndices[i] ?? 0)}
                       data-testid={`gpx-placement-zero-datum-${i}`}
-                      onChange={(e) => handleZeroDatumChange(i, parseInt(e.target.value, 10))}
-                    >
-                      {Array.from({ length: sec.pointCount }, (_, si) => (
-                        <option key={si} value={si}>
-                          Station {si}{si === 0 ? ' (first)' : si === sec.pointCount - 1 ? ' (last)' : ''}
-                        </option>
-                      ))}
-                    </select>
+                      onChange={(v) => handleZeroDatumChange(i, parseInt(v, 10))}
+                      options={Array.from({ length: sec.pointCount }, (_, si) => ({
+                        value: String(si),
+                        label: `Station ${si}${si === 0 ? ' (first)' : si === sec.pointCount - 1 ? ' (last)' : ''}`,
+                      }))}
+                      size="sm"
+                      aria-label={`Zero datum station for ${sec.name}`}
+                    />
                   </td>
                 </tr>
               ))}
