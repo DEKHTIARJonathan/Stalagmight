@@ -265,33 +265,91 @@
  *    narrower oracle - all 532 shots held a unique uuid, so a
  *    "unique-uuid-only" check would have excluded nothing.
  *
- * 5. OPEN, and the residue of finding 4 rather than a new sighting. AFTER 4a AND
- *    4b, 198 GEOMETRY KEYS AND 2 COMMENT TEXTS STILL DIFFER ON naharon.
+ * 5. MEASURED AND SPLIT. The 198 residual geometry keys of finding 4 were three
+ *    families, not one. Two are closed; one is OPEN and needs a product call.
  *
  *        STALAGMIGHT_FUZZ_FIXTURE=naharon.stalx \
  *          pnpm agent:scenario export-roundtrip-fuzz --seed 1 --iterations 8
  *
- *    NOT CHARACTERISED, and this entry says so rather than guessing again. What
- *    the printed sample shows is that at least some are the REVERSED LEG coming
- *    back reversed: `0.770|168.800|15.330|15.240` leaves and
- *    `0.770|348.800|15.240|15.330` arrives - the same tape, the reciprocal
- *    heading, the two depths swapped. That is what 4a's legs ARE, and it is the
- *    exporter working as designed; what it means is that X6's key is
- *    DIRECTION-BEARING and cannot see one physical leg through a deliberate
- *    reversal. The sample also holds at least one pair separated by a 0.02 depth
- *    shift, which that explanation does not cover.
+ *    Classified by dumping both digests and matching them offline, so the counts
+ *    below are exact rather than sampled. 99 keys vanished and 99 appeared.
  *
- *    So the next step is a measurement, not a fix, and it has to answer two
- *    questions before either an oracle change or an app change is justified:
- *    how many of the 198 are exact reversal pairs (a direction-agnostic key
- *    would be comparing the same physical leg, which is a correctness
- *    improvement to the ORACLE, not a tolerance), and what the remainder are.
- *    The 2 comment texts are a third thread again.
+ *      a. CLOSED - ORACLE FIX. 75 shots, 150 of the 198 keys, were EXACT
+ *         RECIPROCAL PAIRS: same tape, heading through 180, the two depths
+ *         swapped, left and right swapped with them. Every one matched under
+ *         that transform with nothing left over. They are the reversed legs of
+ *         finding 4a arriving reversed, which is the exporter working as
+ *         designed - a `.tml` cannot say "surveyed outward from here", so a
+ *         section surveyed away from its datum is written walking back toward
+ *         it. X6's key was DIRECTION-BEARING and called one leg a lost shot and
+ *         a gained shot. It is now direction-agnostic (`shotKey` orients each
+ *         shot to the lexicographically smaller of itself and its reciprocal),
+ *         which is a fact about the key rather than a fold: the transform is
+ *         exact, and a heading off by one degree, an unswapped depth pair, a
+ *         changed length or an LRUD that is not the mirror all still fail.
  *
- *    The oracle is deliberately left ASSERTING. The synthetic fixture is green,
- *    so this stays visible as a red on the fixture that shows it, and the
- *    matrix's `naharon.stalx` cells stay red until it is answered - use
- *    `--fixtures fractal_plant_iter3.stalx` for a green matrix in the meantime.
+ *      b. OPEN - NEEDS A PRODUCT CALL. 24 shots, the remaining 48 keys. Azimuth
+ *         delta is EXACTLY 0.000 on all 24; only the depths move, by 0.01 to
+ *         7.16 m, in two clusters - a small one (0.01, 0.09, 0.095, 0.14) and a
+ *         large one (4.71, 6.91, 7.05, 7.15+). Sampled pairs show whole runs of
+ *         shots moved by the SAME offset, e.g. two different shots both shifted
+ *         +4.71.
+ *
+ *         NOT ROUNDING, and that was checked rather than assumed: the exported
+ *         LENGTH differs from the database for 4 shots by at most 2.1e-7, which
+ *         is the writer's six-decimal formatting and is three orders of
+ *         magnitude below the key's precision. The signature instead matches
+ *         `enforce_ariane_geometry_invariants` (`export/tml.rs:1608`), which
+ *         RE-HANGS a branch whose junction depth Ariane cannot represent and
+ *         CLAMPS a shot past the `|depth - origin_depth| <= length` bound - it
+ *         has its own test family saying so (`a_re_hang_moves_the_rest_of_the_
+ *         branch_with_it`, `a_junction_depth_discontinuity_is_re_hung_rather_
+ *         than_exported_impossible`, `a_shot_exactly_on_the_bound_is_left_
+ *         alone_and_one_past_it_is_clamped`). A constant offset shared by a run
+ *         of shots is exactly what "the rest of the branch moves with it" looks
+ *         like.
+ *
+ *         WHAT IS NOT PROVEN: the attribution is by signature, not shot by shot.
+ *         Confirming it needs the before/after digests carrying UUIDs so each of
+ *         the 24 can be matched by identity rather than by length - about one
+ *         instrumented run.
+ *
+ *         THE QUESTION TO DECIDE, and why this scenario will not decide it. The
+ *         exporter deliberately MOVES survey geometry to fit the format. Unlike
+ *         4b that is not a sentinel collision - there is no equivalence to
+ *         canonicalize, the depths genuinely differ - so X6 has three options
+ *         and only the third is honest:
+ *           (i)   keep asserting: naharon stays red on designed behaviour;
+ *           (ii)  excuse the family: that IS a tolerance, and this file has none;
+ *           (iii) assert the WEAKER property the transform preserves - a re-hang
+ *                 moves a branch's datum, so each shot's own length and descent
+ *                 (`depth_out - depth_in`) should survive even when the absolute
+ *                 depths do not, and a re-hang that changed a shot's descent
+ *                 would still be a red.
+ *         (iii) is the shape to aim at and needs (b)'s per-uuid measurement
+ *         first, because one sampled pair in the current output has a descent of
+ *         -2.35 arriving as -0.15 - which, if it survives identity matching,
+ *         is a re-hang changing a measurement and a real bug rather than a
+ *         datum shift. It may equally be an artifact of pairing by length. That
+ *         is the fact the decision turns on.
+ *
+ *      c. CLOSED - HARNESS BUG, NOT THE APP'S. 2 comment texts read as lost, and
+ *         both were this scenario's fault twice over. `ProjectIpc`
+ *         (`models/project.rs:585-602`) serializes 16 fields and
+ *         `station_comments` is not one of them, so `get_project_state` cannot
+ *         show station comments at all - the fixture's 74 were never measured -
+ *         and the round-trip import ran with `commentsOnStations` at the app
+ *         default of TRUE, which MOVES a shot comment onto its to-station, i.e.
+ *         straight into the blind spot. The chain now imports with it FALSE, a
+ *         real user-facing option rather than a fabricated state, which keeps
+ *         the comments where the oracle can see them and makes the text half an
+ *         assertion instead of a formality. Both comments now survive.
+ *
+ *    NET: 198 keys -> 48, and the comment deltas are gone. naharon is still RED
+ *    on family (b) alone, deliberately - the synthetic fixture is green, so it
+ *    stays visible on the fixture that shows it, and the matrix's
+ *    `naharon.stalx` cells stay red until (b) is decided. Use
+ *    `--fixtures fractal_plant_iter3.stalx` for a green matrix meanwhile.
  *
  * ## Observations that are NOT findings
  *
@@ -1151,7 +1209,20 @@ export const exportRoundtripFuzz: Scenario = {
       if (!created.ok) {
         return { ok: false, error: created.err ?? 'createProject failed', projectPath };
       }
-      const imported = await callProjectAction(ctx, 'executeTmlImport', [file, null, false, true, null]);
+      // `commentsOnStations: false`, deliberately, and it is the ONE place this
+      // scenario departs from the app's default (`executeTmlImport` sends
+      // `?? true`).
+      //
+      // With it on, the importer moves a shot comment onto the shot's
+      // to-STATION (`core::comment_split::split`) - and `ProjectIpc`
+      // (`models/project.rs:585-602`) serializes 16 fields, none of them
+      // `station_comments`, so `get_project_state` cannot show them and X6's
+      // text check would read every moved comment as lost. Measured on naharon:
+      // both of its shot comments read as gone, and its 74 station comments
+      // were never visible in the first place. Keeping the comments on shots is
+      // a real user-facing import option, not a fabricated state, and it is what
+      // makes the text half of X6 an assertion rather than a formality.
+      const imported = await callProjectAction(ctx, 'executeTmlImport', [file, null, false, false, null]);
       if (!imported.ok) {
         return { ok: false, error: imported.err ?? 'import failed', projectPath };
       }
@@ -1232,7 +1303,7 @@ export const exportRoundtripFuzz: Scenario = {
       // X6b: importing the SAME file again must not leave two shots on one
       // uuid. The second import carries the first's foreign uuids verbatim, so
       // `remint_duplicate_uuids`' project-side twin has to fire.
-      const second = await callProjectAction(ctx, 'executeTmlImport', [t1, null, false, true, null]);
+      const second = await callProjectAction(ctx, 'executeTmlImport', [t1, null, false, false, null]);
       if (second.ok) {
         await settleOnce(ctx);
         await assertIntegrity('a second import of the same file');

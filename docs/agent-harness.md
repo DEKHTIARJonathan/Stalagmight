@@ -685,12 +685,15 @@ first half is fixed; the second is Ariane's absent sentinel and is now written
 up in both lossiness tables, with the oracle folding that one documented
 equivalence and nothing else.
 
-Neither was the whole story, and finding 5 records the residue: 198 geometry
-keys still differ on that fixture, at least some of them the reversed leg
-arriving reversed (same tape, reciprocal heading, swapped depths), which X6's
-direction-bearing key cannot see through. So the matrix's `naharon.stalx` cells
-stay red - use `--fixtures fractal_plant_iter3.stalx` for a green matrix until
-that is measured.
+Neither was the whole story. Finding 5 classifies the 198 residual keys into
+three families: 150 were one physical leg seen through the exporter's deliberate
+reversal (X6's key is now direction-agnostic, which is a fact about the key),
+2 were this harness failing to see station comments at all, and 48 are the
+exporter re-hanging branch depths to fit the format - which is designed,
+tested behaviour and needs a product call rather than an oracle change.
+
+So the matrix's `naharon.stalx` cells stay red on that last family alone. Use
+`--fixtures fractal_plant_iter3.stalx` for a green matrix until it is decided.
 
 ### Three tiers, and which one gates CI
 

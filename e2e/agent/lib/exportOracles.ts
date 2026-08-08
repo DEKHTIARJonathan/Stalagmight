@@ -910,6 +910,10 @@ function lrudSentinel(value: number | null): string {
  * semantic rather than a tolerance, and for the two doc sections that own the
  * claim. Every other field is compared as measured.
  *
+ * The key is also DIRECTION-AGNOSTIC: a leg and its reciprocal produce the same
+ * key, because the exporter genuinely writes some legs backwards and a shot
+ * walked the other way is the same shot. `reciprocal` states the argument.
+ *
  * COMMENTS ARE DELIBERATELY NOT IN THE KEY, and that is a corrected premise
  * rather than a weakening. A comment does not belong to a SHOT across this round
  * trip: the exporter co-encodes station comments INTO the shot comment with
@@ -925,13 +929,62 @@ function lrudSentinel(value: number | null): string {
  */
 export function shotKey(shot: ShotIdentity): string {
   const n = (value: number | null): string => (value === null ? '-' : value.toFixed(3));
-  return [
-    n(shot.length),
-    n(shot.azimuthIn),
-    n(shot.depthIn),
-    n(shot.depthOut),
-    shot.lrud.map(lrudSentinel).join('/'),
-  ].join('|');
+  const oriented = (s: ShotIdentity): string =>
+    [
+      // Normalised in BOTH orientations, not just the reciprocal: 360 and 0 are
+      // one heading, and keying them apart would report a shot as lost and
+      // gained for pointing due north.
+      n(normalizeHeading(s.azimuthIn)),
+      n(s.depthIn),
+      n(s.depthOut),
+      s.lrud.map(lrudSentinel).join('/'),
+    ].join('|');
+  // DIRECTION-AGNOSTIC: a leg and the same leg walked the other way key equal.
+  // See `reciprocal` for why that is a correctness fix and not a fold.
+  const forward = oriented(shot);
+  const backward = oriented(reciprocal(shot));
+  return [n(shot.length), forward < backward ? forward : backward].join('|');
+}
+
+/**
+ * The same physical leg, seen from its other end.
+ *
+ * Heading turns through 180 (mod 360, so 0 and 360 are one value), the two
+ * depths swap, and LEFT and RIGHT swap with them - up and down do not, because
+ * turning round does not turn you over. This is exactly the transform
+ * `export/tml.rs`'s reversed-leg constructors apply when they emit the
+ * `(pre-zero-datum)` and merge legs, `reverse_pre_zero_azimuth` included.
+ *
+ * WHY THE KEY IS DIRECTION-AGNOSTIC, and why that is a CORRECTNESS FIX rather
+ * than a fold that buys a green. A `.tml` cannot say "this passage was surveyed
+ * outward from here": Ariane carries one forward azimuth per shot and the chain
+ * hangs off a single rooted start, so a section surveyed away from its zero
+ * datum has to be written walking BACK toward it. The shot that returns is the
+ * same tape between the same two stations - it is one leg, recorded from the
+ * other end. A direction-bearing key calls that a lost shot and a gained shot,
+ * which is not a fact about the survey, it is a fact about the key.
+ *
+ * Measured before the change: on a 532-shot survey, 75 of the 99 vanished keys
+ * paired exactly with a gained key under this transform - 150 of 198 residual
+ * deltas, all of them reversed legs. See finding 5 in `exportRoundtripFuzz.ts`.
+ *
+ * What it does NOT excuse: the transform is exact. A length that changed, a
+ * heading off by anything but 180, a depth that moved, an LRUD that is not the
+ * mirror - all still differ, and the unit tests pin each one.
+ */
+function normalizeHeading(azimuth: number): number {
+  return ((azimuth % 360) + 360) % 360;
+}
+
+function reciprocal(shot: ShotIdentity): ShotIdentity {
+  const [left, right, up, down] = shot.lrud;
+  return {
+    length: shot.length,
+    azimuthIn: normalizeHeading(shot.azimuthIn + 180),
+    depthIn: shot.depthOut,
+    depthOut: shot.depthIn,
+    lrud: [right, left, up, down],
+  };
 }
 
 export interface MultisetDelta {

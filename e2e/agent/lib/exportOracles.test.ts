@@ -582,6 +582,54 @@ describe('X6 shot multiset', () => {
     expect(shotKey(shot({ lrud: [0, 3, 0, 2] }))).toBe(shotKey(shot({ lrud: [null, 3, null, 2] })));
   });
 
+  it('keys a leg and its reciprocal the same - the exporter writes some backwards', () => {
+    // Heading through 180, depths swapped, LEFT and RIGHT swapped with them
+    // (up/down do NOT swap - turning round does not turn you over). This is the
+    // transform export/tml.rs's reversed-leg constructors apply. Finding 5: 75
+    // of 99 vanished keys paired exactly under it.
+    const out = shot({ azimuthIn: 90, depthIn: 5, depthOut: 8, lrud: [1, 2, 3, 4] });
+    const back = shot({ azimuthIn: 270, depthIn: 8, depthOut: 5, lrud: [2, 1, 3, 4] });
+    expect(shotKey(out)).toBe(shotKey(back));
+    expect(multisetDelta([out], [back])).toEqual([]);
+  });
+
+  it('handles the 0/360 wraparound in both directions', () => {
+    expect(shotKey(shot({ azimuthIn: 0, depthIn: 1, depthOut: 2 }))).toBe(
+      shotKey(shot({ azimuthIn: 180, depthIn: 2, depthOut: 1 })),
+    );
+    expect(shotKey(shot({ azimuthIn: 180, depthIn: 1, depthOut: 2 }))).toBe(
+      shotKey(shot({ azimuthIn: 0, depthIn: 2, depthOut: 1 })),
+    );
+    // 360 is 0, not a 361st heading.
+    expect(shotKey(shot({ azimuthIn: 360, depthIn: 1, depthOut: 2 }))).toBe(
+      shotKey(shot({ azimuthIn: 180, depthIn: 2, depthOut: 1 })),
+    );
+  });
+
+  it('is exact - a genuinely different shot is NOT folded into a reciprocal', () => {
+    const out = shot({ azimuthIn: 90, depthIn: 5, depthOut: 8, lrud: [1, 2, 3, 4] });
+    // heading off by one degree from the reciprocal
+    expect(shotKey(out)).not.toBe(
+      shotKey(shot({ azimuthIn: 271, depthIn: 8, depthOut: 5, lrud: [2, 1, 3, 4] })),
+    );
+    // depths not swapped
+    expect(shotKey(out)).not.toBe(
+      shotKey(shot({ azimuthIn: 270, depthIn: 5, depthOut: 8, lrud: [2, 1, 3, 4] })),
+    );
+    // a depth that moved
+    expect(shotKey(out)).not.toBe(
+      shotKey(shot({ azimuthIn: 270, depthIn: 8.1, depthOut: 5, lrud: [2, 1, 3, 4] })),
+    );
+    // length changed
+    expect(shotKey(out)).not.toBe(
+      shotKey(shot({ length: 6, azimuthIn: 270, depthIn: 8, depthOut: 5, lrud: [2, 1, 3, 4] })),
+    );
+    // LRUD not mirrored (up/down swapped instead of left/right)
+    expect(shotKey(out)).not.toBe(
+      shotKey(shot({ azimuthIn: 270, depthIn: 8, depthOut: 5, lrud: [1, 2, 4, 3] })),
+    );
+  });
+
   it('folds ONLY that equivalence - a real LRUD change still differs', () => {
     // The line between a documented semantic and a tolerance.
     expect(shotKey(shot({ lrud: [0, 0, 0, 0] }))).not.toBe(shotKey(shot({ lrud: [3.5, 0, 0, 0] })));
