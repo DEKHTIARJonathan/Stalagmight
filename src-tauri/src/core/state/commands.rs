@@ -271,16 +271,18 @@ impl AppState {
     /// station across the command catches all of them, including the ones nobody
     /// thought of, and asks the state rather than the command what happened.
     ///
-    /// # Both sides must be `Some`
+    /// # The AFTER side must be `Some`
     ///
     /// * `Some -> None` removed the last anchor: there is no frame left to
     ///   renormalise onto, and translating onto nothing would move the survey for
     ///   no reason. No-op.
-    /// * `None -> Some` ADDED the survey's first georeference. Nothing changed
-    ///   meaning, because there was no prior meaning - the map was falling back to
-    ///   a config default, which is not survey data. Left exactly as it is today
-    ///   (that add still translates only the datum's own merge group, which is a
-    ///   separate, pre-existing asymmetry).
+    /// * `None -> Some` ESTABLISHED the survey's first georeference, which gives
+    ///   local `(0, 0)` a meaning it did not have, so the survey moves onto it -
+    ///   the whole survey, rigidly, exactly as any other promotion does.
+    ///   `Project::set_zero_datum` already does that inline (its subsequent-datum
+    ///   arithmetic reads the invariant, so it cannot wait for an epilogue that
+    ///   the import loop and redo's re-execute never reach), which makes this a
+    ///   measured no-op on that route and a safety net on any other.
     ///
     /// # Never on the inverse
     ///
@@ -988,11 +990,13 @@ impl AppState {
         // function, so a renormalisation applied afterwards would sit OUTSIDE the
         // pair and undo->redo would land on the pre-renormalisation geometry.
         //
-        // No batch can change the frame TODAY - `is_batch_allowed` admits only
-        // `SetZeroDatum` among the datum commands, and that one appends or updates
-        // in place, so `zero_datums[0]` keeps its identity. Stated rather than
-        // relied on: the allowlist is the kind of thing that grows, and this is the
-        // only placement that stays correct when it does.
+        // A batch CAN change the frame, in one shape: `is_batch_allowed` admits
+        // `SetZeroDatum`, and the batch whose first sub-command adds the survey's
+        // first datum goes `None -> Some`. `Project::set_zero_datum` re-frames the
+        // survey inline for that one, so what is left for this bookend is any
+        // FUTURE shape - a promotion by some later member of an allowlist that is
+        // the kind of thing that grows. This is the only placement that stays
+        // correct when it does.
         let frame_before = self.frame_datum_key();
 
         // Capture pre-batch snapshot for rollback on partial failure and undo

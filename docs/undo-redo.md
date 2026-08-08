@@ -284,18 +284,31 @@ reproduces the recorded post-command map.
 not a connectivity question, and it takes `Project::capture_all_section_offsets`
 rather than the merge group its two siblings above take.
 
-Local `(0, 0)` MEANS `zero_datums[0]`'s GPS: `set_zero_datum` puts the first datum
-on the origin and every later one at `gps_to_local(its gps, first.gps)`, and the
-map, the data table's GPS column, the Ariane export's `START` lat/long and the
+Local `(0, 0)` MEANS `zero_datums[0]`'s GPS: `set_zero_datum` lands the first datum
+on the origin and puts every later one at `gps_to_local(its gps, first.gps)`, and
+the map, the data table's GPS column, the Ariane export's `START` lat/long and the
 GlobalView pin all read local metres against it. So changing WHICH datum is first
 re-defines every stored coordinate, and `Project::renormalize_frame` answers that
 by translating the whole survey - free-floating, datum-less components included -
 so the promoted datum's station lands back on the origin. Nothing bounded by
-merges or aligned closures can hand that back. Undoing the ADD of a first datum
-removes it, which is an inverse that performs a frame change, so this is the arm
-that has to hold the whole map.
+merges or aligned closures can hand that back.
 
-The renormalisation itself runs only in the FORWARD epilogue (`execute()`,
+ADDING the survey's first datum is the same frame change seen from the other end:
+before it there is no frame, after it every coordinate is read against this one, so
+the add re-frames the whole survey too (it does NOT translate just the datum's own
+merge group, which would move that group relative to every other component). And
+undoing that add REMOVES the frame again, so this is the arm that has to hold the
+whole map.
+
+The add performs its renormalisation INSIDE `Project::set_zero_datum`, not in the
+epilogue: the subsequent-datum arithmetic reads "the frame datum's station sits at
+(0, 0)" on every call, so the invariant has to hold when the model call returns,
+and the three routes with no epilogue (a batch's second datum, the TML/DMP import
+placement loop, redo's re-execute) would otherwise place a second datum against an
+origin the first one does not sit on. It is idempotent (the delta is MEASURED), so
+the gate below is a no-op on top of it.
+
+Otherwise the renormalisation runs only in the FORWARD epilogue (`execute()`,
 `execute_batch`, `repair_open_project_integrity`, and the four delete/split entry
 points that bypass `execute()`), never in `reconcile_geometry` - which
 `undo()`/`redo()` share - and never in the loader. Every command that can reach it

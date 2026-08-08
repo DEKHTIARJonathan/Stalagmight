@@ -250,10 +250,14 @@ from the merge and datum constraints on every open. A project therefore always o
 geometrically correct even if an older build persisted drift.
 
 The offsets are read against ONE frame: local (0,0) means `zero_datums[0]`'s GPS.
-A command that promotes a different datum to first therefore re-defines every
-stored coordinate, and the forward epilogue answers that by translating every
-section - free-floating components included - so the promoted datum's station lands
-back on the origin (`Project::renormalize_frame`, issue #469). It runs forward only:
+A command that promotes a different datum to first - or ADDS the survey's first
+datum, which establishes the frame - therefore re-defines every stored coordinate,
+and the answer is always the same: translate every section, free-floating
+components included, so that datum's station lands on the origin
+(`Project::renormalize_frame`, issue #469). The add does it inside
+`Project::set_zero_datum` (the subsequent-datum placement reads that invariant, and
+the import loop and redo never reach an epilogue); every other promotion does it in
+the forward epilogue. It runs forward only:
 `resolve_offsets`' cascade never re-derives a seed's offset, so a whole-project
 translation is a no-op for the load path, and every affected command's undo restores
 the recorded map rather than re-deriving a frame.

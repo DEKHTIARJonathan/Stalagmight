@@ -668,13 +668,22 @@ impl Project {
         format!("{} #{}", section_label, station_ref.station_index)
     }
 
-    /// Set a station as the zero datum and reposition connected sections.
+    /// Set a station as the zero datum and reposition the survey around it.
     ///
     /// When a GPS reference is set:
-    /// - For the first datum: The station is repositioned to (0, 0) via section offsets
-    /// - For subsequent datums: The station is positioned at the GPS offset from the first datum
+    /// - For the FIRST datum (the survey had no resolvable one): the station ends
+    ///   at (0, 0), reached by translating EVERY section rigidly
+    ///   ([`Self::renormalize_frame`]) rather than only the datum's merge group.
+    ///   Establishing the frame is what gives local (0, 0) a meaning, and nothing
+    ///   was placed relative to that meaning yet, so the survey moves as one body
+    ///   and every relative position survives.
+    /// - For subsequent datums: the station is positioned at the GPS offset from
+    ///   the frame datum, by moving that station's merge-connected group only.
+    /// - Re-setting the frame datum's own GPS keeps it at (0, 0): it IS the origin.
     ///
-    /// All sections connected through station merges are moved together.
+    /// "First" here means the first datum that still RESOLVES, matching
+    /// [`Self::frame_datum_key`] and the wire; a dangling datum anchors nothing.
+    ///
     /// Z-coordinates (depths) are preserved and not affected by GPS positioning.
     ///
     /// Returns Err if the station doesn't exist, GPS is invalid, or if a connected station
@@ -734,61 +743,68 @@ impl Project {
             "Computed raw station coordinates for zero datum"
         );
 
-        // Determine target position based on whether this is the first datum
-        // Special case: if updating the first datum station itself, keep it at origin
-        let target_x: f64;
-        let target_y: f64;
-
-        let is_first_datum_station = self
+        // The datum that defines the frame RIGHT NOW, if the survey has one: the
+        // first RESOLVABLE datum, the same one [`Self::frame_datum_key`] and the
+        // wire name. Not `zero_datums.first()`: a dangling datum is dropped before
+        // the frontend ever sees it, so placing a new datum relative to its GPS
+        // would position the group against an origin nothing else in the app reads.
+        let frame_datum = self
             .zero_datums
-            .first()
-            .is_some_and(|d| d.station_ref == datum_key);
+            .iter()
+            .find(|d| self.resolve_key(&d.station_ref).is_some())
+            .map(|d| (d.station_ref.clone(), d.gps));
 
-        if is_first_datum_station {
-            // Updating the first datum: keep at origin (0, 0)
-            target_x = 0.0;
-            target_y = 0.0;
+        // Where this datum's station has to end up, or `None` when this add
+        // ESTABLISHES the frame and the whole survey moves instead (below).
+        let target = match &frame_datum {
+            Some((frame_key, _)) if *frame_key == datum_key => {
+                debug!(
+                    station_ref = ?station_ref,
+                    purpose = "anchor survey to GPS",
+                    "Updating the frame datum; keeping at origin"
+                );
+                Some((0.0, 0.0))
+            }
+            Some((_, frame_gps)) => {
+                // Subsequent datum: compute GPS offset from the frame datum
+                let (east, north) = gps_to_local(&gps, frame_gps);
+                debug!(
+                    station_ref = ?station_ref,
+                    offset_x = east,
+                    offset_y = north,
+                    purpose = "anchor survey to GPS",
+                    "Computed GPS offset from the frame datum"
+                );
+                Some((east, north))
+            }
+            None => {
+                debug!(
+                    station_ref = ?station_ref,
+                    purpose = "anchor survey to GPS",
+                    "First datum; the whole survey will be re-framed onto it"
+                );
+                None
+            }
+        };
+
+        // Move the datum's rigid group onto its target. Skipped entirely when this
+        // add establishes the frame: there is nothing to be placed RELATIVE to yet,
+        // and moving one group would move it relative to every other component.
+        if let Some((target_x, target_y)) = target {
+            // Compute the offset needed to move station from current position to target
+            let offset_delta_x = target_x - current_coords.x;
+            let offset_delta_y = target_y - current_coords.y;
             debug!(
                 station_ref = ?station_ref,
-                purpose = "anchor survey to GPS",
-                "Updating first datum; keeping at origin"
+                offset_delta_x,
+                offset_delta_y,
+                purpose = "reposition connected sections",
+                "Computed offset delta for zero datum"
             );
-        } else if let Some(first_datum) = self.zero_datums.first() {
-            // Subsequent datum: compute GPS offset from first datum
-            let (east, north) = gps_to_local(&gps, &first_datum.gps);
-            target_x = east;
-            target_y = north;
-            debug!(
-                station_ref = ?station_ref,
-                offset_x = east,
-                offset_y = north,
-                purpose = "anchor survey to GPS",
-                "Computed GPS offset from first datum"
-            );
-        } else {
-            // First datum: position at origin (0, 0)
-            target_x = 0.0;
-            target_y = 0.0;
-            debug!(
-                station_ref = ?station_ref,
-                purpose = "anchor survey to GPS",
-                "First datum; positioning at origin"
-            );
+
+            // Apply offset to all connected sections (rigid group)
+            self.adjust_rigid_group_offsets(station_ref.section_id, offset_delta_x, offset_delta_y);
         }
-
-        // Compute the offset needed to move station from current position to target
-        let offset_delta_x = target_x - current_coords.x;
-        let offset_delta_y = target_y - current_coords.y;
-        debug!(
-            station_ref = ?station_ref,
-            offset_delta_x,
-            offset_delta_y,
-            purpose = "reposition connected sections",
-            "Computed offset delta for zero datum"
-        );
-
-        // Apply offset to all connected sections (rigid group)
-        self.adjust_rigid_group_offsets(station_ref.section_id, offset_delta_x, offset_delta_y);
 
         // Cascade through aligned closures that may have been affected
         self.cascade_connection_offsets(&[station_ref.section_id]);
@@ -809,6 +825,29 @@ impl Project {
                 station_ref: datum_key,
                 gps,
             });
+        }
+
+        // The survey had no frame and now has one, so local (0, 0) has just
+        // acquired a MEANING it did not have: this datum's GPS. Re-frame onto it
+        // the same way every other frame change does
+        // ([`Self::renormalize_frame`]) - one rigid translation of EVERY section,
+        // free-floating components included. Placing only the datum's own merge
+        // group would move that group relative to the rest of the survey, which is
+        // the one thing a georeference change must not do; before the frame
+        // existed the absolute coordinates were arbitrary and only the relative
+        // arrangement was real, and a rigid translation preserves exactly that.
+        //
+        // Deliberately HERE and not left to `AppState`'s epilogue: the
+        // subsequent-datum arithmetic above reads "the frame datum's station sits
+        // at (0, 0)" on every call, so that invariant has to hold when this
+        // function returns and not merely by the end of the command. The paths
+        // with no epilogue (a batch's second datum, the import placement loop,
+        // redo's re-execute) are exactly the ones that would otherwise place a
+        // second datum against an origin the first one does not sit on.
+        // Idempotent, so the epilogue's own `renormalize_frame_if_changed` is a
+        // measured no-op after this.
+        if frame_datum.is_none() {
+            self.renormalize_frame();
         }
 
         self.touch();
@@ -942,8 +981,9 @@ impl Project {
     /// # Why this exists
     ///
     /// Local `(0, 0)` is not a neutral coordinate: it MEANS `zero_datums[0]`'s
-    /// GPS. [`Self::set_zero_datum`] establishes that by placing the first datum
-    /// at the origin and every later one at `gps_to_local(its gps, first.gps)`,
+    /// GPS. [`Self::set_zero_datum`] establishes that by landing the first datum
+    /// on the origin - through THIS function, so the survey re-frames as one rigid
+    /// body - and every later one at `gps_to_local(its gps, first.gps)`,
     /// and every reader of local metres relies on it - the map's `gpsOrigin`, the
     /// data table's GPS column, the Ariane export's `START` lat/long, the
     /// GlobalView pin. So the frame is `zero_datums[0]` BY POSITION, and anything
@@ -1026,16 +1066,24 @@ impl Project {
     /// DIFFERENT one than `before` named. THE gate - every trigger site routes
     /// through it so the rule lives in one place.
     ///
-    /// Both sides must be `Some`. `Some -> None` removed the last anchor, so there
-    /// is no frame to renormalise onto; `None -> Some` added the survey's first
-    /// georeference, where nothing changed meaning because there was no prior
-    /// meaning. `before == after` covers the ordinary command and makes a second
-    /// call after a first one a no-op by identity rather than by arithmetic.
+    /// The AFTER side must be `Some`: `Some -> None` removed the last anchor, so
+    /// there is no frame left to renormalise onto and translating onto nothing
+    /// would move the survey for no reason. `None -> Some` DOES fire - it
+    /// establishes the frame, which is a change of what every stored coordinate
+    /// means, and the answer to that is the same rigid translation as any other
+    /// promotion. [`Self::set_zero_datum`] already performs it inline (it has to:
+    /// its own subsequent-datum arithmetic reads the invariant), so on that route
+    /// this is a measured no-op; the gate covers it anyway rather than asserting
+    /// that no other route can ever establish a frame, which is the claim the
+    /// derive-don't-hook rule exists to avoid having to make.
+    ///
+    /// `before == after` covers the ordinary command and makes a second call after
+    /// a first one a no-op by identity rather than by arithmetic.
     pub(crate) fn renormalize_frame_if_changed(&mut self, before: Option<StationKey>) -> bool {
-        let (Some(before), Some(after)) = (before, self.frame_datum_key()) else {
+        let Some(after) = self.frame_datum_key() else {
             return false;
         };
-        if before == after {
+        if before.as_ref() == Some(&after) {
             return false;
         }
         self.renormalize_frame()
