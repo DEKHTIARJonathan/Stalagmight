@@ -216,7 +216,11 @@ used to FORCE `is_aligned = true` on every `Move` closure on every open - fixing
 the creation site would have made a closure honestly saved as `0` come straight back
 as `1`), and `Project::remeasure_closure_alignment`, a derived idempotent sweep run
 from `AppState::reconcile_geometry`, from `redrive_offsets_after_load` and from
-Repair - each LAST, after the re-solve that settles the geometry it measures.
+Repair. Each of those runs it AFTER its own re-solve, so the claims are measured off
+the geometry that was settled on rather than the geometry that was found; the
+per-command one also runs it BEFORE, because an aligned closure is an edge the
+cascade solves through and a stale claim would otherwise drag a section onto a
+coincidence that is about to be retracted.
 
 The user-facing snap-to-merge path is unchanged: `ClosureDialog` sends `Move` only
 behind the move commands that made the two stations one point, so the measurement says

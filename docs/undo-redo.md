@@ -290,9 +290,12 @@ recorded, and no more.
 `reconcile_geometry` runs on every history move as well as every forward command,
 and it now re-derives two things rather than one: the section offsets
 (`realign_merges`) and every snap-to-merge closure's alignment claim
-(`Project::remeasure_closure_alignment`, LAST - the realign can move a section,
-which changes the very gaps the claim is measured from). No undo arm captures
-`is_aligned` at all, and none needs to.
+(`Project::remeasure_closure_alignment`). The claim is swept on BOTH sides of the
+realign - before, because an aligned closure is an EDGE the offset cascade
+traverses, so the flags are an INPUT to the solve and must be a function of the
+geometry rather than of the route taken to it; after, because the realign can move
+a section, which changes the very gaps the claim is measured from. No undo arm
+captures `is_aligned` at all, and none needs to.
 
 That looks like the opposite of the rule above, and it is not, because the claim is
 a **total function of the rest of the state**: `Move` strategy, a measured end gap
