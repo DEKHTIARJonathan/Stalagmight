@@ -223,6 +223,13 @@ const START_ATTEMPTS = 4;
 const HISTORY_TAIL = 25;
 /** Specs the writer/parser drift detector pushes through `import_dmp`. */
 const SELF_CHECK_SPECS = 6;
+/**
+ * Share of episodes that run with NO project open.
+ *
+ * Fixed rather than a knob: it is a coverage split, not something a repro would
+ * want to vary, and every seed's trajectory depends on it.
+ */
+const NO_PROJECT_EPISODE_P = 0.3;
 
 // ---------------------------------------------------------------------------
 // Knobs. Read at CALL time, never frozen at import: a replay restores the
@@ -897,6 +904,18 @@ export const importDialogFuzz: Scenario = {
       }
       const domBefore = await ctx.eval<number>('return document.querySelectorAll("*").length;');
 
+      // Some episodes run with NO project open, which is a different import
+      // flow, not a smaller one: a `.dmp` with nothing loaded routes to
+      // `new-project-for-import` instead of the selection dialog, so it is the
+      // only way to reach `importContext='new-project'` and the DEFERRED
+      // initial save that context selects. The fixture is still opened first,
+      // so E2's integrity check on it runs either way.
+      const headless = !replaySteps && ctx.rng() < NO_PROJECT_EPISODE_P;
+      if (headless) {
+        await ctx.callAction('project', 'closeProject', []).catch(() => undefined);
+        ctx.metric('episodeWithoutProject');
+      }
+
       let digest = await observeScreen(ctx, false);
       lastUndoDepth = digest.undo;
 
@@ -1110,7 +1129,6 @@ export const importDialogFuzz: Scenario = {
       ctx.setMetric('domNodes', domAfter);
       ctx.metric('episodes');
     }
-
     };
 
     try {
