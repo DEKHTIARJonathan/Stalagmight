@@ -41,6 +41,7 @@ import { useMapTools } from '../../hooks/useMapTools';
 import { useGasPlanPointMarkers } from './useGasPlanPointMarkers';
 import { useGasPlanDropMarkers } from './useGasPlanDropMarkers';
 import SurveyLayer, { type SurveyLayerCallbacks } from './SurveyLayer';
+import { SATELLITE_BOTTOM_CANDIDATES } from './mapUtils';
 import { renderFatalMessage } from './surveyLayer/mapErrors';
 import PlacementOverlay from './PlacementOverlay';
 import GridOverlay from './GridOverlay';
@@ -3227,17 +3228,10 @@ function MapCanvas() {
           maxzoom: tileConfig.maxZoom,
         });
 
-        // Add satellite layer below survey layers but above background.
-        // The main shots/stations hitbox layers were removed (#mem budget), so
-        // the bottom-most survey layer is now the ghost shot hitbox (added first
-        // in initializeLayers). Fall back through the first visible survey layers
-        // in case ordering changes, so satellite always lands beneath them.
-        const bottomCandidates = [
-          'survey-ghost-shots-hitbox',
-          'survey-ghost-shots',
-          'survey-shots',
-        ];
-        const firstSurveyLayer = bottomCandidates.find((id) => currentMap.getLayer(id));
+        // Satellite draws below the grid and both below the survey; the shared
+        // candidate list owns that ordering. An unresolved anchor would append
+        // the raster over everything, so it must not be the common case.
+        const bottomAnchor = SATELLITE_BOTTOM_CANDIDATES.find((id) => currentMap.getLayer(id));
         currentMap.addLayer({
           id: 'satellite-tiles',
           type: 'raster',
@@ -3245,7 +3239,7 @@ function MapCanvas() {
           paint: {
             'raster-opacity': 0.7,
           },
-        }, firstSurveyLayer);
+        }, bottomAnchor);
 
         // Add error handler for tile fetch failures
         const sourceId = 'satellite-tiles';

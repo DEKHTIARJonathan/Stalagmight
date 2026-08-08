@@ -3,7 +3,7 @@ import maplibregl from 'maplibre-gl';
 import { metersToMapCoords } from '../../utils/coordinates';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
-import { hasLiveStyle } from './mapUtils';
+import { hasLiveStyle, BOTTOM_SURVEY_LAYERS } from './mapUtils';
 import { getThemeColor } from '../../utils/themeColors';
 import type { GpsOrigin } from '../../types/config';
 
@@ -122,8 +122,12 @@ export default function GridOverlay({ map, gpsOrigin }: GridOverlayProps) {
       }
 
       if (!map.getLayer(layerId)) {
-        // Insert below survey layers if they exist
-        const surveyLayer = map.getLayer('survey-shots');
+        // The grid belongs under every survey layer, ghosts and loop closures
+        // included, which the first candidate gives; the last one only lands it
+        // under the geometry, above ghosts and closures. No anchor means no
+        // survey layer exists yet, and layers added after this one are appended
+        // above it anyway.
+        const firstSurveyLayer = BOTTOM_SURVEY_LAYERS.find((id) => map.getLayer(id));
         map.addLayer(
           {
             id: layerId,
@@ -135,7 +139,7 @@ export default function GridOverlay({ map, gpsOrigin }: GridOverlayProps) {
               'line-opacity': 0.8,
             },
           },
-          surveyLayer ? 'survey-shots' : undefined
+          firstSurveyLayer
         );
       }
 
