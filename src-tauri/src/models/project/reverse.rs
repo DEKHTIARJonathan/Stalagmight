@@ -418,7 +418,7 @@ impl Project {
 )]
 mod tests {
     use super::*;
-    use crate::config::ClosureAdjustmentConfig;
+    use crate::models::config::ClosureAdjustmentConfig;
     use crate::models::{
         ClosureStrategy, LoopClosure, SectionData, ShotData, Station, StationMerge,
     };

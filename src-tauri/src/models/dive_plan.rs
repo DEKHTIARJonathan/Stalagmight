@@ -8,7 +8,7 @@
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-use crate::config::GasConfig;
+use crate::models::config::GasConfig;
 use crate::models::{Cylinder, Diver, PlanSegment, Project, StationKey, StationRef};
 
 /// A station identified by the shots it SITS BETWEEN, rather than by its position or by which

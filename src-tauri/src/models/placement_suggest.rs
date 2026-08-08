@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-use crate::config::PlacementSuggestionConfig;
+use crate::models::config::PlacementSuggestionConfig;
 
 use super::{horizontal_length_from_slope, SectionId, Shot, ShotData};
 

@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use tracing::{debug, error, trace, warn};
 
-use crate::config::ClosureAdjustmentConfig;
+use crate::models::config::ClosureAdjustmentConfig;
 use crate::models::{
     normalize_azimuth, ClosureStrategy, Coordinates, LoopClosure, SectionId, Shot, StationRef,
 };

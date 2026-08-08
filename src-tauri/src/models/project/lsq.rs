@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 
-use crate::config::ClosureAdjustmentConfig;
+use crate::models::config::ClosureAdjustmentConfig;
 use crate::models::{Coordinates, LoopClosure, SectionId, StationRef};
 
 use super::Project;

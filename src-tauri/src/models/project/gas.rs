@@ -17,7 +17,7 @@ mod tests;
 
 use std::collections::VecDeque;
 
-use crate::config::{GasConfig, ReservePreset, ReserveProfile};
+use crate::models::config::{GasConfig, ReservePreset, ReserveProfile};
 use crate::models::{Coordinates, ShotKind, StationKey, StationRef};
 
 use super::Project;

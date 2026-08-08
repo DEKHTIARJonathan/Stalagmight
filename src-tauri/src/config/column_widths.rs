@@ -43,7 +43,7 @@ const MAX_COLUMN_KEY_LEN: usize = 128;
 ///
 /// Per-entry rather than per-field, so a hand-edited `length = -5` costs that one
 /// column its width instead of taking down the whole `[panels]` table. Same
-/// reasoning as `lenient_dpv` in `config/gas.rs`: erroring here would fail the entire
+/// reasoning as `lenient_dpv` in `models/config/gas.rs`: erroring here would fail the entire
 /// `toml::from_str::<Config>`, and `Config::load().unwrap_or_default()` would
 /// then reset every unrelated setting in the file. Out-of-range-but-integral
 /// values survive deserialization and are clamped by [`normalize_column_widths`];

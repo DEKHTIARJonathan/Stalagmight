@@ -1,4 +1,3 @@
-use super::types::{default_sigma_azimuth_deg, default_sigma_depth_m, default_sigma_length_m};
 use super::{
     AngleUnit, AppearanceConfig, CacheConfig, ClosureAdjustmentConfig, Config, DebugConfig,
     DecimalPrecision, DepthGradientConfig, DisplayConfig, ExportConfig, GasConfig, GeneralConfig,
@@ -160,32 +159,6 @@ impl Default for MapControlsConfig {
             zoom_speed: 0.55,
             invert_scroll: false,
             show_navigation_tools: false,
-        }
-    }
-}
-
-impl Default for ValidationConfig {
-    fn default() -> Self {
-        Self {
-            // Flag suspiciously short shots (under 0.3 m by default; configurable
-            // via the `[validation]` config). Surfaces as the SHORT_SHOT warning.
-            warn_shot_length_min: 0.3,
-            warn_shot_length_max: 50.0,
-            warn_depth_change_per_shot_max: 10.0,
-            warn_azimuth_deviation_max: 30.0,
-            azimuth_diff_threshold: 20.0,
-            pitch_diff_threshold: 10.0,
-            inclination_depth_diff_threshold: 15.0,
-        }
-    }
-}
-
-impl Default for ClosureAdjustmentConfig {
-    fn default() -> Self {
-        Self {
-            base_sigma_length_m: default_sigma_length_m(),
-            base_sigma_azimuth_deg: default_sigma_azimuth_deg(),
-            base_sigma_depth_m: default_sigma_depth_m(),
         }
     }
 }

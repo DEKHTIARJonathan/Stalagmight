@@ -1,4 +1,5 @@
 pub mod angle;
+pub mod config;
 pub mod dive_plan;
 pub mod geo;
 pub mod id_stride;

@@ -12,7 +12,7 @@ use super::physics::{
     gas_rate, sac_to_rmv,
 };
 use super::{is_swim_leg, penetration_budget, required_stages, route_metrics, usable_oc_gas};
-use crate::config::{DpvRig, DpvUnit, GasConfig, ReservePreset, ReserveProfile};
+use crate::models::config::{DpvRig, DpvUnit, GasConfig, ReservePreset, ReserveProfile};
 use crate::models::{
     Coordinates, GpsCoordinates, Project, SectionData, ShotData, ShotKind, StationRef, ZeroDatum,
 };

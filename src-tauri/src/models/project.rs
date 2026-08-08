@@ -31,7 +31,7 @@ mod pathfinding;
 #[cfg(test)]
 use super::{Coordinates, GpsCoordinates, Shot, ShotUpdates, Station};
 #[cfg(test)]
-use crate::config::ClosureAdjustmentConfig;
+use crate::models::config::ClosureAdjustmentConfig;
 
 mod classify;
 mod connectivity;
@@ -293,7 +293,7 @@ pub struct Project {
     /// the global config (the "defaults for new projects"); thereafter this is
     /// authoritative. Defaults on legacy projects until populated on load.
     #[serde(default)]
-    pub validation: crate::config::ValidationConfig,
+    pub validation: crate::models::config::ValidationConfig,
 
     /// Entrance elevation (#431): +up, metres above mean sea level.
     /// `None` = unknown. Project-level rather than per-entrance (#431): the
@@ -635,7 +635,7 @@ impl Project {
             imported_file_hashes: Vec::new(),
             imported_section_hashes: Vec::new(),
             next_closure_id: 1,
-            validation: crate::config::ValidationConfig::default(),
+            validation: crate::models::config::ValidationConfig::default(),
             surface_elevation: None,
             cascade_deferred: false,
             section_index_cache: HashMap::new(),

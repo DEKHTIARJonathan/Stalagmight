@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use tracing::warn;
 
-use crate::config::ClosureAdjustmentConfig;
+use crate::models::config::ClosureAdjustmentConfig;
 use crate::models::{
     ClosureRef, ClosureStrategy, Coordinates, Section, SectionId, Station, StationRef,
 };

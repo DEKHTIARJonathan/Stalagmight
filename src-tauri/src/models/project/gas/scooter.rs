@@ -3,7 +3,7 @@
 //! The engine proper ([`super`]) owns the graph walk; everything here is arithmetic over the
 //! plan's own inputs, which is what keeps it testable without building a project.
 
-use crate::config::DpvRig;
+use crate::models::config::DpvRig;
 
 use super::model::PlanSegment;
 
@@ -150,7 +150,7 @@ pub(super) fn scooter_range_limit(dpv: Option<&DpvRig>) -> f64 {
 )]
 mod tests {
     use super::*;
-    use crate::config::DpvUnit;
+    use crate::models::config::DpvUnit;
 
     fn unit(speed: f64, burn: f64) -> DpvUnit {
         DpvUnit {

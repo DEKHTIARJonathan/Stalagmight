@@ -871,7 +871,7 @@ impl Project {
     pub fn suggest_orphan_placements(
         &self,
         newly_imported_section_ids: &[SectionId],
-        ps_config: &crate::config::PlacementSuggestionConfig,
+        ps_config: &crate::models::config::PlacementSuggestionConfig,
     ) -> Vec<super::placement_suggest::OrphanPlacementSuggestion> {
         use super::placement_suggest::{
             suggest_placements, ExistingSection, OrphanPlacementSuggestion,

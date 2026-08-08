@@ -1,8 +1,9 @@
 //! Gas & route-planning config types (issue #38).
 //!
-//! Split out of `config/types.rs` to keep that file under the file-size ratchet
-//! (it was already at the 1500-LOC freeze line). Re-exported from `config` via
-//! `pub use gas::*`, so `crate::config::GasConfig` etc. resolve unchanged.
+//! Originally split out of `config/types.rs` to keep that file under the
+//! file-size ratchet; now lives under `models::config` as pure domain config.
+//! Re-exported from `crate::config` (via `models::config`'s `pub use gas::*`),
+//! so `crate::config::GasConfig` etc. resolve unchanged.
 
 use serde::{Deserialize, Deserializer, Serialize};
 use ts_rs::TS;
@@ -60,7 +61,7 @@ fn default_recalc_hold_stage1_bar() -> f64 {
     70.0
 }
 
-pub(super) fn default_dpv_range_reserve_fraction() -> f64 {
+pub(crate) fn default_dpv_range_reserve_fraction() -> f64 {
     0.1
 }
 
