@@ -871,11 +871,14 @@ async function runFuzz(
   // and this scenario would then be comparing against a model that never saw
   // it. Nothing here opens an import wizard, so it must be null; asserting that
   // once turns an assumption the generator relies on into a checked fact.
-  const importContext = await ctx.readStore('ui', 'importContext');
-  if (importContext !== null && importContext !== undefined) {
+  // `readStore` answers `{ value, truncated }` for a dot path, never the bare
+  // value - reading it as the value itself compares an object against null and
+  // fails on a project that is perfectly fine.
+  const importContext = (await ctx.readStore('ui', 'importContext')) as { value?: unknown };
+  if (importContext.value !== null && importContext.value !== undefined) {
     throw new Error(
-      `uiStore.importContext opened as ${JSON.stringify(importContext)}; the v3 import group ` +
-        'assumes null, because saveAfterImport() saves the project when it is "new-project"',
+      `uiStore.importContext opened as ${JSON.stringify(importContext.value)}; the v3 import ` +
+        'group assumes null, because saveAfterImport() saves the project when it is "new-project"',
     );
   }
 
