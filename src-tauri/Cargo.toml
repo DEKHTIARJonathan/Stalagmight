@@ -8,10 +8,10 @@ license = "AGPL-3.0-or-later"
 repository = "https://github.com/Stalagmight/Stalagmight"
 default-run = "stalagmight"
 
-# Hybrid workspace root: this package stays where it is, future crates land in
-# crates/*. Members is explicitly empty until the extraction commits add them.
+# Hybrid workspace root: this package stays where it is, extracted crates land
+# in crates/*.
 [workspace]
-members = []
+members = ["crates/models"]
 resolver = "2"
 # Required: path deps inside the workspace directory are auto-adopted as
 # members, which would drag the vendored crate into the fmt/clippy gates.
@@ -92,6 +92,7 @@ required-features = ["ipc-typegen"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+stalagmight-models = { path = "crates/models" }
 tauri = { version = "2", features = ["devtools"] }
 tauri-plugin-fs = "2"
 tauri-plugin-dialog = "2"
@@ -311,6 +312,10 @@ unreachable_pub = "deny"
 workspace = true
 
 [dev-dependencies]
+# `test-support` compiles the member's test-only helpers (formerly plain
+# `#[cfg(test)]` in the unsplit crate) for this crate's own test builds;
+# dev-dependencies don't affect production builds, so `cargo build` is unchanged.
+stalagmight-models = { path = "crates/models", features = ["test-support"] }
 tempfile = { workspace = true }
 tauri = { version = "2", features = ["test"] }
 libc = "0.2"

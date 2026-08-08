@@ -41,7 +41,18 @@ const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..
 const OUT_FILE = path.join(REPO_ROOT, 'THIRD-PARTY-LICENSES.md');
 
 // Workspace crates whose license is the app's own, not a third-party notice.
-const FIRST_PARTY_CRATES = new Set(['stalagmight']);
+// Names every planned member of the crate split up front so each extraction
+// commit only has to add the member, not remember this list.
+const FIRST_PARTY_CRATES = new Set([
+  'stalagmight',
+  'stalagmight-models',
+  'stalagmight-telemetry',
+  'stalagmight-parsers',
+  'stalagmight-persistence',
+  'stalagmight-export',
+  'stalagmight-speleodb',
+  'stalagmight-core',
+]);
 
 const sha256 = (buf) => createHash('sha256').update(buf).digest('hex');
 // Hashes are CRLF-normalised on both the generator and checker side, so a

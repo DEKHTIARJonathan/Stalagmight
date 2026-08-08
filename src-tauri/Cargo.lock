@@ -4440,6 +4440,7 @@ dependencies = [
  "serde_bytes",
  "serde_json",
  "sha2",
+ "stalagmight-models",
  "svg2pdf",
  "tauri",
  "tauri-build",
@@ -4461,6 +4462,18 @@ dependencies = [
  "usvg",
  "uuid",
  "zip",
+]
+
+[[package]]
+name = "stalagmight-models"
+version = "0.0.0"
+dependencies = [
+ "chrono",
+ "serde",
+ "serde_json",
+ "tracing",
+ "ts-rs",
+ "uuid",
 ]
 
 [[package]]

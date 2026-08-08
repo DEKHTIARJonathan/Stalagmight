@@ -10,11 +10,11 @@ from the dependency lockfiles - do not edit by hand. CI fails if this file is
 stale or hand-edited; regenerate after any dependency change.
 
 <!-- lockfile-hashes
-Cargo.lock=847aed7f680ab67624db92e86f3340592e6db0398bb22e76f4e6271a2850312a
+Cargo.lock=13bfe2001a9df3bc22f1aeeaad811252d89f1c2130c370709e62e671167a5a0e
 pnpm-lock.yaml=98e7b00c3d204c8f92df55569640b374de723a0d9ccd6b7fca65c1c33de346d9
-gen-third-party-licenses.mjs=d3fca0b94b8a58ba5c4f323714cf1b01fcd1562327eced45ec0c9e6e26d07c8b
+gen-third-party-licenses.mjs=ebb68f24487c3cca49f60ec5c0867729efa22850dc3fc7d5780e163eb707c1f1
 about.toml=a6751e567d54df96b63b6e14089a1763d14443b34a815b085dbb45a57436d455
-bundle-body=8b0dee1561ad8ae296f4532a937a1765f26fe0c560992739cd7d21ab45c332cf
+bundle-body=de326bdbe52b3d9057e24c9907b3398cb83bc34edcb8b2f3a2cfe6025cb6675a
 -->
 
 ## npm packages
@@ -7023,6 +7023,7 @@ Copyright 2013-2014 RAD Game Tools and Valve Software
 Copyright 2010-2014 Rich Geldreich and Tenacious Software LLC
 Copyright (c) 2017 Frommi
 Copyright (c) 2017-2024 oyvindln
+
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal

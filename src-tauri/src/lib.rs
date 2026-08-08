@@ -1,11 +1,15 @@
-pub mod app_dirs;
+// Extracted to the `stalagmight-models` workspace member; re-exported under the
+// old names so every `crate::app_dirs::*` / `crate::models::*` path (and the
+// `stalagmight_lib::…` paths the integration tests and gen_ipc_types example
+// use) keeps compiling unchanged.
+pub use stalagmight_models::app_dirs;
 pub mod cache;
 pub mod commands;
 pub mod config;
 pub mod core;
 pub mod export;
 pub mod logging;
-pub mod models;
+pub use stalagmight_models as models;
 pub mod parsers;
 pub mod persistence;
 pub mod speleodb;

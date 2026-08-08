@@ -81,7 +81,53 @@ fn export<T: TS + 'static>(out_dir: &Path) {
         .and_then(|path| Path::new(path).file_name())
         .expect("TS type must have an export path");
     let out_path = out_dir.join(export_to);
-    T::export_to(out_path).expect("Failed to export TS type");
+    T::export_to(&out_path).expect("Failed to export TS type");
+    flatten_import_paths(&out_path);
+}
+
+/// Rewrite every `import type { X } from "<somewhere>/X";` to the sibling form
+/// `"./X"`. ts-rs derives import specifiers from each dependency's `EXPORT_TO`
+/// relative to the importing type's own, and those are crate-relative - so a
+/// dependency that lives in a workspace member crate (whose exports point at
+/// `../../bindings/`) comes out as `../../../bindings/X` when imported by a
+/// root-crate type. That relative dance is right for the `src-tauri/bindings/`
+/// freshness tree, but everything here is flattened into the single
+/// `src/types/ipc/` directory, where the only correct specifier is `./X`.
+fn flatten_import_paths(file: &Path) {
+    let content = fs::read_to_string(file).expect("exported TS file should be readable");
+    let mut changed = false;
+    let flattened: Vec<String> = content
+        .split('\n')
+        .map(|line| {
+            let from = " from \"";
+            let Some(open) = line
+                .starts_with("import type ")
+                .then(|| line.find(from))
+                .flatten()
+            else {
+                return line.to_owned();
+            };
+            let path_start = open + from.len();
+            let Some(close) = line[path_start..].find('"') else {
+                return line.to_owned();
+            };
+            let spec = &line[path_start..path_start + close];
+            let stem = spec.rsplit('/').next().unwrap_or(spec);
+            let flat = format!("./{stem}");
+            if spec == flat {
+                return line.to_owned();
+            }
+            changed = true;
+            format!(
+                "{}{flat}{}",
+                &line[..path_start],
+                &line[path_start + close..]
+            )
+        })
+        .collect();
+    if changed {
+        fs::write(file, flattened.join("\n")).expect("Failed to rewrite TS imports");
+    }
 }
 
 fn main() {
