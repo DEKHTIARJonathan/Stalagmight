@@ -480,9 +480,11 @@ function drawExistingShotUpdates(
     }
     if (chance(ctx, 0.25)) patch.kind = ctx.pick(SHOT_KINDS);
     if (chance(ctx, 0.15)) patch.comment = null;
-    // A non-finite here is refused by `execute_import_sections` BEFORE any
-    // mutation, by name, with its own message - a different refusal from the
-    // serde one a poisoned `ShotData` gets, and worth reaching separately.
+    // A non-finite here does NOT reach the backend's `all_finite()` refusal: it
+    // is `null` by the time it lands, and `Option<f64>` reads that as "leave
+    // this field alone". Drawn anyway, because a value the caller believed it
+    // was setting turning into a silent no-op is a shape worth walking - just
+    // not one `mustBeRejected` has an opinion about. See its header.
     if (chance(ctx, 0.15)) patch[ctx.pick(UPDATE_NUMBER_FIELDS)] = Number.NaN;
     updates.push({
       section_id: target.sectionId,
@@ -569,23 +571,25 @@ export function mustBeRejected(action: string, args: readonly unknown[]): string
       }
     }
   }
-  // Index 5: `existingShotUpdates` is the store action's LAST parameter - see
-  // `importTail` for why it is appended rather than placed at the command's
-  // third position.
-  const updates = args[5];
-  if (Array.isArray(updates)) {
-    for (let i = 0; i < updates.length; i++) {
-      const update = updates[i] as Record<string, unknown> | null;
-      if (update === null || typeof update !== 'object') continue;
-      const patch = update.updates as Record<string, unknown> | null;
-      if (patch === null || typeof patch !== 'object') continue;
-      for (const [key, value] of Object.entries(patch)) {
-        if (typeof value !== 'number' || Number.isFinite(value)) continue;
-        return `existing_shot_updates[${i}].updates.${key} is non-finite - ` +
-          '`execute_import_sections` refuses it by name before any mutation';
-      }
-    }
-  }
+  // NOT CLAIMED, and the reason is measured rather than assumed: a non-finite
+  // in an `existing_shot_updates` PATCH.
+  //
+  // `execute_import_sections` does refuse one by name, before any mutation
+  // (`all_finite()`, with its own Rust test at
+  // `test_execute_import_sections_rejects_non_finite_shot_update`). It cannot
+  // fire for anything that crossed JSON, though. Every `ShotUpdates` field is
+  // `Option<f64>` (or `Option<Option<f64>>`) with `#[serde(default)]`
+  // (models/shot.rs), `JSON.stringify` spells `NaN` and `Infinity` `null`, and
+  // an explicit `null` on a plain `Option<f64>` deserializes to `None` - which
+  // is the double-option's "leave this field alone". So the value does not
+  // arrive non-finite; it does not arrive at all, and the import SUCCEEDS
+  // having quietly dropped that one field of that one patch.
+  //
+  // Claiming a refusal here failed a legal run (naharon seed 59 x60 under v3,
+  // which is what measured it). The generator still injects the value - a
+  // wizard-computed number silently becoming a no-op is a shape worth walking -
+  // but the oracle has no opinion about it, exactly as it has none about the
+  // OPTIONAL `ShotData` numbers, which are the same serde story.
   return null;
 }
 

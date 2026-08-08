@@ -374,6 +374,29 @@
  * of the recorded args rather than a flag on the drawn action, which is what
  * lets a replayed trace assert exactly what the recording did.
  *
+ * ## A v3 OBSERVATION that is not a finding
+ *
+ * `execute_import_sections` refuses a non-finite value in an
+ * `existing_shot_updates` patch by name, before any mutation, and has a Rust
+ * test for it (`test_execute_import_sections_rejects_non_finite_shot_update`,
+ * "attacker-controllable input ... must hold the same all_finite invariant as
+ * update_shot"). NOTHING THAT CROSSED JSON CAN REACH IT. Every `ShotUpdates`
+ * field is `Option<f64>` (or the double-option `Option<Option<f64>>`) with
+ * `#[serde(default)]` (models/shot.rs), `JSON.stringify` spells `NaN` and
+ * `Infinity` as `null` on the real `invoke` exactly as on this bridge, and an
+ * explicit `null` on a plain `Option<f64>` deserializes to `None` - the
+ * double-option's "leave this field alone". So the import SUCCEEDS, having
+ * quietly dropped that one field of that one patch.
+ *
+ * Measured, not reasoned: naharon seed 59 x60 under v3 is what found it, by
+ * failing an oracle that had claimed the refusal. It is not reported as an app
+ * defect because the wizard's own guard covers the shots it interpolates FROM,
+ * so no shipped route produces the value; what it means is that the backend
+ * check is a Rust-API defence and cannot be cited as protecting the frontend.
+ * If a caller ever needs a non-finite patch field rejected rather than dropped,
+ * `ShotUpdates` has to distinguish "absent" from "explicitly null" for the
+ * non-nullable numbers, exactly as finding 5 made `SectionUpdates` do.
+ *
  * ## v3 file inputs: what a trace carries, and what it rebuilds
  *
  * A file-backed import cannot record its path: the recording machine's absolute

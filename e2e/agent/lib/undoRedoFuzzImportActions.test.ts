@@ -273,14 +273,15 @@ describe('mustBeRejected', () => {
     }
   });
 
-  it('refuses a non-finite existing_shot_update, at the arg index the store uses', () => {
+  it('does NOT claim a refusal for a non-finite existing_shot_update', () => {
+    // `execute_import_sections` DOES refuse one by name - but only when it
+    // arrives non-finite, which nothing crossing JSON can. Every `ShotUpdates`
+    // field is `Option<f64>` with `#[serde(default)]`, `JSON.stringify` spells
+    // NaN `null`, and `null` reads back as `None` = "leave this field alone".
+    // Claiming a refusal here failed a legal run (naharon seed 59 x60, v3).
     const updates = [{ section_id: 1, shot_id: 1001, updates: { length: Number.NaN } }];
-    const args = [[config()], null, null, 'Auto', null, updates];
 
-    expect(mustBeRejected('importSections', args)).toContain('existing_shot_updates[0]');
-    // Index 5, not 3: `existingShotUpdates` is the store action's LAST parameter
-    // so that adding it could not shift `virtualShotMode` for the v2 generator.
-    expect(mustBeRejected('importSections', [[config()], null, null, updates, null])).toBeNull();
+    expect(mustBeRejected('importSections', [[config()], null, null, 'Auto', null, updates])).toBeNull();
   });
 
   it('has no opinion about anything the v1/v2 generators produce', () => {
