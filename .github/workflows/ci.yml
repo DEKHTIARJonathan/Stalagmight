@@ -67,8 +67,18 @@ jobs:
       # pins edition 2021). Fail fast on any drift before the expensive
       # pnpm/build/test steps - sub-second, needs only the toolchain above.
       # `check` triggers on src-tauri/** so a Rust format regression always runs it.
+      # NOT `--all`: cargo-fmt --all also formats local path deps regardless of the
+      # [workspace] exclude, which would gate the vendored compass_data crate
+      # (deliberately left unformatted - see docs/linting.md). The loop discovers
+      # workspace members under crates/ instead, so an extraction commit cannot
+      # land a crate the gate does not see.
       - name: Rust formatting (cargo fmt --check)
-        run: cargo fmt --manifest-path src-tauri/Cargo.toml --check
+        run: |
+          cargo fmt --manifest-path src-tauri/Cargo.toml --check
+          for m in src-tauri/crates/*/Cargo.toml; do
+            [ -e "$m" ] || continue
+            cargo fmt --manifest-path "$m" --check
+          done
 
       # Hosted: actions/cache-backed rust-cache restores a prebuilt target/.
       # Self-hosted: that's useless on an ephemeral (--rm) runner - it uses the
@@ -140,7 +150,7 @@ jobs:
       - name: sccache zero-stats (self-hosted only)
         if: runner.environment == 'self-hosted'
         run: sccache --zero-stats || true
-      - run: cargo test --manifest-path src-tauri/Cargo.toml --features telemetry
+      - run: cargo test --workspace --manifest-path src-tauri/Cargo.toml --features telemetry
         env:
           XDG_CONFIG_HOME: ${{ runner.temp }}/config
           TELEMETRY_ENDPOINT: "https://test.invalid/v1/events"
@@ -172,7 +182,7 @@ jobs:
       # 17dc4feb; this enforces it so it can't silently rot again. Pedantic lints
       # stay warn-level (advisory) - only the deny-level policy fails the build.
       - name: Clippy (deny-level lint gate)
-        run: cargo clippy --manifest-path src-tauri/Cargo.toml --features telemetry --all-targets
+        run: cargo clippy --workspace --manifest-path src-tauri/Cargo.toml --features telemetry --all-targets
         env:
           TELEMETRY_ENDPOINT: "https://test.invalid/v1/events"
       # sccache health on the self-hosted path (the cache that replaces rust-cache

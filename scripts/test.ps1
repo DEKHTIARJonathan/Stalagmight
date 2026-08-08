@@ -12,4 +12,4 @@ $ErrorActionPreference = 'Stop'
 $env:STALAGMIGHT_TEST_MANIFEST = '1'
 if (-not $env:TELEMETRY_ENDPOINT) { $env:TELEMETRY_ENDPOINT = 'http://localhost/dummy' }
 
-cargo test --manifest-path src-tauri/Cargo.toml --features telemetry @args
+cargo test --workspace --manifest-path src-tauri/Cargo.toml --features telemetry @args

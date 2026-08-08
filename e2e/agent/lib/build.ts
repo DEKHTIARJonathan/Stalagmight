@@ -38,7 +38,7 @@ export function needsE2eFeature(): boolean {
 }
 
 // Source inputs whose changes should invalidate the built binary.
-const SOURCE_DIRS = ['src', path.join('src-tauri', 'src')];
+const SOURCE_DIRS = ['src', path.join('src-tauri', 'src'), path.join('src-tauri', 'crates')];
 const SOURCE_FILES = [
   path.join('src-tauri', 'tauri.conf.json'),
   'package.json',

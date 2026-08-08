@@ -42,7 +42,7 @@ jobs:
         run: |
           node scripts/check-third-party-licenses.test.mjs
           node scripts/check-third-party-licenses.mjs
-      - run: cargo test --manifest-path src-tauri/Cargo.toml --features telemetry
+      - run: cargo test --workspace --manifest-path src-tauri/Cargo.toml --features telemetry
         env:
           XDG_CONFIG_HOME: ${{ runner.temp }}/config
           TELEMETRY_ENDPOINT: "https://test.invalid/v1/events"
