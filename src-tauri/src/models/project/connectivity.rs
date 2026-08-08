@@ -386,6 +386,24 @@ impl Project {
         offsets
     }
 
+    /// EVERY section's `section_offsets` entry - `None` for a section that has no
+    /// key. The whole-project sibling of the two captures above.
+    ///
+    /// For the one command whose effect is not bounded by any connectivity:
+    /// changing WHICH zero datum is first re-defines the georeference origin, and
+    /// [`Self::renormalize_frame`] answers that by translating the whole survey,
+    /// free-floating components included. A merge-group or rigid-set capture
+    /// cannot hand that back, so the undo entry that records it has to take the
+    /// project (#469, item 1). Both narrower captures stay as they are: no
+    /// per-keystroke shot edit can change the frame, and widening those would put
+    /// an N-entry map on every one of them.
+    pub(crate) fn capture_all_section_offsets(&self) -> HashMap<SectionId, Option<(f64, f64)>> {
+        self.sections
+            .iter()
+            .map(|section| (section.id, self.section_offsets.get(&section.id).copied()))
+            .collect()
+    }
+
     /// Restore section offsets from a captured snapshot.
     ///
     /// For each entry in `offsets`:

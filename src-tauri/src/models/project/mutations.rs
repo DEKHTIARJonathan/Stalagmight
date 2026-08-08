@@ -4,7 +4,7 @@ use tracing::{debug, error, info, trace};
 
 use crate::models::{
     gps_to_local, ClosurePreview, ClosureStrategy, Coordinates, GpsCoordinates, LoopClosure,
-    SectionId, StationMerge, StationRef, ZeroDatum,
+    SectionId, StationKey, StationMerge, StationRef, ZeroDatum,
 };
 
 use super::Project;
@@ -909,6 +909,126 @@ impl Project {
     /// Get the primary zero datum (first one, or None)
     pub fn primary_zero_datum(&self) -> Option<&ZeroDatum> {
         self.zero_datums.first()
+    }
+
+    /// The station whose local position IS the survey's georeference origin: the
+    /// first zero datum that still resolves.
+    ///
+    /// "First that resolves" rather than plain `zero_datums.first()` because a
+    /// dangling datum is not on the wire at all (`Project::datum_to_wire` drops
+    /// it), so the frontend map and the data table take their GPS origin from the
+    /// first RESOLVABLE one. This is the definition the renormalisation is gated
+    /// on, so the gate and the thing the user looks at agree.
+    pub(crate) fn frame_datum_key(&self) -> Option<StationKey> {
+        self.zero_datums
+            .iter()
+            .find(|d| self.resolve_key(&d.station_ref).is_some())
+            .map(|d| d.station_ref.clone())
+    }
+
+    /// Translate the WHOLE survey so the frame-defining datum's station sits at
+    /// local `(0, 0)` again. Returns true when anything moved.
+    ///
+    /// # Why this exists
+    ///
+    /// Local `(0, 0)` is not a neutral coordinate: it MEANS `zero_datums[0]`'s
+    /// GPS. [`Self::set_zero_datum`] establishes that by placing the first datum
+    /// at the origin and every later one at `gps_to_local(its gps, first.gps)`,
+    /// and every reader of local metres relies on it - the map's `gpsOrigin`, the
+    /// data table's GPS column, the Ariane export's `START` lat/long, the
+    /// GlobalView pin. So the frame is `zero_datums[0]` BY POSITION, and anything
+    /// that changes WHICH datum is first re-defines what every stored coordinate
+    /// means. [`Self::remove_zero_datum`] is a bare `retain`: it promotes the next
+    /// datum and moves nothing, and `resolve_offsets` cannot repair that (the
+    /// cascade marks datum sections authoritative and never re-derives their
+    /// offsets), so the survey stays laid out against the datum that is gone while
+    /// the app now reads it against the one that is left. Nothing warns, no
+    /// command asked for it, and the whole cave slides by the inter-datum vector
+    /// on the map and in every export (#469, item 1; #413 finding 26 is the same
+    /// mechanism reached one edit later).
+    ///
+    /// The fix preserves the thing the user cares about - every station's
+    /// REAL-WORLD position - and changes only the arbitrary part, the local
+    /// coordinates: one rigid translation of every section by minus the promoted
+    /// datum station's current position.
+    ///
+    /// # Measure, do not re-derive
+    ///
+    /// The delta is `-(measured position of the promoted datum station)`, not
+    /// `-gps_to_local(G_new, G_old)`. For a self-consistent project the two are
+    /// the same number (that identity is exactly what `set_zero_datum` wrote).
+    /// For one that is already inconsistent - a merged project, whose datums are
+    /// copied by `store_zero_datum_without_repositioning` precisely to preserve
+    /// their offsets - only the measured form restores the app's own invariant,
+    /// and only the measured form is IDEMPOTENT: a second application measures
+    /// zero and does nothing. That is the same choice
+    /// [`Self::datum_anchor_position`] already made for shot edits.
+    ///
+    /// # What is NOT rewritten
+    ///
+    /// * `ZeroDatum::gps` - rewriting a measured GPS fix would falsify data.
+    /// * `station_offsets` - they are relative to the walked position.
+    /// * shot geometry - no closure or merge metric goes stale from a translation.
+    ///
+    /// Datum-less, free-floating components translate too: their local
+    /// coordinates are read against the same origin, so leaving them behind would
+    /// move them RELATIVE to the anchored survey, which is the one thing a
+    /// georeference change must not do.
+    ///
+    /// Every write goes through [`Self::adjust_section_offset`] and therefore
+    /// [`Self::write_section_offset`], so the dust-zero invariant holds: the
+    /// promoted datum's own section normally ends with no key at all.
+    pub(crate) fn renormalize_frame(&mut self) -> bool {
+        let Some(key) = self.frame_datum_key() else {
+            return false;
+        };
+        let Some(current) = self
+            .resolve_key(&key)
+            .and_then(|sr| self.compute_station_raw_coords(sr))
+        else {
+            return false;
+        };
+
+        let (dx, dy) = (-current.x, -current.y);
+        // Dust is not a displacement - the shared bound, see
+        // `Project::OFFSET_DUST_M`. This is also what makes a second call a
+        // provable no-op rather than a churn of near-zero writes.
+        if dx.abs() <= Self::OFFSET_DUST_M && dy.abs() <= Self::OFFSET_DUST_M {
+            return false;
+        }
+
+        let section_ids: Vec<SectionId> = self.sections.iter().map(|s| s.id).collect();
+        for id in section_ids {
+            self.adjust_section_offset(id, dx, dy);
+        }
+
+        info!(
+            datum_section = key.section_id,
+            delta_x = dx,
+            delta_y = dy,
+            purpose = "renormalise georeference frame",
+            "The frame-defining zero datum changed; translated the survey onto the new origin"
+        );
+        true
+    }
+
+    /// [`Self::renormalize_frame`], but only when the frame-defining station is a
+    /// DIFFERENT one than `before` named. THE gate - every trigger site routes
+    /// through it so the rule lives in one place.
+    ///
+    /// Both sides must be `Some`. `Some -> None` removed the last anchor, so there
+    /// is no frame to renormalise onto; `None -> Some` added the survey's first
+    /// georeference, where nothing changed meaning because there was no prior
+    /// meaning. `before == after` covers the ordinary command and makes a second
+    /// call after a first one a no-op by identity rather than by arithmetic.
+    pub(crate) fn renormalize_frame_if_changed(&mut self, before: Option<StationKey>) -> bool {
+        let (Some(before), Some(after)) = (before, self.frame_datum_key()) else {
+            return false;
+        };
+        if before == after {
+            return false;
+        }
+        self.renormalize_frame()
     }
 
     /// The world position of the anchor [`Self::realign_after_shot_edit`] will

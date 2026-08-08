@@ -375,10 +375,19 @@ impl AppState {
                     .enumerate()
                     .find(|(_, zd)| project.key_is_ref(&zd.station_ref, *station_ref));
 
-                // Capture section offsets for all connected sections
-                // This allows undo to restore exact previous state
-                let previous_offsets =
-                    project.capture_connected_section_offsets(station_ref.section_id);
+                // Capture EVERY section's offset, not the datum's merge group.
+                // Adding the first datum makes this station the georeference
+                // origin, and undoing that add REMOVES it again - an inverse that
+                // performs a frame change, and the frame is the one thing whose
+                // blast radius is the whole project rather than a connected set
+                // (`Project::renormalize_frame`, #469 item 1). The narrow capture
+                // was exact only as long as no offset outside the merge group
+                // could move; it no longer is, and an inverse that re-derives what
+                // it cannot restore is the shape this programme exists to
+                // eliminate. Whole-project here is affordable for the same reason
+                // it is not on `UpdateShot`: setting a GPS anchor is a rare,
+                // deliberate act.
+                let previous_offsets = project.capture_all_section_offsets();
 
                 UndoData::ZeroDatumInfo {
                     station_ref: *station_ref,

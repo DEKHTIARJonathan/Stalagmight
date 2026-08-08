@@ -4,7 +4,7 @@ use crate::core::CommentHolder;
 use crate::core::{
     Command, CommandResult, IntegrityCheckResult, IntegrityRepairResult, ReversedSection, UndoData,
 };
-use crate::models::{Project, SectionData, SectionId, ViolationSeverity};
+use crate::models::{Project, SectionData, SectionId, StationKey, ViolationSeverity};
 #[cfg(test)]
 use crate::models::{ShotData, ShotId, ShotUpdates};
 
@@ -248,6 +248,62 @@ impl AppState {
         }
     }
 
+    /// The open project's frame-defining datum station, or `None` with no project
+    /// and none with no resolvable datum. Read BEFORE a command runs; handed back
+    /// to [`Self::renormalize_frame_if_changed`] after it.
+    pub(super) fn frame_datum_key(&self) -> Option<StationKey> {
+        let guard = match self.project.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        guard.as_ref().and_then(Project::frame_datum_key)
+    }
+
+    /// If the command that just ran changed WHICH station defines the
+    /// georeference frame, translate the survey onto the new origin
+    /// ([`Project::renormalize_frame`], #469 item 1).
+    ///
+    /// Derived, not hooked. At least six routes can promote a different datum to
+    /// first - `remove_zero_datum`, `cleanup_section_references` on a
+    /// `DeleteSection`, the delete/split entry points, `repair_structural_integrity`,
+    /// `set_zero_datum`, and the `ZeroDatumInfo` undo arm - and a hook set that is
+    /// one call site short does not degrade, it silently skips. Comparing the frame
+    /// station across the command catches all of them, including the ones nobody
+    /// thought of, and asks the state rather than the command what happened.
+    ///
+    /// # Both sides must be `Some`
+    ///
+    /// * `Some -> None` removed the last anchor: there is no frame left to
+    ///   renormalise onto, and translating onto nothing would move the survey for
+    ///   no reason. No-op.
+    /// * `None -> Some` ADDED the survey's first georeference. Nothing changed
+    ///   meaning, because there was no prior meaning - the map was falling back to
+    ///   a config default, which is not survey data. Left exactly as it is today
+    ///   (that add still translates only the datum's own merge group, which is a
+    ///   separate, pre-existing asymmetry).
+    ///
+    /// # Never on the inverse
+    ///
+    /// This is the FORWARD epilogue only, alongside the orphan-closure conversion,
+    /// and deliberately not inside `reconcile_geometry` - which `undo()`/`redo()`
+    /// share. An inverse must RESTORE, not re-derive; every command that can get
+    /// here records either a `ProjectSnapshotPair` or (for `SetZeroDatum`) a
+    /// whole-project `previous_offsets`, so the undo hands the old map back
+    /// verbatim. Nor on the LOAD path: `resolve_offsets`' cascade is
+    /// translation-invariant, so save/reopen converges with the loader untouched,
+    /// and a load-time renormalisation would silently translate a merged project
+    /// whose datums legitimately do not sit at the origin.
+    pub(super) fn renormalize_frame_if_changed(&self, before: Option<StationKey>) {
+        let mut guard = match self.project.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        let Some(project) = guard.as_mut() else {
+            return;
+        };
+        project.renormalize_frame_if_changed(before);
+    }
+
     /// True iff the open project currently holds a Critical integrity violation.
     pub(super) fn project_has_critical(&self) -> bool {
         self.project
@@ -407,6 +463,12 @@ impl AppState {
                     changed: false,
                 };
             };
+            // The frame-defining datum station before the repair. Repair never runs
+            // through `execute()`, so it carries its own frame check (#469, item 1):
+            // `repair_structural_integrity` drops every zero datum whose anchor no
+            // longer resolves, and dropping the PRIMARY one promotes the next - which
+            // re-defines what local (0, 0) means for the whole survey.
+            let frame_before = project.frame_datum_key();
             // Drop dangling refs/orphans and re-mint duplicate shot UUIDs.
             project.repair_structural_integrity();
             // Demote any merge that bridges two independently datum-anchored
@@ -423,6 +485,9 @@ impl AppState {
             // the converter's own double-anchor guard sees the same two anchored
             // halves and leaves it alone.
             project.convert_orphan_closures_to_merges();
+            // Same order as execute()'s epilogue: renormalise onto the new frame
+            // before the solve that lands on it.
+            project.renormalize_frame_if_changed(frame_before);
             project.resolve_offsets();
         } // release the guard before re-measuring (integrity_violation_messages re-locks)
           // Repair mutated measured geometry (and convert_orphan_closures_to_merges
@@ -524,6 +589,12 @@ impl AppState {
         // The command's integrity capabilities, computed once and read by the
         // epilogue below (snapshot / orphan-closure conversion / reconcile).
         let integrity = Self::command_integrity(&cmd);
+
+        // The station that currently defines the georeference frame, read before
+        // dispatch so the epilogue can tell whether this command changed it
+        // (#469, item 1). Cheap: a walk of `zero_datums` (a handful) with a
+        // `resolve_key` each.
+        let frame_before = self.frame_datum_key();
 
         // Snapshot before a ref-removing/renumbering command so a result that
         // introduces dangling references can be rejected and rolled back -
@@ -690,6 +761,19 @@ impl AppState {
         // still leaves an inert closure independent.
         if result.success && integrity.can_orphan_closures {
             self.convert_orphan_closures_in_open_project();
+        }
+
+        // Local (0, 0) MEANS `zero_datums[0]`'s GPS, so a command that promoted a
+        // different datum to first just re-defined what every stored coordinate
+        // means. Translate the survey onto the new origin before the reconcile, so
+        // the geometry the reconcile solves - and the after-half of any snapshot
+        // pair - is the renormalised one (#469, item 1). Gated on
+        // `affects_geometry` exactly as the reconcile below is: that classification
+        // is what excludes the lifecycle commands, and OpenProject in particular,
+        // where "the frame station changed" means a DIFFERENT PROJECT is open and
+        // renormalising would translate a file the user just loaded.
+        if result.success && cmd.affects_geometry() {
+            self.renormalize_frame_if_changed(frame_before);
         }
 
         // Treat section offsets as derived: after any structural command,
@@ -884,6 +968,13 @@ impl AppState {
         // rejects corruption the batch itself introduces.
         let pre_had_critical = self.project_has_critical();
 
+        // The frame-defining datum station before the batch (#469, item 1). Read
+        // here rather than left to the outer `execute()` epilogue for the same
+        // reason the conversion below is: the after-snapshot is taken inside this
+        // function, so a renormalisation applied afterwards would sit OUTSIDE the
+        // pair and undo->redo would land on the pre-renormalisation geometry.
+        let frame_before = self.frame_datum_key();
+
         // Capture pre-batch snapshot for rollback on partial failure and undo
         let before_snapshot = match self.capture_project_snapshot() {
             Ok(s) => s,
@@ -939,6 +1030,9 @@ impl AppState {
         // the Batch command, so the two passes agree.
         self.convert_orphan_closures_in_open_project();
         if commands.iter().any(Command::affects_geometry) {
+            // Same order as `execute()`'s epilogue: renormalise onto the new frame
+            // first, then reconcile the geometry that lands on it (#469, item 1).
+            self.renormalize_frame_if_changed(frame_before);
             self.reconcile_geometry();
         }
 

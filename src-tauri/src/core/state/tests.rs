@@ -4517,6 +4517,23 @@ fn test_legacy_project_seeds_validation_from_global_config() {
 /// Deleting a shot in one connected component must NEVER move a station in an
 /// unrelated component. The strongest "whole map jumps" sentinel: two sections,
 /// each its own zero datum, sharing no merge/closure.
+///
+/// The delete here is the first shot of A, which removes A's station 0 and with
+/// it the zero datum keyed `StationAnchor::SectionStart` - and that datum was the
+/// PRIMARY one. So this command also changes the georeference frame, and the
+/// oracle has to be stated in the frame-independent terms it always meant (#469,
+/// item 1): B does not move IN THE WORLD. Local (0, 0) means `zero_datums[0]`'s
+/// GPS, so when B's datum is promoted to first the whole survey is translated so
+/// that B's datum station lands on the origin, and B's real-world position - what
+/// the map draws and what the exports write - is unchanged precisely BECAUSE its
+/// local coordinates moved by that one vector.
+///
+/// The assertion is therefore "B translated by exactly the promoted datum's own
+/// former position, and by nothing else", which is strictly sharper than the
+/// byte-for-byte form it replaces: a spurious shift of any size still fails, and
+/// so does a translation of the wrong magnitude. Section A's own stations are not
+/// comparable across the delete (a shot went away), which is why the sentinel was
+/// always read off B.
 #[test]
 fn delete_shot_does_not_shift_independent_component() {
     let state = AppState::new().unwrap();
@@ -4588,10 +4605,35 @@ fn delete_shot_does_not_shift_independent_component() {
 
     let after = abs_coord_map(&state.get_project_state().unwrap());
 
-    // Section B (unrelated component) must be byte-for-byte unmoved.
+    // The delete took A's station 0, so A's datum went with it and B's was
+    // promoted to primary. B's datum station is the new local origin.
+    let promoted = StationRef::new(b, 0);
+    let promoted_now = after[&promoted];
+    assert!(
+        promoted_now.x.abs() < 1e-6 && promoted_now.y.abs() < 1e-6,
+        "the promoted datum's station must sit at the local origin, got {promoted_now:?}: local \
+         (0, 0) means zero_datums[0]'s GPS, so a promotion that leaves the survey where it was \
+         re-georeferences it by the whole inter-datum vector"
+    );
+
+    // Section B (unrelated component) is unmoved in the WORLD: every station
+    // translated by exactly the vector that put the promoted datum on the origin,
+    // and z (which section offsets do not carry) is untouched.
+    let (dx, dy) = (before[&promoted].x, before[&promoted].y);
+    assert!(
+        dx.abs() > 1000.0,
+        "setup: the two datums must sit kilometres apart, got ({dx}, {dy})"
+    );
     for idx in 0..=2 {
         let r = StationRef::new(b, idx);
-        assert_coords_close(after[&r], before[&r]);
+        assert_coords_close(
+            after[&r],
+            Coordinates {
+                x: before[&r].x - dx,
+                y: before[&r].y - dy,
+                z: before[&r].z,
+            },
+        );
     }
 }
 
