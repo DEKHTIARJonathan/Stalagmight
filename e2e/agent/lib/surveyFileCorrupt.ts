@@ -32,6 +32,14 @@ import {
   writeDmpText,
 } from './surveyFileWriters';
 import { type GeneratedFileSpec, type Rng, pick, randInt, surveyFileName } from './surveyFileSpecs';
+import {
+  type Corruption,
+  DAT_CORRUPTIONS,
+  GPX_CORRUPTIONS,
+  MAK_CORRUPTIONS,
+  SRV_CORRUPTIONS,
+  WPJ_CORRUPTIONS,
+} from './surveyFileCorruptText';
 
 /** A corrupted file, and the catalog id that says how. */
 export interface CorruptedFileSpec {
@@ -328,14 +336,48 @@ const TML_CORRUPTIONS: readonly TmlCorruption[] = [
 // Entry point
 // ---------------------------------------------------------------------------
 
+/**
+ * The entries of one catalog that apply to one spec, in catalog order.
+ *
+ * ORDER IS PART OF THE CONTRACT. `corruptSpec` draws with a single `pick` over
+ * this filtered list, so inserting an entry in the MIDDLE of a catalog shifts
+ * which entry every existing seed draws. The header of
+ * `scenarios/importDialogFuzz.ts` carries repro lines whose trajectories depend
+ * on exactly that, which is why the DMP and TML catalogs above are appended to
+ * and never rearranged, and why the five new ones live in their own module and
+ * are dispatched to rather than merged in.
+ */
+function applicable<T>(entries: readonly Corruption<T>[], spec: T): readonly Corruption<T>[] {
+  return entries.filter((entry) => entry.applies?.(spec) ?? true);
+}
+
 /** Catalog ids that could be applied to `spec`, in catalog order. */
 export function corruptionsFor(spec: GeneratedFileSpec): string[] {
-  if (spec.format === 'dmp') {
-    return DMP_CORRUPTIONS.filter((entry) => entry.applies?.(spec.dmp) ?? true).map((entry) => `dmp:${entry.id}`);
+  switch (spec.format) {
+    case 'dmp':
+      return DMP_CORRUPTIONS.filter((entry) => entry.applies?.(spec.dmp) ?? true).map(
+        (entry) => `dmp:${entry.id}`,
+      );
+    case 'tml':
+    case 'tmlu':
+      return TML_CORRUPTIONS.filter((entry) =>
+        (entry.formats ?? ['tml', 'tmlu']).includes(spec.format),
+      ).map((entry) => `tml:${entry.id}`);
+    case 'dat':
+      return applicable(DAT_CORRUPTIONS, spec.dat).map((entry) => `dat:${entry.id}`);
+    case 'mak':
+      return applicable(MAK_CORRUPTIONS, { mak: spec.mak, dats: spec.dats }).map(
+        (entry) => `mak:${entry.id}`,
+      );
+    case 'srv':
+      return applicable(SRV_CORRUPTIONS, spec.srv).map((entry) => `srv:${entry.id}`);
+    case 'wpj':
+      return applicable(WPJ_CORRUPTIONS, { wpj: spec.wpj, srvs: spec.srvs }).map(
+        (entry) => `wpj:${entry.id}`,
+      );
+    default:
+      return applicable(GPX_CORRUPTIONS, spec.gpx).map((entry) => `gpx:${entry.id}`);
   }
-  return TML_CORRUPTIONS.filter((entry) => (entry.formats ?? ['tml', 'tmlu']).includes(spec.format)).map(
-    (entry) => `tml:${entry.id}`,
-  );
 }
 
 /**
@@ -343,7 +385,10 @@ export function corruptionsFor(spec: GeneratedFileSpec): string[] {
  *
  * Deterministic in `rng`: the same stream position and the same input spec
  * always produce the same catalog entry and the same corrupted spec. The name is
- * recomputed, so a corrupted file never collides with the clean one it came from.
+ * recomputed, so a corrupted file never collides with the clean one it came from
+ * - and for a `.mak`/`.wpj` the WHOLE file set comes back, siblings included,
+ * because a corruption may have changed the sibling list rather than the project
+ * text (`mak:missing-dat-sibling`, `wpj:missing-srv`).
  */
 export function corruptSpec(rng: Rng, spec: GeneratedFileSpec): CorruptedFileSpec {
   if (spec.format === 'dmp') {
@@ -356,16 +401,73 @@ export function corruptSpec(rng: Rng, spec: GeneratedFileSpec): CorruptedFileSpe
     };
   }
 
-  const format = spec.format;
-  const candidates = TML_CORRUPTIONS.filter((entry) => (entry.formats ?? ['tml', 'tmlu']).includes(format));
-  const entry = pick(rng, candidates);
-  const tml = entry.apply(rng, spec.tml);
-  // Spelled out per variant rather than `{ format, ... }`: the union's two arms
-  // differ only in the literal, and TypeScript will not widen one object into a
-  // union of two literal-discriminated members.
-  const next: GeneratedFileSpec =
-    format === 'tml'
-      ? { format: 'tml', name: surveyFileName('tml', tml), profile: spec.profile, tml }
-      : { format: 'tmlu', name: surveyFileName('tmlu', tml), profile: spec.profile, tml };
-  return { spec: next, corruption: `tml:${entry.id}` };
+  if (spec.format === 'tml' || spec.format === 'tmlu') {
+    const format = spec.format;
+    const candidates = TML_CORRUPTIONS.filter((entry) => (entry.formats ?? ['tml', 'tmlu']).includes(format));
+    const entry = pick(rng, candidates);
+    const tml = entry.apply(rng, spec.tml);
+    // Spelled out per variant rather than `{ format, ... }`: the union's two arms
+    // differ only in the literal, and TypeScript will not widen one object into a
+    // union of two literal-discriminated members.
+    const next: GeneratedFileSpec =
+      format === 'tml'
+        ? { format: 'tml', name: surveyFileName('tml', tml), profile: spec.profile, tml }
+        : { format: 'tmlu', name: surveyFileName('tmlu', tml), profile: spec.profile, tml };
+    return { spec: next, corruption: `tml:${entry.id}` };
+  }
+
+  const profile = spec.profile;
+  if (spec.format === 'dat') {
+    const entry = pick(rng, applicable(DAT_CORRUPTIONS, spec.dat));
+    const dat = entry.apply(rng, spec.dat);
+    return {
+      spec: { format: 'dat', name: surveyFileName('dat', dat), profile, dat },
+      corruption: `dat:${entry.id}`,
+    };
+  }
+  if (spec.format === 'mak') {
+    const project = { mak: spec.mak, dats: spec.dats };
+    const entry = pick(rng, applicable(MAK_CORRUPTIONS, project));
+    const next = entry.apply(rng, project);
+    return {
+      spec: {
+        format: 'mak',
+        name: surveyFileName('mak', next),
+        profile,
+        mak: next.mak,
+        dats: next.dats,
+      },
+      corruption: `mak:${entry.id}`,
+    };
+  }
+  if (spec.format === 'srv') {
+    const entry = pick(rng, applicable(SRV_CORRUPTIONS, spec.srv));
+    const srv = entry.apply(rng, spec.srv);
+    return {
+      spec: { format: 'srv', name: surveyFileName('srv', srv), profile, srv },
+      corruption: `srv:${entry.id}`,
+    };
+  }
+  if (spec.format === 'wpj') {
+    const project = { wpj: spec.wpj, srvs: spec.srvs };
+    const entry = pick(rng, applicable(WPJ_CORRUPTIONS, project));
+    const next = entry.apply(rng, project);
+    return {
+      spec: {
+        format: 'wpj',
+        name: surveyFileName('wpj', next),
+        profile,
+        wpj: next.wpj,
+        srvs: next.srvs,
+      },
+      corruption: `wpj:${entry.id}`,
+    };
+  }
+
+  const entry = pick(rng, applicable(GPX_CORRUPTIONS, spec.gpx));
+  const gpx = entry.apply(rng, spec.gpx);
+  return {
+    spec: { format: 'gpx', name: surveyFileName('gpx', gpx), profile, gpx },
+    corruption: `gpx:${entry.id}`,
+  };
 }
