@@ -9,8 +9,9 @@ use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tauri::{AppHandle, Emitter};
 use ts_rs::TS;
+
+use crate::core::events::EventSink;
 
 // ============================================================================
 // LoadError
@@ -590,7 +591,7 @@ const HEARTBEAT_MS: u64 = 2000;
 
 /// Emits loading progress events to the frontend.
 pub struct ProgressEmitter {
-    handle: AppHandle,
+    sink: Arc<dyn EventSink>,
     loading_id: u64,
     cancelled: Arc<AtomicBool>,
     phase_weights: Vec<(LoadingPhase, f32)>,
@@ -601,7 +602,7 @@ pub struct ProgressEmitter {
 
 impl ProgressEmitter {
     /// Create a new emitter for project open operations (8 phases summing to 100%).
-    pub fn new_for_open(handle: AppHandle, cancelled: Arc<AtomicBool>) -> Self {
+    pub fn new_for_open(sink: Arc<dyn EventSink>, cancelled: Arc<AtomicBool>) -> Self {
         let weights = vec![
             (LoadingPhase::OpeningDatabase, 5.0),
             (LoadingPhase::LoadingProjectData, 20.0),
@@ -616,11 +617,11 @@ impl ProgressEmitter {
             (weights.iter().map(|(_, w)| w).sum::<f32>() - 100.0).abs() < 0.01,
             "Open phase weights must sum to 100"
         );
-        Self::new(handle, weights, cancelled)
+        Self::new(sink, weights, cancelled)
     }
 
     /// Create a new emitter for project create operations (3 phases summing to 100%).
-    pub fn new_for_create(handle: AppHandle, cancelled: Arc<AtomicBool>) -> Self {
+    pub fn new_for_create(sink: Arc<dyn EventSink>, cancelled: Arc<AtomicBool>) -> Self {
         let weights = vec![
             (LoadingPhase::CreatingDatabase, 40.0),
             (LoadingPhase::InitializingProject, 40.0),
@@ -630,13 +631,13 @@ impl ProgressEmitter {
             (weights.iter().map(|(_, w)| w).sum::<f32>() - 100.0).abs() < 0.01,
             "Create phase weights must sum to 100"
         );
-        Self::new(handle, weights, cancelled)
+        Self::new(sink, weights, cancelled)
     }
 
     /// Create a new emitter for survey-file import operations (TML, Compass)
     /// with 4 phases summing to 100%. Import doesn't support cancellation today,
     /// so this uses a dummy token.
-    pub fn new_for_import(handle: AppHandle) -> Self {
+    pub fn new_for_import(sink: Arc<dyn EventSink>) -> Self {
         let weights = vec![
             (LoadingPhase::ImportParsing, 15.0),
             (LoadingPhase::ImportConverting, 20.0),
@@ -648,13 +649,13 @@ impl ProgressEmitter {
             "Import phase weights must sum to 100"
         );
         let dummy_cancelled = Arc::new(AtomicBool::new(false));
-        Self::new(handle, weights, dummy_cancelled)
+        Self::new(sink, weights, dummy_cancelled)
     }
 
     /// Create a new emitter for export operations (4 phases summing to 100%).
     ///
     /// Export operations don't support cancellation, so this uses a dummy token.
-    pub fn new_for_export(handle: AppHandle) -> Self {
+    pub fn new_for_export(sink: Arc<dyn EventSink>) -> Self {
         let weights = vec![
             (LoadingPhase::ExportPreparing, 10.0),
             (LoadingPhase::ExportGenerating, 60.0),
@@ -667,16 +668,16 @@ impl ProgressEmitter {
         );
         // Export doesn't support cancellation - use a dummy token that's never cancelled
         let dummy_cancelled = Arc::new(AtomicBool::new(false));
-        Self::new(handle, weights, dummy_cancelled)
+        Self::new(sink, weights, dummy_cancelled)
     }
 
     fn new(
-        handle: AppHandle,
+        sink: Arc<dyn EventSink>,
         phase_weights: Vec<(LoadingPhase, f32)>,
         cancelled: Arc<AtomicBool>,
     ) -> Self {
         Self {
-            handle,
+            sink,
             loading_id: LOADING_ID_COUNTER.fetch_add(1, Ordering::SeqCst),
             cancelled,
             phase_weights,
@@ -774,12 +775,13 @@ impl ProgressEmitter {
             is_indeterminate,
         };
 
-        if let Err(e) = self.handle.emit("loading-progress", &progress) {
-            tracing::warn!(
+        match serde_json::to_value(&progress) {
+            Ok(payload) => self.sink.emit("loading-progress", payload),
+            Err(e) => tracing::warn!(
                 error = %e,
                 purpose = "report loading progress to UI",
-                "Failed to emit loading progress event"
-            );
+                "Failed to serialize loading progress event"
+            ),
         }
     }
 

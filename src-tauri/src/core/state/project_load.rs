@@ -336,9 +336,9 @@ impl AppState {
             DisplaySettings, LoadError, LoadProjectFullResult, LoadingPhase, ProgressEmitter,
         };
 
-        let handle = self
-            .get_app_handle()
-            .ok_or_else(|| LoadError::internal("AppHandle not initialized"))?;
+        let sink = self
+            .get_event_sink()
+            .ok_or_else(|| LoadError::internal("EventSink not initialized"))?;
 
         tracing::info!(
             path = ?path,
@@ -358,7 +358,7 @@ impl AppState {
         // Start new load - cancels any existing load
         // Store the token for identity-safe clearing later
         let cancel_token = self.start_new_load();
-        let mut progress = ProgressEmitter::new_for_open(handle, Arc::clone(&cancel_token));
+        let mut progress = ProgressEmitter::new_for_open(sink, Arc::clone(&cancel_token));
 
         // Helper macro for early return with identity-safe token clearing
         macro_rules! check_cancelled {

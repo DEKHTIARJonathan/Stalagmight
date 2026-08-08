@@ -3,7 +3,6 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64};
 use std::sync::{Arc, Mutex};
-use tauri::AppHandle;
 
 use crate::cache::TileCache;
 use crate::config::{ClosureAdjustmentConfig, Config, GasConfig};
@@ -143,8 +142,8 @@ pub struct AppState {
     /// Lock-free tile fetch statistics (in-flight count, latency, errors).
     /// Uses Arc because the protocol handler needs a cloneable reference.
     pub(super) tile_fetch_stats: Arc<TileFetchStats>,
-    /// Tauri app handle for emitting events (set during app setup)
-    pub(super) app_handle: Mutex<Option<AppHandle>>,
+    /// Sink for emitting events to the host application (set during app setup)
+    pub(super) event_sink: Mutex<Option<Arc<dyn crate::core::events::EventSink>>>,
     /// Active loading cancellation token (if any load operation is in progress)
     pub(super) active_loading: Mutex<Option<Arc<AtomicBool>>>,
     /// Shots a load found carrying a `kind` byte this build does not recognise
@@ -238,7 +237,7 @@ impl AppState {
             tile_cache: Arc::new(Mutex::new(tile_cache)),
             tilemap_cache: Arc::new(Mutex::new(TilemapCache::new())),
             tile_fetch_stats: Arc::new(TileFetchStats::new()),
-            app_handle: Mutex::new(None),
+            event_sink: Mutex::new(None),
             active_loading: Mutex::new(None),
             unrecognised_shot_kinds: Mutex::new(None),
             adjusted_cache: Mutex::new(None),
@@ -281,16 +280,16 @@ impl AppState {
         Arc::clone(&self.tile_fetch_stats)
     }
 
-    /// Set the app handle (called during app setup)
-    pub fn set_app_handle(&self, handle: AppHandle) {
-        if let Ok(mut h) = self.app_handle.lock() {
-            *h = Some(handle);
+    /// Set the event sink (called during app setup)
+    pub fn set_event_sink(&self, sink: Arc<dyn crate::core::events::EventSink>) {
+        if let Ok(mut h) = self.event_sink.lock() {
+            *h = Some(sink);
         }
     }
 
-    /// Get the app handle
-    pub fn get_app_handle(&self) -> Option<AppHandle> {
-        self.app_handle.lock().ok().and_then(|h| h.clone())
+    /// Get the event sink
+    pub fn get_event_sink(&self) -> Option<Arc<dyn crate::core::events::EventSink>> {
+        self.event_sink.lock().ok().and_then(|h| h.clone())
     }
 
     /// Start a new loading operation, cancelling any existing one.

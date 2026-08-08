@@ -50,6 +50,7 @@ use crate::speleodb::SpeleoDbError;
 /// call sites, is a swap the compiler cannot catch - and swapping `endpoint` with
 /// `token` sends the bearer token into a URL, or the project id into the auth
 /// header, with a type error nowhere in sight.
+#[derive(Clone)]
 pub(super) struct LockReleaseParams {
     /// The SpeleoDB base URL this session is authenticated against.
     pub(super) endpoint: String,
@@ -452,8 +453,8 @@ impl AppState {
     /// stranded and stands down.
     ///
     /// A detached thread cannot borrow `self`, so it goes back in through the
-    /// Tauri handle the state already holds - the one `'static` route to managed
-    /// state. Without a handle (unit tests, pre-`setup`) there is no managed
+    /// event sink's `with_app_state` - the one `'static` route to managed
+    /// state. Without a sink (unit tests, pre-`setup`) there is no managed
     /// state to consult and the raw POST is what this always did.
     fn speleodb_spawn_lock_release(
         &self,
@@ -490,19 +491,26 @@ impl AppState {
             (p, claim, self.speleodb_session_generation())
         };
         let (tx, rx) = std::sync::mpsc::channel();
-        let handle = self.get_app_handle();
+        let sink = self.get_event_sink();
         std::thread::spawn(move || {
-            let outcome = match handle
-                .as_ref()
-                .and_then(tauri::Manager::try_state::<AppState>)
-            {
-                Some(state) => state.speleodb_stand_down_and_release(&p, entry_gen, claim),
+            let ran = sink.is_some_and(|sink| {
+                // Clones of what the fallback still needs: a `false` return
+                // means the closure was never run, and Rust does not un-move
+                // on the not-called path.
+                let tx = tx.clone();
+                let p = p.clone();
+                sink.with_app_state(Box::new(move |state| {
+                    let _ = tx.send(state.speleodb_stand_down_and_release(&p, entry_gen, claim));
+                }))
+            });
+            if !ran {
                 // No managed state to consult (unit tests, pre-`setup`): the raw
                 // POST this always did.
-                None => client::release_lock(&p.endpoint, &p.token, p.insecure_http, &p.project_id)
-                    .map(|_| ()),
-            };
-            let _ = tx.send(outcome);
+                let _ = tx.send(
+                    client::release_lock(&p.endpoint, &p.token, p.insecure_http, &p.project_id)
+                        .map(|_| ()),
+                );
+            }
         });
         Some(rx)
     }

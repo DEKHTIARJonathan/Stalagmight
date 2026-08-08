@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use sha2::{Digest, Sha256};
 use tauri::{AppHandle, State};
 
+use crate::commands::event_sink::tauri_sink;
 use crate::core::loading::{LoadingPhase, ProgressEmitter};
 use crate::core::state::{AppState, VirtualShotMode};
 use crate::core::CommandResult;
@@ -308,7 +309,7 @@ pub fn execute_tml_import(
         "Executing TML import"
     );
 
-    let mut emitter = ProgressEmitter::new_for_import(app);
+    let mut emitter = ProgressEmitter::new_for_import(tauri_sink(app));
 
     emitter.start_phase(LoadingPhase::ImportParsing);
     let tml = match crate::parsers::tml::parse_tml(&path) {
@@ -432,7 +433,7 @@ pub fn execute_compass_import(
         "Executing Compass import"
     );
 
-    let mut emitter = ProgressEmitter::new_for_import(app);
+    let mut emitter = ProgressEmitter::new_for_import(tauri_sink(app));
 
     emitter.start_phase(LoadingPhase::ImportParsing);
     let parsed = match crate::parsers::compass::parse_compass(&path) {
@@ -732,7 +733,7 @@ pub fn execute_walls_import(
         "Executing Walls import"
     );
 
-    let mut emitter = ProgressEmitter::new_for_import(app);
+    let mut emitter = ProgressEmitter::new_for_import(tauri_sink(app));
 
     emitter.start_phase(LoadingPhase::ImportParsing);
     let parsed = match crate::parsers::walls::parse_walls(&path) {

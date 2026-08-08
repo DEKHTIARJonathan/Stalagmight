@@ -1777,9 +1777,9 @@ pub fn run() {
             let app_state = core::state::AppState::new()?;
             app.manage(app_state);
 
-            // Set app handle on state for event emission
+            // Set event sink on state for event emission
             let state = app.state::<core::state::AppState>();
-            state.set_app_handle(app.handle().clone());
+            state.set_event_sink(commands::event_sink::tauri_sink(app.handle().clone()));
 
             // Initialize telemetry (no-op when feature is disabled)
             let telemetry_config = state.get_config();

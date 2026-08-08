@@ -2,6 +2,7 @@ pub mod cache;
 pub mod config;
 pub mod debug;
 pub mod dive_plan;
+pub mod event_sink;
 pub mod export;
 pub mod gas;
 pub mod history;
