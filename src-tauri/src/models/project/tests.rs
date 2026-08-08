@@ -8999,6 +8999,62 @@ fn compute_station_depth_with_merge_averages_both_sections() {
     );
 }
 
+/// [#469] The single-station and whole-component coordinate APIs agree to the BIT on
+/// the depth of the same colocated group.
+///
+/// They average the same measurements in different orders - `compute_station_raw_coords`
+/// walks the BFS order out of `get_colocated_stations` (which starts at the station
+/// asked about), `compute_component_raw_coords` walks station-list order - and
+/// floating-point addition is not associative. The two depths per station below are
+/// chosen so that difference is REAL rather than theoretical: summed
+/// `[6.58, 6.35, 33.29, 40.99]` the average is 21.802500000000002, and summed
+/// `[33.29, 40.99, 6.58, 6.35]` it is 21.8025. Sorting the group inside
+/// `compute_station_depth` is what collapses the two.
+#[test]
+fn the_two_coordinate_apis_average_a_colocated_group_identically() {
+    let mut project = Project::new("AverageOrder".to_string(), None);
+    // Section A first, so it sorts first AND comes first in `self.sections` - the
+    // component API's order. The BFS order is whatever station is asked about, which
+    // below is B's.
+    let a = project
+        .add_section(SectionData {
+            shots: vec![
+                shot(0.0, 0.0, 1.0, 0.0, 33.29),
+                shot(0.0, 0.0, 1.0, 40.99, 0.0),
+            ],
+            ..Default::default()
+        })
+        .id;
+    let b = project
+        .add_section(SectionData {
+            shots: vec![
+                shot(90.0, 90.0, 1.0, 0.0, 6.58),
+                shot(90.0, 90.0, 1.0, 6.35, 0.0),
+            ],
+            ..Default::default()
+        })
+        .id;
+    project.station_merges.push(StationMerge {
+        station_a: StationRef::new(a, 1).into(),
+        station_b: StationRef::new(b, 1).into(),
+        merged_at: Utc::now(),
+    });
+
+    let component: HashSet<SectionId> = [a, b].into_iter().collect();
+    let by_component = project.compute_component_raw_coords(&component);
+    for station in [StationRef::new(a, 1), StationRef::new(b, 1)] {
+        let single = project.compute_station_raw_coords(station).unwrap();
+        let component_z = by_component.get(&station).unwrap().z;
+        assert_eq!(
+            single.z.to_bits(),
+            component_z.to_bits(),
+            "the same group must average to the same bits whichever API asks: \
+             {} vs {component_z} for {station:?}",
+            single.z
+        );
+    }
+}
+
 #[test]
 fn compute_station_depth_no_shots_returns_zero() {
     // Edge case: section with no shots, station 0 has no surrounding shots

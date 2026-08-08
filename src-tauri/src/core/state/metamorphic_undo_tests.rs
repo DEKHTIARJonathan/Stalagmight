@@ -544,10 +544,11 @@ const EXPLAINS: &[Explains] = &[
     // built instances with the sort as it was, and 0 over the same 240 with the
     // re-sort, every other pair's counts byte-identical.
     //
-    // The earlier lead - the order-dependent `removed_comments` vector at
-    // `models/project/shots.rs:772-777` - was already refuted (it feeds the
-    // delete dialog's impact summary and nothing consumes its order) and is not
-    // resurrected by this.
+    // The earlier lead - the order-dependent `removed_comments` vector in
+    // `preview_delete_shot_range` (models/project/shots.rs) - was already refuted as
+    // the cause here (it feeds the delete dialog's impact summary, which no oracle
+    // observes) and is not resurrected by this. It has since been sorted anyway
+    // (#469), so the vector it names is no longer order-dependent at all.
 ];
 
 /// Every way two observed states differ, as readable lines. Empty means the two

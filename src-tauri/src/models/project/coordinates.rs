@@ -61,7 +61,30 @@ impl Project {
     /// - **Outgoing shot** (shot at index `station_index`): use `depth_in`
     ///
     /// Returns the average of all collected measurements, or 0.0 if none exist.
+    ///
+    /// [#469] The sum runs in a CANONICAL order, not the caller's. Floating-point
+    /// addition is not associative, so the same group summed in two orders can differ
+    /// in the last bit - and the callers genuinely disagree about order:
+    /// [`Self::compute_station_raw_coords`] hands over the BFS order out of
+    /// `get_colocated_stations`, while [`Self::compute_component_raw_coords`] and
+    /// `build_colocated_groups` hand over station-list order. Each was deterministic
+    /// per run; between them the same station could come out one ulp apart depending on
+    /// which API asked. Sorting at this single shared site makes them bit-identical.
+    /// Group MEMBERSHIP is untouched - this only fixes the order it is added in.
     fn compute_station_depth(&self, colocated: &[StationRef]) -> f64 {
+        // A one-station group (every unmerged station, i.e. nearly all of them on a big
+        // project) has no ordering question, so it keeps the allocation-free path: this
+        // runs once per group per full coordinate rebuild.
+        let sorted_group: Vec<StationRef>;
+        let colocated: &[StationRef] = if colocated.len() < 2 {
+            colocated
+        } else {
+            let mut group = colocated.to_vec();
+            group.sort_unstable_by_key(|sr| (sr.section_id, sr.station_index));
+            sorted_group = group;
+            &sorted_group
+        };
+
         let mut depths: Vec<f64> = Vec::new();
 
         for &sr in colocated {

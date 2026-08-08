@@ -948,12 +948,18 @@ impl Project {
         // superset, incl. the tail boundary `end_pos+1`). The dialog frames these
         // per action - a SPLIT keeps `end_pos+1` and its comment - using the
         // `start_pos`/`end_pos` it carries.
-        let removed_comments: Vec<StationRef> = self
+        let mut removed_comments: Vec<StationRef> = self
             .station_comments
             .keys()
             .filter_map(|k| self.resolve_key(k))
             .filter(|sr| removed_set.contains(sr))
             .collect();
+        // [#469] Sorted like its sibling `removed_stations` below, and for the same
+        // reason: this is built by iterating a `HashMap`, so without a sort the dialog
+        // lists the same comments in a different order on every run of the same preview.
+        // Nothing downstream re-sorts (`BulkDeleteDialog.tsx` renders the vector as
+        // given), so this is the only place the order can be pinned.
+        removed_comments.sort_by_key(|sr| (sr.section_id, sr.station_index));
 
         // The relationship panel (`removed_stations`/`removed_merges`/
         // `removed_closures`) and the preserved-connectivity replacements describe

@@ -13125,6 +13125,66 @@ fn test_delete_range_preview_surfaces_interior_split_comment() {
     );
 }
 
+/// [#469] The preview's `removed_comments` comes out SORTED, like the `removed_stations`
+/// list built beside it.
+///
+/// It is collected by iterating the `station_comments` HashMap, so before the sort the
+/// delete dialog listed the same comments in a different order on every run of the same
+/// preview - and nothing downstream re-sorts (`BulkDeleteDialog.tsx` renders the vector
+/// as given). Six commented stations make an accidentally-ascending hash order a
+/// 1-in-720 coincidence rather than a coin flip.
+#[test]
+fn test_delete_range_preview_sorts_the_removed_comments() {
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Comment Order".to_string(),
+        location: None,
+    });
+    let create = state.execute(Command::CreateSection {
+        name: Some("S".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#ff0000".to_string(),
+        direction: None,
+        shots: (0..8).map(|i| test_shot_data(2.0 + f64::from(i))).collect(),
+    });
+    let section_id = create.section_id.unwrap();
+    for idx in 1..=6u32 {
+        assert!(
+            state
+                .execute(Command::SetStationComment {
+                    station_ref: StationRef::new(section_id, idx),
+                    comment: Some(format!("note {idx}")),
+                })
+                .success
+        );
+    }
+
+    let (first, last) = {
+        let proj = state.get_project_state().unwrap();
+        let sec = proj.get_section(section_id).unwrap();
+        (sec.shots[1].id, sec.shots[5].id)
+    };
+    let proj = state.get_project_state().unwrap();
+    let impact = proj
+        .preview_delete_shot_range(section_id, first, last)
+        .unwrap();
+
+    let indices: Vec<u32> = impact
+        .removed_comments
+        .iter()
+        .map(|sr| sr.station_index)
+        .collect();
+    assert!(
+        indices.len() >= 5,
+        "the fixture must actually carry the comments it is sorting, got {indices:?}"
+    );
+    assert!(
+        indices.windows(2).all(|w| w[0] < w[1]),
+        "removed_comments must be in ascending station order, got {indices:?}"
+    );
+}
+
 #[test]
 fn test_delete_range_interior_preview_includes_shift_boundary_merge() {
     // Codex review #3: the interior preview's relationship set must cover the
