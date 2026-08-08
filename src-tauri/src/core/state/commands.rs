@@ -464,10 +464,17 @@ impl AppState {
                 };
             };
             // The frame-defining datum station before the repair. Repair never runs
-            // through `execute()`, so it carries its own frame check (#469, item 1):
-            // `repair_structural_integrity` drops every zero datum whose anchor no
-            // longer resolves, and dropping the PRIMARY one promotes the next - which
-            // re-defines what local (0, 0) means for the whole survey.
+            // through `execute()`, so it carries its own frame check (#469, item 1).
+            //
+            // No route through today's repair is known to trip it, and that is worth
+            // stating rather than leaving as an unexamined "it might":
+            // `repair_structural_integrity` drops zero datums whose anchor does not
+            // resolve, and a datum that does not resolve is ALREADY not the frame
+            // (`Project::frame_datum_key` takes the first RESOLVABLE one, matching
+            // the wire, which drops dangling datums before the frontend ever sees
+            // them). The check is here because the alternative is asserting that no
+            // future repair step can promote a datum - which is exactly the kind of
+            // claim the derive-don't-hook rule exists to avoid having to make.
             let frame_before = project.frame_datum_key();
             // Drop dangling refs/orphans and re-mint duplicate shot UUIDs.
             project.repair_structural_integrity();
@@ -973,6 +980,12 @@ impl AppState {
         // reason the conversion below is: the after-snapshot is taken inside this
         // function, so a renormalisation applied afterwards would sit OUTSIDE the
         // pair and undo->redo would land on the pre-renormalisation geometry.
+        //
+        // No batch can change the frame TODAY - `is_batch_allowed` admits only
+        // `SetZeroDatum` among the datum commands, and that one appends or updates
+        // in place, so `zero_datums[0]` keeps its identity. Stated rather than
+        // relied on: the allowlist is the kind of thing that grows, and this is the
+        // only placement that stays correct when it does.
         let frame_before = self.frame_datum_key();
 
         // Capture pre-batch snapshot for rollback on partial failure and undo
