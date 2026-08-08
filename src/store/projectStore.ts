@@ -38,6 +38,7 @@ import type {
   Coordinates,
   FrozenShotRef,
 } from '../types/project';
+import type { ExistingShotUpdate } from '../types/ipc/ExistingShotUpdate';
 import type { ReversedSection } from '../types/ipc/ReversedSection';
 import type { SpeleoManagedFile } from '../types/ipc/SpeleoManagedFile';
 import type { Config } from '../types/config';
@@ -448,12 +449,20 @@ export interface ProjectStore extends ProjectConfigActions {
   calculateFileHash: (path: string) => Promise<string>;
   checkDuplicateImport: (hash: string) => Promise<boolean>;
   checkSectionHashes: (hashes: string[]) => Promise<boolean[]>;
+  /**
+   * `existingShotUpdates` is the overlap interpolation the DMP wizard computes
+   * client-side (`applyAllOverlapTreatments`). It is LAST rather than in the
+   * command's own third position deliberately: appending leaves every existing
+   * call's argument positions untouched. Optional and defaulted to `null`, which
+   * the backend reads as "no updates".
+   */
   importSections: (
     sections: ImportSectionConfig[],
     fileHash?: string | null,
     sectionHashes?: string[] | null,
     virtualShotMode?: VirtualShotMode,
     provenance?: ImportReceiptProvenance,
+    existingShotUpdates?: ExistingShotUpdate[] | null,
   ) => Promise<CommandResult>;
   suggestImportPlacement: (shots: ShotData[]) => Promise<PlacementSuggestion[]>;
   exportCsv: (path: string) => Promise<void>;
@@ -2316,6 +2325,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     sectionHashes?: string[] | null,
     virtualShotMode?: VirtualShotMode,
     provenance?: ImportReceiptProvenance,
+    existingShotUpdates?: ExistingShotUpdate[] | null,
   ) => {
     const s = peekProjectActionSource();
     if (s) setSource(s);
@@ -2326,6 +2336,11 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
           sections,
           fileHash: fileHash ?? null,
           sectionHashes: sectionHashes ?? null,
+          // The command has taken these since the overlap work; this wrapper
+          // could not express them, so the only route to the overlap path was
+          // the DMP wizard's direct `invokeIpc`. Optional and null-defaulted, so
+          // no existing caller changes behaviour.
+          existingShotUpdates: existingShotUpdates ?? null,
           virtualShotMode: virtualShotMode ?? null,
           sourceLabel: provenance?.sourceLabel ?? null,
           sourceFileName: provenance?.sourceFileName ?? null,
