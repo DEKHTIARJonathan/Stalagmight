@@ -288,13 +288,53 @@ impl AppState {
     ///
     /// This is the FORWARD epilogue only, alongside the orphan-closure conversion,
     /// and deliberately not inside `reconcile_geometry` - which `undo()`/`redo()`
-    /// share. An inverse must RESTORE, not re-derive; every command that can get
-    /// here records either a `ProjectSnapshotPair` or (for `SetZeroDatum`) a
-    /// whole-project `previous_offsets`, so the undo hands the old map back
-    /// verbatim. Nor on the LOAD path: `resolve_offsets`' cascade is
-    /// translation-invariant, so save/reopen converges with the loader untouched,
-    /// and a load-time renormalisation would silently translate a merged project
-    /// whose datums legitimately do not sit at the origin.
+    /// share. An inverse must RESTORE, not re-derive. Nor on the LOAD path:
+    /// `resolve_offsets`' cascade is translation-invariant, so save/reopen
+    /// converges with the loader untouched, and a load-time renormalisation would
+    /// silently translate a merged project whose datums legitimately do not sit at
+    /// the origin.
+    ///
+    /// # What the undo side actually guarantees
+    ///
+    /// Stated as what holds rather than as a blanket claim, because the gate now
+    /// admits `None -> Some` as well and that is a different set of routes:
+    ///
+    /// * The commands that PROMOTE a datum (`RemoveZeroDatum`, `DeleteSection`,
+    ///   `DeleteShot`, the delete/split entry points, `RepairIntegrity`, any
+    ///   `Batch`) each record a `ProjectSnapshotPair`, so their undo hands the old
+    ///   map back verbatim.
+    /// * `SetZeroDatum` - the only command that ESTABLISHES a frame today -
+    ///   records `UndoData::ZeroDatumInfo` with a whole-project
+    ///   `previous_offsets` (`Project::capture_all_section_offsets`, taken before
+    ///   the mutation), which is exactly the blast radius of the translation it
+    ///   performs.
+    ///
+    /// KNOWN LIMITATION, pre-existing and NOT introduced here: a datum stored
+    /// against a legacy POSITIONAL anchor (`StationAnchor::Index`, written by
+    /// pre-anchor builds) can go from dangling to resolving when a command GROWS
+    /// its section - `CreateShot` is the reachable one - which flips the frame
+    /// key under a command whose undo captures only its rigid group
+    /// (`CreatedShotSnapshot`). The resulting translation is then not restored
+    /// exactly by that undo. It is reachable on master already in the
+    /// `Some -> Some` form (an index datum un-dangling ahead of the datum that
+    /// was the frame); widening the gate adds the `None -> Some` form of the same
+    /// shape. Anchors written by any current build are `SectionStart`/`AfterShot`,
+    /// which no forward command can un-dangle, so this stays a legacy-file
+    /// question and is deliberately left to the anchor work rather than patched
+    /// here.
+    ///
+    /// # Why `MergeProjects` cannot fire this
+    ///
+    /// It is classified `affects_geometry` and dispatched through `execute()`, so
+    /// it reaches this call - but `merge_projects` builds a `Project` locally,
+    /// writes it to a NEW file and returns; it never touches `self.project` (there
+    /// is no reference to it anywhere in `project_merge.rs`). Both reads therefore
+    /// see the same unchanged open project, `before == after`, and the gate
+    /// returns without measuring anything. That matters because a merged project's
+    /// datums legitimately do NOT sit at the origin
+    /// (`store_zero_datum_without_repositioning` copies them precisely to preserve
+    /// the source offsets), so a fire here would translate a file the user just
+    /// built. Pinned by `merge_projects_does_not_renormalise_the_open_project`.
     pub(super) fn renormalize_frame_if_changed(&self, before: Option<StationKey>) {
         let mut guard = match self.project.lock() {
             Ok(g) => g,

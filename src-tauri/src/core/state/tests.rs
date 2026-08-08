@@ -872,6 +872,170 @@ fn test_merge_projects_preserves_offsets_zero_datums_and_closure_ids() {
     }));
 }
 
+/// `MergeProjects` is classified `affects_geometry`, so it reaches `execute`'s
+/// renormalisation epilogue - and that gate now fires on `None -> Some` as well
+/// as on `Some -> Some`. An open project with no datum reads `frame_datum_key()
+/// == None` on the before side, so if the merge ever swapped its freshly built
+/// project into the open slot the gate would find a frame where there had been
+/// none and translate the whole survey onto it. It does not: `merge_projects`
+/// builds a `Project` locally, writes it to a NEW file and returns, without ever
+/// touching `self.project` (there is no reference to it anywhere in
+/// `project_merge.rs`), so both halves of the gate read the same unchanged open
+/// project and it returns without measuring anything.
+///
+/// That distinction has teeth: a merged project's datums deliberately do NOT sit
+/// at the origin - `store_zero_datum_without_repositioning` copies them exactly
+/// so each source's own offsets survive - so a fire here would silently
+/// translate the file the user just built.
+///
+/// Non-vacuous on both sides. The open project carries section offsets that
+/// nothing in the merge could produce and no datum at all, so a swap-in is
+/// visible in the offsets, in every station coordinate and in `zero_datums`; and
+/// the sources DO carry datums, so the `None -> Some` transition the widened
+/// gate now admits is genuinely available for it to fire on. Cited by name from
+/// `AppState::renormalize_frame_if_changed`'s doc comment.
+#[test]
+fn merge_projects_does_not_renormalise_the_open_project() {
+    let temp_dir = TempDir::new().unwrap();
+
+    // The OPEN project: two free-floating sections, no datum anywhere.
+    let state = AppState::new().unwrap();
+    assert!(
+        state
+            .execute(Command::CreateProject {
+                name: "Open".to_string(),
+                location: None,
+            })
+            .success
+    );
+    let open_a = state
+        .execute(Command::CreateSection {
+            name: Some("Open A".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#ff0000".to_string(),
+            direction: None,
+            shots: vec![test_shot_data(7.0)],
+        })
+        .section_id
+        .unwrap();
+    let open_b = state
+        .execute(Command::CreateSection {
+            name: Some("Open B".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#00ff00".to_string(),
+            direction: None,
+            shots: vec![test_shot_data(9.0)],
+        })
+        .section_id
+        .unwrap();
+
+    // Offsets nothing in this merge could ever produce, so a swap-in is loud.
+    {
+        let mut guard = state.project.lock().unwrap();
+        let project = guard.as_mut().unwrap();
+        project.section_offsets.insert(open_a, (137.0, -42.0));
+        project.section_offsets.insert(open_b, (-311.0, 63.0));
+        assert!(
+            project.zero_datums.is_empty() && project.frame_datum_key().is_none(),
+            "the open project must have NO frame, so the gate sees None on the before side"
+        );
+    }
+    let open_offsets_before = {
+        let guard = state.project.lock().unwrap();
+        guard.as_ref().unwrap().section_offsets.clone()
+    };
+    let open_coords_before = abs_coord_map(&state.get_project_state().unwrap());
+
+    // Two sources on disk, both carrying a datum, so the merged project has a
+    // frame the gate could latch onto if it ever saw it.
+    let mut source_project_a = Project::new("Source A".to_string(), None);
+    let source_section_a = source_project_a
+        .add_section(SectionData {
+            name: Some("Source Section A".to_string()),
+            shots: vec![test_shot_data(1.0)],
+            ..Default::default()
+        })
+        .id;
+    source_project_a
+        .section_offsets
+        .insert(source_section_a, (5.0, 6.0));
+    source_project_a
+        .store_zero_datum_without_repositioning(
+            StationRef::new(source_section_a, 0),
+            GpsCoordinates::new(20.35, -87.4, 0.0).unwrap(),
+        )
+        .unwrap();
+
+    let mut source_project_b = Project::new("Source B".to_string(), None);
+    let source_section_b = source_project_b
+        .add_section(SectionData {
+            name: Some("Source Section B".to_string()),
+            shots: vec![test_shot_data(2.0)],
+            ..Default::default()
+        })
+        .id;
+    source_project_b
+        .section_offsets
+        .insert(source_section_b, (-8.0, 3.0));
+
+    let source_a = temp_dir.path().join("source-a.stalx");
+    let source_b = temp_dir.path().join("source-b.stalx");
+    Database::open(&source_a)
+        .unwrap()
+        .save_project(&source_project_a)
+        .unwrap();
+    Database::open(&source_b)
+        .unwrap()
+        .save_project(&source_project_b)
+        .unwrap();
+
+    let output_path = temp_dir.path().join("merged-output.stalx");
+    let result = state.execute(Command::MergeProjects {
+        source_paths: vec![source_a, source_b],
+        output_path: output_path.clone(),
+        output_name: "Merged".to_string(),
+        archive_originals: false,
+    });
+    assert!(result.success, "merge failed: {:?}", result.error);
+
+    // The merged file really does carry a frame - otherwise there is nothing for
+    // the epilogue to have renormalised onto and the test below is vacuous.
+    let merged = Database::open_existing(&output_path)
+        .unwrap()
+        .load_project()
+        .unwrap();
+    assert!(
+        merged.frame_datum_key().is_some(),
+        "the merged output must have a frame datum for this test to mean anything"
+    );
+
+    // ...and the open project is untouched: same offsets, same coordinates, still
+    // no datum.
+    let open_after = state.get_project_state().unwrap();
+    assert_eq!(
+        open_after.section_offsets, open_offsets_before,
+        "MergeProjects translated the open project's sections"
+    );
+    let open_coords_after = abs_coord_map(&open_after);
+    assert_eq!(
+        open_coords_after.len(),
+        open_coords_before.len(),
+        "the open project's station set changed"
+    );
+    for (station_ref, before) in &open_coords_before {
+        let after = open_coords_after
+            .get(station_ref)
+            .unwrap_or_else(|| panic!("{station_ref:?} vanished from the open project"));
+        assert_coords_close(*after, *before);
+    }
+    assert!(
+        open_after.zero_datums.is_empty(),
+        "the open project gained a datum from a merge that writes a different file"
+    );
+}
+
 #[test]
 fn test_merge_projects_preserves_station_comments() {
     // merge_projects remaps every sibling cross-reference collection; station
