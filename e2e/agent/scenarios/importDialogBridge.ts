@@ -130,6 +130,9 @@ export const CLICKABLE_TESTIDS: ReadonlySet<string> = new Set([
   'gpx-import-confirm',
   'gpx-placement-back',
   'gpx-placement-cancel',
+  // unsaved-changes prompt. CANCEL ONLY - `unsaved-changes-discard` quits the
+  // app on the quit path and is on the forbidden list.
+  'unsaved-changes-cancel',
   // export modal (opened by Ctrl+E; its contents are not fuzzed)
   'export-dialog-close',
   // app mode carousel. Only ever clicked at `idle`: everywhere else a modal

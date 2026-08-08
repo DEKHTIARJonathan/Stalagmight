@@ -70,6 +70,15 @@ export type ScreenId =
    * to open. Its CONTENTS are not fuzzed here.
    */
   | 'export-modal'
+  /**
+   * The unsaved-changes prompt, which a non-DMP import raises on its way in.
+   *
+   * `import-as-new-project`'s confirm closes the current project before it
+   * re-enters the router, and `handleCloseProject` prompts when that project is
+   * dirty - so this sits in the middle of an ordinary Compass/Walls/TML/GPX
+   * flow, not only on the quit path.
+   */
+  | 'unsaved-changes'
   | 'zero-datum-select'
   | 'zero-datum-config'
   | 'wiz-init'
@@ -179,6 +188,18 @@ export interface ImportScreenDigest {
   receipt: ReceiptDigest | null;
   /** Is a `DialogWrapper` discard-confirm overlay up? */
   dirty: boolean;
+  /**
+   * The value `project-save-path-input` currently holds, or null when the
+   * new-project screen is not up.
+   *
+   * Load-bearing, not diagnostics. `NewProjectForImportDialog` defaults the
+   * path to the user's Documents folder and the project NAME to the imported
+   * file's basename, so a `create-and-continue-button` clicked before the path
+   * has been redirected writes a `.stalx` outside the session directory - and
+   * on a corpus run that file would be named after a private survey. The walk
+   * reads this to make sure it never does (`enforceSavePath`).
+   */
+  savePath: string | null;
   /**
    * Why the screen came out `unknown` or `wiz-blank`: every dialog root and
    * wizard phase marker, tagged present / hidden / absent.
@@ -294,6 +315,7 @@ export async function computeImportScreenDigest(
   else if (shown('import-receipt-dialog')) screen = 'receipt';
   else if (shown('import-blocked-dialog')) screen = 'blocked';
   else if (shown('import-as-new-project-dialog')) screen = 'as-new-project';
+  else if (shown('unsaved-changes-dialog')) screen = 'unsaved-changes';
   else if (shown('export-dialog')) screen = 'export-modal';
   else if (shown('error-dialog')) screen = 'error';
   else if (placement) screen = 'map-placement';
@@ -413,6 +435,7 @@ export async function computeImportScreenDigest(
       'import-receipt-dialog',
       'orphan-placement-dialog',
       'export-dialog',
+      'unsaved-changes-dialog',
       'error-dialog',
       'wizard-importing-zero-datum',
       'wizard-calculating',
@@ -531,6 +554,10 @@ export async function computeImportScreenDigest(
     shots,
     receipt,
     dirty: byPrefix('dirty-dialog-').length > 0,
+    savePath: (() => {
+      const field = one('project-save-path-input') as HTMLInputElement | null;
+      return field === null ? null : String(field.value ?? '');
+    })(),
     why,
   };
 }

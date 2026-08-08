@@ -260,6 +260,45 @@
  *    silently records nothing - which looks exactly like a spy that saw
  *    nothing. That was tried, measured (zero rejections recorded on a run whose
  *    log had two) and removed; the log ring is the source S6 uses.
+ *
+ * 4. FIXED (64f6a525), issue #479. A COMPASS `.DAT` WITH AN IMPOSSIBLE
+ *    `SURVEY DATE:` PANICKED THE BACKEND, AND THE IMPORT PROMISE NEVER SETTLED.
+ *
+ *    NOT FOUND BY A RUN, and the entry says so rather than implying otherwise.
+ *    It was found while transcribing the Compass grammar for this wave's
+ *    writers - `NaiveDate::from_ymd_opt(..).unwrap()` in the vendored survey
+ *    parser, with `digit1.parse::<u32>().unwrap()` beside it - and then
+ *    measured against the real parser. `parse_compass` is a synchronous
+ *    `#[tauri::command]`, so the panic unwinds out of the command and the
+ *    frontend's promise never resolves: the dialog sits on its spinner with no
+ *    error and no way back except restarting the app.
+ *
+ *    It is now this scenario's coverage rather than only a Rust test: the
+ *    `dat:impossible-date` and `dat:date-field-overflow` catalog entries emit
+ *    exactly those six shapes, so a malformed-heavy Compass run walks the fix.
+ *
+ *        STALAGMIGHT_FUZZ_IMPORT_MALFORMED_P=0.6 pnpm agent:scenario \
+ *          import-dialog-fuzz --seed 3 --iterations 6
+ *
+ * ## Observations that are NOT findings
+ *
+ * `closeProject` does not clear `activeDialog`. It nulls the project and the
+ * derived state (`clearOpenProjectState`) and never touches the dialog, so
+ * every import dialog stays mounted over a project that is gone - the ones
+ * gated on `dialogData.<x>File` because that survives the close, and
+ * `new-project-for-import` / `orphan-placement` because they are gated on
+ * `activeDialog` alone.
+ *
+ * This scenario does NOT report it, and the reason is the discipline rather
+ * than the severity: NOTHING IN THE UI CAN REACH IT. No control binds
+ * `handleCloseProject` while a dialog is open, both keyboard dispatchers return
+ * early for every non-Escape key in that state, and the mode carousel and the
+ * toolbar sit behind the modal backdrop. Driving the raw store action there
+ * reaches a state no user can, and a bug found in one of those is a fabricated
+ * bug - the same argument this file already makes for `uiStore.confirmPlacement()`.
+ * So the interjection plays `closeProject` at `idle` only, where it IS
+ * reachable, and asserts the contract there. If a future change gives the user
+ * a way to close a project mid-import, this becomes a finding on the spot.
  */
 import * as fs from 'fs';
 import * as path from 'path';
@@ -676,6 +715,36 @@ export const importDialogFuzz: Scenario = {
           label: describeSource(source),
         });
       }
+    };
+
+    /**
+     * A run must never write a `.stalx` outside its own session directory.
+     *
+     * `NewProjectForImportDialog` defaults the save path to the user's
+     * Documents folder and the project NAME to the imported file's basename, so
+     * a `create-and-continue-button` clicked before the path was redirected
+     * creates a project there - and on a corpus run that file is NAMED AFTER A
+     * PRIVATE SURVEY, in a directory nothing here ever cleans up. Measured: a
+     * Walls run left `~/Documents/stalagmight/fuzz_3.stalx` behind, and the app
+     * auto-renamed around the previous run's copy of it.
+     *
+     * So the create click is REPLACED by the move that fixes the path, and the
+     * walk gets to it on its next step. The substitution is recorded, so a
+     * replay is faithful; and it is done here rather than in a generator
+     * because progress forcing plays the same click from the model's table
+     * without asking a generator at all.
+     */
+    const enforceSavePath = (move: FuzzMove, digest: ImportScreenDigest): FuzzMove => {
+      if (move.kind !== 'ui' || move.testid !== 'create-and-continue-button') return move;
+      if (digest.savePath !== null && digest.savePath.startsWith(projectsDir)) return move;
+      ctx.metric('savePathRedirected');
+      return {
+        kind: 'input',
+        testid: 'project-save-path-input',
+        value: PROJECT_DIR_PLACEHOLDER,
+        mode: 'type',
+        label: 'redirect the save path into the session directory',
+      };
     };
 
     /**
@@ -1411,7 +1480,8 @@ export const importDialogFuzz: Scenario = {
             break;
           }
 
-          const move = drawMove(digest, mode);
+          const drawn = drawMove(digest, mode);
+          const move = drawn === null ? null : enforceSavePath(drawn, digest);
           if (move === null) {
             // Nothing to draw here. At idle there is nothing to leave either, so
             // the flow is simply not startable this time round.

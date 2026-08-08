@@ -345,7 +345,7 @@ of its own.
 | `map-storm` | A seeded `jumpTo` barrage does not stall the main thread. |
 | `save-under-churn` | Mutate+save leaves `isDirty=false`, no `.tmp`, and reopens clean. |
 | `import-repeatedly` | Re-importing a `.tml` keeps the undo stack at or under 100. |
-| `import-dialog-fuzz` | Generates `.dmp` files and walks the real DMP import UI at random; per-step coherence plus a per-flow undo-roundtrip / residue / accounting / receipt / temp-file contract (see below). |
+| `import-dialog-fuzz` | Generates DMP/Ariane/Compass/Walls/GPX files and walks the real import UI at random; per-step coherence plus a per-flow undo-roundtrip / residue / accounting / receipt / temp-file contract (see below). |
 | `rapid-project-cycle` | Open/close cycles leave clean project transitions. |
 
 ### undo-redo-fuzz
@@ -552,13 +552,45 @@ security boundary for a replayed trace exactly as `REPLAYABLE_MUTATIONS` is for
 store actions.
 
 An EPISODE opens a fresh fixture and runs a few FLOWS with no reload between
-them; a FLOW is one generated `.dmp` from an entry point to whatever ends it.
+them; a FLOW is one input file from an entry point to whatever ends it.
 Per-step oracles cover the screen table, the error boundary, the project
 invariants, unexpected error dialogs and wedges, plus an integrity check after
 any step that pushed an undo entry. Per-flow oracles are in
 `e2e/agent/lib/importFlowOracles.ts`: the undo roundtrip, dialog/placement/context
 residue, the receipt's numbers against the project's delta, the receipt's own
 rendering, and leftover staging files.
+
+It covers all five importable families - mNemo `.dmp`, Ariane `.tml`/`.tmlu`,
+Compass `.dat`/`.mak`, Walls `.srv`/`.wpj` and GPX - which is not just five
+parsers but two flow SHAPES: `.dmp` is the only additive import, and every other
+extension routes to `new-project-for-import` whether or not a project is open
+(with one open it goes through `import-as-new-project`, whose confirm closes the
+project first). So a non-DMP flow always creates a project in the middle of
+itself. `STALAGMIGHT_FUZZ_IMPORT_FORMAT` is a csv of family names that restricts
+the draw, and it is the natural third matrix axis.
+
+Input files come from three sources: a seeded spec rendered by
+`e2e/agent/lib/surveyFileWriters.ts` / `surveyFileWritersText.ts` (valid-biased,
+or run through the named corruption catalog), a tracked `.dmp` fixture, or - when
+`STALAGMIGHT_FUZZ_CORPUS_DIR` points at one - an entry from a PRIVATE corpus of
+real survey files. Generated files reach the parsers' edges; real files reach the
+shapes nobody would think to generate. A run with no corpus counts
+`corpus:absent` and is exactly as valid, just narrower.
+
+**Nothing a corpus run publishes ever names a corpus file.** An entry is
+identified everywhere by `corpusFileId`, a 5-hex fold of its relative path
+(`e2e/agent/lib/fixtureCorpus.ts`), because a survey filename can name a cave, a
+landowner or an unreleased project - and a metric key, a log line and a failure
+payload are all things that end up attached to an issue. The corpus-relative path
+appears in exactly one place, the `corpusFile` trace step, which is a local
+artifact. Replaying such a trace without a corpus skips those moves and counts
+them.
+
+Before it fuzzes anything, the run pushes a valid-biased spec of EVERY enabled
+format through the real parse command and checks the count against
+`selfCheckClaim`. That is the writer/parser drift detector: without it a writer
+that had drifted would have every file rejected at the door and the whole run
+would pass green having exercised nothing.
 
 Not in `pnpm agent:scenarios`. It is listed in that file's `SMOKE_EXCLUDED` and
 runs on explicit request only - `pnpm agent:scenario`, `pnpm agent:fuzz-matrix`,
@@ -568,15 +600,29 @@ the scenario has no classifier and no tolerance, so a red from it is the app's.
 ```bash
 pnpm agent:scenario import-dialog-fuzz --seed 7 --iterations 8
 pnpm agent:fuzz-matrix --scenario import-dialog-fuzz --seeds 1..4 --workers 2
+# one format family per cell:
+pnpm agent:fuzz-matrix --scenario import-dialog-fuzz \
+  --axis STALAGMIGHT_FUZZ_IMPORT_FORMAT=dmp,tml,compass,walls,gpx --seeds 1..3 --workers 2
 # sweep a knob as a third matrix dimension:
 pnpm agent:fuzz-matrix --scenario import-dialog-fuzz \
   --axis STALAGMIGHT_FUZZ_IMPORT_MALFORMED_P=0,0.5,1
+# widen the inputs with a private corpus (never baked in, never named in output):
+STALAGMIGHT_FUZZ_CORPUS_DIR=~/data/my-survey-files \
+  pnpm agent:scenario import-dialog-fuzz --seed 4 --iterations 6
 ```
 
 Its knobs, all read at call time so a replayed trace's restored environment
-reaches them: `STALAGMIGHT_FUZZ_IMPORT_FLOWS_PER_EPISODE` (3),
-`_MAX_FLOW_STEPS` (140), `_MALFORMED_P` (0.2), `_INTERJECT_P` (0.08),
-`_SETTLE_MS` (12000).
+reaches them: `STALAGMIGHT_FUZZ_IMPORT_FORMAT` (all five families),
+`STALAGMIGHT_FUZZ_IMPORT_FLOWS_PER_EPISODE` (3), `_MAX_FLOW_STEPS` (140),
+`_MALFORMED_P` (0.2), `_INTERJECT_P` (0.08), `_AUX_INTERJECT_P` (0.04),
+`_SETTLE_MS` (12000), plus `STALAGMIGHT_FUZZ_CORPUS_DIR` (unset).
+
+Two interjection streams, not one: `_INTERJECT_P` drives the original
+Escape/route/undo/redo/save set, and `_AUX_INTERJECT_P` drives the wave-3
+additions (Ctrl+E, an app-mode switch, `closeProject`, and Ctrl+O with an armed
+picker). They are separate PRNG streams so that adding the second left the
+first's draws bit-identical, which bounds how far the existing repro lines
+moved - the convention `mulberry32`'s header states.
 
 The open findings it has produced are written up in the scenario file's header,
 each with the `reproduce:` line that still runs.

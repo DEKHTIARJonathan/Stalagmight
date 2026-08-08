@@ -522,7 +522,7 @@ const COMPASS_TEAMS: readonly string[] = [
   'NOBODY',
   'A. Surveyor, B. Notes',
   'team-2',
-  'D Saska / J Doe',
+  'E Xample / J Doe',
 ];
 
 function compassNumber(rng: Rng, min: number, max: number, decimals: number): string {

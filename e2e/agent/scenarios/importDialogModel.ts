@@ -109,6 +109,7 @@ export const IN_FLOW_SCREENS: ReadonlySet<ScreenId> = new Set<ScreenId>([
   'blocked',
   'as-new-project',
   'orphan-placement',
+  'unsaved-changes',
   'error',
   'first-run',
 ]);
@@ -215,6 +216,15 @@ export const TESTID_INVENTORY: readonly string[] = [
   'gpx-placement-zero-datum-*',
   'gpx-placement-back',
   'gpx-placement-cancel',
+  // --- unsaved-changes prompt -----------------------------------------------
+  //
+  // CANCEL ONLY, deliberately. `unsaved-changes-discard` is on the forbidden
+  // list `lib/importDialogActions.test.ts` pins, and `handleDiscard` is why: on
+  // the quit path it calls `performQuit()`, so a crafted trace naming it would
+  // end the session, and on the others it throws away work with no undo entry.
+  // Cancelling abandons whatever raised the prompt, which is all the walk needs.
+  'unsaved-changes-dialog',
+  'unsaved-changes-cancel',
   // --- export modal (Ctrl+E; contents are not fuzzed this wave) --------------
   'export-dialog',
   'export-dialog-close',
@@ -371,6 +381,7 @@ export const ADVANCE_MOVE: Readonly<Partial<Record<ScreenId, readonly string[]>>
   receipt: ['import-receipt-continue'],
   blocked: ['import-blocked-stay'],
   'as-new-project': ['import-as-new-project-cancel'],
+  'unsaved-changes': ['unsaved-changes-cancel'],
   'orphan-placement': ['orphan-close'],
   'export-modal': ['export-dialog-close'],
   error: ['error-dialog-close'],
@@ -418,6 +429,7 @@ export const ESCAPE_PATH: Readonly<Record<ScreenId, readonly string[]>> = {
   receipt: ['import-receipt-continue', 'key:Escape'],
   blocked: ['import-blocked-stay', 'key:Escape'],
   'as-new-project': ['import-as-new-project-cancel', 'key:Escape'],
+  'unsaved-changes': ['unsaved-changes-cancel', 'key:Escape'],
   'orphan-placement': ['orphan-close', 'key:Escape'],
   error: ['error-dialog-close', 'key:Escape'],
   'first-run': ['telemetry-opt-in-no'],

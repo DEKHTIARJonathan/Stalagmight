@@ -925,6 +925,25 @@ const EXPORT_MODAL: Generator[] = [
     build: (env) =>
       actionable(env.digest, 'export-dialog-close') ? click('export-dialog-close', 'close the export modal') : null,
   },
+  {
+    /**
+     * The unsaved-changes prompt, cancelled and nothing else.
+     *
+     * A non-DMP import raises it on the way in: `import-as-new-project`'s
+     * confirm closes the current project first, and `handleCloseProject`
+     * prompts when that project is dirty. `unsaved-changes-discard` is
+     * forbidden (it quits the app on the quit path and throws away work with no
+     * undo entry on the others), so cancelling - which abandons whatever raised
+     * the prompt - is the only move here.
+     */
+    name: 'unsaved:cancel',
+    weight: 10,
+    screens: ['unsaved-changes'],
+    build: (env) =>
+      actionable(env.digest, 'unsaved-changes-cancel')
+        ? click('unsaved-changes-cancel', 'cancel the unsaved-changes prompt')
+        : null,
+  },
 ];
 
 const ZERO_DATUM: Generator[] = [
