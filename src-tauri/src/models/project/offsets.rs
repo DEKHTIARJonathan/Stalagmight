@@ -421,16 +421,28 @@ impl Project {
     /// # It runs on the INVERSE too, and that is not a re-derivation
     ///
     /// The rule an undo owes is that it RESTORES what was recorded. A sweep that
-    /// only DEMOTED would break it outright: `MoveStation` captures no closure
-    /// flags, so tearing an aligned closure and undoing it would give the geometry
-    /// back with the flag stuck false, landing on a state the history never held.
-    /// What makes running it on both directions correct is that the stamp is TOTAL
-    /// and blind to the flags (see [`Self::closure_alignment_stamp`]): the flag is
-    /// a FUNCTION of the rest of the state, every state the history records
-    /// satisfies `flag == stamp(state)`, and an inverse that restores the rest of
-    /// the state therefore reproduces the flag it recorded - in both directions,
-    /// promotion as well as demotion. It is the same argument
-    /// [`Self::realign_merges`] rests on, one field over.
+    /// only DEMOTED would break it outright: `UpdateShot`'s `PreviousValues`
+    /// carries the shot's old measurements and its rigid group's offsets and not
+    /// one closure flag, so tearing an aligned closure and undoing it would give
+    /// the geometry back with the flag stuck false, landing on a state the history
+    /// never held. What makes running it on both directions correct is that the
+    /// stamp is TOTAL and blind to the flags (see
+    /// [`Self::closure_alignment_stamp`]): the flag is a FUNCTION of the rest of
+    /// the state, every state the history records satisfies
+    /// `flag == stamp(state)`, and an inverse that restores the rest of the state
+    /// therefore reproduces the flag it recorded - in both directions, promotion
+    /// as well as demotion. It is the same argument [`Self::realign_merges`] rests
+    /// on, one field over.
+    ///
+    /// That invariant is why REPAIR carries this too. Repair never goes through
+    /// `reconcile_geometry`, and a state it left with a stale claim would be
+    /// corrected by the NEXT command's sweep - i.e. a difference against Repair's
+    /// own undo snapshot, appearing one command later.
+    ///
+    /// Nothing has to be re-solved after a change: [`Self::realign_structure_hash`]
+    /// already hashes `is_aligned`, so a claim that moves invalidates any recorded
+    /// [`RealignFixpoint`] and the next `realign_merges` re-solves against the
+    /// rigid graph as it now stands.
     ///
     /// # What it deliberately does NOT touch (#469, and the 0.5.0 migration)
     ///

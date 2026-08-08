@@ -3129,11 +3129,20 @@ fn closure_alignment(state: &AppState, a: StationRef, b: StationRef) -> Option<b
         .map(|c| c.is_aligned)
 }
 
-/// `two_merged_sections` with the far end of B snapped onto the datum station,
+/// Two merged sections with the far end of B snapped onto A's first station,
 /// closing the loop as one physical point, and a `Move` closure recorded over
 /// it - the state the snap-to-merge workflow produces. Returns `(a, b)`.
-fn snapped_loop(state: &AppState) -> (SectionId, SectionId) {
-    let (a, b) = two_merged_sections(state);
+///
+/// `anchored` picks whether the loop carries a zero datum. It changes what can
+/// be done to the loop afterwards, not what it is: on an ANCHORED loop every
+/// shot reaches the datum from both ends, so the frozen-shot guard refuses a
+/// geometry edit outright and only a station move can tear it.
+fn snapped_loop(state: &AppState, anchored: bool) -> (SectionId, SectionId) {
+    let (a, b) = if anchored {
+        two_merged_sections(state)
+    } else {
+        two_unanchored_merged_sections(state)
+    };
     let (from, to) = station_raw_xy(state, (b, 1), (a, 0));
     let snapped = state.execute(Command::MoveStation {
         station_ref: StationRef::new(b, 1),
@@ -3258,64 +3267,94 @@ fn the_snap_to_merge_batch_still_creates_an_aligned_closure() {
     );
 }
 
-/// THE CRUX. `MoveStation` moves ONE station (only the UI batches the
-/// co-located set), and its undo captures no closure flag at all - so a sweep
-/// that could only DEMOTE would leave the flag stuck false after the undo,
-/// landing on a state the history never recorded and failing the roundtrip
-/// oracle. The stamp is total and blind to the flags, so the undo re-derives
-/// exactly the claim the recorded state had.
+/// THE CRUX, over the two undo captures that can reach a torn closure.
+///
+/// The fuzz roundtrip oracle requires that an undo restores the state the
+/// history RECORDED, and the recorded state had the claim TRUE. `UpdateShot`
+/// is the sharp case: its `UndoData::PreviousValues` carries the shot's old
+/// measurements and the rigid group's offsets, and NOT one closure flag - so a
+/// sweep that could only DEMOTE would hand the geometry back with the claim
+/// stuck false, landing on a state the history never held. `MoveStation`
+/// records a whole `ProjectSnapshotPair`, which restores the flag verbatim, so
+/// it pins the other half: a sweep that runs on the inverse must not disturb
+/// what the snapshot just put back.
+///
+/// The stamp is total and blind to the flags, so both come out the same way -
+/// the undo re-derives exactly the claim the recorded state had.
+///
+/// The narrow-capture row runs on an UNANCHORED loop, and has to: on an
+/// anchored one every shot of the loop reaches the datum from both ends, so the
+/// frozen-shot guard refuses the edit before it can tear anything - which is
+/// itself one of the things an alignment claim buys, and why an honest claim
+/// matters.
 #[test]
 fn tearing_an_aligned_closure_demotes_it_and_the_undo_restores_the_claim() {
     let _config = isolated_config();
-    let state = state_with_project();
-    let (a, b) = snapped_loop(&state);
-    let closed_geometry = all_station_xy(&state);
-    assert_eq!(
-        closure_alignment(&state, StationRef::new(a, 0), StationRef::new(b, 1)),
-        Some(true),
-        "setup: the loop is closed and the claim is true"
-    );
+    for narrow_capture in [false, true] {
+        let state = state_with_project();
+        let (a, b) = snapped_loop(&state, !narrow_capture);
+        let closed_geometry = all_station_xy(&state);
+        assert_eq!(
+            closure_alignment(&state, StationRef::new(a, 0), StationRef::new(b, 1)),
+            Some(true),
+            "setup: the loop is closed and the claim is true"
+        );
 
-    let torn = state.execute(Command::MoveStation {
-        station_ref: StationRef::new(b, 1),
-        offset: Coordinates {
-            x: 100.0,
-            y: 0.0,
-            z: 0.0,
-        },
-    });
-    assert!(torn.success, "MoveStation failed: {:?}", torn.error);
-    assert!(
-        raw_station_gap(&state, (a, 0), (b, 1)) > 1.0,
-        "setup: the move tore the loop open"
-    );
-    assert_eq!(
-        closure_alignment(&state, StationRef::new(a, 0), StationRef::new(b, 1)),
-        Some(false),
-        "the claim is false now, so the flag must be"
-    );
-    assert!(
-        !state
-            .integrity_check()
-            .messages
-            .iter()
-            .any(|m| m.contains("marked closed")),
-        "the demotion IS the 'recompute' the old Critical asked for: {:?}",
-        state.integrity_check().messages
-    );
+        let torn = if narrow_capture {
+            // `UpdateShot` - a narrow capture, and the only route of the two that
+            // a demote-only sweep gets wrong.
+            state.execute(Command::UpdateShot {
+                section_id: b,
+                shot_id: shot_ids(&state, b)[0],
+                updates: ShotUpdates {
+                    length: Some(105.0),
+                    ..Default::default()
+                },
+            })
+        } else {
+            state.execute(Command::MoveStation {
+                station_ref: StationRef::new(b, 1),
+                offset: Coordinates {
+                    x: 100.0,
+                    y: 0.0,
+                    z: 0.0,
+                },
+            })
+        };
+        assert!(torn.success, "the tearing command failed: {:?}", torn.error);
+        assert!(
+            raw_station_gap(&state, (a, 0), (b, 1)) > 1.0,
+            "setup (narrow_capture={narrow_capture}): the edit tore the loop open"
+        );
+        assert_eq!(
+            closure_alignment(&state, StationRef::new(a, 0), StationRef::new(b, 1)),
+            Some(false),
+            "the claim is false now, so the flag must be"
+        );
+        assert!(
+            !state
+                .integrity_check()
+                .messages
+                .iter()
+                .any(|m| m.contains("marked closed")),
+            "the demotion IS the 'recompute' the old Critical asked for: {:?}",
+            state.integrity_check().messages
+        );
 
-    let undone = state.undo();
-    assert!(undone.success, "undo failed: {:?}", undone.error);
-    assert_eq!(
-        all_station_xy(&state),
-        closed_geometry,
-        "the undo restores the geometry"
-    );
-    assert_eq!(
-        closure_alignment(&state, StationRef::new(a, 0), StationRef::new(b, 1)),
-        Some(true),
-        "AND the claim, which is what a demote-only sweep could never do"
-    );
+        let undone = state.undo();
+        assert!(undone.success, "undo failed: {:?}", undone.error);
+        assert_eq!(
+            all_station_xy(&state),
+            closed_geometry,
+            "the undo restores the geometry (narrow_capture={narrow_capture})"
+        );
+        assert_eq!(
+            closure_alignment(&state, StationRef::new(a, 0), StationRef::new(b, 1)),
+            Some(true),
+            "AND the claim, which is what a demote-only sweep could never do \
+             (narrow_capture={narrow_capture})"
+        );
+    }
 }
 
 /// Drift back into coincidence: the flag follows the geometry in BOTH
@@ -3325,7 +3364,7 @@ fn tearing_an_aligned_closure_demotes_it_and_the_undo_restores_the_claim() {
 fn drifting_back_into_coincidence_re_promotes_the_closure() {
     let _config = isolated_config();
     let state = state_with_project();
-    let (a, b) = snapped_loop(&state);
+    let (a, b) = snapped_loop(&state, true);
 
     for (offset, expected) in [(100.0, false), (-100.0, true)] {
         let moved = state.execute(Command::MoveStation {
@@ -3429,7 +3468,7 @@ fn a_demoted_alignment_claim_survives_save_and_reopen() {
 
     let (a, b) = {
         let state = state_with_project();
-        let (a, b) = snapped_loop(&state);
+        let (a, b) = snapped_loop(&state, true);
         let torn = state.execute(Command::MoveStation {
             station_ref: StationRef::new(b, 1),
             offset: Coordinates {

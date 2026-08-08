@@ -2115,9 +2115,13 @@ fn the_re_measure_leaves_a_legacy_baked_alignment_alone() {
     // cannot know what the bake did to the shots and `check_closure_alignment`
     // is the honest surface for it.
     let (mut project, _a, b, c) = double_anchored_bridge_project();
-    for (id, strategy) in [
-        (1_u64, ClosureStrategy::Batch),
-        (2, ClosureStrategy::LeastSquaresWeighted),
+    for (id, strategy, is_aligned) in [
+        (1_u64, ClosureStrategy::Batch, true),
+        (2, ClosureStrategy::LeastSquaresWeighted, true),
+        // A modern snap-to-merge closure alongside them, so the sweep genuinely
+        // runs (it short-circuits on a project holding no `Move` closure at all)
+        // and the exemption below is the thing being measured.
+        (3, ClosureStrategy::Move, false),
     ] {
         project.loop_closures.push(LoopClosure {
             id,
@@ -2129,15 +2133,23 @@ fn the_re_measure_leaves_a_legacy_baked_alignment_alone() {
             horizontal_misclosure: 0.0,
             vertical_misclosure: 0.0,
             strategy,
-            is_aligned: true,
+            is_aligned,
         });
     }
+    let legacy_claims = |project: &Project| {
+        project
+            .loop_closures
+            .iter()
+            .filter(|lc| lc.strategy != ClosureStrategy::Move)
+            .map(|lc| lc.is_aligned)
+            .collect::<Vec<_>>()
+    };
 
     assert_eq!(project.remeasure_closure_alignment(), 0);
-    assert!(project.loop_closures.iter().all(|lc| lc.is_aligned));
+    assert_eq!(legacy_claims(&project), vec![true, true]);
     // Including through the LOAD, which is where the force-restamp used to live.
     project.assign_closure_ids();
-    assert!(project.loop_closures.iter().all(|lc| lc.is_aligned));
+    assert_eq!(legacy_claims(&project), vec![true, true]);
     assert_eq!(
         project.check_closure_alignment().len(),
         2,
