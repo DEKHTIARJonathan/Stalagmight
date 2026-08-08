@@ -504,6 +504,17 @@ malformed file the parser refuses, or the deliberate missing-file probe, is the
 app reporting a problem properly. Those are findings at severity `error`, which
 does not fail a run.
 
+The introducing sweep was 8 cells (both fixtures, seeds 1-4, x40), 14 more on the
+seven seeds whose swarm profile is `import-heavy` (14, 15, 21, 23, 26, 56, 59,
+both fixtures, x60), and two malformed-heavy runs at
+`STALAGMIGHT_FUZZ_IMPORT_MALFORMED_P=0.8`. All green. The one red it produced was
+the ORACLE's - a claim that the backend refuses a non-finite
+`existing_shot_updates` field, which it cannot, because `JSON.stringify` spells
+NaN `null` and `Option<f64>` reads `null` as "leave this field alone". That
+measurement is written up in the scenario header as an observation, not a
+finding: the backend check is a Rust-API defence and cannot be cited as
+protecting the frontend.
+
 ##### File inputs: what a trace carries, and what it rebuilds
 
 A file-backed import takes a PATH, and a path cannot be recorded verbatim - the

@@ -397,6 +397,16 @@
  * `ShotUpdates` has to distinguish "absent" from "explicitly null" for the
  * non-nullable numbers, exactly as finding 5 made `SectionUpdates` do.
  *
+ * V3 SWEEP, at the wave that introduced it. 8 cells (both fixtures, seeds 1-4,
+ * x40) plus 14 more on the seven seeds whose swarm profile is `import-heavy`
+ * (14, 15, 21, 23, 26, 56, 59, both fixtures, x60), plus fractal seeds 1 x80 and
+ * 5 x80 with `STALAGMIGHT_FUZZ_IMPORT_MALFORMED_P=0.8`. All green. The one RED
+ * the sweep produced was the oracle's, not the app's - naharon seed 59 x60,
+ * written up in the observation above - and it is why `mustBeRejected` is now
+ * two claims rather than three. No app defect was found; the group is coverage
+ * that did not exist rather than a bug hunt that came back empty, and the seeds
+ * above are its regression cover.
+ *
  * ## v3 file inputs: what a trace carries, and what it rebuilds
  *
  * A file-backed import cannot record its path: the recording machine's absolute
