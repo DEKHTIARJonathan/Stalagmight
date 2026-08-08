@@ -9,13 +9,142 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use crate::config::GasConfig;
-use crate::models::{Cylinder, Diver, PlanSegment, StationRef};
+use crate::models::{Cylinder, Diver, PlanSegment, Project, StationKey, StationRef};
 
-/// The `.plnx` storage form of a station reference, re-exported here so it can cross the IPC
-/// boundary (#310). Defined next to the code that builds and places it
-/// (`core::state::dive_plan`); its fields stay private to that module on purpose - see
-/// [`PlanAnchorSet`] for why the frontend must treat one as opaque.
-pub use crate::core::state::dive_plan::{PlanAnchor, StoredAnchor};
+/// A station identified by the shots it SITS BETWEEN, rather than by its position or by which
+/// side of one shot it is on (#24).
+///
+/// This is the sidecar's own storage form. The project's internal cross-references keep using
+/// [`StationKey`] - they are rewritten in place by the edits that move them, which a file
+/// outside the project cannot be.
+///
+/// The point is that a station's neighbours do not care which way you walk the section. Station
+/// `i` sits between `shots[i-1]` and `shots[i]`; reverse the section and it sits between the
+/// same two shots, so the same record still names it. `AfterShot(uuid)` cannot say that: "after"
+/// is defined by traversal order, so a reverse silently slides it onto the neighbouring station
+/// while it carries on resolving.
+///
+/// `a`/`b` are the two neighbours as they stood at save time, `None` for the free end of a
+/// terminal station. They are NOT ordered - resolution derives the side from the current
+/// positions, so it reads the same after a reverse.
+///
+/// `pub` only so it can appear inside [`StoredAnchor`] on the IPC boundary (#310); every field
+/// stays crate-private (`pub(crate)`, built and placed by `core::state::dive_plan`), which is
+/// what makes an anchor opaque to the frontend.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PlanAnchor {
+    pub(crate) section_id: crate::models::SectionId,
+    #[serde(default)]
+    pub(crate) a: Option<String>,
+    #[serde(default)]
+    pub(crate) b: Option<String>,
+    /// Which side of `a` the station sat on when it was saved, in TRAVERSAL terms.
+    ///
+    /// Only consulted when the pair cannot place the station on its own - a terminal station has
+    /// no second neighbour, and a deleted partner leaves only one. On its own this bit is
+    /// reverse-UNSAFE, which is what `parity` below repairs.
+    #[serde(default)]
+    pub(crate) after_a: bool,
+    /// The section's [`Section::reverse_parity`] when this anchor was written.
+    ///
+    /// This is what makes the single-neighbour case correct. `after_a` is expressed in traversal
+    /// terms, and a reverse flips traversal - so the same observable state ("`a` is at position
+    /// 0 and something follows it") is produced by two different histories that need OPPOSITE
+    /// answers:
+    ///
+    /// ```text
+    ///   [s0,s1,s2] reversed          -> a at 0, follower present -> station is index 0
+    ///   [s0,s1] delete s0, append s2 -> a at 0, follower present -> station is index 1
+    /// ```
+    ///
+    /// The pair alone cannot tell those apart. Comparing this against the section's parity now
+    /// can: differing parity means a reverse happened and the side flips; equal parity means it
+    /// did not and the saved side is read literally.
+    ///
+    /// Absent (`false`) on plans written before this field existed, which is correct for them -
+    /// no reverse had been recorded against their sections either.
+    #[serde(default)]
+    pub(crate) parity: bool,
+    /// `length.to_bits()` of the sole neighbouring shot, recorded only for a TERMINAL station.
+    ///
+    /// Turns the one case the pair genuinely cannot survive - splitting that shot - into a
+    /// VISIBLE stale reference instead of a silent one-station error. The split keeps the
+    /// original UUID on the shortened tail, so afterwards no shot in the file has this station
+    /// as an endpoint and nothing can name it; the length necessarily changed, which is what
+    /// gives us a detector.
+    ///
+    /// Read only when the resolved side is no longer at an end of the section - so a plain
+    /// prepend or append, which leaves the shot's length alone, keeps resolving exactly as
+    /// before, and a reverse is untouched (length is invariant, and `parity` handles the side).
+    /// The one false positive is editing this shot's length AND extending that same end before
+    /// the plan is next loaded, which yields a "re-pin this" warning rather than a wrong route.
+    ///
+    /// ⚠ Compared as a LENGTH within a relative tolerance, never bit-for-bit - see
+    /// `terminal_length_matches` in `core::state::dive_plan`. Bit equality is not survivable now
+    /// that an anchor crosses the IPC boundary (#310): this is a full 64-bit integer, JavaScript
+    /// has only doubles, and the shortest-round-trip decimal `JSON.stringify` writes for one
+    /// differs from the original in its low bits. Those are the low MANTISSA bits of the encoded
+    /// length, so the length itself survives to ~1e-13 relative - orders of magnitude finer than
+    /// the thing this field exists to detect.
+    #[serde(default)]
+    pub(crate) terminal_shot_length_bits: Option<u64>,
+}
+
+impl PlanAnchor {
+    /// Position of a neighbour in the section as it stands now.
+    /// Position of a neighbour in the section as it stands now.
+    ///
+    /// Takes the project's shot-UUID index first, the way `Project::resolve_key` does, and only
+    /// falls back to a scan when the index is cold or stale. Without it every anchor cost a full
+    /// pass per neighbour - two per station - and a hand-edited `.plnx` full of UUIDs that match
+    /// nothing would scan the whole section every time.
+    pub(crate) fn position_of(
+        project: &Project,
+        section: &crate::models::Section,
+        uuid: &Option<String>,
+    ) -> Option<usize> {
+        let uuid = uuid.as_deref()?;
+        if let Some(&i) = project.shot_uuid_index.get(&(section.id, uuid.to_string())) {
+            // Re-check before trusting it, exactly as `Project::resolve_key` does: a stale
+            // entry then costs only the scan below and can never resolve to the wrong shot.
+            if section
+                .shots
+                .get(i as usize)
+                .and_then(|sh| sh.uuid.as_deref())
+                == Some(uuid)
+            {
+                return Some(i as usize);
+            }
+        }
+        section
+            .shots
+            .iter()
+            .position(|s| s.uuid.as_deref() == Some(uuid))
+    }
+}
+
+/// What a `.plnx` row can hold for one station.
+///
+/// Plans written before #24 store a [`StationKey`] - `{section_id, anchor}`. Those are still
+/// read, and still resolve exactly as they always did (including the reverse blind spot), so
+/// upgrading cannot lose anyone's route. They are rewritten in the pair form the next time the
+/// user saves that plan, which is also when they stop being vulnerable to it.
+///
+/// `Legacy` is listed FIRST deliberately: `StationKey` REQUIRES an `anchor` or `station_index`
+/// field, so only a pre-#24 blob can match it and a pair-form blob falls through. Reversing the
+/// order would make `PlanAnchor` - whose fields all default - swallow legacy rows and quietly
+/// blank every reference in them.
+///
+/// `pub` since #310, when it started crossing the IPC boundary so the frontend can hold a live
+/// plan pin as an anchor rather than an index. It is `crate::models::StoredAnchor` (re-exported
+/// from `core::state::dive_plan`, the code that builds and places it) and is OPAQUE to the
+/// frontend: no public constructor, no public fields, and `unknown` in TS.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(untagged)]
+pub enum StoredAnchor {
+    Legacy(StationKey),
+    Pair(PlanAnchor),
+}
 
 /// Payload schema version stamped into every saved snapshot. Bump only on a
 /// breaking change to `DivePlanSnapshot`; additive changes need no bump because
