@@ -586,6 +586,24 @@ export const importDialogFuzz: Scenario = {
 
     const recorder = new TraceRecorder();
     const history: string[] = [];
+    /**
+     * Substrings a failure payload must never contain, and what to say instead.
+     *
+     * `describeSource` keeps a corpus file's NAME out of every label this run
+     * writes, but the app puts it back: an import that fails quotes the path it
+     * was given, and the copy under `fuzz-files/corpus-N/` keeps the original
+     * basename because a `.mak` names its sibling `.dat` files and a `.wpj`
+     * names its `.srv` tree - renaming them would break the very files the
+     * corpus exists to exercise. So the file names are real, and a failure
+     * message that echoes one would carry it into the issue the failure gets
+     * attached to. Filled in as entries are materialized; applied by `fail`.
+     */
+    const redactions: { find: string; say: string }[] = [];
+    const redact = (text: string): string => {
+      let out = text;
+      for (const entry of redactions) out = out.split(entry.find).join(entry.say);
+      return out;
+    };
     let inFlight: string | null = null;
     let fileSeq = 0;
     let lastUndoDepth = -1;
@@ -622,16 +640,20 @@ export const importDialogFuzz: Scenario = {
       // without this the tail ends on the move BEFORE the one that failed, which
       // reads as an attribution and is one.
       if (inFlight !== null) tail.push(`    ${inFlight} -> IN FLIGHT (had not returned)`);
-      const message = [
-        headline,
-        `  reproduce: pnpm agent:scenario ${SCENARIO} --seed ${ctx.seed} --iterations ${iterations}` +
-          `${fixture === DEFAULT_FIXTURE ? '' : ` with STALAGMIGHT_FUZZ_FIXTURE=${fixture}`}` +
-          `${replayPath ? ` (REPLAY of ${replayPath})` : ''}`,
-        `  fixture=${fixture} flowsPerEpisode=${flowsPerEpisode()} maxFlowSteps=${maxFlowSteps()}`,
-        ...(detail ? [detail] : []),
-        `  last ${tail.length} move(s):`,
-        ...tail,
-      ].join('\n');
+      // REDACTED, because this text is what goes into an issue: the app quotes
+      // the path it was handed, and a corpus copy keeps its original file name.
+      const message = redact(
+        [
+          headline,
+          `  reproduce: pnpm agent:scenario ${SCENARIO} --seed ${ctx.seed} --iterations ${iterations}` +
+            `${fixture === DEFAULT_FIXTURE ? '' : ` with STALAGMIGHT_FUZZ_FIXTURE=${fixture}`}` +
+            `${replayPath ? ` (REPLAY of ${replayPath})` : ''}`,
+          `  fixture=${fixture} flowsPerEpisode=${flowsPerEpisode()} maxFlowSteps=${maxFlowSteps()}`,
+          ...(detail ? [detail] : []),
+          `  last ${tail.length} move(s):`,
+          ...tail,
+        ].join('\n'),
+      );
       // The trace carries the message VERBATIM, so a shrink compares signatures
       // taken from the same text a human reads.
       const written = dumpTrace({ message });
@@ -676,13 +698,21 @@ export const importDialogFuzz: Scenario = {
           ctx.metric('corpus:absent');
           return null;
         }
-        const copied = materializeCorpusEntry(entry, resolveRel(source.dirRel));
+        const destination = resolveRel(source.dirRel);
+        const copied = materializeCorpusEntry(entry, destination);
         if (copied.skipped) {
           ctx.metric('corpus:oversizedDirectory');
           return null;
         }
         ctx.metric('corpus:materialized');
         ctx.metric('corpus:copiedBytes', copied.bytes);
+        // Both halves, and the directory FIRST so a full path is redacted whole
+        // rather than leaving `<corpus #id>/<basename>` behind.
+        const tag = `<corpus #${source.id}>`;
+        redactions.unshift({ find: destination, say: tag });
+        for (const name of fs.readdirSync(destination)) {
+          redactions.push({ find: name, say: `${tag}/file` });
+        }
         return copied.path;
       }
       const target = resolveRel(source.rel);
