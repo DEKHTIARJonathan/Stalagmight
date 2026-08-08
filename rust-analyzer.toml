@@ -1,0 +1,22 @@
+# rust-analyzer project config (ratoml), picked up by rust-analyzer for the
+# src-tauri cargo workspace when the repo root is opened in an editor.
+#
+# Two goals:
+# 1. targetDir = true gives rust-analyzer its own target subdirectory, so RA
+#    checks and terminal cargo runs stop invalidating each other's incremental
+#    caches (the feature sets differ, which forced a full recheck storm after
+#    every terminal test run).
+# 2. features + extraEnv mirror the CI/pre-push command shape exactly
+#    (--features telemetry with TELEMETRY_ENDPOINT set) so RA analyzes the
+#    telemetry module and flycheck agrees with CI. src-tauri/build.rs hard-fails
+#    without TELEMETRY_ENDPOINT whenever the telemetry feature is enabled.
+#
+# If your rust-analyzer build does not honor this file, mirror the three keys
+# into your editor config - see docs/toolchain.md ("rust-analyzer").
+
+[cargo]
+targetDir = true
+features = ["telemetry"]
+
+[cargo.extraEnv]
+TELEMETRY_ENDPOINT = "http://localhost/dummy"
