@@ -1546,6 +1546,113 @@ fn save_drops_orphan_section_offset() {
     );
 }
 
+/// [#469] A `.stalx` written before the dust gate widened can carry a
+/// `section_offsets` value that was REAL to the old 1e-12 gate and is dust to
+/// `Project::OFFSET_DUST_M` (1e-6). Opening drops the key and moves that section
+/// by the value it held - the deliberate on-disk consequence of widening the
+/// gate, pinned here rather than left to be discovered.
+///
+/// Three claims, because each is a separate way this could go wrong: the key is
+/// GONE after the open (`normalize_section_offsets` at the load boundary, see
+/// `Project::redrive_offsets_after_load`), the geometry moved by less than a
+/// micrometre rather than by anything a survey could notice, and a save/reopen
+/// CONVERGES - the row does not come back on the next round trip.
+#[test]
+fn opening_drops_a_legacy_sub_gate_section_offset() {
+    // 5e-7 m, half the gate: the old bound preserved it, the current writer
+    // cannot produce it (`Project::write_section_offset` removes the key
+    // instead), so only a legacy FILE can hold one.
+    const LEGACY_OFFSET: (f64, f64) = (5e-7, -5e-7);
+
+    crate::test_helpers::with_isolated_config(|| {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("legacy-dust.stalx");
+
+        let section_id = {
+            let mut project = Project::new("LegacyDust".to_string(), None);
+            let section_id = project
+                .add_section(SectionData {
+                    shots: vec![test_shot_data(10.0)],
+                    ..Default::default()
+                })
+                .id;
+            project.ensure_shot_uuids();
+            // Straight into the map: routing through the writer would normalize it
+            // away, which is the point - this state is unrepresentable in memory.
+            project.section_offsets.insert(section_id, LEGACY_OFFSET);
+
+            // The drop is `normalize_section_offsets`' doing. Asked directly, it
+            // claims exactly this one row.
+            let mut probe = project.clone();
+            assert_eq!(
+                probe.normalize_section_offsets(),
+                1,
+                "the sub-gate row is what the load-boundary normalize drops"
+            );
+
+            let mut db = Database::open(&path).unwrap();
+            db.save_project(&project).unwrap();
+            section_id
+        };
+
+        // Precondition: the value really is on disk. The save does not normalize -
+        // if it ever starts to, this test is measuring nothing.
+        assert_eq!(
+            Database::open_existing(&path)
+                .unwrap()
+                .load_project()
+                .unwrap()
+                .section_offsets
+                .get(&section_id)
+                .copied(),
+            Some(LEGACY_OFFSET),
+            "precondition: the legacy file carries the sub-gate offset"
+        );
+
+        let state = AppState::new().unwrap();
+        assert!(
+            state.open_project(path.clone()).success,
+            "open must succeed"
+        );
+        let opened = state.get_project_state().unwrap();
+        assert!(
+            !opened.section_offsets.contains_key(&section_id),
+            "the load boundary must drop a sub-gate offset: {:?}",
+            opened.section_offsets.get(&section_id)
+        );
+
+        // ...and the geometry it moved by is the value that went: under a
+        // micrometre, four decades under anything the app displays.
+        let station = StationRef::new(section_id, 0);
+        let moved = opened.compute_station_raw_coords(station).unwrap();
+        let (dx, dy) = (moved.x - LEGACY_OFFSET.0, moved.y - LEGACY_OFFSET.1);
+        assert!(
+            dx.abs() < Project::OFFSET_DUST_M && dy.abs() < Project::OFFSET_DUST_M,
+            "dropping the key moved station 0 by ({dx}, {dy}), which is not sub-gate"
+        );
+
+        // Convergence: saving what the open produced and reopening it leaves the
+        // key absent. A boundary that dropped and a writer that re-minted would
+        // make every round trip a fresh edit.
+        assert!(state.save_project(Some(path.clone())).success);
+        let reopened_state = AppState::new().unwrap();
+        assert!(reopened_state.open_project(path).success);
+        let reopened = reopened_state.get_project_state().unwrap();
+        assert!(
+            !reopened.section_offsets.contains_key(&section_id),
+            "a sub-gate offset must not resurrect across save/reopen: {:?}",
+            reopened.section_offsets.get(&section_id)
+        );
+        let again = reopened.compute_station_raw_coords(station).unwrap();
+        assert_eq!(
+            (again.x.to_bits(), again.y.to_bits()),
+            (moved.x.to_bits(), moved.y.to_bits()),
+            "the second round trip must not move the geometry again - bit-exact, \
+             because a converged round trip has nothing left to round off"
+        );
+    });
+}
+
 #[test]
 fn save_sanitizes_non_finite_geometry() {
     // A non-finite shot value would abort the save (NaN → NULL in a NOT NULL

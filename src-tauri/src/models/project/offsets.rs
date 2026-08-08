@@ -117,8 +117,9 @@ impl Project {
     /// found, and a writer that sees only its own arguments cannot tell the two
     /// starting points apart:
     ///
-    /// * from an ABSENT key, `(0 + d) - d` lands a femtometre off zero and the
-    ///   key must end ABSENT - the route that did nothing has none either
+    /// * from an ABSENT key, `(0 + d) - d` lands off zero by a residue under
+    ///   [`Project::OFFSET_DUST_M`] rather than on it, and the key must end
+    ///   ABSENT - the route that did nothing has none either
     ///   (#413 finding 2's dust half: a `ReverseSection` applied twice, an insert
     ///   plus the remove that undoes it, a cascade "correcting" its own noise);
     /// * from a PRESENT all-zero key, the same arithmetic must end PRESENT.

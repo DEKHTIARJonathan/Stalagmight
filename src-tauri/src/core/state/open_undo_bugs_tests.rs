@@ -1824,8 +1824,9 @@ fn adjusted_bits(state: &AppState) -> Vec<(String, [u64; 3])> {
 /// cannot be compared against a recorded one without a tolerance, and a
 /// tolerance is exactly what hides a real regression.
 ///
-/// The magnitude here is small (femtometres on this five-shot loop) because the
-/// system is tiny and well conditioned. It is NOT bounded by anything: the
+/// The magnitude here is small - the last bits of this five-shot loop's
+/// coordinates, reported by the failure rather than promised in prose - because
+/// the system is tiny and well conditioned. It is NOT bounded by anything: the
 /// amplification is the condition number of the network, and the fuzzer's own
 /// adjusted-geometry oracle recorded a station 2.2 km out moving 28 microns
 /// between two solves of a state whose stored project roundtripped byte for

@@ -1206,6 +1206,22 @@ impl Project {
     /// enforces. Nothing physical lives in the gap: survey instruments read
     /// centimetres, and this app reports and asserts in centimetres.
     ///
+    /// One ordering does NOT hold, and it is the one worth writing down: the fuzz
+    /// comparison oracle's absolute tolerance is 1e-9 m (`TOLERANCE_ABS`,
+    /// `core/state/fuzz_undo_tests.rs`), three decades BELOW this gate, so a
+    /// difference anywhere in `(0, OFFSET_DUST_M)` is one the oracle WOULD report.
+    /// It never has to, because that band is unreachable rather than merely
+    /// unlikely: [`Self::write_section_offset`] is the single writer and it removes
+    /// the key instead of writing a value inside the band, and
+    /// [`Self::normalize_section_offsets`] drops any a legacy file carried, so no
+    /// state the fuzzer can reach holds a `section_offsets` value under the gate at
+    /// all. Two compared states can therefore only disagree inside the band via the
+    /// STRADDLE below - a TRUE offset landing within one float residue (~5e-9 m,
+    /// the worst measured above) of the gate boundary itself, so one route writes
+    /// just over it and the other normalizes just under. That difference is
+    /// micrometre-scale and the oracle sees it, which is the intended outcome: the
+    /// answer is to re-measure this constant, never to widen that tolerance.
+    ///
     /// # The failure this replaces, and the one to watch for
     ///
     /// The old 1e-12 was chosen against a corpus measurement of 1.51e-14 taken

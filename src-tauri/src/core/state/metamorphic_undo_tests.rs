@@ -493,7 +493,8 @@ const EXPLAINS: &[Explains] = &[
     // * The float DUST. `ReverseSection` applied twice does NOT cancel: the
     //   compensation is `shot_run_displacement` summed over the shots, and the
     //   second reverse sums the negated vectors in the OPPOSITE order, so the
-    //   round trip lands on a femtometre residue rather than on zero.
+    //   round trip lands on a residue under `Project::OFFSET_DUST_M` rather
+    //   than on zero.
     //   `Project::write_section_offset` normalizes an offset within
     //   `Project::OFFSET_DUST_M` of the origin to absent, and `cascade_bfs`
     //   (models/project/connectivity.rs) declines to "correct" a sub-bound gap
