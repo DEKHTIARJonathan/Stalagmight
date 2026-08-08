@@ -17,6 +17,7 @@ import { useUIStore } from './uiStore';
 import { autosaveFailureMessage, surfaceSaveFailure } from '../utils/saveFeedback';
 import { useGlobalViewStore } from './globalViewStore';
 import { useSpeleoStore } from './speleoStore';
+import { useExportStore } from './exportStore';
 import type {
   Project,
   ProjectState,
@@ -563,6 +564,12 @@ function clearOpenProjectState(set: (partial: Partial<ProjectStore>) => void): v
   // Losing a project bypasses the setView() cleanup funnel, so drop the gas
   // sub-mode (#38) here too - a stale overlay/panel must not outlive the project.
   useUIStore.getState().exitGasPlan();
+  // Same bypass, same fix, for the Export-mode option set: `applyDisplaySettings`
+  // resets it on load/create, but a CLOSE never reaches that funnel, so without
+  // this the next project opened from a closed state would still inherit the
+  // previous one's format/DPI/threshold. `exitGasPlan()` above only leaves the
+  // sub-mode; it does not clear either store's values.
+  useExportStore.getState().reset();
   // #204: drop the SpeleoDB action-shell edit-state - no project is open.
   useSpeleoStore.getState().clearLink();
 }
