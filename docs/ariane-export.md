@@ -220,7 +220,7 @@ is deliberately unchanged - the logging exists so the loss is observable, not to
 change the behaviour.
 
 The same split logic is applied in reverse on `.tml` import
-(`core::comment_split::split`) when the import dialog's "comments on
+(`models::comment_split::split`) when the import dialog's "comments on
 stations" option is on (the default). Text typed in Ariane carries no marker
 and therefore routes to the **station** on import - matching how Ariane
 visually centers Comment text on the station, not along the shot. A bare

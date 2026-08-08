@@ -16,7 +16,7 @@ use ts_rs::TS;
 
 // [Track A] #186/D-B2: the typed action carried on the IPC error DTO.
 use super::contract::{SpeleoDbAction, TransportCause};
-use crate::core::command::ImportReceipt;
+use crate::models::ImportReceipt;
 
 /// Project permission level.
 ///

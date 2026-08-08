@@ -1388,9 +1388,9 @@ const MAX_UNIT_LABEL_LEN: usize = 300;
 /// Make a file-controlled unit string fit to cross IPC and land in a UI warning
 /// line. The file is untrusted input - this app reads whatever anyone hands it -
 /// and the rules are the receipt's, so the sanitizing itself lives with the
-/// receipt: [`crate::core::command::sanitize_display_text`].
+/// receipt: [`crate::models::sanitize_display_text`].
 fn sanitize_unit_label(raw: &str) -> String {
-    crate::core::command::sanitize_display_text(raw, MAX_UNIT_LABEL_LEN)
+    crate::models::sanitize_display_text(raw, MAX_UNIT_LABEL_LEN)
 }
 
 /// The import receipt's unit-conversion note for an Ariane file: TML carries ONE
@@ -1577,7 +1577,7 @@ pub fn convert_tml_to_import_configs(
 
         // When comments_on_stations is true, peel station-portion lines out
         // of each shot's Comment field via the ZWSP marker convention
-        // (see `core::comment_split`): unmarked lines go to the "to" station
+        // (see `models::comment_split`): unmarked lines go to the "to" station
         // (shot_index + 1), marked lines stay on the shot. This handles both
         // Stalagmight-authored .tml files (which mark shot lines) and bare
         // Ariane-authored ones (no markers → everything routes to the
@@ -1590,7 +1590,7 @@ pub fn convert_tml_to_import_configs(
                 .enumerate()
                 .map(|(shot_idx, mut shot)| {
                     let (shot_part, station_part) =
-                        crate::core::comment_split::split(shot.comment.as_deref());
+                        crate::models::comment_split::split(shot.comment.as_deref());
                     shot.comment = shot_part;
                     if let Some(text) = station_part.filter(|s| !s.is_empty()) {
                         station_comments.push((shot_idx as u32 + 1, text));

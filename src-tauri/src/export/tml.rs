@@ -24,7 +24,7 @@ use anyhow::{Context, Result};
 use quick_xml::events::{BytesDecl, BytesEnd, BytesStart, BytesText, Event};
 use quick_xml::Writer;
 
-use crate::core::comment_split;
+use crate::models::comment_split;
 use crate::models::{normalize_azimuth, Project, Section, SectionId, Shot, StationRef};
 
 // ============================================================================
@@ -1232,7 +1232,7 @@ fn build_export_shots(project: &Project, profile: TmlProfile) -> Vec<ExportShot>
     // `to` station matches. The shot side of the comment is ZWSP-prefixed; the
     // station side is written verbatim. Multiple StationRefs that alias the
     // same Ariane shot (parent <-> merged child) have their comments joined
-    // by '\n'. See `core::comment_split` for the marker convention.
+    // by '\n'. See `models::comment_split` for the marker convention.
     if !project.station_comments.is_empty() {
         // ariane_id -> list of (StationRef, comment), in a deterministic
         // order (sorted by section_id then station_index) so the joined

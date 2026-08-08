@@ -3,7 +3,7 @@ use chrono::{DateTime, Utc};
 use rusqlite::{params, OptionalExtension};
 
 use super::{compress_json, decompress_json, Database};
-use crate::core::undo::MAX_PERSISTED_HISTORY_ROWS;
+use crate::persistence::undo_limits::MAX_PERSISTED_HISTORY_ROWS;
 
 type CompressedHistoryRow = (i64, Vec<u8>, Vec<u8>, Option<String>);
 type HistoryRow = (i64, String, String, Option<String>);

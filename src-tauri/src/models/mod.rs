@@ -1,8 +1,10 @@
 pub mod angle;
+pub mod comment_split;
 pub mod config;
 pub mod dive_plan;
 pub mod geo;
 pub mod id_stride;
+pub mod import_receipt;
 pub mod placement_suggest;
 pub mod project;
 pub mod section;
@@ -16,6 +18,7 @@ pub use angle::*;
 pub use dive_plan::*;
 pub use geo::*;
 pub use id_stride::*;
+pub use import_receipt::*;
 pub use placement_suggest::*;
 pub use project::*;
 pub use section::*;
