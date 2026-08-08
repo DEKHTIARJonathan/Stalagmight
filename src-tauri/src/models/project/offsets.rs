@@ -318,10 +318,12 @@ impl Project {
     }
 
     /// THE alignment predicate: is a loop closure's coincidence CLAIM true right
-    /// now, and may it be made rigid? One definition, so the three sites that ask
-    /// - creation ([`Self::create_loop_closure`]), the load
-    /// ([`Self::assign_closure_ids`]) and the per-command re-measure
-    /// ([`Self::remeasure_closure_alignment`]) - cannot answer it differently and
+    /// now, and may it be made rigid?
+    ///
+    /// One definition, so that the three sites which ask (creation in
+    /// [`Self::create_loop_closure`], the load in [`Self::assign_closure_ids`],
+    /// and the per-command re-measure in
+    /// [`Self::remeasure_closure_alignment`]) cannot answer it differently and
     /// leave memory and disk disagreeing about what a closure IS (#469 item 2;
     /// the single-definition doctrine of [`Self::is_orphan_closure`]).
     ///

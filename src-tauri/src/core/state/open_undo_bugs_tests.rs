@@ -3118,7 +3118,7 @@ fn the_renormalised_frame_survives_save_and_reopen() {
 /// The alignment claim of a closure between `a` and `b`, or `None` when there
 /// is no closure over that pair.
 fn closure_alignment(state: &AppState, a: StationRef, b: StationRef) -> Option<bool> {
-    let project = state.get_project_state().expect("no project open");
+    let project = state.get_project_state()?;
     project
         .loop_closures
         .iter()
