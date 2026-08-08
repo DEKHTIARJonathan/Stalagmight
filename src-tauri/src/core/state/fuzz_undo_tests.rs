@@ -122,9 +122,11 @@
 //! | (none) | 40 x 100 | 40/40 |
 //! | `CLOSURES=1` | 20 x 60 | 20/20 |
 //! | `CLOSURE_SHAPES=1` | 20 x 40 | 20/20 |
+//! | `CLOSURE_SHAPES=1` | 40 x 150 | 40/40 - the regime that found the dust-gate observation below |
 //! | `DIVERGENCE=1` | 20 x 12 | 20/20 |
 //! | `JUMPS=1 CLOSURE_SHAPES=1` | 20 x 150 | 20/20 |
-//! | `COMBINED=1` | 40 x 300 | 38/40 - seeds 20 and 35 reach the open observation below |
+//! | `COMBINED=1` | 40 x 300 | 40/40 |
+//! | `HORIZON=1` | 3 x 5000 | 3/3 |
 //!
 //! Environment prefix for every row: `STALAGMIGHT_RUST_FUZZ_`. So the finding-7
 //! row is
@@ -164,18 +166,73 @@
 //!
 //! ## Observations, and what each one turned out to be
 //!
-//! NOTHING IS OPEN. The orphan-closure story was the last one, and both of its
-//! halves - the LOAD BOUNDARY half and the UNDO half, the first two entries
-//! below - are now fixed, with `COMBINED=1 SEEDS=40 ITERATIONS=300` at 40/40.
-//! Every other observation this section has carried is resolved too - three into
-//! findings (20, 21, 25), two into model fixes, one into a duplicate of finding
-//! 12, and one triaged out as the measuring engine's own artifact. The record
-//! stays because the next run of this programme should start from the evidence -
-//! including the shape of the reductions that did NOT reproduce - rather than
-//! from a surprise.
+//! NOTHING IS OPEN. The dust-gate story was the last one - the first entry
+//! below, `CLOSURE_SHAPES=1` seed 18 - and it is fixed, with that regime back at
+//! 40/40. Every other observation this section has carried is resolved too: the
+//! orphan-closure story's two halves (the LOAD BOUNDARY half and the UNDO half),
+//! the closure that asserted its own coincidence, three into findings (20, 21,
+//! 25), two into model fixes, one into a duplicate of finding 12, and one
+//! triaged out as the measuring engine's own artifact. The record stays because
+//! the next run of this programme should start from the evidence - including the
+//! shape of the reductions that did NOT reproduce - rather than from a surprise.
 //!
 //! The bar an entry has to clear to be listed as OPEN is unchanged:
 //! deterministic, reproducing twice, and FAILING its run rather than classified.
+//!
+//! * **RESOLVED, and FIXED: the offset cascade's dust gate was ABSOLUTE, and the
+//!   coordinates stopped being metre-scale.** `CLOSURE_SHAPES=1 SEEDS=40
+//!   ITERATIONS=150` failed seed 18 on `undo x1 did not restore the state
+//!   recorded at depth 11 | at section_offsets.8`, `expected: <absent>`,
+//!   `actual: [1.78e-14, -3.61e-12]` - a picometre key on a section the consumed
+//!   entry (`create_shot` on another section) never touched.
+//!
+//!   `fuzz_shrink_tests.rs` took the 84 recorded moves to THIRTEEN in 281
+//!   probes. Measured, not argued: a backtrace on the write names
+//!   `remove_shot_with_rewire` -> `cascade_connection_offsets` -> `cascade_bfs`,
+//!   on the UNDO of an appended `createShot`; the same value was written once
+//!   before, by a forward `deleteShot`, and cleared in between by
+//!   `removeZeroDatum`'s zero-trust `resolve_offsets`. The two cascades run from
+//!   DIFFERENT seed sets (the edited section plus every datum section, versus
+//!   one anchor per component), so they sum the same chains in different orders
+//!   and disagree in the last bits.
+//!
+//!   Why then: `cascade_bfs` declines a correction at or under
+//!   `Project::OFFSET_DUST_M`, and that bound is ABSOLUTE while the residue it
+//!   exists to swallow is RELATIVE - it tracks the magnitude of the coordinates
+//!   being summed. #469 item 1 renormalises the whole survey onto a promoted
+//!   datum, which puts coordinates at the inter-datum distance (kilometres)
+//!   instead of metres, and 16 km x 2.2e-16 is 3.6e-12: the residue crossed the
+//!   1e-12 gate it used to sit two decades under. Both halves of the branch were
+//!   NECESSARY, which is what made it one observation rather than two: with the
+//!   renormalisation disabled the minimized trace produced no failure, and
+//!   replayed on the commit before #469 item 2 (so the same `CLOSURE_SHAPES`
+//!   closures are `is_aligned` by assertion rather than by measurement, and the
+//!   cascade reaches different sections) it produced none either. Item 2 supplied
+//!   the path; item 1 supplied the magnitude.
+//!
+//!   FIXED by re-measuring the constant rather than by bumping it. Every gate
+//!   site was instrumented and the whole distribution of `max(|dx|, |dy|)`
+//!   recorded per site, over this file's own corpora, with the generator's datum
+//!   draw left alone and then widened to scatter datums worldwide:
+//!
+//!   | corpus | coordinates reached | worst residue |
+//!   |---|---|---|
+//!   | `CLOSURE_SHAPES=1` 40x150, real GPS spread | 7.9e4 m | 1.46e-11 m |
+//!   | `COMBINED=1` 40x300, real GPS spread | 7.9e4 m | 1.96e-11 m |
+//!   | `CLOSURE_SHAPES=1` 40x150, datums worldwide | 5.7e6 m | 9.31e-10 m |
+//!   | `COMBINED=1` 40x300, datums worldwide | 4.7e6 m | 9.31e-10 m |
+//!   | `HORIZON=1` 3x5000, datums worldwide | 1.8e7 m | 4.66e-9 m |
+//!
+//!   Each is one to five ULPs of the coordinate magnitude, and between the
+//!   residue and the smallest real correction (1e-1 m in these corpora) the
+//!   histogram is EMPTY for eight decades - so the gate belongs in that valley,
+//!   far from both ends. `Project::OFFSET_DUST_M` is now 1e-6 m, two decades
+//!   above the worst residue measured past the georeference ceiling and four
+//!   below `MERGE_ALIGNMENT_INVARIANT_M`; the constant's doc carries the whole
+//!   argument, and two tests in `models/project/tests.rs` re-run the measurement
+//!   and pin the clearances. A scale-aware gate was rejected on purpose: the
+//!   bound has to stay a pure function of the value written, or two routes
+//!   disagree BY DESIGN.
 //!
 //! * **RESOLVED, and FIXED: a closure orphaned by a command that did not convert
 //!   was reclassified by the next LOAD.** Surfaced by the fix in the next entry:
@@ -298,6 +355,33 @@
 //!   half: the commands that ORPHAN a closure convert it themselves, so the LOAD
 //!   has nothing left to reclassify - and with the entry above, that now holds
 //!   for the one command it did not cover.
+//! * **RESOLVED, and FIXED: a closure ASSERTED that its endpoints coincided.**
+//!   Recorded on #413 as "arguably intended staleness after large geometry
+//!   edits" and carried to #469 item 2: `COMBINED=1` runs left the post-run
+//!   integrity sweep reporting a closure "marked closed but its ends are 5.86 m
+//!   apart", with every IN-RUN oracle green. That combination is the whole
+//!   signature: `Verdict` compares one state's integrity messages against
+//!   another's, and this message was reproduced identically in both directions,
+//!   so nothing here could see it - only the harness's post-run sweep
+//!   (`e2e/agent/lib/oracles.ts`) named it.
+//!
+//!   The mechanism was the CREATE, not the drift. `create_loop_closure` stamped
+//!   `is_aligned: strategy == Move` without measuring, one line after
+//!   `compute_closure_metrics` had computed the refutation - and this module's
+//!   generator draws `Move` for half its closures over an arbitrary cross-section
+//!   pair, with `moveSection(+/-1000 m)` supplying the distance. Nothing could
+//!   ever heal it: the flag was never set back to false, `realign_merges` looks at
+//!   merges only, and `cascade_connection_offsets` deliberately preserves a
+//!   redundant closure's residual.
+//!
+//!   FIXED by making the flag a MEASUREMENT re-derived after every geometry
+//!   change (`Project::closure_alignment_stamp` /
+//!   `remeasure_closure_alignment`, models/project/offsets.rs), which is safe to
+//!   run on an inverse because the stamp is total and blind to the flags it
+//!   computes - see that function and docs/undo-redo.md. `COMBINED=1 SEEDS=40
+//!   ITERATIONS=300` is 40/40 on both halves after it, and the reductions are
+//!   pinned in `open_undo_bugs_tests.rs` (six tests, from the birth route to the
+//!   save/reopen convergence) and `models/project/tests.rs` (three).
 //! * RESOLVED as FINDING 20, and now FIXED. `HORIZON=1 SEEDS=1 ITERATIONS=2000`
 //!   left a merged pair 1.58 cm apart after an `updateShot`, because
 //!   `realign_after_shot_edit` returned early when the edited section's merge

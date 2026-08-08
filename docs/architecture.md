@@ -249,6 +249,15 @@ Offsets are **derived** state that the file merely caches, which is why
 from the merge and datum constraints on every open. A project therefore always opens
 geometrically correct even if an older build persisted drift.
 
+The offsets are read against ONE frame: local (0,0) means `zero_datums[0]`'s GPS.
+A command that promotes a different datum to first therefore re-defines every
+stored coordinate, and the forward epilogue answers that by translating every
+section - free-floating components included - so the promoted datum's station lands
+back on the origin (`Project::renormalize_frame`, issue #469). It runs forward only:
+`resolve_offsets`' cascade never re-derives a seed's offset, so a whole-project
+translation is a no-op for the load path, and every affected command's undo restores
+the recorded map rather than re-deriving a frame.
+
 ### Database Operations
 
 - Use `Database::open_existing()` for reading (doesn't create files)

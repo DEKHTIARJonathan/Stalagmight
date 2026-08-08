@@ -4,16 +4,41 @@ use crate::models::{Section, SectionData, SectionId, SectionIdentity, Shot, Shot
 use super::AppState;
 
 impl AppState {
-    /// Re-derive section offsets so merged stations stay colocated, healing any
-    /// drift a just-completed operation left behind.
+    /// Re-derive the geometry every command leaves behind: the section offsets
+    /// that keep merged stations colocated, and the alignment claims the loop
+    /// closures make about their own endpoints.
     ///
-    /// Section offsets are treated as *derived* state: rather than trust every
-    /// forward / undo / redo path to maintain them perfectly by hand (the source
-    /// of the redo-desync and cascade-propagation bugs), the command layer
-    /// reconciles them once after each user action. It is a no-op when nothing
-    /// drifted (the common case - an `O(shots + merges)` check thanks to the
-    /// coordinate precompute) and is skipped during the bulk-import loop
+    /// Both are treated as *derived* state: rather than trust every forward /
+    /// undo / redo path to maintain them perfectly by hand (the source of the
+    /// redo-desync and cascade-propagation bugs), the command layer reconciles
+    /// them once after each user action. Both are a no-op when nothing changed
+    /// (the common case - `O(shots + merges + closures)` thanks to the coordinate
+    /// precompute) and both are skipped during the bulk-import loop
     /// (`cascade_deferred`), so it doesn't reintroduce the per-mutation cost.
+    ///
+    /// The two are ORDERED, and the closure re-measure runs on BOTH sides of the
+    /// realign, because each direction answers a different requirement:
+    ///
+    /// * BEFORE, because an aligned closure is an EDGE the offset cascade solves
+    ///   through, so the flags are an INPUT to `realign_merges`. Left to whatever
+    ///   the last command happened to leave, that input would depend on the route
+    ///   taken to a state rather than on the state - a forward command's realign
+    ///   would see the pre-command flags while the undo's realign saw the swept
+    ///   ones, and the two cascades would settle on offsets that differ by float
+    ///   dust (a `section_offsets` key that exists on one route and not the
+    ///   other, which is #413 finding 2's shape and what the fuzz roundtrip
+    ///   oracle reports). Sweeping first makes the solver's input a function of
+    ///   the geometry alone.
+    /// * AFTER, because the realign can MOVE a section, which changes the very
+    ///   gaps the claims are measured from. This function must exit with the
+    ///   claims true of the geometry it is leaving, or the NEXT command's sweep
+    ///   would correct them - producing a difference against a snapshot recorded
+    ///   one command earlier.
+    ///
+    /// Both are cheap and idempotent (`O(shots + closures)`, and a no-op when
+    /// nothing changed), so running the sweep twice costs a scan and buys a
+    /// property. See `Project::remeasure_closure_alignment` for why a sweep that
+    /// runs on the inverse at all is still a restore rather than a re-derivation.
     pub(super) fn reconcile_geometry(&self) {
         let mut guard = match self.project.lock() {
             Ok(g) => g,
@@ -25,6 +50,7 @@ impl AppState {
         if project.cascade_deferred {
             return;
         }
+        project.remeasure_closure_alignment();
         let fixed = project.realign_merges();
         if fixed > 0 {
             tracing::warn!(
@@ -33,6 +59,7 @@ impl AppState {
                 "Re-aligned drifted station merges after an operation"
             );
         }
+        project.remeasure_closure_alignment();
     }
 
     /// Execute a command without pushing to undo stack (used for undo operations and batch)

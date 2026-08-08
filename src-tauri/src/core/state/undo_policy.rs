@@ -7,6 +7,7 @@
 //! answer has three inputs (is there a link, has its legacy NULL been initialized,
 //! what is the global default) and three chances to get the transition wrong.
 
+use crate::core::undo::MAX_PERSISTED_HISTORY_ROWS;
 use crate::models::{SpeleoLink, UndoMode, UndoPolicy};
 use crate::speleodb::{SpeleoDbError, SpeleoErrorDto};
 
@@ -122,6 +123,32 @@ impl AppState {
     pub(crate) fn sync_undo_depth_limit_for(&self, link: Option<&SpeleoLink>) {
         let policy = self.undo_policy_for(link);
         self.apply_undo_depth_limit(policy);
+    }
+
+    /// [#469] How many persisted history rows the load paths may read for a project
+    /// whose link is `link`, per stack.
+    ///
+    /// The mirror of [`Self::sync_undo_depth_limit_for`], answered BEFORE the rows are
+    /// read rather than after they are in memory. A count-window project reads its own
+    /// window, because that is exactly what survives the restore's `enforce_depth_limit`;
+    /// a Full-mode linked project has no count window, so it reads the derived ceiling
+    /// [`MAX_PERSISTED_HISTORY_ROWS`], past which the byte budget would evict anyway.
+    ///
+    /// The window comes off the undo stack rather than the config because it is the
+    /// stack's own `history_limit` that `use_count_limit` re-arms moments later; reading
+    /// the config here would let the two disagree if a reload landed between them.
+    /// Takes only the `undo_stack` lock, so it is safe wherever
+    /// `sync_undo_depth_limit_for` is.
+    pub(crate) fn history_load_row_cap(&self, link: Option<&SpeleoLink>) -> usize {
+        if self.undo_policy_for(link).unlimited_depth() {
+            return MAX_PERSISTED_HISTORY_ROWS;
+        }
+        let window = self
+            .undo_stack
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .history_limit();
+        window.min(MAX_PERSISTED_HISTORY_ROWS)
     }
 
     fn apply_undo_depth_limit(&self, policy: UndoPolicy) {
@@ -411,6 +438,103 @@ mod tests {
 
             assert_eq!(state.undo_mode_status(), UndoMode::Disabled);
         });
+    }
+
+    /// [#469] The load cap is the bound the restore is ABOUT to apply, resolved one step
+    /// earlier so the rows past it are never read at all.
+    #[test]
+    fn the_history_load_cap_matches_the_bound_the_restore_will_apply() {
+        with_isolated_config(|| {
+            let state = state();
+
+            // A Full-mode linked project has no count window - its bound is the byte
+            // budget - so it reads the ceiling derived from that budget.
+            assert_eq!(
+                state.history_load_row_cap(Some(&link_with(Some(UndoMode::Full)))),
+                MAX_PERSISTED_HISTORY_ROWS
+            );
+
+            // Everything else reads exactly the window `use_count_limit` re-arms.
+            state
+                .undo_stack
+                .lock()
+                .expect("undo stack lock")
+                .set_history_limit(7);
+            assert_eq!(state.history_load_row_cap(None), 7);
+            assert_eq!(
+                state.history_load_row_cap(Some(&link_with(Some(UndoMode::Disabled)))),
+                7
+            );
+
+            // ...and never more than the ceiling, whatever the config asks for.
+            state
+                .undo_stack
+                .lock()
+                .expect("undo stack lock")
+                .set_history_limit(usize::MAX);
+            assert_eq!(state.history_load_row_cap(None), MAX_PERSISTED_HISTORY_ROWS);
+        });
+    }
+
+    /// [#469] Both load paths read the persisted history through the CAPPED loader, and
+    /// resolve the cap before they read.
+    ///
+    /// Structural because the failure is invisible in behaviour: an uncapped read
+    /// produces the same restored stack as a capped one - the trim afterwards sees to
+    /// that - and differs only in how much of a hostile file it gunzipped into memory
+    /// first. `do_load_project_full` needs an `AppHandle`, so it has no unit-test entry
+    /// point of its own; this is what keeps the two paths from drifting.
+    #[test]
+    fn both_load_paths_read_the_history_under_a_cap() {
+        let src = include_str!("project_load.rs");
+        assert_eq!(
+            src.matches("load_undo_stack_with_timestamps_capped(")
+                .count(),
+            2,
+            "both load paths read the undo table through the capped loader"
+        );
+        assert_eq!(
+            src.matches("load_redo_stack_with_timestamps_capped(")
+                .count(),
+            2,
+            "both load paths read the redo table through the capped loader"
+        );
+        assert!(
+            !src.contains("load_undo_stack_with_timestamps()")
+                && !src.contains("load_redo_stack_with_timestamps()"),
+            "an unwindowed history read is exactly what #469 removed from this file"
+        );
+
+        for func in ["fn open_project", "pub fn do_load_project_full"] {
+            // Slice at the NEXT item in the `impl AppState` block rather than at the end
+            // of the file. Both are 4-space-indented methods, so the next `///`, `pub` or
+            // `fn` at that indent ends this one. Without the cut, `open_project`'s slice
+            // ran through `do_load_project_full` and would have passed on ITS cap and read
+            // even if `open_project` had lost both - the check has to be scoped to one
+            // function to mean anything.
+            let start = src
+                .find(func)
+                .unwrap_or_else(|| panic!("{func} is present"))
+                + func.len();
+            let rest = &src[start..];
+            let end = ["\n    /// ", "\n    pub ", "\n    pub(", "\n    fn "]
+                .iter()
+                .filter_map(|boundary| rest.find(boundary))
+                .min()
+                .unwrap_or(rest.len());
+            let body = &rest[..end];
+            let cap = body
+                .find("history_load_row_cap(")
+                .unwrap_or_else(|| panic!("{func} resolves a load cap"));
+            let read = body
+                .find("load_undo_stack_with_timestamps_capped(")
+                .unwrap_or_else(|| panic!("{func} reads the undo table"));
+            assert!(
+                cap < read,
+                "{func} must resolve the cap BEFORE the read - the whole point is that \
+                 the rows past it are never fetched"
+            );
+        }
     }
 
     #[test]

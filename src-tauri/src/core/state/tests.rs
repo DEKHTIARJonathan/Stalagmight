@@ -350,6 +350,169 @@ fn opening_a_full_mode_project_restores_history_deeper_than_the_count_window() {
     });
 }
 
+/// [#469] A count-window project opens the NEWEST window of a bloated undo table and
+/// reads nothing beyond it - and what it reads is a WORKING history.
+///
+/// Nothing in the schema bounds `undo_stack`, and a `.stalx` is a file the app opens
+/// rather than one it can trust: the loader used to `SELECT` and gunzip every row, and
+/// only the restore that followed applied the entry window. A long-lived (or crafted)
+/// file could therefore exhaust memory during open with the correct bound already armed
+/// - it was applied one step too late to matter. The bound has to be in the QUERY, which
+/// is what the row counts below pin.
+///
+/// The undo at the end is the other half: dropping the oldest rows must not corrupt the
+/// sequence bookkeeping. It cannot, because the loaded sequences are discarded and every
+/// save renumbers 0..n - which the final assertion checks rather than assumes.
+#[test]
+fn opening_a_count_window_project_reads_only_the_newest_window_of_a_bloated_table() {
+    // `open_project`/`save_project` record the path in the global config, and the entry
+    // window this test reasons about is read from it.
+    crate::test_helpers::with_isolated_config(|| {
+        let temp_dir = TempDir::new().unwrap();
+        let path = temp_dir.path().join("bloated_history.stalx");
+
+        let mut project = Project::new("Bloated".to_string(), None);
+        project.add_section(SectionData {
+            shots: vec![ShotData {
+                comment: Some("edit 399".to_string()),
+                ..test_shot_data(2.0)
+            }],
+            ..Default::default()
+        });
+
+        let mut db = Database::open(&path).unwrap();
+        db.save_project(&project).unwrap();
+        // Ids as the loader assigns them, so the persisted entries address the shot the
+        // reopened project actually has.
+        let saved = db.load_project().unwrap();
+        let section_id = saved.sections[0].id;
+        let shot_id = saved.sections[0].shots[0].id;
+
+        // Four times the 100-entry default window, so a load that read the whole table
+        // and trimmed afterwards is distinguishable from one that never read it.
+        const PERSISTED: usize = 400;
+        let now = chrono::Utc::now();
+        let rows: Vec<_> = (0..PERSISTED)
+            .map(|i| {
+                let entry = UndoEntry {
+                    command_bytes: None,
+                    command: Command::UpdateShot {
+                        section_id,
+                        shot_id,
+                        updates: ShotUpdates {
+                            comment: Some(Some(format!("edit {i}"))),
+                            ..Default::default()
+                        },
+                    },
+                    undo_data: UndoData::PreviousValues {
+                        section_id,
+                        shot_id: Some(shot_id),
+                        shot_uuid: None,
+                        values_json: serde_json::to_string(&ShotUpdates {
+                            comment: Some(Some(format!("comment {i}"))),
+                            ..Default::default()
+                        })
+                        .unwrap(),
+                        previous_offsets: HashMap::new(),
+                    },
+                    timestamp: Some(now + chrono::Duration::seconds(i as i64)),
+                };
+                UndoStack::serialize_entry_with_timestamp(&entry).unwrap()
+            })
+            .collect();
+        db.save_undo_stack_with_timestamps(rows.clone()).unwrap();
+        db.save_redo_stack_with_timestamps(rows).unwrap();
+        drop(db);
+
+        // The row that makes this test decisive rather than vacuous: the OLDEST entry in
+        // each table is given a blob that claims to be gzip and is not, so any read that
+        // reaches it fails - and a failed history load restores NOTHING. Without a
+        // windowed query the assertions below therefore see an empty stack, whatever the
+        // in-memory trim would have done afterwards.
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        for table in ["undo_stack", "redo_stack"] {
+            conn.execute(
+                &format!("UPDATE {table} SET command_json = X'1F8B0000FFFF' WHERE sequence = 0"),
+                [],
+            )
+            .unwrap();
+        }
+        drop(conn);
+        assert!(
+            Database::open_existing(&path)
+                .unwrap()
+                .load_undo_stack_with_timestamps()
+                .is_err(),
+            "the poison row must really poison a read that reaches it, or the window \
+             assertions below prove nothing"
+        );
+
+        let state = AppState::new().unwrap();
+        let window = state.undo_stack.lock().unwrap().history_limit();
+        assert!(
+            window < PERSISTED,
+            "the fixture must overflow the window it is testing: {window} vs {PERSISTED}"
+        );
+        assert!(state.open_project(path.clone()).success);
+
+        {
+            let stack = state.undo_stack.lock().unwrap();
+            assert_eq!(
+                stack.len(),
+                window,
+                "a count-window project keeps its window and no more"
+            );
+            assert_eq!(
+                stack.redo_len(),
+                window,
+                "the redo table is bounded the same way - a `.stalx` persists both"
+            );
+            assert!(
+                matches!(
+                    &stack.undo_entries().next().unwrap().command,
+                    Command::UpdateShot { updates, .. }
+                        if updates.comment == Some(Some("edit 399".to_string()))
+                ),
+                "the window has to be the NEWEST rows: the newest entry is the next undo"
+            );
+            assert!(
+                matches!(
+                    &stack.undo_entries().last().unwrap().command,
+                    Command::UpdateShot { updates, .. }
+                        if updates.comment == Some(Some("edit 300".to_string()))
+                ),
+                "...and it must be contiguous down to exactly one window's depth"
+            );
+        }
+
+        // A working history, not merely a short one.
+        assert!(state.undo().success);
+        assert_eq!(
+            state.get_project_state().unwrap().sections[0].shots[0]
+                .comment
+                .as_deref(),
+            Some("comment 399"),
+            "the newest restored entry must still undo to the state it recorded"
+        );
+
+        // And the rows dropped with the oldest history leave no hole behind: the save
+        // renumbers the table from 0, exactly as it does for a history that was never
+        // truncated.
+        assert!(state.save_project(Some(path.clone())).success);
+        let persisted = Database::open_existing(&path)
+            .unwrap()
+            .load_undo_stack_with_timestamps()
+            .unwrap();
+        assert!(!persisted.is_empty());
+        assert_eq!(
+            persisted.iter().map(|(seq, ..)| *seq).collect::<Vec<_>>(),
+            (0..persisted.len() as i64).collect::<Vec<_>>(),
+            "sequences are contiguous from 0 after a truncated load, so nothing that \
+             reads them can trip over the dropped rows"
+        );
+    });
+}
+
 /// Shot with every nullable field populated - the fields a replayed legacy
 /// (pre-v7) undo entry would silently clear under the v7 `double_option`
 /// null-means-clear semantics.
@@ -1381,6 +1544,113 @@ fn save_drops_orphan_section_offset() {
             .all(|sid| saved.get_section(*sid).is_some()),
         "orphan section_offsets must be dropped on save"
     );
+}
+
+/// [#469] A `.stalx` written before the dust gate widened can carry a
+/// `section_offsets` value that was REAL to the old 1e-12 gate and is dust to
+/// `Project::OFFSET_DUST_M` (1e-6). Opening drops the key and moves that section
+/// by the value it held - the deliberate on-disk consequence of widening the
+/// gate, pinned here rather than left to be discovered.
+///
+/// Three claims, because each is a separate way this could go wrong: the key is
+/// GONE after the open (`normalize_section_offsets` at the load boundary, see
+/// `Project::redrive_offsets_after_load`), the geometry moved by less than a
+/// micrometre rather than by anything a survey could notice, and a save/reopen
+/// CONVERGES - the row does not come back on the next round trip.
+#[test]
+fn opening_drops_a_legacy_sub_gate_section_offset() {
+    // 5e-7 m, half the gate: the old bound preserved it, the current writer
+    // cannot produce it (`Project::write_section_offset` removes the key
+    // instead), so only a legacy FILE can hold one.
+    const LEGACY_OFFSET: (f64, f64) = (5e-7, -5e-7);
+
+    crate::test_helpers::with_isolated_config(|| {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("legacy-dust.stalx");
+
+        let section_id = {
+            let mut project = Project::new("LegacyDust".to_string(), None);
+            let section_id = project
+                .add_section(SectionData {
+                    shots: vec![test_shot_data(10.0)],
+                    ..Default::default()
+                })
+                .id;
+            project.ensure_shot_uuids();
+            // Straight into the map: routing through the writer would normalize it
+            // away, which is the point - this state is unrepresentable in memory.
+            project.section_offsets.insert(section_id, LEGACY_OFFSET);
+
+            // The drop is `normalize_section_offsets`' doing. Asked directly, it
+            // claims exactly this one row.
+            let mut probe = project.clone();
+            assert_eq!(
+                probe.normalize_section_offsets(),
+                1,
+                "the sub-gate row is what the load-boundary normalize drops"
+            );
+
+            let mut db = Database::open(&path).unwrap();
+            db.save_project(&project).unwrap();
+            section_id
+        };
+
+        // Precondition: the value really is on disk. The save does not normalize -
+        // if it ever starts to, this test is measuring nothing.
+        assert_eq!(
+            Database::open_existing(&path)
+                .unwrap()
+                .load_project()
+                .unwrap()
+                .section_offsets
+                .get(&section_id)
+                .copied(),
+            Some(LEGACY_OFFSET),
+            "precondition: the legacy file carries the sub-gate offset"
+        );
+
+        let state = AppState::new().unwrap();
+        assert!(
+            state.open_project(path.clone()).success,
+            "open must succeed"
+        );
+        let opened = state.get_project_state().unwrap();
+        assert!(
+            !opened.section_offsets.contains_key(&section_id),
+            "the load boundary must drop a sub-gate offset: {:?}",
+            opened.section_offsets.get(&section_id)
+        );
+
+        // ...and the geometry it moved by is the value that went: under a
+        // micrometre, four decades under anything the app displays.
+        let station = StationRef::new(section_id, 0);
+        let moved = opened.compute_station_raw_coords(station).unwrap();
+        let (dx, dy) = (moved.x - LEGACY_OFFSET.0, moved.y - LEGACY_OFFSET.1);
+        assert!(
+            dx.abs() < Project::OFFSET_DUST_M && dy.abs() < Project::OFFSET_DUST_M,
+            "dropping the key moved station 0 by ({dx}, {dy}), which is not sub-gate"
+        );
+
+        // Convergence: saving what the open produced and reopening it leaves the
+        // key absent. A boundary that dropped and a writer that re-minted would
+        // make every round trip a fresh edit.
+        assert!(state.save_project(Some(path.clone())).success);
+        let reopened_state = AppState::new().unwrap();
+        assert!(reopened_state.open_project(path).success);
+        let reopened = reopened_state.get_project_state().unwrap();
+        assert!(
+            !reopened.section_offsets.contains_key(&section_id),
+            "a sub-gate offset must not resurrect across save/reopen: {:?}",
+            reopened.section_offsets.get(&section_id)
+        );
+        let again = reopened.compute_station_raw_coords(station).unwrap();
+        assert_eq!(
+            (again.x.to_bits(), again.y.to_bits()),
+            (moved.x.to_bits(), moved.y.to_bits()),
+            "the second round trip must not move the geometry again - bit-exact, \
+             because a converged round trip has nothing left to round off"
+        );
+    });
 }
 
 #[test]
@@ -4517,6 +4787,23 @@ fn test_legacy_project_seeds_validation_from_global_config() {
 /// Deleting a shot in one connected component must NEVER move a station in an
 /// unrelated component. The strongest "whole map jumps" sentinel: two sections,
 /// each its own zero datum, sharing no merge/closure.
+///
+/// The delete here is the first shot of A, which removes A's station 0 and with
+/// it the zero datum keyed `StationAnchor::SectionStart` - and that datum was the
+/// PRIMARY one. So this command also changes the georeference frame, and the
+/// oracle has to be stated in the frame-independent terms it always meant (#469,
+/// item 1): B does not move IN THE WORLD. Local (0, 0) means `zero_datums[0]`'s
+/// GPS, so when B's datum is promoted to first the whole survey is translated so
+/// that B's datum station lands on the origin, and B's real-world position - what
+/// the map draws and what the exports write - is unchanged precisely BECAUSE its
+/// local coordinates moved by that one vector.
+///
+/// The assertion is therefore "B translated by exactly the promoted datum's own
+/// former position, and by nothing else", which is strictly sharper than the
+/// byte-for-byte form it replaces: a spurious shift of any size still fails, and
+/// so does a translation of the wrong magnitude. Section A's own stations are not
+/// comparable across the delete (a shot went away), which is why the sentinel was
+/// always read off B.
 #[test]
 fn delete_shot_does_not_shift_independent_component() {
     let state = AppState::new().unwrap();
@@ -4588,10 +4875,35 @@ fn delete_shot_does_not_shift_independent_component() {
 
     let after = abs_coord_map(&state.get_project_state().unwrap());
 
-    // Section B (unrelated component) must be byte-for-byte unmoved.
+    // The delete took A's station 0, so A's datum went with it and B's was
+    // promoted to primary. B's datum station is the new local origin.
+    let promoted = StationRef::new(b, 0);
+    let promoted_now = after[&promoted];
+    assert!(
+        promoted_now.x.abs() < 1e-6 && promoted_now.y.abs() < 1e-6,
+        "the promoted datum's station must sit at the local origin, got {promoted_now:?}: local \
+         (0, 0) means zero_datums[0]'s GPS, so a promotion that leaves the survey where it was \
+         re-georeferences it by the whole inter-datum vector"
+    );
+
+    // Section B (unrelated component) is unmoved in the WORLD: every station
+    // translated by exactly the vector that put the promoted datum on the origin,
+    // and z (which section offsets do not carry) is untouched.
+    let (dx, dy) = (before[&promoted].x, before[&promoted].y);
+    assert!(
+        dx.abs() > 1000.0,
+        "setup: the two datums must sit kilometres apart, got ({dx}, {dy})"
+    );
     for idx in 0..=2 {
         let r = StationRef::new(b, idx);
-        assert_coords_close(after[&r], before[&r]);
+        assert_coords_close(
+            after[&r],
+            Coordinates {
+                x: before[&r].x - dx,
+                y: before[&r].y - dy,
+                z: before[&r].z,
+            },
+        );
     }
 }
 
@@ -12917,6 +13229,66 @@ fn test_delete_range_preview_surfaces_interior_split_comment() {
             .any(|sr| sr.station_index == 2),
         "the interior-station comment the split drops must be surfaced: {:?}",
         impact.removed_comments
+    );
+}
+
+/// [#469] The preview's `removed_comments` comes out SORTED, like the `removed_stations`
+/// list built beside it.
+///
+/// It is collected by iterating the `station_comments` HashMap, so before the sort the
+/// delete dialog listed the same comments in a different order on every run of the same
+/// preview - and nothing downstream re-sorts (`BulkDeleteDialog.tsx` renders the vector
+/// as given). Six commented stations make an accidentally-ascending hash order a
+/// 1-in-720 coincidence rather than a coin flip.
+#[test]
+fn test_delete_range_preview_sorts_the_removed_comments() {
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Comment Order".to_string(),
+        location: None,
+    });
+    let create = state.execute(Command::CreateSection {
+        name: Some("S".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#ff0000".to_string(),
+        direction: None,
+        shots: (0..8).map(|i| test_shot_data(2.0 + f64::from(i))).collect(),
+    });
+    let section_id = create.section_id.unwrap();
+    for idx in 1..=6u32 {
+        assert!(
+            state
+                .execute(Command::SetStationComment {
+                    station_ref: StationRef::new(section_id, idx),
+                    comment: Some(format!("note {idx}")),
+                })
+                .success
+        );
+    }
+
+    let (first, last) = {
+        let proj = state.get_project_state().unwrap();
+        let sec = proj.get_section(section_id).unwrap();
+        (sec.shots[1].id, sec.shots[5].id)
+    };
+    let proj = state.get_project_state().unwrap();
+    let impact = proj
+        .preview_delete_shot_range(section_id, first, last)
+        .unwrap();
+
+    let indices: Vec<u32> = impact
+        .removed_comments
+        .iter()
+        .map(|sr| sr.station_index)
+        .collect();
+    assert!(
+        indices.len() >= 5,
+        "the fixture must actually carry the comments it is sorting, got {indices:?}"
+    );
+    assert!(
+        indices.windows(2).all(|w| w[0] < w[1]),
+        "removed_comments must be in ascending station order, got {indices:?}"
     );
 }
 
@@ -23021,6 +23393,23 @@ fn finding_26_a_shot_edit_does_not_translate_a_group_whose_first_datum_was_remov
                 station_ref: StationRef::new(anchor, 0),
             })
             .success
+    );
+
+    // The promotion is no longer silent: local (0, 0) means `zero_datums[0]`'s
+    // GPS, so the removal translates the survey onto the new origin and a's datum
+    // station - the new `zero_datums[0]` - sits there (#469, item 1). Everything
+    // below is measured against that state.
+    let promoted = state
+        .get_project_state()
+        .unwrap()
+        .compute_station_raw_coords(StationRef::new(a, 0))
+        .unwrap();
+    assert!(
+        promoted.x.abs() < 1e-6 && promoted.y.abs() < 1e-6,
+        "the promoted datum's station must sit at the local origin after the removal, got \
+         ({}, {})",
+        promoted.x,
+        promoted.y
     );
 
     let before = state.get_project_state().unwrap().section_offsets.clone();

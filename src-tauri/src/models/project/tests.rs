@@ -1,5 +1,5 @@
 use super::*;
-use crate::models::ShotKind;
+use crate::models::{ClosureStrategy, ShotKind};
 
 fn shot(azimuth_in: f64, azimuth_out: f64, length: f64, depth_in: f64, depth_out: f64) -> ShotData {
     ShotData {
@@ -1973,6 +1973,188 @@ fn demoted_closure_is_not_re_promoted_by_orphan_conversion() {
     assert_eq!(project.demote_double_anchoring_merges(), 0);
     assert_eq!(project.loop_closures.len(), 1);
     assert_eq!(project.station_merges.len(), 1);
+}
+
+// ===========================================================================
+// #469 item 2: `is_aligned` is a MEASUREMENT
+// ===========================================================================
+
+#[test]
+fn a_closure_is_born_with_a_measured_claim() {
+    // The MODEL API, which the importers and the project merge call directly and
+    // no command epilogue follows. Two laps of a 10 m square, so stations 0, 4
+    // and 8 are all one physical point and station 2 is the far corner.
+    let mut project = Project::new("Square".to_string(), None);
+    let lap = [0.0, 90.0, 180.0, 270.0];
+    let s = project
+        .add_section(SectionData {
+            shots: lap
+                .iter()
+                .chain(lap.iter())
+                .map(|&azimuth| shot(azimuth, azimuth, 10.0, 0.0, 0.0))
+                .collect(),
+            ..Default::default()
+        })
+        .id;
+    project.ensure_shot_uuids();
+
+    let closure = |project: &mut Project, from: u32, to: u32, strategy| {
+        project
+            .create_loop_closure(StationRef::new(s, from), StationRef::new(s, to), strategy)
+            .expect("create_loop_closure failed")
+            .is_aligned
+    };
+
+    assert!(
+        closure(&mut project, 0, 4, ClosureStrategy::Move),
+        "the lap closes on itself, so the coincidence claim is TRUE"
+    );
+    assert!(
+        !closure(&mut project, 0, 2, ClosureStrategy::Move),
+        "the diagonal is 14 m of open loop - a claim the app measured the \
+         refutation of one line earlier must not be stamped"
+    );
+    assert!(
+        !closure(&mut project, 4, 8, ClosureStrategy::Batch),
+        "and a Batch closure RECORDS a misclosure: coincident or not, it is the \
+         soft edge the non-destructive solve relaxes"
+    );
+    assert_eq!(
+        project
+            .loop_closures
+            .iter()
+            .map(|lc| lc.is_aligned)
+            .collect::<Vec<_>>(),
+        vec![true, false, false],
+        "the recorded closures carry what was measured"
+    );
+}
+
+#[test]
+fn the_re_measure_never_re_promotes_what_repair_demoted() {
+    // Repair's demotion and the per-command re-measure both run over the same
+    // project, and the re-measure is the one that can set `is_aligned` back to
+    // TRUE. If it went on geometry alone, the two would fight: Repair softens the
+    // edge precisely so the two anchored halves stop being one rigid component,
+    // and the next geometry command would rigidify it again the moment anything
+    // pulled the endpoints together. The double-anchor term is what makes that
+    // impossible, and it is asked of the MERGE graph, so no closure flag can
+    // change the answer.
+    let (mut project, _a, b, c) = double_anchored_bridge_project();
+    // The pair already carries the one kind of closure the re-measure governs.
+    project.loop_closures.push(LoopClosure {
+        id: 7,
+        station_a: StationRef::new(b, 2).into(),
+        station_b: StationRef::new(c, 0).into(),
+        path_length: 123.0,
+        misclosure_distance: 0.0,
+        error_percentage: 0.0,
+        horizontal_misclosure: 0.0,
+        vertical_misclosure: 0.0,
+        strategy: ClosureStrategy::Move,
+        is_aligned: true,
+    });
+
+    assert_eq!(project.demote_double_anchoring_merges(), 1);
+    assert!(
+        !project.loop_closures[0].is_aligned,
+        "setup: Repair softens the closure over the demoted pair"
+    );
+
+    // What Repair itself does next, in order.
+    project.resolve_offsets();
+    assert_eq!(
+        project.remeasure_closure_alignment(),
+        0,
+        "the re-measure must not re-impose the constraint Repair removed"
+    );
+
+    // And now the part geometry alone would get wrong: slide C's rigid group so
+    // the two endpoints are exactly one point. The claim is now TRUE and still
+    // must not be made, because the edge would weld two independently
+    // GPS-anchored merge components into one - the #464 refusal.
+    project.adjust_rigid_group_offsets(c, 0.0, 40.0);
+    let (local, station_offsets) = (
+        project.section_local_coords(),
+        project.resolved_station_offsets(),
+    );
+    let gap = project
+        .endpoint_gap(
+            &StationRef::new(b, 2).into(),
+            &StationRef::new(c, 0).into(),
+            &local,
+            &station_offsets,
+        )
+        .expect("both endpoints resolve")
+        .2;
+    assert!(
+        gap < Project::MERGE_ALIGNMENT_INVARIANT_M,
+        "setup: the endpoints are coincident now (gap {gap})"
+    );
+    assert_eq!(
+        project.remeasure_closure_alignment(),
+        0,
+        "a coincident pair bridging two anchored groups is still not alignable"
+    );
+    assert!(!project.loop_closures[0].is_aligned);
+}
+
+#[test]
+fn the_re_measure_leaves_a_legacy_baked_alignment_alone() {
+    // The 0.5.0 migration promise (docs/closures.md): a project whose shots were
+    // baked by the removed destructive "Adjust Closures" action opens looking
+    // identical and is never rewritten again. Those closures carry `is_aligned`
+    // with a NON-`Move` strategy, and their shots were rewritten to make the
+    // claim true - so demoting them would silently change co-location, station
+    // depth averaging, move-tool rigidity and which shots are frozen on a file
+    // that is exactly what it says it is. The re-measure governs `Move` closures
+    // and nothing else.
+    //
+    // The far end of the pair here is 40 m out, i.e. the worst case: even a
+    // legacy claim the app can SEE is false is left as recorded, because the app
+    // cannot know what the bake did to the shots and `check_closure_alignment`
+    // is the honest surface for it.
+    let (mut project, _a, b, c) = double_anchored_bridge_project();
+    for (id, strategy, is_aligned) in [
+        (1_u64, ClosureStrategy::Batch, true),
+        (2, ClosureStrategy::LeastSquaresWeighted, true),
+        // A modern snap-to-merge closure alongside them, so the sweep genuinely
+        // runs (it short-circuits on a project holding no `Move` closure at all)
+        // and the exemption below is the thing being measured.
+        (3, ClosureStrategy::Move, false),
+    ] {
+        project.loop_closures.push(LoopClosure {
+            id,
+            station_a: StationRef::new(b, 2).into(),
+            station_b: StationRef::new(c, 1).into(),
+            path_length: 10.0,
+            misclosure_distance: 0.0,
+            error_percentage: 0.0,
+            horizontal_misclosure: 0.0,
+            vertical_misclosure: 0.0,
+            strategy,
+            is_aligned,
+        });
+    }
+    let legacy_claims = |project: &Project| {
+        project
+            .loop_closures
+            .iter()
+            .filter(|lc| lc.strategy != ClosureStrategy::Move)
+            .map(|lc| lc.is_aligned)
+            .collect::<Vec<_>>()
+    };
+
+    assert_eq!(project.remeasure_closure_alignment(), 0);
+    assert_eq!(legacy_claims(&project), vec![true, true]);
+    // Including through the LOAD, which is where the force-restamp used to live.
+    project.assign_closure_ids();
+    assert_eq!(legacy_claims(&project), vec![true, true]);
+    assert_eq!(
+        project.check_closure_alignment().len(),
+        2,
+        "a torn legacy claim is still REPORTED - detect-only is the contract"
+    );
 }
 
 #[test]
@@ -8874,9 +9056,16 @@ fn assign_closure_ids_fills_zeros_and_updates_counter() {
 
     // First closure (was 0) gets id=6 (next after max existing=5)
     assert_eq!(project.loop_closures[0].id, 6);
-    // Second closure keeps id=5, and Move strategy sets is_aligned
+    // Second closure keeps id=5. Its `Move` strategy used to FORCE `is_aligned`
+    // on every open; it is MEASURED now (#469 item 2), and this project has no
+    // sections at all - so neither endpoint resolves, there is no coincidence to
+    // measure, and the claim stays false. (An open that re-asserted the flag
+    // would put memory and disk permanently at odds about what the closure is.)
     assert_eq!(project.loop_closures[1].id, 5);
-    assert!(project.loop_closures[1].is_aligned);
+    assert!(
+        !project.loop_closures[1].is_aligned,
+        "assign_closure_ids must not re-assert an alignment claim it cannot measure"
+    );
     // Third closure (was 0) gets id=7
     assert_eq!(project.loop_closures[2].id, 7);
     // next_closure_id should be 8
@@ -8997,6 +9186,62 @@ fn compute_station_depth_with_merge_averages_both_sections() {
         "merged station depth should be 9.0, got {}",
         coords.z
     );
+}
+
+/// [#469] The single-station and whole-component coordinate APIs agree to the BIT on
+/// the depth of the same colocated group.
+///
+/// They average the same measurements in different orders - `compute_station_raw_coords`
+/// walks the BFS order out of `get_colocated_stations` (which starts at the station
+/// asked about), `compute_component_raw_coords` walks station-list order - and
+/// floating-point addition is not associative. The two depths per station below are
+/// chosen so that difference is REAL rather than theoretical: summed
+/// `[6.58, 6.35, 33.29, 40.99]` the average is 21.802500000000002, and summed
+/// `[33.29, 40.99, 6.58, 6.35]` it is 21.8025. Sorting the group inside
+/// `compute_station_depth` is what collapses the two.
+#[test]
+fn the_two_coordinate_apis_average_a_colocated_group_identically() {
+    let mut project = Project::new("AverageOrder".to_string(), None);
+    // Section A first, so it sorts first AND comes first in `self.sections` - the
+    // component API's order. The BFS order is whatever station is asked about, which
+    // below is B's.
+    let a = project
+        .add_section(SectionData {
+            shots: vec![
+                shot(0.0, 0.0, 1.0, 0.0, 33.29),
+                shot(0.0, 0.0, 1.0, 40.99, 0.0),
+            ],
+            ..Default::default()
+        })
+        .id;
+    let b = project
+        .add_section(SectionData {
+            shots: vec![
+                shot(90.0, 90.0, 1.0, 0.0, 6.58),
+                shot(90.0, 90.0, 1.0, 6.35, 0.0),
+            ],
+            ..Default::default()
+        })
+        .id;
+    project.station_merges.push(StationMerge {
+        station_a: StationRef::new(a, 1).into(),
+        station_b: StationRef::new(b, 1).into(),
+        merged_at: Utc::now(),
+    });
+
+    let component: HashSet<SectionId> = [a, b].into_iter().collect();
+    let by_component = project.compute_component_raw_coords(&component);
+    for station in [StationRef::new(a, 1), StationRef::new(b, 1)] {
+        let single = project.compute_station_raw_coords(station).unwrap();
+        let component_z = by_component.get(&station).unwrap().z;
+        assert_eq!(
+            single.z.to_bits(),
+            component_z.to_bits(),
+            "the same group must average to the same bits whichever API asks: \
+             {} vs {component_z} for {station:?}",
+            single.z
+        );
+    }
 }
 
 #[test]
@@ -10355,7 +10600,8 @@ fn an_adjustment_that_lands_on_dust_leaves_no_section_offset_key() {
         project.section_offsets.get(&a)
     );
 
-    // Real geometry is untouched: a millimetre is nine decades above the bound.
+    // Real geometry is untouched: a millimetre is three decades above the bound
+    // (#469 re-measured it up from a picometre - see `Project::OFFSET_DUST_M`).
     project.adjust_section_offset(a, 0.001, 0.0);
     assert_eq!(project.section_offsets.get(&a).copied(), Some((0.001, 0.0)));
 
@@ -10392,6 +10638,193 @@ fn an_adjustment_that_lands_on_dust_leaves_no_section_offset_key() {
         project.section_offsets.get(&a).copied(),
         Some((0.25, -0.5)),
         "a restore of a real displacement must still reproduce it verbatim"
+    );
+}
+
+/// The worst residue #469's re-measurement found, over every fuzz corpus, at
+/// coordinates PAST the largest a georeference can produce: `HORIZON=1` at 3
+/// seeds x 5000 moves with the generator's datums scattered worldwide, 1.8e7 m
+/// from the frame origin, five ULPs of that magnitude. The full table is on
+/// [`Project::OFFSET_DUST_M`].
+const WORST_MEASURED_RESIDUE_M: f64 = 4.66e-9;
+
+#[test]
+fn the_dust_gate_is_decades_clear_of_both_ends() {
+    // `Project::OFFSET_DUST_M` is squeezed from two sides and both are numbers,
+    // so both are asserted rather than described.
+    //
+    // From BELOW: it has to sit clear of the float residue two routes to the
+    // same geometry differ by, or a residue lands on either side of it and one
+    // route writes a `section_offsets` key the other does not (#469, the
+    // `CLOSURE_SHAPES=1` seed 18 failure). Two decades of clearance over the
+    // worst residue ever measured is the floor.
+    assert!(
+        WORST_MEASURED_RESIDUE_M * 100.0 <= Project::OFFSET_DUST_M,
+        "the dust gate ({:e}) must stay at least two decades above the worst measured residue \
+         ({WORST_MEASURED_RESIDUE_M:e}) - closing that gap is what makes two routes disagree \
+         about whether a key exists",
+        Project::OFFSET_DUST_M
+    );
+
+    // From ABOVE: it is a NORMALIZATION that silently discards what it gates, so
+    // it must stay far below the smallest displacement the app treats as real.
+    // `MERGE_ALIGNMENT_INVARIANT_M` is that floor - the gap at which a merge
+    // stops being aligned as far as the code is concerned - and four decades is
+    // the clearance the constant's own doc argues for.
+    assert!(
+        Project::OFFSET_DUST_M * 1e4 <= Project::MERGE_ALIGNMENT_INVARIANT_M,
+        "the dust gate ({:e}) must stay at least four decades below the alignment invariant \
+         ({:e}): everything under the gate is thrown away, so it may never approach a \
+         displacement the app would call real",
+        Project::OFFSET_DUST_M,
+        Project::MERGE_ALIGNMENT_INVARIANT_M
+    );
+
+    // Those two are the bottom of the chain
+    // OFFSET_DUST_M << MERGE_ALIGNMENT_INVARIANT_M <= MERGE_ALIGNMENT_TOLERANCE_M;
+    // its top is pinned by
+    // `the_self_heal_gate_is_never_looser_than_the_alignment_invariant`, which
+    // is where the reason for that half lives (#413 finding 20).
+}
+
+#[test]
+fn the_dust_gate_clears_the_residue_at_the_georeference_ceiling() {
+    // THE measurement `Project::OFFSET_DUST_M` is argued from, re-runnable: how
+    // far apart do two merged stations actually land once the survey sits at the
+    // largest coordinates a georeference can put it at?
+    //
+    // That gap is exactly what `cascade_bfs` compares against the gate, and #469
+    // item 1 is why it is not a metre-scale question any more: the frame
+    // renormalisation translates the whole survey onto whichever datum defines
+    // the frame, so the coordinates carry the INTER-DATUM distance. Built here
+    // the way the app reaches it - two datums, the first one removed, the second
+    // promoted - rather than by injecting a large offset.
+    let mut project = Project::new("Ceiling".to_string(), None);
+
+    // A chain of merged sections, deep enough that the cascade BFS sums a real
+    // chain of adjustments rather than one hop.
+    const CHAIN: usize = 12;
+    let chain: Vec<SectionId> = (0..CHAIN)
+        .map(|i| {
+            #[expect(
+                clippy::cast_precision_loss,
+                reason = "12 section indices, exact in f64"
+            )]
+            let turn = (i as f64) * 17.0;
+            project
+                .add_section(SectionData {
+                    shots: vec![
+                        shot(turn, turn + 3.0, 13.7, 0.0, 1.1),
+                        shot(turn + 41.0, turn + 44.0, 7.3, 1.1, 2.9),
+                        shot(turn + 122.0, turn + 125.0, 21.9, 2.9, 0.4),
+                    ],
+                    ..Default::default()
+                })
+                .id
+        })
+        .collect();
+    project.ensure_shot_uuids();
+    for pair in chain.windows(2) {
+        project
+            .merge_stations(StationRef::new(pair[0], 3), StationRef::new(pair[1], 0))
+            .expect("a fresh chain link is mergeable");
+    }
+
+    // The far component, carrying the datum that will define the frame after the
+    // first one goes. Nothing merges the two, so the translation below is the
+    // only thing that moves the chain.
+    let far = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 9.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    project.ensure_shot_uuids();
+
+    // Both fixes are valid GPS, so this is a survey the app must hold rather
+    // than a corrupt one - and the pair is chosen to MAXIMISE the projection.
+    // `gps_to_local`'s ENU turns an angular separation `theta` into a horizontal
+    // displacement of `R * sin(theta)`, so a quarter turn of longitude at the
+    // equator is the largest one any pair of fixes on this planet can produce:
+    // 6.378137e6 m east, `WGS84_A` exactly. A more distant fix projects to LESS,
+    // not more, because the separation goes into the discarded up component.
+    project
+        .set_zero_datum(
+            StationRef::new(chain[0], 0),
+            GpsCoordinates::new(0.0, -87.35, 0.0).expect("valid fix"),
+        )
+        .expect("first datum");
+    project
+        .set_zero_datum(
+            StationRef::new(far, 0),
+            GpsCoordinates::new(0.0, 2.65, 0.0).expect("valid fix"),
+        )
+        .expect("second datum");
+    // Dropping the frame-defining datum promotes the far one and renormalises
+    // onto it (#469 item 1), which is what puts the chain at ~1e7 m. The two
+    // calls are what every command that can drop a datum does around the drop
+    // (`AppState::renormalize_frame_if_changed`); the model has no epilogue of
+    // its own.
+    let frame_before = project.frame_datum_key();
+    assert!(project.remove_zero_datum(StationRef::new(chain[0], 0)));
+    assert!(
+        project.renormalize_frame_if_changed(frame_before),
+        "the promotion has to translate the survey - without it this test measures nothing"
+    );
+
+    // A zero-trust re-solve, the route the loader and Repair take.
+    project.resolve_offsets();
+
+    let local = project.section_local_coords();
+    let station_offsets = project.resolved_station_offsets();
+    let reached = chain
+        .iter()
+        .flat_map(|&id| {
+            let (ox, oy) = project.section_offset(id);
+            [ox.abs(), oy.abs()]
+        })
+        .fold(0.0_f64, f64::max);
+    assert!(
+        reached > 6.0e6,
+        "the fixture has to REACH the coordinates it claims to measure at - the georeference \
+         ceiling, ~6.38e6 m - and it only got to {reached:e} m, so a shrunken version of this \
+         test would measure nothing"
+    );
+
+    let worst_gap = project
+        .station_merges
+        .iter()
+        .filter_map(|merge| {
+            project.endpoint_gap(&merge.station_a, &merge.station_b, &local, &station_offsets)
+        })
+        .map(|(_, _, distance)| distance)
+        .fold(0.0_f64, f64::max);
+    assert!(
+        worst_gap * 100.0 < Project::OFFSET_DUST_M,
+        "at {reached:e} m from the frame origin the solved chain left a {worst_gap:e} m gap \
+         across a merge, which is within two decades of the dust gate ({:e}). That is the \
+         straddle #469 fixed coming back: re-measure the residue and re-argue the constant \
+         (its doc carries the table), do not widen an oracle",
+        Project::OFFSET_DUST_M
+    );
+
+    // And the consequence, which is the defect itself rather than the number
+    // behind it: a SECOND cascade over the same geometry, seeded from one
+    // section of the chain instead of from every datum-bearing section, must
+    // leave the map alone. Those two seed sets sum the same chains in different
+    // orders and are entitled to differ in the last bits - what they are not
+    // entitled to do is disagree about whether a section HAS a key, which is
+    // structural, survives into the `.stalx`, and is exactly what #469's
+    // `CLOSURE_SHAPES=1` seed 18 caught the picometre gate doing. Compared as a
+    // whole map, so a key appearing on a section the first route left alone
+    // fails even where the value is dust.
+    let before = project.section_offsets.clone();
+    project.cascade_connection_offsets(&[chain[CHAIN / 2]]);
+    assert_eq!(
+        before, project.section_offsets,
+        "a second cascade over one solved geometry, seeded differently, rewrote the offset map \
+         at {reached:e} m from the frame origin. Two routes to one geometry must agree on which \
+         sections have a key (#469)"
     );
 }
 

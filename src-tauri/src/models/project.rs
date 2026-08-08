@@ -6,9 +6,8 @@ use std::path::PathBuf;
 use ts_rs::TS;
 
 use super::{
-    ClosureStrategy, GpsBounds, LoopClosure, Section, SectionData, SectionId, SectionUpdates,
-    ShotData, ShotId, StationAnchor, StationKey, StationMerge, StationMergeWire, StationRef,
-    ZeroDatum,
+    GpsBounds, LoopClosure, Section, SectionData, SectionId, SectionUpdates, ShotData, ShotId,
+    StationAnchor, StationKey, StationMerge, StationMergeWire, StationRef, ZeroDatum,
 };
 use super::{LoopClosureWire, ZeroDatumWire};
 
@@ -645,8 +644,19 @@ impl Project {
         }
     }
 
-    /// Assign sequential IDs to any loop closures that have id=0 (legacy projects).
+    /// Assign sequential IDs to any loop closures that have id=0 (legacy projects),
+    /// and re-derive the alignment claims the file carries.
     /// Updates `next_closure_id` to be greater than all existing IDs.
+    ///
+    /// The alignment half used to FORCE `is_aligned = true` on every
+    /// [`ClosureStrategy::Move`] closure on every open, which is why fixing the
+    /// creation stamp alone would not have been enough: a closure honestly saved
+    /// as `0` came straight back as `true`, and memory and disk would have
+    /// disagreed from that open onward (the #413 finding-10 convergence shape).
+    /// It re-MEASURES now, through the one predicate
+    /// ([`Self::remeasure_closure_alignment`]), so the round trip converges - and
+    /// the load re-measures once more after `redrive_offsets_after_load`'s
+    /// zero-trust re-solve, which is the geometry the opened project actually has.
     pub fn assign_closure_ids(&mut self) {
         // First, ensure next_closure_id is at least max(existing) + 1
         let max_id = self.loop_closures.iter().map(|lc| lc.id).max().unwrap_or(0);
@@ -659,10 +669,8 @@ impl Project {
                 lc.id = self.next_closure_id;
                 self.next_closure_id += 1;
             }
-            if lc.strategy == ClosureStrategy::Move {
-                lc.is_aligned = true;
-            }
         }
+        self.remeasure_closure_alignment();
     }
 
     /// Mark the project as modified
@@ -1137,27 +1145,102 @@ impl Project {
     /// invariant on [`Self::write_section_offset`], which no `section_offsets`
     /// entry in memory or on disk may violate.
     ///
-    /// One constant for the three places that decide it (#413 finding 2's dust
+    /// One constant for the six places that decide it (#413 finding 2's dust
     /// half): [`Self::write_section_offset`], the offset solver's
-    /// [`Self::cascade_bfs`] correction gate, and the merge-BFS gates in
-    /// `reconcile_after_edit`. They used to disagree - the merge BFS declined
-    /// below 1e-12 while `cascade_bfs` "corrected" a femtometre, CREATING a
-    /// `section_offsets` key for a section that is not displaced - and the
-    /// difference between a key and no key is structural, not numeric: it
-    /// survives into the `.stalx`, and two routes to the same geometry stopped
-    /// comparing equal.
+    /// [`Self::cascade_bfs`] correction gate, the two merge-BFS gates in
+    /// `reconcile_after_edit`, [`Self::settle_minted_merges`], and
+    /// [`Self::renormalize_frame`]'s idempotence early-return. They used to
+    /// disagree - the merge BFS declined below 1e-12 while `cascade_bfs`
+    /// "corrected" a femtometre, CREATING a `section_offsets` key for a section
+    /// that is not displaced - and the difference between a key and no key is
+    /// structural, not numeric: it survives into the `.stalx`, and two routes to
+    /// the same geometry stopped comparing equal.
     ///
-    /// 1e-12 m is a picometre. It is where it is because of what it has to
-    /// swallow and what it must not: an adjust-and-adjust-back is not the
-    /// identity in IEEE (`(c + d) - d != c`), and the residue measured over
-    /// this app's fuzz corpus tops out at 1.51e-14 m (a hundredth of this),
-    /// while the smallest quantity any consumer can see is the nanometre the
-    /// snapshot differ already calls equal - a thousand times LARGER. So this
-    /// sits two decades above the noise it removes and three below the
-    /// smallest difference anything downstream can distinguish. It is a
-    /// NORMALIZATION applied when a value is written, never a tolerance on a
-    /// comparison: no oracle may be widened to this or to anything else.
-    pub const OFFSET_DUST_M: f64 = 1e-12;
+    /// # Why the bound is where it is (#469, re-measured)
+    ///
+    /// The thing being gated is ABSOLUTE and the thing it swallows is RELATIVE,
+    /// and that is the whole difficulty. An adjust-and-adjust-back is not the
+    /// identity in IEEE (`(c + d) - d != c`), and the residue two routes to the
+    /// same geometry differ by is a few ULPs OF THE COORDINATES BEING SUMMED -
+    /// so it grows with how far the survey sits from its georeference origin,
+    /// which is not a quantity any single write can see. The bound therefore has
+    /// to clear the residue at the largest coordinates the app can legitimately
+    /// hold, not at the ones a typical project happens to use.
+    ///
+    /// That ceiling is knowable. [`crate::models::GpsCoordinates::validate`]
+    /// pins latitude to `[-90, 90]` and longitude to `[-180, 180]`, and
+    /// `gps_to_local`'s ENU projection turns an angular separation `theta` into
+    /// a horizontal displacement of `R * sin(theta)`, maximal at a quarter turn:
+    /// however hostile or mistaken a GPS fix is, one datum can put the frame
+    /// origin at most ~6.38e6 m (`WGS84_A`) away, measured by
+    /// `the_dust_gate_clears_the_residue_at_the_georeference_ceiling`.
+    /// Coordinates go past that only by STACKING - offsets on top of a
+    /// georeference on top of another - which is what the horizon corpus below
+    /// reaches. #469 item 1 (the frame renormalisation) is what put ordinary
+    /// projects anywhere near any of it: the survey is translated onto whichever
+    /// datum defines the frame, so coordinates carry the INTER-DATUM distance
+    /// rather than the cave's own extent.
+    ///
+    /// Measured on this branch, with the gate sites instrumented and the whole
+    /// distribution of `max(|dx|, |dy|)` recorded per site:
+    ///
+    /// | corpus | coordinates reached | worst residue |
+    /// |---|---|---|
+    /// | `CLOSURE_SHAPES=1` 40x150, real GPS spread (~46 km) | 7.9e4 m | 1.46e-11 m |
+    /// | `COMBINED=1` 40x300, real GPS spread | 7.9e4 m | 1.96e-11 m |
+    /// | `CLOSURE_SHAPES=1` 40x150, datums scattered worldwide | 5.7e6 m | 9.31e-10 m |
+    /// | `COMBINED=1` 40x300, datums scattered worldwide | 4.7e6 m | 9.31e-10 m |
+    /// | `HORIZON=1` 3x5000, datums scattered worldwide | 1.8e7 m | 4.66e-9 m |
+    ///
+    /// Every one of those is one to five ULPs of the coordinate magnitude
+    /// (1.46e-11 is exactly 2^-36, one ULP at 7.9e4 m; 4.66e-9 is five ULPs at
+    /// 4.2e6 m), which is the shape the argument above predicts. The worst case
+    /// the app can produce is therefore ~5e-9 m, and it was measured PAST the
+    /// georeference ceiling (the horizon run reached 1.8e7 m because section
+    /// offsets stack on top of the inter-datum distance).
+    ///
+    /// 1e-6 m is a micrometre: two decades and a bit above that worst case, four
+    /// decades above the residue a real-world georeference produces, and four
+    /// decades below [`Self::MERGE_ALIGNMENT_INVARIANT_M`] - the ordering the
+    /// whole chain depends on and `the_dust_gate_is_decades_clear_of_both_ends`
+    /// enforces. Nothing physical lives in the gap: survey instruments read
+    /// centimetres, and this app reports and asserts in centimetres.
+    ///
+    /// One ordering does NOT hold, and it is the one worth writing down: the fuzz
+    /// comparison oracle's absolute tolerance is 1e-9 m (`TOLERANCE_ABS`,
+    /// `core/state/fuzz_undo_tests.rs`), three decades BELOW this gate, so a
+    /// difference anywhere in `(0, OFFSET_DUST_M)` is one the oracle WOULD report.
+    /// It never has to, because that band is unreachable rather than merely
+    /// unlikely: [`Self::write_section_offset`] is the single writer and it removes
+    /// the key instead of writing a value inside the band, and
+    /// [`Self::normalize_section_offsets`] drops any a legacy file carried, so no
+    /// state the fuzzer can reach holds a `section_offsets` value under the gate at
+    /// all. Two compared states can therefore only disagree inside the band via the
+    /// STRADDLE below - a TRUE offset landing within one float residue (~5e-9 m,
+    /// the worst measured above) of the gate boundary itself, so one route writes
+    /// just over it and the other normalizes just under. That difference is
+    /// micrometre-scale and the oracle sees it, which is the intended outcome: the
+    /// answer is to re-measure this constant, never to widen that tolerance.
+    ///
+    /// # The failure this replaces, and the one to watch for
+    ///
+    /// The old 1e-12 was chosen against a corpus measurement of 1.51e-14 taken
+    /// when coordinates were metre-scale (#413 finding 2). Item 1's
+    /// renormalisation moved them four decades, the residue moved with them, and
+    /// `CLOSURE_SHAPES=1` seed 18 then found the consequence: two cascades over
+    /// the same geometry, seeded differently, landed on either side of the gate,
+    /// so one wrote a picometre `section_offsets` key and the other wrote none.
+    /// A key is structural, so the two states stopped comparing equal.
+    ///
+    /// That is the failure mode to watch for, and it is a STRADDLE rather than a
+    /// magnitude: it happens when the residue distribution reaches the gate, not
+    /// when it is large. So the bound stays a deterministic pure function of the
+    /// value written - never a scale-aware or context-dependent threshold, which
+    /// would let two routes disagree BY DESIGN - and if a residue ever
+    /// approaches 1e-6 m the answer is to re-measure and re-argue this constant
+    /// with the numbers above, not to widen an oracle. It is a NORMALIZATION
+    /// applied when a value is written, never a tolerance on a comparison.
+    pub const OFFSET_DUST_M: f64 = 1e-6;
 
     /// Per-section cumulative LOCAL `(x, y)` for every station index
     /// (`0..=shots.len()`), before section/station offsets are applied. Built

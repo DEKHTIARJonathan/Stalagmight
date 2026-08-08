@@ -681,12 +681,18 @@ fn undo_of_create_shot_in_an_anchored_loop_succeeds() {
 /// both refusals intact.
 ///
 /// Both are exercised, because bug 6's write-up quoted only one and the fuzzer
-/// hits the other more often. The strategy is what separates them: a
-/// `ClosureStrategy::Move` closure is created `is_aligned`
-/// (`models/project/mutations.rs`), which rigidifies the loop, so both endpoints
-/// of a shot on it reach the datum and the shot is FROZEN; the default `Batch`
-/// closure is not aligned, so the shot is not frozen and the shift-blocked
-/// loop/datum pair behind the frozen check is what refuses.
+/// hits the other more often. ALIGNMENT is what separates them: an aligned
+/// closure rigidifies the loop, so both endpoints of a shot on it reach the
+/// datum and the shot is FROZEN; an unaligned one leaves the shot movable, and
+/// the shift-blocked loop/datum pair behind the frozen check is what refuses.
+///
+/// The `Move` row snaps `(b, 1)` onto the datum station first, because
+/// `is_aligned` is a MEASUREMENT now (#469 item 2) rather than a property of the
+/// strategy alone: `two_merged_sections` leaves those two stations 11 m apart,
+/// and a closure across that gap is not a coincidence claim anybody would
+/// believe. Snapping is also what the real workflow does - the strategy is
+/// called `Move` because the frontend sends it only behind the move commands
+/// that made the two stations one point.
 #[test]
 fn the_delete_guards_still_refuse_a_user_delete() {
     for (strategy, expected) in [
@@ -698,17 +704,11 @@ fn the_delete_guards_still_refuse_a_user_delete() {
     ] {
         let state = state_with_project();
         let (a, b) = two_merged_sections(&state);
-        let closed = state.execute(Command::CreateLoopClosure {
-            station_a: StationRef::new(a, 0),
-            station_b: StationRef::new(b, 1),
-            closure_strategy: strategy,
-        });
-        assert!(
-            closed.success,
-            "setup ({strategy:?}): loop-closing closure failed: {:?}",
-            closed.error
-        );
 
+        // The insert comes FIRST here, before the loop is closed. It lengthens
+        // the loop by 3 m, which a closure across it cannot absorb - so closing
+        // afterwards is the only order in which the `Move` row's premise (an
+        // aligned, i.e. genuinely coincident, closure) survives to the delete.
         let first_shot_of_a = shot_ids(&state, a)[0];
         let created = state.execute(Command::CreateShot {
             section_id: a,
@@ -722,6 +722,43 @@ fn the_delete_guards_still_refuse_a_user_delete() {
             created.error
         );
         let inserted = shot_ids(&state, a)[1];
+
+        if strategy == ClosureStrategy::Move {
+            // Snap the far end onto the datum station, measured off the geometry
+            // as it stands - which is what the frontend's snap-to-merge does
+            // before it sends this strategy.
+            let (from, to) = station_raw_xy(&state, (b, 1), (a, 0));
+            let snapped = state.execute(Command::MoveStation {
+                station_ref: StationRef::new(b, 1),
+                offset: Coordinates {
+                    x: to.0 - from.0,
+                    y: to.1 - from.1,
+                    z: 0.0,
+                },
+            });
+            assert!(
+                snapped.success,
+                "setup ({strategy:?}): snap-to-merge move failed: {:?}",
+                snapped.error
+            );
+        }
+        let closed = state.execute(Command::CreateLoopClosure {
+            station_a: StationRef::new(a, 0),
+            station_b: StationRef::new(b, 1),
+            closure_strategy: strategy,
+        });
+        assert!(
+            closed.success,
+            "setup ({strategy:?}): loop-closing closure failed: {:?}",
+            closed.error
+        );
+        assert_eq!(
+            state
+                .get_project_state()
+                .and_then(|project| project.loop_closures.first().map(|c| c.is_aligned)),
+            Some(strategy == ClosureStrategy::Move),
+            "setup ({strategy:?}): the row's premise is the closure's alignment"
+        );
 
         let deleted = state.execute(Command::DeleteShot {
             section_id: a,
@@ -1548,6 +1585,23 @@ fn datum_sections(state: &AppState) -> Vec<SectionId> {
 /// through `resolved_station_offsets()`. The app's two alignment measures
 /// disagree by construction (issue #413 finding 14), so a test about the
 /// invariant the app ASSERTS has to use the assert's own measure.
+/// The raw `(x, y)` of two stations, in one project read - for a caller that
+/// needs the VECTOR between them (a snap-to-merge move) rather than the distance.
+fn station_raw_xy(
+    state: &AppState,
+    a: (SectionId, u32),
+    b: (SectionId, u32),
+) -> ((f64, f64), (f64, f64)) {
+    let project = state.get_project_state().expect("no project open");
+    let raw = |at: (SectionId, u32)| {
+        let coords = project
+            .compute_station_raw_coords(StationRef::new(at.0, at.1))
+            .expect("station has no raw coordinates");
+        (coords.x, coords.y)
+    };
+    (raw(a), raw(b))
+}
+
 fn raw_station_gap(state: &AppState, a: (SectionId, u32), b: (SectionId, u32)) -> f64 {
     let project = state.get_project_state().expect("no project open");
     let left = project
@@ -1770,8 +1824,9 @@ fn adjusted_bits(state: &AppState) -> Vec<(String, [u64; 3])> {
 /// cannot be compared against a recorded one without a tolerance, and a
 /// tolerance is exactly what hides a real regression.
 ///
-/// The magnitude here is small (femtometres on this five-shot loop) because the
-/// system is tiny and well conditioned. It is NOT bounded by anything: the
+/// The magnitude here is small - the last bits of this five-shot loop's
+/// coordinates, reported by the failure rather than promised in prose - because
+/// the system is tiny and well conditioned. It is NOT bounded by anything: the
 /// amplification is the condition number of the network, and the fuzzer's own
 /// adjusted-geometry oracle recorded a station 2.2 km out moving 28 microns
 /// between two solves of a state whose stored project roundtripped byte for
@@ -2312,6 +2367,16 @@ fn removing_the_primary_zero_datum_re_anchors_the_datums_it_leaves_behind() {
     let settled_anchor = raw_station_xy(&state, datum_station);
     let settled = section_offset(&state, anchored).expect("the anchored section lost its offset");
 
+    // The removal promoted this datum to first, and local (0, 0) means
+    // `zero_datums[0]`'s GPS - so the survey is translated onto the new origin
+    // rather than left contradicting it (#469, item 1). Asserted here because it
+    // is the state everything below is measured against.
+    assert!(
+        settled_anchor.0.abs() <= 1e-9 && settled_anchor.1.abs() <= 1e-9,
+        "the promoted datum's station must sit at the local origin after the removal, got \
+         {settled_anchor:?}: leaving it kilometres out re-georeferences the whole survey"
+    );
+
     // An edit that has nothing to do with the datum, several moves later: 2 m of
     // extra length on the shot UPSTREAM of the datum station.
     let target = shot_ids(&state, anchored)[0];
@@ -2394,6 +2459,15 @@ fn undoing_the_edit_that_re_anchored_a_component_puts_it_back() {
             })
             .success,
         "RemoveZeroDatum failed"
+    );
+
+    // Same promotion as the forward test: the removal translated the survey so the
+    // surviving datum's station is the local origin (#469, item 1).
+    let promoted = raw_station_xy(&state, StationRef::new(anchored, 1));
+    assert!(
+        promoted.0.abs() <= 1e-9 && promoted.1.abs() <= 1e-9,
+        "the promoted datum's station must sit at the local origin after the removal, got \
+         {promoted:?}"
     );
 
     let before = section_offset(&state, anchored);
@@ -2509,6 +2583,928 @@ fn deleting_the_primary_datums_station_does_not_silently_move_the_origin() {
         "the anchored section slid {moved:.3} m (from {settled:?} to {after:?}) for a 2 m \
          lengthening of the shot upstream of its datum station; with the anchor held, the edit's \
          own magnitude is the only motion allowed"
+    );
+}
+
+// ===========================================================================
+// #469 item 1 (FIXED): promoting a different zero datum to first re-defined the
+// georeference frame and moved nothing, so the whole survey slid on the map
+// ===========================================================================
+
+/// Every station of every section, keyed by ref. A section with N shots has
+/// N + 1 stations.
+fn all_station_xy(state: &AppState) -> Vec<(StationRef, (f64, f64))> {
+    let project = state.get_project_state().expect("no project open");
+    let mut out = Vec::new();
+    for section in &project.sections {
+        for index in 0..=section.shots.len() {
+            let station = StationRef::new(section.id, index as u32);
+            let coords = project
+                .compute_station_raw_coords(station)
+                .expect("station has no raw coordinates");
+            out.push((station, (coords.x, coords.y)));
+        }
+    }
+    out
+}
+
+/// The whole `section_offsets` map.
+fn all_section_offsets(state: &AppState) -> std::collections::HashMap<SectionId, (f64, f64)> {
+    state
+        .get_project_state()
+        .expect("no project open")
+        .section_offsets
+        .clone()
+}
+
+/// The (latitude, longitude) of the datum that currently defines the frame.
+/// `GpsCoordinates` is not `PartialEq`, so the pair is the comparable form.
+fn frame_gps(state: &AppState) -> (f64, f64) {
+    let project = state.get_project_state().expect("no project open");
+    let gps = project
+        .zero_datums
+        .iter()
+        .find(|zd| project.resolve_key(&zd.station_ref).is_some())
+        .expect("no resolvable zero datum")
+        .gps;
+    (gps.latitude, gps.longitude)
+}
+
+/// THE property. Local `(0, 0)` means `zero_datums[0]`'s GPS, so when the first
+/// datum goes away and the next is promoted, the survey has to be TRANSLATED onto
+/// the new origin - otherwise every station's real-world position changes by the
+/// full inter-datum vector while no command asked for anything of the kind.
+///
+/// The oracle is real-world position, expressed in one fixed ENU frame (the frame
+/// the OLD datum defined, which is where the survey started): before the removal a
+/// station's world position is its local xy; after it, it is
+/// `gps_to_local(new_origin_gps, old_origin_gps)` plus its local xy. Both use the
+/// app's own conversion, the one `MapCanvas` and the data table's GPS column use.
+///
+/// The third section is free-floating: no datum, no merge, no closure. It must
+/// translate with everything else - its local coordinates are read against the
+/// same origin, so leaving it behind would move it RELATIVE to the anchored
+/// survey, which is the one thing a georeference change must not do.
+#[test]
+fn promoting_a_zero_datum_keeps_every_station_where_it_is_in_the_world() {
+    let _config = isolated_config();
+    let state = state_with_project();
+    let origin = create_section(&state, "Origin", vec![shot(10.0, 3.0), shot(20.0, 4.0)]);
+    let anchored = create_section(&state, "Anchored", vec![shot(70.0, 7.0), shot(100.0, 8.0)]);
+    // Free-floating: no datum, no merge, no closure. `all_station_xy` sweeps it
+    // like every other section, which is what puts it under the oracle below.
+    let _floater = create_section(&state, "Floater", vec![shot(300.0, 12.0)]);
+
+    let first_gps = GpsCoordinates::new(20.4, -87.3, 0.0).unwrap();
+    // About 400 m away: far enough that a missed translation is unmissable, close
+    // enough that the two ENU tangent frames agree to well under a centimetre.
+    let second_gps = GpsCoordinates::new(20.4027, -87.2973, 0.0).unwrap();
+
+    for (station, gps) in [
+        (StationRef::new(origin, 0), first_gps),
+        (StationRef::new(anchored, 1), second_gps),
+    ] {
+        let set = state.execute(Command::SetZeroDatum {
+            station_ref: station,
+            coordinates: gps,
+        });
+        assert!(set.success, "SetZeroDatum failed: {:?}", set.error);
+    }
+
+    let before = all_station_xy(&state);
+    let separation = raw_station_xy(&state, StationRef::new(anchored, 1));
+    assert!(
+        separation.0.hypot(separation.1) > 100.0,
+        "setup: the second datum must sit well away from the first, got {separation:?}"
+    );
+    assert_eq!(
+        frame_gps(&state),
+        (first_gps.latitude, first_gps.longitude),
+        "setup: the frame is the first datum"
+    );
+
+    let removed = state.execute(Command::RemoveZeroDatum {
+        station_ref: StationRef::new(origin, 0),
+    });
+    assert!(
+        removed.success,
+        "RemoveZeroDatum failed: {:?}",
+        removed.error
+    );
+
+    // The promoted datum's station IS the new local origin.
+    let promoted = raw_station_xy(&state, StationRef::new(anchored, 1));
+    assert!(
+        promoted.0.abs() <= 1e-9 && promoted.1.abs() <= 1e-9,
+        "the promoted datum's station must sit at local (0, 0), got {promoted:?}"
+    );
+    assert_eq!(
+        frame_gps(&state),
+        (second_gps.latitude, second_gps.longitude),
+        "setup: the second datum must have been promoted"
+    );
+
+    // Nobody moved in the world.
+    let shift = crate::models::gps_to_local(&second_gps, &first_gps);
+    let after: std::collections::HashMap<StationRef, (f64, f64)> =
+        all_station_xy(&state).into_iter().collect();
+    for (station, world_before) in before {
+        assert!(
+            after.contains_key(&station),
+            "station {station:?} vanished when the primary zero datum was removed"
+        );
+        let local_after = after[&station];
+        let world_after = (shift.0 + local_after.0, shift.1 + local_after.1);
+        let moved = (world_after.0 - world_before.0).hypot(world_after.1 - world_before.1);
+        assert!(
+            moved <= 1e-2,
+            "station {station:?} moved {moved:.4} m in the WORLD when the primary zero datum was \
+             removed (from {world_before:?} to {world_after:?}, both in the ENU frame of the \
+             datum that was removed): the frame changed, so the survey has to be translated onto \
+             the new origin rather than re-read against it"
+        );
+    }
+}
+
+/// The undo half. `RemoveZeroDatum` records a `ProjectSnapshotPair`, which
+/// restores verbatim - so the translation is already exactly invertible, and this
+/// pins it rather than fixing it. The oracle is the WHOLE `section_offsets` map,
+/// key presence included: the renormalisation drops the promoted datum's own key
+/// (it lands on the origin) and creates keys for sections that had none, so an
+/// inverse that restored values but not presence would fail here.
+#[test]
+fn undoing_the_primary_datum_removal_restores_every_section_offset() {
+    let _config = isolated_config();
+    let state = state_with_project();
+    let origin = create_section(&state, "Origin", vec![shot(10.0, 3.0), shot(20.0, 4.0)]);
+    let anchored = create_section(&state, "Anchored", vec![shot(70.0, 7.0), shot(100.0, 8.0)]);
+    let _floater = create_section(&state, "Floater", vec![shot(300.0, 12.0)]);
+
+    for (station, gps) in [
+        (
+            StationRef::new(origin, 0),
+            GpsCoordinates::new(20.4, -87.3, 0.0).unwrap(),
+        ),
+        (
+            StationRef::new(anchored, 1),
+            GpsCoordinates::new(20.4027, -87.2973, 0.0).unwrap(),
+        ),
+    ] {
+        assert!(
+            state
+                .execute(Command::SetZeroDatum {
+                    station_ref: station,
+                    coordinates: gps,
+                })
+                .success,
+            "SetZeroDatum failed"
+        );
+    }
+
+    let before = all_section_offsets(&state);
+    assert!(
+        state
+            .execute(Command::RemoveZeroDatum {
+                station_ref: StationRef::new(origin, 0),
+            })
+            .success,
+        "RemoveZeroDatum failed"
+    );
+    let renormalised = all_section_offsets(&state);
+    assert_ne!(
+        renormalised, before,
+        "setup: the removal must have translated the survey, or this proves nothing"
+    );
+
+    assert!(state.undo().success, "undo of RemoveZeroDatum failed");
+    assert_eq!(
+        all_section_offsets(&state),
+        before,
+        "undoing the removal did not put the section offsets back: the renormalisation moved \
+         every section, so the inverse has to restore every one of them - values AND key presence"
+    );
+
+    assert!(state.redo().success, "redo of RemoveZeroDatum failed");
+    assert_eq!(
+        all_section_offsets(&state),
+        renormalised,
+        "redo has to land on the renormalised state the forward command produced"
+    );
+}
+
+/// `SetZeroDatum`'s `UndoData::ZeroDatumInfo` now captures EVERY section's offset,
+/// not the datum's merge group.
+///
+/// Undoing the add of the first datum REMOVES it, which is an inverse that
+/// performs a frame change - and the frame is the one thing whose blast radius is
+/// not bounded by any connectivity. The merge-group capture was exact only as long
+/// as nothing outside that group could move; this pins the width directly, because
+/// a behavioural test cannot distinguish the two captures on a project where
+/// nothing outside the group happens to move.
+#[test]
+fn the_zero_datum_undo_capture_covers_every_section() {
+    let _config = isolated_config();
+    let state = state_with_project();
+    let anchored = create_section(&state, "Anchored", vec![shot(10.0, 3.0), shot(20.0, 4.0)]);
+    let _one = create_section(&state, "One", vec![shot(70.0, 7.0)]);
+    let _two = create_section(&state, "Two", vec![shot(300.0, 12.0)]);
+
+    assert!(
+        state
+            .execute(Command::SetZeroDatum {
+                station_ref: StationRef::new(anchored, 0),
+                coordinates: GpsCoordinates::new(20.4, -87.3, 0.0).unwrap(),
+            })
+            .success,
+        "SetZeroDatum failed"
+    );
+
+    let sections = state
+        .get_project_state()
+        .expect("no project open")
+        .sections
+        .len();
+
+    let stack = state.undo_stack.lock().unwrap();
+    let recorded = stack.peek_undo_data();
+    assert_eq!(
+        recorded.map(crate::core::UndoData::variant_name),
+        Some("ZeroDatumInfo"),
+        "SetZeroDatum must record ZeroDatumInfo"
+    );
+    let Some(crate::core::UndoData::ZeroDatumInfo {
+        previous_offsets, ..
+    }) = recorded
+    else {
+        // Unreachable: the assertion above already named the variant.
+        return;
+    };
+    assert_eq!(
+        previous_offsets.len(),
+        sections,
+        "the capture covers {} of {sections} sections: the datum's merge group is not the set an \
+         inverse that changes the frame has to hand back",
+        previous_offsets.len()
+    );
+}
+
+/// The behavioural half: adding the survey's first georeference and undoing it
+/// puts every section offset back, presence included.
+///
+/// This one passes under EITHER capture width today - no reachable `SetZeroDatum`
+/// currently moves an offset outside the datum's merge group, which is why the
+/// width is pinned directly above rather than only through behaviour. It is the
+/// contract the widening exists to keep true as the add's scope changes.
+#[test]
+fn adding_the_first_zero_datum_and_undoing_it_restores_every_section_offset() {
+    let _config = isolated_config();
+    let state = state_with_project();
+    let anchored = create_section(&state, "Anchored", vec![shot(10.0, 3.0), shot(20.0, 4.0)]);
+    let partner = create_section(&state, "Partner", vec![shot(70.0, 7.0), shot(100.0, 8.0)]);
+    let _floater = create_section(&state, "Floater", vec![shot(300.0, 12.0)]);
+
+    // A merge so the add has a group wider than one section to move.
+    assert!(
+        state
+            .execute(Command::MergeStations {
+                station_a: StationRef::new(anchored, 2),
+                station_b: StationRef::new(partner, 0),
+            })
+            .success,
+        "MergeStations failed"
+    );
+    // Displace the group so the add has something to undo.
+    assert!(
+        state
+            .execute(Command::MoveSection {
+                section_id: anchored,
+                offset: Coordinates {
+                    x: 13.0,
+                    y: -7.0,
+                    z: 0.0,
+                },
+            })
+            .success,
+        "MoveSection failed"
+    );
+
+    let before = all_section_offsets(&state);
+    assert!(
+        state
+            .execute(Command::SetZeroDatum {
+                station_ref: StationRef::new(anchored, 1),
+                coordinates: GpsCoordinates::new(20.4, -87.3, 0.0).unwrap(),
+            })
+            .success,
+        "SetZeroDatum failed"
+    );
+    assert_ne!(
+        all_section_offsets(&state),
+        before,
+        "setup: adding the first datum must have moved the group"
+    );
+
+    assert!(state.undo().success, "undo of SetZeroDatum failed");
+    assert_eq!(
+        all_section_offsets(&state),
+        before,
+        "undoing the add of the first zero datum did not restore the section offsets it found"
+    );
+}
+
+/// The renormalisation is not a RemoveZeroDatum feature. Deleting the SECTION the
+/// primary datum lives in promotes the next datum through
+/// `cleanup_section_references`, and the trigger is derived from the state rather
+/// than tagged onto a command, so this route is covered by construction.
+#[test]
+fn deleting_the_primary_datums_section_renormalises_the_frame() {
+    let _config = isolated_config();
+    let state = state_with_project();
+    let origin = create_section(&state, "Origin", vec![shot(10.0, 3.0), shot(20.0, 4.0)]);
+    let anchored = create_section(&state, "Anchored", vec![shot(70.0, 7.0), shot(100.0, 8.0)]);
+
+    for (station, gps) in [
+        (
+            StationRef::new(origin, 0),
+            GpsCoordinates::new(20.4, -87.3, 0.0).unwrap(),
+        ),
+        (
+            StationRef::new(anchored, 1),
+            GpsCoordinates::new(20.4027, -87.2973, 0.0).unwrap(),
+        ),
+    ] {
+        assert!(
+            state
+                .execute(Command::SetZeroDatum {
+                    station_ref: station,
+                    coordinates: gps,
+                })
+                .success,
+            "SetZeroDatum failed"
+        );
+    }
+    let separation = raw_station_xy(&state, StationRef::new(anchored, 1));
+    assert!(
+        separation.0.hypot(separation.1) > 100.0,
+        "setup: the two datums must sit well apart, got {separation:?}"
+    );
+
+    let deleted = state.execute(Command::DeleteSection { section_id: origin });
+    assert!(deleted.success, "DeleteSection failed: {:?}", deleted.error);
+
+    let promoted = raw_station_xy(&state, StationRef::new(anchored, 1));
+    assert!(
+        promoted.0.abs() <= 1e-9 && promoted.1.abs() <= 1e-9,
+        "deleting the primary datum's SECTION promoted the next datum and left the survey on the \
+         old origin: the promoted station is at {promoted:?}, not local (0, 0)"
+    );
+
+    assert!(state.undo().success, "undo of DeleteSection failed");
+    let restored = raw_station_xy(&state, StationRef::new(anchored, 1));
+    assert!(
+        (restored.0 - separation.0).abs() <= 1e-9 && (restored.1 - separation.1).abs() <= 1e-9,
+        "the undo has to put the OLD frame back, not re-derive the new one: {separation:?} -> \
+         {restored:?}"
+    );
+}
+
+/// The delete/split family bypasses `execute()` entirely, so it carries its own
+/// frame check. `execute_delete_last_shot_and_section` removes a whole section
+/// (and every reference into it, the zero datum included), which is the same
+/// promotion reached through a path that never mentions datums.
+#[test]
+fn the_delete_last_shot_path_renormalises_the_frame() {
+    let _config = isolated_config();
+    let state = state_with_project();
+    let origin = create_section(&state, "Origin", vec![shot(10.0, 3.0)]);
+    let anchored = create_section(&state, "Anchored", vec![shot(70.0, 7.0), shot(100.0, 8.0)]);
+
+    for (station, gps) in [
+        (
+            StationRef::new(origin, 0),
+            GpsCoordinates::new(20.4, -87.3, 0.0).unwrap(),
+        ),
+        (
+            StationRef::new(anchored, 1),
+            GpsCoordinates::new(20.4027, -87.2973, 0.0).unwrap(),
+        ),
+    ] {
+        assert!(
+            state
+                .execute(Command::SetZeroDatum {
+                    station_ref: station,
+                    coordinates: gps,
+                })
+                .success,
+            "SetZeroDatum failed"
+        );
+    }
+    let separation = raw_station_xy(&state, StationRef::new(anchored, 1));
+    assert!(
+        separation.0.hypot(separation.1) > 100.0,
+        "setup: the two datums must sit well apart, got {separation:?}"
+    );
+
+    let only_shot = shot_ids(&state, origin)[0];
+    let deleted = state.execute_delete_last_shot_and_section(origin, only_shot);
+    assert!(
+        deleted.success,
+        "execute_delete_last_shot_and_section failed: {:?}",
+        deleted.error
+    );
+
+    let promoted = raw_station_xy(&state, StationRef::new(anchored, 1));
+    assert!(
+        promoted.0.abs() <= 1e-9 && promoted.1.abs() <= 1e-9,
+        "the delete/split path removed the primary datum's section without renormalising: the \
+         promoted station is at {promoted:?}, not local (0, 0)"
+    );
+
+    assert!(state.undo().success, "undo of the delete failed");
+    let restored = raw_station_xy(&state, StationRef::new(anchored, 1));
+    assert!(
+        (restored.0 - separation.0).abs() <= 1e-9 && (restored.1 - separation.1).abs() <= 1e-9,
+        "the undo has to put the OLD frame back: {separation:?} -> {restored:?}"
+    );
+}
+
+/// The renormalised offsets are what the file gives back. The loader is
+/// deliberately NOT taught about the frame - `resolve_offsets`' cascade never
+/// re-derives a seed's offset, so a whole-project translation is a provable no-op
+/// for it, and a load-time renormalisation would silently translate a merged
+/// project (whose datums keep their own offsets on purpose) on every open. This is
+/// the gate on that reasoning.
+#[test]
+fn the_renormalised_frame_survives_save_and_reopen() {
+    let _config = isolated_config();
+    let temp = TempDir::new().unwrap();
+    let save_path: PathBuf = temp.path().join("renormalised-frame.stalx");
+
+    let (before_offsets, before_promoted) = {
+        let state = state_with_project();
+        let origin = create_section(&state, "Origin", vec![shot(10.0, 3.0), shot(20.0, 4.0)]);
+        let anchored = create_section(&state, "Anchored", vec![shot(70.0, 7.0), shot(100.0, 8.0)]);
+        let _floater = create_section(&state, "Floater", vec![shot(300.0, 12.0)]);
+
+        for (station, gps) in [
+            (
+                StationRef::new(origin, 0),
+                GpsCoordinates::new(20.4, -87.3, 0.0).unwrap(),
+            ),
+            (
+                StationRef::new(anchored, 1),
+                GpsCoordinates::new(20.4027, -87.2973, 0.0).unwrap(),
+            ),
+        ] {
+            assert!(
+                state
+                    .execute(Command::SetZeroDatum {
+                        station_ref: station,
+                        coordinates: gps,
+                    })
+                    .success,
+                "SetZeroDatum failed"
+            );
+        }
+        assert!(
+            state
+                .execute(Command::RemoveZeroDatum {
+                    station_ref: StationRef::new(origin, 0),
+                })
+                .success,
+            "RemoveZeroDatum failed"
+        );
+
+        let saved = state.save_project(Some(save_path.clone()));
+        assert!(saved.success, "save failed: {:?}", saved.error);
+        (
+            all_section_offsets(&state),
+            raw_station_xy(&state, StationRef::new(anchored, 1)),
+        )
+    };
+    assert!(
+        before_promoted.0.abs() <= 1e-9 && before_promoted.1.abs() <= 1e-9,
+        "setup: the promoted datum must sit at the origin in session, got {before_promoted:?}"
+    );
+
+    let reopened = AppState::new().unwrap();
+    let opened = reopened.execute(Command::OpenProject { path: save_path });
+    assert!(opened.success, "reopen failed: {:?}", opened.error);
+
+    assert_eq!(
+        all_section_offsets(&reopened),
+        before_offsets,
+        "save + reopen did not reproduce the renormalised section offsets: the loader must be a \
+         no-op on a whole-project translation, not a second solve that undoes it"
+    );
+}
+
+// ===========================================================================
+// #469 item 2 (FIXED): a loop closure ASSERTED that its endpoints coincided,
+// and nothing in the app could ever set the claim straight
+// ===========================================================================
+//
+// `create_loop_closure` stamped `is_aligned: strategy == Move` without
+// measuring, one line after `compute_closure_metrics` had computed the
+// refutation. The flag is a RIGID edge to the offset cascade, to the move
+// tools, to co-location and to the frozen-shot rule, and nothing ever set it
+// back to false: `realign_merges` looks at merges only, and the cascade
+// deliberately leaves a redundant loop's residual intact. So a closure born
+// torn - or torn later by a `moveStation` on one endpoint - was reported
+// Critical forever, with no way out but deleting a legitimate closure.
+//
+// It is MEASURED now, by one predicate re-derived after every geometry change
+// (`Project::closure_alignment_stamp` / `remeasure_closure_alignment`).
+
+/// The alignment claim of a closure between `a` and `b`, or `None` when there
+/// is no closure over that pair.
+fn closure_alignment(state: &AppState, a: StationRef, b: StationRef) -> Option<bool> {
+    let project = state.get_project_state()?;
+    project
+        .loop_closures
+        .iter()
+        .find(|c| {
+            (project.key_is_ref(&c.station_a, a) && project.key_is_ref(&c.station_b, b))
+                || (project.key_is_ref(&c.station_a, b) && project.key_is_ref(&c.station_b, a))
+        })
+        .map(|c| c.is_aligned)
+}
+
+/// Two merged sections with the far end of B snapped onto A's first station,
+/// closing the loop as one physical point, and a `Move` closure recorded over
+/// it - the state the snap-to-merge workflow produces. Returns `(a, b)`.
+///
+/// `anchored` picks whether the loop carries a zero datum. It changes what can
+/// be done to the loop afterwards, not what it is: on an ANCHORED loop every
+/// shot reaches the datum from both ends, so the frozen-shot guard refuses a
+/// geometry edit outright and only a station move can tear it.
+fn snapped_loop(state: &AppState, anchored: bool) -> (SectionId, SectionId) {
+    let (a, b) = if anchored {
+        two_merged_sections(state)
+    } else {
+        two_unanchored_merged_sections(state)
+    };
+    let (from, to) = station_raw_xy(state, (b, 1), (a, 0));
+    let snapped = state.execute(Command::MoveStation {
+        station_ref: StationRef::new(b, 1),
+        offset: Coordinates {
+            x: to.0 - from.0,
+            y: to.1 - from.1,
+            z: 0.0,
+        },
+    });
+    assert!(snapped.success, "snap failed: {:?}", snapped.error);
+    let closed = state.execute(Command::CreateLoopClosure {
+        station_a: StationRef::new(a, 0),
+        station_b: StationRef::new(b, 1),
+        closure_strategy: ClosureStrategy::Move,
+    });
+    assert!(
+        closed.success,
+        "CreateLoopClosure failed: {:?}",
+        closed.error
+    );
+    (a, b)
+}
+
+/// The birth route: the fuzzer's `createLoopClosure(..., Move)` on an arbitrary
+/// pair, which is also every IPC and harness caller. The two stations here are
+/// 11 m apart and the app knows it - `compute_closure_metrics` records exactly
+/// that distance on the closure one line earlier.
+///
+/// This is the shape the COMBINED regime kept reaching: "marked closed but its
+/// ends are 5.86 m apart" in the post-run integrity sweep, with every in-run
+/// oracle green because the lie was stable in both directions.
+#[test]
+fn a_move_closure_over_a_real_gap_is_not_born_aligned() {
+    let _config = isolated_config();
+    let state = state_with_project();
+    let (a, b) = two_merged_sections(&state);
+
+    let closed = state.execute(Command::CreateLoopClosure {
+        station_a: StationRef::new(a, 0),
+        station_b: StationRef::new(b, 1),
+        closure_strategy: ClosureStrategy::Move,
+    });
+    assert!(
+        closed.success,
+        "CreateLoopClosure failed: {:?}",
+        closed.error
+    );
+
+    let gap = raw_station_gap(&state, (a, 0), (b, 1));
+    assert!(
+        gap > 1.0,
+        "setup: the endpoints are metres apart (got {gap} m)"
+    );
+    assert_eq!(
+        closure_alignment(&state, StationRef::new(a, 0), StationRef::new(b, 1)),
+        Some(false),
+        "a closure cannot claim a coincidence the app measured the refutation of"
+    );
+    let misclosure = state
+        .get_project_state()
+        .expect("no project open")
+        .loop_closures[0]
+        .misclosure_distance;
+    assert!(
+        (misclosure - gap).abs() < 1e-6,
+        "nothing is lost: the distance lives in the misclosure the user reads ({misclosure} vs {gap})"
+    );
+    assert!(
+        !state
+            .integrity_check()
+            .messages
+            .iter()
+            .any(|m| m.contains("marked closed")),
+        "and the Critical banner that had no cure is not raised: {:?}",
+        state.integrity_check().messages
+    );
+}
+
+/// The other half: the REAL workflow, which is a batch - the move commands that
+/// snapped the station onto its target, then the closure. The frontend
+/// (`ClosureDialog.tsx`) sends `Move` only with those `preCommands`, so the
+/// measurement says exactly what the assertion used to, and the user-facing
+/// path is unchanged.
+#[test]
+fn the_snap_to_merge_batch_still_creates_an_aligned_closure() {
+    let _config = isolated_config();
+    let state = state_with_project();
+    let (a, b) = two_merged_sections(&state);
+    let (from, to) = station_raw_xy(&state, (b, 1), (a, 0));
+
+    let batched = state.execute(Command::Batch {
+        commands: vec![
+            Command::MoveStation {
+                station_ref: StationRef::new(b, 1),
+                offset: Coordinates {
+                    x: to.0 - from.0,
+                    y: to.1 - from.1,
+                    z: 0.0,
+                },
+            },
+            Command::CreateLoopClosure {
+                station_a: StationRef::new(a, 0),
+                station_b: StationRef::new(b, 1),
+                closure_strategy: ClosureStrategy::Move,
+            },
+        ],
+    });
+    assert!(
+        batched.success,
+        "snap-to-merge batch failed: {:?}",
+        batched.error
+    );
+
+    assert!(
+        raw_station_gap(&state, (a, 0), (b, 1)) < 1e-6,
+        "setup: the snap made the two stations one point"
+    );
+    assert_eq!(
+        closure_alignment(&state, StationRef::new(a, 0), StationRef::new(b, 1)),
+        Some(true),
+        "a measured coincidence is still an alignment - the workflow is unchanged"
+    );
+}
+
+/// THE CRUX, over the two undo captures that can reach a torn closure.
+///
+/// The fuzz roundtrip oracle requires that an undo restores the state the
+/// history RECORDED, and the recorded state had the claim TRUE. `UpdateShot`
+/// is the sharp case: its `UndoData::PreviousValues` carries the shot's old
+/// measurements and the rigid group's offsets, and NOT one closure flag - so a
+/// sweep that could only DEMOTE would hand the geometry back with the claim
+/// stuck false, landing on a state the history never held. `MoveStation`
+/// records a whole `ProjectSnapshotPair`, which restores the flag verbatim, so
+/// it pins the other half: a sweep that runs on the inverse must not disturb
+/// what the snapshot just put back.
+///
+/// The stamp is total and blind to the flags, so both come out the same way -
+/// the undo re-derives exactly the claim the recorded state had.
+///
+/// The narrow-capture row runs on an UNANCHORED loop, and has to: on an
+/// anchored one every shot of the loop reaches the datum from both ends, so the
+/// frozen-shot guard refuses the edit before it can tear anything - which is
+/// itself one of the things an alignment claim buys, and why an honest claim
+/// matters.
+#[test]
+fn tearing_an_aligned_closure_demotes_it_and_the_undo_restores_the_claim() {
+    let _config = isolated_config();
+    for narrow_capture in [false, true] {
+        let state = state_with_project();
+        let (a, b) = snapped_loop(&state, !narrow_capture);
+        let closed_geometry = all_station_xy(&state);
+        assert_eq!(
+            closure_alignment(&state, StationRef::new(a, 0), StationRef::new(b, 1)),
+            Some(true),
+            "setup: the loop is closed and the claim is true"
+        );
+
+        let torn = if narrow_capture {
+            // `UpdateShot` - a narrow capture, and the only route of the two that
+            // a demote-only sweep gets wrong.
+            state.execute(Command::UpdateShot {
+                section_id: b,
+                shot_id: shot_ids(&state, b)[0],
+                updates: ShotUpdates {
+                    length: Some(105.0),
+                    ..Default::default()
+                },
+            })
+        } else {
+            state.execute(Command::MoveStation {
+                station_ref: StationRef::new(b, 1),
+                offset: Coordinates {
+                    x: 100.0,
+                    y: 0.0,
+                    z: 0.0,
+                },
+            })
+        };
+        assert!(torn.success, "the tearing command failed: {:?}", torn.error);
+        assert!(
+            raw_station_gap(&state, (a, 0), (b, 1)) > 1.0,
+            "setup (narrow_capture={narrow_capture}): the edit tore the loop open"
+        );
+        assert_eq!(
+            closure_alignment(&state, StationRef::new(a, 0), StationRef::new(b, 1)),
+            Some(false),
+            "the claim is false now, so the flag must be"
+        );
+        assert!(
+            !state
+                .integrity_check()
+                .messages
+                .iter()
+                .any(|m| m.contains("marked closed")),
+            "the demotion IS the 'recompute' the old Critical asked for: {:?}",
+            state.integrity_check().messages
+        );
+
+        let undone = state.undo();
+        assert!(undone.success, "undo failed: {:?}", undone.error);
+        assert_eq!(
+            all_station_xy(&state),
+            closed_geometry,
+            "the undo restores the geometry (narrow_capture={narrow_capture})"
+        );
+        assert_eq!(
+            closure_alignment(&state, StationRef::new(a, 0), StationRef::new(b, 1)),
+            Some(true),
+            "AND the claim, which is what a demote-only sweep could never do \
+             (narrow_capture={narrow_capture})"
+        );
+    }
+}
+
+/// Drift back into coincidence: the flag follows the geometry in BOTH
+/// directions, which is the same property the undo above relies on, reached by
+/// two forward commands instead of an inverse.
+#[test]
+fn drifting_back_into_coincidence_re_promotes_the_closure() {
+    let _config = isolated_config();
+    let state = state_with_project();
+    let (a, b) = snapped_loop(&state, true);
+
+    for (offset, expected) in [(100.0, false), (-100.0, true)] {
+        let moved = state.execute(Command::MoveStation {
+            station_ref: StationRef::new(b, 1),
+            offset: Coordinates {
+                x: offset,
+                y: 0.0,
+                z: 0.0,
+            },
+        });
+        assert!(
+            moved.success,
+            "MoveStation({offset}) failed: {:?}",
+            moved.error
+        );
+        assert_eq!(
+            closure_alignment(&state, StationRef::new(a, 0), StationRef::new(b, 1)),
+            Some(expected),
+            "after moving by {offset} m the gap is {} m",
+            raw_station_gap(&state, (a, 0), (b, 1))
+        );
+    }
+}
+
+/// The double-anchor term, on the one shape where it is the ONLY thing
+/// refusing: two independently GPS-anchored sections whose stations are
+/// coincident. Aligning the closure would weld two datum-anchored merge
+/// components into one rigid group - `cascade_bfs` pre-loads every
+/// datum-bearing section as authoritative and never traverses an edge into one,
+/// so nothing could ever satisfy it. That is #464 defect A, and
+/// `plan_merge_promotion` refuses it for the same reason.
+#[test]
+fn a_coincident_closure_between_two_anchored_groups_is_never_aligned() {
+    let _config = isolated_config();
+    let state = state_with_project();
+    let a = create_section(&state, "A", vec![shot(0.0, 5.0)]);
+    let c = create_section(&state, "C", vec![shot(90.0, 5.0)]);
+    // The SAME GPS on both: `set_zero_datum` puts the first datum's station at
+    // the local origin and every later one at `gps_to_local(gps, first.gps)`, so
+    // identical coordinates place both stations on exactly one point.
+    let gps = GpsCoordinates::new(20.4, -87.3, 0.0).unwrap();
+    for station in [StationRef::new(a, 0), StationRef::new(c, 0)] {
+        let datum = state.execute(Command::SetZeroDatum {
+            station_ref: station,
+            coordinates: gps,
+        });
+        assert!(datum.success, "SetZeroDatum failed: {:?}", datum.error);
+    }
+    assert!(
+        raw_station_gap(&state, (a, 0), (c, 0)) < 1e-6,
+        "setup: the two anchored stations are one point"
+    );
+
+    let closed = state.execute(Command::CreateLoopClosure {
+        station_a: StationRef::new(a, 0),
+        station_b: StationRef::new(c, 0),
+        closure_strategy: ClosureStrategy::Move,
+    });
+    assert!(
+        closed.success,
+        "CreateLoopClosure failed: {:?}",
+        closed.error
+    );
+    assert_eq!(
+        closure_alignment(&state, StationRef::new(a, 0), StationRef::new(c, 0)),
+        Some(false),
+        "coincident is not enough: a rigid edge here would double-anchor the group"
+    );
+
+    // And no later command promotes it either - the term is a function of the
+    // merges and the datums, both of which this leaves exactly as they were.
+    let commented = state.execute(Command::MoveSection {
+        section_id: c,
+        offset: Coordinates {
+            x: 0.0,
+            y: 0.0,
+            z: 0.0,
+        },
+    });
+    assert!(
+        commented.success,
+        "MoveSection failed: {:?}",
+        commented.error
+    );
+    assert_eq!(
+        closure_alignment(&state, StationRef::new(a, 0), StationRef::new(c, 0)),
+        Some(false)
+    );
+}
+
+/// CONVERGENCE. `assign_closure_ids` used to force `is_aligned = true` on every
+/// `Move` closure on every open, so a closure honestly saved as `0` came
+/// straight back as `1`: memory and disk would have disagreed from that open
+/// onward, which is the #413 finding-10 shape and exactly what the persistence
+/// oracle exists to catch.
+#[test]
+fn a_demoted_alignment_claim_survives_save_and_reopen() {
+    let _config = isolated_config();
+    let temp = TempDir::new().unwrap();
+    let save_path: PathBuf = temp.path().join("demoted-claim.stalx");
+
+    let (a, b) = {
+        let state = state_with_project();
+        let (a, b) = snapped_loop(&state, true);
+        let torn = state.execute(Command::MoveStation {
+            station_ref: StationRef::new(b, 1),
+            offset: Coordinates {
+                x: 100.0,
+                y: 0.0,
+                z: 0.0,
+            },
+        });
+        assert!(torn.success, "MoveStation failed: {:?}", torn.error);
+        assert_eq!(
+            closure_alignment(&state, StationRef::new(a, 0), StationRef::new(b, 1)),
+            Some(false),
+            "setup: the claim is demoted in session"
+        );
+        let saved = state.save_project(Some(save_path.clone()));
+        assert!(saved.success, "save failed: {:?}", saved.error);
+        (a, b)
+    };
+
+    let reopened = AppState::new().unwrap();
+    let opened = reopened.execute(Command::OpenProject { path: save_path });
+    assert!(opened.success, "reopen failed: {:?}", opened.error);
+    assert_eq!(
+        closure_alignment(&reopened, StationRef::new(a, 0), StationRef::new(b, 1)),
+        Some(false),
+        "the open must not re-assert the claim the session measured away"
+    );
+    assert!(
+        !reopened
+            .integrity_check()
+            .messages
+            .iter()
+            .any(|m| m.contains("marked closed")),
+        "and the reopened project is clean: {:?}",
+        reopened.integrity_check().messages
     );
 }
 
@@ -3027,7 +4023,7 @@ fn removing_a_zero_datum_leaves_nothing_for_the_next_load_to_reclassify() {
     let temp = TempDir::new().unwrap();
     let save_path: PathBuf = temp.path().join("converged-orphan.stalx");
 
-    let before = {
+    let (before, before_offsets) = {
         let (state, _a, b) = detached_anchored_closure();
         let removed = state.execute(Command::RemoveZeroDatum {
             station_ref: StationRef::new(b, 0),
@@ -3038,9 +4034,10 @@ fn removing_a_zero_datum_leaves_nothing_for_the_next_load_to_reclassify() {
             removed.error
         );
         let counts = closure_and_merge_counts(&state);
+        let offsets = all_section_offsets(&state);
         let saved = state.save_project(Some(save_path.clone()));
         assert!(saved.success, "save failed: {:?}", saved.error);
-        counts
+        (counts, offsets)
     };
 
     let reopened = AppState::new().unwrap();
@@ -3052,6 +4049,16 @@ fn removing_a_zero_datum_leaves_nothing_for_the_next_load_to_reclassify() {
         before,
         "save + reopen reclassified a loop closure as a station merge: the session that removed \
          the zero datum did not run the conversion the loader runs"
+    );
+    // Geometry converges too, not only topology. The removal here takes the
+    // SECOND datum, so it changes no frame - but the closure->merge conversion it
+    // triggers does move offsets, and the loader must reproduce them rather than
+    // re-solve to something else (#469, item 1's convergence argument, which rests
+    // on the loader being a no-op on what the session already settled).
+    assert_eq!(
+        all_section_offsets(&reopened),
+        before_offsets,
+        "save + reopen did not reproduce the section offsets the session settled on"
     );
 }
 
@@ -3147,6 +4154,13 @@ fn undo_of_an_appended_shot_restores_the_recorded_closure_state() {
 /// frontend, and walked in order by `resolve_offsets` when it picks the datum
 /// that anchors a connected group. The removal here takes the FIRST of the two
 /// datums, so an append would be visible.
+///
+/// Taking the FIRST datum also changes the FRAME, so the forward command now
+/// renormalises the whole survey (#469, item 1). A legacy entry's narrow
+/// `previous_offsets` cannot hand a whole-project translation back - it restores
+/// the merge group it recorded and nothing more, which is the same
+/// degrade-gracefully rule as the closure. Both halves are asserted: the index,
+/// and that the offsets it DID record came back verbatim.
 #[test]
 fn a_legacy_remove_zero_datum_entry_still_restores_the_datum_at_its_index() {
     let _config = isolated_config();
@@ -3155,7 +4169,7 @@ fn a_legacy_remove_zero_datum_entry_still_restores_the_datum_at_its_index() {
     let datums_before = datum_stations(&state);
 
     // Exactly what the pre-pair capture recorded for this command.
-    let legacy = {
+    let (legacy, recorded_offsets) = {
         let project = state.get_project_state().expect("no project open");
         let (position, gps) = project
             .zero_datums
@@ -3165,12 +4179,16 @@ fn a_legacy_remove_zero_datum_entry_still_restores_the_datum_at_its_index() {
             .map(|(position, zd)| (position, zd.gps))
             .expect("setup: the datum being removed must exist");
         assert_eq!(position, 0, "setup: the removal must take the FIRST datum");
-        crate::core::UndoData::ZeroDatumInfo {
-            station_ref: station,
-            previous_gps: Some(gps),
-            position: Some(position),
-            previous_offsets: project.capture_connected_section_offsets(a),
-        }
+        let previous_offsets = project.capture_connected_section_offsets(a);
+        (
+            crate::core::UndoData::ZeroDatumInfo {
+                station_ref: station,
+                previous_gps: Some(gps),
+                position: Some(position),
+                previous_offsets: previous_offsets.clone(),
+            },
+            previous_offsets,
+        )
     };
 
     let removed = state.execute(Command::RemoveZeroDatum {
@@ -3201,6 +4219,16 @@ fn a_legacy_remove_zero_datum_entry_still_restores_the_datum_at_its_index() {
         "the legacy arm put the datum back in the wrong place: it re-inserts at the recorded \
          index rather than appending (#413, finding 17)"
     );
+
+    // What it recorded, it restored - values and key presence both.
+    let now = all_section_offsets(&state);
+    for (section_id, recorded) in &recorded_offsets {
+        assert_eq!(
+            now.get(section_id).copied(),
+            *recorded,
+            "the legacy arm did not restore the offset it recorded for section {section_id}"
+        );
+    }
 }
 
 /// Two sections with no path between them, each with its own GPS anchor, and a

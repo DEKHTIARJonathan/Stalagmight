@@ -527,8 +527,9 @@ impl Fixpoint {
 ///   path had accumulated (`offset_y=2.58` saved, `2.579999999999999` after the
 ///   reload re-solved it, then stable). `cascade_bfs`
 ///   (models/project/connectivity.rs) now DECLINES a correction below
-///   `Project::OFFSET_DUST_M` rather than applying a picometre one, so the
-///   re-solve leaves an already-correct offset exactly where the file put it.
+///   `Project::OFFSET_DUST_M` rather than applying one that lands under that
+///   bound, so the re-solve leaves an already-correct offset exactly where the
+///   file put it.
 ///
 /// **What IS asserted:** no save/load cycle may change ANYTHING in the file's
 /// logical content. That was already the shape of the property - "nothing may

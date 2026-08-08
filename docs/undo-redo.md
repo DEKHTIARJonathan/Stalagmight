@@ -185,7 +185,7 @@ twice and restoring one already deserializes it.
 
 `section_offsets` holds a key only for a section that is **actually displaced**,
 and "not displaced" has exactly one spelling: the key is absent. A value within
-`Project::OFFSET_DUST_M` (a picometre) of the origin in both components is not a
+`Project::OFFSET_DUST_M` (a micrometre) of the origin in both components is not a
 position, so it is never stored - in memory or on disk, by any writer, computed or
 restored. The invariant is stated on `Project::write_section_offset`, which is the
 one write point everything routes through, and enforced on maps this app did not
@@ -227,6 +227,30 @@ it always was: the app never writes a dust-zero row, so a save-load-save cycle o
 file this app wrote is a fixpoint. A legacy file sees a one-time settle - the load
 drops the row, the next save omits it - and is a fixpoint from then on.
 
+##### Why the bound is a micrometre and not a picometre (#469)
+
+The gate is absolute; the residue it swallows is **relative** to the coordinates
+being summed, because it is a few ULPs of them. It was 1e-12 m, chosen against a
+corpus measured when coordinates were metre-scale - and #469's frame
+renormalisation (`Project::renormalize_frame`) legitimately moved them onto the
+inter-datum distance, so the residue moved with them and started landing on both
+sides of the gate. Two cascades over the same geometry, seeded differently, then
+disagreed about whether a section HAS a key, which is structural rather than
+numeric: `CLOSURE_SHAPES=1` seed 18 in `fuzz_undo_tests.rs`.
+
+Re-measured with every gate site instrumented, the residue is one to five ULPs of
+the coordinate magnitude: 1.96e-11 m at the ~8e4 m a real georeference produces,
+and 4.66e-9 m at the 1.8e7 m the horizon corpus reaches with datums scattered
+worldwide. 1e-6 m clears that by two decades and stays four decades below
+`Project::MERGE_ALIGNMENT_INVARIANT_M`, which is the ordering the whole chain
+rests on. The full table is on `Project::OFFSET_DUST_M`;
+`the_dust_gate_clears_the_residue_at_the_georeference_ceiling` and
+`the_dust_gate_is_decades_clear_of_both_ends` (models/project/tests.rs) re-run the
+measurement and pin the clearances. The gate stays a **pure function of the value
+written** - never scale-aware, which would let two routes disagree by design - and
+a residue that ever approaches it means re-measuring the constant, not widening an
+oracle.
+
 #### An inverse still RESTORES the offsets it re-derives
 
 Two undo arms re-derive the offsets their inverse recomputes, and both carry the
@@ -253,6 +277,68 @@ metadata-only shot edit carries none.
 Only the undo direction needs them. A redo re-executes the forward command from a
 state the undo restored exactly, and the forward path is deterministic, so it
 reproduces the recorded post-command map.
+
+#### `ZeroDatumInfo` captures the WHOLE project, not a connected set (#469, item 1)
+
+`UndoData::ZeroDatumInfo { previous_offsets }` is the one capture whose scope is
+not a connectivity question, and it takes `Project::capture_all_section_offsets`
+rather than the merge group its two siblings above take.
+
+Local `(0, 0)` MEANS `zero_datums[0]`'s GPS: `set_zero_datum` puts the first datum
+on the origin and every later one at `gps_to_local(its gps, first.gps)`, and the
+map, the data table's GPS column, the Ariane export's `START` lat/long and the
+GlobalView pin all read local metres against it. So changing WHICH datum is first
+re-defines every stored coordinate, and `Project::renormalize_frame` answers that
+by translating the whole survey - free-floating, datum-less components included -
+so the promoted datum's station lands back on the origin. Nothing bounded by
+merges or aligned closures can hand that back. Undoing the ADD of a first datum
+removes it, which is an inverse that performs a frame change, so this is the arm
+that has to hold the whole map.
+
+The renormalisation itself runs only in the FORWARD epilogue (`execute()`,
+`execute_batch`, `repair_open_project_integrity`, and the four delete/split entry
+points that bypass `execute()`), never in `reconcile_geometry` - which
+`undo()`/`redo()` share - and never in the loader. Every command that can reach it
+records either a `ProjectSnapshotPair` or this widened map, so no inverse
+re-derives a frame; and `resolve_offsets`' cascade never re-derives a seed's
+offset, which makes a whole-project translation a provable no-op for the loader, so
+save/reopen converges without teaching it anything.
+
+The other three offset captures stay merge/rigid-scoped: no per-keystroke shot edit
+can change the frame, and widening those would put an N-entry map on every one.
+Entries persisted with a narrow map still restore through the same arm - what they
+recorded, and no more.
+
+#### The one derived field an inverse RE-DERIVES: `is_aligned` (#469, item 2)
+
+`reconcile_geometry` runs on every history move as well as every forward command,
+and it now re-derives two things rather than one: the section offsets
+(`realign_merges`) and every snap-to-merge closure's alignment claim
+(`Project::remeasure_closure_alignment`). The claim is swept on BOTH sides of the
+realign - before, because an aligned closure is an EDGE the offset cascade
+traverses, so the flags are an INPUT to the solve and must be a function of the
+geometry rather than of the route taken to it; after, because the realign can move
+a section, which changes the very gaps the claim is measured from. No undo arm
+captures `is_aligned` at all, and none needs to.
+
+That looks like the opposite of the rule above, and it is not, because the claim is
+a **total function of the rest of the state**: `Move` strategy, a measured end gap
+under `MERGE_ALIGNMENT_INVARIANT_M`, and no double-anchoring, none of which reads
+any closure flag (see `Project::closure_alignment_stamp`). Every state the history
+records therefore satisfies `flag == stamp(state)`, so an inverse that restores the
+rest of the state reproduces the flag it recorded. The frame renormalisation has no
+such property - it is a translation, not a function of what it translates - which is
+why that one is forward-only and this one is not.
+
+The direction matters. A sweep that could only DEMOTE would break the roundtrip
+outright: `UpdateShot`'s `PreviousValues` carries no closure flag, so tearing an
+aligned closure and undoing it would hand the geometry back with the claim stuck
+false - a state the history never held. The sweep sets the flag BOTH ways.
+
+Repair carries the same sweep itself (it never goes through `reconcile_geometry`),
+and so does `redrive_offsets_after_load`, each after its own re-solve. A boundary
+that left a stale claim behind would have the next command's sweep correct it, i.e.
+produce a difference against a snapshot recorded one command earlier.
 
 ### An inverse consults no user-intent guard (#413, findings 3 and 6)
 

@@ -101,8 +101,14 @@ impl AppState {
                             if let Ok(prev_updates) =
                                 serde_json::from_str::<ShotUpdates>(values_json.as_str())
                             {
+                                // Guard-free (`restore_shot_values`): an inverse
+                                // consults no user-intent guard, and the frozen
+                                // check judges the state the FORWARD command
+                                // produced rather than the one it was permitted
+                                // from. See that function for the single-command
+                                // route that makes the two differ.
                                 let restored =
-                                    self.update_shot(*section_id, target_id, prev_updates);
+                                    self.restore_shot_values(*section_id, target_id, prev_updates);
                                 if restored.success {
                                     // The re-execution's `realign_after_shot_edit`
                                     // just RE-DERIVED the group's offsets. An

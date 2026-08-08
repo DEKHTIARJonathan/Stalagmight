@@ -159,8 +159,20 @@ impl AppState {
         // load path classifies and persists them. Classifying in memory here
         // without persisting would only make the two paths disagree.
 
+        // [#303] The link that decides how deep the stack the persisted entries land in is
+        // allowed to be. Read off the same handle they are, before it is swapped, and used
+        // below BEFORE the restore - see the arming call for what a late one costs.
+        //
+        // [#469] Read BEFORE the entries rather than after, because the depth it resolves
+        // is also the bound the LOAD runs under; see `history_load_row_cap`.
+        let mut speleo_link = db.load_speleo_link().ok().flatten();
+        if let Some(link) = &mut speleo_link {
+            self.materialize_undo_mode(&db, link);
+        }
+        let history_row_cap = self.history_load_row_cap(speleo_link.as_ref());
+
         // Load undo/redo stacks from database before replacing database reference
-        let undo_entries = match db.load_undo_stack_with_timestamps() {
+        let undo_entries = match db.load_undo_stack_with_timestamps_capped(history_row_cap) {
             Ok(loaded) => loaded
                 .into_iter()
                 .map(|(_, cmd, undo, ts)| (cmd, undo, ts))
@@ -174,7 +186,7 @@ impl AppState {
                 Vec::new()
             }
         };
-        let redo_entries = match db.load_redo_stack_with_timestamps() {
+        let redo_entries = match db.load_redo_stack_with_timestamps_capped(history_row_cap) {
             Ok(loaded) => loaded
                 .into_iter()
                 .map(|(_, cmd, undo, ts)| (cmd, undo, ts))
@@ -202,13 +214,6 @@ impl AppState {
                     .ok()
                     .map(|dt| dt.with_timezone(&chrono::Utc))
             });
-        // [#303] ...and the link that decides how deep the stack those entries land in is
-        // allowed to be. Read off the same handle for the same reason, and used below
-        // BEFORE the restore - see the arming call for what a late one costs.
-        let mut speleo_link = db.load_speleo_link().ok().flatten();
-        if let Some(link) = &mut speleo_link {
-            self.materialize_undo_mode(&db, link);
-        }
 
         // ALL commits under ONE `project` acquisition, exactly as
         // `do_load_project_full`'s finalization and for the same reason (round
@@ -738,8 +743,22 @@ impl AppState {
         // Allow cancellation only before any state mutation occurs.
         check_cancelled!();
 
+        // [#303] The link that bounds the stack the persisted entries land in, off the
+        // handle they are read from and before it is swapped. Used before the restore
+        // below - see the arming call. This is the INCOMING file's link; the detached
+        // release further down reads the OUTGOING project's through the still-live handle,
+        // and the two are not interchangeable.
+        //
+        // [#469] Read BEFORE the entries rather than after, because the depth it resolves
+        // is also the bound the LOAD runs under; see `history_load_row_cap`.
+        let mut speleo_link = db.load_speleo_link().ok().flatten();
+        if let Some(link) = &mut speleo_link {
+            self.materialize_undo_mode(&db, link);
+        }
+        let history_row_cap = self.history_load_row_cap(speleo_link.as_ref());
+
         // Load undo/redo stacks from database BEFORE storing db
-        let undo_entries = match db.load_undo_stack_with_timestamps() {
+        let undo_entries = match db.load_undo_stack_with_timestamps_capped(history_row_cap) {
             Ok(loaded) => loaded
                 .into_iter()
                 .map(|(_, cmd, undo, ts)| (cmd, undo, ts))
@@ -753,7 +772,7 @@ impl AppState {
                 Vec::new()
             }
         };
-        let redo_entries = match db.load_redo_stack_with_timestamps() {
+        let redo_entries = match db.load_redo_stack_with_timestamps_capped(history_row_cap) {
             Ok(loaded) => loaded
                 .into_iter()
                 .map(|(_, cmd, undo, ts)| (cmd, undo, ts))
@@ -781,15 +800,6 @@ impl AppState {
                     .ok()
                     .map(|dt| dt.with_timezone(&chrono::Utc))
             });
-        // [#303] ...and the link that bounds the stack they land in, off the same handle
-        // and for the same reason. Used before the restore below - see the arming call.
-        // This is the INCOMING file's link; the detached release just below reads the
-        // OUTGOING project's through the still-live handle, and the two are not
-        // interchangeable.
-        let mut speleo_link = db.load_speleo_link().ok().flatten();
-        if let Some(link) = &mut speleo_link {
-            self.materialize_undo_mode(&db, link);
-        }
 
         // All finalization commits use unwrap_or_else(PoisonError::into_inner) to ensure
         // data is written even if a previous panic poisoned a mutex. This is acceptable

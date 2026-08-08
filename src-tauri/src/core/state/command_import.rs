@@ -613,7 +613,19 @@ impl AppState {
                     if let Some(new_coords) = project.compute_station_raw_coords(*anchor_ref) {
                         let dx = old_coords.x - new_coords.x;
                         let dy = old_coords.y - new_coords.y;
-                        if dx.abs() > 1e-12 || dy.abs() > 1e-12 {
+                        // Decline a compensation that is float dust, on the same
+                        // shared bound as the merge BFS and `cascade_bfs`
+                        // (models/project/connectivity.rs). "The anchor drifted"
+                        // is the same question here as there, so it gets the same
+                        // answer: a gap of a few ULPs of the coordinates being
+                        // summed is the residue of re-summing the survey chain,
+                        // not a drift, and "compensating" it writes a
+                        // `section_offsets` key for a rigid group that has not
+                        // moved - a key that is structural, saved, and makes this
+                        // route differ from the route with nothing to compensate.
+                        // The bound is measured at the largest coordinates the app
+                        // can hold, on `Project::OFFSET_DUST_M` (#469).
+                        if dx.abs() > Project::OFFSET_DUST_M || dy.abs() > Project::OFFSET_DUST_M {
                             tracing::info!(
                                 section_id = sid,
                                 anchor_station = anchor_ref.station_index,
