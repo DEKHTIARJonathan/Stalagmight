@@ -19,6 +19,7 @@ import { useExportStore } from './store/exportStore';
 import { useNetworkStore } from './store/networkStore';
 import { shotMaterialization } from './types/survey-data';
 import { getPerfTimings } from './utils/memoryProbe';
+import { routeOpenedFile } from './utils/openOrImport';
 import type { TestFileDialogQueueEntry } from './utils/fileDialogs';
 
 // Pipe frontend console.* calls into the Rust ring buffer for the debug dialog
@@ -78,6 +79,20 @@ declare global {
       };
       fileDialogConsumptions?: Record<string, 'open' | 'save'>;
       activeFileDialogTriggerTestId?: string;
+      /**
+       * The open/import ROUTER, by path (`src/utils/openOrImport.ts`).
+       *
+       * Every production entry point - toolbar, Ctrl+I/Ctrl+O, drag-drop,
+       * launch-with-file - funnels into it, but only two of them are reachable
+       * from a driver: the pickers (which need an armed file-dialog answer AND a
+       * clickable trigger) and a real OS drag-drop. Neither works while an
+       * import already owns the screen, which is exactly the state
+       * `routeOpenedFile`'s own `importFlowOwnsScreen` guard exists to refuse -
+       * so the guard had no test path at all. This exposes the router itself,
+       * under the same E2E gate as the stores below (which already expose
+       * `loadProject`/`saveProject`, a strictly larger capability).
+       */
+      routeOpenedFile?: (path: string, errorTitle?: string) => Promise<void>;
     };
   }
 }
@@ -96,6 +111,9 @@ if (import.meta.env.DEV || import.meta.env.MODE === 'test' || import.meta.env.VI
   testAPI.networkStore = useNetworkStore;
   testAPI.fileDialogAnswers ??= { open: [], save: [] };
   testAPI.fileDialogConsumptions ??= {};
+  // See the declaration above for why the router needs its own hook.
+  testAPI.routeOpenedFile = (path: string, errorTitle?: string) =>
+    routeOpenedFile(path, errorTitle ?? 'Import Failed');
   window.__E2E_TEST__ = testAPI;
 
   // Lazy-materialization guard for the load path: the harness reads this after
