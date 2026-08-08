@@ -673,7 +673,13 @@ export function buildBatchImport(
         section_index: configs.length,
         name: sectionName,
         surveyor: surveyorValue || null,
-        date: dateStr,
+        // `|| null`, exactly like the line above it. `date` is `Option<NaiveDate>`
+        // on the Rust side (`models/section.rs`), and chrono parses "" as
+        // TOO_SHORT, whose Display is "premature end of input" - so an empty
+        // string is not "no date", it is a malformed argument that makes Tauri
+        // reject the WHOLE `import_sections` call before it reaches the command
+        // (#478). A cleared date field means null.
+        date: dateStr || null,
         color: colorValue,
         direction: directionValue,
         quality: qualityValue,
@@ -2913,7 +2919,11 @@ export default function DmpNewImportDialog({
       const sectionData = {
         name: edits?.name ?? anchorDmpSection.name,
         surveyor: edits?.surveyor ?? selectionConfig.defaultSurveyor ?? null,
-        date: edits?.date ?? selectionConfig.defaultDate ?? anchorDmpSection.date?.split(/[T ]/)[0] ?? null,
+        // Trailing `|| null` for the same reason as `buildBatchImport`'s date
+        // (#478): the `??` chain preserves "the user cleared it", and the empty
+        // string that expresses that has to leave as null. Kept as `??` inside
+        // so a cleared date does NOT fall back to the file's or the default.
+        date: (edits?.date ?? selectionConfig.defaultDate ?? anchorDmpSection.date?.split(/[T ]/)[0] ?? null) || null,
         color:
           (edits?.color || null) ??
           sectionPalette[selectedIndices.indexOf(anchor.sectionIndex) % sectionPalette.length] ??
