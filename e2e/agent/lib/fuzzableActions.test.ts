@@ -39,6 +39,16 @@ describe('FUZZABLE_ACTIONS', () => {
     expect(produced.filter((action) => !REPLAYABLE_MUTATIONS.has(action))).toEqual([]);
   });
 
+  it('covers every action the v3 import generators can produce', () => {
+    // A SEPARATE file, and so a separate scan: the v3 group lives in
+    // `undoRedoFuzzImportActions.ts`, and the first test above would keep
+    // passing while every one of its actions died at the dispatch boundary.
+    const produced = actionLiteralsIn('undoRedoFuzzImportActions.ts');
+
+    expect(produced.length).toBeGreaterThan(8);
+    expect(produced.filter((action) => !REPLAYABLE_MUTATIONS.has(action))).toEqual([]);
+  });
+
   it('covers every action the persistence coverage plan can produce', () => {
     const produced = actionLiteralsIn('undoPersistenceCoverage.ts');
 

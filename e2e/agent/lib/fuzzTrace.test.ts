@@ -13,6 +13,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { shortId } from './crc32';
 import { corpusFileId } from './fixtureCorpus';
 import {
+  FILE_ARG_ACTIONS,
   TRACE_VERSION,
   type TraceStep,
   TraceRecorder,
@@ -295,6 +296,25 @@ describe('schema v2 steps', () => {
     rejects({ kind: 'reload', fixture: '../../etc/passwd' }, /bare fixture name/);
     rejects({ kind: 'reload', fixture: 'sub/dir.stalx' }, /bare fixture name/);
     rejects({ kind: 'reload', fixture: '' }, /fixture/);
+  });
+
+  it('REFUSES a file-taking mutation whose args[0] leaves the session directory', () => {
+    // The v3 import group drives store actions that take a PATH, so `args[0]`
+    // reaches the filesystem instead of the model. Without this a hand-written
+    // trace could have the app open and parse any file on the machine - the
+    // same hole every `rel` field above is checked for.
+    for (const action of FILE_ARG_ACTIONS) {
+      for (const bad of ['/etc/shadow', 'C:\\Windows\\x', '../../../.ssh/id_rsa', '']) {
+        rejects(
+          { kind: 'mutate', action, args: [bad], label: action },
+          /absolute args\[0\]|escaping the session directory|must be a non-empty string/,
+        );
+      }
+      rejects({ kind: 'mutate', action, args: [], label: action }, /must be a non-empty string/);
+      accepts({ kind: 'mutate', action, args: [`fuzz-files/a.dmp`, null], label: action });
+    }
+    // A mutation that does NOT take a path is untouched: its args are values.
+    accepts({ kind: 'mutate', action: 'createSection', args: ['/not/a/path'], label: 'createSection' });
   });
 
   it('still validates every v1 step kind - only the FILE version moved', () => {

@@ -110,6 +110,39 @@ export type TraceStep =
   /** Reopen the named tracked fixture, discarding the current project. */
   | { kind: 'reload'; fixture: string };
 
+/**
+ * `mutate` actions whose `args[0]` is an INPUT FILE PATH, not a value.
+ *
+ * The undo-redo-fuzz v3 import group drives the store's file importers, and a
+ * store action that takes a path is the one shape a `mutate` step cannot carry
+ * verbatim: the recording machine's absolute path means nothing on a replayer,
+ * and a trace is meant to be attachable to a bug report. So those steps record a
+ * SESSION-RELATIVE path (paired with a `genFile` step carrying the spec to
+ * rebuild the file from), and the replayer resolves it against its own files
+ * directory - keyed on exactly this set, because a trace has no other way to say
+ * "argument zero is a path".
+ *
+ * It is a security boundary as much as a portability one, and the same one every
+ * v2 `rel` field has: without the check below, a hand-written trace could name
+ * `/etc/shadow` (or `../../../.ssh/id_rsa`) as the file for `executeTmlImport`
+ * and have the app open and parse it. `validateStep` refuses that outright, so
+ * the only thing a trace can point the importers at is a path inside the session
+ * directory the replayer chose.
+ *
+ * Kept HERE rather than beside the generators because this file is the one that
+ * reads untrusted input; `undoRedoFuzz.ts` imports it for resolution and
+ * `undoRedoFuzzImportActions.test.ts` pins that every file-bearing generator
+ * names one of these.
+ */
+export const FILE_ARG_ACTIONS: ReadonlySet<string> = new Set([
+  'importDmp',
+  'executeTmlImport',
+  'executeCompassImport',
+  'executeWallsImport',
+  'executeGpxImport',
+  'calculateFileHash',
+]);
+
 /** A failure, reduced to the parts that identify it across a shrink. */
 export interface FailureSignature {
   /** First line of the failure, with every run of digits replaced by `N`. */
@@ -351,6 +384,11 @@ function validateStep(step: unknown, index: number, filePath: string): void {
       throw new Error(`${where} is a mutation with no action name`);
     }
     if (!Array.isArray(candidate.args)) throw new Error(`${where} has args that are not an array`);
+    // An action that takes a PATH is the one `mutate` shape whose arguments
+    // reach the filesystem instead of the model - see `FILE_ARG_ACTIONS`.
+    if (FILE_ARG_ACTIONS.has(candidate.action)) {
+      requireSessionRelative(candidate.args[0], 'args[0]', `${where} (${candidate.action})`);
+    }
   }
   if (candidate.kind === 'undoTo' || candidate.kind === 'redoTo') {
     const steps = candidate.steps;
