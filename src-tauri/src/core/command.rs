@@ -493,13 +493,7 @@ pub struct ValidationWarning {
     pub severity: WarningSeverity,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, TS)]
-#[serde(rename_all = "lowercase")]
-#[ts(rename_all = "lowercase")]
-pub enum WarningSeverity {
-    Warning,
-    Error,
-}
+pub use crate::models::warning::WarningSeverity;
 
 impl CommandResult {
     pub fn success() -> Self {

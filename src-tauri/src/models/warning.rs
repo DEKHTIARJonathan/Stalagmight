@@ -7,8 +7,15 @@
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-use crate::core::WarningSeverity;
 use crate::models::{SectionId, ShotId, StationRef};
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, TS)]
+#[serde(rename_all = "lowercase")]
+#[ts(rename_all = "lowercase")]
+pub enum WarningSeverity {
+    Warning,
+    Error,
+}
 
 /// Warning code for a merge-connected group anchored by two or more zero datums.
 /// This is a structural over-constraint, not a tolerance the surveyor can wave
