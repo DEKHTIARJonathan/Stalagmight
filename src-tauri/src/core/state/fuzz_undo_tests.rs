@@ -164,18 +164,61 @@
 //!
 //! ## Observations, and what each one turned out to be
 //!
-//! NOTHING IS OPEN. The orphan-closure story was the last one, and both of its
-//! halves - the LOAD BOUNDARY half and the UNDO half, the first two entries
-//! below - are now fixed, with `COMBINED=1 SEEDS=40 ITERATIONS=300` at 40/40.
-//! Every other observation this section has carried is resolved too - three into
-//! findings (20, 21, 25), two into model fixes, one into a duplicate of finding
-//! 12, and one triaged out as the measuring engine's own artifact. The record
-//! stays because the next run of this programme should start from the evidence -
-//! including the shape of the reductions that did NOT reproduce - rather than
-//! from a surprise.
+//! ONE IS OPEN - the first entry below, a picometre `section_offsets` key that
+//! `CLOSURE_SHAPES=1 SEEDS=40 ITERATIONS=150` reaches on seed 18. Every other
+//! observation this section has carried is resolved: the orphan-closure story's
+//! two halves (the LOAD BOUNDARY half and the UNDO half), the closure that
+//! asserted its own coincidence, three into findings (20, 21, 25), two into
+//! model fixes, one into a duplicate of finding 12, and one triaged out as the
+//! measuring engine's own artifact. The record stays because the next run of
+//! this programme should start from the evidence - including the shape of the
+//! reductions that did NOT reproduce - rather than from a surprise.
 //!
 //! The bar an entry has to clear to be listed as OPEN is unchanged:
 //! deterministic, reproducing twice, and FAILING its run rather than classified.
+//!
+//! * **OPEN: the offset cascade's dust gate is ABSOLUTE, and the coordinates are
+//!   no longer metre-scale.** `CLOSURE_SHAPES=1 SEEDS=40 ITERATIONS=150` fails
+//!   seed 18 on `undo x1 did not restore the state recorded at depth 11 | at
+//!   section_offsets.8`, `expected: <absent>`, `actual: [1.78e-14,
+//!   -3.61e-12]` - a picometre key on a section the consumed entry
+//!   (`create_shot` on another section) never touched.
+//!
+//!   `fuzz_shrink_tests.rs` took the 84 recorded moves to THIRTEEN in 281
+//!   probes. Measured, not argued: a backtrace on the write names
+//!   `remove_shot_with_rewire` -> `cascade_connection_offsets` -> `cascade_bfs`,
+//!   on the UNDO of an appended `createShot`; the same value was written once
+//!   before, by a forward `deleteShot`, and cleared in between by
+//!   `removeZeroDatum`'s zero-trust `resolve_offsets`. The two cascades run from
+//!   DIFFERENT seed sets (the edited section plus every datum section, versus
+//!   one anchor per component), so they sum the same chains in different orders
+//!   and disagree in the last bits.
+//!
+//!   Why now: `cascade_bfs` declines a correction at or under
+//!   `Project::OFFSET_DUST_M` (1e-12 m), and that bound is ABSOLUTE while the
+//!   residue it exists to swallow is RELATIVE - it tracks the magnitude of the
+//!   coordinates being summed. #469 item 1 renormalises the whole survey onto a
+//!   promoted datum, which puts coordinates at the inter-datum distance
+//!   (kilometres) instead of metres, and 16 km x 2.2e-16 is 3.6e-12: the residue
+//!   crossed its own gate. The constant's doc states the headroom it was chosen
+//!   for ("the residue measured over this app's fuzz corpus tops out at 1.51e-14
+//!   m, a hundredth of this"), and that measurement predates the
+//!   renormalisation.
+//!
+//!   Both halves are NECESSARY, which is what makes this one observation rather
+//!   than two: with the renormalisation disabled the minimized trace produces no
+//!   failure, and replayed on the commit before #469 item 2 (so the same
+//!   `CLOSURE_SHAPES` closures are `is_aligned` by assertion rather than by
+//!   measurement, and the cascade reaches different sections) it produces no
+//!   failure either. Item 2 supplies the path; item 1 supplies the magnitude.
+//!
+//!   NOT fixed here, deliberately. The fix is a scale-aware dust gate (decline a
+//!   correction below `max(OFFSET_DUST_M, magnitude * a few ULPs)`) or a higher
+//!   absolute one - the constant still has three decades of headroom under the
+//!   nanometre the snapshot differ calls equal - and either changes the most
+//!   carefully argued invariant in `models/project/offsets.rs` on the strength
+//!   of one seed. It wants its own measurement of the residue distribution at
+//!   the magnitudes the renormalisation now produces, and its own change.
 //!
 //! * **RESOLVED, and FIXED: a closure orphaned by a command that did not convert
 //!   was reclassified by the next LOAD.** Surfaced by the fix in the next entry:
