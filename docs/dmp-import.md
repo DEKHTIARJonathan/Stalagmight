@@ -8,8 +8,15 @@ The DMP import wizard (`DmpNewImportDialog`) is the primary UI for importing cav
 |-------|-------------|
 | `init` | Import the zero-datum section (if provided), then call `suggest_all_import_placements` for all remaining sections |
 | `suggesting` | Present suggestions one at a time; user confirms, edits, or skips each |
+| `manual_placing` | Nothing was suggested for the remaining sections, so they are offered one SEGMENT at a time (`computeUnreachableSegments`) with four choices: reuse a skipped suggestion, attach to an existing section, place on the map by hand, or discard. Entered with `autoStartManualPlacementPending` set, which hides the dialog (`DialogWrapper`'s `hidden`) until the map placement it auto-starts has begun |
 | `placing` | Run `applyAllOverlapTreatments`, build batch `ImportSectionConfig[]` + `ExistingShotUpdate[]`, and call `import_sections` |
 | `done` | All sections placed, or hand off unreachable sections to legacy dialog |
+
+The phase union is declared inline at `DmpNewImportDialog.tsx`'s `phase` state and
+mirrored, for the onboarding tour, as `DmpImportWizardPhase` in `src/store/uiStore.ts`.
+The STORE copy only ever takes `suggesting`, `manual_placing` or `null`, so it is not
+a phase oracle - the DOM markers (`wizard-suggestion`, `wizard-manual-placing`, ...)
+are.
 
 ## Virtual Connections
 

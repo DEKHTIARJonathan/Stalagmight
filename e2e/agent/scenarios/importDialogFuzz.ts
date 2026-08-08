@@ -509,7 +509,12 @@ export const importDialogFuzz: Scenario = {
       }
       if (digest.screen === 'unknown') {
         fail(
-          "S1 UNKNOWN SCREEN: a dialog is up that this build's screen table does not name",
+          // The dialog name is IN THE HEADLINE, not in the detail, because
+          // `failureSignature` builds a shrink's target from the first line: a
+          // generic "unknown screen" headline matches every unknown screen, and
+          // ddmin then accepts a candidate that fails on a different one.
+          `S1 UNKNOWN SCREEN ${JSON.stringify(digest.dialog)}: a dialog is up that this build's ` +
+            'screen table does not name',
           `  activeDialog=${JSON.stringify(digest.dialog)} after: ${move.label}\n  dom: ${digest.why}`,
         );
       }
@@ -527,7 +532,7 @@ export const importDialogFuzz: Scenario = {
       }
       if (digest.screen !== 'idle' && !WEDGE_EXEMPT_SCREENS.has(digest.screen) && actionableCount(digest) === 0) {
         fail(
-          'S5 WEDGE: a non-idle screen with no actionable control anywhere in the inventory',
+          `S5 WEDGE on "${digest.screen}": no actionable control anywhere in the inventory`,
           `  screen=${digest.screen} activeDialog=${JSON.stringify(digest.dialog)} after: ${move.label}`,
         );
       }
@@ -784,11 +789,41 @@ export const importDialogFuzz: Scenario = {
       fs.rmSync(probeDir, { recursive: true, force: true });
     }
 
+    /**
+     * Put the app and the disk back to a usable state, whatever happened.
+     *
+     * Best-effort and unconditional, and it is what makes `fuzz-shrink` sound.
+     * The shrinker reuses ONE live session for every ddmin candidate, and a
+     * candidate that FAILS never reaches its episode teardown - so without this
+     * it leaves the project open, a dialog up and its generated `.dmp` files on
+     * disk, and the next candidate inherits all of it. That is not a tidiness
+     * problem: it makes later candidates fail (or pass) for reasons their own
+     * trace does not contain, and ddmin then minimizes toward the leak instead
+     * of toward the bug. Measured, not theorised - the first shrink of the
+     * wizard-hidden finding cut 124 steps to 1, and that survivor passed
+     * cleanly when replayed on its own.
+     */
+    const forceClean = async (): Promise<void> => {
+      await ctx.callAction('ui', 'cancelPlacementMode', []).catch(() => undefined);
+      await ctx.callAction('ui', 'closeDialog', []).catch(() => undefined);
+      await ctx.callAction('ui', 'setImportContext', [null]).catch(() => undefined);
+      await ctx.callAction('project', 'closeProject', []).catch(() => undefined);
+      for (const dir of [filesDir, projectsDir]) {
+        try {
+          fs.rmSync(dir, { recursive: true, force: true });
+        } catch {
+          // A file the app still holds open is not worth failing a cleanup for.
+        }
+      }
+    };
+
     // ---- the run ----------------------------------------------------------
 
     const replaySteps = replay ? replay.steps : null;
     let replayAt = 0;
 
+    /** The episode loop. Extracted so `forceClean` can wrap it in a finally. */
+    const runEpisodes = async (): Promise<void> => {
     for (let episode = 0; episode < iterations; episode += 1) {
       await loadFixtureWithoutUndoHistory(ctx, fixture);
       if (!(await disableAutoSave(ctx))) {
@@ -1020,6 +1055,14 @@ export const importDialogFuzz: Scenario = {
       ctx.metric('domNodeDelta', domAfter - domBefore);
       ctx.setMetric('domNodes', domAfter);
       ctx.metric('episodes');
+    }
+
+    };
+
+    try {
+      await runEpisodes();
+    } finally {
+      await forceClean();
     }
 
     if (traceOut) {

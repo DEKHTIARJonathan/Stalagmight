@@ -341,6 +341,7 @@ pins was fixed and the entry (and the scenario's header) needs updating.
 | `map-storm` | A seeded `jumpTo` barrage does not stall the main thread. |
 | `save-under-churn` | Mutate+save leaves `isDirty=false`, no `.tmp`, and reopens clean. |
 | `import-repeatedly` | Re-importing a `.tml` keeps the undo stack at or under 100. |
+| `import-dialog-fuzz` | Generates `.dmp` files and walks the real DMP import UI at random; per-step coherence plus a per-flow undo-roundtrip / residue / accounting / receipt / temp-file contract (see below). |
 | `rapid-project-cycle` | Open/close cycles leave clean project transitions. |
 
 ### undo-redo-fuzz
@@ -531,6 +532,50 @@ one normalizing writer, plus re-normalization at the loader and at snapshot
 restore, the two boundaries that ingest maps this app did not write.
 `STALAGMIGHT_FUZZ_FIXTURE=naharon.stalx --seed 5 --iterations 2` is kept as its
 regression check; the shrinker had reduced it to five steps.
+
+### import-dialog-fuzz
+
+The first scenario that drives the app by CLICKING it rather than by calling
+store actions, so it is the first one whose oracle has to know what is on screen.
+That job belongs to `e2e/agent/lib/importScreenDigest.ts`: one self-contained
+function, injected exactly the way `fuzzOracleCore.ts` injects its oracle, that
+returns in a single in-page pass which screen is up, which testids are actionable
+and what the project looks like. `scenarios/importDialogModel.ts` owns the screen
+table, the verified testid inventory and the escape paths;
+`scenarios/importDialogGenerators.ts` is the weighted move catalog;
+`scenarios/importDialogBridge.ts` holds the testid ALLOWLISTS, which are the
+security boundary for a replayed trace exactly as `REPLAYABLE_MUTATIONS` is for
+store actions.
+
+An EPISODE opens a fresh fixture and runs a few FLOWS with no reload between
+them; a FLOW is one generated `.dmp` from an entry point to whatever ends it.
+Per-step oracles cover the screen table, the error boundary, the project
+invariants, unexpected error dialogs and wedges, plus an integrity check after
+any step that pushed an undo entry. Per-flow oracles are in
+`e2e/agent/lib/importFlowOracles.ts`: the undo roundtrip, dialog/placement/context
+residue, the receipt's numbers against the project's delta, the receipt's own
+rendering, and leftover staging files.
+
+Not in `pnpm agent:scenarios`. It is listed in that file's `SMOKE_EXCLUDED` and
+runs on explicit request only - `pnpm agent:scenario`, `pnpm agent:fuzz-matrix`,
+or the MCP `run_scenario` tool. That is not an expected-failure list in disguise:
+the scenario has no classifier and no tolerance, so a red from it is the app's.
+
+```bash
+pnpm agent:scenario import-dialog-fuzz --seed 7 --iterations 8
+pnpm agent:fuzz-matrix --scenario import-dialog-fuzz --seeds 1..4 --workers 2
+# sweep a knob as a third matrix dimension:
+pnpm agent:fuzz-matrix --scenario import-dialog-fuzz \
+  --axis STALAGMIGHT_FUZZ_IMPORT_MALFORMED_P=0,0.5,1
+```
+
+Its knobs, all read at call time so a replayed trace's restored environment
+reaches them: `STALAGMIGHT_FUZZ_IMPORT_FLOWS_PER_EPISODE` (3),
+`_MAX_FLOW_STEPS` (140), `_MALFORMED_P` (0.2), `_INTERJECT_P` (0.08),
+`_SETTLE_MS` (12000).
+
+The open findings it has produced are written up in the scenario file's header,
+each with the `reproduce:` line that still runs.
 
 ### Three tiers, and which one gates CI
 
